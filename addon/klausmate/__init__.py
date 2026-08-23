@@ -5781,10 +5781,25 @@ def on_editor_did_init(editor: Editor) -> None:
         if layout is None:
             return
         pdf_handler.ensure_active_pdf(USER_FILES)
-        if getattr(editor, "_klausmate_panel", None) is None:
-            panel = _KlausmatePanel(editor, parent=widget)
-            layout.addWidget(panel)
-            editor._klausmate_panel = panel  # type: ignore[attr-defined]
+
+        def _install_klaus_bar() -> None:
+            # Deferred by one event-loop tick, same reasoning as
+            # _install_panel below: Anki is still finishing this editor's
+            # own layout when editor_did_init fires, so adding the bar
+            # synchronously can leave it mid-stack instead of the LAST
+            # widget in editor.widget's layout — i.e. not sitting directly
+            # above the host window's bottom button row (History/Help/
+            # Close/Add in the Add window).
+            try:
+                if getattr(editor, "_klausmate_panel", None) is None:
+                    panel = _KlausmatePanel(editor, parent=widget)
+                    layout.addWidget(panel)
+                    editor._klausmate_panel = panel  # type: ignore[attr-defined]
+            except RuntimeError:
+                pass
+
+        QTimer.singleShot(0, _install_klaus_bar)
+
         if not hasattr(editor, "_klausmate_target_field_index"):
             editor._klausmate_target_field_index = None  # type: ignore[attr-defined]
         # Default state for the page-aware retrieval helper.
