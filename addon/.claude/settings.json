@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(klausmate/user_files/**)",
+      "Write(klausmate/user_files/**)",
+      "Read(klausmate/meta.json)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/klausmate-compile.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

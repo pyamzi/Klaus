@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Build klausmate.ankiaddon for manual distribution (Anki: File → Install add-on from file).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$ROOT/klausmate"
+OUT_DIR="$ROOT/dist"
+OUT="$OUT_DIR/klausmate.ankiaddon"
+STAGE="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "$STAGE"
+}
+trap cleanup EXIT
+
+if [[ ! -f "$SRC/__init__.py" ]]; then
+  echo "error: $SRC/__init__.py not found" >&2
+  exit 1
+fi
+
+# Bump manifest mod so Anki treats this as a new build.
+python3 - "$SRC/manifest.json" <<'PY'
+import json
+import sys
+import time
+from pathlib import Path
+
+path = Path(sys.argv[1])
+data = json.loads(path.read_text(encoding="utf-8"))
+data["mod"] = int(time.time())
+path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+print(f"manifest mod -> {data['mod']}")
+PY
+
+echo "Staging add-on files..."
+rsync -a \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.DS_Store' \
+  --exclude 'meta.json' \
+  --exclude 'user_files/' \
+  "$SRC/" "$STAGE/"
+
+mkdir -p "$STAGE/user_files"
+cp "$SRC/user_files/README.txt" "$STAGE/user_files/README.txt"
+
+mkdir -p "$OUT_DIR"
+rm -f "$OUT"
+
+echo "Creating $OUT ..."
+(
+  cd "$STAGE"
+  zip -rq "$OUT" . -x '*.pyc' -x '*__pycache__*' -x '.DS_Store'
+)
+
+BYTES=$(wc -c <"$OUT" | tr -d ' ')
+echo "Done: $OUT ($BYTES bytes)"
+echo "Install in Anki: Tools → Add-ons → Install from file…"

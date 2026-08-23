@@ -1,0 +1,27 @@
+# ─── Never commit: personal data and secrets ──────────────────────────────
+# 459 MB of real lecture PDFs, annotations, embeddings, and the card index.
+klausmate/user_files/
+# Live addon config — holds claude_api_key / embedding_api_key_* once set.
+klausmate/meta.json
+**/meta.json
+
+# ─── Addon source: intentionally untracked (see CLAUDE.md) ────────────────
+# CLAUDE.md documents klausmate/ as untracked, which is why git worktrees
+# never contain it. Delete this line to start version-controlling the addon
+# (~8 MB of source once user_files is excluded above).
+klausmate/
+
+# ─── Separate projects / vendored reference material ──────────────────────
+SynapsePro-main/
+addon-docs-main/
+
+# ─── Build output ─────────────────────────────────────────────────────────
+dist/
+*.ankiaddon
+
+# ─── Noise ────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.DS_Store
+.claude/worktrees/
+.cursor/
