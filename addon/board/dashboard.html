@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>klausmate board</title>
+<style>
+/* Dispatch console for unattended agent work.
+   Organising principle: lit vs unlit. Idle columns are near-greyscale; the
+   colour budget goes almost entirely to work that is in flight, because
+   that is the only thing the supervisor needs to react to. */
+:root {
+  --ground:  #12151c;
+  --panel:   #1a1f29;
+  --raised:  #212836;
+  --line:    #2a3140;
+  --ink:     #e4e7ee;
+  --dim:     #7c8598;
+  --faint:   #4d5567;
+  --live:    #e8a33d;  /* in flight — the one loud colour */
+  --contest: #d9736b;  /* collision / blocked */
+  --review:  #5fa8a0;  /* awaiting sign-off */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --prose: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  /* Mono is the default here: most of this board's content really is
+     identifiers, paths and owners. Prose is the exception, not the rule. */
+  font: 13px/1.5 var(--mono);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { margin: 0; font-weight: 600; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--live); outline-offset: 2px; }
+
+/* ── status rail ─────────────────────────────────────────────────────── */
+.rail {
+  display: flex; align-items: baseline; gap: 16px;
+  padding: 10px 18px; border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky; top: 0; z-index: 20;
+}
+.rail h1 {
+  font-size: 13px; letter-spacing: .14em; text-transform: uppercase;
+}
+.rail h1 span { color: var(--live); }
+.rail .spacer { flex: 1; }
+.stat { color: var(--dim); font-size: 11px; letter-spacing: .06em; }
+.stat b { color: var(--ink); font-weight: 600; }
+.stat.live b { color: var(--live); }
+.pulse {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--faint); margin-right: 5px; vertical-align: middle;
+}
+.pulse.on { background: var(--live); }
+.rail button {
+  background: transparent; border: 1px solid var(--line);
+  border-radius: 5px; padding: 3px 10px; font-size: 11px; color: var(--dim);
+}
+.rail button:hover { border-color: var(--live); color: var(--ink); }
+
+/* ── claim map: the signature ────────────────────────────────────────── */
+/* Which regions of the codebase are locked right now, and by whom. This is
+   the constraint that lets a swarm run unattended, so it gets top billing
+   rather than being buried in a card field. */
+.map { padding: 12px 18px; border-bottom: 1px solid var(--line); }
+.map-head {
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px;
+}
+.map-head h2 {
+  font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--dim);
+}
+.map-head .hint { font-size: 11px; color: var(--faint); }
+.regions { display: flex; gap: 10px; flex-wrap: wrap; }
+.region {
+  flex: 1 1 150px; min-width: 130px;
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 7px 9px; background: var(--panel);
+}
+.region.claimed { border-color: color-mix(in srgb, var(--live) 45%, var(--line)); }
+.region.contested { border-color: var(--contest); }
+.region-name { font-size: 11px; color: var(--dim); }
+.region.claimed .region-name { color: var(--ink); }
+.bar {
+  height: 3px; border-radius: 2px; background: var(--line);
+  margin: 6px 0 5px; overflow: hidden;
+}
+.bar i { display: block; height: 100%; background: var(--live); width: 0; }
+.region.contested .bar i { background: var(--contest); }
+.holds { display: flex; flex-direction: column; gap: 2px; }
+.hold { font-size: 10.5px; color: var(--dim); }
+.hold b { color: var(--live); font-weight: 500; }
+.hold.clash b { color: var(--contest); }
+.region-idle { font-size: 10.5px; color: var(--faint); }
+
+/* ── columns ─────────────────────────────────────────────────────────── */
+.cols {
+  display: grid; grid-template-columns: repeat(5, minmax(190px, 1fr));
+  gap: 12px; padding: 14px 18px 28px; align-items: start;
+}
+.col-head {
+  display: flex; align-items: baseline; gap: 7px;
+  padding-bottom: 7px; margin-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+.col-head h2 {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--dim);
+}
+.col-head .n { font-size: 10px; color: var(--faint); }
+.col[data-col="Doing"] .col-head { border-bottom-color: var(--live); }
+.col[data-col="Doing"] .col-head h2 { color: var(--live); }
+.col[data-col="Review"] .col-head { border-bottom-color: var(--review); }
+.col[data-col="Review"] .col-head h2 { color: var(--review); }
+.drop { min-height: 60px; display: flex; flex-direction: column; gap: 8px; }
+.drop.over { outline: 1px dashed var(--live); outline-offset: 4px; border-radius: 6px; }
+
+/* ── cards ───────────────────────────────────────────────────────────── */
+.card {
+  background: var(--panel); border: 1px solid var(--line);
+  border-left: 2px solid var(--faint);
+  border-radius: 6px; padding: 9px 10px; cursor: grab;
+  transition: border-color .12s ease, background .12s ease;
+}
+.card:hover { background: var(--raised); }
+.card.dragging { opacity: .4; }
+.card .id { font-size: 10px; color: var(--faint); letter-spacing: .06em; }
+.card .title {
+  font-family: var(--prose); font-size: 13px; line-height: 1.35;
+  margin: 3px 0 6px; color: var(--dim);
+}
+.card .meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.tag {
+  font-size: 9.5px; letter-spacing: .05em; padding: 1px 5px;
+  border: 1px solid var(--line); border-radius: 3px; color: var(--dim);
+}
+.tag.design   { border-color: #6d5f9c; color: #a99bd6; }
+.tag.human    { border-color: var(--contest); color: var(--contest); }
+.owner { font-size: 10px; color: var(--live); }
+.nofiles { font-size: 9.5px; color: var(--contest); }
+
+/* Lit state: only Doing cards get full ink. */
+.col[data-col="Doing"] .card {
+  border-left-color: var(--live);
+  border-color: color-mix(in srgb, var(--live) 25%, var(--line));
+}
+.col[data-col="Doing"] .card .title { color: var(--ink); }
+.col[data-col="Review"] .card { border-left-color: var(--review); }
+.col[data-col="Review"] .card .title { color: var(--ink); }
+.col[data-col="Done"] .card { opacity: .5; }
+
+/* One motion cue, and it earns its place: it answers "did something change
+   while I was not looking?" for work that runs unattended. */
+@keyframes flash {
+  from { border-left-color: var(--live); background: color-mix(in srgb, var(--live) 14%, var(--panel)); }
+  to   { }
+}
+.card.changed { animation: flash 1.4s ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .card.changed { animation: none; box-shadow: inset 2px 0 0 var(--live); }
+}
+
+/* ── detail drawer ───────────────────────────────────────────────────── */
+.scrim {
+  position: fixed; inset: 0; background: rgba(6,8,12,.6);
+  display: none; z-index: 40;
+}
+.scrim.open { display: block; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%);
+  background: var(--panel); border-left: 1px solid var(--line);
+  padding: 18px; overflow-y: auto; z-index: 50;
+  transform: translateX(100%); transition: transform .16s ease;
+}
+.drawer.open { transform: none; }
+@media (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
+.drawer h3 { font-family: var(--prose); font-size: 16px; margin: 4px 0 10px; }
+.drawer .close {
+  float: right; background: transparent; border: none; color: var(--dim);
+  font-size: 20px; line-height: 1; padding: 0 4px;
+}
+.kv { display: grid; grid-template-columns: 70px 1fr; gap: 4px 10px; margin: 10px 0; }
+.kv dt { color: var(--faint); font-size: 11px; }
+.kv dd { margin: 0; font-size: 11.5px; word-break: break-all; }
+.body {
+  font-family: var(--prose); font-size: 13px; line-height: 1.55;
+  white-space: pre-wrap; color: var(--dim);
+  border-top: 1px solid var(--line); padding-top: 11px; margin-top: 11px;
+}
+.cmts { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 10px; }
+.cmts h4 {
+  margin: 0 0 6px; font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--faint); font-weight: 600;
+}
+.cmt { font-size: 11.5px; color: var(--dim); padding: 3px 0; }
+.row { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.row button, .newcard button {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 11px; font-size: 11px;
+}
+.row button:hover, .newcard button:hover { border-color: var(--live); }
+.newcard { padding: 0 18px 26px; max-width: 620px; }
+.newcard h2 {
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 8px;
+}
+.newcard input, .newcard select, .newcard textarea {
+  width: 100%; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 6px 8px; font: inherit; margin-bottom: 6px;
+}
+.newcard textarea { font-family: var(--prose); min-height: 56px; resize: vertical; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  background: var(--contest); color: #17110f; padding: 8px 14px;
+  border-radius: 6px; font-size: 12px; z-index: 60; max-width: 80vw;
+  display: none;
+}
+.toast.show { display: block; }
+.empty { color: var(--faint); font-size: 11px; padding: 6px 2px; }
+
+@media (max-width: 900px) {
+  .cols { grid-template-columns: 1fr; }
+  .col[data-col="Backlog"], .col[data-col="Done"] { opacity: .8; }
+}
+</style>
+</head>
+<body>
+
+<div class="rail">
+  <h1>klausmate<span>/</span>board</h1>
+  <span class="stat live"><span class="pulse" id="pulse"></span><b id="n-doing">0</b> in flight</span>
+  <span class="stat"><b id="n-ready">0</b> ready to claim</span>
+  <span class="stat"><b id="n-review">0</b> awaiting sign-off</span>
+  <span class="spacer"></span>
+  <span class="stat" id="synced">connecting…</span>
+  <button id="refresh">Refresh now</button>
+</div>
+
+<section class="map">
+  <div class="map-head">
+    <h2>Claim map</h2>
+    <span class="hint" id="map-hint">no files locked</span>
+  </div>
+  <div class="regions" id="regions"></div>
+</section>
+
+<main class="cols" id="cols"></main>
+
+<section class="newcard">
+  <h2>Add a card</h2>
+  <input id="f-title" placeholder="Title — what someone should end up having done">
+  <div class="grid2">
+    <select id="f-col"></select>
+    <input id="f-tags" placeholder="tags: sonnet-safe, design, needs-human">
+  </div>
+  <div class="grid2">
+    <input id="f-files" placeholder="files: comma-separated paths it touches">
+    <input id="f-verify" placeholder="verify: command that proves it is done">
+  </div>
+  <textarea id="f-body" placeholder="Acceptance criteria. What must be true for this to count as finished?"></textarea>
+  <button id="f-add">Add card</button>
+</section>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Card detail"></aside>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const COLS = ["Backlog", "Ready", "Doing", "Review", "Done"];
+let board = null, lastMtime = 0, openId = null, prevSig = {};
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove("show"), 4200);
+}
+
+async function api(path, payload) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(data.error || ("request failed: " + r.status)); return null; }
+  await load(true);
+  return data;
+}
+
+async function load(force) {
+  let data;
+  try {
+    data = await (await fetch("/api/board")).json();
+  } catch (e) {
+    $("synced").textContent = "server not responding";
+    return;
+  }
+  if (!force && data.mtime === lastMtime) { markSynced(); return; }
+  lastMtime = data.mtime;
+  board = data;
+  render();
+  markSynced();
+}
+
+function markSynced() {
+  $("synced").textContent = "synced " + new Date().toLocaleTimeString();
+}
+
+function cardsIn(name) {
+  const c = (board.columns || []).find(x => x.name === name);
+  return c ? c.cards : [];
+}
+
+/* ── claim map ──────────────────────────────────────────────────────── */
+/* Group every declared path by its top-level region so the supervisor can
+   see territory at a glance rather than reading each card's file list. */
+function renderMap() {
+  const regions = {};
+  const add = (path, owner, col) => {
+    const p = String(path);
+    const isDir = p.includes("/");
+    const top = isDir ? p.split("/")[0] : p;
+    const r = (regions[top] = regions[top] || { holds: [], ready: [], dir: false });
+    if (isDir) r.dir = true;
+    (col === "Doing" ? r.holds : r.ready).push({ path: p, owner });
+  };
+  cardsIn("Doing").forEach(c => c.files.forEach(f => add(f, c.owner, "Doing")));
+  cardsIn("Ready").forEach(c => c.files.forEach(f => add(f, null, "Ready")));
+
+  const names = Object.keys(regions).sort();
+  const el = $("regions");
+  if (!names.length) {
+    el.innerHTML = '<div class="region"><div class="region-idle">'
+      + 'Nothing claimed. Cards declare the files they touch, and the board '
+      + 'refuses a claim that overlaps work already in flight.</div></div>';
+    $("map-hint").textContent = "no files locked";
+    return;
+  }
+
+  let locked = 0, clashes = 0;
+  el.innerHTML = names.map(name => {
+    const r = regions[name];
+    const held = r.holds.length;
+    locked += held;
+    // A Ready path that collides with a held path cannot be claimed yet.
+    const clash = r.ready.filter(x => r.holds.some(h =>
+      h.path === x.path || x.path.startsWith(h.path + "/") || h.path.startsWith(x.path + "/")));
+    clashes += clash.length;
+    const total = held + r.ready.length;
+    const pct = total ? Math.round(held / total * 100) : 0;
+    const cls = clash.length ? "contested" : (held ? "claimed" : "");
+    const lines = r.holds.map(h =>
+      `<div class="hold">${esc(r.dir ? (h.path.split("/").slice(1).join("/") || h.path) : h.path)} <b>@${esc(h.owner)}</b></div>`);
+    clash.forEach(c => lines.push(
+      `<div class="hold clash">${esc(r.dir ? (c.path.split("/").slice(1).join("/") || c.path) : c.path)} <b>blocked</b></div>`));
+    if (!lines.length) lines.push('<div class="region-idle">free</div>');
+    return `<div class="region ${cls}">
+      <div class="region-name">${esc(name)}${r.dir ? "/" : ""}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="holds">${lines.join("")}</div>
+    </div>`;
+  }).join("");
+
+  $("map-hint").textContent = locked
+    ? `${locked} path${locked === 1 ? "" : "s"} locked`
+      + (clashes ? ` · ${clashes} blocked by work in flight` : "")
+    : "no files locked";
+}
+
+/* ── columns ────────────────────────────────────────────────────────── */
+function cardHTML(c) {
+  const tags = (c.tags || []).map(t => {
+    const k = t === "design" ? "design" : (t === "needs-human" ? "human" : "");
+    return `<span class="tag ${k}">${esc(t)}</span>`;
+  }).join("");
+  const owner = c.owner && c.owner !== "-" ? `<span class="owner">@${esc(c.owner)}</span>` : "";
+  const nofiles = (!c.files || !c.files.length)
+    ? '<span class="nofiles">no files declared</span>' : "";
+  return `<article class="card" draggable="true" data-id="${c.id}" tabindex="0">
+    <div class="id">${c.id}</div>
+    <div class="title">${esc(c.title)}</div>
+    <div class="meta">${owner}${tags}${nofiles}</div>
+  </article>`;
+}
+
+function render() {
+  const sig = {};
+  COLS.forEach(col => cardsIn(col).forEach(c => { sig[c.id] = col + "|" + c.owner; }));
+
+  $("cols").innerHTML = COLS.map(col => {
+    const cards = cardsIn(col);
+    const inner = cards.length
+      ? cards.map(cardHTML).join("")
+      : `<div class="empty">${col === "Ready"
+          ? "Nothing groomed yet. A card reaches Ready once it has acceptance criteria, a file list, and a verify command."
+          : "—"}</div>`;
+    return `<section class="col" data-col="${col}">
+      <div class="col-head"><h2>${col}</h2><span class="n">${cards.length}</span></div>
+      <div class="drop" data-col="${col}">${inner}</div>
+    </section>`;
+  }).join("");
+
+  $("n-doing").textContent = cardsIn("Doing").length;
+  $("n-ready").textContent = cardsIn("Ready").length;
+  $("n-review").textContent = cardsIn("Review").length;
+  $("pulse").classList.toggle("on", cardsIn("Doing").length > 0);
+
+  // Flash only what actually moved or changed hands since the last render.
+  Object.keys(sig).forEach(id => {
+    if (prevSig[id] && prevSig[id] !== sig[id]) {
+      const el = document.querySelector(`.card[data-id="${id}"]`);
+      if (el) el.classList.add("changed");
+    }
+  });
+  prevSig = sig;
+
+  renderMap();
+  wireCards();
+  if (openId) openDrawer(openId);
+}
+
+/* ── interaction ────────────────────────────────────────────────────── */
+function wireCards() {
+  document.querySelectorAll(".card").forEach(el => {
+    el.addEventListener("dragstart", e => {
+      e.dataTransfer.setData("text/plain", el.dataset.id);
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", () => openDrawer(el.dataset.id));
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrawer(el.dataset.id); }
+    });
+  });
+  document.querySelectorAll(".drop").forEach(zone => {
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+    zone.addEventListener("drop", async e => {
+      e.preventDefault();
+      zone.classList.remove("over");
+      const id = e.dataTransfer.getData("text/plain");
+      const to = zone.dataset.col;
+      const from = findCol(id);
+      if (!id || from === to) return;
+      // Ready→Doing is a claim, not a plain move: it also enforces that no
+      // in-flight card already holds these files.
+      if (from === "Ready" && to === "Doing") {
+        const who = prompt("Claim " + id + " as:", "human");
+        if (who) await api("/api/claim", { id, owner: who });
+      } else if (from === "Doing" && to === "Ready") {
+        await api("/api/release", { id });
+      } else {
+        await api("/api/move", { id, to });
+      }
+    });
+  });
+}
+
+function findCol(id) {
+  for (const col of COLS) if (cardsIn(col).some(c => c.id === id)) return col;
+  return null;
+}
+function findCard(id) {
+  for (const col of COLS) {
+    const c = cardsIn(col).find(x => x.id === id);
+    if (c) return [col, c];
+  }
+  return [null, null];
+}
+
+function openDrawer(id) {
+  const [col, c] = findCard(id);
+  if (!c) { closeDrawer(); return; }
+  openId = id;
+  const nexts = { Backlog: ["Ready"], Ready: ["Backlog"], Doing: ["Review", "Ready"],
+                  Review: ["Done", "Doing"], Done: ["Backlog"] };
+  const btns = (nexts[col] || []).map(t =>
+    `<button data-move="${t}">${t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("");
+  $("drawer").innerHTML = `
+    <button class="close" aria-label="Close">×</button>
+    <div class="id">${c.id} · ${col}</div>
+    <h3>${esc(c.title)}</h3>
+    <dl class="kv">
+      <dt>owner</dt><dd>${esc(c.owner || "-")}</dd>
+      <dt>priority</dt><dd>${esc(c.priority || "-")}</dd>
+      <dt>tags</dt><dd>${(c.tags || []).map(esc).join(", ") || "-"}</dd>
+      <dt>files</dt><dd>${(c.files || []).map(esc).join("<br>") || "<span style='color:var(--contest)'>none declared</span>"}</dd>
+      <dt>verify</dt><dd>${esc(c.verify) || "<span style='color:var(--contest)'>none</span>"}</dd>
+    </dl>
+    ${c.body ? `<div class="body">${esc(c.body)}</div>` : ""}
+    <div class="cmts"><h4>Comments</h4>
+      ${(c.comments || []).map(x => `<div class="cmt">${esc(x)}</div>`).join("")
+        || '<div class="cmt" style="color:var(--faint)">None yet.</div>'}
+    </div>
+    <div class="row">${btns}<button data-comment="1">Add comment</button></div>`;
+  $("drawer").classList.add("open");
+  $("scrim").classList.add("open");
+  $("drawer").querySelector(".close").onclick = closeDrawer;
+  $("drawer").querySelectorAll("[data-move]").forEach(b => {
+    b.onclick = async () => {
+      const to = b.dataset.move;
+      if (col === "Doing" && to === "Ready") await api("/api/release", { id });
+      else await api("/api/move", { id, to });
+    };
+  });
+  const cb = $("drawer").querySelector("[data-comment]");
+  if (cb) cb.onclick = async () => {
+    const text = prompt("Comment on " + id + ":");
+    if (text) await api("/api/comment", { id, author: "human", text });
+  };
+}
+
+function closeDrawer() {
+  openId = null;
+  $("drawer").classList.remove("open");
+  $("scrim").classList.remove("open");
+}
+
+$("scrim").onclick = closeDrawer;
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+$("refresh").onclick = () => load(true);
+
+COLS.forEach(c => {
+  const o = document.createElement("option");
+  o.value = o.textContent = c;
+  $("f-col").appendChild(o);
+});
+$("f-col").value = "Backlog";
+
+$("f-add").onclick = async () => {
+  const title = $("f-title").value.trim();
+  if (!title) { toast("A card needs a title before it can be added."); return; }
+  const ok = await api("/api/add", {
+    col: $("f-col").value,
+    title,
+    fields: {
+      tags: $("f-tags").value.trim(),
+      files: $("f-files").value.trim(),
+      verify: $("f-verify").value.trim()
+    },
+    body: $("f-body").value
+  });
+  if (ok) ["f-title", "f-tags", "f-files", "f-verify", "f-body"]
+    .forEach(i => { $(i).value = ""; });
+};
+
+load(true);
+setInterval(load, 2000);
+</script>
+</body>
+</html>
