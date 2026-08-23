@@ -269,6 +269,15 @@ body.night_mode #result.error,
   text-align: center;
 }
 #gate-text { color: var(--ks-muted); font-size: 12px; line-height: 1.5; }
+#gate-provider { color: var(--ks-muted); font-size: 12px; }
+#gate-provider.warn { color: #d9822b; }
+#gate-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
 #index-now {
   border: none;
   border-radius: 10px;
@@ -279,6 +288,16 @@ body.night_mode #result.error,
   padding: 7px 16px;
   cursor: pointer;
 }
+#open-models {
+  border: 1px solid var(--ks-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ks-muted);
+  font: inherit;
+  padding: 7px 16px;
+  cursor: pointer;
+}
+#open-models:hover { color: var(--ks-fg); border-color: var(--klausmate-cobalt); }
 
 #index-status {
   color: var(--ks-muted);

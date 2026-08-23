@@ -3,11 +3,17 @@
  * Bridge:
  *   JS → Python:  pycmd("klaus:<action>:<b64 json>")
  *     actions: ready · search {prompt,pdf,deck,create} · reindex ·
- *              cancel · close · log {msg}
+ *              cancel · close · manage · log {msg}
  *   Python → JS:  window.klausSearch.<fn>(...)
  *     init(state) · setIndexStatus(st) · setProgress(label, done, total) ·
  *     hideProgress() · searchDone(result) · showError(msg) · setBusy(on) ·
  *     focusInput()
+ *
+ *   st (indexStatus payload) also carries embedding-provider readiness,
+ *   computed locally in chat_dock.py (no network call): provider_ready
+ *   (bool), provider_label ('Voyage' / 'OpenAI' / 'local model <name>'),
+ *   provider_reason (empty when ready, else why Index would fail). Shown
+ *   in #gate-provider only while the first-run gate (#gate) is visible.
  */
 (function () {
   "use strict";
@@ -15,6 +21,7 @@
   var els = {};
   var busy = false;
   var indexed = false;
+  var providerReady = true;
 
   function $(id) { return document.getElementById(id); }
 
@@ -30,7 +37,7 @@
     busy = !!on;
     els.find.disabled = busy || !indexed;
     els.create.disabled = busy || !indexed;
-    els.indexNow.disabled = busy;
+    els.indexNow.disabled = busy || !providerReady;
     els.prompt.disabled = busy;
     els.pdf.disabled = busy;
     els.deck.disabled = busy;
@@ -63,12 +70,22 @@
 
   function setIndexStatus(st) {
     indexed = !!(st && st.exists && st.count > 0);
+    providerReady = !(st && st.provider_ready === false);
     els.gate.classList.toggle("hidden", indexed);
     els.indexStatus.classList.toggle("hidden", !indexed);
     if (indexed) {
       var txt = st.count.toLocaleString() + " cards indexed";
       if (st.ago) txt += " · updated " + st.ago;
       els.istatusText.textContent = txt;
+    } else {
+      // Gate is visible — always say which provider will be used, and why
+      // Index would fail if it's not ready yet.
+      var line = st && st.provider_label ? "Search will use " + st.provider_label + "." : "";
+      if (!providerReady && st && st.provider_reason) line += " " + st.provider_reason;
+      els.gateProvider.textContent = line;
+      els.gateProvider.classList.toggle("hidden", !line);
+      els.gateProvider.classList.toggle("warn", !providerReady);
+      els.openModels.classList.toggle("hidden", providerReady);
     }
     if (!busy) setBusy(false); // refresh button enablement
   }
@@ -161,6 +178,8 @@
       plabel: $("plabel"),
       result: $("result"),
       gate: $("gate"),
+      gateProvider: $("gate-provider"),
+      openModels: $("open-models"),
       indexNow: $("index-now"),
       indexStatus: $("index-status"),
       istatusText: $("istatus-text"),
@@ -195,6 +214,7 @@
       send("reindex");
     });
     els.closeBtn.addEventListener("click", function () { send("close"); });
+    els.openModels.addEventListener("click", function () { send("manage"); });
 
     send("ready");
   });

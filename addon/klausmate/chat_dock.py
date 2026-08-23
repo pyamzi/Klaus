@@ -101,12 +101,40 @@ class KlausPanelController:
         except Exception as e:
             print(f"[klausmate] panel eval failed: {e}")
 
+    def _provider_status(self) -> tuple[bool, str, str]:
+        """(ready, label, reason) for the configured embedding provider.
+
+        Computed entirely from local config — never touches the network —
+        so it's safe to call on every panel open / index-status refresh.
+        Ollama has no cheap readiness probe, so it's unconditionally ready;
+        cloud providers are ready iff their API key is set.
+        """
+        from . import embeddings, get_config
+
+        cfg = get_config()
+        provider = embeddings.provider_name(cfg)
+        if provider == "ollama":
+            return True, f"local model {embeddings.embedding_model(cfg)}", ""
+        label = "Voyage" if provider == "voyage" else "OpenAI"
+        key = str(cfg.get(f"embedding_api_key_{provider}") or "").strip()
+        if key:
+            return True, label, ""
+        reason = (
+            f"No {label} API key yet — add one in Manage models, or switch "
+            "to a local model."
+        )
+        return False, label, reason
+
     def _index_status_payload(self) -> dict:
         st = curation.index_stats()
+        ready, label, reason = self._provider_status()
         return {
             "exists": bool(st["exists"]),
             "count": int(st["count"]),
             "ago": _fmt_ago(st["updated_at"]) if st["exists"] else "",
+            "provider_ready": ready,
+            "provider_label": label,
+            "provider_reason": reason,
         }
 
     def _push_init(self) -> None:
@@ -163,6 +191,10 @@ class KlausPanelController:
             self._on_cancel()
         elif action == "close":
             self.dock.hide()
+        elif action == "manage":
+            from .manage_models import manage_models_dialog
+
+            manage_models_dialog()
         elif action == "log":
             print(f"[klausmate search.js] {payload.get('msg')}")
 
