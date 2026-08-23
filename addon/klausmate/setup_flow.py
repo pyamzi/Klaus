@@ -5,6 +5,13 @@ split). Backs the one-time "Welcome to Klaus" dialog and the silent
 Ollama autostart + actionable-warning flow that runs on every profile
 open thereafter.
 
+Klaus is embeddings-only (K-029): the only thing this module needs to
+report readiness on is the embedding provider that powers semantic search
+and PDF study priorities. The default provider is Voyage, a cloud API —
+Ollama is an optional local alternative, not a requirement. Every check
+below is gated on ``embeddings.provider_name(cfg)`` so a cloud-provider
+profile never sees Ollama-flavored copy or probes.
+
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
 function, after the package has finished loading. _pkg() below is that
@@ -23,7 +30,7 @@ from aqt.operations import QueryOp
 from aqt.qt import QMessageBox
 from aqt.utils import askUser, openLink, tooltip
 
-from . import ollama_runtime
+from . import embeddings, ollama_runtime
 from .manage_models import manage_models_dialog
 from .ollama_runtime import ensure_server, runtime_download_size_hint
 from .ollama_setup import OLLAMA_DOWNLOAD_URL
@@ -42,12 +49,33 @@ def _pkg():
 _first_run_dialog_shown_this_session: bool = False
 
 
+def _embedding_ready(cfg: dict) -> bool:
+    """True if semantic search can actually run right now.
+
+    Cloud providers (Voyage, OpenAI) are ready once their API key is set —
+    no local runtime involved. Ollama is ready once it's reachable AND the
+    configured embedding model is pulled.
+    """
+    provider = embeddings.provider_name(cfg)
+    if provider != "ollama":
+        key = str(cfg.get(f"embedding_api_key_{provider}") or "").strip()
+        return bool(key)
+    try:
+        if not _pkg().client(5.0).health():
+            return False
+        installed = set(_pkg().client().list_models())
+    except Exception:
+        return False
+    return embeddings.embedding_model(cfg) in installed
+
+
 def first_run_check() -> None:
     """Welcome dialog shown once per profile.
 
-    Always shows the how-to bullets (autocomplete, ⌘K, PDF sidebar) so the
-    user knows the feature surface — not just when Ollama is missing. If
-    Ollama isn't running we add an install nudge to the same dialog.
+    Always shows the how-to bullets (PDF sidebar, semantic search) so the
+    user knows the feature surface — not just when something needs setup.
+    The readiness line and follow-up buttons adapt to whichever embedding
+    provider is configured.
     """
     global _first_run_dialog_shown_this_session
     # Reset each profile-open so profile switches re-evaluate cleanly.
@@ -56,36 +84,41 @@ def first_run_check() -> None:
     if cfg.get("_first_run_done"):
         return
     _first_run_dialog_shown_this_session = True
-    try:
-        # Short timeout — this runs synchronously on the main thread.
-        ollama_ok = _pkg().client(5.0).health()
-    except Exception:
-        ollama_ok = False
 
-    hotkey = cfg.get("ask_hotkey", "Cmd+K")
+    provider = embeddings.provider_name(cfg)
+    is_ollama = provider == "ollama"
+    ready = _embedding_ready(cfg)
+
     body_lines = [
-        "Klaus adds local AI to your Anki editor.",
+        "Klaus adds a PDF workspace and semantic search to Anki.",
         "",
-        "• As you type, ghost-text suggestions appear — press Tab to accept, "
-        "Esc to dismiss.",
-        f"• Press {hotkey} on any field to open the Ask popover — type a "
-        "free-form instruction and Klaus rewrites the field.",
-        "• Drop a lecture PDF into the Klaus sidebar to ground suggestions "
-        "in what you're reading.",
-        "• Semantic search and PDF study priorities use the Voyage API by "
-        "default (free key at voyageai.com — paste it under Manage models). "
-        "Prefer fully local? Pick Ollama under Manage models → Card "
-        "embeddings.",
+        "• The PDF sidebar lets you read a lecture PDF, highlight it, and "
+        "keep it open next to your cards.",
+        "• Semantic search finds cards by meaning, not just keywords, and "
+        "can curate a deck for you — open it from the Browse screen.",
         "",
     ]
-    if ollama_ok:
-        body_lines.append("Ollama is running — you're ready to go.")
-    else:
+    if ready and not is_ollama:
+        provider_label = "Voyage" if provider == "voyage" else "OpenAI"
+        body_lines.append(f"Semantic search runs on {provider_label} — you're ready to go.")
+    elif ready:
         body_lines.append(
-            "One click sets everything up: Klaus downloads its local AI "
-            f"engine ({runtime_download_size_hint()}) and a starter model. "
-            "Autocomplete and Ask run on this computer; semantic search "
-            "uses the Voyage cloud API unless you switch it to local Ollama."
+            "Ollama is running with the embedding model installed — "
+            "semantic search is ready."
+        )
+    elif is_ollama:
+        body_lines.append(
+            "Semantic search is set to use a local Ollama model. One "
+            f"click sets it up: Klaus downloads Ollama "
+            f"({runtime_download_size_hint()}) and the embedding model. "
+            "Nothing leaves this computer."
+        )
+    else:
+        provider_label = "Voyage" if provider == "voyage" else "OpenAI"
+        body_lines.append(
+            f"Semantic search needs a {provider_label} API key to work "
+            "(free tier available). Add it under Manage models, or "
+            "switch to a local embedding model there."
         )
 
     msg = QMessageBox(mw)
@@ -93,12 +126,12 @@ def first_run_check() -> None:
     msg.setText("\n".join(body_lines))
     msg.setIcon(QMessageBox.Icon.Information)
     setup_btn = None
-    if ollama_ok:
+    if ready:
         msg.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
         manage_btn = msg.addButton(
-            "Choose models…", QMessageBox.ButtonRole.ActionRole
+            "Manage models…", QMessageBox.ButtonRole.ActionRole
         )
-    else:
+    elif is_ollama:
         setup_btn = msg.addButton(
             "Set up Klaus", QMessageBox.ButtonRole.ActionRole
         )
@@ -107,6 +140,12 @@ def first_run_check() -> None:
         )
         msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
         msg.setDefaultButton(setup_btn)
+    else:
+        manage_btn = msg.addButton(
+            "Manage models…", QMessageBox.ButtonRole.ActionRole
+        )
+        msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
+        msg.setDefaultButton(manage_btn)
     msg.exec()
     clicked = msg.clickedButton()
     if setup_btn is not None and clicked is setup_btn:
@@ -130,7 +169,7 @@ def first_run_check() -> None:
 def setup_readiness_check() -> None:
     """Run on every profile open. Silently start a local Ollama when one
     is available (managed runtime or system install), then verify Klaus
-    can actually generate — surfacing an actionable dialog only when it
+    can actually embed — surfacing an actionable dialog only when it
     genuinely can't.
 
     Skipped on the very first profile open because ``first_run_check``
@@ -138,11 +177,20 @@ def setup_readiness_check() -> None:
     guidance). The ``_first_run_dialog_shown_this_session`` module flag
     tracks that — both hooks share the ``profile_did_open`` signal in
     registration order: first_run_check runs first, this runs second.
+
+    The silent Ollama autostart only makes sense when the configured
+    embedding provider actually is Ollama — a cloud-provider profile
+    (the default) skips straight to the readiness dialog logic, which
+    itself never touches Ollama for a cloud provider.
     """
     if _first_run_dialog_shown_this_session:
         return
 
     cfg = _pkg().get_config()
+    if embeddings.provider_name(cfg) != "ollama":
+        _readiness_check_body()
+        return
+
     if not cfg.get("runtime_auto_setup", True):
         _readiness_check_body()
         return
@@ -172,10 +220,16 @@ def setup_readiness_check() -> None:
 def _maybe_offer_runtime_update(res: Any) -> None:
     """Non-blocking, once-per-version offer to move a managed server onto
     the add-on's newly pinned Ollama version. The old version keeps
-    working regardless — never block startup on an upgrade."""
+    working regardless — never block startup on an upgrade.
+
+    Irrelevant to a cloud embedding provider, which has no local runtime
+    to update.
+    """
+    cfg = _pkg().get_config()
+    if embeddings.provider_name(cfg) != "ollama":
+        return
     if getattr(res, "detail", "") != "update_available":
         return
-    cfg = _pkg().get_config()
     offered_key = f"_runtime_update_offered_{ollama_runtime.OLLAMA_VERSION}"
     if cfg.get(offered_key):
         return
@@ -213,6 +267,11 @@ def _readiness_check_body() -> None:
     """The actual readiness dialogs; runs after the silent autostart."""
     # Re-read config — ensure_server may have rewritten the endpoint.
     cfg = _pkg().get_config()
+    provider = embeddings.provider_name(cfg)
+    if provider != "ollama":
+        _cloud_readiness_check(cfg, provider)
+        return
+
     auto = bool(cfg.get("runtime_auto_setup", True))
 
     # ---- 1. Ollama reachable? -------------------------------------------
@@ -230,8 +289,9 @@ def _readiness_check_body() -> None:
             msg.setWindowTitle("Klaus: Ollama isn't running")
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setText(
-                "Klaus needs Ollama to generate suggestions. Install it "
-                "from https://ollama.com, start it, and restart Anki.\n\n"
+                "Semantic search is set to use a local Ollama model, but "
+                "Ollama isn't running. Install it from https://ollama.com, "
+                "start it, and restart Anki.\n\n"
                 "(Automatic management is disabled in Klaus settings.)"
             )
             open_btn = msg.addButton(
@@ -246,17 +306,17 @@ def _readiness_check_body() -> None:
             print("[klausmate] Ollama unreachable; auto-setup previously declined")
             return
         msg = QMessageBox(mw)
-        msg.setWindowTitle("Klaus: local AI isn't set up yet")
+        msg.setWindowTitle("Klaus: local embedding model isn't set up yet")
         msg.setIcon(QMessageBox.Icon.Warning)
         msg.setText(
-            "Klaus needs a local AI engine (Ollama) to generate "
-            "suggestions — and it can set one up for you automatically "
-            f"(one-time {runtime_download_size_hint()} download).\n\n"
+            "Semantic search is set to use a local Ollama model, and "
+            "Klaus can set it up automatically (one-time "
+            f"{runtime_download_size_hint()} download).\n\n"
             "Everything runs on this computer. Nothing is sent anywhere."
         )
         msg.setInformativeText(
-            "Until then, ⌘K, ghost-text autocomplete, and the Browse "
-            "natural-language search will all be silent."
+            "Until then, semantic search and PDF study priorities won't "
+            "produce results."
         )
         setup_btn = msg.addButton(
             "Set up automatically", QMessageBox.ButtonRole.ActionRole
@@ -284,61 +344,77 @@ def _readiness_check_body() -> None:
             _pkg().write_config(cfg)
         return
 
-    # ---- 2. Models configured + installed? ------------------------------
-    legacy = (cfg.get("model") or "").strip()
-    auto = (cfg.get("autocomplete_model") or legacy).strip()
-    ask_m = (cfg.get("ask_model") or legacy).strip()
-
+    # ---- 2. Embedding model installed? -----------------------------------
+    model = embeddings.embedding_model(cfg)
     try:
         installed = set(_pkg().client().list_models())
     except Exception:
         installed = set()
 
-    missing: list[tuple[str, str]] = []
-    if not auto:
-        missing.append(("Autocomplete", "<not selected>"))
-    elif auto not in installed:
-        missing.append(("Autocomplete", auto))
-    if not ask_m:
-        missing.append(("Ask (⌘K)", "<not selected>"))
-    elif ask_m not in installed:
-        missing.append(("Ask (⌘K)", ask_m))
-
-    if not missing:
+    if model in installed:
         return  # All set — silent
 
-    bullets = "\n".join(f"  • {role}: {name}" for role, name in missing)
     msg = QMessageBox(mw)
-    msg.setWindowTitle("Klaus: model setup needed")
+    msg.setWindowTitle("Klaus: embedding model needed")
     msg.setIcon(QMessageBox.Icon.Warning)
     msg.setText(
-        "Klaus is connected to Ollama, but the model(s) it's configured "
-        "to use aren't installed locally yet:\n\n"
-        + bullets
-        + "\n\nOpen Manage models… to pull a model (e.g. "
-        "`qwen3:0.6b` for autocomplete, `qwen3:4b` for Ask), or pick a "
-        "model you already have in Klaus settings."
+        "Klaus is connected to Ollama, but the embedding model it's "
+        f"configured to use isn't installed yet: {model}\n\n"
+        "Open Manage models… to pull it, or choose a different embedding "
+        "model there."
     )
     msg.setInformativeText(
-        "Until a model is available, ⌘K and ghost-text autocomplete "
-        "won't produce output."
+        "Until it's installed, semantic search and PDF study priorities "
+        "won't produce results."
     )
     manage_btn = msg.addButton(
         "Manage models…", QMessageBox.ButtonRole.ActionRole
     )
-    settings_btn = msg.addButton(
-        "Open Klaus settings…", QMessageBox.ButtonRole.ActionRole
-    )
     msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
     msg.exec()
-    clicked = msg.clickedButton()
-    if clicked is manage_btn:
+    if msg.clickedButton() is manage_btn:
         try:
             manage_models_dialog()
         except Exception as exc:
             print(f"[klausmate] manage_models_dialog failed: {exc}")
-    elif clicked is settings_btn:
+
+
+def _cloud_readiness_check(cfg: dict, provider: str) -> None:
+    """Readiness for Voyage/OpenAI: ready once an API key is set. No
+    runtime to start, no Ollama to reach — just the key."""
+    key = str(cfg.get(f"embedding_api_key_{provider}") or "").strip()
+    if key:
+        return  # All set — silent
+
+    if cfg.get("_embed_key_setup_declined"):
+        return
+
+    provider_label = "Voyage" if provider == "voyage" else "OpenAI"
+    site = "voyageai.com" if provider == "voyage" else "platform.openai.com"
+    msg = QMessageBox(mw)
+    msg.setWindowTitle("Klaus: semantic search needs an API key")
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setText(
+        f"Semantic search uses {provider_label}, but no API key is set. "
+        f"Add a free key from {site} under Manage models, or switch to a "
+        "local embedding model there."
+    )
+    msg.setInformativeText(
+        "Until then, semantic search and PDF study priorities won't "
+        "produce results."
+    )
+    manage_btn = msg.addButton(
+        "Manage models…", QMessageBox.ButtonRole.ActionRole
+    )
+    msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
+    msg.exec()
+    if msg.clickedButton() is manage_btn:
         try:
-            _pkg().open_settings_dialog()
+            manage_models_dialog()
         except Exception as exc:
-            print(f"[klausmate] open_settings_dialog failed: {exc}")
+            print(f"[klausmate] manage_models_dialog failed: {exc}")
+    else:
+        # Respect the decision — don't re-prompt on every profile open.
+        cfg = _pkg().get_config()
+        cfg["_embed_key_setup_declined"] = True
+        _pkg().write_config(cfg)
