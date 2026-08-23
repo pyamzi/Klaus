@@ -72,6 +72,7 @@ from aqt.qt import (
     QComboBox,
     QCursor,
     QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QDragEnterEvent,
     QDropEvent,
@@ -5783,17 +5784,59 @@ def on_editor_did_init(editor: Editor) -> None:
         pdf_handler.ensure_active_pdf(USER_FILES)
 
         def _install_klaus_bar() -> None:
+            # editor.widget (the fieldsArea QWidget Anki hands us) is its
+            # own island: Editor.setupOuter() gives it a private QVBoxLayout
+            # (outerLayout) holding only the field-editing webview. That
+            # widget sits ABOVE the host window's button row as a sibling
+            # in the window's own top-level layout — appending to
+            # outerLayout only ever controls order *inside* fieldsArea, so
+            # attempt #1/#2 stayed pinned to whatever position fieldsArea
+            # occupies, never reaching the window's true bottom.
+            #
+            # Verified against Anki's own .ui forms (aqt/forms/addcards.ui,
+            # aqt/forms/editcurrent.ui): both AddCards and EditCurrent are a
+            # centralwidget QVBoxLayout with items [..., fieldsArea,
+            # buttonBox] in that order — buttonBox is a QDialogButtonBox
+            # sibling directly below fieldsArea, not something inside it.
+            # So the fix walks up to the host window and inserts the bar
+            # into THAT layout, immediately before the button box, instead
+            # of anywhere inside editor.widget's own layout. The Browser
+            # has no QDialogButtonBox in its window at all (its editor pane
+            # ends at the splitter, not a dialog button row), so
+            # findChild() naturally returns None there and we fall back to
+            # the old editor-layout append — unchanged behavior for Browse.
+            #
             # Deferred by one event-loop tick, same reasoning as
             # _install_panel below: Anki is still finishing this editor's
-            # own layout when editor_did_init fires, so adding the bar
-            # synchronously can leave it mid-stack instead of the LAST
-            # widget in editor.widget's layout — i.e. not sitting directly
-            # above the host window's bottom button row (History/Help/
-            # Close/Add in the Add window).
+            # own layout when editor_did_init fires, so constructing the
+            # panel synchronously risks racing that construction. The
+            # button box itself is built by aqt's setupUi() before
+            # editor_did_init ever fires, so the deferral isn't needed for
+            # *finding* it — it's kept only for panel-construction safety.
             try:
                 if getattr(editor, "_klausmate_panel", None) is None:
                     panel = _KlausmatePanel(editor, parent=widget)
-                    layout.addWidget(panel)
+                    placed = False
+                    host = getattr(editor, "parentWindow", None)
+                    if host is not None:
+                        button_box = host.findChild(QDialogButtonBox)
+                        if button_box is not None:
+                            box_parent = button_box.parentWidget()
+                            box_layout = (
+                                box_parent.layout()
+                                if box_parent is not None
+                                else None
+                            )
+                            if box_layout is not None:
+                                idx = box_layout.indexOf(button_box)
+                                if idx != -1:
+                                    box_layout.insertWidget(idx, panel)
+                                    placed = True
+                    if not placed:
+                        # Fallback: no button box found on this host (e.g.
+                        # the Browser window) — keep today's behavior of
+                        # appending inside editor.widget's own layout.
+                        layout.addWidget(panel)
                     editor._klausmate_panel = panel  # type: ignore[attr-defined]
             except RuntimeError:
                 pass
