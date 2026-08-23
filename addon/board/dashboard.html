@@ -39,7 +39,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 /* ── status rail ─────────────────────────────────────────────────────── */
 .rail {
-  display: flex; align-items: baseline; gap: 16px;
+  display: flex; align-items: baseline; gap: 10px 16px; flex-wrap: wrap;
   padding: 10px 18px; border-bottom: 1px solid var(--line);
   background: var(--panel);
   position: sticky; top: 0; z-index: 20;
@@ -49,7 +49,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .rail h1 span { color: var(--live); }
 .rail .spacer { flex: 1; }
-.stat { color: var(--dim); font-size: 11px; letter-spacing: .06em; }
+/* nowrap keeps a stat from breaking mid-phrase ("in / flight") when the
+   rail runs out of room; the rail wraps whole stats to a second line. */
+.stat {
+  color: var(--dim); font-size: 11px; letter-spacing: .06em;
+  white-space: nowrap;
+}
 .stat b { color: var(--ink); font-weight: 600; }
 .stat.live b { color: var(--live); }
 .pulse {
@@ -262,9 +267,65 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .toast.show { display: block; }
 .empty { color: var(--faint); font-size: 11px; padding: 6px 2px; }
 
-@media (max-width: 900px) {
+/* ── tablet ──────────────────────────────────────────────────────────── */
+/* Stacking five columns vertically turns a board into a list and wastes
+   the whole width. Keep them side by side and swipe instead — the column
+   row scrolls horizontally and snaps, which is how a kanban is expected to
+   behave on touch. */
+@media (min-width: 560px) and (max-width: 1199px) {
+  .cols {
+    grid-template-columns: none;
+    grid-auto-flow: column;
+    /* Cap at 300px, but never wider than 82vw — on a narrow tablet the next
+       column stays partly visible, which is what tells you it can swipe. */
+    grid-auto-columns: min(300px, 82vw);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scroll-padding-left: 18px;
+    padding-bottom: 18px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .col { scroll-snap-align: start; }
+  /* Sticky headers so you always know which column you swiped to. */
+  .col-head {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--ground); padding-top: 4px;
+  }
+  /* An empty column should mark its place, not reserve a screenful. */
+  .drop { min-height: 32px; }
+  .regions { gap: 8px; }
+  .region { flex: 1 1 190px; }
+  .newcard { max-width: none; }
+}
+
+/* Phone: below this a swipeable column is narrower than a card wants to be,
+   so stacking wins. */
+@media (max-width: 559px) {
   .cols { grid-template-columns: 1fr; }
+  .drop { min-height: 32px; }
   .col[data-col="Backlog"], .col[data-col="Done"] { opacity: .8; }
+  .drawer { width: 100%; }
+  .grid2 { grid-template-columns: 1fr; }
+}
+
+/* ── touch ───────────────────────────────────────────────────────────── */
+/* Keyed to the pointer, not the width: a small target is a small target
+   on a 13" tablet too. Hover styling is dropped because it sticks after a
+   tap on touch and reads as a stuck selection. */
+@media (pointer: coarse) {
+  .rail button, .row button, .newcard button, .composer .send button {
+    min-height: 40px; padding-left: 14px; padding-right: 14px;
+    font-size: 12px;
+  }
+  .col-head .add-card { width: 32px; height: 32px; font-size: 16px; }
+  .drawer .close { font-size: 28px; padding: 4px 10px; min-height: 40px; }
+  .me input { min-height: 34px; font-size: 12px; }
+  .card { padding: 12px; cursor: default; }
+  .card .title { font-size: 14px; }
+  .newcard input, .newcard select, .newcard textarea { min-height: 40px; }
+  .composer textarea { min-height: 76px; font-size: 14px; }
+  .card:hover { background: var(--panel); }
 }
 </style>
 </head>
@@ -567,7 +628,11 @@ function openDrawer(id) {
   openId = id;
   const nexts = { Backlog: ["Ready"], Ready: ["Backlog"], Doing: ["Review", "Ready"],
                   Review: ["Done", "Doing"], Done: ["Backlog"] };
-  const btns = (nexts[col] || []).map(t =>
+  // Claiming used to be drag-only, which meant it was impossible on a
+  // touch device: HTML5 drag events never fire there. It is a button now.
+  const claimBtn = col === "Ready"
+    ? `<button data-claim="1" class="primary">Claim as ${esc(me())}</button>` : "";
+  const btns = claimBtn + (nexts[col] || []).map(t =>
     `<button data-move="${t}">${t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("");
   $("drawer").innerHTML = `
     <button class="close" aria-label="Close">×</button>
@@ -603,6 +668,8 @@ function openDrawer(id) {
       else await api("/api/move", { id, to });
     };
   });
+  const claimEl = $("drawer").querySelector("[data-claim]");
+  if (claimEl) claimEl.onclick = () => api("/api/claim", { id, owner: me() });
 
   const ta = $("cmt"), post = $("cmt-post");
   // The board polls every 2s and rebuilds this drawer when it changes;
