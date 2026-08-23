@@ -10,16 +10,16 @@
    colour budget goes almost entirely to work that is in flight, because
    that is the only thing the supervisor needs to react to. */
 :root {
-  --ground:  #12151c;
-  --panel:   #1a1f29;
-  --raised:  #212836;
-  --line:    #2a3140;
-  --ink:     #e4e7ee;
-  --dim:     #7c8598;
-  --faint:   #4d5567;
-  --live:    #e8a33d;  /* in flight — the one loud colour */
-  --contest: #d9736b;  /* collision / blocked */
-  --review:  #5fa8a0;  /* awaiting sign-off */
+  --ground:  #e9ebef;
+  --panel:   #ffffff;
+  --raised:  #dfe2e8;
+  --line:    #b7bcc7;
+  --ink:     #0b0d13;
+  --dim:     #3c4454;
+  --faint:   #6b7385;
+  --live:    #8a4d00;  /* in flight — the one loud colour */
+  --contest: #96271e;  /* collision / blocked */
+  --review:  #155950;  /* awaiting sign-off */
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --prose: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
@@ -62,6 +62,33 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 5px; padding: 3px 10px; font-size: 11px; color: var(--dim);
 }
 .rail button:hover { border-color: var(--live); color: var(--ink); }
+/* Identity, set once. Claiming needs a name, and asking for it on every
+   claim would be a dialog in the way of a drag. */
+.me input {
+  background: var(--ground); border: 1px solid var(--line); border-radius: 4px;
+  color: var(--live); font: inherit; font-size: 11px; padding: 2px 6px;
+  margin-left: 4px; width: 88px;
+}
+.me input:hover { border-color: var(--faint); }
+
+/* Comment composer — inline, because a modal prompt cannot be trusted to
+   exist (embedded browser views block window.prompt outright). */
+.composer { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+.composer textarea {
+  width: 100%; min-height: 62px; resize: vertical;
+  background: var(--ground); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 7px 8px;
+  font-family: var(--prose); font-size: 12.5px; line-height: 1.5;
+}
+.composer textarea:focus { border-color: var(--live); outline: none; }
+.composer .send { display: flex; align-items: center; gap: 8px; }
+.composer .send button {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 12px; font-size: 11px;
+}
+.composer .send button:hover:not(:disabled) { border-color: var(--live); }
+.composer .send button:disabled { opacity: .4; cursor: default; }
+.composer .send span { font-size: 10.5px; color: var(--faint); }
 
 /* ── claim map: the signature ────────────────────────────────────────── */
 /* Which regions of the codebase are locked right now, and by whom. This is
@@ -104,7 +131,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   gap: 12px; padding: 14px 18px 28px; align-items: start;
 }
 .col-head {
-  display: flex; align-items: baseline; gap: 7px;
+  display: flex; align-items: center; gap: 7px;
   padding-bottom: 7px; margin-bottom: 9px;
   border-bottom: 1px solid var(--line);
 }
@@ -117,8 +144,29 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .col[data-col="Doing"] .col-head h2 { color: var(--live); }
 .col[data-col="Review"] .col-head { border-bottom-color: var(--review); }
 .col[data-col="Review"] .col-head h2 { color: var(--review); }
+.col-head .add-card {
+  margin-left: auto; background: transparent; border: 1px solid var(--line);
+  border-radius: 4px; width: 18px; height: 18px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1; color: var(--dim);
+}
+.col-head .add-card:hover { border-color: var(--live); color: var(--live); }
 .drop { min-height: 60px; display: flex; flex-direction: column; gap: 8px; }
 .drop.over { outline: 1px dashed var(--live); outline-offset: 4px; border-radius: 6px; }
+
+/* Quick add: a single input, nothing else. A prompt-style flow beats a form
+   for a card that's just a title — extra fields can be filled in later from
+   the drawer once the work is actually understood. */
+.quick-add input {
+  width: 100%; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--live); border-radius: 6px;
+  padding: 7px 9px; font: inherit; font-size: 13px;
+}
+.quick-add input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--live) 30%, transparent);
+}
+.quick-add input::placeholder { color: var(--faint); }
 
 /* ── cards ───────────────────────────────────────────────────────────── */
 .card {
@@ -139,7 +187,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: 9.5px; letter-spacing: .05em; padding: 1px 5px;
   border: 1px solid var(--line); border-radius: 3px; color: var(--dim);
 }
-.tag.design   { border-color: #6d5f9c; color: #a99bd6; }
+.tag.design   { border-color: #6a5aab; color: #4c3d8c; }
 .tag.human    { border-color: var(--contest); color: var(--contest); }
 .owner { font-size: 10px; color: var(--live); }
 .nofiles { font-size: 9.5px; color: var(--contest); }
@@ -199,27 +247,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 }
 .cmt { font-size: 11.5px; color: var(--dim); padding: 3px 0; }
 .row { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
-.row button, .newcard button {
+.row button {
   background: var(--raised); border: 1px solid var(--line);
   border-radius: 5px; padding: 5px 11px; font-size: 11px;
 }
-.row button:hover, .newcard button:hover { border-color: var(--live); }
-.newcard { padding: 0 18px 26px; max-width: 620px; }
-.newcard h2 {
-  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--dim); margin-bottom: 8px;
-}
-.newcard input, .newcard select, .newcard textarea {
-  width: 100%; background: var(--panel); color: var(--ink);
-  border: 1px solid var(--line); border-radius: 5px;
-  padding: 6px 8px; font: inherit; margin-bottom: 6px;
-}
-.newcard textarea { font-family: var(--prose); min-height: 56px; resize: vertical; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.row button:hover { border-color: var(--live); }
 
 .toast {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
-  background: var(--contest); color: #17110f; padding: 8px 14px;
+  background: var(--contest); color: #fff; padding: 8px 14px;
   border-radius: 6px; font-size: 12px; z-index: 60; max-width: 80vw;
   display: none;
 }
@@ -237,11 +273,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 <div class="rail">
   <h1>klausmate<span>/</span>board</h1>
   <span class="stat live"><span class="pulse" id="pulse"></span><b id="n-doing">0</b> in flight</span>
-  <span class="stat"><b id="n-ready">0</b> ready to claim</span>
-  <span class="stat"><b id="n-review">0</b> awaiting sign-off</span>
+  <span class="stat"><b id="n-ready">0</b> ready</span>
+  <span class="stat"><b id="n-review">0</b> in review</span>
   <span class="spacer"></span>
+  <label class="stat me">as <input id="me" spellcheck="false" size="9"></label>
   <span class="stat" id="synced">connecting…</span>
-  <button id="refresh">Refresh now</button>
+  <button id="refresh">Refresh</button>
 </div>
 
 <section class="map">
@@ -254,21 +291,6 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 <main class="cols" id="cols"></main>
 
-<section class="newcard">
-  <h2>Add a card</h2>
-  <input id="f-title" placeholder="Title — what someone should end up having done">
-  <div class="grid2">
-    <select id="f-col"></select>
-    <input id="f-tags" placeholder="tags: sonnet-safe, design, needs-human">
-  </div>
-  <div class="grid2">
-    <input id="f-files" placeholder="files: comma-separated paths it touches">
-    <input id="f-verify" placeholder="verify: command that proves it is done">
-  </div>
-  <textarea id="f-body" placeholder="Acceptance criteria. What must be true for this to count as finished?"></textarea>
-  <button id="f-add">Add card</button>
-</section>
-
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-label="Card detail"></aside>
 <div class="toast" id="toast"></div>
@@ -276,7 +298,18 @@ button { font: inherit; color: inherit; cursor: pointer; }
 <script>
 "use strict";
 const COLS = ["Backlog", "Ready", "Doing", "Review", "Done"];
-let board = null, lastMtime = 0, openId = null, prevSig = {};
+let board = null, lastMtime = 0, openId = null, prevSig = {}, draft = "";
+let addingCol = null, addDraft = "";
+const ADDABLE = ["Backlog", "Ready"];
+
+/* Who is acting. Persisted, because claiming needs a name and a per-claim
+   dialog would interrupt a drag — and window.prompt is not even available
+   in every browser view this dashboard gets opened in. */
+function me() {
+  const el = document.getElementById("me");
+  const v = (el && el.value.trim()) || localStorage.getItem("klaus.me") || "human";
+  return v;
+}
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
@@ -346,8 +379,7 @@ function renderMap() {
   const el = $("regions");
   if (!names.length) {
     el.innerHTML = '<div class="region"><div class="region-idle">'
-      + 'Nothing claimed. Cards declare the files they touch, and the board '
-      + 'refuses a claim that overlaps work already in flight.</div></div>';
+      + 'Nothing claimed. Overlapping files can’t be claimed twice.</div></div>';
     $("map-hint").textContent = "no files locked";
     return;
   }
@@ -404,13 +436,19 @@ function render() {
 
   $("cols").innerHTML = COLS.map(col => {
     const cards = cardsIn(col);
-    const inner = cards.length
+    const canAdd = ADDABLE.includes(col);
+    const quick = addingCol === col
+      ? `<div class="quick-add"><input class="qa-input" data-col="${col}" type="text"
+           placeholder="New card title" value="${esc(addDraft)}"></div>`
+      : "";
+    const inner = quick + (cards.length
       ? cards.map(cardHTML).join("")
-      : `<div class="empty">${col === "Ready"
-          ? "Nothing groomed yet. A card reaches Ready once it has acceptance criteria, a file list, and a verify command."
-          : "—"}</div>`;
+      : (quick ? "" : `<div class="empty">—</div>`));
+    const addBtn = canAdd
+      ? `<button class="add-card" data-col="${col}" aria-label="Add card" title="Add card">+</button>`
+      : "";
     return `<section class="col" data-col="${col}">
-      <div class="col-head"><h2>${col}</h2><span class="n">${cards.length}</span></div>
+      <div class="col-head"><h2>${col}</h2><span class="n">${cards.length}</span>${addBtn}</div>
       <div class="drop" data-col="${col}">${inner}</div>
     </section>`;
   }).join("");
@@ -431,7 +469,48 @@ function render() {
 
   renderMap();
   wireCards();
+  wireQuickAdd();
   if (openId) openDrawer(openId);
+}
+
+/* ── quick add: title only ─────────────────────────────────────────────
+   A "+" at the top of Backlog/Ready opens one input. Enter files it and
+   leaves the input open for the next one; Escape or an empty blur closes
+   it. Everything else about the card (tags, files, verify, body) is filled
+   in later from the drawer, once the work is understood well enough to say. */
+function wireQuickAdd() {
+  document.querySelectorAll(".add-card").forEach(btn => {
+    btn.onclick = () => {
+      addingCol = btn.dataset.col;
+      addDraft = "";
+      render();
+    };
+  });
+
+  const input = document.querySelector(".qa-input");
+  if (!input) return;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  input.addEventListener("input", () => { addDraft = input.value; });
+  input.addEventListener("keydown", async e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const title = input.value.trim();
+      if (!title) return;
+      const col = input.dataset.col;
+      addDraft = "";
+      input.disabled = true;
+      await api("/api/add", { col, title, fields: {}, body: "" });
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      addingCol = null;
+      addDraft = "";
+      render();
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (!input.value.trim()) { addingCol = null; addDraft = ""; render(); }
+  });
 }
 
 /* ── interaction ────────────────────────────────────────────────────── */
@@ -460,8 +539,7 @@ function wireCards() {
       // Ready→Doing is a claim, not a plain move: it also enforces that no
       // in-flight card already holds these files.
       if (from === "Ready" && to === "Doing") {
-        const who = prompt("Claim " + id + " as:", "human");
-        if (who) await api("/api/claim", { id, owner: who });
+        await api("/api/claim", { id, owner: me() });
       } else if (from === "Doing" && to === "Ready") {
         await api("/api/release", { id });
       } else {
@@ -507,7 +585,14 @@ function openDrawer(id) {
       ${(c.comments || []).map(x => `<div class="cmt">${esc(x)}</div>`).join("")
         || '<div class="cmt" style="color:var(--faint)">None yet.</div>'}
     </div>
-    <div class="row">${btns}<button data-comment="1">Add comment</button></div>`;
+    <div class="composer">
+      <textarea id="cmt" placeholder="Add a comment"></textarea>
+      <div class="send">
+        <button id="cmt-post" disabled>Post comment</button>
+        <span>as ${esc(me())} · ⌘↵ to post</span>
+      </div>
+    </div>
+    <div class="row">${btns}</div>`;
   $("drawer").classList.add("open");
   $("scrim").classList.add("open");
   $("drawer").querySelector(".close").onclick = closeDrawer;
@@ -518,15 +603,34 @@ function openDrawer(id) {
       else await api("/api/move", { id, to });
     };
   });
-  const cb = $("drawer").querySelector("[data-comment]");
-  if (cb) cb.onclick = async () => {
-    const text = prompt("Comment on " + id + ":");
-    if (text) await api("/api/comment", { id, author: "human", text });
-  };
+
+  const ta = $("cmt"), post = $("cmt-post");
+  // The board polls every 2s and rebuilds this drawer when it changes;
+  // restore whatever was being typed so a poll never eats a draft.
+  ta.value = draft;
+  post.disabled = !draft.trim();
+  ta.addEventListener("input", () => {
+    draft = ta.value;
+    post.disabled = !draft.trim();
+  });
+  ta.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
+  });
+  post.onclick = send;
+
+  async function send() {
+    const text = ta.value.trim();
+    if (!text) return;
+    post.disabled = true;
+    const ok = await api("/api/comment", { id, author: me(), text });
+    if (ok) { draft = ""; const t = $("cmt"); if (t) t.value = ""; }
+    else post.disabled = false;
+  }
 }
 
 function closeDrawer() {
   openId = null;
+  draft = "";
   $("drawer").classList.remove("open");
   $("scrim").classList.remove("open");
 }
@@ -535,29 +639,14 @@ $("scrim").onclick = closeDrawer;
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 $("refresh").onclick = () => load(true);
 
-COLS.forEach(c => {
-  const o = document.createElement("option");
-  o.value = o.textContent = c;
-  $("f-col").appendChild(o);
+const meEl = $("me");
+meEl.value = localStorage.getItem("klaus.me") || "human";
+meEl.addEventListener("change", () => {
+  const v = meEl.value.trim() || "human";
+  meEl.value = v;
+  localStorage.setItem("klaus.me", v);
+  if (openId) openDrawer(openId);   // the composer shows who you post as
 });
-$("f-col").value = "Backlog";
-
-$("f-add").onclick = async () => {
-  const title = $("f-title").value.trim();
-  if (!title) { toast("A card needs a title before it can be added."); return; }
-  const ok = await api("/api/add", {
-    col: $("f-col").value,
-    title,
-    fields: {
-      tags: $("f-tags").value.trim(),
-      files: $("f-files").value.trim(),
-      verify: $("f-verify").value.trim()
-    },
-    body: $("f-body").value
-  });
-  if (ok) ["f-title", "f-tags", "f-files", "f-verify", "f-body"]
-    .forEach(i => { $(i).value = ""; });
-};
 
 load(true);
 setInterval(load, 2000);
