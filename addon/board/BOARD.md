@@ -7,289 +7,240 @@
 
 ## Backlog
 
-## Ready
-
-### K-001: Manual-verify PDF drive and deck-curate surfaces in live Anki
+### K-028: A2a: strip text-generation from ollama_client.py
 owner: -
-priority: P0
-tags: 
-files: 
-verify: human confirms each checklist item in Anki
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/ollama_client.py
+verify: ! grep -q 'def chat' klausmate/ollama_client.py && ! grep -q 'def generate' klausmate/ollama_client.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
 created: 2026-08-23
 
-Only a human can do this: it needs a running Anki with a real collection.
+Phase A2a. BLOCKED until K-027 (A1) is Done — A1 deletes generating_client() and the three call sites of chat()/generate(). Do not start before then.
 
-Checklist:
-- Toolbar shows the PDFs link; it opens the drive window and re-raises on second click.
-- Drive tree lists imported PDFs; folder create/move/rename and display-rename survive a restart.
-- Double-click opens a PDF in the right pane with annotations intact.
-- Retention columns populate; Embed runs with progress and can be cancelled; the threshold slider re-aggregates live.
-- Deck browser shows the Curate Deck button; dropping a PDF imports and arms it without Anki's own importer opening.
-- Curate at root offers the all-decks/specific chooser; inside a deck it scopes silently.
+Klaus is embeddings-only now. ollama_client.py keeps only what embeddings and model management need.
 
-Report failures as new cards rather than fixing them here.
+DELETE: generate() (~:228-264), chat() (~:266-304), and the three response extractors used only by them: _extract_model_text (~:27), _extract_generate_response (~:36), _extract_chat_message (~:43). Locate by name.
 
-#### Comments
-- [2026-08-23 Pouya] PDF viewer just doesn't work at all. It's not even opening. I can't figure out exactly how to. It's not easy to understand the model installation process for a curation or an embedded model, so that needs to be fixed as well.
-- [2026-08-23 Pouya] PDF shows up at the top. It just doesn't open into anything, like it doesn't open a window or anything.
+KEEP (all still used): _url_error_message, _http_error_detail, every error class (OllamaError/OllamaNotRunning/etc), _post, _get, health(), list_models(), embed(), pull(), delete(). embeddings.py's OllamaProvider.embed() calls client.embed() -> POST /api/embed, and manage_models.py drives pull/delete/list_models — verify each with grep before you touch anything.
+
+Also update the module docstring if it advertises chat/generate.
+
+Constraint: do not touch embeddings.py, manage_models.py, or any other file. Full suite before committing; py_compile through the Anki symlink.
+
+Done when: verify passes, full suite green, handoff confirms via grep that no caller of the deleted methods remains anywhere in klausmate/ or tests/.
+
+### K-029: A2b: rewrite setup_flow.py for embeddings-only, make Ollama optional
+owner: -
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/setup_flow.py
+verify: ! grep -q 'ask_model' klausmate/setup_flow.py && ! grep -q 'autocomplete' klausmate/setup_flow.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Phase A2b. BLOCKED until K-027 (A1) is Done — A1 deletes autocomplete_model/ask_model/klaus_engine, which this file calls via _pkg(). Read A1's handoff comment on K-027 first: it lists exactly which names vanished.
+
+Klaus is embeddings-only. The DEFAULT install (embedding_provider=voyage) now needs NO Ollama at all — today this file nags every user to download a ~1GB runtime regardless. That is the main bug to fix.
+
+1. first_run_check welcome copy: drop the ghost-text and ⌘K bullets. Keep and lead with the PDF sidebar + semantic-search/curation bullets. Remove the claim that 'Autocomplete and Ask run on this computer' — replace with an honest line about semantic search using a cloud embedder by default (free tier) or a local model if the user prefers.
+
+2. _readiness_check_body: today its 'missing' list checks only autocomplete_model and ask_model — there is NO embedding readiness check at all. Replace that block entirely: ready means (cloud provider AND its embedding_api_key_<provider> is non-empty) OR (ollama provider AND the configured/default embedding model is installed). Not ready -> one actionable warning pointing at Manage models. Use embeddings.provider_name(cfg)/embedding_model(cfg) and embeddings.DEFAULT_MODELS; the config key shape is embedding_api_key_voyage / embedding_api_key_openai (confirm against manage_models._embed_cfg_key).
+
+3. Ollama reachability half of _readiness_check_body: make it conditional on embeddings.provider_name(cfg) == 'ollama'. A Voyage user must never see an Ollama warning. Same gate on _maybe_offer_runtime_update.
+
+4. Starter pull: if a first-run auto-pull remains, it must pull nomic-embed-text (the embedding default), NOT a text model, and only when the user has chosen the local provider. If that makes the starter pull vacuous for cloud users, drop it for them entirely.
+
+Keep: _first_run_dialog_shown_this_session and both its readers in this module (shared session state), the _pkg() lazy-access pattern, all defensive try/except. _try_silent_autostart and _save_config_on_main survive in __init__.py per A1 — keep calling them via _pkg().
+
+Constraint: this file only. Full suite; py_compile through the symlink. Done when: verify passes and a Voyage-default profile would see zero Ollama prompts (state in the handoff exactly which code path a Voyage user now takes through this file).
+
+### K-030: A3: collapse Manage models to embeddings-only
+owner: -
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/manage_models.py
+verify: ! grep -q 'ask_combo' klausmate/manage_models.py && ! grep -q '_MODEL_PRESETS' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Phase A3. BLOCKED until K-027 (A1) is Done — A1 deletes autocomplete_model/ask_model/klaus_engine/_DEFAULT_CLAUDE_MODEL, which this file calls via _pkg(). Read A1's handoff on K-027 first for the exact list.
+
+The dialog currently has three job rows (Autocomplete / Ask / Semantic search). Only Semantic search survives — Klaus is embeddings-only.
+
+DELETE: the Autocomplete row + caption, the Ask row + caption, claude_key_lbl/edit + claude_model_lbl/edit, ask_selection(), the ask/auto halves of sync_jobs_widgets and update_jobs_status and save_jobs, the auto/Ask used-by badges in rebuild_library_list, the auto/ask entries in set_busy's widget tuple, and their signal connects. Delete _MODEL_PRESETS (text models) entirely, plus the Text-models tab, _is_embedding_model, and _fill_pull_presets's tab-switching — with only embedding models left, the library is ONE list again (keep _EMBED_MODEL_PRESETS from K-026 as the pull dropdown's presets). Also fix the module docstring's _pkg() contract list and maybe_auto_pull_starter (must reference an embedding model or go away).
+
+REWORK the framing (this is the point of the card, not just deletion): 'What Klaus uses' now describes one job. The K-009 explainer text currently says 'Autocomplete and Ask work without any of this' — that is now false and inverted; semantic search is the ONLY thing. Rewrite that caption and the Semantic-search caption to match a one-job product. Keep the K-009 one-click 'Get key' / 'Pull it' dispatcher and the self-documenting key placeholders exactly as they are — they still apply.
+
+ADD a small 'General' group with the two toggles orphaned by settings_ui.py's deletion (A5): image_crop_enabled and runtime_auto_setup. Read settings_ui.py for their exact config keys, labels and defaults, but do NOT edit that file (A5 deletes it).
+
+Constraint: this file only. tests/test_dialog_logic.py currently models the ask/auto rows and WILL fail — that is expected and A5 rewrites it; do not edit tests here, and note the expected failures in your handoff. Every other suite must stay green. py_compile through the symlink.
+
+Done when: verify passes, the dialog is one job + one model library + General, and the handoff lists every removed widget and the new caption text.
+
+### K-031: A4: drop dead browse-search calls from browse_toggles.py
+owner: -
+priority: P2
+tags: sonnet-safe,removal,library-era
+files: klausmate/browse_toggles.py
+verify: ! grep -q '_install_browser_search_klaus' klausmate/browse_toggles.py && ! grep -q '_remap_browser_mark_hotkey' klausmate/browse_toggles.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Phase A4. BLOCKED until K-027 (A1) is Done — A1 deletes the two functions this file calls.
+
+Small card. In on_browser_will_show's _deferred() (~:206-212), remove the two _pkg() calls to _remap_browser_mark_hotkey and _install_browser_search_klaus, which A1 deleted along with the Browse natural-language search feature. Keep the third call, _reset_browse_layout_to_defaults (still lives in __init__.py — verify with grep). Update the module docstring: its numbered list mentions the ⌘K search and the Mark-hotkey remap as items 1 and 2; those behaviors are gone, and Anki's native ⌘K Mark now works again.
+
+Everything else in this file — the ◧/◨ sidebar and editor-column toggles, _VisibilityWatcher, the gridLayout cell-(0,0) repack note and the QTimer.singleShot(0) deferral note — MUST stay, comments verbatim.
+
+Constraint: this file only. Full suite; py_compile through the symlink. Done when: verify passes and the handoff confirms _reset_browse_layout_to_defaults still resolves.
+
+### K-032: A5: delete dead modules and rewrite the two test files
+owner: -
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/claude_api.py,klausmate/anki_tools.py,klausmate/settings_ui.py,tests/test_imports.py,tests/test_dialog_logic.py,klausmate/embeddings.py
+verify: ! test -f klausmate/claude_api.py && ! test -f klausmate/anki_tools.py && ! test -f klausmate/settings_ui.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+
+Phase A5 — the closing card of the removal phase. BLOCKED until K-027, K-028, K-029, K-030, K-031 are ALL Done. Verify that before starting.
+
+1. git rm three modules, each confirmed dead by then:
+   - claude_api.py — its only consumers were __init__.py's ClaudeAPIError import and _ask_via_claude, both deleted in A1. Grep to confirm zero references before deleting.
+   - anki_tools.py — already fully orphaned today (zero references anywhere in the repo; it was tooling for a removed chat agent).
+   - settings_ui.py — its two surviving toggles moved into Manage models in A3. Confirm A3 actually did that before deleting, and confirm nothing still imports or opens it.
+
+2. klausmate/embeddings.py: ONE comment near the _post_json helper says something like 'same as claude_api.' — reword it to stand alone. This is a comment-only edit; change no logic in this file.
+
+3. tests/test_imports.py: it globs klausmate/*.py and imports each, then executes __init__.py. Update it for the three removed modules so it passes. Keep its structure and its guard value.
+
+4. tests/test_dialog_logic.py: near-total rewrite. It currently transcribes the Autocomplete/Ask/Claude combo logic, which no longer exists — and it has ZERO coverage of the embedding rows that survive. KEEP the check() harness and the Combo class verbatim (they are good and reusable). Rebuild World around what the dialog is now: embed_provider_combo, embed_model_combo, embed_key_edit, the ui_state['syncing'] guard, and the K-009 fix-button dispatcher (kind 'key' vs 'model' vs '' — read manage_models.py's _embed_fix_kind and on_embed_fix_clicked and transcribe faithfully; the file's contract is hand-transcription kept in lockstep with the real closure). At minimum assert: switching provider repopulates without writing config (the syncing guard — this concept survives from the old file); a cloud provider with no key yields kind 'key'; a local provider with an uninstalled model yields kind 'model'; a ready state yields ''; the embed model dropdown offers only embedding models. Aim to at least match the 29 assertions the old file had.
+
+5. FINAL GATE for the whole removal phase: run a repo-wide sweep and paste the output in your handoff —
+   grep -rn 'claude_api\|anki_tools\|settings_ui\|autocomplete\|ask_model\|klaus_engine\|request_completion\|copilot.css' klausmate/ tests/ --include='*.py' --include='*.js' --include='*.json'
+   Anything that comes back must be either a deliberate historical mention in a comment (say which) or a real leftover you then fix. Docs (README/CLAUDE.md/ANKIWEB.md/config.md) are a SEPARATE follow-up card — do not edit them here, but DO list every doc hit the sweep finds so that card can be written accurately.
+
+Full suite must be green at the end — that is the whole point of this card. py_compile through the Anki symlink. Done when: verify passes, the sweep is clean, and the handoff includes the sweep output plus the new test_dialog_logic assertion count.
+
+### K-035: B3: restyle the editor PDF bar to match the deck-browser square
+owner: -
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py
+verify: grep -q 'dashed' klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Phase B3. BLOCKED until K-027 (A1) is Done — A1 is rewriting __init__.py heavily and owns the file until it lands. ALSO read K-034 (B2)'s handoff comment first if that card is done: it records the exact final border/radius/padding/copy of the deck-browser square, which this card must match.
+
+Pouya's requirement (item 12): 'I want the same PDF thing to replace the Klaus thing at the bottom of the ad panel, so those two should look exactly the same. There should be complete consistency between those two items.' The Add/Edit window's PDF bar and the deck-browser drop square do the same job but look nothing alike — one is a 34px solid-bordered Qt row with a cobalt 'Klaus' badge, the other a dashed centered pill.
+
+Restyle _PdfBar (the QFrame at ~:2515-2694, an id-selector stylesheet on objectName 'klausmateDropZone') to match the square:
+- 1px DASHED border rgba(128,128,128,0.55), radius 10px, transparent/inherit background at rest (the square uses var(--window-bg,transparent)); centered content.
+- Idle copy 'Drop a lecture PDF here' -> match the square's phrasing as closely as the context allows (the square says 'Drop a lecture PDF here to curate a deck from it.'; in the editor the action is 'to read alongside your cards', so keep the leading clause identical and adapt only the trailing purpose clause — state your exact final string in the handoff).
+- A visible 'Browse…' button inside the bar, like the square gets in B2.
+- Drag-over state should read like the square's armed state: solid cobalt rgba(58,130,247,0.85) border.
+- DROP the cobalt 'Klaus' badge — it was there to rhyme with the ⌘K popover, which A1 deleted. Its removal is part of the simplification.
+- KEEP the extra affordances the editor genuinely needs — Remove (when a PDF is active) and the ◨ viewer toggle — but make them subtle/secondary so the bar still reads as the same object as the square. The bar may need to grow past 34px to breathe; that is fine, but it must not dominate the Add window.
+- Preserve ALL behavior: acceptDrops, dragEnter/dragLeave/dropEvent with the dragOver property + unpolish/polish restyle trick, multi-PDF drop, _elide_name on resize, the Browse/Remove action swap in set_active_pdf, update_toggle.
+
+Do NOT touch _install_klaus_bar's placement logic (~:4130-4188) — the button-box insertion was hard-won in K-017 and is correct; you are restyling the widget, not moving it.
+
+Constraint: this file only, and only the _PdfBar region. Full suite; py_compile through the symlink. Done when: verify passes and the handoff states the final border/radius/copy values so they can be diffed against the square's.
+
+## Ready
 
 ## Doing
+
+### K-027: A1: remove autocomplete + Ask + Browse NL search from __init__.py and copilot.js
+owner: sonnet-x
+priority: P0
+tags: sonnet-safe,removal,library-era
+files: klausmate/__init__.py,klausmate/web/copilot.js,klausmate/web/copilot.css,klausmate/config.json,klausmate/config.md
+verify: ! grep -q 'def build_prompt' klausmate/__init__.py && ! test -f klausmate/web/copilot.css && ! grep -q 'dbgLog' klausmate/web/copilot.js && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Phase A1 of the approved Library-era plan (plan file: ~/.claude/plans/ok-but-i-want-cozy-forest.md). Klaus is dropping ALL LLM-text features — autocomplete, editor ⌘K Ask, and Browse natural-language search — keeping only embeddings. Hard delete; git preserves history.
+
+DELETE from klausmate/__init__.py (locate by NAME, line numbers are pre-K-023 approximations and have shifted):
+- Debug instrumentation: _debug_log_path block near top (~:21-60) and the klausmate:dbg pycmd handler (~:2149-2160).
+- from .claude_api import ClaudeAPIError (line ~109).
+- _DEFAULT_MODEL, resolve_model, autocomplete_model, ask_model, klaus_engine, _DEFAULT_CLAUDE_MODEL, _DEFAULT_ASK_SYSTEM, _ask_via_claude.
+- _MODE_ORDER/_MODE_PARAMS/_LIST_INCOMING_RE/_LONG_MIN_SCORE/choose_mode, build_prompt, _strip_html, extract_card_ctx, strip_markdown + its _MD_* regexes.
+- The ENTIRE output-cleanup section (_ABBREV through clean_completion, incl. _strip_llm_artifacts — its last caller, Browse search, dies here too).
+- request_completion + send_completion_to_js, build_ask_prompt + request_ask.
+- Browse NL search: the search-conversion block, _KlausSearchAskPopover, _install_browser_search_klaus, AND _remap_browser_mark_hotkey (deleting it restores Anki's native ⌘K Mark hotkey — that is intentional).
+- retrieve_chunks_for (its 3 callers all die). Leave pdf_handler.py alone (its BM25 fn goes dormant; out of scope).
+- generating_client. In the error-helper cluster: KEEP _try_silent_autostart and _save_config_on_main (setup_flow.py reaches them via _pkg()); delete _show_ollama_setup_error/_classify_setup_error ONLY if grep shows no surviving callers.
+- _GHOST_SPAN_RE + strip_ghost_html + the gui_hooks.editor_will_munge_html registration.
+- on_js_message branches for 'complete' and 'ask'; runtime-config injection of ask/autocomplete keys (ask_hotkey, ask_enabled, autocomplete_enabled, cycle hotkeys, debounce, min-chars, cooldowns); copilot.css injection line.
+- Test-connection dialog: trim the autocomplete/ask model lines; keep the endpoint/health part.
+- Settings openers pointing at settings_ui (menu will be rebuilt in A3; settings_ui.py itself is deleted in A5, NOT here).
+- _migrate_config: collapse _LEGACY_KEY_RENAMES into _LEGACY_KEYS_DROPPED (the rename targets are now dead), and append ALL newly-dead keys so old profiles get scrubbed: model, autocomplete_model, ask_model, generate_timeout_s, temperature, top_p, top_k, repeat_penalty, completion_mode, ask_hotkey, cycle_forward_hotkey, cycle_backward_hotkey, debounce_ms, min_chars_before_trigger, paste_cooldown_ms, dismissal_cooldown_ms, accept_cooldown_ms, retrieval_method, retrieval_top_k, system_prompt, ask_system_prompt, autocomplete_enabled, ask_enabled, chat_hotkey, klaus_engine, claude_api_key, claude_model, claude_timeout_s, chat_engine, chat_claude_api_key, chat_claude_model, chat_turn_timeout_s, autofill_system_prompt. DO NOT TOUCH the _embed_default_migrated guard block.
+
+klausmate/web/copilot.js — reduce to a minimal file keeping ONLY: the IIFE + window.klausmate={__installed:true} stub, deepActiveElement/isEditableField, fieldNameForEditable, notifyFieldFocus + its mousedown and focusin listeners (strip the ghost-wiping lines inside focusin), and the dblclick crop handler. Everything else goes (ghost text, ask popover, dbgLog + its localhost POST, keydown handler, layout tick with its findFieldContainers ReferenceError).
+
+DELETE klausmate/web/copilot.css entirely (git rm).
+
+klausmate/config.json — remove every key listed in the drop list above that exists there (survivors: endpoint, runtime_auto_setup, image_crop_enabled, embedding_*, curate_*, pdf_match_*, pdf_index_max_chunks, and any _-prefixed state keys). klausmate/config.md — delete the sections documenting removed keys/features.
+
+HARD CONSTRAINTS: grep EVERY name before deleting it — a name is deletable only when all its callers are also in this card's delete set. manage_models.py/setup_flow.py reference some deleted names via lazy _pkg() calls — those modules are FOLLOW-UP cards (A3/A2b); their _pkg() calls are lazy so imports and py_compile stay green — do NOT touch those files. tests/test_dialog_logic.py is a stub transcription that imports nothing from the addon — it must keep passing untouched. tests/test_imports.py must pass (claude_api.py still exists until A5; you only remove __init__'s import OF it).
+
+Done when: verify passes, full suite (234 assertions) green, py_compile through the Anki symlink clean, ⌘K/autocomplete/Browse-search code is unreachable, and the handoff lists every deleted top-level name plus every name you KEPT that the plan flagged (with the grep evidence for keeping it).
 
 ## Review
 
 ## Done
 
-### K-022: The PDFs button at the top still does not open anything.
-owner: sonnet-p
-priority: P1
-tags: sonnet-safe
-files: klausmate/pdf_drive.py
-verify: grep -q 'self.show()' klausmate/pdf_drive.py && python3 tests/test_imports.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Pouya, after restarting Anki: the PDFs toolbar button still opens nothing. Root cause found by orchestrator code-reading, confirmed twice-over by prior evidence (K-008 ruled out import/setup errors; open_drive's except-with-showWarning never fired, so nothing raises):
-
-DriveWindow NEVER SHOWS ITSELF. aqt.dialogs.open() constructs a new instance via the registered creator and stores it — it does not call show(); every Anki dialog calls self.show() in its own __init__ (see Browser/AddCards in the aqt source). So the click builds a complete window that stays invisible. The existing reopen() only helps a window that was shown once.
-
-Fix, all in klausmate/pdf_drive.py:
-1. End of DriveWindow.__init__ (after _restore_geometry/rebuild): self.show() + self.raise_() + self.activateWindow(), try/excepted per house style.
-2. Related defect, fix in the same pass: user_files/drive.json currently holds window.splitter [46, 46] — closeEvent saved sizes() from the never-shown window, i.e. garbage. Guard BOTH ends: _restore_geometry must ignore splitter sizes that are absurd (e.g. either pane < 120px → fall back to the default split), and closeEvent must not persist sizes when the window was never visible (isVisible() check) or sizes are degenerate.
-3. reopen() should also defensively show()+raise_() in case the stored instance is hidden.
-
-Do NOT edit user_files/drive.json itself — it is user data and the restore guard makes stale values harmless.
-
-Done when: the gate passes, imports pass, and the handoff explains where show() landed and how the splitter guard decides.
-
-#### Comments
-- [2026-08-23 sonnet-p] Decisions: put self.show()+raise_()+activateWindow() at the end of __init__ (after _restore_geometry/rebuild_tree/_refresh_rows), so the window is fully populated before it appears on screen; same 3 calls added to reopen() defensively in case aqt.dialogs hands back a hidden stored instance. Splitter guard: new _sane_splitter_sizes(sizes) helper rejects anything that isn't a 2-int list or has either pane < 120px (the _MIN_PANE threshold) — used on both ends: _restore_geometry falls back to the [300, 740] default when the stored value is insane (harmless against the existing stale [46, 46] in the user's drive.json, which I did not touch), and _save_geometry now (a) skips persisting anything at all when self.isVisible() is False, since a never-shown window's geometry/splitter are meaningless, and (b) even when visible, only writes the splitter key when _sane_splitter_sizes approves it — x/y/w/h still save either way. Files: klausmate/pdf_drive.py. Risks: reviewer should sanity-check that show() at the very end of __init__ doesn't race with aqt.dialogs.open()'s own bookkeeping (register_dialog's creator lambda just returns _create()'s instance; Browser/AddCards call self.show() in __init__ the same way per the card's own research, so this follows house pattern). Next: none — K-001's manual-verify checklist item ('opens the drive window and re-raises on second click') can now actually be exercised by a human.
-- [2026-08-23 orchestrator] Code review passed: show/raise/activateWindow at the end of __init__ (after the tree is populated, so no blank flash) and defensively in reopen(); _sane_splitter_sizes rejects panes under 120px so the stale [46,46] in drive.json is neutralized on restore without touching the file; _save_geometry bails when the window was never visible and omits degenerate splitter values otherwise. Compiles, imports green. HOLDING IN REVIEW: this family of card has burned us with should-work-but-doesnt twice, so it gets the same gate as everything else — Pouya, after the NEXT Anki restart, click PDFs: the drive window should appear frontmost with a sensible split. Then move to Done.
-
-### K-017: Align the add pdf thing to the bottom, right above the four buttons.
-owner: sonnet-q
-priority: P1
-tags: sonnet-safe
-files: klausmate/__init__.py
-verify: python3 tests/test_imports.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-REWORK — Pouya checked in live Anki after the first attempt: 'This was not done properly, the add pdf square is still aligned to the top. I want it aligned to the bottom, above the four buttons.'
-
-Attempt #1 (kept in history, commit 03219da): deferred layout.addWidget(panel) by one tick so the bar appends last to editor.widget.layout(). The position did not change, so appending last to THAT layout does not put the bar at the visual bottom — wrong container, or that layout does not own the vertical order we care about.
-
-New approach — target the host window, not the editor's internal layout: from editor.widget, walk up parents to the top-level window (AddCards). Find the layout that directly contains the window's bottom button box (QDialogButtonBox / the widget holding History/Help/Close/Add), and insertWidget the Klaus panel into THAT layout at the index just before the button box. Fall back to the current editor-layout append if the walk fails (guarded, logged), so Browse/EditCurrent hosts — which have different bottoms — keep working as today.
-
-Investigate before coding: print/log the widget tree once if needed (temporary, removed before commit) is NOT possible headlessly — instead read aqt/addcards.py in the Anki source tree conceptually via CLAUDE.md's guidance: generated forms show setupUi only, Anki mutates layouts afterwards; grep the aqt source strings if useful. State your layout reasoning explicitly in the handoff since nobody can see the window until Pouya restarts Anki.
-
-Keep attempt #1's deferral if still needed for construction-order safety, or revert it if superseded — your call, justify it.
-
-Done when: imports pass, compile passes, and the handoff explains exactly which layout now hosts the bar and at what index. Card stops in Review for Pouya's visual check, same as before.
-
-#### Comments
-- [2026-08-23 sonnet-n] Decisions: I read the code differently than the card's literal pointer. The _KlausmatePanel.__init__ 'outer' QVBoxLayout at __init__.py (outer.addWidget(self._pdf_bar), now line 4370) only ever holds that one widget — it's trivially already first/last, nothing to reorder there. The real placement is decided where the whole panel (which just wraps the bar) gets attached to the ACTUAL editor layout: layout.addWidget(panel) inside on_editor_did_init (now line 5786), where layout = editor.widget.layout() — that's the fieldsArea layout that sits directly above the Add window's buttonBox row. That call ran synchronously inside editor_did_init, i.e. before Editor.__init__ necessarily finishes building out editor.widget's own layout. This file already has a documented precedent for exactly this race: _install_panel (a few lines below) is deferred via QTimer.singleShot(0, ...) specifically because 'the window's layout is fully constructed' only after one event-loop tick. I applied the same fix: wrapped the panel-creation-and-addWidget block in a new _install_klaus_bar() closure and scheduled it with QTimer.singleShot(0, _install_klaus_bar), so it now runs after Anki finishes constructing the rest of that layout, guaranteeing our bar is appended last. Files: klausmate/__init__.py — only the on_editor_did_init function changed (added _install_klaus_bar, deferred the existing 4-line block into it unchanged, added a try/except RuntimeError for the case the widget is gone by the time the timer fires). Nothing else in the layout was reordered; the two lines that set _klausmate_target_field_index/_klausmate_active_pdf defaults stayed synchronous since nothing depends on timing there. Risks: Qt widgets can't be instantiated in this repo's offscreen test harness (see .claude/skills/klaus-test), so I could not empirically confirm this was the actual root cause of the misplacement vs. some other layout detail I'm not seeing — please eyeball the Add window after restarting Anki, specifically that the 'Drop lecture PDF here' bar sits directly above the History/Help/Close/Add row with nothing (e.g. stray whitespace or another widget) between them. Also worth confirming the PDF bar still shows up immediately (not with a visible flash/delay) since it now waits one 0ms timer tick before appearing — should be imperceptible but flag it if not. Next: none identified beyond the visual check this card already calls for.
-- [2026-08-23 orchestrator] Code review passed: minimal deferred-install change with a defensive RuntimeError guard, mirroring the established _install_panel pattern; compiles through the symlink; imports green. The worker's disagreement with my grooming was correct — the card pointed at outer.addWidget inside _KlausmatePanel, which only ever holds one widget; the real ordering happens at layout.addWidget(panel) in on_editor_did_init, and that is what was deferred. HOLDING IN REVIEW: position is visual. Pouya — restart Anki, open the Add window, and check the 'Drop lecture PDF here' bar now sits at the very bottom, directly above History/Help/Close/Add. Move to Done if right; comment and move to Doing if not.
-- [2026-08-23 Pouya] This was not done properly, the add pdf square is still aligned to the top. I want it aligned to the bottom, above the four buttons.
-- [2026-08-23 sonnet-q] Decisions: I disagreed with attempt #1/#2's target (editor.widget.layout(), i.e. Editor.outerLayout) and confirmed why via Anki's actual source (checked out at /Users/pyamzi/Documents/Github/R36XX AnkiBoy/anki-main/qt/aqt, v25.09.2, close to the installed 26.8.1). Editor.setupOuter() (aqt/editor.py:196-201) gives editor.widget (= form.fieldsArea) its OWN private QVBoxLayout holding only the field-editing webview (self.web, stretch=1) -- setupTags() exists but is never called in this Anki version (tags are HTML inside the webview now), so that layout has nothing else in it besides our appended panel. Appending there only ever controls order INSIDE fieldsArea; fieldsArea itself is a SIBLING widget one level up, positioned above the button row by the window's OWN layout, so nothing done inside outerLayout can move the bar past fieldsArea's own boundary -- this is why attempts #1/#2 stayed pinned to the top edge of that box regardless of ordering. Confirmed from the real .ui forms: aqt/forms/addcards.ui and aqt/forms/editcurrent.ui both define centralwidget's QVBoxLayout as items [..., fieldsArea, buttonBox] in that order -- buttonBox (QDialogButtonBox, holds History/Help/Close/Add in AddCards) is fieldsArea's direct next sibling in THAT outer layout, not a descendant of fieldsArea. New fix in on_editor_did_init's _install_klaus_bar (klausmate/__init__.py): after building the panel, call host = editor.parentWindow, then button_box = host.findChild(QDialogButtonBox). If found, get box_parent = button_box.parentWidget() (== centralwidget) and box_layout = box_parent.layout() (== verticalLayout_3 / verticalLayout), compute idx = box_layout.indexOf(button_box), and box_layout.insertWidget(idx, panel) -- inserting the bar as buttonBox's immediate previous sibling in the WINDOW's layout, i.e. index (idx), which pushes buttonBox to idx+1. This places the bar directly above History/Help/Close/Add in AddCards, and directly above Close in EditCurrent (same centralwidget/buttonBox shape per editcurrent.ui). If host.findChild(QDialogButtonBox) returns None -- true for the Browser window, which has no QDialogButtonBox anywhere in its widget tree (grepped aqt/browser/browser.py and forms/browser.ui, zero matches) -- placed stays False and we fall back to the pre-existing layout.addWidget(panel) on editor.widget.layout(), i.e. Browse keeps exactly today's behavior. Kept attempt #1/#2's QTimer.singleShot(0, ...) deferral for panel-construction-order safety (unrelated to the actual bug, but harmless and already-established pattern in this file via _install_panel); the button box widget itself is built by aqt's setupUi() before editor_did_init ever fires, so the deferral was never needed for FINDING it, only for constructing the panel safely. Files: klausmate/__init__.py -- added QDialogButtonBox to the aqt.qt import block, rewrote _install_klaus_bar inside on_editor_did_init to try the host-window insertWidget path before falling back to the old append. Nothing else touched. Risks: I could not visually confirm this in a live Anki window (Qt widgets can't be instantiated in this repo's offscreen test harness) -- please restart Anki and check the Add window: the 'Drop lecture PDF here' bar should now sit directly above the History/Help/Close/Add row, and the EditCurrent window (opened from Browser, Ctrl+E on a card) should show it directly above Close. One thing worth eyeballing: findChild(QDialogButtonBox) does a recursive search of the ENTIRE host window, so if some other klausmate feature (e.g. the PDF drive dialog) ever adds a QDialogButtonBox as a descendant of the SAME AddCards/EditCurrent window before this runs, it could match the wrong one -- I checked and found no such case today. Next: none identified beyond the visual check this card already calls for.
-- [2026-08-23 orchestrator] Code review passed, and I independently re-verified the investigation rather than taking it on trust: pulled the real addcards.ui/editcurrent.ui from the anki-main checkout at /Users/pyamzi/Documents/Github/R36XX AnkiBoy/anki-main/qt/aqt/forms/ and confirmed line-for-line that centralwidget's QVBoxLayout holds [modelArea/deckArea row, fieldsArea, buttonBox] as three direct siblings — fieldsArea and buttonBox are NOT nested, exactly as the handoff claims. Also confirmed editor.parentWindow is unconditionally set in Editor.__init__ (aqt/editor.py:167) and that Browser has zero QDialogButtonBox anywhere in browser.py or browser.ui, so the fallback path is real, not speculative. This is the correct container this time — insertWidget(idx, panel) lands the bar between fieldsArea and buttonBox, i.e. directly above it. Compiles, imports green. Still HOLDING IN REVIEW per the card's own rule: Pouya, next Anki restart, check the Add window bar sits right above History/Help/Close/Add, and separately check the same PDFs-button fix from K-022 while you're in there.
-
-### K-023: Slice 1/3: extract the Manage-models dialog to manage_models.py
-owner: sonnet-r
+### K-034: B2: add a Browse button inside the deck-browser drop square
+owner: sonnet-z
 priority: P2
-tags: sonnet-safe,slice
-files: klausmate/__init__.py,klausmate/manage_models.py
-verify: test -f klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+tags: sonnet-safe,library-era
+files: klausmate/deck_curate.py
+verify: grep -q 'BROWSE_CMD' klausmate/deck_curate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 created: 2026-08-23
 claimed: 2026-08-23
 
-First slice of K-006 (parent card). Pure code MOVE, zero behavior change.
+Phase B2. Small, self-contained. The deck-browser drop square currently only accepts a drag-and-drop; there is no way to pick a PDF with a file dialog from that screen. Add a 'Browse…' button inside the square.
 
-Move from klausmate/__init__.py into a new klausmate/manage_models.py:
-- _MODEL_PRESETS (line ~2922), _format_pull_event (~2949), _KlausManageDialog (~2970), manage_models_dialog (~2996 through ~4050). Roughly 1,130 lines.
+The bridge pattern already exists in this file and the square already uses it — the armed state's '×' disarm link is a pycmd() call inside this very injected div, which proves clicks round-trip. Mirror it:
 
-Hard requirements:
-- __init__.py keeps working references: it calls manage_models_dialog at ~8 sites (first-run, readiness, install_menu, settings glue) and passes it into settings_ui.open_settings_dialog. After the move, import it back: 'from .manage_models import manage_models_dialog, _MODEL_PRESETS' near the other relative imports, so every existing call site and any external reference keeps resolving. ollama_runtime.py's docstring mentions _format_pull_event — docstring only, no import to fix.
-- CIRCULAR IMPORTS: the moved code references names living in __init__.py (get_config, write_config, client, _save_config_on_main, autocomplete_model, ask_model, klaus_engine, open_config, _DEFAULT_CLAUDE_MODEL, and runtime helpers). __init__ will import manage_models at module load, so manage_models must NOT import __init__ at module load. Use the established pattern from curation.py:56 — a lazy _pkg() via importlib.import_module(__package__) inside functions — or import from the true leaf module where one exists (ollama_setup: install_methods/run_install_method/ollama_reachable; ollama_runtime: full_setup/runtime_download_size_hint; ollama_client). Grep every name the moved block references before deciding; list your import decisions in the handoff.
-- Qt imports: copy exactly the aqt.qt names the moved code uses into the new module's own import block; remove any that become unused in __init__.py ONLY if truly unused elsewhere (grep first).
-- tests/test_dialog_logic.py transcribes this dialog's logic; it must still pass unmodified — if it fails, your move changed behavior.
-- Run the FULL suite before committing, not just the verify gate. Compile hook fires on every klausmate/*.py edit.
+1. Add BROWSE_CMD = 'klausmate_browse' next to CURATE_CMD/DISARM_CMD (~:48-49) and add it to the _CLAIMED set (~:50). The _CLAIMED addition is mandatory — on_deck_js_message early-bails on messages not in that set.
+2. Add a branch in on_deck_js_message (~:293-310) alongside the DISARM_CMD branch. Return (True, None) like the others. Keep the existing isinstance(context, (DeckBrowser, DeckBrowserBottomBar)) gate — the square renders under DeckBrowser so it passes.
+3. In the handler, do NOT open the file dialog synchronously inside the JS-message callback — wrap it in QTimer.singleShot(0, ...) exactly as the drop wrapper does (~:400-402). Then QFileDialog.getOpenFileNames (plural: multi-select, matching the drop path which imports every dropped PDF) with filter 'PDF files (*.pdf)', and feed the result to the existing _import_and_arm(paths) (~:100) so import + arm + refresh behave identically to a drop.
+4. Emit the button in on_deck_browser_content's idle-state HTML (~:336-349) with onclick='pycmd("klausmate_browse"); return false;'. Style it inline (the div has no stylesheet) as a quiet secondary control — a bordered link-button, not a loud primary. It belongs in the IDLE state; the armed state keeps its current text + × affordance.
 
-Done when: verify passes, full suite green, __init__.py is ~1,100 lines shorter, and the handoff lists every name whose import path changed.
+NAMESPACE TRAP: it must be the underscore form klausmate_browse, NOT the editor bridge's colon form klausmate:browse — the colon handler claims and drops messages from non-Editor contexts. The module docstring explains this.
+
+Note for your handoff: B3 (a sibling card) restyles the editor's Qt PDF bar to look exactly like this square, so if you change the square's dashed border, radius, padding or copy, record the exact final values in your handoff comment — B3 has to match them.
+
+Constraint: this file only. Full suite; py_compile through the symlink. Done when: verify passes and the square offers both drop and Browse.
 
 #### Comments
-- [2026-08-23 sonnet-r] Decisions: Moved lines 2917-4050 of __init__.py (the '# --- model manager ---' header through end of manage_models_dialog, 1134 lines) verbatim into klausmate/manage_models.py, plus a 1-line blank-line trim at the seam so __init__.py keeps exactly 2 blank lines before def open_config. Circular imports: 9 names the block calls that live in __init__.py (get_config, write_config, client, autocomplete_model, ask_model, klaus_engine, open_config, _DEFAULT_CLAUDE_MODEL, _save_config_on_main) are now reached via a _pkg() lazy importlib.import_module(__package__) helper (curation.py:56 pattern) — every call site got a mechanical _pkg().<name> prefix via regex on \b<name>\(, verified against a full AST free-name scan so dict-key string collisions (e.g. cfg['autocomplete_model']) were not touched. embeddings/curation were already locally imported inside nested functions ('from . import embeddings' etc.) in the original code, so those needed no change. Import decisions for the 46 names the AST scan found free in the block: stdlib (threading, time, Any, Callable) -> direct imports in manage_models.py; aqt.qt widgets (QComboBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QStackedWidget, QTimer, QVBoxLayout, QWidget, Qt) -> from aqt.qt import (...) in manage_models.py; aqt/aqt.operations/aqt.utils (mw, QueryOp, openLink, showInfo, showWarning, tooltip) -> their own module imports; .ollama_client (OllamaError), .ollama_setup (OLLAMA_DOWNLOAD_URL, InstallMethod, install_methods, ollama_reachable, run_install_method), .ollama_runtime (RuntimeProvisionError, full_setup, runtime_download_size_hint) -> re-imported directly into manage_models.py from those leaf modules (no back-import to package __init__, confirmed by reading their headers). __init__.py gets back 'from .manage_models import _MODEL_PRESETS, manage_models_dialog' placed after the ollama_runtime import block. Cleanup: grepped every one of those names for outside-the-block usage in __init__.py and removed the now-genuinely-unused ones from __init__.py's own imports: import threading; QFormLayout, QListWidget, QListWidgetItem, QProgressBar, QSizePolicy, QStackedWidget from aqt.qt; InstallMethod, install_methods, ollama_reachable, run_install_method from .ollama_setup (collapsed to a single-line 'from .ollama_setup import OLLAMA_DOWNLOAD_URL'); RuntimeProvisionError, full_setup from .ollama_runtime. Every other aqt/typing name stayed in __init__.py's imports because it's still used elsewhere there. Files: klausmate/__init__.py (import block edits + block deletion), klausmate/manage_models.py (new, 1197 lines). Risks: the _pkg() indirection is the only semantic-looking diff in the moved block (12 get_config, 5 client, 3 write_config, 3 each of autocomplete_model/ask_model/klaus_engine, 1 each of open_config/_DEFAULT_CLAUDE_MODEL/_save_config_on_main) — worth a careful read since it's the one place text != the original beyond import lines, though behavior is identical (same object, same package, just resolved lazily instead of at module scope). Next: none — K-024 and K-025 (siblings) still need to slice the rest of __init__.py; I did not touch anything past line 4050 (old numbering) / line 2916 (new).
-- [2026-08-23 orchestrator] Independently re-verified: full suite (232 assertions across 5 files) green, py_compile clean both in-repo and through the Anki symlink, _pkg() indirection counts match exactly (12/5/3/3/3/1/1/1), no leftover unqualified references to the 9 relocated names, no module-level circular import, all ~9 call sites in __init__.py resolve via the re-export. Signed off.
+- [2026-08-23 sonnet-z] Decisions: Reused _import_and_arm(paths) exactly as the drop path does — Browse and drop now converge on one import function. QFileDialog is imported LAZILY inside _browse_for_pdfs() (not at module top-level) because tests/test_drive.py stubs a reduced aqt.qt without QFileDialog; a top-level import broke deck_curate's and pdf_drive's import checks (pdf_drive imports deck_curate). This follows the file's existing local-import convention (_user_files, _import_and_arm, _install_drop_wrap all do the same). QTimer.singleShot(0, _browse_for_pdfs) defers the modal dialog off the JS-message callback, mirroring the drop wrapper at ~:400. Button uses getOpenFileNames (plural) with filter 'PDF files (*.pdf)', title 'Import lecture PDF'. Files: klausmate/deck_curate.py — added BROWSE_CMD='klausmate_browse' constant + _CLAIMED entry (~:48-51), _browse_for_pdfs()/_on_browse_clicked() (~:280-292), a BROWSE_CMD branch in on_deck_js_message (~:325-327), and the Browse button markup in on_deck_browser_content's idle body (~:368-376). Style values for B3 (editor Qt PDF bar restyle) to match exactly — SQUARE (unchanged): idle border '1px dashed rgba(128,128,128,0.55)', armed border '1px solid rgba(58,130,247,0.85)', border-radius 10px, padding 8px 14px, font-size 13px. NEW Browse button (idle state only): inline <a> styled 'display:inline-block;margin-top:6px;padding:3px 10px;border:1px solid rgba(128,128,128,0.55);border-radius:6px;font-size:12px;color:inherit;text-decoration:none;', copy string 'Browse&hellip;' (HTML entity, renders 'Browse…'), placed on its own line via <br> below 'Drop a lecture PDF here to curate a deck from it.', inheriting the parent div's text-align:center. Risks: Cannot click-test the button since Qt can't be instantiated headlessly here (per card) — correctness rests on the aqt-stub suite plus mirroring the proven drop-path pattern (_import_and_arm, QTimer.singleShot deferral) exactly. Reviewer should double check the lazy-import choice isn't seen as a workaround rather than a deliberate fit with house style — it matches 4 existing precedents in this same file. Next: none.
+- [2026-08-23 orchestrator] Independently re-verified: BROWSE_CMD uses the correct underscore namespace and IS in _CLAIMED (both edits present — the silent-failure trap avoided); QTimer is a module-level import already, so the deferral has no import cost; the QFileDialog local-import deviation is legitimate and I confirmed the premise myself — tests/test_drive.py:257's aqt.qt stub list contains QTimer but not QFileDialog, and the same local-import pattern already exists at :300 and :318 for aqt.deckbrowser, so it is house style rather than a workaround; Browse button lands in the idle branch only, armed state untouched; style is quiet secondary as specced. Full suite 234 green, py_compile clean in-repo and through the Anki symlink. Signed off — rendered look needs Pouya's eyes in Anki. B3 (K-035) must match the values recorded in sonnet-z's handoff.
 
-### K-024: Slice 2/3: extract Browse toolbar toggles to browse_toggles.py
-owner: sonnet-s
-priority: P3
-tags: sonnet-safe,slice
-files: klausmate/__init__.py,klausmate/browse_toggles.py
-verify: test -f klausmate/browse_toggles.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+### K-033: B1: Library rename, retention colors, sorting, drag-and-drop
+owner: sonnet-y
+priority: P1
+tags: sonnet-safe,library-era
+files: klausmate/pdf_drive.py,klausmate/drive_store.py
+verify: grep -q 'Library' klausmate/pdf_drive.py && grep -q 'def retention_color' klausmate/drive_store.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 created: 2026-08-23
 claimed: 2026-08-23
 
-Second slice of K-006. Pure move, zero behavior change. BLOCKED behind slice 1 by design — both touch __init__.py; the claim guard enforces the ordering.
+Phase B1 of the Library-era plan. Four user-visible upgrades to the PDF drive window, all in pdf_drive.py plus one pure helper in drive_store.py. Independent of Phase A — safe to run in parallel with removal cards (different files).
 
-Move from klausmate/__init__.py into new klausmate/browse_toggles.py:
-- _KLAUS_TOGGLE_QSS (~2040), _make_klaus_toggle (~2061), _VisibilityWatcher (~2072), _install_browser_sidebar_toggle (~2094) and everything through on_browser_will_show (~2186, ends before ~2230). Roughly 190 lines. (Line numbers shift after slice 1 — locate by name, not number.)
+1. RENAME to 'Library'. The toolbar link label 'PDFs' lives in _on_toolbar_links (~:736, the second arg to toolbar.create_link); the window title 'Klaus — PDFs' is at ~:67; the toolbar tip is 'Klaus PDF drive'. Rename the user-visible strings to Library ('Library', 'Klaus — Library', tip 'Klaus PDF library'). Do NOT change the link's cmd name 'klausDriveOpen', the id 'klaus-drive', the DIALOG_NAME 'KlausDrive', or any module/file name — those are identities, and DIALOG_NAME in particular is what aqt.dialogs registration and saved state key off.
 
-Requirements:
-- __init__.py registers on_browser_will_show on gui_hooks.browser_will_show near the bottom; after the move import it back ('from .browse_toggles import on_browser_will_show') so the registration line is untouched or minimally adjusted.
-- Check what the moved code references (mw? get_config? pure Qt?) — grep before assuming; use lazy _pkg() only if actually needed.
-- Preserve the hard-won comments in this block verbatim (the grid-repack trick and QTimer deferral notes are documented gotchas).
-- Full suite before committing.
+2. RETENTION COLOR (red 0% -> green 100%). Add a PURE function to drive_store.py: retention_color(fraction, night_mode) -> (r, g, b) ints, interpolating hue 0->120 in HSV. It must be aqt-free and Qt-free (plain tuple out) so it is headless-testable — drive_store.py is already aqt-free, keep it that way. Tune saturation/value so both light and dark themes stay readable (dark mode needs lighter, less saturated colors). In pdf_drive._apply_row, call it and item.setForeground(1, QBrush(QColor(*rgb))). Only the retention cell is colored — no row backgrounds, no bold, nothing loud (the product aesthetic is 'Anki with a little extra you barely notice'). Non-numeric states (not embedded / re-embed needed / no matches / em-dash) get NO color, default foreground. Night mode: aqt.theme.theme_manager.night_mode, read defensively.
 
-#### Comments
-- [2026-08-23 sonnet-s] Decisions: pure move of _KLAUS_TOGGLE_QSS, _make_klaus_toggle, _VisibilityWatcher, _install_browser_sidebar_toggle, on_browser_will_show (lines ~2026-2223 pre-move) into new klausmate/browse_toggles.py, reusing K-023's _pkg() lazy-import pattern verbatim (importlib.import_module(__package__)). __init__.py still defines _remap_browser_mark_hotkey, _install_browser_search_klaus, _reset_browse_layout_to_defaults (they weren't part of this card's block); on_browser_will_show's inner _deferred() now calls them as _pkg()._remap_browser_mark_hotkey(browser) etc. since they still live in __init__.py. Direct aqt.qt imports (QEvent, QHBoxLayout, QObject, QTimer, QToolButton, QWidget) and typing (Any, Callable) added to browse_toggles.py — no _pkg() needed for those, they're leaf-importable. __init__.py: removed the now-unused QObject import from its aqt.qt import block (last remaining reference was _VisibilityWatcher, which moved out), and added 'from .browse_toggles import on_browser_will_show' right after the manage_models import (line ~119-120) so the existing 'gui_hooks.browser_will_show.append(on_browser_will_show)' registration line (~4639) is untouched. Import paths that changed: on_browser_will_show, _KLAUS_TOGGLE_QSS, _make_klaus_toggle, _VisibilityWatcher, _install_browser_sidebar_toggle now live in klausmate.browse_toggles instead of klausmate (__init__.py re-exports on_browser_will_show only, since that's the only one anything outside the block calls). Files: klausmate/__init__.py (removed the 198-line block + QObject import + added 1 import line), klausmate/browse_toggles.py (new, 234 lines, verbatim comments preserved including the gridLayout cell-(0,0) repack note and the QTimer.singleShot(0) deferral note). Verify: 'test -f klausmate/browse_toggles.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py' exits 0 (21 passed, 0 failed). Full suite: all 5 tests/test_*.py exit 0, 233 total assertions passed (up from the 232 baseline — test_imports.py's new klausmate.browse_toggles import check adds one), 0 failed. py_compile through the real Anki symlink (~/Library/Application Support/Anki2/addons21/klausmate/{__init__.py,browse_toggles.py}) exits 0. Risks: the three _pkg()-routed helpers (_remap_browser_mark_hotkey, _install_browser_search_klaus, _reset_browse_layout_to_defaults) stay in __init__.py — if a future slice moves those too, browse_toggles.py's _deferred() calls need updating to match wherever they land. Next: none. Commit: 6993713.
-- [2026-08-23 orchestrator] Independently re-verified: full suite (233 assertions across 5 files) green, py_compile clean both in-repo and through the Anki symlink, all 3 _pkg()-routed helpers (_remap_browser_mark_hotkey, _install_browser_search_klaus, _reset_browse_layout_to_defaults) confirmed still resident in __init__.py, gridLayout and QTimer.singleShot(0) gotcha comments preserved verbatim, on_browser_will_show re-import wired correctly to the existing gui_hooks registration line. __init__.py now 4,662 lines. Signed off.
+3. SORTING. Today the tree is alpha-only from build_tree and the retention values live as strings in column text. Add a QTreeWidgetItem subclass overriding __lt__ so sorting is numeric, not lexicographic: store the sort key via setData(col, Qt.ItemDataRole.UserRole+2, value) in _apply_row (retention as a float, cards as an int; use -1.0 for unknown/unembedded so they sink to the bottom in either direction). Folders must ALWAYS sort above PDFs regardless of column/direction — handle that first in __lt__ (compare the _ROLE_FOLDER-vs-_ROLE_SAFE nature of self and other). Enable header().setSectionsClickable(True) + setSortingEnabled, and make sure rebuild_tree does not fight the sort (disable sorting while repopulating, re-enable after — a classic QTreeWidget trap).
 
-### K-025: Slice 3/3: extract first-run and readiness flows to setup_flow.py
-owner: sonnet-t
-priority: P3
-tags: sonnet-safe,slice
-files: klausmate/__init__.py,klausmate/setup_flow.py
-verify: test -f klausmate/setup_flow.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
-created: 2026-08-23
-claimed: 2026-08-23
+4. DRAG-AND-DROP folder moves. Subclass QTreeWidget; setDragDropMode(InternalMove), setDragEnabled/setAcceptDrops. Override dropEvent: resolve the drop target (a folder item -> its _ROLE_FOLDER path; a PDF item -> that PDF's parent folder; empty space -> root/None), then call drive_store.set_folder(safe, folder) and rebuild_tree(). CRITICAL: do NOT call super().dropEvent() and do NOT let Qt perform the visual move — drive.json is the single source of truth and rebuild_tree repaints from it. Dragging a PDF onto its current folder is a no-op. PDFs only: reject drags whose item is a folder (folder reparenting is out of scope for this card). Guard everything in try/except per house style.
 
-Third slice of K-006. Pure move, zero behavior change. Runs after slices 1 and 2 (same-file serialization via the claim guard).
+5. Slider range: in _on_threshold, widen the QSlider from 20-60 to 20-80. (Phase C raises the default to 0.55; this is groundwork so the default is not pinned at the max.)
 
-Move from klausmate/__init__.py into new klausmate/setup_flow.py:
-- _first_run_dialog_shown_this_session (~2561), first_run_check (~2564), setup_readiness_check (~2649), _maybe_offer_runtime_update (~2689), _readiness_check_body (~2729) and their private helpers up to but NOT including the manage-models block boundary. Roughly 360 lines. Locate by name; numbers will have shifted.
+Constraints: do not touch retention.py, curation.py or any tag logic — Phase C owns those. Add tests to tests/test_drive.py? NO — test_drive.py is not in your files: scope. Instead the verify gate only requires the helper to exist and existing suites to stay green; a follow-up may add color tests. Actually: tests/test_drive.py IS out of scope, so do not edit it.
 
-Requirements:
-- These functions are registered on gui_hooks.profile_did_open near the bottom of __init__.py — import them back so registrations keep working.
-- first_run_check calls manage_models_dialog: after slice 1 that lives in manage_models.py — import it from there directly, not via the package.
-- The module-level mutable _first_run_dialog_shown_this_session is read/written across first_run_check and setup_readiness_check — keep both users in the SAME module so the global stays coherent; do not leave one behind in __init__.
-- Mind the migration guard interplay: _migrate_config stays in __init__.py (it is config plumbing, not setup flow) — do not move it.
-- Full suite before committing.
+Full suite (234 assertions, 5 files) must stay green; py_compile through the Anki symlink. Done when: verify passes, and the handoff describes the color ramp endpoints (what RGB 0% and 100% produce in each theme) and confirms the sorting/rebuild interaction is handled.
 
 #### Comments
-- [2026-08-23 sonnet-t] Decisions: pure move of the comment header + _first_run_dialog_shown_this_session, first_run_check, setup_readiness_check, _maybe_offer_runtime_update, _readiness_check_body (old __init__.py lines 2344-2648, 305 lines) into new klausmate/setup_flow.py, reusing the established _pkg() lazy importlib.import_module(__package__) pattern verbatim from manage_models.py/browse_toggles.py. AST free-name scan of the block found 5 names still resident in __init__.py that needed the _pkg() indirection: get_config (8 call sites), write_config (3), client (3), _save_config_on_main (2, both passed as a bare callable reference via save_config=_pkg()._save_config_on_main rather than called), and open_settings_dialog (1 - the settings_btn branch in _readiness_check_body; open_settings_dialog itself stays defined in __init__.py right after the moved block, so this is a genuine back-reference, not a leaf import). Per the card's requirement #2, manage_models_dialog is imported directly from .manage_models (leaf module, not _pkg()) - used 4x in the moved code (first_run_check x2, _readiness_check_body x2). Other names were leaf-importable directly with no circularity: ensure_server + runtime_download_size_hint from .ollama_runtime, the ollama_runtime module itself via 'from . import ollama_runtime' (used as ollama_runtime.OLLAMA_VERSION / ollama_runtime.update_runtime), OLLAMA_DOWNLOAD_URL from .ollama_setup, QMessageBox from aqt.qt, QueryOp from aqt.operations, askUser/openLink/tooltip from aqt.utils, mw from aqt, Any from typing. _first_run_dialog_shown_this_session (module-level mutable) and both its readers/writers (first_run_check, setup_readiness_check) landed together in setup_flow.py per requirement #3 - no split. _migrate_config was left untouched in __init__.py per requirement #4 (not moved, not referenced by the moved block). Registration lines at __init__.py:4326-4327 (gui_hooks.profile_did_open.append(first_run_check) / (setup_readiness_check)) needed zero changes - 'from .setup_flow import first_run_check, setup_readiness_check' added to the import block (after the browse_toggles import) makes them resolve exactly as before. Cleanup in __init__.py: removed openLink from the aqt.utils import (now unused there, its only other use was in the moved block) and removed runtime_download_size_hint plus the .ollama_setup import of OLLAMA_DOWNLOAD_URL entirely (both now fully unused in __init__.py, verified by grep). Kept ensure_server, manage_models_dialog, QMessageBox, QueryOp, askUser, tooltip, and the ollama_runtime module import in __init__.py's own import block since each still has independent call sites elsewhere in the file (grepped individually before removing anything). Also trimmed a 4-blank-line seam left after deletion down to the standard 2 blank lines before 'def open_settings_dialog'. Files: klausmate/__init__.py (import block edits + 305-line block deletion + blank-line trim, now 4,354 lines), klausmate/setup_flow.py (new, 344 lines, header docstring documents the _pkg() rationale and lists the 5 back-referenced names). Verify: 'test -f klausmate/setup_flow.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py' exits 0 (22 passed, 0 failed - up from 21 in K-024's baseline; test_imports.py's klausmate.setup_flow import check is the +1). Full suite: all 5 tests/test_*.py exit 0, 234 total assertions passed (up from 233), 0 failed. py_compile clean both in-repo and through the real Anki symlink (~/Library/Application Support/Anki2/addons21/klausmate/{__init__.py,setup_flow.py}). Risks: the 5 _pkg()-indirected call sites are the only semantic-looking diff inside the moved block beyond import lines - same objects, same package, just resolved lazily; worth a quick read since the save_config=_pkg()._save_config_on_main line wraps to two lines where the original didn't (line length). This is the final slice of K-006 - after sign-off the parent tracking card can close. Next: none. Commit: 709a081.
-- [2026-08-23 orchestrator] Independently re-verified: full suite (234 assertions across 5 files) green, py_compile clean both in-repo and through the Anki symlink, _migrate_config confirmed untouched (still at __init__.py:147, registered independently at 4325), manage_models_dialog confirmed imported directly from .manage_models (not via _pkg(), per the card's explicit requirement), first_run_check and setup_readiness_check both landed in setup_flow.py together with their shared _first_run_dialog_shown_this_session global, gui_hooks.profile_did_open registrations for both intact. __init__.py now 4,354 lines. Signed off.
-
-### K-006: Slice klausmate/__init__.py into modules
-owner: -
-priority: P3
-tags: sonnet-safe,large
-files: klausmate/__init__.py
-verify: python3 -m py_compile via the symlink, then the full suite
-created: 2026-08-23
-
-5,980 lines in one file. Too large for one card — the orchestrator must slice it into file-disjoint pieces first, or every worker collides on the same path.
-
-Blocked on grooming, not on skill. Candidate seams: the Manage models dialog (~1000 lines), the editor panel and PDF bar, the Browse toolbar toggles, hook registration and bootstrap.
-
-#### Comments
-- [2026-08-23 orchestrator] Sliced into K-023 (manage-models dialog, ~1130 lines), K-024 (browse toggles, ~190), K-025 (first-run/readiness, ~360) — a serial pipeline, since every slice removes code from __init__.py and the claim guard refuses overlapping claims. The PDF panel machinery (~2000 lines) deliberately stays put: highest risk, least separable, and untestable headlessly. K-006 stays in Backlog as the tracking parent; it closes when all three slices are Done. Expected end state: __init__.py drops from 6,010 to ~4,300 lines.
-- [2026-08-23 orchestrator] All three slices landed and independently verified: K-023 (manage_models.py, 1197 lines), K-024 (browse_toggles.py, 233 lines), K-025 (setup_flow.py, 344 lines). __init__.py dropped from 6,010 to 4,354 lines (target was ~4,300 — on target). Full suite grew from 132 to 234 assertions across the pipeline with zero regressions at any step, and every intermediate commit compiles clean through the real Anki symlink. Closing this tracking card.
-
-### K-026: Split model library into Text / Embedding tabs, add embedding presets
-owner: sonnet-u
-priority: P2
-tags: sonnet-safe
-files: klausmate/manage_models.py,tests/test_dialog_logic.py
-verify: grep -q _EMBED_MODEL_PRESETS klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-The Manage-models dialog's 'Local model library (Ollama)' box is one flat QListWidget, and _MODEL_PRESETS holds only text-generation models — there is not a single embedding model a user can pull with one click, even though Semantic search on the local provider needs one (default: nomic-embed-text). Requested by Pouya: separate tabs for embedding vs text models, and download presets that are good for embedding.
-
-Scope (all in klausmate/manage_models.py):
-
-1. Add _EMBED_MODEL_PRESETS next to _MODEL_PRESETS, exactly these entries (all verified real Ollama library names; index 0 must stay nomic-embed-text since it is embeddings.DEFAULT_MODELS['ollama']):
-   ('nomic-embed-text', 'default, best all-round · ~274 MB')
-   ('all-minilm', 'tiny, fastest · ~46 MB')
-   ('snowflake-arctic-embed', 'strong retrieval · ~670 MB')
-   ('mxbai-embed-large', 'best quality · ~670 MB')
-   ('bge-m3', 'multilingual, long context · ~1.2 GB')
-   ('embeddinggemma', 'Google, newest · ~620 MB')
-   Do NOT invent additional model names.
-
-2. Add a module-level helper _is_embedding_model(name: str) -> bool: True when the bare name (strip any :tag suffix) matches a _EMBED_MODEL_PRESETS entry, or contains 'embed' or 'minilm', or starts with 'bge'. One function, used everywhere the split is decided — no inline duplicates.
-
-3. Replace the single lst QListWidget in lib_box with a QTabWidget holding two tabs: 'Text models' and 'Embedding models', each a QListWidget. rebuild_library_list() partitions ui_state['models'] via _is_embedding_model. The 'used by' badges (autocomplete/Ask/search) must follow each model into whichever tab it lands in — a text model configured as the search model still shows its 'search' badge on the Text tab. Per-tab empty placeholders ('(no text models installed — pull one below)' / embedding equivalent), NoItemFlags like the current placeholder.
-
-4. The pull row (pull_input combo + Pull/Delete/Refresh buttons) stays SHARED below the tab widget, but pull_input's preset items repopulate when the active tab changes: Text tab -> _MODEL_PRESETS, Embedding tab -> _EMBED_MODEL_PRESETS. Keep it editable with the same placeholder text. Repopulating may clear typed text — acceptable.
-
-5. get_selected_model() must read from the ACTIVE tab's list widget. delete_selected() and the post-pull reselect path go through it, so they follow automatically — verify they do.
-
-6. In sync_embed_widgets(), when provider == 'ollama', populate embed_model_combo from installed models that pass _is_embedding_model (instead of all installed models). Keep the existing behavior where the combo stays editable and setEditText preserves the configured value even when not in the list — a user who genuinely wants a text model as embedder can still type it.
-
-7. QTabWidget import: add to the aqt.qt import block in manage_models.py only.
-
-Constraints: tests/test_dialog_logic.py transcribes this dialog's logic — it must still pass; extend it ONLY if it directly models something you changed, and keep every existing assertion. maybe_auto_pull_starter() keeps using _MODEL_PRESETS[0] (text starter). Do not touch embeddings.py. Full suite (234 assertions, 5 files) before committing; py_compile through the Anki symlink.
-
-Done when: verify passes, both tabs render correct partitions with badges, embedding presets pull-able from the Embedding tab, embed model dropdown suggests only embedding models.
-
-#### Comments
-- [2026-08-23 sonnet-u] Implemented all 7 scope items in klausmate/manage_models.py. _EMBED_MODEL_PRESETS added verbatim (6 entries, nomic-embed-text at index 0) right after _MODEL_PRESETS; _is_embedding_model(name) strips :tag, checks membership in a set built from the preset names, then 'embed'/'minilm' substring and 'bge' prefix — single source of truth, used in rebuild_library_list's partition and sync_embed_widgets' filter. Decisions: lib_box's flat 'lst' QListWidget became a QTabWidget (lib_tabs) with two fresh QListWidgets, text_lst and embed_lst ('Text models' / 'Embedding models'). Added a small _active_lib_list() closure (returns text_lst if lib_tabs.currentIndex()==0 else embed_lst) so get_selected_model() just delegates to it — delete_selected() and the post-pull reselect in start_pull()/refresh() go through get_selected_model() already, so they follow for free, verified by reading both call sites. rebuild_library_list() now partitions ui_state['models'] via _is_embedding_model into text_models/embed_models lists, then a local populate(list_widget, names, empty_text) helper builds badges (autocomplete/Ask/search — unchanged logic) and restores selection into whichever tab the previously-selected model landed in (does not force-switch the active tab, matching the card's wording). Each tab gets its own NoItemFlags placeholder. Pull row stays shared below the QTabWidget; added _fill_pull_presets() which clears+refills pull_input from _MODEL_PRESETS or _EMBED_MODEL_PRESETS based on lib_tabs.currentIndex(), resets currentIndex(-1), and sets a tab-appropriate placeholder string; wired via lib_tabs.currentChanged.connect(lambda _i: _fill_pull_presets()) in the final connect block alongside the other .connect() calls. This repopulation only touches pull_input (no ui_state['syncing'] guard needed — pull_input has no currentIndexChanged save path, confirmed by grep). sync_embed_widgets() now adds only _is_embedding_model-passing names to embed_model_combo when provider=='ollama'; setEditText(cfg value) still runs unconditionally after, so a configured text-model embedder still shows correctly (per item 6). QTabWidget added to the aqt.qt import block, alphabetically between QStackedWidget and QTimer. Files: klausmate/manage_models.py only — tests/test_dialog_logic.py was not touched; it transcribes sync_jobs_widgets/save_jobs/ask_selection, none of which changed, and it has no model of the library-list split or sync_embed_widgets, so extending it wasn't warranted by the card's 'only if it directly models something you changed' rule. Risks: a reviewer should double check the 'used by search' badge case for a text model configured as the embedder (e.g. someone manually configured embedding_model to a qwen model) — it will show 'search' badge on the Text tab per item 3's requirement, verified by reading rebuild_library_list's shared auto_active/ask_active/embed_active computation which is unchanged and applied identically to both tabs via the populate() helper. Also worth a visual check that lib_tabs default tab (index 0, Text) matches maybe_auto_pull_starter()'s assumption of _MODEL_PRESETS[0] via pull_input.setCurrentIndex(0) — confirmed correct since _fill_pull_presets() is called once at dialog build before any tab change, populating pull_input from _MODEL_PRESETS. Next: none — all 7 scope items done. Full suite: 234 assertions across 5 test files, 0 regressions (68+29+58+22+57). py_compile through the Anki symlink passed. Verify gate passes clean.
-- [2026-08-23 orchestrator] Independently re-verified: preset list matches the card verbatim (6 entries, nomic-embed-text at index 0), _is_embedding_model is the single source of truth for the split and correctly classifies every current preset on both sides (embeddinggemma -> embed via 'embed' substring, gemma3n -> text), zero stray references to the removed single-list variable, get_selected_model reads the active tab via _active_lib_list so Delete and post-pull reselect follow, badges applied identically in both tabs, per-tab placeholders present, lib_tabs.currentChanged wired to _fill_pull_presets with no save path attached, embed_model_combo filter preserves the editable setEditText fallback. py_compile clean in-repo and through the Anki symlink; full suite 234 assertions green. Signed off — visual tab layout still needs Pouya's eyes in a restarted Anki (Qt untestable headlessly).
-
-### K-009: Make model setup for curation and embeddings understandable
-owner: sonnet-v
-priority: P0
-tags: sonnet-safe,spec-ready
-files: klausmate/manage_models.py
-verify: grep -q 'Get key' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Pouya, on K-001: 'It's not easy to understand the model installation process for a curation or an embedded model.' Second confusion report on this surface. DESIGN SPEC below was written by the orchestrator (acting designer tier) after reading the current dialog code — this card also absorbs K-002's Manage-models-dialog visual-polish half (K-002 is rescoped to the Klaus panel, file-disjoint from this card).
-
-Ground truth about the current dialog (verified in code, do not re-litigate): the jobs form already has per-row warnings (auto_warn/ask_warn/embed_warn), update_embed_status() already detects key_missing for cloud providers and shows '⚠ key needed (voyageai.com)', and K-026 just added Text/Embedding library tabs with embedding presets. The remaining gaps are exactly these four:
-
-SPEC — all changes in manage_models.py, keep the closure structure and the ui_state['syncing'] guard discipline:
-
-1. JOB CAPTIONS. Each of the three job rows gets a one-line muted caption (style _MUTED, wrapped QLabel) directly under its form row, in plain user language:
-   - Autocomplete: 'Suggests the rest of the field as you type. Always a local model.'
-   - Ask (⌘K): 'Answers questions about the current card. Local model or Claude API.'
-   - Semantic search: 'Powers deck curation and the Klaus panel. Cloud embedder (needs a key) or local Ollama model.'
-   Use jobs_form.addRow('', caption_label) or a spanning row — visually attached to its row, not floating.
-
-2. KEY ACQUISITION MUST BE ONE CLICK. In update_embed_status(), when key_missing: repurpose embed_fix_btn as the fix — setText('Get key'), make it visible, and on click openLink to the provider's key page: voyage -> https://dash.voyageai.com/api-keys , openai -> https://platform.openai.com/api-keys . When model_missing (ollama path) it stays 'Pull it' with the existing pull behavior. The button's role therefore switches with the warning state — rewire its clicked handler through one dispatcher function that reads the current state rather than stacking multiple connects (Qt connects accumulate; a naive second .connect fires both).
-3. KEY FIELD SELF-DOCUMENTS. embed_key_edit gets a provider-dependent placeholder set in sync_embed_widgets(): voyage -> 'pa-…  (free tier at voyageai.com; stored in add-on config)', openai -> 'sk-…  (platform.openai.com; stored in add-on config)' — mirroring the existing claude_key_edit placeholder convention.
-
-4. COST/SKIP EXPLAINER. One muted wrapped QLabel at the bottom of the jobs_box (after the index row): 'Semantic search needs either a Voyage/OpenAI key (both have free tiers) or a local embedding model from the library below — nothing else in Klaus depends on it. Autocomplete and Ask work without any of this.' Exactly this text.
-
-VISUAL PASS (absorbed from K-002, keep native Qt feel, no heavy QSS): jobs_box and lib_box QGroupBox titles bold via one shared stylesheet string ('QGroupBox { font-weight: 600; }' applied per-box); jobs_layout/models_layout spacing normalized to 8; captions from item 1 give the form breathing room — no other decoration. Do NOT restyle buttons/combos; native is correct here.
-
-Constraints: tests/test_dialog_logic.py must pass with all existing assertions intact — it models save/sync logic; if you extend it, extend for the fix-button dispatcher state only. Do not touch embeddings.py, curation.py, or web/. Full suite + py_compile through the Anki symlink before committing.
-
-Done when: verify passes; a user who opens the dialog with no key and no local model can read what each job is, see what is missing, and fix it in one click per gap.
-
-#### Comments
-- [2026-08-23 sonnet-v] Implemented all 4 spec items plus the visual pass in klausmate/manage_models.py, commit 2c40948. Item 1 (captions): added a _caption(text) helper (QLabel, _MUTED, setWordWrap(True)) and inserted jobs_form.addRow('', _caption(...)) directly under each of the three job rows (auto_row, ask_row, embed_row) with the exact verbatim strings from the spec — a spanning row via QFormLayout's empty-label form so each caption sits attached to its row, not floating. Item 2 (one-click key): added _embed_fix_kind() as the single source of truth (returns 'key'/'model'/'') computed from provider+config+ui_state['models'] — called from update_embed_status(), which now stores the result in ui_state['embed_fix_kind'] and sets embed_fix_btn's text/visibility per kind ('Get key' for cloud-key-missing, now visible where before the key-missing case showed no button at all; 'Pull it' unchanged for local-model-missing). on_embed_fix_clicked() is the ONE dispatcher, reading ui_state['embed_fix_kind'] at click time and either openLink()-ing _EMBED_KEY_URLS[provider] or calling pull_missing(embed_model_combo.currentText()); the old inline lambda .connect() was replaced (not stacked) with embed_fix_btn.clicked.connect(on_embed_fix_clicked) — one connect for the button's lifetime, confirmed by grep showing exactly one embed_fix_btn.clicked.connect in the file. Item 3 (key field self-documents): sync_embed_widgets() now calls embed_key_edit.setPlaceholderText(_EMBED_KEY_PLACEHOLDERS.get(provider, '')) right after setText, using a new module-level _EMBED_KEY_PLACEHOLDERS dict with the exact verbatim strings, mirroring claude_key_edit's existing placeholder convention. Item 4 (cost/skip explainer): one _caption(...) QLabel added via jobs_layout.addWidget(...) after index_row, exact verbatim text. Visual pass: added module-level-style _BOLD_TITLE = 'QGroupBox { font-weight: 600; }' applied via jobs_box.setStyleSheet(_BOLD_TITLE) and lib_box.setStyleSheet(_BOLD_TITLE); jobs_layout.setSpacing(6) -> 8 to match models_layout's existing 8 (lib_layout left at 6, out of scope per spec wording). Decisions: kept _embed_fix_kind() as a separate closure from update_embed_status() rather than inlining, so the warning label and the button dispatcher can never disagree about state — both read the same computation. Did not extend tests/test_dialog_logic.py: it transcribes sync_jobs_widgets/save_jobs/ask_selection (auto+ask rows only) and has no existing model of sync_embed_widgets/update_embed_status/embed_fix_btn, so adding embed-dispatcher coverage there would mean introducing a whole new World-embed model rather than extending something already modeling what changed; full suite (234 assertions, 5 files, all green, no regressions) plus the verify gate plus py_compile through the Anki symlink were the correctness gates instead, per the card's Qt-headless constraint. Files: klausmate/manage_models.py only. Risks: a reviewer should eyeball the actual dialog in a restarted Anki for the caption/spacing visual result (Qt untestable headlessly here, per CLAUDE.md) — logic-side everything is verified. Also worth double-checking that embed_fix_btn showing for key_missing (previously it never showed in that case) doesn't surprise anyone relying on the old silent-no-button behavior; I read it as the whole point of item 2. Next: none — all 4 items + visual pass done.
-- [2026-08-23 orchestrator] Independently re-verified: spec items 1-4 all present with the exact strings and URLs from the card; the fix-button dispatcher is the correct single-connect pattern (one .connect for the dialog's life, kind stored in ui_state by update_embed_status, _embed_fix_kind() as sole source of truth — the accumulating-connects trap the spec warned about is explicitly avoided and documented in comments); openLink already imported; placeholder set inside the syncing guard; visual pass limited to bold group titles + spacing as specced. Full suite 234 assertions green, py_compile clean in-repo and through the Anki symlink. The flagged behavior change (fix button now appears for the key-missing case) is exactly what the spec ordered. Signed off — visual result needs Pouya's eyes in a restarted Anki.
-
-### K-002: Klaus panel: show search-provider readiness in the index gate
-owner: sonnet-w
-priority: P0
-tags: sonnet-safe,spec-ready
-files: klausmate/chat_dock.py,klausmate/web/search.js,klausmate/web/search.html,klausmate/web/search.css
-verify: grep -q provider_ready klausmate/chat_dock.py && grep -q provider_ready klausmate/web/search.js && python3 -m py_compile klausmate/chat_dock.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-RESCOPED by orchestrator (acting designer tier): the original 'Klaus panel still uses Bootstrap-era defaults' claim is stale — search.html/css already got the Google-like redesign (theme-aware, cobalt accent, proper states); verified by reading all 294 lines of search.css. The Manage-models-dialog polish half moved into K-009 (file-disjoint). What remains is the ONE real panel gap, straight from Pouya's confusion report: Voyage-by-default is not discoverable before it fails. You only learn a key is needed AFTER pressing 'Index my cards' and watching it error.
-
-SPEC:
-
-1. chat_dock.py: extend _index_status_payload() with provider readiness. Compute Python-side (import embeddings lazily like the rest of the file): provider = embeddings.provider_name(cfg); for cloud providers ready = bool of the key config (voyage_api_key / openai_api_key — confirm exact key names via manage_models.py's _embed_cfg_key, transcribe its mapping, do not import the dialog); for ollama ready = True (no cheap check exists; do NOT call the Ollama server here — this payload builds on panel open and must never block). Add to the payload: provider_ready (bool), provider_label (str: 'Voyage', 'OpenAI', or 'local model <name>'), provider_reason (str, empty when ready, else 'No <provider> API key yet — add one in Manage models, or switch to a local model.').
-
-2. search.html: inside #gate, under #gate-text, add <div id="gate-provider" class="hidden"></div> and a secondary action <button id="open-models" class="hidden">Open Manage models…</button> next to #index-now (wrap both in a row div if needed).
-
-3. search.js: in setIndexStatus/init handling, when the gate is visible: always show provider line 'Search will use <provider_label>.' in #gate-provider; when !provider_ready, append the provider_reason, add class 'warn' to #gate-provider, DISABLE #index-now (it would fail anyway), and show #open-models. #open-models sends a new bridge action: send('manage', {}).
-
-4. chat_dock.py _dispatch: add 'manage' action -> call _pkg-style lazy access is NOT the pattern here; chat_dock already imports from the package — follow its existing import conventions and open the dialog via the same route __init__.py uses (from .manage_models import manage_models_dialog; call on main thread via existing taskman/timer convention used elsewhere in the file — read _dispatch's existing actions and mirror how they touch mw).
-
-5. search.css: #gate-provider { color: var(--ks-muted); font-size: 12px; } #gate-provider.warn { color: #d9822b; } #open-models styled like #cancel (bordered secondary, not primary). Also refresh the readiness line whenever _push_index_status fires so entering a key in the dialog and reopening the panel clears the warning without a restart.
-
-Constraints: no changes to manage_models.py (K-009 owns it — hard file-scope boundary), embeddings.py, or curation.py. The panel cannot be opened headlessly — correctness comes from reading chat_dock's existing bridge/init flow carefully; py_compile chat_dock.py through the Anki symlink; test_imports/test_drive must stay green (chat_dock is not directly imported there but the suite guards against collateral edits).
-
-Done when: verify passes; with no key configured the gate says what will be used, why Index would fail, and offers the Manage-models door before the user hits the error.
-
-#### Comments
-- [2026-08-23 sonnet-w] Decisions: Confirmed the embedding-key config-key mapping by reading manage_models.py's _embed_cfg_key (transcribed only, not imported/edited): f"embedding_api_key_{provider}" — i.e. embedding_api_key_voyage / embedding_api_key_openai, matching update_embed_status's is_cloud = provider != "ollama" check. chat_dock.py: added KlausPanelController._provider_status() -> (ready, label, reason), computed purely from get_config() + embeddings.provider_name/embedding_model (both lazily imported, matching the file's existing lazy-import convention used in _push_init/_error_text) — no network call, safe on every payload build. ollama is unconditionally ready (label "local model <name>"); voyage/openai are ready iff their key string is non-empty after strip(). _index_status_payload() now also returns provider_ready (bool), provider_label ('Voyage'/'OpenAI'/'local model <name>'), provider_reason (empty when ready, else "No <Label> API key yet — add one in Manage models, or switch to a local model."). Because get_config() reads live from mw.addonManager.getConfig (no caching) and _push_index_status() recomputes the full payload every call, entering a key in Manage models and reopening the panel clears the warning automatically — no extra cache-invalidation code needed (verified by reading get_config()/_push_index_status(), not runtime-tested since the panel can't open headlessly). New bridge action: 'manage' in _dispatch, calling `from .manage_models import manage_models_dialog; manage_models_dialog()` directly — mirrors how __init__.py's own call sites invoke it (no QueryOp/timer wrapper; bridge callbacks already run on the main thread, same as the existing 'close' branch which calls self.dock.hide() directly). Files: klausmate/chat_dock.py (added _provider_status(), extended _index_status_payload(), added 'manage' branch in _dispatch); klausmate/web/search.html (added #gate-provider div and a #gate-actions row wrapping #index-now + new #open-models button, both children of #gate); klausmate/web/search.css (#gate-provider / #gate-provider.warn, #gate-actions flex row, #open-models styled as a bordered secondary button like #cancel, with the same hover treatment); klausmate/web/search.js (module var providerReady, defaults true; setIndexStatus now sets providerReady from st.provider_ready and, only while the gate is visible i.e. !indexed, builds the "Search will use <label>." line into #gate-provider, appends provider_reason + adds .warn when not ready, and toggles #open-models' visibility to !providerReady; setBusy now disables #index-now on `busy || !providerReady` instead of just `busy`; new els.gateProvider/els.openModels lookups; new click handler `els.openModels.addEventListener("click", function () { send("manage"); })`; header comment's action list and payload-fields note updated to document 'manage' and the three new indexStatus fields). Risks: I did not runtime-test the panel opening (per CLAUDE.md, no headless Anki GUI path for this surface) — correctness rests on reading chat_dock's bridge/init flow and _dispatch's existing action patterns carefully, plus py_compile (both in-repo and through the real Anki symlink) and the full test suite. A reviewer should eyeball the actual panel after an Anki restart with no Voyage key configured: gate should read "Search will use Voyage. No Voyage API key yet — add one in Manage models, or switch to a local model.", Index my cards should be disabled, and "Open Manage models…" should open the dialog and, after a key is saved and the panel is reopened (dock hide/show re-triggers _push_index_status), the warning should clear without an Anki restart. Also worth checking that switching to ollama in Manage models (no key needed) correctly re-enables Index the same way. Next: none from this card's scope. Did not touch manage_models.py, embeddings.py, curation.py, or __init__.py — read-only as instructed. K-009 (manage_models.py, in progress by a sibling worker) is unaffected since I only read _embed_cfg_key's mapping, never imported or edited that module beyond the lazy `from .manage_models import manage_models_dialog` call already established as this codebase's pattern for opening the dialog. Verify: `grep -q provider_ready klausmate/chat_dock.py && grep -q provider_ready klausmate/web/search.js && python3 -m py_compile klausmate/chat_dock.py` exits 0. Full suite: all 5 tests/test_*.py green, 234 assertions (68+29+58+22+57), 0 regressions against baseline. py_compile clean through the real Anki symlink (~/Library/Application Support/Anki2/addons21/klausmate/chat_dock.py). Commit: fdd72fc, touching only the 4 in-scope files (klausmate/chat_dock.py, klausmate/web/search.js, klausmate/web/search.html, klausmate/web/search.css).
-- [2026-08-23 orchestrator] Independently re-verified: config key names (embedding_api_key_voyage/_openai) cross-checked against config.json, embeddings.py, and the dialog's _embed_cfg_key — all match; _provider_status is pure-config with ollama unconditionally ready (no network, per spec); 'manage' bridge action mirrors the existing direct-call pattern and pycmd handlers run on the Qt main thread; JS providerReady defaults true when the field is absent (backwards compatible with a stale cached payload); the disable/re-enable trap is handled — show() re-pushes index status on every panel open, so adding a key and reopening clears the warning and re-enables Index via the setBusy(false) refresh; #open-models styled as bordered secondary consistent with #cancel. Full suite 234 green, py_compile clean through the symlink. Signed off — the gate's rendered look needs Pouya's eyes in a restarted Anki.
+- [2026-08-23 sonnet-y] Decisions: retention_color(fraction, night_mode) in drive_store.py interpolates HSV hue 0->120 with fixed sat/val per theme, returning a plain (r,g,b) tuple — light theme uses S=0.65/V=0.75 (0%=rgb(191,67,67), 50%=rgb(191,191,67), 100%=rgb(67,191,67)); night mode uses a lighter/less-saturated S=0.5/V=0.9 (0%=rgb(230,115,115), 50%=rgb(230,230,115), 100%=rgb(115,230,115)). Applied via item.setForeground(1, QBrush(QColor(*rgb))) in a new _apply_row-called helper _set_retention_color; non-numeric states (no row/not-embedded/stale) clear the role via setData(1, ForegroundRole, None) rather than leave a stale color on reused items (the _on_threshold in-place update path reuses items). QColor/QBrush are imported lazily inside that method, not at module top-level — test_drive.py's own embedded aqt.qt stub whitelists a fixed set of names that doesn't include them, so a top-level import would fail that test's 'pdf_drive imports' check even though real Anki has both. Sorting: added _LibraryItem(QTreeWidgetItem) overriding __lt__, sort keys stored in a new _ROLE_SORT (UserRole+2) role set by _apply_row (retention as float, cards as int, -1.0 sentinel for no-row/unembedded/stale — NOT for a real zero-match count, which is a known value and sorts normally). Two invariants had to be direction-compensated inside __lt__: folders-above-PDFs and known-above-unknown both flip to the wrong side under Qt's descending comparator (QTreeModel::itemGreaterThan calls right<left, i.e. swaps which item's __lt__ runs) — __lt__ reads header().sortIndicatorOrder() and inverts its own relation when descending to cancel that flip, verified by hand-deriving both call directions. rebuild_tree captures was_sorting = tree.isSortingEnabled(), disables it before tree.clear()+repopulate, restores in a finally block; setSectionsClickable(True)+setSortingEnabled(True) are set once at tree construction in __init__ so the very first rebuild_tree call already sees sorting enabled and the dance is symmetric from the start. Drag-and-drop: new _LibraryTree(QTreeWidget) with InternalMove/setDragEnabled/setAcceptDrops; dropEvent never calls super() or touches Qt's own move — it resolves safe (the dragged item, via currentItem(), since single-selection means the drag always starts from the current item) and folder (itemAt(event.position().toPoint()): None item -> root, a folder item -> its _ROLE_FOLDER path, a PDF item -> that PDF's parent's folder, i.e. parent.data(0,_ROLE_FOLDER) or None if parent is None), rejects when the dragged item is a folder or event.source() is not self, no-ops (accepts but skips the write) when current_folder == folder, and otherwise calls self._window._move_pdf(safe, folder) — the exact existing two-line drive_store.set_folder+rebuild_tree pattern, reused rather than duplicated. Files: klausmate/drive_store.py (+retention_color), klausmate/pdf_drive.py (rename strings, _LibraryItem, _LibraryTree, _apply_row/_set_retention_color, rebuild_tree sort guard, slider 20->80). Risks: I could not run the actual window (Qt can't be instantiated headlessly here) so the drag-and-drop and sort-direction logic are verified by careful reading + hand-derivation of Qt's descending-comparator mechanics, not by executing them — a reviewer should sanity-check the __lt__ direction inversion live in Anki, especially clicking the Retention header twice (asc then desc) with a mix of embedded/unembedded PDFs and at least one folder. Also note test_drive.py is explicitly out of scope for this card and was not touched, so there is no automated coverage yet for retention_color's exact values or for _LibraryItem's sort behavior — verified manually via a standalone script (light 0/50/100%: rgb(191,67,67)/(191,191,67)/(67,191,67); dark: rgb(230,115,115)/(230,230,115)/(115,230,115)). Next: a follow-up card could add retention_color + sort-order tests to test_drive.py now that it's out of my scope; folder drag-and-drop (reparenting one folder into another) is explicitly out of scope here and still unimplemented. Note: verify initially failed twice with 'NameError: strip_ghost_html' in klausmate/__init__.py — that file is entirely outside this card's scope and was mid-edit by K-027 (@sonnet-x, concurrent removal card touching __init__.py). Waited for K-027 to land rather than releasing correct, complete work; re-ran verify + the full 5-file/234-assertion suite immediately after, both clean, then committed right away to minimize the shared-checkout race window.
+- [2026-08-23 orchestrator] Independently re-verified. Identities intact (DIALOG_NAME/klausDriveOpen/klaus-drive unchanged; only label+tip+title renamed). retention_color is stdlib-only (colorsys) and stays aqt-free; I ran the ramp myself — light 0%=(191,67,67) -> 100%=(67,191,67), dark lighter at (230,115,115)->(115,230,115), out-of-range clamps correctly, muted as specced. The _LibraryItem.__lt__ descending-order handling is the standout: Qt's QTreeModel::itemGreaterThan calls right<left rather than reversing, so a naive folders-first relation inverts on the second header click — the worker caught this and compensates in both the folder and unknown-sink branches. Sorting is correctly disabled around rebuild_tree repopulation with try/finally restoring the user's setting. dropEvent never calls super() and never lets Qt reparent visually — it routes through _move_pdf -> drive_store.set_folder -> rebuild_tree, so drive.json stays the source of truth; same-folder drop is a no-op; folder drags rejected as scoped. Sentinel design is right: an embedded PDF matching nothing is a real zero and sorts with the numbers, only unknowns sink. Both files compile in-repo and through the Anki symlink; full suite 234 green. Signed off — colors/sort/drag need Pouya's eyes in Anki.

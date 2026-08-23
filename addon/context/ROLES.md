@@ -77,6 +77,16 @@ own card to Done — a generator that grades its own output grades leniently.
 - **Keep Ready file-disjoint.** Run `check-disjoint` after every grooming
   pass. Overlapping Ready cards are not a bug in the board, they are a
   scheduling mistake.
+- **File-disjointness protects writes, not verify gates.** Every card's gate
+  runs the test suite, and the suite imports `klausmate/__init__.py`. So a
+  worker editing that file leaves *every* concurrently-running card's gate
+  failing on a `NameError` that has nothing to do with its own work. K-033
+  hit exactly this against K-027 and polled until the tree recovered rather
+  than releasing finished work — the right call, but it burned a worker's
+  time on someone else's half-saved file. When a card rewrites `__init__.py`
+  (or any module the suite imports at collection time), either run it alone
+  or tell the parallel workers in their brief that a transient failure in a
+  file outside their scope means "wait and re-run", not "my change broke it".
 - **Slice large work before releasing it.** A card naming a 6,000-line file
   blocks every other card touching that file. Split it along real seams
   first; leave it in Backlog until you have.
