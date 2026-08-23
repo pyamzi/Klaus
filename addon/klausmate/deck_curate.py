@@ -47,7 +47,8 @@ from . import curation, pdf_handler
 
 CURATE_CMD = "klausmate_curate"
 DISARM_CMD = "klausmate_disarm"
-_CLAIMED = {CURATE_CMD, DISARM_CMD}
+BROWSE_CMD = "klausmate_browse"
+_CLAIMED = {CURATE_CMD, DISARM_CMD, BROWSE_CMD}
 
 _armed_pdf: str | None = None
 
@@ -275,6 +276,23 @@ def _on_curate_clicked() -> None:
         _pick_pdf_menu()
 
 
+def _browse_for_pdfs() -> None:
+    """Open the file dialog and feed picks through the same path as a drop."""
+    from aqt.qt import QFileDialog
+
+    paths, _ = QFileDialog.getOpenFileNames(
+        mw, "Import lecture PDF", "", "PDF files (*.pdf)"
+    )
+    if paths:
+        _import_and_arm(list(paths))
+
+
+def _on_browse_clicked() -> None:
+    # Never open a modal QFileDialog synchronously inside the JS-message
+    # callback — defer it exactly like the drop wrapper defers its import.
+    QTimer.singleShot(0, _browse_for_pdfs)
+
+
 # ------------------------------------------------------------- installs
 
 
@@ -305,6 +323,8 @@ def on_deck_js_message(
         return handled
     if message == DISARM_CMD:
         arm(None)
+    elif message == BROWSE_CMD:
+        _on_browse_clicked()
     else:
         _on_curate_clicked()
     return (True, None)
@@ -345,7 +365,14 @@ def on_deck_browser_content(deck_browser: Any, content: Any) -> None:
             )
             border = "1px solid rgba(58,130,247,0.85)"
         else:
-            body = "Drop a lecture PDF here to curate a deck from it."
+            body = (
+                "Drop a lecture PDF here to curate a deck from it.<br>"
+                f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
+                "style='display:inline-block;margin-top:6px;padding:3px 10px;"
+                "border:1px solid rgba(128,128,128,0.55);border-radius:6px;"
+                "font-size:12px;color:inherit;text-decoration:none;'>"
+                "Browse&hellip;</a>"
+            )
             border = "1px dashed rgba(128,128,128,0.55)"
         # Fixed to the bottom of the deck-browser's own viewport rather
         # than flowing in-place after the stats line: content.stats renders
