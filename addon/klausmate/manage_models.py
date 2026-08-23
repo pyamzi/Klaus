@@ -125,6 +125,17 @@ def _is_embedding_model(name: str) -> bool:
     return False
 
 
+_EMBED_KEY_URLS = {
+    "voyage": "https://dash.voyageai.com/api-keys",
+    "openai": "https://platform.openai.com/api-keys",
+}
+
+_EMBED_KEY_PLACEHOLDERS = {
+    "voyage": "pa-…  (free tier at voyageai.com; stored in add-on config)",
+    "openai": "sk-…  (platform.openai.com; stored in add-on config)",
+}
+
+
 def _format_pull_event(ev: dict) -> tuple[str, int]:
     """Return (human status, percent 0-100) for an Ollama pull progress event."""
     status = str(ev.get("status") or "")
@@ -260,10 +271,18 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
     _WARN = "color: #d9822b; font-size: 11px;"
+    _BOLD_TITLE = "QGroupBox { font-weight: 600; }"
+
+    def _caption(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(_MUTED)
+        lbl.setWordWrap(True)
+        return lbl
 
     jobs_box = QGroupBox("What Klaus uses")
+    jobs_box.setStyleSheet(_BOLD_TITLE)
     jobs_layout = QVBoxLayout(jobs_box)
-    jobs_layout.setSpacing(6)
+    jobs_layout.setSpacing(8)
     jobs_form = QFormLayout()
     jobs_form.setContentsMargins(0, 0, 0, 0)
     jobs_form.setSpacing(6)
@@ -287,6 +306,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     auto_combo = QComboBox()
     auto_row, auto_warn, auto_pull_btn = _job_row(auto_combo)
     jobs_form.addRow("Autocomplete:", auto_row)
+    jobs_form.addRow(
+        "",
+        _caption("Suggests the rest of the field as you type. Always a local model."),
+    )
 
     # Ask — engine and model merged into ONE choice. Previously the engine
     # lived here and the model was set by a button over the list, which is
@@ -294,6 +317,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     ask_combo = QComboBox()
     ask_row, ask_warn, ask_pull_btn = _job_row(ask_combo)
     jobs_form.addRow("Ask (⌘K):", ask_row)
+    jobs_form.addRow(
+        "",
+        _caption("Answers questions about the current card. Local model or Claude API."),
+    )
 
     claude_key_lbl = QLabel("    Claude key:")
     claude_key_edit = QLineEdit()
@@ -316,6 +343,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_row, embed_warn, embed_fix_btn = _job_row(embed_provider_combo)
     embed_fix_btn.setText("Pull it")
     jobs_form.addRow("Semantic search:", embed_row)
+    jobs_form.addRow(
+        "",
+        _caption(
+            "Powers deck curation and the Klaus panel. Cloud embedder (needs a "
+            "key) or local Ollama model."
+        ),
+    )
 
     embed_model_lbl = QLabel("    Search model:")
     embed_model_combo = QComboBox()
@@ -339,10 +373,19 @@ def manage_models_dialog(setup: bool = False) -> None:
     index_btn = QPushButton("Index cards now")
     index_row.addWidget(index_btn)
     jobs_layout.addLayout(index_row)
+    jobs_layout.addWidget(
+        _caption(
+            "Semantic search needs either a Voyage/OpenAI key (both have free "
+            "tiers) or a local embedding model from the library below — "
+            "nothing else in Klaus depends on it. Autocomplete and Ask work "
+            "without any of this."
+        )
+    )
     models_layout.addWidget(jobs_box)
 
     # ----- Local model library (inventory only) ----------------------------
     lib_box = QGroupBox("Local model library (Ollama)")
+    lib_box.setStyleSheet(_BOLD_TITLE)
     lib_layout = QVBoxLayout(lib_box)
     lib_layout.setSpacing(6)
 
@@ -959,6 +1002,7 @@ def manage_models_dialog(setup: bool = False) -> None:
                     f"default: {embeddings.DEFAULT_MODELS[provider]}"
                 )
             embed_key_edit.setText(str(cfg.get(_embed_cfg_key(provider)) or ""))
+            embed_key_edit.setPlaceholderText(_EMBED_KEY_PLACEHOLDERS.get(provider, ""))
         finally:
             ui_state["syncing"] = False
         update_embed_status()
@@ -972,6 +1016,25 @@ def manage_models_dialog(setup: bool = False) -> None:
         if secs < 172800:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} days ago"
+
+    def _embed_fix_kind() -> str:
+        """What embed_fix_btn should do right now: 'key' when the selected
+        cloud provider has no API key configured, 'model' when the local
+        embed model named in config isn't installed, '' when neither. The
+        single source of truth for both the row warning and the button
+        dispatcher below — they must never compute this separately or the
+        two could disagree about what the button is currently offering."""
+        from . import embeddings
+
+        cfg = _pkg().get_config()
+        sig = embeddings.index_signature(cfg)
+        provider = embed_provider_combo.currentData() or "ollama"
+        is_cloud = provider != "ollama"
+        if is_cloud and not str(cfg.get(_embed_cfg_key(provider)) or "").strip():
+            return "key"
+        if not is_cloud and sig[1] and sig[1] not in ui_state["models"]:
+            return "model"
+        return ""
 
     def update_embed_status() -> None:
         from . import curation, embeddings
@@ -991,20 +1054,35 @@ def manage_models_dialog(setup: bool = False) -> None:
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
-        # Row-level warning, matching the other two jobs.
-        key_missing = is_cloud and not str(
-            cfg.get(_embed_cfg_key(provider)) or ""
-        ).strip()
-        model_missing = (
-            not is_cloud and sig[1] and sig[1] not in ui_state["models"]
-        )
-        if key_missing:
+        # Row-level warning, matching the other two jobs. embed_fix_btn's
+        # role (open a key page vs. pull a model) switches with `kind` —
+        # on_embed_fix_clicked() reads ui_state["embed_fix_kind"] rather
+        # than being re-wired here, so there is exactly one .connect() for
+        # this button for the life of the dialog (see the connect block).
+        kind = _embed_fix_kind()
+        ui_state["embed_fix_kind"] = kind
+        if kind == "key":
             site = "voyageai.com" if provider == "voyage" else "platform.openai.com"
             embed_warn.setText(f"⚠ key needed ({site})")
-        elif model_missing:
+            embed_fix_btn.setText("Get key")
+        elif kind == "model":
             embed_warn.setText("⚠ not installed")
-        embed_warn.setVisible(bool(key_missing or model_missing))
-        embed_fix_btn.setVisible(bool(model_missing))
+            embed_fix_btn.setText("Pull it")
+        embed_warn.setVisible(bool(kind))
+        embed_fix_btn.setVisible(bool(kind))
+
+    def on_embed_fix_clicked() -> None:
+        """Sole handler for embed_fix_btn.clicked (connected once, at the
+        bottom). Dispatches on the state update_embed_status() last
+        computed instead of the button being rewired per state change —
+        Qt connects accumulate, so a naive second .connect() on a state
+        change would leave both the old and new handler firing."""
+        kind = ui_state.get("embed_fix_kind", "")
+        if kind == "key":
+            provider = str(embed_provider_combo.currentData() or "voyage")
+            openLink(_EMBED_KEY_URLS.get(provider, _EMBED_KEY_URLS["voyage"]))
+        elif kind == "model":
+            pull_missing(embed_model_combo.currentText().strip())
 
     def save_embed() -> None:
         if ui_state["syncing"]:
@@ -1243,9 +1321,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         lambda: pull_missing(str(auto_combo.currentData() or ""))
     )
     ask_pull_btn.clicked.connect(lambda: pull_missing(ask_selection()[1]))
-    embed_fix_btn.clicked.connect(
-        lambda: pull_missing(embed_model_combo.currentText().strip())
-    )
+    embed_fix_btn.clicked.connect(on_embed_fix_clicked)
     embed_provider_combo.currentIndexChanged.connect(lambda _i: save_embed())
     _embed_model_edit_widget = embed_model_combo.lineEdit()
     if _embed_model_edit_widget is not None:
