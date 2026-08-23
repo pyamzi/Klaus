@@ -1,8 +1,14 @@
 # Klausmate — Local AI for Anki
 
-Copilot-style **inline ghost-text autocomplete** for Anki's card editor, powered by a **local** LLM via [Ollama](https://ollama.com). Optionally ground suggestions in your **lecture PDF** with BM25 retrieval and a built-in PDF viewer.
+Copilot-style **inline ghost-text autocomplete** for Anki's card editor, powered by a **local** LLM via [Ollama](https://ollama.com). Optionally ground suggestions in your **lecture PDF** with BM25 retrieval and a built-in PDF viewer, plus semantic deck curation across your whole collection.
 
-> No data leaves your computer. No API keys. No subscription. No telemetry.
+> **Privacy — read before installing.** Autocomplete and Ask run on a local
+> Ollama model by default: nothing leaves your computer for those, no API
+> key, no subscription. Curate Deck and PDF drive retention scoring are
+> different — they default to Voyage AI's cloud embedding service, so your
+> card text is sent to Voyage to build the search index. Switch the
+> embedding provider to Ollama in **Manage models…** for a fully local
+> alternative. No telemetry either way.
 
 Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY)
 
