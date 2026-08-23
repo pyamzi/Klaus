@@ -257,6 +257,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 5px; padding: 5px 11px; font-size: 11px;
 }
 .row button:hover { border-color: var(--live); }
+.row button.danger { border-color: var(--contest); color: var(--contest); }
+.row button.danger:hover { background: color-mix(in srgb, var(--contest) 12%, var(--panel)); }
+.row button.danger.armed { background: var(--contest); color: #fff; }
+.row button.danger.armed:hover { background: var(--contest); }
 
 .toast {
   position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
@@ -633,7 +637,8 @@ function openDrawer(id) {
   const claimBtn = col === "Ready"
     ? `<button data-claim="1" class="primary">Claim as ${esc(me())}</button>` : "";
   const btns = claimBtn + (nexts[col] || []).map(t =>
-    `<button data-move="${t}">${t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("");
+    `<button data-move="${t}">${t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("")
+    + `<button data-delete="1" class="danger">Delete</button>`;
   $("drawer").innerHTML = `
     <button class="close" aria-label="Close">×</button>
     <div class="id">${c.id} · ${col}</div>
@@ -670,6 +675,33 @@ function openDrawer(id) {
   });
   const claimEl = $("drawer").querySelector("[data-claim]");
   if (claimEl) claimEl.onclick = () => api("/api/claim", { id, owner: me() });
+
+  // Delete is destructive and irreversible, and window.confirm is not an
+  // option here — embedded browser views block modal dialogs outright
+  // (the same reason window.prompt was removed from this file). Arm on the
+  // first click, require a second click within a few seconds to actually
+  // send it; anything else (blur, timeout, another drawer action) disarms.
+  const delEl = $("drawer").querySelector("[data-delete]");
+  if (delEl) {
+    const disarm = () => {
+      clearTimeout(delEl._armTimer);
+      delEl.classList.remove("armed");
+      delEl.textContent = "Delete";
+    };
+    delEl.onclick = async () => {
+      if (!delEl.classList.contains("armed")) {
+        delEl.classList.add("armed");
+        delEl.textContent = "Click again to delete";
+        delEl._armTimer = setTimeout(disarm, 3000);
+        return;
+      }
+      disarm();
+      delEl.disabled = true;
+      const ok = await api("/api/delete", { id });
+      if (ok) closeDrawer();
+      else delEl.disabled = false;
+    };
+  }
 
   const ta = $("cmt"), post = $("cmt-post");
   // The board polls every 2s and rebuilds this drawer when it changes;

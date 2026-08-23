@@ -100,6 +100,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/edit": lambda b: B.edit(
                 b, data["id"], data.get("title"), data.get("fields"), data.get("body")
             ),
+            "/api/delete": lambda b: B.delete(b, data["id"]),
         }
         op = ops.get(path)
         if op is None:
