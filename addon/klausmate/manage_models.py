@@ -37,6 +37,7 @@ from aqt.qt import (
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QTabWidget,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -91,6 +92,37 @@ _MODEL_PRESETS = [
     # Community medical fine-tune.
     ("cniongolo/biomistral", "medical-tuned · ~4.4 GB"),
 ]
+
+# Embedding-model presets for the Embedding models tab. Index 0 must stay
+# nomic-embed-text — it is embeddings.DEFAULT_MODELS['ollama'].
+_EMBED_MODEL_PRESETS = [
+    ("nomic-embed-text", "default, best all-round · ~274 MB"),
+    ("all-minilm", "tiny, fastest · ~46 MB"),
+    ("snowflake-arctic-embed", "strong retrieval · ~670 MB"),
+    ("mxbai-embed-large", "best quality · ~670 MB"),
+    ("bge-m3", "multilingual, long context · ~1.2 GB"),
+    ("embeddinggemma", "Google, newest · ~620 MB"),
+]
+
+_EMBED_PRESET_NAMES = {name for name, _desc in _EMBED_MODEL_PRESETS}
+
+
+def _is_embedding_model(name: str) -> bool:
+    """True when `name` looks like an embedding model.
+
+    Matches a bare _EMBED_MODEL_PRESETS name (ignoring any :tag suffix), or
+    a name containing 'embed'/'minilm', or one starting with 'bge'. This is
+    the single source of truth for the text/embedding split — every caller
+    (library-list partitioning, the embed-model dropdown) goes through it.
+    """
+    bare = name.split(":", 1)[0].lower()
+    if bare in _EMBED_PRESET_NAMES:
+        return True
+    if "embed" in bare or "minilm" in bare:
+        return True
+    if bare.startswith("bge"):
+        return True
+    return False
 
 
 def _format_pull_event(ev: dict) -> tuple[str, int]:
@@ -318,19 +350,40 @@ def manage_models_dialog(setup: bool = False) -> None:
     status_lbl.setStyleSheet(_MUTED)
     lib_layout.addWidget(status_lbl)
 
-    lst = QListWidget()
-    lst.setMinimumHeight(96)
-    lib_layout.addWidget(lst)
+    lib_tabs = QTabWidget()
+    text_lst = QListWidget()
+    text_lst.setMinimumHeight(96)
+    embed_lst = QListWidget()
+    embed_lst.setMinimumHeight(96)
+    lib_tabs.addTab(text_lst, "Text models")
+    lib_tabs.addTab(embed_lst, "Embedding models")
+    lib_layout.addWidget(lib_tabs)
+
+    def _active_lib_list() -> QListWidget:
+        return text_lst if lib_tabs.currentIndex() == 0 else embed_lst
 
     pull_row = QHBoxLayout()
     pull_input = QComboBox()
     pull_input.setEditable(True)
     pull_input.setMinimumWidth(220)
     pull_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    for name, desc in _MODEL_PRESETS:
-        pull_input.addItem(f"{name}   ({desc})", name)
-    pull_input.setCurrentIndex(-1)
-    pull_input.lineEdit().setPlaceholderText("pick or type a model to download")
+
+    def _fill_pull_presets() -> None:
+        presets = _MODEL_PRESETS if lib_tabs.currentIndex() == 0 else _EMBED_MODEL_PRESETS
+        pull_input.clear()
+        for name, desc in presets:
+            pull_input.addItem(f"{name}   ({desc})", name)
+        pull_input.setCurrentIndex(-1)
+        edit = pull_input.lineEdit()
+        if edit is not None:
+            placeholder = (
+                "pick or type a model to download"
+                if lib_tabs.currentIndex() == 0
+                else "pick or type an embedding model to download"
+            )
+            edit.setPlaceholderText(placeholder)
+
+    _fill_pull_presets()
     pull_btn = QPushButton("Pull")
     delete_btn = QPushButton("Delete")
     refresh_btn = QPushButton("Refresh")
@@ -417,7 +470,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         )
 
     def get_selected_model() -> str:
-        item = lst.currentItem()
+        item = _active_lib_list().currentItem()
         if not item:
             return ""
         return item.data(Qt.ItemDataRole.UserRole) or item.text()
@@ -443,19 +496,20 @@ def manage_models_dialog(setup: bool = False) -> None:
         rebuild_library_list()
 
     def rebuild_library_list() -> None:
-        """Inventory with a 'used by' badge per model — the list answers
-        'what do I have and what is it for', it no longer assigns."""
+        """Inventory with a 'used by' badge per model, split across the
+        Text/Embedding tabs — the list answers 'what do I have and what is
+        it for', it no longer assigns."""
         from . import embeddings
 
         cfg = _pkg().get_config()
         models = ui_state["models"]
         selected = get_selected_model()
-        lst.clear()
-        if not models:
-            placeholder = QListWidgetItem("(no models installed — pull one below)")
-            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-            lst.addItem(placeholder)
-            return
+        text_lst.clear()
+        embed_lst.clear()
+
+        text_models = [name for name in models if not _is_embedding_model(name)]
+        embed_models = [name for name in models if _is_embedding_model(name)]
+
         auto_active = _pkg().autocomplete_model(cfg)
         ask_active = _pkg().ask_model(cfg) if _pkg().klaus_engine(cfg) != "claude" else None
         embed_active = (
@@ -463,22 +517,34 @@ def manage_models_dialog(setup: bool = False) -> None:
             if embeddings.provider_name(cfg) == "ollama"
             else None
         )
-        for name in models:
-            tags = [
-                label
-                for label, active in (
-                    ("autocomplete", name == auto_active),
-                    ("Ask", name == ask_active),
-                    ("search", name == embed_active),
-                )
-                if active
-            ]
-            suffix = f"   ·  used by: {', '.join(tags)}" if tags else ""
-            item = QListWidgetItem(name + suffix)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            lst.addItem(item)
-            if name == selected:
-                lst.setCurrentItem(item)
+
+        def populate(list_widget: QListWidget, names: list[str], empty_text: str) -> None:
+            if not names:
+                placeholder = QListWidgetItem(empty_text)
+                placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+                list_widget.addItem(placeholder)
+                return
+            for name in names:
+                tags = [
+                    label
+                    for label, active in (
+                        ("autocomplete", name == auto_active),
+                        ("Ask", name == ask_active),
+                        ("search", name == embed_active),
+                    )
+                    if active
+                ]
+                suffix = f"   ·  used by: {', '.join(tags)}" if tags else ""
+                item = QListWidgetItem(name + suffix)
+                item.setData(Qt.ItemDataRole.UserRole, name)
+                list_widget.addItem(item)
+                if name == selected:
+                    list_widget.setCurrentItem(item)
+
+        populate(text_lst, text_models, "(no text models installed — pull one below)")
+        populate(
+            embed_lst, embed_models, "(no embedding models installed — pull one below)"
+        )
 
     def start_install(method: InstallMethod) -> None:
         ok = QMessageBox.question(
@@ -878,11 +944,14 @@ def manage_models_dialog(setup: bool = False) -> None:
             provider = embeddings.provider_name(cfg)
             idx = max(0, embed_provider_combo.findData(provider))
             embed_provider_combo.setCurrentIndex(idx)
-            # Local provider → offer the installed models; cloud → free text.
+            # Local provider → offer the installed embedding models; cloud →
+            # free text. setEditText below still preserves a configured
+            # value even if it's a text model not in this filtered list.
             embed_model_combo.clear()
             if provider == "ollama":
                 for name in ui_state["models"]:
-                    embed_model_combo.addItem(name, name)
+                    if _is_embedding_model(name):
+                        embed_model_combo.addItem(name, name)
             embed_model_combo.setEditText(str(cfg.get("embedding_model") or ""))
             edit = embed_model_combo.lineEdit()
             if edit is not None:
@@ -1163,6 +1232,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     settings_btn.clicked.connect(_pkg().open_config)
     delete_btn.clicked.connect(delete_selected)
     refresh_btn.clicked.connect(refresh)
+    lib_tabs.currentChanged.connect(lambda _i: _fill_pull_presets())
     pull_btn.clicked.connect(start_pull)
     close_btn.clicked.connect(confirm_close)
     auto_combo.currentIndexChanged.connect(lambda _i: save_jobs())
