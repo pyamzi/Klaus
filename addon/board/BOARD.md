@@ -26,6 +26,9 @@ Checklist:
 
 Report failures as new cards rather than fixing them here.
 
+#### Comments
+- [2026-08-23 Pouya] PDF viewer just doesn't work at all. It's not even opening. I can't figure out exactly how to. It's not easy to understand the model installation process for a curation or an embedded model, so that needs to be fixed as well.
+
 ### K-006: Slice klausmate/__init__.py into modules
 owner: -
 priority: P3
@@ -52,21 +55,6 @@ Designer: write the spec into this card, then move it to Ready. Do not hand this
 
 ## Ready
 
-### K-004: Edge-case coverage for drive_store and deck_curate
-owner: -
-priority: P2
-tags: sonnet-safe
-files: tests/test_drive.py
-verify: python3 tests/test_drive.py
-created: 2026-08-23
-
-Extend the existing suite. Gaps worth covering: a folder rename that collides with an existing folder; two PDFs whose safe-names collide; drive.json holding a folder no card references; deck_curate recency ordering when last_used is missing for some PDFs.
-
-Done when: new assertions cover each gap, the suite still passes, and no production module changed — this card owns only the test file.
-
-#### Comments
-- [2026-08-23 sonnet-1] Started; reading the existing suite to find the gaps.
-
 ### K-007: Reconcile the rest of AGENTS.md with the current module map
 owner: -
 priority: P3
@@ -83,6 +71,21 @@ Scope note: AGENTS.md only. Do not edit CLAUDE.md — it is the authority here, 
 
 #### Comments
 - [2026-08-23 orchestrator] Groomed twice: my first verify command referenced a phrase that is not in the file, so it passed with zero work. Replaced with a check that pdf_drive.py and retention.py appear in the layout block — they exist in the tree and are absent from the doc, so it fails now and can only pass once the module list is genuinely current.
+
+### K-004: Edge-case coverage for drive_store and deck_curate
+owner: -
+priority: P2
+tags: sonnet-safe
+files: tests/test_drive.py
+verify: python3 tests/test_drive.py
+created: 2026-08-23
+
+Extend the existing suite. Gaps worth covering: a folder rename that collides with an existing folder; two PDFs whose safe-names collide; drive.json holding a folder no card references; deck_curate recency ordering when last_used is missing for some PDFs.
+
+Done when: new assertions cover each gap, the suite still passes, and no production module changed — this card owns only the test file.
+
+#### Comments
+- [2026-08-23 sonnet-1] Started; reading the existing suite to find the gaps.
 
 ## Doing
 
