@@ -7,44 +7,11 @@ and installs cleanly from AnkiWeb.
 from __future__ import annotations
 
 import json
-import re
 import socket
 import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable
-
-_THINKING_BLOCK_RE = re.compile(
-    r"<(?:redacted_)?think(?:ing)?>\s*.*?\s*</(?:redacted_)?think(?:ing)?>",
-    re.DOTALL | re.IGNORECASE,
-)
-_QWEN_CONTROL_TOKEN_RE = re.compile(
-    r"/(?:no_think|no_check|think)\b/?",
-    re.IGNORECASE,
-)
-
-
-def _extract_model_text(text: str, thinking: str = "") -> str:
-    """Strip thinking traces from Ollama message/response text."""
-    if thinking and thinking in text:
-        text = text.replace(thinking, "")
-    text = _THINKING_BLOCK_RE.sub("", text)
-    text = _QWEN_CONTROL_TOKEN_RE.sub("", text)
-    return text.strip()
-
-
-def _extract_generate_response(resp: dict[str, Any]) -> str:
-    return _extract_model_text(
-        str(resp.get("response") or ""),
-        str(resp.get("thinking") or ""),
-    )
-
-
-def _extract_chat_message(msg: dict[str, Any]) -> str:
-    return _extract_model_text(
-        str(msg.get("content") or ""),
-        str(msg.get("thinking") or ""),
-    )
 
 # #region agent log
 # Writable from Anki regardless of repo path (USER_FILES lives in the add-on).
@@ -224,84 +191,6 @@ class OllamaClient:
     def list_models(self) -> list[str]:
         data = self._get("/api/tags")
         return [m["name"] for m in data.get("models", [])]
-
-    def generate(
-        self,
-        model: str,
-        prompt: str,
-        system: str | None = None,
-        max_tokens: int = 40,
-        temperature: float = 0.2,
-        top_p: float | None = None,
-        top_k: int | None = None,
-        repeat_penalty: float | None = None,
-        stop: list[str] | None = None,
-    ) -> str:
-        options: dict[str, Any] = {
-            "num_predict": max_tokens,
-            "temperature": temperature,
-        }
-        if top_p is not None:
-            options["top_p"] = top_p
-        if top_k is not None:
-            options["top_k"] = top_k
-        if repeat_penalty is not None:
-            options["repeat_penalty"] = repeat_penalty
-        if stop:
-            options["stop"] = stop
-        payload: dict[str, Any] = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "options": options,
-        }
-        if system:
-            payload["system"] = system
-        # Qwen3 thinking models may leak reasoning into `response` unless disabled.
-        if "qwen3" in model.lower():
-            payload["think"] = False
-        resp = self._post("/api/generate", payload)
-        return _extract_generate_response(resp)
-
-    def chat(
-        self,
-        model: str,
-        user_content: str,
-        system: str | None = None,
-        max_tokens: int = 40,
-        temperature: float = 0.2,
-        top_p: float | None = None,
-        top_k: int | None = None,
-        repeat_penalty: float | None = None,
-        stop: list[str] | None = None,
-    ) -> str:
-        """Chat completion — preferred for Ask/autofill (better on Qwen3)."""
-        options: dict[str, Any] = {
-            "num_predict": max_tokens,
-            "temperature": temperature,
-        }
-        if top_p is not None:
-            options["top_p"] = top_p
-        if top_k is not None:
-            options["top_k"] = top_k
-        if repeat_penalty is not None:
-            options["repeat_penalty"] = repeat_penalty
-        if stop:
-            options["stop"] = stop
-        messages: list[dict[str, str]] = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": user_content})
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "stream": False,
-            "options": options,
-        }
-        if "qwen3" in model.lower():
-            payload["think"] = False
-        resp = self._post("/api/chat", payload)
-        return _extract_chat_message(resp.get("message") or {})
 
     def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts via /api/embed.
