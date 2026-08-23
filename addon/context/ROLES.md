@@ -67,6 +67,13 @@ own card to Done — a generator that grades its own output grades leniently.
 
 ## Grooming rules for the orchestrator
 
+- **A `verify:` command must fail before the work and pass after.** Run it
+  against the current tree while grooming. If it already exits 0, it gates
+  nothing and the card can be "finished" without a single edit. This is easy
+  to get wrong: `grep -c 'stale phrase' FILE` exits 0 when the phrase is
+  *present*, so as a check that the phrase is gone it is exactly backwards.
+  (K-003 shipped with that bug. The worker's judgement saved it; the gate
+  did not.) Prefer `! grep -q ...`, a test command, or a compile check.
 - **Keep Ready file-disjoint.** Run `check-disjoint` after every grooming
   pass. Overlapping Ready cards are not a bug in the board, they are a
   scheduling mistake.
