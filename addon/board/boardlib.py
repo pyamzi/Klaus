@@ -59,6 +59,14 @@ BOARD_HEADER = """# klausmate board
      or designer. See context/ROLES.md. -->
 """
 
+ARCHIVE_HEADER = """# klausmate archive
+
+<!-- Durable record of Done cards removed from BOARD.md by `board.py archive`.
+     Append-only: each entry is a card's full text (fields, body, comments)
+     as it stood when archived, plus an `archived:` date. Ids are never
+     reused — next_id() scans this file too — so do not hand-edit ids here. -->
+"""
+
 
 class BoardError(Exception):
     """Validation or contention failure. CLI maps this to exit code 1."""
@@ -101,8 +109,13 @@ class Board:
                 return col, card
         return None, None
 
-    def next_id(self) -> str:
+    def next_id(self, extra=None) -> str:
+        """Lowest unused K-NNN. ``extra`` folds in ids that must not be
+        reused (e.g. archived ones) without the Board itself knowing where
+        those come from — see ``_archived_ids`` / ``add``."""
         nums = [int(c.id[2:]) for _col, c in self.all_cards()]
+        if extra:
+            nums.extend(extra)
         return "K-%03d" % ((max(nums) + 1) if nums else 1)
 
 
@@ -118,6 +131,10 @@ def board_dir() -> str:
 
 def board_path() -> str:
     return os.path.join(board_dir(), "BOARD.md")
+
+
+def archive_path() -> str:
+    return os.path.join(board_dir(), "ARCHIVE.md")
 
 
 def lock_path() -> str:
@@ -194,26 +211,37 @@ def parse(text: str) -> Board:
     return board
 
 
+def _serialize_card_lines(card: Card) -> list:
+    """The full text block for one card: heading, fields, body, comments.
+
+    Shared by ``serialize()`` (BOARD.md, cards grouped under column headers)
+    and ``_append_archive()`` (ARCHIVE.md, cards appended flat) so archived
+    cards keep exactly the shape they had on the board.
+    """
+    out = ["### %s: %s" % (card.id, card.title)]
+    for key in FIELD_ORDER:
+        if key in card.fields:
+            out.append("%s: %s" % (key, card.fields[key]))
+    for key in sorted(k for k in card.fields if k not in FIELD_ORDER):
+        out.append("%s: %s" % (key, card.fields[key]))
+    if card.body:
+        out.append("")
+        out.append(card.body)
+    if card.comments:
+        out.append("")
+        out.append("#### Comments")
+        for c in card.comments:
+            out.append("- " + c)
+    return out
+
+
 def serialize(board: Board) -> str:
     out = [board.preamble.rstrip("\n"), ""]
     for col in COLUMNS:
         out.append("## " + col)
         for card in board.columns[col]:
             out.append("")
-            out.append("### %s: %s" % (card.id, card.title))
-            for key in FIELD_ORDER:
-                if key in card.fields:
-                    out.append("%s: %s" % (key, card.fields[key]))
-            for key in sorted(k for k in card.fields if k not in FIELD_ORDER):
-                out.append("%s: %s" % (key, card.fields[key]))
-            if card.body:
-                out.append("")
-                out.append(card.body)
-            if card.comments:
-                out.append("")
-                out.append("#### Comments")
-                for c in card.comments:
-                    out.append("- " + c)
+            out.extend(_serialize_card_lines(card))
         out.append("")
     return "\n".join(out).rstrip("\n") + "\n"
 
@@ -320,6 +348,47 @@ def _write(board: Board) -> None:
     os.replace(tmp, path)
 
 
+def _archived_ids() -> set:
+    """Numeric ids (the int after 'K-') already spent in ARCHIVE.md.
+
+    A regex scan over the archive file, not a persisted high-water mark: it
+    needs no extra state to keep in sync with reality, matches how
+    ``parse()`` already reads BOARD.md, and self-heals if ARCHIVE.md is ever
+    hand-edited or merged from a branch. The archive is expected to stay
+    small enough (Done cards only, swept periodically) that re-scanning it
+    on every `add` is not a real cost.
+    """
+    try:
+        with open(archive_path(), encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        return set()
+    return {int(m) for m in re.findall(r"^### K-(\d+):", text, re.MULTILINE)}
+
+
+def _append_archive(card: Card) -> None:
+    """Append one card's full text to ARCHIVE.md, durably.
+
+    Called while the board lock is held (from inside a ``mutate()`` fn), so
+    no locking of its own is needed here. Uses a plain append + fsync rather
+    than BOARD.md's write-tmp-then-``os.replace`` dance: ARCHIVE.md is
+    append-only, so there is no prior content to protect against a torn
+    write, and the ordering that matters (archive before BOARD.md) is
+    enforced by the caller doing this before removing the card from the
+    board that ``mutate()`` then writes.
+    """
+    path = archive_path()
+    is_new = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if is_new:
+            f.write(ARCHIVE_HEADER)
+        f.write("\n")
+        f.write("\n".join(_serialize_card_lines(card)))
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def mutate(fn):
     """Run fn(board) under the lock; persist atomically. Returns fn's result.
 
@@ -379,7 +448,10 @@ def add(board: Board, column: str, title: str, fields: dict | None = None,
         body: str = "") -> Card:
     if column not in COLUMNS:
         raise BoardError("unknown column: %s" % column)
-    card = Card(id=board.next_id(), title=title.strip(), body=body)
+    # Fold archived ids into the reservation: without it, deleting or
+    # archiving the highest-numbered card frees its number, and the next
+    # `add` silently collides with a card that still exists in ARCHIVE.md.
+    card = Card(id=board.next_id(extra=_archived_ids()), title=title.strip(), body=body)
     card.fields = {"owner": "-", "created": _today()}
     card.fields.update({k: v for k, v in (fields or {}).items() if v})
     board.columns[column].append(card)
@@ -458,6 +530,28 @@ def delete(board: Board, card_id: str) -> Card:
         )
     board.columns[col].remove(card)
     return card
+
+
+def archive(board: Board, card_id: str) -> Card:
+    """Move a Done card's full record into ARCHIVE.md and off the board.
+
+    The append happens before the card is removed from ``board.columns`` —
+    ``mutate()`` writes BOARD.md only after this function returns, so a
+    crash between the two leaves the card duplicated (still on the board
+    AND in the archive) rather than lost.
+    """
+    col, card = _require(board, card_id)
+    if col != "Done":
+        raise BoardError("card %s is in %s, not Done" % (card_id, col))
+    card.fields["archived"] = _today()
+    _append_archive(card)
+    board.columns["Done"].remove(card)
+    return card
+
+
+def archive_all_done(board: Board) -> list:
+    """Archive every Done card. Returns the archived cards, in order."""
+    return [archive(board, c.id) for c in list(board.columns["Done"])]
 
 
 def check_disjoint(board: Board):

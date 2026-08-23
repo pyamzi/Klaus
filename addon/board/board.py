@@ -86,6 +86,23 @@ def cmd_delete(args) -> int:
     return 0
 
 
+def cmd_archive(args) -> int:
+    if args.all_done:
+        cards = B.mutate(lambda b: B.archive_all_done(b))
+        if not cards:
+            print("no Done cards to archive")
+        else:
+            for card in cards:
+                print("archived %s (%s)" % (card.id, card.title))
+        return 0
+    if not args.id:
+        print("board.py: archive requires an id or --all-done", file=sys.stderr)
+        return 1
+    card = B.mutate(lambda b: B.archive(b, args.id))
+    print("archived %s (%s)" % (card.id, card.title))
+    return 0
+
+
 def cmd_list(args) -> int:
     board = B.load()
     if args.json:
@@ -176,6 +193,11 @@ def build_parser() -> argparse.ArgumentParser:
     dl = sub.add_parser("delete", help="remove a card (not while in flight)")
     dl.add_argument("id")
     dl.set_defaults(func=cmd_delete)
+
+    ar = sub.add_parser("archive", help="move a Done card's record to ARCHIVE.md")
+    ar.add_argument("id", nargs="?")
+    ar.add_argument("--all-done", action="store_true", help="archive every Done card")
+    ar.set_defaults(func=cmd_archive)
 
     ls = sub.add_parser("list", help="show the board")
     ls.add_argument("--col", choices=B.COLUMNS)

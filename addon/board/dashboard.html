@@ -156,6 +156,13 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font-size: 13px; line-height: 1; color: var(--dim);
 }
 .col-head .add-card:hover { border-color: var(--live); color: var(--live); }
+.col-head .archive-all {
+  margin-left: auto; background: transparent; border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 8px; font-size: 9.5px; letter-spacing: .04em;
+  color: var(--dim);
+}
+.col-head .archive-all:hover { border-color: var(--contest); color: var(--contest); }
+.col-head .archive-all.armed { background: var(--contest); color: #fff; border-color: var(--contest); }
 .drop { min-height: 60px; display: flex; flex-direction: column; gap: 8px; }
 .drop.over { outline: 1px dashed var(--live); outline-offset: 4px; border-radius: 6px; }
 
@@ -512,8 +519,12 @@ function render() {
     const addBtn = canAdd
       ? `<button class="add-card" data-col="${col}" aria-label="Add card" title="Add card">+</button>`
       : "";
+    // Archive all: only worth showing once there is something to sweep.
+    const archiveAllBtn = (col === "Done" && cards.length)
+      ? `<button class="archive-all" data-col="${col}" title="Archive every Done card">Archive all</button>`
+      : "";
     return `<section class="col" data-col="${col}">
-      <div class="col-head"><h2>${col}</h2><span class="n">${cards.length}</span>${addBtn}</div>
+      <div class="col-head"><h2>${col}</h2><span class="n">${cards.length}</span>${addBtn}${archiveAllBtn}</div>
       <div class="drop" data-col="${col}">${inner}</div>
     </section>`;
   }).join("");
@@ -535,7 +546,32 @@ function render() {
   renderMap();
   wireCards();
   wireQuickAdd();
+  wireArchiveAll();
   if (openId) openDrawer(openId);
+}
+
+/* Same arm-then-confirm pattern as the drawer's Delete button (see
+   openDrawer): no window.confirm, because embedded browser views block it. */
+function wireArchiveAll() {
+  const btn = document.querySelector(".archive-all");
+  if (!btn) return;
+  const disarm = () => {
+    clearTimeout(btn._armTimer);
+    btn.classList.remove("armed");
+    btn.textContent = "Archive all";
+  };
+  btn.onclick = async () => {
+    if (!btn.classList.contains("armed")) {
+      btn.classList.add("armed");
+      btn.textContent = "Confirm archive all";
+      btn._armTimer = setTimeout(disarm, 3000);
+      return;
+    }
+    disarm();
+    btn.disabled = true;
+    await api("/api/archive_all", {});
+    btn.disabled = false;
+  };
 }
 
 /* ── quick add: title only ─────────────────────────────────────────────
@@ -636,8 +672,11 @@ function openDrawer(id) {
   // touch device: HTML5 drag events never fire there. It is a button now.
   const claimBtn = col === "Ready"
     ? `<button data-claim="1" class="primary">Claim as ${esc(me())}</button>` : "";
+  const archiveBtn = col === "Done"
+    ? `<button data-archive="1" class="danger">Archive</button>` : "";
   const btns = claimBtn + (nexts[col] || []).map(t =>
     `<button data-move="${t}">${t === "Ready" && col === "Doing" ? "Release to Ready" : "Move to " + t}</button>`).join("")
+    + archiveBtn
     + `<button data-delete="1" class="danger">Delete</button>`;
   $("drawer").innerHTML = `
     <button class="close" aria-label="Close">×</button>
@@ -700,6 +739,30 @@ function openDrawer(id) {
       const ok = await api("/api/delete", { id });
       if (ok) closeDrawer();
       else delEl.disabled = false;
+    };
+  }
+
+  // Archive: same arm/confirm as Delete above (a modal confirm is not an
+  // option here either).
+  const archEl = $("drawer").querySelector("[data-archive]");
+  if (archEl) {
+    const disarmA = () => {
+      clearTimeout(archEl._armTimer);
+      archEl.classList.remove("armed");
+      archEl.textContent = "Archive";
+    };
+    archEl.onclick = async () => {
+      if (!archEl.classList.contains("armed")) {
+        archEl.classList.add("armed");
+        archEl.textContent = "Click again to archive";
+        archEl._armTimer = setTimeout(disarmA, 3000);
+        return;
+      }
+      disarmA();
+      archEl.disabled = true;
+      const ok = await api("/api/archive", { id });
+      if (ok) closeDrawer();
+      else archEl.disabled = false;
     };
   }
 

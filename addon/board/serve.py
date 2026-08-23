@@ -101,13 +101,18 @@ class Handler(BaseHTTPRequestHandler):
                 b, data["id"], data.get("title"), data.get("fields"), data.get("body")
             ),
             "/api/delete": lambda b: B.delete(b, data["id"]),
+            "/api/archive": lambda b: B.archive(b, data["id"]),
+            # Sweeps every Done card in one lock hold, rather than the UI
+            # firing one /api/archive per card (each a separate lock
+            # acquisition racing the same swarm of workers).
+            "/api/archive_all": lambda b: B.archive_all_done(b),
         }
         op = ops.get(path)
         if op is None:
             self._send(404, b"not found", "text/plain")
             return
         try:
-            card = B.mutate(op)
+            result = B.mutate(op)
         except KeyError as exc:
             self._json(400, {"error": "missing field %s" % exc})
         except B.LockTimeout as exc:
@@ -117,7 +122,14 @@ class Handler(BaseHTTPRequestHandler):
             # verbatim rather than guessing at a friendlier wording.
             self._json(409, {"error": str(exc)})
         else:
-            self._json(200, {"ok": True, "id": card.id, "mtime": board_mtime()})
+            # Most ops return one Card; archive_all returns a list (possibly
+            # empty, when there was nothing Done to sweep).
+            if isinstance(result, list):
+                payload = {"ok": True, "ids": [c.id for c in result]}
+            else:
+                payload = {"ok": True, "id": result.id}
+            payload["mtime"] = board_mtime()
+            self._json(200, payload)
 
 
 def main(argv=None) -> int:

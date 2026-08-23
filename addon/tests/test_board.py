@@ -197,6 +197,80 @@ B.edit(b8, c8.id, fields={"priority": "P0"})
 check("edit updates field", c8.fields["priority"] == "P0")
 check("edit keeps body", c8.body == "Original body.")
 
+# ------------------------------------------------------------------- archive
+
+section("archive")
+d = new_board_dir(); tmpdirs.append(d)
+archive_file = os.path.join(d, "ARCHIVE.md")
+
+b9 = B.Board(columns={c: [] for c in B.COLUMNS})
+c9 = B.add(b9, "Done", "finished work", {"files": "x.py"})
+B.comment(b9, c9.id, "worker", "wrapped up nicely")
+archived = B.archive(b9, c9.id)
+check("archive removes card from Done", b9.find(c9.id)[1] is None)
+check("archive returns the archived card", archived.id == c9.id)
+check("archive stamps an archived-on date", "archived" in archived.fields)
+
+with open(archive_file, encoding="utf-8") as f:
+    archive_text = f.read()
+check("archived card heading present in ARCHIVE.md",
+      "### %s: finished work" % c9.id in archive_text)
+check("archived comment preserved in ARCHIVE.md",
+      "wrapped up nicely" in archive_text)
+check("archived-on date field present in ARCHIVE.md",
+      "archived: %s" % archived.fields["archived"] in archive_text)
+
+section("archive refuses non-Done cards")
+b10 = B.Board(columns={c: [] for c in B.COLUMNS})
+c10 = B.add(b10, "Doing", "still in progress", {"files": "y.py"})
+try:
+    B.archive(b10, c10.id)
+    check("archive refuses a Doing card", False, "was allowed")
+except B.BoardError:
+    check("archive refuses a Doing card", True)
+try:
+    B.archive(b10, "K-999")
+    check("archive rejects an unknown id", False, "was allowed")
+except B.BoardError:
+    check("archive rejects an unknown id", True)
+
+section("archive --all-done sweep")
+d = new_board_dir(); tmpdirs.append(d)
+cli("add", "--col", "Done", "--title", "done one")
+cli("add", "--col", "Done", "--title", "done two")
+cli("add", "--col", "Ready", "--title", "still ready", "--files", "keep.py")
+rc, out, err = cli("archive", "--all-done")
+check("archive --all-done exits 0", rc == 0, err)
+check("archive --all-done reports both cards",
+      "K-001" in out and "K-002" in out, out)
+
+rc, out, _e = cli("list", "--json")
+data = json.loads(out)
+by_name = {col["name"]: col["cards"] for col in data["columns"]}
+check("all Done cards archived off the board", by_name["Done"] == [], by_name["Done"])
+check("Ready cards untouched by --all-done", len(by_name["Ready"]) == 1)
+
+rc, out, err = cli("archive", "--all-done")
+check("archive --all-done is a no-op when nothing is Done", rc == 0, err)
+check("no-op sweep says so", "no Done cards" in out, out)
+
+section("archive id-reuse regression")
+# Grooming note on K-019: next_id() is max+1 over *live* cards, so removing
+# the highest-numbered card (by delete, or now by archive) frees its number
+# for reuse — except an archived card's id is still permanently recorded in
+# ARCHIVE.md, so reusing it would collide with real history.
+d = new_board_dir(); tmpdirs.append(d)
+rc, highest_id, _e = cli("add", "--col", "Done", "--title", "will be archived")
+check("seed card created", rc == 0, highest_id)
+rc, _o, err = cli("archive", highest_id)
+check("archive of the highest card exits 0", rc == 0, err)
+rc, new_id, _e = cli("add", "--col", "Backlog", "--title", "created after archive")
+check("add after archiving the max card exits 0", rc == 0, new_id)
+check("new id is not the archived id", new_id != highest_id, new_id)
+expect_num = int(highest_id[2:]) + 1
+check("new id advances past the archived id",
+      new_id == "K-%03d" % expect_num, "%s vs expected K-%03d" % (new_id, expect_num))
+
 # ------------------------------------------------------------------ CLI
 
 section("CLI end to end")
