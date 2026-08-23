@@ -244,9 +244,28 @@ button { font: inherit; color: inherit; cursor: pointer; }
   float: right; background: transparent; border: none; color: var(--dim);
   font-size: 20px; line-height: 1; padding: 0 4px;
 }
-.kv { display: grid; grid-template-columns: 70px 1fr; gap: 4px 10px; margin: 10px 0; }
+.kv { display: grid; grid-template-columns: 70px 1fr; gap: 6px 10px; margin: 10px 0; align-items: center; }
 .kv dt { color: var(--faint); font-size: 11px; }
 .kv dd { margin: 0; font-size: 11.5px; word-break: break-all; }
+/* Fields were read-only text; now they're inputs, styled to match the
+   quick-add / composer inputs elsewhere rather than inventing a new look. */
+.kv dd input, .kv dd textarea {
+  width: 100%; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 7px; font: inherit; font-size: 11.5px;
+  font-family: var(--mono);
+}
+.kv dd input:focus, .kv dd textarea:focus { border-color: var(--live); outline: none; }
+.kv dd textarea { resize: vertical; min-height: 36px; line-height: 1.4; }
+.kv-actions { display: flex; align-items: center; gap: 8px; margin: -2px 0 12px; }
+.kv-actions button {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 12px; font-size: 11px;
+}
+.kv-actions button:hover:not(:disabled) { border-color: var(--live); }
+.kv-actions button:disabled { opacity: .4; cursor: default; }
+.kv-actions button.ghost { background: transparent; }
+.kv-actions span { font-size: 10.5px; color: var(--faint); }
 .body {
   font-family: var(--prose); font-size: 13px; line-height: 1.55;
   white-space: pre-wrap; color: var(--dim);
@@ -683,12 +702,17 @@ function openDrawer(id) {
     <div class="id">${c.id} · ${col}</div>
     <h3>${esc(c.title)}</h3>
     <dl class="kv">
-      <dt>owner</dt><dd>${esc(c.owner || "-")}</dd>
-      <dt>priority</dt><dd>${esc(c.priority || "-")}</dd>
-      <dt>tags</dt><dd>${(c.tags || []).map(esc).join(", ") || "-"}</dd>
-      <dt>files</dt><dd>${(c.files || []).map(esc).join("<br>") || "<span style='color:var(--contest)'>none declared</span>"}</dd>
-      <dt>verify</dt><dd>${esc(c.verify) || "<span style='color:var(--contest)'>none</span>"}</dd>
+      <dt>owner</dt><dd><input id="kv-owner" value="${esc(c.owner === '-' ? '' : (c.owner || ''))}" placeholder="-"></dd>
+      <dt>priority</dt><dd><input id="kv-priority" value="${esc(c.priority || '')}" placeholder="P2"></dd>
+      <dt>tags</dt><dd><input id="kv-tags" value="${esc((c.tags || []).join(', '))}" placeholder="sonnet-safe, design, needs-human"></dd>
+      <dt>files</dt><dd><textarea id="kv-files" rows="2" placeholder="comma-separated paths">${esc((c.files || []).join(', '))}</textarea></dd>
+      <dt>verify</dt><dd><input id="kv-verify" value="${esc(c.verify || '')}" placeholder="command that proves it is done"></dd>
     </dl>
+    <div class="kv-actions">
+      <button id="kv-save" disabled>Save changes</button>
+      <button id="kv-cancel" class="ghost">Cancel</button>
+      <span id="kv-status"></span>
+    </div>
     ${c.body ? `<div class="body">${esc(c.body)}</div>` : ""}
     <div class="cmts"><h4>Comments</h4>
       ${(c.comments || []).map(x => `<div class="cmt">${esc(x)}</div>`).join("")
@@ -705,6 +729,45 @@ function openDrawer(id) {
   $("drawer").classList.add("open");
   $("scrim").classList.add("open");
   $("drawer").querySelector(".close").onclick = closeDrawer;
+
+  // Editable metadata (owner/priority/tags/files/verify). These are plain
+  // "key: value" lines in BOARD.md, one per line — a stray newline would
+  // corrupt the parser, so every value is collapsed to one line on save.
+  // Compare against a snapshot to gate Save on an actual change, same as
+  // the comment composer gates Post on non-empty text.
+  const kvFields = ["owner", "priority", "tags", "files", "verify"];
+  const kvOriginal = {
+    owner: c.owner === "-" ? "" : (c.owner || ""),
+    priority: c.priority || "",
+    tags: (c.tags || []).join(", "),
+    files: (c.files || []).join(", "),
+    verify: c.verify || "",
+  };
+  const kvSave = $("kv-save"), kvCancel = $("kv-cancel"), kvStatus = $("kv-status");
+  const kvDirty = () => kvFields.some(f => $("kv-" + f).value !== kvOriginal[f]);
+  const kvCheck = () => { kvSave.disabled = !kvDirty(); kvStatus.textContent = ""; };
+  kvFields.forEach(f => $("kv-" + f).addEventListener("input", kvCheck));
+  kvCancel.onclick = () => {
+    kvFields.forEach(f => { $("kv-" + f).value = kvOriginal[f]; });
+    kvCheck();
+  };
+  kvSave.onclick = async () => {
+    const clean = s => s.replace(/\s*\n\s*/g, ", ").trim();
+    const fields = {
+      owner: clean($("kv-owner").value) || "-",
+      priority: clean($("kv-priority").value),
+      tags: clean($("kv-tags").value),
+      files: clean($("kv-files").value),
+      verify: clean($("kv-verify").value),
+    };
+    kvSave.disabled = true;
+    kvStatus.textContent = "Saving…";
+    const ok = await api("/api/edit", { id, fields });
+    // On success api()'s load(true) reloads the board and re-runs
+    // openDrawer(openId), which repaints these inputs from the saved
+    // state — that's what clears the dirty flag, not any code here.
+    if (!ok) { kvStatus.textContent = ""; kvSave.disabled = false; }
+  };
   $("drawer").querySelectorAll("[data-move]").forEach(b => {
     b.onclick = async () => {
       const to = b.dataset.move;
