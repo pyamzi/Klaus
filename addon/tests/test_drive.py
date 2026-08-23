@@ -152,6 +152,58 @@ check("write after corruption recovers",
       (drive_store.record_import(tmp, "A", "a.pdf") or True)
       and drive_store.display_name(tmp, "A") == "a.pdf")
 
+print("== folder rename collides with an existing folder ==")
+tmp_r = tempfile.mkdtemp(prefix="klaus_drive_")
+drive_store.add_folder(tmp_r, "Alpha")
+drive_store.add_folder(tmp_r, "Beta")
+drive_store.record_import(tmp_r, "Doc1", "Doc One.pdf")
+drive_store.set_folder(tmp_r, "Doc1", "Alpha")
+drive_store.record_import(tmp_r, "Doc2", "Doc Two.pdf")
+drive_store.set_folder(tmp_r, "Doc2", "Beta")
+rename_ok = drive_store.rename_folder(tmp_r, "Alpha", "Beta")
+d = drive_store.load(tmp_r)
+check("rename onto an existing folder still reports ok", rename_ok)
+check("rename onto an existing folder merges, no duplicate",
+      d["folders"].count("Beta") == 1 and d["folders"] == ["Beta"])
+check("rename onto an existing folder migrates the old folder's pdf",
+      d["pdfs"]["Doc1"]["folder"] == "Beta")
+check("rename onto an existing folder leaves the target's own pdf alone",
+      d["pdfs"]["Doc2"]["folder"] == "Beta")
+shutil.rmtree(tmp_r, ignore_errors=True)
+
+print("== two PDFs whose safe-names collide ==")
+tmp_c = tempfile.mkdtemp(prefix="klaus_drive_")
+drive_store.record_import(tmp_c, "Notes", "Notes (Week 1).pdf")
+drive_store.set_folder(tmp_c, "Notes", "Anatomy")
+# A second original file sanitizes to the same safe name (pdf_handler's
+# _safe_basename collision) and re-imports over the same key.
+drive_store.record_import(tmp_c, "Notes", "Notes (Week 2).pdf")
+d = drive_store.load(tmp_c)
+check("colliding safe-name keeps a single pdfs entry", len(d["pdfs"]) == 1)
+check("colliding safe-name shows the latest import's display",
+      d["pdfs"]["Notes"]["display"] == "Notes (Week 2).pdf")
+check("colliding safe-name preserves the earlier folder assignment",
+      d["pdfs"]["Notes"]["folder"] == "Anatomy")
+shutil.rmtree(tmp_c, ignore_errors=True)
+
+print("== drive.json holding a folder no pdf references ==")
+tmp_o = tempfile.mkdtemp(prefix="klaus_drive_")
+os.makedirs(tmp_o, exist_ok=True)
+with open(os.path.join(tmp_o, "drive.json"), "w") as f:
+    json.dump({"version": 1, "folders": ["Orphan/Nested"], "pdfs": {},
+               "window": {}}, f)
+d = drive_store.load(tmp_o)
+check("load keeps a folder no pdf references", d["folders"] == ["Orphan/Nested"])
+tree = drive_store.build_tree([], d)
+check("build_tree lists the unreferenced folder, empty",
+      "Orphan/Nested" in tree["folders"] and tree["folders"]["Orphan/Nested"] == [])
+check("build_tree root stays empty", tree["root"] == [])
+drive_store.remove_folder(tmp_o, "Orphan/Nested")
+d2 = drive_store.load(tmp_o)
+check("removing an unreferenced nested folder collapses it to its parent",
+      d2["folders"] == ["Orphan"] and d2["pdfs"] == {})
+shutil.rmtree(tmp_o, ignore_errors=True)
+
 print("== aqt-dependent modules import cleanly (stubbed) ==")
 
 
@@ -234,6 +286,74 @@ try:
           dc.on_deck_js_message((False, None), "something:else", None) == (False, None))
 except Exception as e:
     check("deck_curate surface", False, str(e))
+
+print("== deck_curate recency ordering (last_used missing for some pdfs) ==")
+try:
+    tmp_dc = tempfile.mkdtemp(prefix="klaus_drive_")
+    ctx_dir = os.path.join(tmp_dc, "contexts")
+    os.makedirs(ctx_dir, exist_ok=True)
+    for name in ("alpha", "beta", "gamma"):
+        open(os.path.join(ctx_dir, name + ".txt"), "w").close()
+    # beta has no last_used entry at all -- must fall back to file mtime,
+    # interleaved correctly against alpha/gamma's explicit timestamps.
+    os.utime(os.path.join(ctx_dir, "beta.txt"), (3000.0, 3000.0))
+    with open(os.path.join(tmp_dc, "pdf_tabs.json"), "w") as f:
+        json.dump({"last_used": {"alpha": 1000.0, "gamma": 5000.0}}, f)
+
+    pkg.USER_FILES = tmp_dc  # deck_curate._user_files() reads this attr
+
+    _created_menus = []
+
+    class _FakeSignal:
+        def connect(self, fn):
+            pass
+
+    class _FakeAction:
+        def __init__(self, text, parent=None):
+            self.text = text
+            self.enabled = True
+
+        def setEnabled(self, v):
+            self.enabled = v
+
+        @property
+        def triggered(self):
+            return _FakeSignal()
+
+    class _FakeMenu:
+        def __init__(self, parent=None):
+            self.items = []
+            _created_menus.append(self)
+
+        def addAction(self, action):
+            self.items.append(action)
+
+        def addSeparator(self):
+            self.items.append("sep")
+
+        def exec(self, pos=None):
+            pass
+
+    class _FakeCursor:
+        @staticmethod
+        def pos():
+            return None
+
+    orig_menu, orig_action, orig_cursor = dc.QMenu, dc.QAction, dc.QCursor
+    dc.QMenu, dc.QAction, dc.QCursor = _FakeMenu, _FakeAction, _FakeCursor
+    try:
+        dc._pick_pdf_menu()
+    finally:
+        dc.QMenu, dc.QAction, dc.QCursor = orig_menu, orig_action, orig_cursor
+
+    menu = _created_menus[-1]
+    order = [it.text for it in menu.items
+             if isinstance(it, _FakeAction) and it.enabled]
+    check("recency order interleaves explicit last_used and mtime fallback",
+          order == ["gamma", "beta", "alpha"], order)
+    shutil.rmtree(tmp_dc, ignore_errors=True)
+except Exception as e:
+    check("deck_curate recency ordering", False, f"{type(e).__name__}: {e}")
 
 shutil.rmtree(tmp, ignore_errors=True)
 print(f"\n{PASS} passed, {FAIL} failed")
