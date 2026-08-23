@@ -33,10 +33,8 @@ from aqt.qt import (
     QEvent,
     QFileDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QImage,
-    QKeySequence,
     QLabel,
     QLineEdit,
     QApplication,
@@ -67,7 +65,7 @@ from .ollama_runtime import (
     ensure_server,
     server_manager,
 )
-from .manage_models import _MODEL_PRESETS, manage_models_dialog
+from .manage_models import manage_models_dialog
 from .browse_toggles import on_browser_will_show
 from .setup_flow import first_run_check, setup_readiness_check
 
@@ -582,105 +580,47 @@ def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
 # ----------------------------- menu / setup -------------------------------
 
 
-def open_settings_dialog() -> None:
-    from .settings_ui import open_settings_dialog as _open
-
-    _open(get_config, write_config, manage_models_dialog, tooltip)
-
-
-def install_preferences() -> None:
-    """Embed Klaus settings in Anki Edit → Preferences (Editing tab)."""
-    from anki.hooks import wrap
-    from aqt.preferences import Preferences
-
-    from .settings_ui import KlausSettingsPanel
-
-    def _klaus_setup_options(prefs: Preferences) -> None:
-        try:
-            box = QGroupBox("Klaus")
-            box_lay = QVBoxLayout(box)
-            panel = KlausSettingsPanel(
-                box, on_manage_models=manage_models_dialog
-            )
-            panel.load_from_config(get_config())
-            box_lay.addWidget(panel)
-            prefs._klausmate_settings = panel  # type: ignore[attr-defined]
-            form = prefs.form
-            target = getattr(form, "pastePNG", None)
-            if target is not None:
-                parent = target.parentWidget()
-                lay = parent.layout() if parent else None
-                if lay is not None:
-                    lay.addWidget(box)
-                    return
-            lay_main = prefs.form.centralwidget.layout() if hasattr(
-                prefs.form, "centralwidget"
-            ) else None
-            if lay_main is not None:
-                lay_main.addWidget(box)
-        except Exception as e:
-            print(f"[klausmate] preferences setup failed: {e}")
-
-    def _klaus_update_options(prefs: Preferences) -> None:
-        panel = getattr(prefs, "_klausmate_settings", None)
-        if panel is None:
-            return
-        try:
-            cfg = get_config()
-            write_config(panel.save_to_config(cfg))
-        except Exception as e:
-            print(f"[klausmate] preferences save failed: {e}")
-
-    wrap(Preferences.setupOptions, _klaus_setup_options, "after")
-    wrap(Preferences.updateOptions, _klaus_update_options, "after")
-
-
 def open_config() -> None:
-    open_settings_dialog()
-
-
-def _open_chat_dock() -> None:
-    from . import chat_dock
-
-    chat_dock.toggle_chat_dock()
+    manage_models_dialog()
 
 
 def install_menu() -> None:
     menu = mw.form.menuTools.addMenu("Klaus")
 
-    a_chat = QAction("Open Klaus", mw)
-    try:
-        a_chat.setShortcut(
-            QKeySequence(str(get_config().get("chat_hotkey", "Ctrl+Shift+K")))
-        )
-    except Exception:
-        pass
-    a_chat.triggered.connect(_open_chat_dock)
-    menu.addAction(a_chat)
+    a_clear_library = QAction("Clear library tag", mw)
 
-    a_clear_tag = QAction("Clear curation tag", mw)
+    def _clear_library_tag() -> None:
+        from . import curation, retention
 
-    def _clear_tag() -> None:
-        from . import curation
+        curation_nids = mw.col.find_notes(f'tag:"{curation.TEMP_TAG}"') if mw.col else []
+        pdfmatch_nids = mw.col.find_notes(f'tag:"{retention.RETENTION_TAG}"') if mw.col else []
+        if not curation_nids and not pdfmatch_nids:
+            tooltip("No notes carry a Klaus library tag.", parent=mw)
+            return
+        if not askUser(
+            "Clear the Klaus curation and PDF-match tags from all notes?",
+            parent=mw,
+        ):
+            return
 
         curation.clear_curation_tag(mw)
-
-    a_clear_tag.triggered.connect(_clear_tag)
-    menu.addAction(a_clear_tag)
-
-    a_clear_pdfmatch = QAction("Clear PDF-match tag", mw)
-
-    def _clear_pdfmatch() -> None:
-        from . import retention
-
         retention.clear_pdfmatch_tag(mw)
 
-    a_clear_pdfmatch.triggered.connect(_clear_pdfmatch)
-    menu.addAction(a_clear_pdfmatch)
+        parts = []
+        if curation_nids:
+            parts.append(f"{len(curation_nids)} curation")
+        if pdfmatch_nids:
+            parts.append(f"{len(pdfmatch_nids)} PDF-match")
+        msg = f"Cleared the library tag from {' and '.join(parts)} notes."
+        # clear_curation_tag/clear_pdfmatch_tag each pop their own tooltip
+        # via an async CollectionOp; Anki's tooltip() is a single global
+        # overlay where each call closes the last, so firing both trims to
+        # whichever finishes second. Delay this summary past both so it is
+        # the one message the user actually reads.
+        QTimer.singleShot(400, lambda: tooltip(msg, parent=mw))
 
-    a_settings = QAction("Settings…", mw)
-    a_settings.triggered.connect(open_settings_dialog)
-    menu.addAction(a_settings)
+    a_clear_library.triggered.connect(_clear_library_tag)
+    menu.addAction(a_clear_library)
 
     a_models = QAction("Manage models…", mw)
     a_models.triggered.connect(manage_models_dialog)
@@ -2514,46 +2454,10 @@ if getattr(mw, "app", None) is not None:
 atexit.register(_shutdown_managed_server)
 
 
-# --------------------------- klaus panel glue -----------------------------
-
-
-def _chat_dock_loaded() -> bool:
-    import sys as _sys
-
-    return f"{__name__}.chat_dock" in _sys.modules
-
-
-def _chat_profile_close() -> None:
-    if not _chat_dock_loaded():
-        return
-    try:
-        from . import chat_dock
-
-        chat_dock.on_profile_will_close()
-    except Exception as e:
-        print(f"[klausmate] chat profile-close failed: {e}")
-
-
-def _chat_quit() -> None:
-    if not _chat_dock_loaded():
-        return
-    try:
-        from . import chat_dock
-
-        chat_dock.on_quit()
-    except Exception as e:
-        print(f"[klausmate] chat quit failed: {e}")
-
-
-gui_hooks.profile_will_close.append(_chat_profile_close)
-if getattr(mw, "app", None) is not None:
-    mw.app.aboutToQuit.connect(_chat_quit)
-
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)
 gui_hooks.main_window_did_init.append(install_menu)
-gui_hooks.main_window_did_init.append(install_preferences)
 from . import curation as _curation
 
 _curation.setup_hooks()
