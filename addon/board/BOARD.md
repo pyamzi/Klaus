@@ -72,7 +72,7 @@ owner: -
 priority: P3
 tags: sonnet-safe
 files: AGENTS.md
-verify: ! grep -q 'single active PDF' AGENTS.md
+verify: grep -q 'retention.py' AGENTS.md && grep -q 'pdf_drive.py' AGENTS.md
 created: 2026-08-23
 
 Two workers independently flagged this while doing other cards: beyond the privacy line fixed in K-003, AGENTS.md still describes an older architecture — the repo layout, the module list, the 'single active PDF' model, and the dependencies table all predate semantic search, the PDF drive, and multi-PDF tabs.
@@ -80,6 +80,9 @@ Two workers independently flagged this while doing other cards: beyond the priva
 Done when: the repo layout and module list match what is actually in klausmate/ (including pdf_drive.py, deck_curate.py, drive_store.py, retention.py, curation.py, embeddings.py, card_index.py), the single-PDF section is replaced by the multi-PDF tab model, and nothing in the file contradicts CLAUDE.md.
 
 Scope note: AGENTS.md only. Do not edit CLAUDE.md — it is the authority here, use it as your source.
+
+#### Comments
+- [2026-08-23 orchestrator] Groomed twice: my first verify command referenced a phrase that is not in the file, so it passed with zero work. Replaced with a check that pdf_drive.py and retention.py appear in the layout block — they exist in the tree and are absent from the doc, so it fails now and can only pass once the module list is genuinely current.
 
 ## Doing
 
