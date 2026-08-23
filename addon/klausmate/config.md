@@ -57,6 +57,13 @@ dismissals). Tab accepts the visible ghost; Esc dismisses it.
 
 - **ask_hotkey**: Opens the inline ASK popover so you can type a free-form
   prompt. Default `Cmd+K`. Examples: `Ctrl+K`, `Alt+Enter`, `Cmd+/`.
+- **cycle_forward_hotkey**: While a ghost-text suggestion is showing, steps
+  to the next alternate completion. Default `Cmd+Shift+]`. Past the last
+  generated alternate it requests a fresh variant that avoids the ones
+  already shown (a "thinking…" ghost shows while it loads).
+- **cycle_backward_hotkey**: Steps back to the previous alternate
+  completion. Default `Cmd+Shift+[`. No-op at the first candidate (does not
+  wrap around).
 - **debounce_ms**: Milliseconds of idle time after the last keystroke before
   a suggestion request is fired. Default `400`. Lower = snappier but noisier.
   Suggestions only fire when the caret is at the very end of the field AND
