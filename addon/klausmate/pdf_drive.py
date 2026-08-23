@@ -132,7 +132,29 @@ class DriveWindow(QWidget):
         self.rebuild_tree()
         self._refresh_rows()
 
+        try:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            print(f"[klausmate] drive show failed: {e}")
+
     # -------------------------------------------------------- geometry
+
+    _MIN_PANE = 120
+
+    def _sane_splitter_sizes(self, sizes: object) -> list[int] | None:
+        """Reject degenerate splitter sizes (e.g. saved from a never-shown
+        window, where sizes() returns something like [46, 46])."""
+        if not isinstance(sizes, list) or len(sizes) != 2:
+            return None
+        try:
+            ints = [int(s) for s in sizes]
+        except (TypeError, ValueError):
+            return None
+        if any(s < self._MIN_PANE for s in ints):
+            return None
+        return ints
 
     def _restore_geometry(self) -> None:
         try:
@@ -143,28 +165,31 @@ class DriveWindow(QWidget):
                     self.move(int(state["x"]), int(state["y"]))
             else:
                 self.resize(1040, 680)
-            sizes = state.get("splitter")
-            if isinstance(sizes, list) and len(sizes) == 2:
-                self.splitter.setSizes([int(s) for s in sizes])
-            else:
-                self.splitter.setSizes([300, 740])
+            sane = self._sane_splitter_sizes(state.get("splitter"))
+            self.splitter.setSizes(sane if sane is not None else [300, 740])
         except Exception as e:
             print(f"[klausmate] drive geometry restore failed: {e}")
             self.resize(1040, 680)
 
     def _save_geometry(self) -> None:
         try:
+            if not self.isVisible():
+                # A window that was constructed but never shown has bogus
+                # geometry/splitter sizes (e.g. splitter.sizes() == [46, 46]
+                # before any layout pass) — persisting it would poison the
+                # next restore. Nothing to save in that case.
+                return
+            sizes = list(self.splitter.sizes())
             geo = self.geometry()
-            drive_store.save_window_state(
-                _user_files(),
-                {
-                    "x": geo.x(),
-                    "y": geo.y(),
-                    "w": geo.width(),
-                    "h": geo.height(),
-                    "splitter": list(self.splitter.sizes()),
-                },
-            )
+            state = {
+                "x": geo.x(),
+                "y": geo.y(),
+                "w": geo.width(),
+                "h": geo.height(),
+            }
+            if self._sane_splitter_sizes(sizes) is not None:
+                state["splitter"] = sizes
+            drive_store.save_window_state(_user_files(), state)
         except Exception as e:
             print(f"[klausmate] drive geometry save failed: {e}")
 
@@ -643,6 +668,12 @@ class DriveWindow(QWidget):
     def reopen(self, *args, **kwargs) -> None:
         self.rebuild_tree()
         self._refresh_rows()
+        try:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            print(f"[klausmate] drive reopen show failed: {e}")
 
     def closeEvent(self, evt) -> None:  # noqa: N802 — Qt naming
         global _instance
