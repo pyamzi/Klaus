@@ -19,6 +19,8 @@ Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY)
 | **PDF dock** *(Add window)* | Toggle with **◨** on the editor panel. Native PDF viewer beside your cards — the page you're viewing becomes the primary context. |
 | **PDF text copy** | Drag-select text in the viewer, then **Cmd+C** or right-click **Copy**. |
 | **PDF page → image** | Toolbar **Copy page** button copies the current page as an image to the clipboard. Paste with **Cmd+V**. |
+| **PDF drive** | **PDFs** link in the top toolbar opens the Klaus PDF drive — a library window with every imported PDF in a foldered tree, a retention score per PDF, and a right-click menu to embed, curate, or browse matches. |
+| **Curate Deck** | A **Curate Deck** button on the deck list and on a deck's overview screen finds cards matching a lecture PDF. Drop a PDF on the deck list to arm it, or pick one from the menu. |
 
 Autocomplete only fires when the caret is at the **end** of the field and you're starting a new word (whitespace before the cursor). Mid-word edits, selections, IME composition, and recent paste/dismiss/accept events suppress it.
 
@@ -100,6 +102,21 @@ Restart Anki. Without pypdf, autocomplete and Ask still work — only PDF upload
   - **Copy page** in the toolbar copies the current page as an image to the clipboard — paste with **Cmd+V**.
 
 Extracted text and the raw PDF live under `addons21/klausmate/user_files/` (`contexts/`, `pdfs/`).
+
+### PDF drive (library)
+
+- Click **PDFs** in the top toolbar (left of Decks…Sync) to open the Klaus PDF drive — a standalone window listing every PDF you've imported.
+- **Left pane:** a folder tree. **New folder** creates a virtual folder — PDFs aren't moved on disk, only organized; a PDF's right-click **Move to folder** files it there. Each row shows its **retention** (the share of that PDF's matched cards you'd currently recall) and how many cards match.
+- **Double-click** a PDF to open it in the viewer on the right, the same viewer used elsewhere in Klaus.
+- **Right-click** a PDF for **Open**, **Rename…**, **Move to folder**, **Embed / Re-embed for retention**, **Match strictness…** (how closely a card must relate to the PDF to count as a match), **Show matched cards in Browse**, **Curate deck from this PDF…**, and **Delete…**.
+- This window replaced the old Priorities tab — retention scoring and deck curation both live here now, in addition to the deck screens below.
+
+### Curate Deck
+
+- On the **deck list** or a **deck's overview** screen, click **Curate Deck** at the bottom to find cards matching a lecture PDF.
+- **Drag a PDF onto the deck list** to arm it — an "Armed: *name*" banner appears above the deck list until you click **Curate Deck** (or its **×** to disarm). With nothing armed, **Curate Deck** opens a menu of your imported PDFs, most recently used first.
+- You'll be asked which deck to search, unless you're on a deck's overview screen, where it defaults to that deck. Matching cards are tagged and opened in Browse.
+- The same curation can also be started from the PDF drive's **Curate deck from this PDF…** right-click action.
 
 ### Settings & models
 
