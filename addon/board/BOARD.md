@@ -7,8 +7,6 @@
 
 ## Backlog
 
-## Ready
-
 ### K-006: Slice klausmate/__init__.py into modules
 owner: -
 priority: P3
@@ -20,6 +18,11 @@ created: 2026-08-23
 5,980 lines in one file. Too large for one card — the orchestrator must slice it into file-disjoint pieces first, or every worker collides on the same path.
 
 Blocked on grooming, not on skill. Candidate seams: the Manage models dialog (~1000 lines), the editor panel and PDF bar, the Browse toolbar toggles, hook registration and bootstrap.
+
+#### Comments
+- [2026-08-23 orchestrator] Sliced into K-023 (manage-models dialog, ~1130 lines), K-024 (browse toggles, ~190), K-025 (first-run/readiness, ~360) — a serial pipeline, since every slice removes code from __init__.py and the claim guard refuses overlapping claims. The PDF panel machinery (~2000 lines) deliberately stays put: highest risk, least separable, and untestable headlessly. K-006 stays in Backlog as the tracking parent; it closes when all three slices are Done. Expected end state: __init__.py drops from 6,010 to ~4,300 lines.
+
+## Ready
 
 ### K-002: Visual polish pass: Manage models dialog and Klaus panel
 owner: -
@@ -48,17 +51,13 @@ Designer: write the spec into this card before anyone touches code. Worth coveri
 
 Not sonnet-safe. Needs a spec first.
 
-## Doing
-
-## Review
-
 ### K-001: Manual-verify PDF drive and deck-curate surfaces in live Anki
-owner: Pouya
+owner: -
 priority: P1
 tags: needs-human
+files: 
 verify: human confirms each checklist item in Anki
 created: 2026-08-23
-claimed: 2026-08-23
 
 Only a human can do this: it needs a running Anki with a real collection.
 
@@ -75,6 +74,72 @@ Report failures as new cards rather than fixing them here.
 #### Comments
 - [2026-08-23 Pouya] PDF viewer just doesn't work at all. It's not even opening. I can't figure out exactly how to. It's not easy to understand the model installation process for a curation or an embedded model, so that needs to be fixed as well.
 - [2026-08-23 Pouya] PDF shows up at the top. It just doesn't open into anything, like it doesn't open a window or anything.
+
+### K-024: Slice 2/3: extract Browse toolbar toggles to browse_toggles.py
+owner: -
+priority: P3
+tags: sonnet-safe,slice
+files: klausmate/__init__.py,klausmate/browse_toggles.py
+verify: test -f klausmate/browse_toggles.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Second slice of K-006. Pure move, zero behavior change. BLOCKED behind slice 1 by design — both touch __init__.py; the claim guard enforces the ordering.
+
+Move from klausmate/__init__.py into new klausmate/browse_toggles.py:
+- _KLAUS_TOGGLE_QSS (~2040), _make_klaus_toggle (~2061), _VisibilityWatcher (~2072), _install_browser_sidebar_toggle (~2094) and everything through on_browser_will_show (~2186, ends before ~2230). Roughly 190 lines. (Line numbers shift after slice 1 — locate by name, not number.)
+
+Requirements:
+- __init__.py registers on_browser_will_show on gui_hooks.browser_will_show near the bottom; after the move import it back ('from .browse_toggles import on_browser_will_show') so the registration line is untouched or minimally adjusted.
+- Check what the moved code references (mw? get_config? pure Qt?) — grep before assuming; use lazy _pkg() only if actually needed.
+- Preserve the hard-won comments in this block verbatim (the grid-repack trick and QTimer deferral notes are documented gotchas).
+- Full suite before committing.
+
+### K-025: Slice 3/3: extract first-run and readiness flows to setup_flow.py
+owner: -
+priority: P3
+tags: sonnet-safe,slice
+files: klausmate/__init__.py,klausmate/setup_flow.py
+verify: test -f klausmate/setup_flow.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Third slice of K-006. Pure move, zero behavior change. Runs after slices 1 and 2 (same-file serialization via the claim guard).
+
+Move from klausmate/__init__.py into new klausmate/setup_flow.py:
+- _first_run_dialog_shown_this_session (~2561), first_run_check (~2564), setup_readiness_check (~2649), _maybe_offer_runtime_update (~2689), _readiness_check_body (~2729) and their private helpers up to but NOT including the manage-models block boundary. Roughly 360 lines. Locate by name; numbers will have shifted.
+
+Requirements:
+- These functions are registered on gui_hooks.profile_did_open near the bottom of __init__.py — import them back so registrations keep working.
+- first_run_check calls manage_models_dialog: after slice 1 that lives in manage_models.py — import it from there directly, not via the package.
+- The module-level mutable _first_run_dialog_shown_this_session is read/written across first_run_check and setup_readiness_check — keep both users in the SAME module so the global stays coherent; do not leave one behind in __init__.
+- Mind the migration guard interplay: _migrate_config stays in __init__.py (it is config plumbing, not setup flow) — do not move it.
+- Full suite before committing.
+
+## Doing
+
+### K-023: Slice 1/3: extract the Manage-models dialog to manage_models.py
+owner: sonnet-r
+priority: P2
+tags: sonnet-safe,slice
+files: klausmate/__init__.py,klausmate/manage_models.py
+verify: test -f klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+First slice of K-006 (parent card). Pure code MOVE, zero behavior change.
+
+Move from klausmate/__init__.py into a new klausmate/manage_models.py:
+- _MODEL_PRESETS (line ~2922), _format_pull_event (~2949), _KlausManageDialog (~2970), manage_models_dialog (~2996 through ~4050). Roughly 1,130 lines.
+
+Hard requirements:
+- __init__.py keeps working references: it calls manage_models_dialog at ~8 sites (first-run, readiness, install_menu, settings glue) and passes it into settings_ui.open_settings_dialog. After the move, import it back: 'from .manage_models import manage_models_dialog, _MODEL_PRESETS' near the other relative imports, so every existing call site and any external reference keeps resolving. ollama_runtime.py's docstring mentions _format_pull_event — docstring only, no import to fix.
+- CIRCULAR IMPORTS: the moved code references names living in __init__.py (get_config, write_config, client, _save_config_on_main, autocomplete_model, ask_model, klaus_engine, open_config, _DEFAULT_CLAUDE_MODEL, and runtime helpers). __init__ will import manage_models at module load, so manage_models must NOT import __init__ at module load. Use the established pattern from curation.py:56 — a lazy _pkg() via importlib.import_module(__package__) inside functions — or import from the true leaf module where one exists (ollama_setup: install_methods/run_install_method/ollama_reachable; ollama_runtime: full_setup/runtime_download_size_hint; ollama_client). Grep every name the moved block references before deciding; list your import decisions in the handoff.
+- Qt imports: copy exactly the aqt.qt names the moved code uses into the new module's own import block; remove any that become unused in __init__.py ONLY if truly unused elsewhere (grep first).
+- tests/test_dialog_logic.py transcribes this dialog's logic; it must still pass unmodified — if it fails, your move changed behavior.
+- Run the FULL suite before committing, not just the verify gate. Compile hook fires on every klausmate/*.py edit.
+
+Done when: verify passes, full suite green, __init__.py is ~1,100 lines shorter, and the handoff lists every name whose import path changed.
+
+## Review
 
 ### K-017: Align the add pdf thing to the bottom, right above the four buttons.
 owner: sonnet-q
