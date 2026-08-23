@@ -73,6 +73,8 @@ Not sonnet-safe. Needs a spec first.
 
 ## Doing
 
+## Review
+
 ### K-017: Align the add pdf thing to the bottom, right above the four buttons.
 owner: sonnet-n
 priority: P2
@@ -90,34 +92,9 @@ Done when: the bar is appended after all other widgets in that layout (or moved 
 
 NOTE: this card shares klausmate/__init__.py with K-018 — the board will refuse your claim while K-018 is in flight. That is expected; it runs second.
 
-### K-019: Archive button for reviewed cards
-owner: sonnet-o
-priority: P2
-tags: sonnet-safe
-files: board/boardlib.py,board/board.py,board/serve.py,board/dashboard.html,tests/test_board.py
-verify: grep -q 'def archive' board/boardlib.py && python3 tests/test_board.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Requested by Pouya in a comment on K-016: 'I also need an archive button for all of the items that have been reviewed.'
-
-Done cards accumulate forever in BOARD.md; archiving moves them out while keeping the record.
-
-Done when:
-- boardlib gains archive(board, card_id): removes a Done card from the board, appends its full serialized form (fields, body, comments) to board/ARCHIVE.md with an archived-on date. Only Done cards are archivable — BoardError otherwise.
-- The ARCHIVE.md append happens inside the same mutate() lock; BOARD.md is written AFTER the append succeeds (a crash between the two duplicates into the archive rather than losing the card).
-- ID UNIQUENESS (defect found during grooming — the board reused K-019 minutes after a card with that id was deleted): next_id() must never reuse an id that appears in ARCHIVE.md. Either scan ARCHIVE.md for K-\d+ ids, or persist a high-water mark; your choice, justify it in the handoff. Test: archive the highest card, add a new one, assert the id advances.
-- CLI: board.py archive <id> and board.py archive --all-done.
-- API: /api/archive through the same ops dict.
-- UI: Archive button in the drawer for Done cards + an 'Archive all' control on the Done column header; no modal dialogs — reuse the Delete button's arm/confirm pattern.
-- tests/test_board.py: archive happy path (comments intact in ARCHIVE.md), refusal on non-Done, --all-done sweep, and the id-reuse regression.
-
-OPS NOTE: after your commit the change is NOT live until the dashboard server restarts — say so in your handoff. ARCHIVE.md gets committed; it is the durable record, not ignored.
-
 #### Comments
-- [2026-08-23 orchestrator] Grooming addendum discovered while creating this very card: it was assigned K-019, the id of a throwaway card deleted minutes earlier — next_id() is max+1 over live cards only, so removing the highest card frees its number. Archiving makes this a real defect: archived cards keep their ids in ARCHIVE.md while next_id forgets them, so a future card would silently collide with an archived one. Requirement added: next_id must also consider ARCHIVE.md (scan it for K-ids, or persist a high-water mark in the board preamble comment); add a test — archive the max card, add a new one, assert the id is NOT reused.
-
-## Review
+- [2026-08-23 sonnet-n] Decisions: I read the code differently than the card's literal pointer. The _KlausmatePanel.__init__ 'outer' QVBoxLayout at __init__.py (outer.addWidget(self._pdf_bar), now line 4370) only ever holds that one widget — it's trivially already first/last, nothing to reorder there. The real placement is decided where the whole panel (which just wraps the bar) gets attached to the ACTUAL editor layout: layout.addWidget(panel) inside on_editor_did_init (now line 5786), where layout = editor.widget.layout() — that's the fieldsArea layout that sits directly above the Add window's buttonBox row. That call ran synchronously inside editor_did_init, i.e. before Editor.__init__ necessarily finishes building out editor.widget's own layout. This file already has a documented precedent for exactly this race: _install_panel (a few lines below) is deferred via QTimer.singleShot(0, ...) specifically because 'the window's layout is fully constructed' only after one event-loop tick. I applied the same fix: wrapped the panel-creation-and-addWidget block in a new _install_klaus_bar() closure and scheduled it with QTimer.singleShot(0, _install_klaus_bar), so it now runs after Anki finishes constructing the rest of that layout, guaranteeing our bar is appended last. Files: klausmate/__init__.py — only the on_editor_did_init function changed (added _install_klaus_bar, deferred the existing 4-line block into it unchanged, added a try/except RuntimeError for the case the widget is gone by the time the timer fires). Nothing else in the layout was reordered; the two lines that set _klausmate_target_field_index/_klausmate_active_pdf defaults stayed synchronous since nothing depends on timing there. Risks: Qt widgets can't be instantiated in this repo's offscreen test harness (see .claude/skills/klaus-test), so I could not empirically confirm this was the actual root cause of the misplacement vs. some other layout detail I'm not seeing — please eyeball the Add window after restarting Anki, specifically that the 'Drop lecture PDF here' bar sits directly above the History/Help/Close/Add row with nothing (e.g. stray whitespace or another widget) between them. Also worth confirming the PDF bar still shows up immediately (not with a visible flash/delay) since it now waits one 0ms timer tick before appearing — should be imperceptible but flag it if not. Next: none identified beyond the visual check this card already calls for.
+- [2026-08-23 orchestrator] Code review passed: minimal deferred-install change with a defensive RuntimeError guard, mirroring the established _install_panel pattern; compiles through the symlink; imports green. The worker's disagreement with my grooming was correct — the card pointed at outer.addWidget inside _KlausmatePanel, which only ever holds one widget; the real ordering happens at layout.addWidget(panel) in on_editor_did_init, and that is what was deferred. HOLDING IN REVIEW: position is visual. Pouya — restart Anki, open the Add window, and check the 'Drop lecture PDF here' bar now sits at the very bottom, directly above History/Help/Close/Add. Move to Done if right; comment and move to Doing if not.
 
 ## Done
 
@@ -383,3 +360,32 @@ Style: match the drawer's existing buttons; destructive styling may use --contes
 - [2026-08-23 Pouya] I also need an archive button for all of the items that have been reviewed
 - [2026-08-23 sonnet-l] Decisions: added /api/delete to serve.py's ops dict as a one-line lambda calling B.delete(b, data["id"]) — it goes through the same B.mutate(op) call and try/except as every other endpoint, so BoardError (in-flight refusal) already surfaces as 409 with no special-casing needed. In dashboard.html, added a Delete button to the drawer's .row (next to Move/Release/Claim) styled with --contest via a new .row button.danger rule; no window.confirm/prompt — it arms on first click (text changes to 'Click again to delete', red fill), requires a second click within 3s to actually POST, and auto-disarms on timeout. On success the drawer closes via the existing closeDrawer(); on a 409 the existing api() toast surfaces boardlib's rejection reason verbatim. Files: board/serve.py (added the /api/delete lambda), board/dashboard.html (danger button CSS + drawer button + arm/confirm/disarm wiring). Risks: I verified the wiring by code inspection and the full test_board.py suite (49 passed) plus the two grep checks; I could not safely click through the live two-step confirm against the shared running dashboard (127.0.0.1:8765) without risking an accidental delete on another worker's in-flight card, so the actual browser click-twice interaction is unexercised beyond confirming the button renders with correct label/style in the drawer. A reviewer should click Delete twice on a Backlog/Ready/Review/Done test card to confirm the happy path, and once on a Doing card to confirm the 409 toast. Next: Pouya also asked for an archive button for reviewed items in a comment on this card — that's separate scope, not done here.
 - [2026-08-23 orchestrator] Reviewed and exercised for real, per your handoff request: two-click delete removed a throwaway card (drawer closed, card gone from BOARD.md), and attempting it on in-flight K-017 surfaced boardlib's exact refusal in the toast. One finding your inspection could not see: the FIRST attempt 404ed, because the running serve.py predated your commit — dashboard.html reloads per request but the Python process does not. Restarted the server; works. Ops note added to the card trail: any card touching serve.py needs a server restart to take effect. Signing off.
+
+### K-019: Archive button for reviewed cards
+owner: sonnet-o
+priority: P2
+tags: sonnet-safe
+files: board/boardlib.py,board/board.py,board/serve.py,board/dashboard.html,tests/test_board.py
+verify: grep -q 'def archive' board/boardlib.py && python3 tests/test_board.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Requested by Pouya in a comment on K-016: 'I also need an archive button for all of the items that have been reviewed.'
+
+Done cards accumulate forever in BOARD.md; archiving moves them out while keeping the record.
+
+Done when:
+- boardlib gains archive(board, card_id): removes a Done card from the board, appends its full serialized form (fields, body, comments) to board/ARCHIVE.md with an archived-on date. Only Done cards are archivable — BoardError otherwise.
+- The ARCHIVE.md append happens inside the same mutate() lock; BOARD.md is written AFTER the append succeeds (a crash between the two duplicates into the archive rather than losing the card).
+- ID UNIQUENESS (defect found during grooming — the board reused K-019 minutes after a card with that id was deleted): next_id() must never reuse an id that appears in ARCHIVE.md. Either scan ARCHIVE.md for K-\d+ ids, or persist a high-water mark; your choice, justify it in the handoff. Test: archive the highest card, add a new one, assert the id advances.
+- CLI: board.py archive <id> and board.py archive --all-done.
+- API: /api/archive through the same ops dict.
+- UI: Archive button in the drawer for Done cards + an 'Archive all' control on the Done column header; no modal dialogs — reuse the Delete button's arm/confirm pattern.
+- tests/test_board.py: archive happy path (comments intact in ARCHIVE.md), refusal on non-Done, --all-done sweep, and the id-reuse regression.
+
+OPS NOTE: after your commit the change is NOT live until the dashboard server restarts — say so in your handoff. ARCHIVE.md gets committed; it is the durable record, not ignored.
+
+#### Comments
+- [2026-08-23 orchestrator] Grooming addendum discovered while creating this very card: it was assigned K-019, the id of a throwaway card deleted minutes earlier — next_id() is max+1 over live cards only, so removing the highest card frees its number. Archiving makes this a real defect: archived cards keep their ids in ARCHIVE.md while next_id forgets them, so a future card would silently collide with an archived one. Requirement added: next_id must also consider ARCHIVE.md (scan it for K-ids, or persist a high-water mark in the board preamble comment); add a test — archive the max card, add a new one, assert the id is NOT reused.
+- [2026-08-23 sonnet-o] Decisions: id-reuse guard scans ARCHIVE.md for K-\d+ headings at add() time (_archived_ids(), via a new optional Board.next_id(extra=) param) rather than persisting a high-water mark -- no extra state file to keep in sync, mirrors how parse() already treats BOARD.md as the source of truth, and self-heals if ARCHIVE.md is ever hand-merged. ARCHIVE.md reuses the exact per-card block format from BOARD.md (factored serialize()'s card-block logic into boardlib._serialize_card_lines, shared by both), plus an added 'archived: <date>' field, so archived cards are visually/structurally identical to their BOARD.md form. Ordering guarantee (archive-before-BOARD.md-write) is satisfied structurally: archive() appends+fsyncs to ARCHIVE.md before removing the card from board.columns, and mutate() only calls _write(board) after archive() returns, so a crash mid-sequence duplicates rather than loses. serve.py's /api/archive and /api/archive_all share the same ops-dict/mutate() dispatch as every other endpoint; I generalized the response builder to handle archive_all's list-of-cards result (payload.ids) vs the usual single card (payload.id). Files: board/boardlib.py (archive, archive_all_done, _archived_ids, _append_archive, ARCHIVE_HEADER, _serialize_card_lines extracted from serialize(), Board.next_id(extra=)), board/board.py (archive subcommand + --all-done), board/serve.py (/api/archive, /api/archive_all, generalized POST response), board/dashboard.html (Archive button on Done cards in the drawer, Archive-all button on the Done column header, both reusing the Delete button's arm/confirm-within-3s pattern), tests/test_board.py (archive happy path incl. comments-preserved-in-ARCHIVE.md, refusal on non-Done/unknown id, --all-done sweep incl. no-op case, id-reuse regression per the grooming note). Risks: dashboard.html changes are UI-only and unverified in a live browser (I checked the script block parses via node -e but did not click-test drag/drawer/arm-confirm interactions). ARCHIVE.md append is a plain append+fsync, not the tmp+os.replace atomic swap BOARD.md uses -- acceptable per the card's own ordering requirement (a crash duplicates, never loses) but a torn write could leave a malformed trailing entry; not treated as a bug since re-running archive on the same card would just append a second block, and ARCHIVE.md is meant to be human-readable history, not machine-critical state beyond the id scan. verify: command only runs test_board.py plus a grep, so the serve.py/dashboard.html changes have no automated coverage -- only manual code reading. Next: this repo's OPS NOTE applies -- serve.py's new endpoints are NOT live until the dashboard server process is restarted; the running dashboard (if any) will 404 on /api/archive until then. No other follow-up identified.
+- [2026-08-23 orchestrator] Reviewed and exercised end to end after restarting the server: CLI archive moved a Done throwaway into ARCHIVE.md with fields and dates intact, and the id-uniqueness fix held on the live board (next id after archiving K-020 was K-021, not a reuse). UI verified after a page reload — polling refreshes data, not code, which is worth remembering when reviewing dashboard cards: drawer Archive arms and completes in two clicks, Ready cards correctly offer no Archive, and the Done header has Archive all. The archive-scan approach over a high-water mark is the right call for the stated reasons. Two throwaway test entries remain in ARCHIVE.md as an honest record. Signing off.
