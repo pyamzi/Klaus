@@ -28,6 +28,7 @@ pdf but missing from ``folders`` is implicitly part of the tree.
 
 from __future__ import annotations
 
+import colorsys
 import json
 import os
 
@@ -241,6 +242,23 @@ def build_tree(context_names: list[str], data: dict) -> dict:
         items.sort(key=lambda p: p["display"].lower())
     root.sort(key=lambda p: p["display"].lower())
     return {"folders": dict(sorted(folders.items())), "root": root}
+
+
+def retention_color(fraction: float, night_mode: bool = False) -> tuple[int, int, int]:
+    """Red (0%) -> green (100%) retention indicator, as a plain RGB tuple.
+
+    Pure HSV hue interpolation (hue 0 -> 120 degrees). Deliberately
+    returns ints, never a QColor, so this stays aqt-free/Qt-free and
+    headlessly testable. Night mode uses a lighter, less saturated ramp
+    so the text stays legible on a dark background — in both themes the
+    ramp is muted on purpose: this is a quiet nudge on the retention
+    figure itself, not a highlight.
+    """
+    frac = max(0.0, min(1.0, float(fraction)))
+    hue = (frac * 120.0) / 360.0
+    saturation, value = (0.5, 0.9) if night_mode else (0.65, 0.75)
+    r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
+    return (round(r * 255), round(g * 255), round(b * 255))
 
 
 def prune(user_files_dir: str, context_names: list[str]) -> None:

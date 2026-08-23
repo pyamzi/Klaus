@@ -48,12 +48,142 @@ from . import curation, deck_curate, drive_store, pdf_handler, retention
 DIALOG_NAME = "KlausDrive"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
 _ROLE_FOLDER = Qt.ItemDataRole.UserRole + 1
+_ROLE_SORT = Qt.ItemDataRole.UserRole + 2
+_UNKNOWN_SORT = -1.0
 
 
 def _user_files() -> str:
     from . import USER_FILES
 
     return USER_FILES
+
+
+class _LibraryItem(QTreeWidgetItem):
+    """Tree item with numeric sort keys and folders pinned above PDFs.
+
+    Column 0 (name) falls through to the base class's text comparison.
+    Columns 1/2 (Retention, Cards) carry a numeric key in ``_ROLE_SORT``
+    set by ``_apply_row`` — otherwise Qt would compare the display
+    strings lexicographically ("100%" < "20%").
+
+    Two invariants need to hold in EITHER sort direction: folders always
+    sit above PDFs, and PDFs with no retention data (unembedded/stale/no
+    row) always sink below ones that have it. Qt's descending sort does
+    not just reverse the ascending list — its comparator swaps which
+    item's ``__lt__`` gets called (``QTreeModel::itemGreaterThan`` calls
+    ``right < left``) — so a plain "folder is less-than PDF" relation
+    flips to the wrong side once the header is clicked to descending.
+    Both branches below read the header's current sort order and invert
+    the relation for that direction to cancel the flip out.
+    """
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, QTreeWidgetItem):
+            return NotImplemented
+        descending = self._descending()
+
+        self_folder = bool(self.data(0, _ROLE_FOLDER))
+        other_folder = bool(other.data(0, _ROLE_FOLDER))
+        if self_folder != other_folder:
+            return (not self_folder) if descending else self_folder
+
+        col = self._sort_column()
+        if col in (1, 2):
+            self_key = self.data(col, _ROLE_SORT)
+            other_key = other.data(col, _ROLE_SORT)
+            if self_key is not None and other_key is not None:
+                try:
+                    self_val = float(self_key)
+                    other_val = float(other_key)
+                except (TypeError, ValueError):
+                    return super().__lt__(other)
+                self_known = self_val > _UNKNOWN_SORT
+                other_known = other_val > _UNKNOWN_SORT
+                if self_known != other_known:
+                    return (not self_known) if descending else self_known
+                return self_val < other_val
+        return super().__lt__(other)
+
+    def _descending(self) -> bool:
+        try:
+            tree = self.treeWidget()
+            if tree is None:
+                return False
+            return tree.header().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+        except Exception:
+            return False
+
+    def _sort_column(self) -> int:
+        try:
+            tree = self.treeWidget()
+            return tree.sortColumn() if tree is not None else 0
+        except Exception:
+            return 0
+
+
+class _LibraryTree(QTreeWidget):
+    """QTreeWidget with drag-and-drop folder moves.
+
+    ``drive.json`` is the single source of truth for folder placement —
+    a drop never lets Qt perform the visual reparent itself. ``dropEvent``
+    only resolves what moved where and hands off to the owning
+    ``DriveWindow``, whose ``_move_pdf`` writes ``drive_store.set_folder``
+    then calls ``rebuild_tree()``; the repaint from disk IS the move.
+    """
+
+    def __init__(self, window: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._window = window
+        try:
+            self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+            self.setDragEnabled(True)
+            self.setAcceptDrops(True)
+            self.setDropIndicatorShown(True)
+        except Exception as e:
+            print(f"[klausmate] library tree dnd setup failed: {e}")
+
+    def dropEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            if event.source() is not self:
+                event.ignore()
+                return
+            dragged = self.currentItem()
+            safe = dragged.data(0, _ROLE_SAFE) if dragged is not None else None
+            if not safe:
+                # Folder reparenting (or no item at all) is out of scope
+                # for this card — reject rather than let Qt guess.
+                event.ignore()
+                return
+
+            target = self.itemAt(event.position().toPoint())
+            if target is None:
+                folder = None
+            elif target.data(0, _ROLE_FOLDER):
+                folder = target.data(0, _ROLE_FOLDER)
+            elif target.data(0, _ROLE_SAFE):
+                parent = target.parent()
+                folder = parent.data(0, _ROLE_FOLDER) if parent is not None else None
+            else:
+                folder = None
+
+            current_parent = dragged.parent()
+            current_folder = (
+                current_parent.data(0, _ROLE_FOLDER)
+                if current_parent is not None
+                else None
+            )
+            if current_folder == folder:
+                event.acceptProposedAction()
+                return
+
+            self._window._move_pdf(safe, folder)
+            event.acceptProposedAction()
+        except Exception as e:
+            print(f"[klausmate] library drop failed: {e}")
+            try:
+                event.ignore()
+            except Exception:
+                pass
 
 
 class DriveWindow(QWidget):
@@ -64,7 +194,7 @@ class DriveWindow(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Klaus — PDFs")
+        self.setWindowTitle("Klaus — Library")
         self.setMinimumSize(720, 420)
 
         self.busy = False
@@ -85,7 +215,7 @@ class DriveWindow(QWidget):
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(6)
 
-        self.tree = QTreeWidget(left)
+        self.tree = _LibraryTree(self, left)
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["PDF", "Retention", "Cards"])
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -96,6 +226,8 @@ class DriveWindow(QWidget):
             self.tree.setColumnWidth(0, 240)
             self.tree.header().setStretchLastSection(False)
             self.tree.setColumnWidth(1, 80)
+            self.tree.header().setSectionsClickable(True)
+            self.tree.setSortingEnabled(True)
         except Exception:
             pass
         lay.addWidget(self.tree, 1)
@@ -203,34 +335,44 @@ class DriveWindow(QWidget):
             contexts = pdf_handler.list_contexts(user_files)
             data = drive_store.load(user_files)
             tree = drive_store.build_tree(contexts, data)
-            self.tree.clear()
+            # QTreeWidget re-sorts on every insertion while sorting is
+            # enabled, which both wastes work and — worse — can land rows
+            # in the wrong spot mid-repopulation (children inserted before
+            # their sort keys are set). Disable for the rebuild, restore
+            # whatever the user had after.
+            was_sorting = self.tree.isSortingEnabled()
+            self.tree.setSortingEnabled(False)
+            try:
+                self.tree.clear()
 
-            folder_items: dict[str, QTreeWidgetItem] = {}
+                folder_items: dict[str, QTreeWidgetItem] = {}
 
-            def folder_item(path: str) -> QTreeWidgetItem:
-                if path in folder_items:
-                    return folder_items[path]
-                parent_path, _, leaf = path.rpartition("/")
-                parent = folder_item(parent_path) if parent_path else None
-                item = (
-                    QTreeWidgetItem(parent, [leaf])
-                    if parent is not None
-                    else QTreeWidgetItem(self.tree, [leaf])
-                )
-                item.setData(0, _ROLE_FOLDER, path)
-                font = item.font(0)
-                font.setBold(True)
-                item.setFont(0, font)
-                item.setExpanded(True)
-                folder_items[path] = item
-                return item
+                def folder_item(path: str) -> QTreeWidgetItem:
+                    if path in folder_items:
+                        return folder_items[path]
+                    parent_path, _, leaf = path.rpartition("/")
+                    parent = folder_item(parent_path) if parent_path else None
+                    item = (
+                        _LibraryItem(parent, [leaf])
+                        if parent is not None
+                        else _LibraryItem(self.tree, [leaf])
+                    )
+                    item.setData(0, _ROLE_FOLDER, path)
+                    font = item.font(0)
+                    font.setBold(True)
+                    item.setFont(0, font)
+                    item.setExpanded(True)
+                    folder_items[path] = item
+                    return item
 
-            for path, pdfs in tree["folders"].items():
-                parent = folder_item(path)
-                for pdf in pdfs:
-                    self._add_pdf_item(parent, pdf)
-            for pdf in tree["root"]:
-                self._add_pdf_item(None, pdf)
+                for path, pdfs in tree["folders"].items():
+                    parent = folder_item(path)
+                    for pdf in pdfs:
+                        self._add_pdf_item(parent, pdf)
+                for pdf in tree["root"]:
+                    self._add_pdf_item(None, pdf)
+            finally:
+                self.tree.setSortingEnabled(was_sorting)
 
             if selected:
                 self._select_safe(selected)
@@ -244,9 +386,9 @@ class DriveWindow(QWidget):
 
     def _add_pdf_item(self, parent, pdf: dict) -> QTreeWidgetItem:
         item = (
-            QTreeWidgetItem(parent, [pdf["display"]])
+            _LibraryItem(parent, [pdf["display"]])
             if parent is not None
-            else QTreeWidgetItem(self.tree, [pdf["display"]])
+            else _LibraryItem(self.tree, [pdf["display"]])
         )
         item.setData(0, _ROLE_SAFE, pdf["safe"])
         item.setToolTip(0, pdf["safe"])
@@ -254,28 +396,66 @@ class DriveWindow(QWidget):
         return item
 
     def _apply_row(self, item: QTreeWidgetItem, row: dict | None) -> None:
+        retention_val: float | None = None
+        cards: int | None = None
         if not row:
             item.setText(1, "—")
             item.setText(2, "")
-            return
-        if not row.get("indexed"):
+        elif not row.get("indexed"):
             item.setText(1, "—")
             item.setText(2, "not embedded")
-            return
-        if row.get("stale"):
+        elif row.get("stale"):
             item.setText(1, "—")
             item.setText(2, "re-embed needed")
-            return
-        retention_val = row.get("retention")
-        item.setText(
-            1, f"{round(retention_val * 100)}%" if retention_val is not None else "—"
+        else:
+            retention_val = row.get("retention")
+            item.setText(
+                1, f"{round(retention_val * 100)}%" if retention_val is not None else "—"
+            )
+            cards = int(row.get("matched_cards") or 0)
+            new_pct = float(row.get("new_pct") or 0.0)
+            item.setText(
+                2,
+                f"{cards:,} cards · {round(new_pct * 100)}% unseen"
+                if cards
+                else "no matches",
+            )
+        # Sort keys live in a role, not the display text, so the tree can
+        # sort numerically instead of lexicographically ("100%" < "20%").
+        # -1.0 is an out-of-range sentinel: no row/not embedded/stale have
+        # no retention *or* card count to speak of, so both columns sink
+        # them to the bottom (see _LibraryItem.__lt__). A PDF that IS
+        # embedded but matched nothing is a real, known zero — it sorts
+        # with the numbers, not with the unknowns.
+        item.setData(
+            1, _ROLE_SORT, float(retention_val) if retention_val is not None else _UNKNOWN_SORT
         )
-        cards = int(row.get("matched_cards") or 0)
-        new_pct = float(row.get("new_pct") or 0.0)
-        item.setText(
-            2,
-            f"{cards:,} cards · {round(new_pct * 100)}% unseen" if cards else "no matches",
-        )
+        item.setData(2, _ROLE_SORT, float(cards) if cards is not None else _UNKNOWN_SORT)
+        self._set_retention_color(item, retention_val)
+
+    def _set_retention_color(self, item: QTreeWidgetItem, fraction: float | None) -> None:
+        """Color the retention cell's text only — no row background, no
+        bold. Non-numeric states get no color override (default
+        foreground): the product bar is "Anki with a little extra you
+        barely notice."
+        """
+        try:
+            if fraction is None:
+                item.setData(1, Qt.ItemDataRole.ForegroundRole, None)
+                return
+            from aqt.qt import QBrush, QColor
+
+            night = False
+            try:
+                from aqt.theme import theme_manager
+
+                night = bool(theme_manager.night_mode)
+            except Exception:
+                night = False
+            rgb = drive_store.retention_color(fraction, night)
+            item.setForeground(1, QBrush(QColor(*rgb)))
+        except Exception as e:
+            print(f"[klausmate] drive retention color failed: {e}")
 
     def _iter_pdf_items(self):
         stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
@@ -443,7 +623,7 @@ class DriveWindow(QWidget):
         )
         slider = QSlider(Qt.Orientation.Horizontal, dlg)
         slider.setMinimum(20)
-        slider.setMaximum(60)
+        slider.setMaximum(80)
         slider.setValue(int(round(current * 100)))
         lay.addWidget(slider)
         lay.addWidget(label)
@@ -733,9 +913,9 @@ def _on_toolbar_links(links: list, toolbar: Any) -> None:
             0,
             toolbar.create_link(
                 "klausDriveOpen",
-                "PDFs",
+                "Library",
                 open_drive,
-                tip="Klaus PDF drive",
+                tip="Klaus PDF library",
                 id="klaus-drive",
             ),
         )
