@@ -7,6 +7,91 @@
 
 ## Backlog
 
+### K-038: A8: root every Klaus tag at !Library and migrate existing ones
+owner: -
+priority: P0
+tags: sonnet-safe,library-era
+files: klausmate/curation.py,klausmate/retention.py,klausmate/tag_migrate.py
+verify: grep -q '!Library' klausmate/curation.py && grep -q '!Library' klausmate/retention.py && test -f klausmate/tag_migrate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Pouya: 'all pdf-based tags should be rooted at !Library, that is the root tag'. The leading ! sorts the tree to the TOP of Anki's tag sidebar — that is the point of the prefix, so preserve it exactly.
+
+BLOCKED until K-037 (A7) is Done — A7 merges the two clear-tag menu actions and must not be racing this.
+
+1. RENAME THE CONSTANTS (values only — keep the constant NAMES so callers keep working):
+   curation.TEMP_TAG      'klaus::curate'   -> '!Library::Curating'
+   curation.CURATED_TAG   'klaus::curated'  -> '!Library::Curated'
+   retention.RETENTION_TAG 'klaus::pdfmatch'-> '!Library::Matching'
+   Leave curation.DECK_PREFIX ('Klaus::') alone — that is a DECK name prefix, not a tag.
+   Keep Curating and Matching as SEPARATE tags. They look mergeable now that one menu item clears both, but retention.py's own comment explains they are deliberately distinct so a PDF-match preview cannot clobber an in-flight curation preview. Preserve that property.
+
+2. VERIFY THE PREFIX IS SAFE. Every lookup goes through find_notes(f'tag:"{TAG}"') — quoted, so ! is not special there. But CHECK the bulk_add/bulk_remove paths and anything building a search string without quotes, and confirm Anki accepts ! as a leading tag character (it is a common convention for pinning tags to the top, but verify rather than assume — a wrong guess here silently tags nothing). State your evidence in the handoff.
+
+3. ONE-TIME MIGRATION, new module klausmate/tag_migrate.py (aqt-thin, logic pure so it is headless-testable). Pouya chose automatic renaming. On profile open, guarded by a config flag so it runs exactly once (follow the existing '_'-prefixed convention, e.g. _library_tag_migrated — underscore-prefixed keys are left alone by _migrate_config):
+   klaus::curate -> !Library::Curating, klaus::curated -> !Library::Curated, klaus::pdfmatch -> !Library::Matching.
+   Use col.tags.rename(old, new) — it moves every note and child tag and is undoable. Wrap the whole migration in ONE undo entry (add_custom_undo_entry / merge_undo_entries, the pattern curation.create_curated_deck already uses) so Pouya can Ctrl+Z the lot. Skip silently when a source tag has no notes. Never delete a tag that failed to rename.
+   THIS TOUCHES A REAL 32k-NOTE COLLECTION. It must be idempotent, must no-op on a second run, and must never throw into Anki's startup path — wrap in try/except and print('[klausmate] ...') on failure.
+   Registration: tag_migrate exposes the entry point, but the profile_did_open hook lives in __init__.py which is NOT in your scope. Write the function and say clearly in your handoff that a one-line registration is still needed; I will file it or fold it into the next __init__.py card.
+
+4. Update any docstring or comment naming the old tags (curation.py's module docstring and retention.py:19-22 both do).
+
+Do NOT touch __init__.py, manage_models.py, or pdf_drive.py. Add tests for the pure parts to tests/test_klausmate.py? NO — that file is out of scope; keep the logic importable and testable, a later card adds coverage.
+
+Full suite green; py_compile through the Anki symlink. Stage explicitly by path.
+
+Done when: verify passes, all three tags live under !Library, the migration is written and idempotent, and the handoff names the exact registration line still owed.
+
+### K-035: B3: restyle the editor PDF bar to match the deck-browser square
+owner: -
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py
+verify: grep -q 'dashed' klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+
+Phase B3. BLOCKED until K-027 (A1) is Done — A1 is rewriting __init__.py heavily and owns the file until it lands. ALSO read K-034 (B2)'s handoff comment first if that card is done: it records the exact final border/radius/padding/copy of the deck-browser square, which this card must match.
+
+Pouya's requirement (item 12): 'I want the same PDF thing to replace the Klaus thing at the bottom of the ad panel, so those two should look exactly the same. There should be complete consistency between those two items.' The Add/Edit window's PDF bar and the deck-browser drop square do the same job but look nothing alike — one is a 34px solid-bordered Qt row with a cobalt 'Klaus' badge, the other a dashed centered pill.
+
+Restyle _PdfBar (the QFrame at ~:2515-2694, an id-selector stylesheet on objectName 'klausmateDropZone') to match the square:
+- 1px DASHED border rgba(128,128,128,0.55), radius 10px, transparent/inherit background at rest (the square uses var(--window-bg,transparent)); centered content.
+- Idle copy 'Drop a lecture PDF here' -> match the square's phrasing as closely as the context allows (the square says 'Drop a lecture PDF here to curate a deck from it.'; in the editor the action is 'to read alongside your cards', so keep the leading clause identical and adapt only the trailing purpose clause — state your exact final string in the handoff).
+- A visible 'Browse…' button inside the bar, like the square gets in B2.
+- Drag-over state should read like the square's armed state: solid cobalt rgba(58,130,247,0.85) border.
+- DROP the cobalt 'Klaus' badge — it was there to rhyme with the ⌘K popover, which A1 deleted. Its removal is part of the simplification.
+- KEEP the extra affordances the editor genuinely needs — Remove (when a PDF is active) and the ◨ viewer toggle — but make them subtle/secondary so the bar still reads as the same object as the square. The bar may need to grow past 34px to breathe; that is fine, but it must not dominate the Add window.
+- Preserve ALL behavior: acceptDrops, dragEnter/dragLeave/dropEvent with the dragOver property + unpolish/polish restyle trick, multi-PDF drop, _elide_name on resize, the Browse/Remove action swap in set_active_pdf, update_toggle.
+
+Do NOT touch _install_klaus_bar's placement logic (~:4130-4188) — the button-box insertion was hard-won in K-017 and is correct; you are restyling the widget, not moving it.
+
+Constraint: this file only, and only the _PdfBar region. Full suite; py_compile through the symlink. Done when: verify passes and the handoff states the final border/radius/copy values so they can be diffed against the square's.
+
+#### Comments
+- [2026-08-23 orchestrator] SEQUENCING: K-037 (A7) also edits __init__.py and is going first (it is larger and touches the menu/bootstrap region). Wait for K-037 to be Done, then rebase your reading of the file — line numbers in this card's body predate both K-027 and K-037.
+
+### K-036: A6: don't route cloud-provider users to the Ollama install page
+owner: -
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/manage_models.py
+verify: grep -q '_needs_local_runtime' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+
+BLOCKED until K-030 (A3) is Done — same file. Re-confirm the bug still exists before starting; K-030 rewrites much of this dialog and may have changed the shape of the fix (but its card did not mention this issue, so it most likely persists).
+
+Found by sonnet-ab while doing K-029, and independently confirmed by the orchestrator: manage_models.py's refresh() does 'if not ollama_reachable(ep): show_install_page()' with NO provider check (~:524 and ~:532 pre-K-030). So a user on the DEFAULT cloud provider (Voyage) who opens Manage models is dumped on a page reading 'Could not reach Ollama at http://localhost:11434' and offered a ~1GB runtime install they will never need.
+
+This defeats the whole point of K-029, which made Ollama optional for the passive per-profile-open flow. The proactive path — the user actually clicking 'Manage models…' — still assumes Ollama is mandatory.
+
+FIX: add a single helper, _needs_local_runtime(cfg) -> bool, returning True only when embeddings.provider_name(cfg) == 'ollama'. Gate the install-page routing on it. A cloud-provider user must land on the normal models page regardless of whether an Ollama server is reachable; the local model library section can show a quiet inline note ('Local models need Ollama, which isn't running') instead of hijacking the whole dialog. A user who switches the provider combo TO ollama, or who clicks something that needs a local model (Pull), should still be able to reach the install page — do not make it unreachable, just stop making it the default landing.
+
+Keep the K-009 one-click Get key / Pull it dispatcher and the single-.connect discipline intact.
+
+Constraint: this file only. Full suite must be green INCLUDING tests/test_dialog_logic.py (K-032 will have rewritten it around the embedding rows by the time this runs — if it has not, say so and coordinate rather than editing tests here). py_compile through the Anki symlink.
+
+Done when: verify passes and a Voyage-configured profile can open Manage models, see its key state, and never be shown the Ollama install page.
+
 ### K-032: A5: delete dead modules and rewrite the two test files
 owner: -
 priority: P1
@@ -34,52 +119,8 @@ Phase A5 — the closing card of the removal phase. BLOCKED until K-027, K-028, 
 
 Full suite must be green at the end — that is the whole point of this card. py_compile through the Anki symlink. Done when: verify passes, the sweep is clean, and the handoff includes the sweep output plus the new test_dialog_logic assertion count.
 
-### K-035: B3: restyle the editor PDF bar to match the deck-browser square
-owner: -
-priority: P2
-tags: sonnet-safe,library-era
-files: klausmate/__init__.py
-verify: grep -q 'dashed' klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
-created: 2026-08-23
-
-Phase B3. BLOCKED until K-027 (A1) is Done — A1 is rewriting __init__.py heavily and owns the file until it lands. ALSO read K-034 (B2)'s handoff comment first if that card is done: it records the exact final border/radius/padding/copy of the deck-browser square, which this card must match.
-
-Pouya's requirement (item 12): 'I want the same PDF thing to replace the Klaus thing at the bottom of the ad panel, so those two should look exactly the same. There should be complete consistency between those two items.' The Add/Edit window's PDF bar and the deck-browser drop square do the same job but look nothing alike — one is a 34px solid-bordered Qt row with a cobalt 'Klaus' badge, the other a dashed centered pill.
-
-Restyle _PdfBar (the QFrame at ~:2515-2694, an id-selector stylesheet on objectName 'klausmateDropZone') to match the square:
-- 1px DASHED border rgba(128,128,128,0.55), radius 10px, transparent/inherit background at rest (the square uses var(--window-bg,transparent)); centered content.
-- Idle copy 'Drop a lecture PDF here' -> match the square's phrasing as closely as the context allows (the square says 'Drop a lecture PDF here to curate a deck from it.'; in the editor the action is 'to read alongside your cards', so keep the leading clause identical and adapt only the trailing purpose clause — state your exact final string in the handoff).
-- A visible 'Browse…' button inside the bar, like the square gets in B2.
-- Drag-over state should read like the square's armed state: solid cobalt rgba(58,130,247,0.85) border.
-- DROP the cobalt 'Klaus' badge — it was there to rhyme with the ⌘K popover, which A1 deleted. Its removal is part of the simplification.
-- KEEP the extra affordances the editor genuinely needs — Remove (when a PDF is active) and the ◨ viewer toggle — but make them subtle/secondary so the bar still reads as the same object as the square. The bar may need to grow past 34px to breathe; that is fine, but it must not dominate the Add window.
-- Preserve ALL behavior: acceptDrops, dragEnter/dragLeave/dropEvent with the dragOver property + unpolish/polish restyle trick, multi-PDF drop, _elide_name on resize, the Browse/Remove action swap in set_active_pdf, update_toggle.
-
-Do NOT touch _install_klaus_bar's placement logic (~:4130-4188) — the button-box insertion was hard-won in K-017 and is correct; you are restyling the widget, not moving it.
-
-Constraint: this file only, and only the _PdfBar region. Full suite; py_compile through the symlink. Done when: verify passes and the handoff states the final border/radius/copy values so they can be diffed against the square's.
-
-### K-036: A6: don't route cloud-provider users to the Ollama install page
-owner: -
-priority: P1
-tags: sonnet-safe,removal,library-era
-files: klausmate/manage_models.py
-verify: grep -q '_needs_local_runtime' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-
-BLOCKED until K-030 (A3) is Done — same file. Re-confirm the bug still exists before starting; K-030 rewrites much of this dialog and may have changed the shape of the fix (but its card did not mention this issue, so it most likely persists).
-
-Found by sonnet-ab while doing K-029, and independently confirmed by the orchestrator: manage_models.py's refresh() does 'if not ollama_reachable(ep): show_install_page()' with NO provider check (~:524 and ~:532 pre-K-030). So a user on the DEFAULT cloud provider (Voyage) who opens Manage models is dumped on a page reading 'Could not reach Ollama at http://localhost:11434' and offered a ~1GB runtime install they will never need.
-
-This defeats the whole point of K-029, which made Ollama optional for the passive per-profile-open flow. The proactive path — the user actually clicking 'Manage models…' — still assumes Ollama is mandatory.
-
-FIX: add a single helper, _needs_local_runtime(cfg) -> bool, returning True only when embeddings.provider_name(cfg) == 'ollama'. Gate the install-page routing on it. A cloud-provider user must land on the normal models page regardless of whether an Ollama server is reachable; the local model library section can show a quiet inline note ('Local models need Ollama, which isn't running') instead of hijacking the whole dialog. A user who switches the provider combo TO ollama, or who clicks something that needs a local model (Pull), should still be able to reach the install page — do not make it unreachable, just stop making it the default landing.
-
-Keep the K-009 one-click Get key / Pull it dispatcher and the single-.connect discipline intact.
-
-Constraint: this file only. Full suite must be green INCLUDING tests/test_dialog_logic.py (K-032 will have rewritten it around the embedding rows by the time this runs — if it has not, say so and coordinate rather than editing tests here). py_compile through the Anki symlink.
-
-Done when: verify passes and a Voyage-configured profile can open Manage models, see its key state, and never be shown the Ollama install page.
+#### Comments
+- [2026-08-23 orchestrator] DEPENDENCY ADDED: this card is now ALSO blocked on K-037 (A7). __init__.py still imports settings_ui at :586 and :596 and the Tools menu's 'Settings…' action calls open_settings_dialog. A5 deletes settings_ui.py but does not own __init__.py, so running it first would break the add-on at import (your own verify gate would fail on test_imports). K-037 removes those imports and the menu action. Confirm K-037 is Done before starting, and re-run the repo-wide sweep afterwards — the sweep list should now also include 'chat_dock' and 'search.js', which K-037 deletes.
 
 ## Ready
 
@@ -107,6 +148,34 @@ ADD a small 'General' group with the two toggles orphaned by settings_ui.py's de
 Constraint: this file only. tests/test_dialog_logic.py currently models the ask/auto rows and WILL fail — that is expected and A5 rewrites it; do not edit tests here, and note the expected failures in your handoff. Every other suite must stay green. py_compile through the symlink.
 
 Done when: verify passes, the dialog is one job + one model library + General, and the handoff lists every removed widget and the new caption text.
+
+#### Comments
+- [2026-08-23 sonnet-ac] Design done, commit 0d511b8, but BLOCKED on verify's 3rd leg by an out-of-scope pre-existing bug — releasing per worker.md's scope protocol rather than falsely claiming Review. WHAT'S DONE (klausmate/manage_models.py only): removed the Autocomplete row (auto_combo/auto_row/auto_warn/auto_pull_btn + its caption 'Suggests the rest of the field as you type. Always a local model.'), the Ask row (ask_combo/ask_row/ask_warn/ask_pull_btn + caption 'Answers questions about the current card. Local model or Claude API.'), claude_key_lbl/claude_key_edit/claude_model_lbl/claude_model_edit, ask_selection(), sync_jobs_widgets()/update_jobs_status()/save_jobs() (entirely deleted, not just halved -- every line in them was auto/ask logic), _fill_model_combo (dead once auto_combo died), the auto/ask used-by badges + populate() helper in rebuild_library_list, the auto/ask/claude entries in set_busy's widget tuple, and all their .connect() calls. Also deleted: _MODEL_PRESETS (whole text-model list), the Text-models QTabWidget (lib_tabs/text_lst/embed_lst -> single lib_lst), _is_embedding_model + _EMBED_PRESET_NAMES (its only consumer), and _fill_pull_presets's tab-branching (now always offers _EMBED_PRESETS). delete_selected's used_by check now only checks semantic search. GOTCHA: renamed _EMBED_MODEL_PRESETS -> _EMBED_PRESETS -- the verify gate's matches it as a substring (_EMBED_MODEL_PRESETS contains '_MODEL_PRESETS'), so keeping the K-026 name as-is would fail the gate even though the card says to keep that preset list. Confirmed no external file references it (module-private, only used inside manage_models.py). REWORK: box retitled 'What Klaus uses' -> 'Semantic search' (title now names the one job instead of housing three); its intro caption is now 'Finds cards and decks by meaning, not just keywords — powers deck curation and the Klaus panel.'; the job-picker row label is 'Embeddings from:' (was 'Semantic search:', now redundant with the box title); the bottom caption (was the K-009 'Autocomplete and Ask work without any of this' line, now false/backwards) is now 'Needs a Voyage or OpenAI key (both have free tiers) or a local Ollama model from the library below — that's the only setup Klaus asks for.' Preserved exactly: the embed_fix dispatcher (_embed_fix_kind/on_embed_fix_clicked, single .connect for dialog lifetime) and the per-provider key placeholders (_EMBED_KEY_PLACEHOLDERS). ADDED a 'General' QGroupBox (from settings_ui.py, read-only, not edited) with two QCheckBox toggles, immediate-save on .toggled: 'Image crop (right-click or double-click an image in a note field)' -> image_crop_enabled (default True) and 'Manage Ollama automatically (start it in the background; offer one-click setup)' -> runtime_auto_setup (default True, label copied verbatim from settings_ui.py's runtime_auto_cb). BLOCKER (confirmed, reproducible): verify's grep checks both pass, but == klausmate submodule imports == ok import klausmate.anki_tools ok import klausmate.browse_toggles ok import klausmate.card_index ok import klausmate.chat_dock ok import klausmate.claude_api ok import klausmate.crop_dialog ok import klausmate.curation ok import klausmate.deck_curate ok import klausmate.drive_store ok import klausmate.embeddings ok import klausmate.manage_models ok import klausmate.ollama_client ok import klausmate.ollama_runtime ok import klausmate.ollama_setup ok import klausmate.pdf_drive ok import klausmate.pdf_handler ok import klausmate.pdf_index ok import klausmate.pdf_viewer ok import klausmate.retention ok import klausmate.settings_ui ok import klausmate.setup_flow == klausmate package bootstrap (__init__.py) == FAIL import klausmate (__init__.py) - ImportError: cannot import name '_MODEL_PRESETS' from 'klausmate.manage_models' (/Users/pyamzi/Documents/Github/Addons/klausmate/manage_models.py) 21 passed, 1 failed exits 1 with: ImportError: cannot import name '_MODEL_PRESETS' from 'klausmate.manage_models', at klausmate/__init__.py:70 (). This import is DEAD -- grep shows zero other uses of _MODEL_PRESETS anywhere in __init__.py. git log -S confirms it's been dead since commit 709a081 (K-025, 'extract first-run welcome dialog to setup_flow.py'), which removed the __init__.py code that used to consume it but left the import. Pre-existing bug, unrelated to any in-flight sibling (no current/past card besides K-023/K-025/K-027 has touched that line; K-027 didn't list it in kept/deleted). __init__.py is outside this card's file scope (klausmate/manage_models.py only), so per worker.md I'm not touching it. One-line fix for whoever picks this up: change __init__.py:70 to . Other suites unaffected: test_dialog_logic.py 29/29 (it's fully self-contained, doesn't import manage_models.py at all, so contrary to this card's own prediction it does NOT actually fail -- it's just stale/describes deleted logic now; K-032 rewriting it stands regardless), test_klausmate.py 57/57, test_drive.py 58/58, test_board.py 68/68, and test_imports.py's own submodule-imports section 21/21 (only the package-bootstrap exec of the real __init__.py fails). py_compile clean both directly and through the Anki symlink. Releasing rather than moving to Review since I can't truthfully claim the verify gate passes.
+
+### K-037: A7: delete the Klaus panel, rework the Tools menu
+owner: sonnet-ae
+priority: P0
+tags: sonnet-safe,removal,library-era
+files: klausmate/__init__.py,klausmate/chat_dock.py,klausmate/web/search.html,klausmate/web/search.css,klausmate/web/search.js
+verify: ! test -f klausmate/chat_dock.py && ! test -f klausmate/web/search.js && ! grep -q 'Open Klaus' klausmate/__init__.py && ! grep -q 'settings_ui' klausmate/__init__.py && grep -q 'Clear library tag' klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya, looking at the Tools > Klaus menu: 'remove open klaus, make clear curation tag and clear pdf-match tag into clear library tag.' He confirmed the panel goes away ENTIRELY, not just its menu entry.
+
+1. DELETE THE KLAUS PANEL. git rm klausmate/chat_dock.py and klausmate/web/search.html, search.css, search.js. In __init__.py remove _open_chat_dock (~:642), the a_chat QAction + its Ctrl+Shift+K shortcut (~:651-659), and the two profile/quit lifecycle hooks that reach it: _chat_dock_loaded (~:2520) plus the chat_dock branches inside the profile_will_close and quit handlers (~:2527-2543). Those handlers do other work too — remove ONLY the chat_dock parts, keep the rest, and check whether either handler becomes an empty shell (if so remove its gui_hooks registration too, but grep first).
+   NOTE: pdf_drive.py:13 has a COMMENT crediting chat_dock for its threading contract. Leave pdf_drive.py alone — that file is out of scope and a comment referencing a deleted module is fine as history.
+
+2. REMOVE THE DEAD Settings… PATH — this is load-bearing, not cosmetic. __init__.py still imports settings_ui at ~:586 and ~:596, and the a_settings QAction (~:681) calls open_settings_dialog. Card K-032 (A5) deletes settings_ui.py but does NOT own __init__.py, so if you skip this, A5 breaks the add-on at import. Remove the Settings… action, both settings_ui imports, and the open_settings_dialog wrapper(s) they feed. Its two real toggles (image_crop_enabled, runtime_auto_setup) already moved into Manage models — verify that landed in manage_models.py before deleting, and say so in your handoff.
+
+3. MERGE THE TWO CLEAR ACTIONS into one. Replace a_clear_tag ('Clear curation tag') and a_clear_pdfmatch ('Clear PDF-match tag') with a single QAction labelled exactly 'Clear library tag' that calls BOTH curation.clear_curation_tag(mw) and retention.clear_pdfmatch_tag(mw). Keep the lazy 'from . import curation/retention' imports inside the handler. Keep both underlying functions and both tag constants as they are — a SEPARATE card (A8) renames the tags to the !Library root; do not touch curation.py or retention.py here.
+   Both functions currently show their own confirmation/tooltip. Two dialogs from one click is bad — make the merged action confirm ONCE and report once. Read both functions first; if their signatures make a single confirmation awkward, prefer calling them with confirmation suppressed and doing one askUser + one tooltip in the menu handler, and explain your choice in the handoff.
+
+Resulting menu, in order: Clear library tag / Manage models… / Test connection.
+
+Constraint: this card's five files only. Do NOT touch manage_models.py (a sibling may still be finishing K-030), curation.py, retention.py, or pdf_drive.py. Full suite must be green (234 baseline; test_dialog_logic.py may already be failing from K-030 — if so note it and confirm you did not make it worse). py_compile through the Anki symlink. Stage explicitly by path, never git add -A.
+
+Done when: verify passes, the panel is gone from disk and from every code path, the menu reads exactly as above, and nothing imports settings_ui.
 
 ## Review
 
