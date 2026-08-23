@@ -244,7 +244,7 @@ The most useful keys (see `config.md` for the full list):
 | `autocomplete_model` / `ask_model` | `qwen3:0.6b` / `qwen3:4b` | Local models per feature |
 | `klaus_engine` | `ollama` | Ask engine: `ollama` or `claude` |
 | `claude_api_key` / `claude_model` | — / `claude-opus-4-8` | Anthropic API credentials for Ask |
-| `embedding_provider` / `embedding_model` | `ollama` / per provider | Card-embedding backend |
+| `embedding_provider` / `embedding_model` | `voyage` / per provider | Card-embedding backend |
 | `curate_top_k` / `curate_min_score` | `100` / `0.35` | Curation result size / similarity floor |
 | `chat_hotkey` / `ask_hotkey` | `Ctrl+Shift+K` / `Cmd+K` | Klaus panel / Ask popover shortcuts |
 | `completion_mode` | `sentence` | Ghost-text length (word…paragraph) |
