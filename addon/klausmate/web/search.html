@@ -1,0 +1,60 @@
+<div id="klaus-root">
+  <div id="topbar">
+    <span id="brand-mini"><span id="brand-dot"></span>Klaus</span>
+    <button id="close-btn" title="Close panel">&times;</button>
+  </div>
+
+  <div id="hero">
+    <div id="brand">Klaus</div>
+    <div id="tagline">Curate a deck from any lecture</div>
+
+    <div id="searchbox">
+      <textarea id="prompt" rows="1"
+        placeholder="Describe the lecture or topic&hellip;  e.g. “renal physiology: nephron transport”"></textarea>
+    </div>
+
+    <div id="filters">
+      <label>
+        <span class="flabel">Lecture PDF</span>
+        <select id="pdf"><option value="">None — use my prompt</option></select>
+      </label>
+      <label>
+        <span class="flabel">Search in</span>
+        <select id="deck"><option value="">All decks</option></select>
+      </label>
+    </div>
+
+    <div id="actions">
+      <button id="find" class="primary">Find cards</button>
+      <button id="create">Create deck now</button>
+    </div>
+
+    <div id="hint">
+      Matches open in Browse tagged <code>klaus::curate</code> — prune them
+      there, then use <i>Notes &rarr; Klaus: Create curated deck from
+      selection&hellip;</i> Originals are never moved; the new deck gets
+      copies.
+    </div>
+
+    <div id="progress" class="hidden">
+      <div id="bar"><div id="fill"></div></div>
+      <div id="progress-row">
+        <span id="plabel"></span>
+        <button id="cancel">Cancel</button>
+      </div>
+    </div>
+
+    <div id="result" class="hidden"></div>
+
+    <div id="gate" class="hidden">
+      <div id="gate-text">Your cards aren&rsquo;t indexed yet — semantic search
+        needs a one-time index of your collection.</div>
+      <button id="index-now" class="primary">Index my cards</button>
+    </div>
+
+    <div id="index-status" class="hidden">
+      <span id="istatus-text"></span>
+      <a href="#" id="reindex">Re-index</a>
+    </div>
+  </div>
+</div>

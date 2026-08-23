@@ -2,14 +2,9 @@
 # 459 MB of real lecture PDFs, annotations, embeddings, and the card index.
 klausmate/user_files/
 # Live addon config — holds claude_api_key / embedding_api_key_* once set.
-klausmate/meta.json
+# The glob also covers meta.json.bak-* backups, which `**/meta.json` misses.
+klausmate/meta.json*
 **/meta.json
-
-# ─── Addon source: intentionally untracked (see CLAUDE.md) ────────────────
-# CLAUDE.md documents klausmate/ as untracked, which is why git worktrees
-# never contain it. Delete this line to start version-controlling the addon
-# (~8 MB of source once user_files is excluded above).
-klausmate/
 
 # ─── Separate projects / vendored reference material ──────────────────────
 SynapsePro-main/
@@ -18,6 +13,10 @@ addon-docs-main/
 # ─── Build output ─────────────────────────────────────────────────────────
 dist/
 *.ankiaddon
+
+# ─── Board runtime ────────────────────────────────────────────────────────
+board/.lock
+board/*.tmp
 
 # ─── Noise ────────────────────────────────────────────────────────────────
 __pycache__/

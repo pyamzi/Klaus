@@ -1,0 +1,123 @@
+/* Klausmate styling
+ *
+ * Brand accent: Anki's link-blue (#3a82f7) — chosen to blend with the
+ * host app's existing palette rather than introducing a separate brand
+ * cobalt. The CSS variable name still says "cobalt" for backward-compat
+ * with downstream selectors; only the value changed.
+ */
+
+:root {
+  --klausmate-cobalt: #3a82f7;
+  --klausmate-cobalt-soft: rgba(58, 130, 247, 0.45);
+  --klausmate-cobalt-tint: rgba(58, 130, 247, 0.10);
+}
+
+/* ----- Inline ghost autocomplete ---------------------------------------- */
+
+.klausmate-ghost {
+  color: rgba(140, 140, 140, 0.85);
+  font-style: italic;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: normal;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-modify: read-only;
+}
+
+.klausmate-hint {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+  user-select: none;
+  font-size: 10px;
+  color: rgba(140, 140, 140, 0.75);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(140, 140, 140, 0.3);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-family: -apple-system, system-ui, sans-serif;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- Cmd/Ctrl+K ASK popover ------------------------------------------ */
+
+.klausmate-ask {
+  position: fixed;
+  z-index: 2147483647;
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(252, 252, 253, 0.98);
+  border: 1px solid var(--klausmate-cobalt-soft);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 6px 20px rgba(0, 30, 80, 0.10);
+  box-sizing: border-box;
+}
+
+/* Label + hint share the same type rules — only color distinguishes them,
+ * and there are no divider borders. The 12 px gap on .klausmate-ask is
+ * enough visual separation. */
+.klausmate-ask__icon,
+.klausmate-ask__hint {
+  flex: 0 0 auto;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.klausmate-ask__icon {
+  color: var(--klausmate-cobalt);
+}
+
+.klausmate-ask__hint {
+  color: rgba(120, 120, 120, 0.85);
+}
+
+.klausmate-ask__input,
+.klausmate-ask__input:focus {
+  flex: 1 1 auto;
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  font: inherit;
+  color: inherit;
+  padding: 4px 6px;
+  margin: 0;
+  min-width: 0;
+}
+
+/* ----- Dark mode -------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  .klausmate-ghost {
+    color: rgba(180, 180, 180, 0.65);
+  }
+  .klausmate-hint {
+    color: rgba(200, 200, 200, 0.8);
+    background: rgba(40, 40, 40, 0.85);
+    border-color: rgba(120, 120, 120, 0.4);
+  }
+  .klausmate-ask {
+    background: rgba(28, 30, 36, 0.98);
+    border-color: rgba(120, 165, 255, 0.55);
+    color: rgba(230, 230, 230, 0.95);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  }
+  .klausmate-ask__icon {
+    color: #6FA8FF;
+  }
+  .klausmate-ask__hint {
+    color: rgba(180, 180, 180, 0.75);
+  }
+}
