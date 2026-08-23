@@ -11,7 +11,7 @@ The workaround: register a synthetic `klausmate` package plus stub
 aqt/anki modules in sys.modules *before* importing the module under test.
 Anything aqt-free (embeddings, card_index, pdf_index, drive_store) needs
 only the package stub; anything importing aqt (retention, curation,
-pdf_drive, deck_curate) needs install_aqt_stubs() as well.
+pdf_drive, deck_curate, ...) needs install_aqt_stubs() as well.
 
 Usage:
     from anki_stubs import install, check, report
@@ -20,7 +20,38 @@ Usage:
     retention = importlib.import_module("klausmate.retention")
     check("weighted retention", abs(got - want) < 1e-9)
     raise SystemExit(report())
+
+## The permissive Qt/aqt/anki surface
+
+klausmate imports a *lot* of names out of `aqt.qt` (every PyQt6 widget/
+enum class it touches), plus a handful of names out of `aqt.editor`,
+`aqt.webview`, `aqt.deckbrowser`, `aqt.preferences`, `anki.hooks` and
+`anki.utils`. Hand-enumerating all of those (and keeping the list in sync
+as the addon grows) is exactly the kind of stub drift that let
+`klausmate.pdf_drive` and `klausmate.deck_curate` go completely
+import-untested — the old stub only defined QAction, QInputDialog,
+QMessageBox, QTimer and qconnect.
+
+Instead, every stubbed aqt/anki module here is *permissive*: an
+undeclared attribute auto-vivifies into a `_Dummy` (see below) rather than
+raising AttributeError/ImportError. `_Dummy` works as:
+  - a base class (`class DriveWindow(QWidget): ...`),
+  - a constructor (`QColor(58, 130, 247)`),
+  - a chainable attribute/enum namespace (`Qt.ItemDataRole.UserRole`),
+  - and something you can do enum-flag arithmetic on
+    (`Qt.ItemDataRole.UserRole + 1`, which pdf_drive.py does at module
+    level).
+
+This is deliberately loose: it does not try to model real Qt behaviour.
+But it never hides an error in OUR code — a name that doesn't exist in
+klausmate itself, a real syntax error, a bad relative import, a genuine
+NameError in module-level code, etc. still raise normally, because those
+happen independent of (or before) any attribute lookup on these
+stand-ins. The catch-all only ever satisfies lookups *into aqt/anki*,
+which is exactly the surface klausmate does not own.
 """
+from __future__ import annotations
+
 import sys
 import types
 
@@ -65,16 +96,107 @@ class _AnyOp:
         pass
 
 
+class _DummyMeta(type):
+    """Metaclass for `_Dummy` subclasses so that attribute/arithmetic
+    access works even on the *class object itself* — needed because
+    klausmate uses some aqt.qt names directly as enum namespaces rather
+    than instances (``Qt.ItemDataRole.UserRole``, at module level in
+    pdf_drive.py), not just as base classes.
+    """
+
+    def __getattr__(cls, name):  # class.attr fallback (e.g. Qt.ItemDataRole)
+        return cls
+
+    def __add__(cls, other):
+        return cls
+
+    __radd__ = __sub__ = __rsub__ = __and__ = __rand__ = __or__ = __ror__ = __add__
+
+    def __repr__(cls):
+        return f"<Dummy {cls.__name__}>"
+
+
+class _Dummy(metaclass=_DummyMeta):
+    """Generic permissive stand-in. See module docstring."""
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __getattr__(self, name):  # instance.attr fallback
+        return _Dummy()
+
+    def __call__(self, *a, **k):
+        return _Dummy()
+
+    def __add__(self, other):
+        return _Dummy()
+
+    __radd__ = __sub__ = __rsub__ = __and__ = __rand__ = __or__ = __ror__ = __add__
+
+    def __bool__(self):
+        return True
+
+    def __repr__(self):
+        return "<Dummy instance>"
+
+
+_dummy_class_cache: dict[str, type] = {}
+
+
+def _dummy_class(name: str) -> type:
+    """A distinct `_Dummy` subclass per requested name, cached. Distinct
+    types (rather than one shared object) avoid a hypothetical "duplicate
+    base class" TypeError if some future class ever multiply-inherits
+    from two different stubbed Qt names.
+    """
+    cls = _dummy_class_cache.get(name)
+    if cls is None:
+        cls = _DummyMeta(name, (_Dummy,), {})
+        _dummy_class_cache[name] = cls
+    return cls
+
+
+def _permissive_module(name: str, **explicit) -> types.ModuleType:
+    """A stub module whose undeclared attributes auto-vivify to a
+    per-name `_Dummy` subclass, via PEP 562 module `__getattr__`.
+    `explicit` overrides specific names with real (usually no-op)
+    behaviour instead of a dummy class — e.g. `qconnect` needs to be a
+    plain callable, not something you'd subclass.
+    """
+    mod = types.ModuleType(name)
+    for k, v in explicit.items():
+        setattr(mod, k, v)
+
+    def __getattr__(item, _explicit=frozenset(explicit)):
+        return _dummy_class(item)
+
+    mod.__getattr__ = __getattr__
+    sys.modules[name] = mod
+    return mod
+
+
+def _permissive_namespace() -> _Dummy:
+    """A single reusable auto-vivifying instance for aqt.mw and similar
+    "one object with lots of chained attributes" spots (mw.addonManager.
+    setWebExports(...), mw.app.aboutToQuit.connect(...), ...).
+    """
+    return _Dummy()
+
+
 def install_aqt_stubs() -> None:
-    """Minimal aqt/anki surface for modules that import them at load time."""
-    aqt_mod = _stub("aqt", mw=None)
+    """Permissive aqt/anki surface for modules that import them at load
+    time. Covers every `aqt.*`/`anki.*` module klausmate imports from
+    (grepped across klausmate/*.py — see module docstring), not just
+    aqt.qt.
+    """
+    aqt_mod = _permissive_module("aqt", mw=_permissive_namespace())
     aqt_mod.dialogs = types.SimpleNamespace(
         open=lambda *a, **k: None,
         register_dialog=lambda *a, **k: None,
         markClosed=lambda *a, **k: None,
     )
-    _stub("aqt.operations", CollectionOp=_AnyOp, QueryOp=_AnyOp)
-    _stub(
+    _permissive_module("aqt.operations", CollectionOp=_AnyOp, QueryOp=_AnyOp)
+    _permissive_module(
         "aqt.utils",
         tooltip=lambda *a, **k: None,
         askUser=lambda *a, **k: False,
@@ -82,18 +204,18 @@ def install_aqt_stubs() -> None:
         showInfo=lambda *a, **k: None,
         openLink=lambda *a, **k: None,
     )
-    _stub(
-        "aqt.qt",
-        QAction=object,
-        QInputDialog=object,
-        QMessageBox=object,
-        QTimer=types.SimpleNamespace(singleShot=lambda *a, **k: None),
-        qconnect=lambda *a, **k: None,
-    )
-    gh = _stub("aqt.gui_hooks")
+    _permissive_module("aqt.qt", qconnect=lambda *a, **k: None)
+    gh = _permissive_module("aqt.gui_hooks")
     aqt_mod.gui_hooks = gh
+    _permissive_module("aqt.editor")          # Editor, EditorWebView
+    _permissive_module("aqt.webview")         # WebContent, AnkiWebView
+    _permissive_module("aqt.deckbrowser")     # DeckBrowser, DeckBrowserBottomBar
+    _permissive_module("aqt.preferences")     # Preferences
+    _permissive_module("aqt.main")            # AnkiQt (type-hint only)
     _stub("anki")
-    _stub("anki.collection", AddNoteRequest=object)
+    _permissive_module("anki.collection", AddNoteRequest=_dummy_class("AddNoteRequest"))
+    _permissive_module("anki.hooks")          # wrap
+    _permissive_module("anki.utils")          # strip_html
 
 
 def install(addon_dir: str = ADDON) -> None:
