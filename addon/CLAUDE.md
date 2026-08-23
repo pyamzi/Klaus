@@ -69,9 +69,10 @@ holds API keys) stay ignored — never stage those.
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`); ghost text, focus tracking, crop dblclick.
 - **Semantic curation stack** (replaced the old Klaus chat in 2026-07):
-  - `embeddings.py` (aqt-free): provider abstraction — Ollama `/api/embed`
-    (default, `nomic-embed-text`), OpenAI, Voyage. `OPENAI_API_BASE`/
-    `VOYAGE_API_BASE` module globals exist for test monkeypatching.
+  - `embeddings.py` (aqt-free): provider abstraction — Voyage
+    (default, `voyage-3-lite`), with Ollama `/api/embed` (`nomic-embed-text`)
+    and OpenAI as alternatives. `OPENAI_API_BASE`/`VOYAGE_API_BASE` module
+    globals exist for test monkeypatching.
     Vectors are **unit-normalized at write time**.
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
