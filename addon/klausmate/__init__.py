@@ -1,7 +1,8 @@
-"""Klausmate — Local AI Autocomplete for Anki.
+"""Klausmate — semantic PDF library and deck curation for Anki.
 
-Provides Copilot-style inline ghost-text completions in the editor (Add /
-Edit / Browser) powered by a local Ollama server. Press Tab to accept.
+Bootstrap and Qt glue for the add-on: the PDF viewer panel and its tabs,
+the editor's PDF bar, image cropping, and the Browse toolbar toggles.
+Embeddings power the rest — see curation.py, retention.py, and pdf_drive.py.
 """
 
 from __future__ import annotations
