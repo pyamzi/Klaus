@@ -62,6 +62,33 @@ button { font: inherit; color: inherit; cursor: pointer; }
   border-radius: 5px; padding: 3px 10px; font-size: 11px; color: var(--dim);
 }
 .rail button:hover { border-color: var(--live); color: var(--ink); }
+/* Identity, set once. Claiming needs a name, and asking for it on every
+   claim would be a dialog in the way of a drag. */
+.me input {
+  background: var(--ground); border: 1px solid var(--line); border-radius: 4px;
+  color: var(--live); font: inherit; font-size: 11px; padding: 2px 6px;
+  margin-left: 4px; width: 88px;
+}
+.me input:hover { border-color: var(--faint); }
+
+/* Comment composer — inline, because a modal prompt cannot be trusted to
+   exist (embedded browser views block window.prompt outright). */
+.composer { display: flex; flex-direction: column; gap: 6px; margin-top: 9px; }
+.composer textarea {
+  width: 100%; min-height: 62px; resize: vertical;
+  background: var(--ground); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 7px 8px;
+  font-family: var(--prose); font-size: 12.5px; line-height: 1.5;
+}
+.composer textarea:focus { border-color: var(--live); outline: none; }
+.composer .send { display: flex; align-items: center; gap: 8px; }
+.composer .send button {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: 5px; padding: 5px 12px; font-size: 11px;
+}
+.composer .send button:hover:not(:disabled) { border-color: var(--live); }
+.composer .send button:disabled { opacity: .4; cursor: default; }
+.composer .send span { font-size: 10.5px; color: var(--faint); }
 
 /* ── claim map: the signature ────────────────────────────────────────── */
 /* Which regions of the codebase are locked right now, and by whom. This is
@@ -240,6 +267,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   <span class="stat"><b id="n-ready">0</b> ready to claim</span>
   <span class="stat"><b id="n-review">0</b> awaiting sign-off</span>
   <span class="spacer"></span>
+  <label class="stat me">you are <input id="me" spellcheck="false" size="9"></label>
   <span class="stat" id="synced">connecting…</span>
   <button id="refresh">Refresh now</button>
 </div>
@@ -276,7 +304,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 <script>
 "use strict";
 const COLS = ["Backlog", "Ready", "Doing", "Review", "Done"];
-let board = null, lastMtime = 0, openId = null, prevSig = {};
+let board = null, lastMtime = 0, openId = null, prevSig = {}, draft = "";
+
+/* Who is acting. Persisted, because claiming needs a name and a per-claim
+   dialog would interrupt a drag — and window.prompt is not even available
+   in every browser view this dashboard gets opened in. */
+function me() {
+  const el = document.getElementById("me");
+  const v = (el && el.value.trim()) || localStorage.getItem("klaus.me") || "human";
+  return v;
+}
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
@@ -460,8 +497,7 @@ function wireCards() {
       // Ready→Doing is a claim, not a plain move: it also enforces that no
       // in-flight card already holds these files.
       if (from === "Ready" && to === "Doing") {
-        const who = prompt("Claim " + id + " as:", "human");
-        if (who) await api("/api/claim", { id, owner: who });
+        await api("/api/claim", { id, owner: me() });
       } else if (from === "Doing" && to === "Ready") {
         await api("/api/release", { id });
       } else {
@@ -507,7 +543,14 @@ function openDrawer(id) {
       ${(c.comments || []).map(x => `<div class="cmt">${esc(x)}</div>`).join("")
         || '<div class="cmt" style="color:var(--faint)">None yet.</div>'}
     </div>
-    <div class="row">${btns}<button data-comment="1">Add comment</button></div>`;
+    <div class="composer">
+      <textarea id="cmt" placeholder="Add a comment — what you decided, what you found, what is blocked."></textarea>
+      <div class="send">
+        <button id="cmt-post" disabled>Post comment</button>
+        <span>as ${esc(me())} · ⌘↵ to post</span>
+      </div>
+    </div>
+    <div class="row">${btns}</div>`;
   $("drawer").classList.add("open");
   $("scrim").classList.add("open");
   $("drawer").querySelector(".close").onclick = closeDrawer;
@@ -518,15 +561,34 @@ function openDrawer(id) {
       else await api("/api/move", { id, to });
     };
   });
-  const cb = $("drawer").querySelector("[data-comment]");
-  if (cb) cb.onclick = async () => {
-    const text = prompt("Comment on " + id + ":");
-    if (text) await api("/api/comment", { id, author: "human", text });
-  };
+
+  const ta = $("cmt"), post = $("cmt-post");
+  // The board polls every 2s and rebuilds this drawer when it changes;
+  // restore whatever was being typed so a poll never eats a draft.
+  ta.value = draft;
+  post.disabled = !draft.trim();
+  ta.addEventListener("input", () => {
+    draft = ta.value;
+    post.disabled = !draft.trim();
+  });
+  ta.addEventListener("keydown", e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
+  });
+  post.onclick = send;
+
+  async function send() {
+    const text = ta.value.trim();
+    if (!text) return;
+    post.disabled = true;
+    const ok = await api("/api/comment", { id, author: me(), text });
+    if (ok) { draft = ""; const t = $("cmt"); if (t) t.value = ""; }
+    else post.disabled = false;
+  }
 }
 
 function closeDrawer() {
   openId = null;
+  draft = "";
   $("drawer").classList.remove("open");
   $("scrim").classList.remove("open");
 }
@@ -534,6 +596,15 @@ function closeDrawer() {
 $("scrim").onclick = closeDrawer;
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
 $("refresh").onclick = () => load(true);
+
+const meEl = $("me");
+meEl.value = localStorage.getItem("klaus.me") || "human";
+meEl.addEventListener("change", () => {
+  const v = meEl.value.trim() || "human";
+  meEl.value = v;
+  localStorage.setItem("klaus.me", v);
+  if (openId) openDrawer(openId);   // the composer shows who you post as
+});
 
 COLS.forEach(c => {
   const o = document.createElement("option");

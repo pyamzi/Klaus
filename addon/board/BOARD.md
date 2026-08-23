@@ -26,18 +26,6 @@ Checklist:
 
 Report failures as new cards rather than fixing them here.
 
-### K-002: Visual polish pass: Manage models dialog and Klaus panel
-owner: -
-priority: P2
-tags: design
-files: klausmate/web/search.css,klausmate/web/search.html
-verify: designer sign-off; screenshots attached to this card
-created: 2026-08-23
-
-Needs a design spec before any code. The Manage models dialog was reorganised by job (What Klaus uses / Local model library) but never got a visual pass. The Klaus panel still uses Bootstrap-era defaults.
-
-Designer: write the spec into this card, then move it to Ready. Do not hand this to a worker un-specced.
-
 ### K-006: Slice klausmate/__init__.py into modules
 owner: -
 priority: P3
@@ -49,6 +37,18 @@ created: 2026-08-23
 5,980 lines in one file. Too large for one card — the orchestrator must slice it into file-disjoint pieces first, or every worker collides on the same path.
 
 Blocked on grooming, not on skill. Candidate seams: the Manage models dialog (~1000 lines), the editor panel and PDF bar, the Browse toolbar toggles, hook registration and bootstrap.
+
+### K-002: Visual polish pass: Manage models dialog and Klaus panel
+owner: -
+priority: P2
+tags: design
+files: klausmate/web/search.css,klausmate/web/search.html
+verify: designer sign-off; screenshots attached to this card
+created: 2026-08-23
+
+Needs a design spec before any code. The Manage models dialog was reorganised by job (What Klaus uses / Local model library) but never got a visual pass. The Klaus panel still uses Bootstrap-era defaults.
+
+Designer: write the spec into this card, then move it to Ready. Do not hand this to a worker un-specced.
 
 ## Ready
 
