@@ -71,23 +71,51 @@ Designer: write the spec into this card before anyone touches code. Worth coveri
 
 Not sonnet-safe. Needs a spec first.
 
-### K-016: Add a delete button to the kanban board
-owner: -
-created: 2026-08-23
-
-#### Comments
-- [2026-08-23 Pouya] I want to be able to delete a card on the board.
-- [2026-08-23 Pouya] I also need an archive button for all of the items that have been reviewed
+## Doing
 
 ### K-017: Align the add pdf thing to the bottom, right above the four buttons.
-owner: -
+owner: sonnet-n
+priority: P2
+tags: sonnet-safe
+files: klausmate/__init__.py
+verify: python3 tests/test_imports.py
 created: 2026-08-23
+claimed: 2026-08-23
 
-### K-018: Remove the Klaus button on the top right.
-owner: -
+Requested by Pouya via the dashboard: 'Align the add pdf thing to the bottom, right above the four buttons.'
+
+Orchestrator's interpretation (flag in your handoff if you read the code differently): 'the add pdf thing' is the _PdfBar — the 'Drop lecture PDF here' row (class at __init__.py:4189, added to the editor layout via outer.addWidget(self._pdf_bar) at :4389). 'The four buttons' are the Add window's bottom row (History/Help/Close/Add). Today the bar sits wherever :4389 lands it in the layout order; it should instead be the LAST widget in the editor's outer layout, so it renders at the very bottom of the editor area, directly above Anki's own bottom buttons.
+
+Done when: the bar is appended after all other widgets in that layout (or moved with insertWidget to the end), nothing else in the layout changes order, and the import suite passes. The verify command only proves nothing broke — the actual position is visual, so this lands in Review for a human check in Anki before Done.
+
+NOTE: this card shares klausmate/__init__.py with K-018 — the board will refuse your claim while K-018 is in flight. That is expected; it runs second.
+
+### K-019: Archive button for reviewed cards
+owner: sonnet-o
+priority: P2
+tags: sonnet-safe
+files: board/boardlib.py,board/board.py,board/serve.py,board/dashboard.html,tests/test_board.py
+verify: grep -q 'def archive' board/boardlib.py && python3 tests/test_board.py
 created: 2026-08-23
+claimed: 2026-08-23
 
-## Doing
+Requested by Pouya in a comment on K-016: 'I also need an archive button for all of the items that have been reviewed.'
+
+Done cards accumulate forever in BOARD.md; archiving moves them out while keeping the record.
+
+Done when:
+- boardlib gains archive(board, card_id): removes a Done card from the board, appends its full serialized form (fields, body, comments) to board/ARCHIVE.md with an archived-on date. Only Done cards are archivable — BoardError otherwise.
+- The ARCHIVE.md append happens inside the same mutate() lock; BOARD.md is written AFTER the append succeeds (a crash between the two duplicates into the archive rather than losing the card).
+- ID UNIQUENESS (defect found during grooming — the board reused K-019 minutes after a card with that id was deleted): next_id() must never reuse an id that appears in ARCHIVE.md. Either scan ARCHIVE.md for K-\d+ ids, or persist a high-water mark; your choice, justify it in the handoff. Test: archive the highest card, add a new one, assert the id advances.
+- CLI: board.py archive <id> and board.py archive --all-done.
+- API: /api/archive through the same ops dict.
+- UI: Archive button in the drawer for Done cards + an 'Archive all' control on the Done column header; no modal dialogs — reuse the Delete button's arm/confirm pattern.
+- tests/test_board.py: archive happy path (comments intact in ARCHIVE.md), refusal on non-Done, --all-done sweep, and the id-reuse regression.
+
+OPS NOTE: after your commit the change is NOT live until the dashboard server restarts — say so in your handoff. ARCHIVE.md gets committed; it is the durable record, not ignored.
+
+#### Comments
+- [2026-08-23 orchestrator] Grooming addendum discovered while creating this very card: it was assigned K-019, the id of a throwaway card deleted minutes earlier — next_id() is max+1 over live cards only, so removing the highest card frees its number. Archiving makes this a real defect: archived cards keep their ids in ARCHIVE.md while next_id forgets them, so a future card would silently collide with an archived one. Requirement added: next_id must also consider ARCHIVE.md (scan it for K-ids, or persist a high-water mark in the board preamble comment); add a test — archive the max card, add a new one, assert the id is NOT reused.
 
 ## Review
 
@@ -313,3 +341,45 @@ Scope: root README.md only. klausmate/README.md has its own stale table row, not
 #### Comments
 - [2026-08-23 sonnet-j] Decisions: cross-checked klausmate/config.json directly (24 keys) and split the single Configuration table into four grouped tables (Autocomplete & Ask, Claude Ask engine, Semantic curation, plus the existing completion-modes note) so the doubled key count stays scannable rather than one giant table. Descriptions are one-line summaries, not copies of config.md's prose. Architecture section now has two diagrams: the existing autocomplete pipeline, plus a new one for the semantic curation stack (embeddings.py -> card_index.py -> curation.py, fanning out to Curate Deck / PDF drive retention / chat_dock.py panel), with a one-line Ask-via-claude_api.py note. Files: README.md (Configuration section and Architecture section only). Risks: I chose which config.json keys to surface individually vs. fold into the legacy 'model' row (kept 'model' as its own row since it exists in config.json) - reviewer should confirm no key was silently dropped; I did not touch _runtime_setup_declined since it's not a config.json key. Next: klausmate/README.md still has the stale table row noted by K-012's worker - untouched per this card's scope, left for its own card.
 - [2026-08-23 orchestrator] Verified: commit scoped to root README.md only; all 40 config.json keys are now named somewhere in the file (the report said 24 keys exist — that count was wrong, config.json has 40, but coverage is complete regardless); a programmatic sweep of single-value defaults found zero disagreements; full suite 212 passing. Signing off.
+
+### K-018: Remove the Klaus button on the top right.
+owner: sonnet-m
+priority: P2
+tags: sonnet-safe
+files: klausmate/__init__.py
+verify: ! grep -q klausChatToggle klausmate/__init__.py && python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Requested by Pouya via the dashboard: remove the Klaus button from Anki's top-right toolbar tray.
+
+The button is created in on_top_toolbar_right_tray (__init__.py:4061) and registered at :5934-5939 (both the right-tray hook and the did_init_links fallback). Remove the function and both registration branches — do not leave a dead function behind.
+
+The Klaus panel must remain reachable afterwards via its hotkey (chat_hotkey, Ctrl+Shift+K) and Tools → Klaus → Open Klaus; touch nothing about those paths. Note the drive's separate 'PDFs' link lives in pdf_drive.py and is NOT this button — leave it alone.
+
+Editing klausmate/*.py fires the compile hook; a syntax error blocks your edit.
+
+#### Comments
+- [2026-08-23 sonnet-m] Decisions: removed on_top_toolbar_right_tray (klausmate/__init__.py:4061-4077) and both its hook registrations (the top_toolbar_will_set_right_tray_content branch and the top_toolbar_did_init_links fallback, ~5932-5939), plus the now-orphaned comment block above them. Left _open_chat_dock, install_menu (Tools > Klaus > Open Klaus), and chat_hotkey untouched. Did not touch pdf_drive.py's separate PDFs link. Files: klausmate/__init__.py. Risks: none identified — grep confirms no remaining klausChatToggle/on_top_toolbar_right_tray references, py_compile is clean, and tests/test_imports.py passes (19/19). Next: none.
+- [2026-08-23 orchestrator] Verified: pure 28-line deletion scoped to __init__.py; klausChatToggle fully gone; the drive's PDFs link, Tools → Open Klaus, and chat_hotkey all intact; compiles through the symlink; imports pass. Signing off — takes effect on next Anki restart.
+
+### K-016: Add a delete button to the kanban board
+owner: sonnet-l
+priority: P2
+tags: sonnet-safe
+files: board/dashboard.html,board/serve.py
+verify: grep -q 'api/delete' board/serve.py && grep -q 'api/delete' board/dashboard.html && python3 tests/test_board.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Requested by Pouya via the dashboard. boardlib.delete() already exists (boardlib.py:452) and the CLI exposes it; the dashboard does not.
+
+Done when: the card drawer has a Delete button; it POSTs to a new /api/delete endpoint on serve.py that calls boardlib.delete via the same mutate() path as every other endpoint (409 + reason on rejection — deleting an in-flight card must surface boardlib's refusal, not bypass it); the UI asks for confirmation before sending (no window.confirm — embedded views block modal dialogs, same reason prompt() was removed; use an inline two-step, e.g. the button arms and asks to click again); the drawer closes after a successful delete.
+
+Style: match the drawer's existing buttons; destructive styling may use --contest.
+
+#### Comments
+- [2026-08-23 Pouya] I want to be able to delete a card on the board.
+- [2026-08-23 Pouya] I also need an archive button for all of the items that have been reviewed
+- [2026-08-23 sonnet-l] Decisions: added /api/delete to serve.py's ops dict as a one-line lambda calling B.delete(b, data["id"]) — it goes through the same B.mutate(op) call and try/except as every other endpoint, so BoardError (in-flight refusal) already surfaces as 409 with no special-casing needed. In dashboard.html, added a Delete button to the drawer's .row (next to Move/Release/Claim) styled with --contest via a new .row button.danger rule; no window.confirm/prompt — it arms on first click (text changes to 'Click again to delete', red fill), requires a second click within 3s to actually POST, and auto-disarms on timeout. On success the drawer closes via the existing closeDrawer(); on a 409 the existing api() toast surfaces boardlib's rejection reason verbatim. Files: board/serve.py (added the /api/delete lambda), board/dashboard.html (danger button CSS + drawer button + arm/confirm/disarm wiring). Risks: I verified the wiring by code inspection and the full test_board.py suite (49 passed) plus the two grep checks; I could not safely click through the live two-step confirm against the shared running dashboard (127.0.0.1:8765) without risking an accidental delete on another worker's in-flight card, so the actual browser click-twice interaction is unexercised beyond confirming the button renders with correct label/style in the drawer. A reviewer should click Delete twice on a Backlog/Ready/Review/Done test card to confirm the happy path, and once on a Doing card to confirm the 409 toast. Next: Pouya also asked for an archive button for reviewed items in a comment on this card — that's separate scope, not done here.
+- [2026-08-23 orchestrator] Reviewed and exercised for real, per your handoff request: two-click delete removed a throwaway card (drawer closed, card gone from BOARD.md), and attempting it on in-flight K-017 surfaced boardlib's exact refusal in the toast. One finding your inspection could not see: the FIRST attempt 404ed, because the running serve.py predated your commit — dashboard.html reloads per request but the Python process does not. Restarted the server; works. Ops note added to the card trail: any card touching serve.py needs a server restart to take effect. Signing off.
