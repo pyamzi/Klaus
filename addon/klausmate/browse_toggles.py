@@ -9,8 +9,7 @@ This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
 function, after the package has finished loading. _pkg() below is that
 lazy accessor (same pattern as curation.py's and manage_models.py's
-_pkg()); it reaches Browse helpers that still live in __init__.py:
-_remap_browser_mark_hotkey, _install_browser_search_klaus,
+_pkg()); it reaches a Browse helper that still lives in __init__.py:
 _reset_browse_layout_to_defaults.
 """
 
@@ -181,19 +180,19 @@ def _install_browser_sidebar_toggle(browser: Any) -> None:
 
 
 def on_browser_will_show(browser: Any) -> None:
-    """``gui_hooks.browser_will_show`` callback — install Klaus's two
+    """``gui_hooks.browser_will_show`` callback — install Klaus's
     Browse-specific features:
 
-    1. Remap Anki's Mark hotkey (``Ctrl/Cmd+K``) to ``Ctrl/Cmd+Alt+K``
-       so Klaus can own ``⌘K`` consistently across all surfaces.
-    2. Bind ``⌘K`` inside the Browse search bar to the Klaus Ask
-       popover, which converts natural-language queries to Anki search
-       syntax.
-    3. Add a visible, one-click sidebar toggle button.
+    1. Repair leftover broken layout state from earlier add-on builds
+       (``_reset_browse_layout_to_defaults``).
+    2. Add the visible, one-click ◧ sidebar / ◨ editor-column toggle
+       buttons.
 
     Earlier batches also wrapped the editor pane in a ``QDockWidget`` and
-    added a View menu. Those layout-mutating features were removed — the
-    user preferred Anki's stock Browse layout. The sidebar toggle button
+    added a View menu, plus a Browse natural-language ⌘K search that
+    remapped Anki's native Mark hotkey out of the way. Those features were
+    removed — the user preferred Anki's stock Browse layout, and Anki's
+    native ⌘K Mark hotkey now works again. The sidebar toggle button
     re-added here does NOT touch the dock's areas/floating/features; it is
     purely a visible affordance for Anki's existing show/hide.
 
@@ -203,14 +202,6 @@ def on_browser_will_show(browser: Any) -> None:
     """
 
     def _deferred() -> None:
-        try:
-            _pkg()._remap_browser_mark_hotkey(browser)
-        except Exception as exc:
-            print(f"[klausmate] mark remap failed: {exc}")
-        try:
-            _pkg()._install_browser_search_klaus(browser)
-        except Exception as exc:
-            print(f"[klausmate] search ⌘K install failed: {exc}")
         # Repair leftover broken layout state from earlier add-on builds:
         # re-anchor the sidebar to the left and undo any zero-width
         # splitter pane. No-op on a clean profile. Runs BEFORE the toggle
