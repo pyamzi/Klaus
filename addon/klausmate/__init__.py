@@ -4058,25 +4058,6 @@ def _open_chat_dock() -> None:
     chat_dock.toggle_chat_dock()
 
 
-def on_top_toolbar_right_tray(tray_content: list[str], toolbar: Any) -> None:
-    """Klaus panel button in the toolbar's native top-right tray.
-
-    create_link both registers the pycmd handler and returns the HTML;
-    the hook re-fires on every toolbar draw (sync/theme/profile), so the
-    button survives rebuilds for free. The same (list, toolbar) signature
-    also fits top_toolbar_did_init_links, the fallback for older Anki.
-    """
-    tray_content.append(
-        toolbar.create_link(
-            "klausChatToggle",
-            "Klaus",
-            _open_chat_dock,
-            tip=f"Klaus ({get_config().get('chat_hotkey', 'Ctrl+Shift+K')})",
-            id="klaus-chat",
-        )
-    )
-
-
 def install_menu() -> None:
     menu = mw.form.menuTools.addMenu("Klaus")
 
@@ -5928,15 +5909,6 @@ def _chat_quit() -> None:
 gui_hooks.profile_will_close.append(_chat_profile_close)
 if getattr(mw, "app", None) is not None:
     mw.app.aboutToQuit.connect(_chat_quit)
-
-# Native top-right tray slot (next to sync); older Anki falls back to the
-# centered link row — same hook signature either way.
-if hasattr(gui_hooks, "top_toolbar_will_set_right_tray_content"):
-    gui_hooks.top_toolbar_will_set_right_tray_content.append(
-        on_top_toolbar_right_tray
-    )
-else:
-    gui_hooks.top_toolbar_did_init_links.append(on_top_toolbar_right_tray)
 
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)
