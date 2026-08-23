@@ -136,12 +136,16 @@ Extracted text and the raw PDF live under `addons21/klausmate/user_files/` (`con
 
 ## Configuration
 
+**Autocomplete & Ask**
+
 | Key | Default | Description |
 |-----|---------|-------------|
 | `autocomplete_model` | `qwen3:0.6b` | Model for inline ghost autocomplete |
-| `ask_model` | `qwen3:4b` | Model for Cmd+K Ask |
+| `ask_model` | `qwen3:4b` | Model for Cmd+K Ask (when `klaus_engine` is `ollama`) |
+| `model` | `qwen3:0.6b` | Legacy alias, kept in sync with `autocomplete_model` |
 | `endpoint` | `http://localhost:11434` | Ollama server URL |
 | `generate_timeout_s` | `180` | Timeout for long generations |
+| `runtime_auto_setup` | `true` | Klaus silently starts/installs its own local Ollama when needed |
 | `completion_mode` | `sentence` | `word` · `phrase` · `sentence` · `paragraph` · `long` |
 | `temperature` | `0.2` | Sampling temperature |
 | `top_p` | `0.9` | Nucleus sampling |
@@ -159,16 +163,42 @@ Extracted text and the raw PDF live under `addons21/klausmate/user_files/` (`con
 | `retrieval_method` | `keyword` | BM25 today; `semantic` reserved (falls back) |
 | `autocomplete_enabled` | `true` | Master switch for ghost-text autocomplete |
 | `ask_enabled` | `true` | Master switch for the ⌘K Ask popover |
+| `image_crop_enabled` | `true` | Enable right-click/double-click image crop |
 | `system_prompt` | *(see config.json)* | Prepended to every autocomplete request |
 | `ask_system_prompt` | *(see config.json)* | Prepended to every Ask request |
 
+**Claude Ask engine** — routes Cmd+K Ask to the Anthropic API instead of the local model. Autocomplete always stays local.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `klaus_engine` | `ollama` | `ollama` (local Ask model) or `claude` (cloud Ask) |
+| `claude_api_key` | *(empty)* | Anthropic API key; required when `klaus_engine` is `claude` |
+| `claude_model` | `claude-opus-4-8` | Model used when Ask runs on Claude |
+| `claude_timeout_s` | `300` | Timeout for a Claude Ask call |
+
+**Semantic curation** — powers Curate Deck, the PDF drive, and retention scoring.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `embedding_provider` | `voyage` | `voyage`, `openai` (both cloud, need an API key), or `ollama` (local) |
+| `embedding_model` | *(empty)* | Embedding model ID; empty = provider default |
+| `embedding_api_key_voyage` / `embedding_api_key_openai` | *(empty)* | API key for the matching cloud embedding provider |
+| `chat_hotkey` | `Ctrl+Shift+K` | Toggle the Klaus panel (semantic deck curation) |
+| `curate_top_k` | `100` | Best-matching notes tagged for review per curation search |
+| `curate_min_score` | `0.35` | Minimum cosine similarity for a curation match |
+| `pdf_match_threshold` | `0.35` | Similarity cutoff for a card counting as "about" a PDF (retention scoring) |
+| `pdf_match_agg` | `max` | How a card's score against a PDF's chunks is aggregated: `max` or `top3_mean` |
+| `pdf_index_max_chunks` | `1000` | Cap on embedded chunks per PDF |
+
 **Completion modes:** `word` (≤8 tokens) · `phrase` (first `.!?`) · `sentence` (one complete sentence) · `paragraph` (2–3 sentences) · `long` (multi-line lists). Klaus may **auto-promote** to `long` when the field ends with a list cue (`…are:`, `…include:`, trailing `:`) and PDF retrieval score is strong (≥ 6.0).
 
-Full key documentation: [`klausmate/config.md`](klausmate/config.md).
+Full key documentation, including how each engine and provider is wired up: [`klausmate/config.md`](klausmate/config.md).
 
 ---
 
 ## Architecture
+
+**Autocomplete / Ask** — the ghost-text and Cmd+K paths:
 
 ```
 Editor field (contenteditable, shadow DOM)
@@ -182,9 +212,26 @@ Editor field (contenteditable, shadow DOM)
         └◀── editor.web.eval("klausmate.onCompletion(…)") ── inline ghost <span>
 ```
 
-- **Non-blocking:** all Ollama I/O runs in `QueryOp.without_collection()`.
-- **No native wheels:** stdlib HTTP + optional vendored `pypdf` only.
+Ask instead calls `claude_api.py` (a stdlib SSE client for the Anthropic Messages API) when `klaus_engine` is `claude`.
+
+**Semantic curation** — Curate Deck, the PDF drive, and retention scoring all read the same embedding index:
+
+```
+Notes / PDF chunks ─▶ embeddings.py (Ollama · OpenAI · Voyage) ─▶ card_index.py (packed vectors + manifest)
+                                                                        │
+                                                                        ▼
+                                                          curation.py — top_k search
+                                                                        │
+                                        ┌───────────────────────────────┼───────────────────────────┐
+                                        ▼                               ▼                            ▼
+                              Curate Deck (tag + Browse,        PDF drive retention           Klaus panel
+                              undoable deck copy)                score per PDF                (chat_dock.py)
+```
+
+- **Non-blocking:** Ollama calls run in `QueryOp.without_collection()`; embedding/indexing runs off the main thread too, resumable if cancelled mid-batch.
+- **No native wheels:** stdlib HTTP only, plus the vendored `pypdf` for PDF text/annotations — no pip installs, including for the cloud embedding/Claude calls.
 - **Editor state:** PDF dock sets `editor._klausmate_active_pdf` for page-aware retrieval.
+- **Index storage:** the card index lives under `user_files/card_index/`; deleting it forces a full rebuild.
 
 ---
 
