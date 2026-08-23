@@ -7,6 +7,8 @@
 
 ## Backlog
 
+## Ready
+
 ### K-001: Manual-verify PDF drive and deck-curate surfaces in live Anki
 owner: -
 priority: P1
@@ -28,6 +30,7 @@ Report failures as new cards rather than fixing them here.
 
 #### Comments
 - [2026-08-23 Pouya] PDF viewer just doesn't work at all. It's not even opening. I can't figure out exactly how to. It's not easy to understand the model installation process for a curation or an embedded model, so that needs to be fixed as well.
+- [2026-08-23 Pouya] PDF shows up at the top. It just doesn't open into anything, like it doesn't open a window or anything.
 
 ### K-006: Slice klausmate/__init__.py into modules
 owner: -
@@ -53,15 +56,67 @@ Needs a design spec before any code. The Manage models dialog was reorganised by
 
 Designer: write the spec into this card, then move it to Ready. Do not hand this to a worker un-specced.
 
-## Ready
+### K-009: Make model setup for curation and embeddings understandable
+owner: -
+priority: P1
+tags: design
+verify: designer sign-off against the spec in this card
+created: 2026-08-23
+
+Pouya, on K-001: 'It's not easy to understand the model installation process for a curation or an embedded model.'
+
+This is the second time this surface has been called confusing — the Manage models dialog was reorganised by job on 2026-08-23 for the same reason, and it clearly did not go far enough. The remaining gap is the install/provisioning path rather than the assignment path: what has to be downloaded, what it costs, what a key is for, and what happens if you skip it.
+
+Designer: write the spec into this card before anyone touches code. Worth covering — what the user sees when no embedding model is installed and they press Index cards; whether Voyage-by-default is discoverable at all before it fails; how pulling a local embedding model is offered; and what distinguishes the Ask engine from the search provider in the user's mind, given both are 'models'.
+
+Not sonnet-safe. Needs a spec first.
+
+## Doing
+
+### K-008: Import-smoke every klausmate module in the test harness
+owner: sonnet-c
+priority: P1
+tags: sonnet-safe
+files: .claude/skills/klaus-test/scripts/anki_stubs.py,tests/test_imports.py
+verify: python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya reports the PDF drive window does not open at all in live Anki. A likely class of cause is an ImportError or NameError at module import: pdf_drive.setup() is wrapped in try/except that only prints, so the window would silently never register.
+
+Nothing catches this today. The aqt.qt stub in the test harness defines only QAction, QInputDialog, QMessageBox, QTimer and qconnect, so importing klausmate.pdf_drive or klausmate.deck_curate fails on the stub itself — meaning those modules have never been import-tested at all.
+
+Done when:
+- anki_stubs.py's aqt.qt stub covers every Qt name the addon imports. Derive the list from the source (grep the 'from aqt.qt import' blocks across klausmate/*.py); do not hand-guess it. A permissive module-level __getattr__ returning a dummy class is acceptable and probably better than enumerating, but real ImportErrors in OUR code must still surface — a stub that silently satisfies every name would defeat the point, so any catch-all must still be driven by what the source actually imports.
+- tests/test_imports.py imports every module in klausmate/ (excluding vendor/) under the stub and reports one pass/fail per module, in the check/report style of the other suites.
+- If that surfaces a genuine bug in an addon module, DO NOT fix it here — this card owns only the two files listed. Comment what you found and leave it; the orchestrator will groom a fix card.
+
+This is P1 because it is the cheapest path to a real answer about a bug we currently cannot reproduce.
+
+### K-004: Edge-case coverage for drive_store and deck_curate
+owner: sonnet-d
+priority: P2
+tags: sonnet-safe
+files: tests/test_drive.py
+verify: python3 tests/test_drive.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Extend the existing suite. Gaps worth covering: a folder rename that collides with an existing folder; two PDFs whose safe-names collide; drive.json holding a folder no card references; deck_curate recency ordering when last_used is missing for some PDFs.
+
+Done when: new assertions cover each gap, the suite still passes, and no production module changed — this card owns only the test file.
+
+#### Comments
+- [2026-08-23 sonnet-1] Started; reading the existing suite to find the gaps.
 
 ### K-007: Reconcile the rest of AGENTS.md with the current module map
-owner: -
+owner: sonnet-e
 priority: P3
 tags: sonnet-safe
 files: AGENTS.md
 verify: grep -q 'retention.py' AGENTS.md && grep -q 'pdf_drive.py' AGENTS.md
 created: 2026-08-23
+claimed: 2026-08-23
 
 Two workers independently flagged this while doing other cards: beyond the privacy line fixed in K-003, AGENTS.md still describes an older architecture — the repo layout, the module list, the 'single active PDF' model, and the dependencies table all predate semantic search, the PDF drive, and multi-PDF tabs.
 
@@ -71,23 +126,6 @@ Scope note: AGENTS.md only. Do not edit CLAUDE.md — it is the authority here, 
 
 #### Comments
 - [2026-08-23 orchestrator] Groomed twice: my first verify command referenced a phrase that is not in the file, so it passed with zero work. Replaced with a check that pdf_drive.py and retention.py appear in the layout block — they exist in the tree and are absent from the doc, so it fails now and can only pass once the module list is genuinely current.
-
-### K-004: Edge-case coverage for drive_store and deck_curate
-owner: -
-priority: P2
-tags: sonnet-safe
-files: tests/test_drive.py
-verify: python3 tests/test_drive.py
-created: 2026-08-23
-
-Extend the existing suite. Gaps worth covering: a folder rename that collides with an existing folder; two PDFs whose safe-names collide; drive.json holding a folder no card references; deck_curate recency ordering when last_used is missing for some PDFs.
-
-Done when: new assertions cover each gap, the suite still passes, and no production module changed — this card owns only the test file.
-
-#### Comments
-- [2026-08-23 sonnet-1] Started; reading the existing suite to find the gaps.
-
-## Doing
 
 ## Review
 
