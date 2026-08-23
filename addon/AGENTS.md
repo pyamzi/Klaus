@@ -2,7 +2,7 @@
 
 Klausmate is an **Anki 2.1 add-on** that adds Copilot-style inline ghost-text autocomplete to the card editor, powered by a **local [Ollama](https://ollama.com)** server. A drop-in lecture PDF supplies retrieval context (BM25), and the Add window can dock a native PDF viewer beside the editor for page-aware retrieval.
 
-**Privacy:** all inference runs on-device. No API keys, no cloud calls, no telemetry.
+**Privacy:** autocomplete and ⌘K Ask can run fully on-device via Ollama. No API keys, no cloud calls, and no telemetry are required for that path. Semantic deck search is the exception — it defaults to the **Voyage** cloud embedding API, so card text is sent to Voyage's servers unless you switch `embedding_provider` to `ollama` in settings. Ask can also be switched to the Claude API, which does require an API key.
 
 ---
 
