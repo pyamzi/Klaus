@@ -347,8 +347,21 @@ def on_deck_browser_content(deck_browser: Any, content: Any) -> None:
         else:
             body = "Drop a lecture PDF here to curate a deck from it."
             border = "1px dashed rgba(128,128,128,0.55)"
+        # Fixed to the bottom of the deck-browser's own viewport rather
+        # than flowing in-place after the stats line: content.stats renders
+        # near the TOP of the page (right after the deck tree, per Anki's
+        # own _body template), while Get Shared / Create Deck / Import File
+        # / Curate Deck live in a SEPARATE webview (mw.bottomWeb) pinned
+        # below it. There is no shared document to lay these two out
+        # against each other in normal flow, so `position: fixed; bottom`
+        # is what actually lands this directly above that button row —
+        # it stops exactly at the edge of this webview, which is exactly
+        # where the other one begins.
         content.stats += (
-            f"<div style='margin:10px auto 4px;padding:8px 14px;max-width:420px;"
+            f"<div style='position:fixed;left:50%;bottom:10px;"
+            f"transform:translateX(-50%);z-index:50;"
+            f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
+            f"box-sizing:border-box;background:var(--window-bg,transparent);"
             f"border:{border};border-radius:10px;text-align:center;"
             f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
         )
