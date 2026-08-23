@@ -1,19 +1,25 @@
 # CLAUDE.md — Addons repo / Klaus (klausmate)
 
 The real project here is **`klausmate/`** — "Klaus", a local-AI Anki addon
-(autocomplete, ⌘K Ask with a selectable Ollama/Claude brain, semantic deck
-curation, PDF viewer, image cropping). The rest of this repo is dotfiles.
-**`klausmate/` is gitignored/untracked**, which has two hard consequences:
+(autocomplete, ⌘K Ask on either a local Ollama model or the Claude API,
+semantic deck curation, PDF viewer, image cropping). The rest of this repo
+is dotfiles.
 
-- **Git worktrees do NOT contain it.** If a session starts in
-  `.claude/worktrees/...`, always edit the main checkout directly:
-  `/Users/mpouy/Documents/Github/Addons/klausmate/`.
-- There is no git history for it; don't offer commits/diffs for addon work.
+**`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
+(personal PDFs, annotations, card index) and `meta.json*` (live config,
+holds API keys) stay ignored — never stage those.
+
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Addons/klausmate/`,
+  even though worktrees now contain a copy. Anki loads the addon through a
+  symlink to the main checkout only, and the PostToolUse compile hook
+  compiles that symlink target — so a worktree edit would report success
+  without ever being compiled or loaded.
+- Commits and diffs for addon work are now expected.
 
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/mpouy/Documents/Github/Addons/klausmate`. If the repo folder is ever
+  `/Users/pyamzi/Documents/Github/Addons/klausmate`. If the repo folder is ever
   renamed, this symlink breaks silently and Anki loads nothing.
 - **Never create a second copy under `addons21/`** (e.g. a numbered AnkiWeb
   install). Two copies race on the same hooks and `editor._klausmate_*`
