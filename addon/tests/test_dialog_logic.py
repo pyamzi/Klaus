@@ -277,5 +277,36 @@ check(
                           "nomic-embed-text") == "nomic-embed-text",
 )
 
+
+
+print("== resolver write-back must not persist an uninformed fallback (K-039 review) ==")
+
+
+def _should_persist(resolved, configured, models):
+    """Transcribed from manage_models.sync_embed_widgets' heal branch.
+
+    The resolver always returns SOMETHING to display, but the config may
+    only be rewritten when we actually enumerated the installed models.
+    With an empty list (Ollama unreachable) the resolver falls through to
+    the hardcoded default; persisting that would durably orphan an index
+    built with a different model.
+    """
+    return resolved != configured and bool(models)
+
+
+check(
+    "informed resolution persists",
+    _should_persist("embeddinggemma:latest", "", ["embeddinggemma:latest"]) is True,
+)
+check(
+    "uninformed fallback (no model list) does NOT persist",
+    _should_persist("nomic-embed-text", "", []) is False,
+)
+check(
+    "no change means no write even with a populated list",
+    _should_persist("qwen3:4b", "qwen3:4b", ["qwen3:4b"]) is False,
+)
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

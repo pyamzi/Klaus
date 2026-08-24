@@ -838,11 +838,21 @@ def manage_models_dialog(setup: bool = False) -> None:
                     indexed_model,
                     embeddings.DEFAULT_MODELS["ollama"],
                 )
-                if resolved != configured_model:
+                if resolved != configured_model and ui_state["models"]:
                     # Heal the config now, not just the widget — an empty
                     # field must not silently mean DEFAULT_MODELS['ollama']
                     # everywhere else this config is read (index_signature,
                     # the real indexing pipeline in curation.py).
+                    #
+                    # Only persist when we actually enumerated the installed
+                    # models. An empty list means we could not ask Ollama
+                    # (server down, or the user just switched the provider
+                    # combo back to ollama while it is down), and the
+                    # resolver then falls through to the hardcoded default.
+                    # Writing THAT to disk would permanently orphan an index
+                    # built with another model — the exact failure this
+                    # resolver exists to prevent, made durable. Display it,
+                    # never store it.
                     cfg["embedding_model"] = resolved
                     _pkg().write_config(cfg)
                 embed_model_combo.setEditText(resolved)
