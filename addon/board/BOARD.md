@@ -639,3 +639,14 @@ created: 2026-08-24
 
 #### Comments
 - [2026-08-24 opus] Committed 9b4a2a6, filed retrospectively (fix shipped in the same turn as the diagnosis). Diagnosed from real data: mapping synced at 17:42 by migration, tree rewritten at 18:08 by the stale-tag reconcile, moves-only loop permanently unable to repair. Fix: tree follows mapping for every mapped entry; tags follow tree_changed. Pouya's stale tree self-heals on next Library open/refresh — no manual cleanup needed. Falsified (3 red on the old loop); suite 156 in file, all green.
+
+### K-075: Two-way sync DOA fix + Anki-side file moves + live watcher (K-075)
+owner: -
+priority: P2
+tags: library-era
+files: klausmate/pdf_handler.py,klausmate/pdf_drive.py,tests/test_klausmate.py,tests/test_drive.py
+verify: grep -q "^import os" klausmate/pdf_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
+created: 2026-08-24
+
+#### Comments
+- [2026-08-24 opus] Committed dec0195, filed retrospectively (diagnosed and fixed in one turn from Pouya's third live report). Root cause of ALL three no-sync rounds: pdf_drive missing 'import os' — the K-073 glue NameError'd inside its own failure guard on every call, invisible. Regression trap added at the glue layer (verified red on the recreated bug); fleet-wide AST name sweep clean. Also shipped: Anki-side moves/renames now move the real file (disappearing-move fix), live QFileSystemWatcher sync while the Library is open, PDFs no longer render as drop targets. Temp rescan breadcrumbs stay in until Pouya confirms.
