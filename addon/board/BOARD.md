@@ -7,9 +7,188 @@
 
 ## Backlog
 
+### K-058: After all this, I want to start working on the next few stages, like D and E.
+owner: -
+created: 2026-08-24
+
+### K-059: Single-window mode: tab shell + Browse as a tab
+owner: -
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/single_window.py,klausmate/__init__.py,klausmate/manage_models.py,tests/test_single_window.py
+verify: test -f klausmate/single_window.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_single_window.py
+created: 2026-08-24
+
+Pouya wants ONE window: pressing Browse switches to a Browse pane in the main
+window instead of opening a separate window. This card builds the shell and the
+Browse embed; AddCards/Library/Stats follow in later cards.
+
+VERIFIED FACTS (26.8.1 app_packages bytecode, 2026-08-24 — do not re-derive):
+- aqt.browser.browser.Browser is a QMainWindow with its own menubar
+  (menuEdit, menu_Notes, menu_Cards, menuFlag, menuJump, menu_Help) including
+  actionUndo / actionFind (Cmd-F) / actionSelectAll (Cmd-A) which COLLIDE with
+  the main window's actionUndo/actionRedo once both live in one window.
+- aqt.addcards.AddCards is also a QMainWindow (next card). Stats is a QDialog.
+- Toolbar links are plain pycmds (decks/browse/stats); Browse routes to
+  aqt.dialogs.open("Browser", mw). aqt.dialogs.register_dialog/open/markClosed
+  are public and re-registering the creator is the sanctioned intercept point.
+
+DESIGN (agreed):
+1. Shell: hoist mw.toolbarWeb ABOVE a QStackedWidget so the existing top
+   toolbar stays visible on every pane and acts as the tab bar (no new chrome —
+   "feels like Anki"). Page 0 = the existing central content (web + bottomWeb).
+   CRITICAL: detach the old central widget with setParent(None) BEFORE calling
+   mw.setCentralWidget(container) — setCentralWidget DELETES the previous one.
+   Fallback shell if Anki's fullscreen code fights the hoist: plain QTabWidget
+   as central widget with toolbarWeb left inside the Decks tab.
+2. Browse embed: re-register the "Browser" creator with a factory that
+   (a) temporarily no-ops Browser.show during __init__ (Browser.__init__ calls
+   self.show() — suppressing it avoids any window flash AND means we reparent
+   before first show, sidestepping the Cocoa mid-gesture reparent trap),
+   (b) setWindowFlags(Qt.WindowType.Widget), reparent into the stack,
+   (c) menuBar().setNativeMenuBar(False) so Browser's menus render as an
+   in-pane strip (native macOS menubar only serves top-level windows).
+3. Shortcuts: preferred strategy — widget-scope BOTH action sets
+   (setShortcutContext(WidgetWithChildrenShortcut) + pane_root.addAction(a) for
+   every menubar action, mw's and Browser's) so Cmd-Z/Cmd-F/Cmd-A resolve by
+   focus with zero ambiguity. Fallback: enable/disable arbiter on
+   currentChanged — but it must survive Anki's update_undo_actions, which
+   re-enables mw.form.actionUndo after every op. Ambiguous shortcuts are DEAD
+   keys (see CLAUDE.md gotcha), so an unresolved collision is a shipped bug:
+   enumerate both menubars' shortcuts at runtime and log any overlap.
+4. Lifecycle: Browser stays alive across tab switches; pressing Browse again
+   re-fronts the pane. Cmd-W / closeEvent still fires on a child widget —
+   markClosed bookkeeping keeps working; on close, remove the pane and switch
+   back to Decks. aqt.dialogs.closeAll (profile switch/quit) must still close it.
+5. Config gate single_window_mode (default True) surfaced in Klausmate
+   Preferences -> General. EVERY embed step wrapped in try/except that falls
+   back to stock window behavior — a failure here must degrade to normal Anki,
+   never a broken main window.
+
+TESTING: headless can only cover the logic (factory registration, action
+enumeration/scoping lists, config gate) via the aqt-stub pattern — the real
+verification is live: restart Anki, press Browse, check Cmd-Z/Cmd-F/Cmd-A in
+both panes, close with Cmd-W, switch profiles. Flag anything you cannot verify
+headlessly on the card for Pouya's restart queue.
+
+File overlap warning: K-056 (Add-panel PDF bar rework) also touches
+__init__.py — serialize via the board, never run concurrently.
+
+### K-060: Single-window mode: Add Cards as a tab
+owner: -
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: grep -q 'AddCards' klausmate/single_window.py
+created: 2026-08-24
+
+Depends on the shell card (same file — serial). AddCards is a QMainWindow
+(verified in 26.8.1 bytecode); embed it exactly like Browser: re-register the
+"AddCards" creator, suppress show() during __init__, clear window flags,
+reparent into the stack, setNativeMenuBar(False), widget-scope its actions.
+AddCards' menubar is small so the collision audit is quick, but run it anyway.
+Closing the Add pane must still run AddCards' unsaved-note guard
+(closeWithCallback path) — do not bypass its closeEvent.
+
+### K-061: Single-window mode: Library opens as a tab
+owner: -
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/pdf_drive.py,klausmate/single_window.py,klausmate/__init__.py
+verify: grep -q 'single_window' klausmate/pdf_drive.py
+created: 2026-08-24
+
+Depends on the shell card. The Library window is ours (pdf_drive), so this
+is the easy one: when single_window_mode is on, the top-toolbar Library link
+switches to a Library pane in the stack instead of opening a separate window.
+Keep the existing separate-window path intact for single_window_mode=False.
+refresh_open_library() must keep working for the embedded pane (its
+alive+visible guard should treat 'pane is current' as visible).
+
+### K-062: Single-window mode: Stats as a tab (follow-up)
+owner: -
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/single_window.py
+verify: grep -q 'Stats' klausmate/single_window.py
+created: 2026-08-24
+
+Optional follow-up once Browse/Add/Library tabs are proven live. Stats
+(NewDeckStats) is a QDialog, not a QMainWindow — embedding a QDialog as a pane
+also works (clear window flags) but its close/accept semantics differ; verify
+aqt.dialogs bookkeeping still balances. Deck Options, Preferences, Import and
+other genuinely modal dialogs STAY dialogs — single-window apps keep modals.
+
+### K-057: I want to have some Obsidian-like features for the library panel. Specifically, I want all of the PDFs that we import into the library to be hosted in a directory that points to a specific directory, and then you should be able to choose that directory right away. The first time you open the Anki app, it forces you to choose a directory to host the library in, and then you can change what that directory is.  All the PDFs are in that directory. The way the directory is controlled, the way the folders are arranged, is the same as in the library as well. If something is in a certain folder type, then all the PDFs are also arranged in that folder type in the library and also in the tags. Does that make sense?
+owner: -
+created: 2026-08-24
+
+#### Comments
+- [2026-08-24 opus] Held for grooming: this changes the storage architecture (a user-chosen disk directory becomes the source of truth; drive.json tree and tags mirror it — today nothing on disk moves and folders are virtual). Needs a design pass covering migration of existing user_files/pdfs, bake_annotations paths, rename/move sync direction, and missing-directory behavior. Also file-overlaps K-055 (pdf_drive, tag_sync). Will groom and launch after this swarm lands.
+
 ## Ready
 
 ## Doing
+
+### K-055: Retire the !Library::Matching preview tag (per-PDF tags replaced it)
+owner: sonnet-au
+tags: sonnet-safe,library-era
+files: klausmate/retention.py,klausmate/pdf_drive.py,klausmate/manage_models.py,klausmate/tag_migrate.py,klausmate/tag_sync.py,tests/test_tag_migrate.py
+verify: ! grep -qE "RETENTION_TAG|preview_matches|clear_pdfmatch_tag" klausmate/retention.py klausmate/pdf_drive.py klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya's screenshot: !Library::Matching lingers in the Browse tag sidebar.
+Root cause: retention.preview_matches (called from pdf_drive._on_browse ~:842,
+the Library right-click "Show matches in Browse") bulk-adds the temp tag
+RETENTION_TAG onto every matched note per preview and it never fully leaves.
+Since K-053 every indexed PDF has a DURABLE per-PDF tag holding exactly the
+matches above the current sensitivity — the temp preview vehicle is redundant.
+
+CHANGES (all call sites verified 2026-08-24; the only callers of the retiring
+functions are the two listed below — still grep before you delete):
+
+1. pdf_drive._on_browse (~:830-842): keep the existing guards ("Embed this PDF
+   first", "No cards above the current sensitivity"), but replace the
+   retention.preview_matches(mw, nids) tail with: tag = tag_sync.get_stored_tag(safe);
+   if tag -> browser = aqt.dialogs.open("Browser", mw); browser.search_for of
+   tag:"<tag>" (quote it — tag names contain no spaces by construction but
+   quote anyway). If no stored tag -> self.status.setText telling the user to
+   re-index this PDF to create its Library tag. No note mutation, no CollectionOp.
+
+2. retention.py: delete preview_matches, clear_pdfmatch_tag, RETENTION_TAG.
+   Do NOT touch the unrelated "Matching cards…" progress label (~:690).
+
+3. manage_models.py (~:1370-1381): the Clear-library-tag maintenance flow
+   counts RETENTION_TAG notes and calls clear_pdfmatch_tag(dlg, quiet=True) —
+   remove both; adjust its combined summary message accordingly.
+
+4. tag_migrate.py: (a) the legacy map entry "klaus::pdfmatch" ->
+   "!Library::Matching" (~:52) — remove the pair; renaming into a tag we are
+   abolishing is pointless. (b) Add a one-time idempotent cleanup that runs in
+   the same profile-open pass: for each of "klaus::pdfmatch" and
+   "!Library::Matching", if the tag exists, bulk_remove it from all carrying
+   notes AND col.tags.remove it so the empty entry leaves the sidebar. Skip
+   silently when neither exists (idempotency = structural, like plan_renames).
+   HARD CONTRACT: any CollectionOp op MUST return col.merge_undo_entries(pos)
+   — a plain return here crashed every profile open once (see run_migration's
+   docstring). Reuse/extend the existing op rather than adding a second one.
+
+5. tag_sync.py: COMMENTS ONLY — lines ~18, ~149, ~183 reference retention's
+   !Library::Matching; update the prose. Leave RESERVED_LEAVES exactly as is
+   ("matching" stays reserved so a PDF literally named Matching can never
+   collide with historical tags).
+
+TESTS: extend tests/test_tag_migrate.py with the cleanup (stub-col pattern
+already in the file): tag exists -> removed from notes + registry; neither
+tag exists -> no-op, op not launched; klaus::pdfmatch alone -> cleaned.
+TRAP: the test file ends with print(summary) + sys.exit() — insert new tests
+ABOVE that block or they silently never run (this bit us twice).
+
+#### Comments
+- [2026-08-24 Pouya] ![](attachments/cea1eabb6913859e.png) this is what keeps showing up
+- [2026-08-24 sonnet-au] Decisions: pdf_drive._on_browse now looks up tag_sync.get_stored_tag(safe) and opens Browse on that stored !Library tag directly (no note mutation, no CollectionOp) instead of retention.preview_matches; falls back to a status message telling the user to re-index when there's no stored tag yet. retention.py: deleted preview_matches, clear_pdfmatch_tag, and the RETENTION_TAG constant, plus the now-unused aqt/CollectionOp/tooltip imports (only QueryOp and mw are still used). manage_models.py's clear_library_tag keeps only the curation-tag half (curation.TEMP_TAG / clear_curation_tag) and its summary message dropped the PDF-match count. tag_migrate.py: removed the 'klaus::pdfmatch' -> '!Library::Matching' pair from TAG_RENAME_MAP and added MATCHING_TAGS_TO_REMOVE + plan_matching_cleanup (pure, structurally idempotent like plan_renames) — run_migration now also bulk_removes each retired tag from its notes and calls col.tags.remove on it, in the SAME undo entry/op as the rename batch; migrate_on_profile_open's pre-flight check now short-circuits only when both plan_renames AND plan_matching_cleanup are empty. tag_sync.py: comments-only prose updates at the module docstring, the RESERVED_LEAVES block, desired_tag's docstring, and _is_reserved_tag's docstring — all now describe !Library::Matching as retention.py's retired preview tag rather than a live one; RESERVED_LEAVES itself is untouched. Files: klausmate/retention.py, klausmate/pdf_drive.py, klausmate/manage_models.py, klausmate/tag_migrate.py, klausmate/tag_sync.py, tests/test_tag_migrate.py. Risks: run_migration's cleanup loop calls col.find_notes(f'tag:"{tag}"') then col.tags.bulk_remove before col.tags.remove — real Anki's tags.remove may already strip membership on its own, so the bulk_remove call could be a harmless no-op in production even though the FakeCol test double tracks it as a distinct call; worth a sanity check against a live collection if anyone's touching this path again. Also note manage_models.py's askUser copy changed from 'Clear the Klaus curation and PDF-match tags' to 'Clear the Klaus curation tag' (singular) since there's only one tag left to clear. Next: none — all five call-site changes and the tag_sync comment updates from the card body are done.
+- [2026-08-24 opus] REWORK (review finding, confirmed in code): migrate_on_profile_open early-returns on MIGRATED_FLAG (_library_tag_migrated) BEFORE the pre-flight — and that flag is already True on Pouya's profile from the original klaus::->!Library run. So the new Matching cleanup never executes for the exact user who reported the tag. Same failure class as the retired one-shot _threshold_default_migrated. Fix: add a second flag (e.g. _matching_tag_removed) guarding only the cleanup pass; proceed when EITHER flag is unset; empty pre-flight records both. Add the falsifying test first — 'rename flag already set, !Library::Matching present -> cleanup still runs' — confirm it is RED against the current commit, then green after.
 
 ## Review
 
@@ -73,3 +252,71 @@ Same safety/verify regime as K-053. Full suite green; py_compile via symlink; st
 - [2026-08-24 orchestrator] PREREQUISITES CONFIRMED against the landed K-053 module before launch, so build on these rather than re-deriving them: desired_tag(folder, display) :136 — the forward mapping you must re-apply when a reverse match is ambiguous. get_stored_tag(safe) :226 / set_stored_tag(safe, tag) :240 — prefs.json's 'tag' key, the exact record of what was last applied. This is what makes 'the stored tag is GONE' detectable at all; never infer it from the current display name. _folder_and_display(safe) :248, _safe(name) :220, RESERVED_LEAVES :90, library_tags_enabled(cfg) :99 — reuse all four, do not reimplement. drive_store.rename_display(user_files, safe, display) :115 and set_folder(user_files, safe, folder) :105 — the write side of the reverse direction. add_folder :126 exists if a renamed tag implies a folder that is not registered yet; set_folder auto-registers unknown paths, so check before adding a redundant call. Also note K-053's verified gate: I confirmed _run_sync_op is the ONLY CollectionOp in tag_sync and that every op returns col.merge_undo_entries(pos). If reconcile_from_tags mutates the collection at all, it goes through that same helper — do not add a second op path. One live-state fact worth knowing: Pouya's prefs.json is currently {} (he cleared every per-PDF override via the new apply-to-all prompt), so NO PDF has a stored 'tag' yet — reconcile must treat 'no stored tag' as simply nothing to reconcile, not as a missing tag to hunt for. That is the state your code will actually meet on his first run.
 - [2026-08-24 sonnet-at] Decisions: layered plan_reconcile(stored_by_safe, existing_tags) as pure decision core, fully unit-tested; reconcile_from_tags(col) is thin deferred-import glue around it (mirrors K-053's own pure/col-only/prefs-glue/aqt-glue layering). Ambiguity rule as implemented: per-safe, stored tag still in col.tags.all() -> untouched. Else it's in 'missing'. candidates = every !Library::-prefixed tag in the collection that is NOT any PDF's stored tag (missing or still-present) and not a root reserved leaf (_is_reserved_tag: exact !Library::Curating/Curated/Matching only, case-insensitive on the leaf -- nested e.g. !Library::Foo::Curating stays claimable, matching desired_tag's own root-only collision guard). len(missing)==1 and len(candidates)==1 -> confident rename (pure drive_store.rename_display + drive_store.set_folder + set_stored_tag writes, NO CollectionOp -- Anki's sidebar already moved every note's tag, nothing here touches col.tags). Any other shape (multiple missing, multiple candidates, zero candidates) -> 'reapply': _reapply_missing rebuilds each missing PDF's deterministic tag from its own cached matches.json scores via apply_membership, batched into exactly ONE _run_sync_op CollectionOp (no second CollectionOp path -- confirmed only call site). Tag->folder/display reversal is _tag_to_folder_display (underscore -> space per segment); _display_with_ext re-appends the OLD display's real .pdf/.txt extension so the Library does not lose file-type recognition on a confident rename. Called from: DriveWindow._refresh_rows (klausmate/pdf_drive.py, top of the method, before the QueryOp fires) -- in this card's file scope, done. Registration OWED to __init__.py (not in this card's files): gui_hooks.profile_did_open.append(tag_sync.reconcile_on_profile_open) -- written and documented in tag_sync.py but not wired, per the card's own instruction not to reach into __init__.py. Files: klausmate/tag_sync.py (plan_reconcile + _is_reserved_tag + _tag_to_folder_display + _display_with_ext + reconcile_from_tags + reconcile_on_profile_open + _reapply_missing, plus a docstring update noting the reverse direction now lives here), klausmate/pdf_drive.py (one-line reconcile_from_tags(mw.col) call at the top of _refresh_rows), tests/test_tag_migrate.py (27 new checks: 93 passed in that file, full 6-file suite now 380 vs the confirmed 353 baseline -- exactly +27, no regressions elsewhere). Lossy mapping: documented in _tag_to_folder_display's docstring and covered by a direct test (!Library::Week_3_Notes -> (None, 'Week 3 Notes') -- a genuine underscore reads back as a space, no escaping scheme added, per the card's instruction. Risks: reconcile_from_tags's own deferred-import body (prefs.json load, drive_store writes, the ambiguous-case CollectionOp) could NOT be verified headlessly -- retention.py pulls in curation.py's aqt.qt/gui_hooks/anki.collection surface, which this suite's minimal stub deliberately does not cover (same documented boundary K-053's sync_after_matches etc. already live with). Only the pre-import kill-switch short-circuit on reconcile_from_tags itself is directly tested; every ambiguity-rule branch is proven at the plan_reconcile level instead, which is where that logic actually lives and is untangled from aqt entirely. Qt cannot instantiate headlessly on this machine at all, so nothing here was tested against a live Anki/real collection -- stating that plainly rather than implying otherwise. Next: none from me -- the __init__.py registration line is the one remaining wire-up, owed as stated above.
 - [2026-08-24 orchestrator] Signed off, with three closures from me on top. THE INFERENCE LOGIC IS RIGHT, and I falsified it rather than reading it: replacing the strict `len(missing) == 1 and len(candidates) == 1` guard with a naive `len(candidates) >= 1` turns 3 checks red. So the tests genuinely pin the ambiguity rule — a greedy implementation cannot pass. plan_reconcile is pure (no col, no prefs, no drive_store), which is what made that falsification possible at all. Confirmed exactly ONE CollectionOp call site remains in the module (:457) — the confident-rename path deliberately mutates nothing in the collection, since Anki's own sidebar rename already moved every note, and only the ambiguous reapply routes through _run_sync_op. The OpChanges contract holds. MY THREE FIXES: 1. Registered reconcile_on_profile_open on profile_did_open (owed, __init__.py out of scope), ordered right after tag_migrate's hook so it cannot race a rename the migration is performing. Without this the reverse direction only fired on a Library refresh — sidebar renames would have looked ignored until you opened the Library. That is the difference between the feature working and appearing not to. 2. reconcile_from_tags' docstring puts the None-check on callers; pdf_drive called it bare. Safe TODAY only because it returns early while no PDF has a stored tag — once tags exist, a closing profile logs a spurious failure every refresh. Guarded at the call site. 3. Updated the docstring still claiming registration was owed. Suite 380, py_compile clean in-repo and through the symlink. Untestable here as the worker stated: the deferred-import body needs the full aqt surface, so the glue is verified by review and the decision core by the pure tests.
+
+### K-056: Editor: replace the bottom PDF bar with a "Library..." button left of Fields...
+owner: opus
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py,klausmate/web/copilot.js
+verify: grep -q "notetypeButtons" klausmate/__init__.py && ! grep -qE "_PdfBar|_KlausmatePanel|Drop a PDF to view" klausmate/__init__.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya (screenshots on card): remove the bottom PDF bar from the editor
+("Measures_… [Browse…] Remove ◧") entirely. Add a button named EXACTLY
+"Library..." at the TOP LEFT of the editor toolbar — to the LEFT of the
+"Fields..." button, i.e. inside Anki's notetype button group, not the addon
+group on the right. From it you choose PDFs already in the library; you can
+NOT add new PDFs from the editor anymore (the Library window's drop zone is
+the only add path).
+
+VERIFIED API (extracted from 26.8.1 aqt/editor.pyc — Anki itself injects raw
+HTML buttons into that exact group):
+  uiPromise.then((noteEditor) => noteEditor.toolbar.notetypeButtons.appendButton(
+      { component: editorToolbar.Raw, props: { html: ... } }, -1));
+Both uiPromise and editorToolbar are globals in the editor webview. For
+LEFTMOST placement use insertButton(button, 0) (inserts BEFORE index 0);
+fall back to appendButton(button, 0) if insertButton is undefined, and log
+which path ran — final left-of-Fields placement is a live check for Pouya.
+Run the eval per-editor from gui_hooks.editor_did_init (each editor webview
+has exactly one NoteEditor, so instances[0]/the uiPromise arg is safe).
+
+BUTTON BEHAVIOR: html <button> with onclick pycmd('klausmate:library:<b64 {}>')
+— the bridge in on_js_message already routes klausmate:<action>:<b64> (only
+focus/crop/log/dbg remain; add 'library'). Handler = the old bar toggle role:
+if the PDF panel is visible -> panel_hide(); if hidden -> panel_show(), and
+when no tab is open, immediately pop the stored-PDF picker (_show_add_menu)
+so the user lands in "choose from the library". Style the button to not look
+alien next to Fields.../Cards... (a bare <button> gets browser-default
+styling; borrow the neighboring buttons' classes or minimal inline style —
+visual check is Pouya's).
+
+REMOVALS: _PdfBar class (~:653-850) and its host wiring in _KlausmatePanel
+(~:851+). _KlausmatePanel exists to host the bar below the Tags row — if
+nothing else remains in it, delete the panel and its editor-layout insertion
+too. PRESERVE the logic the bar delegated to (remove-current-pdf, toggle,
+_ensure_sidebar_pdf) by moving what the new handler needs; per-tab close
+buttons and the panel header's ◫/＋ controls already cover the rest (verified:
+header has thumbs toggle, ＋ add menu, per-tab close, page indicator).
+Also remove the filesystem "Browse…" entry from the container's ＋ menu
+(~:2255) — the menu lists ONLY stored library PDFs now. Grep before every
+delete; anything else that references a removed symbol must be resolved, not
+commented out.
+
+copilot.js is in the files list in case the eval approach needs a JS-side
+assist (e.g. re-inserting after notetype switches rebuild the toolbar — test
+switching Type in the Add window mentally: if the group re-renders, the
+button must come back; a MutationObserver in copilot.js is the fallback).
+
+Headless coverage is limited to py_compile + greps; the placement, styling,
+toggle behavior, and notetype-switch survival all go on Pouya's restart queue
+— list them explicitly in your handoff comment.
+
+#### Comments
+- [2026-08-24 Pouya] ![](attachments/d995a104801b8de0.png) This is what I am referring to
+- [2026-08-24 Pouya] You can honsetly just place it at the top near all of the other buttons
+- [2026-08-24 Pouya] ![](attachments/729bf33906c9089c.png)
+- [2026-08-24 Pouya] This is what I mean by the top
+- [2026-08-24 Pouya] Ensure that it is on the top Left side of you place it at the top, like to the left of Fields..., and name it "Library..."
+- [2026-08-24 opus] Live crash report from Pouya mid-task (restarted Anki against the half-edited tree): NameError _KlausmatePanel at __init__.py:2135 in _install_klaus_bar. Expected transient state, but it pins the must-fix: _install_klaus_bar (~:2103-2161, QTimer.singleShot install path) must be rewritten or removed along with the class. Verify gate now also rejects any _KlausmatePanel reference — py_compile cannot catch dangling names, greps can.
+- [2026-08-24 opus] Handoff: sonnet-av built the button machinery (HTML/JS injection with insertButton-then-appendButton, polling for page globals, script-escape guard, toggle handler, module-level _ensure_sidebar_pdf) then was stopped mid-task; the half-edited tree crashed live Anki (NameError _KlausmatePanel at :2135). Opus completed the rewiring: editor-init now evals the button JS (AnkiWebView.eval queues until page load; the JS polls for globals), bridge routes 'library' via singleShot (menu exec must not run in the webchannel handler), both dead panel refs deleted, + menu lost its filesystem Browse... and gained a disabled empty-state hint, QDialogButtonBox/QFileDialog/QFrame imports trimmed, copilot.js re-mounts the button after notetype switches. Verify gate PASS; py_compile through symlink ok; full suite 68/57/60/20/82/113 all green; leftover sweep clean (remaining QFileDialog/QDialogButtonBox hits are deck_curate/pdf_drive's own legitimate uses). LIVE CHECKS for Pouya: placement left of Fields..., styling, toggle, notetype-switch survival, empty-Library hint.
+- [2026-08-24 opus] Signed off: headless criteria all met (gate, compile, suite, sweep). Live-only items stay on the restart queue and were listed in the handoff — if any fail on restart, reopen this card rather than filing fresh.
