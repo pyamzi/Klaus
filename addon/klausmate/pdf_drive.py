@@ -18,7 +18,7 @@ re-aggregate instantly without touching the collection.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import aqt
 from aqt import gui_hooks, mw
@@ -186,6 +186,145 @@ class _LibraryTree(QTreeWidget):
                 pass
 
 
+class _LibraryDropZone(QWidget):
+    """Drop-a-PDF square for the bottom of the Library's left pane.
+
+    The Library is the one PDF surface with no way to add a PDF at all —
+    its own empty state used to just point elsewhere. Every OTHER PDF
+    entry point (deck browser, deck overview, editor's PDF bar) already
+    has one of these; this closes the gap.
+
+    Those three squares are two different implementations for two
+    different hosts. deck_curate._drop_square_html() renders one as HTML
+    with pycmd() onclick handlers for the deck browser/overview, which
+    are webviews. This pane is a plain QTreeWidget + QVBoxLayout — no
+    webview, no bridge — so that HTML has nothing to attach pycmd() to.
+    __init__._PdfBar is the precedent for the native-Qt version:
+    setAcceptDrops(True), a "dragOver" dynamic property toggled in
+    dragEnter/dragLeave via style().unpolish/polish for hover feedback,
+    and a dropEvent that hands matched .pdf paths to a plain Python
+    callback. This class follows that exact shape rather than hosting a
+    QWebEngineView for one box. One deliberate difference: _PdfBar bases
+    itself on QFrame (+ setFrameShape(StyledPanel)) to get its stylesheet
+    border painted; this class stays on QWidget and sets
+    WA_StyledBackground instead, because tests/test_drive.py stubs
+    aqt.qt with its own fixed, non-permissive name list (unlike the
+    permissive stub anki_stubs.py provides elsewhere) and QFrame is not
+    in it — adding it would mean editing a file outside this card's
+    scope (klausmate/pdf_drive.py only). WA_StyledBackground on QWidget
+    paints the same stylesheet border/background QFrame would.
+
+    Unlike either existing square, this one never arms a PDF for
+    curation (armed/× is deck-screen semantics — the Library's job here
+    is only "get the file into the store and show it in the tree").
+
+    Style values (idle border/radius, font-size, Browse-button chrome)
+    are copied from deck_curate._drop_square_html() rather than shared,
+    because this card's file scope is pdf_drive.py only and sharing them
+    would mean also editing deck_curate.py. __init__._PdfBar already
+    duplicates the same values for the same reason (see its docstring) —
+    this makes three copies where until now there were two. Owed: pull
+    idle-square border/radius/font-size/Browse-button styling into one
+    module all three can import from. If you change these values here,
+    update deck_curate._drop_square_html and __init__._PdfBar to match,
+    and vice versa.
+    """
+
+    _IDLE_TEXT = "Drop a PDF here to add it to your library."
+
+    def __init__(
+        self,
+        on_paths: Callable[[list[str]], None],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._on_paths = on_paths
+        self.setAcceptDrops(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("klausmateLibraryDropZone")
+        self.setStyleSheet(
+            "#klausmateLibraryDropZone {"
+            " border: 1px dashed rgba(128, 128, 128, 0.55);"
+            " border-radius: 10px;"
+            " background: transparent;"
+            "}"
+            "#klausmateLibraryDropZone[dragOver=\"true\"] {"
+            " border: 1px solid rgba(58, 130, 247, 0.85);"
+            "}"
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(6)
+
+        label = QLabel(self._IDLE_TEXT, self)
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet(
+            "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
+        )
+        lay.addWidget(label)
+
+        browse_btn = QPushButton("Browse…", self)
+        browse_btn.setFlat(True)
+        browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse_btn.setStyleSheet(
+            "QPushButton {"
+            " border: 1px solid rgba(128, 128, 128, 0.55);"
+            " border-radius: 6px;"
+            " font-size: 12px;"
+            " padding: 3px 10px;"
+            " background: transparent;"
+            "}"
+            "QPushButton:hover {"
+            " border-color: rgba(58, 130, 247, 0.55);"
+            "}"
+        )
+        browse_btn.clicked.connect(self._browse)
+        lay.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def _browse(self) -> None:
+        from aqt.qt import QFileDialog
+
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Import PDF", "", "PDF files (*.pdf)"
+        )
+        if paths:
+            self._on_paths(list(paths))
+
+    def dragEnterEvent(self, e) -> None:  # type: ignore[override]
+        md = e.mimeData()
+        if md and md.hasUrls():
+            for url in md.urls():
+                if url.toLocalFile().lower().endswith(".pdf"):
+                    self.setProperty("dragOver", "true")
+                    self.style().unpolish(self)
+                    self.style().polish(self)
+                    e.acceptProposedAction()
+                    return
+        e.ignore()
+
+    def dragLeaveEvent(self, e) -> None:  # type: ignore[override]
+        self.setProperty("dragOver", "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def dropEvent(self, e) -> None:  # type: ignore[override]
+        self.setProperty("dragOver", "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        md = e.mimeData()
+        if not md:
+            return
+        paths = [
+            url.toLocalFile()
+            for url in md.urls()
+            if url.toLocalFile().lower().endswith(".pdf")
+        ]
+        if paths:
+            self._on_paths(paths)
+        e.acceptProposedAction()
+
+
 class DriveWindow(QWidget):
     """Standalone library window. Managed by aqt.dialogs."""
 
@@ -251,6 +390,9 @@ class DriveWindow(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.cancel_btn.setVisible(False)
         lay.addWidget(self.cancel_btn)
+
+        self.drop_zone = _LibraryDropZone(self._on_dropped_paths, left)
+        lay.addWidget(self.drop_zone)
 
         # ---- right: the existing viewer ----
         from .pdf_viewer import PdfSidebar
@@ -695,6 +837,30 @@ class DriveWindow(QWidget):
         except Exception as e:
             print(f"[klausmate] drive open failed for {safe}: {e}")
             showWarning(f"Could not open that PDF.\n\n{e}")
+
+    def _on_dropped_paths(self, paths: list[str]) -> None:
+        """Import PDFs dropped on, or picked via Browse… in, the drop
+        zone. Reaches the same import_pdf_file() every other PDF entry
+        point uses (its own docstring already names "drive window" as a
+        caller) so a file lands in the store exactly like it would from
+        the deck screen or the editor's PDF bar — the only difference is
+        what happens after: no arm(), just a tree rebuild so the new PDF
+        shows up immediately. Arming is deck-screen semantics; the
+        Library's job here stops at "get it into the store and visible."
+        """
+        from . import import_pdf_file
+
+        imported = 0
+        for path in paths:
+            try:
+                name = import_pdf_file(path)
+            except Exception as e:
+                print(f"[klausmate] library import failed for {path}: {e}")
+                continue
+            if name:
+                imported += 1
+        if imported:
+            self.rebuild_tree()
 
     def _new_folder(self, parent_path: str | None = None) -> str | None:
         name, ok = QInputDialog.getText(self, "New folder", "Folder name:")
