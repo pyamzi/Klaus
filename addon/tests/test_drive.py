@@ -250,7 +250,7 @@ qt_names = {n: _Any for n in (
     "QAction", "QComboBox", "QCursor", "QDialog", "QDialogButtonBox", "QLabel",
     "QMenu", "QTimer", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QSlider",
     "QSplitter", "QTreeWidget", "QTreeWidgetItem", "QWidget", "QInputDialog",
-    "QMessageBox", "QAbstractItemView", "qconnect")}
+    "QMessageBox", "QAbstractItemView", "QFileSystemWatcher", "qconnect")}
 # Qt is an enum namespace, not a base class — an instance chains attributes
 # (Qt.ItemDataRole.UserRole is read at import time in pdf_drive).
 qt_names["Qt"] = _Any()
@@ -388,6 +388,35 @@ pdf_drive.refresh_open_library()
 check("dead C++ handle is not refreshed", w3.refreshes == 0)
 pdf_drive._instance = None
 
+
+
+print("== rescan_library_root glue runs end-to-end (K-075 regression trap) ==")
+# The K-073 glue shipped WITHOUT `import os` in pdf_drive: every live call
+# died on a NameError inside its own failure guard, the folder never
+# synced, and stdout swallowed the evidence — while the pdf_handler
+# engine tests stayed green, because nothing ever exercised the GLUE.
+# This does, so a dangling name in it can never ship silently again.
+_g_uf = tempfile.mkdtemp(prefix="drive_glue_uf_")
+_g_root = tempfile.mkdtemp(prefix="drive_glue_root_")
+os.makedirs(os.path.join(_g_uf, "contexts"))
+pkg.USER_FILES = _g_uf
+_ph = importlib.import_module("klausmate.pdf_handler")
+_orig_llr = _ph._live_library_root
+_ph._live_library_root = lambda: _g_root
+try:
+    _g_summary = pdf_drive.rescan_library_root()
+finally:
+    _ph._live_library_root = _orig_llr
+check(
+    "glue returns a summary dict (not the failure-path None)",
+    isinstance(_g_summary, dict),
+    repr(_g_summary),
+)
+check(
+    "empty root -> quiet summary",
+    bool(_g_summary) and _g_summary.get("moved") == [] and _g_summary.get("ingested") == [],
+    repr(_g_summary),
+)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

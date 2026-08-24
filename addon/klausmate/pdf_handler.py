@@ -718,6 +718,93 @@ def migrate_to_root(
     return result
 
 
+# ------------------------------------------------- Anki -> disk moves
+
+
+def move_mapped_file(
+    user_files_dir: str, root: str, safe: str, folder: str | None
+) -> str | None:
+    """Anki -> disk half of the two-way sync (K-075): a Library-tree move
+    moves the FILE, so the disk-truth rescan agrees with the user's move
+    instead of reverting it on the next pass. Returns the new rel, the
+    unchanged rel when already in place, or None when nothing is mapped
+    or the file is missing (legacy store, unplugged root — no-op)."""
+    mapping = load_library_map(user_files_dir)
+    rel = mapping.get(safe)
+    if not rel:
+        return None
+    src = os.path.join(root, rel)
+    if not os.path.isfile(src):
+        return None
+    dest_dir = root
+    if isinstance(folder, str) and folder.strip():
+        for part in folder.split("/"):
+            part = part.strip()
+            if part and part != "..":
+                dest_dir = os.path.join(dest_dir, part)
+    if os.path.realpath(dest_dir) == os.path.realpath(os.path.dirname(src)):
+        return rel
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = _unique_path(dest_dir, os.path.basename(rel))
+    shutil.move(src, dest)
+    mapping[safe] = os.path.relpath(dest, root)
+    save_library_map(user_files_dir, mapping)
+    return mapping[safe]
+
+
+def rename_mapped_file(
+    user_files_dir: str, root: str, safe: str, display: str
+) -> str | None:
+    """Library rename -> disk rename (K-075), same contract as
+    ``move_mapped_file``. The filename follows ``_library_filename`` —
+    the same normalizer the rescan uses to decide a display still
+    corresponds to its file, so rename and rescan can never disagree."""
+    mapping = load_library_map(user_files_dir)
+    rel = mapping.get(safe)
+    if not rel:
+        return None
+    src = os.path.join(root, rel)
+    if not os.path.isfile(src):
+        return None
+    filename = _library_filename(display, safe)
+    if os.path.basename(rel) == filename:
+        return rel
+    dest = _unique_path(os.path.dirname(src), filename)
+    shutil.move(src, dest)
+    mapping[safe] = os.path.relpath(dest, root)
+    save_library_map(user_files_dir, mapping)
+    return mapping[safe]
+
+
+def rename_mapped_folder(
+    user_files_dir: str, root: str, old: str, new: str
+) -> bool:
+    """Library folder rename -> disk directory rename (K-075). Refuses a
+    merge into an existing destination (returns False, tree-only rename
+    stands and the next rescan re-derives from disk). Rewrites every
+    mapping rel under the old prefix."""
+    src = os.path.join(root, *[p for p in old.split("/") if p])
+    dst = os.path.join(root, *[p for p in new.split("/") if p])
+    if not os.path.isdir(src) or os.path.exists(dst):
+        return False
+    parent = os.path.dirname(dst)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    os.rename(src, dst)
+    mapping = load_library_map(user_files_dir)
+    old_prefix = old.rstrip("/") + "/"
+    changed = False
+    for safe, rel in list(mapping.items()):
+        rel_fwd = rel.replace(os.sep, "/")
+        if rel_fwd.startswith(old_prefix):
+            tail = rel_fwd[len(old_prefix):]
+            mapping[safe] = os.path.join(*[p for p in (new + "/" + tail).split("/") if p])
+            changed = True
+    if changed:
+        save_library_map(user_files_dir, mapping)
+    return True
+
+
 # ------------------------------------------------- folder -> Anki sync
 
 

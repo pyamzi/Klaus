@@ -1003,5 +1003,57 @@ _dr2 = pdf_handler.rescan_root(dr_user, dr_root, drive_store.load(dr_user)["pdfs
 check("second rescan is fully quiet (converged)",
       _dr2["moved"] == [] and _dr2["tree_changed"] == [])
 
+
+print("== Anki -> disk file moves (K-075) ==")
+ad_user = tempfile.mkdtemp(prefix="klaus_test_ad_user_")
+ad_root = tempfile.mkdtemp(prefix="klaus_test_ad_root_")
+os.makedirs(os.path.join(ad_user, "contexts"))
+os.makedirs(os.path.join(ad_root, "Anatomy"))
+with open(os.path.join(ad_root, "Lec One.pdf"), "wb") as f:
+    f.write(b"%PDF-one")
+with open(os.path.join(ad_root, "Anatomy", "Lec Two.pdf"), "wb") as f:
+    f.write(b"%PDF-two")
+pdf_handler.save_library_map(ad_user, {"Lec_One": "Lec One.pdf",
+                                       "Lec_Two": os.path.join("Anatomy", "Lec Two.pdf")})
+
+_m1 = pdf_handler.move_mapped_file(ad_user, ad_root, "Lec_One", "Anatomy/Week 1")
+check("tree move relocates the file on disk",
+      _m1 == os.path.join("Anatomy", "Week 1", "Lec One.pdf")
+      and os.path.isfile(os.path.join(ad_root, "Anatomy", "Week 1", "Lec One.pdf"))
+      and not os.path.isfile(os.path.join(ad_root, "Lec One.pdf")), str(_m1))
+check("move to root works too",
+      pdf_handler.move_mapped_file(ad_user, ad_root, "Lec_Two", None) == "Lec Two.pdf"
+      and os.path.isfile(os.path.join(ad_root, "Lec Two.pdf")))
+check("already-in-place move is a no-op returning the rel",
+      pdf_handler.move_mapped_file(ad_user, ad_root, "Lec_Two", None) == "Lec Two.pdf")
+check("unmapped safe -> None, nothing thrown",
+      pdf_handler.move_mapped_file(ad_user, ad_root, "Ghost", "Anywhere") is None)
+# Collision: another file already holds the destination name.
+with open(os.path.join(ad_root, "Anatomy", "Week 1", "Lec Two.pdf"), "wb") as f:
+    f.write(b"squatter")
+_m2 = pdf_handler.move_mapped_file(ad_user, ad_root, "Lec_Two", "Anatomy/Week 1")
+check("destination collision suffixes, never overwrites",
+      _m2 == os.path.join("Anatomy", "Week 1", "Lec Two (1).pdf")
+      and open(os.path.join(ad_root, "Anatomy", "Week 1", "Lec Two.pdf"), "rb").read() == b"squatter")
+
+print("== Anki -> disk renames (K-075) ==")
+_r1 = pdf_handler.rename_mapped_file(ad_user, ad_root, "Lec_One", "Renamed Lecture")
+check("display rename renames the file (with .pdf appended)",
+      _r1 == os.path.join("Anatomy", "Week 1", "Renamed Lecture.pdf")
+      and os.path.isfile(os.path.join(ad_root, "Anatomy", "Week 1", "Renamed Lecture.pdf")))
+check("same-name rename is a no-op",
+      pdf_handler.rename_mapped_file(ad_user, ad_root, "Lec_One", "Renamed Lecture.pdf") == _r1)
+
+print("== Anki -> disk folder renames (K-075) ==")
+check("folder rename moves the directory and rewrites mapping rels",
+      pdf_handler.rename_mapped_folder(ad_user, ad_root, "Anatomy/Week 1", "Anatomy/Intro Week")
+      and os.path.isdir(os.path.join(ad_root, "Anatomy", "Intro Week"))
+      and pdf_handler.load_library_map(ad_user)["Lec_One"]
+      == os.path.join("Anatomy", "Intro Week", "Renamed Lecture.pdf"))
+os.makedirs(os.path.join(ad_root, "Clash"))
+check("rename refuses to merge into an existing directory",
+      pdf_handler.rename_mapped_folder(ad_user, ad_root, "Anatomy", "Clash") is False
+      and os.path.isdir(os.path.join(ad_root, "Anatomy")))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

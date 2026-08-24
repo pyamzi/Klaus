@@ -18,6 +18,7 @@ re-aggregate instantly without touching the collection.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 import aqt
@@ -26,6 +27,8 @@ from aqt.operations import QueryOp
 from aqt.qt import (
     QAbstractItemView,
     QDialog,
+    QFileSystemWatcher,
+    QTimer,
     QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
@@ -58,6 +61,19 @@ def _user_files() -> str:
     return USER_FILES
 
 
+def _dbg(msg: str) -> None:
+    """K-075 TEMP DIAGNOSTICS — remove once folder sync is confirmed live.
+    The profile-open rescan silently no-ops on Pouya's machine and stdout
+    is invisible; this localizes where the chain dies."""
+    try:
+        import time as _time
+
+        with open("/tmp/klausmate-debug.txt", "a", encoding="utf-8") as fh:
+            fh.write(f"{_time.strftime('%H:%M:%S')} drive: {msg}\n")
+    except Exception:
+        pass
+
+
 def rescan_library_root() -> dict | None:
     """Folder -> Anki half of the two-way Library sync (K-073).
 
@@ -70,7 +86,9 @@ def rescan_library_root() -> dict | None:
     every Library refresh and must never break either).
     """
     try:
+        _dbg("rescan: entered")
         root = pdf_handler._live_library_root()
+        _dbg(f"rescan: root={root!r} isdir={bool(root and os.path.isdir(root))}")
         if not root or not os.path.isdir(root):
             return None
         uf = _user_files()
@@ -82,6 +100,7 @@ def rescan_library_root() -> dict | None:
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
         summary = pdf_handler.rescan_root(uf, root, folders)
+        _dbg(f"rescan: summary={summary}")
         # tree_changed, not moved: the tags follow folder+display, and
         # those can change for entries the mapping already knew about
         # (drift repair — see rescan_root's tree loop).
@@ -95,6 +114,9 @@ def rescan_library_root() -> dict | None:
             tag_sync.sync_after_folder_rename(mw, touched)
         return summary
     except Exception as exc:  # noqa: BLE001
+        import traceback as _tb
+
+        _dbg(f"rescan: FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
         print(f"[klausmate] library rescan failed: {exc}")
         return None
 
@@ -389,6 +411,26 @@ class DriveWindow(QWidget):
         self.matches: dict = {}
         self.rows: dict[str, dict] = {}
 
+        # LIVE folder -> Anki sync (K-075): watch the root and its
+        # subdirectories while the window is open; a Finder move fires
+        # directoryChanged, the debounce absorbs the burst (Finder emits
+        # several per move), and the refresh runs the normal rescan. The
+        # watch list is re-armed after every refresh because moved/new
+        # directories fall off a QFileSystemWatcher silently.
+        try:
+            self._fs_watcher = QFileSystemWatcher(self)
+            self._fs_debounce = QTimer(self)
+            self._fs_debounce.setSingleShot(True)
+            self._fs_debounce.setInterval(700)
+            self._fs_debounce.timeout.connect(self._refresh_rows)
+            self._fs_watcher.directoryChanged.connect(
+                lambda _p: self._fs_debounce.start()
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] library watcher unavailable: {e}")
+            self._fs_watcher = None
+            self._fs_debounce = None
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -579,6 +621,14 @@ class DriveWindow(QWidget):
             else _LibraryItem(self.tree, [pdf["display"]])
         )
         item.setData(0, _ROLE_SAFE, pdf["safe"])
+        # A PDF must never LOOK like a drop target (K-075): the model
+        # already resolved such drops to the PDF's parent folder, but the
+        # indicator invited "moving a PDF into a PDF". Folders keep the
+        # default drop-enabled flag.
+        try:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsDropEnabled)
+        except Exception:
+            pass
         item.setToolTip(0, pdf["safe"])
         self._apply_row(item, self.rows.get(pdf["safe"]))
         return item
@@ -703,6 +753,28 @@ class DriveWindow(QWidget):
 
     # -------------------------------------------------------- retention
 
+    def _rearm_fs_watcher(self) -> None:
+        """Point the watcher at the root and every current subdirectory.
+        Cheap (a handful of paths) and idempotent; called after every
+        refresh so directories created or renamed on disk keep firing."""
+        w = getattr(self, "_fs_watcher", None)
+        if w is None:
+            return
+        try:
+            root = pdf_handler._live_library_root()
+            old = list(w.directories())
+            if old:
+                w.removePaths(old)
+            if not root or not os.path.isdir(root):
+                return
+            paths = [root]
+            for dirpath, dirnames, _files in os.walk(root):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                paths.extend(os.path.join(dirpath, d) for d in dirnames)
+            w.addPaths(paths)
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] library watcher re-arm failed: {e}")
+
     def _refresh_rows(self) -> None:
         if mw is None or mw.col is None:
             return
@@ -718,6 +790,7 @@ class DriveWindow(QWidget):
         # structure, the tree follows it, and the tag reconcile below
         # then works against the freshly-synced tree (K-073).
         rescan_library_root()
+        self._rearm_fs_watcher()
         if mw.col is not None:
             tag_sync.reconcile_from_tags(mw.col)
         seq = self.seq
@@ -1007,11 +1080,30 @@ class DriveWindow(QWidget):
         )
         if ok and (name or "").strip():
             drive_store.rename_display(_user_files(), safe, name.strip())
+            # Disk rename follows the display rename (K-075).
+            try:
+                root = pdf_handler._live_library_root()
+                if root and os.path.isdir(root):
+                    pdf_handler.rename_mapped_file(
+                        _user_files(), root, safe, name.strip()
+                    )
+            except Exception as e:  # noqa: BLE001
+                print(f"[klausmate] disk rename failed for {safe!r}: {e}")
             self.rebuild_tree()
             tag_sync.sync_after_rename(mw, safe)
 
     def _move_pdf(self, safe: str, folder: str | None) -> None:
         drive_store.set_folder(_user_files(), safe, folder)
+        # Anki -> disk half (K-075): the FILE follows the tree move, so
+        # the disk-truth rescan agrees with it instead of snapping the
+        # tree back on the next pass — which read as "my move just
+        # disappeared" live.
+        try:
+            root = pdf_handler._live_library_root()
+            if root and os.path.isdir(root):
+                pdf_handler.move_mapped_file(_user_files(), root, safe, folder)
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] disk move failed for {safe!r}: {e}")
         self.rebuild_tree()
         tag_sync.sync_after_rename(mw, safe)
 
