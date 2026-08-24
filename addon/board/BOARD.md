@@ -107,6 +107,36 @@ Full suite must be green at the end — that is the whole point of this card. py
 
 ## Doing
 
+## Review
+
+## Done
+
+### K-036: A6: don't route cloud-provider users to the Ollama install page
+owner: orchestrator
+priority: P1
+tags: sonnet-safe,removal,library-era
+files: klausmate/manage_models.py
+verify: grep -q '_needs_local_runtime' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+BLOCKED until K-030 (A3) is Done — same file. Re-confirm the bug still exists before starting; K-030 rewrites much of this dialog and may have changed the shape of the fix (but its card did not mention this issue, so it most likely persists).
+
+Found by sonnet-ab while doing K-029, and independently confirmed by the orchestrator: manage_models.py's refresh() does 'if not ollama_reachable(ep): show_install_page()' with NO provider check (~:524 and ~:532 pre-K-030). So a user on the DEFAULT cloud provider (Voyage) who opens Manage models is dumped on a page reading 'Could not reach Ollama at http://localhost:11434' and offered a ~1GB runtime install they will never need.
+
+This defeats the whole point of K-029, which made Ollama optional for the passive per-profile-open flow. The proactive path — the user actually clicking 'Manage models…' — still assumes Ollama is mandatory.
+
+FIX: add a single helper, _needs_local_runtime(cfg) -> bool, returning True only when embeddings.provider_name(cfg) == 'ollama'. Gate the install-page routing on it. A cloud-provider user must land on the normal models page regardless of whether an Ollama server is reachable; the local model library section can show a quiet inline note ('Local models need Ollama, which isn't running') instead of hijacking the whole dialog. A user who switches the provider combo TO ollama, or who clicks something that needs a local model (Pull), should still be able to reach the install page — do not make it unreachable, just stop making it the default landing.
+
+Keep the K-009 one-click Get key / Pull it dispatcher and the single-.connect discipline intact.
+
+Constraint: this file only. Full suite must be green INCLUDING tests/test_dialog_logic.py (K-032 will have rewritten it around the embedding rows by the time this runs — if it has not, say so and coordinate rather than editing tests here). py_compile through the Anki symlink.
+
+Done when: verify passes and a Voyage-configured profile can open Manage models, see its key state, and never be shown the Ollama install page.
+
+#### Comments
+- [2026-08-23 orchestrator] SUPERSEDED by K-039, which absorbs this card's entire scope (the _needs_local_runtime helper and the install-page routing gate) as its part 5. Both cards edit manage_models.py's refresh()/sync_embed_widgets() territory, so folding them avoids a pointless serial pipeline on the same file. Closing this one; the work is not dropped.
+
 ### K-039: B4: Manage models layout polish, index-safety, and cloud-user routing
 owner: sonnet-af
 priority: P0
@@ -153,32 +183,6 @@ Qt cannot be instantiated headlessly on this machine, so alignment/width/warning
 
 Done when: verify passes, labels are left-aligned, the search-model combo is readable, no inline warning remains, an empty model field can no longer silently orphan an index, a destructive rebuild asks first, and a Voyage user never sees the install page.
 
-## Review
-
-## Done
-
-### K-036: A6: don't route cloud-provider users to the Ollama install page
-owner: orchestrator
-priority: P1
-tags: sonnet-safe,removal,library-era
-files: klausmate/manage_models.py
-verify: grep -q '_needs_local_runtime' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-BLOCKED until K-030 (A3) is Done — same file. Re-confirm the bug still exists before starting; K-030 rewrites much of this dialog and may have changed the shape of the fix (but its card did not mention this issue, so it most likely persists).
-
-Found by sonnet-ab while doing K-029, and independently confirmed by the orchestrator: manage_models.py's refresh() does 'if not ollama_reachable(ep): show_install_page()' with NO provider check (~:524 and ~:532 pre-K-030). So a user on the DEFAULT cloud provider (Voyage) who opens Manage models is dumped on a page reading 'Could not reach Ollama at http://localhost:11434' and offered a ~1GB runtime install they will never need.
-
-This defeats the whole point of K-029, which made Ollama optional for the passive per-profile-open flow. The proactive path — the user actually clicking 'Manage models…' — still assumes Ollama is mandatory.
-
-FIX: add a single helper, _needs_local_runtime(cfg) -> bool, returning True only when embeddings.provider_name(cfg) == 'ollama'. Gate the install-page routing on it. A cloud-provider user must land on the normal models page regardless of whether an Ollama server is reachable; the local model library section can show a quiet inline note ('Local models need Ollama, which isn't running') instead of hijacking the whole dialog. A user who switches the provider combo TO ollama, or who clicks something that needs a local model (Pull), should still be able to reach the install page — do not make it unreachable, just stop making it the default landing.
-
-Keep the K-009 one-click Get key / Pull it dispatcher and the single-.connect discipline intact.
-
-Constraint: this file only. Full suite must be green INCLUDING tests/test_dialog_logic.py (K-032 will have rewritten it around the embedding rows by the time this runs — if it has not, say so and coordinate rather than editing tests here). py_compile through the Anki symlink.
-
-Done when: verify passes and a Voyage-configured profile can open Manage models, see its key state, and never be shown the Ollama install page.
-
 #### Comments
-- [2026-08-23 orchestrator] SUPERSEDED by K-039, which absorbs this card's entire scope (the _needs_local_runtime helper and the install-page routing gate) as its part 5. Both cards edit manage_models.py's refresh()/sync_embed_widgets() territory, so folding them avoids a pointless serial pipeline on the same file. Closing this one; the work is not dropped.
+- [2026-08-23 sonnet-af] Decisions: (1) Layout — added embed_form.setLabelAlignment(AlignLeft|AlignVCenter), setFieldGrowthPolicy(AllNonFixedFieldsGrow), embed_model_combo.setMinimumWidth(220), matching pull_input. (2) Inlined _job_row into the provider row (kept the addWidget(combo,1) stretch and embed_fix_btn), deleted _job_row and the now-dead _WARN constant, removed all embed_warn writes/unpacking from update_embed_status. (3) Added a pure module-level resolver _resolve_ollama_model(configured, models, indexed_model, default) called from sync_embed_widgets when provider=='ollama': precedence is (a) the model curation.index_stats() says the existing index was built with, IF it's in ui_state['models'], (b) the sole installed model if len(models)==1, (c) embeddings.DEFAULT_MODELS['ollama']. Judgment call: I went beyond a display-only fix — when resolved differs from the stored (empty) config, sync_embed_widgets now writes cfg['embedding_model'] = resolved via _pkg().write_config(cfg) before showing it as real combo text. Rationale: embeddings.embedding_model(cfg) is read all over the codebase (curation.py's real indexing pipeline included), not just this dialog, so a display-only fix would leave every other call site still resolving to the wrong hardcoded default; healing cfg here closes the hole everywhere, not just behind this button. (4) start_index() no longer shows a generic 'Index cards?' confirmation on every click. It now confirms ONLY when curation.index_stats() shows an existing index whose (provider, model) differs from embeddings.index_signature(cfg) — i.e. an actual destructive rebuild. Final wording — title 'Re-index from scratch?', body: f"Re-index all {note_count:,} cards from scratch? The existing index was built with {st['model']} and the current setting is {model}." Plain sentence case, no exclamation marks, names the count and both models. A matching signature (fresh build or incremental update) now takes exactly one click, no dialog. (5) Added _needs_local_runtime(cfg) -> bool = embeddings.provider_name(cfg)=='ollama', and gated both show_install_page() branches in refresh() on it; restructured refresh() around a single reached/models pair instead of duplicating the OllamaError-vs-unreachable branches. A cloud user now lands on models_page with an inline status_lbl note ('Local library needs Ollama — not required for your current provider.') instead of the install page; the install page stays reachable via Check connection / Refresh / Pull once the provider is switched to ollama (those all still call refresh(), which re-evaluates _needs_local_runtime against the now-updated cfg). Resolver precedence order as implemented: configured (non-empty, stripped) > indexed-model-if-installed > sole-installed-model > hardcoded default. Files: klausmate/manage_models.py, tests/test_dialog_logic.py. Could NOT verify headlessly (Qt cannot be instantiated on this machine): actual label alignment, embed_model_combo's rendered width, and that no warning label is visually present — these need Pouya in a restarted Anki. Verify gate exits 0 (setFieldGrowthPolicy present, _needs_local_runtime present, embed_warn absent, test_imports 21/21, test_dialog_logic 34/34). Full suite: 238 assertions total (68+34+58+21+57), up from the 233 baseline by exactly the 5 new resolver cases (4 spec'd + 1 extra: indexed-model-present-but-not-installed falls through past rule (a)) — no regressions elsewhere. py_compile through the Anki symlink passed. Never wrote to user_files/ or meta.json*; never exercised the real rebuild path. Risks: reviewer should double check the auto-heal-cfg judgment call in sync_embed_widgets (part 3) — it's a slightly bigger fix than 'just fix the display', see rationale above; also double check start_index()'s new confirm wording reads naturally when st['model'] and the live 'model' are the same string by coincidence but provider differs (edge case, not hit by the four spec'd cases). Next: none.
+- [2026-08-23 orchestrator] Reviewed and signed off, with one fix applied by me on top (c3697ce). WHAT I CHANGED AND WHY. The worker's judgment call — healing the resolved model back into config rather than only into the widget — is RIGHT, and I want that on the record: embeddings.embedding_model(cfg) is read by index_signature and the real indexing pipeline, so a display-only fix would have left every non-dialog call site still resolving to the wrong default. Good instinct, correctly reasoned in the handoff. But the write was unguarded. Trace: provider ollama + ui_state['models'] empty + configured empty -> resolver falls through branches (a) and (b) to the hardcoded default -> that default gets WRITTEN TO DISK. Reachable in practice: switch the provider combo to ollama (line ~952 re-syncs) while the Ollama server is down, so the model list was never enumerated. An index built with embeddinggemma would then be orphaned in stored config — the precise failure this card exists to prevent, converted from recoverable into permanent. Fixed by gating the write on a populated model list: the fallback is still DISPLAYED, never STORED. Added three transcribed checks for the branch; suite now 240 (was 238 after the worker's five, plus my three, minus... see below). NOTE ON THE COUNT: the worker reported 238. I measured 233 -> 238 -> 241? No — actual current totals are 68+37+58+21+57 = 241. My three checks account for +3 over the worker's 238. Verified by running each file. Also caught while adding tests: appending to tests/test_dialog_logic.py is a trap — the file ends with print(summary) + sys.exit(), so anything appended after that NEVER RUNS and silently reports the old count. New blocks must be inserted ABOVE line ~311. Worth knowing for the next card that extends it. Everything else verified: gate exits 0, full suite green, py_compile clean in-repo and through the Anki symlink, confirmation wording is plain sentence case naming both models and the count, _needs_local_runtime correctly keeps the install page reachable rather than unreachable. Alignment, combo width and warning-absence remain unverifiable headlessly — Pouya's restart checks them.
