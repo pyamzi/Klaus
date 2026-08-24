@@ -33,7 +33,7 @@ from aqt.utils import askUser, openLink, tooltip
 from . import embeddings, ollama_runtime
 from .manage_models import manage_models_dialog
 from .ollama_runtime import ensure_server, runtime_download_size_hint
-from .ollama_setup import OLLAMA_DOWNLOAD_URL
+from .ollama_setup import OLLAMA_DOWNLOAD_URL, ollama_reachable
 
 
 def _pkg():
@@ -61,7 +61,7 @@ def _embedding_ready(cfg: dict) -> bool:
         key = str(cfg.get(f"embedding_api_key_{provider}") or "").strip()
         return bool(key)
     try:
-        if not _pkg().client(5.0).health():
+        if not ollama_reachable(cfg.get("endpoint", "http://localhost:11434")):
             return False
         installed = set(_pkg().client().list_models())
     except Exception:
@@ -117,7 +117,7 @@ def first_run_check() -> None:
         provider_label = "Voyage" if provider == "voyage" else "OpenAI"
         body_lines.append(
             f"Semantic search needs a {provider_label} API key to work "
-            "(free tier available). Add it under Manage models, or "
+            "(free tier available). Add it under Klausmate Preferences, or "
             "switch to a local embedding model there."
         )
 
@@ -129,20 +129,20 @@ def first_run_check() -> None:
     if ready:
         msg.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
         manage_btn = msg.addButton(
-            "Manage models…", QMessageBox.ButtonRole.ActionRole
+            "Klausmate Preferences", QMessageBox.ButtonRole.ActionRole
         )
     elif is_ollama:
         setup_btn = msg.addButton(
             "Set up Klaus", QMessageBox.ButtonRole.ActionRole
         )
         manage_btn = msg.addButton(
-            "Manage models…", QMessageBox.ButtonRole.ActionRole
+            "Klausmate Preferences", QMessageBox.ButtonRole.ActionRole
         )
         msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
         msg.setDefaultButton(setup_btn)
     else:
         manage_btn = msg.addButton(
-            "Manage models…", QMessageBox.ButtonRole.ActionRole
+            "Klausmate Preferences", QMessageBox.ButtonRole.ActionRole
         )
         msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
         msg.setDefaultButton(manage_btn)
@@ -250,7 +250,7 @@ def _maybe_offer_runtime_update(res: Any) -> None:
         )
 
     def on_done(res2: Any) -> None:
-        if getattr(res2, "status", "") in ("reachable", "started"):
+        if getattr(res2, "ok", False):
             tooltip("Klaus: local AI engine updated")
         else:
             print(
@@ -275,11 +275,8 @@ def _readiness_check_body() -> None:
     auto = bool(cfg.get("runtime_auto_setup", True))
 
     # ---- 1. Ollama reachable? -------------------------------------------
-    try:
-        # Short timeout — this runs synchronously on the main thread.
-        ollama_ok = _pkg().client(5.0).health()
-    except Exception:
-        ollama_ok = False
+    # Short timeout — this runs synchronously on the main thread.
+    ollama_ok = ollama_reachable(cfg.get("endpoint", "http://localhost:11434"))
 
     if not ollama_ok:
         if not auto:
@@ -360,15 +357,15 @@ def _readiness_check_body() -> None:
     msg.setText(
         "Klaus is connected to Ollama, but the embedding model it's "
         f"configured to use isn't installed yet: {model}\n\n"
-        "Open Manage models… to pull it, or choose a different embedding "
-        "model there."
+        "Open Klausmate Preferences to pull it, or choose a different "
+        "embedding model there."
     )
     msg.setInformativeText(
         "Until it's installed, semantic search and PDF study priorities "
         "won't produce results."
     )
     manage_btn = msg.addButton(
-        "Manage models…", QMessageBox.ButtonRole.ActionRole
+        "Klausmate Preferences", QMessageBox.ButtonRole.ActionRole
     )
     msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
     msg.exec()
@@ -396,15 +393,15 @@ def _cloud_readiness_check(cfg: dict, provider: str) -> None:
     msg.setIcon(QMessageBox.Icon.Warning)
     msg.setText(
         f"Semantic search uses {provider_label}, but no API key is set. "
-        f"Add a free key from {site} under Manage models, or switch to a "
-        "local embedding model there."
+        f"Add a free key from {site} under Klausmate Preferences, or switch "
+        "to a local embedding model there."
     )
     msg.setInformativeText(
         "Until then, semantic search and PDF study priorities won't "
         "produce results."
     )
     manage_btn = msg.addButton(
-        "Manage models…", QMessageBox.ButtonRole.ActionRole
+        "Klausmate Preferences", QMessageBox.ButtonRole.ActionRole
     )
     msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
     msg.exec()

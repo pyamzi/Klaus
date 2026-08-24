@@ -653,6 +653,16 @@ class EnsureResult:
     detail: str = ""
     port_moved: bool = False  # spawned on a non-default port; config rewritten
 
+    @property
+    def ok(self) -> bool:
+        """True when the server is actually usable (reachable or just
+        started). The single source of truth for this check — it used to
+        be copy-pasted as ``status in ("reachable", "started")`` at four
+        call sites (__init__.py, setup_flow.py, manage_models.py, and the
+        one below); adding a fifth status value now only means updating
+        this property, not hunting down every copy."""
+        return self.status in ("reachable", "started")
+
 
 class ServerManager:
     """Owns at most one `ollama serve` child. App-lifetime singleton.
@@ -981,7 +991,7 @@ def update_runtime(
     if server_manager.spawned_or_adopted():
         server_manager.stop()
     res = ensure_server(cfg, save_config)
-    if res.status in ("reachable", "started"):
+    if res.ok:
         cleanup_old_runtimes(keep=OLLAMA_VERSION)
     return res
 

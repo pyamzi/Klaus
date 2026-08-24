@@ -1,14 +1,19 @@
-"""Manage-models dialog: provision the local AI runtime, pull a local
-embedding model, and configure semantic search.
+"""Klausmate Preferences dialog: provision the local AI runtime, pull a
+local embedding model, configure semantic search, and hold the two
+maintenance actions (Test connection, Clear library tag).
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
-split). Backs Tools > Klaus > Manage Models, the first-run one-click setup
-path, and the Preferences panel's "Manage models" button.
+split). Backs Tools > Klausmate Preferences — the single Tools-menu entry
+point (K-045 folded the old 'Klaus' submenu's three items in here) — plus
+the first-run one-click setup path.
 
 Klaus is embeddings-only (K-027 dropped autocomplete and the Ask ⌘K
-popover): this dialog is one job — where semantic search's embeddings
-come from (Voyage / OpenAI / a local Ollama model) — plus a General
-section for the two toggles orphaned by settings_ui.py's deletion.
+popover): the Semantic search and Local model library sections are one
+job — where semantic search's embeddings come from (Voyage / OpenAI / a
+local Ollama model). General holds the two toggles orphaned by
+settings_ui.py's deletion, plus Test connection and Clear library tag
+(K-045 moved both out of the Tools menu so they stay reachable — a menu
+item that vanishes is worse than one click deeper).
 
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
@@ -47,7 +52,7 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import openLink, showInfo, showWarning, tooltip
+from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 
 from .ollama_client import OllamaError
 from .ollama_runtime import RuntimeProvisionError, full_setup, runtime_download_size_hint
@@ -171,7 +176,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     chains straight into pulling the starter model when none exist.
     """
     dlg = _KlausManageDialog(mw)
-    dlg.setWindowTitle("Klaus — Manage models")
+    dlg.setWindowTitle("Klausmate Preferences")
     dlg.setMinimumWidth(560)
     outer = QVBoxLayout(dlg)
     outer.setSpacing(10)
@@ -232,10 +237,8 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     install_btn_row = QHBoxLayout()
     check_conn_btn = QPushButton("Check connection")
-    settings_btn = QPushButton("Settings…")
     install_btn_row.addWidget(check_conn_btn)
     install_btn_row.addStretch(1)
-    install_btn_row.addWidget(settings_btn)
     install_layout.addLayout(install_btn_row)
     install_layout.addStretch(1)
 
@@ -383,6 +386,18 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(runtime_auto_cb)
 
+    # Maintenance — the two actions that used to live in the Tools > Klaus
+    # submenu (K-045). Moved here rather than dropped: a menu item that
+    # vanishes is worse than one that's a click deeper.
+    maintenance_row = QHBoxLayout()
+    maintenance_row.setContentsMargins(0, 0, 0, 0)
+    test_conn_btn = QPushButton("Test connection")
+    clear_library_btn = QPushButton("Clear library tag")
+    maintenance_row.addWidget(test_conn_btn)
+    maintenance_row.addWidget(clear_library_btn)
+    maintenance_row.addStretch(1)
+    general_layout.addLayout(maintenance_row)
+
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
@@ -422,9 +437,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         op_state["active"] = busy
         for w in (
             pull_btn, pull_input, delete_btn, refresh_btn,
-            auto_setup_btn, download_btn, check_conn_btn, settings_btn,
+            auto_setup_btn, download_btn, check_conn_btn,
             embed_provider_combo, embed_model_combo, embed_key_edit,
-            embed_fix_btn, index_btn,
+            embed_fix_btn, index_btn, test_conn_btn, clear_library_btn,
         ):
             w.setEnabled(not busy)
         for btn in install_action_btns:
@@ -658,7 +673,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         def on_done(res: Any) -> None:
             finish()
-            if getattr(res, "status", "") in ("reachable", "started"):
+            if getattr(res, "ok", False):
                 cfg = _pkg().get_config()
                 if cfg.get("_runtime_setup_declined"):
                     cfg["_runtime_setup_declined"] = False
@@ -1159,12 +1174,80 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         _pkg().write_config(cfg)
 
+    def test_connection() -> None:
+        """Moved from the old Tools > Klaus > Test connection (K-045).
+
+        Fixed on the move: it used to call client().health() with the
+        client's default 30-second timeout, synchronously on this same
+        main thread — a packet-dropping endpoint froze all of Anki for
+        30s. ollama_reachable uses a short timeout for exactly this
+        reason (see its docstring). It's also now provider-aware: a
+        cloud-provider user gets a key-presence check, not an Ollama
+        probe — Ollama is optional and shouldn't be implied otherwise.
+        """
+        from . import embeddings
+
+        cfg = _pkg().get_config()
+        provider = embeddings.provider_name(cfg)
+        if provider != "ollama":
+            provider_label = "Voyage" if provider == "voyage" else "OpenAI"
+            key = str(cfg.get(_embed_cfg_key(provider)) or "").strip()
+            if key:
+                showInfo(f"{provider_label} API key is set.", parent=dlg)
+            else:
+                showWarning(
+                    f"No {provider_label} API key is set. Add one above.",
+                    parent=dlg,
+                )
+            return
+        ep = endpoint_url()
+        if ollama_reachable(ep):
+            showInfo("Connected to Ollama.", parent=dlg)
+        else:
+            showWarning(
+                f"Could not reach Ollama at {ep}.\n"
+                "Install/start it from https://ollama.com/download",
+                parent=dlg,
+            )
+
+    def clear_library_tag() -> None:
+        """Moved from the old Tools > Klaus > Clear library tag (K-045),
+        logic unchanged. quiet=True on both calls suppresses each
+        function's own tooltip so the one summary below is the only
+        message (K-038 — two independent async tooltips used to race)."""
+        from . import curation, retention
+
+        curation_nids = mw.col.find_notes(f'tag:"{curation.TEMP_TAG}"') if mw.col else []
+        pdfmatch_nids = mw.col.find_notes(f'tag:"{retention.RETENTION_TAG}"') if mw.col else []
+        if not curation_nids and not pdfmatch_nids:
+            tooltip("No notes carry a Klaus library tag.", parent=dlg)
+            return
+        if not askUser(
+            "Clear the Klaus curation and PDF-match tags from all notes?",
+            parent=dlg,
+        ):
+            return
+
+        curation.clear_curation_tag(dlg, quiet=True)
+        retention.clear_pdfmatch_tag(dlg, quiet=True)
+
+        parts = []
+        if curation_nids:
+            parts.append(f"{len(curation_nids)} curation")
+        if pdfmatch_nids:
+            parts.append(f"{len(pdfmatch_nids)} PDF-match")
+        tooltip(
+            f"Cleared the library tag from {' and '.join(parts)} notes.",
+            parent=dlg,
+        )
+
     auto_setup_btn.clicked.connect(start_auto_setup)
     cancel_btn.clicked.connect(cancel_setup_download)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
     download_btn.clicked.connect(lambda: openLink(OLLAMA_DOWNLOAD_URL))
     check_conn_btn.clicked.connect(refresh)
-    settings_btn.clicked.connect(_pkg().open_config)
+    test_conn_btn.clicked.connect(test_connection)
+    clear_library_btn.clicked.connect(clear_library_tag)
     delete_btn.clicked.connect(delete_selected)
     refresh_btn.clicked.connect(refresh)
     pull_btn.clicked.connect(start_pull)

@@ -235,7 +235,7 @@ def _try_silent_autostart(exc: Exception) -> bool:
         return ensure_server(get_config(), save_config=_save_config_on_main)
 
     def on_done(res: Any) -> None:
-        if getattr(res, "status", "") in ("reachable", "started"):
+        if getattr(res, "ok", False):
             tooltip("Klaus: local AI ready — try again")
         else:
             print(f"[klausmate] silent autostart failed: {getattr(res, 'detail', '')}")
@@ -582,63 +582,25 @@ def open_config() -> None:
 
 
 def install_menu() -> None:
-    menu = mw.form.menuTools.addMenu("Klaus")
+    """Single Tools-menu entry point, at the top of the menu.
 
-    a_clear_library = QAction("Clear library tag", mw)
-
-    def _clear_library_tag() -> None:
-        from . import curation, retention
-
-        curation_nids = mw.col.find_notes(f'tag:"{curation.TEMP_TAG}"') if mw.col else []
-        pdfmatch_nids = mw.col.find_notes(f'tag:"{retention.RETENTION_TAG}"') if mw.col else []
-        if not curation_nids and not pdfmatch_nids:
-            tooltip("No notes carry a Klaus library tag.", parent=mw)
-            return
-        if not askUser(
-            "Clear the Klaus curation and PDF-match tags from all notes?",
-            parent=mw,
-        ):
-            return
-
-        # quiet=True: each function's own tooltip is suppressed so the one
-        # summary below is the only message. (Previously both fired their
-        # own async tooltip and this handler raced them with a QTimer —
-        # fragile on a large collection where either op can outlast the
-        # delay. K-038 added the quiet parameter to retire that race.)
-        curation.clear_curation_tag(mw, quiet=True)
-        retention.clear_pdfmatch_tag(mw, quiet=True)
-
-        parts = []
-        if curation_nids:
-            parts.append(f"{len(curation_nids)} curation")
-        if pdfmatch_nids:
-            parts.append(f"{len(pdfmatch_nids)} PDF-match")
-        tooltip(
-            f"Cleared the library tag from {' and '.join(parts)} notes.",
-            parent=mw,
-        )
-
-    a_clear_library.triggered.connect(_clear_library_tag)
-    menu.addAction(a_clear_library)
-
-    a_models = QAction("Manage models…", mw)
-    a_models.triggered.connect(manage_models_dialog)
-    menu.addAction(a_models)
-
-    a_test = QAction("Test connection", mw)
-
-    def test() -> None:
-        if client().health():
-            showInfo("Connected to Ollama.")
-        else:
-            showWarning(
-                "Could not reach Ollama at "
-                f"{get_config().get('endpoint')}.\n"
-                "Install/start it from https://ollama.com/download"
-            )
-
-    a_test.triggered.connect(test)
-    menu.addAction(a_test)
+    Everything that used to live in a 'Klaus' submenu (Clear library tag,
+    Manage models…, Test connection) now lives inside the Klausmate
+    Preferences dialog itself (manage_models.py) — a menu that only ever
+    grows one deeper is still one click, and it keeps this menu from
+    forking into a second place users have to think to look. Anki has
+    already populated menuTools by the time main_window_did_init fires,
+    so insertAction against its current first action is what puts us
+    ahead of Anki's own items rather than appending after them.
+    """
+    menu = mw.form.menuTools
+    action = QAction("Klausmate Preferences", mw)
+    action.triggered.connect(manage_models_dialog)
+    existing_actions = menu.actions()
+    if existing_actions:
+        menu.insertAction(existing_actions[0], action)
+    else:
+        menu.addAction(action)
 
 
 # ------------------------------ PDF import -------------------------------
