@@ -82,7 +82,10 @@ def rescan_library_root() -> dict | None:
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
         summary = pdf_handler.rescan_root(uf, root, folders)
-        touched = list(summary.get("moved") or []) + list(
+        # tree_changed, not moved: the tags follow folder+display, and
+        # those can change for entries the mapping already knew about
+        # (drift repair — see rescan_root's tree loop).
+        touched = list(summary.get("tree_changed") or []) + list(
             summary.get("ingested") or []
         )
         if touched and mw is not None and mw.col is not None:

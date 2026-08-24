@@ -879,19 +879,38 @@ def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> 
     if moved or ingested:
         save_library_map(user_files_dir, mapping)
 
-    for safe in moved:
+    # The tree follows the MAPPING for EVERY entry whose file exists,
+    # not just this pass's moves. The tree is derived state and drifts
+    # independently of the mapping: the initial migration syncs the
+    # mapping without ever updating the tree, and the K-054 tag
+    # reconcile can pull the tree toward STALE !Library tags. Seen live
+    # 2026-08-24: migration synced the mapping at 17:42, the old tags
+    # then rewrote the tree to the pre-move layout at 18:08, and a
+    # moves-only loop could never repair it — the mapping never changed
+    # again, so the rescan no-opped forever while tree and disk
+    # disagreed. Reconciling unconditionally makes the rescan
+    # self-healing regardless of which side drifted.
+    tree_changed: list[str] = []
+    for safe in sorted(mapping):
         rel = mapping[safe]
+        if not os.path.isfile(os.path.join(root, rel)):
+            continue  # missing on disk — reported below, never rewritten
         entry = folders.get(safe) or {}
+        changed = False
         try:
             folder = _rel_folder(rel)
             if (entry.get("folder") or None) != folder:
                 drive_store.set_folder(user_files_dir, safe, folder)
+                changed = True
             cur_display = entry.get("display") or safe
             basename = os.path.basename(rel)
             if _library_filename(cur_display, safe) != basename:
                 drive_store.rename_display(user_files_dir, safe, basename)
+                changed = True
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: tree update failed for {safe!r}: {exc}")
+        if changed:
+            tree_changed.append(safe)
 
     for safe in ingested:
         rel = mapping[safe]
@@ -919,6 +938,7 @@ def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> 
 
     return {
         "moved": moved,
+        "tree_changed": tree_changed,
         "ingested": ingested,
         "ingest_failed": ingest_failed,
         "missing": plan["missing"],

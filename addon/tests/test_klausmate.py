@@ -965,5 +965,43 @@ try:
 finally:
     pdf_handler.extract_pages = _orig_extract
 
+
+print("== rescan repairs tree drift even when the mapping never changed (live bug) ==")
+# Pouya's exact 18:07 state: migration had already synced the mapping to
+# disk, then the stale !Library tags pulled the TREE back to the old
+# layout. A moves-only rescan no-ops forever (the mapping is consistent)
+# while tree and Finder disagree. The tree must follow the mapping for
+# every entry, unconditionally.
+dr_user = tempfile.mkdtemp(prefix="klaus_test_drift_user_")
+dr_root = tempfile.mkdtemp(prefix="klaus_test_drift_root_")
+os.makedirs(os.path.join(dr_user, "contexts"))
+for _safe in ("Bio", "Meas"):
+    with open(os.path.join(dr_user, "contexts", _safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+os.makedirs(os.path.join(dr_root, "Bootcamp"))
+with open(os.path.join(dr_root, "Bootcamp", "Bio.pdf"), "wb") as f:
+    f.write(b"%PDF")
+with open(os.path.join(dr_root, "Meas.pdf"), "wb") as f:
+    f.write(b"%PDF")
+# Mapping already matches disk...
+pdf_handler.save_library_map(dr_user, {"Bio": os.path.join("Bootcamp", "Bio.pdf"),
+                                       "Meas": "Meas.pdf"})
+# ...but the tree says the OPPOSITE (stale-tag layout).
+drive_store.record_import(dr_user, "Bio", "Bio.pdf")
+drive_store.record_import(dr_user, "Meas", "Meas.pdf")
+drive_store.set_folder(dr_user, "Meas", "Bootcamp")
+_dr = pdf_handler.rescan_root(dr_user, dr_root, drive_store.load(dr_user)["pdfs"])
+check("no moves planned (mapping was already consistent)", _dr["moved"] == [], str(_dr))
+check("tree drift is repaired anyway",
+      sorted(_dr["tree_changed"]) == ["Bio", "Meas"], str(_dr))
+_dr_tree = drive_store.load(dr_user)["pdfs"]
+check("tree now matches the disk, both directions",
+      _dr_tree["Bio"]["folder"] == "Bootcamp" and _dr_tree["Meas"]["folder"] is None)
+check("repaired safes are handed to the tag sync (tree_changed drives tags)",
+      set(_dr["tree_changed"]) == {"Bio", "Meas"})
+_dr2 = pdf_handler.rescan_root(dr_user, dr_root, drive_store.load(dr_user)["pdfs"])
+check("second rescan is fully quiet (converged)",
+      _dr2["moved"] == [] and _dr2["tree_changed"] == [])
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
