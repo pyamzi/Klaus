@@ -367,5 +367,60 @@ finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+print("== projection: the SECOND component is pinned (deflation) ==")
+# Review-added (K-071 sign-off): with the deflation step disabled, every
+# other test in this file stayed green — the second axis was unpinned, so
+# a regression could ship a 1-D map disguised as 2-D (all points on a
+# diagonal). Build data with variance along two orthogonal directions:
+# axis 1 must separate the wide split, axis 2 must still carry the
+# narrow one, and the two score vectors must be (near-)uncorrelated —
+# with broken deflation ys duplicates xs and |corr| -> 1.
+_rngq = random.Random(7)
+_D = 64
+_quad_rows = []
+for _sx in (-1.0, 1.0):
+    for _sy in (-1.0, 1.0):
+        for _ in range(25):
+            _row = [_rngq.gauss(0.0, 0.02) for _ in range(_D)]
+            _row[0] += 3.0 * _sx   # wide split  -> PC1
+            _row[1] += 1.0 * _sy   # narrow split -> PC2
+            _quad_rows.append(array("f", _row))
+_qpts, _ = projection.project(_quad_rows, max_points=1000, seed=0)
+_qx = [p[0] for p in _qpts]
+_qy = [p[1] for p in _qpts]
+
+
+def _corr(a, b):
+    n = len(a)
+    ma = sum(a) / n
+    mb = sum(b) / n
+    cov = sum((x - ma) * (y - mb) for x, y in zip(a, b))
+    va = math.sqrt(sum((x - ma) ** 2 for x in a))
+    vb = math.sqrt(sum((y - mb) ** 2 for y in b))
+    return cov / (va * vb) if va > 0 and vb > 0 else 1.0
+
+
+check(
+    "axis-1/axis-2 scores are uncorrelated (|corr| < 0.2)",
+    abs(_corr(_qx, _qy)) < 0.2,
+    f"corr={_corr(_qx, _qy):.4f}",
+)
+# The narrow split must be visible on axis 2: rows 0-49 carry _sy=-1,
+# wait — ordering is (sx,sy): groups of 25 as (-,-)(-,+)(+,-)(+,+).
+_y_neg = _qy[0:25] + _qy[50:75]
+_y_pos = _qy[25:50] + _qy[75:100]
+_gap = abs(sum(_y_pos) / 50 - sum(_y_neg) / 50)
+_spread = max(
+    1e-9,
+    (sum((v - sum(_y_neg) / 50) ** 2 for v in _y_neg) / 50) ** 0.5
+    + (sum((v - sum(_y_pos) / 50) ** 2 for v in _y_pos) / 50) ** 0.5,
+)
+check(
+    "axis 2 separates the orthogonal narrow split",
+    _gap > 1.5 * _spread,
+    f"gap={_gap:.4f} spread={_spread:.4f}",
+)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
