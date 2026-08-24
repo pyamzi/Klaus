@@ -7,54 +7,7 @@
 
 ## Backlog
 
-### K-043: add the "drop pdf + browse button" to the bottom at the library.
-owner: -
-created: 2026-08-23
-
-#### Comments
-- [2026-08-23 orchestrator] Parked: pdf_drive.py is held by K-044. Note for whoever takes this — K-040 is extracting the drop-square markup into a shared helper so the deck browser and deck overview cannot drift; this card should reuse that same helper for the Library, not fork a third copy.
-
-### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
-owner: -
-created: 2026-08-23
-
-#### Comments
-- [2026-08-23 Pouya] "Klausmate Preferences..."
-
-### K-048: Ollama plumbing correctness: nested Settings loop, 30s UI freeze, unify reachability
-owner: -
-priority: P1
-tags: sonnet-safe,library-era,audit
-files: klausmate/manage_models.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
-verify: ! grep -q 'settings_btn' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-
-From the 2026-08-23 audit, three correctness items:
-1. manage_models.py's 'Settings…' button (:235,:238,:425,:1167) calls _pkg().open_config, which now opens manage_models_dialog — a second modal copy of the SAME dialog stacked on the first, with stale-widget writeback risk when the inner closes. Leftover from settings_ui's deletion. Delete the button. open_config itself STAYS (Anki's gear-icon config action uses it).
-2. Tools > Klaus > Test connection (__init__.py ~:630) calls client().health() with the default 30s timeout, synchronously on the main thread — a packet-dropping endpoint freezes Anki for 30s. Use client(5.0) or ollama_setup.ollama_reachable. Also: with a cloud provider it always probes Ollama and shows an install warning — make it provider-aware (report key-presence for cloud, Ollama reachability only for local).
-3. Unify 'is Ollama reachable': setup_flow.py:64,:280 hand-roll client(5.0).health() — route through ollama_setup.ollama_reachable (whose docstring is the authority on why). Add EnsureResult.ok property replacing the four copy-pasted status-in-('reachable','started') checks (__init__.py:237, setup_flow.py:253, manage_models.py:661, ollama_runtime.py:984). Optionally hoist the localhost:11434 default into one constant.
-Full suite green; py_compile via symlink; stage by path.
-
-#### Comments
-- [2026-08-23 orchestrator] Parked in Backlog: blocked on K-046 (owns __init__.py) and K-047 (owns manage_models.py). Unblocks when both land.
-
-### K-049: State-store hygiene: prefs orphans, recency unification, atomic pdf_tabs writes
-owner: -
-priority: P2
-tags: sonnet-safe,library-era,audit
-files: klausmate/pdf_handler.py,klausmate/retention.py,klausmate/__init__.py,klausmate/deck_curate.py,tests/test_klausmate.py
-verify: grep -q _atomic_write_json klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
-created: 2026-08-23
-
-From the 2026-08-23 audit (artifact has full evidence). Four related state bugs/dups:
-1. Deleting a PDF orphans its prefs.json entry forever, and a re-import silently inherits the old threshold+tag (retention._prefs_path is a SIBLING file of the per-PDF dirs, so pdf_index.delete's rmtree cannot reach it). Add a prune call in pdf_handler.delete_context.
-2. pdf_tabs.json — the hottest, multi-writer state file — is written NON-atomically (_save_tabs_file :166-177 plain json.dump) while six other stores all do tmp+os.replace. A crash mid-write wipes open tabs, recency, placement, thumbs at once (the bare-except loader returns {}). Add one shared _atomic_write_json(path, obj) in pdf_handler and use it for _save_tabs_file, set_active_pdf, and (import from there) retention's save_matches/set_threshold + drive_store._save if trivially reachable without a dependency knot — otherwise scope to pdf_handler+retention and note the rest.
-3. Recency drift trio: save_pdf sets active_pdf.txt but never touches last_used (re-import sorts stale); __init__'s + menu mtime fallback reads pdfs/*.pdf whose mtime is the SOURCE file's (copy2 preserves it — a 2019-authored PDF imported today sorts last) while deck_curate correctly reads contexts/*.txt; the two menus also disagree on display names (safe basename vs display_name) and capping. Unify into one pdf_handler.list_by_recency + shared display-name join; make save_pdf touch last_used; make ensure_active_pdf repair from last_used not mtime.
-4. Drop-filter drift: deck_curate checks .pdf AND isfile; the editor bar (__init__.py ~:864,:882) checks suffix only — align on the stricter form.
-Tests for the pure parts (recency ordering, atomic write) belong in test_klausmate/test_drive per their existing boundaries. Full suite green; py_compile via symlink.
-
-#### Comments
-- [2026-08-23 orchestrator] Parked in Backlog: overlaps K-046 (pdf_handler.py, __init__.py), K-044 (retention.py) and K-040 (deck_curate.py) — the most contended card on the board. Runs alone after this wave.
+## Ready
 
 ### K-050: user_files/README.txt: ships to users but is untracked, and still describes autocomplete
 owner: -
@@ -73,9 +26,98 @@ NEEDS-HUMAN because editing it requires either Pouya doing it, or an explicit ex
 
 SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it at klausmate/user_files_README.txt (tracked, reviewable) and have package.sh copy it to user_files/README.txt at build time, exactly as it already does mkdir + cp for that directory. Then the shipped text is version-controlled and the deny-rule stays absolute with no exception.
 
-## Ready
-
 ## Doing
+
+### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
+owner: sonnet-an
+priority: P0
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py,klausmate/manage_models.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
+verify: grep -q 'Klausmate Preferences' klausmate/__init__.py && ! grep -q settings_btn klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya: 'Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.' This card also ABSORBS K-048 (closed as superseded) — same surface, same files.
+
+CURRENT STATE: Tools gets a 'Klaus' SUBMENU containing three items — Clear library tag, Manage models…, Test connection. Pouya wants one entry named 'Klausmate Preferences', at the TOP of the Tools menu.
+
+1. MENU (__init__.py, install_menu). Replace the submenu with a single QAction 'Klausmate Preferences' inserted at the TOP of mw.form.menuTools — use insertAction against the menu's first existing action, not addAction, which appends. Anki populates that menu itself, so verify your insertion point survives main_window_did_init ordering (install_menu is already registered on that hook).
+
+2. THE OTHER TWO ACTIONS MUST NOT JUST VANISH. They move into the dialog:
+   - Test connection -> a button in the dialog's General/Maintenance area.
+   - Clear library tag -> likewise. Keep its existing confirm-once + single-summary-tooltip behaviour (it already uses the quiet= parameters; do not regress that into two tooltips).
+   Both handlers currently live in install_menu's closures — move the logic, do not duplicate it.
+
+3. TEST CONNECTION IS BROKEN, FIX IT WHILE MOVING IT (was K-048). It calls client().health() with the DEFAULT 30-SECOND timeout, synchronously on the main thread — a packet-dropping endpoint hard-freezes Anki for 30s. Use a short timeout (ollama_setup.ollama_reachable, whose docstring is the authority on exactly this hazard, or client(5.0)). ALSO make it provider-aware: with a cloud provider configured it currently still probes Ollama and warns about installing it, which contradicts Ollama being optional. Report key presence for cloud providers; probe Ollama only when the provider is local.
+
+4. REMOVE THE NESTED SETTINGS BUTTON (was K-048). manage_models.py's 'Settings…' button calls _pkg().open_config, which now opens manage_models_dialog — a SECOND modal copy of the same dialog stacked on the first, with stale-widget writeback when the inner one closes. Delete the button and its wiring. KEEP open_config itself: Anki's gear-icon config action uses it (mw.addonManager.setConfigAction). Point open_config at whatever the new single entry point is.
+
+5. UNIFY REACHABILITY (was K-048). setup_flow.py hand-rolls client(5.0).health() in two places; route those through ollama_setup.ollama_reachable. Add an EnsureResult.ok property in ollama_runtime.py to replace the four copy-pasted  checks (__init__.py, setup_flow.py, manage_models.py, ollama_runtime.py) — grep for all four and switch them.
+
+NAMING: the dialog's window title should match what the menu promises. 'Klaus — Manage models' under a menu item called 'Klausmate Preferences' is the kind of mismatch this card exists to remove. Pick one name and use it in both places; say what you picked.
+
+PRESERVE: the single-connect fix-button dispatcher (_embed_fix_kind/on_embed_fix_clicked — Qt connects accumulate, this is deliberate), the per-provider key placeholders, and _needs_local_runtime's install-page gating.
+
+Two siblings are running on pdf_drive.py and on pdf_handler/retention/deck_curate — a suite failure in a file that is not yours is a sibling mid-save; wait and re-run. Qt cannot instantiate headlessly: you cannot see the menu or dialog, so do not claim you verified appearance.
+
+Full suite green (245 across 6 files); tests/test_dialog_logic.py transcribes this dialog and must keep passing. py_compile through the Anki symlink for every file touched. Stage by path.
+
+Done when: verify passes, Tools shows one 'Klausmate Preferences' entry at the top, nothing that used to be reachable has become unreachable, and Test connection can no longer freeze Anki.
+
+#### Comments
+- [2026-08-23 Pouya] "Klausmate Preferences..."
+- [2026-08-23 orchestrator] CORRECTION to item 5 — a shell-quoting slip ate a code snippet when I wrote the body. The line should read: replace the four copy-pasted status-in-tuple checks, i.e. the pattern getattr(res, "status", "") in ("reachable", "started") which appears in __init__.py, setup_flow.py, manage_models.py and ollama_runtime.py. Add an EnsureResult.ok property in ollama_runtime.py and switch all four sites to it, so adding a fifth status value later is one edit instead of four. Grep the literal string reachable to find them all.
+
+### K-049: State-store hygiene: prefs orphans, recency unification, atomic pdf_tabs writes
+owner: sonnet-ao
+priority: P2
+tags: sonnet-safe,library-era,audit
+files: klausmate/pdf_handler.py,klausmate/retention.py,klausmate/deck_curate.py,tests/test_klausmate.py
+verify: grep -q _atomic_write_json klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+From the 2026-08-23 audit (artifact has full evidence). Four related state bugs/dups:
+1. Deleting a PDF orphans its prefs.json entry forever, and a re-import silently inherits the old threshold+tag (retention._prefs_path is a SIBLING file of the per-PDF dirs, so pdf_index.delete's rmtree cannot reach it). Add a prune call in pdf_handler.delete_context.
+2. pdf_tabs.json — the hottest, multi-writer state file — is written NON-atomically (_save_tabs_file :166-177 plain json.dump) while six other stores all do tmp+os.replace. A crash mid-write wipes open tabs, recency, placement, thumbs at once (the bare-except loader returns {}). Add one shared _atomic_write_json(path, obj) in pdf_handler and use it for _save_tabs_file, set_active_pdf, and (import from there) retention's save_matches/set_threshold + drive_store._save if trivially reachable without a dependency knot — otherwise scope to pdf_handler+retention and note the rest.
+3. Recency drift trio: save_pdf sets active_pdf.txt but never touches last_used (re-import sorts stale); __init__'s + menu mtime fallback reads pdfs/*.pdf whose mtime is the SOURCE file's (copy2 preserves it — a 2019-authored PDF imported today sorts last) while deck_curate correctly reads contexts/*.txt; the two menus also disagree on display names (safe basename vs display_name) and capping. Unify into one pdf_handler.list_by_recency + shared display-name join; make save_pdf touch last_used; make ensure_active_pdf repair from last_used not mtime.
+4. Drop-filter drift: deck_curate checks .pdf AND isfile; the editor bar (__init__.py ~:864,:882) checks suffix only — align on the stricter form.
+Tests for the pure parts (recency ordering, atomic write) belong in test_klausmate/test_drive per their existing boundaries. Full suite green; py_compile via symlink.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked in Backlog: overlaps K-046 (pdf_handler.py, __init__.py), K-044 (retention.py) and K-040 (deck_curate.py) — the most contended card on the board. Runs alone after this wave.
+- [2026-08-23 orchestrator] RESCOPED: klausmate/__init__.py is REMOVED from your files — K-045 owns it this wave. Consequences for your four items: - Items 1 (prefs orphan on delete) and 2 (atomic pdf_tabs writes) are UNAFFECTED and are the data-safety core of this card. Do those fully. - Item 3 (recency unification): build the shared pdf_handler.list_by_recency() helper and switch deck_curate.py's menu to it. The OTHER call site is __init__.py's ＋ menu — out of scope. State it as owed in your handoff and I will file the one-line switch. Also still yours: make save_pdf touch last_used, and make ensure_active_pdf repair from last_used rather than mtime (both pdf_handler). - Item 4 (drop-filter drift): the stricter check lives in deck_curate.py (yours); the looser one is in __init__.py's _PdfBar (not yours). Note it as owed. Do NOT reach into __init__.py for any of this.
+
+### K-043: add the "drop pdf + browse button" to the bottom at the library.
+owner: sonnet-ap
+priority: P1
+tags: sonnet-safe,library-era
+files: klausmate/pdf_drive.py
+verify: grep -q _drop_square_html klausmate/pdf_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya: 'add the "drop pdf + browse button" to the bottom at the library.' The Library window is the one PDF surface with no way to add a PDF — you can only get one in from the deck screen or the editor bar. Its own empty state even says so ('drop one on the deck list or the editor's PDF bar to add it here'), which is an admission, not a feature.
+
+REUSE, DO NOT FORK. K-040 extracted the square into deck_curate._drop_square_html(), already shared by the deck browser and the deck overview. pdf_drive.py ALREADY imports deck_curate (line 46), so call that helper — this is the third caller it was shaped for. A fourth copy of these styles is exactly what K-040 existed to prevent.
+
+THE CATCH, and the reason this is not a two-line card: that helper returns HTML with pycmd() onclick handlers, built for a webview. The Library is a native Qt QWidget (QTreeWidget + splitter), so you CANNOT drop that HTML in. Decide and justify one of:
+(a) A small QWidget mirroring the square — dashed border, same copy, a Browse… button — placed under the tree in the left pane's QVBoxLayout, wired straight to Python (no bridge). Reuse the STYLE VALUES from the helper by reading them, and if that means extracting the border/radius/copy constants so both files share them, say so — but you may only edit pdf_drive.py, so if the extraction needs a deck_curate.py change, state it as owed rather than reaching.
+(b) A QWebEngineView hosting the helper's HTML. Almost certainly wrong here — a whole webview for one box, plus bridge plumbing the Library has none of.
+I expect (a). Justify whichever you pick.
+
+ALSO WIRE THE DROP ITSELF, not just the button. _PdfBar in __init__.py is the working reference for Qt-native PDF drag-and-drop: setAcceptDrops(True), dragEnterEvent checking for .pdf urls, a dragOver property + style().unpolish/polish for hover feedback, dropEvent importing each file. Read it and follow the same shape. A box that says 'Drop a lecture PDF here' and does not accept drops is worse than no box — that exact gap had to be fixed on K-040 before it could ship.
+
+After a successful import: refresh the tree so the new PDF appears immediately (rebuild_tree), and do NOT arm it for curation — arming is the deck screen's semantics, not the Library's. Match the existing import path: pdf_drive should reach import_pdf_file the same way its siblings do.
+
+Scope: klausmate/pdf_drive.py ONLY. Two siblings are running on other files. Qt cannot instantiate headlessly, so you cannot see it — do not claim you verified appearance; py_compile plus careful reading is the bar, and Pouya checks it in a restarted Anki.
+
+Full suite green (245 across 6 files). py_compile through the Anki symlink. Stage by path.
+
+Done when: verify passes, the Library has a drop square at the bottom of its left pane that both accepts dropped PDFs and opens a file picker, and no style values were copy-pasted without saying so.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked: pdf_drive.py is held by K-044. Note for whoever takes this — K-040 is extracting the drop-square markup into a shared helper so the deck browser and deck overview cannot drift; this card should reuse that same helper for the Library, not fork a third copy.
 
 ## Review
 
@@ -385,3 +427,22 @@ Done when: one embed per PDF serves both curation and retention, curate_* knobs 
 - [2026-08-23 orchestrator] AUDIT INPUTS for this card (2026-08-23 full-codebase audit; see artifact): (1) run_curation's prompt/preview parameters are already dead — sole caller passes pdf_name only; suggest_deck_name's prompt branch and the previewed:False path are unreachable. Delete rather than preserve. (2) stride_sample is duplicated byte-identical in curation.py:86 and pdf_index.py:82 — keep the pdf_index copy (aqt-free), delete curation's. (3) The embed-batch flush/progress loop is copy-pasted between curation._embed_plan (:136-150) and retention.ensure_pdf_index (:461-489) with unexplained 4x-different flush constants (1024 vs 256) — extract embeddings.embed_with_flush(...) with callback accumulators (the None-vector handling genuinely differs: skip-by-nid vs zero-row padding — keep as callbacks). (4) COMPLETE busy-flag map is in the audit: the guard is one-way (ensure_index never checks retention._busy), ensure_matches is entirely unguarded (runs its O(notes x chunks) scan with every flag clear), and cancel desyncs the drive's flag from the module flag. One shared re-entrancy token held across the WHOLE composed pipeline. (5) matches.json writes a 'floor' field that load_matches never validates — if MATCH_FLOOR ever changes, stale caches stay silently valid; add it to the invalidation check.
 - [2026-08-23 orchestrator] SCOPE ADDITIONS — this card now absorbs K-041 and K-042 (both closed as superseded), because both change the same control in the same files this card already owns: A. SENSITIVITY DEFAULT 0.55 (was K-041). retention.DEFAULT_THRESHOLD and config.json's pdf_match_threshold are both still 0.35. Set both to 0.55. Add a ONE-TIME migration guard (follow the _-prefixed convention, e.g. _threshold_default_migrated) that bumps a STORED global value of exactly 0.35 — the old default — up to 0.55, and leaves any other stored value alone. NEVER touch per-PDF values in pdf_index/prefs.json: those are user choices and Pouya's words were 'saved forever'. B. RENAME strictness -> sensitivity (was K-042). All three occurrences are in pdf_drive.py, which you own: :618 dialog title 'Match strictness', :680 status text 'No cards above the current strictness — lower it in Threshold…' (note this string ALSO says 'Threshold…' while the menu action says 'Match strictness…' — they already disagree; unify both on 'sensitivity'), :747 menu action 'Match strictness…'. Check config.md and any docstrings too. Config KEY names stay as they are (pdf_match_threshold) — renaming stored keys would orphan every user's setting for a vocabulary change; this is a UI-copy rename only. Say that explicitly in your handoff. Both are user-visible vocabulary/behaviour, so get the copy right: sentence case, plain words, and make the dialog, the menu action and the status line all use the same noun.
 - [2026-08-23 orchestrator] RECOVERED AND SIGNED OFF. The worker (sonnet-aj) hit a session limit and died after completing the work and a clean 245-test run, but before py_compile and commit. Its changes were intact and correctly scoped in the working tree; I reviewed, finished the verification it never reached, and committed as 1bb4126 with authorship credited. Reviewed in detail because this is the architectural card: - Curation now composes ensure_index -> ensure_pdf_index -> ensure_matches -> filter by retention.get_threshold. No live query embedding, no second chunker, no separate cutoff. ensure_pdf_index is unconditional, so curating an unindexed PDF indexes it first instead of failing — a Done-when the card called out. - The single busy token is real, not cosmetic: retention._busy is GONE, both retention entry points guard curation._busy, and _reentrant lets the composed pipeline acquire once. That closes all three audit gaps at once, including ensure_matches which previously ran its O(28k x chunks) scan with every flag clear. - The 0.55 migration is correctly scoped: it reads only the GLOBAL pdf_match_threshold, bumps it only when it equals exactly the retired 0.35, sets its own guard flag, and its docstring states it never reads or writes prefs.json — which I confirmed. Pouya's per-PDF choices are untouched, per 'saved forever'. - Wiring check: _migrate_default_threshold is called from retention._cfg() (:103), not left unregistered — I checked specifically, because an unwired migration is exactly the bug that crashed his Anki this morning. - Sensitivity rename covers all three sites AND fixes the pre-existing disagreement where the status line said 'Threshold…' while the menu said 'Match strictness…'. Both now say 'Match sensitivity…'. Config keys unchanged, so no stored setting is orphaned. - Cancellation is handled honestly: after_matches treats a cancelled partial list as a failure rather than a final answer — the exact 'silent empty result reads as no matches' trap the card warned about. MY ADDITION: curate_top_k/curate_min_score were removed from config.json but could not be added to _LEGACY_KEYS_DROPPED, which lives in __init__.py, outside this card's scope. Without that they would linger in every existing profile forever. Added. Verification I ran: gate exit 0; py_compile clean in-repo AND through the Anki symlink for all four Python files; config.json parses; full suite 245 = 68+34+56+19+57+11, no regressions.
+
+### K-048: Ollama plumbing correctness: nested Settings loop, 30s UI freeze, unify reachability
+owner: orchestrator
+priority: P1
+tags: sonnet-safe,library-era,audit
+files: klausmate/manage_models.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
+verify: ! grep -q 'settings_btn' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+From the 2026-08-23 audit, three correctness items:
+1. manage_models.py's 'Settings…' button (:235,:238,:425,:1167) calls _pkg().open_config, which now opens manage_models_dialog — a second modal copy of the SAME dialog stacked on the first, with stale-widget writeback risk when the inner closes. Leftover from settings_ui's deletion. Delete the button. open_config itself STAYS (Anki's gear-icon config action uses it).
+2. Tools > Klaus > Test connection (__init__.py ~:630) calls client().health() with the default 30s timeout, synchronously on the main thread — a packet-dropping endpoint freezes Anki for 30s. Use client(5.0) or ollama_setup.ollama_reachable. Also: with a cloud provider it always probes Ollama and shows an install warning — make it provider-aware (report key-presence for cloud, Ollama reachability only for local).
+3. Unify 'is Ollama reachable': setup_flow.py:64,:280 hand-roll client(5.0).health() — route through ollama_setup.ollama_reachable (whose docstring is the authority on why). Add EnsureResult.ok property replacing the four copy-pasted status-in-('reachable','started') checks (__init__.py:237, setup_flow.py:253, manage_models.py:661, ollama_runtime.py:984). Optionally hoist the localhost:11434 default into one constant.
+Full suite green; py_compile via symlink; stage by path.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked in Backlog: blocked on K-046 (owns __init__.py) and K-047 (owns manage_models.py). Unblocks when both land.
+- [2026-08-23 orchestrator] SUPERSEDED by K-045, which absorbs this entire card. Both are the same surface — the Klaus configuration entry points — and they contend on the same two files (__init__.py for the menu and Test connection, manage_models.py for the Settings button and the install-page routing). Splitting them would mean two cards serialised on one feature. K-045 now carries: the Klausmate Preferences restructure, the nested-Settings-button removal, the Test-connection 30s main-thread freeze plus its provider-awareness, and the reachability unification across setup_flow/ollama_runtime. Nothing is dropped.
