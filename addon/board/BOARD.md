@@ -134,66 +134,6 @@ created: 2026-08-24
 
 ## Doing
 
-### K-070: Library root directory, part A: storage root + migration (K-057)
-owner: sonnet-ax
-priority: P2
-tags: sonnet-safe,library-era
-files: klausmate/pdf_handler.py,klausmate/setup_flow.py,klausmate/manage_models.py,tests/test_klausmate.py
-verify: grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
-created: 2026-08-24
-claimed: 2026-08-24
-
-Part A of Pouya's K-057 (directory-backed library). DESIGN (agreed):
-a real filesystem directory becomes where library PDFs LIVE; the Library
-tree and tags mirror it. This card ships the storage half only — root
-config, path resolution, migration, and the two UI touchpoints. Part B
-(disk<->tree mirroring, rename/move sync, rescan) is a later card on
-pdf_drive/tag_sync — do NOT touch those files.
-
-1. Config key library_root (absolute path, addon config). New pdf_handler
-   helpers: get_library_root(cfg) -> str|None, and a single resolution
-   choke point — pdf_path_for must consult a persisted mapping
-   safe_name -> path-relative-to-root (stored in user_files/
-   library_map.json via _atomic_write_json) and fall back to the legacy
-   pdfs/<safe>.pdf location when unmapped. EVERY consumer already routes
-   through pdf_path_for — verify that claim with a grep before relying on
-   it, and fix any caller that hardcodes pdfs/ paths.
-2. Migration (pdf_handler.migrate_to_root(user_files, root, folders)):
-   for each stored PDF, move pdfs/<safe>.pdf ->
-   <root>/<drive.json folder path>/<display name>.pdf. Per-file guarded
-   and RESUMABLE: never overwrite an existing destination (append a
-   numeric suffix), write the mapping entry only after a verified move
-   (size match), leave the source untouched on any failure, keep going on
-   per-file errors. contexts/, pdf_originals/, annotations/ are Klaus-
-   private and STAY under user_files keyed by safe name — only the baked
-   pdfs/ copies relocate. bake_annotations regenerates into the MAPPED
-   path — its tmp file must be created in the destination directory so
-   os.replace stays same-filesystem (existing pattern, preserve it).
-3. setup_flow: when library_root is unset, the per-profile-open readiness
-   check adds a step prompting to choose the folder (QFileDialog
-   directory picker) and then runs the migration with a progress-safe
-   CollectionOp-free QueryOp (no collection involvement). Decline =
-   ask-again-next-profile-open, never nag twice per session.
-4. manage_models General tab: a 'Library folder' row showing the current
-   path with a Change... button — changing re-runs migrate_to_root from
-   the old root to the new one (same per-file rules).
-
-SAFETY, absolute: never write to the REAL klausmate/user_files/ in tests
-or verification — a deny rule enforces this. All tests use scratch
-directories with synthetic files. The migration code itself must be pure
-enough to test that way (pass user_files and root as parameters, no
-module-global path reads inside the move loop).
-
-TESTS (tests/test_klausmate.py, insert ABOVE the print(summary)/sys.exit
-tail): mapping round-trip; unmapped fallback to legacy path; migration
-moves+maps; collision suffixing; failure mid-list leaves earlier moves
-mapped and later sources untouched; re-run resumes; pdf_path_for after
-migration resolves to the root path.
-
-#### Comments
-- [2026-08-24 sonnet-ax] Decisions: pdf_path_for(user_files_dir, name, root=None) keeps its 2-arg call sites (pdf_viewer.py, __init__.py) working unchanged — a new optional root= param lets tests bypass aqt entirely, while production falls back to a guarded _live_library_root() (lazy `from aqt import mw`, try/except) reading cfg["library_root"] via mw.addonManager.getConfig(__package__). Extracted the shared resolution logic into _working_pdf_path() (returns the intended path even when it doesn't exist yet) so bake_annotations's `working` var uses the SAME choke point instead of hardcoding pdfs/ — its tmp-file/os.replace pattern was already derived from os.path.dirname(working) so no other change was needed there. migrate_to_root(user_files_dir, root, folders=None) takes folders shaped exactly like drive_store.load(...)["pdfs"] (safe -> {folder, display}) so it's a pure function a test can drive with a hand-built dict — no drive_store import inside pdf_handler.py. Resumability is achieved by checking "is safe already mapped AND does that mapped file exist" before touching anything for that PDF, rather than a separate journal. Extra fix beyond the card text, flagging per the card's own instruction #1 ("fix any caller that hardcodes pdfs/ paths"): delete_context in pdf_handler.py itself was hardcoding pdfs/<safe>.pdf as one of its removal candidates — after a migration that's not where the real file lives anymore, so a delete would silently orphan the actual PDF in the Library folder. Fixed it to also pop the safe's library_map.json entry and delete the mapped file when one exists. This is pdf_handler.py-internal, stayed in scope. setup_flow.py: added _library_root_check(), called from the top of setup_readiness_check() (right after the _first_run_dialog_shown_this_session early-return, so it's skipped on the very first profile-open alongside the welcome dialog, then runs on every one after). askUser() explains why, then QFileDialog.getExistingDirectory() picks the folder; migration runs via QueryOp(...).without_collection().run_in_background(), matching the file's existing ensure_server pattern. Decline persists nothing, so it re-asks next profile-open — no "stop nagging forever" flag, by design (an unset Library folder is a state worth re-surfacing). manage_models.py: smallest addition I could make — one QHBoxLayout row (label + path QLabel + 'Change…' button) inserted into the existing General QGroupBox right after runtime_auto_cb, one change_library_folder() handler placed next to save_general()/test_connection(), one line added to set_busy()'s widget tuple, one .clicked.connect() added to the existing end-of-function dispatcher block. No other line in that file touched. Files: klausmate/pdf_handler.py (load_library_map/save_library_map/get_library_root/_live_library_root/_working_pdf_path/pdf_path_for/_library_filename/_unique_path/migrate_to_root added; bake_annotations and delete_context updated to route through the mapping). klausmate/setup_flow.py (_library_root_check added; wired into setup_readiness_check; showWarning added to the aqt.utils import). klausmate/manage_models.py (Library folder row + change_library_folder() + set_busy/dispatcher wiring). tests/test_klausmate.py (31 new checks in a new "library root + migration (K-070)" section, inserted above the print(summary)/sys.exit tail; scratch tempfile.mkdtemp() dirs only, never touches klausmate/user_files/). Risks: _live_library_root()'s aqt lookup is exercised by NEITHER the automated suite nor a real Anki restart yet — every test that needs migrated-path resolution passes root= explicitly, so the live mw.addonManager.getConfig(__package__) path is currently unverified beyond code review. The mid-migration failure/resume tests simulate a disk error by monkeypatching pdf_handler.shutil.copy2 (restored in finally) rather than a real IO fault — worth a skeptical read since it's global-module patching, even though scoped narrowly. _library_filename()'s sanitizing (replace '/' and '\\', strip leading dots) is a defensive addition beyond literal card text — no test exercises a display name containing a slash specifically, only the collision-suffix path was tested end-to-end. Live-only checks for Pouya's restart queue (none of this is exercised by the headless suite): (1) first-time setup prompt — profile open with library_root unset should show the askUser() explanation, then a real QFileDialog folder picker, then a tooltip on completion; decline should re-prompt on the NEXT profile open, not nag again this session. (2) Preferences -> General -> Library folder row: initial label should read "Not set — PDFs stay inside the add-on" pre-migration, update to the real path after either the setup prompt or "Change…" completes. (3) Actual migration against a real user_files/pdfs/ store with a real drive.json — confirm PDFs land under <root>/<folder>/<display>.pdf, the sidebar/viewer (pdf_viewer.py's load_pdf, __init__.py's pdf_path_for call) still opens them post-migration, and bake/un-bake (highlighting a migrated PDF) still writes into the new location. (4) "Change…" from an already-migrated root to a second new root (root-to-root move, not just unset-to-root). Verify: `grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py` exits 0. 113 passed, 0 failed (baseline before this card: 82 passed). Real tail of the run: ok re-run completes the previously-failed file ok re-run skips already-migrated files instead of re-moving them ok resumed file is now mapped ok resumed file's legacy source is finally removed 113 passed, 0 failed Next: Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) is filed separately per the card's own note, touching pdf_drive.py/tag_sync.py/drive_store.py — none of which this card touched.
-- [2026-08-24 opus] REWORK (review finding, reproduced in scratch): change_library_folder promises old-root -> new-root but migrate_to_root only moves LEGACY pdfs/ sources. After a first migration to root A, changing to root B reports the PDF as 'skipped', the mapping rel resolves against B where nothing exists, pdf_path_for returns None, and the file sits stranded in A — every already-migrated PDF becomes unopenable on a folder change. Repro: migrate to A (moved), migrate same store to B (skipped), pdf_path_for(root=B) -> None, file present in A. Fix in migrate_to_root: accept old_root: str|None = None; when a mapping entry's file is absent under the NEW root but present under old_root/rel, move it old->new under the same collision/verify/map-then-delete discipline, updating the mapping rel. change_library_folder passes old_root; setup_flow's first-time call passes None. Falsifying test FIRST (mirror the repro above; must be RED on the current commit), then fix, then re-run the full gate.
-
 ## Review
 
 ## Done
@@ -611,3 +551,65 @@ Headless verification is impossible for a native use-after-free; live check is P
 
 #### Comments
 - [2026-08-24 opus] Committed fca2e41. Gate PASS, compile ok, full suite green. Honest confidence: the mechanism is traced end-to-end (synchronous reparent inside eventFilter -> dangling receiver -> sip conversion crash before any Python runs) and the fix removes it structurally, but like K-068 this is a native use-after-free no headless test can prove. Live check: float out, dock back in, repeated across above/below/left/right, plus a float-to-float move. Remaining known synchronous reparent is _start_panel_drag's tear-off, which startSystemMove requires — documented in the commit, not implicated in this crash.
+
+### K-070: Library root directory, part A: storage root + migration (K-057)
+owner: opus
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/pdf_handler.py,klausmate/setup_flow.py,klausmate/manage_models.py,tests/test_klausmate.py
+verify: grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Part A of Pouya's K-057 (directory-backed library). DESIGN (agreed):
+a real filesystem directory becomes where library PDFs LIVE; the Library
+tree and tags mirror it. This card ships the storage half only — root
+config, path resolution, migration, and the two UI touchpoints. Part B
+(disk<->tree mirroring, rename/move sync, rescan) is a later card on
+pdf_drive/tag_sync — do NOT touch those files.
+
+1. Config key library_root (absolute path, addon config). New pdf_handler
+   helpers: get_library_root(cfg) -> str|None, and a single resolution
+   choke point — pdf_path_for must consult a persisted mapping
+   safe_name -> path-relative-to-root (stored in user_files/
+   library_map.json via _atomic_write_json) and fall back to the legacy
+   pdfs/<safe>.pdf location when unmapped. EVERY consumer already routes
+   through pdf_path_for — verify that claim with a grep before relying on
+   it, and fix any caller that hardcodes pdfs/ paths.
+2. Migration (pdf_handler.migrate_to_root(user_files, root, folders)):
+   for each stored PDF, move pdfs/<safe>.pdf ->
+   <root>/<drive.json folder path>/<display name>.pdf. Per-file guarded
+   and RESUMABLE: never overwrite an existing destination (append a
+   numeric suffix), write the mapping entry only after a verified move
+   (size match), leave the source untouched on any failure, keep going on
+   per-file errors. contexts/, pdf_originals/, annotations/ are Klaus-
+   private and STAY under user_files keyed by safe name — only the baked
+   pdfs/ copies relocate. bake_annotations regenerates into the MAPPED
+   path — its tmp file must be created in the destination directory so
+   os.replace stays same-filesystem (existing pattern, preserve it).
+3. setup_flow: when library_root is unset, the per-profile-open readiness
+   check adds a step prompting to choose the folder (QFileDialog
+   directory picker) and then runs the migration with a progress-safe
+   CollectionOp-free QueryOp (no collection involvement). Decline =
+   ask-again-next-profile-open, never nag twice per session.
+4. manage_models General tab: a 'Library folder' row showing the current
+   path with a Change... button — changing re-runs migrate_to_root from
+   the old root to the new one (same per-file rules).
+
+SAFETY, absolute: never write to the REAL klausmate/user_files/ in tests
+or verification — a deny rule enforces this. All tests use scratch
+directories with synthetic files. The migration code itself must be pure
+enough to test that way (pass user_files and root as parameters, no
+module-global path reads inside the move loop).
+
+TESTS (tests/test_klausmate.py, insert ABOVE the print(summary)/sys.exit
+tail): mapping round-trip; unmapped fallback to legacy path; migration
+moves+maps; collision suffixing; failure mid-list leaves earlier moves
+mapped and later sources untouched; re-run resumes; pdf_path_for after
+migration resolves to the root path.
+
+#### Comments
+- [2026-08-24 sonnet-ax] Decisions: pdf_path_for(user_files_dir, name, root=None) keeps its 2-arg call sites (pdf_viewer.py, __init__.py) working unchanged — a new optional root= param lets tests bypass aqt entirely, while production falls back to a guarded _live_library_root() (lazy `from aqt import mw`, try/except) reading cfg["library_root"] via mw.addonManager.getConfig(__package__). Extracted the shared resolution logic into _working_pdf_path() (returns the intended path even when it doesn't exist yet) so bake_annotations's `working` var uses the SAME choke point instead of hardcoding pdfs/ — its tmp-file/os.replace pattern was already derived from os.path.dirname(working) so no other change was needed there. migrate_to_root(user_files_dir, root, folders=None) takes folders shaped exactly like drive_store.load(...)["pdfs"] (safe -> {folder, display}) so it's a pure function a test can drive with a hand-built dict — no drive_store import inside pdf_handler.py. Resumability is achieved by checking "is safe already mapped AND does that mapped file exist" before touching anything for that PDF, rather than a separate journal. Extra fix beyond the card text, flagging per the card's own instruction #1 ("fix any caller that hardcodes pdfs/ paths"): delete_context in pdf_handler.py itself was hardcoding pdfs/<safe>.pdf as one of its removal candidates — after a migration that's not where the real file lives anymore, so a delete would silently orphan the actual PDF in the Library folder. Fixed it to also pop the safe's library_map.json entry and delete the mapped file when one exists. This is pdf_handler.py-internal, stayed in scope. setup_flow.py: added _library_root_check(), called from the top of setup_readiness_check() (right after the _first_run_dialog_shown_this_session early-return, so it's skipped on the very first profile-open alongside the welcome dialog, then runs on every one after). askUser() explains why, then QFileDialog.getExistingDirectory() picks the folder; migration runs via QueryOp(...).without_collection().run_in_background(), matching the file's existing ensure_server pattern. Decline persists nothing, so it re-asks next profile-open — no "stop nagging forever" flag, by design (an unset Library folder is a state worth re-surfacing). manage_models.py: smallest addition I could make — one QHBoxLayout row (label + path QLabel + 'Change…' button) inserted into the existing General QGroupBox right after runtime_auto_cb, one change_library_folder() handler placed next to save_general()/test_connection(), one line added to set_busy()'s widget tuple, one .clicked.connect() added to the existing end-of-function dispatcher block. No other line in that file touched. Files: klausmate/pdf_handler.py (load_library_map/save_library_map/get_library_root/_live_library_root/_working_pdf_path/pdf_path_for/_library_filename/_unique_path/migrate_to_root added; bake_annotations and delete_context updated to route through the mapping). klausmate/setup_flow.py (_library_root_check added; wired into setup_readiness_check; showWarning added to the aqt.utils import). klausmate/manage_models.py (Library folder row + change_library_folder() + set_busy/dispatcher wiring). tests/test_klausmate.py (31 new checks in a new "library root + migration (K-070)" section, inserted above the print(summary)/sys.exit tail; scratch tempfile.mkdtemp() dirs only, never touches klausmate/user_files/). Risks: _live_library_root()'s aqt lookup is exercised by NEITHER the automated suite nor a real Anki restart yet — every test that needs migrated-path resolution passes root= explicitly, so the live mw.addonManager.getConfig(__package__) path is currently unverified beyond code review. The mid-migration failure/resume tests simulate a disk error by monkeypatching pdf_handler.shutil.copy2 (restored in finally) rather than a real IO fault — worth a skeptical read since it's global-module patching, even though scoped narrowly. _library_filename()'s sanitizing (replace '/' and '\\', strip leading dots) is a defensive addition beyond literal card text — no test exercises a display name containing a slash specifically, only the collision-suffix path was tested end-to-end. Live-only checks for Pouya's restart queue (none of this is exercised by the headless suite): (1) first-time setup prompt — profile open with library_root unset should show the askUser() explanation, then a real QFileDialog folder picker, then a tooltip on completion; decline should re-prompt on the NEXT profile open, not nag again this session. (2) Preferences -> General -> Library folder row: initial label should read "Not set — PDFs stay inside the add-on" pre-migration, update to the real path after either the setup prompt or "Change…" completes. (3) Actual migration against a real user_files/pdfs/ store with a real drive.json — confirm PDFs land under <root>/<folder>/<display>.pdf, the sidebar/viewer (pdf_viewer.py's load_pdf, __init__.py's pdf_path_for call) still opens them post-migration, and bake/un-bake (highlighting a migrated PDF) still writes into the new location. (4) "Change…" from an already-migrated root to a second new root (root-to-root move, not just unset-to-root). Verify: `grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py` exits 0. 113 passed, 0 failed (baseline before this card: 82 passed). Real tail of the run: ok re-run completes the previously-failed file ok re-run skips already-migrated files instead of re-moving them ok resumed file is now mapped ok resumed file's legacy source is finally removed 113 passed, 0 failed Next: Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) is filed separately per the card's own note, touching pdf_drive.py/tag_sync.py/drive_store.py — none of which this card touched.
+- [2026-08-24 opus] REWORK (review finding, reproduced in scratch): change_library_folder promises old-root -> new-root but migrate_to_root only moves LEGACY pdfs/ sources. After a first migration to root A, changing to root B reports the PDF as 'skipped', the mapping rel resolves against B where nothing exists, pdf_path_for returns None, and the file sits stranded in A — every already-migrated PDF becomes unopenable on a folder change. Repro: migrate to A (moved), migrate same store to B (skipped), pdf_path_for(root=B) -> None, file present in A. Fix in migrate_to_root: accept old_root: str|None = None; when a mapping entry's file is absent under the NEW root but present under old_root/rel, move it old->new under the same collision/verify/map-then-delete discipline, updating the mapping rel. change_library_folder passes old_root; setup_flow's first-time call passes None. Falsifying test FIRST (mirror the repro above; must be RED on the current commit), then fix, then re-run the full gate.
+- [2026-08-24 opus] Rework done by opus (worker stopped by host restarts 3x). Red-then-green honored: change-root test written first (failed on the missing parameter), six checks red with the fix disabled, 124/124 green with it; full suite 68/57/60/22/124/30/121. Verify gate PASS. NOTE FOR POUYA — a deliberate behavior now pinned by test: if the folder you point the Library at already contains a file at a PDF's mapped relative path, Klaus ADOPTS that file rather than overwriting or duplicating it, and the original stays in the old folder. That is required for resumable migrations (an interrupted run leaves files exactly there) and cannot be told apart from a stranger's same-named file without hashing. Say the word if you would rather it suffix instead.
+- [2026-08-24 opus] Signed off. LIVE CHECKS still owed on next restart: first-run folder prompt appears and migrates; Klausmate Preferences > General shows the Library folder row; Change... moves an existing library between folders and every PDF still opens afterwards; baked annotations write to the new location. Part B (disk<->tree mirroring, rename/move sync, rescan) still to be filed against K-057.
