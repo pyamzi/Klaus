@@ -9,27 +9,6 @@
 
 ## Ready
 
-### K-050: user_files/README.txt: ships to users but is untracked, and still describes autocomplete
-owner: -
-priority: P2
-tags: audit
-files: 
-verify: human confirms the file is tracked and its text matches the current product
-created: 2026-08-23
-
-Two problems with klausmate/user_files/README.txt, found while closing K-047.
-
-1. CONTENT: it still says the folder holds 'Extracted PDF text (lecture slides) used as context for completions' and 'Per-deck context overrides'. Completions are deleted; per-deck context overrides never shipped. The real contents are pdfs/, pdf_originals/, annotations/, contexts/, card_index/, pdf_index/, drive.json, pdf_tabs.json — and it should warn that deleting anything there is permanent, since Klaus keeps no second copy.
-
-2. THE ACTUAL BUG: the file SHIPS (scripts/package.sh copies it into every .ankiaddon) but is NOT TRACKED (git ls-files klausmate/user_files/ is empty — the .gitignore rule that protects Pouya's personal data also excludes this template). So a file every user receives drifts with no review and no history. That is the part worth fixing properly.
-
-NEEDS-HUMAN because editing it requires either Pouya doing it, or an explicit exception to the user_files deny-rule in .claude/settings.json — a rule that is otherwise load-bearing (it holds ~459MB of personal PDFs, annotations, and the 28,668-note index, and it correctly blocked ME from editing this file while closing K-047).
-
-SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it at klausmate/user_files_README.txt (tracked, reviewable) and have package.sh copy it to user_files/README.txt at build time, exactly as it already does mkdir + cp for that directory. Then the shipped text is version-controlled and the deny-rule stays absolute with no exception.
-
-#### Comments
-- [2026-08-23 Pouya] Do the suggested fix
-
 ### K-052: Preferences panel: tabs, and a control for the default sensitivity
 owner: sonnet-aq
 priority: P0
@@ -93,3 +72,26 @@ Full suite green (257 across 6 files); py_compile through the Anki symlink; stag
 ## Review
 
 ## Done
+
+### K-050: user_files/README.txt: ships to users but is untracked, and still describes autocomplete
+owner: orchestrator
+priority: P2
+tags: audit
+files: 
+verify: human confirms the file is tracked and its text matches the current product
+created: 2026-08-23
+claimed: 2026-08-23
+
+Two problems with klausmate/user_files/README.txt, found while closing K-047.
+
+1. CONTENT: it still says the folder holds 'Extracted PDF text (lecture slides) used as context for completions' and 'Per-deck context overrides'. Completions are deleted; per-deck context overrides never shipped. The real contents are pdfs/, pdf_originals/, annotations/, contexts/, card_index/, pdf_index/, drive.json, pdf_tabs.json — and it should warn that deleting anything there is permanent, since Klaus keeps no second copy.
+
+2. THE ACTUAL BUG: the file SHIPS (scripts/package.sh copies it into every .ankiaddon) but is NOT TRACKED (git ls-files klausmate/user_files/ is empty — the .gitignore rule that protects Pouya's personal data also excludes this template). So a file every user receives drifts with no review and no history. That is the part worth fixing properly.
+
+NEEDS-HUMAN because editing it requires either Pouya doing it, or an explicit exception to the user_files deny-rule in .claude/settings.json — a rule that is otherwise load-bearing (it holds ~459MB of personal PDFs, annotations, and the 28,668-note index, and it correctly blocked ME from editing this file while closing K-047).
+
+SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it at klausmate/user_files_README.txt (tracked, reviewable) and have package.sh copy it to user_files/README.txt at build time, exactly as it already does mkdir + cp for that directory. Then the shipped text is version-controlled and the deny-rule stays absolute with no exception.
+
+#### Comments
+- [2026-08-23 Pouya] Do the suggested fix
+- [2026-08-23 orchestrator] Implemented by orchestrator on Pouya's go-ahead ('add that last one too'). The suggested fix from the card, exactly: klausmate/user_files_README.txt is now the TRACKED source of truth; package.sh copies it to user_files/README.txt at build time and excludes the template from the staged root so it ships only at that path. The user_files deny-rule stays absolute — nothing writes into the live directory, and the guard that blocked my first attempt remains the reason this shape was chosen. Verified with a staging dry-run mirroring the script's rsync+cp: template absent from the addon root, present as user_files/README.txt with zero stale feature mentions, meta.json* still excluded. Grep confirms no runtime code reads the file, so the stale copy on Pouya's disk is inert — it and debug-16d0b4.log are his to delete whenever. New text covers the real folder inventory, the permanent-deletion warning, and the runtime/ removal procedure (delete after disabling 'Manage Ollama automatically' in Klausmate Preferences) that older docs falsely attributed to a nonexistent settings control.
