@@ -1363,7 +1363,9 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         def do(_col: Any) -> Any:
             folders = drive_store.load(USER_FILES).get("pdfs", {})
-            return pdf_handler.migrate_to_root(USER_FILES, new_root, folders)
+            return pdf_handler.migrate_to_root(
+                USER_FILES, new_root, folders, old_root=old_root
+            )
 
         def on_done(result: Any) -> None:
             set_busy(False)

@@ -546,10 +546,24 @@ def _unique_path(dest_dir: str, filename: str) -> str:
 
 
 def migrate_to_root(
-    user_files_dir: str, root: str, folders: dict | None = None
+    user_files_dir: str,
+    root: str,
+    folders: dict | None = None,
+    old_root: str | None = None,
 ) -> dict:
     """Move every stored PDF's baked copy out of the legacy ``pdfs/``
     store into ``root``, laid out to match the Library tree.
+
+    ``old_root`` names the root this Library is moving AWAY from, for
+    the Preferences "Change..." flow. Without it this function only ever
+    finds LEGACY ``pdfs/<safe>.pdf`` sources, so a second root change
+    reported every already-migrated PDF as "skipped", left the file in
+    the old root, and pointed its mapping at a path that does not exist
+    under the new one — ``pdf_path_for`` then returned None and the PDF
+    was unopenable (review finding, reproduced 2026-08-24). With it, a
+    PDF whose mapped file is missing under ``root`` but present under
+    ``old_root`` is moved across with the identical discipline below.
+    The first-time flow (legacy store -> first root) passes None.
 
     ``folders`` mirrors ``drive_store.load(user_files_dir)["pdfs"]`` —
     ``{safe: {"folder": "Anatomy/Week 3" | None, "display": "name.pdf"}}``
@@ -599,6 +613,16 @@ def migrate_to_root(
                     pass
             result["skipped"].append(safe)
             continue
+
+        if not os.path.isfile(source) and mapped_rel and old_root:
+            # Root CHANGE: the file already left the legacy store on an
+            # earlier run and now lives under the previous root. Treat
+            # that as the source; everything below (destination layout,
+            # collision suffixing, size verify, map-then-delete order)
+            # is identical whichever root the bytes come from.
+            previous = os.path.join(old_root, mapped_rel)
+            if os.path.isfile(previous):
+                source = previous
 
         if not os.path.isfile(source):
             result["skipped"].append(safe)  # nothing stored to move

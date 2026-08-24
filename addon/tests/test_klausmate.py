@@ -704,5 +704,130 @@ shutil.rmtree(lib_user, ignore_errors=True)
 shutil.rmtree(lib_root, ignore_errors=True)
 
 
+
+print("== library root: CHANGING the root moves already-migrated PDFs (K-070 rework) ==")
+# Falsifies the review finding: migrate_to_root only ever looked for
+# LEGACY pdfs/<safe>.pdf sources, so once a PDF lived under root A the
+# Preferences "Change..." button reported it 'skipped', left the file in
+# A, and pointed the mapping at a path that does not exist under B —
+# pdf_path_for then returns None and the PDF is unopenable. Reproduced
+# in scratch dirs before the fix; this pins it.
+cr_user = tempfile.mkdtemp(prefix="klaus_test_chroot_user_")
+cr_a = tempfile.mkdtemp(prefix="klaus_test_chroot_A_")
+cr_b = tempfile.mkdtemp(prefix="klaus_test_chroot_B_")
+os.makedirs(os.path.join(cr_user, "contexts"))
+os.makedirs(os.path.join(cr_user, "pdfs"))
+for _safe in ("Anat_1", "Anat_2"):
+    with open(os.path.join(cr_user, "contexts", _safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    with open(os.path.join(cr_user, "pdfs", _safe + ".pdf"), "wb") as f:
+        f.write(b"%PDF-1.4\n" + _safe.encode() + b"\n%%EOF")
+
+_cr_folders = {
+    "Anat_1": {"folder": "Anatomy", "display": "Anatomy One.pdf"},
+    "Anat_2": {"folder": None, "display": "Anat Two.pdf"},
+}
+_r_a = pdf_handler.migrate_to_root(cr_user, cr_a, _cr_folders)
+check(
+    "setup: both PDFs migrate into root A",
+    sorted(_r_a["moved"]) == ["Anat_1", "Anat_2"],
+    str(_r_a),
+)
+
+# The actual change-root call: old root A -> new root B.
+_r_b = pdf_handler.migrate_to_root(cr_user, cr_b, _cr_folders, old_root=cr_a)
+check(
+    "changing the root MOVES the already-migrated PDFs (not 'skipped')",
+    sorted(_r_b["moved"]) == ["Anat_1", "Anat_2"],
+    str(_r_b),
+)
+check(
+    "the PDFs now resolve under the NEW root",
+    pdf_handler.pdf_path_for(cr_user, "Anat_1", root=cr_b) is not None
+    and pdf_handler.pdf_path_for(cr_user, "Anat_2", root=cr_b) is not None,
+)
+check(
+    "the folder layout is preserved under the new root",
+    os.path.isfile(os.path.join(cr_b, "Anatomy", "Anatomy One.pdf")),
+)
+check(
+    "nothing is left stranded in the old root",
+    not os.path.isfile(os.path.join(cr_a, "Anatomy", "Anatomy One.pdf"))
+    and not os.path.isfile(os.path.join(cr_a, "Anat Two.pdf")),
+)
+check(
+    "the stored mapping is rewritten relative to the new root",
+    pdf_handler.load_library_map(cr_user).get("Anat_1")
+    == os.path.join("Anatomy", "Anatomy One.pdf"),
+)
+# Re-running the same change is a structural no-op (resumability).
+_r_again = pdf_handler.migrate_to_root(cr_user, cr_b, _cr_folders, old_root=cr_a)
+check(
+    "re-running the same change-root is a no-op",
+    _r_again["moved"] == [] and not _r_again["failed"],
+    str(_r_again),
+)
+# A file already sitting at a PDF's mapped path under the new root is
+# ADOPTED, not duplicated. This is the resumability property (an
+# interrupted run leaves files exactly there) and it cannot be told
+# apart from a stranger's file of the same name without hashing — so it
+# is pinned deliberately rather than left to chance. Consequence worth
+# knowing: pointing the Library at a folder that already contains a file
+# at that relative path adopts it and leaves the original in the old
+# root. Flagged on K-070 for Pouya.
+cr_c = tempfile.mkdtemp(prefix="klaus_test_chroot_C_")
+os.makedirs(os.path.join(cr_c, "Anatomy"), exist_ok=True)
+with open(os.path.join(cr_c, "Anatomy", "Anatomy One.pdf"), "wb") as f:
+    f.write(b"pre-existing")
+_r_c = pdf_handler.migrate_to_root(cr_user, cr_c, _cr_folders, old_root=cr_b)
+check(
+    "a file already at the mapped path in the new root is adopted, not duplicated",
+    "Anat_1" in _r_c["skipped"]
+    and open(os.path.join(cr_c, "Anatomy", "Anatomy One.pdf"), "rb").read()
+    == b"pre-existing"
+    and not os.path.isfile(os.path.join(cr_c, "Anatomy", "Anatomy One (1).pdf")),
+    str(_r_c),
+)
+
+# A GENUINE collision through the change-root path: two PDFs that share
+# a display name. The second one's destination filename is taken by the
+# first, so it must be suffixed — never overwritten.
+cl_user = tempfile.mkdtemp(prefix="klaus_test_clash_user_")
+cl_a = tempfile.mkdtemp(prefix="klaus_test_clash_A_")
+cl_b = tempfile.mkdtemp(prefix="klaus_test_clash_B_")
+os.makedirs(os.path.join(cl_user, "contexts"))
+os.makedirs(os.path.join(cl_user, "pdfs"))
+for _safe, _body in (("Dup_1", b"first"), ("Dup_2", b"second")):
+    with open(os.path.join(cl_user, "contexts", _safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    with open(os.path.join(cl_user, "pdfs", _safe + ".pdf"), "wb") as f:
+        f.write(b"%PDF-1.4\n" + _body + b"\n%%EOF")
+
+_cl_folders = {
+    "Dup_1": {"folder": "Shared", "display": "Same Name.pdf"},
+    "Dup_2": {"folder": "Shared", "display": "Same Name.pdf"},
+}
+pdf_handler.migrate_to_root(cl_user, cl_a, _cl_folders)
+_cl_b = pdf_handler.migrate_to_root(cl_user, cl_b, _cl_folders, old_root=cl_a)
+check(
+    "both same-named PDFs survive a root change as distinct files",
+    sorted(_cl_b["moved"]) == ["Dup_1", "Dup_2"]
+    and os.path.isfile(os.path.join(cl_b, "Shared", "Same Name.pdf"))
+    and os.path.isfile(os.path.join(cl_b, "Shared", "Same Name (1).pdf")),
+    str(_cl_b),
+)
+_cl_map = pdf_handler.load_library_map(cl_user)
+check(
+    "each keeps its own mapping and resolves independently",
+    _cl_map["Dup_1"] != _cl_map["Dup_2"]
+    and pdf_handler.pdf_path_for(cl_user, "Dup_1", root=cl_b) is not None
+    and pdf_handler.pdf_path_for(cl_user, "Dup_2", root=cl_b) is not None,
+)
+check(
+    "neither file's bytes were overwritten by the other",
+    open(pdf_handler.pdf_path_for(cl_user, "Dup_1", root=cl_b), "rb").read()
+    != open(pdf_handler.pdf_path_for(cl_user, "Dup_2", root=cl_b), "rb").read(),
+)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
