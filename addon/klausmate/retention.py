@@ -288,12 +288,9 @@ def save_matches(
         "floor": MATCH_FLOOR,
         "matches": [[nid, round(score, 6)] for nid, score in matches],
     }
-    path = _matches_path(name)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, separators=(",", ":"))
-    os.replace(tmp, path)
+    pdf_handler._atomic_write_json(
+        _matches_path(name), payload, separators=(",", ":")
+    )
 
 
 # ------------------------------------------------------------- prefs.json
@@ -332,12 +329,28 @@ def set_threshold(name: str, value: float) -> None:
     safe = pdf_handler._safe_basename(name)
     prefs = _load_prefs()
     prefs.setdefault(safe, {})["threshold"] = round(float(value), 3)
-    path = _prefs_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(prefs, f, separators=(",", ":"))
-    os.replace(tmp, path)
+    pdf_handler._atomic_write_json(
+        _prefs_path(), prefs, separators=(",", ":")
+    )
+
+
+def forget_prefs(name: str) -> None:
+    """Drop ``name``'s entire prefs.json entry.
+
+    Called from ``pdf_handler.delete_context`` when a PDF is deleted:
+    prefs.json is a SIBLING of the per-PDF ``contexts``/``pdfs``/
+    ``annotations`` directories, so nothing that rmtree's or unlinks
+    those can reach it, and a stale entry (threshold, or any other
+    per-PDF preference stored here later) would otherwise silently
+    resurface if a PDF with the same safe basename is re-imported.
+    """
+    safe = pdf_handler._safe_basename(name)
+    prefs = _load_prefs()
+    if safe in prefs:
+        del prefs[safe]
+        pdf_handler._atomic_write_json(
+            _prefs_path(), prefs, separators=(",", ":")
+        )
 
 
 # --------------------------------------------------- FSRS retrievability

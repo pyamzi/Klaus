@@ -217,6 +217,81 @@ with open(os.path.join(d2, "manifest.json"), "w") as f:
 pdf_handler.delete_context(tmp, "Lecture 1")
 check("delete_context removes pdf_index dir", not os.path.isdir(d2))
 
+# ------------------------------------- pdf_handler: atomic writes + recency
+
+print("== pdf_handler: atomic writes ==")
+
+awj_path = os.path.join(tmp, "atomic_test.json")
+pdf_handler._atomic_write_json(awj_path, {"a": 1})
+pdf_handler._atomic_write_json(awj_path, {"b": 2})
+with open(awj_path, encoding="utf-8") as f:
+    on_disk = json.load(f)
+check("_atomic_write_json overwrites rather than merges", on_disk == {"b": 2}, str(on_disk))
+check("_atomic_write_json leaves no tmp file behind",
+      not any(n.startswith(".atomic_test.json.") for n in os.listdir(tmp)))
+
+tabs_tmp = tempfile.mkdtemp(prefix="klaus_test_tabs_")
+pdf_handler.save_open_tabs(tabs_tmp, ["Foo", "Bar"])
+pdf_handler.touch_last_used(tabs_tmp, "Foo")
+raw_tabs = pdf_handler._load_tabs_file(tabs_tmp)
+check("pdf_tabs.json round-trips through the shared atomic writer (multi-writer merge)",
+      raw_tabs.get("open") == ["Foo", "Bar"] and "Foo" in raw_tabs.get("last_used", {}),
+      str(raw_tabs))
+check("pdf_tabs.json has no leftover tmp file",
+      not any(n.startswith(".pdf_tabs.json.") for n in os.listdir(tabs_tmp)))
+shutil.rmtree(tabs_tmp, ignore_errors=True)
+
+print("== pdf_handler: recency ordering ==")
+
+# list_by_recency: an explicit last_used touch outranks mtime, and the
+# untouched fallback reads contexts/<safe>.txt (fresh at ingest time) —
+# NOT pdfs/<safe>.pdf, whose mtime shutil.copy2 preserves from the
+# source file.
+rec_tmp = tempfile.mkdtemp(prefix="klaus_test_recency_")
+rec_ctx = os.path.join(rec_tmp, "contexts")
+os.makedirs(rec_ctx)
+for nm in ("Old", "Middle", "New"):
+    with open(os.path.join(rec_ctx, nm + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    time.sleep(0.01)
+# "Old" is the stalest by ctx mtime but gets touched last -> must lead.
+pdf_handler.touch_last_used(rec_tmp, "Old")
+ranked = pdf_handler.list_by_recency(rec_tmp)
+check("list_by_recency: last_used outranks mtime", ranked[0] == "Old", str(ranked))
+check("list_by_recency: untouched entries fall back to ctx mtime, newest first",
+      ranked[1:] == ["New", "Middle"], str(ranked))
+check("list_by_recency: limit caps the result",
+      pdf_handler.list_by_recency(rec_tmp, limit=1) == ["Old"])
+
+# ensure_active_pdf must repair from the same last_used ranking, not an
+# independent max-mtime scan: "Middle" is the mtime-newest context, but
+# "Old" is the most recently USED one, and no active pointer is set yet.
+repaired = pdf_handler.ensure_active_pdf(rec_tmp)
+check("ensure_active_pdf repairs from last_used rather than mtime",
+      repaired == "Old", str(repaired))
+shutil.rmtree(rec_tmp, ignore_errors=True)
+
+print("== pdf_handler: save_pdf touches last_used ==")
+
+sp_tmp = tempfile.mkdtemp(prefix="klaus_test_savepdf_")
+raw_pdf = os.path.join(sp_tmp, "raw.pdf")
+with open(raw_pdf, "wb") as f:
+    f.write(b"%PDF-1.4\n%%EOF")
+t0 = time.time()
+pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)
+lu1 = pdf_handler.load_last_used(sp_tmp)
+check("save_pdf touches last_used on first import",
+      lu1.get("Old_Lecture", 0) >= t0, str(lu1))
+
+time.sleep(0.05)
+t1 = time.time()
+pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)  # re-import, same basename
+lu2 = pdf_handler.load_last_used(sp_tmp)
+check("re-import bumps last_used forward (doesn't keep the stale timestamp)",
+      lu2.get("Old_Lecture", 0) >= t1 > lu1["Old_Lecture"],
+      f"{lu1} -> {lu2}")
+shutil.rmtree(sp_tmp, ignore_errors=True)
+
 # ---------------------------------------------------- retention (needs aqt)
 
 print("== retention math (aqt stubbed) ==")
@@ -343,6 +418,16 @@ if HAVE_RETENTION:
           abs(retention.get_threshold("Lecture 1", {}) - 0.42) < 1e-9)
     check("threshold default from cfg",
           abs(retention.get_threshold("Other", {"pdf_match_threshold": 0.5}) - 0.5) < 1e-9)
+
+    # prefs orphan cleanup: delete_context must reach prefs.json (a
+    # SIBLING of the per-PDF dirs, so its own rmtree/unlink candidates
+    # can never touch it) via the real lazy retention.forget_prefs hop —
+    # not a stub, since aqt is stubbed by this point in the file.
+    pdf_handler.delete_context(tmp, "Lecture 1")
+    check("delete_context clears the prefs.json entry (no orphaned threshold)",
+          abs(retention.get_threshold("Lecture 1", {}) - retention.DEFAULT_THRESHOLD) < 1e-9)
+    check("prefs.json itself no longer has the entry",
+          "Lecture_1" not in retention._load_prefs())
 
     # card_retrievability against a fake col.db
     class FakeDB:

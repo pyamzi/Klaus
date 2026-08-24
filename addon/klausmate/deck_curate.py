@@ -223,29 +223,16 @@ def run_curation_flow(pdf_name: str, deck_scope: str | None, parent=None) -> Non
 def _pick_pdf_menu() -> None:
     """No PDF armed: offer the library, most recently used first."""
     user_files = _user_files()
-    names = [
-        f[:-4] if f.endswith(".txt") else f
-        for f in pdf_handler.list_contexts(user_files)
-    ]
+    try:
+        names = pdf_handler.list_by_recency(user_files)
+    except Exception:
+        names = [
+            f[:-4] if f.endswith(".txt") else f
+            for f in pdf_handler.list_contexts(user_files)
+        ]
     if not names:
         tooltip("No PDFs imported yet — drop one on the deck list first.")
         return
-    try:
-        recency = pdf_handler.load_last_used(user_files)
-    except Exception:
-        recency = {}
-
-    def sort_key(safe: str) -> float:
-        ts = recency.get(safe)
-        if ts:
-            return -float(ts)
-        try:
-            path = os.path.join(user_files, "contexts", safe + ".txt")
-            return -os.path.getmtime(path)
-        except OSError:
-            return 0.0
-
-    names.sort(key=sort_key)
     menu = QMenu(mw)
     # addAction(QAction) returns None in PyQt6 — build, configure, then add.
     header = QAction("Curate a deck from…", menu)

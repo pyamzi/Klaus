@@ -52,6 +52,54 @@ except Exception:
 _ACTIVE_PDF_FILE = "active_pdf.txt"
 
 
+# ------------------------------- atomic writes ----------------------------
+#
+# Shared by every store below that can be written from more than one call
+# site (pdf_tabs.json has four: open tabs, last_used, thumbs, panel
+# placement) or that a background thread might touch concurrently with a
+# read. A tmp file lives in the SAME directory as the target so
+# ``os.replace`` is a same-filesystem rename: atomic, and safe even while
+# something else still holds the old inode open (mirrors
+# ``_atomic_replace_from`` below, which does the analogous thing for whole
+# PDF files during bake/un-bake).
+#
+# Both helpers RAISE on failure rather than swallowing — callers decide
+# whether a failed write should be silent (``_save_tabs_file`` keeps its
+# long-standing best-effort contract) or surfaced (retention's
+# save_matches/set_threshold let it propagate to the caller's QueryOp
+# failure handler, same as before this helper existed).
+
+
+def _atomic_write(path: str, write_fn) -> None:
+    """Write to ``path`` atomically: ``write_fn(f)`` writes into an open
+    tmp file in ``path``'s directory, which is then ``os.replace``'d onto
+    ``path``. The tmp file is always cleaned up, success or failure."""
+    dest_dir = os.path.dirname(path) or "."
+    os.makedirs(dest_dir, exist_ok=True)
+    tmp = os.path.join(
+        dest_dir, f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            write_fn(f)
+        os.replace(tmp, path)
+    finally:
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _atomic_write_json(path: str, obj, **json_kwargs) -> None:
+    """Write ``obj`` as JSON to ``path`` atomically (tmp file + rename).
+
+    ``**json_kwargs`` forwards to ``json.dump`` (e.g. ``separators=(",",
+    ":")`` for a compact cache file).
+    """
+    _atomic_write(path, lambda f: json.dump(obj, f, **json_kwargs))
+
+
 # ----------------------------- extraction --------------------------------
 
 
@@ -97,10 +145,11 @@ def get_active_pdf(user_files_dir: str) -> str | None:
 
 
 def set_active_pdf(user_files_dir: str, name: str) -> None:
-    os.makedirs(user_files_dir, exist_ok=True)
     base = _safe_basename(name)
-    with open(_active_pdf_path(user_files_dir), "w", encoding="utf-8") as f:
-        f.write(base)
+    # Plain text (a bare basename), not JSON — routed through the same
+    # tmp+replace primitive as _atomic_write_json rather than that helper
+    # itself, so the on-disk format of this live user file doesn't change.
+    _atomic_write(_active_pdf_path(user_files_dir), lambda f: f.write(base))
 
 
 def clear_active_pdf(user_files_dir: str) -> None:
@@ -127,18 +176,15 @@ def ensure_active_pdf(user_files_dir: str) -> str | None:
     active = get_active_pdf(user_files_dir)
     if active and active + ".txt" in names:
         return active
-    ctx_dir = os.path.join(user_files_dir, "contexts")
-    newest_name = names[0]
-    newest_mtime = 0.0
-    for n in names:
-        try:
-            m = os.path.getmtime(os.path.join(ctx_dir, n))
-        except OSError:
-            m = 0.0
-        if m >= newest_mtime:
-            newest_mtime = m
-            newest_name = n
-    base = newest_name[:-4] if newest_name.endswith(".txt") else newest_name
+    # Repair from the same recency ranking the ＋ menu uses (last_used,
+    # falling back to ingest time) rather than an independent mtime scan —
+    # otherwise the repointed pointer could disagree with what the menu
+    # calls "most recent".
+    ranked = list_by_recency(user_files_dir)
+    if ranked:
+        base = ranked[0]
+    else:
+        base = names[0][:-4] if names[0].endswith(".txt") else names[0]
     set_active_pdf(user_files_dir, base)
     return base
 
@@ -161,12 +207,9 @@ def _save_tabs_file(user_files_dir: str, updates: dict) -> None:
     data = _load_tabs_file(user_files_dir)
     data.update(updates)
     try:
-        with open(
-            os.path.join(user_files_dir, _OPEN_TABS_FILE),
-            "w",
-            encoding="utf-8",
-        ) as f:
-            json.dump(data, f)
+        _atomic_write_json(
+            os.path.join(user_files_dir, _OPEN_TABS_FILE), data
+        )
     except Exception:
         pass
 
@@ -215,6 +258,41 @@ def touch_last_used(user_files_dir: str, name: str) -> None:
             sorted(lu.items(), key=lambda kv: kv[1], reverse=True)[:50]
         )
     _save_tabs_file(user_files_dir, {"last_used": lu})
+
+
+def list_by_recency(
+    user_files_dir: str, limit: int | None = None
+) -> list[str]:
+    """Safe basenames of every stored PDF, most-recently-used first.
+
+    Ranked by ``last_used`` (set by ``touch_last_used`` on import or tab
+    activation) when present. A PDF that was imported but never
+    activated falls back to its ``contexts/<safe>.txt`` mtime, which is
+    written FRESH at import — this means "ingest time", unlike
+    ``pdfs/<safe>.pdf``'s mtime, which ``shutil.copy2`` PRESERVES from
+    the source file (a lecture authored in 2019 and imported today would
+    sort as if it were from 2019). Both call sites that need a recency
+    order (this ＋ menu / deck_curate's menu) should read this, not
+    re-derive their own mtime fallback.
+    """
+    ctx_dir = os.path.join(user_files_dir, "contexts")
+    names = [
+        f[:-4] if f.endswith(".txt") else f
+        for f in list_contexts(user_files_dir)
+    ]
+    recency = load_last_used(user_files_dir)
+
+    def sort_key(safe: str) -> float:
+        ts = recency.get(safe)
+        if ts:
+            return -float(ts)
+        try:
+            return -os.path.getmtime(os.path.join(ctx_dir, safe + ".txt"))
+        except OSError:
+            return 0.0
+
+    names.sort(key=sort_key)
+    return names[:limit] if limit is not None else names
 
 
 def load_thumbs_state(user_files_dir: str) -> dict:
@@ -319,6 +397,10 @@ def save_pdf(user_files_dir: str, name: str, raw_path: str) -> dict:
             print(f"[klausmate] could not drop stale original: {exc}")
 
     set_active_pdf(user_files_dir, safe)
+    # A re-import under the same basename must sort as freshly ingested,
+    # not at its old recency slot (or worse, by the copied file's SOURCE
+    # mtime — see list_by_recency).
+    touch_last_used(user_files_dir, safe)
     return {"name": safe, "page_count": len(pages), "txt_path": txt_path}
 
 
@@ -662,6 +744,16 @@ def delete_context(user_files_dir: str, name: str) -> None:
         drive_store.remove_pdf(user_files_dir, base)
     except Exception as exc:
         print(f"[klausmate] drive cleanup failed for {base}: {exc}")
+    # prefs.json (sensitivity threshold, etc.) is a SIBLING of contexts/
+    # pdfs/annotations — the candidates list above can never reach it, so
+    # without this a re-import under the same safe basename would
+    # silently inherit a stale entry forever.
+    try:
+        from . import retention
+
+        retention.forget_prefs(base)
+    except Exception as exc:
+        print(f"[klausmate] prefs cleanup failed for {base}: {exc}")
     if get_active_pdf(user_files_dir) == base:
         clear_active_pdf(user_files_dir)
 
