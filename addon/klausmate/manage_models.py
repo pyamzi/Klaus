@@ -266,7 +266,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_layout.addWidget(
         _caption(
             "Finds cards and decks by meaning, not just keywords — powers "
-            "deck curation and the Klaus panel."
+            "Curate Deck and the Library's retention scores."
         )
     )
     embed_form = QFormLayout()

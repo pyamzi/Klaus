@@ -3752,7 +3752,7 @@ class PdfSidebar(QWidget):
             self._doc = None
             self._fallback_label = QLabel(
                 "PDF viewer is unavailable on this Anki build.\n"
-                "Klaus will still use BM25 retrieval for your lecture PDF.",
+                "Klaus will still index it for curation and retention scoring.",
                 self,
             )
             self._fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -3778,7 +3778,7 @@ class PdfSidebar(QWidget):
             if self._fallback_label is not None:
                 self._fallback_label.setText(
                     f"The raw PDF for '{name}' is not stored.\n"
-                    "Re-add it via the Klaus panel (drop zone) to enable the viewer."
+                    "Re-add it via the editor's PDF panel or the Library to enable the viewer."
                 )
             self._name = None
             self._set_active(None)

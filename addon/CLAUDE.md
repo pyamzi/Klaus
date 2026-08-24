@@ -1,9 +1,18 @@
 # CLAUDE.md — Addons repo / Klaus (klausmate)
 
-The real project here is **`klausmate/`** — "Klaus", a local-AI Anki addon
-(autocomplete, ⌘K Ask on either a local Ollama model or the Claude API,
-semantic deck curation, PDF viewer, image cropping). The rest of this repo
-is dotfiles.
+The real project here is **`klausmate/`** — "Klaus", an Anki addon for
+semantic deck curation (find cards matching a lecture PDF, copy them into a
+new deck), a lecture-PDF library with per-PDF retention scoring, a native
+PDF viewer with highlights/sticky notes, and image cropping. The rest of
+this repo is dotfiles.
+
+Klaus is **embeddings-only**: its one AI capability is semantic search,
+which defaults to the **Voyage** cloud embedding API (Ollama is an optional
+local alternative, OpenAI a second cloud option). Autocomplete, ⌘K Ask, the
+Klaus chat panel, the Settings dialog, and the Claude/Anthropic integration
+were all deleted in 2026-08 — if you find docs, comments, or instincts that
+assume any of those still exist, they're stale. See AGENTS.md's "What used
+to be here" for the full list of what was removed.
 
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
@@ -45,35 +54,60 @@ holds API keys) stay ignored — never stage those.
 
 ## Module map
 
-- `__init__.py` (~5k lines): bootstrap + gui_hooks; JS bridge
+- `__init__.py`: bootstrap + gui_hooks; JS bridge
   (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
-  splits `":", 2`); `_PdfTabContainer` (tabbed PDF panel + window management:
-  embed above/below/left/right of the editor pane via a QSplitter wrapper, or
-  float as a parentless real window; native drag via `startSystemMove` with a
-  watchdog + ghost fallback); image-crop plumbing; Browse toolbar toggles
-  (◧ sidebar / ◨ editor column).
+  splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
+  `complete`/`ask` actions are gone with autocomplete/Ask); `_PdfTabContainer`
+  (tabbed PDF panel + window management: embed above/below/left/right of the
+  editor pane via a QSplitter wrapper, or float as a parentless real window;
+  native drag via `startSystemMove` with a watchdog + ghost fallback);
+  image-crop plumbing; Tools → Klaus menu (`install_menu`: Clear library tag,
+  Manage models…, Test connection).
+- `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
+  split out of `__init__.py`.
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
-  `PdfSidebar` (one instance reused across tabs).
-- `pdf_handler.py`: storage + retrieval. `user_files/{contexts,pdfs,
+  `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"
+  button — Cmd/Ctrl-double-click a page, or right-click "Copy slide as
+  image", copies it as an image; right-click also offers "Copy page text".
+- `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
   pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs, placement,
-  thumbs, last_used — all writers MERGE via `_save_tabs_file`). BM25 retrieval
-  for autocomplete/Ask grounding. `bake_annotations(dir, name)` writes
-  highlights/notes into `pdfs/<base>.pdf` as REAL annotations (vendored
-  pypdf): pristine original captured once in `pdf_originals/`, every bake
-  regenerates from pristine + full json (never incremental; empty json =
-  un-bake/restore), atomic `os.replace` (safe under the viewer's open
+  thumbs, last_used — all writers MERGE via `_save_tabs_file`). No retrieval
+  consumer remains here (autocomplete/Ask, the only callers of its old BM25
+  search, are gone) — `_chunk_text` now only feeds the semantic-curation
+  pipeline (`curation.py`, `pdf_index.py`). `bake_annotations(dir, name)`
+  writes highlights/notes into `pdfs/<base>.pdf` as REAL annotations
+  (vendored pypdf): pristine original captured once in `pdf_originals/`,
+  every bake regenerates from pristine + full json (never incremental; empty
+  json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
   QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
   1200ms debounce → daemon thread.
+- `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
+  UI; file/class names still say drive) — virtual-folder tree
+  (`drive_store.py`, `user_files/drive.json`; nothing on disk moves) next to
+  a standalone `PdfSidebar`. Top-toolbar link labeled "Library"
+  (`gui_hooks.top_toolbar_did_init_links`). Right-click per row: open,
+  rename, move to folder, re-embed, adjust match sensitivity, show matches
+  in Browse, curate deck from this PDF, delete.
+- `retention.py`: per-PDF retention/study-priority score shown in the
+  Library — embed the PDF's chunks (`pdf_index.py`) → score every indexed
+  note against them (max cosine, cached in `matches.json`) → pull FSRS
+  retrievability for matched cards → aggregate. Preview tag
+  `!Library::Matching`.
+- `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
+  chunks, `card_index.py`'s sibling for the PDF side.
 - `crop_dialog.py`: image-crop dialog (crop saved as NEW media file).
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
-  (`composedPath`); ghost text, focus tracking, crop dblclick.
-- **Semantic curation stack** (replaced the old Klaus chat in 2026-07):
+  (`composedPath`). Ghost text and Ask are gone — this file now only tracks
+  field focus (for PDF page-insert targeting) and the image-crop dblclick
+  trigger.
+- **Semantic curation stack** (Curate Deck + the Library's retention score;
+  this is the only AI-powered feature left):
   - `embeddings.py` (aqt-free): provider abstraction — Voyage
     (default, `voyage-3-lite`), with Ollama `/api/embed` (`nomic-embed-text`)
-    and OpenAI as alternatives. `OPENAI_API_BASE`/`VOYAGE_API_BASE` module
-    globals exist for test monkeypatching.
-    Vectors are **unit-normalized at write time**.
+    and OpenAI (`text-embedding-3-small`) as alternatives. `OPENAI_API_BASE`/
+    `VOYAGE_API_BASE` module globals exist for test monkeypatching. Vectors
+    are **unit-normalized at write time**.
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
     detector; `note.mod` only a pre-filter** — the Browse-preview tag bumps
@@ -85,24 +119,46 @@ holds API keys) stay ignored — never stage those.
   - `curation.py` (aqt glue): two-phase `ensure_index` (snapshot with col
     via `select id, mod, flds from notes` + `flds.split("\x1f")`; embed
     without col, partial save every ~1k vectors), `run_curation`, preview
-    via temp tag `klaus::curate` (+ `Browser.search_for`; `nid:` lists
+    via temp tag `!Library::Curating` (+ `Browser.search_for`; `nid:` lists
     break at thousands of ids), undoable deck copy (`add_custom_undo_entry`
-    → `col.add_notes` → `merge_undo_entries`).
-  - `chat_dock.py`: the Klaus panel controller (name kept so the
-    `klausmateChatDock` objectName preserves saved dock geometry). Hosts
-    `web/search.html|css|js`, bridge prefix `klaus:`, `window.klausSearch`.
-  - `claude_api.py` (aqt-free): stdlib SSE client for the Anthropic
-    Messages API (the official SDK needs compiled pydantic-core — banned).
-    Powers the ⌘K Claude brain (`klaus_engine`/`claude_api_key` config).
-  - `anki_tools.py`: **inert** collection tools (kept, tested) for a future
-    agent surface.
+    → `col.add_notes` → `merge_undo_entries`) tagged `!Library::Curated`.
+    Curation is always PDF-driven now — `run_curation`'s free-text `prompt`
+    param has no caller since the chat panel that used to fill it in was
+    deleted.
+  - `deck_curate.py`: "Curate Deck" button + PDF drop/arm on the deck list
+    and deck overview screens; calls into `curation.py` via
+    `run_curation_flow(pdf_name, deck_scope)`.
+  - `tag_migrate.py`: one-time `klaus::*` → `!Library::*` collection tag
+    rename on `profile_did_open`, guarded idempotent (only proposes a rename
+    when the old tag still exists), returns `col.merge_undo_entries(pos)`
+    (a plain list return here crashed every profile open — `on_op_finished`
+    reads `.changes` off a `CollectionOp`'s result).
+  - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
+    also first-run setup) — three sections: **Semantic search** (embedding
+    provider/key/model — `_resolve_ollama_model()` guards against silently
+    orphaning an existing index when the ollama model config is empty),
+    **Local model library (Ollama)** (pull/delete embedding models only —
+    `_EMBED_PRESETS`: nomic-embed-text, snowflake-arctic-embed,
+    mxbai-embed-large, embeddinggemma), **General** (`image_crop_enabled`,
+    `runtime_auto_setup` toggles — no other UI touches either key).
+  - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
+    readiness checks, gated on `embeddings.provider_name(cfg)` — a
+    Voyage/OpenAI profile never sees Ollama-flavored copy or probes.
+  - `ollama_client.py`: stdlib HTTP client — `/api/embed`, pull, delete.
+    **No text-generation method** (stripped when autocomplete/Ask were
+    removed).
   - `ollama_runtime.py`/`ollama_setup.py`: managed Ollama provisioning.
     **Never kill a user-owned Ollama** — only servers Klaus spawned
-    (pidfile + process-identity verify).
-- Config lives in Anki's addon config (`meta.json`) + `config.md`;
-  `browser_dock_enabled` is a dead legacy key. `_migrate_config()`
-  (profile_did_open) renames legacy `chat_*` keys → `klaus_engine`/
-  `claude_*`; keep it until users have upgraded.
+    (pidfile + process-identity verify). No UI control removes a
+    Klaus-managed install; reclaiming that disk space is a manual delete of
+    `user_files/runtime/` (after switching off "Manage Ollama automatically"
+    in Manage models → General so it doesn't just come back).
+- Deleted (2026-08, do not resurrect the language): `claude_api.py`,
+  `anki_tools.py`, `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
+  `web/search.html|css|js`. Config lives in `klausmate/config.json` +
+  Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
+  (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
+  deleted Claude-Ask feature; keep it until users have upgraded past it.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -154,5 +210,7 @@ holds API keys) stay ignored — never stage those.
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has
   `pypdf.annotations`); no other third-party deps, no native code.
-- Ollama models: presets in `_MODEL_PRESETS` (`__init__.py`), all must run in
-  ≤8 GB RAM; index 0 stays the tiny starter model (first-run flow pulls it).
+- Ollama embedding-model presets live in `_EMBED_PRESETS`
+  (`manage_models.py`) — there is no text-generation model list anymore
+  (autocomplete/Ask are gone), and no first-run auto-pull; the user picks a
+  provider/model explicitly.
