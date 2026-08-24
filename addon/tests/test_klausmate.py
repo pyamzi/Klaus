@@ -829,5 +829,141 @@ check(
     != open(pdf_handler.pdf_path_for(cl_user, "Dup_2", root=cl_b), "rb").read(),
 )
 
+
+print("== two-way folder sync (K-073): plan_rescan is pure and conservative ==")
+_pr = pdf_handler.plan_rescan
+check("all in place -> no-op",
+      _pr({"A": "x/a.pdf"}, ["x/a.pdf"])
+      == {"moves": {}, "missing": [], "new": [], "ingestable": [], "ambiguous": False})
+check("unique basename elsewhere -> MOVE",
+      _pr({"A": "x/a.pdf"}, ["y/a.pdf"])["moves"] == {"A": "y/a.pdf"})
+check("two missing share a basename -> neither is guessed",
+      _pr({"A": "x/n.pdf", "B": "y/n.pdf"}, ["z/n.pdf", "keep/other stuff.pdf"])["moves"] == {})
+check("exactly-one-missing / exactly-one-new -> RENAME",
+      _pr({"A": "a.pdf", "B": "b.pdf"}, ["b.pdf", "renamed.pdf"])["moves"] == {"A": "renamed.pdf"})
+_amb = _pr({"A": "a.pdf", "B": "b.pdf"}, ["c.pdf", "d.pdf"])
+check("two renames at once -> ambiguous, no moves, no ingest",
+      _amb["ambiguous"] and _amb["moves"] == {} and _amb["ingestable"] == [],
+      str(_amb))
+check("deletion with nothing new -> reported missing only",
+      _pr({"A": "a.pdf"}, []) == {"moves": {}, "missing": ["A"], "new": [],
+                                  "ingestable": [], "ambiguous": False})
+_clean_new = _pr({"A": "a.pdf"}, ["a.pdf", "fresh/drop.pdf"])
+check("new file with nothing missing -> ingestable",
+      _clean_new["ingestable"] == ["fresh/drop.pdf"] and not _clean_new["ambiguous"])
+_mixed = _pr({"A": "gone.pdf"}, ["maybe-renamed.pdf", "maybe-new.pdf"])
+check("new files while a rename is unresolved are NOT ingestable",
+      _mixed["ambiguous"] and _mixed["ingestable"] == [])
+check("move recognised by basename even alongside other new files",
+      _pr({"A": "x/lec.pdf"}, ["y/lec.pdf", "brand/new.pdf"])["moves"] == {"A": "y/lec.pdf"})
+
+print("== two-way folder sync (K-073): rescan_root applies to map + tree ==")
+drive_store = importlib.import_module("klausmate.drive_store")
+tw_user = tempfile.mkdtemp(prefix="klaus_test_twoway_user_")
+tw_root = tempfile.mkdtemp(prefix="klaus_test_twoway_root_")
+os.makedirs(os.path.join(tw_user, "contexts"))
+os.makedirs(os.path.join(tw_user, "pdfs"))
+for _safe in ("Sync_A", "Sync_B"):
+    with open(os.path.join(tw_user, "contexts", _safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    with open(os.path.join(tw_user, "pdfs", _safe + ".pdf"), "wb") as f:
+        f.write(b"%PDF-1.4\n" + _safe.encode() + b"\n%%EOF")
+drive_store.record_import(tw_user, "Sync_A", "Sync A.pdf")
+drive_store.record_import(tw_user, "Sync_B", "Sync B.pdf")
+drive_store.add_folder(tw_user, "Anatomy")
+drive_store.set_folder(tw_user, "Sync_A", "Anatomy")
+_tw_folders = drive_store.load(tw_user)["pdfs"]
+pdf_handler.migrate_to_root(tw_user, tw_root, _tw_folders)
+
+# Finder MOVE: Anatomy/Sync A.pdf -> Histology/Week 2/Sync A.pdf
+os.makedirs(os.path.join(tw_root, "Histology", "Week 2"))
+os.rename(os.path.join(tw_root, "Anatomy", "Sync A.pdf"),
+          os.path.join(tw_root, "Histology", "Week 2", "Sync A.pdf"))
+_s1 = pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])
+check("move applied to mapping", pdf_handler.load_library_map(tw_user)["Sync_A"]
+      == os.path.join("Histology", "Week 2", "Sync A.pdf"), str(_s1))
+check("move applied to the tree",
+      drive_store.load(tw_user)["pdfs"]["Sync_A"]["folder"] == "Histology/Week 2")
+check("a plain move leaves the display text alone",
+      drive_store.load(tw_user)["pdfs"]["Sync_A"]["display"] == "Sync A.pdf")
+check("PDF still resolves after the move",
+      pdf_handler.pdf_path_for(tw_user, "Sync_A", root=tw_root) is not None)
+
+# Finder RENAME: Sync B.pdf -> Better Name.pdf (same directory)
+os.rename(os.path.join(tw_root, "Sync B.pdf"),
+          os.path.join(tw_root, "Better Name.pdf"))
+_s2 = pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])
+check("rename applied to mapping",
+      pdf_handler.load_library_map(tw_user)["Sync_B"] == "Better Name.pdf", str(_s2))
+check("rename updates the display",
+      drive_store.load(tw_user)["pdfs"]["Sync_B"]["display"] == "Better Name.pdf")
+check("rescan with nothing changed is a no-op",
+      pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])["moved"] == [])
+
+# Finder DELETE: report, never destroy Klaus data.
+os.remove(os.path.join(tw_root, "Better Name.pdf"))
+_s3 = pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])
+check("deleted file is reported missing", _s3["missing"] == ["Sync_B"], str(_s3))
+check("deletion keeps the mapping and the context",
+      "Sync_B" in pdf_handler.load_library_map(tw_user)
+      and os.path.isfile(os.path.join(tw_user, "contexts", "Sync_B.txt")))
+
+print("== two-way folder sync (K-073): dropping a PDF into the folder ingests in place ==")
+os.makedirs(os.path.join(tw_root, "Drops"), exist_ok=True)
+with open(os.path.join(tw_root, "Drops", "Fresh Lecture.pdf"), "wb") as f:
+    f.write(b"%PDF-1.4\nfresh\n%%EOF")
+# Restore Sync_B first so the new file is unambiguous.
+with open(os.path.join(tw_root, "Better Name.pdf"), "wb") as f:
+    f.write(b"%PDF-1.4\nSync_B\n%%EOF")
+_orig_extract = pdf_handler.extract_pages
+pdf_handler.extract_pages = lambda p: ["synthetic page text"]
+try:
+    _s4 = pdf_handler.rescan_root(tw_user, tw_root, drive_store.load(tw_user)["pdfs"])
+finally:
+    pdf_handler.extract_pages = _orig_extract
+check("dropped PDF is ingested", _s4["ingested"] == ["Fresh_Lecture"], str(_s4))
+check("ingest maps the file WHERE IT IS (no copy made)",
+      pdf_handler.load_library_map(tw_user)["Fresh_Lecture"]
+      == os.path.join("Drops", "Fresh Lecture.pdf")
+      and not os.path.isfile(os.path.join(tw_user, "pdfs", "Fresh_Lecture.pdf")))
+check("ingest wrote the context and the tree entry",
+      os.path.isfile(os.path.join(tw_user, "contexts", "Fresh_Lecture.txt"))
+      and drive_store.load(tw_user)["pdfs"]["Fresh_Lecture"]["folder"] == "Drops")
+check("ingested PDF resolves through pdf_path_for",
+      pdf_handler.pdf_path_for(tw_user, "Fresh_Lecture", root=tw_root) is not None)
+
+print("== single-copy imports (K-073): save_pdf writes straight into the root ==")
+sc_user = tempfile.mkdtemp(prefix="klaus_test_single_user_")
+sc_root = tempfile.mkdtemp(prefix="klaus_test_single_root_")
+sc_src = os.path.join(tempfile.mkdtemp(prefix="klaus_test_single_src_"), "My Notes.pdf")
+with open(sc_src, "wb") as f:
+    f.write(b"%PDF-1.4\nv1\n%%EOF")
+_orig_extract = pdf_handler.extract_pages
+pdf_handler.extract_pages = lambda p: ["page"]
+try:
+    _info = pdf_handler.save_pdf(sc_user, "My Notes", sc_src, root=sc_root)
+    check("import lands in the root under its original filename",
+          os.path.isfile(os.path.join(sc_root, "My Notes.pdf")), str(_info))
+    check("NO copy appears in the legacy pdfs/ store",
+          not os.path.isfile(os.path.join(sc_user, "pdfs", _info["name"] + ".pdf")))
+    check("import is mapped",
+          pdf_handler.load_library_map(sc_user)[_info["name"]] == "My Notes.pdf")
+    # Re-import the same name: replace in place, never a second copy.
+    with open(sc_src, "wb") as f:
+        f.write(b"%PDF-1.4\nv2 longer body\n%%EOF")
+    pdf_handler.save_pdf(sc_user, "My Notes", sc_src, root=sc_root)
+    check("re-import replaces the SAME file in place",
+          open(os.path.join(sc_root, "My Notes.pdf"), "rb").read()
+          == b"%PDF-1.4\nv2 longer body\n%%EOF"
+          and not os.path.isfile(os.path.join(sc_root, "My Notes (1).pdf")))
+    # Root unavailable -> graceful legacy fallback, import never fails.
+    _info2 = pdf_handler.save_pdf(
+        sc_user, "Other Deck", sc_src, root=os.path.join(sc_root, "gone-subdir")
+    )
+    check("missing root falls back to the legacy store",
+          os.path.isfile(os.path.join(sc_user, "pdfs", _info2["name"] + ".pdf")))
+finally:
+    pdf_handler.extract_pages = _orig_extract
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

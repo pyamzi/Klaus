@@ -636,7 +636,12 @@ def import_pdf_file(path: str) -> str | None:
         return None
     base = os.path.splitext(os.path.basename(path))[0]
     try:
-        info = pdf_handler.save_pdf(USER_FILES, base, path)
+        root = None
+        try:
+            root = pdf_handler.get_library_root(get_config())
+        except Exception:
+            root = None
+        info = pdf_handler.save_pdf(USER_FILES, base, path, root=root)
     except Exception as e:
         showWarning(f"Could not read PDF: {e}")
         return None
@@ -2188,6 +2193,23 @@ gui_hooks.profile_did_open.append(_tag_migrate.migrate_on_profile_open)
 # rename the migration itself is performing.
 from . import tag_sync as _tag_sync
 
+
+def _library_rescan_on_profile_open() -> None:
+    """Folder -> Anki half of the two-way Library sync (K-073).
+
+    Runs BEFORE the tag reconcile below on purpose: the disk is the
+    source of truth for structure, so the tree follows the folder first
+    and the tags then follow the tree.
+    """
+    try:
+        from . import pdf_drive as _pdf_drive
+
+        _pdf_drive.rescan_library_root()
+    except Exception as exc:  # noqa: BLE001 - never block profile open
+        print(f"[klausmate] library rescan failed: {exc}")
+
+
+gui_hooks.profile_did_open.append(_library_rescan_on_profile_open)
 gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)

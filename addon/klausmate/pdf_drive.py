@@ -58,6 +58,44 @@ def _user_files() -> str:
     return USER_FILES
 
 
+def rescan_library_root() -> dict | None:
+    """Folder -> Anki half of the two-way Library sync (K-073).
+
+    Walks the configured root, applies confirmed moves/renames to the
+    mapping and the tree (pdf_handler.rescan_root), sweeps any legacy
+    pdfs/ stragglers first via the idempotent migration, and hands the
+    moved PDFs to tag_sync so their !Library tags follow the new
+    folder/name. Returns the rescan summary, or None when no root is
+    configured (or on any failure — this runs on profile open and on
+    every Library refresh and must never break either).
+    """
+    try:
+        root = pdf_handler._live_library_root()
+        if not root or not os.path.isdir(root):
+            return None
+        uf = _user_files()
+        folders = drive_store.load(uf).get("pdfs", {})
+        try:
+            # Single-copy sweep: anything still in the legacy pdfs/
+            # store belongs in the root; migrate_to_root is idempotent.
+            pdf_handler.migrate_to_root(uf, root, folders)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] rescan: straggler sweep failed: {exc}")
+        summary = pdf_handler.rescan_root(uf, root, folders)
+        touched = list(summary.get("moved") or []) + list(
+            summary.get("ingested") or []
+        )
+        if touched and mw is not None and mw.col is not None:
+            # Tags follow the tree (K-053 invariant). Ingested PDFs with
+            # no match cache yet are skipped inside tag_sync (cold-cache
+            # rule) and pick their tag up on first indexing.
+            tag_sync.sync_after_folder_rename(mw, touched)
+        return summary
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] library rescan failed: {exc}")
+        return None
+
+
 class _LibraryItem(QTreeWidgetItem):
     """Tree item with numeric sort keys and folders pinned above PDFs.
 
@@ -673,6 +711,10 @@ class DriveWindow(QWidget):
         # callers. It happens to short-circuit before touching col while
         # no PDF has a stored tag yet, but once they do, a closing profile
         # would log a spurious failure here every refresh.
+        # Disk first, tags second: the folder is the source of truth for
+        # structure, the tree follows it, and the tag reconcile below
+        # then works against the freshly-synced tree (K-073).
+        rescan_library_root()
         if mw.col is not None:
             tag_sync.reconcile_from_tags(mw.col)
         seq = self.seq

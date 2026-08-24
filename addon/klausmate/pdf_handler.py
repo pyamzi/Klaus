@@ -364,8 +364,22 @@ def save_panel_state(
         _save_tabs_file(user_files_dir, updates)
 
 
-def save_pdf(user_files_dir: str, name: str, raw_path: str) -> dict:
-    """Ingest a PDF: per-page text, BM25 .txt, page JSON, raw .pdf copy."""
+def save_pdf(
+    user_files_dir: str, name: str, raw_path: str, root: str | None = None
+) -> dict:
+    """Ingest a PDF: per-page text, BM25 .txt, page JSON, raw .pdf copy.
+
+    ``root`` (K-073, single-copy invariant): with a Library root
+    configured, the ONE copy of the PDF goes straight into the root —
+    original filename preserved, mapping recorded — and nothing is
+    written to the legacy ``pdfs/`` store. A RE-import of an
+    already-mapped name overwrites its existing root file in place
+    (same relative path) so no second copy ever appears, mirroring how
+    the legacy store always overwrote ``pdfs/<safe>.pdf``. When the
+    root directory is missing (unplugged drive, deleted folder) the
+    import falls back to the legacy store with a printed note rather
+    than failing — the next migration sweep relocates it.
+    """
     pages = extract_pages(raw_path)
     safe = _safe_basename(name)
     ctx_dir = os.path.join(user_files_dir, "contexts")
@@ -382,8 +396,27 @@ def save_pdf(user_files_dir: str, name: str, raw_path: str) -> dict:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"pages": pages, "page_count": len(pages)}, f)
 
-    pdf_dest = os.path.join(pdf_dir, safe + ".pdf")
-    shutil.copy2(raw_path, pdf_dest)
+    if root and os.path.isdir(root):
+        mapping = load_library_map(user_files_dir)
+        prior = mapping.get(safe)
+        if prior and os.path.isfile(os.path.join(root, prior)):
+            # Re-import: replace the existing library copy in place.
+            pdf_dest = os.path.join(root, prior)
+            shutil.copy2(raw_path, pdf_dest)
+        else:
+            filename = _library_filename(os.path.basename(raw_path), safe)
+            pdf_dest = _unique_path(root, filename)
+            shutil.copy2(raw_path, pdf_dest)
+            mapping[safe] = os.path.relpath(pdf_dest, root)
+            save_library_map(user_files_dir, mapping)
+    else:
+        if root:
+            print(
+                f"[klausmate] Library root {root!r} is unavailable — "
+                f"importing {safe!r} into the legacy store instead."
+            )
+        pdf_dest = os.path.join(pdf_dir, safe + ".pdf")
+        shutil.copy2(raw_path, pdf_dest)
 
     # Re-ingest under the same name: the base file changed, so any
     # captured pristine original is stale — drop it (the next bake
@@ -683,6 +716,215 @@ def migrate_to_root(
         result["moved"].append(safe)
 
     return result
+
+
+# ------------------------------------------------- folder -> Anki sync
+
+
+def walk_root(root: str) -> list[str]:
+    """Every ``*.pdf`` under ``root`` as sorted root-relative paths.
+
+    Hidden files and hidden directories (dot-prefixed) are skipped —
+    macOS drops ``.DS_Store`` siblings everywhere, and editors leave
+    dot-backups; none of those are library content.
+    """
+    out: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in filenames:
+            if fn.startswith(".") or not fn.lower().endswith(".pdf"):
+                continue
+            out.append(os.path.relpath(os.path.join(dirpath, fn), root))
+    return sorted(out)
+
+
+def plan_rescan(mapping: dict, disk_rels: list[str]) -> dict:
+    """PURE folder->Anki diff (K-073, the reverse half of K-057).
+
+    The disk is the source of truth for structure, but matching a
+    missing mapped file to a newly-appeared one is INFERENCE, so it
+    follows tag_sync.plan_reconcile's confidence philosophy exactly:
+
+      1. a missing file whose basename appears exactly once among the
+         new files — and no OTHER missing file shares that basename —
+         was MOVED (Finder moves keep the name);
+      2. after that, exactly-one-missing and exactly-one-new pair up as
+         a RENAME;
+      3. anything else is ambiguous: report and do nothing. In
+         particular, new files are only ``ingestable`` when NO missing
+         files remain unmatched — ingesting while a rename is unresolved
+         would duplicate the renamed PDF under a second identity.
+
+    Returns ``{"moves": {safe: new_rel}, "missing": [safe],
+    "new": [rel], "ingestable": [rel], "ambiguous": bool}``.
+    ``missing`` are mapped PDFs gone from disk with no candidate — the
+    caller reports them; Klaus never deletes its own data over them.
+    """
+    disk = set(disk_rels)
+    claimed = set(mapping.values())
+    missing = sorted(s for s, rel in mapping.items() if rel not in disk)
+    new = sorted(r for r in disk if r not in claimed)
+    moves: dict = {}
+
+    if missing and new:
+        new_by_base: dict = {}
+        for r in new:
+            new_by_base.setdefault(os.path.basename(r), []).append(r)
+        missing_base_counts: dict = {}
+        for s in missing:
+            b = os.path.basename(mapping[s])
+            missing_base_counts[b] = missing_base_counts.get(b, 0) + 1
+        still = []
+        for s in missing:
+            b = os.path.basename(mapping[s])
+            cands = new_by_base.get(b) or []
+            if len(cands) == 1 and missing_base_counts[b] == 1:
+                moves[s] = cands[0]
+                new.remove(cands[0])
+                new_by_base[b] = []
+            else:
+                still.append(s)
+        missing = still
+
+    if len(missing) == 1 and len(new) == 1:
+        moves[missing[0]] = new[0]
+        missing, new = [], []
+
+    ambiguous = bool(missing and new)
+    return {
+        "moves": moves,
+        "missing": missing,
+        "new": new,
+        "ingestable": [] if ambiguous else list(new),
+        "ambiguous": ambiguous,
+    }
+
+
+def _rel_folder(rel: str) -> str | None:
+    """drive_store folder path ("A/B", forward slashes) for a root-relative
+    file path, or None for the root itself."""
+    d = os.path.dirname(rel)
+    parts = [p for p in d.replace(os.sep, "/").split("/") if p]
+    return "/".join(parts) or None
+
+
+def _unique_safe(user_files_dir: str, mapping: dict, stem: str) -> str:
+    """A safe name not already used by a mapping entry or a context."""
+    base = _safe_basename(stem)
+    ctx = os.path.join(user_files_dir, "contexts")
+
+    def taken(s: str) -> bool:
+        return s in mapping or os.path.isfile(os.path.join(ctx, s + ".txt"))
+
+    if not taken(base):
+        return base
+    n = 2
+    while taken(f"{base}_{n}"):
+        n += 1
+    return f"{base}_{n}"
+
+
+def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> dict:
+    """Apply the folder->Anki half of the two-way sync (K-073).
+
+    Moves/renames confirmed by ``plan_rescan`` update the mapping AND the
+    Library tree (drive_store folder + display follow the file). The
+    mapping is saved FIRST: path resolution correctness beats a
+    cosmetic tree mismatch if a write fails halfway (documented
+    trade-off — a failed drive write leaves the folder column stale
+    until the entry next moves, but every PDF still opens).
+
+    New unmatched PDFs are ingested IN PLACE — context extracted, drive
+    entry recorded, mapping pointed at the file where it already lives.
+    No copy is made anywhere: the file in the root folder IS the
+    library copy (single-copy invariant). A file that will not parse is
+    skipped with a printed reason and retried on the next rescan.
+
+    A display only changes when the on-disk basename no longer
+    corresponds to it under ``_library_filename`` — a plain move keeps
+    the user's display text untouched.
+    """
+    from . import drive_store  # aqt-free; local import keeps deps one-way
+
+    folders = folders or {}
+    mapping = load_library_map(user_files_dir)
+    plan = plan_rescan(mapping, walk_root(root))
+
+    moved: list[str] = []
+    for safe, rel in sorted(plan["moves"].items()):
+        mapping[safe] = rel
+        moved.append(safe)
+
+    ingested: list[str] = []
+    ingest_failed: list[str] = []
+    for rel in plan["ingestable"]:
+        full = os.path.join(root, rel)
+        try:
+            pages = extract_pages(full)
+        except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
+            print(f"[klausmate] rescan: could not ingest {rel!r}: {exc}")
+            ingest_failed.append(rel)
+            continue
+        stem = os.path.splitext(os.path.basename(rel))[0]
+        safe = _unique_safe(user_files_dir, mapping, stem)
+        ctx_dir = os.path.join(user_files_dir, "contexts")
+        os.makedirs(ctx_dir, exist_ok=True)
+        with open(os.path.join(ctx_dir, safe + ".txt"), "w", encoding="utf-8") as f:
+            f.write("\n\n".join(pages))
+        with open(os.path.join(ctx_dir, safe + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"pages": pages, "page_count": len(pages)}, f)
+        mapping[safe] = rel
+        ingested.append(safe)
+
+    if moved or ingested:
+        save_library_map(user_files_dir, mapping)
+
+    for safe in moved:
+        rel = mapping[safe]
+        entry = folders.get(safe) or {}
+        try:
+            folder = _rel_folder(rel)
+            if (entry.get("folder") or None) != folder:
+                drive_store.set_folder(user_files_dir, safe, folder)
+            cur_display = entry.get("display") or safe
+            basename = os.path.basename(rel)
+            if _library_filename(cur_display, safe) != basename:
+                drive_store.rename_display(user_files_dir, safe, basename)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] rescan: tree update failed for {safe!r}: {exc}")
+
+    for safe in ingested:
+        rel = mapping[safe]
+        try:
+            drive_store.record_import(user_files_dir, safe, os.path.basename(rel))
+            folder = _rel_folder(rel)
+            if folder:
+                drive_store.set_folder(user_files_dir, safe, folder)
+            touch_last_used(user_files_dir, safe)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] rescan: bookkeeping failed for {safe!r}: {exc}")
+
+    if plan["missing"]:
+        print(
+            "[klausmate] rescan: missing from the Library folder "
+            f"(nothing deleted on the Klaus side): {plan['missing']}"
+        )
+    if plan["ambiguous"]:
+        print(
+            "[klausmate] rescan: ambiguous folder changes — "
+            f"missing {plan['missing']} vs new {plan['new']}; "
+            "no action taken. Undo the simultaneous rename+move batch or "
+            "resolve one file at a time."
+        )
+
+    return {
+        "moved": moved,
+        "ingested": ingested,
+        "ingest_failed": ingest_failed,
+        "missing": plan["missing"],
+        "ambiguous_new": plan["new"] if plan["ambiguous"] else [],
+        "ambiguous": plan["ambiguous"],
+    }
 
 
 def annotations_path_for(user_files_dir: str, name: str) -> str:
