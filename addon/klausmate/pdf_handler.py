@@ -420,10 +420,245 @@ def load_pages(user_files_dir: str, name: str) -> list[str] | None:
     return None
 
 
-def pdf_path_for(user_files_dir: str, name: str) -> str | None:
+_LIBRARY_MAP_FILE = "library_map.json"
+
+
+def _library_map_path(user_files_dir: str) -> str:
+    return os.path.join(user_files_dir, _LIBRARY_MAP_FILE)
+
+
+def load_library_map(user_files_dir: str) -> dict:
+    """{safe basename: path relative to library_root} for every PDF that
+    ``migrate_to_root`` has moved out of the legacy ``pdfs/`` store.
+    Missing file, malformed JSON, or non-string entries all degrade to
+    ``{}`` (nothing mapped -> everything falls back to the legacy path)."""
+    path = _library_map_path(user_files_dir)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(k): str(v) for k, v in data.items() if isinstance(v, str) and v
+    }
+
+
+def save_library_map(user_files_dir: str, mapping: dict) -> None:
+    _atomic_write_json(_library_map_path(user_files_dir), dict(mapping))
+
+
+def get_library_root(cfg: dict | None) -> str | None:
+    """The user-chosen Library storage folder (absolute path) from the
+    addon config, or None if never set. Takes ``cfg`` explicitly (rather
+    than reading it itself) so this stays aqt-free and testable, mirroring
+    ``embeddings.provider_name``'s cfg-in style."""
+    if not isinstance(cfg, dict):
+        return None
+    root = cfg.get("library_root")
+    return root if isinstance(root, str) and root.strip() else None
+
+
+def _live_library_root() -> str | None:
+    """Best-effort read of the configured Library folder via aqt's live
+    addon config.
+
+    ``pdf_path_for``'s two production call sites (pdf_viewer.py,
+    __init__.py) only ever pass ``(user_files_dir, name)`` — this is the
+    one spot in this otherwise aqt-free module that reaches for the
+    config, and only as a fallback when no ``root`` was passed in
+    explicitly. Guarded so the module keeps importing cleanly with no aqt
+    present (the headless test harness) — tests instead pass ``root=``
+    directly and never hit this path.
+    """
+    try:
+        from aqt import mw
+
+        if mw is None or mw.addonManager is None:
+            return None
+        cfg = mw.addonManager.getConfig(__package__) or {}
+    except Exception:
+        return None
+    return get_library_root(cfg)
+
+
+def _working_pdf_path(
+    user_files_dir: str, name: str, root: str | None = None
+) -> str:
+    """Where ``name``'s stored PDF file lives — the mapped Library
+    location once migrated, else the legacy ``pdfs/<safe>.pdf`` slot.
+
+    Unlike ``pdf_path_for`` this is returned even when nothing exists
+    there yet: ``bake_annotations`` needs the intended path to create the
+    file, not just to check for one.
+    """
     base = _safe_basename(name)
-    path = os.path.join(user_files_dir, "pdfs", base + ".pdf")
+    rel = load_library_map(user_files_dir).get(base)
+    if rel:
+        if root is None:
+            root = _live_library_root()
+        if root:
+            return os.path.join(root, rel)
+    return os.path.join(user_files_dir, "pdfs", base + ".pdf")
+
+
+def pdf_path_for(
+    user_files_dir: str, name: str, root: str | None = None
+) -> str | None:
+    """Single resolution choke point for every PDF-file consumer.
+
+    ``root`` lets tests (and any future explicit caller) bypass the aqt
+    config lookup in ``_live_library_root`` — production call sites pass
+    only ``(user_files_dir, name)``.
+    """
+    path = _working_pdf_path(user_files_dir, name, root)
     return path if os.path.isfile(path) else None
+
+
+def _library_filename(display: str, fallback: str) -> str:
+    """A filesystem-safe ``.pdf`` filename for a Library ``display`` name.
+
+    ``display`` is free-form (drive_store's ``rename_display`` only
+    checks non-empty) — this guards against a stray path separator or
+    leading dots turning a rename into a path escape or hidden file.
+    """
+    name = (display or "").strip() or fallback
+    name = name.replace("/", "-").replace("\\", "-")
+    name = name.lstrip(".") or fallback
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    return name
+
+
+def _unique_path(dest_dir: str, filename: str) -> str:
+    """``filename`` under ``dest_dir``, suffixed " (1)", " (2)", ... on a
+    collision. Never returns a path that already exists on disk."""
+    stem, ext = os.path.splitext(filename)
+    candidate = os.path.join(dest_dir, filename)
+    n = 1
+    while os.path.isfile(candidate):
+        candidate = os.path.join(dest_dir, f"{stem} ({n}){ext}")
+        n += 1
+    return candidate
+
+
+def migrate_to_root(
+    user_files_dir: str, root: str, folders: dict | None = None
+) -> dict:
+    """Move every stored PDF's baked copy out of the legacy ``pdfs/``
+    store into ``root``, laid out to match the Library tree.
+
+    ``folders`` mirrors ``drive_store.load(user_files_dir)["pdfs"]`` —
+    ``{safe: {"folder": "Anatomy/Week 3" | None, "display": "name.pdf"}}``
+    — passed in by the caller rather than read from disk here, so this
+    stays a pure function a headless test can call with a hand-built
+    dict, and no module-global path is read inside the move loop.
+
+    Per-file guarded and RESUMABLE:
+      * a PDF whose mapping already points at an existing destination
+        file is left alone — a leftover legacy copy is tidied up but
+        nothing is re-copied (idempotent re-run).
+      * a PDF with no ``pdfs/<safe>.pdf`` left to move (never stored, or
+        already relocated by a prior run) is skipped.
+      * the destination is never overwritten — a filename collision gets
+        a " (1)", " (2)", ... suffix.
+      * the ``library_map.json`` entry is written only after the copy is
+        verified byte-for-byte (size match); the legacy source is removed
+        only AFTER that write succeeds — a crash mid-move leaves either
+        the untouched source or a fully-mapped destination, never a state
+        in between.
+      * one file's OSError is caught and recorded; the rest of the batch
+        keeps going.
+
+    ``contexts/``, ``pdf_originals/`` and ``annotations/`` are untouched —
+    only the baked ``pdfs/`` copy relocates.
+
+    Returns ``{"moved": [safe, ...], "skipped": [safe, ...], "failed":
+    {safe: "reason"}}``.
+    """
+    folders = folders or {}
+    result: dict = {"moved": [], "skipped": [], "failed": {}}
+    library_map = load_library_map(user_files_dir)
+    pdf_dir = os.path.join(user_files_dir, "pdfs")
+
+    for fname in list_contexts(user_files_dir):
+        safe = fname[:-4] if fname.endswith(".txt") else fname
+        source = os.path.join(pdf_dir, safe + ".pdf")
+
+        mapped_rel = library_map.get(safe)
+        if mapped_rel and os.path.isfile(os.path.join(root, mapped_rel)):
+            # Already migrated, possibly by an earlier interrupted run —
+            # just tidy up a leftover legacy copy, if any.
+            if os.path.isfile(source):
+                try:
+                    os.remove(source)
+                except OSError:
+                    pass
+            result["skipped"].append(safe)
+            continue
+
+        if not os.path.isfile(source):
+            result["skipped"].append(safe)  # nothing stored to move
+            continue
+
+        entry = folders.get(safe) or {}
+        folder = entry.get("folder")
+        display = entry.get("display") or safe
+        dest_dir = root
+        if isinstance(folder, str) and folder.strip():
+            for part in folder.split("/"):
+                part = part.strip()
+                if part and part != "..":
+                    dest_dir = os.path.join(dest_dir, part)
+        filename = _library_filename(display, safe)
+
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except OSError as exc:
+            result["failed"][safe] = str(exc)
+            continue
+
+        dest_path = _unique_path(dest_dir, filename)
+        try:
+            src_size = os.path.getsize(source)
+            shutil.copy2(source, dest_path)
+            if os.path.getsize(dest_path) != src_size:
+                raise OSError(f"size mismatch copying {safe} to {dest_path}")
+        except OSError as exc:
+            if os.path.isfile(dest_path):
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+            result["failed"][safe] = str(exc)
+            continue
+
+        rel = os.path.relpath(dest_path, root)
+        library_map[safe] = rel
+        try:
+            save_library_map(user_files_dir, library_map)
+        except OSError as exc:
+            library_map.pop(safe, None)
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+            result["failed"][safe] = str(exc)
+            continue
+
+        try:
+            os.remove(source)
+        except OSError as exc:
+            print(
+                f"[klausmate] migration: moved {safe} but could not remove "
+                f"the old copy: {exc}"
+            )
+        result["moved"].append(safe)
+
+    return result
 
 
 def annotations_path_for(user_files_dir: str, name: str) -> str:
@@ -590,7 +825,10 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
             print("[klausmate] bake skipped: pypdf writer/annotations unavailable")
             return False
         base = _safe_basename(name)
-        working = os.path.join(user_files_dir, "pdfs", base + ".pdf")
+        # The MAPPED location once migrated (K-070) — same choke point as
+        # pdf_path_for, so a bake after moving the library folder writes
+        # to where the file actually lives, not the old pdfs/ slot.
+        working = _working_pdf_path(user_files_dir, name)
         pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
         highlights = load_annotations(user_files_dir, name)
 
@@ -725,6 +963,20 @@ def delete_context(user_files_dir: str, name: str) -> None:
         os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
         os.path.join(user_files_dir, "contexts", name),
     ]
+    # A migrated PDF's real file lives outside user_files_dir entirely
+    # (see migrate_to_root) — the candidates above can never reach it, so
+    # without this a delete would only clear the Klaus-private siblings
+    # and leave the actual PDF orphaned in the Library folder.
+    library_map = load_library_map(user_files_dir)
+    mapped_rel = library_map.pop(base, None)
+    if mapped_rel:
+        root = _live_library_root()
+        if root:
+            candidates.append(os.path.join(root, mapped_rel))
+        try:
+            save_library_map(user_files_dir, library_map)
+        except OSError as exc:
+            print(f"[klausmate] library_map cleanup failed for {base}: {exc}")
     for path in candidates:
         if os.path.isfile(path):
             try:

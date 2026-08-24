@@ -438,6 +438,20 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(runtime_auto_cb)
 
+    # Library folder (K-070, part A of K-057) — where Library PDFs live
+    # on disk. "Change…" re-runs the same guarded migration the
+    # per-profile-open setup prompt uses (setup_flow._library_root_check),
+    # just from the old root to the new one.
+    library_row = QHBoxLayout()
+    library_row.setContentsMargins(0, 0, 0, 0)
+    library_row.addWidget(QLabel("Library folder:"))
+    library_path_lbl = QLabel()
+    library_path_lbl.setWordWrap(True)
+    library_change_btn = QPushButton("Change…")
+    library_row.addWidget(library_path_lbl, 1)
+    library_row.addWidget(library_change_btn)
+    general_layout.addLayout(library_row)
+
     # Maintenance — the two actions that used to live in the Tools > Klaus
     # submenu (K-045). Moved here rather than dropped: a menu item that
     # vanishes is worse than one that's a click deeper.
@@ -451,6 +465,14 @@ def manage_models_dialog(setup: bool = False) -> None:
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
+
+    def _refresh_library_label() -> None:
+        from . import pdf_handler
+
+        root = pdf_handler.get_library_root(_pkg().get_config())
+        library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
+
+    _refresh_library_label()
     tabs.addTab(_tab(general_box), "General")
 
     stack.addWidget(models_page)
@@ -490,7 +512,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             auto_setup_btn, download_btn, check_conn_btn,
             embed_provider_combo, embed_model_combo, embed_key_edit,
             embed_fix_btn, index_btn, test_conn_btn,
-            threshold_slider,
+            threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
         for btn in install_action_btns:
@@ -1321,6 +1343,55 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         _pkg().write_config(cfg)
 
+    def change_library_folder() -> None:
+        """Point the Library at a different on-disk folder, moving
+        whatever's already there (K-070, part A of K-057) — same guarded,
+        resumable move as setup_flow's first-time prompt, just old root
+        -> new root instead of unset -> chosen.
+        """
+        from aqt.qt import QFileDialog
+
+        from . import USER_FILES, drive_store, pdf_handler
+
+        cfg = _pkg().get_config()
+        old_root = pdf_handler.get_library_root(cfg)
+        new_root = QFileDialog.getExistingDirectory(
+            dlg, "Choose a folder for your Klaus Library", old_root or ""
+        )
+        if not new_root or new_root == old_root:
+            return
+
+        def do(_col: Any) -> Any:
+            folders = drive_store.load(USER_FILES).get("pdfs", {})
+            return pdf_handler.migrate_to_root(USER_FILES, new_root, folders)
+
+        def on_done(result: Any) -> None:
+            set_busy(False)
+            cfg2 = _pkg().get_config()
+            cfg2["library_root"] = new_root
+            _pkg().write_config(cfg2)
+            _refresh_library_label()
+            failed = (result or {}).get("failed") or {}
+            if failed:
+                showWarning(
+                    "Library folder updated, but "
+                    f"{len(failed)} file(s) couldn't be moved and stay "
+                    "in the old location:\n"
+                    + "\n".join(f"{k}: {v}" for k, v in failed.items()),
+                    parent=dlg,
+                )
+            else:
+                tooltip("Klaus: Library folder updated")
+
+        def on_fail(exc: Exception) -> None:
+            set_busy(False)
+            showWarning(f"Could not move the Library: {exc}", parent=dlg)
+
+        set_busy(True)
+        op = QueryOp(parent=dlg, op=do, success=on_done)
+        op.failure(on_fail)
+        op.without_collection().run_in_background()
+
     def test_connection() -> None:
         """Moved from the old Tools > Klaus > Test connection (K-045).
 
@@ -1379,6 +1450,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     index_btn.clicked.connect(start_index)
     image_crop_cb.toggled.connect(lambda _checked: save_general())
     runtime_auto_cb.toggled.connect(lambda _checked: save_general())
+    library_change_btn.clicked.connect(change_library_folder)
 
     rebuild_install_method_buttons()
     refresh()

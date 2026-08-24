@@ -552,6 +552,157 @@ check(
     _mig({"pdf_match_threshold": "nonsense"}).get("pdf_match_threshold") == "nonsense",
 )
 
+# ------------------------------- library root + migration (K-070) --------
+#
+# Scratch dirs ONLY — never klausmate/user_files/. lib_user stands in for
+# user_files_dir, lib_root for the chosen Library folder; both are plain
+# tempfile.mkdtemp() dirs cleaned up at the end of this section.
+
+print("== library root + migration (K-070) ==")
+
+lib_user = tempfile.mkdtemp(prefix="klaus_test_libuser_")
+lib_root = tempfile.mkdtemp(prefix="klaus_test_libroot_")
+lib_ctx = os.path.join(lib_user, "contexts")
+lib_pdfs = os.path.join(lib_user, "pdfs")
+os.makedirs(lib_ctx)
+os.makedirs(lib_pdfs)
+
+
+def _lib_mk_pdf(safe):
+    with open(os.path.join(lib_ctx, safe + ".txt"), "w", encoding="utf-8") as f:
+        f.write("x")
+    with open(os.path.join(lib_pdfs, safe + ".pdf"), "wb") as f:
+        f.write(b"%PDF-1.4\n%%EOF")
+
+
+_lib_mk_pdf("Lecture_A")
+_lib_mk_pdf("Lecture_B")
+_lib_mk_pdf("Lecture_C")
+
+# -- get_library_root --
+check("get_library_root: unset cfg -> None", pdf_handler.get_library_root({}) is None)
+check("get_library_root: non-dict cfg -> None", pdf_handler.get_library_root(None) is None)
+check("get_library_root: blank string -> None",
+      pdf_handler.get_library_root({"library_root": "  "}) is None)
+check("get_library_root: reads the configured path",
+      pdf_handler.get_library_root({"library_root": lib_root}) == lib_root)
+
+# -- mapping round-trip --
+check("library_map starts empty", pdf_handler.load_library_map(lib_user) == {})
+pdf_handler.save_library_map(lib_user, {"Lecture_A": "Foo/bar.pdf"})
+check("library_map round-trips through save/load",
+      pdf_handler.load_library_map(lib_user) == {"Lecture_A": "Foo/bar.pdf"})
+with open(os.path.join(lib_user, "library_map.json"), "w", encoding="utf-8") as f:
+    json.dump({"Lecture_A": "ok.pdf", "Lecture_B": 123, "Lecture_C": ""}, f)
+check("library_map load drops non-string/empty values",
+      pdf_handler.load_library_map(lib_user) == {"Lecture_A": "ok.pdf"})
+pdf_handler.save_library_map(lib_user, {})  # reset before migration tests below
+
+# -- unmapped fallback to legacy pdfs/ path --
+legacy_a = os.path.join(lib_pdfs, "Lecture_A.pdf")
+check("pdf_path_for falls back to legacy pdfs/<safe>.pdf when unmapped",
+      pdf_handler.pdf_path_for(lib_user, "Lecture A", root=lib_root) == legacy_a)
+check("pdf_path_for (no root passed) still resolves the legacy file",
+      pdf_handler.pdf_path_for(lib_user, "Lecture A") == legacy_a)
+
+# -- migration moves + maps --
+folders = {
+    "Lecture_A": {"folder": "Anatomy/Week 3", "display": "Renal Physiology (Dr. K).pdf"},
+    "Lecture_B": {"folder": None, "display": "Lecture B"},
+    # Lecture_C deliberately has no drive_store entry (orphan -> root, safe name).
+}
+mig1 = pdf_handler.migrate_to_root(lib_user, lib_root, folders)
+check("migration moves every stored pdf",
+      set(mig1["moved"]) == {"Lecture_A", "Lecture_B", "Lecture_C"}, str(mig1))
+check("migration reports no failures", mig1["failed"] == {}, str(mig1))
+
+expect_a = os.path.join(lib_root, "Anatomy", "Week 3", "Renal Physiology (Dr. K).pdf")
+mapped1 = pdf_handler.load_library_map(lib_user)
+check("mapped path follows folder + display name",
+      os.path.join(lib_root, mapped1["Lecture_A"]) == expect_a, str(mapped1))
+check("root-level pdf (no folder) mapped under the root itself",
+      mapped1["Lecture_B"] == "Lecture B.pdf", str(mapped1))
+check("orphan pdf (no drive_store entry) falls back to its safe name",
+      mapped1["Lecture_C"] == "Lecture_C.pdf", str(mapped1))
+check("destination file exists after the move", os.path.isfile(expect_a))
+check("legacy pdfs/ copy is gone after a successful move",
+      not os.path.isfile(os.path.join(lib_pdfs, "Lecture_A.pdf")))
+
+# -- pdf_path_for after migration resolves to the root path --
+check("pdf_path_for resolves the migrated file against an explicit root",
+      pdf_handler.pdf_path_for(lib_user, "Lecture A", root=lib_root) == expect_a)
+check("pdf_path_for with no root can no longer find the (moved) file",
+      pdf_handler.pdf_path_for(lib_user, "Lecture A") is None)
+
+# -- collision suffixing: same folder + display name -> numeric suffix --
+_lib_mk_pdf("Lecture_D")
+folders_collide = dict(folders)
+folders_collide["Lecture_D"] = {
+    "folder": "Anatomy/Week 3", "display": "Renal Physiology (Dr. K).pdf",
+}
+mig2 = pdf_handler.migrate_to_root(lib_user, lib_root, folders_collide)
+check("colliding file still gets moved", "Lecture_D" in mig2["moved"], str(mig2))
+mapped2 = pdf_handler.load_library_map(lib_user)
+check("colliding display name gets a ' (1)' suffix instead of overwriting",
+      mapped2["Lecture_D"].endswith("Renal Physiology (Dr. K) (1).pdf"),
+      mapped2.get("Lecture_D"))
+check("both colliding files exist on disk as distinct paths",
+      mapped2["Lecture_A"] != mapped2["Lecture_D"]
+      and os.path.isfile(os.path.join(lib_root, mapped2["Lecture_D"]))
+      and os.path.isfile(os.path.join(lib_root, mapped2["Lecture_A"])))
+
+# -- failure mid-list: earlier moves stay mapped, later ones still proceed,
+#    the failed file's source is left untouched --
+_lib_mk_pdf("Lecture_G")
+_lib_mk_pdf("Lecture_H")
+_lib_mk_pdf("Lecture_I")
+folders_fail = {
+    "Lecture_G": {"folder": None, "display": "G.pdf"},
+    "Lecture_H": {"folder": "Broken", "display": "H.pdf"},
+    "Lecture_I": {"folder": None, "display": "I.pdf"},
+}
+_real_copy2 = pdf_handler.shutil.copy2
+
+
+def _flaky_copy2(src, dst, *a, **k):
+    if "Lecture_H" in src:
+        raise OSError("simulated disk failure")
+    return _real_copy2(src, dst, *a, **k)
+
+
+pdf_handler.shutil.copy2 = _flaky_copy2
+try:
+    mig3 = pdf_handler.migrate_to_root(lib_user, lib_root, folders_fail)
+finally:
+    pdf_handler.shutil.copy2 = _real_copy2
+
+check("earlier item (G) moved despite a later failure",
+      "Lecture_G" in mig3["moved"], str(mig3))
+check("failing item (H) recorded as failed, not moved",
+      "Lecture_H" in mig3["failed"] and "Lecture_H" not in mig3["moved"], str(mig3))
+check("later item (I) still moved after the mid-list failure",
+      "Lecture_I" in mig3["moved"], str(mig3))
+check("failed item's legacy source is left untouched",
+      os.path.isfile(os.path.join(lib_pdfs, "Lecture_H.pdf")))
+mapped3 = pdf_handler.load_library_map(lib_user)
+check("failed item has no mapping entry", "Lecture_H" not in mapped3, str(mapped3))
+check("succeeded items on either side of the failure ARE mapped",
+      {"Lecture_G", "Lecture_I"} <= set(mapped3), str(mapped3))
+
+# -- re-run resumes: retries the failure, leaves completed ones alone --
+mig4 = pdf_handler.migrate_to_root(lib_user, lib_root, folders_fail)
+check("re-run completes the previously-failed file",
+      "Lecture_H" in mig4["moved"], str(mig4))
+check("re-run skips already-migrated files instead of re-moving them",
+      "Lecture_G" in mig4["skipped"] and "Lecture_G" not in mig4["moved"], str(mig4))
+mapped4 = pdf_handler.load_library_map(lib_user)
+check("resumed file is now mapped", "Lecture_H" in mapped4, str(mapped4))
+check("resumed file's legacy source is finally removed",
+      not os.path.isfile(os.path.join(lib_pdfs, "Lecture_H.pdf")))
+
+shutil.rmtree(lib_user, ignore_errors=True)
+shutil.rmtree(lib_root, ignore_errors=True)
+
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -28,7 +28,7 @@ from typing import Any
 from aqt import mw
 from aqt.operations import QueryOp
 from aqt.qt import QMessageBox
-from aqt.utils import askUser, openLink, tooltip
+from aqt.utils import askUser, openLink, showWarning, tooltip
 
 from . import embeddings, ollama_runtime
 from .manage_models import manage_models_dialog
@@ -166,6 +166,69 @@ def first_run_check() -> None:
     _pkg().write_config(cfg)
 
 
+def _library_root_check() -> None:
+    """Offer to pick a real on-disk folder for the Library (K-070, part A
+    of K-057) once ``library_root`` is unset. Runs as one step of the
+    per-profile-open readiness check, before the embedding-provider
+    checks below.
+
+    Declining writes nothing to config — the next profile open re-asks,
+    exactly once, since this only ever runs from ``setup_readiness_check``
+    which itself fires once per profile-open. No "stop asking forever"
+    flag exists on purpose: an unset Library folder is a state worth
+    re-surfacing, unlike a one-time API-key nudge.
+    """
+    from . import pdf_handler
+
+    cfg = _pkg().get_config()
+    if pdf_handler.get_library_root(cfg):
+        return
+
+    from aqt.qt import QFileDialog
+
+    if not askUser(
+        "Klaus can keep your Library PDFs in a real folder on disk "
+        "(instead of tucked inside the add-on) so they show up in "
+        "Finder/Explorer too, and any existing PDFs get moved there.\n\n"
+        "Choose a folder now?",
+        parent=mw,
+    ):
+        return  # ask again next profile open — nothing persisted
+
+    chosen = QFileDialog.getExistingDirectory(
+        mw, "Choose a folder for your Klaus Library"
+    )
+    if not chosen:
+        return
+
+    def do(_col: Any) -> Any:
+        from . import USER_FILES, drive_store
+
+        folders = drive_store.load(USER_FILES).get("pdfs", {})
+        return pdf_handler.migrate_to_root(USER_FILES, chosen, folders)
+
+    def on_done(result: Any) -> None:
+        cfg2 = _pkg().get_config()
+        cfg2["library_root"] = chosen
+        _pkg().write_config(cfg2)
+        failed = (result or {}).get("failed") or {}
+        if failed:
+            tooltip(
+                f"Klaus: Library folder set — {len(failed)} file(s) "
+                "couldn't be moved and stay in the old location"
+            )
+        else:
+            tooltip("Klaus: Library folder set")
+
+    def on_fail(exc: Exception) -> None:
+        print(f"[klausmate] library migration failed: {exc}")
+        showWarning(f"Could not set up the Library folder: {exc}", parent=mw)
+
+    op = QueryOp(parent=mw, op=do, success=on_done)
+    op.failure(on_fail)
+    op.without_collection().run_in_background()
+
+
 def setup_readiness_check() -> None:
     """Run on every profile open. Silently start a local Ollama when one
     is available (managed runtime or system install), then verify Klaus
@@ -185,6 +248,8 @@ def setup_readiness_check() -> None:
     """
     if _first_run_dialog_shown_this_session:
         return
+
+    _library_root_check()
 
     cfg = _pkg().get_config()
     if embeddings.provider_name(cfg) != "ollama":
