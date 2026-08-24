@@ -664,6 +664,7 @@ def _on_library_button(editor: Editor) -> None:
     way to add a PDF from the editor anymore; only the Library window's
     drop zone can bring a new PDF into the store.
     """
+    print("[klausmate] Library button: toggling PDF panel")
     tabs = getattr(editor, "_klausmate_pdf_tabs", None)
     if tabs is None:
         tooltip("Klaus: PDF viewer is unavailable in this window")

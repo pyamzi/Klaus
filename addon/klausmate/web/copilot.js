@@ -170,13 +170,24 @@
     btn.className = fields.className;
     btn.textContent = "Library...";
     btn.title = "Choose a PDF from the Klaus Library";
-    btn.addEventListener("click", function (e) {
-      e.preventDefault();
-      try { pycmd("klausmate:library:e30="); } catch (err) { /* non-fatal */ }
-    });
+    // NO listener on the node: Svelte re-renders can clone subtrees, and
+    // cloneNode keeps the markup but drops addEventListener handlers —
+    // a dead shell the remount observer can't distinguish from a live
+    // button. The document-level capture listener below is the ONLY
+    // click dispatch (a second mechanism would double-fire the toggle).
     fields.parentNode.insertBefore(btn, fields);
+    console.log("[klausmate] Library button mounted");
     return true;
   }
+
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    var hit = t && t.closest ? t.closest("#" + BTN_ID) : null;
+    if (!hit) return;
+    e.preventDefault();
+    console.log("[klausmate] Library button clicked");
+    try { pycmd("klausmate:library:e30="); } catch (err) { /* non-fatal */ }
+  }, true);
 
   var tries = 0;
   var timer = setInterval(function () {
