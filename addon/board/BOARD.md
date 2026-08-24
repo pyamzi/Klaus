@@ -26,47 +26,10 @@ NEEDS-HUMAN because editing it requires either Pouya doing it, or an explicit ex
 
 SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it at klausmate/user_files_README.txt (tracked, reviewable) and have package.sh copy it to user_files/README.txt at build time, exactly as it already does mkdir + cp for that directory. Then the shipped text is version-controlled and the deny-rule stays absolute with no exception.
 
-## Doing
-
-### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
-owner: sonnet-an
-priority: P0
-tags: sonnet-safe,library-era
-files: klausmate/__init__.py,klausmate/manage_models.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
-verify: grep -q 'Klausmate Preferences' klausmate/__init__.py && ! grep -q settings_btn klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Pouya: 'Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.' This card also ABSORBS K-048 (closed as superseded) — same surface, same files.
-
-CURRENT STATE: Tools gets a 'Klaus' SUBMENU containing three items — Clear library tag, Manage models…, Test connection. Pouya wants one entry named 'Klausmate Preferences', at the TOP of the Tools menu.
-
-1. MENU (__init__.py, install_menu). Replace the submenu with a single QAction 'Klausmate Preferences' inserted at the TOP of mw.form.menuTools — use insertAction against the menu's first existing action, not addAction, which appends. Anki populates that menu itself, so verify your insertion point survives main_window_did_init ordering (install_menu is already registered on that hook).
-
-2. THE OTHER TWO ACTIONS MUST NOT JUST VANISH. They move into the dialog:
-   - Test connection -> a button in the dialog's General/Maintenance area.
-   - Clear library tag -> likewise. Keep its existing confirm-once + single-summary-tooltip behaviour (it already uses the quiet= parameters; do not regress that into two tooltips).
-   Both handlers currently live in install_menu's closures — move the logic, do not duplicate it.
-
-3. TEST CONNECTION IS BROKEN, FIX IT WHILE MOVING IT (was K-048). It calls client().health() with the DEFAULT 30-SECOND timeout, synchronously on the main thread — a packet-dropping endpoint hard-freezes Anki for 30s. Use a short timeout (ollama_setup.ollama_reachable, whose docstring is the authority on exactly this hazard, or client(5.0)). ALSO make it provider-aware: with a cloud provider configured it currently still probes Ollama and warns about installing it, which contradicts Ollama being optional. Report key presence for cloud providers; probe Ollama only when the provider is local.
-
-4. REMOVE THE NESTED SETTINGS BUTTON (was K-048). manage_models.py's 'Settings…' button calls _pkg().open_config, which now opens manage_models_dialog — a SECOND modal copy of the same dialog stacked on the first, with stale-widget writeback when the inner one closes. Delete the button and its wiring. KEEP open_config itself: Anki's gear-icon config action uses it (mw.addonManager.setConfigAction). Point open_config at whatever the new single entry point is.
-
-5. UNIFY REACHABILITY (was K-048). setup_flow.py hand-rolls client(5.0).health() in two places; route those through ollama_setup.ollama_reachable. Add an EnsureResult.ok property in ollama_runtime.py to replace the four copy-pasted  checks (__init__.py, setup_flow.py, manage_models.py, ollama_runtime.py) — grep for all four and switch them.
-
-NAMING: the dialog's window title should match what the menu promises. 'Klaus — Manage models' under a menu item called 'Klausmate Preferences' is the kind of mismatch this card exists to remove. Pick one name and use it in both places; say what you picked.
-
-PRESERVE: the single-connect fix-button dispatcher (_embed_fix_kind/on_embed_fix_clicked — Qt connects accumulate, this is deliberate), the per-provider key placeholders, and _needs_local_runtime's install-page gating.
-
-Two siblings are running on pdf_drive.py and on pdf_handler/retention/deck_curate — a suite failure in a file that is not yours is a sibling mid-save; wait and re-run. Qt cannot instantiate headlessly: you cannot see the menu or dialog, so do not claim you verified appearance.
-
-Full suite green (245 across 6 files); tests/test_dialog_logic.py transcribes this dialog and must keep passing. py_compile through the Anki symlink for every file touched. Stage by path.
-
-Done when: verify passes, Tools shows one 'Klausmate Preferences' entry at the top, nothing that used to be reachable has become unreachable, and Test connection can no longer freeze Anki.
-
 #### Comments
-- [2026-08-23 Pouya] "Klausmate Preferences..."
-- [2026-08-23 orchestrator] CORRECTION to item 5 — a shell-quoting slip ate a code snippet when I wrote the body. The line should read: replace the four copy-pasted status-in-tuple checks, i.e. the pattern getattr(res, "status", "") in ("reachable", "started") which appears in __init__.py, setup_flow.py, manage_models.py and ollama_runtime.py. Add an EnsureResult.ok property in ollama_runtime.py and switch all four sites to it, so adding a fifth status value later is one edit instead of four. Grep the literal string reachable to find them all.
+- [2026-08-23 Pouya] Do the suggested fix
+
+## Doing
 
 ### K-049: State-store hygiene: prefs orphans, recency unification, atomic pdf_tabs writes
 owner: sonnet-ao
@@ -87,37 +50,6 @@ Tests for the pure parts (recency ordering, atomic write) belong in test_klausma
 #### Comments
 - [2026-08-23 orchestrator] Parked in Backlog: overlaps K-046 (pdf_handler.py, __init__.py), K-044 (retention.py) and K-040 (deck_curate.py) — the most contended card on the board. Runs alone after this wave.
 - [2026-08-23 orchestrator] RESCOPED: klausmate/__init__.py is REMOVED from your files — K-045 owns it this wave. Consequences for your four items: - Items 1 (prefs orphan on delete) and 2 (atomic pdf_tabs writes) are UNAFFECTED and are the data-safety core of this card. Do those fully. - Item 3 (recency unification): build the shared pdf_handler.list_by_recency() helper and switch deck_curate.py's menu to it. The OTHER call site is __init__.py's ＋ menu — out of scope. State it as owed in your handoff and I will file the one-line switch. Also still yours: make save_pdf touch last_used, and make ensure_active_pdf repair from last_used rather than mtime (both pdf_handler). - Item 4 (drop-filter drift): the stricter check lives in deck_curate.py (yours); the looser one is in __init__.py's _PdfBar (not yours). Note it as owed. Do NOT reach into __init__.py for any of this.
-
-### K-043: add the "drop pdf + browse button" to the bottom at the library.
-owner: sonnet-ap
-priority: P1
-tags: sonnet-safe,library-era
-files: klausmate/pdf_drive.py
-verify: grep -q _drop_square_html klausmate/pdf_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Pouya: 'add the "drop pdf + browse button" to the bottom at the library.' The Library window is the one PDF surface with no way to add a PDF — you can only get one in from the deck screen or the editor bar. Its own empty state even says so ('drop one on the deck list or the editor's PDF bar to add it here'), which is an admission, not a feature.
-
-REUSE, DO NOT FORK. K-040 extracted the square into deck_curate._drop_square_html(), already shared by the deck browser and the deck overview. pdf_drive.py ALREADY imports deck_curate (line 46), so call that helper — this is the third caller it was shaped for. A fourth copy of these styles is exactly what K-040 existed to prevent.
-
-THE CATCH, and the reason this is not a two-line card: that helper returns HTML with pycmd() onclick handlers, built for a webview. The Library is a native Qt QWidget (QTreeWidget + splitter), so you CANNOT drop that HTML in. Decide and justify one of:
-(a) A small QWidget mirroring the square — dashed border, same copy, a Browse… button — placed under the tree in the left pane's QVBoxLayout, wired straight to Python (no bridge). Reuse the STYLE VALUES from the helper by reading them, and if that means extracting the border/radius/copy constants so both files share them, say so — but you may only edit pdf_drive.py, so if the extraction needs a deck_curate.py change, state it as owed rather than reaching.
-(b) A QWebEngineView hosting the helper's HTML. Almost certainly wrong here — a whole webview for one box, plus bridge plumbing the Library has none of.
-I expect (a). Justify whichever you pick.
-
-ALSO WIRE THE DROP ITSELF, not just the button. _PdfBar in __init__.py is the working reference for Qt-native PDF drag-and-drop: setAcceptDrops(True), dragEnterEvent checking for .pdf urls, a dragOver property + style().unpolish/polish for hover feedback, dropEvent importing each file. Read it and follow the same shape. A box that says 'Drop a lecture PDF here' and does not accept drops is worse than no box — that exact gap had to be fixed on K-040 before it could ship.
-
-After a successful import: refresh the tree so the new PDF appears immediately (rebuild_tree), and do NOT arm it for curation — arming is the deck screen's semantics, not the Library's. Match the existing import path: pdf_drive should reach import_pdf_file the same way its siblings do.
-
-Scope: klausmate/pdf_drive.py ONLY. Two siblings are running on other files. Qt cannot instantiate headlessly, so you cannot see it — do not claim you verified appearance; py_compile plus careful reading is the bar, and Pouya checks it in a restarted Anki.
-
-Full suite green (245 across 6 files). py_compile through the Anki symlink. Stage by path.
-
-Done when: verify passes, the Library has a drop square at the bottom of its left pane that both accepts dropped PDFs and opens a file picker, and no style values were copy-pasted without saying so.
-
-#### Comments
-- [2026-08-23 orchestrator] Parked: pdf_drive.py is held by K-044. Note for whoever takes this — K-040 is extracting the drop-square markup into a shared helper so the deck browser and deck overview cannot drift; this card should reuse that same helper for the Library, not fork a third copy.
 
 ## Review
 
@@ -446,3 +378,78 @@ Full suite green; py_compile via symlink; stage by path.
 #### Comments
 - [2026-08-23 orchestrator] Parked in Backlog: blocked on K-046 (owns __init__.py) and K-047 (owns manage_models.py). Unblocks when both land.
 - [2026-08-23 orchestrator] SUPERSEDED by K-045, which absorbs this entire card. Both are the same surface — the Klaus configuration entry points — and they contend on the same two files (__init__.py for the menu and Test connection, manage_models.py for the Settings button and the install-page routing). Splitting them would mean two cards serialised on one feature. K-045 now carries: the Klausmate Preferences restructure, the nested-Settings-button removal, the Test-connection 30s main-thread freeze plus its provider-awareness, and the reachability unification across setup_flow/ollama_runtime. Nothing is dropped.
+
+### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
+owner: sonnet-an
+priority: P0
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py,klausmate/manage_models.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
+verify: grep -q 'Klausmate Preferences' klausmate/__init__.py && ! grep -q settings_btn klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya: 'Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.' This card also ABSORBS K-048 (closed as superseded) — same surface, same files.
+
+CURRENT STATE: Tools gets a 'Klaus' SUBMENU containing three items — Clear library tag, Manage models…, Test connection. Pouya wants one entry named 'Klausmate Preferences', at the TOP of the Tools menu.
+
+1. MENU (__init__.py, install_menu). Replace the submenu with a single QAction 'Klausmate Preferences' inserted at the TOP of mw.form.menuTools — use insertAction against the menu's first existing action, not addAction, which appends. Anki populates that menu itself, so verify your insertion point survives main_window_did_init ordering (install_menu is already registered on that hook).
+
+2. THE OTHER TWO ACTIONS MUST NOT JUST VANISH. They move into the dialog:
+   - Test connection -> a button in the dialog's General/Maintenance area.
+   - Clear library tag -> likewise. Keep its existing confirm-once + single-summary-tooltip behaviour (it already uses the quiet= parameters; do not regress that into two tooltips).
+   Both handlers currently live in install_menu's closures — move the logic, do not duplicate it.
+
+3. TEST CONNECTION IS BROKEN, FIX IT WHILE MOVING IT (was K-048). It calls client().health() with the DEFAULT 30-SECOND timeout, synchronously on the main thread — a packet-dropping endpoint hard-freezes Anki for 30s. Use a short timeout (ollama_setup.ollama_reachable, whose docstring is the authority on exactly this hazard, or client(5.0)). ALSO make it provider-aware: with a cloud provider configured it currently still probes Ollama and warns about installing it, which contradicts Ollama being optional. Report key presence for cloud providers; probe Ollama only when the provider is local.
+
+4. REMOVE THE NESTED SETTINGS BUTTON (was K-048). manage_models.py's 'Settings…' button calls _pkg().open_config, which now opens manage_models_dialog — a SECOND modal copy of the same dialog stacked on the first, with stale-widget writeback when the inner one closes. Delete the button and its wiring. KEEP open_config itself: Anki's gear-icon config action uses it (mw.addonManager.setConfigAction). Point open_config at whatever the new single entry point is.
+
+5. UNIFY REACHABILITY (was K-048). setup_flow.py hand-rolls client(5.0).health() in two places; route those through ollama_setup.ollama_reachable. Add an EnsureResult.ok property in ollama_runtime.py to replace the four copy-pasted  checks (__init__.py, setup_flow.py, manage_models.py, ollama_runtime.py) — grep for all four and switch them.
+
+NAMING: the dialog's window title should match what the menu promises. 'Klaus — Manage models' under a menu item called 'Klausmate Preferences' is the kind of mismatch this card exists to remove. Pick one name and use it in both places; say what you picked.
+
+PRESERVE: the single-connect fix-button dispatcher (_embed_fix_kind/on_embed_fix_clicked — Qt connects accumulate, this is deliberate), the per-provider key placeholders, and _needs_local_runtime's install-page gating.
+
+Two siblings are running on pdf_drive.py and on pdf_handler/retention/deck_curate — a suite failure in a file that is not yours is a sibling mid-save; wait and re-run. Qt cannot instantiate headlessly: you cannot see the menu or dialog, so do not claim you verified appearance.
+
+Full suite green (245 across 6 files); tests/test_dialog_logic.py transcribes this dialog and must keep passing. py_compile through the Anki symlink for every file touched. Stage by path.
+
+Done when: verify passes, Tools shows one 'Klausmate Preferences' entry at the top, nothing that used to be reachable has become unreachable, and Test connection can no longer freeze Anki.
+
+#### Comments
+- [2026-08-23 Pouya] "Klausmate Preferences..."
+- [2026-08-23 orchestrator] CORRECTION to item 5 — a shell-quoting slip ate a code snippet when I wrote the body. The line should read: replace the four copy-pasted status-in-tuple checks, i.e. the pattern getattr(res, "status", "") in ("reachable", "started") which appears in __init__.py, setup_flow.py, manage_models.py and ollama_runtime.py. Add an EnsureResult.ok property in ollama_runtime.py and switch all four sites to it, so adding a fifth status value later is one edit instead of four. Grep the literal string reachable to find them all.
+- [2026-08-23 sonnet-an] Decisions: chose 'Klausmate Preferences' as the single name, used verbatim as both the Tools menuTools QAction text (__init__.py install_menu, inserted via menu.insertAction(existing_actions[0], action) so it lands ahead of Anki's own items) and the dialog's setWindowTitle (manage_models.py, was 'Klaus — Manage models'). Also updated setup_flow.py's four 'Manage models…' button labels and three inline 'under Manage models' / 'Open Manage models…' prose strings to the same name — those open the same dialog and would have pointed at a name that no longer exists anywhere in the UI otherwise. Clear library tag and Test connection moved verbatim (logic unchanged, quiet= behaviour preserved) into new clear_library_tag()/test_connection() closures inside manage_models_dialog, wired to two new buttons (test_conn_btn, clear_library_btn) added to the existing General QGroupBox as a 'Maintenance' row; both are in set_busy()'s disabled-during-op widget list. Test connection: replaced client().health() (default 30s timeout, main thread) with ollama_setup.ollama_reachable(endpoint_url()) (5s default) and made it provider-aware — cloud providers get a key-presence check via embedding_api_key_<provider>, only the ollama provider probes Ollama. settings_btn ('Settings…') deleted along with its set_busy entry and .clicked wiring; open_config() untouched, still calls manage_models_dialog() for Anki's gear-icon action. Added EnsureResult.ok property in ollama_runtime.py (status in ('reachable','started')) and switched all four copy-pasted call sites onto it: __init__.py:238ish (_try_silent_autostart.on_done), setup_flow.py (_maybe_offer_runtime_update.on_done), manage_models.py (start_auto_setup.on_done), ollama_runtime.py (update_runtime). setup_flow.py's two hand-rolled client(5.0).health() calls (_embedding_ready, _readiness_check_body) now call ollama_reachable(cfg.get('endpoint', ...)) instead, importing it from .ollama_setup. Files: klausmate/__init__.py, klausmate/manage_models.py, klausmate/setup_flow.py, klausmate/ollama_runtime.py. Risks: I cannot see the menu or dialog render (Qt is headless-only here) — insertAction ordering and the new Maintenance row's layout are unverified by eye, only by import/logic tests. embed_key_placeholders/_embed_fix_kind/on_embed_fix_clicked/_needs_local_runtime were left untouched as instructed. Left the QMessageBox window titles ('Klaus: Ollama isn't running', 'Klaus: embedding model needed', etc.) as-is — the card's naming ask was specifically menu-entry-vs-dialog-title, not every warning dialog's title. Next: none owed outside this card's file scope — the three siblings' files (deck_curate.py, pdf_handler.py, retention.py, pdf_drive.py) were untouched. Verify: grep -q 'Klausmate Preferences' klausmate/__init__.py && ! grep -q settings_btn klausmate/manage_models.py && test_imports.py && test_dialog_logic.py all pass. Full suite 245/245 across all 6 test files, no regressions. py_compile clean through the addons21/klausmate symlink for all four touched files. Commit 282e71354c38fb694f35743d87593dcc3c9cb480.
+- [2026-08-23 orchestrator] Independently re-verified and signed off. Tools now carries exactly one 'Klausmate Preferences' entry, inserted via insertAction against the menu's current first action rather than addAction — which is what actually puts it at the TOP rather than after Anki's own items, and the docstring records why. The thing I was most concerned about is handled: nothing became unreachable. Clear library tag and Test connection both live as real buttons in the dialog's Maintenance row (:394-395) with their logic MOVED, not duplicated, and Clear library tag's confirm-once/single-tooltip behaviour intact. Dialog title is now 'Klausmate Preferences' too, so the menu promise and the window agree — the mismatch the card called out is gone, and setup_flow's prose and button labels were updated to stop naming a dialog that no longer exists under that name. Test connection is genuinely fixed, not just relocated: short-timeout ollama_reachable instead of a 30-second main-thread client().health(), AND provider-aware — a Voyage user now gets a key-presence answer instead of being told to install Ollama. That was the last place the menu still assumed Ollama was mandatory. EnsureResult.ok verified at all four sites. My first grep for '.ok' found only one, which looked like an incomplete job — they actually use the defensive getattr(res, 'ok', False) form, consistent with house style, and the old status tuple survives only inside the property itself and its own docstring. Correct. Settings… button gone; open_config kept for Anki's gear-icon action, as required. py_compile clean in-repo and through the symlink for all four files; full suite green.
+
+### K-043: add the "drop pdf + browse button" to the bottom at the library.
+owner: sonnet-ap
+priority: P1
+tags: sonnet-safe,library-era
+files: klausmate/pdf_drive.py
+verify: grep -q _drop_square_html klausmate/pdf_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya: 'add the "drop pdf + browse button" to the bottom at the library.' The Library window is the one PDF surface with no way to add a PDF — you can only get one in from the deck screen or the editor bar. Its own empty state even says so ('drop one on the deck list or the editor's PDF bar to add it here'), which is an admission, not a feature.
+
+REUSE, DO NOT FORK. K-040 extracted the square into deck_curate._drop_square_html(), already shared by the deck browser and the deck overview. pdf_drive.py ALREADY imports deck_curate (line 46), so call that helper — this is the third caller it was shaped for. A fourth copy of these styles is exactly what K-040 existed to prevent.
+
+THE CATCH, and the reason this is not a two-line card: that helper returns HTML with pycmd() onclick handlers, built for a webview. The Library is a native Qt QWidget (QTreeWidget + splitter), so you CANNOT drop that HTML in. Decide and justify one of:
+(a) A small QWidget mirroring the square — dashed border, same copy, a Browse… button — placed under the tree in the left pane's QVBoxLayout, wired straight to Python (no bridge). Reuse the STYLE VALUES from the helper by reading them, and if that means extracting the border/radius/copy constants so both files share them, say so — but you may only edit pdf_drive.py, so if the extraction needs a deck_curate.py change, state it as owed rather than reaching.
+(b) A QWebEngineView hosting the helper's HTML. Almost certainly wrong here — a whole webview for one box, plus bridge plumbing the Library has none of.
+I expect (a). Justify whichever you pick.
+
+ALSO WIRE THE DROP ITSELF, not just the button. _PdfBar in __init__.py is the working reference for Qt-native PDF drag-and-drop: setAcceptDrops(True), dragEnterEvent checking for .pdf urls, a dragOver property + style().unpolish/polish for hover feedback, dropEvent importing each file. Read it and follow the same shape. A box that says 'Drop a lecture PDF here' and does not accept drops is worse than no box — that exact gap had to be fixed on K-040 before it could ship.
+
+After a successful import: refresh the tree so the new PDF appears immediately (rebuild_tree), and do NOT arm it for curation — arming is the deck screen's semantics, not the Library's. Match the existing import path: pdf_drive should reach import_pdf_file the same way its siblings do.
+
+Scope: klausmate/pdf_drive.py ONLY. Two siblings are running on other files. Qt cannot instantiate headlessly, so you cannot see it — do not claim you verified appearance; py_compile plus careful reading is the bar, and Pouya checks it in a restarted Anki.
+
+Full suite green (245 across 6 files). py_compile through the Anki symlink. Stage by path.
+
+Done when: verify passes, the Library has a drop square at the bottom of its left pane that both accepts dropped PDFs and opens a file picker, and no style values were copy-pasted without saying so.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked: pdf_drive.py is held by K-044. Note for whoever takes this — K-040 is extracting the drop-square markup into a shared helper so the deck browser and deck overview cannot drift; this card should reuse that same helper for the Library, not fork a third copy.
+- [2026-08-23 sonnet-ap] Decisions: Chose option (a) — a native QWidget mirroring the square, no bridge. New _LibraryDropZone(QWidget) in pdf_drive.py, added under the tree in DriveWindow's left-pane QVBoxLayout (after cancel_btn, so it sits at the bottom of the pane). It shows a fixed idle copy ("Drop a PDF here to add it to your library.") plus a Browse... button — no armed/x state, since arming a PDF for curation is deck-screen semantics the Library doesn't share; this widget only ever imports. Drop wiring: setAcceptDrops(True) + dragEnterEvent/dragLeaveEvent/dropEvent following _PdfBar's exact shape in __init__.py — a "dragOver" dynamic property toggled via style().unpolish/polish for hover feedback, dragEnterEvent accepting only when a URL ends in .pdf, dropEvent collecting every matching path and handing them to a plain Python callback (_on_dropped_paths). Browse... opens QFileDialog.getOpenFileNames the same way. Both paths call the shared import_pdf_file() from __init__.py (its own docstring already lists "drive window" as a caller) — the same import path the deck screen and editor bar use. After import, DriveWindow._on_dropped_paths calls self.rebuild_tree() so new PDFs appear immediately; it deliberately does NOT call deck_curate.arm(). Deviation worth flagging: _PdfBar bases itself on QFrame (+ setFrameShape(StyledPanel)) to get its stylesheet border to paint. I built _LibraryDropZone on QWidget + setAttribute(WA_StyledBackground, True) instead — same visual result, but no QFrame import. Reason: tests/test_drive.py stubs aqt.qt with its own hard-coded, non-permissive name tuple (separate from anki_stubs.py's permissive stub used by test_imports.py), and QFrame isn't in that tuple. Adding it would mean editing tests/test_drive.py, which is outside this card's file scope (klausmate/pdf_drive.py only) — so I avoided needing the name at all rather than reaching outside scope. Confirmed reproducible before the fix (test_drive.py's "pdf_drive imports" check failed with ImportError: cannot import name 'QFrame' from 'aqt.qt') and clean after. Style values duplicated (not shared): the idle border (1px dashed rgba(128,128,128,0.55)), armed/hover border (1px solid rgba(58,130,247,0.85)), border-radius 10px, label font-size 13px, and the Browse button's border/radius/padding/font-size/hover-color are all copied from deck_curate._drop_square_html(). Card scope is pdf_drive.py only, so extracting shared constants would require editing deck_curate.py too — not done. __init__._PdfBar already duplicates these same values for the identical reason (see its own docstring), so this is now a three-way copy, not a new pattern. Owed: pull idle-square border/radius/font-size/Browse-button styling into one module deck_curate.py, pdf_drive.py, and __init__.py can all import from. Verify gate note: it greps for the literal name _drop_square_html in pdf_drive.py. My design does not call that function (it can't — it returns pycmd-laced HTML for a webview, and the Library is native Qt) — the name appears only in the _LibraryDropZone docstring, explaining why a different implementation was needed and pointing at the style values' source. Stating this plainly per the card's own instruction rather than contriving a call. Files: klausmate/pdf_drive.py only (new _LibraryDropZone class; DriveWindow.__init__ instantiates it into the left-pane layout; new DriveWindow._on_dropped_paths method; Callable added to the typing import). Risks: cannot verify appearance or actual drag-and-drop behavior — Qt does not instantiate headlessly here. A human needs to check in a restarted Anki that the square renders correctly at the bottom of the Library's left pane, that dropping a real PDF file imports it and the tree updates, and that Browse... does the same. Also worth a look: the drop zone has no fixed height and no stretch factor, so with a very short left-pane split it could get visually cramped against the tree/status/cancel widgets above it — not something I could observe here. Next: the style-constant duplication across three files (deck_curate.py, pdf_drive.py, __init__.py) noted above as owed — a follow-up card to extract shared border/radius/font/button-style constants into one module would remove that drift risk permanently.
+- [2026-08-23 orchestrator] Independently re-verified and signed off. Option (a) was the right call and the justification is sound — a webview plus bridge plumbing for one box would have been absurd in a window that has neither. Critically, it ACCEPTS DROPS and does not merely offer a button: setAcceptDrops, dragEnterEvent/dragLeaveEvent/dropEvent, and the dragOver property with unpolish/polish for hover feedback, mirroring _PdfBar. That was the failure mode I flagged hardest — a square promising 'Drop a lecture PDF here' that silently routes to Anki's importer — and it is not present here. Both paths reach the shared import_pdf_file, and it correctly does NOT arm for curation (arming is deck-screen semantics), just rebuild_tree. The QWidget + WA_StyledBackground deviation from _PdfBar's QFrame is legitimate and I verified the premise myself: tests/test_drive.py's aqt.qt stub does not define QFrame, and that file was outside this card's scope. The worker confirmed the breakage before switching rather than guessing. Honest handling of the gate: _drop_square_html appears only in a docstring explaining why the HTML helper cannot be called from a Qt widget, and the worker SAID SO plainly instead of contriving a call to satisfy a string match. That is exactly right — a gate is evidence, not a target — and it is a better outcome than a fake call would have been. Style-value duplication is owed, as expected under the file-disjointness rule; noted for the eventual shared-constants pass. py_compile clean through the symlink; full suite green. Appearance needs Pouya in a restarted Anki.
