@@ -43,7 +43,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning, tooltip
 
-from . import curation, deck_curate, drive_store, pdf_handler, retention
+from . import deck_curate, drive_store, pdf_handler, retention
 
 DIALOG_NAME = "KlausDrive"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
@@ -547,7 +547,7 @@ class DriveWindow(QWidget):
         # Staleness is handled by the seq token and _alive() instead.
         op = QueryOp(
             parent=mw,
-            op=lambda col: retention.priority_rows(col, curation._cfg()),
+            op=lambda col: retention.priority_rows(col, retention._cfg()),
             success=done,
         )
         op.failure(fail)
@@ -612,10 +612,10 @@ class DriveWindow(QWidget):
         )
 
     def _on_threshold(self, safe: str) -> None:
-        cfg = curation._cfg()
+        cfg = retention._cfg()
         current = retention.get_threshold(safe, cfg)
         dlg = QDialog(self)
-        dlg.setWindowTitle("Match strictness")
+        dlg.setWindowTitle("Match sensitivity")
         lay = QVBoxLayout(dlg)
         label = QLabel("", dlg)
         lay.addWidget(
@@ -673,11 +673,11 @@ class DriveWindow(QWidget):
         if not matches:
             self.status.setText("Embed this PDF first to see its matched cards.")
             return
-        threshold = retention.get_threshold(safe, curation._cfg())
+        threshold = retention.get_threshold(safe, retention._cfg())
         nids = [int(n) for n, s in matches if float(s) >= threshold]
         if not nids:
             self.status.setText(
-                "No cards above the current strictness — lower it in Threshold…"
+                "No cards above the current sensitivity — lower it in Match sensitivity…"
             )
             return
         retention.preview_matches(mw, nids)
@@ -742,9 +742,9 @@ class DriveWindow(QWidget):
         )
 
         menu.addSeparator()
-        embed_label = "Re-embed for retention" if row.get("indexed") else "Embed for retention"
+        embed_label = "Re-index" if row.get("indexed") else "Add to index"
         menu.addAction(embed_label).triggered.connect(lambda: self._on_embed(safe))
-        menu.addAction("Match strictness…").triggered.connect(
+        menu.addAction("Match sensitivity…").triggered.connect(
             lambda: self._on_threshold(safe)
         )
         menu.addAction("Show matched cards in Browse").triggered.connect(

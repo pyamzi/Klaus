@@ -33,22 +33,29 @@
   the engine's disk space use **Remove Klaus-managed runtime** in Klaus
   settings.
 
-## Klaus panel (semantic deck curation)
+## Semantic library (curation + retention)
 
-The Klaus panel opens from the **Klaus** button in the top-right of Anki's
-toolbar (or Tools → Klaus → Open Klaus). It has one job: **curate a deck
-from a lecture**. Describe the lecture (and/or pick an imported lecture
-PDF), Klaus semantically searches every card in your collection, tags the
-best matches `klaus::curate`, and opens them in Browse. Prune the list
-there, then **Notes → Klaus: Create curated deck from selection…** copies
-them into a new deck — originals are never moved, and the whole copy is
-one undo step. Copies get the `klaus::curated` tag.
+One embed per imported PDF now serves two jobs, both driven by the same
+match cache: **curating a deck** and **PDF study priorities**. There is no
+separate curation embed — indexing a PDF (from the PDF drive's **Add to
+index** / **Re-index**, or automatically the first time you curate from an
+unindexed PDF) scores every card in your collection against it once, and
+that same ranked list is what curation tags and what the priorities view
+aggregates into a retention score.
 
-- **curate_top_k**: How many of the best-matching notes a search tags for
-  review. Default `100`.
-- **curate_min_score**: Minimum cosine similarity (0–1) for a match.
-  Default `0.35`. Raise it for stricter matches, lower it if searches come
-  back empty.
+**Curating a deck**: the deck-browser/overview **Curate Deck** button, or
+the PDF drive's **Curate deck from this PDF…** action, tags the matches at
+or above that PDF's sensitivity with `!Library::Curating` and opens them
+in Browse. Prune the list there, then **Notes → Klaus: Create curated deck
+from selection…** copies them into a new deck — originals are never
+moved, and the whole copy is one undo step. Copies get the
+`!Library::Curated` tag.
+
+- **pdf_match_threshold**: The single sensitivity control — how closely a
+  card must match a PDF to count, for curation, the priorities score, and
+  the `!Library` tags alike. Default `0.55`. Each PDF also has its own
+  slider (PDF drive → right-click a PDF → **Match sensitivity…**), which
+  overrides this for that PDF only.
 
 ### Card embeddings
 
@@ -74,13 +81,12 @@ your machine.
 
 ### PDF study priorities
 
-Each imported PDF can be embedded and semantically matched against your
-cards; the Klaus panel then shows a per-PDF retention score so you know
-what to study first.
+The PDF drive shows a per-PDF retention score — the share of that PDF's
+matched cards (at or above its sensitivity, see `pdf_match_threshold`
+above) you'd currently recall — so you know what to study first. It reads
+the same match cache curation does; nothing here embeds anything curation
+wouldn't already need.
 
-- **pdf_match_threshold**: Default similarity cutoff (0–1) for counting a
-  card as "about" a PDF. Default `0.35`. Each PDF also has its own slider
-  in the panel, which overrides this.
 - **pdf_match_agg**: How a card's score against a PDF's chunks is
   aggregated — `max` (default) or `top3_mean` (mean of the 3 best chunk
   matches; stricter, suppresses one-off spurious hits).

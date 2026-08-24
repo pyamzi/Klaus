@@ -97,6 +97,11 @@ _LEGACY_KEYS_DROPPED = (
     "autocomplete_enabled", "ask_enabled", "chat_hotkey", "klaus_engine",
     "claude_api_key", "claude_model", "claude_timeout_s",
     "autofill_system_prompt",
+    # Retired by K-044: curation no longer has its own top-k/cutoff — the
+    # per-PDF sensitivity is the single control for curation, retention
+    # and the !Library tags alike. Dropped rather than migrated; there is
+    # nothing left that reads either key.
+    "curate_top_k", "curate_min_score",
 )
 
 

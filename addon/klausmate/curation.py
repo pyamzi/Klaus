@@ -1,12 +1,27 @@
-"""Semantic deck curation — the Klaus panel's one job.
+"""Semantic deck curation — rank every card against one imported PDF.
 
-Pipeline: keep the card index in sync (embeddings of every note), embed the
-user's prompt and/or lecture PDF, rank every card against those query
-vectors, tag the best matches for review in Browse, and copy the confirmed
-set into a new deck (originals untouched).
+Pipeline: keep the card index in sync (embeddings of every note) → bring
+the PDF's own persistent chunk index up to date (retention.ensure_pdf_index)
+→ score every card against it (retention.ensure_matches, cached in
+matches.json) → cut at the PDF's sensitivity threshold
+(retention.get_threshold) → tag the survivors for review in Browse, and
+copy the confirmed set into a new deck (originals untouched).
+
+This used to be a SEPARATE pipeline that re-read contexts/<pdf>.txt,
+re-chunked it, sampled up to 128 chunks and embedded them live on every
+run, discarding the vectors — while retention persisted up to 1000 chunks
+of that identical text. One embed per PDF now serves both: curation is
+just retention's ranked-match list, cut at the same per-PDF sensitivity
+number the library slider and the !Library tags use. Curating a PDF that
+isn't indexed yet indexes it first (retention.ensure_pdf_index is
+unconditional) rather than failing.
+
+Free-text prompts (the other half of the old pipeline) are gone along with
+the Klaus panel that offered them — the sole caller (deck_curate.py) always
+passes a ``pdf_name``.
 
 aqt glue only — the vector math lives in card_index.py and the providers in
-embeddings.py. Long work runs on QueryOp workers; the embedding phase runs
+embeddings.py. Long work runs on QueryOp workers; the embedding phases run
 ``without_collection()`` so a 20-minute first index never blocks reviewing.
 
 Preview vehicle: the temp tag ``!Library::Curating`` (nid: search strings
@@ -27,7 +42,7 @@ from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import QAction, QInputDialog, qconnect
 from aqt.utils import askUser, showWarning, tooltip
 
-from . import card_index, embeddings, pdf_handler
+from . import card_index, embeddings
 
 ADDON_DIR = os.path.dirname(__file__)
 USER_FILES = os.path.join(ADDON_DIR, "user_files")
@@ -38,17 +53,21 @@ CURATED_TAG = "!Library::Curated"
 DECK_PREFIX = "Klaus::"
 
 PARTIAL_FLUSH_EVERY = 1024  # vectors between saves — cancel/crash resume point
-MAX_QUERY_CHUNKS = 128
 _FIELD_SEP = "\x1f"  # anki notes.flds separator
-
-DEFAULT_TOP_K = 100
-DEFAULT_MIN_SCORE = 0.35
 
 # Result of the most recent search (ranked nids, scores, suggested name) —
 # consumed by the Browser action and the panel's "Create deck now".
 last_run: dict | None = None
 
-_busy = False  # one index/search pipeline at a time (main-thread flag)
+# ONE re-entrancy token for the WHOLE composed pipeline: card-index sync,
+# PDF chunk-index sync (retention.ensure_pdf_index) and card/PDF matching
+# (retention.ensure_matches) all check and hold THIS SAME flag — those two
+# retention functions take a ``_reentrant`` kwarg so a caller composing
+# several phases (run_curation below) acquires it exactly once instead of
+# nesting acquisitions. Previously curation._busy and retention._busy were
+# separate globals, the guard was one-way (ensure_index never checked
+# retention's), and ensure_matches checked neither.
+_busy = False
 
 ProgressFn = Callable[[str, int, int], None]  # (label, done, total)
 
@@ -66,29 +85,13 @@ def _cfg() -> dict:
 # ------------------------------------------------------------ pure helpers
 
 
-def suggest_deck_name(prompt: str, pdf_name: str | None) -> str:
-    """Deck-name suggestion: PDF basename, else a word-cut prompt prefix."""
-    if pdf_name:
-        base = os.path.basename(pdf_name)
-        for ext in (".txt", ".pdf"):
-            if base.lower().endswith(ext):
-                base = base[: -len(ext)]
-        base = base.strip()
-        if base:
-            return base[:60].strip()
-    p = " ".join((prompt or "").split())
-    if len(p) > 48:
-        cut = p[:48].rsplit(" ", 1)[0]
-        p = (cut if cut else p[:48]).rstrip() + "…"
-    return p or "Curated"
-
-
-def stride_sample(items: list, cap: int = MAX_QUERY_CHUNKS) -> list:
-    """Evenly sample ``cap`` items, keeping document order."""
-    if len(items) <= cap:
-        return list(items)
-    step = len(items) / cap
-    return [items[int(i * step)] for i in range(cap)]
+def suggest_deck_name(pdf_name: str | None) -> str:
+    """Deck-name suggestion: the PDF's basename, minus its extension."""
+    base = os.path.basename(pdf_name or "").strip()
+    for ext in (".txt", ".pdf"):
+        if base.lower().endswith(ext):
+            base = base[: -len(ext)]
+    return base[:60].strip() or "Curated"
 
 
 def _escape_search(term: str) -> str:
@@ -159,29 +162,38 @@ def ensure_index(
     on_done: Callable[[card_index.CardIndex, bool], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
+    _reentrant: bool = False,
 ) -> None:
     """Bring the card index up to date. All callbacks fire on main thread.
 
     ``on_done(index, completed)`` — completed False means cancelled mid-way
     (the partial index is saved; the next run resumes).
+
+    ``_reentrant``: set by a caller (namely run_curation) that already holds
+    ``_busy`` for a larger composed pipeline this is one phase of — skips
+    the guard/release here so the single token is acquired exactly once.
     """
     global _busy
-    if _busy:
-        _fail(on_error, RuntimeError("Klaus is already indexing — try again in a moment."))
-        return
-    _busy = True
+    if not _reentrant:
+        if _busy:
+            _fail(on_error, RuntimeError("Klaus is already indexing — try again in a moment."))
+            return
+        _busy = True
+
+    def release() -> None:
+        global _busy
+        if not _reentrant:
+            _busy = False
 
     def finish_err(exc: Exception) -> None:
-        global _busy
-        _busy = False
+        release()
         _fail(on_error, exc)
 
     def phase_b(snap) -> None:
-        global _busy
         index, plan, sig = snap
         if plan.is_noop() and index is not None:
             # Nothing changed at all — skip the worker round-trip.
-            _busy = False
+            release()
             if on_done:
                 on_done(index, True)
             return
@@ -192,8 +204,7 @@ def ensure_index(
             return _embed_plan(index, plan, sig, on_progress, cancel)
 
         def done(result) -> None:
-            global _busy
-            _busy = False
+            release()
             new_index, completed = result
             if on_done:
                 on_done(new_index, completed)
@@ -228,67 +239,59 @@ def _fail(on_error, exc: Exception) -> None:
 # ---------------------------------------------------------------- search
 
 
-def _query_texts(prompt: str, pdf_name: str | None) -> tuple[list[str], str | None]:
-    """Prompt and/or evenly-sampled PDF chunks → query strings."""
-    texts: list[str] = []
-    p = (prompt or "").strip()
-    if p:
-        texts.append(p)
-    err = None
-    if pdf_name:
-        base = pdf_name if pdf_name.endswith(".txt") else pdf_name + ".txt"
-        path = os.path.join(USER_FILES, "contexts", os.path.basename(base))
-        try:
-            with open(path, encoding="utf-8") as f:
-                raw = f.read()
-            chunks = pdf_handler._chunk_text(raw, source=pdf_name)
-            texts.extend(c["text"] for c in stride_sample(chunks))
-        except OSError:
-            err = f"Could not read the lecture PDF context “{pdf_name}”."
-    return texts, err
-
-
 def run_curation(
     parent,
-    prompt: str = "",
     pdf_name: str | None = None,
     deck_scope: str | None = None,
     *,
-    preview: bool = True,
     on_progress: ProgressFn | None = None,
     on_done: Callable[[dict], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
 ) -> None:
-    """Full search pipeline: sync index → embed query → rank → preview.
+    """Full curation pipeline: sync the card index, sync the PDF's own
+    chunk index (indexing it first if it isn't yet), score every card
+    against it, cut at the PDF's sensitivity threshold, then tag and
+    preview the survivors in Browse.
 
     ``on_done(result)`` with ``{"nids", "scores", "suggested_name",
-    "previewed"}``; with ``preview`` the matches are tagged
-    ``!Library::Curating`` and Browse opens on that tag (membership is
-    ranked; row order in Browse follows the user's sort).
+    "previewed"}``; matches are tagged ``!Library::Curating`` and Browse
+    opens on that tag (membership is ranked; row order in Browse follows
+    the user's sort).
+
+    Holds ``_busy`` for the WHOLE composed pipeline (card index, PDF index,
+    matching, preview) as one token: each phase below is called with
+    ``_reentrant=True`` so none of them re-acquires it.
     """
-    if not (prompt or "").strip() and not pdf_name:
-        _fail(on_error, ValueError("Type a topic or pick a lecture PDF first."))
+    global _busy
+    if not pdf_name:
+        _fail(on_error, ValueError("Pick a lecture PDF first."))
         return
+    if _busy:
+        _fail(on_error, RuntimeError("Klaus is already indexing — try again in a moment."))
+        return
+    _busy = True
 
-    cfg = _cfg()
-    top_n = int(cfg.get("curate_top_k") or DEFAULT_TOP_K)
-    min_score = float(cfg.get("curate_min_score") or DEFAULT_MIN_SCORE)
+    def release() -> None:
+        global _busy
+        _busy = False
 
-    def after_index(index: card_index.CardIndex, completed: bool) -> None:
+    def fail(exc: Exception) -> None:
+        release()
+        _fail(on_error, exc)
+
+    from . import retention  # deferred: retention.py imports this module at its top
+
+    def after_card_index(index: card_index.CardIndex, completed: bool) -> None:
         if not completed:
-            _fail(
-                on_error,
-                RuntimeError("Indexing was cancelled — run the search again to resume."),
-            )
+            fail(RuntimeError("Indexing was cancelled — run the search again to resume."))
             return
         if not index.nids:
-            _fail(
-                on_error,
+            fail(
                 RuntimeError(
                     "No cards are indexed yet — add some notes, then re-index "
                     "from Manage models."
-                ),
+                )
             )
             return
 
@@ -297,68 +300,84 @@ def run_curation(
                 return None
             return set(col.find_notes(f'deck:"{_escape_search(deck_scope)}"'))
 
-        def rank(allowed: set[int] | None) -> None:
-            if on_progress:
-                on_progress("Searching…", 0, 0)
-
-            def do_rank(_col=None) -> dict:
-                texts, err = _query_texts(prompt, pdf_name)
-                if err:
-                    raise RuntimeError(err)
-                if not texts:
-                    raise RuntimeError("Nothing to search with — the PDF context is empty.")
-                provider = embeddings.provider_from_config(_cfg)
-                qvecs = []
-                for _off, vecs in embeddings.embed_batches(
-                    provider, texts, cancel=cancel, kind="query"
-                ):
-                    qvecs.extend(v for v in vecs if v is not None)
-                if cancel is not None and cancel.is_set():
-                    return {"cancelled": True}
-                if not qvecs:
-                    raise RuntimeError("Could not embed the search query.")
-                ranked = card_index.top_k(
-                    index, qvecs, top_n, allowed=allowed, min_score=min_score
-                )
-                return {"ranked": ranked, "cancelled": False}
-
-            def ranked_done(out: dict) -> None:
-                global last_run
-                if out.get("cancelled"):
+        def after_scope(allowed: set[int] | None) -> None:
+            def after_pdf_index(idx) -> None:
+                if not idx.is_complete():
+                    fail(
+                        RuntimeError(
+                            "Indexing was cancelled — run the search again to resume."
+                        )
+                    )
                     return
-                ranked = out["ranked"]
+                retention.ensure_matches(
+                    parent,
+                    pdf_name,
+                    on_progress=on_progress,
+                    on_done=after_matches,
+                    on_error=fail,
+                    cancel=cancel,
+                    _reentrant=True,
+                )
+
+            def after_matches(matches: list[tuple[int, float]]) -> None:
+                if cancel is not None and cancel.is_set():
+                    # match_scores stops early on cancel but still returns
+                    # its partial list — never treat that as a final answer.
+                    fail(RuntimeError("Search was cancelled — run it again to resume."))
+                    return
+                global last_run
+                threshold = retention.get_threshold(pdf_name, retention._cfg())
+                ranked = sorted(
+                    (
+                        (nid, score)
+                        for nid, score in matches
+                        if score >= threshold and (allowed is None or nid in allowed)
+                    ),
+                    key=lambda pair: pair[1],
+                    reverse=True,
+                )
                 result = {
                     "nids": [nid for nid, _ in ranked],
                     "scores": [score for _, score in ranked],
-                    "suggested_name": suggest_deck_name(prompt, pdf_name),
+                    "suggested_name": suggest_deck_name(pdf_name),
                     "previewed": False,
                 }
                 last_run = result
                 if not ranked:
+                    release()
                     if on_done:
                         on_done(result)
                     return
-                if preview:
-                    result["previewed"] = True
-                    _preview_in_browse(parent, result["nids"], lambda: on_done and on_done(result))
-                else:
+                result["previewed"] = True
+
+                def after_preview() -> None:
+                    release()
                     if on_done:
                         on_done(result)
 
-            op = QueryOp(parent=parent, op=lambda col: do_rank(), success=ranked_done)
-            op.failure(lambda exc: _fail(on_error, exc))
-            op.without_collection().run_in_background()
+                _preview_in_browse(parent, result["nids"], after_preview)
 
-        op = QueryOp(parent=parent, op=scope, success=rank)
-        op.failure(lambda exc: _fail(on_error, exc))
+            retention.ensure_pdf_index(
+                parent,
+                pdf_name,
+                on_progress=on_progress,
+                on_done=after_pdf_index,
+                on_error=fail,
+                cancel=cancel,
+                _reentrant=True,
+            )
+
+        op = QueryOp(parent=parent, op=scope, success=after_scope)
+        op.failure(fail)
         op.run_in_background()
 
     ensure_index(
         parent,
         on_progress=on_progress,
-        on_done=after_index,
-        on_error=on_error,
+        on_done=after_card_index,
+        on_error=fail,
         cancel=cancel,
+        _reentrant=True,
     )
 
 

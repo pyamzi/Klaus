@@ -52,13 +52,12 @@ MATCHES_VERSION = 1
 # cached list and never triggers a recompute.
 MATCH_FLOOR = 0.15
 
-DEFAULT_THRESHOLD = 0.35
+DEFAULT_THRESHOLD = 0.55
+_LEGACY_DEFAULT_THRESHOLD = 0.35  # the retired global default, one-time migrated up
 DEFAULT_AGG = "max"
 DEFAULT_MAX_CHUNKS = 1000
 
 PDF_FLUSH_EVERY = 256  # vectors between partial saves while embedding a PDF
-
-_busy = False  # one PDF pipeline at a time (main-thread flag)
 
 ProgressFn = Callable[[str, int, int], None]
 
@@ -69,8 +68,39 @@ except ImportError:  # pre-3.12 fallback (Anki bundles 3.13)
         return sum(x * y for x, y in zip(a, b))
 
 
+def _migrate_default_threshold(cfg: dict) -> dict:
+    """One-time bump of a stored 0.35 (the retired global default) up to
+    0.55 (Pouya's chosen default) — guarded so it runs exactly once per
+    profile and never touches a value someone set deliberately.
+
+    Only the GLOBAL config's ``pdf_match_threshold`` is in scope here.
+    Per-PDF prefs.json entries (set_threshold/get_threshold) are a user
+    choice "saved forever" and this never reads or writes prefs.json.
+    """
+    if cfg.get("_threshold_default_migrated"):
+        return cfg
+    cfg = dict(cfg)
+    try:
+        current = float(cfg.get("pdf_match_threshold", DEFAULT_THRESHOLD))
+    except (TypeError, ValueError):
+        current = None
+    if current == _LEGACY_DEFAULT_THRESHOLD:
+        cfg["pdf_match_threshold"] = DEFAULT_THRESHOLD
+    cfg["_threshold_default_migrated"] = True
+    try:
+        mw.taskman.run_on_main(lambda c=cfg: curation._pkg().write_config(c))
+    except Exception as e:
+        print(f"[klausmate] threshold default migration failed: {e}")
+    return cfg
+
+
 def _cfg() -> dict:
-    return curation._cfg()
+    """The global config, with the one-time threshold-default migration
+    applied. This is the canonical config accessor for retention/curation's
+    shared, threshold-scoped reads — curation._cfg() itself stays a plain
+    pass-through so unrelated config reads (embedding signature, etc.)
+    don't carry this side effect."""
+    return _migrate_default_threshold(curation._cfg())
 
 
 # ------------------------------------------------------------ pure helpers
@@ -227,6 +257,11 @@ def load_matches(
         if str(m.get("card_index_digest")) != digest:
             return None
         if str(m.get("agg")) != agg:
+            return None
+        if float(m.get("floor", -1.0)) != MATCH_FLOOR:
+            # MATCH_FLOOR changed since this cache was written — a cache
+            # built with a different floor could be silently missing rows
+            # that should now be included. Treat as cold, never stale-valid.
             return None
         return [(int(nid), float(score)) for nid, score in m["matches"]]
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -393,25 +428,34 @@ def ensure_pdf_index(
     on_done: Callable[[pdf_index.PdfIndex], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
+    _reentrant: bool = False,
 ) -> None:
     """Bring one PDF's chunk index up to date. Callbacks fire on main.
 
     Never needs the collection — chunking reads files, embedding hits the
     provider — so the whole pipeline runs ``without_collection()``.
     Cancellation persists ``embedded_rows``; the next run resumes there.
+
+    Guards ``curation._busy`` — the ONE re-entrancy token shared with the
+    card-index sync and ensure_matches below, so a caller composing several
+    phases (curation.run_curation) can hold it once across all of them.
+    Pass ``_reentrant=True`` when the caller already holds it.
     """
-    global _busy
-    if _busy or curation._busy:
-        _fail(
-            on_error,
-            RuntimeError("Klaus is already indexing — try again in a moment."),
-        )
-        return
-    _busy = True
+    if not _reentrant:
+        if curation._busy:
+            _fail(
+                on_error,
+                RuntimeError("Klaus is already indexing — try again in a moment."),
+            )
+            return
+        curation._busy = True
+
+    def release() -> None:
+        if not _reentrant:
+            curation._busy = False
 
     def finish_err(exc: Exception) -> None:
-        global _busy
-        _busy = False
+        release()
         _fail(on_error, exc)
 
     def do_build(_col=None) -> pdf_index.PdfIndex:
@@ -490,8 +534,7 @@ def ensure_pdf_index(
         return idx
 
     def done(idx: pdf_index.PdfIndex) -> None:
-        global _busy
-        _busy = False
+        release()
         if on_done:
             on_done(idx)
 
@@ -510,8 +553,27 @@ def ensure_matches(
     on_done: Callable[[list[tuple[int, float]]], None] | None = None,
     on_error: Callable[[Exception], None] | None = None,
     cancel: threading.Event | None = None,
+    _reentrant: bool = False,
 ) -> None:
-    """Return cached (or freshly computed) card↔PDF match scores."""
+    """Return cached (or freshly computed) card↔PDF match scores.
+
+    Guards ``curation._busy`` exactly like ensure_pdf_index above — this
+    used to run entirely unguarded, letting its O(notes x chunks) match
+    pass start concurrently with an index build. Pass ``_reentrant=True``
+    when a caller already holds the token.
+    """
+    if not _reentrant:
+        if curation._busy:
+            _fail(
+                on_error,
+                RuntimeError("Klaus is already indexing — try again in a moment."),
+            )
+            return
+        curation._busy = True
+
+    def release() -> None:
+        if not _reentrant:
+            curation._busy = False
 
     def do_match(_col=None) -> list[tuple[int, float]]:
         cfg = _cfg()
@@ -547,8 +609,17 @@ def ensure_matches(
         save_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg, matches)
         return matches
 
-    op = QueryOp(parent=parent, op=lambda col: do_match(), success=lambda m: on_done and on_done(m))
-    op.failure(lambda exc: _fail(on_error, exc))
+    def done(matches: list[tuple[int, float]]) -> None:
+        release()
+        if on_done:
+            on_done(matches)
+
+    def fail(exc: Exception) -> None:
+        release()
+        _fail(on_error, exc)
+
+    op = QueryOp(parent=parent, op=lambda col: do_match(), success=done)
+    op.failure(fail)
     op.without_collection().run_in_background()
 
 

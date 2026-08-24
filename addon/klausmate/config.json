@@ -6,9 +6,7 @@
   "embedding_model": "",
   "embedding_api_key_openai": "",
   "embedding_api_key_voyage": "",
-  "curate_top_k": 100,
-  "curate_min_score": 0.35,
-  "pdf_match_threshold": 0.35,
+  "pdf_match_threshold": 0.55,
   "pdf_match_agg": "max",
   "pdf_index_max_chunks": 1000
 }
