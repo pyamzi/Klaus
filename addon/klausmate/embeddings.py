@@ -138,8 +138,8 @@ def _post_json(
                 f"Could not reach {provider} embeddings API: {e.reason}",
                 provider=provider,
             )
-            # Transient network blips are expensive mid-index; one retry,
-            # same as claude_api.
+            # Transient network blips are expensive mid-index (a 30k-note
+            # library re-embeds from scratch on failure); one retry.
             if attempt == 0:
                 time.sleep(2.0)
                 continue

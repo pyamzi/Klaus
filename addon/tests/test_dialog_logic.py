@@ -1,12 +1,16 @@
-"""State-machine tests for the reworked Manage-models dialog.
+"""State-machine tests for the Manage-models dialog's semantic-search half
+(embed_provider_combo / embed_model_combo / embed_key_edit).
 
 PyQt6 cannot be imported here (its sip is 3.13-only), so this reimplements
 the dialog's decision logic against faithful combo semantics and asserts the
-behaviours that matter: assignment round-trips, missing-model detection, the
-syncing guard, and the empty-library edge case.
+behaviours that matter: the ui_state['syncing'] guard, the embed_fix_btn
+dispatcher (_embed_fix_kind returning 'key' / 'model' / ''), assignment
+round-trips, and the empty-library / uninstalled-model edge cases.
 
 Kept in lockstep with manage_models_dialog by construction — the functions
-below are transcribed from it; if that code changes these must too.
+below are transcribed from it; if that code changes these must too. The
+K-039 section further down covers manage_models._resolve_ollama_model and
+its config write-back guard in isolation and is maintained separately.
 """
 import sys
 
@@ -76,159 +80,264 @@ class Combo:
         self.setCurrentIndex(i)
 
 
-class World:
-    """The dialog's closure state, transcribed."""
+class LineEdit:
+    """QLineEdit semantics needed here: get/set text, and an editingFinished
+    signal that fires when the simulated user finishes typing (embed_key_edit
+    and embed_model_combo's line edit both connect editingFinished to
+    save_embed in the real dialog)."""
 
-    def __init__(self, cfg, models):
+    def __init__(self, on_finish=None):
+        self._text = ""
+        self.on_finish = on_finish
+
+    def text(self):
+        return self._text
+
+    def setText(self, t):
+        self._text = t
+
+    def type_and_leave(self, t):
+        """Simulate a user typing into the field and then leaving it."""
+        self._text = t
+        if self.on_finish:
+            self.on_finish()
+
+
+_EMBED_DEFAULTS = {
+    "ollama": "nomic-embed-text",
+    "openai": "text-embedding-3-small",
+    "voyage": "voyage-3-lite",
+}
+
+
+def _resolve_ollama_model(configured, models, indexed_model, default):
+    """Transcribed from manage_models._resolve_ollama_model, needed here so
+    World.sync_embed_widgets can be transcribed faithfully too. The K-039
+    section below transcribes its own copy independently for isolated
+    resolver checks — both must be kept in lockstep with the real function."""
+    configured = configured.strip()
+    if configured:
+        return configured
+    if indexed_model and indexed_model in models:
+        return indexed_model
+    if len(models) == 1:
+        return models[0]
+    return default
+
+
+class World:
+    """The manage_models_dialog's semantic-search closure, transcribed:
+    embed_provider_combo / embed_model_combo / embed_key_edit, the
+    ui_state['syncing'] guard, and the embed_fix_btn dispatcher
+    (_embed_fix_kind / on_embed_fix_clicked)."""
+
+    def __init__(self, cfg, models, indexed_model=""):
         self.cfg = dict(cfg)
-        self.models = list(models)
-        self.syncing = False
+        # indexed_model mirrors curation.index_stats()["model"] when an
+        # index already exists, else "".
+        self.indexed_model = indexed_model
+        self.ui_state = {"models": list(models), "syncing": False, "embed_fix_kind": ""}
         self.saves = 0
-        self.auto = Combo(on_change=self.save_jobs)
-        self.ask = Combo(on_change=self.save_jobs)
-        self.claude_key = ""
-        self.warns = {}
-        self.sync_jobs_widgets()
+        self.opened_key_pages = []
+        self.pulled_models = []
+
+        self.embed_provider_combo = Combo(on_change=self.save_embed)
+        self.embed_provider_combo.addItem("Voyage API (default)", "voyage")
+        self.embed_provider_combo.addItem("OpenAI API", "openai")
+        self.embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
+        self.embed_model_combo = Combo(on_change=self.save_embed)
+        self.embed_key_edit = LineEdit(on_finish=self.save_embed)
+
+        self.sync_embed_widgets()
+
+    # --- transcribed from embeddings.py (provider_name/embedding_model/index_signature) ---
+
+    def _provider_name(self):
+        p = str(self.cfg.get("embedding_provider") or "voyage").strip().lower()
+        return p if p in _EMBED_DEFAULTS else "voyage"
+
+    def _embedding_model(self):
+        model = str(self.cfg.get("embedding_model") or "").strip()
+        return model or _EMBED_DEFAULTS[self._provider_name()]
+
+    def _index_signature(self):
+        return self._provider_name(), self._embedding_model()
+
+    def _embed_cfg_key(self, provider):
+        return f"embedding_api_key_{provider}"
 
     # --- transcribed from manage_models_dialog ---
 
-    def _fill_model_combo(self, combo, current):
-        combo.clear()
-        for name in self.models:
-            combo.addItem(name, name)
-        if current and current not in self.models:
-            combo.addItem(f"{current}  (not installed)", current)
-        if not combo.count():
-            combo.addItem("(no models installed)", "")
-        idx = combo.findData(current)
-        combo.setCurrentIndex(idx if idx >= 0 else 0)
+    def pick_model(self, name):
+        """Editable combo: choosing an item from the dropdown syncs the
+        line edit's text to it (real QComboBox behaviour for an editable
+        box) before the change signal fires. Combo's setCurrentIndex alone
+        doesn't do that, so the harness does it explicitly."""
+        combo = self.embed_model_combo
+        i = combo.findData(name)
+        assert i >= 0, f"no item with data {name!r}"
+        combo.setEditText(name)
+        combo.setCurrentIndex(i)
 
-    def sync_jobs_widgets(self):
-        self.syncing = True
+    def sync_embed_widgets(self):
+        self.ui_state["syncing"] = True
         try:
-            auto_active = self.cfg.get("autocomplete_model", "")
-            ask_active = self.cfg.get("ask_model", "")
-            is_claude = self.cfg.get("klaus_engine") == "claude"
-            self._fill_model_combo(self.auto, auto_active)
-
-            self.ask.clear()
-            for name in self.models:
-                self.ask.addItem(f"Local — {name}", f"ollama:{name}")
-            if ask_active and ask_active not in self.models:
-                self.ask.addItem(
-                    f"Local — {ask_active}  (not installed)", f"ollama:{ask_active}")
-            if not self.ask.count():
-                self.ask.addItem("Local — (none installed)", "ollama:")
-            self.ask.addItem("Claude API…", "claude:")
-            want = "claude:" if is_claude else f"ollama:{ask_active}"
-            idx = self.ask.findData(want)
-            self.ask.setCurrentIndex(idx if idx >= 0 else 0)
-            self.claude_key = self.cfg.get("claude_api_key", "")
+            provider = self._provider_name()
+            idx = max(0, self.embed_provider_combo.findData(provider))
+            self.embed_provider_combo.setCurrentIndex(idx)
+            # Local provider -> offer every installed model; cloud -> free
+            # text (no items, just the line edit).
+            self.embed_model_combo.clear()
+            if provider == "ollama":
+                for name in self.ui_state["models"]:
+                    self.embed_model_combo.addItem(name, name)
+            configured_model = str(self.cfg.get("embedding_model") or "")
+            if provider == "ollama":
+                resolved = _resolve_ollama_model(
+                    configured_model, self.ui_state["models"], self.indexed_model,
+                    _EMBED_DEFAULTS["ollama"],
+                )
+                if resolved != configured_model and self.ui_state["models"]:
+                    # Heal the config now, not just the widget (K-039) —
+                    # only when models were actually enumerated, so an
+                    # unreachable Ollama can't durably orphan an index.
+                    self.cfg["embedding_model"] = resolved
+                self.embed_model_combo.setEditText(resolved)
+            else:
+                self.embed_model_combo.setEditText(configured_model)
+            self.embed_key_edit.setText(
+                str(self.cfg.get(self._embed_cfg_key(provider)) or ""))
         finally:
-            self.syncing = False
-        self.update_jobs_status()
+            self.ui_state["syncing"] = False
+        self.update_embed_status()
 
-    def ask_selection(self):
-        data = str(self.ask.currentData() or "")
-        if data.startswith("claude"):
-            return "claude", ""
-        return "ollama", data[len("ollama:"):] if data.startswith("ollama:") else ""
+    def update_embed_status(self):
+        self.ui_state["embed_fix_kind"] = self._embed_fix_kind()
 
-    def update_jobs_status(self):
-        engine, ask_name = self.ask_selection()
-        is_claude = engine == "claude"
-        auto_name = str(self.auto.currentData() or "")
-        auto_missing = bool(auto_name) and auto_name not in self.models
-        ask_missing = bool(ask_name) and ask_name not in self.models
-        self.warns = {
-            "claude_fields_visible": is_claude,
-            "auto": "not installed" if auto_missing else None,
-            "auto_pull": auto_missing,
-            "ask": ("key needed" if (is_claude and not self.claude_key.strip())
-                    else ("not installed" if ask_missing else None)),
-            "ask_pull": ask_missing,
-        }
+    def _embed_fix_kind(self):
+        """'key' when the selected cloud provider has no API key configured,
+        'model' when the local embed model named in config isn't installed,
+        '' when neither."""
+        sig = self._index_signature()
+        provider = self.embed_provider_combo.currentData() or "ollama"
+        is_cloud = provider != "ollama"
+        if is_cloud and not str(self.cfg.get(self._embed_cfg_key(provider)) or "").strip():
+            return "key"
+        if not is_cloud and sig[1] and sig[1] not in self.ui_state["models"]:
+            return "model"
+        return ""
 
-    def save_jobs(self):
-        if self.syncing:
+    def on_embed_fix_clicked(self):
+        """Sole handler for embed_fix_btn.clicked — dispatches on the state
+        update_embed_status() last computed, not recomputed here."""
+        kind = self.ui_state.get("embed_fix_kind", "")
+        if kind == "key":
+            provider = str(self.embed_provider_combo.currentData() or "voyage")
+            self.opened_key_pages.append(provider)
+        elif kind == "model":
+            self.pulled_models.append(self.embed_model_combo.currentText().strip())
+
+    def save_embed(self):
+        if self.ui_state["syncing"]:
             return
         self.saves += 1
-        auto_name = str(self.auto.currentData() or "")
-        if auto_name:
-            self.cfg["autocomplete_model"] = auto_name
-            self.cfg["model"] = auto_name
-        engine, ask_name = self.ask_selection()
-        self.cfg["klaus_engine"] = engine
-        if engine == "ollama" and ask_name:
-            self.cfg["ask_model"] = ask_name
-        self.cfg["claude_api_key"] = self.claude_key.strip()
-        self.update_jobs_status()
+        provider = str(self.embed_provider_combo.currentData() or "ollama")
+        prev = self._provider_name()
+        self.cfg["embedding_provider"] = provider
+        if provider == prev:
+            self.cfg["embedding_model"] = self.embed_model_combo.currentText().strip()
+        else:
+            # Provider switched: the typed/selected model belonged to the
+            # old provider.
+            self.cfg["embedding_model"] = ""
+        if provider != "ollama":
+            self.cfg[self._embed_cfg_key(provider)] = self.embed_key_edit.text().strip()
+        if provider != prev:
+            self.sync_embed_widgets()  # reload model/key fields for the new provider
+        else:
+            self.update_embed_status()
 
 
-BASE = {"autocomplete_model": "qwen3:4b", "model": "qwen3:4b",
-        "ask_model": "qwen3:4b", "klaus_engine": "ollama", "claude_api_key": ""}
+BASE = {"embedding_provider": "voyage", "embedding_model": "",
+        "embedding_api_key_voyage": ""}
 
-print("== the bug from the screenshot: config points at a missing model ==")
-w = World(BASE, models=[])            # exactly the reported state
-check("autocomplete flagged not installed", w.warns["auto"] == "not installed")
-check("its Pull-it button shows", w.warns["auto_pull"])
-check("Ask flagged not installed", w.warns["ask"] == "not installed")
-check("missing model still selectable, not dropped",
-      w.auto.currentData() == "qwen3:4b")
-check("no silent config rewrite on open", w.saves == 0)
-
-print("== healthy library ==")
-w = World(BASE, models=["qwen3:0.6b", "qwen3:4b"])
-check("no warnings", w.warns["auto"] is None and w.warns["ask"] is None)
-check("autocomplete preselected from config", w.auto.currentData() == "qwen3:4b")
-check("ask preselected from config", w.ask.currentData() == "ollama:qwen3:4b")
-check("claude fields hidden", not w.warns["claude_fields_visible"])
+print("== provider default and the syncing guard ==")
+w = World(BASE, models=[])
+check("defaults to voyage", w.embed_provider_combo.currentData() == "voyage")
 check("opening the dialog saves nothing", w.saves == 0)
-
-print("== assignment round-trips ==")
-w.auto.pick("qwen3:0.6b")
-check("autocomplete write", w.cfg["autocomplete_model"] == "qwen3:0.6b")
-check("legacy 'model' key kept in sync", w.cfg["model"] == "qwen3:0.6b")
-check("ask untouched by autocomplete change", w.cfg["ask_model"] == "qwen3:4b")
-
-w.ask.pick("ollama:qwen3:0.6b")
-check("ask model write", w.cfg["ask_model"] == "qwen3:0.6b")
-check("engine stays ollama", w.cfg["klaus_engine"] == "ollama")
-
-print("== the merged Ask control ==")
-w.ask.pick("claude:")
-check("engine flips to claude", w.cfg["klaus_engine"] == "claude")
-check("claude fields revealed", w.warns["claude_fields_visible"])
-check("warns about missing key", w.warns["ask"] == "key needed")
-check("last local model remembered", w.cfg["ask_model"] == "qwen3:0.6b")
-w.claude_key = "sk-ant-xyz"
-w.save_jobs()
-check("key entered clears the warning", w.warns["ask"] is None)
-w.ask.pick("ollama:qwen3:4b")
-check("switching back restores ollama", w.cfg["klaus_engine"] == "ollama")
-check("and sets that model", w.cfg["ask_model"] == "qwen3:4b")
-check("claude key retained for next time", w.cfg["claude_api_key"] == "sk-ant-xyz")
-
-print("== empty library must not force Claude (regression) ==")
-w = World({**BASE, "ask_model": "", "klaus_engine": "ollama"}, models=[])
-check("a local placeholder exists", w.ask.findData("ollama:") >= 0)
-check("placeholder is selected, not Claude", w.ask.currentData() == "ollama:")
-w.auto.setCurrentIndex(0)   # user touches an unrelated row
-w.save_jobs()
-check("engine still ollama after unrelated edit",
-      w.cfg["klaus_engine"] == "ollama", w.cfg["klaus_engine"])
-
-print("== syncing guard ==")
-w = World(BASE, models=["qwen3:4b", "llama3"])
 before = w.saves
-w.sync_jobs_widgets()
+w.sync_embed_widgets()
 check("repopulating combos writes no config", w.saves == before)
 
-print("== claude engine restored from config ==")
-w = World({**BASE, "klaus_engine": "claude", "claude_api_key": "sk-ant-1"},
-          models=["qwen3:4b"])
-check("claude preselected", w.ask.currentData() == "claude:")
-check("no key warning when key present", w.warns["ask"] is None)
+print("== cloud provider with no key -> kind 'key' ==")
+w = World(BASE, models=[])
+check("voyage with empty key needs a key", w.ui_state["embed_fix_kind"] == "key")
+check("cloud provider offers no model items, free text only",
+      w.embed_model_combo.count() == 0)
+w.on_embed_fix_clicked()
+check("fix button opens the voyage key page", w.opened_key_pages == ["voyage"])
+
+print("== cloud provider with a key -> kind '' (ready) ==")
+w = World({**BASE, "embedding_api_key_voyage": "pa-xyz"}, models=[])
+check("key present clears the warning", w.ui_state["embed_fix_kind"] == "")
+
+print("== local provider with an uninstalled model -> kind 'model' ==")
+w = World({"embedding_provider": "ollama", "embedding_model": "mxbai-embed-large"},
+          models=["nomic-embed-text"])
+check("configured model not in library needs a pull",
+      w.ui_state["embed_fix_kind"] == "model")
+check("model dropdown lists only what's installed, not the missing one",
+      [n for n, _d in w.embed_model_combo.items] == ["nomic-embed-text"])
+w.on_embed_fix_clicked()
+check("fix button pulls the configured (missing) model, not an installed one",
+      w.pulled_models == ["mxbai-embed-large"])
+
+print("== local provider, model installed -> kind '' (ready) ==")
+w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
+          models=["nomic-embed-text", "all-minilm"])
+check("installed model needs no fix", w.ui_state["embed_fix_kind"] == "")
+check("model dropdown offers only the installed models",
+      sorted(n for n, _d in w.embed_model_combo.items) == ["all-minilm", "nomic-embed-text"])
+
+print("== local provider, empty library -> still 'model' (edge case) ==")
+w = World({"embedding_provider": "ollama", "embedding_model": ""}, models=[])
+check("empty config falls back to the hardcoded default for display",
+      w.embed_model_combo.currentText() == "nomic-embed-text")
+check("but an empty library still can't run it -> kind 'model'",
+      w.ui_state["embed_fix_kind"] == "model")
+check("empty library is not healed into config (nothing installed to confirm)",
+      w.cfg["embedding_model"] == "")
+
+print("== empty configured model heals from an installed library on open ==")
+w = World({"embedding_provider": "ollama", "embedding_model": ""},
+          models=["embeddinggemma"])
+check("resolver picks the one installed model",
+      w.embed_model_combo.currentText() == "embeddinggemma")
+check("and writes it back to config (the sync_embed_widgets heal branch)",
+      w.cfg["embedding_model"] == "embeddinggemma")
+check("healing on open does not count as a user save", w.saves == 0)
+
+print("== assignment round-trips ==")
+w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
+          models=["nomic-embed-text", "all-minilm"])
+w.pick_model("all-minilm")
+check("picking a model writes config", w.cfg["embedding_model"] == "all-minilm")
+check("one save for one pick", w.saves == 1)
+
+w = World(BASE, models=[])
+w.embed_key_edit.type_and_leave("pa-new-key")
+check("typing a key writes config", w.cfg["embedding_api_key_voyage"] == "pa-new-key")
+check("key entered clears the fix warning", w.ui_state["embed_fix_kind"] == "")
+
+print("== switching provider drops the old model and resyncs without a double-save ==")
+w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
+          models=["nomic-embed-text"])
+w.embed_provider_combo.pick("openai")
+check("provider switch writes the new provider", w.cfg["embedding_provider"] == "openai")
+check("old provider's model is dropped, not carried over", w.cfg["embedding_model"] == "")
+check("switching provider is exactly one save (inner resync must not re-save)",
+      w.saves == 1)
+check("cloud fields reset to empty (no openai key yet)", w.embed_key_edit.text() == "")
 
 print("== empty embedding_model resolver (K-039, manage_models._resolve_ollama_model) ==")
 
