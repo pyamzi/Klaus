@@ -628,3 +628,14 @@ Pouya (live, after part A): Anki->folder works, folder->Anki does not — moving
 
 #### Comments
 - [2026-08-24 opus] Committed f5797f7. 30 new checks, 151/151 in file, full suite green; falsification: ambiguity guard disabled = 2 red. Design notes pinned by test: (1) moving files in Finder syncs folder+name back into the tree and tags; (2) simultaneous multi-file rename+move batches are AMBIGUOUS and untouched — resolve one at a time; (3) deleting a file in Finder reports it missing but never deletes Klaus data (annotations/context/index survive; re-add the file and everything reconnects); (4) dropping a PDF into the folder ingests it in place, no copy; (5) imports with a root set write straight into the root, re-imports replace in place. pdf_originals/ deliberately stays as the internal pristine baseline for annotation baking — not a viewable duplicate.
+
+### K-074: Rescan reconciles tree to mapping unconditionally (K-073 live fix)
+owner: -
+priority: P2
+tags: library-era
+files: klausmate/pdf_handler.py,klausmate/pdf_drive.py,tests/test_klausmate.py
+verify: grep -q "tree_changed" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
+created: 2026-08-24
+
+#### Comments
+- [2026-08-24 opus] Committed 9b4a2a6, filed retrospectively (fix shipped in the same turn as the diagnosis). Diagnosed from real data: mapping synced at 17:42 by migration, tree rewritten at 18:08 by the stale-tag reconcile, moves-only loop permanently unable to repair. Fix: tree follows mapping for every mapped entry; tags follow tree_changed. Pouya's stale tree self-heals on next Library open/refresh — no manual cleanup needed. Falsified (3 red on the old loop); suite 156 in file, all green.
