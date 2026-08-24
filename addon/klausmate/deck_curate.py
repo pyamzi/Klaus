@@ -457,7 +457,12 @@ def _install_drop_wrap() -> None:
 
     def dropEvent(self, evt):  # noqa: N802 — Qt naming
         try:
-            if getattr(mw, "state", "") == "deckBrowser":
+            # Both screens that render the drop square (K-040), not just
+            # the deck list. The square says "Drop a lecture PDF here" on
+            # the overview too, and without this the drop falls through to
+            # Anki's own importer, which chokes on a PDF — an invitation
+            # the add-on then fails to honour.
+            if getattr(mw, "state", "") in ("deckBrowser", "overview"):
                 md = evt.mimeData()
                 if md is not None and md.hasUrls():
                     pdfs, others = [], 0
