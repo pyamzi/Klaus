@@ -2240,7 +2240,12 @@ class _PdfTabContainer(QWidget):
                 continue
             if pdf_handler.pdf_path_for(USER_FILES, base):
                 stored.append(base)
-        for base in stored[:20]:
+        # No cap, unlike deck_curate's curate-from-recent menu (top 20).
+        # That one is a shortcut with the Library as the full path; THIS
+        # menu is the only way to open a stored PDF in the editor's
+        # viewer, so truncating it would strand every PDF past the top 20
+        # with no route in. QMenu scrolls natively when it overflows.
+        for base in stored:
             act = menu.addAction(_pdf_display_name(base))
             act.triggered.connect(
                 lambda _=False, b=base: self._sidebar.load_pdf(b)
