@@ -7,13 +7,18 @@
 
 ## Backlog
 
+## Ready
+
+## Doing
+
 ### K-054: Tag renames flow back to the PDF (reverse direction of K-053)
-owner: -
+owner: sonnet-at
 priority: P1
 tags: sonnet-safe,library-era
 files: klausmate/tag_sync.py,klausmate/pdf_drive.py,tests/test_tag_migrate.py
-verify: grep -q reconcile_from_tags klausmate/tag_sync.py && env QT_QPA_PLATFORM=OFFSCREEN true; grep -q reconcile_from_tags klausmate/tag_sync.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py
+verify: grep -q reconcile_from_tags klausmate/tag_sync.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 created: 2026-08-24
+claimed: 2026-08-24
 
 BLOCKED until K-053 is Done — same files. Pouya's invariant is bidirectional: 'the PDF should always follow the names of the tag, those two are always the same.'
 
@@ -25,9 +30,8 @@ CAVEAT to encode in copy+tests: the mapping is lossy — spaces become _ in tags
 
 Same safety/verify regime as K-053. Full suite green; py_compile via symlink; stage by path.
 
-## Ready
-
-## Doing
+#### Comments
+- [2026-08-24 orchestrator] PREREQUISITES CONFIRMED against the landed K-053 module before launch, so build on these rather than re-deriving them: desired_tag(folder, display) :136 — the forward mapping you must re-apply when a reverse match is ambiguous. get_stored_tag(safe) :226 / set_stored_tag(safe, tag) :240 — prefs.json's 'tag' key, the exact record of what was last applied. This is what makes 'the stored tag is GONE' detectable at all; never infer it from the current display name. _folder_and_display(safe) :248, _safe(name) :220, RESERVED_LEAVES :90, library_tags_enabled(cfg) :99 — reuse all four, do not reimplement. drive_store.rename_display(user_files, safe, display) :115 and set_folder(user_files, safe, folder) :105 — the write side of the reverse direction. add_folder :126 exists if a renamed tag implies a folder that is not registered yet; set_folder auto-registers unknown paths, so check before adding a redundant call. Also note K-053's verified gate: I confirmed _run_sync_op is the ONLY CollectionOp in tag_sync and that every op returns col.merge_undo_entries(pos). If reconcile_from_tags mutates the collection at all, it goes through that same helper — do not add a second op path. One live-state fact worth knowing: Pouya's prefs.json is currently {} (he cleared every per-PDF override via the new apply-to-all prompt), so NO PDF has a stored 'tag' yet — reconcile must treat 'no stored tag' as simply nothing to reconcile, not as a missing tag to hunt for. That is the state your code will actually meet on his first run.
 
 ## Review
 
