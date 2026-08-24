@@ -46,7 +46,9 @@ from aqt.qt import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QStackedWidget,
+    QTabWidget,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -250,8 +252,29 @@ def manage_models_dialog(setup: bool = False) -> None:
     # from, what proves you can use it, which model — and the library below
     # is pure inventory (pull, delete, see what's installed).
     models_page = QWidget()
-    models_layout = QVBoxLayout(models_page)
-    models_layout.setSpacing(8)
+    models_page_layout = QVBoxLayout(models_page)
+    models_page_layout.setContentsMargins(0, 0, 0, 0)
+
+    # Page 1 used to be one long scroll of three group boxes and kept
+    # growing (K-052). The install page (page 0) stays a separate
+    # QStackedWidget page rather than a tab: a user with no Ollama should
+    # not see tabs offering settings that cannot work yet (Local model
+    # library) until they've set up local AI or picked a cloud provider.
+    # Split follows the existing group boxes 1:1 — Semantic search /
+    # Models / General — since that's already the natural job boundary and
+    # needed no rethinking to tab cleanly.
+    tabs = QTabWidget()
+    models_page_layout.addWidget(tabs)
+
+    def _tab(*widgets: QWidget) -> QWidget:
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(10, 10, 10, 10)
+        tab_layout.setSpacing(8)
+        for w in widgets:
+            tab_layout.addWidget(w)
+        tab_layout.addStretch(1)
+        return tab
 
     _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
     _BOLD_TITLE = "QGroupBox { font-weight: 600; }"
@@ -325,7 +348,35 @@ def manage_models_dialog(setup: bool = False) -> None:
             "Klaus asks for."
         )
     )
-    models_layout.addWidget(embed_box)
+
+    # ----- Default match sensitivity ---------------------------------------
+    # The global starting point for retention._migrate_default_threshold /
+    # pdf_match_threshold. Same 20-80 range and live numeric readout as the
+    # Library's per-PDF slider (pdf_drive._on_threshold) — same control,
+    # different scope, so it should look and feel like the same control.
+    threshold_row = QHBoxLayout()
+    threshold_row.setContentsMargins(0, 0, 0, 0)
+    threshold_row.addWidget(QLabel("Default match sensitivity:"))
+    threshold_slider = QSlider(Qt.Orientation.Horizontal)
+    threshold_slider.setMinimum(20)
+    threshold_slider.setMaximum(80)
+    threshold_slider.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
+    threshold_row.addWidget(threshold_slider, 1)
+    threshold_value_lbl = QLabel()
+    threshold_value_lbl.setMinimumWidth(36)
+    threshold_row.addWidget(threshold_value_lbl)
+    embed_layout.addLayout(threshold_row)
+    embed_layout.addWidget(
+        _caption(
+            "Starting point for PDFs that haven't been tuned individually — "
+            "the Library's per-PDF sensitivity (right-click a PDF → Match "
+            "sensitivity) always wins over this."
+        )
+    )
+
+    tabs.addTab(_tab(embed_box), "Semantic search")
 
     # ----- Local model library (inventory only) ----------------------------
     lib_box = QGroupBox("Local model library (Ollama)")
@@ -365,7 +416,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     pull_row.addWidget(delete_btn)
     pull_row.addWidget(refresh_btn)
     lib_layout.addLayout(pull_row)
-    models_layout.addWidget(lib_box)
+    tabs.addTab(_tab(lib_box), "Models")
 
     # ----- General ----------------------------------------------------------
     # The two toggles orphaned by settings_ui.py's deletion (A5) — labels,
@@ -401,7 +452,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
-    models_layout.addWidget(general_box)
+    tabs.addTab(_tab(general_box), "General")
 
     stack.addWidget(models_page)
 
@@ -440,6 +491,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             auto_setup_btn, download_btn, check_conn_btn,
             embed_provider_combo, embed_model_combo, embed_key_edit,
             embed_fix_btn, index_btn, test_conn_btn, clear_library_btn,
+            threshold_slider,
         ):
             w.setEnabled(not busy)
         for btn in install_action_btns:
@@ -516,6 +568,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             else "Local library needs Ollama — not required for your current provider."
         )
         sync_embed_widgets()
+        sync_threshold_widget()
         rebuild_library_list()
 
     def rebuild_library_list() -> None:
@@ -979,6 +1032,62 @@ def manage_models_dialog(setup: bool = False) -> None:
             update_embed_status()
         rebuild_library_list()  # the "used by: search" badge may have moved
 
+    def _update_threshold_label(value: int) -> None:
+        threshold_value_lbl.setText(f"{value / 100:.2f}")
+
+    def sync_threshold_widget() -> None:
+        from . import retention
+
+        ui_state["syncing"] = True
+        try:
+            cfg = retention._cfg()  # applies the default-bump migration
+            try:
+                value = float(
+                    cfg.get("pdf_match_threshold") or retention.DEFAULT_THRESHOLD
+                )
+            except (TypeError, ValueError):
+                value = retention.DEFAULT_THRESHOLD
+            threshold_slider.setValue(int(round(value * 100)))
+        finally:
+            ui_state["syncing"] = False
+        _update_threshold_label(threshold_slider.value())
+
+    def save_threshold() -> None:
+        """Wired to sliderReleased, not valueChanged — valueChanged only
+        drives the live label (_update_threshold_label), so dragging never
+        writes config on every intermediate pixel, and a programmatic
+        setValue() (sync_threshold_widget, on every refresh()) never emits
+        sliderReleased at all, real Qt never fires it outside a genuine
+        mouse/touch release.
+
+        Still guarded by ui_state['syncing'] like every other save_* here,
+        belt-and-braces, AND a no-op unless the value actually differs from
+        what's stored: opening this dialog and closing it untouched must
+        leave config byte-identical. Getting either guard wrong stamps
+        _threshold_user_set on profiles that never touched the control,
+        which permanently opts them out of every future
+        retention._migrate_default_threshold bump with no visible symptom
+        until that bump ships and silently reaches nobody.
+        """
+        if ui_state["syncing"]:
+            return
+        from . import retention
+
+        value = round(threshold_slider.value() / 100.0, 3)
+        cfg = _pkg().get_config()
+        try:
+            current = round(
+                float(cfg.get("pdf_match_threshold") or retention.DEFAULT_THRESHOLD),
+                3,
+            )
+        except (TypeError, ValueError):
+            current = None
+        if value == current:
+            return
+        cfg["pdf_match_threshold"] = value
+        cfg["_threshold_user_set"] = True
+        _pkg().write_config(cfg)
+
     def finish_index() -> None:
         progress.setRange(0, 100)
         set_busy(False)
@@ -1259,6 +1368,8 @@ def manage_models_dialog(setup: bool = False) -> None:
         _embed_model_edit_widget.editingFinished.connect(save_embed)
     embed_model_combo.currentIndexChanged.connect(lambda _i: save_embed())
     embed_key_edit.editingFinished.connect(save_embed)
+    threshold_slider.valueChanged.connect(_update_threshold_label)
+    threshold_slider.sliderReleased.connect(save_threshold)
     index_btn.clicked.connect(start_index)
     image_crop_cb.toggled.connect(lambda _checked: save_general())
     runtime_auto_cb.toggled.connect(lambda _checked: save_general())

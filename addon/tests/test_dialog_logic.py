@@ -417,5 +417,195 @@ check(
 )
 
 
+print("== default-sensitivity slider: migration-side bail (K-052) ==")
+
+_SHIPPED_DEFAULTS = (0.35, 0.55, 0.75)
+_DEFAULT_APPLIED_KEY = "_threshold_default_applied"
+_THRESHOLD_USER_SET_KEY = "_threshold_user_set"
+
+
+def _migrate_default_threshold(cfg, default_threshold):
+    """Transcribed from retention._migrate_default_threshold — if that
+    function changes this must too. Parameterized on ``default_threshold``
+    (the real function reads the module constant DEFAULT_THRESHOLD) purely
+    so a test can simulate "a later version bumps the default" without
+    monkeypatching; behaviour is otherwise identical. The write-back side
+    effect (mw.taskman.run_on_main -> write_config) is dropped since this
+    file never imports aqt — only the returned dict matters here."""
+    if cfg.get(_THRESHOLD_USER_SET_KEY):
+        return cfg
+    if cfg.get(_DEFAULT_APPLIED_KEY) == default_threshold:
+        return cfg
+    cfg = dict(cfg)
+    try:
+        current = float(cfg.get("pdf_match_threshold", default_threshold))
+    except (TypeError, ValueError):
+        current = None
+    if current is not None and any(
+        abs(current - shipped) < 1e-9 for shipped in _SHIPPED_DEFAULTS
+    ):
+        cfg["pdf_match_threshold"] = default_threshold
+    cfg[_DEFAULT_APPLIED_KEY] = default_threshold
+    cfg.pop("_threshold_default_migrated", None)
+    return cfg
+
+
+check(
+    "untouched inherited value still migrates on a later bump (feature intact)",
+    _migrate_default_threshold({"pdf_match_threshold": 0.55}, 0.85)[
+        "pdf_match_threshold"
+    ]
+    == 0.85,
+)
+check(
+    "a deliberately user-set 0.55 survives a later default bump",
+    _migrate_default_threshold(
+        {"pdf_match_threshold": 0.55, "_threshold_user_set": True}, 0.85
+    )["pdf_match_threshold"]
+    == 0.55,
+)
+check(
+    "a user-set cfg is returned completely untouched, not just the threshold key",
+    _migrate_default_threshold(
+        {"pdf_match_threshold": 0.55, "_threshold_user_set": True}, 0.85
+    )
+    == {"pdf_match_threshold": 0.55, "_threshold_user_set": True},
+)
+
+
+print("== default-sensitivity slider: dialog-side flag wiring (K-052) ==")
+
+
+class Slider:
+    """QSlider semantics needed here: setValue fires valueChanged only when
+    the value actually changes (real Qt behaviour, mirrored by Combo
+    above); sliderReleased is a distinct signal that ONLY a genuine user
+    mouse/touch release ever triggers — a programmatic setValue() never
+    emits it. That distinction is what makes sliderReleased (not
+    valueChanged) the safe place to persist a change and set the
+    user-set flag from."""
+
+    def __init__(self, on_change=None, on_release=None):
+        self._value = 0
+        self.on_change = on_change
+        self.on_release = on_release
+
+    def value(self):
+        return self._value
+
+    def setValue(self, v):
+        changed = v != self._value
+        self._value = v
+        if changed and self.on_change:
+            self.on_change(v)
+
+    def user_drag_and_release(self, v):
+        """A real user dragging the handle to v and releasing the mouse —
+        the only path that should ever persist a change."""
+        self.setValue(v)
+        if self.on_release:
+            self.on_release()
+
+    def user_click_release_no_move(self):
+        """A plain click-and-release that changes nothing — must still not
+        write anything."""
+        if self.on_release:
+            self.on_release()
+
+
+class ThresholdWorld:
+    """manage_models_dialog's default-sensitivity control, transcribed:
+    sync_threshold_widget / save_threshold and the ui_state['syncing']
+    guard shared with the rest of the dialog (see World above for the
+    embed-widget half of the same guard)."""
+
+    DEFAULT_THRESHOLD = 0.75
+
+    def __init__(self, cfg):
+        self.cfg = dict(cfg)
+        self.ui_state = {"syncing": False}
+        self.writes = 0
+        self.slider = Slider(on_release=self.save_threshold)
+        self.sync_threshold_widget()
+
+    def sync_threshold_widget(self):
+        self.ui_state["syncing"] = True
+        try:
+            try:
+                value = float(
+                    self.cfg.get("pdf_match_threshold") or self.DEFAULT_THRESHOLD
+                )
+            except (TypeError, ValueError):
+                value = self.DEFAULT_THRESHOLD
+            self.slider.setValue(int(round(value * 100)))
+        finally:
+            self.ui_state["syncing"] = False
+
+    def save_threshold(self):
+        if self.ui_state["syncing"]:
+            return
+        value = round(self.slider.value() / 100.0, 3)
+        try:
+            current = round(
+                float(self.cfg.get("pdf_match_threshold") or self.DEFAULT_THRESHOLD),
+                3,
+            )
+        except (TypeError, ValueError):
+            current = None
+        if value == current:
+            return
+        self.cfg["pdf_match_threshold"] = value
+        self.cfg["_threshold_user_set"] = True
+        self.writes += 1
+
+
+w = ThresholdWorld({"pdf_match_threshold": 0.55})
+check("opens showing the stored value", w.slider.value() == 55)
+check("populating the widget on open writes nothing", w.writes == 0)
+check(
+    "populating the widget on open does not stamp the user-set flag",
+    "_threshold_user_set" not in w.cfg,
+)
+
+before = w.writes
+w.sync_threshold_widget()  # e.g. Refresh / Check connection re-populating
+check("re-syncing without touching the slider still writes nothing",
+      w.writes == before)
+check(
+    "repeated programmatic repopulation still never stamps the flag",
+    "_threshold_user_set" not in w.cfg,
+)
+
+w = ThresholdWorld({"pdf_match_threshold": 0.55})
+w.slider.user_click_release_no_move()
+check("a click-release that changes nothing writes nothing", w.writes == 0)
+check("no user-set flag from a no-op release", "_threshold_user_set" not in w.cfg)
+
+w = ThresholdWorld({"pdf_match_threshold": 0.75})
+w.slider.user_drag_and_release(55)
+check("dragging and releasing persists the new value",
+      w.cfg["pdf_match_threshold"] == 0.55)
+check("dragging and releasing stamps the user-set flag",
+      w.cfg.get("_threshold_user_set") is True)
+check("exactly one write for one drag-and-release", w.writes == 1)
+
+w = ThresholdWorld({"pdf_match_threshold": 0.55})
+w.slider.user_drag_and_release(55)  # releases at the value already stored
+check("releasing at the already-stored value writes nothing", w.writes == 0)
+check(
+    "no user-set flag when the value didn't actually change",
+    "_threshold_user_set" not in w.cfg,
+)
+
+print("== end to end: a slider-set value survives a later default bump ==")
+w = ThresholdWorld({"pdf_match_threshold": 0.75})
+w.slider.user_drag_and_release(55)  # user deliberately picks 0.55
+bumped = _migrate_default_threshold(w.cfg, 0.85)
+check(
+    "the dialog's own output config is untouched by a later migration",
+    bumped["pdf_match_threshold"] == 0.55,
+)
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -64,6 +64,17 @@ _SHIPPED_DEFAULTS = (0.35, 0.55, 0.75)
 # edit a future bump needs — no new boolean guard per change. Superseded the
 # one-shot _threshold_default_migrated flag, which could not re-run.
 _DEFAULT_APPLIED_KEY = "_threshold_default_applied"
+# Set (only) by the Preferences dialog's default-sensitivity control
+# (manage_models.py's save_threshold, K-052) the moment a human actually
+# changes the slider — never by the dialog merely opening or repopulating.
+# Before that control existed, a stored value equal to a _SHIPPED_DEFAULTS
+# entry could only mean "inherited", so silently carrying it forward was
+# safe. Once a user can deliberately pick 0.55 through the UI, that
+# assumption breaks: a later default bump would look identical to an
+# inherited value and overwrite a real choice. This flag is the
+# distinguishing signal — once set, migration leaves the value alone
+# forever, independent of _DEFAULT_APPLIED_KEY bookkeeping.
+_THRESHOLD_USER_SET_KEY = "_threshold_user_set"
 DEFAULT_AGG = "max"
 DEFAULT_MAX_CHUNKS = 1000
 
@@ -92,7 +103,14 @@ def _migrate_default_threshold(cfg: dict) -> dict:
     Only the GLOBAL config's ``pdf_match_threshold`` is in scope here.
     Per-PDF prefs.json entries (set_threshold/get_threshold) are a user
     choice "saved forever" and this never reads or writes prefs.json.
+
+    A cfg with ``_threshold_user_set`` truthy is returned completely
+    unchanged, before anything else runs: that flag means a human chose
+    this value on purpose through the Preferences dialog, not that it
+    happens to match an old shipped default.
     """
+    if cfg.get(_THRESHOLD_USER_SET_KEY):
+        return cfg
     if cfg.get(_DEFAULT_APPLIED_KEY) == DEFAULT_THRESHOLD:
         return cfg
     cfg = dict(cfg)
