@@ -2450,6 +2450,14 @@ gui_hooks.profile_did_open.append(_migrate_config)
 from . import tag_migrate as _tag_migrate
 
 gui_hooks.profile_did_open.append(_tag_migrate.migrate_on_profile_open)
+# K-054: after the one-time klaus:: -> !Library:: rename, pick up any
+# !Library tag the user renamed in Anki's own sidebar while Klaus was
+# not running, so the PDF's name follows it (the reverse half of the
+# tag/PDF invariant). Ordered after the migration so it never races a
+# rename the migration itself is performing.
+from . import tag_sync as _tag_sync
+
+gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.editor_did_init.append(on_editor_did_init)

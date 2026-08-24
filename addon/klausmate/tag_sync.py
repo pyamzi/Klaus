@@ -821,10 +821,10 @@ def reconcile_from_tags(col) -> dict:
 
 
 def reconcile_on_profile_open() -> None:
-    """Intended ``profile_did_open`` entry point for the reverse
-    direction. Registration owed (NOT done here — __init__.py is out of
-    this card's file scope, same rule tag_migrate.py's own docstring
-    states for its hook)::
+    """``profile_did_open`` entry point for the reverse direction.
+
+    Registered in __init__.py immediately after tag_migrate's own hook —
+    ordered so it never races a rename that migration is performing::
 
         gui_hooks.profile_did_open.append(tag_sync.reconcile_on_profile_open)
 

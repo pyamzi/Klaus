@@ -669,7 +669,12 @@ class DriveWindow(QWidget):
         # last refresh, before recomputing rows off (possibly now stale)
         # drive_store display/folder data. Never raises — see
         # tag_sync.reconcile_from_tags's own try/except.
-        tag_sync.reconcile_from_tags(mw.col)
+        # reconcile_from_tags' own docstring puts the None-check on its
+        # callers. It happens to short-circuit before touching col while
+        # no PDF has a stored tag yet, but once they do, a closing profile
+        # would log a spurious failure here every refresh.
+        if mw.col is not None:
+            tag_sync.reconcile_from_tags(mw.col)
         seq = self.seq
 
         def done(out: dict) -> None:
