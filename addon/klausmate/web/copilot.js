@@ -137,19 +137,65 @@
   }, true);
 })();
 
-// K-056: the "Library..." toolbar button is a raw-HTML node inside the
-// notetype button group; switching note types rebuilds that group and
-// drops the node with it. The Python side exposes
-// window.__klausmateMountLibraryButton (idempotent — bails if the button
-// exists); this observer only notices the disappearance and re-mounts.
+// K-056/K-063: the "Library..." toolbar button, mounted by plain DOM.
+// The component-API route is a dead end in 26.8.1: the bundle's
+// editorToolbar exports only AddonButtons (no Raw), and uiPromise /
+// editorToolbar are page-lexical bindings invisible as window.*
+// properties. So instead: find the native Fields... button, clone its
+// className for native styling, and insert ours before it. Svelte
+// rebuilds the toolbar on notetype switches and drops foreign nodes —
+// the MutationObserver re-mounts (debounced; mount() bails when the
+// button already exists, so re-entry is cheap and loop-free).
+// Label-match is English-locale-bound; we log once when it never shows.
 (function () {
-  var pending = null;
-  function check() {
-    pending = null;
-    var mount = window.__klausmateMountLibraryButton;
-    if (mount && !document.getElementById("klausmate-library-btn")) mount(0);
+  var BTN_ID = "klausmate-library-btn";
+  var warned = false;
+
+  function findFieldsButton() {
+    var btns = document.querySelectorAll("button");
+    for (var i = 0; i < btns.length; i++) {
+      var t = (btns[i].textContent || "").trim();
+      if (t === "Fields..." || t.indexOf("Fields") === 0) return btns[i];
+    }
+    return null;
   }
+
+  function mount() {
+    if (document.getElementById(BTN_ID)) return true;
+    var fields = findFieldsButton();
+    if (!fields || !fields.parentNode) return false;
+    var btn = document.createElement("button");
+    btn.id = BTN_ID;
+    btn.type = "button";
+    btn.className = fields.className;
+    btn.textContent = "Library...";
+    btn.title = "Choose a PDF from the Klaus Library";
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      try { pycmd("klausmate:library:e30="); } catch (err) { /* non-fatal */ }
+    });
+    fields.parentNode.insertBefore(btn, fields);
+    return true;
+  }
+
+  var tries = 0;
+  var timer = setInterval(function () {
+    tries += 1;
+    if (mount() || tries > 75) {
+      clearInterval(timer);
+      if (tries > 75 && !warned) {
+        warned = true;
+        console.log("[klausmate] Library button: Fields... never appeared");
+      }
+    }
+  }, 200);
+
+  var pending = null;
   new MutationObserver(function () {
-    if (!pending) pending = setTimeout(check, 200);
+    if (pending) return;
+    pending = setTimeout(function () {
+      pending = null;
+      mount();
+    }, 200);
   }).observe(document.documentElement, { childList: true, subtree: true });
 })();

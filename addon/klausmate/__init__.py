@@ -654,105 +654,6 @@ def import_pdf_file(path: str) -> str | None:
 # ------------------------------- PDF panel --------------------------------
 
 
-_LIBRARY_BTN_ID = "klausmate-library-btn"
-
-
-def _ensure_sidebar_pdf(editor: Editor) -> bool:
-    """Load the active PDF into the dock viewer if it isn't already.
-
-    Module-level since K-056 (which removed the bottom PDF bar and the
-    panel widget that hosted it) — the toolbar "Library..." button and
-    _PdfTabContainer.showEvent both need this and neither owns a panel
-    widget to hang it off anymore.
-    """
-    active = pdf_handler.get_active_pdf(USER_FILES)
-    if not active:
-        return False
-    sidebar = getattr(editor, "_klausmate_sidebar", None)
-    if sidebar is None:
-        return False
-    if not sidebar.is_loaded(active):
-        sidebar.load_pdf(active)
-    return True
-
-
-def _library_button_js() -> str:
-    """JS injected per editor webview to mount the toolbar "Library..."
-    button LEFT of Fields... — inside Anki's own notetype-button group,
-    not the addon-icon group on the right.
-
-    Uses the exact mechanism Anki's own editor.pyc uses to add raw-HTML
-    buttons to that group (decompiled from 26.8.1's editor.pyc):
-    ``uiPromise.then((noteEditor) => noteEditor.toolbar.notetypeButtons
-    .appendButton({ component: editorToolbar.Raw, props: { html } },
-    -1))``. That native path (and the public editor_did_init_left_buttons
-    hook, which drives the same call under the hood) always appends AFTER
-    Fields.../Cards..., so leftmost placement needs
-    ``insertButton(button, 0)`` (inserts BEFORE index 0) instead —
-    ``appendButton(button, 0)`` is the fallback for an Anki version
-    without insertButton. ``uiPromise``/``editorToolbar`` are page
-    globals that may not exist the instant this eval runs (the page's
-    own bundle may still be loading), so this polls briefly rather than
-    assuming they're ready.
-
-    Exposes ``window.__klausmateMountLibraryButton`` so copilot.js's
-    MutationObserver can re-run this after a notetype switch rebuilds
-    the toolbar and tears the raw-HTML button node down with it.
-    """
-    payload = base64.b64encode(json.dumps({}).encode("utf-8")).decode("ascii")
-    html = (
-        f'<button id="{_LIBRARY_BTN_ID}" type="button" '
-        'title="Choose a PDF from the Klaus Library" '
-        "style=\"all:unset;cursor:pointer;padding:1px 8px;"
-        "margin:0 4px 0 0;border:1px solid var(--border-subtle);"
-        "border-bottom-color:var(--shadow);border-radius:3px;"
-        "background:var(--button-bg);color:var(--fg);font-size:12px;"
-        'line-height:1.7;white-space:nowrap;" '
-        "onmouseover=\"this.style.background='var(--button-gradient-end)'\" "
-        "onmouseout=\"this.style.background='var(--button-bg)'\" "
-        f"onclick=\"pycmd('klausmate:library:{payload}')\">"
-        "Library...</button>"
-    )
-    # "</" -> "<\/" so the html string can't prematurely close the <script>
-    # block this gets embedded in (same guard as on_webview_will_set_content).
-    html_js = json.dumps(html).replace("</", "<\\/")
-    return (
-        "(function(){"
-        f"var ID={json.dumps(_LIBRARY_BTN_ID)};"
-        f"var HTML={html_js};"
-        "function mount(tries){"
-        "tries=tries||0;"
-        "if(document.getElementById(ID))return;"
-        "if(!window.uiPromise||!window.editorToolbar){"
-        "if(tries<50){setTimeout(function(){mount(tries+1);},100);}"
-        "else{console.log('[klausmate] Library button: uiPromise/"
-        "editorToolbar never appeared');}"
-        "return;"
-        "}"
-        "window.uiPromise.then(function(noteEditor){"
-        "try{"
-        "var group=noteEditor.toolbar.notetypeButtons;"
-        "var button={component:window.editorToolbar.Raw,"
-        "props:{html:HTML}};"
-        "if(typeof group.insertButton==='function'){"
-        "group.insertButton(button,0);"
-        "console.log('[klausmate] Library button mounted via "
-        "insertButton');"
-        "}else{"
-        "group.appendButton(button,0);"
-        "console.log('[klausmate] Library button mounted via "
-        "appendButton fallback');"
-        "}"
-        "}catch(e){console.log('[klausmate] Library button mount "
-        "failed: '+e);}"
-        "});"
-        "}"
-        "window.__klausmateMountLibraryButton=mount;"
-        "mount(0);"
-        "})();"
-    )
-
-
 def _on_library_button(editor: Editor) -> None:
     """Toolbar "Library..." button: the old bottom bar's toggle role.
 
@@ -2084,8 +1985,7 @@ class _PdfTabContainer(QWidget):
 
 
 def on_editor_did_init(editor: Editor) -> None:
-    """Mount the "Library..." button into this editor's toolbar webview
-    and attach the tabbed PDF viewer panel (``_PdfTabContainer``) that
+    """Attach the tabbed PDF viewer panel (``_PdfTabContainer``) that
     docks above/below the editor pane or floats as its own window. The
     panel starts hidden and is toggled via the Library... button, or
     auto-shown when the user opens a PDF.
@@ -2099,13 +1999,6 @@ def on_editor_did_init(editor: Editor) -> None:
             return
         pdf_handler.ensure_active_pdf(USER_FILES)
 
-        # AnkiWebView.eval queues JS until the page finishes loading, and
-        # the injected snippet itself polls for the page globals it needs
-        # (see _library_button_js) — no deferral required here.
-        try:
-            editor.web.eval(_library_button_js())
-        except Exception as e:
-            print(f"[klausmate] Library button inject failed: {e}")
 
         if not hasattr(editor, "_klausmate_target_field_index"):
             editor._klausmate_target_field_index = None  # type: ignore[attr-defined]
