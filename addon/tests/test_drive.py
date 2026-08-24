@@ -418,5 +418,90 @@ check(
     repr(_g_summary),
 )
 
+print("== K-076: plan_folder_move (folder drag targets) ==")
+try:
+    pfm = pdf_drive.plan_folder_move
+    check("top-level into folder", pfm("B", "A") == "A/B")
+    check("nested source keeps its leaf", pfm("A/B", "C") == "C/B")
+    check("nested to root", pfm("A/B", None) == "B")
+    check("into itself is illegal", pfm("A", "A") is None)
+    check("into own subtree is illegal", pfm("A", "A/B") is None)
+    check("sibling name-prefix is NOT illegal", pfm("A", "AB") == "AB/A")
+    check("same place is a no-op", pfm("A/B", "A") is None)
+    check("root to root is a no-op", pfm("B", None) is None)
+except Exception as e:
+    check("plan_folder_move exists", False, f"{type(e).__name__}: {e}")
+
+print("== K-076: apply_folder_change moves the disk dir with the tree ==")
+_k_uf = tempfile.mkdtemp(prefix="drive_k76_uf_")
+_k_root = tempfile.mkdtemp(prefix="drive_k76_root_")
+try:
+    _ph = importlib.import_module("klausmate.pdf_handler")
+    os.makedirs(os.path.join(_k_uf, "contexts"))
+    os.makedirs(os.path.join(_k_root, "Bootcamp"))
+    with open(os.path.join(_k_root, "Bootcamp", "Biostats.pdf"), "wb") as fh:
+        fh.write(b"%PDF-1.4 k76")
+    _ph.save_library_map(_k_uf, {"Biostats": os.path.join("Bootcamp", "Biostats.pdf")})
+    drive_store.record_import(_k_uf, "Biostats", "Biostats.pdf")
+    drive_store.set_folder(_k_uf, "Biostats", "Bootcamp")
+    drive_store.add_folder(_k_uf, "Archive")
+    os.makedirs(os.path.join(_k_root, "Archive"))
+
+    ok, why = pdf_drive.apply_folder_change(_k_uf, _k_root, "Bootcamp", "Archive/Bootcamp")
+    check("move reports ok", ok, why)
+    check("directory moved on disk",
+          os.path.isfile(os.path.join(_k_root, "Archive", "Bootcamp", "Biostats.pdf"))
+          and not os.path.exists(os.path.join(_k_root, "Bootcamp")))
+    check("mapping rel rewritten",
+          _ph.load_library_map(_k_uf).get("Biostats")
+          == os.path.join("Archive", "Bootcamp", "Biostats.pdf"))
+    _k_d = drive_store.load(_k_uf)
+    check("store folder follows",
+          _k_d["pdfs"]["Biostats"]["folder"] == "Archive/Bootcamp"
+          and "Archive/Bootcamp" in _k_d["folders"])
+
+    # THE K-076 trap: with a store-only rename (what _rename_folder shipped
+    # as), the disk-truth rescan reverts the folder assignment on the very
+    # next pass — live, that read as "my folder move snapped back".
+    _k_sum = _ph.rescan_root(_k_uf, _k_root, drive_store.load(_k_uf).get("pdfs", {}))
+    check("rescan is quiet after the move",
+          _k_sum.get("moved") == [] and _k_sum.get("tree_changed") == [],
+          repr(_k_sum))
+    check("folder assignment SURVIVES the rescan",
+          drive_store.load(_k_uf)["pdfs"]["Biostats"]["folder"] == "Archive/Bootcamp",
+          repr(drive_store.load(_k_uf)["pdfs"]["Biostats"]))
+
+    # Occupied destination (store side) refuses and changes nothing.
+    drive_store.add_folder(_k_uf, "Slides")
+    drive_store.add_folder(_k_uf, "Archive/Slides")
+    ok2, why2 = pdf_drive.apply_folder_change(_k_uf, _k_root, "Slides", "Archive/Slides")
+    check("occupied store destination refused", not ok2 and why2 == "exists", (ok2, why2))
+    check("refused move leaves the source folder",
+          "Slides" in drive_store.load(_k_uf)["folders"])
+
+    # Occupied destination (disk side only) refuses too.
+    drive_store.add_folder(_k_uf, "X")
+    os.makedirs(os.path.join(_k_root, "X"))
+    os.makedirs(os.path.join(_k_root, "Y", "X"))
+    ok3, why3 = pdf_drive.apply_folder_change(_k_uf, _k_root, "X", "Y/X")
+    check("occupied disk destination refused", not ok3 and why3 == "exists", (ok3, why3))
+
+    # A tree-only folder (nothing on disk yet) still renames store-side.
+    drive_store.add_folder(_k_uf, "Notes")
+    ok4, why4 = pdf_drive.apply_folder_change(_k_uf, _k_root, "Notes", "Archive/Notes")
+    check("tree-only folder renames", ok4, why4)
+    _k_d = drive_store.load(_k_uf)
+    check("tree-only rename lands in store, creates no dir",
+          "Archive/Notes" in _k_d["folders"] and "Notes" not in _k_d["folders"]
+          and not os.path.exists(os.path.join(_k_root, "Archive", "Notes")))
+
+    ok5, why5 = pdf_drive.apply_folder_change(_k_uf, _k_root, "Archive", "a//b")
+    check("invalid destination name refused", not ok5 and why5 == "invalid", (ok5, why5))
+except Exception as e:
+    check("apply_folder_change section", False, f"{type(e).__name__}: {e}")
+finally:
+    shutil.rmtree(_k_uf, ignore_errors=True)
+    shutil.rmtree(_k_root, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

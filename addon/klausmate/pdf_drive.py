@@ -74,6 +74,116 @@ def _dbg(msg: str) -> None:
         pass
 
 
+def plan_folder_move(old: str, dest: str | None) -> str | None:
+    """Destination path for dropping folder ``old`` into ``dest`` (None =
+    root), or None when the drop is a no-op or illegal — a folder cannot
+    move into itself or its own subtree. Pure: the drag handler and the
+    tests share it (K-076)."""
+    if not old:
+        return None
+    if dest is not None and (dest == old or dest.startswith(old + "/")):
+        return None
+    leaf = old.rsplit("/", 1)[-1]
+    new = f"{dest}/{leaf}" if dest else leaf
+    return None if new == old else new
+
+
+def apply_folder_change(
+    user_files_dir: str, root: str | None, old: str, new: str
+) -> tuple[bool, str]:
+    """Move/rename a Library folder in BOTH stores — the directory on
+    disk (when the live root has one) and drive_store — so the
+    disk-truth rescan agrees with the change instead of reverting it on
+    the next pass (K-076: the context-menu rename shipped store-only and
+    snapped back live). Refuses merges: an occupied destination leaves
+    everything untouched. Returns (ok, reason); reason is "exists" for
+    an occupied destination, "invalid" for a bad name, "disk" when the
+    directory move itself failed."""
+    new = (new or "").strip().strip("/")
+    if not new or not drive_store._valid_folder(new):
+        return False, "invalid"
+    if new == old:
+        return True, ""
+    data = drive_store.load(user_files_dir)
+    occupied = new in data.get("folders", []) or any(
+        (e.get("folder") or "") == new
+        or (e.get("folder") or "").startswith(new + "/")
+        for e in data.get("pdfs", {}).values()
+    )
+    src_dir = None
+    if root and os.path.isdir(root):
+        src_dir = os.path.join(root, *[p for p in old.split("/") if p])
+        dst_dir = os.path.join(root, *[p for p in new.split("/") if p])
+        occupied = occupied or os.path.exists(dst_dir)
+    if occupied:
+        return False, "exists"
+    if src_dir is not None and os.path.isdir(src_dir):
+        try:
+            if not pdf_handler.rename_mapped_folder(user_files_dir, root, old, new):
+                return False, "disk"
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] folder disk move failed {old!r}->{new!r}: {exc}")
+            return False, "disk"
+    if not drive_store.rename_folder(user_files_dir, old, new):
+        return False, "invalid"
+    return True, ""
+
+
+# ------------------------------------------------------- live watcher
+# Module-level, parented to mw, NOT to the Library window (K-076): the
+# folder->Anki sync must stay live while the window is closed too, and a
+# window-owned watcher died with its window.
+
+_fs_watcher: Any = None
+_fs_debounce: Any = None
+
+
+def _on_fs_tick() -> None:
+    """Debounced watcher target: something under the library root changed
+    on disk. Window open -> the full refresh path repaints it (rescan +
+    rebuild); closed -> a bare rescan still keeps mapping/tree/tags in
+    step, so the sync is live all the time, not only while showing."""
+    try:
+        win = _instance
+        if win is not None and win._alive() and win.isVisible():
+            win._refresh_rows()
+        else:
+            rescan_library_root()
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] library watcher tick failed: {e}")
+
+
+def _rearm_watcher(root: str | None) -> None:
+    """Point the watcher at the root and every current subdirectory.
+    Called after every rescan — moved or newly created directories fall
+    off a QFileSystemWatcher silently. Idempotent and cheap."""
+    global _fs_watcher, _fs_debounce
+    if mw is None:
+        return
+    try:
+        if _fs_watcher is None:
+            _fs_watcher = QFileSystemWatcher(mw)
+            _fs_debounce = QTimer(mw)
+            _fs_debounce.setSingleShot(True)
+            _fs_debounce.setInterval(700)
+            _fs_debounce.timeout.connect(_on_fs_tick)
+            _fs_watcher.directoryChanged.connect(
+                lambda _p: _fs_debounce.start()
+            )
+        old = list(_fs_watcher.directories())
+        if old:
+            _fs_watcher.removePaths(old)
+        if not root or not os.path.isdir(root):
+            return
+        paths = [root]
+        for dirpath, dirnames, _files in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            paths.extend(os.path.join(dirpath, d) for d in dirnames)
+        _fs_watcher.addPaths(paths)
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] library watcher re-arm failed: {e}")
+
+
 def rescan_library_root() -> dict | None:
     """Folder -> Anki half of the two-way Library sync (K-073).
 
@@ -90,6 +200,7 @@ def rescan_library_root() -> dict | None:
         root = pdf_handler._live_library_root()
         _dbg(f"rescan: root={root!r} isdir={bool(root and os.path.isdir(root))}")
         if not root or not os.path.isdir(root):
+            _rearm_watcher(None)  # root unplugged/unset -> stop watching
             return None
         uf = _user_files()
         folders = drive_store.load(uf).get("pdfs", {})
@@ -112,6 +223,9 @@ def rescan_library_root() -> dict | None:
             # no match cache yet are skipped inside tag_sync (cold-cache
             # rule) and pick their tag up on first indexing.
             tag_sync.sync_after_folder_rename(mw, touched)
+        # Every rescan re-arms the live watcher: directories that moved
+        # or appeared since the last pass must fire the next one.
+        _rearm_watcher(root)
         return summary
     except Exception as exc:  # noqa: BLE001
         import traceback as _tb
@@ -206,47 +320,61 @@ class _LibraryTree(QTreeWidget):
             print(f"[klausmate] library tree dnd setup failed: {e}")
 
     def dropEvent(self, event) -> None:  # type: ignore[override]
+        """Resolve what moved where and hand off to DriveWindow; the
+        rebuild from drive.json IS the visual move. Every path finishes
+        the drop as an accepted IgnoreAction and schedules a next-tick
+        rebuild: QAbstractItemView's InternalMove cleanup deletes the
+        dragged row itself after an accepted MoveAction (and macOS has
+        been seen doing it even for drops we ignored), which is exactly
+        how Library folders were "disappearing" until reopen (K-076)."""
         try:
-            if event.source() is not self:
-                event.ignore()
-                return
-            dragged = self.currentItem()
-            safe = dragged.data(0, _ROLE_SAFE) if dragged is not None else None
-            if not safe:
-                # Folder reparenting (or no item at all) is out of scope
-                # for this card — reject rather than let Qt guess.
-                event.ignore()
-                return
+            try:
+                if event.source() is self:
+                    dragged = self.currentItem()
+                    safe = dragged.data(0, _ROLE_SAFE) if dragged is not None else None
+                    folder_path = (
+                        dragged.data(0, _ROLE_FOLDER) if dragged is not None else None
+                    )
+                    target = self.itemAt(event.position().toPoint())
+                    if target is None:
+                        dest = None
+                    elif target.data(0, _ROLE_FOLDER):
+                        dest = target.data(0, _ROLE_FOLDER)
+                    elif target.data(0, _ROLE_SAFE):
+                        parent = target.parent()
+                        dest = (
+                            parent.data(0, _ROLE_FOLDER)
+                            if parent is not None
+                            else None
+                        )
+                    else:
+                        dest = None
 
-            target = self.itemAt(event.position().toPoint())
-            if target is None:
-                folder = None
-            elif target.data(0, _ROLE_FOLDER):
-                folder = target.data(0, _ROLE_FOLDER)
-            elif target.data(0, _ROLE_SAFE):
-                parent = target.parent()
-                folder = parent.data(0, _ROLE_FOLDER) if parent is not None else None
-            else:
-                folder = None
-
-            current_parent = dragged.parent()
-            current_folder = (
-                current_parent.data(0, _ROLE_FOLDER)
-                if current_parent is not None
-                else None
-            )
-            if current_folder == folder:
-                event.acceptProposedAction()
-                return
-
-            self._window._move_pdf(safe, folder)
-            event.acceptProposedAction()
+                    if safe:
+                        current_parent = dragged.parent()
+                        current_folder = (
+                            current_parent.data(0, _ROLE_FOLDER)
+                            if current_parent is not None
+                            else None
+                        )
+                        if current_folder != dest:
+                            self._window._move_pdf(safe, dest)
+                    elif folder_path:
+                        new = plan_folder_move(folder_path, dest)
+                        if new:
+                            self._window._move_folder(folder_path, new)
+            finally:
+                try:
+                    event.setDropAction(Qt.DropAction.IgnoreAction)
+                    event.accept()
+                except Exception:
+                    pass
+                try:
+                    QTimer.singleShot(0, self._window.rebuild_tree)
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[klausmate] library drop failed: {e}")
-            try:
-                event.ignore()
-            except Exception:
-                pass
 
 
 class _LibraryDropZone(QWidget):
@@ -411,26 +539,6 @@ class DriveWindow(QWidget):
         self.matches: dict = {}
         self.rows: dict[str, dict] = {}
 
-        # LIVE folder -> Anki sync (K-075): watch the root and its
-        # subdirectories while the window is open; a Finder move fires
-        # directoryChanged, the debounce absorbs the burst (Finder emits
-        # several per move), and the refresh runs the normal rescan. The
-        # watch list is re-armed after every refresh because moved/new
-        # directories fall off a QFileSystemWatcher silently.
-        try:
-            self._fs_watcher = QFileSystemWatcher(self)
-            self._fs_debounce = QTimer(self)
-            self._fs_debounce.setSingleShot(True)
-            self._fs_debounce.setInterval(700)
-            self._fs_debounce.timeout.connect(self._refresh_rows)
-            self._fs_watcher.directoryChanged.connect(
-                lambda _p: self._fs_debounce.start()
-            )
-        except Exception as e:  # noqa: BLE001
-            print(f"[klausmate] library watcher unavailable: {e}")
-            self._fs_watcher = None
-            self._fs_debounce = None
-
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -558,9 +666,29 @@ class DriveWindow(QWidget):
     # ------------------------------------------------------------ tree
 
     def rebuild_tree(self) -> None:
-        """Repaint the tree from disk, preserving selection where possible."""
+        """Repaint the tree from disk, preserving selection, folder
+        expansion, and scroll position where possible — it runs on every
+        refresh now (K-076 live repaint), so it must be visually calm."""
         try:
             selected = self._selected_safe()
+            expanded: dict[str, bool] = {}
+            scroll = None
+            try:
+                stack = [
+                    self.tree.topLevelItem(i)
+                    for i in range(self.tree.topLevelItemCount())
+                ]
+                while stack:
+                    it = stack.pop()
+                    if it is None:
+                        continue
+                    path = it.data(0, _ROLE_FOLDER)
+                    if path:
+                        expanded[path] = it.isExpanded()
+                    stack.extend(it.child(j) for j in range(it.childCount()))
+                scroll = self.tree.verticalScrollBar().value()
+            except Exception:
+                pass
             user_files = _user_files()
             contexts = pdf_handler.list_contexts(user_files)
             data = drive_store.load(user_files)
@@ -591,7 +719,7 @@ class DriveWindow(QWidget):
                     font = item.font(0)
                     font.setBold(True)
                     item.setFont(0, font)
-                    item.setExpanded(True)
+                    item.setExpanded(expanded.get(path, True))
                     folder_items[path] = item
                     return item
 
@@ -606,6 +734,11 @@ class DriveWindow(QWidget):
 
             if selected:
                 self._select_safe(selected)
+            if scroll is not None:
+                try:
+                    self.tree.verticalScrollBar().setValue(scroll)
+                except Exception:
+                    pass
             if not contexts:
                 self.status.setText(
                     "No PDFs yet — drop one on the deck list or the editor's "
@@ -753,28 +886,6 @@ class DriveWindow(QWidget):
 
     # -------------------------------------------------------- retention
 
-    def _rearm_fs_watcher(self) -> None:
-        """Point the watcher at the root and every current subdirectory.
-        Cheap (a handful of paths) and idempotent; called after every
-        refresh so directories created or renamed on disk keep firing."""
-        w = getattr(self, "_fs_watcher", None)
-        if w is None:
-            return
-        try:
-            root = pdf_handler._live_library_root()
-            old = list(w.directories())
-            if old:
-                w.removePaths(old)
-            if not root or not os.path.isdir(root):
-                return
-            paths = [root]
-            for dirpath, dirnames, _files in os.walk(root):
-                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-                paths.extend(os.path.join(dirpath, d) for d in dirnames)
-            w.addPaths(paths)
-        except Exception as e:  # noqa: BLE001
-            print(f"[klausmate] library watcher re-arm failed: {e}")
-
     def _refresh_rows(self) -> None:
         if mw is None or mw.col is None:
             return
@@ -790,9 +901,14 @@ class DriveWindow(QWidget):
         # structure, the tree follows it, and the tag reconcile below
         # then works against the freshly-synced tree (K-073).
         rescan_library_root()
-        self._rearm_fs_watcher()
         if mw.col is not None:
             tag_sync.reconcile_from_tags(mw.col)
+        # THE live-update fix (K-076): everything above only moved DATA
+        # (drive.json, mapping, tags) — without this repaint the open
+        # window kept showing the old tree until it was reopened.
+        # rebuild_tree preserves expansion/selection/scroll, so frequent
+        # watcher-driven rebuilds are visually stable.
+        self.rebuild_tree()
         seq = self.seq
 
         def done(out: dict) -> None:
@@ -1118,25 +1234,41 @@ class DriveWindow(QWidget):
             self, "Rename folder", "Folder name:", text=leaf
         )
         name = (name or "").strip().strip("/")
-        if not ok or not name:
+        if not ok or not name or name == leaf:
             return
         parent = path.rsplit("/", 1)[0] if "/" in path else ""
-        new_path = f"{parent}/{name}" if parent else name
-        if drive_store.rename_folder(_user_files(), path, new_path):
-            # Every PDF drive_store.rename_folder just reparented under
-            # new_path (direct children and nested descendants alike) —
-            # collect them AFTER the rename so their tags follow in one
-            # batched undo entry.
-            affected = [
-                safe
-                for safe, entry in drive_store.load(_user_files()).get("pdfs", {}).items()
-                if entry.get("folder") == new_path
-                or (entry.get("folder") or "").startswith(new_path + "/")
-            ]
-            self.rebuild_tree()
-            tag_sync.sync_after_folder_rename(mw, affected)
-        else:
-            showWarning("That folder name isn't valid.")
+        # Same path as a drag-move (K-076): the store-only rename this
+        # shipped as was reverted by the very next disk-truth rescan.
+        self._move_folder(path, f"{parent}/{name}" if parent else name)
+
+    def _move_folder(self, old: str, new: str) -> None:
+        """Folder rename/reparent, disk directory included; the shared
+        back half of the context-menu rename and a tree drag (K-076)."""
+        root = None
+        try:
+            root = pdf_handler._live_library_root()
+        except Exception:  # noqa: BLE001
+            pass
+        ok, why = apply_folder_change(_user_files(), root, old, new)
+        if not ok:
+            if why == "exists":
+                showWarning("A folder with that name already exists there.")
+            elif why == "disk":
+                showWarning("Could not move the folder inside the library root.")
+            else:
+                showWarning("That folder name isn't valid.")
+            return
+        # Every PDF now under new (direct children and nested
+        # descendants alike) just changed its path — collect them AFTER
+        # the change so their tags follow in one batched undo entry.
+        affected = [
+            safe
+            for safe, entry in drive_store.load(_user_files()).get("pdfs", {}).items()
+            if entry.get("folder") == new
+            or (entry.get("folder") or "").startswith(new + "/")
+        ]
+        self.rebuild_tree()
+        tag_sync.sync_after_folder_rename(mw, affected)
 
     def _remove_folder(self, path: str) -> None:
         drive_store.remove_folder(_user_files(), path)
