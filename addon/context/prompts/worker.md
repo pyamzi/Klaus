@@ -77,6 +77,14 @@ git add <only the files in your card>
 git commit -m "<CARD-ID>: <what changed, in one line>"
 ```
 
+Exactly that form — plain `git add` by path, then plain `git commit`.
+Never `git add -A` (siblings have work in flight) and never
+`git commit -- <paths>` / `git commit <paths>`: the pathspec form resets
+the index for everything OUTSIDE your paths back to HEAD, which silently
+un-stages a sibling's staged-but-uncommitted work in this shared
+checkout. (Happened on K-038/K-032; recoverable only because the sibling
+re-staged from the working tree afterwards.)
+
 **6. Hand off.** Comment, then move to Review:
 
 ```bash
