@@ -197,7 +197,7 @@ Same safety/verify regime as K-053. Full suite green; py_compile via symlink; st
 owner: opus
 tags: sonnet-safe,library-era
 files: klausmate/__init__.py,klausmate/web/copilot.js
-verify: grep -q "notetypeButtons" klausmate/__init__.py && ! grep -qE "_PdfBar|_KlausmatePanel|Drop a PDF to view" klausmate/__init__.py
+verify: grep -q "klausmate-library-btn" klausmate/web/copilot.js && ! grep -qE "_PdfBar|_KlausmatePanel|notetypeButtons|uiPromise" klausmate/__init__.py
 created: 2026-08-24
 claimed: 2026-08-24
 
@@ -260,6 +260,7 @@ toggle behavior, and notetype-switch survival all go on Pouya's restart queue
 - [2026-08-24 opus] Live crash report from Pouya mid-task (restarted Anki against the half-edited tree): NameError _KlausmatePanel at __init__.py:2135 in _install_klaus_bar. Expected transient state, but it pins the must-fix: _install_klaus_bar (~:2103-2161, QTimer.singleShot install path) must be rewritten or removed along with the class. Verify gate now also rejects any _KlausmatePanel reference — py_compile cannot catch dangling names, greps can.
 - [2026-08-24 opus] Handoff: sonnet-av built the button machinery (HTML/JS injection with insertButton-then-appendButton, polling for page globals, script-escape guard, toggle handler, module-level _ensure_sidebar_pdf) then was stopped mid-task; the half-edited tree crashed live Anki (NameError _KlausmatePanel at :2135). Opus completed the rewiring: editor-init now evals the button JS (AnkiWebView.eval queues until page load; the JS polls for globals), bridge routes 'library' via singleShot (menu exec must not run in the webchannel handler), both dead panel refs deleted, + menu lost its filesystem Browse... and gained a disabled empty-state hint, QDialogButtonBox/QFileDialog/QFrame imports trimmed, copilot.js re-mounts the button after notetype switches. Verify gate PASS; py_compile through symlink ok; full suite 68/57/60/20/82/113 all green; leftover sweep clean (remaining QFileDialog/QDialogButtonBox hits are deck_curate/pdf_drive's own legitimate uses). LIVE CHECKS for Pouya: placement left of Fields..., styling, toggle, notetype-switch survival, empty-Library hint.
 - [2026-08-24 opus] Signed off: headless criteria all met (gate, compile, suite, sweep). Live-only items stay on the restart queue and were listed in the handoff — if any fail on restart, reopen this card rather than filing fresh.
+- [2026-08-24 opus] REOPENED (live failure, Pouya): button never appeared. Root cause found in the shipped web bundle, not the pyc: (1) our mount polled window.uiPromise/window.editorToolbar — both are page-lexical bindings, never window properties, so the poll timed out silently; (2) worse, editorToolbar.Raw does not exist in 26.8.1's editor.js bundle at all (editorToolbar exports only AddonButtons) — the pyc snippet naming Raw is dead legacy code, so the component path could never have worked. New approach: copilot.js (already injected in every editor page) mounts via plain DOM — find the native Fields... button, clone its className for native styling, insertBefore, pycmd on click; MutationObserver re-mounts after toolbar rebuilds. Gate updated to match.
 
 ### K-055: Retire the !Library::Matching preview tag (per-PDF tags replaced it)
 owner: sonnet-au
@@ -322,3 +323,66 @@ ABOVE that block or they silently never run (this bit us twice).
 - [2026-08-24 opus] REWORK (review finding, confirmed in code): migrate_on_profile_open early-returns on MIGRATED_FLAG (_library_tag_migrated) BEFORE the pre-flight — and that flag is already True on Pouya's profile from the original klaus::->!Library run. So the new Matching cleanup never executes for the exact user who reported the tag. Same failure class as the retired one-shot _threshold_default_migrated. Fix: add a second flag (e.g. _matching_tag_removed) guarding only the cleanup pass; proceed when EITHER flag is unset; empty pre-flight records both. Add the falsifying test first — 'rename flag already set, !Library::Matching present -> cleanup still runs' — confirm it is RED against the current commit, then green after.
 - [2026-08-24 sonnet-au] REWORK addressed. Bug confirmed: migrate_on_profile_open's 'if cfg.get(MIGRATED_FLAG): return' short-circuited before the K-055 pre-flight ever ran plan_matching_cleanup — and MIGRATED_FLAG is already True on any profile that completed the original klaus::->!Library rename (Pouya's included), so the Matching cleanup was unreachable for exactly that user. Process: (1) wrote the falsifying test FIRST in tests/test_tag_migrate.py ('migrate_on_profile_open (K-055 rework): MIGRATED_FLAG already True must NOT block the Matching cleanup' — pkg.get_config returns only {MIGRATED_FLAG: True}, collection carries !Library::Matching with a note on it) and ran it against the unfixed commit: RED, 4 checks failed, exit 1, reported count 109 passed/4 failed. (2) Added MATCHING_MIGRATED_FLAG = '_matching_tag_removed' in tag_migrate.py, independent of MIGRATED_FLAG; migrate_on_profile_open's early-return now requires BOTH flags set ('if cfg.get(MIGRATED_FLAG) and cfg.get(MATCHING_MIGRATED_FLAG): return'); the pre-flight (and _record_flags, renamed from _record_flag) now runs whenever either is unset and always records both on completion — existing MIGRATED_FLAG semantics for a fresh profile (no legacy tags at all) are unchanged since both plans are empty and both flags get set together in the same step. (3) Reran: GREEN, 113 passed/0 failed, exit 0. (4) Reran the card's exact verify command end to end: exit 0, 113 passed/0 failed. Files: klausmate/tag_migrate.py (MATCHING_MIGRATED_FLAG constant + docstrings; migrate_on_profile_open's two-flag gate; _record_flag -> _record_flags), tests/test_tag_migrate.py (the new falsifying test, inserted above the print(summary)+sys.exit() trap — confirmed count increased 109 -> 113). No other card files touched in this rework; original K-055 commit was amended in place (same K-055-prefixed message, now with a Rework paragraph) rather than added as a second commit, per your instruction, so exactly one commit still carries this card. Risks: none new beyond what the original handoff already flagged (the bulk_remove-before-tags.remove redundancy in run_migration's cleanup loop). Next: none.
 - [2026-08-24 opus] Signed off. Independent falsification: re-introduced the single-flag guard -> 4 red; restored -> 113 green. Gate grep-clause clean. The rework's amend pre-dated the K-056 commits, so history stacked cleanly (e6e47cf under a5111d0) — no rewrite occurred. Live check on next restart: !Library::Matching disappears from the Browse sidebar on profile open, and Library right-click 'Show matches in Browse' opens Browse filtered to the PDF's own tag.
+
+### K-064: Retire the !Library::Curating preview tag (K-055's sibling)
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/curation.py,klausmate/manage_models.py,klausmate/tag_migrate.py,klausmate/tag_sync.py,klausmate/deck_curate.py,tests/test_tag_migrate.py,tests/test_klausmate.py
+verify: ! grep -qE "TEMP_TAG" klausmate/curation.py klausmate/manage_models.py klausmate/deck_curate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya: Matching is gone from the Browse sidebar but !Library::Curating
+still lingers — same disease, same cure as K-055. The curation preview
+stamps curation.TEMP_TAG onto matched notes; post-K-044 the match set
+equals the per-PDF tag's content, so preview should search that tag
+(composable with a deck scope: tag:"<pdf-tag>" deck:"<scope>") and the
+temp-tag machinery retires. KEEP !Library::Curated (permanent marker on
+notes copied into a curated deck) and keep the Curate Deck button itself:
+indexing computes matches and tags; curating CREATES A NEW DECK with
+copies — indexing must never create decks as a side effect.
+
+CRITICAL FLAG LESSON (bitten twice now): tag_migrate's cleanup is guarded
+by MATCHING_MIGRATED_FLAG which is one-shot and has ALREADY FIRED on
+Pouya's profile today. Simply appending Curating to
+MATCHING_TAGS_TO_REMOVE would be unreachable — the third instance of the
+stale-one-shot-flag bug. Replace the boolean with a config list of
+cleaned tag names (e.g. _retired_tags_cleaned: [...]); pre-flight = set
+difference against the current retirement list, so every future
+retirement is automatically reachable. Migrate the existing booleans:
+treat MATCHING_MIGRATED_FLAG=True as the two K-055 names already cleaned.
+Falsifying test required: flags/list say Matching cleaned, collection
+carries !Library::Curating -> op launches and removes it (RED before fix).
+Also remove klaus::curate -> !Library::Curating from TAG_RENAME_MAP and
+clean both names; RESERVED_LEAVES untouched.
+
+#### Comments
+- [2026-08-24 opus] Committed 50d8997. Red-first honored: falsifying test (both legacy booleans True + Curating present) was RED 5 failures against the pre-fix tree, GREEN after; full suite 408 assertions green; gate PASS; compile-all ok. Design notes: preview sequenced through sync_after_matches on_done (fires on success/failure/early-out — releases the busy token, skipping it would deadlock); copies keep source tags; Curate Deck button intentionally KEPT (it creates a deck; indexing must never create decks). Live checks: Curating vanishes from Browse sidebar on next profile open; curation preview opens Browse on the per-PDF tag; Preferences no longer shows Clear library tag.
+
+### K-063: K-056 rework: DOM-mount the Library... button (component API was dead code)
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/__init__.py,klausmate/web/copilot.js
+verify: grep -q "klausmate-library-btn" klausmate/web/copilot.js && ! grep -qE "notetypeButtons|uiPromise|_library_button_js" klausmate/__init__.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Live failure: button never appeared. Bundle ground truth (26.8.1
+_aqt/data/web/js/editor.js): editorToolbar exports ONLY AddonButtons — the
+Raw component the pyc snippet references is dead legacy code; and
+uiPromise/editorToolbar are page-lexical bindings, invisible as window.*
+properties, so the old poll timed out silently. Fix: copilot.js (already
+injected into every editor page) mounts by DOM — find the native button
+whose trimmed text starts with "Fields", create <button
+id=klausmate-library-btn> cloning its className for native styling,
+insertBefore it, onclick pycmd('klausmate:library:e30='); initial timed
+retries + MutationObserver re-mount after toolbar rebuilds. Python side:
+delete _library_button_js/_LIBRARY_BTN_ID and the editor.web.eval; keep
+_on_library_button and the bridge action unchanged. Label-match is
+English-locale-bound — acceptable (personal addon), log when not found.
+
+#### Comments
+- [2026-08-24 opus] Committed. Gate PASS, py_compile ok, node --check ok on copilot.js. Live check remains: button appears left of Fields... in Add/Browse/EditCurrent, native styling via cloned className, survives notetype switch, click toggles PDF panel.
+- [2026-08-24 opus] Signed off with K-064; both ship together on Pouya's next restart. If the button still fails to appear, the copilot.js console line '[klausmate] Library button: Fields... never appeared' is the tell — report what the editor console shows.
