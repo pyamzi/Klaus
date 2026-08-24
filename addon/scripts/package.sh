@@ -37,7 +37,7 @@ rsync -a \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   --exclude '.DS_Store' \
-  --exclude 'meta.json' \
+  --exclude 'meta.json*' \
   --exclude 'user_files/' \
   "$SRC/" "$STAGE/"
 

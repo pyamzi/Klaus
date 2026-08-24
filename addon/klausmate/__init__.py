@@ -603,21 +603,23 @@ def install_menu() -> None:
         ):
             return
 
-        curation.clear_curation_tag(mw)
-        retention.clear_pdfmatch_tag(mw)
+        # quiet=True: each function's own tooltip is suppressed so the one
+        # summary below is the only message. (Previously both fired their
+        # own async tooltip and this handler raced them with a QTimer —
+        # fragile on a large collection where either op can outlast the
+        # delay. K-038 added the quiet parameter to retire that race.)
+        curation.clear_curation_tag(mw, quiet=True)
+        retention.clear_pdfmatch_tag(mw, quiet=True)
 
         parts = []
         if curation_nids:
             parts.append(f"{len(curation_nids)} curation")
         if pdfmatch_nids:
             parts.append(f"{len(pdfmatch_nids)} PDF-match")
-        msg = f"Cleared the library tag from {' and '.join(parts)} notes."
-        # clear_curation_tag/clear_pdfmatch_tag each pop their own tooltip
-        # via an async CollectionOp; Anki's tooltip() is a single global
-        # overlay where each call closes the last, so firing both trims to
-        # whichever finishes second. Delay this summary past both so it is
-        # the one message the user actually reads.
-        QTimer.singleShot(400, lambda: tooltip(msg, parent=mw))
+        tooltip(
+            f"Cleared the library tag from {' and '.join(parts)} notes.",
+            parent=mw,
+        )
 
     a_clear_library.triggered.connect(_clear_library_tag)
     menu.addAction(a_clear_library)
@@ -2478,6 +2480,12 @@ from . import curation as _curation
 _curation.setup_hooks()
 
 gui_hooks.profile_did_open.append(_migrate_config)
+# One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config
+# so the config store is already scrubbed when the migration reads its
+# _library_tag_migrated guard flag.
+from . import tag_migrate as _tag_migrate
+
+gui_hooks.profile_did_open.append(_tag_migrate.migrate_on_profile_open)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.editor_did_init.append(on_editor_did_init)
