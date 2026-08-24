@@ -16,9 +16,9 @@ previews bulk-tag notes, which bumps mods and resaves the card index
 without changing any text; hashes+nids move only when content or
 membership really changed.
 
-Preview vehicle: the temp tag ``klaus::pdfmatch`` (distinct from curation's
-``klaus::curate`` so a priorities click never clobbers an in-flight
-curation preview).
+Preview vehicle: the temp tag ``!Library::Matching`` (distinct from
+curation's ``!Library::Curating`` so a priorities click never clobbers an
+in-flight curation preview).
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from . import card_index, curation, embeddings, pdf_handler, pdf_index
 USER_FILES = curation.USER_FILES
 INDEX_DIR = curation.INDEX_DIR
 
-RETENTION_TAG = "klaus::pdfmatch"
+RETENTION_TAG = "!Library::Matching"
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
 MATCHES_VERSION = 1
@@ -652,12 +652,19 @@ def preview_matches(parent, nids: list[int]) -> None:
     CollectionOp(parent=parent, op=op).success(done).run_in_background()
 
 
-def clear_pdfmatch_tag(parent=None) -> None:
-    """Tools-menu escape hatch: drop the pdfmatch tag from every note."""
+def clear_pdfmatch_tag(parent=None, *, quiet: bool = False) -> None:
+    """Tools-menu escape hatch: drop the pdfmatch tag from every note.
+
+    ``quiet`` suppresses this function's own tooltip (both the "nothing to
+    clear" early-out and the success summary) — for a caller that reports
+    its own combined result instead. Default False keeps every existing
+    caller's behavior unchanged.
+    """
     parent = parent or mw
     nids = mw.col.find_notes(f'tag:"{RETENTION_TAG}"') if mw.col else []
     if not nids:
-        tooltip("No notes carry the Klaus PDF-match tag.", parent=parent)
+        if not quiet:
+            tooltip("No notes carry the Klaus PDF-match tag.", parent=parent)
         return
 
     def op(col):
@@ -665,8 +672,11 @@ def clear_pdfmatch_tag(parent=None) -> None:
         col.tags.bulk_remove(list(nids), RETENTION_TAG)
         return col.merge_undo_entries(pos)
 
-    CollectionOp(parent=parent, op=op).success(
-        lambda _c: tooltip(
-            f"Cleared the PDF-match tag from {len(nids)} notes.", parent=parent
+    op_result = CollectionOp(parent=parent, op=op)
+    if not quiet:
+        op_result = op_result.success(
+            lambda _c: tooltip(
+                f"Cleared the PDF-match tag from {len(nids)} notes.", parent=parent
+            )
         )
-    ).run_in_background()
+    op_result.run_in_background()

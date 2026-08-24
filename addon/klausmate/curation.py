@@ -9,9 +9,9 @@ aqt glue only — the vector math lives in card_index.py and the providers in
 embeddings.py. Long work runs on QueryOp workers; the embedding phase runs
 ``without_collection()`` so a 20-minute first index never blocks reviewing.
 
-Preview vehicle: the temp tag ``klaus::curate`` (nid: search strings break
-at thousands of ids). Tagging bumps note.mod, which is exactly why the card
-index diffs by text hash — see card_index.py.
+Preview vehicle: the temp tag ``!Library::Curating`` (nid: search strings
+break at thousands of ids). Tagging bumps note.mod, which is exactly why
+the card index diffs by text hash — see card_index.py.
 """
 
 from __future__ import annotations
@@ -33,8 +33,8 @@ ADDON_DIR = os.path.dirname(__file__)
 USER_FILES = os.path.join(ADDON_DIR, "user_files")
 INDEX_DIR = os.path.join(USER_FILES, "card_index")
 
-TEMP_TAG = "klaus::curate"
-CURATED_TAG = "klaus::curated"
+TEMP_TAG = "!Library::Curating"
+CURATED_TAG = "!Library::Curated"
 DECK_PREFIX = "Klaus::"
 
 PARTIAL_FLUSH_EVERY = 1024  # vectors between saves — cancel/crash resume point
@@ -263,9 +263,9 @@ def run_curation(
     """Full search pipeline: sync index → embed query → rank → preview.
 
     ``on_done(result)`` with ``{"nids", "scores", "suggested_name",
-    "previewed"}``; with ``preview`` the matches are tagged ``klaus::curate``
-    and Browse opens on that tag (membership is ranked; row order in Browse
-    follows the user's sort).
+    "previewed"}``; with ``preview`` the matches are tagged
+    ``!Library::Curating`` and Browse opens on that tag (membership is
+    ranked; row order in Browse follows the user's sort).
     """
     if not (prompt or "").strip() and not pdf_name:
         _fail(on_error, ValueError("Type a topic or pick a lecture PDF first."))
@@ -385,12 +385,19 @@ def _preview_in_browse(parent, nids: list[int], after: Callable[[], None] | None
     CollectionOp(parent=parent, op=op).success(done).run_in_background()
 
 
-def clear_curation_tag(parent=None) -> None:
-    """Tools-menu escape hatch: drop the preview tag from every note."""
+def clear_curation_tag(parent=None, *, quiet: bool = False) -> None:
+    """Tools-menu escape hatch: drop the preview tag from every note.
+
+    ``quiet`` suppresses this function's own tooltip (both the "nothing to
+    clear" early-out and the success summary) — for a caller that reports
+    its own combined result instead. Default False keeps every existing
+    caller's behavior unchanged.
+    """
     parent = parent or mw
     nids = mw.col.find_notes(f'tag:"{TEMP_TAG}"') if mw.col else []
     if not nids:
-        tooltip("No notes carry the Klaus curation tag.", parent=parent)
+        if not quiet:
+            tooltip("No notes carry the Klaus curation tag.", parent=parent)
         return
 
     def op(col):
@@ -398,9 +405,12 @@ def clear_curation_tag(parent=None) -> None:
         col.tags.bulk_remove(list(nids), TEMP_TAG)
         return col.merge_undo_entries(pos)
 
-    CollectionOp(parent=parent, op=op).success(
-        lambda _c: tooltip(f"Cleared the curation tag from {len(nids)} notes.", parent=parent)
-    ).run_in_background()
+    op_result = CollectionOp(parent=parent, op=op)
+    if not quiet:
+        op_result = op_result.success(
+            lambda _c: tooltip(f"Cleared the curation tag from {len(nids)} notes.", parent=parent)
+        )
+    op_result.run_in_background()
 
 
 def create_curated_deck(
@@ -412,7 +422,7 @@ def create_curated_deck(
     """Copy ``nids`` into ``deck_name`` as one undoable operation.
 
     True copies: fresh notes (new guid) with the source's notetype, fields,
-    and tags (minus the temp tag, plus ``klaus::curated``). Source notes
+    and tags (minus the temp tag, plus ``!Library::Curated``). Source notes
     lose the temp tag. Scheduling starts fresh — these are new cards.
     """
 
