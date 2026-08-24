@@ -39,10 +39,17 @@ rsync -a \
   --exclude '.DS_Store' \
   --exclude 'meta.json*' \
   --exclude 'user_files/' \
+  --exclude 'user_files_README.txt' \
   "$SRC/" "$STAGE/"
 
 mkdir -p "$STAGE/user_files"
-cp "$SRC/user_files/README.txt" "$STAGE/user_files/README.txt"
+# The user_files README ships to every install but the live copy under
+# user_files/ is gitignored (the same rule that protects personal data),
+# so it drifted unreviewed for months — it still described deleted
+# features when caught (K-050). The TRACKED template one level up is the
+# source of truth now; user_files/README.txt on a dev machine is just a
+# stale artifact of old builds.
+cp "$SRC/user_files_README.txt" "$STAGE/user_files/README.txt"
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT"
