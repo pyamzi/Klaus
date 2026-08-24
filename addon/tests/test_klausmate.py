@@ -419,6 +419,30 @@ if HAVE_RETENTION:
     check("threshold default from cfg",
           abs(retention.get_threshold("Other", {"pdf_match_threshold": 0.5}) - 0.5) < 1e-9)
 
+    # global-apply (K-052 rework #2): clearing per-PDF overrides so a new
+    # default actually reaches PDFs the user already tuned. Pouya's real
+    # library had an override on EVERY pdf, so the Preferences slider
+    # changed nothing visible — the exact bug this guards against.
+    retention.set_threshold("Other", 0.6)
+    names = retention.threshold_override_names()
+    check("override_names lists every tuned PDF", len(names) == 2)
+    prefs = retention._load_prefs()
+    prefs["Keeper"] = {"threshold": 0.3, "tag": "!Library::Keeper"}
+    pdf_handler._atomic_write_json(retention._prefs_path(), prefs)
+    cleared = retention.clear_threshold_overrides()
+    check("clear returns how many overrides went", cleared == 3)
+    check("cleared PDFs now follow the cfg default",
+          abs(retention.get_threshold("Lecture 1", {"pdf_match_threshold": 0.5}) - 0.5) < 1e-9)
+    check("non-threshold keys survive the clear",
+          retention._load_prefs().get("Keeper") == {"tag": "!Library::Keeper"})
+    check("entries left empty are dropped entirely",
+          "Other" not in retention._load_prefs())
+    check("clear on an already-clean store is a zero no-op",
+          retention.clear_threshold_overrides() == 0)
+    # restore the fixture the downstream delete_context checks expect
+    retention.forget_prefs("Keeper")
+    retention.set_threshold("Lecture 1", 0.42)
+
     # prefs orphan cleanup: delete_context must reach prefs.json (a
     # SIBLING of the per-PDF dirs, so its own rmtree/unlink candidates
     # can never touch it) via the real lazy retention.forget_prefs hop —

@@ -373,6 +373,44 @@ def set_threshold(name: str, value: float) -> None:
     )
 
 
+def threshold_override_names() -> list[str]:
+    """Safe basenames of every PDF carrying its own sensitivity override."""
+    return sorted(
+        safe
+        for safe, entry in _load_prefs().items()
+        if isinstance(entry, dict) and "threshold" in entry
+    )
+
+
+def clear_threshold_overrides() -> int:
+    """Drop every per-PDF sensitivity so all PDFs follow the global default.
+
+    Exists for the Preferences default-sensitivity slider (K-052 rework #2):
+    Pouya moved the default and saw nothing change, because every one of his
+    PDFs carried its own override and an override always wins — the default
+    could not reach a single visible number. When the user says the new
+    default should apply everywhere, this is the 'everywhere'.
+
+    Only the ``threshold`` key is removed; any other key an entry carries
+    (e.g. a future per-PDF tag) survives, and entries left empty are
+    dropped entirely. Returns how many overrides were cleared.
+    """
+    prefs = _load_prefs()
+    cleared = 0
+    for safe in list(prefs):
+        entry = prefs[safe]
+        if isinstance(entry, dict) and "threshold" in entry:
+            del entry["threshold"]
+            cleared += 1
+            if not entry:
+                del prefs[safe]
+    if cleared:
+        pdf_handler._atomic_write_json(
+            _prefs_path(), prefs, separators=(",", ":")
+        )
+    return cleared
+
+
 def forget_prefs(name: str) -> None:
     """Drop ``name``'s entire prefs.json entry.
 

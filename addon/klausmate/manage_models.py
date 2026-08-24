@@ -370,9 +370,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_layout.addLayout(threshold_row)
     embed_layout.addWidget(
         _caption(
-            "Starting point for PDFs that haven't been tuned individually — "
-            "the Library's per-PDF sensitivity (right-click a PDF → Match "
-            "sensitivity) always wins over this."
+            "Sensitivity for every PDF that hasn't been tuned individually. "
+            "Changing it offers to reset tuned PDFs too; any single PDF can "
+            "still be adjusted afterwards in the Library (right-click → "
+            "Match sensitivity)."
         )
     )
 
@@ -1087,10 +1088,32 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["pdf_match_threshold"] = value
         cfg["_threshold_user_set"] = True
         _pkg().write_config(cfg)
+        # A per-PDF override always beats the default, so a user whose
+        # PDFs are all individually tuned sees NOTHING move when this
+        # slider changes — which reads as the setting being broken
+        # (K-052 rework #2; that was exactly Pouya's library). Offer to
+        # clear the overrides so the new default actually reaches every
+        # row; declining keeps them, and either way untuned PDFs follow
+        # the default as before.
+        try:
+            from . import retention
+
+            n = len(retention.threshold_override_names())
+            if n and askUser(
+                f"Apply this sensitivity to "
+                f"{'the ' + str(n) + ' PDFs' if n > 1 else 'the one PDF'} "
+                "with their own setting too?\n\n"
+                "Their individual sensitivities will be cleared so they "
+                "follow this default. You can still tune any single PDF "
+                "afterwards in the Library.",
+                parent=dlg,
+            ):
+                retention.clear_threshold_overrides()
+        except Exception as e:
+            print(f"[klausmate] applying sensitivity to tuned PDFs failed: {e}")
         # An open Library window shows retention/cards computed at the
-        # old default for every PDF without its own override — push the
-        # new value there immediately rather than waiting for a reopen
-        # (K-052 rework: the setting looked like it did nothing).
+        # old numbers — push the change there immediately rather than
+        # waiting for a reopen (K-052 rework: looked like it did nothing).
         try:
             from . import pdf_drive
 
