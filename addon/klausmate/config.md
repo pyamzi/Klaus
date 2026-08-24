@@ -99,3 +99,11 @@ wouldn't already need.
   image in a note field → **Crop image**, or double-click the image). The
   crop is always saved as a *new* media file — the original is untouched.
   Default `true`.
+- **library_tags_enabled**: Default `true`. Keeps every indexed PDF's
+  per-PDF `!Library` tag (one tag per PDF, holding exactly the notes
+  matched at or above its sensitivity — see `pdf_match_threshold` above)
+  created, renamed, and pruned automatically as you index, re-sensitize,
+  rename, or delete PDFs. Turn off and Klaus stops creating or updating
+  those tags entirely; since that same tag is also **Curate Deck**'s
+  preview vehicle in Browse, the curation Browse-preview step is skipped
+  while this is off (the final deck copy is unaffected).

@@ -336,19 +336,6 @@ def _reset_browse_layout_to_defaults(browser: Any) -> None:
             print(f"[klausmate] editor splitter reset failed: {exc}")
 
 
-# K-066 TEMP DIAGNOSTICS — remove once the Library... button is confirmed
-# working live. Appends one line per event to /tmp/klausmate-debug.txt so a
-# dead click localizes to page / bridge / panel without console access.
-def _dbg(msg: str) -> None:
-    try:
-        import time as _time
-
-        with open("/tmp/klausmate-debug.txt", "a", encoding="utf-8") as fh:
-            fh.write(f"{_time.strftime('%H:%M:%S')} {msg}\n")
-    except Exception:
-        pass
-
-
 # ----------------------------- web injection ------------------------------
 
 
@@ -384,7 +371,6 @@ def on_js_message(
 ) -> tuple[bool, Any]:
     if not message.startswith("klausmate:"):
         return handled
-    _dbg(f"bridge: {message[:60]} ctx={type(context).__name__}")
     if not isinstance(context, Editor):
         return (True, None)
 
@@ -705,27 +691,19 @@ def _on_library_button(editor: Editor) -> None:
     way to add a PDF from the editor anymore; only the Library window's
     drop zone can bring a new PDF into the store.
     """
-    _dbg("handler: _on_library_button entered")
     tabs = getattr(editor, "_klausmate_pdf_tabs", None)
     if tabs is None:
-        _dbg("handler: tabs is None -> tooltip")
         tooltip("Klaus: PDF viewer is unavailable in this window")
         return
     try:
-        _dbg(f"handler: isVisible={tabs.isVisible()} placed={getattr(tabs, '_placed', '?')}")
         if tabs.isVisible():
             tabs.panel_hide()
-            _dbg("handler: panel_hide done")
         else:
             _ensure_sidebar_pdf(editor)
-            _dbg("handler: sidebar ensured")
             tabs.panel_show()
-            _dbg(f"handler: panel_show done, tabs={tabs._tabs.count()}")
             if tabs._tabs.count() == 0:
                 tabs._show_add_menu()
-                _dbg("handler: add menu shown")
     except Exception as e:
-        _dbg(f"handler: FAILED {type(e).__name__}: {e}")
         print(
             "[klausmate] library button action failed: "
             f"{type(e).__name__}: {e}"

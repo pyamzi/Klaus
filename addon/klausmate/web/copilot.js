@@ -151,16 +151,6 @@
   var BTN_ID = "klausmate-library-btn";
   var warned = false;
 
-  // K-066 temp diagnostics: ping the bridge so /tmp/klausmate-debug.txt
-  // shows whether THIS version of the script is even running in the page
-  // (QtWebEngine cached a stale copy across restarts once already).
-  function ping(ev) {
-    try { pycmd("klausmate:dbg:" + btoa(JSON.stringify({ e: ev, v: "k066" }))); }
-    catch (err) { /* bridge not ready yet */ }
-  }
-  ping("script-loaded");
-  setTimeout(function () { ping("script-loaded-late"); }, 2000);
-
   function findFieldsButton() {
     var btns = document.querySelectorAll("button");
     for (var i = 0; i < btns.length; i++) {
@@ -187,7 +177,6 @@
     // click dispatch (a second mechanism would double-fire the toggle).
     fields.parentNode.insertBefore(btn, fields);
     console.log("[klausmate] Library button mounted");
-    ping("button-mounted");
     return true;
   }
 
@@ -197,7 +186,6 @@
     if (!hit) return;
     e.preventDefault();
     console.log("[klausmate] Library button clicked");
-    ping("click-heard");
     try { pycmd("klausmate:library:e30="); } catch (err) { /* non-fatal */ }
   }, true);
 
