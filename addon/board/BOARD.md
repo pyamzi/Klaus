@@ -428,3 +428,17 @@ Breadcrumbs localized the dead Library... button to a NameError: K-063's range-d
 
 #### Comments
 - [2026-08-24 opus] Committed. Gate PASS (def present + AST membership); full-file AST name-resolution sweep shows zero other unresolved symbols. Everything upstream of the NameError was already proven live by Pouya's own clicks in the breadcrumb log, so this restore is the last missing link. Diagnostics stay in until he confirms, then a removal card.
+
+### K-068: Harden PDF panel teardown (SIGSEGV + dead-label RuntimeError)
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/pdf_viewer.py,klausmate/__init__.py
+verify: grep -q "except RuntimeError" klausmate/pdf_viewer.py && grep -q "_hidden_for_close" klausmate/__init__.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Live crash pair from Pouya: (1) hard SIGSEGV in sipSubClass_QPdfView while AnkiApp's app-level event filter converts a mouse-event receiver — a C++-deleted QPdfView still referenced by Qt's mouse pipeline, ~2.5s after a successful embed, consistent with the host Add window closing while the panel's viewer sat under the cursor; (2) RuntimeError: _page_label QLabel deleted while the viewer's nav signal still fires — the label is the viewer's child ADOPTED into the container header (cross-tree ownership), so partial teardown can kill either half first. Fixes: guard every _page_label touch with except RuntimeError (house convention, missing here); on the host's Close event, synchronously hide() the panel before the deferred teardown check so a dying viewer leaves the hover/tracking pipeline immediately (re-show if the close turns out cancelled — AddCards' discard prompt). Both mitigations are independent of the exact deletion order, which static reading could not fully pin. Breadcrumb diagnostics stay in until stable.
+
+#### Comments
+- [2026-08-24 opus] Committed. Gate PASS, compile ok, full suite 408 green. Confidence honest: the RuntimeError is FIXED (deterministic guard); the SIGSEGV is MITIGATED via close-time hide — a use-after-free in Qt's mouse pipeline can't be reproduced headlessly, so live confirmation is Pouya toggling the panel then closing the Add window several times, cursor over the PDF. If it segfaults again, next step is deterministic early teardown of the container on Close (deleteLater at a safe point) rather than riding the window's destructor cascade.
