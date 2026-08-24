@@ -43,7 +43,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning, tooltip
 
-from . import deck_curate, drive_store, pdf_handler, retention
+from . import deck_curate, drive_store, pdf_handler, retention, tag_sync
 
 DIALOG_NAME = "KlausDrive"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
@@ -725,9 +725,10 @@ class DriveWindow(QWidget):
             )
             self.status.setText(msg)
 
-        def after_matches(_matches) -> None:
+        def after_matches(matches) -> None:
             if not self._finish(seq):
                 return
+            tag_sync.sync_after_matches(mw, safe, matches)
             self.status.setText("Embedded — refreshing retention…")
             self._refresh_rows()
 
@@ -803,6 +804,7 @@ class DriveWindow(QWidget):
             return
         value = slider.value() / 100.0
         retention.set_threshold(safe, value)
+        tag_sync.sync_after_threshold(mw, safe, matches, value)
         row = self.rows.get(safe)
         if row is not None and matches is not None:
             agg = retention.pdf_retention(
@@ -946,10 +948,12 @@ class DriveWindow(QWidget):
         if ok and (name or "").strip():
             drive_store.rename_display(_user_files(), safe, name.strip())
             self.rebuild_tree()
+            tag_sync.sync_after_rename(mw, safe)
 
     def _move_pdf(self, safe: str, folder: str | None) -> None:
         drive_store.set_folder(_user_files(), safe, folder)
         self.rebuild_tree()
+        tag_sync.sync_after_rename(mw, safe)
 
     def _move_to_new_folder(self, safe: str) -> None:
         path = self._new_folder()
@@ -967,7 +971,18 @@ class DriveWindow(QWidget):
         parent = path.rsplit("/", 1)[0] if "/" in path else ""
         new_path = f"{parent}/{name}" if parent else name
         if drive_store.rename_folder(_user_files(), path, new_path):
+            # Every PDF drive_store.rename_folder just reparented under
+            # new_path (direct children and nested descendants alike) —
+            # collect them AFTER the rename so their tags follow in one
+            # batched undo entry.
+            affected = [
+                safe
+                for safe, entry in drive_store.load(_user_files()).get("pdfs", {}).items()
+                if entry.get("folder") == new_path
+                or (entry.get("folder") or "").startswith(new_path + "/")
+            ]
             self.rebuild_tree()
+            tag_sync.sync_after_folder_rename(mw, affected)
         else:
             showWarning("That folder name isn't valid.")
 
@@ -993,6 +1008,11 @@ class DriveWindow(QWidget):
                 self.sidebar.clear()
         except Exception:
             pass
+        # Must run BEFORE delete_context: that call chains into
+        # retention.forget_prefs, which wipes this PDF's whole prefs.json
+        # entry (including the stored tag name) — after that, there is no
+        # way left to know what tag to remove.
+        tag_sync.sync_after_delete(mw, safe, display)
         try:
             pdf_handler.delete_context(_user_files(), safe)
         except Exception as e:

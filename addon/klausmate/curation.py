@@ -325,6 +325,9 @@ def run_curation(
                     # its partial list — never treat that as a final answer.
                     fail(RuntimeError("Search was cancelled — run it again to resume."))
                     return
+                from . import tag_sync  # deferred: see run_curation's retention import above
+
+                tag_sync.sync_after_matches(parent, pdf_name, matches)
                 global last_run
                 threshold = retention.get_threshold(pdf_name, retention._cfg())
                 ranked = sorted(

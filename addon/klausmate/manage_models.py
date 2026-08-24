@@ -1098,7 +1098,8 @@ def manage_models_dialog(setup: bool = False) -> None:
         try:
             from . import retention
 
-            n = len(retention.threshold_override_names())
+            names = retention.threshold_override_names()
+            n = len(names)
             if n and askUser(
                 f"Apply this sensitivity to "
                 f"{'the ' + str(n) + ' PDFs' if n > 1 else 'the one PDF'} "
@@ -1109,6 +1110,12 @@ def manage_models_dialog(setup: bool = False) -> None:
                 parent=dlg,
             ):
                 retention.clear_threshold_overrides()
+                try:
+                    from . import tag_sync
+
+                    tag_sync.sync_after_clear_overrides(dlg, names)
+                except Exception as e:
+                    print(f"[klausmate] retagging cleared-override PDFs failed: {e}")
         except Exception as e:
             print(f"[klausmate] applying sensitivity to tuned PDFs failed: {e}")
         # An open Library window shows retention/cards computed at the
