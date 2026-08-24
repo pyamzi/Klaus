@@ -883,7 +883,10 @@ class PdfViewer(QWidget):
         self.set_document(None)
         self._page_count = 0
         self._page_texts = []
-        self._page_label.setText("")
+        try:
+            self._page_label.setText("")
+        except RuntimeError:
+            pass  # adopted label died with the dock header (see above)
 
     def _sync_overlay_geometry(self) -> None:
         if self._overlay is None or self._viewport is None:
@@ -2962,11 +2965,18 @@ class PdfViewer(QWidget):
         self._on_page_changed(page)
 
     def _update_page_label(self, page: int) -> None:
-        if self._page_count <= 0:
-            self._page_label.setText("")
-            return
-        page = max(0, min(page, self._page_count - 1))
-        self._page_label.setText(f"Page {page + 1} / {self._page_count}")
+        try:
+            if self._page_count <= 0:
+                self._page_label.setText("")
+                return
+            page = max(0, min(page, self._page_count - 1))
+            self._page_label.setText(f"Page {page + 1} / {self._page_count}")
+        except RuntimeError:
+            # The dock header ADOPTS this label (see __init__), so the
+            # host window can destroy it while this viewer object outlives
+            # the teardown race — seen live 2026-08-24. A dead label only
+            # costs the page readout; never let it poison a nav signal.
+            pass
 
     # ------------------------------------------------------------------
     # Cmd+F find bar (A9)

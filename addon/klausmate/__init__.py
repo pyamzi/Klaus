@@ -1167,6 +1167,14 @@ class _PdfTabContainer(QWidget):
                 self._on_host_closing()
             except Exception as exc:
                 print(f"[klausmate] pdf host-close teardown failed: {exc}")
+        elif getattr(self, "_hidden_for_close", False):
+            # The close was cancelled (AddCards' discard prompt) — undo
+            # the precautionary hide from the Close filter.
+            self._hidden_for_close = False
+            try:
+                self.setVisible(True)
+            except Exception:
+                pass
 
     def _on_host_closing(self) -> None:
         """The Browse/Add window that spawned this panel is closing.
@@ -1235,6 +1243,17 @@ class _PdfTabContainer(QWidget):
         # -- host lifetime -------------------------------------------
         try:
             if obj is self._win and t == QEvent.Type.Close:
+                # Leave the mouse pipeline NOW: if the close goes through,
+                # the embedded viewer dies with the window, and a hidden
+                # widget can no longer be Qt's hover/tracking target — a
+                # QPdfView deleted while under the cursor segfaulted in
+                # sip's receiver conversion (live crash, 2026-08-24).
+                self._hidden_for_close = self.isVisible()
+                if self._hidden_for_close:
+                    try:
+                        self.hide()
+                    except Exception:
+                        pass
                 # The host may still evt.ignore() this Close (e.g. the
                 # user cancels AddCards' discard prompt), so NEVER tear
                 # down synchronously — check next tick whether the
