@@ -1049,6 +1049,27 @@ class DriveWindow(QWidget):
 _instance: DriveWindow | None = None
 
 
+def refresh_open_library() -> None:
+    """Re-aggregate the open Library window, if there is one.
+
+    Called from Klausmate Preferences when the DEFAULT sensitivity is
+    saved (manage_models.save_threshold): every PDF without a per-PDF
+    override reads that default through retention.get_threshold, so the
+    retention/cards columns an open Library is showing go stale the
+    moment it changes. Without this hook the window only caught up on
+    reopen — which read as the setting not working at all (Pouya, K-052:
+    'currently it does not update the library sensitivity like I had
+    imagined'). No-op when the Library is closed; per-PDF overrides are
+    unaffected either way since they never read the default.
+    """
+    try:
+        win = _instance
+        if win is not None and win._alive() and win.isVisible():
+            win._refresh_rows()
+    except Exception as e:
+        print(f"[klausmate] library refresh after settings change failed: {e}")
+
+
 def _create() -> DriveWindow:
     global _instance
     _instance = DriveWindow()

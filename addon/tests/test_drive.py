@@ -350,5 +350,44 @@ except Exception as e:
     check("deck_curate recency ordering", False, f"{type(e).__name__}: {e}")
 
 shutil.rmtree(tmp, ignore_errors=True)
+
+print("== refresh_open_library glue (K-052 rework) ==")
+pdf_drive = importlib.import_module("klausmate.pdf_drive")
+# With no Library window open, the hook must be a silent no-op — it is
+# called from a config-save path in Preferences, where an exception or a
+# stray dialog would be a much worse bug than a stale column.
+pdf_drive._instance = None
+try:
+    pdf_drive.refresh_open_library()
+    check("no open Library -> silent no-op", True)
+except Exception as e:
+    check(f"no open Library -> silent no-op (raised {e!r})", False)
+
+
+class _FakeWin:
+    def __init__(self, alive, visible):
+        self._is_alive, self._visible, self.refreshes = alive, visible, 0
+    def _alive(self): return self._is_alive
+    def isVisible(self): return self._visible
+    def _refresh_rows(self): self.refreshes += 1
+
+
+w = _FakeWin(alive=True, visible=True)
+pdf_drive._instance = w
+pdf_drive.refresh_open_library()
+check("open+visible Library gets exactly one refresh", w.refreshes == 1)
+
+w2 = _FakeWin(alive=True, visible=False)
+pdf_drive._instance = w2
+pdf_drive.refresh_open_library()
+check("hidden Library is not refreshed", w2.refreshes == 0)
+
+w3 = _FakeWin(alive=False, visible=True)
+pdf_drive._instance = w3
+pdf_drive.refresh_open_library()
+check("dead C++ handle is not refreshed", w3.refreshes == 0)
+pdf_drive._instance = None
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

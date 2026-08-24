@@ -1087,6 +1087,16 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["pdf_match_threshold"] = value
         cfg["_threshold_user_set"] = True
         _pkg().write_config(cfg)
+        # An open Library window shows retention/cards computed at the
+        # old default for every PDF without its own override — push the
+        # new value there immediately rather than waiting for a reopen
+        # (K-052 rework: the setting looked like it did nothing).
+        try:
+            from . import pdf_drive
+
+            pdf_drive.refresh_open_library()
+        except Exception as e:
+            print(f"[klausmate] library refresh after sensitivity save failed: {e}")
 
     def finish_index() -> None:
         progress.setRange(0, 100)
