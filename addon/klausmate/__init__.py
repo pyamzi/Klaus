@@ -823,7 +823,8 @@ class _PdfBar(QFrame):
         md = e.mimeData()
         if md and md.hasUrls():
             for url in md.urls():
-                if url.toLocalFile().lower().endswith(".pdf"):
+                local = url.toLocalFile()
+                if local.lower().endswith(".pdf") and os.path.isfile(local):
                     self.setProperty("dragOver", "true")
                     self.style().unpolish(self); self.style().polish(self)
                     e.acceptProposedAction()
@@ -842,7 +843,7 @@ class _PdfBar(QFrame):
             return
         for url in md.urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".pdf"):
+            if path.lower().endswith(".pdf") and os.path.isfile(path):
                 self._on_pdf(path)
         e.acceptProposedAction()
 
@@ -939,6 +940,20 @@ class _KlausmatePanel(QWidget):
         self._ensure_sidebar_pdf()
         tabs.panel_show()
         self._update_toggle_label(True)
+
+
+def _pdf_display_name(safe: str) -> str:
+    """Human label for a stored PDF, falling back to its safe basename.
+
+    Mirrors deck_curate._display_name's defensive pattern (drive_store
+    lookup, safe on any failure) without importing deck_curate for it.
+    """
+    try:
+        from . import drive_store
+
+        return drive_store.display_name(USER_FILES, safe)
+    except Exception:
+        return safe
 
 
 class _PdfTabContainer(QWidget):
@@ -2216,31 +2231,17 @@ class _PdfTabContainer(QWidget):
         menu = QMenu(self)
         open_names = set(self._tab_names())
         stored: list[str] = []
-        for n in pdf_handler.list_contexts(USER_FILES):
-            base = n[:-4] if n.endswith(".txt") else n
+        # Most recently used first (pdf_handler.list_by_recency ranks by
+        # last_used, falling back to contexts/<safe>.txt mtime — ingest
+        # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
+        # preserves from the source file). Same source deck_curate uses.
+        for base in pdf_handler.list_by_recency(USER_FILES):
             if base in open_names:
                 continue
             if pdf_handler.pdf_path_for(USER_FILES, base):
                 stored.append(base)
-        # Most recently used first; PDFs never activated fall back to
-        # their file mtime (ingest time), oldest last.
-        try:
-            last_used = pdf_handler.load_last_used(USER_FILES)
-        except Exception:
-            last_used = {}
-
-        def _recency(base: str) -> float:
-            ts = last_used.get(base)
-            if ts is not None:
-                return ts
-            try:
-                p = pdf_handler.pdf_path_for(USER_FILES, base)
-                return os.path.getmtime(p) if p else 0.0
-            except Exception:
-                return 0.0
-
-        for base in sorted(stored, key=_recency, reverse=True):
-            act = menu.addAction(base)
+        for base in stored[:20]:
+            act = menu.addAction(_pdf_display_name(base))
             act.triggered.connect(
                 lambda _=False, b=base: self._sidebar.load_pdf(b)
             )
