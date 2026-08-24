@@ -597,6 +597,43 @@ check(
     "_threshold_user_set" not in w.cfg,
 )
 
+print("== the syncing guard is load-bearing on its own (orchestrator review) ==")
+
+# Every check above is satisfied by the value-differs guard ALONE, because
+# sync always sets the slider to the stored value, so the two agree and the
+# save returns early either way. Deleting ui_state['syncing'] from
+# save_threshold left the whole suite green — which means nothing pinned it,
+# and a future refactor could drop it silently.
+#
+# It is not redundant. The slider is integer 1/100 steps, so a stored value
+# it cannot represent (hand-edited config, or any future writer with more
+# precision) makes widget and stored value genuinely DIFFER during a
+# programmatic sync. Then only the syncing guard stands between opening the
+# dialog and having your value rewritten and stamped user-set — which
+# permanently opts that profile out of every later default bump.
+w = ThresholdWorld({"pdf_match_threshold": 0.753})
+check("a non-representable stored value shows as the nearest step", w.slider.value() == 75)
+check("merely opening does not rewrite it", w.writes == 0)
+
+w.ui_state["syncing"] = True
+w.save_threshold()  # what a naive valueChanged wiring would do mid-sync
+w.ui_state["syncing"] = False
+check(
+    "syncing guard blocks a save even when widget and stored value DIFFER",
+    w.writes == 0,
+)
+check(
+    "...and no user-set flag is stamped by that blocked save",
+    "_threshold_user_set" not in w.cfg,
+)
+check("the stored value is left exactly as it was", w.cfg["pdf_match_threshold"] == 0.753)
+
+# And the mirror: with syncing clear, that same difference SHOULD persist —
+# proving the guard is what blocked it, not the value-diff check.
+w.save_threshold()
+check("with syncing clear, a real difference does persist", w.writes == 1)
+check("which is the path that legitimately stamps the flag", w.cfg["_threshold_user_set"] is True)
+
 print("== end to end: a slider-set value survives a later default bump ==")
 w = ThresholdWorld({"pdf_match_threshold": 0.75})
 w.slider.user_drag_and_release(55)  # user deliberately picks 0.55
