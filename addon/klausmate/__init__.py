@@ -690,10 +690,21 @@ def import_pdf_file(path: str) -> str | None:
 
 
 class _PdfBar(QFrame):
-    """Single-row PDF control: drop/browse, status, remove, dock toggle."""
+    """Single-row PDF control: drop/browse, status, remove, dock toggle.
 
-    _BAR_HEIGHT = 34
-    _TOGGLE_SIZE = 26
+    Styled to match the deck-browser drop square injected by
+    deck_curate.py's on_deck_browser_content (idle/armed markup ~:355-394)
+    so the two surfaces read as the same component (Pouya: "those two
+    should look exactly the same"). Kept as duplicated literals rather
+    than a shared constants module on purpose — this file and
+    deck_curate.py are deliberately file-disjoint so cards can run in
+    parallel; if you change the square's idle/armed border, radius,
+    padding, font-size, or Browse-button style, update the values below
+    to match, and vice versa.
+    """
+
+    _IDLE_TEXT = "Drop a lecture PDF here to read alongside your cards."
+    _TOGGLE_SIZE = 22
 
     def __init__(
         self,
@@ -709,53 +720,75 @@ class _PdfBar(QFrame):
         self.setAcceptDrops(True)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setObjectName("klausmateDropZone")
-        self.setFixedHeight(self._BAR_HEIGHT)
+        # No fixed height: the square breathes to fit its content, and so
+        # should this bar now that it carries a permanent Browse button
+        # plus a secondary Remove alongside the status text.
         self.setStyleSheet(
             "#klausmateDropZone {"
-            " border: 1px solid rgba(0, 0, 0, 0.12);"
-            " border-radius: 6px;"
-            " background: rgba(0, 0, 0, 0.03);"
+            " border: 1px dashed rgba(128, 128, 128, 0.55);"
+            " border-radius: 10px;"
+            " background: transparent;"
             "}"
             "#klausmateDropZone[dragOver=\"true\"] {"
-            " background: rgba(80, 140, 255, 0.10);"
-            " border-color: rgba(80, 140, 255, 0.55);"
+            " border: 1px solid rgba(58, 130, 247, 0.85);"
             "}"
         )
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 0, 8, 0)
+        lay.setContentsMargins(14, 8, 14, 8)
         lay.setSpacing(8)
 
-        # Cobalt brand badge at the far left — mirrors the "Ask" cue in the
-        # Cmd+K popover so both surfaces feel like the same product.
-        self._klaus_label = QLabel("Klaus")
-        self._klaus_label.setStyleSheet(
-            "color: rgba(58, 130, 247, 0.95);"
-            " font-weight: 600;"
-            " font-size: 11px;"
-            " letter-spacing: 0.3px;"
-            " padding: 0 6px 0 2px;"
-        )
-        self._klaus_label.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-        )
-        lay.addWidget(self._klaus_label, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self._status = QLabel("Drop lecture PDF here")
+        self._status = QLabel(self._IDLE_TEXT)
         self._status.setStyleSheet(
-            "color: rgba(120, 120, 120, 0.95); font-size: 11px;"
+            "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
         )
         self._status.setAlignment(
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
         )
         lay.addWidget(self._status, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        self._action_btn = QPushButton("Browse…")
-        self._action_btn.setFlat(True)
-        self._action_btn.setFixedHeight(self._TOGGLE_SIZE)
-        self._action_btn.setMinimumWidth(64)
-        self._action_btn.setStyleSheet("font-size: 11px;")
-        self._action_btn.clicked.connect(self._browse)
-        lay.addWidget(self._action_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # Always-visible Browse — the square's equivalent link is always
+        # shown in its idle state; unlike the old single button here, this
+        # one no longer disappears/relabels itself once a PDF is active,
+        # so a second lecture PDF can still be added via the file dialog
+        # the same way it already could via drag-and-drop.
+        self._browse_btn = QPushButton("Browse…")
+        self._browse_btn.setFlat(True)
+        self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._browse_btn.setStyleSheet(
+            "QPushButton {"
+            " border: 1px solid rgba(128, 128, 128, 0.55);"
+            " border-radius: 6px;"
+            " font-size: 12px;"
+            " padding: 3px 10px;"
+            " background: transparent;"
+            "}"
+            "QPushButton:hover {"
+            " border-color: rgba(58, 130, 247, 0.55);"
+            "}"
+        )
+        self._browse_btn.clicked.connect(self._browse)
+        lay.addWidget(self._browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Remove: an affordance the square doesn't need (its "armed" PDF
+        # is cleared via its own x), kept here but demoted to quiet text
+        # so it doesn't compete with Browse for attention, and hidden
+        # entirely until a PDF is actually active.
+        self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setFlat(True)
+        self._remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._remove_btn.setStyleSheet(
+            "QPushButton {"
+            " border: none;"
+            " font-size: 11px;"
+            " color: rgba(130, 130, 130, 0.85);"
+            " padding: 3px 4px;"
+            " background: transparent;"
+            "}"
+            "QPushButton:hover { color: rgba(200, 70, 70, 0.9); }"
+        )
+        self._remove_btn.clicked.connect(self._on_remove)
+        self._remove_btn.setVisible(False)
+        lay.addWidget(self._remove_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self._toggle_btn = QToolButton()
         self._toggle_btn.setText("◨")
@@ -764,20 +797,18 @@ class _PdfBar(QFrame):
         self._toggle_btn.setCheckable(True)
         self._toggle_btn.setStyleSheet(
             "QToolButton {"
-            " border: 1px solid rgba(120, 120, 120, 0.35);"
+            " border: none;"
             " border-radius: 5px;"
-            " font-size: 14px;"
-            " color: rgba(80, 80, 80, 0.95);"
-            " background: rgba(120, 120, 120, 0.06);"
+            " font-size: 12px;"
+            " color: rgba(130, 130, 130, 0.85);"
+            " background: transparent;"
             "}"
             "QToolButton:hover {"
             " color: rgba(58, 130, 247, 0.95);"
-            " border-color: rgba(58, 130, 247, 0.45);"
             " background: rgba(58, 130, 247, 0.10);"
             "}"
             "QToolButton:checked {"
             " color: rgba(58, 130, 247, 0.95);"
-            " border-color: rgba(58, 130, 247, 0.55);"
             " background: rgba(58, 130, 247, 0.14);"
             "}"
         )
@@ -793,33 +824,17 @@ class _PdfBar(QFrame):
         except Exception:
             return name
 
-    def _set_action_browse(self) -> None:
-        self._has_pdf = False
-        try:
-            self._action_btn.clicked.disconnect()
-        except Exception:
-            pass
-        self._action_btn.setText("Browse…")
-        self._action_btn.clicked.connect(self._browse)
-
-    def _set_action_remove(self) -> None:
-        self._has_pdf = True
-        try:
-            self._action_btn.clicked.disconnect()
-        except Exception:
-            pass
-        self._action_btn.setText("Remove")
-        self._action_btn.clicked.connect(self._on_remove)
-
     def set_active_pdf(self, name: str | None) -> None:
         if name:
+            self._has_pdf = True
             self._status.setText(self._elide_name(name))
             self._status.setToolTip(name)
-            self._set_action_remove()
+            self._remove_btn.setVisible(True)
         else:
-            self._status.setText("Drop lecture PDF here")
+            self._has_pdf = False
+            self._status.setText(self._IDLE_TEXT)
             self._status.setToolTip("")
-            self._set_action_browse()
+            self._remove_btn.setVisible(False)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
