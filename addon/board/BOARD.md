@@ -49,26 +49,6 @@ Done when: verify passes, the panel is tabbed with the install page still a sepa
 
 ## Doing
 
-### K-051: Finish the recency + drop-filter unification in __init__.py
-owner: sonnet-ar
-priority: P2
-tags: sonnet-safe,library-era
-files: klausmate/__init__.py
-verify: grep -q list_by_recency klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
-created: 2026-08-23
-claimed: 2026-08-23
-
-Two small leftovers K-049 correctly reported as owed rather than reaching outside its file scope. Both are in klausmate/__init__.py.
-
-1. The _PdfTabContainer ＋ menu still re-derives its own recency order with a private _recency helper that reads pdfs/<safe>.pdf's mtime. That mtime is PRESERVED from the source file by shutil.copy2, so a lecture authored in 2019 and imported today sorts last. K-049 built pdf_handler.list_by_recency() for exactly this — it ranks by last_used and falls back to contexts/<safe>.txt, which is written fresh at import and therefore means ingest time. Swap the call and delete the private helper. deck_curate.py already uses the shared one, so after this both menus agree.
-   While you are there: the two menus also LABEL PDFs differently — deck_curate shows drive_store.display_name, this menu shows the raw safe basename, so the same PDF reads as 'Renal_Phys' in one place and 'Renal Physiology (Dr. K).pdf' in the other. Use the display name here too.
-
-2. _PdfBar's drag-and-drop filter checks only the .pdf suffix; deck_curate checks the suffix AND os.path.isfile. A directory named foo.pdf dropped on the editor bar reaches import_pdf_file; dropped on the deck screen it does not. Align on the stricter form.
-
-Neither is user-visible as a crash — they are consistency bugs — but the recency one produces a menu that is simply wrong about which PDF you used last.
-
-Full suite green (257 across 6 files); py_compile through the Anki symlink; stage by path.
-
 ## Review
 
 ## Done
@@ -95,3 +75,27 @@ SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it
 #### Comments
 - [2026-08-23 Pouya] Do the suggested fix
 - [2026-08-23 orchestrator] Implemented by orchestrator on Pouya's go-ahead ('add that last one too'). The suggested fix from the card, exactly: klausmate/user_files_README.txt is now the TRACKED source of truth; package.sh copies it to user_files/README.txt at build time and excludes the template from the staged root so it ships only at that path. The user_files deny-rule stays absolute — nothing writes into the live directory, and the guard that blocked my first attempt remains the reason this shape was chosen. Verified with a staging dry-run mirroring the script's rsync+cp: template absent from the addon root, present as user_files/README.txt with zero stale feature mentions, meta.json* still excluded. Grep confirms no runtime code reads the file, so the stale copy on Pouya's disk is inert — it and debug-16d0b4.log are his to delete whenever. New text covers the real folder inventory, the permanent-deletion warning, and the runtime/ removal procedure (delete after disabling 'Manage Ollama automatically' in Klausmate Preferences) that older docs falsely attributed to a nonexistent settings control.
+
+### K-051: Finish the recency + drop-filter unification in __init__.py
+owner: sonnet-ar
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py
+verify: grep -q list_by_recency klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Two small leftovers K-049 correctly reported as owed rather than reaching outside its file scope. Both are in klausmate/__init__.py.
+
+1. The _PdfTabContainer ＋ menu still re-derives its own recency order with a private _recency helper that reads pdfs/<safe>.pdf's mtime. That mtime is PRESERVED from the source file by shutil.copy2, so a lecture authored in 2019 and imported today sorts last. K-049 built pdf_handler.list_by_recency() for exactly this — it ranks by last_used and falls back to contexts/<safe>.txt, which is written fresh at import and therefore means ingest time. Swap the call and delete the private helper. deck_curate.py already uses the shared one, so after this both menus agree.
+   While you are there: the two menus also LABEL PDFs differently — deck_curate shows drive_store.display_name, this menu shows the raw safe basename, so the same PDF reads as 'Renal_Phys' in one place and 'Renal Physiology (Dr. K).pdf' in the other. Use the display name here too.
+
+2. _PdfBar's drag-and-drop filter checks only the .pdf suffix; deck_curate checks the suffix AND os.path.isfile. A directory named foo.pdf dropped on the editor bar reaches import_pdf_file; dropped on the deck screen it does not. Align on the stricter form.
+
+Neither is user-visible as a crash — they are consistency bugs — but the recency one produces a menu that is simply wrong about which PDF you used last.
+
+Full suite green (257 across 6 files); py_compile through the Anki symlink; stage by path.
+
+#### Comments
+- [2026-08-23 sonnet-ar] Decisions: (1) +menu now sources order from pdf_handler.list_by_recency(USER_FILES), then applies the same open-tab/pdf-exists filters as before, then caps at stored[:20] to match deck_curate._pick_pdf_menu's cap (the +menu had no cap at all before -- now both cap at 20 with identical ordering semantics). Deleted the private _recency closure and its load_last_used/getmtime fallback entirely; confirmed via grep no other reference to _recency remains. (2) Added module-level _pdf_display_name(safe) right before _PdfTabContainer, a local copy of deck_curate._display_name's pattern (try drive_store.display_name(USER_FILES, safe), except Exception: return safe) -- did not import deck_curate, per the card's guidance. Menu entries now show act = menu.addAction(_pdf_display_name(base)) while the triggered handler still closes over the safe name (b=base), unchanged from before. Grepped for .text() and actions()[ usages in __init__.py: none exist, so nothing was parsing the label -- no trap to fix, just relabeling was safe. (3) Drop filter: both _PdfBar.dragEnterEvent (~line 826) and dropEvent (~line 845) now use local.lower().endswith('.pdf') and os.path.isfile(local), matching deck_curate's MainWebView.dropEvent wrapper exactly. A directory named foo.pdf now fails both call sites identically. Files: klausmate/__init__.py only. Risks: the stored[:20] cap is new behavior for the +menu (previously unbounded) -- added because the task said cap/ordering semantics should end up identical to deck_curate's; a reviewer who intended 'only fix ordering, leave cap alone' should flag this. Could not visually verify the menu opens/renders or that display names show right -- Qt cannot be instantiated headlessly on this machine. Verified via py_compile through the Anki symlink, tests/test_imports.py, tests/test_klausmate.py (verify gate), and the full suite (287 across test_board.py/test_dialog_logic.py/test_drive.py/test_imports.py/test_klausmate.py/test_tag_migrate.py, all green, no regressions). Next: none.
+- [2026-08-23 orchestrator] Signed off, with one review fix on top (commit after f1eeca8) — and the fix corrects MY card, not the worker's execution. Verified: the _recency closure is gone with zero remaining references; ordering comes from pdf_handler.list_by_recency (the ingest-time source, closing the 2019-mtime bug); menu entries show display names while handlers carry the safe name as closure data — and the worker grepped for label-parsing before relabeling rather than assuming, finding none. Both drop sites now require suffix AND isfile, matching deck_curate exactly. THE CAP: my card said cap/ordering semantics should match deck_curate's. The worker complied — adding a top-20 cap the + menu never had — and flagged it as a reviewable behavior change instead of burying it. That flag was exactly right, because the instruction was wrong: deck_curate's menu is a shortcut (the Library is the full curation path), but the + menu is the ONLY route to open a stored PDF in the editor's viewer. A cap strands every PDF past the top 20 with no way in; QMenu scrolls natively on overflow, so it bought nothing. Removed the cap, kept everything else. Pouya has 3 PDFs today, so this was a trap for month six, not a live bug — which is precisely when it would have been hardest to diagnose. Suite 287 green; py_compile clean through the symlink. Menu rendering needs Pouya's eyes as always.
