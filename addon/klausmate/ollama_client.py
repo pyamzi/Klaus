@@ -8,46 +8,9 @@ from __future__ import annotations
 
 import json
 import socket
-import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable
-
-# #region agent log
-# Writable from Anki regardless of repo path (USER_FILES lives in the add-on).
-import os as _os
-
-_DEBUG_LOG = _os.path.join(
-    _os.path.dirname(_os.path.abspath(__file__)), "user_files", "debug-16d0b4.log"
-)
-
-
-def _dbg(
-    location: str,
-    message: str,
-    data: dict[str, Any],
-    hypothesis_id: str,
-) -> None:
-    try:
-        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-            f.write(
-                json.dumps(
-                    {
-                        "sessionId": "16d0b4",
-                        "timestamp": int(time.time() * 1000),
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "hypothesisId": hypothesis_id,
-                    }
-                )
-                + "\n"
-            )
-    except Exception:
-        pass
-
-
-# #endregion
 
 
 class OllamaError(Exception):
@@ -100,23 +63,6 @@ class OllamaClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        # #region agent log
-        t0 = time.monotonic()
-        model_name = payload.get("model", "")
-        num_predict = (payload.get("options") or {}).get("num_predict")
-        _dbg(
-            "ollama_client._post:start",
-            "HTTP POST begin",
-            {
-                "path": path,
-                "timeout_s": self.timeout,
-                "model": model_name,
-                "num_predict": num_predict,
-                "prompt_chars": len(payload.get("prompt") or ""),
-            },
-            "A",
-        )
-        # #endregion
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = resp.read().decode("utf-8")
@@ -125,39 +71,7 @@ class OllamaClient:
                 f"Ollama request failed ({e.code}): {_http_error_detail(e)}"
             ) from e
         except urllib.error.URLError as e:
-            # #region agent log
-            elapsed = round(time.monotonic() - t0, 2)
-            reason = repr(getattr(e, "reason", e))
-            is_timeout = isinstance(
-                getattr(e, "reason", None), (TimeoutError, socket.timeout)
-            )
-            _dbg(
-                "ollama_client._post:urlerror",
-                "HTTP POST failed",
-                {
-                    "path": path,
-                    "elapsed_s": elapsed,
-                    "timeout_s": self.timeout,
-                    "is_timeout": is_timeout,
-                    "reason": reason[:200],
-                    "model": model_name,
-                },
-                "A" if is_timeout else "D",
-            )
-            # #endregion
             raise OllamaNotRunning(_url_error_message(self.endpoint, e)) from e
-        # #region agent log
-        _dbg(
-            "ollama_client._post:ok",
-            "HTTP POST ok",
-            {
-                "path": path,
-                "elapsed_s": round(time.monotonic() - t0, 2),
-                "model": model_name,
-            },
-            "B",
-        )
-        # #endregion
         try:
             return json.loads(body)
         except json.JSONDecodeError as e:

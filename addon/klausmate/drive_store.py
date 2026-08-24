@@ -259,16 +259,3 @@ def retention_color(fraction: float, night_mode: bool = False) -> tuple[int, int
     saturation, value = (0.5, 0.9) if night_mode else (0.65, 0.75)
     r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
     return (round(r * 255), round(g * 255), round(b * 255))
-
-
-def prune(user_files_dir: str, context_names: list[str]) -> None:
-    """Drop pdf entries whose stored files no longer exist."""
-    existing = {
-        (f[:-4] if f.endswith(".txt") else f) for f in context_names
-    }
-    data = load(user_files_dir)
-    stale = [safe for safe in data["pdfs"] if safe not in existing]
-    if stale:
-        for safe in stale:
-            del data["pdfs"][safe]
-        _save(user_files_dir, data)

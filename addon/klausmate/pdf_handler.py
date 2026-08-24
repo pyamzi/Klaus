@@ -13,12 +13,10 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 import shutil
 import sys
 import time
 import uuid
-from collections import Counter
 from pathlib import Path
 
 _HERE = Path(__file__).parent
@@ -55,10 +53,6 @@ _ACTIVE_PDF_FILE = "active_pdf.txt"
 
 
 # ----------------------------- extraction --------------------------------
-
-
-def extract_text(path: str) -> str:
-    return "\n\n".join(extract_pages(path))
 
 
 def extract_pages(path: str) -> list[str]:
@@ -292,17 +286,6 @@ def save_panel_state(
         _save_tabs_file(user_files_dir, updates)
 
 
-def save_context(user_files_dir: str, name: str, text: str) -> str:
-    ctx_dir = os.path.join(user_files_dir, "contexts")
-    os.makedirs(ctx_dir, exist_ok=True)
-    safe = _safe_basename(name) + ".txt"
-    path = os.path.join(ctx_dir, safe)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    _CACHE.clear()
-    return path
-
-
 def save_pdf(user_files_dir: str, name: str, raw_path: str) -> dict:
     """Ingest a PDF: per-page text, BM25 .txt, page JSON, raw .pdf copy."""
     pages = extract_pages(raw_path)
@@ -336,7 +319,6 @@ def save_pdf(user_files_dir: str, name: str, raw_path: str) -> dict:
             print(f"[klausmate] could not drop stale original: {exc}")
 
     set_active_pdf(user_files_dir, safe)
-    _CACHE.clear()
     return {"name": safe, "page_count": len(pages), "txt_path": txt_path}
 
 
@@ -360,32 +342,6 @@ def pdf_path_for(user_files_dir: str, name: str) -> str | None:
     base = _safe_basename(name)
     path = os.path.join(user_files_dir, "pdfs", base + ".pdf")
     return path if os.path.isfile(path) else None
-
-
-def objectives_path_for(user_files_dir: str, name: str) -> str:
-    base = _safe_basename(name)
-    return os.path.join(user_files_dir, "objectives", base + ".txt")
-
-
-def load_objectives(user_files_dir: str, name: str) -> str:
-    path = objectives_path_for(user_files_dir, name)
-    if not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return ""
-
-
-def save_objectives(user_files_dir: str, name: str, text: str) -> None:
-    obj_dir = os.path.join(user_files_dir, "objectives")
-    try:
-        os.makedirs(obj_dir, exist_ok=True)
-        with open(objectives_path_for(user_files_dir, name), "w", encoding="utf-8") as f:
-            f.write(text or "")
-    except OSError:
-        pass
 
 
 def annotations_path_for(user_files_dir: str, name: str) -> str:
@@ -683,7 +639,6 @@ def delete_context(user_files_dir: str, name: str) -> None:
         os.path.join(user_files_dir, "contexts", base + ".txt"),
         os.path.join(user_files_dir, "contexts", base + ".json"),
         os.path.join(user_files_dir, "pdfs", base + ".pdf"),
-        os.path.join(user_files_dir, "objectives", base + ".txt"),
         os.path.join(user_files_dir, "annotations", base + ".json"),
         os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
         os.path.join(user_files_dir, "contexts", name),
@@ -709,19 +664,6 @@ def delete_context(user_files_dir: str, name: str) -> None:
         print(f"[klausmate] drive cleanup failed for {base}: {exc}")
     if get_active_pdf(user_files_dir) == base:
         clear_active_pdf(user_files_dir)
-    _CACHE.clear()
-
-
-def load_all_contexts(user_files_dir: str) -> str:
-    ctx_dir = os.path.join(user_files_dir, "contexts")
-    if not os.path.isdir(ctx_dir):
-        return ""
-    chunks: list[str] = []
-    for fname in sorted(os.listdir(ctx_dir)):
-        if fname.endswith(".txt"):
-            with open(os.path.join(ctx_dir, fname), encoding="utf-8") as f:
-                chunks.append(f.read())
-    return "\n\n---\n\n".join(chunks)
 
 
 # ----------------------------- chunking ----------------------------------
@@ -756,151 +698,3 @@ def _chunk_text(text: str, source: str) -> list[dict]:
         i = max(end - _CHUNK_OVERLAP, i + 1)
     return chunks
 
-
-_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]+")
-_STOPWORDS = {
-    "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in", "on",
-    "at", "by", "for", "with", "as", "is", "are", "was", "were", "be", "been",
-    "being", "this", "that", "these", "those", "it", "its", "from", "into",
-    "than", "so", "such", "not", "no", "nor", "do", "does", "did", "has",
-    "have", "had", "can", "could", "should", "would", "may", "might", "will",
-    "shall", "you", "your", "we", "our", "they", "their", "i", "my", "me",
-}
-
-
-def _tokenize(text: str) -> list[str]:
-    return [
-        t.lower()
-        for t in _TOKEN_RE.findall(text)
-        if len(t) > 2 and t.lower() not in _STOPWORDS
-    ]
-
-
-_CACHE: dict = {}
-
-
-def _index_signature(ctx_dir: str) -> tuple:
-    if not os.path.isdir(ctx_dir):
-        return ()
-    sig = []
-    for fname in sorted(os.listdir(ctx_dir)):
-        if not fname.endswith(".txt"):
-            continue
-        path = os.path.join(ctx_dir, fname)
-        try:
-            st = os.stat(path)
-            sig.append((fname, int(st.st_mtime), int(st.st_size)))
-        except OSError:
-            sig.append((fname, 0, 0))
-    return tuple(sig)
-
-
-def _build_index(ctx_dir: str) -> tuple[list[dict], dict[str, float], float]:
-    all_chunks: list[dict] = []
-    for fname in sorted(os.listdir(ctx_dir)):
-        if not fname.endswith(".txt"):
-            continue
-        path = os.path.join(ctx_dir, fname)
-        try:
-            with open(path, encoding="utf-8") as f:
-                text = f.read()
-        except OSError:
-            continue
-        source = fname[:-4] if fname.endswith(".txt") else fname
-        all_chunks.extend(_chunk_text(text, source))
-
-    if not all_chunks:
-        return [], {}, 0.0
-
-    doc_freq: Counter[str] = Counter()
-    doc_lens: list[int] = []
-    chunk_tokens: list[list[str]] = []
-    for ch in all_chunks:
-        toks = _tokenize(ch["text"])
-        chunk_tokens.append(toks)
-        doc_lens.append(len(toks) or 1)
-        doc_freq.update(set(toks))
-
-    n_docs = len(all_chunks)
-    avg_dl = sum(doc_lens) / n_docs if n_docs else 1.0
-    idf: dict[str, float] = {}
-    for term, df in doc_freq.items():
-        idf[term] = math.log(1 + (n_docs - df + 0.5) / (df + 0.5))
-
-    for i, ch in enumerate(all_chunks):
-        ch["_tokens"] = chunk_tokens[i]
-        ch["_dl"] = doc_lens[i]
-
-    return all_chunks, idf, avg_dl
-
-
-def _bm25_score(
-    query_tokens: list[str],
-    doc_tokens: list[str],
-    doc_len: int,
-    avg_dl: float,
-    idf: dict[str, float],
-    k1: float = 1.5,
-    b: float = 0.75,
-) -> float:
-    if not query_tokens or not doc_tokens:
-        return 0.0
-    tf = Counter(doc_tokens)
-    score = 0.0
-    for term in query_tokens:
-        if term not in tf:
-            continue
-        freq = tf[term]
-        idf_val = idf.get(term, 0.0)
-        denom = freq + k1 * (1 - b + b * doc_len / avg_dl)
-        score += idf_val * (freq * (k1 + 1)) / denom
-    return score
-
-
-def retrieve_relevant_chunks(
-    user_files_dir: str,
-    query: str,
-    top_k: int = 4,
-) -> list[dict]:
-    ctx_dir = os.path.join(user_files_dir, "contexts")
-    if not os.path.isdir(ctx_dir):
-        return []
-
-    sig = _index_signature(ctx_dir)
-    cache_key = (ctx_dir, sig)
-    if cache_key not in _CACHE:
-        _CACHE[cache_key] = _build_index(ctx_dir)
-
-    all_chunks, idf, avg_dl = _CACHE[cache_key]
-    if not all_chunks:
-        return []
-
-    query_tokens = _tokenize(query)
-    if not query_tokens:
-        head = all_chunks[:top_k]
-        return [{**c, "score": 0.0} for c in head]
-
-    scored: list[tuple[float, dict]] = []
-    for ch in all_chunks:
-        s = _bm25_score(
-            query_tokens,
-            ch.get("_tokens", []),
-            ch.get("_dl", 1),
-            avg_dl,
-            idf,
-        )
-        if s > 0:
-            scored.append((s, ch))
-
-    scored.sort(reverse=True, key=lambda x: x[0])
-    if not scored:
-        head = all_chunks[:top_k]
-        return [
-            {"source": c["source"], "text": c["text"], "score": 0.0}
-            for c in head
-        ]
-
-    out: list[dict] = []
-    for s, ch in scored[:top_k]:
-        out.append({"source": ch["source"], "text": ch["text"], "score": s})
-    return out

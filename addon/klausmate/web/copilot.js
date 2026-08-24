@@ -8,10 +8,6 @@
 (function () {
   if (window.klausmate && window.klausmate.__installed) return;
 
-  const state = {
-    activeEl: null,
-  };
-
   // ---- DOM helpers --------------------------------------------------------
 
   function deepActiveElement() {
@@ -27,7 +23,7 @@
     return !!el.isContentEditable;
   }
 
-  // ---- Public API for Python callback ------------------------------------
+  // ---- Re-entry guard (see the check at top of this IIFE) ----------------
 
   window.klausmate = {
     __installed: true,
@@ -66,9 +62,14 @@
     return "";
   }
 
+  let lastSentField = null;
+
   function notifyFieldFocus(el) {
     const name = fieldNameForEditable(el);
-    if (!name) return;
+    // mousedown and focusin both fire for an ordinary click into a field —
+    // skip the second round trip when the target field hasn't changed.
+    if (!name || name === lastSentField) return;
+    lastSentField = name;
     try {
       const payload = btoa(
         unescape(encodeURIComponent(JSON.stringify({ field: name })))
@@ -95,12 +96,7 @@
   document.addEventListener("focusin", function () {
     const el = deepActiveElement();
     const next = isEditableField(el) ? el : null;
-    if (next) {
-      state.activeEl = next;
-      notifyFieldFocus(next);
-    } else {
-      state.activeEl = null;
-    }
+    if (next) notifyFieldFocus(next);
   }, true);
 
   // Double-click on an image inside a note field opens the crop dialog.

@@ -63,12 +63,6 @@ class CardIndex:
     vectors: array = field(default_factory=lambda: array("f"))
     updated_at: float = 0.0
 
-    def row_of(self, nid: int) -> int | None:
-        try:
-            return self.nids.index(nid)
-        except ValueError:
-            return None
-
 
 @dataclass
 class SyncPlan:
@@ -214,17 +208,6 @@ def stats_from_disk(dir_path: str) -> dict:
             "provider": "",
             "model": "",
         }
-
-
-def stats(index: CardIndex | None) -> dict:
-    if index is None:
-        return {"count": 0, "skipped": 0, "updated_at": 0.0, "exists": False}
-    return {
-        "count": len(index.nids),
-        "skipped": len(index.skipped),
-        "updated_at": index.updated_at,
-        "exists": True,
-    }
 
 
 # ------------------------------------------------------------------- sync

@@ -237,15 +237,3 @@ def delete(user_files_dir: str, name: str) -> None:
         shutil.rmtree(index_dir(user_files_dir, name))
     except OSError:
         pass
-
-
-def list_indexed(user_files_dir: str) -> list[str]:
-    """Safe basenames of PDFs that have an index directory on disk."""
-    root = os.path.join(user_files_dir, SUBDIR)
-    if not os.path.isdir(root):
-        return []
-    return sorted(
-        d
-        for d in os.listdir(root)
-        if os.path.isfile(os.path.join(root, d, MANIFEST_FILE))
-    )

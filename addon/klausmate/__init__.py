@@ -23,7 +23,6 @@ from aqt.editor import Editor, EditorWebView
 from aqt.operations import QueryOp
 from aqt.qt import (
     QAction,
-    QComboBox,
     QCursor,
     QDialog,
     QDialogButtonBox,
@@ -36,17 +35,14 @@ from aqt.qt import (
     QHBoxLayout,
     QImage,
     QLabel,
-    QLineEdit,
     QApplication,
     QMenu,
-    QMessageBox,
     QMouseEvent,
     QPoint,
     QPointF,
     QPushButton,
     QRect,
     QSize,
-    QShortcut,
     QSplitter,
     QTabBar,
     QTimer,
@@ -59,7 +55,7 @@ from aqt.utils import askUser, showInfo, showWarning, tooltip
 from aqt.webview import WebContent
 
 from . import pdf_handler
-from .ollama_client import OllamaClient, OllamaError, OllamaNotRunning
+from .ollama_client import OllamaClient, OllamaNotRunning
 from . import ollama_runtime
 from .ollama_runtime import (
     ensure_server,
@@ -393,10 +389,6 @@ def on_js_message(
             # Defer so the modal exec() doesn't run inside the webchannel
             # message handler (mirrors the singleShot pattern at editor init).
             QTimer.singleShot(0, lambda: _launch_crop_dialog(editor, fname))
-        return (True, None)
-
-    if action == "log":
-        print("[klausmate js]", payload)
         return (True, None)
 
     return (True, None)
@@ -1014,9 +1006,8 @@ class _PdfTabContainer(QWidget):
     - **＋** opens another stored PDF or a new file from disk
 
     One viewer instance is reused across tabs; switching loads that PDF
-    and repoints the active-PDF marker, so autocomplete/Ask retrieval
-    always follows the visible tab. Per-tab reading position is kept for
-    the session; the tab set and placement persist across restarts.
+    and repoints the active-PDF marker. Per-tab reading position is kept
+    for the session; the tab set and placement persist across restarts.
     """
 
     def __init__(

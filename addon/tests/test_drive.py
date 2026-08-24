@@ -131,12 +131,6 @@ tree2 = drive_store.build_tree([], data)
 check("pdf entry with no file is omitted",
       all(not v for v in tree2["folders"].values()) and tree2["root"] == [])
 
-print("== prune ==")
-drive_store.prune(tmp, ["Renal_Phys.txt"])
-check("prune keeps live entry", "Renal_Phys" in drive_store.load(tmp)["pdfs"])
-drive_store.prune(tmp, [])
-check("prune drops dead entries", drive_store.load(tmp)["pdfs"] == {})
-
 print("== corruption resilience ==")
 with open(os.path.join(tmp, "drive.json"), "w") as f:
     f.write("{not json")
