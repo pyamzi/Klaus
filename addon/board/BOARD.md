@@ -386,3 +386,17 @@ English-locale-bound — acceptable (personal addon), log when not found.
 #### Comments
 - [2026-08-24 opus] Committed. Gate PASS, py_compile ok, node --check ok on copilot.js. Live check remains: button appears left of Fields... in Add/Browse/EditCurrent, native styling via cloned className, survives notetype switch, click toggles PDF panel.
 - [2026-08-24 opus] Signed off with K-064; both ship together on Pouya's next restart. If the button still fails to appear, the copilot.js console line '[klausmate] Library button: Fields... never appeared' is the tell — report what the editor console shows.
+
+### K-065: Library... button: click must survive Svelte node cloning
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/web/copilot.js,klausmate/__init__.py
+verify: grep -q "addEventListener(\"click\"" klausmate/web/copilot.js && ! grep -q "btn.addEventListener" klausmate/web/copilot.js
+created: 2026-08-24
+claimed: 2026-08-24
+
+Live report: button renders but clicking does nothing. Python path verified intact (hooks registered, bridge block present, handler mirrors the old bar toggle exactly) — the likely killer is on the page: Svelte re-renders can clone DOM subtrees, and cloneNode keeps the button's markup but drops addEventListener handlers, leaving a dead shell that the remount observer skips (getElementById still finds it). Fix: no per-node listener at all — one document-level capture-phase click listener using closest('#klausmate-library-btn'), which fires regardless of how many times the node is recreated and beats Svelte's own delegation. Exactly ONE dispatch mechanism (an inline onclick attribute PLUS delegation would double-fire the toggle). Add console breadcrumbs on mount and click so a still-dead button becomes diagnosable.
+
+#### Comments
+- [2026-08-24 opus] Committed. node --check ok, py_compile ok, gate PASS. Breadcrumb design makes the next failure (if any) self-localizing: '[klausmate] Library button clicked' in the editor console but no '[klausmate] Library button: toggling PDF panel' on stdout = bridge; neither = page; both = panel logic.
