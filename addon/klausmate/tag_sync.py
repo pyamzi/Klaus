@@ -1,9 +1,14 @@
-"""Per-PDF `!Library` tags — forward direction only (PDF -> tag).
+"""Per-PDF `!Library` tags — forward direction (PDF -> tag) AND, as of
+K-054, the reverse (a tag renamed in Anki's own tag sidebar renames the
+PDF in the Library).
 
-Pouya: "add to index / re-index should automatically create the tags. also,
-the tags should ALWAYS follow the name of the PDF." The REVERSE direction
-(renaming a tag renames the PDF) is a separate card (K-054) and is not
-built here.
+Pouya: "add to index / re-index should automatically create the tags.
+also, the tags should ALWAYS follow the name of the PDF and the PDF
+should always follow the names of the tag, those two are always the
+same." The forward half (events 1-4 below) is K-053. The reverse half
+(`plan_reconcile`/`reconcile_from_tags`/`reconcile_on_profile_open`, at
+the end of this file) is K-054 — see that section's own docstrings for
+why it is INFERENCE from a before/after tag diff, never a real event.
 
 THE INVARIANT: every indexed PDF owns exactly one collection tag,
 ``!Library::<folder path, / -> ::>::<leaf>``, where ``leaf`` is the PDF's
@@ -156,6 +161,128 @@ def desired_tag(folder: str | None, display: str) -> str:
 def diff_membership(desired: set[int], current: set[int]) -> tuple[list[int], list[int]]:
     """(to_add, to_remove) — sorted for deterministic tests/logging."""
     return sorted(desired - current), sorted(current - desired)
+
+
+# ---------------------------------------------- reverse-direction (K-054)
+#
+# THE INVARIANT is bidirectional (Pouya): "the tags should ALWAYS follow
+# the name of the PDF and the PDF should always follow the names of the
+# tag." Everything above is the forward half. Below is the reverse: a tag
+# renamed in Anki's OWN tag sidebar renames the PDF in the Library. Anki
+# fires no "tag renamed" event for that — the sidebar's rename UI is just
+# col.tags.rename() under the hood, indistinguishable from any other tag
+# mutation — so this is RECONSTRUCTION from a before/after diff of stored
+# vs. current tags, never a signal. `plan_reconcile` is the pure decision
+# core, fully unit-tested; `reconcile_from_tags` (aqt glue, at the end of
+# this file) is the only caller and the only thing that touches
+# col/drive_store/prefs.json for real.
+
+
+def _is_reserved_tag(tag: str) -> bool:
+    """True only for the exact !Library-root reserved tags (curation's
+    !Library::Curating/Curated, retention's !Library::Matching) — these
+    can never be treated as an orphaned PDF tag up for claiming, even
+    though nothing about their shape otherwise distinguishes them from a
+    real PDF tag. Mirrors desired_tag's own root-only collision guard
+    (RESERVED_LEAVES): a leaf that merely matches one of these names
+    NESTED under a folder (``!Library::Foo::Curating``) is an ordinary
+    PDF tag and stays claimable — the same root-vs-nested line
+    desired_tag's own docstring draws.
+    """
+    parts = tag.split("::")
+    return len(parts) == 2 and parts[0] == "!Library" and parts[1].lower() in RESERVED_LEAVES
+
+
+def _tag_to_folder_display(tag: str) -> tuple[str | None, str]:
+    """Reverse of desired_tag's shape: split a ``!Library::...::Leaf`` tag
+    back into (folder path with '/' separators, or None at the root; the
+    leaf as a display string).
+
+    LOSSY ON PURPOSE, and this is the one place it matters: desired_tag's
+    sanitizer (``_sanitize_segment``) turns every space into an
+    underscore before a name ever reaches a tag, so once a name is inside
+    a tag string there is no way to tell "this underscore used to be a
+    space" from "this was a genuine underscore in the display name" —
+    reversing it can only ever guess "space". A PDF named
+    "cell_biology.pdf" whose tag gets renamed in the sidebar will
+    therefore round-trip its RECOMPUTED leaf as "cell biology" (a space)
+    — a rare, purely cosmetic surprise, accepted rather than building an
+    escaping scheme for it (see the card notes on this — do not add one).
+    """
+    parts = [p for p in tag.split("::") if p]
+    if parts and parts[0] == "!Library":
+        parts = parts[1:]
+    if not parts:
+        return None, ""
+    restored = [p.replace("_", " ").strip() for p in parts]
+    leaf = restored[-1]
+    folder = "/".join(restored[:-1]) if len(restored) > 1 else None
+    return folder, leaf
+
+
+def _display_with_ext(new_leaf: str, old_display: str) -> str:
+    """The display name to actually store for a confident rename: the
+    tag's reconstructed leaf, with whatever real filename extension the
+    OLD display carried (drive_store's ``display`` always carries one —
+    see drive_store.record_import) re-appended. Same extension list as
+    strip_pdf_ext, kept in sync on purpose — losing the extension would
+    make the Library stop recognizing the row's file type.
+    """
+    lower = (old_display or "").lower()
+    if lower.endswith(".pdf") or lower.endswith(".txt"):
+        return f"{new_leaf}{old_display[-4:]}"
+    return new_leaf
+
+
+def plan_reconcile(stored_by_safe: dict[str, str], existing_tags: set[str]) -> dict:
+    """The reverse-direction decision core, pure and fully testable: no
+    col, no prefs.json, no drive_store — just "what WAS stored" (every
+    indexed PDF's ``get_stored_tag`` value) against "what tags exist
+    right now" (``col.tags.all()``).
+
+    Per-PDF: a stored tag still present means nothing happened to it.
+    ``missing`` collects every PDF whose stored tag disappeared.
+
+    If ``missing`` is empty, the plan is a structural no-op regardless of
+    anything else — this is also Pouya's actual day-one state: an empty
+    ``stored_by_safe`` (no PDF has a stored tag yet) always plans a
+    no-op, without even needing ``existing_tags``.
+
+    Otherwise, ``candidates`` is every ``!Library::``-prefixed tag that
+    IS currently in the collection, is NOT any PDF's stored tag (missing
+    OR still-present — a tag another PDF already owns is never up for
+    claiming), and is not one of the three reserved root tags
+    (``_is_reserved_tag``).
+
+    Exactly one missing PDF and exactly one candidate -> a confident
+    rename: that PDF became that tag in the sidebar. Anything else
+    (several missing, several candidates, or zero candidates for a real
+    miss) is ambiguous and NEVER guessed at — the action is "reapply",
+    meaning every missing PDF gets its deterministically-computed tag
+    restored instead (PDF wins ties: our side is deterministic, the
+    sidebar's diff is not).
+    """
+    missing = {safe: tag for safe, tag in stored_by_safe.items() if tag not in existing_tags}
+    if not missing:
+        return {"missing": {}, "candidates": [], "action": "noop", "rename": None}
+
+    all_stored = set(stored_by_safe.values())
+    candidates = sorted(
+        t
+        for t in existing_tags
+        if t.startswith("!Library::") and t not in all_stored and not _is_reserved_tag(t)
+    )
+
+    if len(missing) == 1 and len(candidates) == 1:
+        safe, old_tag = next(iter(missing.items()))
+        return {
+            "missing": missing,
+            "candidates": candidates,
+            "action": "rename",
+            "rename": {"safe": safe, "old": old_tag, "new": candidates[0]},
+        }
+
+    return {"missing": missing, "candidates": candidates, "action": "reapply", "rename": None}
 
 
 # --------------------------------------------------- col-only apply layer
@@ -575,3 +702,139 @@ def sync_after_delete(parent, pdf_name: str, display: str | None = None) -> None
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] tag_sync: sync_after_delete failed for {pdf_name!r}: {exc}")
+
+
+def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
+    """The ambiguous-case fallback for reconcile_from_tags: recreate each
+    vanished tag from ITS OWN last cached match scores — never from
+    ``missing``'s old tag strings, which named something that no longer
+    exists and (in every multi-missing/multi-candidate case this is
+    reached for) may have been reused for a wholly unrelated tag by
+    whatever happened in the sidebar. A PDF with no usable matches cache
+    is skipped individually (never fabricates membership out of nothing
+    — the same "cold cache is a no-op, not a strip" rule every forward
+    event already follows) without blocking the rest of the batch. One
+    CollectionOp/undo entry for the whole batch, same shape as
+    sync_after_clear_overrides/sync_after_folder_rename.
+    """
+    from . import retention
+
+    plans: list[tuple[str, str, set[int]]] = []
+    for safe in missing:
+        matches = _cached_matches(safe, cfg)
+        if matches is None:
+            print(f"[klausmate] tag_sync: no cached matches for {safe!r} — cannot restore its !Library tag yet.")
+            continue
+        threshold = retention.get_threshold(safe, cfg)
+        folder, display = _folder_and_display(safe)
+        tag = desired_tag(folder, display)
+        plans.append((safe, tag, {nid for nid, score in matches if score >= threshold}))
+    if not plans:
+        return
+
+    def work(col):
+        for safe, tag, desired_nids in plans:
+            apply_membership(col, tag, desired_nids)
+            set_stored_tag(safe, tag)
+        return {"count": len(plans)}
+
+    _run_sync_op(mw, "Klaus: restore !Library tags after sidebar rename", work)
+
+
+def reconcile_from_tags(col) -> dict:
+    """Event 5 — the REVERSE direction of THE INVARIANT (K-054): a tag
+    renamed in Anki's own tag sidebar renames the PDF in the Library.
+    Call with ``mw.col`` — callers own the None-check, exactly like every
+    ``_do_sync_one`` caller above owns handing this a real collection.
+
+    Registration owed:
+      - ``gui_hooks.profile_did_open.append(tag_sync.reconcile_on_profile_open)``
+        next to tag_migrate's own hook (__init__.py, out of this card's
+        file scope — see ``reconcile_on_profile_open`` below).
+      - ``pdf_drive.DriveWindow._refresh_rows`` calls this directly at
+        the top (in this card's scope), so opening or refreshing the
+        Library also picks up sidebar renames.
+
+    See ``plan_reconcile`` for the ambiguity rules this enforces (the
+    actual decision logic, pure and fully unit-tested). This function is
+    the thin, deferred-import glue around it: load every PDF's stored tag
+    from prefs.json, diff against ``col.tags.all()``, then either
+
+    (a) a confident single-candidate rename — pure drive_store/prefs.json
+        writes, no CollectionOp at all, since Anki's own sidebar rename
+        already moved every note's tag; nothing here touches col.tags —
+        or
+    (b) an ambiguous reapply — routed through ``_run_sync_op`` exactly
+        like every forward event, because that path DOES mutate
+        col.tags (recreating membership from cached scores). Never a
+        second CollectionOp path (see module docstring's OpChanges
+        contract note).
+
+    Never raises: wrapped the same way every other public event in this
+    module is, so a bug here can never block a profile open or a Library
+    refresh. Returns a plain dict describing what happened ({} when
+    there was nothing to reconcile, including the kill-switch/no-stored-
+    tag/failure cases) — never anything from CollectionOp.
+    """
+    try:
+        cfg = _cfg()
+        if not library_tags_enabled(cfg):
+            return {}
+        from . import retention
+
+        prefs = retention._load_prefs()
+        stored_by_safe = {
+            safe: entry.get("tag")
+            for safe, entry in prefs.items()
+            if isinstance(entry, dict) and entry.get("tag")
+        }
+        if not stored_by_safe:
+            return {}  # e.g. Pouya's current state: no PDF has a stored tag yet
+
+        plan = plan_reconcile(stored_by_safe, set(col.tags.all()))
+        if plan["action"] == "noop":
+            return plan
+
+        if plan["action"] == "rename":
+            from . import curation, drive_store
+
+            r = plan["rename"]
+            safe, old_tag, new_tag = r["safe"], r["old"], r["new"]
+            folder, leaf = _tag_to_folder_display(new_tag)
+            _, old_display = _folder_and_display(safe)
+            drive_store.rename_display(curation.USER_FILES, safe, _display_with_ext(leaf, old_display))
+            drive_store.set_folder(curation.USER_FILES, safe, folder)
+            set_stored_tag(safe, new_tag)
+            print(f"[klausmate] tag_sync: reconciled sidebar rename — {safe!r}: {old_tag!r} -> {new_tag!r}")
+            return plan
+
+        print(
+            f"[klausmate] tag_sync: ambiguous tag reconciliation "
+            f"({len(plan['missing'])} missing, {len(plan['candidates'])} candidate(s)) "
+            "— reapplying the forward direction instead of guessing."
+        )
+        _reapply_missing(col, plan["missing"], cfg)
+        return plan
+    except Exception as exc:  # noqa: BLE001 - never block a profile open or a Library refresh
+        print(f"[klausmate] tag_sync: reconcile_from_tags failed: {exc}")
+        return {}
+
+
+def reconcile_on_profile_open() -> None:
+    """Intended ``profile_did_open`` entry point for the reverse
+    direction. Registration owed (NOT done here — __init__.py is out of
+    this card's file scope, same rule tag_migrate.py's own docstring
+    states for its hook)::
+
+        gui_hooks.profile_did_open.append(tag_sync.reconcile_on_profile_open)
+
+    Order relative to tag_migrate's hook does not matter — that migration
+    only ever touches legacy ``klaus::*`` tags, never a ``!Library::``
+    candidate this module would consider.
+    """
+    try:
+        if mw is None or mw.col is None:
+            return
+        reconcile_from_tags(mw.col)
+    except Exception as exc:  # noqa: BLE001 - never block Anki startup
+        print(f"[klausmate] tag_sync: reconcile_on_profile_open failed: {exc}")

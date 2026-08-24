@@ -1,6 +1,7 @@
 """Headless tests for tag_migrate — the !Library tag migration — and for
-tag_sync, the forward PDF->tag sync module built on top of the same
-OpChanges contract (K-053).
+tag_sync, the bidirectional PDF<->!Library tag sync module built on top of
+the same OpChanges contract: forward (PDF -> tag, K-053) and reverse (a
+sidebar tag rename -> PDF, K-054).
 
 Exists because of a real shipped crash (2026-08-23): run_migration
 returned the renamed-pairs list, but CollectionOp's on_op_finished reads
@@ -15,12 +16,14 @@ Style matches the other suites: check()/report, aqt stubbed via
 sys.modules before import. The tag_sync sections below reuse this same
 minimal stub (NOT the heavier anki_stubs.py permissive surface test_
 imports.py uses) — tag_sync.py is deliberately written so its pure/
-col-only layer and its public event functions' cold-cache short-circuit
+col-only layer, its reverse-direction decision core (``plan_reconcile``),
+and its public event functions' cold-cache/kill-switch short-circuits
 never need retention.py or curation.py to import successfully, which
 means this file never has to grow the QAction/gui_hooks/AddNoteRequest
 surface those modules need. Anything that DOES need that deferred import
-chain (the actual membership-diff body once a real matches cache exists)
-is exactly the part Qt's absence means cannot be exercised here — see the
+chain (the actual membership-diff body once a real matches cache exists;
+``reconcile_from_tags``'s own drive_store/prefs.json-writing glue) is
+exactly the part Qt's absence means cannot be exercised here — see the
 module docstring's own note on that boundary, restated in the tag_sync
 sections below.
 """
@@ -385,6 +388,159 @@ try:
     )
 finally:
     pkg.get_config = _old_get_config
+
+
+# =========================================================================
+# tag_sync (K-054) — reverse !Library tag -> PDF sync
+# =========================================================================
+#
+# Same boundary as the K-053 section above: plan_reconcile and the three
+# small pure helpers it leans on (_is_reserved_tag, _tag_to_folder_display,
+# _display_with_ext) need nothing beyond string/set logic, so they are
+# fully exercised here. reconcile_from_tags's own body (prefs.json load,
+# drive_store writes, the ambiguous-case CollectionOp) does a deferred
+# `from . import retention` the moment there is any real stored tag to
+# look at, which pulls in curation.py's aqt.qt/gui_hooks/anki.collection
+# surface — exactly the gap this file's minimal stub does not cover (see
+# module docstring). Only its kill-switch short-circuit (checked BEFORE
+# that import) is exercised directly against reconcile_from_tags below;
+# everything else is proven at the plan_reconcile level, which is where
+# the actual ambiguity-rule logic lives.
+
+print("== tag_sync._is_reserved_tag: only the exact !Library-root leaves ==")
+check("!Library::Curating is reserved", ts._is_reserved_tag("!Library::Curating") is True)
+check("!Library::Curated is reserved", ts._is_reserved_tag("!Library::Curated") is True)
+check("!Library::Matching is reserved", ts._is_reserved_tag("!Library::Matching") is True)
+check("case-insensitive on the leaf", ts._is_reserved_tag("!Library::matching") is True)
+check(
+    "the SAME leaf nested under a folder is NOT reserved (ordinary PDF tag)",
+    ts._is_reserved_tag("!Library::Foo::Curating") is False,
+)
+check("an ordinary root tag is not reserved", ts._is_reserved_tag("!Library::Biostatistics") is False)
+
+print("== tag_sync._tag_to_folder_display: reverse of desired_tag's shape ==")
+check(
+    "root tag -> (None, leaf)",
+    ts._tag_to_folder_display("!Library::Biostatistics") == (None, "Biostatistics"),
+)
+check(
+    "nested folder segments reconstructed with / separators",
+    ts._tag_to_folder_display("!Library::Anatomy::Week_3::Renal_Physiology")
+    == ("Anatomy/Week 3", "Renal Physiology"),
+)
+check(
+    "LOSSY CAVEAT: an underscore in the tag always reads back as a space "
+    "(cannot distinguish a sanitized space from a genuine underscore)",
+    ts._tag_to_folder_display("!Library::Week_3_Notes") == (None, "Week 3 Notes"),
+)
+
+print("== tag_sync._display_with_ext: preserves the OLD display's real extension ==")
+check(
+    "reconstructed leaf gets the old display's .pdf extension re-appended",
+    ts._display_with_ext("Renal Physiology", "Renal Physio.pdf") == "Renal Physiology.pdf",
+)
+check(
+    "extension case is preserved as-is",
+    ts._display_with_ext("Notes", "Old.TXT") == "Notes.TXT",
+)
+check(
+    "no recognized extension on the old display -> nothing appended",
+    ts._display_with_ext("Foo", "Foo") == "Foo",
+)
+
+print("== tag_sync.plan_reconcile: stored tag present -> no-op ==")
+check(
+    "tag still exists -> nothing happened, empty plan",
+    ts.plan_reconcile({"safeA": "!Library::A"}, {"!Library::A"})
+    == {"missing": {}, "candidates": [], "action": "noop", "rename": None},
+)
+
+print("== tag_sync.plan_reconcile: no stored tag at all (Pouya's current state) ==")
+check(
+    "empty stored_by_safe -> nothing to reconcile, existing_tags never even matters",
+    ts.plan_reconcile({}, {"!Library::Whatever", "!Library::Curating"})
+    == {"missing": {}, "candidates": [], "action": "noop", "rename": None},
+)
+
+print("== tag_sync.plan_reconcile: clean single-candidate rename ==")
+plan_rename = ts.plan_reconcile(
+    {"safeA": "!Library::OldName"},
+    {"!Library::Anatomy::Week_3::New_Name"},
+)
+check("action is a confident rename", plan_rename["action"] == "rename")
+check(
+    "identifies the right safe, old, and new tag",
+    plan_rename["rename"] == {
+        "safe": "safeA",
+        "old": "!Library::OldName",
+        "new": "!Library::Anatomy::Week_3::New_Name",
+    },
+)
+
+print("== tag_sync.plan_reconcile: multiple stored tags missing -> forward re-apply, no guess ==")
+plan_multi_missing = ts.plan_reconcile(
+    {"safeA": "!Library::A", "safeB": "!Library::B"},
+    {"!Library::NewOne"},
+)
+check("action is reapply, never a guessed rename", plan_multi_missing["action"] == "reapply")
+check("rename is None", plan_multi_missing["rename"] is None)
+check(
+    "both missing PDFs are reported",
+    plan_multi_missing["missing"] == {"safeA": "!Library::A", "safeB": "!Library::B"},
+)
+
+print("== tag_sync.plan_reconcile: multiple unclaimed candidates -> forward re-apply, no guess ==")
+plan_multi_candidates = ts.plan_reconcile(
+    {"safeA": "!Library::A"},
+    {"!Library::NewOne", "!Library::NewTwo"},
+)
+check("action is reapply", plan_multi_candidates["action"] == "reapply")
+check("both candidates are reported", plan_multi_candidates["candidates"] == ["!Library::NewOne", "!Library::NewTwo"])
+
+print("== tag_sync.plan_reconcile: zero candidates (tag just vanished) -> forward re-apply ==")
+plan_zero_candidates = ts.plan_reconcile({"safeA": "!Library::A"}, set())
+check("action is reapply", plan_zero_candidates["action"] == "reapply")
+check("no candidates found", plan_zero_candidates["candidates"] == [])
+
+print("== tag_sync.plan_reconcile: another PDF's stored tag is never claimable ==")
+plan_other_owned = ts.plan_reconcile(
+    {"safeA": "!Library::A", "safeB": "!Library::StillHere"},
+    {"!Library::StillHere"},
+)
+check(
+    "safeB's own still-present tag is excluded from candidates, leaving none -> reapply, not a false rename",
+    plan_other_owned["action"] == "reapply" and plan_other_owned["candidates"] == [],
+)
+
+print("== tag_sync.plan_reconcile: reserved leaves are never claimable ==")
+plan_reserved = ts.plan_reconcile(
+    {"safeA": "!Library::A"},
+    {"!Library::Curating", "!Library::Curated", "!Library::Matching"},
+)
+check(
+    "all three reserved root tags excluded -> zero real candidates -> reapply",
+    plan_reserved["action"] == "reapply" and plan_reserved["candidates"] == [],
+)
+plan_reserved_and_real = ts.plan_reconcile(
+    {"safeA": "!Library::A"},
+    {"!Library::Curating", "!Library::RealCandidate"},
+)
+check(
+    "reserved tag ignored, the one real candidate still wins a confident rename",
+    plan_reserved_and_real["action"] == "rename"
+    and plan_reserved_and_real["rename"]["new"] == "!Library::RealCandidate",
+)
+
+print("== tag_sync.reconcile_from_tags: kill switch short-circuits before any deferred import ==")
+_old_get_config2 = pkg.get_config
+pkg.get_config = lambda: {"library_tags_enabled": False}
+try:
+    check(
+        "kill switch off -> {} without ever needing retention/curation to import",
+        ts.reconcile_from_tags(FakeCol()) == {},
+    )
+finally:
+    pkg.get_config = _old_get_config2
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -665,6 +665,11 @@ class DriveWindow(QWidget):
     def _refresh_rows(self) -> None:
         if mw is None or mw.col is None:
             return
+        # K-054: pick up any tag renamed in Anki's own sidebar since the
+        # last refresh, before recomputing rows off (possibly now stale)
+        # drive_store display/folder data. Never raises — see
+        # tag_sync.reconcile_from_tags's own try/except.
+        tag_sync.reconcile_from_tags(mw.col)
         seq = self.seq
 
         def done(out: dict) -> None:
