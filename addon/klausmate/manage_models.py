@@ -1360,33 +1360,30 @@ def manage_models_dialog(setup: bool = False) -> None:
             )
 
     def clear_library_tag() -> None:
-        """Moved from the old Tools > Klaus > Clear library tag (K-045),
-        logic unchanged. quiet=True on both calls suppresses each
-        function's own tooltip so the one summary below is the only
-        message (K-038 — two independent async tooltips used to race)."""
-        from . import curation, retention
+        """Moved from the old Tools > Klaus > Clear library tag (K-045).
+        K-055 dropped the PDF-match half: the temp Browse-preview tag
+        retention.py used to own is gone now that every indexed PDF owns a
+        durable per-PDF !Library tag (tag_sync.py, K-053) instead — only
+        the curation preview tag is left to clear here. quiet=True still
+        suppresses clear_curation_tag's own tooltip so this function's
+        summary is the only message (K-038 — two independent async
+        tooltips used to race)."""
+        from . import curation
 
         curation_nids = mw.col.find_notes(f'tag:"{curation.TEMP_TAG}"') if mw.col else []
-        pdfmatch_nids = mw.col.find_notes(f'tag:"{retention.RETENTION_TAG}"') if mw.col else []
-        if not curation_nids and not pdfmatch_nids:
+        if not curation_nids:
             tooltip("No notes carry a Klaus library tag.", parent=dlg)
             return
         if not askUser(
-            "Clear the Klaus curation and PDF-match tags from all notes?",
+            "Clear the Klaus curation tag from all notes?",
             parent=dlg,
         ):
             return
 
         curation.clear_curation_tag(dlg, quiet=True)
-        retention.clear_pdfmatch_tag(dlg, quiet=True)
 
-        parts = []
-        if curation_nids:
-            parts.append(f"{len(curation_nids)} curation")
-        if pdfmatch_nids:
-            parts.append(f"{len(pdfmatch_nids)} PDF-match")
         tooltip(
-            f"Cleared the library tag from {' and '.join(parts)} notes.",
+            f"Cleared the library tag from {len(curation_nids)} curation notes.",
             parent=dlg,
         )
 

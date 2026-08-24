@@ -11,14 +11,15 @@ run ``without_collection()``.
 
 Match cache invalidation: matches.json records the (provider, model, dims)
 signature, the PDF's source signature, AND a digest of the card index's
-(hashes, nids). The digest — not ``updated_at`` — is deliberate: Browse
-previews bulk-tag notes, which bumps mods and resaves the card index
-without changing any text; hashes+nids move only when content or
-membership really changed.
+(hashes, nids). The digest — not ``updated_at`` — is deliberate: bulk
+tag mutations bump mods and resave the card index without changing any
+text; hashes+nids move only when content or membership really changed.
 
-Preview vehicle: the temp tag ``!Library::Matching`` (distinct from
-curation's ``!Library::Curating`` so a priorities click never clobbers an
-in-flight curation preview).
+Browse hop: "Show matched cards in Browse" (pdf_drive._on_browse) no
+longer mutates any note tags. Each PDF already owns a durable per-PDF
+``!Library::...`` tag (tag_sync.py, K-053) holding exactly the matches
+above its current sensitivity, so the hop just opens Browse on that
+stored tag (tag_sync.get_stored_tag) — see K-055.
 """
 
 from __future__ import annotations
@@ -32,17 +33,14 @@ import threading
 import time
 from typing import Any, Callable
 
-import aqt
 from aqt import mw
-from aqt.operations import CollectionOp, QueryOp
-from aqt.utils import tooltip
+from aqt.operations import QueryOp
 
 from . import card_index, curation, embeddings, pdf_handler, pdf_index
 
 USER_FILES = curation.USER_FILES
 INDEX_DIR = curation.INDEX_DIR
 
-RETENTION_TAG = "!Library::Matching"
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
 MATCHES_VERSION = 1
@@ -790,54 +788,3 @@ def priority_rows(col, cfg: dict) -> dict:
         "matches": all_matches,
         "card_index_ok": card_ok,
     }
-
-
-# ------------------------------------------------------------- Browse hop
-
-
-def preview_matches(parent, nids: list[int]) -> None:
-    """Swap the pdfmatch tag onto the given notes, then open Browse on it."""
-
-    def op(col):
-        pos = col.add_custom_undo_entry("Klaus: preview PDF matches")
-        stale = col.find_notes(f'tag:"{RETENTION_TAG}"')
-        if stale:
-            col.tags.bulk_remove(list(stale), RETENTION_TAG)
-        col.tags.bulk_add(list(nids), RETENTION_TAG)
-        return col.merge_undo_entries(pos)
-
-    def done(_changes) -> None:
-        browser = aqt.dialogs.open("Browser", mw)
-        browser.search_for(f'tag:"{RETENTION_TAG}"')
-
-    CollectionOp(parent=parent, op=op).success(done).run_in_background()
-
-
-def clear_pdfmatch_tag(parent=None, *, quiet: bool = False) -> None:
-    """Tools-menu escape hatch: drop the pdfmatch tag from every note.
-
-    ``quiet`` suppresses this function's own tooltip (both the "nothing to
-    clear" early-out and the success summary) — for a caller that reports
-    its own combined result instead. Default False keeps every existing
-    caller's behavior unchanged.
-    """
-    parent = parent or mw
-    nids = mw.col.find_notes(f'tag:"{RETENTION_TAG}"') if mw.col else []
-    if not nids:
-        if not quiet:
-            tooltip("No notes carry the Klaus PDF-match tag.", parent=parent)
-        return
-
-    def op(col):
-        pos = col.add_custom_undo_entry("Klaus: clear PDF-match tag")
-        col.tags.bulk_remove(list(nids), RETENTION_TAG)
-        return col.merge_undo_entries(pos)
-
-    op_result = CollectionOp(parent=parent, op=op)
-    if not quiet:
-        op_result = op_result.success(
-            lambda _c: tooltip(
-                f"Cleared the PDF-match tag from {len(nids)} notes.", parent=parent
-            )
-        )
-    op_result.run_in_background()

@@ -839,7 +839,12 @@ class DriveWindow(QWidget):
                 "No cards above the current sensitivity — lower it in Match sensitivity…"
             )
             return
-        retention.preview_matches(mw, nids)
+        tag = tag_sync.get_stored_tag(safe)
+        if not tag:
+            self.status.setText("Re-index this PDF to create its Library tag.")
+            return
+        browser = aqt.dialogs.open("Browser", mw)
+        browser.search_for(f'tag:"{tag}"')
 
     # ----------------------------------------------------------- actions
 

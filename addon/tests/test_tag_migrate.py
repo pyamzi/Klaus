@@ -197,24 +197,170 @@ check(
 )
 
 print("== run_migration: the CollectionOp contract ==")
-col = FakeCol(["klaus::curate", "klaus::curated", "klaus::pdfmatch"])
+col = FakeCol(["klaus::curate", "klaus::curated"])
 out: list = []
 result = tm.run_migration(col, renamed_out=out)
 check("returns EXACTLY merge_undo_entries' object (OpChanges contract)", result is col.changes)
 check("returns neither a list nor None", not isinstance(result, (list, type(None))))
-check("all three pairs renamed", sorted(out) == sorted(tm.TAG_RENAME_MAP.items()))
+check("both pairs renamed", sorted(out) == sorted(tm.TAG_RENAME_MAP.items()))
 check("one undo entry for the whole batch", col.undo_entries == 1 and col.merged == [42])
 
 print("== run_migration: partial failure never aborts the batch ==")
-col2 = FakeCol(["klaus::curate", "klaus::pdfmatch"], fail_on={"klaus::curate"})
+col2 = FakeCol(["klaus::curate", "klaus::curated"], fail_on={"klaus::curate"})
 out2: list = []
 result2 = tm.run_migration(col2, renamed_out=out2)
 check("still returns the OpChanges object after a failed pair", result2 is col2.changes)
-check("surviving pair renamed", out2 == [("klaus::pdfmatch", "!Library::Matching")])
+check("surviving pair renamed", out2 == [("klaus::curated", "!Library::Curated")])
 check("failed old tag NOT deleted", "klaus::curate" in col2.tags.all())
 
 print("== second run is a structural no-op ==")
 check("post-migration plan is empty", tm.plan_renames(col.tags.all()) == [])
+
+
+# =========================================================================
+# tag_migrate (K-055) — retiring the !Library::Matching preview tag
+# =========================================================================
+#
+# K-053/K-054's durable per-PDF !Library tags made the temp Browse-preview
+# tag (retention.RETENTION_TAG, formerly "klaus::pdfmatch" pre-!Library)
+# redundant. Rather than renaming it into its !Library home like the two
+# curation tags above, this removes both names outright — see the module
+# docstring and MATCHING_TAGS_TO_REMOVE/plan_matching_cleanup.
+
+print("== plan_matching_cleanup (pure) ==")
+check(
+    "both retired names present -> both listed",
+    tm.plan_matching_cleanup(["klaus::pdfmatch", "!Library::Matching", "unrelated"])
+    == ["klaus::pdfmatch", "!Library::Matching"],
+)
+check("neither present -> empty (skip silently)", tm.plan_matching_cleanup(["unrelated"]) == [])
+check(
+    "klaus::pdfmatch alone -> just that one",
+    tm.plan_matching_cleanup(["klaus::pdfmatch"]) == ["klaus::pdfmatch"],
+)
+
+print("== run_migration: !Library::Matching removed from notes AND the registry ==")
+col3 = FakeCol(["!Library::Matching"], membership={"!Library::Matching": {7, 8}})
+removed3: list = []
+result3 = tm.run_migration(col3, removed_out=removed3)
+check("returns EXACTLY merge_undo_entries' object", result3 is col3.changes)
+check(
+    "bulk-removed the tag from every note that carried it",
+    col3.tags.bulk_remove_calls == [([7, 8], "!Library::Matching")],
+)
+check("tag itself removed from the registry", col3.tags.removed == ["!Library::Matching"])
+check("reported via removed_out", removed3 == ["!Library::Matching"])
+check("gone from tags.all() afterwards", "!Library::Matching" not in col3.tags.all())
+check("still one undo entry for the whole (rename+cleanup) batch", col3.undo_entries == 1)
+
+print("== run_migration: klaus::pdfmatch alone is cleaned (no notes carrying it) ==")
+col4 = FakeCol(["klaus::pdfmatch"])
+removed4: list = []
+result4 = tm.run_migration(col4, removed_out=removed4)
+check("returns EXACTLY merge_undo_entries' object", result4 is col4.changes)
+check("no bulk_remove call when nothing carries it", col4.tags.bulk_remove_calls == [])
+check("tag removed from the registry", col4.tags.removed == ["klaus::pdfmatch"])
+check("reported via removed_out", removed4 == ["klaus::pdfmatch"])
+
+print("== run_migration: neither retired tag present -> cleanup half is a no-op ==")
+col5 = FakeCol(["unrelated"])
+removed5: list = []
+tm.run_migration(col5, removed_out=removed5)
+check("nothing removed, nothing reported", removed5 == [] and col5.tags.removed == [])
+
+print("== second cleanup run is a structural no-op ==")
+check("post-cleanup plan is empty", tm.plan_matching_cleanup(col3.tags.all()) == [])
+
+print("== migrate_on_profile_open: nothing to rename or clean -> CollectionOp never launched ==")
+
+
+class _FakeMw:
+    def __init__(self, col):
+        self.col = col
+
+
+_orig_mw = tm.mw
+_had_write_config = hasattr(pkg, "write_config")
+_orig_write_config = getattr(pkg, "write_config", None)
+pkg.write_config = lambda cfg: None
+tm.mw = _FakeMw(FakeCol(["unrelated"]))
+try:
+    _before_profile_op = len(RecordingOp.instances)
+    tm.migrate_on_profile_open()
+    check(
+        "no CollectionOp created when there is nothing to rename or clean up",
+        len(RecordingOp.instances) == _before_profile_op,
+    )
+finally:
+    tm.mw = _orig_mw
+    if _had_write_config:
+        pkg.write_config = _orig_write_config
+    else:
+        del pkg.write_config
+
+print(
+    "== migrate_on_profile_open (K-055 rework): MIGRATED_FLAG already True "
+    "must NOT block the Matching cleanup =="
+)
+# Falsifies the exact review finding: MIGRATED_FLAG (_library_tag_migrated)
+# is already True on every profile that completed the original
+# klaus::->!Library rename — Pouya's included. A single-flag short-circuit
+# at the top of migrate_on_profile_open would make the new
+# plan_matching_cleanup pre-flight permanently unreachable for exactly the
+# user who reported the lingering !Library::Matching tag. This must reach
+# the pre-flight (because MATCHING_MIGRATED_FLAG is still unset), launch
+# the CollectionOp, actually remove the tag, and record BOTH flags when
+# it succeeds.
+col6 = FakeCol(["!Library::Matching"], membership={"!Library::Matching": {9}})
+_written_cfgs: list = []
+_orig_get_config3 = pkg.get_config
+_had_write_config3 = hasattr(pkg, "write_config")
+_orig_write_config3 = getattr(pkg, "write_config", None)
+# Only the rename flag is set — the exact state of an already-migrated
+# profile that has never run the Matching cleanup.
+pkg.get_config = lambda: {tm.MIGRATED_FLAG: True}
+pkg.write_config = lambda cfg: _written_cfgs.append(dict(cfg))
+tm.mw = _FakeMw(col6)
+try:
+    _before_bug_op = len(RecordingOp.instances)
+    tm.migrate_on_profile_open()
+    _op_launched = len(RecordingOp.instances) == _before_bug_op + 1
+    check(
+        "a CollectionOp IS launched even though MIGRATED_FLAG is already True",
+        _op_launched,
+    )
+    if _op_launched:
+        _bug_inst = RecordingOp.instances[-1]
+        _bug_result = _bug_inst.op_fn(col6)
+        check(
+            "running the op bulk-removes !Library::Matching from its notes",
+            col6.tags.bulk_remove_calls == [([9], "!Library::Matching")],
+        )
+        check(
+            "...and drops it from the tag registry",
+            "!Library::Matching" not in col6.tags.all(),
+        )
+        _bug_inst._success(_bug_result)
+        check(
+            "on completion, BOTH flags get recorded (not just the Matching one)",
+            bool(_written_cfgs)
+            and _written_cfgs[-1].get(tm.MIGRATED_FLAG) is True
+            and _written_cfgs[-1].get(tm.MATCHING_MIGRATED_FLAG) is True,
+        )
+    else:
+        # Keep the check count identical whether this is RED or GREEN, so
+        # the "op not launched" failure above doesn't silently swallow the
+        # rest of this scenario's assertions.
+        check("running the op bulk-removes !Library::Matching from its notes", False)
+        check("...and drops it from the tag registry", False)
+        check("on completion, BOTH flags get recorded (not just the Matching one)", False)
+finally:
+    tm.mw = _orig_mw
+    pkg.get_config = _orig_get_config3
+    if _had_write_config3:
+        pkg.write_config = _orig_write_config3
+    else:
+        del pkg.write_config
 
 
 # =========================================================================

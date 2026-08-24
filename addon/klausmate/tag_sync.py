@@ -16,8 +16,10 @@ display name minus a trailing ``.pdf``/``.txt``, sanitized tag-legal. The
 tag's members are exactly the notes whose cached match score is at or
 above that PDF's sensitivity threshold. The three reserved leaves
 (``Curating``, ``Curated``, ``Matching`` — the static tags already living
-at the ``!Library`` root, see curation.TEMP_TAG/CURATED_TAG and
-retention.RETENTION_TAG) get a ``-pdf`` suffix if a display name would
+at the ``!Library`` root; see curation.TEMP_TAG/CURATED_TAG. ``Matching``
+was retention.py's own Browse-preview tag until K-055 retired it — kept
+reserved anyway so a PDF literally named "Matching" can never collide
+with that historical name) get a ``-pdf`` suffix if a display name would
 otherwise collide with one of them at the root.
 
 State: each PDF's prefs.json entry (the same file retention.py's
@@ -85,8 +87,9 @@ from aqt.utils import tooltip
 CONFIG_KEY = "library_tags_enabled"
 
 # The three tags already anchored at the !Library root before this module
-# existed (curation's preview tag, curation's post-copy tag, retention's
-# preview tag). Hardcoded as literal strings rather than imported from
+# existed (curation's preview tag, curation's post-copy tag, and
+# retention's Browse-preview tag — retired outright by K-055, but its name
+# stays reserved below). Hardcoded as literal strings rather than imported from
 # curation/retention: this file's pure section must stay import-free (see
 # module docstring) so it can be unit-tested under the same minimal aqt
 # stub tag_migrate.py already uses, and these three names are exactly as
@@ -146,9 +149,11 @@ def desired_tag(folder: str | None, display: str) -> str:
     carrying its .pdf extension, spaces, whatever the user typed).
 
     Reserved-leaf collision (a display name that sanitizes to "Curating",
-    "Curated", or "Matching") only matters at the !Library ROOT — nested
-    under any folder the full tag path already differs from the reserved
-    one, so only the folder-less case gets the "-pdf" suffix.
+    "Curated", or "Matching" — the last one historical: retention.py's own
+    Browse-preview tag until K-055 retired it) only matters at the
+    !Library ROOT — nested under any folder the full tag path already
+    differs from the reserved one, so only the folder-less case gets the
+    "-pdf" suffix.
     """
     leaf = _sanitize_segment(strip_pdf_ext(display)) or "PDF"
     segments = [s for s in (_sanitize_segment(p) for p in (folder or "").split("/")) if s]
@@ -180,7 +185,8 @@ def diff_membership(desired: set[int], current: set[int]) -> tuple[list[int], li
 
 def _is_reserved_tag(tag: str) -> bool:
     """True only for the exact !Library-root reserved tags (curation's
-    !Library::Curating/Curated, retention's !Library::Matching) — these
+    !Library::Curating/Curated, plus !Library::Matching — retention.py's
+    own Browse-preview tag until K-055 retired it) — these
     can never be treated as an orphaned PDF tag up for claiming, even
     though nothing about their shape otherwise distinguishes them from a
     real PDF tag. Mirrors desired_tag's own root-only collision guard
