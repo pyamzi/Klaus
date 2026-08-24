@@ -379,28 +379,34 @@ def _drop_square_html() -> str:
             label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
         body = (
-            f"Armed: <b>{safe_label}</b> — press "
-            "<b>Curate Deck</b> below. "
-            f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;'>"
+            f"<span style='flex:1;text-align:left;'>Armed: <b>{safe_label}</b>"
+            " — press <b>Curate Deck</b> below.</span>"
+            f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;' "
+            "style='flex:0 0 auto;color:inherit;text-decoration:none;'>"
             "&times;</a>"
         )
         border = "1px solid rgba(58,130,247,0.85)"
     else:
         body = (
-            "Drop a lecture PDF here to curate a deck from it.<br>"
+            "<span style='flex:1;text-align:left;'>Drop a PDF to curate</span>"
             f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
-            "style='display:inline-block;margin-top:6px;padding:3px 10px;"
+            "style='flex:0 0 auto;padding:3px 10px;"
             "border:1px solid rgba(128,128,128,0.55);border-radius:6px;"
             "font-size:12px;color:inherit;text-decoration:none;'>"
             "Browse&hellip;</a>"
         )
         border = "1px dashed rgba(128,128,128,0.55)"
+    # One flex row, not a stacked block: the label takes the free space and
+    # the action (Browse… / ×) sits hard right, matching the Qt surfaces in
+    # pdf_drive._LibraryDropZone and __init__._PdfBar. Both states use the
+    # same row so the square does not reflow when a PDF is armed.
     return (
         f"<div style='position:fixed;left:50%;bottom:10px;"
         f"transform:translateX(-50%);z-index:50;"
+        f"display:flex;align-items:center;gap:10px;"
         f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
         f"box-sizing:border-box;background:var(--window-bg,transparent);"
-        f"border:{border};border-radius:10px;text-align:center;"
+        f"border:{border};border-radius:10px;"
         f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
     )
 

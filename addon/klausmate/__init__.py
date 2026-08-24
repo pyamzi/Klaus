@@ -664,7 +664,7 @@ class _PdfBar(QFrame):
     to match, and vice versa.
     """
 
-    _IDLE_TEXT = "Drop a lecture PDF here to read alongside your cards."
+    _IDLE_TEXT = "Drop a PDF to view"
     _TOGGLE_SIZE = 22
 
     def __init__(

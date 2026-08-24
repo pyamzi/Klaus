@@ -230,7 +230,7 @@ class _LibraryDropZone(QWidget):
     and vice versa.
     """
 
-    _IDLE_TEXT = "Drop a PDF here to add it to your library."
+    _IDLE_TEXT = "Drop a PDF to add"
 
     def __init__(
         self,
@@ -252,17 +252,22 @@ class _LibraryDropZone(QWidget):
             " border: 1px solid rgba(58, 130, 247, 0.85);"
             "}"
         )
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(6)
+        # One row: label takes the free space, Browse… sits hard right —
+        # same shape as the deck square's flex row and _PdfBar's QHBoxLayout,
+        # so all three drop surfaces read as the same component.
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(10)
 
         label = QLabel(self._IDLE_TEXT, self)
         label.setWordWrap(True)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         label.setStyleSheet(
             "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
         )
-        lay.addWidget(label)
+        lay.addWidget(label, 1)
 
         browse_btn = QPushButton("Browse…", self)
         browse_btn.setFlat(True)
@@ -280,7 +285,7 @@ class _LibraryDropZone(QWidget):
             "}"
         )
         browse_btn.clicked.connect(self._browse)
-        lay.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def _browse(self) -> None:
         from aqt.qt import QFileDialog
