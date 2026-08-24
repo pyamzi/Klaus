@@ -414,3 +414,17 @@ Button still dead after K-065 despite a verified restart (Anki up 16:39:01, comm
 
 #### Comments
 - [2026-08-24 opus] Committed. /tmp/klausmate-debug.txt cleared pre-test. Expected healthy sequence after restart+click: script-loaded (+late), button-mounted, click-heard, bridge: klausmate:library, handler entered, isVisible/placed state, panel_show done. Diagnostics are temporary — file a removal card once the button is confirmed working.
+
+### K-067: Restore _ensure_sidebar_pdf (K-063's block-cut swallowed it)
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/__init__.py
+verify: grep -q "def _ensure_sidebar_pdf" klausmate/__init__.py && python3 -c "import ast,sys; tree=ast.parse(open(\"klausmate/__init__.py\").read()); names={n.name for n in ast.walk(tree) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))}; sys.exit(0 if \"_ensure_sidebar_pdf\" in names else 1)"
+created: 2026-08-24
+claimed: 2026-08-24
+
+Breadcrumbs localized the dead Library... button to a NameError: K-063's range-delete of the dead JS-injection block also swallowed the module-level _ensure_sidebar_pdf that sat between the anchors. Two live call sites survived: _on_library_button (the button click — dead since K-063) and _PdfTabContainer.showEvent:968 (silently broken since K-063). py_compile cannot catch dangling names; the reviewer's own rule — grep every deleted symbol — was preached to the worker and then violated by the reviewer. Restore the function verbatim from commit a5111d0.
+
+#### Comments
+- [2026-08-24 opus] Committed. Gate PASS (def present + AST membership); full-file AST name-resolution sweep shows zero other unresolved symbols. Everything upstream of the NameError was already proven live by Pouya's own clicks in the breadcrumb log, so this restore is the last missing link. Diagnostics stay in until he confirms, then a removal card.
