@@ -1421,12 +1421,14 @@ class _PdfTabContainer(QWidget):
                         f"(zone={zone})"
                     )
                     if zone:
-                        # Embedded → re-dock on another side directly.
-                        self._embed(zone)
+                        # Embedded → re-dock on another side. Deferred:
+                        # we are inside event delivery (_defer_placement).
+                        self._defer_placement(self._embed, zone)
                     else:
-                        # Float at the drop point — safe now that the
-                        # button is up (no gesture left to kill).
-                        self._tear_off(gp)
+                        # Float at the drop point. The button is up, but
+                        # the reparent still must not run inside this
+                        # event's delivery (_defer_placement).
+                        self._defer_placement(self._tear_off, gp)
                     return True
                 if state in ("native", "manual_follow", "armed"):
                     self._finalize_drag(True, "bar release")
@@ -1703,6 +1705,40 @@ class _PdfTabContainer(QWidget):
         except Exception:
             pass
 
+    def _defer_placement(self, fn, *args) -> None:
+        """Run a placement change (embed / tear-off) AFTER the current
+        event finishes delivering.
+
+        Reparenting this panel moves the live QPdfView between native
+        windows, which destroys and recreates the whole subtree's window
+        handles. Doing that synchronously inside ``eventFilter`` — where
+        every drop path below is called from — leaves Qt delivering a
+        mouse event into freed widgets: the next event's receiver
+        pointer is dangling and sip segfaults converting it to Python
+        before any of our code runs, so no try/except can catch it
+        (SIGSEGV in sipSubClass_QPdfView, reproduced live by tearing the
+        panel out and docking it back in, 2026-08-24). It is the same
+        "never reparent mid-mouse-gesture" rule the tear-off already
+        respects at pickup time, applied at drop time.
+
+        singleShot(0) returns control to Qt first; the app-level event
+        filter is already removed by ``_reset_drag`` (which every caller
+        runs BEFORE scheduling this), so by the time ``fn`` runs there is
+        no event in flight and no filter on the stack.
+        """
+
+        def run() -> None:
+            try:
+                if self._closed:
+                    return
+                fn(*args)
+            except RuntimeError:
+                pass  # panel died between scheduling and running
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] pdf drag: deferred placement failed: {exc}")
+
+        QTimer.singleShot(0, run)
+
     def _finalize_drag(self, allow_embed: bool, why: str) -> None:
         """Common end for native/cursor-follow drags: tear the machinery
         down, then dock into the active zone or stay floating in place.
@@ -1724,7 +1760,8 @@ class _PdfTabContainer(QWidget):
             f"(zone={zone}, fresh={fresh}, embed_ok={allow_embed})"
         )
         if allow_embed and zone is not None and fresh:
-            self._embed(zone)
+            # Deferred: this runs inside eventFilter (see _defer_placement).
+            self._defer_placement(self._embed, zone)
         else:
             self._persist_state()
 
