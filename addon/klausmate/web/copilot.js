@@ -136,3 +136,20 @@
     } catch (err) { /* non-fatal */ }
   }, true);
 })();
+
+// K-056: the "Library..." toolbar button is a raw-HTML node inside the
+// notetype button group; switching note types rebuilds that group and
+// drops the node with it. The Python side exposes
+// window.__klausmateMountLibraryButton (idempotent — bails if the button
+// exists); this observer only notices the disappearance and re-mounts.
+(function () {
+  var pending = null;
+  function check() {
+    pending = null;
+    var mount = window.__klausmateMountLibraryButton;
+    if (mount && !document.getElementById("klausmate-library-btn")) mount(0);
+  }
+  new MutationObserver(function () {
+    if (!pending) pending = setTimeout(check, 200);
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();

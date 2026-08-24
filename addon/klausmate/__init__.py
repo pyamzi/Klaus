@@ -25,13 +25,10 @@ from aqt.qt import (
     QAction,
     QCursor,
     QDialog,
-    QDialogButtonBox,
     QDockWidget,
     QDragEnterEvent,
     QDropEvent,
     QEvent,
-    QFileDialog,
-    QFrame,
     QHBoxLayout,
     QImage,
     QLabel,
@@ -396,6 +393,13 @@ def on_js_message(
             QTimer.singleShot(0, lambda: _launch_crop_dialog(editor, fname))
         return (True, None)
 
+    if action == "library":
+        editor = context
+        # Defer: _on_library_button can exec a QMenu (nested event loop),
+        # which must not run inside the webchannel message handler.
+        QTimer.singleShot(0, lambda: _on_library_button(editor))
+        return (True, None)
+
     return (True, None)
 
 
@@ -647,299 +651,135 @@ def import_pdf_file(path: str) -> str | None:
     return str(info["name"])
 
 
-# ----------------------------- editor panel ------------------------------
+# ------------------------------- PDF panel --------------------------------
 
 
-class _PdfBar(QFrame):
-    """Single-row PDF control: drop/browse, status, remove, dock toggle.
+_LIBRARY_BTN_ID = "klausmate-library-btn"
 
-    Styled to match the deck-browser drop square injected by
-    deck_curate.py's on_deck_browser_content (idle/armed markup ~:355-394)
-    so the two surfaces read as the same component (Pouya: "those two
-    should look exactly the same"). Kept as duplicated literals rather
-    than a shared constants module on purpose — this file and
-    deck_curate.py are deliberately file-disjoint so cards can run in
-    parallel; if you change the square's idle/armed border, radius,
-    padding, font-size, or Browse-button style, update the values below
-    to match, and vice versa.
+
+def _ensure_sidebar_pdf(editor: Editor) -> bool:
+    """Load the active PDF into the dock viewer if it isn't already.
+
+    Module-level since K-056 (which removed the bottom PDF bar and the
+    panel widget that hosted it) — the toolbar "Library..." button and
+    _PdfTabContainer.showEvent both need this and neither owns a panel
+    widget to hang it off anymore.
     """
-
-    _IDLE_TEXT = "Drop a PDF to view"
-    _TOGGLE_SIZE = 22
-
-    def __init__(
-        self,
-        on_pdf: Callable[[str], None],
-        on_remove: Callable[[], None],
-        on_toggle: Callable[[], None],
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._on_pdf = on_pdf
-        self._on_remove = on_remove
-        self._has_pdf = False
-        self.setAcceptDrops(True)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("klausmateDropZone")
-        # No fixed height: the square breathes to fit its content, and so
-        # should this bar now that it carries a permanent Browse button
-        # plus a secondary Remove alongside the status text.
-        self.setStyleSheet(
-            "#klausmateDropZone {"
-            " border: 1px dashed rgba(128, 128, 128, 0.55);"
-            " border-radius: 10px;"
-            " background: transparent;"
-            "}"
-            "#klausmateDropZone[dragOver=\"true\"] {"
-            " border: 1px solid rgba(58, 130, 247, 0.85);"
-            "}"
-        )
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 8, 14, 8)
-        lay.setSpacing(8)
-
-        self._status = QLabel(self._IDLE_TEXT)
-        self._status.setStyleSheet(
-            "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
-        )
-        self._status.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-        )
-        lay.addWidget(self._status, 1, Qt.AlignmentFlag.AlignVCenter)
-
-        # Always-visible Browse — the square's equivalent link is always
-        # shown in its idle state; unlike the old single button here, this
-        # one no longer disappears/relabels itself once a PDF is active,
-        # so a second lecture PDF can still be added via the file dialog
-        # the same way it already could via drag-and-drop.
-        self._browse_btn = QPushButton("Browse…")
-        self._browse_btn.setFlat(True)
-        self._browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._browse_btn.setStyleSheet(
-            "QPushButton {"
-            " border: 1px solid rgba(128, 128, 128, 0.55);"
-            " border-radius: 6px;"
-            " font-size: 12px;"
-            " padding: 3px 10px;"
-            " background: transparent;"
-            "}"
-            "QPushButton:hover {"
-            " border-color: rgba(58, 130, 247, 0.55);"
-            "}"
-        )
-        self._browse_btn.clicked.connect(self._browse)
-        lay.addWidget(self._browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        # Remove: an affordance the square doesn't need (its "armed" PDF
-        # is cleared via its own x), kept here but demoted to quiet text
-        # so it doesn't compete with Browse for attention, and hidden
-        # entirely until a PDF is actually active.
-        self._remove_btn = QPushButton("Remove")
-        self._remove_btn.setFlat(True)
-        self._remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._remove_btn.setStyleSheet(
-            "QPushButton {"
-            " border: none;"
-            " font-size: 11px;"
-            " color: rgba(130, 130, 130, 0.85);"
-            " padding: 3px 4px;"
-            " background: transparent;"
-            "}"
-            "QPushButton:hover { color: rgba(200, 70, 70, 0.9); }"
-        )
-        self._remove_btn.clicked.connect(self._on_remove)
-        self._remove_btn.setVisible(False)
-        lay.addWidget(self._remove_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self._toggle_btn = QToolButton()
-        self._toggle_btn.setText("◨")
-        self._toggle_btn.setFixedSize(self._TOGGLE_SIZE, self._TOGGLE_SIZE)
-        self._toggle_btn.setToolTip("Show PDF viewer")
-        self._toggle_btn.setCheckable(True)
-        self._toggle_btn.setStyleSheet(
-            "QToolButton {"
-            " border: none;"
-            " border-radius: 5px;"
-            " font-size: 12px;"
-            " color: rgba(130, 130, 130, 0.85);"
-            " background: transparent;"
-            "}"
-            "QToolButton:hover {"
-            " color: rgba(58, 130, 247, 0.95);"
-            " background: rgba(58, 130, 247, 0.10);"
-            "}"
-            "QToolButton:checked {"
-            " color: rgba(58, 130, 247, 0.95);"
-            " background: rgba(58, 130, 247, 0.14);"
-            "}"
-        )
-        self._toggle_btn.clicked.connect(on_toggle)
-        lay.addWidget(self._toggle_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-
-    def _elide_name(self, name: str) -> str:
-        try:
-            w = max(80, self._status.width() - 8)
-            return self.fontMetrics().elidedText(
-                name, Qt.TextElideMode.ElideMiddle, w
-            )
-        except Exception:
-            return name
-
-    def set_active_pdf(self, name: str | None) -> None:
-        if name:
-            self._has_pdf = True
-            self._status.setText(self._elide_name(name))
-            self._status.setToolTip(name)
-            self._remove_btn.setVisible(True)
-        else:
-            self._has_pdf = False
-            self._status.setText(self._IDLE_TEXT)
-            self._status.setToolTip("")
-            self._remove_btn.setVisible(False)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        tip = self._status.toolTip()
-        if tip:
-            self._status.setText(self._elide_name(tip))
-
-    def update_toggle(self, visible: bool) -> None:
-        try:
-            self._toggle_btn.setChecked(bool(visible))
-            self._toggle_btn.setToolTip(
-                "Hide PDF viewer" if visible else "Show PDF viewer"
-            )
-        except RuntimeError:
-            pass
-
-    def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select PDF", "", "PDF files (*.pdf)"
-        )
-        if path:
-            self._on_pdf(path)
-
-    def dragEnterEvent(self, e: QDragEnterEvent) -> None:  # type: ignore[override]
-        md = e.mimeData()
-        if md and md.hasUrls():
-            for url in md.urls():
-                local = url.toLocalFile()
-                if local.lower().endswith(".pdf") and os.path.isfile(local):
-                    self.setProperty("dragOver", "true")
-                    self.style().unpolish(self); self.style().polish(self)
-                    e.acceptProposedAction()
-                    return
-        e.ignore()
-
-    def dragLeaveEvent(self, e: Any) -> None:  # type: ignore[override]
-        self.setProperty("dragOver", "false")
-        self.style().unpolish(self); self.style().polish(self)
-
-    def dropEvent(self, e: QDropEvent) -> None:  # type: ignore[override]
-        self.setProperty("dragOver", "false")
-        self.style().unpolish(self); self.style().polish(self)
-        md = e.mimeData()
-        if not md:
-            return
-        for url in md.urls():
-            path = url.toLocalFile()
-            if path.lower().endswith(".pdf") and os.path.isfile(path):
-                self._on_pdf(path)
-        e.acceptProposedAction()
+    active = pdf_handler.get_active_pdf(USER_FILES)
+    if not active:
+        return False
+    sidebar = getattr(editor, "_klausmate_sidebar", None)
+    if sidebar is None:
+        return False
+    if not sidebar.is_loaded(active):
+        sidebar.load_pdf(active)
+    return True
 
 
-class _KlausmatePanel(QWidget):
-    def __init__(self, editor: Editor, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._editor = editor
+def _library_button_js() -> str:
+    """JS injected per editor webview to mount the toolbar "Library..."
+    button LEFT of Fields... — inside Anki's own notetype-button group,
+    not the addon-icon group on the right.
 
-        outer = QVBoxLayout(self)
-        # Zero horizontal margin: Anki's editor layout already pads the
-        # row, so adding our own would inset the bar relative to the Tags
-        # input above it. Vertical 4 px stays for breathing room.
-        outer.setContentsMargins(0, 4, 0, 4)
-        outer.setSpacing(0)
+    Uses the exact mechanism Anki's own editor.pyc uses to add raw-HTML
+    buttons to that group (decompiled from 26.8.1's editor.pyc):
+    ``uiPromise.then((noteEditor) => noteEditor.toolbar.notetypeButtons
+    .appendButton({ component: editorToolbar.Raw, props: { html } },
+    -1))``. That native path (and the public editor_did_init_left_buttons
+    hook, which drives the same call under the hood) always appends AFTER
+    Fields.../Cards..., so leftmost placement needs
+    ``insertButton(button, 0)`` (inserts BEFORE index 0) instead —
+    ``appendButton(button, 0)`` is the fallback for an Anki version
+    without insertButton. ``uiPromise``/``editorToolbar`` are page
+    globals that may not exist the instant this eval runs (the page's
+    own bundle may still be loading), so this polls briefly rather than
+    assuming they're ready.
 
-        self._pdf_bar = _PdfBar(
-            self._handle_pdf,
-            self._remove_current_pdf,
-            self._toggle_viewer,
-            parent=self,
-        )
-        outer.addWidget(self._pdf_bar)
-        self._refresh_pdf_status()
+    Exposes ``window.__klausmateMountLibraryButton`` so copilot.js's
+    MutationObserver can re-run this after a notetype switch rebuilds
+    the toolbar and tears the raw-HTML button node down with it.
+    """
+    payload = base64.b64encode(json.dumps({}).encode("utf-8")).decode("ascii")
+    html = (
+        f'<button id="{_LIBRARY_BTN_ID}" type="button" '
+        'title="Choose a PDF from the Klaus Library" '
+        "style=\"all:unset;cursor:pointer;padding:1px 8px;"
+        "margin:0 4px 0 0;border:1px solid var(--border-subtle);"
+        "border-bottom-color:var(--shadow);border-radius:3px;"
+        "background:var(--button-bg);color:var(--fg);font-size:12px;"
+        'line-height:1.7;white-space:nowrap;" '
+        "onmouseover=\"this.style.background='var(--button-gradient-end)'\" "
+        "onmouseout=\"this.style.background='var(--button-bg)'\" "
+        f"onclick=\"pycmd('klausmate:library:{payload}')\">"
+        "Library...</button>"
+    )
+    # "</" -> "<\/" so the html string can't prematurely close the <script>
+    # block this gets embedded in (same guard as on_webview_will_set_content).
+    html_js = json.dumps(html).replace("</", "<\\/")
+    return (
+        "(function(){"
+        f"var ID={json.dumps(_LIBRARY_BTN_ID)};"
+        f"var HTML={html_js};"
+        "function mount(tries){"
+        "tries=tries||0;"
+        "if(document.getElementById(ID))return;"
+        "if(!window.uiPromise||!window.editorToolbar){"
+        "if(tries<50){setTimeout(function(){mount(tries+1);},100);}"
+        "else{console.log('[klausmate] Library button: uiPromise/"
+        "editorToolbar never appeared');}"
+        "return;"
+        "}"
+        "window.uiPromise.then(function(noteEditor){"
+        "try{"
+        "var group=noteEditor.toolbar.notetypeButtons;"
+        "var button={component:window.editorToolbar.Raw,"
+        "props:{html:HTML}};"
+        "if(typeof group.insertButton==='function'){"
+        "group.insertButton(button,0);"
+        "console.log('[klausmate] Library button mounted via "
+        "insertButton');"
+        "}else{"
+        "group.appendButton(button,0);"
+        "console.log('[klausmate] Library button mounted via "
+        "appendButton fallback');"
+        "}"
+        "}catch(e){console.log('[klausmate] Library button mount "
+        "failed: '+e);}"
+        "});"
+        "}"
+        "window.__klausmateMountLibraryButton=mount;"
+        "mount(0);"
+        "})();"
+    )
 
-    def _ensure_sidebar_pdf(self) -> bool:
-        """Load active PDF into the dock viewer if needed."""
-        active = pdf_handler.get_active_pdf(USER_FILES)
-        if not active:
-            return False
-        sidebar = getattr(self._editor, "_klausmate_sidebar", None)
-        if sidebar is None:
-            return False
-        if not sidebar.is_loaded(active):
-            sidebar.load_pdf(active)
-        return True
 
-    def _toggle_viewer(self) -> None:
-        tabs = getattr(self._editor, "_klausmate_pdf_tabs", None)
-        if tabs is None:
-            tooltip("Klaus: PDF viewer is unavailable in this window")
-            return
+def _on_library_button(editor: Editor) -> None:
+    """Toolbar "Library..." button: the old bottom bar's toggle role.
+
+    If the PDF panel is visible, hide it. If hidden, show it — loading
+    the active PDF into the viewer first if needed — and if that leaves
+    no tab open, immediately pop the stored-PDF picker (_show_add_menu)
+    so the user lands in "choose from the library". There is no other
+    way to add a PDF from the editor anymore; only the Library window's
+    drop zone can bring a new PDF into the store.
+    """
+    tabs = getattr(editor, "_klausmate_pdf_tabs", None)
+    if tabs is None:
+        tooltip("Klaus: PDF viewer is unavailable in this window")
+        return
+    try:
         if tabs.isVisible():
             tabs.panel_hide()
         else:
-            self._ensure_sidebar_pdf()
+            _ensure_sidebar_pdf(editor)
             tabs.panel_show()
-        self._update_toggle_label(tabs.isVisible())
-
-    def _update_toggle_label(self, visible: bool) -> None:
-        try:
-            self._pdf_bar.update_toggle(visible)
-        except RuntimeError:
-            pass
-
-    def _handle_pdf(self, path: str) -> None:
-        if import_pdf_file(path) is None:
-            return
-        self._refresh_pdf_status()
-        self._open_active_pdf()
-
-    def _refresh_pdf_status(self) -> None:
-        active = pdf_handler.get_active_pdf(USER_FILES)
-        try:
-            self._pdf_bar.set_active_pdf(active)
-        except RuntimeError:
-            pass
-
-    def _remove_current_pdf(self) -> None:
-        active = pdf_handler.get_active_pdf(USER_FILES)
-        if not active:
-            return
-        if not askUser(f"Remove lecture PDF '{active}'?", parent=self):
-            return
-        pdf_handler.delete_context(USER_FILES, active)
-        tabs = getattr(self._editor, "_klausmate_pdf_tabs", None)
-        if tabs is not None:
-            # Closing the tab switches the viewer to a neighbouring open
-            # PDF, or clears + hides the dock if this was the last one.
-            tabs.close_tab(active)
-        else:
-            sidebar = getattr(self._editor, "_klausmate_sidebar", None)
-            if sidebar is not None:
-                sidebar.clear()
-        self._refresh_pdf_status()
-
-    def _open_active_pdf(self) -> None:
-        if not pdf_handler.get_active_pdf(USER_FILES):
-            return
-        tabs = getattr(self._editor, "_klausmate_pdf_tabs", None)
-        if tabs is None:
-            tooltip("Klaus: PDF viewer is unavailable in this window")
-            return
-        self._ensure_sidebar_pdf()
-        tabs.panel_show()
-        self._update_toggle_label(True)
+            if tabs._tabs.count() == 0:
+                tabs._show_add_menu()
+    except Exception as e:
+        print(
+            "[klausmate] library button action failed: "
+            f"{type(e).__name__}: {e}"
+        )
 
 
 def _pdf_display_name(safe: str) -> str:
@@ -1193,13 +1033,10 @@ class _PdfTabContainer(QWidget):
 
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
-        panel = getattr(self._editor, "_klausmate_panel", None)
-        if panel is not None:
-            try:
-                panel._update_toggle_label(True)
-                panel._ensure_sidebar_pdf()
-            except Exception:
-                pass
+        try:
+            _ensure_sidebar_pdf(self._editor)
+        except Exception:
+            pass
         # Re-arm page-window retrieval (hideEvent cleared it).
         try:
             if self._sidebar._name is not None:
@@ -1217,12 +1054,6 @@ class _PdfTabContainer(QWidget):
             self._sidebar._set_active(None)
         except Exception:
             pass
-        panel = getattr(self._editor, "_klausmate_panel", None)
-        if panel is not None:
-            try:
-                panel._update_toggle_label(False)
-            except Exception:
-                pass
 
     # ---- placement engine ----
 
@@ -2147,12 +1978,6 @@ class _PdfTabContainer(QWidget):
             pdf_handler.touch_last_used(USER_FILES, name)
         except Exception:
             pass
-        panel = getattr(self._editor, "_klausmate_panel", None)
-        if panel is not None:
-            try:
-                panel._refresh_pdf_status()
-            except Exception:
-                pass
 
     def _on_sidebar_loaded(self, name: str) -> None:
         """Sidebar loaded a PDF (from any call site): make sure a tab
@@ -2212,12 +2037,6 @@ class _PdfTabContainer(QWidget):
                 pdf_handler.clear_active_pdf(USER_FILES)
             except Exception:
                 pass
-            panel = getattr(self._editor, "_klausmate_panel", None)
-            if panel is not None:
-                try:
-                    panel._refresh_pdf_status()
-                except Exception:
-                    pass
             self.panel_hide()
 
     def close_tab(self, name: str) -> None:
@@ -2250,31 +2069,26 @@ class _PdfTabContainer(QWidget):
             act.triggered.connect(
                 lambda _=False, b=base: self._sidebar.load_pdf(b)
             )
-        if stored:
-            menu.addSeparator()
-        open_act = menu.addAction("Browse…")
-        open_act.triggered.connect(self._browse_new)
+        if not stored:
+            # The editor deliberately has no way to ADD a PDF (K-056) —
+            # only the Library window's drop zone imports new ones.
+            hint = menu.addAction(
+                "Every Library PDF is already open"
+                if open_names
+                else "No PDFs in your Library yet"
+            )
+            hint.setEnabled(False)
         menu.exec(
             self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft())
         )
 
-    def _browse_new(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select PDF", "", "PDF files (*.pdf)"
-        )
-        if not path:
-            return
-        panel = getattr(self._editor, "_klausmate_panel", None)
-        if panel is not None:
-            panel._handle_pdf(path)
-
 
 def on_editor_did_init(editor: Editor) -> None:
-    """Attach the Klaus panel below the tags bar, plus the tabbed PDF
-    viewer panel (``_PdfTabContainer``) that docks above/below the editor
-    pane or floats as its own window. The panel starts hidden and is
-    toggled via the Klaus bar's button, or auto-shown when the user adds
-    or opens a PDF.
+    """Mount the "Library..." button into this editor's toolbar webview
+    and attach the tabbed PDF viewer panel (``_PdfTabContainer``) that
+    docks above/below the editor pane or floats as its own window. The
+    panel starts hidden and is toggled via the Library... button, or
+    auto-shown when the user opens a PDF.
     """
     try:
         widget = editor.widget
@@ -2285,65 +2099,13 @@ def on_editor_did_init(editor: Editor) -> None:
             return
         pdf_handler.ensure_active_pdf(USER_FILES)
 
-        def _install_klaus_bar() -> None:
-            # editor.widget (the fieldsArea QWidget Anki hands us) is its
-            # own island: Editor.setupOuter() gives it a private QVBoxLayout
-            # (outerLayout) holding only the field-editing webview. That
-            # widget sits ABOVE the host window's button row as a sibling
-            # in the window's own top-level layout — appending to
-            # outerLayout only ever controls order *inside* fieldsArea, so
-            # attempt #1/#2 stayed pinned to whatever position fieldsArea
-            # occupies, never reaching the window's true bottom.
-            #
-            # Verified against Anki's own .ui forms (aqt/forms/addcards.ui,
-            # aqt/forms/editcurrent.ui): both AddCards and EditCurrent are a
-            # centralwidget QVBoxLayout with items [..., fieldsArea,
-            # buttonBox] in that order — buttonBox is a QDialogButtonBox
-            # sibling directly below fieldsArea, not something inside it.
-            # So the fix walks up to the host window and inserts the bar
-            # into THAT layout, immediately before the button box, instead
-            # of anywhere inside editor.widget's own layout. The Browser
-            # has no QDialogButtonBox in its window at all (its editor pane
-            # ends at the splitter, not a dialog button row), so
-            # findChild() naturally returns None there and we fall back to
-            # the old editor-layout append — unchanged behavior for Browse.
-            #
-            # Deferred by one event-loop tick, same reasoning as
-            # _install_panel below: Anki is still finishing this editor's
-            # own layout when editor_did_init fires, so constructing the
-            # panel synchronously risks racing that construction. The
-            # button box itself is built by aqt's setupUi() before
-            # editor_did_init ever fires, so the deferral isn't needed for
-            # *finding* it — it's kept only for panel-construction safety.
-            try:
-                if getattr(editor, "_klausmate_panel", None) is None:
-                    panel = _KlausmatePanel(editor, parent=widget)
-                    placed = False
-                    host = getattr(editor, "parentWindow", None)
-                    if host is not None:
-                        button_box = host.findChild(QDialogButtonBox)
-                        if button_box is not None:
-                            box_parent = button_box.parentWidget()
-                            box_layout = (
-                                box_parent.layout()
-                                if box_parent is not None
-                                else None
-                            )
-                            if box_layout is not None:
-                                idx = box_layout.indexOf(button_box)
-                                if idx != -1:
-                                    box_layout.insertWidget(idx, panel)
-                                    placed = True
-                    if not placed:
-                        # Fallback: no button box found on this host (e.g.
-                        # the Browser window) — keep today's behavior of
-                        # appending inside editor.widget's own layout.
-                        layout.addWidget(panel)
-                    editor._klausmate_panel = panel  # type: ignore[attr-defined]
-            except RuntimeError:
-                pass
-
-        QTimer.singleShot(0, _install_klaus_bar)
+        # AnkiWebView.eval queues JS until the page finishes loading, and
+        # the injected snippet itself polls for the page globals it needs
+        # (see _library_button_js) — no deferral required here.
+        try:
+            editor.web.eval(_library_button_js())
+        except Exception as e:
+            print(f"[klausmate] Library button inject failed: {e}")
 
         if not hasattr(editor, "_klausmate_target_field_index"):
             editor._klausmate_target_field_index = None  # type: ignore[attr-defined]
@@ -2381,9 +2143,6 @@ def on_editor_did_init(editor: Editor) -> None:
                     active = pdf_handler.get_active_pdf(USER_FILES)
                     if active:
                         sidebar.load_pdf(active)
-                    panel = getattr(editor, "_klausmate_panel", None)
-                    if panel is not None:
-                        panel._update_toggle_label(existing.isVisible())
                     return
 
                 sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
@@ -2392,10 +2151,6 @@ def on_editor_did_init(editor: Editor) -> None:
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container
-
-                panel = getattr(editor, "_klausmate_panel", None)
-                if panel is not None:
-                    panel._update_toggle_label(False)
 
                 active = pdf_handler.get_active_pdf(USER_FILES)
                 if active:
