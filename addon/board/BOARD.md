@@ -400,3 +400,17 @@ Live report: button renders but clicking does nothing. Python path verified inta
 
 #### Comments
 - [2026-08-24 opus] Committed. node --check ok, py_compile ok, gate PASS. Breadcrumb design makes the next failure (if any) self-localizing: '[klausmate] Library button clicked' in the editor console but no '[klausmate] Library button: toggling PDF panel' on stdout = bridge; neither = page; both = panel logic.
+
+### K-066: Cache-bust copilot.js + breadcrumb diagnostics for the dead click
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/__init__.py,klausmate/web/copilot.js
+verify: grep -q "copilot.js?v=" klausmate/__init__.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Button still dead after K-065 despite a verified restart (Anki up 16:39:01, commit 16:38:18). Prime suspect: QtWebEngine caches /_addons/ web assets across restarts, so the page may still run the K-063 copilot.js — mount works (button renders), per-node listener dies to Svelte node cloning (clicks dead), and K-065's delegated-listener fix never reached the page. Fix: append ?v=<file mtime> to the copilot.js URL in on_webview_will_set_content. Plus temp breadcrumbs to /tmp/klausmate-debug.txt: script-loaded and button-mounted pings from the page via pycmd dbg, bridge-level log of every klausmate:* message, and step logging in _on_library_button — so a still-dead click localizes to page/bridge/panel in one report.
+
+#### Comments
+- [2026-08-24 opus] Committed. /tmp/klausmate-debug.txt cleared pre-test. Expected healthy sequence after restart+click: script-loaded (+late), button-mounted, click-heard, bridge: klausmate:library, handler entered, isVisible/placed state, panel_show done. Diagnostics are temporary — file a removal card once the button is confirmed working.
