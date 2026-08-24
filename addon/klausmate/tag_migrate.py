@@ -91,13 +91,24 @@ def plan_renames(
 # ------------------------------------------------------------- migration
 
 
-def run_migration(col) -> list[tuple[str, str]]:
+def run_migration(col, renamed_out: list[tuple[str, str]] | None = None):
     """Rename every present legacy tag to its !Library home, in one undo
-    entry. Must be called with the collection open.
+    entry. Must be called with the collection open, and with a non-empty
+    plan — callers pre-check ``plan_renames`` and skip the whole op when
+    there is nothing to do.
 
-    Returns the ``(old, new)`` pairs actually renamed — an empty list is a
-    clean no-op (nothing to migrate: a fresh profile, or a second run
-    after a completed first one).
+    RETURNS ``col.merge_undo_entries(pos)`` — an ``OpChanges`` object.
+    This is a hard contract, not a convenience: when run under
+    ``CollectionOp``, Anki's ``on_op_finished`` reads ``.changes`` off
+    whatever the op returns, so returning anything else (this function
+    originally returned the renamed-pairs list) crashes every profile
+    open with ``AttributeError: 'list' object has no attribute
+    'changes'`` — and because the crash lands before the success
+    callback, the migrated flag never persists and the crash repeats
+    forever. Shipped on 2026-08-23; caught by Pouya's live Anki.
+
+    The renamed pairs are reported via ``renamed_out`` (extended in
+    place) instead of the return value.
 
     A rename that raises is caught per-pair and logged; it never deletes
     the old tag (see module docstring) and is simply retried whichever
@@ -105,20 +116,16 @@ def run_migration(col) -> list[tuple[str, str]]:
     """
     existing = set(col.tags.all())
     plan = plan_renames(existing)
-    if not plan:
-        return []
 
     pos = col.add_custom_undo_entry("Klaus: migrate tags to !Library")
-    done: list[tuple[str, str]] = []
     for old, new in plan:
         try:
             col.tags.rename(old, new)
-            done.append((old, new))
+            if renamed_out is not None:
+                renamed_out.append((old, new))
         except Exception as exc:  # noqa: BLE001 - must not abort the batch
             print(f"[klausmate] tag_migrate: failed to rename {old!r} -> {new!r}: {exc}")
-    if done:
-        col.merge_undo_entries(pos)
-    return done
+    return col.merge_undo_entries(pos)
 
 
 def migrate_on_profile_open() -> None:
@@ -136,16 +143,35 @@ def migrate_on_profile_open() -> None:
         if cfg.get(MIGRATED_FLAG):
             return
 
-        def op(col):
-            return run_migration(col)
-
-        def done(renamed: list[tuple[str, str]]) -> None:
+        def _record_flag() -> None:
             try:
                 cfg2 = _cfg()
                 cfg2[MIGRATED_FLAG] = True
                 _pkg().write_config(cfg2)
             except Exception as exc:  # noqa: BLE001
                 print(f"[klausmate] tag_migrate: failed to record migration flag: {exc}")
+
+        # Pre-flight on the main thread: profile_did_open guarantees the
+        # collection is loaded, and tags.all() is cheap. When there is
+        # nothing to migrate (fresh profile, or the flag write failed
+        # after a completed run) we record the flag and never launch a
+        # CollectionOp at all — an empty batch has no OpChanges to
+        # return and no undo entry worth creating.
+        col = mw.col
+        if col is None:
+            return  # not loaded yet; retry next profile open
+        if not plan_renames(col.tags.all()):
+            _record_flag()
+            return
+
+        renamed: list[tuple[str, str]] = []
+
+        def op(col):
+            # Contract: must return OpChanges (see run_migration).
+            return run_migration(col, renamed_out=renamed)
+
+        def done(_changes) -> None:
+            _record_flag()
             if renamed:
                 print(f"[klausmate] tag_migrate: renamed {len(renamed)} tag(s) to !Library: {renamed}")
 
