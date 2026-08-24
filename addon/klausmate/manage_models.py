@@ -444,9 +444,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     maintenance_row = QHBoxLayout()
     maintenance_row.setContentsMargins(0, 0, 0, 0)
     test_conn_btn = QPushButton("Test connection")
-    clear_library_btn = QPushButton("Clear library tag")
     maintenance_row.addWidget(test_conn_btn)
-    maintenance_row.addWidget(clear_library_btn)
     maintenance_row.addStretch(1)
     general_layout.addLayout(maintenance_row)
 
@@ -491,7 +489,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             pull_btn, pull_input, delete_btn, refresh_btn,
             auto_setup_btn, download_btn, check_conn_btn,
             embed_provider_combo, embed_model_combo, embed_key_edit,
-            embed_fix_btn, index_btn, test_conn_btn, clear_library_btn,
+            embed_fix_btn, index_btn, test_conn_btn,
             threshold_slider,
         ):
             w.setEnabled(not busy)
@@ -1359,41 +1357,12 @@ def manage_models_dialog(setup: bool = False) -> None:
                 parent=dlg,
             )
 
-    def clear_library_tag() -> None:
-        """Moved from the old Tools > Klaus > Clear library tag (K-045).
-        K-055 dropped the PDF-match half: the temp Browse-preview tag
-        retention.py used to own is gone now that every indexed PDF owns a
-        durable per-PDF !Library tag (tag_sync.py, K-053) instead — only
-        the curation preview tag is left to clear here. quiet=True still
-        suppresses clear_curation_tag's own tooltip so this function's
-        summary is the only message (K-038 — two independent async
-        tooltips used to race)."""
-        from . import curation
-
-        curation_nids = mw.col.find_notes(f'tag:"{curation.TEMP_TAG}"') if mw.col else []
-        if not curation_nids:
-            tooltip("No notes carry a Klaus library tag.", parent=dlg)
-            return
-        if not askUser(
-            "Clear the Klaus curation tag from all notes?",
-            parent=dlg,
-        ):
-            return
-
-        curation.clear_curation_tag(dlg, quiet=True)
-
-        tooltip(
-            f"Cleared the library tag from {len(curation_nids)} curation notes.",
-            parent=dlg,
-        )
-
     auto_setup_btn.clicked.connect(start_auto_setup)
     cancel_btn.clicked.connect(cancel_setup_download)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
     download_btn.clicked.connect(lambda: openLink(OLLAMA_DOWNLOAD_URL))
     check_conn_btn.clicked.connect(refresh)
     test_conn_btn.clicked.connect(test_connection)
-    clear_library_btn.clicked.connect(clear_library_tag)
     delete_btn.clicked.connect(delete_selected)
     refresh_btn.clicked.connect(refresh)
     pull_btn.clicked.connect(start_pull)

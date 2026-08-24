@@ -24,9 +24,12 @@ aqt glue only — the vector math lives in card_index.py and the providers in
 embeddings.py. Long work runs on QueryOp workers; the embedding phases run
 ``without_collection()`` so a 20-minute first index never blocks reviewing.
 
-Preview vehicle: the temp tag ``!Library::Curating`` (nid: search strings
-break at thousands of ids). Tagging bumps note.mod, which is exactly why
-the card index diffs by text hash — see card_index.py.
+Preview vehicle: the PDF's own durable !Library tag (tag_sync.py, K-053)
+— K-064 retired the ``!Library::Curating`` temp tag it used to stamp per
+run; the per-PDF tag holds the identical set, and nid: search strings
+(the tagless alternative) break at thousands of ids. The preview is
+sequenced through ``tag_sync.sync_after_matches``'s ``on_done`` so Browse
+never opens before the tag is written.
 """
 
 from __future__ import annotations
@@ -48,7 +51,6 @@ ADDON_DIR = os.path.dirname(__file__)
 USER_FILES = os.path.join(ADDON_DIR, "user_files")
 INDEX_DIR = os.path.join(USER_FILES, "card_index")
 
-TEMP_TAG = "!Library::Curating"
 CURATED_TAG = "!Library::Curated"
 DECK_PREFIX = "Klaus::"
 
@@ -255,9 +257,9 @@ def run_curation(
     preview the survivors in Browse.
 
     ``on_done(result)`` with ``{"nids", "scores", "suggested_name",
-    "previewed"}``; matches are tagged ``!Library::Curating`` and Browse
-    opens on that tag (membership is ranked; row order in Browse follows
-    the user's sort).
+    "previewed"}``; the sync gives the PDF's own !Library tag exactly the
+    matching notes and Browse opens on that tag — deck-scoped runs add
+    deck:"..." so the preview shows the same cut this run used.
 
     Holds ``_busy`` for the WHOLE composed pipeline (card index, PDF index,
     matching, preview) as one token: each phase below is called with
@@ -327,7 +329,6 @@ def run_curation(
                     return
                 from . import tag_sync  # deferred: see run_curation's retention import above
 
-                tag_sync.sync_after_matches(parent, pdf_name, matches)
                 global last_run
                 threshold = retention.get_threshold(pdf_name, retention._cfg())
                 ranked = sorted(
@@ -347,6 +348,8 @@ def run_curation(
                 }
                 last_run = result
                 if not ranked:
+                    # Still sync: an empty cut must empty the tag too.
+                    tag_sync.sync_after_matches(parent, pdf_name, matches)
                     release()
                     if on_done:
                         on_done(result)
@@ -358,7 +361,17 @@ def run_curation(
                     if on_done:
                         on_done(result)
 
-                _preview_in_browse(parent, result["nids"], after_preview)
+                # The preview SEARCHES the tag the sync writes, so it must
+                # not race the sync op — on_done fires once the sync
+                # settles (success, failure, or tags-disabled early-out).
+                tag_sync.sync_after_matches(
+                    parent,
+                    pdf_name,
+                    matches,
+                    on_done=lambda: _preview_in_browse(
+                        parent, pdf_name, deck_scope, after_preview
+                    ),
+                )
 
             retention.ensure_pdf_index(
                 parent,
@@ -387,52 +400,39 @@ def run_curation(
 # ------------------------------------------------------- preview & create
 
 
-def _preview_in_browse(parent, nids: list[int], after: Callable[[], None] | None) -> None:
-    """Swap the temp tag onto the new result set, then open Browse on it."""
+def _preview_in_browse(
+    parent,
+    pdf_name: str,
+    deck_scope: str | None,
+    after: Callable[[], None] | None,
+) -> None:
+    """Open Browse on the PDF's own !Library tag (no note mutation).
 
-    def op(col):
-        pos = col.add_custom_undo_entry("Klaus: preview curation matches")
-        stale = col.find_notes(f'tag:"{TEMP_TAG}"')
-        if stale:
-            col.tags.bulk_remove(list(stale), TEMP_TAG)
-        col.tags.bulk_add(list(nids), TEMP_TAG)
-        return col.merge_undo_entries(pos)
-
-    def done(_changes) -> None:
-        browser = aqt.dialogs.open("Browser", mw)
-        browser.search_for(f'tag:"{TEMP_TAG}"')
-        if after:
-            after()
-
-    CollectionOp(parent=parent, op=op).success(done).run_in_background()
-
-
-def clear_curation_tag(parent=None, *, quiet: bool = False) -> None:
-    """Tools-menu escape hatch: drop the preview tag from every note.
-
-    ``quiet`` suppresses this function's own tooltip (both the "nothing to
-    clear" early-out and the success summary) — for a caller that reports
-    its own combined result instead. Default False keeps every existing
-    caller's behavior unchanged.
+    Callers sequence this AFTER tag_sync.sync_after_matches settles, so
+    the stored tag exists and already holds this run's matches. When no
+    tag is stored (Library tags disabled), the preview is skipped rather
+    than falling back to the retired temp-tag stamping — ``after`` always
+    runs either way, because it releases the pipeline's busy token.
     """
-    parent = parent or mw
-    nids = mw.col.find_notes(f'tag:"{TEMP_TAG}"') if mw.col else []
-    if not nids:
-        if not quiet:
-            tooltip("No notes carry the Klaus curation tag.", parent=parent)
-        return
+    try:
+        from . import tag_sync
 
-    def op(col):
-        pos = col.add_custom_undo_entry("Klaus: clear curation tag")
-        col.tags.bulk_remove(list(nids), TEMP_TAG)
-        return col.merge_undo_entries(pos)
-
-    op_result = CollectionOp(parent=parent, op=op)
-    if not quiet:
-        op_result = op_result.success(
-            lambda _c: tooltip(f"Cleared the curation tag from {len(nids)} notes.", parent=parent)
-        )
-    op_result.run_in_background()
+        tag = tag_sync.get_stored_tag(tag_sync._safe(pdf_name))
+        if tag:
+            query = f'tag:"{tag}"'
+            if deck_scope:
+                query += f' deck:"{deck_scope}"'
+            browser = aqt.dialogs.open("Browser", mw)
+            browser.search_for(query)
+        else:
+            print(
+                "[klausmate] curation preview skipped: no !Library tag "
+                f"stored for {pdf_name!r} (Library tags disabled?)"
+            )
+    except Exception as exc:  # noqa: BLE001 - preview is best-effort
+        print(f"[klausmate] curation preview failed: {exc}")
+    if after:
+        after()
 
 
 def create_curated_deck(
@@ -444,8 +444,9 @@ def create_curated_deck(
     """Copy ``nids`` into ``deck_name`` as one undoable operation.
 
     True copies: fresh notes (new guid) with the source's notetype, fields,
-    and tags (minus the temp tag, plus ``!Library::Curated``). Source notes
-    lose the temp tag. Scheduling starts fresh — these are new cards.
+    and tags (plus ``!Library::Curated``; since K-064 there is no temp tag
+    to strip — copies keep the per-PDF !Library tag, which is accurate:
+    they match the PDF too). Scheduling starts fresh — these are new cards.
     """
 
     def op(col):
@@ -456,13 +457,12 @@ def create_curated_deck(
             src = col.get_note(nid)
             new = col.new_note(src.note_type())
             new.fields = list(src.fields)
-            tags = [t for t in src.tags if t.lower() != TEMP_TAG.lower()]
+            tags = list(src.tags)
             if CURATED_TAG not in tags:
                 tags.append(CURATED_TAG)
             new.tags = tags
             requests.append(AddNoteRequest(note=new, deck_id=did))
         col.add_notes(requests)
-        col.tags.bulk_remove(list(nids), TEMP_TAG)
         return col.merge_undo_entries(pos)
 
     def done(_changes) -> None:
@@ -514,8 +514,9 @@ def prompt_and_create(parent, nids: list[int], on_done: Callable[[int], None] | 
 def _create_from_browser(browser) -> None:
     nids = list(browser.selected_notes())
     if not nids:
-        # No selection → act on the whole preview set.
-        nids = list(mw.col.find_notes(f'tag:"{TEMP_TAG}"'))
+        # No selection → act on the last run's whole result set (K-064:
+        # there is no temp preview tag to read back anymore).
+        nids = list((last_run or {}).get("nids") or [])
     if not nids:
         tooltip("Select notes first (or run a Klaus search).", parent=browser)
         return

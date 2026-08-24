@@ -16,7 +16,7 @@ display name minus a trailing ``.pdf``/``.txt``, sanitized tag-legal. The
 tag's members are exactly the notes whose cached match score is at or
 above that PDF's sensitivity threshold. The three reserved leaves
 (``Curating``, ``Curated``, ``Matching`` — the static tags already living
-at the ``!Library`` root; see curation.TEMP_TAG/CURATED_TAG. ``Matching``
+at the ``!Library`` root; see curation.CURATED_TAG. ``Matching``
 was retention.py's own Browse-preview tag until K-055 retired it — kept
 reserved anyway so a PDF literally named "Matching" can never collide
 with that historical name) get a ``-pdf`` suffix if a display name would
@@ -437,6 +437,7 @@ def _run_sync_op(
     work: Callable[[object], dict | None],
     *,
     on_done: Callable[[dict], None] | None = None,
+    on_finished: Callable[[], None] | None = None,
 ) -> None:
     """Fire exactly one CollectionOp for one sync event. `work(col)` does
     the tag mutation(s) and returns a plain dict describing what happened
@@ -456,9 +457,16 @@ def _run_sync_op(
     def done(_changes) -> None:
         if on_done:
             on_done(result)
+        if on_finished:
+            on_finished()
 
     def fail(exc: Exception) -> None:
+        # on_finished fires on BOTH outcomes — callers use it to sequence
+        # follow-on work (curation's Browse preview) and to release the
+        # pipeline busy token; skipping it on failure would deadlock that.
         print(f"[klausmate] tag_sync: {undo_label!r} failed: {exc}")
+        if on_finished:
+            on_finished()
 
     CollectionOp(parent=parent, op=op).success(done).failure(fail).run_in_background()
 
@@ -479,7 +487,13 @@ def _tooltip_membership(parent, display: str, result: dict) -> None:
     tooltip(f"“{display}” in !Library: {_phrase_counts(added, removed)}.", parent=parent)
 
 
-def sync_after_matches(parent, pdf_name: str, matches: list[tuple[int, float]] | None) -> None:
+def sync_after_matches(
+    parent,
+    pdf_name: str,
+    matches: list[tuple[int, float]] | None,
+    *,
+    on_done: Callable[[], None] | None = None,
+) -> None:
     """Event 1 — indexing/curating a PDF creates or refreshes its tag.
 
     Called from BOTH completion points that finish a PDF's match pipeline
@@ -488,14 +502,35 @@ def sync_after_matches(parent, pdf_name: str, matches: list[tuple[int, float]] |
     value is never None in practice — ensure_matches raises on failure
     rather than returning None — the guard below is defense in depth only,
     matching every other event's "never strip on missing data" rule.
+
+    ``on_done`` (K-064) fires exactly once when the event is SETTLED —
+    after the sync op succeeds or fails, and immediately on every early
+    return (tags disabled, no matches, exception). Curation sequences its
+    Browse preview through it, since the preview searches the tag this
+    event writes; a path that skipped it would strand curation's busy
+    token forever.
     """
+    _settled = {"done": False}
+
+    def settled() -> None:
+        if _settled["done"] or on_done is None:
+            _settled["done"] = True
+            return
+        _settled["done"] = True
+        try:
+            on_done()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] tag_sync: on_done callback failed: {exc}")
+
     try:
         cfg = _cfg()
         if not library_tags_enabled(cfg):
+            settled()
             return
         safe = _safe(pdf_name)
         if matches is None:
             print(f"[klausmate] tag_sync: no matches for {safe!r} — skipping tag sync.")
+            settled()
             return
         from . import retention
 
@@ -509,9 +544,11 @@ def sync_after_matches(parent, pdf_name: str, matches: list[tuple[int, float]] |
             f"Klaus: tag “{display}” in !Library",
             lambda col: _do_sync_one(col, safe, tag, desired_nids),
             on_done=lambda result: _tooltip_membership(parent, display, result),
+            on_finished=settled,
         )
     except Exception as exc:  # noqa: BLE001 - never break the indexing pipeline
         print(f"[klausmate] tag_sync: sync_after_matches failed for {pdf_name!r}: {exc}")
+        settled()
 
 
 def sync_after_threshold(

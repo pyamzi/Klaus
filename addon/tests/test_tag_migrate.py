@@ -188,7 +188,12 @@ class FakeCol:
 print("== plan_renames (pure) ==")
 check(
     "proposes only present old tags",
-    tm.plan_renames(["klaus::curate", "unrelated"]) == [("klaus::curate", "!Library::Curating")],
+    tm.plan_renames(["klaus::curated", "unrelated"])
+    == [("klaus::curated", "!Library::Curated")],
+)
+check(
+    "klaus::curate is retired now, not renamed (K-064)",
+    tm.plan_renames(["klaus::curate"]) == [],
 )
 check("empty collection -> empty plan", tm.plan_renames([]) == [])
 check(
@@ -199,19 +204,23 @@ check(
 print("== run_migration: the CollectionOp contract ==")
 col = FakeCol(["klaus::curate", "klaus::curated"])
 out: list = []
-result = tm.run_migration(col, renamed_out=out)
+gone: list = []
+result = tm.run_migration(col, renamed_out=out, removed_out=gone)
 check("returns EXACTLY merge_undo_entries' object (OpChanges contract)", result is col.changes)
 check("returns neither a list nor None", not isinstance(result, (list, type(None))))
-check("both pairs renamed", sorted(out) == sorted(tm.TAG_RENAME_MAP.items()))
+check("the rename pair renamed", sorted(out) == sorted(tm.TAG_RENAME_MAP.items()))
+check("the retired name removed in the SAME batch (K-064)", gone == ["klaus::curate"])
 check("one undo entry for the whole batch", col.undo_entries == 1 and col.merged == [42])
 
 print("== run_migration: partial failure never aborts the batch ==")
-col2 = FakeCol(["klaus::curate", "klaus::curated"], fail_on={"klaus::curate"})
+col2 = FakeCol(["klaus::curate", "klaus::curated"], fail_on={"klaus::curated"})
 out2: list = []
-result2 = tm.run_migration(col2, renamed_out=out2)
+gone2: list = []
+result2 = tm.run_migration(col2, renamed_out=out2, removed_out=gone2)
 check("still returns the OpChanges object after a failed pair", result2 is col2.changes)
-check("surviving pair renamed", out2 == [("klaus::curated", "!Library::Curated")])
-check("failed old tag NOT deleted", "klaus::curate" in col2.tags.all())
+check("failed pair NOT reported renamed", out2 == [])
+check("failed old tag NOT deleted", "klaus::curated" in col2.tags.all())
+check("removal half still went through despite the rename failure", gone2 == ["klaus::curate"])
 
 print("== second run is a structural no-op ==")
 check("post-migration plan is empty", tm.plan_renames(col.tags.all()) == [])
@@ -225,18 +234,18 @@ check("post-migration plan is empty", tm.plan_renames(col.tags.all()) == [])
 # tag (retention.RETENTION_TAG, formerly "klaus::pdfmatch" pre-!Library)
 # redundant. Rather than renaming it into its !Library home like the two
 # curation tags above, this removes both names outright — see the module
-# docstring and MATCHING_TAGS_TO_REMOVE/plan_matching_cleanup.
+# docstring and RETIRED_TAGS/plan_retired_cleanup.
 
-print("== plan_matching_cleanup (pure) ==")
+print("== plan_retired_cleanup (pure) ==")
 check(
     "both retired names present -> both listed",
-    tm.plan_matching_cleanup(["klaus::pdfmatch", "!Library::Matching", "unrelated"])
+    tm.plan_retired_cleanup(["klaus::pdfmatch", "!Library::Matching", "unrelated"])
     == ["klaus::pdfmatch", "!Library::Matching"],
 )
-check("neither present -> empty (skip silently)", tm.plan_matching_cleanup(["unrelated"]) == [])
+check("neither present -> empty (skip silently)", tm.plan_retired_cleanup(["unrelated"]) == [])
 check(
     "klaus::pdfmatch alone -> just that one",
-    tm.plan_matching_cleanup(["klaus::pdfmatch"]) == ["klaus::pdfmatch"],
+    tm.plan_retired_cleanup(["klaus::pdfmatch"]) == ["klaus::pdfmatch"],
 )
 
 print("== run_migration: !Library::Matching removed from notes AND the registry ==")
@@ -269,7 +278,7 @@ tm.run_migration(col5, removed_out=removed5)
 check("nothing removed, nothing reported", removed5 == [] and col5.tags.removed == [])
 
 print("== second cleanup run is a structural no-op ==")
-check("post-cleanup plan is empty", tm.plan_matching_cleanup(col3.tags.all()) == [])
+check("post-cleanup plan is empty", tm.plan_retired_cleanup(col3.tags.all()) == [])
 
 print("== migrate_on_profile_open: nothing to rename or clean -> CollectionOp never launched ==")
 
@@ -306,9 +315,9 @@ print(
 # is already True on every profile that completed the original
 # klaus::->!Library rename — Pouya's included. A single-flag short-circuit
 # at the top of migrate_on_profile_open would make the new
-# plan_matching_cleanup pre-flight permanently unreachable for exactly the
+# plan_retired_cleanup pre-flight permanently unreachable for exactly the
 # user who reported the lingering !Library::Matching tag. This must reach
-# the pre-flight (because MATCHING_MIGRATED_FLAG is still unset), launch
+# the pre-flight (because the cleaned-list is still incomplete), launch
 # the CollectionOp, actually remove the tag, and record BOTH flags when
 # it succeeds.
 col6 = FakeCol(["!Library::Matching"], membership={"!Library::Matching": {9}})
@@ -342,10 +351,11 @@ try:
         )
         _bug_inst._success(_bug_result)
         check(
-            "on completion, BOTH flags get recorded (not just the Matching one)",
+            "on completion, the rename flag and the cleaned-list both get recorded",
             bool(_written_cfgs)
             and _written_cfgs[-1].get(tm.MIGRATED_FLAG) is True
-            and _written_cfgs[-1].get(tm.MATCHING_MIGRATED_FLAG) is True,
+            and set(tm.RETIRED_TAGS)
+            <= set(_written_cfgs[-1].get(tm.CLEANED_KEY) or []),
         )
     else:
         # Keep the check count identical whether this is RED or GREEN, so
@@ -353,7 +363,7 @@ try:
         # rest of this scenario's assertions.
         check("running the op bulk-removes !Library::Matching from its notes", False)
         check("...and drops it from the tag registry", False)
-        check("on completion, BOTH flags get recorded (not just the Matching one)", False)
+        check("on completion, the rename flag and the cleaned-list both get recorded", False)
 finally:
     tm.mw = _orig_mw
     pkg.get_config = _orig_get_config3
@@ -687,6 +697,66 @@ try:
     )
 finally:
     pkg.get_config = _old_get_config2
+
+
+print(
+    "== migrate_on_profile_open (K-064): the legacy one-shot booleans must "
+    "NOT strand the Curating cleanup =="
+)
+# Third instance of the stale-one-shot-flag disease, prevented this time:
+# after K-055's rework, BOTH _library_tag_migrated and _matching_tag_removed
+# are True on Pouya's profile. Retiring !Library::Curating afterwards must
+# still reach the cleanup — the guard has to reopen whenever the retirement
+# list grows, and the legacy boolean must migrate into the cleaned-list
+# config entry (_retired_tags_cleaned) so this never recurs for the NEXT
+# retirement either.
+col8 = FakeCol(["!Library::Curating"], membership={"!Library::Curating": {11}})
+_written8: list = []
+_orig_get8 = pkg.get_config
+_had_write8 = hasattr(pkg, "write_config")
+_orig_write8 = getattr(pkg, "write_config", None)
+pkg.get_config = lambda: {tm.MIGRATED_FLAG: True, "_matching_tag_removed": True}
+pkg.write_config = lambda cfg: _written8.append(dict(cfg))
+tm.mw = _FakeMw(col8)
+try:
+    _b8 = len(RecordingOp.instances)
+    tm.migrate_on_profile_open()
+    _launched8 = len(RecordingOp.instances) == _b8 + 1
+    check("op launches although both legacy booleans are True", _launched8)
+    if _launched8:
+        _inst8 = RecordingOp.instances[-1]
+        _r8 = _inst8.op_fn(col8)
+        check(
+            "!Library::Curating bulk-removed from its notes",
+            col8.tags.bulk_remove_calls == [([11], "!Library::Curating")],
+        )
+        check(
+            "...and dropped from the registry",
+            "!Library::Curating" not in col8.tags.all(),
+        )
+        _inst8._success(_r8)
+        _cfg8 = _written8[-1] if _written8 else {}
+        _cleaned8 = set(_cfg8.get("_retired_tags_cleaned") or [])
+        check(
+            "cleaned-list records every retired name (old and new)",
+            {"klaus::pdfmatch", "!Library::Matching", "klaus::curate",
+             "!Library::Curating"} <= _cleaned8,
+        )
+        check(
+            "legacy boolean dropped from config",
+            "_matching_tag_removed" not in _cfg8,
+        )
+    else:
+        for _lbl in ("tag removal", "registry drop", "cleaned-list",
+                     "legacy key drop"):
+            check(f"(unreached: op never launched) {_lbl}", False)
+finally:
+    pkg.get_config = _orig_get8
+    tm.mw = _orig_mw
+    if _had_write8:
+        pkg.write_config = _orig_write8
+    else:
+        del pkg.write_config
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
