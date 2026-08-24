@@ -277,6 +277,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
   text-transform: uppercase; color: var(--faint); font-weight: 600;
 }
 .cmt { font-size: 11.5px; color: var(--dim); padding: 3px 0; }
+/* Attached screenshots. Capped so a tall Anki grab cannot push the
+   comment thread off-screen; click opens the full image in a tab. */
+.shot { display: block; margin: 6px 0; }
+.shot img {
+  max-width: 100%; max-height: 260px; border-radius: 6px;
+  border: 1px solid var(--line); display: block;
+}
+.shot:hover img { border-color: var(--live); }
+.composer textarea.dropping,
+.newcard input.dropping { border-color: var(--live); background: var(--accent-soft, transparent); }
 .row { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
 .row button {
   background: var(--raised); border: 1px solid var(--line);
@@ -390,7 +400,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 "use strict";
 const COLS = ["Backlog", "Ready", "Doing", "Review", "Done"];
 let board = null, lastMtime = 0, openId = null, prevSig = {}, draft = "";
-let addingCol = null, addDraft = "";
+let addingCol = null, addDraft = "", addShots = [];
 const ADDABLE = ["Backlog", "Ready"];
 
 /* Who is acting. Persisted, because claiming needs a name and a per-claim
@@ -405,6 +415,81 @@ function me() {
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
   c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+// ---- images -------------------------------------------------------------
+// Text with ![](attachments/x.png) rendered as real images. ORDER MATTERS:
+// escape everything first, THEN match. The path charset below is strict
+// enough that only paths this dashboard itself generated can match, so no
+// pasted text can smuggle markup through an attribute.
+const IMG_MD = /!\[([^\]]*)\]\((attachments\/[A-Za-z0-9._-]+)\)/g;
+const escImg = s => esc(s).replace(IMG_MD,
+  (_m, alt, path) => `<a href="${path}" target="_blank" rel="noopener"` +
+                     ` class="shot"><img src="${path}" alt="${alt}"></a>`);
+
+// Upload one File/Blob, return its markdown. Throws with a readable
+// message so callers can toast it rather than failing silently.
+async function uploadImage(file) {
+  if (file.size > 8 * 1024 * 1024)
+    throw new Error(`image is ${(file.size / 1048576).toFixed(1)} MB; limit is 8 MB`);
+  const b64 = await new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onerror = () => rej(new Error("could not read the image"));
+    fr.onload = () => res(String(fr.result).split(",")[1] || "");
+    fr.readAsDataURL(file);
+  });
+  const r = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: file.type, b64 }),
+  });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(out.error || `upload failed (${r.status})`);
+  return `![](${out.path})`;
+}
+
+// Pull images out of a paste/drop event. Returns [] for ordinary text so
+// callers can fall through to the browser's own handling.
+function imagesFrom(ev) {
+  const dt = ev.clipboardData || ev.dataTransfer;
+  if (!dt) return [];
+  return Array.from(dt.files || []).filter(f => f.type.startsWith("image/"));
+}
+
+// Wire a textarea so pasting or dropping a screenshot inserts its markdown
+// at the caret. Text pastes are left entirely alone.
+function attachImagePaste(el, after) {
+  const insert = async (ev, files) => {
+    ev.preventDefault();
+    for (const f of files) {
+      try {
+        const md = await uploadImage(f);
+        const a = el.selectionStart ?? el.value.length;
+        const b = el.selectionEnd ?? el.value.length;
+        const pad = a > 0 && !/\s$/.test(el.value.slice(0, a)) ? "\n" : "";
+        el.value = el.value.slice(0, a) + pad + md + "\n" + el.value.slice(b);
+        el.selectionStart = el.selectionEnd = a + pad.length + md.length + 1;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        if (after) after();
+      } catch (e) { toast(e.message); }
+    }
+  };
+  el.addEventListener("paste", ev => {
+    const f = imagesFrom(ev);
+    if (f.length) insert(ev, f);
+  });
+  el.addEventListener("dragover", ev => {
+    if (imagesFrom(ev).length || (ev.dataTransfer || {}).types?.includes("Files")) {
+      ev.preventDefault();
+      el.classList.add("dropping");
+    }
+  });
+  el.addEventListener("dragleave", () => el.classList.remove("dropping"));
+  el.addEventListener("drop", ev => {
+    el.classList.remove("dropping");
+    const f = imagesFrom(ev);
+    if (f.length) insert(ev, f);
+  });
+}
 
 function toast(msg) {
   const t = $("toast");
@@ -612,6 +697,26 @@ function wireQuickAdd() {
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
   input.addEventListener("input", () => { addDraft = input.value; });
+  // A card title is one line, so an image cannot live in it. Pasted or
+  // dropped shots are held here and land in the new card's BODY when it
+  // is created — the title stays a title.
+  const shotsFor = ev => {
+    const files = imagesFrom(ev);
+    if (!files.length) return;
+    ev.preventDefault();
+    files.forEach(async f => {
+      try {
+        addShots.push(await uploadImage(f));
+        const n = addShots.length;
+        toast(`${n} image${n > 1 ? "s" : ""} attached — press Enter to create the card`);
+      } catch (e) { toast(e.message); }
+    });
+  };
+  input.addEventListener("paste", shotsFor);
+  input.addEventListener("dragover", ev => {
+    if ((ev.dataTransfer || {}).types?.includes("Files")) ev.preventDefault();
+  });
+  input.addEventListener("drop", shotsFor);
   input.addEventListener("keydown", async e => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -620,11 +725,14 @@ function wireQuickAdd() {
       const col = input.dataset.col;
       addDraft = "";
       input.disabled = true;
-      await api("/api/add", { col, title, fields: {}, body: "" });
+      const body = addShots.join("\n");
+      addShots = [];
+      await api("/api/add", { col, title, fields: {}, body });
     } else if (e.key === "Escape") {
       e.preventDefault();
       addingCol = null;
       addDraft = "";
+      addShots = [];
       render();
     }
   });
@@ -713,9 +821,9 @@ function openDrawer(id) {
       <button id="kv-cancel" class="ghost">Cancel</button>
       <span id="kv-status"></span>
     </div>
-    ${c.body ? `<div class="body">${esc(c.body)}</div>` : ""}
+    ${c.body ? `<div class="body">${escImg(c.body)}</div>` : ""}
     <div class="cmts"><h4>Comments</h4>
-      ${(c.comments || []).map(x => `<div class="cmt">${esc(x)}</div>`).join("")
+      ${(c.comments || []).map(x => `<div class="cmt">${escImg(x)}</div>`).join("")
         || '<div class="cmt" style="color:var(--faint)">None yet.</div>'}
     </div>
     <div class="composer">
@@ -841,6 +949,8 @@ function openDrawer(id) {
   ta.addEventListener("keydown", e => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); send(); }
   });
+  // Paste or drop a screenshot straight into the comment.
+  attachImagePaste(ta, () => { draft = ta.value; post.disabled = !draft.trim(); });
   post.onclick = send;
 
   async function send() {
