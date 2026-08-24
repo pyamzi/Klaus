@@ -7,29 +7,67 @@
 
 ## Backlog
 
-### K-040: have the drop PDF + browser button show up when opening decks / subdecks just like it does for the main menu
-owner: -
-created: 2026-08-23
-
-### K-041: Ensure that the curate deck button has a default sensitivity of 0.55
-owner: -
-created: 2026-08-23
-
-### K-042: Rename strictness to sensitivity
-owner: -
-created: 2026-08-23
-
 ### K-043: add the "drop pdf + browse button" to the bottom at the library.
 owner: -
 created: 2026-08-23
 
-### K-044: C1: one embed per PDF — delete the separate retention pipeline
+#### Comments
+- [2026-08-23 orchestrator] Parked: pdf_drive.py is held by K-044. Note for whoever takes this — K-040 is extracting the drop-square markup into a shared helper so the deck browser and deck overview cannot drift; this card should reuse that same helper for the Library, not fork a third copy.
+
+### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
 owner: -
+created: 2026-08-23
+
+#### Comments
+- [2026-08-23 Pouya] "Klausmate Preferences..."
+
+### K-048: Ollama plumbing correctness: nested Settings loop, 30s UI freeze, unify reachability
+owner: -
+priority: P1
+tags: sonnet-safe,library-era,audit
+files: klausmate/manage_models.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
+verify: ! grep -q 'settings_btn' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
+created: 2026-08-23
+
+From the 2026-08-23 audit, three correctness items:
+1. manage_models.py's 'Settings…' button (:235,:238,:425,:1167) calls _pkg().open_config, which now opens manage_models_dialog — a second modal copy of the SAME dialog stacked on the first, with stale-widget writeback risk when the inner closes. Leftover from settings_ui's deletion. Delete the button. open_config itself STAYS (Anki's gear-icon config action uses it).
+2. Tools > Klaus > Test connection (__init__.py ~:630) calls client().health() with the default 30s timeout, synchronously on the main thread — a packet-dropping endpoint freezes Anki for 30s. Use client(5.0) or ollama_setup.ollama_reachable. Also: with a cloud provider it always probes Ollama and shows an install warning — make it provider-aware (report key-presence for cloud, Ollama reachability only for local).
+3. Unify 'is Ollama reachable': setup_flow.py:64,:280 hand-roll client(5.0).health() — route through ollama_setup.ollama_reachable (whose docstring is the authority on why). Add EnsureResult.ok property replacing the four copy-pasted status-in-('reachable','started') checks (__init__.py:237, setup_flow.py:253, manage_models.py:661, ollama_runtime.py:984). Optionally hoist the localhost:11434 default into one constant.
+Full suite green; py_compile via symlink; stage by path.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked in Backlog: blocked on K-046 (owns __init__.py) and K-047 (owns manage_models.py). Unblocks when both land.
+
+### K-049: State-store hygiene: prefs orphans, recency unification, atomic pdf_tabs writes
+owner: -
+priority: P2
+tags: sonnet-safe,library-era,audit
+files: klausmate/pdf_handler.py,klausmate/retention.py,klausmate/__init__.py,klausmate/deck_curate.py,tests/test_klausmate.py
+verify: grep -q _atomic_write_json klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
+created: 2026-08-23
+
+From the 2026-08-23 audit (artifact has full evidence). Four related state bugs/dups:
+1. Deleting a PDF orphans its prefs.json entry forever, and a re-import silently inherits the old threshold+tag (retention._prefs_path is a SIBLING file of the per-PDF dirs, so pdf_index.delete's rmtree cannot reach it). Add a prune call in pdf_handler.delete_context.
+2. pdf_tabs.json — the hottest, multi-writer state file — is written NON-atomically (_save_tabs_file :166-177 plain json.dump) while six other stores all do tmp+os.replace. A crash mid-write wipes open tabs, recency, placement, thumbs at once (the bare-except loader returns {}). Add one shared _atomic_write_json(path, obj) in pdf_handler and use it for _save_tabs_file, set_active_pdf, and (import from there) retention's save_matches/set_threshold + drive_store._save if trivially reachable without a dependency knot — otherwise scope to pdf_handler+retention and note the rest.
+3. Recency drift trio: save_pdf sets active_pdf.txt but never touches last_used (re-import sorts stale); __init__'s + menu mtime fallback reads pdfs/*.pdf whose mtime is the SOURCE file's (copy2 preserves it — a 2019-authored PDF imported today sorts last) while deck_curate correctly reads contexts/*.txt; the two menus also disagree on display names (safe basename vs display_name) and capping. Unify into one pdf_handler.list_by_recency + shared display-name join; make save_pdf touch last_used; make ensure_active_pdf repair from last_used not mtime.
+4. Drop-filter drift: deck_curate checks .pdf AND isfile; the editor bar (__init__.py ~:864,:882) checks suffix only — align on the stricter form.
+Tests for the pure parts (recency ordering, atomic write) belong in test_klausmate/test_drive per their existing boundaries. Full suite green; py_compile via symlink.
+
+#### Comments
+- [2026-08-23 orchestrator] Parked in Backlog: overlaps K-046 (pdf_handler.py, __init__.py), K-044 (retention.py) and K-040 (deck_curate.py) — the most contended card on the board. Runs alone after this wave.
+
+## Ready
+
+## Doing
+
+### K-044: C1: one embed per PDF — delete the separate retention pipeline
+owner: sonnet-aj
 priority: P0
 tags: library-era
 files: klausmate/curation.py,klausmate/retention.py,klausmate/pdf_drive.py,klausmate/config.json,klausmate/config.md
 verify: ! grep -q curate_min_score klausmate/curation.py && ! grep -q MAX_QUERY_CHUNKS klausmate/curation.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 created: 2026-08-23
+claimed: 2026-08-23
 
 BLOCKED until K-038 (A8) is Done — it owns curation.py and retention.py right now.
 
@@ -56,14 +94,16 @@ Done when: one embed per PDF serves both curation and retention, curate_* knobs 
 
 #### Comments
 - [2026-08-23 orchestrator] AUDIT INPUTS for this card (2026-08-23 full-codebase audit; see artifact): (1) run_curation's prompt/preview parameters are already dead — sole caller passes pdf_name only; suggest_deck_name's prompt branch and the previewed:False path are unreachable. Delete rather than preserve. (2) stride_sample is duplicated byte-identical in curation.py:86 and pdf_index.py:82 — keep the pdf_index copy (aqt-free), delete curation's. (3) The embed-batch flush/progress loop is copy-pasted between curation._embed_plan (:136-150) and retention.ensure_pdf_index (:461-489) with unexplained 4x-different flush constants (1024 vs 256) — extract embeddings.embed_with_flush(...) with callback accumulators (the None-vector handling genuinely differs: skip-by-nid vs zero-row padding — keep as callbacks). (4) COMPLETE busy-flag map is in the audit: the guard is one-way (ensure_index never checks retention._busy), ensure_matches is entirely unguarded (runs its O(notes x chunks) scan with every flag clear), and cancel desyncs the drive's flag from the module flag. One shared re-entrancy token held across the WHOLE composed pipeline. (5) matches.json writes a 'floor' field that load_matches never validates — if MATCH_FLOOR ever changes, stale caches stay silently valid; add it to the invalidation check.
+- [2026-08-23 orchestrator] SCOPE ADDITIONS — this card now absorbs K-041 and K-042 (both closed as superseded), because both change the same control in the same files this card already owns: A. SENSITIVITY DEFAULT 0.55 (was K-041). retention.DEFAULT_THRESHOLD and config.json's pdf_match_threshold are both still 0.35. Set both to 0.55. Add a ONE-TIME migration guard (follow the _-prefixed convention, e.g. _threshold_default_migrated) that bumps a STORED global value of exactly 0.35 — the old default — up to 0.55, and leaves any other stored value alone. NEVER touch per-PDF values in pdf_index/prefs.json: those are user choices and Pouya's words were 'saved forever'. B. RENAME strictness -> sensitivity (was K-042). All three occurrences are in pdf_drive.py, which you own: :618 dialog title 'Match strictness', :680 status text 'No cards above the current strictness — lower it in Threshold…' (note this string ALSO says 'Threshold…' while the menu action says 'Match strictness…' — they already disagree; unify both on 'sensitivity'), :747 menu action 'Match strictness…'. Check config.md and any docstrings too. Config KEY names stay as they are (pdf_match_threshold) — renaming stored keys would orphan every user's setting for a vocabulary change; this is a UI-copy rename only. Say that explicitly in your handoff. Both are user-visible vocabulary/behaviour, so get the copy right: sentence case, plain words, and make the dialog, the menu action and the status line all use the same noun.
 
 ### K-046: Dead-code sweep: BM25 engine, zero-caller defs, debug logger, bridge residue
-owner: -
+owner: sonnet-ak
 priority: P1
 tags: sonnet-safe,library-era,audit
 files: klausmate/pdf_handler.py,klausmate/ollama_client.py,klausmate/__init__.py,klausmate/web/copilot.js,klausmate/pdf_index.py,klausmate/card_index.py,klausmate/drive_store.py,tests/test_drive.py
 verify: ! grep -q retrieve_relevant_chunks klausmate/pdf_handler.py && ! grep -q _dbg klausmate/ollama_client.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
 created: 2026-08-23
+claimed: 2026-08-23
 
 From the 2026-08-23 full-codebase audit (see the Redundancy Audit artifact for evidence; every claim was grep-verified). All deletions; grep each name repo-wide INCLUDING lazy _pkg()/string references before removing — that discipline caught live callers three times this session.
 
@@ -77,56 +117,45 @@ From the 2026-08-23 full-codebase audit (see the Redundancy Audit artifact for e
 Full suite green after; py_compile through the symlink; stage by path.
 
 ### K-047: Docs truth pass: every doc still describes the deleted product
-owner: -
+owner: sonnet-al
 priority: P0
 tags: sonnet-safe,library-era,audit
-files: README.md,klausmate/README.md,ANKIWEB.md,klausmate/config.md,AGENTS.md,CLAUDE.md,klausmate/pdf_drive.py,klausmate/pdf_viewer.py,klausmate/manage_models.py
-verify: ! grep -qi 'autocomplete' README.md && ! grep -qi 'Klaus panel' klausmate/config.md && ! grep -q 'klaus::curate' klausmate/README.md && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+files: README.md,klausmate/README.md,ANKIWEB.md,AGENTS.md,CLAUDE.md,klausmate/pdf_viewer.py,klausmate/manage_models.py
+verify: ! grep -qi autocomplete README.md && ! grep -q 'klaus::curate' klausmate/README.md && ! grep -qi 'Klaus panel' ANKIWEB.md && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 created: 2026-08-23
+claimed: 2026-08-23
 
 From the 2026-08-23 audit: all six docs describe the pre-Library product (autocomplete, Cmd+K Ask, Klaus panel, Settings dialog, Ollama-required, klaus:: tags). The audit artifact lists every false claim with line numbers — work from it, but VERIFY each against current code; do not trust either doc or audit blindly. Priorities: ANKIWEB.md first (public store listing; its privacy framing is now backwards — the only AI path defaults to Voyage cloud), then klausmate/README.md (ships in the addon; also falsely promises a 'Remove Klaus-managed runtime' control that does not exist — either describe reality or note manual deletion of user_files/runtime), then root README.md, config.md (shown inside Anki's config UI), AGENTS.md, CLAUDE.md (its :107+ gotchas section is accurate — keep it).
 ALSO the three stale user-visible strings pointing at the deleted Klaus panel: pdf_drive.py:533-536 ('run a search from the Klaus panel first' -> point at Manage models -> Index cards now), pdf_viewer.py:3781, pdf_viewer.py:3755 ('BM25 retrieval' promise), manage_models.py:268-269 caption ('and the Klaus panel'). And add _embed_key_setup_declined + _library_tag_migrated to config.md's private-keys note.
 NOTE there are TWO README.md files (root and klausmate/) — both in scope, keep their audiences distinct (repo visitor vs addon user). Stage by path.
 
-### K-048: Ollama plumbing correctness: nested Settings loop, 30s UI freeze, unify reachability
-owner: -
-priority: P1
-tags: sonnet-safe,library-era,audit
-files: klausmate/manage_models.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/ollama_runtime.py
-verify: ! grep -q 'settings_btn' klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && python3 tests/test_dialog_logic.py
-created: 2026-08-23
-
-From the 2026-08-23 audit, three correctness items:
-1. manage_models.py's 'Settings…' button (:235,:238,:425,:1167) calls _pkg().open_config, which now opens manage_models_dialog — a second modal copy of the SAME dialog stacked on the first, with stale-widget writeback risk when the inner closes. Leftover from settings_ui's deletion. Delete the button. open_config itself STAYS (Anki's gear-icon config action uses it).
-2. Tools > Klaus > Test connection (__init__.py ~:630) calls client().health() with the default 30s timeout, synchronously on the main thread — a packet-dropping endpoint freezes Anki for 30s. Use client(5.0) or ollama_setup.ollama_reachable. Also: with a cloud provider it always probes Ollama and shows an install warning — make it provider-aware (report key-presence for cloud, Ollama reachability only for local).
-3. Unify 'is Ollama reachable': setup_flow.py:64,:280 hand-roll client(5.0).health() — route through ollama_setup.ollama_reachable (whose docstring is the authority on why). Add EnsureResult.ok property replacing the four copy-pasted status-in-('reachable','started') checks (__init__.py:237, setup_flow.py:253, manage_models.py:661, ollama_runtime.py:984). Optionally hoist the localhost:11434 default into one constant.
-Full suite green; py_compile via symlink; stage by path.
-
-### K-049: State-store hygiene: prefs orphans, recency unification, atomic pdf_tabs writes
-owner: -
-priority: P2
-tags: sonnet-safe,library-era,audit
-files: klausmate/pdf_handler.py,klausmate/retention.py,klausmate/__init__.py,klausmate/deck_curate.py,tests/test_klausmate.py
-verify: grep -q _atomic_write_json klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
-created: 2026-08-23
-
-From the 2026-08-23 audit (artifact has full evidence). Four related state bugs/dups:
-1. Deleting a PDF orphans its prefs.json entry forever, and a re-import silently inherits the old threshold+tag (retention._prefs_path is a SIBLING file of the per-PDF dirs, so pdf_index.delete's rmtree cannot reach it). Add a prune call in pdf_handler.delete_context.
-2. pdf_tabs.json — the hottest, multi-writer state file — is written NON-atomically (_save_tabs_file :166-177 plain json.dump) while six other stores all do tmp+os.replace. A crash mid-write wipes open tabs, recency, placement, thumbs at once (the bare-except loader returns {}). Add one shared _atomic_write_json(path, obj) in pdf_handler and use it for _save_tabs_file, set_active_pdf, and (import from there) retention's save_matches/set_threshold + drive_store._save if trivially reachable without a dependency knot — otherwise scope to pdf_handler+retention and note the rest.
-3. Recency drift trio: save_pdf sets active_pdf.txt but never touches last_used (re-import sorts stale); __init__'s + menu mtime fallback reads pdfs/*.pdf whose mtime is the SOURCE file's (copy2 preserves it — a 2019-authored PDF imported today sorts last) while deck_curate correctly reads contexts/*.txt; the two menus also disagree on display names (safe basename vs display_name) and capping. Unify into one pdf_handler.list_by_recency + shared display-name join; make save_pdf touch last_used; make ensure_active_pdf repair from last_used not mtime.
-4. Drop-filter drift: deck_curate checks .pdf AND isfile; the editor bar (__init__.py ~:864,:882) checks suffix only — align on the stricter form.
-Tests for the pure parts (recency ordering, atomic write) belong in test_klausmate/test_drive per their existing boundaries. Full suite green; py_compile via symlink.
-
-## Ready
-
-### K-045: Have all of the Klaus preferences under a single thing called "Klausmate Preferences" and have it at the top of the Tools menu in the Tools menubar item.
-owner: -
-created: 2026-08-23
-
 #### Comments
-- [2026-08-23 Pouya] "Klausmate Preferences..."
+- [2026-08-23 orchestrator] RESCOPED for parallel execution: klausmate/config.md and klausmate/pdf_drive.py are REMOVED from this card's files — K-044 owns both right now (it is rewriting config.md's threshold documentation and renaming strictness->sensitivity in pdf_drive.py). So: config.md's stale Klaus-panel section and klaus:: tag references, plus pdf_drive.py:533-536's 'run a search from the Klaus panel first' string, are NOT yours; I will file them as a small follow-up after K-044 lands. Everything else in the body stands, including pdf_viewer.py's two stale strings (:3755 BM25 promise, :3781 Klaus panel) and manage_models.py:268-269's caption.
 
-## Doing
+### K-040: have the drop PDF + browser button show up when opening decks / subdecks just like it does for the main menu
+owner: sonnet-am
+priority: P1
+tags: sonnet-safe,library-era
+files: klausmate/deck_curate.py
+verify: grep -q on_overview_content klausmate/deck_curate.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Pouya: 'have the drop PDF + browser button show up when opening decks / subdecks just like it does for the main menu'.
+
+Today the dashed drop square (with its Browse… button) is injected ONLY on the deck-browser screen, via on_deck_browser_content on gui_hooks.deck_browser_will_render_content (deck_curate.py ~:349). Once you open a deck, the overview screen gets only the Curate Deck BUTTON — added by on_overview_bottom (~:333), a filter hook on overview_will_render_bottom — and no drop square at all. So the affordance vanishes exactly where a user is most likely to want to curate into the deck they are looking at.
+
+VERIFIED FOR YOU against real Anki source (qt/aqt/overview.py in the local 26.8.x checkout): there IS a content hook — gui_hooks.overview_will_render_content(self, content) fires at overview.py:199, taking an OverviewContent dataclass with fields deck, shareLink, desc, table, rendered through _body % content.__dict__ at :202. Append your markup to content.table (the same shape as content.stats on the deck browser). Feature-detect with hasattr like the existing registrations do (~:460-467) — never assume the hook exists.
+
+DO:
+1. Add on_overview_content(overview, content) and register it on gui_hooks.overview_will_render_content, guarded by hasattr.
+2. Reuse the EXISTING square markup. Do not fork it: extract whatever on_deck_browser_content builds (idle body + Browse anchor + armed state + the border/style values) into one shared helper that both callers use, so the two screens can never drift. This is the whole point of the card — Pouya's words are 'just like it does for the main menu'.
+3. POSITIONING IS DIFFERENT AND YOU MUST HANDLE IT. The deck-browser square uses position:fixed; bottom:10px, which works there because that content renders in mw.web and the button row lives in a separate webview below. Check whether that still lands correctly on the overview screen — the overview has its own bottom bar (overview_will_render_bottom) and a different body template. If fixed-bottom collides with the overview's own buttons or its description text, use in-flow placement at the end of content.table instead and say so in your handoff. Read overview.py's _body template before deciding; do not guess.
+4. The armed state and the × disarm link must work identically on both screens. BROWSE_CMD/DISARM_CMD go through on_deck_js_message, whose context check is 'isinstance(context, (DeckBrowser, DeckBrowserBottomBar))' (~:300-303) — the overview will arrive as an Overview context and be REJECTED. You must widen that check to include aqt.overview.Overview (import it lazily/defensively inside the function, same style as the existing local imports). Without this, the Browse button and the × link render but silently do nothing on the overview. This is the single most likely way to ship this card broken.
+
+Constraint: klausmate/deck_curate.py ONLY. Do not touch pdf_drive.py or __init__.py (siblings own them). Cannot be verified visually here — Qt will not instantiate; say so in your handoff. Full suite green, py_compile through the Anki symlink, stage by path.
+
+Done when: verify passes, both screens render the identical square from one shared helper, and Browse/disarm work on the overview as well as the deck browser.
 
 ## Review
 
@@ -314,3 +343,17 @@ Constraint: this file only, and only the _PdfBar region. Full suite; py_compile 
 - [2026-08-23 sonnet-ah] Decisions: full side-by-side vs. K-034's recorded square values (deck_curate.py:355-394, out of scope, read-only). Property | Square (HTML) | Editor _PdfBar (Qt) now --- | --- | --- Idle border | 1px dashed rgba(128,128,128,0.55) | identical, on #klausmateDropZone Armed/drag border | 1px solid rgba(58,130,247,0.85) | identical, on #klausmateDropZone[dragOver="true"] Radius | 10px | identical Padding | 8px 14px | identical, via QHBoxLayout.setContentsMargins(14,8,14,8) Background | var(--window-bg,transparent) | transparent (Qt has no page-bg variable to inherit; transparent lets the Add-window's own background show through, same visual effect) Font-size (body text) | 13px | identical, on _status QLabel Idle copy | "Drop a lecture PDF here to curate a deck from it." | "Drop a lecture PDF here to read alongside your cards." -- leading clause identical per the card's instruction, trailing purpose clause adapted to the editor's actual job Browse button | inline <a>, border 1px solid rgba(128,128,128,0.55), radius 6px, font-size 12px, padding 3px 10px, color inherit, no text-decoration, text "Browse&hellip;" | QPushButton, same border/radius/font-size/padding, text "Browse…", flat+transparent bg so it reads as the same secondary chip Klaus badge | none (never existed) | removed entirely (was rhyming with the deleted Cmd+K popover per K-027/K-037) Not translatable exactly: the square's color:inherit (it sits in an Anki webview and inherits the page's active text color/theme) has no Qt equivalent without a live theme hook, so _status/_browse_btn use explicit muted-grey / default palette text colors instead -- close in light and dark Anki themes but not a byte-for-byte match. Judgment call (flagged since two instructions conflicted): the launch brief said "a visible Browse... button rather than the current mode-switching action button"; the stale card body said "preserve... the Browse/Remove action swap in set_active_pdf". I followed the launch brief: Browse is now its own always-visible QPushButton (never relabeled/disconnected), and Remove is a separate, quiet, text-only QPushButton hidden via setVisible() until a PDF is active. This also fixes a real inconsistency: dropEvent already allowed adding a second PDF while one was active (multi-PDF drop, unconditional), but the old single Browse/Remove button blocked doing the same via the file dialog once a PDF was active. Behavior preserved otherwise: acceptDrops, dragEnter/dragLeave/dropEvent incl. the dragOver property + unpolish/polish trick, multi-PDF drop, _elide_name on resize, update_toggle, _remove_current_pdf's confirm dialog. Toggle button and Remove kept per the card but demoted: toggle lost its bordered/background chip look (now transparent, icon-only, cobalt only on hover/checked); Remove is borderless 11px grey text, red only on hover. Bar no longer has setFixedHeight(34) -- it now sizes to its padding+content, per the card's note that it may need to grow past 34px to breathe. Did NOT touch _install_klaus_bar's placement logic, deck_curate.py, or any file outside klausmate/__init__.py. Left a comment in the _PdfBar docstring pointing back at deck_curate.py's on_deck_browser_content (~:355-394) and K-034's handoff for anyone changing either side later; could not add the mirror comment in deck_curate.py itself since that file is out of this card's scope. Files: klausmate/__init__.py only (the _PdfBar class, ~:692-886). Risks: cannot visually verify -- Qt won't instantiate headlessly on this machine. Confidence rests on faithful value transcription plus the full test suite (241/241, matching stated baseline) and py_compile through the Anki symlink, both green. The color:inherit gap above is the one spot a reviewer should eyeball in both Anki light and dark themes. Next: none from me. A natural follow-up (not filed) would be a manual-verify pass once Pouya restarts Anki, side by side with the deck-browser square.
 - [2026-08-23 Pouya] The dots on the outline don't match that of the main space. I also want to have a library button and a browse button, library button allowing you to select from the library, and browse allowing you to add to your library. Lastly, I want the rest of the text to be "Drop a PDF to view"
 - [2026-08-23 orchestrator] Independently re-verified and signed off. dashed idle border + cobalt armed state match K-034's recorded values; commit 5f355b0 touches only __init__.py; suite was 241 green at its commit point. The flagged untranslatable (color: inherit has no Qt equivalent) is honest and acceptable. The judgment call to follow the launch brief over the stale card body (permanent Browse button) was correct — the brief was newer and traceable to Pouya's words. Visual parity between the two surfaces is the one thing nobody here can see; it is on Pouya's restart checklist.
+
+### K-041: Ensure that the curate deck button has a default sensitivity of 0.55
+owner: -
+created: 2026-08-23
+
+#### Comments
+- [2026-08-23 orchestrator] SUPERSEDED by K-044, which absorbs this. K-044 makes the per-PDF threshold the single sensitivity control for curation, retention and tags at once — setting the default there (0.35 -> 0.55, plus a one-time migration of the stored old default) is the correct place, since changing it anywhere else would leave the three consumers disagreeing. Verified still outstanding: retention.DEFAULT_THRESHOLD and config.json both read 0.35 today.
+
+### K-042: Rename strictness to sensitivity
+owner: -
+created: 2026-08-23
+
+#### Comments
+- [2026-08-23 orchestrator] SUPERSEDED by K-044. Every occurrence of the word is in pdf_drive.py (:618 dialog title, :680 status text, :747 menu action) — a file K-044 already owns — and the concept is exactly what K-044 unifies. Renaming it in a separate card would collide on the same file for no benefit.
