@@ -130,66 +130,6 @@ created: 2026-08-24
 
 ## Doing
 
-### K-055: Retire the !Library::Matching preview tag (per-PDF tags replaced it)
-owner: sonnet-au
-tags: sonnet-safe,library-era
-files: klausmate/retention.py,klausmate/pdf_drive.py,klausmate/manage_models.py,klausmate/tag_migrate.py,klausmate/tag_sync.py,tests/test_tag_migrate.py
-verify: ! grep -qE "RETENTION_TAG|preview_matches|clear_pdfmatch_tag" klausmate/retention.py klausmate/pdf_drive.py klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py
-created: 2026-08-24
-claimed: 2026-08-24
-
-Pouya's screenshot: !Library::Matching lingers in the Browse tag sidebar.
-Root cause: retention.preview_matches (called from pdf_drive._on_browse ~:842,
-the Library right-click "Show matches in Browse") bulk-adds the temp tag
-RETENTION_TAG onto every matched note per preview and it never fully leaves.
-Since K-053 every indexed PDF has a DURABLE per-PDF tag holding exactly the
-matches above the current sensitivity — the temp preview vehicle is redundant.
-
-CHANGES (all call sites verified 2026-08-24; the only callers of the retiring
-functions are the two listed below — still grep before you delete):
-
-1. pdf_drive._on_browse (~:830-842): keep the existing guards ("Embed this PDF
-   first", "No cards above the current sensitivity"), but replace the
-   retention.preview_matches(mw, nids) tail with: tag = tag_sync.get_stored_tag(safe);
-   if tag -> browser = aqt.dialogs.open("Browser", mw); browser.search_for of
-   tag:"<tag>" (quote it — tag names contain no spaces by construction but
-   quote anyway). If no stored tag -> self.status.setText telling the user to
-   re-index this PDF to create its Library tag. No note mutation, no CollectionOp.
-
-2. retention.py: delete preview_matches, clear_pdfmatch_tag, RETENTION_TAG.
-   Do NOT touch the unrelated "Matching cards…" progress label (~:690).
-
-3. manage_models.py (~:1370-1381): the Clear-library-tag maintenance flow
-   counts RETENTION_TAG notes and calls clear_pdfmatch_tag(dlg, quiet=True) —
-   remove both; adjust its combined summary message accordingly.
-
-4. tag_migrate.py: (a) the legacy map entry "klaus::pdfmatch" ->
-   "!Library::Matching" (~:52) — remove the pair; renaming into a tag we are
-   abolishing is pointless. (b) Add a one-time idempotent cleanup that runs in
-   the same profile-open pass: for each of "klaus::pdfmatch" and
-   "!Library::Matching", if the tag exists, bulk_remove it from all carrying
-   notes AND col.tags.remove it so the empty entry leaves the sidebar. Skip
-   silently when neither exists (idempotency = structural, like plan_renames).
-   HARD CONTRACT: any CollectionOp op MUST return col.merge_undo_entries(pos)
-   — a plain return here crashed every profile open once (see run_migration's
-   docstring). Reuse/extend the existing op rather than adding a second one.
-
-5. tag_sync.py: COMMENTS ONLY — lines ~18, ~149, ~183 reference retention's
-   !Library::Matching; update the prose. Leave RESERVED_LEAVES exactly as is
-   ("matching" stays reserved so a PDF literally named Matching can never
-   collide with historical tags).
-
-TESTS: extend tests/test_tag_migrate.py with the cleanup (stub-col pattern
-already in the file): tag exists -> removed from notes + registry; neither
-tag exists -> no-op, op not launched; klaus::pdfmatch alone -> cleaned.
-TRAP: the test file ends with print(summary) + sys.exit() — insert new tests
-ABOVE that block or they silently never run (this bit us twice).
-
-#### Comments
-- [2026-08-24 Pouya] ![](attachments/cea1eabb6913859e.png) this is what keeps showing up
-- [2026-08-24 sonnet-au] Decisions: pdf_drive._on_browse now looks up tag_sync.get_stored_tag(safe) and opens Browse on that stored !Library tag directly (no note mutation, no CollectionOp) instead of retention.preview_matches; falls back to a status message telling the user to re-index when there's no stored tag yet. retention.py: deleted preview_matches, clear_pdfmatch_tag, and the RETENTION_TAG constant, plus the now-unused aqt/CollectionOp/tooltip imports (only QueryOp and mw are still used). manage_models.py's clear_library_tag keeps only the curation-tag half (curation.TEMP_TAG / clear_curation_tag) and its summary message dropped the PDF-match count. tag_migrate.py: removed the 'klaus::pdfmatch' -> '!Library::Matching' pair from TAG_RENAME_MAP and added MATCHING_TAGS_TO_REMOVE + plan_matching_cleanup (pure, structurally idempotent like plan_renames) — run_migration now also bulk_removes each retired tag from its notes and calls col.tags.remove on it, in the SAME undo entry/op as the rename batch; migrate_on_profile_open's pre-flight check now short-circuits only when both plan_renames AND plan_matching_cleanup are empty. tag_sync.py: comments-only prose updates at the module docstring, the RESERVED_LEAVES block, desired_tag's docstring, and _is_reserved_tag's docstring — all now describe !Library::Matching as retention.py's retired preview tag rather than a live one; RESERVED_LEAVES itself is untouched. Files: klausmate/retention.py, klausmate/pdf_drive.py, klausmate/manage_models.py, klausmate/tag_migrate.py, klausmate/tag_sync.py, tests/test_tag_migrate.py. Risks: run_migration's cleanup loop calls col.find_notes(f'tag:"{tag}"') then col.tags.bulk_remove before col.tags.remove — real Anki's tags.remove may already strip membership on its own, so the bulk_remove call could be a harmless no-op in production even though the FakeCol test double tracks it as a distinct call; worth a sanity check against a live collection if anyone's touching this path again. Also note manage_models.py's askUser copy changed from 'Clear the Klaus curation and PDF-match tags' to 'Clear the Klaus curation tag' (singular) since there's only one tag left to clear. Next: none — all five call-site changes and the tag_sync comment updates from the card body are done.
-- [2026-08-24 opus] REWORK (review finding, confirmed in code): migrate_on_profile_open early-returns on MIGRATED_FLAG (_library_tag_migrated) BEFORE the pre-flight — and that flag is already True on Pouya's profile from the original klaus::->!Library run. So the new Matching cleanup never executes for the exact user who reported the tag. Same failure class as the retired one-shot _threshold_default_migrated. Fix: add a second flag (e.g. _matching_tag_removed) guarding only the cleanup pass; proceed when EITHER flag is unset; empty pre-flight records both. Add the falsifying test first — 'rename flag already set, !Library::Matching present -> cleanup still runs' — confirm it is RED against the current commit, then green after.
-
 ## Review
 
 ## Done
@@ -320,3 +260,65 @@ toggle behavior, and notetype-switch survival all go on Pouya's restart queue
 - [2026-08-24 opus] Live crash report from Pouya mid-task (restarted Anki against the half-edited tree): NameError _KlausmatePanel at __init__.py:2135 in _install_klaus_bar. Expected transient state, but it pins the must-fix: _install_klaus_bar (~:2103-2161, QTimer.singleShot install path) must be rewritten or removed along with the class. Verify gate now also rejects any _KlausmatePanel reference — py_compile cannot catch dangling names, greps can.
 - [2026-08-24 opus] Handoff: sonnet-av built the button machinery (HTML/JS injection with insertButton-then-appendButton, polling for page globals, script-escape guard, toggle handler, module-level _ensure_sidebar_pdf) then was stopped mid-task; the half-edited tree crashed live Anki (NameError _KlausmatePanel at :2135). Opus completed the rewiring: editor-init now evals the button JS (AnkiWebView.eval queues until page load; the JS polls for globals), bridge routes 'library' via singleShot (menu exec must not run in the webchannel handler), both dead panel refs deleted, + menu lost its filesystem Browse... and gained a disabled empty-state hint, QDialogButtonBox/QFileDialog/QFrame imports trimmed, copilot.js re-mounts the button after notetype switches. Verify gate PASS; py_compile through symlink ok; full suite 68/57/60/20/82/113 all green; leftover sweep clean (remaining QFileDialog/QDialogButtonBox hits are deck_curate/pdf_drive's own legitimate uses). LIVE CHECKS for Pouya: placement left of Fields..., styling, toggle, notetype-switch survival, empty-Library hint.
 - [2026-08-24 opus] Signed off: headless criteria all met (gate, compile, suite, sweep). Live-only items stay on the restart queue and were listed in the handoff — if any fail on restart, reopen this card rather than filing fresh.
+
+### K-055: Retire the !Library::Matching preview tag (per-PDF tags replaced it)
+owner: sonnet-au
+tags: sonnet-safe,library-era
+files: klausmate/retention.py,klausmate/pdf_drive.py,klausmate/manage_models.py,klausmate/tag_migrate.py,klausmate/tag_sync.py,tests/test_tag_migrate.py
+verify: ! grep -qE "RETENTION_TAG|preview_matches|clear_pdfmatch_tag" klausmate/retention.py klausmate/pdf_drive.py klausmate/manage_models.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_tag_migrate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya's screenshot: !Library::Matching lingers in the Browse tag sidebar.
+Root cause: retention.preview_matches (called from pdf_drive._on_browse ~:842,
+the Library right-click "Show matches in Browse") bulk-adds the temp tag
+RETENTION_TAG onto every matched note per preview and it never fully leaves.
+Since K-053 every indexed PDF has a DURABLE per-PDF tag holding exactly the
+matches above the current sensitivity — the temp preview vehicle is redundant.
+
+CHANGES (all call sites verified 2026-08-24; the only callers of the retiring
+functions are the two listed below — still grep before you delete):
+
+1. pdf_drive._on_browse (~:830-842): keep the existing guards ("Embed this PDF
+   first", "No cards above the current sensitivity"), but replace the
+   retention.preview_matches(mw, nids) tail with: tag = tag_sync.get_stored_tag(safe);
+   if tag -> browser = aqt.dialogs.open("Browser", mw); browser.search_for of
+   tag:"<tag>" (quote it — tag names contain no spaces by construction but
+   quote anyway). If no stored tag -> self.status.setText telling the user to
+   re-index this PDF to create its Library tag. No note mutation, no CollectionOp.
+
+2. retention.py: delete preview_matches, clear_pdfmatch_tag, RETENTION_TAG.
+   Do NOT touch the unrelated "Matching cards…" progress label (~:690).
+
+3. manage_models.py (~:1370-1381): the Clear-library-tag maintenance flow
+   counts RETENTION_TAG notes and calls clear_pdfmatch_tag(dlg, quiet=True) —
+   remove both; adjust its combined summary message accordingly.
+
+4. tag_migrate.py: (a) the legacy map entry "klaus::pdfmatch" ->
+   "!Library::Matching" (~:52) — remove the pair; renaming into a tag we are
+   abolishing is pointless. (b) Add a one-time idempotent cleanup that runs in
+   the same profile-open pass: for each of "klaus::pdfmatch" and
+   "!Library::Matching", if the tag exists, bulk_remove it from all carrying
+   notes AND col.tags.remove it so the empty entry leaves the sidebar. Skip
+   silently when neither exists (idempotency = structural, like plan_renames).
+   HARD CONTRACT: any CollectionOp op MUST return col.merge_undo_entries(pos)
+   — a plain return here crashed every profile open once (see run_migration's
+   docstring). Reuse/extend the existing op rather than adding a second one.
+
+5. tag_sync.py: COMMENTS ONLY — lines ~18, ~149, ~183 reference retention's
+   !Library::Matching; update the prose. Leave RESERVED_LEAVES exactly as is
+   ("matching" stays reserved so a PDF literally named Matching can never
+   collide with historical tags).
+
+TESTS: extend tests/test_tag_migrate.py with the cleanup (stub-col pattern
+already in the file): tag exists -> removed from notes + registry; neither
+tag exists -> no-op, op not launched; klaus::pdfmatch alone -> cleaned.
+TRAP: the test file ends with print(summary) + sys.exit() — insert new tests
+ABOVE that block or they silently never run (this bit us twice).
+
+#### Comments
+- [2026-08-24 Pouya] ![](attachments/cea1eabb6913859e.png) this is what keeps showing up
+- [2026-08-24 sonnet-au] Decisions: pdf_drive._on_browse now looks up tag_sync.get_stored_tag(safe) and opens Browse on that stored !Library tag directly (no note mutation, no CollectionOp) instead of retention.preview_matches; falls back to a status message telling the user to re-index when there's no stored tag yet. retention.py: deleted preview_matches, clear_pdfmatch_tag, and the RETENTION_TAG constant, plus the now-unused aqt/CollectionOp/tooltip imports (only QueryOp and mw are still used). manage_models.py's clear_library_tag keeps only the curation-tag half (curation.TEMP_TAG / clear_curation_tag) and its summary message dropped the PDF-match count. tag_migrate.py: removed the 'klaus::pdfmatch' -> '!Library::Matching' pair from TAG_RENAME_MAP and added MATCHING_TAGS_TO_REMOVE + plan_matching_cleanup (pure, structurally idempotent like plan_renames) — run_migration now also bulk_removes each retired tag from its notes and calls col.tags.remove on it, in the SAME undo entry/op as the rename batch; migrate_on_profile_open's pre-flight check now short-circuits only when both plan_renames AND plan_matching_cleanup are empty. tag_sync.py: comments-only prose updates at the module docstring, the RESERVED_LEAVES block, desired_tag's docstring, and _is_reserved_tag's docstring — all now describe !Library::Matching as retention.py's retired preview tag rather than a live one; RESERVED_LEAVES itself is untouched. Files: klausmate/retention.py, klausmate/pdf_drive.py, klausmate/manage_models.py, klausmate/tag_migrate.py, klausmate/tag_sync.py, tests/test_tag_migrate.py. Risks: run_migration's cleanup loop calls col.find_notes(f'tag:"{tag}"') then col.tags.bulk_remove before col.tags.remove — real Anki's tags.remove may already strip membership on its own, so the bulk_remove call could be a harmless no-op in production even though the FakeCol test double tracks it as a distinct call; worth a sanity check against a live collection if anyone's touching this path again. Also note manage_models.py's askUser copy changed from 'Clear the Klaus curation and PDF-match tags' to 'Clear the Klaus curation tag' (singular) since there's only one tag left to clear. Next: none — all five call-site changes and the tag_sync comment updates from the card body are done.
+- [2026-08-24 opus] REWORK (review finding, confirmed in code): migrate_on_profile_open early-returns on MIGRATED_FLAG (_library_tag_migrated) BEFORE the pre-flight — and that flag is already True on Pouya's profile from the original klaus::->!Library run. So the new Matching cleanup never executes for the exact user who reported the tag. Same failure class as the retired one-shot _threshold_default_migrated. Fix: add a second flag (e.g. _matching_tag_removed) guarding only the cleanup pass; proceed when EITHER flag is unset; empty pre-flight records both. Add the falsifying test first — 'rename flag already set, !Library::Matching present -> cleanup still runs' — confirm it is RED against the current commit, then green after.
+- [2026-08-24 sonnet-au] REWORK addressed. Bug confirmed: migrate_on_profile_open's 'if cfg.get(MIGRATED_FLAG): return' short-circuited before the K-055 pre-flight ever ran plan_matching_cleanup — and MIGRATED_FLAG is already True on any profile that completed the original klaus::->!Library rename (Pouya's included), so the Matching cleanup was unreachable for exactly that user. Process: (1) wrote the falsifying test FIRST in tests/test_tag_migrate.py ('migrate_on_profile_open (K-055 rework): MIGRATED_FLAG already True must NOT block the Matching cleanup' — pkg.get_config returns only {MIGRATED_FLAG: True}, collection carries !Library::Matching with a note on it) and ran it against the unfixed commit: RED, 4 checks failed, exit 1, reported count 109 passed/4 failed. (2) Added MATCHING_MIGRATED_FLAG = '_matching_tag_removed' in tag_migrate.py, independent of MIGRATED_FLAG; migrate_on_profile_open's early-return now requires BOTH flags set ('if cfg.get(MIGRATED_FLAG) and cfg.get(MATCHING_MIGRATED_FLAG): return'); the pre-flight (and _record_flags, renamed from _record_flag) now runs whenever either is unset and always records both on completion — existing MIGRATED_FLAG semantics for a fresh profile (no legacy tags at all) are unchanged since both plans are empty and both flags get set together in the same step. (3) Reran: GREEN, 113 passed/0 failed, exit 0. (4) Reran the card's exact verify command end to end: exit 0, 113 passed/0 failed. Files: klausmate/tag_migrate.py (MATCHING_MIGRATED_FLAG constant + docstrings; migrate_on_profile_open's two-flag gate; _record_flag -> _record_flags), tests/test_tag_migrate.py (the new falsifying test, inserted above the print(summary)+sys.exit() trap — confirmed count increased 109 -> 113). No other card files touched in this rework; original K-055 commit was amended in place (same K-055-prefixed message, now with a Rework paragraph) rather than added as a second commit, per your instruction, so exactly one commit still carries this card. Risks: none new beyond what the original handoff already flagged (the bulk_remove-before-tags.remove redundancy in run_migration's cleanup loop). Next: none.
+- [2026-08-24 opus] Signed off. Independent falsification: re-introduced the single-flag guard -> 4 red; restored -> 113 green. Gate grep-clause clean. The rework's amend pre-dated the K-056 commits, so history stacked cleanly (e6e47cf under a5111d0) — no rewrite occurred. Live check on next restart: !Library::Matching disappears from the Browse sidebar on profile open, and Library right-click 'Show matches in Browse' opens Browse filtered to the PDF's own tag.
