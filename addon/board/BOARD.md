@@ -650,3 +650,56 @@ created: 2026-08-24
 
 #### Comments
 - [2026-08-24 opus] Committed dec0195, filed retrospectively (diagnosed and fixed in one turn from Pouya's third live report). Root cause of ALL three no-sync rounds: pdf_drive missing 'import os' — the K-073 glue NameError'd inside its own failure guard on every call, invisible. Regression trap added at the glue layer (verified red on the recreated bug); fleet-wide AST name sweep clean. Also shipped: Anki-side moves/renames now move the real file (disappearing-move fix), live QFileSystemWatcher sync while the Library is open, PDFs no longer render as drop targets. Temp rescan breadcrumbs stay in until Pouya confirms.
+
+### K-076: Library window: live repaint + folder drag/rename moves disk (view desync)
+owner: -
+priority: P1
+tags: orchestrator
+files: klausmate/pdf_drive.py,tests/test_drive.py
+verify: python3 tests/test_drive.py && python3 tests/test_klausmate.py
+created: 2026-08-24
+
+Live report after K-075: data-side sync now WORKS (breadcrumbs show quiet
+rescans), but the OPEN Library window never repaints — Pouya must close and
+reopen the tab to see any change. Also folder drags vanish from the view
+until reopen.
+
+Root causes (verified by reading pdf_drive.py):
+1. `_refresh_rows` (the watcher/refresh target) runs rescan + tag reconcile
+   but NEVER calls `rebuild_tree()` — drive.json updates, the tree widget
+   doesn't. Reopen rebuilds, hence "works after reopen".
+2. `_LibraryTree.dropEvent` rejects folder drags outright ("out of scope"),
+   and Qt InternalMove can still remove the dragged row on macOS even for
+   ignored/accepted-noop drops -> folder disappears from the VIEW (data
+   intact, back on reopen). Same latent hole: accepted same-folder PDF drop
+   (line ~238) rebuildless -> row removed.
+3. Context-menu folder RENAME (`_rename_folder`) never moves the directory
+   on disk (`rename_mapped_folder` has ZERO callers) — with live repaint it
+   would visibly snap back on the next rescan.
+4. Watcher is per-window — "live all the time" needs it module-level so
+   tags keep syncing while the Library is closed.
+
+Work:
+- `_refresh_rows` calls `rebuild_tree()`; rebuild preserves folder
+  expansion + scroll + selection so frequent rebuilds are visually stable.
+- Folder drag-and-drop implemented: pure `plan_folder_move(old, dest)`
+  (illegal = into itself/own subtree/no-op), `apply_folder_change(uf, root,
+  old, new)` module-level (disk dir move via rename_mapped_folder + store
+  rename; refuses when destination occupied; tree-only folders rename
+  store-only). `_rename_folder` routes through the same apply path.
+- dropEvent: every path ends IgnoreAction-accepted + next-tick heal
+  rebuild, so Qt can never eat a row.
+- Module-level QFileSystemWatcher (parented to mw, armed/re-armed inside
+  rescan_library_root); window open -> _refresh_rows, closed -> bare rescan.
+  Per-window watcher removed.
+
+Verify: python3 tests/test_drive.py (new plan_folder_move +
+apply_folder_change + survives-rescan trap; RED against current tree) &&
+python3 tests/test_klausmate.py. Falsify: disable the disk half of
+apply_folder_change -> survives-rescan test must go red.
+Live checks (Pouya): Finder move updates OPEN window ~1s; folder drag in
+Library moves dir on disk and sticks; folder rename sticks; nothing
+disappears without reopen.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator, self-executed). Root causes verified in code + live breadcrumbs: (1) _refresh_rows never rebuilt the tree — data synced, view stale until reopen; (2) folder drags rejected while Qt InternalMove still removed the row from the view; (3) context-menu folder rename was store-only (rename_mapped_folder had zero callers) so the disk-truth rescan reverted it. Fix: refresh rebuilds (expansion/selection/scroll preserved), folder drag+rename share apply_folder_change (disk dir + store + mapping, merge-refusing), every drop path ends IgnoreAction+heal-rebuild, watcher is module-level so sync is live with the window closed. Falsified: disk half disabled -> survives-rescan test red with the exact live revert. 82+165 green, AST sweep clean. Commit 20a5b5f. Live checks owed: Finder move updates open window ~1s; folder drag sticks; nothing disappears.
