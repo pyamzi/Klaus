@@ -11,6 +11,9 @@
 owner: -
 created: 2026-08-24
 
+#### Comments
+- [2026-08-24 opus] Started: K-071 (Ready) is Phase D1 — the embedding-map projection + graph data, headless foundation. D2 (the window + canvas UI) follows once D1 lands. Phase E begins with the designer audit of the PDF viewer (E0) — that is orchestrator-tier work, queued after this swarm.
+
 ### K-059: Single-window mode: tab shell + Browse as a tab
 owner: -
 priority: P2
@@ -125,10 +128,71 @@ created: 2026-08-24
 
 #### Comments
 - [2026-08-24 opus] Held for grooming: this changes the storage architecture (a user-chosen disk directory becomes the source of truth; drive.json tree and tags mirror it — today nothing on disk moves and folders are virtual). Needs a design pass covering migration of existing user_files/pdfs, bake_annotations paths, rename/move sync direction, and missing-directory behavior. Also file-overlaps K-055 (pdf_drive, tag_sync). Will groom and launch after this swarm lands.
+- [2026-08-24 opus] Design pass done. Split: K-070 (Ready) is part A — storage root, path mapping, migration, setup step, Preferences row. Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) gets filed once A lands, on pdf_drive/tag_sync/drive_store. This card stays as the umbrella.
 
 ## Ready
 
 ## Doing
+
+### K-070: Library root directory, part A: storage root + migration (K-057)
+owner: sonnet-ax
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/pdf_handler.py,klausmate/setup_flow.py,klausmate/manage_models.py,tests/test_klausmate.py
+verify: grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Part A of Pouya's K-057 (directory-backed library). DESIGN (agreed):
+a real filesystem directory becomes where library PDFs LIVE; the Library
+tree and tags mirror it. This card ships the storage half only — root
+config, path resolution, migration, and the two UI touchpoints. Part B
+(disk<->tree mirroring, rename/move sync, rescan) is a later card on
+pdf_drive/tag_sync — do NOT touch those files.
+
+1. Config key library_root (absolute path, addon config). New pdf_handler
+   helpers: get_library_root(cfg) -> str|None, and a single resolution
+   choke point — pdf_path_for must consult a persisted mapping
+   safe_name -> path-relative-to-root (stored in user_files/
+   library_map.json via _atomic_write_json) and fall back to the legacy
+   pdfs/<safe>.pdf location when unmapped. EVERY consumer already routes
+   through pdf_path_for — verify that claim with a grep before relying on
+   it, and fix any caller that hardcodes pdfs/ paths.
+2. Migration (pdf_handler.migrate_to_root(user_files, root, folders)):
+   for each stored PDF, move pdfs/<safe>.pdf ->
+   <root>/<drive.json folder path>/<display name>.pdf. Per-file guarded
+   and RESUMABLE: never overwrite an existing destination (append a
+   numeric suffix), write the mapping entry only after a verified move
+   (size match), leave the source untouched on any failure, keep going on
+   per-file errors. contexts/, pdf_originals/, annotations/ are Klaus-
+   private and STAY under user_files keyed by safe name — only the baked
+   pdfs/ copies relocate. bake_annotations regenerates into the MAPPED
+   path — its tmp file must be created in the destination directory so
+   os.replace stays same-filesystem (existing pattern, preserve it).
+3. setup_flow: when library_root is unset, the per-profile-open readiness
+   check adds a step prompting to choose the folder (QFileDialog
+   directory picker) and then runs the migration with a progress-safe
+   CollectionOp-free QueryOp (no collection involvement). Decline =
+   ask-again-next-profile-open, never nag twice per session.
+4. manage_models General tab: a 'Library folder' row showing the current
+   path with a Change... button — changing re-runs migrate_to_root from
+   the old root to the new one (same per-file rules).
+
+SAFETY, absolute: never write to the REAL klausmate/user_files/ in tests
+or verification — a deny rule enforces this. All tests use scratch
+directories with synthetic files. The migration code itself must be pure
+enough to test that way (pass user_files and root as parameters, no
+module-global path reads inside the move loop).
+
+TESTS (tests/test_klausmate.py, insert ABOVE the print(summary)/sys.exit
+tail): mapping round-trip; unmapped fallback to legacy path; migration
+moves+maps; collision suffixing; failure mid-list leaves earlier moves
+mapped and later sources untouched; re-run resumes; pdf_path_for after
+migration resolves to the root path.
+
+#### Comments
+- [2026-08-24 sonnet-ax] Decisions: pdf_path_for(user_files_dir, name, root=None) keeps its 2-arg call sites (pdf_viewer.py, __init__.py) working unchanged — a new optional root= param lets tests bypass aqt entirely, while production falls back to a guarded _live_library_root() (lazy `from aqt import mw`, try/except) reading cfg["library_root"] via mw.addonManager.getConfig(__package__). Extracted the shared resolution logic into _working_pdf_path() (returns the intended path even when it doesn't exist yet) so bake_annotations's `working` var uses the SAME choke point instead of hardcoding pdfs/ — its tmp-file/os.replace pattern was already derived from os.path.dirname(working) so no other change was needed there. migrate_to_root(user_files_dir, root, folders=None) takes folders shaped exactly like drive_store.load(...)["pdfs"] (safe -> {folder, display}) so it's a pure function a test can drive with a hand-built dict — no drive_store import inside pdf_handler.py. Resumability is achieved by checking "is safe already mapped AND does that mapped file exist" before touching anything for that PDF, rather than a separate journal. Extra fix beyond the card text, flagging per the card's own instruction #1 ("fix any caller that hardcodes pdfs/ paths"): delete_context in pdf_handler.py itself was hardcoding pdfs/<safe>.pdf as one of its removal candidates — after a migration that's not where the real file lives anymore, so a delete would silently orphan the actual PDF in the Library folder. Fixed it to also pop the safe's library_map.json entry and delete the mapped file when one exists. This is pdf_handler.py-internal, stayed in scope. setup_flow.py: added _library_root_check(), called from the top of setup_readiness_check() (right after the _first_run_dialog_shown_this_session early-return, so it's skipped on the very first profile-open alongside the welcome dialog, then runs on every one after). askUser() explains why, then QFileDialog.getExistingDirectory() picks the folder; migration runs via QueryOp(...).without_collection().run_in_background(), matching the file's existing ensure_server pattern. Decline persists nothing, so it re-asks next profile-open — no "stop nagging forever" flag, by design (an unset Library folder is a state worth re-surfacing). manage_models.py: smallest addition I could make — one QHBoxLayout row (label + path QLabel + 'Change…' button) inserted into the existing General QGroupBox right after runtime_auto_cb, one change_library_folder() handler placed next to save_general()/test_connection(), one line added to set_busy()'s widget tuple, one .clicked.connect() added to the existing end-of-function dispatcher block. No other line in that file touched. Files: klausmate/pdf_handler.py (load_library_map/save_library_map/get_library_root/_live_library_root/_working_pdf_path/pdf_path_for/_library_filename/_unique_path/migrate_to_root added; bake_annotations and delete_context updated to route through the mapping). klausmate/setup_flow.py (_library_root_check added; wired into setup_readiness_check; showWarning added to the aqt.utils import). klausmate/manage_models.py (Library folder row + change_library_folder() + set_busy/dispatcher wiring). tests/test_klausmate.py (31 new checks in a new "library root + migration (K-070)" section, inserted above the print(summary)/sys.exit tail; scratch tempfile.mkdtemp() dirs only, never touches klausmate/user_files/). Risks: _live_library_root()'s aqt lookup is exercised by NEITHER the automated suite nor a real Anki restart yet — every test that needs migrated-path resolution passes root= explicitly, so the live mw.addonManager.getConfig(__package__) path is currently unverified beyond code review. The mid-migration failure/resume tests simulate a disk error by monkeypatching pdf_handler.shutil.copy2 (restored in finally) rather than a real IO fault — worth a skeptical read since it's global-module patching, even though scoped narrowly. _library_filename()'s sanitizing (replace '/' and '\\', strip leading dots) is a defensive addition beyond literal card text — no test exercises a display name containing a slash specifically, only the collision-suffix path was tested end-to-end. Live-only checks for Pouya's restart queue (none of this is exercised by the headless suite): (1) first-time setup prompt — profile open with library_root unset should show the askUser() explanation, then a real QFileDialog folder picker, then a tooltip on completion; decline should re-prompt on the NEXT profile open, not nag again this session. (2) Preferences -> General -> Library folder row: initial label should read "Not set — PDFs stay inside the add-on" pre-migration, update to the real path after either the setup prompt or "Change…" completes. (3) Actual migration against a real user_files/pdfs/ store with a real drive.json — confirm PDFs land under <root>/<folder>/<display>.pdf, the sidebar/viewer (pdf_viewer.py's load_pdf, __init__.py's pdf_path_for call) still opens them post-migration, and bake/un-bake (highlighting a migrated PDF) still writes into the new location. (4) "Change…" from an already-migrated root to a second new root (root-to-root move, not just unset-to-root). Verify: `grep -q "library_root" klausmate/pdf_handler.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py` exits 0. 113 passed, 0 failed (baseline before this card: 82 passed). Real tail of the run: ok re-run completes the previously-failed file ok re-run skips already-migrated files instead of re-moving them ok resumed file is now mapped ok resumed file's legacy source is finally removed 113 passed, 0 failed Next: Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) is filed separately per the card's own note, touching pdf_drive.py/tag_sync.py/drive_store.py — none of which this card touched.
+- [2026-08-24 opus] REWORK (review finding, reproduced in scratch): change_library_folder promises old-root -> new-root but migrate_to_root only moves LEGACY pdfs/ sources. After a first migration to root A, changing to root B reports the PDF as 'skipped', the mapping rel resolves against B where nothing exists, pdf_path_for returns None, and the file sits stranded in A — every already-migrated PDF becomes unopenable on a folder change. Repro: migrate to A (moved), migrate same store to B (skipped), pdf_path_for(root=B) -> None, file present in A. Fix in migrate_to_root: accept old_root: str|None = None; when a mapping entry's file is absent under the NEW root but present under old_root/rel, move it old->new under the same collision/verify/map-then-delete discipline, updating the mapping rel. change_library_folder passes old_root; setup_flow's first-time call passes None. Falsifying test FIRST (mirror the repro above; must be RED on the current commit), then fix, then re-run the full gate.
 
 ## Review
 
@@ -442,3 +506,108 @@ Live crash pair from Pouya: (1) hard SIGSEGV in sipSubClass_QPdfView while AnkiA
 
 #### Comments
 - [2026-08-24 opus] Committed. Gate PASS, compile ok, full suite 408 green. Confidence honest: the RuntimeError is FIXED (deterministic guard); the SIGSEGV is MITIGATED via close-time hide — a use-after-free in Qt's mouse pipeline can't be reproduced headlessly, so live confirmation is Pouya toggling the panel then closing the Add window several times, cursor over the PDF. If it segfaults again, next step is deterministic early teardown of the container on Close (deleteLater at a safe point) rather than riding the window's destructor cascade.
+
+### K-069: Strip K-066 diagnostics; document library_tags_enabled in config.md
+owner: sonnet-aw
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py,klausmate/web/copilot.js,klausmate/config.md
+verify: ! grep -rq "_dbg" klausmate/__init__.py klausmate/web/copilot.js && grep -q "library_tags_enabled" klausmate/config.md
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya confirmed the Library... button and panel are stable — the temporary
+diagnostics come out. REMOVE: the _dbg helper and every _dbg(...) call in
+__init__.py (bridge-level message log, all handler step logs — the marker
+comment says 'K-066 TEMP DIAGNOSTICS'); in copilot.js the ping() function,
+both script-loaded pings, the button-mounted ping, and the click-heard ping
+(the console.log lines may stay — they are free and aid future debugging).
+KEEP (permanent, do not touch): the ?v= cache-buster on the copilot.js URL,
+the _hidden_for_close close-time hide, the RuntimeError guards, the
+document-level click delegation, and the MutationObserver remount.
+Grep '_dbg' across klausmate/ after removal — zero hits (the deleted-symbol
+lesson from K-067 applies in reverse: no orphaned callers).
+
+Second job, owed since K-053: klausmate/config.md documents every config
+key — add library_tags_enabled (default true; when off, Klaus stops
+creating/updating the per-PDF !Library tags and the curation Browse
+preview is skipped). Match the file's existing entry style exactly.
+
+#### Comments
+- [2026-08-24 sonnet-aw] Decisions: removed the _dbg helper/comment block, the bridge-level _dbg call in on_js_message, and every step _dbg call inside _on_library_button (kept the print() in the except branch, and the try/except structure itself). In copilot.js removed the ping() function + its comment, both script-loaded pings, the button-mounted ping, and the click-heard ping; kept both console.log lines, the document-level click delegation, and the MutationObserver remount untouched. Added library_tags_enabled to config.md under Feature toggles, describing the tag_sync.py kill switch (default true) and that turning it off also skips curation's Browse-preview step since the per-PDF !Library tag is that preview's vehicle (curation.py's K-064 note). Files: klausmate/__init__.py, klausmate/web/copilot.js, klausmate/config.md. Verify: '! grep -rq "_dbg" klausmate/__init__.py klausmate/web/copilot.js && grep -q "library_tags_enabled" klausmate/config.md' exits 0. Risks: none identified -- grepped '_dbg' across klausmate/ (excluding user_files) after removal, zero hits; confirmed KEEP items (?v= cache-buster, _hidden_for_close, document-level click delegation, MutationObserver) all still present untouched. Next: none. Commit: b1ae797.
+- [2026-08-24 opus] Signed off: diff reviewed, all KEEP items verified present (cache-buster, _hidden_for_close, RuntimeError guards, delegation+observer), gate PASS, py_compile + node --check green. config.md entry is accurate incl. the K-064 preview interaction. Board commit deferred until the swarm drains.
+
+### K-071: Phase D1: embedding map foundation — 2D projection + graph data (no UI)
+owner: sonnet-ay
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/projection.py,klausmate/pdf_graph.py,tests/test_projection.py
+verify: test -f klausmate/projection.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_projection.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+First card of Phase D (Pouya's K-058: start the next stages): the
+Obsidian-like map of all embeddings. This card is the HEADLESS foundation
+only — the window/canvas UI is the next card, so everything here must be
+fully testable offline. NEW FILES ONLY; touch nothing existing.
+
+1. klausmate/projection.py (aqt-free, stdlib only — NO numpy, Anki's env
+   has none): project unit vectors (array('f') rows, the card_index/
+   pdf_index storage format) to 2D via PCA — top-2 principal components
+   by power iteration with deflation on mean-centered data, using
+   math.sumprod over memoryviews for the inner loops (same trick that
+   makes card_index.top_k rank 30k x 768 in ~0.25s). Deterministic:
+   seeded start vectors, fixed iteration count (~40) with an early-out on
+   convergence. Cap the input at max_points (default 4000) by even-stride
+   sampling so a 30k-note index stays interactive; the cap and stride are
+   parameters. API: project(rows: Sequence[memoryview|sequence], *,
+   max_points=4000, seed=0) -> list[tuple[float, float]] plus the chosen
+   row indices, normalized into [-1, 1] on both axes.
+2. klausmate/pdf_graph.py: build_graph_data(user_files, cfg) -> dict —
+   assembles the JSON the future canvas will render: PDF nodes (safe
+   name, display name, folder, threshold, retention if cached) placed at
+   the centroid of their matched notes' 2D positions; note nodes (nid,
+   xy); edges PDF->nid for matches at-or-above that PDF's threshold,
+   read from the existing matches.json caches via retention.load_matches
+   (import inside the function; treat None as 'unknown — skip that PDF,
+   never invent empties'). Read vectors via card_index/pdf_index public
+   loaders only — if a loader is missing, add nothing to those modules;
+   read the packed files directly here instead and note it on the card.
+   No Qt imports at module top; keep the module importable headless.
+3. tests/test_projection.py (new, follow the aqt-stub pattern from
+   tests/test_klausmate.py's header): projection determinism (same seed,
+   same output); two well-separated clusters in 768-d land well-separated
+   in 2D (inter-cluster 2D distance > intra-cluster); max_points
+   sampling respected; degenerate inputs (0 rows, 1 row, identical rows)
+   return without dividing by zero; build_graph_data on a synthetic
+   scratch store produces consistent node/edge counts and skips a PDF
+   whose match cache is absent. Standalone runner style: check()
+   counters + print(summary) + sys.exit like the other test files.
+
+Never point anything at the real user_files — scratch fixtures only.
+
+#### Comments
+- [2026-08-24 sonnet-ay] Decisions: projection.py does top-2 PCA via power iteration + deflation directly on the n x d centered data matrix (never forms the d x d covariance matrix). Both matrix-vector directions (X@v row-wise, X.T@s column-wise) reuse ONE packed array('d') buffer — column j is read via a strided memoryview slice mv[j:n*d:d] instead of building a separate transposed copy, so no extra O(n*d) transpose pass is needed. math.sumprod is used with the same pre-3.12 zip/sum fallback card_index.py already carries (this repo's plain python3 is 3.9.6, confirmed via 'python3 --version', no math.sumprod). pdf_graph.build_graph_data derives the embedding signature from the loaded card_index itself (cidx.provider, cidx.model) rather than recomputing embeddings.index_signature(cfg) — avoids a spurious 'stale index' false-skip if cfg drifts from what was actually indexed, and let pdf_graph.py skip importing embeddings.py entirely. It relies entirely on retention.load_matches' own invalidation checks (signature/dims/source_sig/digest/agg) to decide None='unknown, skip' rather than duplicating that staleness logic. retention.py is imported LAZILY inside build_graph_data (it pulls in aqt via curation.py at its own module top) so pdf_graph.py itself stays Qt-free at import time; card_index/pdf_index/pdf_handler/drive_store are the public loaders already documented in CLAUDE.md and needed no additions. One notable side effect: build_graph_data sets the module global retention.USER_FILES = user_files before calling retention.load_matches, because that function has no per-call user_files parameter — this mirrors the exact pattern tests/test_klausmate.py already uses (retention.USER_FILES = tmp) to redirect it in tests; in production user_files is always curation.USER_FILES already so it's a no-op there. PDF node 'retention' field is always None headlessly (FSRS scoring needs a live collection this module never has). A PDF whose cached matches don't overlap the projected/sampled note subset (when max_points caps a large collection) is skipped like an absent cache — documented as a tradeoff in pdf_graph.py's module docstring. Files: klausmate/projection.py (new), klausmate/pdf_graph.py (new), tests/test_projection.py (new). Risks: the retention.USER_FILES mutation above is the one thing worth a second look — it's an accepted pattern in this codebase but it is a cross-module global side effect. Also flagging for the reviewer: pdf_graph.py never validates that a PDF's own pdf_index/<safe>/ chunk index is complete/fresh before reading its matches.json — it doesn't need to, because retention.load_matches already re-validates (provider,model,dims,source_sig,digest,agg) against what's stored, so a stale/incomplete PDF index just yields no match cache -> skip, same as a totally absent one. Next: none — this card is headless data-layer only; the window/canvas UI is explicitly the next card per K-058 Phase D. Verify: 'test -f klausmate/projection.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_projection.py' -> exit 0, 28 passed, 0 failed. Rough timing line from the run: 'projected 4000x768 in 8.21s (no numpy, no C ext)' — that's under Python 3.9.6's math.sumprod-less fallback path (system python3 has no math.sumprod; confirmed the fallback is exercised, matching card_index.py's own compatibility story).
+- [2026-08-24 opus] Signed off. Review: scope exact (3 new files), import-pure headless, gate green, and one falsification finding — the second PC was unpinned (all tests green with deflation disabled); added two pinning tests, red-verified (corr=1.0) then 30/30 green. Worker's flagged retention.USER_FILES mutation reviewed: same-value write in production, acceptable for D1, but D2 should thread user_files as a real parameter into retention.load_matches instead. D2 notes: 8.2s projection on 4000x768 under python3.9-without-sumprod means the graph build MUST run on a QueryOp worker, never the main thread (Anki's own 3.13 has math.sumprod, so live timing will be much better — still off-thread).
+
+### K-072: Tear-off/re-dock SIGSEGV: reparent runs inside mouse-event delivery
+owner: opus
+priority: P2
+tags: library-era
+files: klausmate/__init__.py
+verify: grep -q "_defer_placement" klausmate/__init__.py && ! grep -nE "^ +self\._embed\(zone\)$" klausmate/__init__.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Pouya's reproduction (exact): float the PDF panel OUT of the window, then dock it back IN -> SIGSEGV in sipSubClass_QPdfView during QApplication event-filter delivery of a mouse event. Same signature as the K-068 crash but a DIFFERENT trigger, and K-068's close-time hide cannot help here.
+
+Root cause (traced, not guessed): _finalize_drag -> self._embed(zone) is called SYNCHRONOUSLY from inside eventFilter (app-filter release/press/buttonless-move at ~:1260-1266, bar release at ~:1432), and the manual_ghost drop path calls _embed/_tear_off inline at ~:1424-1428. _embed reparents the panel — with the live QPdfView inside it — from a floating top-level window into the host splitter. Reparenting across native windows destroys and recreates the widget subtree's native handles WHILE Qt is mid-delivery of a mouse event through the application-level filter; the next event's receiver pointer is then dangling, and sip segfaults converting it to a Python object before any of our Python code runs (so no try/except can catch it). This is the CLAUDE.md 'never reparent mid-mouse-gesture' gotcha resurfacing at drop time rather than pickup time.
+
+FIX: add a _defer_placement(fn) helper that schedules placement work via QTimer.singleShot(0, ...) with a liveness guard (skip if self._closed or the C++ object is gone — catch RuntimeError), and route EVERY placement call that can originate inside event delivery through it: both _embed and _tear_off in the manual_ghost drop, and _embed in _finalize_drag. The event returns to Qt first, the filter stack unwinds, the app filter is already removed by _reset_drag (which runs BEFORE the deferred work), and only then does the reparent happen with no event in flight.
+
+Keep _reset_drag's ordering: filter removal must still precede the deferred placement. Do not defer _make_floating calls that happen outside event delivery (panel_show's initial placement at ~:945/:1036) — those are already safe and deferring them would flash an unplaced panel.
+
+Headless verification is impossible for a native use-after-free; live check is Pouya repeating his exact reproduction several times, plus a re-dock on each of the four zones.
+
+#### Comments
+- [2026-08-24 opus] Committed fca2e41. Gate PASS, compile ok, full suite green. Honest confidence: the mechanism is traced end-to-end (synchronous reparent inside eventFilter -> dangling receiver -> sip conversion crash before any Python runs) and the fix removes it structurally, but like K-068 this is a native use-after-free no headless test can prove. Live check: float out, dock back in, repeated across above/below/left/right, plus a float-to-float move. Remaining known synchronous reparent is _start_panel_drag's tear-off, which startSystemMove requires — documented in the commit, not implicated in this crash.
