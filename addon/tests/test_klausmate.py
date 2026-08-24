@@ -467,5 +467,67 @@ if HAVE_RETENTION:
 
 shutil.rmtree(tmp, ignore_errors=True)
 srv.shutdown()
+
+print("== threshold default migration (retention._migrate_default_threshold) ==")
+
+_ret_mod = importlib.import_module("klausmate.retention")
+
+
+def _mig(cfg):
+    """Run the migration with the config write stubbed out."""
+    import types as _t
+    real_mw = _ret_mod.mw
+    written = {}
+    _ret_mod.mw = _t.SimpleNamespace(
+        taskman=_t.SimpleNamespace(run_on_main=lambda fn: fn())
+    )
+    real_pkg = _ret_mod.curation._pkg
+    _ret_mod.curation._pkg = lambda: _t.SimpleNamespace(
+        write_config=lambda c: written.update(c)
+    )
+    try:
+        return _ret_mod._migrate_default_threshold(cfg)
+    finally:
+        _ret_mod.mw = real_mw
+        _ret_mod.curation._pkg = real_pkg
+
+
+_D = _ret_mod.DEFAULT_THRESHOLD
+
+check("current default is 0.75", _D == 0.75)
+check(
+    "a stored 0.35 (first shipped default) moves to the current default",
+    _mig({"pdf_match_threshold": 0.35})["pdf_match_threshold"] == _D,
+)
+check(
+    "a stored 0.55 moves too, even though the OLD one-shot guard already fired",
+    _mig({"pdf_match_threshold": 0.55, "_threshold_default_migrated": True})[
+        "pdf_match_threshold"
+    ]
+    == _D,
+)
+check(
+    "a deliberate value is never touched",
+    _mig({"pdf_match_threshold": 0.42})["pdf_match_threshold"] == 0.42,
+)
+check(
+    "re-running at the same default is a no-op",
+    _mig({"pdf_match_threshold": 0.42, "_threshold_default_applied": _D})[
+        "pdf_match_threshold"
+    ]
+    == 0.42,
+)
+check(
+    "the retired one-shot guard is scrubbed",
+    "_threshold_default_migrated" not in _mig(
+        {"pdf_match_threshold": 0.55, "_threshold_default_migrated": True}
+    ),
+)
+check(
+    "a garbage stored value does not crash or overwrite blindly",
+    _mig({"pdf_match_threshold": "nonsense"}).get("pdf_match_threshold") == "nonsense",
+)
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

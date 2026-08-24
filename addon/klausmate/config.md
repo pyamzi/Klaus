@@ -53,7 +53,7 @@ moved, and the whole copy is one undo step. Copies get the
 
 - **pdf_match_threshold**: The single sensitivity control — how closely a
   card must match a PDF to count, for curation, the priorities score, and
-  the `!Library` tags alike. Default `0.55`. Each PDF also has its own
+  the `!Library` tags alike. Default `0.75`. Each PDF also has its own
   slider (PDF drive → right-click a PDF → **Match sensitivity…**), which
   overrides this for that PDF only.
 

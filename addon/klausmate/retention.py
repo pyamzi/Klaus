@@ -52,8 +52,18 @@ MATCHES_VERSION = 1
 # cached list and never triggers a recompute.
 MATCH_FLOOR = 0.15
 
-DEFAULT_THRESHOLD = 0.55
-_LEGACY_DEFAULT_THRESHOLD = 0.35  # the retired global default, one-time migrated up
+DEFAULT_THRESHOLD = 0.75
+# Every global default this add-on has ever shipped, oldest first. A stored
+# value equal to ANY of them was inherited, not chosen, so it follows the
+# current default forward; anything else is a deliberate setting and is left
+# alone. Keeping the whole history here (rather than one "previous default"
+# constant) means a user who skipped a version still lands on the current
+# default instead of being stranded on an intermediate one.
+_SHIPPED_DEFAULTS = (0.35, 0.55, 0.75)
+# Records the default last applied, so changing DEFAULT_THRESHOLD is the only
+# edit a future bump needs — no new boolean guard per change. Superseded the
+# one-shot _threshold_default_migrated flag, which could not re-run.
+_DEFAULT_APPLIED_KEY = "_threshold_default_applied"
 DEFAULT_AGG = "max"
 DEFAULT_MAX_CHUNKS = 1000
 
@@ -69,24 +79,35 @@ except ImportError:  # pre-3.12 fallback (Anki bundles 3.13)
 
 
 def _migrate_default_threshold(cfg: dict) -> dict:
-    """One-time bump of a stored 0.35 (the retired global default) up to
-    0.55 (Pouya's chosen default) — guarded so it runs exactly once per
-    profile and never touches a value someone set deliberately.
+    """Carry a stored default forward when DEFAULT_THRESHOLD changes, and
+    never touch a value someone set deliberately.
+
+    Runs once per default value, not once per profile: it records which
+    default it last applied, so a later bump re-runs for everyone instead
+    of stranding whoever already migrated. That matters because the
+    previous one-shot boolean had already fired for existing users at
+    0.55; without this they would have kept 0.55 forever while new
+    installs got 0.75.
 
     Only the GLOBAL config's ``pdf_match_threshold`` is in scope here.
     Per-PDF prefs.json entries (set_threshold/get_threshold) are a user
     choice "saved forever" and this never reads or writes prefs.json.
     """
-    if cfg.get("_threshold_default_migrated"):
+    if cfg.get(_DEFAULT_APPLIED_KEY) == DEFAULT_THRESHOLD:
         return cfg
     cfg = dict(cfg)
     try:
         current = float(cfg.get("pdf_match_threshold", DEFAULT_THRESHOLD))
     except (TypeError, ValueError):
         current = None
-    if current == _LEGACY_DEFAULT_THRESHOLD:
+    # Tolerance rather than ==: these round-trip through JSON, and a stored
+    # 0.5500000000000001 is still an inherited default, not a choice.
+    if current is not None and any(
+        abs(current - shipped) < 1e-9 for shipped in _SHIPPED_DEFAULTS
+    ):
         cfg["pdf_match_threshold"] = DEFAULT_THRESHOLD
-    cfg["_threshold_default_migrated"] = True
+    cfg[_DEFAULT_APPLIED_KEY] = DEFAULT_THRESHOLD
+    cfg.pop("_threshold_default_migrated", None)  # retired one-shot guard
     try:
         mw.taskman.run_on_main(lambda c=cfg: curation._pkg().write_config(c))
     except Exception as e:
