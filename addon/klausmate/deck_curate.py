@@ -78,7 +78,7 @@ def armed() -> str | None:
 def arm(safe: str | None) -> None:
     global _armed_pdf
     _armed_pdf = safe
-    _refresh_deck_browser()
+    _refresh_current_screen()
 
 
 def disarm_if(safe: str) -> None:
@@ -87,12 +87,21 @@ def disarm_if(safe: str) -> None:
         arm(None)
 
 
-def _refresh_deck_browser() -> None:
+def _refresh_current_screen() -> None:
+    """Re-render whichever deck-scoped screen is currently showing, so the
+    armed/idle drop square updates immediately after arm()/disarm() —
+    needed on the overview now that Browse/disarm can be triggered there
+    too, not just on the deck browser."""
     try:
-        if mw is not None and getattr(mw, "state", "") == "deckBrowser":
+        if mw is None:
+            return
+        state = getattr(mw, "state", "")
+        if state == "deckBrowser":
             mw.deckBrowser.refresh()
+        elif state == "overview":
+            mw.overview.refresh()
     except Exception as e:
-        print(f"[klausmate] deck browser refresh failed: {e}")
+        print(f"[klausmate] deck/overview refresh failed: {e}")
 
 
 # --------------------------------------------------------------- import
@@ -115,7 +124,7 @@ def _import_and_arm(paths: list[str], skipped: int = 0) -> None:
     if last:
         arm(last)
     else:
-        _refresh_deck_browser()
+        _refresh_current_screen()
 
 
 # ------------------------------------------------------------ deck scope
@@ -317,7 +326,18 @@ def on_deck_js_message(
     try:
         from aqt.deckbrowser import DeckBrowser, DeckBrowserBottomBar
 
-        if not isinstance(context, (DeckBrowser, DeckBrowserBottomBar)):
+        valid_contexts: tuple[type, ...] = (DeckBrowser, DeckBrowserBottomBar)
+        # The overview's content webview (mw.web) passes the Overview
+        # instance itself as bridge context (Overview._renderPage calls
+        # stdHtml(..., context=self)) — imported defensively since aqt
+        # isn't guaranteed importable in every host.
+        try:
+            from aqt.overview import Overview
+
+            valid_contexts += (Overview,)
+        except Exception:
+            pass
+        if not isinstance(context, valid_contexts):
             return handled
     except Exception:
         return handled
@@ -347,53 +367,80 @@ def on_overview_bottom(link_handler, links):
     return wrapped
 
 
+def _drop_square_html() -> str:
+    """Render the drop-PDF square: idle body + Browse anchor, or the armed
+    indicator + its × disarm link. Single source for every deck-scoped
+    screen — deck browser, deck overview, and (K-043) the Library window —
+    so they can never drift apart from each other.
+
+    Fixed to the bottom of the CONTENT webview's own viewport rather than
+    flowing in-place: on both the deck browser and the deck overview, the
+    stats/table HTML this gets appended to renders in the main content
+    webview (mw.web), while the button row (Get Shared / Curate Deck / …)
+    lives in a SEPARATE webview (mw.bottomWeb, via aqt.toolbar.BottomBar)
+    pinned below it — same split on both screens (both construct
+    ``self.bottom = BottomBar(mw, mw.bottomWeb)`` in the real Anki source).
+    There is no shared document to lay these two out against each other in
+    normal flow, so `position: fixed; bottom` is what actually lands this
+    directly above that button row on either screen — it stops exactly at
+    the edge of the content webview, which is exactly where the separate
+    bottom-bar webview begins.
+    """
+    if _armed_pdf:
+        label = _display_name(_armed_pdf)
+        safe_label = (
+            label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        body = (
+            f"Armed: <b>{safe_label}</b> — press "
+            "<b>Curate Deck</b> below. "
+            f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;'>"
+            "&times;</a>"
+        )
+        border = "1px solid rgba(58,130,247,0.85)"
+    else:
+        body = (
+            "Drop a lecture PDF here to curate a deck from it.<br>"
+            f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
+            "style='display:inline-block;margin-top:6px;padding:3px 10px;"
+            "border:1px solid rgba(128,128,128,0.55);border-radius:6px;"
+            "font-size:12px;color:inherit;text-decoration:none;'>"
+            "Browse&hellip;</a>"
+        )
+        border = "1px dashed rgba(128,128,128,0.55)"
+    return (
+        f"<div style='position:fixed;left:50%;bottom:10px;"
+        f"transform:translateX(-50%);z-index:50;"
+        f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
+        f"box-sizing:border-box;background:var(--window-bg,transparent);"
+        f"border:{border};border-radius:10px;text-align:center;"
+        f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
+    )
+
+
 def on_deck_browser_content(deck_browser: Any, content: Any) -> None:
     """Inject the drop square / armed indicator above the deck list."""
     if not hasattr(content, "stats"):
         return
     try:
-        if _armed_pdf:
-            label = _display_name(_armed_pdf)
-            safe_label = (
-                label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            )
-            body = (
-                f"Armed: <b>{safe_label}</b> — press "
-                "<b>Curate Deck</b> below. "
-                f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;'>"
-                "&times;</a>"
-            )
-            border = "1px solid rgba(58,130,247,0.85)"
-        else:
-            body = (
-                "Drop a lecture PDF here to curate a deck from it.<br>"
-                f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
-                "style='display:inline-block;margin-top:6px;padding:3px 10px;"
-                "border:1px solid rgba(128,128,128,0.55);border-radius:6px;"
-                "font-size:12px;color:inherit;text-decoration:none;'>"
-                "Browse&hellip;</a>"
-            )
-            border = "1px dashed rgba(128,128,128,0.55)"
-        # Fixed to the bottom of the deck-browser's own viewport rather
-        # than flowing in-place after the stats line: content.stats renders
-        # near the TOP of the page (right after the deck tree, per Anki's
-        # own _body template), while Get Shared / Create Deck / Import File
-        # / Curate Deck live in a SEPARATE webview (mw.bottomWeb) pinned
-        # below it. There is no shared document to lay these two out
-        # against each other in normal flow, so `position: fixed; bottom`
-        # is what actually lands this directly above that button row —
-        # it stops exactly at the edge of this webview, which is exactly
-        # where the other one begins.
-        content.stats += (
-            f"<div style='position:fixed;left:50%;bottom:10px;"
-            f"transform:translateX(-50%);z-index:50;"
-            f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
-            f"box-sizing:border-box;background:var(--window-bg,transparent);"
-            f"border:{border};border-radius:10px;text-align:center;"
-            f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
-        )
+        content.stats += _drop_square_html()
     except Exception as e:
         print(f"[klausmate] deck browser content injection failed: {e}")
+
+
+def on_overview_content(overview: Any, content: Any) -> None:
+    """Inject the same drop square on the deck overview screen — 'just
+    like it does for the main menu': opening a deck must not lose the
+    affordance the deck-list screen has. Appended to content.table, the
+    OverviewContent field that plays the same role content.stats does on
+    the deck browser (both are the last piece rendered into the _body
+    template before the closing </center>)."""
+    if not hasattr(content, "table"):
+        return
+    try:
+        content.table += _drop_square_html()
+    except Exception as e:
+        print(f"[klausmate] overview content injection failed: {e}")
 
 
 def _install_drop_wrap() -> None:
@@ -467,6 +514,11 @@ def setup() -> None:
             gui_hooks.deck_browser_will_render_content.append(on_deck_browser_content)
         except Exception as e:
             print(f"[klausmate] deck content hook failed: {e}")
+    if hasattr(gui_hooks, "overview_will_render_content"):
+        try:
+            gui_hooks.overview_will_render_content.append(on_overview_content)
+        except Exception as e:
+            print(f"[klausmate] overview content hook failed: {e}")
     try:
         gui_hooks.profile_will_close.append(_on_profile_will_close)
     except Exception as e:
