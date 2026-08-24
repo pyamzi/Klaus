@@ -230,5 +230,52 @@ w = World({**BASE, "klaus_engine": "claude", "claude_api_key": "sk-ant-1"},
 check("claude preselected", w.ask.currentData() == "claude:")
 check("no key warning when key present", w.warns["ask"] is None)
 
+print("== empty embedding_model resolver (K-039, manage_models._resolve_ollama_model) ==")
+
+
+def _resolve_ollama_model(configured, models, indexed_model, default):
+    """Transcribed verbatim from manage_models._resolve_ollama_model — if
+    that function changes this must too. Decides what real model name the
+    ollama 'Search model' field should show/hold when embedding_model is
+    empty, instead of silently falling through to
+    embeddings.DEFAULT_MODELS['ollama'] (which can mismatch an existing
+    index and make one click on 'Index cards now' discard it)."""
+    configured = configured.strip()
+    if configured:
+        return configured
+    if indexed_model and indexed_model in models:
+        return indexed_model
+    if len(models) == 1:
+        return models[0]
+    return default
+
+
+check(
+    "empty + indexed model installed -> the indexed model",
+    _resolve_ollama_model("", ["nomic-embed-text", "embeddinggemma:latest"],
+                          "embeddinggemma:latest", "nomic-embed-text")
+    == "embeddinggemma:latest",
+)
+check(
+    "empty + exactly one installed -> that one",
+    _resolve_ollama_model("", ["embeddinggemma:latest"], "", "nomic-embed-text")
+    == "embeddinggemma:latest",
+)
+check(
+    "empty + none installed -> hardcoded default",
+    _resolve_ollama_model("", [], "", "nomic-embed-text") == "nomic-embed-text",
+)
+check(
+    "non-empty -> untouched, indexed/installed state ignored",
+    _resolve_ollama_model("qwen3:4b", ["embeddinggemma:latest"],
+                          "embeddinggemma:latest", "nomic-embed-text")
+    == "qwen3:4b",
+)
+check(
+    "indexed model present but NOT installed -> falls through, not (a)",
+    _resolve_ollama_model("", ["all-minilm", "bge-m3"], "embeddinggemma:latest",
+                          "nomic-embed-text") == "nomic-embed-text",
+)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

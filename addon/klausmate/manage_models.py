@@ -112,6 +112,30 @@ def _format_pull_event(ev: dict) -> tuple[str, int]:
     return label, pct
 
 
+def _resolve_ollama_model(
+    configured: str, models: list[str], indexed_model: str, default: str
+) -> str:
+    """What real model name the Ollama 'Search model' field should show when
+    the config's embedding_model is empty, instead of silently falling
+    through to embeddings.DEFAULT_MODELS['ollama'] — a stored index built
+    with a different model would then look orphaned, and one click on
+    'Index cards now' would discard it (K-039). Dialog-level resolution
+    only; the embedding contract in embeddings.py is untouched.
+
+    Precedence: (a) the model the existing index was actually built with,
+    if it is currently installed; (b) the one model installed, if there is
+    exactly one; (c) the hardcoded default.
+    """
+    configured = configured.strip()
+    if configured:
+        return configured
+    if indexed_model and indexed_model in models:
+        return indexed_model
+    if len(models) == 1:
+        return models[0]
+    return default
+
+
 class _KlausManageDialog(QDialog):
     """QDialog whose EVERY close path goes through the confirm callback.
 
@@ -227,7 +251,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     models_layout.setSpacing(8)
 
     _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
-    _WARN = "color: #d9822b; font-size: 11px;"
     _BOLD_TITLE = "QGroupBox { font-weight: 600; }"
 
     def _caption(text: str) -> QLabel:
@@ -235,21 +258,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         lbl.setStyleSheet(_MUTED)
         lbl.setWordWrap(True)
         return lbl
-
-    def _job_row(combo: QComboBox) -> tuple[QHBoxLayout, QLabel, QPushButton]:
-        """combo + inline warning + a fix-it button, as one form field."""
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        row.addWidget(combo, 1)
-        warn = QLabel()
-        warn.setStyleSheet(_WARN)
-        warn.setVisible(False)
-        row.addWidget(warn)
-        fix = QPushButton("Pull it")
-        fix.setVisible(False)
-        row.addWidget(fix)
-        return row, warn, fix
 
     embed_box = QGroupBox("Semantic search")
     embed_box.setStyleSheet(_BOLD_TITLE)
@@ -264,13 +272,24 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_form = QFormLayout()
     embed_form.setContentsMargins(0, 0, 0, 0)
     embed_form.setSpacing(6)
+    embed_form.setLabelAlignment(
+        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+    )
+    embed_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
     embed_provider_combo = QComboBox()
     embed_provider_combo.addItem("Voyage API (default)", "voyage")
     embed_provider_combo.addItem("OpenAI API", "openai")
     embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
-    embed_row, embed_warn, embed_fix_btn = _job_row(embed_provider_combo)
-    embed_fix_btn.setText("Pull it")
+    embed_provider_combo.setSizePolicy(
+        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+    )
+    embed_row = QHBoxLayout()
+    embed_row.setContentsMargins(0, 0, 0, 0)
+    embed_row.addWidget(embed_provider_combo, 1)
+    embed_fix_btn = QPushButton("Pull it")
+    embed_fix_btn.setVisible(False)
+    embed_row.addWidget(embed_fix_btn)
     embed_form.addRow("Embeddings from:", embed_row)
 
     embed_model_lbl = QLabel("Search model:")
@@ -279,6 +298,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_model_combo.setSizePolicy(
         QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
     )
+    embed_model_combo.setMinimumWidth(220)
     embed_form.addRow(embed_model_lbl, embed_model_combo)
 
     embed_key_lbl = QLabel("API key:")
@@ -447,21 +467,39 @@ def manage_models_dialog(setup: bool = False) -> None:
             return ""
         return item.data(Qt.ItemDataRole.UserRole) or item.text()
 
+    def _needs_local_runtime(cfg: dict) -> bool:
+        """True only when Ollama is the active embedding provider. A cloud
+        (Voyage/OpenAI) user has no reason to land on a ~1GB local-runtime
+        install page just because Ollama isn't running (K-036) — the
+        install page stays reachable (switch the provider to Ollama, or
+        click Pull), it just stops being the default landing."""
+        from . import embeddings
+
+        return embeddings.provider_name(cfg) == "ollama"
+
     def refresh() -> None:
+        cfg = _pkg().get_config()
         ep = endpoint_url()
-        if not ollama_reachable(ep):
+        models: list[str] = []
+        reached = False
+        if ollama_reachable(ep):
+            try:
+                models = list(_pkg().client().list_models())
+                reached = True
+            except OllamaError:
+                reached = False
+
+        if not reached and _needs_local_runtime(cfg):
             show_install_page()
             return
 
         stack.setCurrentIndex(1)
-        try:
-            models = _pkg().client().list_models()
-        except OllamaError:
-            show_install_page()
-            return
-
-        ui_state["models"] = list(models)
-        status_lbl.setText(f"Connected to {ep}")
+        ui_state["models"] = models
+        status_lbl.setText(
+            f"Connected to {ep}"
+            if reached
+            else "Local library needs Ollama — not required for your current provider."
+        )
         sync_embed_widgets()
         rebuild_library_list()
 
@@ -775,7 +813,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         return f"embedding_api_key_{provider}"
 
     def sync_embed_widgets() -> None:
-        from . import embeddings
+        from . import curation, embeddings
 
         ui_state["syncing"] = True
         try:
@@ -790,7 +828,26 @@ def manage_models_dialog(setup: bool = False) -> None:
             if provider == "ollama":
                 for name in ui_state["models"]:
                     embed_model_combo.addItem(name, name)
-            embed_model_combo.setEditText(str(cfg.get("embedding_model") or ""))
+            configured_model = str(cfg.get("embedding_model") or "")
+            if provider == "ollama":
+                st = curation.index_stats()
+                indexed_model = st["model"] if st["exists"] else ""
+                resolved = _resolve_ollama_model(
+                    configured_model,
+                    ui_state["models"],
+                    indexed_model,
+                    embeddings.DEFAULT_MODELS["ollama"],
+                )
+                if resolved != configured_model:
+                    # Heal the config now, not just the widget — an empty
+                    # field must not silently mean DEFAULT_MODELS['ollama']
+                    # everywhere else this config is read (index_signature,
+                    # the real indexing pipeline in curation.py).
+                    cfg["embedding_model"] = resolved
+                    _pkg().write_config(cfg)
+                embed_model_combo.setEditText(resolved)
+            else:
+                embed_model_combo.setEditText(configured_model)
             edit = embed_model_combo.lineEdit()
             if edit is not None:
                 edit.setPlaceholderText(
@@ -849,22 +906,16 @@ def manage_models_dialog(setup: bool = False) -> None:
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
-        # Row-level warning, same pattern as the (now-removed) job rows.
         # embed_fix_btn's role (open a key page vs. pull a model) switches
-        # with `kind` —
-        # on_embed_fix_clicked() reads ui_state["embed_fix_kind"] rather
-        # than being re-wired here, so there is exactly one .connect() for
-        # this button for the life of the dialog (see the connect block).
+        # with `kind`. on_embed_fix_clicked() reads ui_state["embed_fix_kind"]
+        # rather than being re-wired here, so there is exactly one .connect()
+        # for this button for the life of the dialog (see the connect block).
         kind = _embed_fix_kind()
         ui_state["embed_fix_kind"] = kind
         if kind == "key":
-            site = "voyageai.com" if provider == "voyage" else "platform.openai.com"
-            embed_warn.setText(f"⚠ key needed ({site})")
             embed_fix_btn.setText("Get key")
         elif kind == "model":
-            embed_warn.setText("⚠ not installed")
             embed_fix_btn.setText("Pull it")
-        embed_warn.setVisible(bool(kind))
         embed_fix_btn.setVisible(bool(kind))
 
     def on_embed_fix_clicked() -> None:
@@ -1025,28 +1076,22 @@ def manage_models_dialog(setup: bool = False) -> None:
                 f"Enter your {provider} API key above before indexing."
             )
             return
-        note_count = mw.col.note_count() if mw.col else 0
         st = curation.index_stats()
-        rebuild_note = (
-            "\n\nThe embedding settings changed, so the existing index is "
-            "rebuilt from scratch."
-            if st["exists"] and (st["provider"], st["model"]) != sig
-            else ""
-        )
-        where = (
-            "locally via Ollama — free and private"
-            if provider == "ollama"
-            else f"via the {provider} API — billed to your key"
-        )
-        ok = QMessageBox.question(
-            dlg,
-            "Index cards?",
-            f"Klaus will embed {note_count:,} notes with {model} ({where}). "
-            "You can cancel any time — progress is saved and indexing "
-            f"resumes where it stopped.{rebuild_note}\n\nContinue?",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
+        if st["exists"] and (st["provider"], st["model"]) != sig:
+            # Destructive: the stored vectors don't match the model about
+            # to run, so a rebuild-from-scratch is one confirm away rather
+            # than one click away. A matching signature (fresh build or
+            # incremental update) skips this prompt entirely.
+            note_count = mw.col.note_count() if mw.col else 0
+            ok = QMessageBox.question(
+                dlg,
+                "Re-index from scratch?",
+                f"Re-index all {note_count:,} cards from scratch? The "
+                f"existing index was built with {st['model']} and the "
+                f"current setting is {model}.",
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return
         if provider == "ollama" and model not in ui_state["models"]:
             _pull_embedder_then_index(model)
         else:
