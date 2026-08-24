@@ -12,7 +12,8 @@
 ### K-050: user_files/README.txt: ships to users but is untracked, and still describes autocomplete
 owner: -
 priority: P2
-tags: needs-human,audit
+tags: audit
+files: 
 verify: human confirms the file is tracked and its text matches the current product
 created: 2026-08-23
 
@@ -28,31 +29,6 @@ SUGGESTED FIX, for Pouya's call: move the template OUT of user_files — keep it
 
 #### Comments
 - [2026-08-23 Pouya] Do the suggested fix
-
-### K-051: Finish the recency + drop-filter unification in __init__.py
-owner: -
-priority: P2
-tags: sonnet-safe,library-era
-files: klausmate/__init__.py
-verify: grep -q list_by_recency klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
-created: 2026-08-23
-
-Two small leftovers K-049 correctly reported as owed rather than reaching outside its file scope. Both are in klausmate/__init__.py.
-
-1. The _PdfTabContainer ＋ menu still re-derives its own recency order with a private _recency helper that reads pdfs/<safe>.pdf's mtime. That mtime is PRESERVED from the source file by shutil.copy2, so a lecture authored in 2019 and imported today sorts last. K-049 built pdf_handler.list_by_recency() for exactly this — it ranks by last_used and falls back to contexts/<safe>.txt, which is written fresh at import and therefore means ingest time. Swap the call and delete the private helper. deck_curate.py already uses the shared one, so after this both menus agree.
-   While you are there: the two menus also LABEL PDFs differently — deck_curate shows drive_store.display_name, this menu shows the raw safe basename, so the same PDF reads as 'Renal_Phys' in one place and 'Renal Physiology (Dr. K).pdf' in the other. Use the display name here too.
-
-2. _PdfBar's drag-and-drop filter checks only the .pdf suffix; deck_curate checks the suffix AND os.path.isfile. A directory named foo.pdf dropped on the editor bar reaches import_pdf_file; dropped on the deck screen it does not. Align on the stricter form.
-
-Neither is user-visible as a crash — they are consistency bugs — but the recency one produces a menu that is simply wrong about which PDF you used last.
-
-Full suite green (257 across 6 files); py_compile through the Anki symlink; stage by path.
-
-## Doing
-
-## Review
-
-## Done
 
 ### K-052: Preferences panel: tabs, and a control for the default sensitivity
 owner: sonnet-aq
@@ -91,3 +67,29 @@ Done when: verify passes, the panel is tabbed with the install page still a sepa
 - [2026-08-23 Pouya] The sensitivity needs to update in the library panel when it is updated in the settings panel
 - [2026-08-23 Pouya] currently it does not update the library sensitivity like I had imagined
 - [2026-08-23 orchestrator] Signed off, with seven tests added by me on review (commit after 189de6b). The implementation is right and the hardening landed exactly as asked: the flag is written from sliderReleased only, behind the syncing guard, and only when the value actually differs. The docstring explains the failure mode for the next reader, which is the part that keeps it from being undone by accident. Tab split is sensible, the install page stayed a mode rather than becoming a tab, and the caption reuses the Library's own 'Match sensitivity' vocabulary so the two scopes read as one concept. WHAT I FOUND ON REVIEW. I falsified the new tests by deleting the ui_state['syncing'] guard from the transcribed save — and all 50 still passed. Then I simulated a naive valueChanged wiring by calling save mid-sync: still all green. Every slider test was satisfied by the value-differs guard ALONE, because sync always sets the slider to the stored value, so the two agree and the save returns early whichever guard you remove. The guard the whole hardening rests on was untested; a later refactor could have deleted it in good conscience. It is not redundant. The slider steps in 1/100, so any stored value it cannot represent (hand-edited config, or a future writer with more precision) makes widget and stored genuinely DIFFER during a programmatic sync. At that point only the syncing guard stops merely OPENING the dialog from rewriting the value and stamping _threshold_user_set — the exact silent opt-out we were defending against, reached by a different door. Added seven checks pinning it, including the mirror case (with syncing clear the same difference DOES persist) so the test proves the guard is what blocked it rather than the value-diff check. Verified they fail — 3 red — with the guard removed, and pass with it restored. Suite 264 -> 280 (worker) -> 287 (mine). py_compile clean through the symlink. Tabs and slider layout still need Pouya in a restarted Anki.
+
+## Doing
+
+### K-051: Finish the recency + drop-filter unification in __init__.py
+owner: sonnet-ar
+priority: P2
+tags: sonnet-safe,library-era
+files: klausmate/__init__.py
+verify: grep -q list_by_recency klausmate/__init__.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py && env QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py
+created: 2026-08-23
+claimed: 2026-08-23
+
+Two small leftovers K-049 correctly reported as owed rather than reaching outside its file scope. Both are in klausmate/__init__.py.
+
+1. The _PdfTabContainer ＋ menu still re-derives its own recency order with a private _recency helper that reads pdfs/<safe>.pdf's mtime. That mtime is PRESERVED from the source file by shutil.copy2, so a lecture authored in 2019 and imported today sorts last. K-049 built pdf_handler.list_by_recency() for exactly this — it ranks by last_used and falls back to contexts/<safe>.txt, which is written fresh at import and therefore means ingest time. Swap the call and delete the private helper. deck_curate.py already uses the shared one, so after this both menus agree.
+   While you are there: the two menus also LABEL PDFs differently — deck_curate shows drive_store.display_name, this menu shows the raw safe basename, so the same PDF reads as 'Renal_Phys' in one place and 'Renal Physiology (Dr. K).pdf' in the other. Use the display name here too.
+
+2. _PdfBar's drag-and-drop filter checks only the .pdf suffix; deck_curate checks the suffix AND os.path.isfile. A directory named foo.pdf dropped on the editor bar reaches import_pdf_file; dropped on the deck screen it does not. Align on the stricter form.
+
+Neither is user-visible as a crash — they are consistency bugs — but the recency one produces a menu that is simply wrong about which PDF you used last.
+
+Full suite green (257 across 6 files); py_compile through the Anki symlink; stage by path.
+
+## Review
+
+## Done
