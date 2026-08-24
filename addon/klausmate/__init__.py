@@ -676,6 +676,25 @@ def import_pdf_file(path: str) -> str | None:
 # ------------------------------- PDF panel --------------------------------
 
 
+def _ensure_sidebar_pdf(editor: Editor) -> bool:
+    """Load the active PDF into the dock viewer if it isn't already.
+
+    Module-level since K-056 (which removed the bottom PDF bar and the
+    panel widget that hosted it) — the toolbar "Library..." button and
+    _PdfTabContainer.showEvent both need this and neither owns a panel
+    widget to hang it off anymore.
+    """
+    active = pdf_handler.get_active_pdf(USER_FILES)
+    if not active:
+        return False
+    sidebar = getattr(editor, "_klausmate_sidebar", None)
+    if sidebar is None:
+        return False
+    if not sidebar.is_loaded(active):
+        sidebar.load_pdf(active)
+    return True
+
+
 def _on_library_button(editor: Editor) -> None:
     """Toolbar "Library..." button: the old bottom bar's toggle role.
 
