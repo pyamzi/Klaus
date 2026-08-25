@@ -174,7 +174,10 @@ def _rearm_watcher(root: str | None) -> None:
             _fs_watcher = QFileSystemWatcher(mw)
             _fs_debounce = QTimer(mw)
             _fs_debounce.setSingleShot(True)
-            _fs_debounce.setInterval(700)
+            # 350ms (K-085): a Preview save should land in Klaus in
+            # well under a second; still long enough to coalesce the
+            # multi-event bursts Finder emits per move.
+            _fs_debounce.setInterval(350)
             _fs_debounce.timeout.connect(_on_fs_tick)
             _fs_watcher.directoryChanged.connect(
                 lambda _p: _fs_debounce.start()

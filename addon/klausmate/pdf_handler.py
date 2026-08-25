@@ -1240,6 +1240,21 @@ def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
         print(f"[klausmate] tombstone write failed for {name}: {exc}")
 
 
+def remove_records(user_files_dir: str, name: str, ids) -> int:
+    """Drop records by id (K-085: the viewer's post-bake callback
+    removes marks the bake omitted as externally deleted). Returns the
+    number removed; preserves every other doc key."""
+    drop = {str(i) for i in ids if i}
+    if not drop:
+        return 0
+    records = load_annotations(user_files_dir, name)
+    kept = [r for r in records if str(r.get("id")) not in drop]
+    removed = len(records) - len(kept)
+    if removed:
+        save_annotations(user_files_dir, name, kept)
+    return removed
+
+
 def load_baked_native(user_files_dir: str, name: str) -> set:
     """Ids of the native records present as marks in the file as of the
     last successful bake (K-084) — replaced wholesale per bake."""
@@ -1313,7 +1328,7 @@ def _bake_color(value, fallback: str) -> str:
 def bake_annotations(
     user_files_dir: str,
     name: str,
-    baked_native_out: list | None = None,
+    report: dict | None = None,
 ) -> bool:
     """Bake stored highlights/notes into ``pdfs/<base>.pdf`` as REAL PDF
     annotations (visible in Preview/Acrobat). Returns False on failure.
@@ -1373,6 +1388,7 @@ def bake_annotations(
         }
         suppressed = load_suppressed(user_files_dir, name)
         carried: list[tuple[int, Any]] = []
+        present_primary: set[str] = set()
         if os.path.isfile(working):
             try:
                 wreader = PdfReader(working)
@@ -1386,7 +1402,10 @@ def bake_annotations(
                                 continue
                             nm = str(o.get("/NM") or "")
                             if nm.startswith(_KLAUS_NM):
-                                rid = nm[len(_KLAUS_NM):].split(":", 1)[0]
+                                tail = nm[len(_KLAUS_NM):]
+                                rid = tail.split(":", 1)[0]
+                                if ":" not in tail:
+                                    present_primary.add(rid)
                                 if rid not in ext_ids:
                                     # Klaus-native: regenerated below.
                                     continue
@@ -1428,9 +1447,42 @@ def bake_annotations(
                 )
                 carried = []
 
-        if not native and not carried:
+        # Resurrection guard (K-085): a record whose mark the LAST bake
+        # put in the file, now absent while other Klaus marks survived,
+        # was deleted in the outside app after our records last synced —
+        # regenerating it would resurrect a deliberate deletion (the
+        # race: Preview deletes, a pending bake fires before the mirror
+        # ran). Omit it and report; the caller drops the record.
+        # Zero surviving marks = stale-model clobber, same rule as the
+        # mirror: bake everything, never mass-omit.
+        ledger = load_baked_native(user_files_dir, name)
+        omitted: list[str] = []
+        native_to_bake: list[dict] = []
+        for hl in native:
+            rid = str(hl.get("id"))
+            if (
+                present_primary
+                and rid in ledger
+                and rid not in present_primary
+            ):
+                omitted.append(rid)
+                continue
+            native_to_bake.append(hl)
+        if report is not None:
+            report["omitted_native"] = omitted
+
+        if not native_to_bake and not carried:
             # Un-bake: nothing of anyone's to keep — pristine back.
             _atomic_replace_from(pristine, working)
+            if report is not None:
+                report["native_ids"] = []
+                try:
+                    st = os.stat(working)
+                    report["stat"] = (
+                        st.st_ino, st.st_mtime_ns, st.st_size
+                    )
+                except OSError:
+                    pass
             print(f"[klausmate] un-baked (restored pristine): {base}.pdf")
             return True
 
@@ -1460,7 +1512,7 @@ def bake_annotations(
                 )
         baked = 0
         baked_ids_now: list[str] = []
-        for hl in native:
+        for hl in native_to_bake:
             page = hl.get("page")
             if not isinstance(page, int) or not (0 <= page < n_pages):
                 print(
@@ -1563,8 +1615,13 @@ def bake_annotations(
                     os.remove(tmp)
                 except OSError:
                     pass
-        if baked_native_out is not None:
-            baked_native_out.extend(baked_ids_now)
+        if report is not None:
+            report["native_ids"] = baked_ids_now
+            try:
+                st = os.stat(working)
+                report["stat"] = (st.st_ino, st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
         print(
             f"[klausmate] baked {baked} annotation record(s) into "
             f"{base}.pdf ({len(carried)} outside mark(s) carried)"
@@ -1796,9 +1853,13 @@ def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
                         continue
                     nm = str(o.get("/NM") or "")
                     if nm.startswith(_KLAUS_NM):
-                        marked_ids.add(
-                            nm[len(_KLAUS_NM):].split(":", 1)[0]
-                        )
+                        tail = nm[len(_KLAUS_NM):]
+                        # Only PRIMARY marks count as present (K-085):
+                        # a suffixed satellite (the ":note" sticky) left
+                        # behind after Preview deleted the highlight
+                        # must not mask that deletion.
+                        if ":" not in tail:
+                            marked_ids.add(tail)
                         continue
                     contents = o.get("/Contents")
                     contents = str(contents) if contents else ""

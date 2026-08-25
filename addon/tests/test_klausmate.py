@@ -1585,11 +1585,12 @@ try:
         {"id": idb, "page": 0, "rects": [[50.0, 200.0, 90.0, 12.0]],
          "color": "#fadc50", "note": ""},
     ])
-    nd_out = []
+    nd_rep = {}
     check("bake reports the native ids it wrote",
-          pdf_handler.bake_annotations(nd_uf, ND, baked_native_out=nd_out)
-          and sorted(nd_out) == sorted([ida, idb]), repr(nd_out))
-    pdf_handler.mark_native_baked(nd_uf, ND, nd_out)
+          pdf_handler.bake_annotations(nd_uf, ND, report=nd_rep)
+          and sorted(nd_rep.get("native_ids") or [])
+          == sorted([ida, idb]), repr(nd_rep))
+    pdf_handler.mark_native_baked(nd_uf, ND, nd_rep["native_ids"])
 
     def nd_strip(drop_ids):
         r = _NdReader(nd_working)
@@ -1676,6 +1677,107 @@ except Exception as e:
           f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 finally:
     shutil.rmtree(nd_uf, ignore_errors=True)
+
+print("== K-085: satellite masking + bake omission ==")
+sm_uf = tempfile.mkdtemp(prefix="klaus_sm_uf_")
+try:
+    from pypdf import PdfReader as _SmReader, PdfWriter as _SmWriter
+    from pypdf.generic import ArrayObject as _SmArray, NameObject as _SmName
+
+    SM = "K85_Sat"
+    os.makedirs(os.path.join(sm_uf, "pdfs"))
+    sm_working = os.path.join(sm_uf, "pdfs", SM + ".pdf")
+    w = _SmWriter()
+    w.add_blank_page(width=612, height=792)
+    with open(sm_working, "wb") as f:
+        w.write(f)
+
+    idx, idb = "ee" * 16, "ff" * 16
+    pdf_handler.save_annotations(sm_uf, SM, [
+        {"id": idx, "page": 0, "rects": [[50.0, 100.0, 90.0, 12.0]],
+         "color": "#fadc50", "note": "remember this"},
+        {"id": idb, "page": 0, "rects": [[50.0, 300.0, 90.0, 12.0]],
+         "color": "#fadc50", "note": ""},
+    ])
+    sm_rep = {}
+    check("bake with note succeeds",
+          pdf_handler.bake_annotations(sm_uf, SM, report=sm_rep))
+    check("report lists both native ids, none omitted",
+          sorted(sm_rep.get("native_ids") or []) == sorted([idx, idb])
+          and sm_rep.get("omitted_native") == [], repr(sm_rep))
+    check("report stat matches the written file",
+          tuple(sm_rep.get("stat") or ()) == (lambda st: (
+              st.st_ino, st.st_mtime_ns, st.st_size))(os.stat(sm_working)),
+          repr(sm_rep.get("stat")))
+    pdf_handler.mark_native_baked(sm_uf, SM, sm_rep["native_ids"])
+
+    # Preview deletes the HIGHLIGHT of the noted record — its sticky
+    # (klausmate:<id>:note) stays behind, as Preview treats them as
+    # separate annotations.
+    r = _SmReader(sm_working)
+    w2 = _SmWriter(clone_from=r)
+    for pg in w2.pages:
+        raw = pg.get("/Annots")
+        if raw is None:
+            continue
+        keep = [
+            a for a in list(raw.get_object())
+            if not (
+                str(a.get_object().get("/NM") or "") == "klausmate:" + idx
+                and str(a.get_object().get("/Subtype")) == "/Highlight"
+            )
+        ]
+        pg[_SmName("/Annots")] = _SmArray(keep)
+    tmp = sm_working + ".tmp"
+    with open(tmp, "wb") as f:
+        w2.write(f)
+    os.replace(tmp, sm_working)
+
+    sm_res = pdf_handler.scan_working_annotations(sm_uf, SM)
+    check("orphaned sticky does NOT mask the deleted highlight",
+          isinstance(sm_res, dict)
+          and idx not in (sm_res.get("marked_ids") or set())
+          and idb in (sm_res.get("marked_ids") or set()),
+          repr(sm_res and sm_res.get("marked_ids")))
+
+    # Resurrection race: records still hold the deleted mark when the
+    # next bake fires — the bake must OMIT it, report it, and drop the
+    # orphaned sticky, not regenerate them.
+    sm_rep2 = {}
+    check("bake succeeds post-delete",
+          pdf_handler.bake_annotations(sm_uf, SM, report=sm_rep2))
+    check("bake omits the externally deleted mark",
+          sm_rep2.get("omitted_native") == [idx]
+          and sm_rep2.get("native_ids") == [idb], repr(sm_rep2))
+    sm_annots = [
+        a.get_object()
+        for a in (_SmReader(sm_working).pages[0].get("/Annots") or [])
+    ]
+    check("file regenerated without the mark or its orphan sticky",
+          [str(o.get("/NM") or "") for o in sm_annots]
+          == ["klausmate:" + idb],
+          repr([(str(o.get("/Subtype")), str(o.get("/NM") or ""))
+                for o in sm_annots]))
+
+    # Viewer post-bake flow: drop omitted records, then ledger.
+    check("remove_records drops by id",
+          pdf_handler.remove_records(sm_uf, SM, sm_rep2["omitted_native"])
+          == 1
+          and [x.get("id") for x in pdf_handler.load_annotations(sm_uf, SM)]
+          == [idb])
+    pdf_handler.mark_native_baked(sm_uf, SM, sm_rep2["native_ids"])
+    sm_res = pdf_handler.scan_working_annotations(sm_uf, SM)
+    check("mirror settles quiet after the full flow",
+          isinstance(sm_res, dict)
+          and pdf_handler.mirror_foreign_annotations(sm_uf, SM, sm_res) == 0
+          and [x.get("id") for x in pdf_handler.load_annotations(sm_uf, SM)]
+          == [idb])
+except Exception as e:
+    import traceback
+    check("K-085 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(sm_uf, ignore_errors=True)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

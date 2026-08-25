@@ -1734,8 +1734,10 @@ class PdfViewer(QWidget):
             print(f"[klausmate] save annotations failed: {exc}")
 
     def _schedule_bake(self, user_files_dir: str, name: str) -> None:
-        """Debounce a PDF-annotation bake (~1200ms, restarted on every
-        change). Args are captured by value NOW — the viewer may switch
+        """Debounce a PDF-annotation bake (~500ms, restarted on every
+        change — K-085 dropped it from 1200ms so Klaus edits reach the
+        file, and Preview, in well under a second). Args are captured
+        by value NOW — the viewer may switch
         tabs before the timer fires, and the bake must target the pdf
         whose annotations just changed. Pending jobs are a SET (ordered
         dict): annotating PDF A then PDF B inside one debounce window
@@ -1745,7 +1747,7 @@ class PdfViewer(QWidget):
             if self._bake_timer is None:
                 timer = QTimer(self)
                 timer.setSingleShot(True)
-                timer.setInterval(1200)
+                timer.setInterval(500)
                 timer.timeout.connect(self._on_bake_timer)
                 self._bake_timer = timer
             self._bake_timer.start()
@@ -1782,34 +1784,39 @@ class PdfViewer(QWidget):
                 for user_files_dir, name in jobs:
                     try:
                         print(f"[klausmate] bake started: {name}")
-                        baked_ids: list = []
+                        rep: dict = {}
                         ok = pdf_handler.bake_annotations(
-                            user_files_dir,
-                            name,
-                            baked_native_out=baked_ids,
+                            user_files_dir, name, report=rep
                         )
                         print(
                             f"[klausmate] bake finished: {name} "
                             f"({'ok' if ok else 'FAILED'})"
                         )
                         if ok:
-                            # Main thread: refresh fingerprints (our own
-                            # write must not read as an external change,
-                            # K-078) and record which native marks the
-                            # file now holds (K-084 delete detection).
+                            # Main thread, in order: pin the fingerprint
+                            # of the file WE wrote (K-078/K-085), drop
+                            # records for marks the bake omitted as
+                            # externally deleted (resurrection race),
+                            # refresh overlays, then the ledger.
                             def _post(
                                 d=user_files_dir,
                                 n=name,
-                                ids=list(baked_ids),
+                                r=dict(rep),
                             ) -> None:
-                                _refresh_stats_for(n)
+                                _refresh_stats_for(n, r.get("stat"))
                                 try:
                                     from . import pdf_handler as _ph
 
-                                    _ph.mark_native_baked(d, n, ids)
+                                    omitted = r.get("omitted_native") or []
+                                    if omitted:
+                                        _ph.remove_records(d, n, omitted)
+                                        _reload_records_for(n)
+                                    _ph.mark_native_baked(
+                                        d, n, r.get("native_ids") or []
+                                    )
                                 except Exception as exc:
                                     print(
-                                        "[klausmate] baked-ids record "
+                                        "[klausmate] post-bake sync "
                                         f"failed: {exc}"
                                     )
 
@@ -4001,14 +4008,22 @@ def poll_external_changes() -> None:
             pass
 
 
-def _refresh_stats_for(name: str) -> None:
+def _refresh_stats_for(name: str, stat: tuple | None = None) -> None:
     """Re-fingerprint every sidebar showing ``name`` — called after a
     successful bake so Klaus's OWN write to the working file never
     reads as an external change (without this, every highlight edit
-    would reload the viewer ~2s later via the watcher)."""
+    would reload the viewer ~2s later via the watcher).
+
+    ``stat`` is the fingerprint of the file the bake actually wrote
+    (K-085): stat'ing the path here instead could swallow a Preview
+    save that landed between the bake's os.replace and this callback —
+    it would be recorded as "current" and never mirrored."""
     for sb in list(_open_sidebars):
         try:
             if getattr(sb, "_name", None) != name:
+                continue
+            if stat is not None:
+                sb._file_stat = tuple(stat)
                 continue
             from . import pdf_handler
             from . import USER_FILES  # type: ignore
@@ -4016,6 +4031,24 @@ def _refresh_stats_for(name: str) -> None:
             path = pdf_handler.pdf_path_for(USER_FILES, name)
             if path:
                 sb._file_stat = _stat_of(path)
+        except Exception:
+            pass
+
+
+def _reload_records_for(name: str) -> None:
+    """Refresh the overlay of every viewer showing ``name`` from the
+    records on disk (K-085: after the post-bake callback removed marks
+    that were deleted externally)."""
+    for sb in list(_open_sidebars):
+        try:
+            v = getattr(sb, "_viewer", None)
+            if v is None or getattr(v, "_annotations_name", None) != name:
+                continue
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            v._highlights = pdf_handler.load_annotations(USER_FILES, name)
+            v._refresh_highlight_overlay()
         except Exception:
             pass
 
