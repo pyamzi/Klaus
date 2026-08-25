@@ -373,3 +373,26 @@ ledger drops removed ids; bake omits with zero marks present.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). Ledger self-seeds from observed marks + prunes to live records; clobber guard replaced by trust-the-delete plus removed_native recovery bucket (50 entries / 24h); one-time legacy reconciliation gated on pdf-newer-than-json; bake omission aligned. Falsified seed and legacy paths separately (seeding test strengthened after v1 passed via the legacy path). 253+82 green, AST clean. Live: his RCTs leftovers should clear on next tab load (pdf newer than json); delete-the-only-highlight in Preview now propagates.
+
+### K-088: Toolbar order: Library sits between Add and Browse
+owner: -
+priority: P3
+tags: ui,orchestrator
+files: klausmate/pdf_drive.py,tests/test_drive.py
+verify: python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: top toolbar order must read Decks - Add - Library - Browse -
+Stats - Sync. _on_toolbar_links currently does links.insert(0, ...),
+putting Library leftmost.
+
+Fix: insert BEFORE the Browse link, located by scanning the link list
+rather than trusting a fixed index (Anki builds the list and addons can
+add their own), with a fallback to third place = the same slot in the
+stock layout.
+
+Verify: red-first test in test_drive.py driving the real
+_on_toolbar_links against a stock-shaped link list + a fake toolbar.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Library inserted before the Browse link (located by scan, not a fixed index; falls back to third place). Red-first x3 including the shifted-list and no-Browse cases. 85+253 green.
