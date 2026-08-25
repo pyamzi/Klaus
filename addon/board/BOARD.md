@@ -68,33 +68,6 @@ created: 2026-08-25
 
 Pouya: 'I want to do the real fix… PDFjs is the thing I will have to do eventually.' QPdfView flickers structurally (async pdfium page delivery, overlay repaint races); SynapsePro proves the pdf.js-in-webview architecture (scripts/SynapsePro-main/web_notebook/pdf_viewer.html): canvas layers GPU-composited by Chromium, base64 PDF feed, no repaint during scroll. Strategy: new PdfJsViewer behind config flag pdf_renderer ('native' default) satisfying PdfSidebar's six-method surface (set_document/set_page_texts/load_annotations/clear_document/go_to_page/scroll_position + toggle_thumbnails/_page_label); build parity feature-by-feature (K-096..K-099); flip default + retire native path only after live soak (K-100). The annotations JSON and bake pipeline are renderer-independent and MUST NOT change.
 
-### K-097: pdfjs parity: selection + clipboard (copy text, copy page/marquee as image)
-owner: -
-priority: P2
-tags: pdfjs
-files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
-created: 2026-08-25
-
-Text-layer selection already native; add: right-click menu (Copy page text / Copy slide as image), Cmd/Ctrl-double-click page → image to clipboard (canvas.toDataURL → Python QImage), Option/Alt-drag marquee → region image. Match native viewer's silent Preview-style copy (tooltips only for capture actions).
-
-### K-098: pdfjs parity: highlights, sticky notes, outside text
-owner: -
-priority: P2
-tags: pdfjs
-files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
-created: 2026-08-25
-
-Render the EXISTING annotations JSON (page-point rects) as positioned divs over the text layer; create highlight from selection; delete; notes as anchored boxes; K-078 adopted outside text with zoom-scaled font. Bake pipeline (pdf_handler.bake_annotations) consumes the same JSON — zero changes there. Coordinate mapping: pdf.js viewport.convertToViewportRectangle vs our y-flip convention — write the round-trip test FIRST.
-
-### K-099: pdfjs parity: find bar, go-to-page, thumbnails
-owner: -
-priority: P2
-tags: pdfjs
-files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
-created: 2026-08-25
-
-In-page find via pdf.js text content (match count, Enter/Shift+Enter cycling, Esc — same shortcuts the native bar claims via ShortcutOverride), Cmd+Option+G go-to-page, thumbnail strip (lazy page renders at ~140px, click to jump) behind the existing ◫ toggle.
-
 ### K-100: pdfjs parity: page-insert into editor field + crop integration
 owner: -
 priority: P3
@@ -103,6 +76,9 @@ files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py,klausmate/__ini
 created: 2026-08-25
 
 Whatever the editor integration surface uses from the native viewer (page-as-image insert into the focused field, image-crop trigger) reproduced from the pdf.js canvases. Audit __init__.py call sites before scoping details.
+
+#### Comments
+- [2026-08-25 orchestrator] Scope addendum from the K-097..K-099 pass: (1) editor page-insert targeting (_set_target_field) still native-only; (2) PdfSidebar.reload_if_externally_changed full-reload branch does not re-feed the pdfjs webview (the common annotation-mirror branch DOES work via load_annotations); (3) persisted-marquee re-copy + drag-out; (4) exact-substring find highlighting. All small; none block daily pdfjs use.
 
 ### K-101: pdfjs cutover: flip default renderer after live soak, then retire QPdfView path
 owner: -
@@ -663,3 +639,42 @@ Vendor pdf.js 3.11.174 (copy SynapsePro's bundled pdf.min.js + pdf.worker.min.js
 
 #### Comments
 - [2026-08-25 orchestrator] Shipped. Vendored pdf.js 3.11.174 (copied from SynapsePro's bundle), web/pdfjs_viewer.html (sized-placeholder + IntersectionObserver lazy render + text layer; theme.css_vars injected), pdfjs_viewer.py host (AnkiWebView, chunked-base64 feed, bridge -> page label), PdfSidebar branches on pdf_renderer (default native — zero behavior change verified, full suite green). Browser-harness verified: chunk feed -> open -> fit-width -> canvas+text render -> page tracking -> bridge posts. HARNESS CAUGHT A REAL BUG: layout-before-width rendered everything at the 0.25 scale floor; fixed with availWidth() rAF wait + ResizeObserver refit (userZoomed suspends refit). NEEDS-LIVE-VERIFY: set pdf_renderer:'pdfjs' in meta.json config, restart Anki, open a PDF — scroll smoothness is the whole point; IO/scroll-event delivery could not be exercised in the hidden harness pane (background throttling).
+
+### K-097: pdfjs parity: selection + clipboard (copy text, copy page/marquee as image)
+owner: orchestrator
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+Text-layer selection already native; add: right-click menu (Copy page text / Copy slide as image), Cmd/Ctrl-double-click page → image to clipboard (canvas.toDataURL → Python QImage), Option/Alt-drag marquee → region image. Match native viewer's silent Preview-style copy (tooltips only for capture actions).
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped with K-098/K-099 in one pass (shared files). Text selection is the pdf.js text layer (native browser selection; dbl/triple-click word/paragraph free). Custom context menu (theme-styled): Copy / Copy selection as image / Highlight over a selection; Copy page text / Copy slide as image always. Cmd-C copy = webview default. Option/Alt-drag marquee copies the region on release (offscreen 2x-quality crop -> PNG -> bridge -> QImage clipboard, tooltip per capture convention; text copies silent). DEFERRED: persisted-marquee re-copy + drag-out of the marquee image. Browser-harness verified end-to-end incl. decoding a real payload through the Python pipeline.
+
+### K-098: pdfjs parity: highlights, sticky notes, outside text
+owner: orchestrator
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+Render the EXISTING annotations JSON (page-point rects) as positioned divs over the text layer; create highlight from selection; delete; notes as anchored boxes; K-078 adopted outside text with zoom-scaled font. Bake pipeline (pdf_handler.bake_annotations) consumes the same JSON — zero changes there. Coordinate mapping: pdf.js viewport.convertToViewportRectangle vs our y-flip convention — write the round-trip test FIRST.
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped. Highlights/notes/outside-text render from the SAME records (0-based page, top-left page-point rects; CSS px = pts x scale — no coordinate fork): hlLayer under the text layer, note anchors (click -> Python QInputDialog), text-kind boxes with zoom-scaled fonts. Mutations go over the bridge (hl-add/hl-remove/note-edit); Python is the single writer — pdf_handler.save_annotations + the native viewer's 500ms debounced bake (thread), K-081 external-delete tombstones preserved via add_suppressed. Cmd+Shift+H/A create from selection. Harness-verified: records render pixel-plausibly, hit-testing drives the menu (Edit Note/Remove over a highlight), real selection payload -> valid record.
+
+### K-099: pdfjs parity: find bar, go-to-page, thumbnails
+owner: orchestrator
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+In-page find via pdf.js text content (match count, Enter/Shift+Enter cycling, Esc — same shortcuts the native bar claims via ShortcutOverride), Cmd+Option+G go-to-page, thumbnail strip (lazy page renders at ~140px, click to jump) behind the existing ◫ toggle.
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped. Find bar in-page (Cmd-F, 250ms debounce, n/m count, Enter/Shift+Enter + Cmd-G/Cmd-Shift-G cycling, Esc): search runs over cached getTextContent of ALL pages (unrendered included), navigation renders the page then rings the owning text span — item-level highlight, not exact substring (noted gap vs QPdfSearchModel's all-match paint). Go to page: Cmd-Option-G or click the page label -> Python getInt dialog. Thumbnails: in-page strip behind the existing header toggle, lazy 140px renders via IntersectionObserver, click-jump, current-page ring. Zoom Cmd+/-/0 (0 = refit; manual zoom suspends the ResizeObserver refit). Scroll position reported over the bridge (300ms debounce) and restored on ready.

@@ -50,9 +50,44 @@ check("theme tokens injected (light bg)", "--bg: #F5F5F7;" in html)
 dark = pv.build_page_html("klausmate", night=True)
 check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
 for fn in ("klausPdfChunk", "klausPdfLoad", "klausPdfError",
-           "klausGoToPage", "klausSetZoom"):
+           "klausGoToPage", "klausSetZoom", "klausSetAnnotations",
+           "klausToggleThumbs", "klausScrollTo", "klausZoomReset"):
     check(f"JS API {fn} present", fn in html)
 check("bridge prefix wired", "klausmate_pdfjs:" in html)
+for feature in ("findbar", "findinput", "ctxmenu", "thumbs", "marquee",
+                "hlLayer", "noteLayer"):
+    check(f"page has {feature}", feature in html)
+
+section("bridge parsing")
+check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)
+check("action only", pv.parse_bridge("klausmate_pdfjs:ready") == ("ready", ""))
+check("action + payload",
+      pv.parse_bridge("klausmate_pdfjs:page:3:10") == ("page", "3:10"))
+check("payload keeps colons (data urls)",
+      pv.parse_bridge("klausmate_pdfjs:copy-image:iVBOR:w0KG")
+      == ("copy-image", "iVBOR:w0KG"))
+import base64 as _b64
+payload = _b64.b64encode(b'{"id": "abc"}').decode()
+check("b64 json round-trip", pv.decode_b64_json(payload) == {"id": "abc"})
+check("bad b64 json degrades to None", pv.decode_b64_json("!!") is None)
+
+section("highlight record minting")
+recs = pv.records_from_rect_map(
+    {"1": [[10.0, 20.0, 100.0, 12.0], [10.0, 34.0, 80.0, 12.0]],
+     "0": [[5, 6, 7, 8]]})
+check("one record per page", len(recs) == 2)
+check("pages ordered and 0-based ints",
+      [r["page"] for r in recs] == [0, 1])
+check("rects are float quads",
+      recs[1]["rects"] == [[10.0, 20.0, 100.0, 12.0], [10.0, 34.0, 80.0, 12.0]])
+check("records get uuid ids", all(len(r["id"]) == 32 for r in recs))
+check("default color is the native yellow",
+      all(r["color"] == "#fadc50" for r in recs))
+check("zero-size rects dropped, page skipped when empty",
+      pv.records_from_rect_map({"0": [[1, 2, 0, 5]]}) == [])
+check("malformed input degrades to empty",
+      pv.records_from_rect_map(None) == []
+      and pv.records_from_rect_map({"x": [[1, 2, 3, 4]]}) == [])
 
 section("vendored pdf.js present")
 here = os.path.dirname(os.path.abspath(__file__))

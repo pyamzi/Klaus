@@ -4193,6 +4193,13 @@ class PdfSidebar(QWidget):
             self._viewer.set_page_texts(pages_text)
             self._viewer.on_count = self._on_pdfjs_count
             self._viewer.load_path(path, name)
+            # Same contract as the native branch: annotations restore
+            # right after the document feed (the viewer re-pushes them
+            # on the page's async "ready", so ordering is safe).
+            try:
+                self._viewer.load_annotations(name)
+            except Exception as exc:
+                print(f"[klausmate] annotations restore failed: {exc}")
             self._on_page_changed(0)
             self._notify_loaded(name)
             return

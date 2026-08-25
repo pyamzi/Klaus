@@ -110,10 +110,21 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   construction; the PDF is fed as chunked base64 into window globals
   (SynapsePro's pattern), pages render lazily via IntersectionObserver
   over sized placeholders, the pdf.js text layer gives native selection,
-  and theme tokens arrive as CSS vars (`theme.css_vars`). Pure helpers
-  (`renderer_from_config`, `chunk_b64`, `build_page_html`) are aqt-free
-  for `tests/test_pdfjs_viewer.py`. The annotations JSON + bake pipeline
-  are renderer-independent — parity work must not fork them.
+  and theme tokens arrive as CSS vars (`theme.css_vars`). Parity shipped
+  (K-097..K-099): highlights/notes/outside-text render from the SAME
+  record schema (0-based page, top-left page-point rects; CSS px = pts ×
+  scale), find bar (searches cached text of unrendered pages; rings the
+  owning span), thumbnails, zoom (⌘+/−/0), go-to-page, custom context
+  menu, marquee/region/page image copies. **The page owns rendering and
+  gestures; Python owns the annotations JSON** — mutations arrive over
+  the bridge (`hl-add`/`hl-remove`/`note-edit`), `PdfJsViewer` persists
+  via `pdf_handler.save_annotations` + the same 500ms debounced bake,
+  keeps K-081 tombstones, and pushes canonical records back via
+  `klausSetAnnotations`. Pure helpers (`renderer_from_config`,
+  `chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
+  `records_from_rect_map`) are aqt-free for `tests/test_pdfjs_viewer.py`.
+  Remaining gaps live on the K-100 card. The annotations JSON + bake
+  pipeline are renderer-independent — parity work must not fork them.
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
   `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"

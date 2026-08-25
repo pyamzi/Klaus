@@ -1,27 +1,67 @@
-<!-- Klaus pdf.js viewer (K-096 foundation).
+<!-- Klaus pdf.js viewer (K-096 foundation; K-097..K-099 parity).
 
 Loaded by pdfjs_viewer.PdfJsViewer via AnkiWebView.stdHtml after two
 substitutions: __ADDON__ -> the addon web-export name, __THEME_VARS__ ->
 CSS custom properties generated from theme.py tokens (single source of
 truth for colours — do not hardcode hex here).
 
-Architecture (why this doesn't flicker where QPdfView does): every page
-gets a correctly-sized placeholder div up front, so scrolling never
-causes layout shift; an IntersectionObserver renders real canvases +
-text layers only near the viewport and Chromium's compositor translates
-them during scroll — no repaint, no async blank flash at the wrong time.
-The PDF arrives base64-chunked into window globals (SynapsePro's feed
-pattern) — see klausPdfChunk/klausPdfLoad at the bottom.
+Division of labour: this page owns rendering and gestures; PYTHON OWNS
+THE ANNOTATIONS JSON. Every mutation (add/remove highlight, note edit)
+goes over the bridge as klausmate_pdfjs:* and Python persists via
+pdf_handler.save_annotations + the debounced bake, then pushes the
+canonical records back through window.klausSetAnnotations. The page
+never invents record fields — coordinates are page points, top-left
+origin, matching the native viewer and the bake pipeline exactly
+(CSS px = points x state.scale).
 -->
 <style>
   :root { __THEME_VARS__ }
   html, body {
     margin: 0; padding: 0; background: var(--bg); color: var(--text);
     font-family: var(--font); overflow: hidden; height: 100%;
+    font-size: 13px;
   }
-  #scroll {
-    position: absolute; inset: 0; overflow-y: auto; overflow-x: auto;
+  #root { position: absolute; inset: 0; display: flex; }
+  /* ---- thumbnail strip ---- */
+  #thumbs {
+    width: 170px; flex: 0 0 auto; overflow-y: auto; display: none;
+    background: var(--bg); border-right: 1px solid var(--grey-light);
+    padding: 6px;
   }
+  #thumbs.visible { display: block; }
+  .thumb {
+    margin: 0 0 8px 0; border: 2px solid transparent; border-radius: 8px;
+    cursor: pointer; padding: 2px; text-align: center;
+  }
+  .thumb:hover { background: var(--hover-subtle); }
+  .thumb.current { border-color: var(--accent); }
+  .thumb canvas { max-width: 100%; border-radius: 4px; display: block;
+                  margin: 0 auto; background: white;
+                  box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .thumb .tnum { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+  /* ---- main column ---- */
+  #main { flex: 1 1 auto; display: flex; flex-direction: column;
+          min-width: 0; }
+  #findbar {
+    display: none; align-items: center; gap: 4px; padding: 3px 6px;
+    background: var(--surface); border-bottom: 1px solid var(--grey-light);
+  }
+  #findbar.visible { display: flex; }
+  #findbar input {
+    flex: 1; background: var(--bg); color: var(--text);
+    border: 1px solid var(--grey-mid); border-radius: 8px;
+    padding: 3px 8px; font-family: var(--font); font-size: 12px;
+    outline: none;
+  }
+  #findbar input:focus { border-color: var(--accent); }
+  #findcount { font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+  #findbar button {
+    background: transparent; color: var(--text-muted); border: none;
+    border-radius: 6px; padding: 1px 6px; font-weight: 600; cursor: pointer;
+    font-size: 13px;
+  }
+  #findbar button:hover { background: var(--hover-subtle); color: var(--text); }
+  #scroll { flex: 1 1 auto; overflow: auto; position: relative; }
   #pages { display: flex; flex-direction: column; align-items: center;
            gap: 12px; padding: 12px; }
   .page {
@@ -29,18 +69,50 @@ pattern) — see klausPdfChunk/klausPdfLoad at the bottom.
     border: 1px solid var(--grey-light); border-radius: 4px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.07);
   }
-  .page canvas { display: block; border-radius: 4px; }
-  /* pdf.js text layer: invisible glyph spans positioned over the canvas
-     so native browser selection works. */
+  .page canvas.pg { display: block; border-radius: 4px; }
+  /* pdf.js text layer: invisible glyph spans over the canvas so native
+     browser selection works. */
   .textLayer {
     position: absolute; inset: 0; overflow: hidden;
-    line-height: 1; opacity: 1; pointer-events: auto;
+    line-height: 1; opacity: 1; pointer-events: auto; z-index: 3;
   }
   .textLayer span {
     color: transparent; position: absolute; white-space: pre;
     cursor: text; transform-origin: 0% 0%;
   }
   .textLayer ::selection { background: var(--accent-selection); }
+  .textLayer span.findCurrent {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+    background: var(--accent-selection);
+  }
+  /* highlights render UNDER the text layer, above the canvas */
+  .hlLayer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+  .hlLayer .hl { position: absolute; border-radius: 2px; }
+  .hlLayer .hltext { position: absolute; white-space: pre-wrap;
+                     line-height: 1.15; overflow: hidden; }
+  .noteLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+  .noteLayer .noteAnchor {
+    position: absolute; pointer-events: auto; cursor: pointer;
+    width: 16px; height: 16px; border-radius: 8px;
+    background: var(--accent); color: white; font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  }
+  #marquee {
+    position: absolute; display: none; z-index: 6; pointer-events: none;
+    background: var(--accent-selection); border: 1px solid var(--accent);
+  }
+  /* ---- custom context menu ---- */
+  #ctxmenu {
+    position: fixed; display: none; z-index: 100; min-width: 180px;
+    background: var(--surface); border: 1px solid var(--grey-light);
+    border-radius: 8px; padding: 4px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  }
+  #ctxmenu .mi {
+    padding: 5px 10px; border-radius: 6px; cursor: pointer; color: var(--text);
+  }
+  #ctxmenu .mi:hover { background: var(--hover-subtle); }
+  #ctxmenu .sep { height: 1px; background: var(--grey-light); margin: 4px 6px; }
   #error {
     display: none; margin: 40px auto; max-width: 420px; padding: 20px;
     background: var(--surface); border: 1px solid var(--grey-light);
@@ -52,7 +124,22 @@ pattern) — see klausPdfChunk/klausPdfLoad at the bottom.
   ::-webkit-scrollbar-thumb { background: var(--grey-mid); border-radius: 4px; }
 </style>
 
-<div id="scroll"><div id="pages"></div><div id="error"></div></div>
+<div id="root">
+  <div id="thumbs"></div>
+  <div id="main">
+    <div id="findbar">
+      <input id="findinput" type="text" placeholder="Find in PDF…" />
+      <span id="findcount"></span>
+      <button id="findprev" title="Previous match (Shift+Enter)">&#8249;</button>
+      <button id="findnext" title="Next match (Enter)">&#8250;</button>
+      <button id="findclose" title="Close (Esc)">&#10005;</button>
+    </div>
+    <div id="scroll"><div id="pages"></div><div id="error"></div></div>
+  </div>
+</div>
+<div id="ctxmenu"></div>
+<div id="marquee"></div>
+
 <script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>
 <script>
 "use strict";
@@ -63,38 +150,30 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 const state = {
   doc: null,
-  scale: 1.0,          // computed fit-width on load
-  userZoomed: false,   // manual zoom suspends fit-width refitting
-  pageDivs: [],        // index -> .page div
-  rendered: new Map(), // pageIndex -> {canvas, textLayer} for teardown
+  scale: 1.0,
+  userZoomed: false,
+  pageDivs: [],
+  rendered: new Map(),   // pageNum -> {canvas, textLayer, spans[]}
   observer: null,
+  thumbObserver: null,
   currentPage: 0,
   b64parts: [],
+  annots: [],            // canonical records, pushed from Python
+  pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
+  find: { query: "", matches: [], index: -1 },
+  marquee: null,         // {page, x0, y0} while alt-dragging
 };
-
-/* Refit on container resize (splitter drags, panel re-dock) unless the
-   user chose an explicit zoom. */
-new ResizeObserver(async () => {
-  if (!state.doc || state.userZoomed) return;
-  const first = await state.doc.getPage(1);
-  const base = first.getViewport({ scale: 1.0 });
-  const target = Math.max(
-    0.25,
-    Math.min(4.0, (document.getElementById("scroll").clientWidth - 24) / base.width)
-  );
-  if (Math.abs(target - state.scale) / state.scale > 0.02) {
-    state.scale = target;
-    rezoom(state.currentPage || 1);
-  }
-}).observe(document.getElementById("scroll"));
 
 function post(msg) {
   try { pycmd("klausmate_pdfjs:" + msg); } catch (e) { /* headless */ }
 }
+function postB64(action, obj) {
+  const json = JSON.stringify(obj);
+  post(action + ":" + btoa(unescape(encodeURIComponent(json))));
+}
 
-/* ---- feed: Python pushes base64 in chunks, then calls klausPdfLoad --- */
+/* ==== feed ========================================================= */
 window.klausPdfChunk = function (part) { state.b64parts.push(part); };
-
 window.klausPdfLoad = function () {
   const b64 = state.b64parts.join("");
   state.b64parts = [];
@@ -103,7 +182,6 @@ window.klausPdfLoad = function () {
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   openDocument(bytes);
 };
-
 window.klausPdfError = function (text) {
   const el = document.getElementById("error");
   el.textContent = text;
@@ -121,18 +199,14 @@ async function openDocument(bytes) {
   }
   post("count:" + state.doc.numPages);
   await buildPlaceholders();
+  buildThumbs();
   observePages();
   post("ready");
 }
 
-/* Correctly-sized placeholders for every page BEFORE any rendering, so
-   the scroll geometry is final from the first frame (no layout shift —
-   the anti-flicker core). Page 1's viewport sets fit-width scale. */
 async function availWidth() {
-  // The host panel may not be laid out yet (webview created before the
-  // splitter sizes it — caught live in the browser harness where the
-  // load-time width was 0 and every page rendered at the 0.25 floor).
-  // Wait up to ~1s for real width before deriving fit-width.
+  // Host panel may not be laid out yet (caught live: zero width at load
+  // rendered everything at the 0.25 floor). Wait up to ~1s.
   const el = document.getElementById("scroll");
   for (let i = 0; i < 60 && el.clientWidth < 60; i++) {
     await new Promise((r) => requestAnimationFrame(r));
@@ -149,8 +223,6 @@ async function buildPlaceholders() {
   const avail = await availWidth();
   state.scale = Math.max(0.25, Math.min(4.0, avail / base.width));
   for (let i = 1; i <= state.doc.numPages; i++) {
-    // Most PDFs are uniform-size; assume page 1's aspect for the
-    // placeholder and let render() correct any oddball page.
     const div = document.createElement("div");
     div.className = "page";
     div.dataset.page = String(i);
@@ -161,15 +233,30 @@ async function buildPlaceholders() {
   }
 }
 
+new ResizeObserver(async () => {
+  if (!state.doc || state.userZoomed) return;
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  const target = Math.max(
+    0.25,
+    Math.min(4.0, (document.getElementById("scroll").clientWidth - 24) / base.width)
+  );
+  if (Math.abs(target - state.scale) / state.scale > 0.02) {
+    state.scale = target;
+    rezoom(state.currentPage || 1);
+  }
+}).observe(document.getElementById("scroll"));
+
 function observePages() {
   if (state.observer) state.observer.disconnect();
   state.observer = new IntersectionObserver(onIntersect, {
     root: document.getElementById("scroll"),
-    rootMargin: "150% 0px",     // render ~1.5 viewports ahead/behind
+    rootMargin: "150% 0px",
   });
   for (const d of state.pageDivs) state.observer.observe(d);
-  document.getElementById("scroll")
-      .addEventListener("scroll", trackCurrentPage, { passive: true });
+  const scroll = document.getElementById("scroll");
+  scroll.addEventListener("scroll", trackCurrentPage, { passive: true });
+  scroll.addEventListener("scroll", scheduleScrollReport, { passive: true });
 }
 
 function onIntersect(entries) {
@@ -189,6 +276,7 @@ async function renderPage(num, div) {
     div.style.width = Math.floor(viewport.width) + "px";
     div.style.height = Math.floor(viewport.height) + "px";
     const canvas = document.createElement("canvas");
+    canvas.className = "pg";
     const ratio = window.devicePixelRatio || 1;
     canvas.width = Math.floor(viewport.width * ratio);
     canvas.height = Math.floor(viewport.height * ratio);
@@ -202,14 +290,18 @@ async function renderPage(num, div) {
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
     const textContent = await page.getTextContent();
-    pdfjsLib.renderTextLayer({
+    const task = pdfjsLib.renderTextLayer({
       textContentSource: textContent,
       container: textLayer,
       viewport: viewport,
     });
+    if (task && task.promise) { try { await task.promise; } catch (e) {} }
     div.appendChild(canvas);
     div.appendChild(textLayer);
-    state.rendered.set(num, { canvas: canvas, textLayer: textLayer });
+    const spans = Array.from(textLayer.querySelectorAll("span"));
+    state.rendered.set(num, { canvas, textLayer, spans });
+    renderAnnotLayers(num, div);
+    if (state.find.matches.length) highlightCurrentMatchIfVisible();
   } catch (e) {
     state.rendered.delete(num);
     post("log:render " + num + " failed: " + e.message);
@@ -219,8 +311,10 @@ async function renderPage(num, div) {
 function teardownPage(num, div) {
   const r = state.rendered.get(num);
   if (!r || !r.canvas) return;   // never tear down a mid-render claim
-  try { div.removeChild(r.canvas); div.removeChild(r.textLayer); }
-  catch (e) { /* already gone */ }
+  for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer"]) {
+    const el = div.querySelector(cls);
+    if (el) { try { div.removeChild(el); } catch (e) {} }
+  }
   state.rendered.delete(num);
 }
 
@@ -228,7 +322,11 @@ function teardown() {
   if (state.observer) state.observer.disconnect();
   state.rendered.clear();
   state.pageDivs = [];
+  state.annots = [];
+  state.pageTexts = null;
+  state.find = { query: "", matches: [], index: -1 };
   document.getElementById("pages").textContent = "";
+  document.getElementById("thumbs").textContent = "";
   document.getElementById("error").style.display = "none";
   state.doc = null;
   state.currentPage = 0;
@@ -245,41 +343,534 @@ function trackCurrentPage() {
   if (page !== state.currentPage) {
     state.currentPage = page;
     post("page:" + page + ":" + (state.doc ? state.doc.numPages : 0));
+    markCurrentThumb(page);
   }
 }
 
-/* ---- API called from Python ---------------------------------------- */
+let scrollReportTimer = null;
+function scheduleScrollReport() {
+  if (scrollReportTimer) clearTimeout(scrollReportTimer);
+  scrollReportTimer = setTimeout(() => {
+    post("scroll:" + Math.round(document.getElementById("scroll").scrollTop));
+  }, 300);
+}
+
+/* ==== annotations (records owned by Python) ======================== */
+window.klausSetAnnotations = function (records) {
+  state.annots = Array.isArray(records) ? records : [];
+  for (const [num, r] of state.rendered) {
+    if (r && r.canvas) {
+      renderAnnotLayers(num, state.pageDivs[num - 1]);
+    }
+  }
+};
+
+function hexToRgba(hex, alpha) {
+  try {
+    const h = String(hex || "#fadc50").replace("#", "");
+    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16),
+          b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  } catch (e) { return "rgba(250, 220, 80, " + alpha + ")"; }
+}
+
+function renderAnnotLayers(num, div) {
+  if (!div) return;
+  for (const cls of [".hlLayer", ".noteLayer"]) {
+    const old = div.querySelector(cls);
+    if (old) div.removeChild(old);
+  }
+  const hlLayer = document.createElement("div");
+  hlLayer.className = "hlLayer";
+  const noteLayer = document.createElement("div");
+  noteLayer.className = "noteLayer";
+  const s = state.scale;
+  for (const rec of state.annots) {
+    if ((rec.page | 0) !== num - 1) continue;   // records are 0-based
+    const rects = rec.rects || [];
+    if (rec.kind === "text" && rects.length) {
+      const [x, y, w, h] = rects[0];
+      const t = document.createElement("div");
+      t.className = "hltext";
+      t.textContent = String(rec.text || "");
+      t.style.left = x * s + "px";
+      t.style.top = y * s + "px";
+      t.style.width = w * s + "px";
+      t.style.height = h * s + "px";
+      t.style.color = String(rec.color || "#000000");
+      t.style.fontSize = Math.max(6, (parseFloat(rec.size) || 12) * s) + "px";
+      hlLayer.appendChild(t);
+    } else {
+      let first = null;
+      for (const r of rects) {
+        const [x, y, w, h] = r;
+        const d = document.createElement("div");
+        d.className = "hl";
+        d.style.left = x * s + "px";
+        d.style.top = y * s + "px";
+        d.style.width = w * s + "px";
+        d.style.height = h * s + "px";
+        d.style.background = hexToRgba(rec.color, 0.43);
+        hlLayer.appendChild(d);
+        if (!first) first = r;
+      }
+      const note = String(rec.note || "").trim();
+      if (note && first) {
+        const a = document.createElement("div");
+        a.className = "noteAnchor";
+        a.textContent = "✎";
+        a.title = note;
+        a.style.left = (first[0] + first[2]) * s - 8 + "px";
+        a.style.top = first[1] * s - 8 + "px";
+        a.dataset.hlid = String(rec.id || "");
+        a.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          postB64("note-edit", { id: a.dataset.hlid });
+        });
+        noteLayer.appendChild(a);
+      }
+    }
+  }
+  div.appendChild(hlLayer);
+  div.appendChild(noteLayer);
+}
+
+/* Selection -> {pageIndex0: [[x,y,w,h] page pts]} */
+function selectionRectMap() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const map = {};
+  const s = state.scale;
+  for (let i = 0; i < sel.rangeCount; i++) {
+    for (const cr of sel.getRangeAt(i).getClientRects()) {
+      if (cr.width < 1 || cr.height < 1) continue;
+      for (const div of state.pageDivs) {
+        const pr = div.getBoundingClientRect();
+        if (cr.left >= pr.left - 1 && cr.right <= pr.right + 1 &&
+            cr.top >= pr.top - 1 && cr.bottom <= pr.bottom + 1) {
+          const page = parseInt(div.dataset.page, 10) - 1;
+          (map[page] = map[page] || []).push([
+            (cr.left - pr.left) / s, (cr.top - pr.top) / s,
+            cr.width / s, cr.height / s,
+          ]);
+          break;
+        }
+      }
+    }
+  }
+  return Object.keys(map).length ? map : null;
+}
+
+function addHighlightFromSelection() {
+  const map = selectionRectMap();
+  if (!map) { post("toast:" + btoa("Klaus: select text first, then highlight")); return; }
+  postB64("hl-add", { pages: map });
+  window.getSelection().removeAllRanges();
+}
+
+/* Topmost highlight record under (page0, xPt, yPt), like _highlight_at. */
+function highlightAt(page0, xPt, yPt, tol) {
+  tol = tol || 3;
+  for (let i = state.annots.length - 1; i >= 0; i--) {
+    const rec = state.annots[i];
+    if ((rec.page | 0) !== page0) continue;
+    for (const r of rec.rects || []) {
+      const [x, y, w, h] = r;
+      if (x - tol <= xPt && xPt <= x + w + tol &&
+          y - tol <= yPt && yPt <= y + h + tol) return rec;
+    }
+  }
+  return null;
+}
+
+/* ==== clipboard helpers ============================================ */
+function pageAndPoint(clientX, clientY) {
+  for (const div of state.pageDivs) {
+    const pr = div.getBoundingClientRect();
+    if (clientX >= pr.left && clientX <= pr.right &&
+        clientY >= pr.top && clientY <= pr.bottom) {
+      return {
+        div, page0: parseInt(div.dataset.page, 10) - 1,
+        xPt: (clientX - pr.left) / state.scale,
+        yPt: (clientY - pr.top) / state.scale,
+      };
+    }
+  }
+  return null;
+}
+
+async function copyPageImage(page0) {
+  // Render offscreen at a fixed quality scale so the copy doesn't
+  // depend on the current zoom (matches the native slide copy).
+  try {
+    const page = await state.doc.getPage(page0 + 1);
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    post("copy-image:" + canvas.toDataURL("image/png").split(",", 2)[1]);
+  } catch (e) { post("log:copy page image failed: " + e.message); }
+}
+
+async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
+  try {
+    const page = await state.doc.getPage(page0 + 1);
+    const q = 2.0;
+    const viewport = page.getViewport({ scale: q });
+    const full = document.createElement("canvas");
+    full.width = Math.floor(viewport.width);
+    full.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: full.getContext("2d"), viewport }).promise;
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.floor(wPt * q));
+    out.height = Math.max(1, Math.floor(hPt * q));
+    out.getContext("2d").drawImage(
+      full, xPt * q, yPt * q, wPt * q, hPt * q,
+      0, 0, out.width, out.height);
+    post("copy-image:" + out.toDataURL("image/png").split(",", 2)[1]);
+  } catch (e) { post("log:copy region failed: " + e.message); }
+}
+
+async function copyPageText(page0) {
+  const texts = await ensurePageTexts();
+  const t = (texts[page0] && texts[page0].str) || "";
+  postB64("copy-text", { text: t });
+}
+
+/* ==== context menu ================================================= */
+const ctxmenu = document.getElementById("ctxmenu");
+function hideMenu() { ctxmenu.style.display = "none"; }
+document.addEventListener("click", hideMenu);
+document.addEventListener("scroll", hideMenu, true);
+
+document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  const sel = window.getSelection();
+  const hasSel = sel && !sel.isCollapsed && String(sel).trim().length > 0;
+  const rec = highlightAt(hit.page0, hit.xPt, hit.yPt);
+  const items = [];
+  if (hasSel) {
+    items.push(["Copy", () => postB64("copy-text", { text: String(sel) })]);
+    items.push(["Copy selection as image", () => {
+      const map = selectionRectMap();
+      if (!map) return;
+      const page0 = parseInt(Object.keys(map)[0], 10);
+      let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      for (const [x, y, w, h] of map[page0]) {
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+      }
+      copyRegionImage(page0, x0, y0, x1 - x0, y1 - y0);
+    }]);
+    items.push(["Highlight", addHighlightFromSelection]);
+    items.push(null);
+  }
+  if (rec) {
+    if (rec.kind === "text") {
+      items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
+    } else {
+      const hasNote = String(rec.note || "").trim().length > 0;
+      items.push([hasNote ? "Edit Note…" : "Add Note…",
+                  () => postB64("note-edit", { id: rec.id })]);
+      items.push(["Remove Highlight", () => postB64("hl-remove", { id: rec.id })]);
+    }
+    items.push(null);
+  }
+  items.push(["Copy page text", () => copyPageText(hit.page0)]);
+  items.push(["Copy slide as image", () => copyPageImage(hit.page0)]);
+  ctxmenu.textContent = "";
+  for (const it of items) {
+    if (it === null) {
+      const s = document.createElement("div"); s.className = "sep";
+      ctxmenu.appendChild(s); continue;
+    }
+    const mi = document.createElement("div");
+    mi.className = "mi"; mi.textContent = it[0];
+    mi.addEventListener("click", (e) => { e.stopPropagation(); hideMenu(); it[1](); });
+    ctxmenu.appendChild(mi);
+  }
+  ctxmenu.style.display = "block";
+  const mw = ctxmenu.offsetWidth, mh = ctxmenu.offsetHeight;
+  ctxmenu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 4) + "px";
+  ctxmenu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 4) + "px";
+});
+
+/* ==== marquee (Option/Alt+drag copy-as-image) ====================== */
+const marqueeEl = document.getElementById("marquee");
+document.getElementById("scroll").addEventListener("mousedown", (ev) => {
+  if (!ev.altKey || ev.button !== 0) return;
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  ev.preventDefault();
+  state.marquee = { page0: hit.page0, x0: ev.clientX, y0: ev.clientY };
+});
+document.addEventListener("mousemove", (ev) => {
+  if (!state.marquee) return;
+  const m = state.marquee;
+  marqueeEl.style.display = "block";
+  marqueeEl.style.left = Math.min(m.x0, ev.clientX) + "px";
+  marqueeEl.style.top = Math.min(m.y0, ev.clientY) + "px";
+  marqueeEl.style.width = Math.abs(ev.clientX - m.x0) + "px";
+  marqueeEl.style.height = Math.abs(ev.clientY - m.y0) + "px";
+});
+document.addEventListener("mouseup", (ev) => {
+  if (!state.marquee) return;
+  const m = state.marquee;
+  state.marquee = null;
+  marqueeEl.style.display = "none";
+  const div = state.pageDivs[m.page0];
+  if (!div) return;
+  const pr = div.getBoundingClientRect();
+  const s = state.scale;
+  const x0 = (Math.min(m.x0, ev.clientX) - pr.left) / s;
+  const y0 = (Math.min(m.y0, ev.clientY) - pr.top) / s;
+  const w = Math.abs(ev.clientX - m.x0) / s;
+  const h = Math.abs(ev.clientY - m.y0) / s;
+  if (w > 4 && h > 4) copyRegionImage(m.page0, x0, y0, w, h);
+});
+
+/* ==== find ========================================================= */
+async function ensurePageTexts() {
+  if (state.pageTexts) return state.pageTexts;
+  const out = [];
+  for (let i = 1; i <= state.doc.numPages; i++) {
+    const page = await state.doc.getPage(i);
+    const tc = await page.getTextContent();
+    let str = "";
+    const items = [];
+    for (const it of tc.items) {
+      items.push({ start: str.length, len: it.str.length });
+      str += it.str;
+      if (it.hasEOL) str += "\n";
+    }
+    out.push({ str, items });
+  }
+  state.pageTexts = out;
+  return out;
+}
+
+function showFindBar() {
+  document.getElementById("findbar").classList.add("visible");
+  const inp = document.getElementById("findinput");
+  inp.focus(); inp.select();
+}
+function hideFindBar() {
+  document.getElementById("findbar").classList.remove("visible");
+  clearFindHighlight();
+  state.find = { query: "", matches: [], index: -1 };
+  document.getElementById("findcount").textContent = "";
+}
+
+let findTimer = null;
+document.getElementById("findinput").addEventListener("input", () => {
+  if (findTimer) clearTimeout(findTimer);
+  findTimer = setTimeout(runFind, 250);
+});
+document.getElementById("findnext").addEventListener("click", () => stepFind(1));
+document.getElementById("findprev").addEventListener("click", () => stepFind(-1));
+document.getElementById("findclose").addEventListener("click", hideFindBar);
+document.getElementById("findinput").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { ev.preventDefault(); stepFind(ev.shiftKey ? -1 : 1); }
+  else if (ev.key === "Escape") { ev.preventDefault(); hideFindBar(); }
+});
+
+async function runFind() {
+  const q = document.getElementById("findinput").value.trim().toLowerCase();
+  clearFindHighlight();
+  state.find = { query: q, matches: [], index: -1 };
+  const countEl = document.getElementById("findcount");
+  if (!q || !state.doc) { countEl.textContent = ""; return; }
+  const texts = await ensurePageTexts();
+  const matches = [];
+  for (let p = 0; p < texts.length; p++) {
+    const hay = texts[p].str.toLowerCase();
+    let at = hay.indexOf(q);
+    while (at !== -1) {
+      // owning text item = the one whose range contains the match start
+      let itemIdx = 0;
+      const items = texts[p].items;
+      for (let k = 0; k < items.length; k++) {
+        if (items[k].start <= at && at < items[k].start + Math.max(1, items[k].len)) {
+          itemIdx = k; break;
+        }
+        if (items[k].start > at) break;
+        itemIdx = k;
+      }
+      matches.push({ page0: p, itemIdx });
+      at = hay.indexOf(q, at + Math.max(1, q.length));
+    }
+  }
+  state.find.matches = matches;
+  countEl.textContent = matches.length ? `1 / ${matches.length}` : "0 matches";
+  if (matches.length) { state.find.index = 0; jumpToMatch(); }
+}
+
+function stepFind(dir) {
+  const f = state.find;
+  if (!f.matches.length) return;
+  f.index = (f.index + dir + f.matches.length) % f.matches.length;
+  document.getElementById("findcount").textContent =
+      `${f.index + 1} / ${f.matches.length}`;
+  jumpToMatch();
+}
+
+function clearFindHighlight() {
+  for (const el of document.querySelectorAll(".findCurrent")) {
+    el.classList.remove("findCurrent");
+  }
+}
+
+async function jumpToMatch() {
+  const m = state.find.matches[state.find.index];
+  if (!m) return;
+  const div = state.pageDivs[m.page0];
+  if (!div) return;
+  const r = state.rendered.get(m.page0 + 1);
+  if (!r || !r.spans) {
+    div.scrollIntoView({ block: "center" });
+    await renderPage(m.page0 + 1, div);
+  }
+  highlightCurrentMatchIfVisible(true);
+}
+
+function highlightCurrentMatchIfVisible(scrollTo) {
+  clearFindHighlight();
+  const m = state.find.matches[state.find.index];
+  if (!m) return;
+  const r = state.rendered.get(m.page0 + 1);
+  if (!r || !r.spans || !r.spans.length) return;
+  const span = r.spans[Math.min(m.itemIdx, r.spans.length - 1)];
+  if (!span) return;
+  span.classList.add("findCurrent");
+  if (scrollTo) span.scrollIntoView({ block: "center" });
+}
+
+/* ==== thumbnails =================================================== */
+function buildThumbs() {
+  const el = document.getElementById("thumbs");
+  el.textContent = "";
+  if (!state.doc) return;
+  if (state.thumbObserver) state.thumbObserver.disconnect();
+  state.thumbObserver = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (en.isIntersecting) renderThumb(parseInt(en.target.dataset.page, 10));
+    }
+  }, { root: el, rootMargin: "100% 0px" });
+  for (let i = 1; i <= state.doc.numPages; i++) {
+    const t = document.createElement("div");
+    t.className = "thumb";
+    t.dataset.page = String(i);
+    const num = document.createElement("div");
+    num.className = "tnum";
+    num.textContent = String(i);
+    t.appendChild(num);
+    t.addEventListener("click", () => window.klausGoToPage(i));
+    el.appendChild(t);
+    state.thumbObserver.observe(t);
+  }
+  markCurrentThumb(state.currentPage || 1);
+}
+
+async function renderThumb(num) {
+  const t = document.querySelector(`.thumb[data-page="${num}"]`);
+  if (!t || t.querySelector("canvas") || !state.doc) return;
+  try {
+    const page = await state.doc.getPage(num);
+    const base = page.getViewport({ scale: 1.0 });
+    const scale = 140 / base.width;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    t.insertBefore(canvas, t.firstChild);
+  } catch (e) { post("log:thumb " + num + " failed: " + e.message); }
+}
+
+function markCurrentThumb(page) {
+  for (const el of document.querySelectorAll(".thumb.current")) {
+    el.classList.remove("current");
+  }
+  const t = document.querySelector(`.thumb[data-page="${page}"]`);
+  if (t) t.classList.add("current");
+}
+
+window.klausToggleThumbs = function () {
+  const el = document.getElementById("thumbs");
+  el.classList.toggle("visible");
+  if (el.classList.contains("visible")) markCurrentThumb(state.currentPage || 1);
+};
+
+/* ==== keyboard ===================================================== */
+document.addEventListener("keydown", (ev) => {
+  const mod = ev.metaKey || ev.ctrlKey;
+  if (mod && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "f") {
+    ev.preventDefault(); showFindBar();
+  } else if (mod && ev.shiftKey && ["h", "a"].includes(ev.key.toLowerCase())) {
+    ev.preventDefault(); addHighlightFromSelection();
+  } else if (mod && ev.altKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); post("goto-request");
+  } else if (mod && !ev.shiftKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); stepFind(1);
+  } else if (mod && ev.shiftKey && ev.key.toLowerCase() === "g") {
+    ev.preventDefault(); stepFind(-1);
+  } else if (mod && (ev.key === "=" || ev.key === "+")) {
+    ev.preventDefault(); window.klausSetZoom(1.2);
+  } else if (mod && ev.key === "-") {
+    ev.preventDefault(); window.klausSetZoom(1 / 1.2);
+  } else if (mod && ev.key === "0") {
+    ev.preventDefault(); window.klausZoomReset();
+  } else if (ev.key === "Escape") {
+    hideMenu();
+    if (document.getElementById("findbar").classList.contains("visible")) {
+      hideFindBar();
+    }
+  }
+});
+
+/* ==== API called from Python ======================================= */
 window.klausGoToPage = function (num) {
   const d = state.pageDivs[num - 1];
   if (d) d.scrollIntoView({ block: "start" });
 };
 
 window.klausSetZoom = function (factor) {
-  // factor relative to current scale; re-derive layout then re-render
-  // what's visible. Placeholder sizes update synchronously (no shift).
   if (!state.doc) return;
   state.userZoomed = true;
   state.scale = Math.max(0.25, Math.min(4.0, state.scale * factor));
-  const keep = state.currentPage;
-  rezoom(keep);
+  rezoom(state.currentPage || 1);
+};
+
+window.klausZoomReset = async function () {
+  if (!state.doc) return;
+  state.userZoomed = false;
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  state.scale = Math.max(
+    0.25,
+    Math.min(4.0, (document.getElementById("scroll").clientWidth - 24) / base.width)
+  );
+  rezoom(state.currentPage || 1);
 };
 
 async function rezoom(keepPage) {
   const first = await state.doc.getPage(1);
   const base = first.getViewport({ scale: 1.0 });
   for (const d of state.pageDivs) {
-    const r = state.rendered.get(parseInt(d.dataset.page, 10));
-    if (r && r.canvas) {
-      try { d.removeChild(r.canvas); d.removeChild(r.textLayer); }
-      catch (e) { /* ok */ }
-    }
+    teardownPage(parseInt(d.dataset.page, 10), d);
     d.style.width = Math.floor(base.width * state.scale) + "px";
     d.style.height = Math.floor(base.height * state.scale) + "px";
   }
   state.rendered.clear();
   window.klausGoToPage(keepPage);
-  // Observer re-fires for whatever is now visible.
 }
+
+window.klausScrollTo = function (y) {
+  document.getElementById("scroll").scrollTop = y;
+};
 
 window.klausScrollPosition = function () {
   return document.getElementById("scroll").scrollTop;
