@@ -438,12 +438,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(runtime_auto_cb)
 
-    single_window_cb = QCheckBox(
-        "Single-window mode (Browse, Add, Library and Stats open as "
-        "panes in the main window — takes effect after restart)"
-    )
-    general_layout.addWidget(single_window_cb)
-
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -471,7 +465,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
-    single_window_cb.setChecked(bool(_general_cfg.get("single_window_mode", True)))
 
     def _refresh_library_label() -> None:
         from . import pdf_handler
@@ -1348,7 +1341,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
-        cfg["single_window_mode"] = bool(single_window_cb.isChecked())
         _pkg().write_config(cfg)
 
     def change_library_folder() -> None:

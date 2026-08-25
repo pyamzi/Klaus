@@ -1380,12 +1380,6 @@ def refresh_open_library() -> None:
     """
     try:
         win = _instance
-        # Under single_window mode the Library is a pane in a
-        # QStackedWidget: isVisible() is False whenever another pane is
-        # current, and single_window._switch_to catches the pane up with
-        # a _refresh_rows on entry instead. This hook therefore only
-        # needs to reach a Library that is showing RIGHT NOW — hidden
-        # panes and closed windows both catch up on their next show.
         if win is not None and win._alive() and win.isVisible():
             win._refresh_rows()
     except Exception as e:

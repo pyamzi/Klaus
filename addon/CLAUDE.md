@@ -3,8 +3,11 @@
 The real project here is **`klausmate/`** — "Klaus", an Anki addon for
 semantic deck curation (find cards matching a lecture PDF, copy them into a
 new deck), a lecture-PDF library with per-PDF retention scoring, a native
-PDF viewer with highlights/sticky notes, and image cropping. The rest of
-this repo is dotfiles.
+PDF viewer with highlights/sticky notes, and image cropping. Around it:
+`tests/` (headless logic tests), `board/` + `context/` (the multi-agent
+kanban board — see below), `References/` and `scripts/` (vendored
+reference repos + packaging), and `AGENTS.md` (deep architecture guide:
+hooks registered, JS↔Python protocol, config keys, packaging).
 
 Klaus is **embeddings-only**: its one AI capability is semantic search,
 which defaults to the **Voyage** cloud embedding API (Ollama is an optional
@@ -25,6 +28,20 @@ holds API keys) stay ignored — never stage those.
   without ever being compiled or loaded.
 - Commits and diffs for addon work are now expected.
 
+## The agent board
+
+Multi-session work is coordinated through a kanban board:
+`board/BOARD.md` is the source of truth, and **every state change
+(claim/move/comment) goes through `python3 board/board.py`** — it
+serializes writes behind a lockfile; hand-editing BOARD.md to move a card
+will eventually lose a write (card *body* prose may be hand-edited by the
+orchestrator/designer only). Claiming enforces file-disjointness against
+cards already in Doing, and a card's `verify:` command must fail before
+the work and pass after. Roles, columns, and gates: `context/ROLES.md`.
+Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
+"board-dashboard" in `.claude/launch.json`). Signed-off history is in
+`board/ARCHIVE.md` — search it (K-0xx) before re-debugging anything.
+
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
@@ -36,21 +53,31 @@ holds API keys) stay ignored — never stage those.
   at `~/Library/Application Support/Anki2/klausmate-duplicate-1402639583.backup`.
 - Anki must be **fully restarted** to pick up code changes.
 
-## Anki runtime (for reference & testing)
+## Anki runtime & testing
 
-- Anki app is a launcher; the real Python env:
-  `~/Library/Application Support/AnkiProgramFiles/.venv/` (Python 3.13,
-  PyQt6/Qt 6.9). Anki's own source (read-only reference):
-  `.../site-packages/aqt/`, generated UI forms in `.../site-packages/_aqt/forms/`.
+- Anki 26.8.1 lives at `/Applications/Anki.app`; its packages are Python
+  3.13 **bytecode-only** in `Contents/Resources/app_packages` (no runnable
+  python binary — `aqt`/`_aqt` there are `.pyc`, readable only by
+  decompiling/`strings`). There is NO venv anywhere. System `python3` is
+  3.9.6: it can `py_compile` every addon file (all use
+  `from __future__ import annotations`) but **cannot import `aqt`**.
+- So headless testing = **stub `aqt`/`anki` in `sys.modules` and test
+  logic only, never Qt widgets**. The harness lives in `tests/` (see its
+  README) with the bootstrap documented in the `klaus-test` skill — use
+  that skill when adding or changing klausmate modules. Run everything:
+  `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
 - Verify syntax **through the symlink**:
   `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
-- **Offscreen runtime testing works** and has caught real bugs:
-  `env QT_QPA_PLATFORM=offscreen "$VENV/bin/python3" script.py`, importing
-  `pdf_viewer.py` via importlib under a synthetic `klausmate` package
-  (sys.modules stub exposing `USER_FILES` + `pdf_handler`) with a
-  `SimpleNamespace` editor stub. Real test PDF:
-  `klausmate/user_files/pdfs/Bootcamp.com_Biostatistics.pdf`. Never point
-  tests at the real `user_files` — use a scratch copy.
+  (the PostToolUse hook `.claude/hooks/klausmate-compile.sh` does this
+  automatically after every klausmate `*.py` edit, and fails loudly if the
+  symlink is missing or dangling — that failure means Anki is not loading
+  this code; fix the symlink, don't suppress the hook).
+- Never point tests at the real `user_files` — use a scratch copy.
+  `.claude/settings.json` denies Edit/Write under `user_files/` and
+  Read of `meta.json` (API keys).
+- Read-only SQL against the live collection works:
+  `sqlite3 "file:...collection.anki2?immutable=1"`. FSRS is ON;
+  `cards.data` JSON carries `{"s","d","dr","decay","lrt"}`.
 
 ## Module map
 
@@ -72,28 +99,55 @@ holds API keys) stay ignored — never stage those.
   image", copies it as an image; right-click also offers "Copy page text".
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
   pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs, placement,
-  thumbs, last_used — all writers MERGE via `_save_tabs_file`). No retrieval
-  consumer remains here (autocomplete/Ask, the only callers of its old BM25
-  search, are gone) — `_chunk_text` now only feeds the semantic-curation
-  pipeline (`curation.py`, `pdf_index.py`). `bake_annotations(dir, name)`
-  writes highlights/notes into `pdfs/<base>.pdf` as REAL annotations
+  thumbs, last_used — all writers MERGE via `_save_tabs_file`). Since K-070/
+  K-073 the PDF *files* live in a user-chosen **library root** (config key
+  `library_root`, picked at setup or in Preferences): `library_map.json`
+  maps safe basename → path relative to that root, and **`pdf_path_for` is
+  the single resolution choke point** (mapped location first, legacy
+  `pdfs/<safe>.pdf` fallback; tests pass `root=` explicitly to stay
+  aqt-free). No retrieval consumer remains here (autocomplete/Ask, the only
+  callers of its old BM25 search, are gone) — `_chunk_text` now only feeds
+  the semantic-curation pipeline (`curation.py`, `pdf_index.py`).
+  `bake_annotations(dir, name)` writes highlights/notes into the stored
+  PDF as REAL annotations
   (vendored pypdf): pristine original captured once in `pdf_originals/`,
   every bake regenerates from pristine + full json (never incremental; empty
   json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
   QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
   1200ms debounce → daemon thread.
 - `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
-  UI; file/class names still say drive) — virtual-folder tree
-  (`drive_store.py`, `user_files/drive.json`; nothing on disk moves) next to
-  a standalone `PdfSidebar`. Top-toolbar link labeled "Library"
-  (`gui_hooks.top_toolbar_did_init_links`). Right-click per row: open,
-  rename, move to folder, re-embed, adjust match sensitivity, show matches
-  in Browse, curate deck from this PDF, delete.
+  UI; file/class names still say drive) — folder tree (`drive_store.py`,
+  `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073
+  the tree is **mirrored two-way with real folders under the library
+  root** (single-copy invariant: one file per PDF, living in the root;
+  `rescan_library_root` + a debounced filesystem watcher pick up outside
+  edits) — `drive_store.py` itself stays a pure aqt-free presentation
+  join; the disk sync lives here and in `pdf_handler`. Top-toolbar link
+  labeled "Library" (`gui_hooks.top_toolbar_did_init_links`). Right-click
+  per row: open, rename, move to folder, re-embed, adjust match
+  sensitivity, show matches in Browse, curate deck from this PDF, delete.
+- `tag_sync.py`: per-PDF collection tags. THE INVARIANT: every indexed PDF
+  owns exactly one tag `!Library::<folder path, / → ::>::<leaf>` (leaf =
+  display name minus extension, tag-sanitized), whose members are exactly
+  the notes at/above that PDF's sensitivity threshold. Forward direction
+  (index/re-index creates + renames tags, K-053) and reverse (a rename in
+  Anki's tag sidebar renames the PDF, K-054 — INFERENCE from a
+  before/after tag diff on profile open, never a real event). Reserved
+  leaves `Curating`/`Curated`/`Matching` are never touched.
 - `retention.py`: per-PDF retention/study-priority score shown in the
   Library — embed the PDF's chunks (`pdf_index.py`) → score every indexed
   note against them (max cosine, cached in `matches.json`) → pull FSRS
-  retrievability for matched cards → aggregate. Preview tag
-  `!Library::Matching`.
+  retrievability for matched cards → aggregate. The old
+  `!Library::Matching` preview tag was retired in K-055 — "Show matches
+  in Browse" now hops to the per-PDF `tag_sync` tag.
+- `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
+  deflation over one packed `array('d')` buffer (`math.sumprod` on
+  memoryview slices, strided slices for the transpose — never the d×d
+  covariance matrix). Numeric foundation for the embedding map (Phase D).
+- `pdf_graph.py` (aqt-free at module top): assembles the embedding-map
+  graph dict — PDF nodes at their matched notes' 2D centroid, edges to
+  every note at/above threshold. `retention` (which imports aqt) is
+  imported lazily inside `build_graph_data`. No window/canvas yet.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
   chunks, `card_index.py`'s sibling for the PDF side.
 - `crop_dialog.py`: image-crop dialog (crop saved as NEW media file).
@@ -115,7 +169,7 @@ holds API keys) stay ignored — never stage those.
     with its vector → cancelled indexing resumes for free. Manifest is
     written AFTER vectors (size mismatch on load ⇒ rebuild). `top_k` =
     `math.sumprod` over memoryview rows (C-speed; **no numpy in Anki's
-    venv**) — 30k×768 ranks in ~0.25 s.
+    bundled Python**) — 30k×768 ranks in ~0.25 s.
   - `curation.py` (aqt glue): two-phase `ensure_index` (snapshot with col
     via `select id, mod, flds from notes` + `flds.split("\x1f")`; embed
     without col, partial save every ~1k vectors), `run_curation`, preview
@@ -155,7 +209,11 @@ holds API keys) stay ignored — never stage those.
     in Manage models → General so it doesn't just come back).
 - Deleted (2026-08, do not resurrect the language): `claude_api.py`,
   `anki_tools.py`, `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
-  `web/search.html|css|js`. Config lives in `klausmate/config.json` +
+  `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
+  panes-in-one-window mode from K-059..K-062 was removed as too buggy:
+  dark webview panes survived five rework rounds, K-090..K-094. Anki is
+  stock multi-window again; `_migrate_config` scrubs the
+  `single_window_mode` key). Config lives in `klausmate/config.json` +
   Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.

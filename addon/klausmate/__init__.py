@@ -99,6 +99,10 @@ _LEGACY_KEYS_DROPPED = (
     # and the !Library tags alike. Dropped rather than migrated; there is
     # nothing left that reads either key.
     "curate_top_k", "curate_min_score",
+    # Retired 2026-08-25: single-window mode (K-059..K-062, K-090..K-094)
+    # removed as too buggy to stabilize — dark webview panes survived five
+    # rework rounds. Anki reverts to stock multi-window behavior.
+    "single_window_mode",
 )
 
 
@@ -2232,15 +2236,6 @@ try:
     _pdf_drive.setup()
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
-
-try:
-    from . import single_window as _single_window
-
-    _single_window.setup()
-except Exception as _e:
-    print(
-        f"[klausmate] single-window setup failed: {type(_e).__name__}: {_e}"
-    )
 
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
