@@ -148,20 +148,17 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
   QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
   1200ms debounce → daemon thread.
-- `workspace.py`: the **Klaus Workspace** (K-102) — one window for
-  Klaus-OWNED surfaces only, behind config `workspace_enabled` (default
-  false; toggle in Preferences → General, restart). Sidebar rail
-  (`theme.workspace_qss`) + QStackedWidget; view 0 hosts
-  `DriveWindow(hosted=True)` (hosted skips window chrome/geometry but
-  keeps splitter persistence and the `_instance` invariant, so refresh
-  hooks reach it unchanged); Decks/Add/Browse/Stats/Sync are LAUNCHERS
-  opening stock Anki windows (`mw.moveToState`, `aqt.dialogs.open`,
-  `mw.onStats`, `mw.on_sync_button_clicked` — verified against 26.8.1
-  bytecode). Registered under the Library's `aqt.dialogs` name via
-  `pdf_drive._create`'s branch; Workspace `closeEvent` runs the hosted
-  Library's `shutdown()`. Anki windows are NEVER embedded here — that
-  is the deleted single-window mode, and it stays deleted. Future home
-  of Phase D's embedding map + a curation view.
+- `top_bar.py`: the **Klaus top bar** — restyles Anki's main-window top
+  toolbar IN PLACE (never rebuilds it): `webview_will_set_content` with
+  an `aqt.toolbar.TopToolbar` context injects `theme.toolbar_css` into
+  the head (SynapsePro's mechanism), and
+  `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
+  hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
+  decks). Because it only restyles, Anki's links, Klaus's Library link,
+  and AnkiHub's toolbar items all keep working and inherit the look via
+  the shared `.hitem` class. Pure builders are aqt-free for
+  `tests/test_top_bar.py`. Night-mode catches up on the toolbar's own
+  redraw.
 - `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
   UI; file/class names still say drive) — folder tree (`drive_store.py`,
   `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073
@@ -273,9 +270,11 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   panes-in-one-window mode from K-059..K-062 was removed as too buggy:
   dark webview panes survived five rework rounds, K-090..K-094. Anki is
   stock multi-window again; `_migrate_config` scrubs the
-  `single_window_mode` key). **Embedding Anki's windows stays deleted**
-  — `workspace.py` (K-102) is the sanctioned successor and hosts
-  Klaus-owned surfaces only, with launchers for Anki's screens. Config lives in `klausmate/config.json` +
+  `single_window_mode` key). **Embedding Anki's windows stays deleted.**
+  `workspace.py` (K-102, the sidebar-shell follow-up) lasted one day —
+  deleted 2026-08-25 as the wrong shape; the unified-UI ask is served
+  by `top_bar.py`'s toolbar restyle instead (`_migrate_config` scrubs
+  `workspace_enabled`). Config lives in `klausmate/config.json` +
   Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.

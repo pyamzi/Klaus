@@ -434,47 +434,57 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
-def workspace_qss(night: bool) -> str:
-    """The Klaus Workspace window (K-102): sidebar rail on ``surface``
-    with a hairline border, nav buttons transparent → ``hover_subtle``
-    on hover → accent-filled when checked (ported from the
-    single-window design study onto tokens). The content side sits on
-    ``bg`` like every other Klaus window."""
+def toolbar_css(night: bool) -> str:
+    """Web CSS for Anki's top-toolbar webview (top_bar.py injects it via
+    webview_will_set_content). RESTYLE ONLY — nothing is hidden or
+    removed, so Anki's links, Klaus's Library link, and other addons'
+    toolbar items (AnkiHub) keep working and inherit the look through
+    the shared ``.hitem`` class. The bar reads as SynapsePro's nav rail
+    turned horizontal: surface strip edge to edge, hairline bottom
+    border, pill links, the star logo at the far left."""
     c = palette(night)
     return f"""
-    QWidget#KlausWorkspace {{
-        background-color: {c['bg']};
-        color: {c['text']};
+    :root {{ --klaus-accent: {c['blue_bright']}; }}
+    html, body {{
+        background: {c['surface']} !important;
+        margin: 0; padding: 0;
     }}
-    QWidget#KlausWorkspaceSidebar {{
-        background-color: {c['surface']};
-        border-right: 1px solid {c['grey_light']};
+    .header {{
+        min-height: 44px;
+        background: {c['surface']};
+        border-bottom: 1px solid {c['grey_light']};
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+        box-sizing: border-box;
     }}
-    QWidget#KlausWorkspaceSidebar QLabel#WorkspaceLogo {{
+    .header .toolbar {{
+        display: flex; align-items: center; justify-content: center;
+        flex: 1 1 auto; gap: 2px;
+    }}
+    .left-tray, .right-tray {{
+        display: flex; align-items: center; gap: 6px;
+    }}
+    .header .hitem {{
         color: {c['text_muted']};
-        border: 1px dashed {c['grey_mid']};
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 700;
-    }}
-    QWidget#KlausWorkspaceSidebar QPushButton {{
-        background: transparent;
-        color: {c['text_muted']};
-        border: none;
-        border-radius: 8px;
-        padding: 9px 14px;
-        text-align: left;
+        text-decoration: none;
+        font-family: {FONT_FAMILY};
         font-size: 13px;
         font-weight: 600;
+        padding: 5px 12px;
+        border-radius: 8px;
     }}
-    QWidget#KlausWorkspaceSidebar QPushButton:hover {{
+    .header .hitem:hover {{
         background: {c['hover_subtle']};
         color: {c['text']};
+        text-decoration: none;
     }}
-    QWidget#KlausWorkspaceSidebar QPushButton:checked {{
-        background: {c['blue']};
-        color: white;
+    #klaus-logo {{
+        display: flex; align-items: center;
+        padding: 2px 6px 2px 2px;
+        cursor: pointer;
     }}
+    #klaus-logo svg {{ display: block; }}
     """
 
 

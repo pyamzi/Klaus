@@ -68,12 +68,6 @@ def load(user_files_dir: str) -> dict:
         window = data.get("window")
         if isinstance(window, dict):
             out["window"] = window
-        # The Workspace frame's own geometry (K-102). Kept parallel to
-        # "window" — load() whitelists keys, so anything not copied
-        # here is silently dropped on the next save.
-        ws_window = data.get("workspace_window")
-        if isinstance(ws_window, dict):
-            out["workspace_window"] = ws_window
         return out
     except (OSError, ValueError, json.JSONDecodeError):
         return _default()
@@ -197,19 +191,13 @@ def remove_pdf(user_files_dir: str, safe: str) -> None:
 # --------------------------------------------------------------- window
 
 
-def get_window_state(user_files_dir: str, key: str = "window") -> dict:
-    """Saved geometry under ``key`` — "window" is the standalone Library
-    window (historical default); the Klaus Workspace stores its own
-    frame under "workspace_window" (K-102) so the two modes never fight
-    over one geometry."""
-    return load(user_files_dir).get(key) or {}
+def get_window_state(user_files_dir: str) -> dict:
+    return load(user_files_dir).get("window") or {}
 
 
-def save_window_state(
-    user_files_dir: str, geom: dict, key: str = "window"
-) -> None:
+def save_window_state(user_files_dir: str, geom: dict) -> None:
     data = load(user_files_dir)
-    data[key] = dict(geom or {})
+    data["window"] = dict(geom or {})
     _save(user_files_dir, data)
 
 

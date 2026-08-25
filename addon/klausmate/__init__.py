@@ -103,6 +103,9 @@ _LEGACY_KEYS_DROPPED = (
     # removed as too buggy to stabilize — dark webview panes survived five
     # rework rounds. Anki reverts to stock multi-window behavior.
     "single_window_mode",
+    # Retired 2026-08-25 same-day: the Klaus Workspace (K-102) shipped and
+    # was replaced by the top-bar restyle before any release.
+    "workspace_enabled",
 )
 
 
@@ -2260,6 +2263,13 @@ try:
     _pdf_drive.setup()
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import top_bar as _top_bar
+
+    _top_bar.setup()
+except Exception as _e:
+    print(f"[klausmate] top bar setup failed: {type(_e).__name__}: {_e}")
 
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is

@@ -14,6 +14,7 @@ created: 2026-08-24
 #### Comments
 - [2026-08-24 opus] Started: K-071 (Ready) is Phase D1 — the embedding-map projection + graph data, headless foundation. D2 (the window + canvas UI) follows once D1 lands. Phase E begins with the designer audit of the PDF viewer (E0) — that is orchestrator-tier work, queued after this swarm.
 - [2026-08-25 orchestrator] Phase D note: the Klaus Workspace (K-102, shipped behind workspace_enabled) is the intended home for the embedding-map view — add it as a second stack view + sidebar entry rather than a new window.
+- [2026-08-25 orchestrator] Correction: the Workspace was reverted same-day (see K-102). Phase D's map view home is TBD again — likely its own window, or a Library-window tab.
 
 ### K-057: I want to have some Obsidian-like features for the library panel. Specifically, I want all of the PDFs that we import into the library to be hosted in a directory that points to a specific directory, and then you should be able to choose that directory right away. The first time you open the Anki app, it forces you to choose a directory to host the library in, and then you can change what that directory is.  All the PDFs are in that directory. The way the directory is controlled, the way the folders are arranged, is the same as in the library as well. If something is in a certain folder type, then all the PDFs are also arranged in that folder type in the library and also in the tags. Does that make sense?
 owner: -
@@ -698,6 +699,7 @@ Approved plan (~/.claude/plans/tell-me-your-opinion-majestic-tiger.md): one wind
 
 #### Comments
 - [2026-08-25 orchestrator] Shipped per the approved plan. workspace.py: WorkspaceWindow (sidebar rail themed by new theme.workspace_qss, QStackedWidget), view 0 = DriveWindow(hosted=True); hosted mode skips window chrome/geometry/show but keeps splitter persistence (MERGED into drive.json, not clobbered) and the _instance invariant. Launchers verified against 26.8.1 bytecode (moveToState/AddCards/Browser/onStats/on_sync_button_clicked). pdf_drive._create branches on workspace_from_config (strict opt-in: only workspace_enabled=True); Workspace closeEvent runs library.shutdown() + markClosed; _close_drive closes whichever window exists. drive_store window state grew an optional key= (workspace_window whitelisted in load() — the silent-key-drop trap was caught and pinned by test). 31-check tests/test_workspace.py green; full suite + symlink compile green. NEEDS-LIVE-VERIFY: flag on -> toolbar Library opens Workspace; checklist on the card body.
+- [2026-08-25 orchestrator] REVERTED (with K-103) per Pouya before any release: 'the unified klaus workspace thing is garbage' — the real ask was a full-width custom TOP BAR on Anki's main window, not another window. workspace.py + test deleted; pdf_drive/_create, drive_store key= API, Preferences checkbox, config key all reverted (workspace_enabled scrubbed via _LEGACY_KEYS_DROPPED). shutdown() extraction kept (better structure). Successor: K-104 top-bar restyle.
 
 ### K-103: Klaus Workspace: Preferences toggle + docs
 owner: orchestrator
@@ -712,3 +714,17 @@ General-section checkbox 'Unified Klaus Workspace…' following the deferred-sav
 
 #### Comments
 - [2026-08-25 orchestrator] Shipped with K-102. Preferences -> General checkbox with ALL FOUR recipe legs (widget, setChecked via workspace_from_config, save_general line, mark_dirty toggled signal — the pdf_renderer lesson). config.md + CLAUDE.md updated: workspace.py module-map entry; Deleted note amended — embedding Anki windows stays deleted, Workspace is the sanctioned successor.
+
+### K-104: Klaus top bar: restyle Anki's top toolbar in place — full-width bar + star logo
+owner: orchestrator
+priority: P1
+tags: workspace,ui
+files: klausmate/top_bar.py,klausmate/theme.py,klausmate/__init__.py,tests/test_top_bar.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_top_bar.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+Approved plan: SynapsePro's mechanism (webview_will_set_content on TopToolbar context -> theme.toolbar_css into head) + top_toolbar_will_set_left_tray_content prepending the hand-drawn star SVG (inline, --klaus-accent var, pycmd('decks') on click — command verified in 26.8.1 bytecode). RESTYLE ONLY: no element hidden/replaced, so Anki's links, Klaus's Library link, and AnkiHub's items keep working and inherit the .hitem pill look. ACCEPTANCE: verify green (18 checks incl. logo-lands-first with other addons' tray items untouched); browser-preview screenshots confirm light+dark full-width bar, star hard left, AnkiHub styled to match. NEEDS-LIVE-VERIFY: restart, both themes, all links, sync spinner.
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped. Preview screenshots (browser harness reproducing Anki's exact .header/left-tray/hitem structure): light = white edge-to-edge strip, hairline border, star hard left, centered muted pill links, AnkiHub matching; dark = surface #2C2C2C with bright-accent star. Full suite (10 files) green; symlink compile ok.
