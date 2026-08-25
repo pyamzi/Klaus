@@ -1621,7 +1621,7 @@ class PdfViewer(QWidget):
             QTimer.singleShot(0, lambda: self._deferred_highlight_remap(gen))
         except Exception:
             pass
-        self._start_foreign_adoption(name)
+        self._start_foreign_mirror(name)
 
     def _deferred_highlight_remap(self, gen: int) -> None:
         """One-tick-later remap, dropped if the document swapped since."""
@@ -1632,13 +1632,35 @@ class PdfViewer(QWidget):
         except Exception:
             pass
 
-    def _start_foreign_adoption(self, name: str) -> None:
-        """Import outside text/highlights (Preview markup) for the
-        loaded PDF (K-078). The pypdf scan and the one-time pristine
-        capture run on a daemon thread — a multi-MB parse must never
-        block the UI — while the merge/save hops back to the main thread
-        so it cannot race the synchronous _save_annotations writes."""
-        gen = self._doc_generation
+    def _apply_mirror(self, name: str, res: dict) -> None:
+        """Main-thread half of the mirror (K-082): records follow the
+        file for outside marks — adds, in-place updates, removals.
+        Schedules NO bake: the file is already correct for those marks,
+        and baking here would re-feed the watcher loop."""
+        try:
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            changed = pdf_handler.mirror_foreign_annotations(
+                USER_FILES, name, res
+            )
+            if not changed:
+                return
+            if self._annotations_name == name:
+                self._highlights = pdf_handler.load_annotations(
+                    USER_FILES, name
+                )
+                self._refresh_highlight_overlay()
+                tooltip(f"Klaus: synced {changed} outside change(s)")
+        except Exception as exc:
+            print(f"[klausmate] mirror apply failed: {exc}")
+
+    def _start_foreign_mirror(self, name: str) -> None:
+        """Mirror outside text/highlights for the loaded PDF (K-082).
+        The pypdf scan and the one-time pristine capture run on a daemon
+        thread — a multi-MB parse must never block the UI — while the
+        merge/save hops back to the main thread so it cannot race the
+        synchronous _save_annotations writes."""
         try:
             from . import pdf_handler
             from . import USER_FILES  # type: ignore
@@ -1647,55 +1669,31 @@ class PdfViewer(QWidget):
         if not getattr(pdf_handler, "BAKE_AVAILABLE", False):
             return
 
-        def _apply(foreign: list) -> None:
-            try:
-                added = pdf_handler.adopt_foreign_annotations(
-                    USER_FILES, name, scanned=foreign
-                )
-                if not added:
-                    return
-                # Markers must land even if the user switched tabs while
-                # the scan ran — bake jobs are keyed by name.
-                self._schedule_bake(USER_FILES, name)
-                if (
-                    self._doc_generation == gen
-                    and self._annotations_name == name
-                ):
-                    self._highlights = pdf_handler.load_annotations(
-                        USER_FILES, name
-                    )
-                    self._refresh_highlight_overlay()
-                    tooltip(
-                        f"Klaus: synced {added} outside annotation(s)"
-                    )
-            except Exception as exc:
-                print(f"[klausmate] adoption apply failed: {exc}")
-
         def _worker() -> None:
             try:
-                foreign = pdf_handler.scan_foreign_annotations(
+                res = pdf_handler.scan_working_annotations(
                     USER_FILES, name
                 )
-                if foreign:
+                if res is None:
+                    return
+                if res.get("foreign"):
                     working = pdf_handler._working_pdf_path(
                         USER_FILES, name
                     )
                     if not pdf_handler._capture_pristine_stripped(
                         USER_FILES, name, working
                     ):
-                        foreign = []
-                # Apply even with an empty scan (K-081): the adopt pass
-                # also collapses previously-duplicated external records.
-                _run_on_main(lambda: _apply(foreign))
+                        return
+                _run_on_main(lambda: self._apply_mirror(name, res))
             except Exception as exc:
-                print(f"[klausmate] foreign scan failed: {exc}")
+                print(f"[klausmate] mirror scan failed: {exc}")
 
         try:
             threading.Thread(
-                target=_worker, name="klausmate-adopt", daemon=True
+                target=_worker, name="klausmate-mirror", daemon=True
             ).start()
         except Exception as exc:
-            print(f"[klausmate] adopt thread failed to start: {exc}")
+            print(f"[klausmate] mirror thread failed to start: {exc}")
 
     def _save_annotations(self) -> None:
         """Synchronous write-through (rare, tiny — see pdf_handler)."""
@@ -4102,11 +4100,14 @@ class PdfSidebar(QWidget):
             pass
 
     def reload_if_externally_changed(self) -> None:
-        """Reload the shown PDF if its file changed on disk (K-078) —
-        Preview saves swap the inode, so the open QPdfDocument keeps
-        showing stale content otherwise. Cheap no-op when nothing
-        changed; keeps the reader's scroll position; re-runs adoption
-        via the normal load path. Never raises."""
+        """React to the shown PDF changing on disk (K-078/K-082).
+
+        An annotation-only edit (page count unchanged — the common
+        Preview case) mirrors the records WITHOUT reloading the
+        document: the viewer never renders the annotation layer, so the
+        page pixels are identical and a reload would only flicker. A
+        page-count change means real content editing and does the full
+        reload. Cheap no-op when nothing changed. Never raises."""
         try:
             try:
                 self.isVisible()
@@ -4123,6 +4124,56 @@ class PdfSidebar(QWidget):
                 return
             st = _stat_of(path)
             if st is None or st == self._file_stat:
+                return
+            self._file_stat = st
+            v = self._viewer
+            if v is None or not getattr(
+                pdf_handler, "BAKE_AVAILABLE", False
+            ):
+                self._full_external_reload(name)
+                return
+
+            def _worker() -> None:
+                try:
+                    res = pdf_handler.scan_working_annotations(
+                        USER_FILES, name
+                    )
+                    if res is None:
+                        return
+                    if int(res.get("page_count") or 0) != int(
+                        self._page_count or 0
+                    ):
+                        _run_on_main(
+                            lambda: self._full_external_reload(name)
+                        )
+                        return
+                    if res.get("foreign"):
+                        working = pdf_handler._working_pdf_path(
+                            USER_FILES, name
+                        )
+                        if not pdf_handler._capture_pristine_stripped(
+                            USER_FILES, name, working
+                        ):
+                            return
+                    _run_on_main(lambda: v._apply_mirror(name, res))
+                except Exception as exc:
+                    print(f"[klausmate] external mirror failed: {exc}")
+
+            threading.Thread(
+                target=_worker, name="klausmate-extmirror", daemon=True
+            ).start()
+        except Exception as exc:
+            print(f"[klausmate] external reload failed: {exc}")
+
+    def _full_external_reload(self, name: str) -> None:
+        """Content actually changed: reload the document, keeping the
+        reader's scroll position."""
+        try:
+            try:
+                self.isVisible()
+            except RuntimeError:
+                return
+            if self._name != name:
                 return
             print(
                 f"[klausmate] {name} changed on disk — reloading viewer"

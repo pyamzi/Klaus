@@ -1180,32 +1180,44 @@ try:
           pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
 
     check("bake succeeds", pdf_handler.bake_annotations(fa_uf, FA))
-    check("post-bake scan finds ZERO foreign (markers work)",
-          pdf_handler.scan_foreign_annotations(fa_uf, FA) == [])
+    # K-082 contract: bake CARRIES the outside originals verbatim and
+    # never rewrites them as Klaus-marked copies — Preview's own objects
+    # must survive every bake untouched.
     wr = _FaReader(fa_working)
     wr_annots = [a.get_object() for a in (wr.pages[0].get("/Annots") or [])]
     fa_marked = [o for o in wr_annots
                  if str(o.get("/NM") or "").startswith("klausmate:")]
-    fa_subs = sorted(str(o.get("/Subtype")) for o in fa_marked)
-    # /Text is the sticky the bake emits for the adopted highlight's
-    # popup note ("margin note") — the note survives adoption too.
-    check("baked file carries all three annotations, Klaus-marked",
-          fa_subs == ["/FreeText", "/Highlight", "/Text"], repr(fa_subs))
-    fa_baked_hl = next(
-        (o for o in fa_marked if str(o.get("/Subtype")) == "/Highlight"), None
+    fa_unmarked = [o for o in wr_annots
+                   if not str(o.get("/NM") or "").startswith("klausmate:")]
+    check("bake writes NO marked copies of outside marks",
+          fa_marked == [], repr([str(o.get("/Subtype")) for o in fa_marked]))
+    check("outside originals carried through the bake",
+          sorted(str(o.get("/Subtype")) for o in fa_unmarked)
+          == ["/FreeText", "/Highlight"],
+          repr([str(o.get("/Subtype")) for o in fa_unmarked]))
+    fa_carried_hl = next(
+        (o for o in fa_unmarked if str(o.get("/Subtype")) == "/Highlight"),
+        None,
     )
-    fa_qp = [float(v) for v in (fa_baked_hl.get("/QuadPoints") or [])] \
-        if fa_baked_hl is not None else []
-    check("highlight quad round-trips within 0.5pt",
+    fa_qp = [float(v) for v in (fa_carried_hl.get("/QuadPoints") or [])] \
+        if fa_carried_hl is not None else []
+    check("carried highlight quad is verbatim",
           len(fa_qp) == 8 and all(
-              abs(a - b) < 0.5 for a, b in
+              abs(a - b) < 0.01 for a, b in
               zip(fa_qp, [100, 620, 200, 620, 100, 600, 200, 600])),
           repr(fa_qp))
+    fa_res = pdf_handler.scan_working_annotations(fa_uf, FA)
+    check("post-bake mirror is quiet",
+          isinstance(fa_res, dict)
+          and pdf_handler.mirror_foreign_annotations(fa_uf, FA, fa_res) == 0
+          and len(pdf_handler.load_annotations(fa_uf, FA)) == 2)
 
     check("adopt after bake is a no-op",
           pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
 
-    # A native Klaus highlight bakes marked too — never self-adopts.
+    # A native Klaus highlight bakes marked — and the outside originals
+    # must survive the native bake (they used to be silently wiped).
+    fa_recs = pdf_handler.load_annotations(fa_uf, FA)
     fa_recs.append({
         "id": "cafe" * 8, "page": 0,
         "rects": [[50.0, 50.0, 80.0, 12.0]],
@@ -1214,8 +1226,18 @@ try:
     pdf_handler.save_annotations(fa_uf, FA, fa_recs)
     check("bake with native highlight succeeds",
           pdf_handler.bake_annotations(fa_uf, FA))
+    # The two carried originals ARE in a scan (unmarked, by design);
+    # the marked native highlight must not be.
     check("native Klaus highlight is never scanned as foreign",
-          pdf_handler.scan_foreign_annotations(fa_uf, FA) == [])
+          len(pdf_handler.scan_foreign_annotations(fa_uf, FA)) == 2)
+    wr2 = _FaReader(fa_working)
+    wr2_annots = [a.get_object() for a in (wr2.pages[0].get("/Annots") or [])]
+    check("native bake carries the outside originals too",
+          sorted(
+              str(o.get("/Subtype")) for o in wr2_annots
+              if not str(o.get("/NM") or "").startswith("klausmate:")
+          ) == ["/FreeText", "/Highlight"],
+          repr([str(o.get("/Subtype")) for o in wr2_annots]))
 
     # K-078: the viewer scans on a daemon thread and applies on the main
     # thread — adopt must accept the pre-scanned list without re-parsing.
@@ -1229,13 +1251,21 @@ try:
           pdf_handler.adopt_foreign_annotations(fa_uf, FA, scanned=fa_pre) == 0)
     check("bake after pre-scanned adopt", pdf_handler.bake_annotations(fa_uf, FA))
 
-    # One-way valve: emptying Klaus records un-bakes EVERYTHING —
-    # including adopted outside markup (it is Klaus data now).
+    # K-082: un-baking clears KLAUS's marks only — outside marks belong
+    # to the file and stay. They leave via Remove in Klaus (tombstone)
+    # or deletion in Preview itself.
     pdf_handler.save_annotations(fa_uf, FA, [])
     check("un-bake succeeds", pdf_handler.bake_annotations(fa_uf, FA))
     ur = _FaReader(fa_working)
-    check("un-bake restores the stripped pristine (adopted text gone)",
-          not (ur.pages[0].get("/Annots") or []))
+    ur_annots = [a.get_object() for a in (ur.pages[0].get("/Annots") or [])]
+    check("un-bake keeps outside originals, drops Klaus marks",
+          sorted(str(o.get("/Subtype")) for o in ur_annots)
+          == ["/FreeText", "/Highlight"]
+          and not any(
+              str(o.get("/NM") or "").startswith("klausmate:")
+              for o in ur_annots
+          ),
+          repr([str(o.get("/Subtype")) for o in ur_annots]))
 except Exception as e:
     import traceback
     check("K-077 section", False, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
@@ -1295,8 +1325,22 @@ try:
     check("adopts and bakes",
           pdf_handler.adopt_foreign_annotations(ap_uf, APN, scanned=ap_found) == 1
           and pdf_handler.bake_annotations(ap_uf, APN))
-    check("post-bake scan clean",
-          pdf_handler.scan_foreign_annotations(ap_uf, APN) == [])
+    # K-082: the bake carries Preview's object VERBATIM — after the
+    # round-trip it is still Contents-less (text only in /AP), unmarked.
+    ap_r2 = _ApReader(ap_working)
+    ap_ft = next(
+        (a.get_object()
+         for a in (ap_r2.pages[0].get("/Annots") or [])
+         if str(a.get_object().get("/Subtype")) == "/FreeText"),
+        None,
+    )
+    check("carried original still Contents-less (verbatim carry)",
+          ap_ft is not None and ap_ft.get("/Contents") is None
+          and not str(ap_ft.get("/NM") or "").startswith("klausmate:"))
+    ap_res = pdf_handler.scan_working_annotations(ap_uf, APN)
+    check("post-bake mirror quiet",
+          isinstance(ap_res, dict)
+          and pdf_handler.mirror_foreign_annotations(ap_uf, APN, ap_res) == 0)
 except Exception as e:
     import traceback
     check("K-080 section", False,
@@ -1392,6 +1436,133 @@ except Exception as e:
           f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 finally:
     shutil.rmtree(au_uf, ignore_errors=True)
+
+print("== K-082: mirror semantics (file owns outside marks) ==")
+mi_uf = tempfile.mkdtemp(prefix="klaus_mirror_uf_")
+try:
+    from pypdf import PdfReader as _MiReader, PdfWriter as _MiWriter
+    from pypdf.annotations import FreeText as _MiFreeText
+    from pypdf.generic import (
+        NameObject as _MiName, TextStringObject as _MiString,
+    )
+
+    MI = "K82_Mirror"
+    os.makedirs(os.path.join(mi_uf, "pdfs"))
+    mi_working = os.path.join(mi_uf, "pdfs", MI + ".pdf")
+
+    def mi_write(texts):
+        """Working file with one foreign FreeText per (text, y)."""
+        w = _MiWriter()
+        w.add_blank_page(width=612, height=792)
+        b = mi_working + ".base"
+        with open(b, "wb") as f:
+            w.write(f)
+        w2 = _MiWriter(clone_from=_MiReader(b))
+        for text, y in texts:
+            w2.add_annotation(0, _MiFreeText(
+                text=text, rect=(100, y, 250, y + 24), font_size="12pt",
+                font_color="000000", border_color=None,
+                background_color=None))
+        with open(mi_working, "wb") as f:
+            w2.write(f)
+        os.remove(b)
+
+    mi_write([("first note", 600), ("second note", 500)])
+    mi_res = pdf_handler.scan_working_annotations(mi_uf, MI)
+    check("scan_working returns dict with page_count",
+          isinstance(mi_res, dict) and mi_res.get("page_count") == 1
+          and len(mi_res.get("foreign") or []) == 2, repr(mi_res))
+    check("mirror imports both",
+          pdf_handler.mirror_foreign_annotations(mi_uf, MI, mi_res) == 2)
+    # Native record rides along and must never be touched by mirroring.
+    mi_recs = pdf_handler.load_annotations(mi_uf, MI)
+    mi_recs.append({"id": "f00d" * 8, "page": 0,
+                    "rects": [[30.0, 30.0, 60.0, 10.0]],
+                    "color": "#fadc50", "note": ""})
+    pdf_handler.save_annotations(mi_uf, MI, mi_recs)
+
+    # Preview-side delete: the second note vanishes from the file ->
+    # its mirrored record must vanish too; native record stays.
+    mi_write([("first note", 600)])
+    mi_res = pdf_handler.scan_working_annotations(mi_uf, MI)
+    check("preview delete propagates to records",
+          pdf_handler.mirror_foreign_annotations(mi_uf, MI, mi_res) == 1)
+    mi_recs = pdf_handler.load_annotations(mi_uf, MI)
+    check("only the deleted mirror went away",
+          sorted(
+              (r.get("origin") or "native", r.get("text", ""))
+              for r in mi_recs
+          ) == [("external", "first note"), ("native", "")], repr(mi_recs))
+
+    # A FAILED scan (None) must never mass-remove mirrored records.
+    check("scan of a missing file is None, not empty",
+          pdf_handler.scan_working_annotations(mi_uf, "No_Such") is None)
+    check("mirror with None is a guarded no-op",
+          pdf_handler.mirror_foreign_annotations(mi_uf, MI, None) == 0
+          and len(pdf_handler.load_annotations(mi_uf, MI)) == 2)
+
+    # Klaus-side delete: tombstone the remaining external record; the
+    # bake must DROP the original from the carry (delete propagates to
+    # the file), while the native mark bakes normally.
+    mi_ext = next(r for r in pdf_handler.load_annotations(mi_uf, MI)
+                  if r.get("origin") == "external")
+    pdf_handler.add_suppressed(mi_uf, MI, mi_ext)
+    pdf_handler.save_annotations(
+        mi_uf, MI,
+        [r for r in pdf_handler.load_annotations(mi_uf, MI)
+         if r.get("id") != mi_ext.get("id")],
+    )
+    check("bake after tombstone", pdf_handler.bake_annotations(mi_uf, MI))
+    mi_r = _MiReader(mi_working)
+    mi_annots = [a.get_object()
+                 for a in (mi_r.pages[0].get("/Annots") or [])]
+    check("tombstoned original dropped from the file, native baked",
+          sorted(str(o.get("/Subtype")) for o in mi_annots)
+          == ["/Highlight"]
+          and str(mi_annots[0].get("/NM") or "").startswith("klausmate:")
+          if mi_annots else False,
+          repr([(str(o.get("/Subtype")), str(o.get("/NM") or ""))
+                for o in mi_annots]))
+
+    # Legacy adopted copy (K-077 era): a klausmate-marked annot whose
+    # /NM id matches an external record is that record's original —
+    # mirror must not remove the record, bake must carry it verbatim.
+    lg_id = "beef" * 8
+    w3 = _MiWriter(clone_from=_MiReader(mi_working))
+    lg_annot = _MiFreeText(
+        text="legacy adopted", rect=(100, 400, 250, 424),
+        font_size="12pt", font_color="000000", border_color=None,
+        background_color=None)
+    lg_annot[_MiName("/NM")] = _MiString("klausmate:" + lg_id)
+    w3.add_annotation(0, lg_annot)
+    with open(mi_working, "wb") as f:
+        w3.write(f)
+    lg_recs = pdf_handler.load_annotations(mi_uf, MI)
+    lg_recs.append({"id": lg_id, "page": 0,
+                    "rects": [[100.0, 368.0, 150.0, 24.0]],
+                    "color": "#000000", "note": "", "kind": "text",
+                    "text": "legacy adopted", "origin": "external"})
+    pdf_handler.save_annotations(mi_uf, MI, lg_recs)
+    mi_res = pdf_handler.scan_working_annotations(mi_uf, MI)
+    check("marked id reported by scan",
+          isinstance(mi_res, dict) and lg_id in (mi_res.get("marked_ids") or set()),
+          repr(mi_res and mi_res.get("marked_ids")))
+    check("legacy record survives the mirror",
+          pdf_handler.mirror_foreign_annotations(mi_uf, MI, mi_res) == 0
+          and any(r.get("id") == lg_id
+                  for r in pdf_handler.load_annotations(mi_uf, MI)))
+    check("bake carries the legacy copy",
+          pdf_handler.bake_annotations(mi_uf, MI)
+          and any(
+              str(a.get_object().get("/NM") or "") == "klausmate:" + lg_id
+              for a in (_MiReader(mi_working).pages[0].get("/Annots") or [])
+          ))
+except Exception as e:
+    import traceback
+    check("K-082 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(mi_uf, ignore_errors=True)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

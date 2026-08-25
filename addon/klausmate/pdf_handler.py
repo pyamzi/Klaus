@@ -1316,12 +1316,78 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
             if not os.path.isfile(working):
                 print(f"[klausmate] bake failed: no stored PDF for {base}")
                 return False
-            os.makedirs(_originals_dir(user_files_dir), exist_ok=True)
-            shutil.copy2(working, pristine)
-            print(f"[klausmate] captured pristine original: {base}.pdf")
+            # STRIPPED capture (K-082): a plain copy would smuggle the
+            # outside marks into the baseline, and the carry below would
+            # then double them on every bake.
+            if not _capture_pristine_stripped(user_files_dir, name, working):
+                print(f"[klausmate] bake failed: pristine capture ({base})")
+                return False
 
-        if not highlights:
-            # Un-bake: put the pristine original back, atomically.
+        # Outside marks are CARRIED verbatim from the current working
+        # file (K-082) — the file is their source of truth, and baking
+        # must never rewrite or delete Preview's own objects. Klaus
+        # regenerates only its NATIVE marks. Tombstoned outside marks
+        # (deleted in Klaus) are dropped from the carry, and legacy
+        # K-077 adopted copies (marked, id belongs to an external
+        # record) ride along verbatim.
+        native = [h for h in highlights if h.get("origin") != "external"]
+        ext_ids = {
+            str(h.get("id"))
+            for h in highlights
+            if h.get("origin") == "external" and h.get("id")
+        }
+        suppressed = load_suppressed(user_files_dir, name)
+        carried: list[tuple[int, Any]] = []
+        if os.path.isfile(working):
+            try:
+                wreader = PdfReader(working)
+                for pi, wpg in enumerate(wreader.pages):
+                    phf, oxf, oyf = _page_frame(wpg)
+                    for ref in _annots_of(wpg):
+                        try:
+                            o = ref.get_object()
+                            sub = str(o.get("/Subtype"))
+                            if sub not in ("/Highlight", "/FreeText"):
+                                continue
+                            nm = str(o.get("/NM") or "")
+                            if nm.startswith(_KLAUS_NM):
+                                rid = nm[len(_KLAUS_NM):].split(":", 1)[0]
+                                if rid not in ext_ids:
+                                    # Klaus-native: regenerated below.
+                                    continue
+                            if suppressed:
+                                if sub == "/Highlight":
+                                    rects = _quads_to_qt_rects(
+                                        o, phf, oxf, oyf
+                                    )
+                                else:
+                                    r = _rect_to_qt(
+                                        o.get("/Rect"), phf, oxf, oyf
+                                    )
+                                    rects = [r] if r else []
+                                pseudo = {
+                                    "page": pi,
+                                    "kind": (
+                                        "text"
+                                        if sub == "/FreeText"
+                                        else "highlight"
+                                    ),
+                                    "rects": rects,
+                                }
+                                if _matches_tombstone(pseudo, suppressed):
+                                    # Deleted in Klaus: drop for real.
+                                    continue
+                            carried.append((pi, o))
+                        except Exception:
+                            continue
+            except Exception as exc:
+                print(
+                    f"[klausmate] bake: carry scan failed ({base}): {exc}"
+                )
+                carried = []
+
+        if not native and not carried:
+            # Un-bake: nothing of anyone's to keep — pristine back.
             _atomic_replace_from(pristine, working)
             print(f"[klausmate] un-baked (restored pristine): {base}.pdf")
             return True
@@ -1329,8 +1395,29 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
         reader = PdfReader(pristine)
         writer = PdfWriter(clone_from=reader)
         n_pages = len(writer.pages)
+        for pi, o in carried:
+            if not (0 <= pi < n_pages):
+                continue
+            try:
+                cl = o.clone(writer)
+                try:
+                    del cl[_BakeName("/P")]
+                except Exception:
+                    pass
+                refc = writer._add_object(cl)
+                pgw = writer.pages[pi]
+                arr = pgw.get("/Annots")
+                if arr is None:
+                    pgw[_BakeName("/Annots")] = _BakeArray([refc])
+                else:
+                    arr.get_object().append(refc)
+            except Exception as exc:
+                print(
+                    f"[klausmate] bake: carry failed on p{pi} "
+                    f"({base}): {exc}"
+                )
         baked = 0
-        for hl in highlights:
+        for hl in native:
             page = hl.get("page")
             if not isinstance(page, int) or not (0 <= page < n_pages):
                 print(
@@ -1430,7 +1517,8 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                 except OSError:
                     pass
         print(
-            f"[klausmate] baked {baked} annotation record(s) into {base}.pdf"
+            f"[klausmate] baked {baked} annotation record(s) into "
+            f"{base}.pdf ({len(carried)} outside mark(s) carried)"
         )
         return True
     except Exception as exc:
@@ -1622,18 +1710,32 @@ def _freetext_style(o) -> tuple[str, float | None]:
 
 
 def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
-    """Annotations in ``name``'s working PDF that Klaus did not write:
-    /Highlight and /FreeText entries whose /NM lacks the klausmate:
-    marker. Returns adoption-ready records in Klaus page-point space
-    (origin top-left); [] when the file is missing, unreadable, or
-    clean. Never raises."""
+    """Compatibility wrapper over ``scan_working_annotations``: just the
+    foreign records, [] on failure."""
+    res = scan_working_annotations(user_files_dir, name)
+    return list(res.get("foreign") or []) if isinstance(res, dict) else []
+
+
+def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
+    """Everything the mirror needs from ``name``'s working PDF (K-082):
+
+    ``{"foreign": [...], "marked_ids": set, "page_count": int}`` —
+    foreign is /Highlight + /FreeText entries whose /NM lacks the
+    klausmate: marker, as records in Klaus page-point space (origin
+    top-left); marked_ids are the record ids of Klaus-marked annotations
+    present (legacy K-077 adopted copies live in the file marked).
+
+    Returns None when the file is missing or unreadable — callers must
+    NOT treat that as "clean": a failed scan must never mass-remove
+    mirrored records. Never raises."""
     out: list[dict] = []
+    marked_ids: set[str] = set()
     try:
         if not BAKE_AVAILABLE:
-            return []
+            return None
         working = _working_pdf_path(user_files_dir, name)
         if not os.path.isfile(working):
-            return []
+            return None
         reader = PdfReader(working)
         for pageno, pg in enumerate(reader.pages):
             ph, ox, oy = _page_frame(pg)
@@ -1643,7 +1745,11 @@ def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
                     sub = str(o.get("/Subtype"))
                     if sub not in ("/Highlight", "/FreeText"):
                         continue
-                    if str(o.get("/NM") or "").startswith(_KLAUS_NM):
+                    nm = str(o.get("/NM") or "")
+                    if nm.startswith(_KLAUS_NM):
+                        marked_ids.add(
+                            nm[len(_KLAUS_NM):].split(":", 1)[0]
+                        )
                         continue
                     contents = o.get("/Contents")
                     contents = str(contents) if contents else ""
@@ -1681,8 +1787,12 @@ def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
                     continue
     except Exception as exc:
         print(f"[klausmate] foreign annotation scan failed for {name}: {exc}")
-        return []
-    return out
+        return None
+    return {
+        "foreign": out,
+        "marked_ids": marked_ids,
+        "page_count": len(reader.pages),
+    }
 
 
 def _capture_pristine_stripped(
@@ -1806,109 +1916,170 @@ def _record_signature(rec: dict) -> tuple:
     )
 
 
+def _matches_tombstone(rec: dict, suppressed: list[dict]) -> bool:
+    """True when ``rec`` sits on a tombstone (K-081): same page, same
+    kind, overlapping box — the user deleted this outside mark in Klaus
+    and it must not come back."""
+    fb = _bbox_of(rec)
+    if fb is None:
+        return False
+    kind = "text" if rec.get("kind") == "text" else "highlight"
+    for s in suppressed:
+        if (
+            s.get("page") == rec.get("page")
+            and ("text" if s.get("kind") == "text" else "highlight") == kind
+            and isinstance(s.get("rect"), list)
+            and len(s["rect"]) == 4
+            and _overlaps(s["rect"], fb)
+        ):
+            return True
+    return False
+
+
+def _mirror_core(
+    user_files_dir: str,
+    name: str,
+    foreign: list[dict],
+    marked_ids: set[str] | None,
+    remove_missing: bool,
+) -> int:
+    """Shared add/update(/remove) pass keeping records in step with the
+    file's outside marks. Overlap = same annotation (K-081: Preview
+    autosaves while typing; every snapshot differs slightly). With
+    ``remove_missing``, external records with no counterpart in the file
+    are dropped (Preview-side deletes propagate, K-082) — unless their
+    id is in ``marked_ids`` (legacy K-077 adopted copies live in the
+    file Klaus-marked)."""
+    records = load_annotations(user_files_dir, name)
+    changes = 0
+    # Self-heal (K-081): overlapping EXTERNAL records of the same kind
+    # on the same page are generations of one outside annotation —
+    # keep the newest. Native Klaus records are never touched.
+    kept: list[dict] = []
+    for rec in records:
+        if rec.get("origin") == "external":
+            for i, prev in enumerate(kept):
+                if (
+                    prev.get("origin") == "external"
+                    and _same_annotation(prev, rec)
+                ):
+                    kept[i] = rec
+                    changes += 1
+                    break
+            else:
+                kept.append(rec)
+        else:
+            kept.append(rec)
+    records = kept
+    suppressed = load_suppressed(user_files_dir, name)
+    sig_map = {_record_signature(r): r for r in records}
+    matched: set[str] = set()
+    for f in foreign:
+        hit = sig_map.get(_record_signature(f))
+        if hit is not None:
+            if hit.get("origin") == "external":
+                matched.add(str(hit.get("id")))
+            continue
+        if _matches_tombstone(f, suppressed):
+            continue
+        target = next(
+            (
+                r
+                for r in records
+                if r.get("origin") == "external" and _same_annotation(r, f)
+            ),
+            None,
+        )
+        if target is not None:
+            # Same spot -> the outside annotation was EDITED (Preview
+            # autosaves mid-typing): update in place, never append.
+            matched.add(str(target.get("id")))
+            updated = False
+            for key in ("rects", "text", "color", "size", "note"):
+                if key in f and f.get(key) != target.get(key):
+                    target[key] = f[key]
+                    updated = True
+            if updated:
+                changes += 1
+            sig_map[_record_signature(target)] = target
+            continue
+        rec = dict(f)
+        rec["id"] = uuid.uuid4().hex
+        rec["origin"] = "external"
+        records.append(rec)
+        sig_map[_record_signature(rec)] = rec
+        matched.add(rec["id"])
+        changes += 1
+    if remove_missing:
+        marked = marked_ids or set()
+        survivors: list[dict] = []
+        for r in records:
+            rid = str(r.get("id"))
+            if (
+                r.get("origin") == "external"
+                and rid not in matched
+                and rid not in marked
+            ):
+                # Its original left the file — deleted outside.
+                changes += 1
+                continue
+            survivors.append(r)
+        records = survivors
+    if changes:
+        save_annotations(user_files_dir, name, records)
+        print(
+            f"[klausmate] synced {changes} outside annotation "
+            f"change(s) for {name}"
+        )
+    return changes
+
+
 def adopt_foreign_annotations(
     user_files_dir: str, name: str, scanned: list[dict] | None = None
 ) -> int:
-    """Import outside /Highlight + /FreeText markup into Klaus records.
-
-    Idempotent WITHOUT relying on a bake landing in between: a content
-    signature (page, kind, rounded rects, text) dedupes re-scans of the
-    same unmarked originals. ``scanned`` lets the viewer pass a list it
-    already collected on a worker thread (K-078) — the multi-MB pypdf
-    parse never runs on the main thread that way. Returns records
-    added; 0 on any failure — including a failed pristine capture,
-    where adopting would set the next bake up to duplicate the marks.
-    Never raises."""
+    """Add/update pass only (no removals) — kept for callers and tests
+    that feed a bare foreign list. The live viewer path uses
+    ``mirror_foreign_annotations``. Never raises."""
     try:
         foreign = (
             scanned
             if scanned is not None
             else scan_foreign_annotations(user_files_dir, name)
         )
-        records = load_annotations(user_files_dir, name)
-        changes = 0
-        # Self-heal (K-081): overlapping EXTERNAL records of the same
-        # kind on the same page are generations of one outside
-        # annotation adopted more than once — keep the newest (later in
-        # the list). Native Klaus records are never touched.
-        kept: list[dict] = []
-        for rec in records:
-            if rec.get("origin") == "external":
-                for i, prev in enumerate(kept):
-                    if (
-                        prev.get("origin") == "external"
-                        and _same_annotation(prev, rec)
-                    ):
-                        kept[i] = rec
-                        changes += 1
-                        break
-                else:
-                    kept.append(rec)
-            else:
-                kept.append(rec)
-        records = kept
         if foreign:
             working = _working_pdf_path(user_files_dir, name)
             if not _capture_pristine_stripped(user_files_dir, name, working):
                 foreign = []
-        suppressed = load_suppressed(user_files_dir, name)
-        seen = {_record_signature(r) for r in records}
-        for f in foreign:
-            if _record_signature(f) in seen:
-                continue
-            fb = _bbox_of(f)
-            fkind = "text" if f.get("kind") == "text" else "highlight"
-            if fb is not None and any(
-                s.get("page") == f.get("page")
-                and ("text" if s.get("kind") == "text" else "highlight")
-                == fkind
-                and isinstance(s.get("rect"), list)
-                and len(s["rect"]) == 4
-                and _overlaps(s["rect"], fb)
-                for s in suppressed
-            ):
-                # Tombstoned: the user deleted this adopted mark in
-                # Klaus; the unmarked original resurfacing (bake still
-                # pending, Preview re-save) must not resurrect it.
-                continue
-            target = next(
-                (
-                    r
-                    for r in records
-                    if r.get("origin") == "external"
-                    and _same_annotation(r, f)
-                ),
-                None,
-            )
-            if target is not None:
-                # Same spot -> the outside annotation was EDITED
-                # (Preview autosaves mid-typing): update in place. This
-                # WAS the K-081 doubling — every autosave became a new
-                # record.
-                updated = False
-                for key in ("rects", "text", "color", "size", "note"):
-                    if key in f and f.get(key) != target.get(key):
-                        target[key] = f[key]
-                        updated = True
-                if updated:
-                    changes += 1
-                seen.add(_record_signature(target))
-                continue
-            rec = dict(f)
-            rec["id"] = uuid.uuid4().hex
-            rec["origin"] = "external"
-            records.append(rec)
-            seen.add(_record_signature(rec))
-            changes += 1
-        if changes:
-            save_annotations(user_files_dir, name, records)
-            print(
-                f"[klausmate] synced {changes} outside annotation "
-                f"change(s) for {name}"
-            )
-        return changes
+        return _mirror_core(
+            user_files_dir, name, foreign, None, remove_missing=False
+        )
     except Exception as exc:
         print(f"[klausmate] foreign annotation adopt failed for {name}: {exc}")
+        return 0
+
+
+def mirror_foreign_annotations(
+    user_files_dir: str, name: str, scan_result: dict | None
+) -> int:
+    """K-082: the FILE is the source of truth for outside marks; records
+    mirror it — adds, in-place updates, and removals when the original
+    left the file. ``scan_result`` comes from scan_working_annotations;
+    None (failed scan) is a guarded no-op so a read hiccup can never
+    mass-delete mirrored records. Never raises."""
+    try:
+        if not isinstance(scan_result, dict):
+            return 0
+        foreign = list(scan_result.get("foreign") or [])
+        marked = {str(x) for x in scan_result.get("marked_ids") or []}
+        if foreign:
+            working = _working_pdf_path(user_files_dir, name)
+            if not _capture_pristine_stripped(user_files_dir, name, working):
+                return 0
+        return _mirror_core(
+            user_files_dir, name, foreign, marked, remove_missing=True
+        )
+    except Exception as exc:
+        print(f"[klausmate] mirror failed for {name}: {exc}")
         return 0
 
 
