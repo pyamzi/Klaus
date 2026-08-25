@@ -41,6 +41,12 @@ LIGHT: dict = {
     # ── Backgrounds ──────────────────────────────────────────────────────
     "bg":           "#F5F5F7",   # Window / page background
     "surface":      "#FFFFFF",   # Cards, inputs, header bars, trees
+    "chrome":       "#FFFFFF",   # Window chrome (the top bar). Chrome must
+                                 # SEPARATE from the content canvas behind
+                                 # it — brighter than canvas here, darker
+                                 # in dark mode. Not `surface`: in dark that
+                                 # is #2C2C2C, exactly Anki's --canvas, so
+                                 # the bar dissolved into the page.
     "grey_light":   "#E5E5EA",   # Secondary-button fills, card borders
     "grey_mid":     "#D1D1D6",   # Hovers, input borders
     "grey_dark":    "#AEAEB2",   # Pressed states
@@ -75,6 +81,9 @@ DARK: dict = {
     # ── Backgrounds ──────────────────────────────────────────────────────
     "bg":           "#191919",
     "surface":      "#2C2C2C",
+    "chrome":       "#232323",   # See LIGHT["chrome"]: a step DARKER than
+                                 # Anki's dark --canvas (#2c2c2c), so the
+                                 # bar reads as recessed chrome.
     "grey_light":   "#303030",
     "grey_mid":     "#404040",
     "grey_dark":    "#505050",
@@ -437,7 +446,7 @@ def accent_rgba(night: bool, alpha: float) -> str:
 def _toolbar_vars(c: dict) -> str:
     """One palette as Klaus custom properties for the toolbar."""
     return (
-        f"--klaus-surface: {c['surface']};"
+        f"--klaus-chrome: {c['chrome']};"
         f" --klaus-border: {c['grey_light']};"
         f" --klaus-text: {c['text']};"
         f" --klaus-text-muted: {c['text_muted']};"
@@ -472,7 +481,7 @@ def toolbar_css() -> str:
         {_toolbar_vars(palette(True))}
     }}
     html, body {{
-        background: var(--klaus-surface) !important;
+        background: var(--klaus-chrome) !important;
         margin: 0 !important;
         padding: 0 !important;
     }}
@@ -494,7 +503,7 @@ def toolbar_css() -> str:
     }}
     .header {{
         min-height: 44px;
-        background: var(--klaus-surface);
+        background: var(--klaus-chrome);
         border-bottom: 1px solid var(--klaus-border) !important;
         padding: 0 12px;
         box-sizing: border-box;

@@ -38,12 +38,20 @@ section("theme-reactive (a baked palette went stale on toggle)")
 import inspect
 check("toolbar_css takes no night argument (can't bake a snapshot)",
       list(inspect.signature(theme.toolbar_css).parameters) == [])
-for key, tok in (("surface", "surface"), ("border", "grey_light"),
+for key, tok in (("chrome", "chrome"), ("border", "grey_light"),
                  ("text", "text"), ("text-muted", "text_muted"),
                  ("hover", "hover_subtle"), ("accent", "blue_bright")):
     check(f"--klaus-{key}: both palettes present",
           f"--klaus-{key}: {theme.LIGHT[tok]};" in css
           and f"--klaus-{key}: {theme.DARK[tok]};" in css)
+_lum = lambda h: sum(int(h[i:i + 2], 16) for i in (1, 3, 5)) / 3
+# Anki's own canvas: --canvas #f5f5f5 light, #2c2c2c dark (toolbar.css).
+check("light chrome separates from Anki's light canvas (brighter)",
+      _lum(theme.LIGHT["chrome"]) > _lum("#F5F5F5"))
+check("dark chrome separates from Anki's dark canvas (darker)",
+      _lum(theme.DARK["chrome"]) < _lum("#2C2C2C"))
+check("dark chrome is not `surface` (that WAS Anki's canvas exactly)",
+      theme.DARK["chrome"] != theme.DARK["surface"])
 check("dark palette keyed on Anki's night-mode classes",
       ":root.night-mode" in css and "body.night_mode" in css
       and "body.nightMode" in css)
