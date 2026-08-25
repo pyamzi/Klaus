@@ -233,6 +233,49 @@ def dialog_qss(night: bool) -> str:
     QScrollArea#ContentScrollArea > QWidget > QWidget {{
         background: transparent;
     }}
+    /* K-106 — SynapsePro's CURRENT settings shell (their 1.5.x window,
+       built from Pouya's screenshot; the vendored source only has the
+       older card grid): a fixed SettingsSidebar carrying the app
+       identity plus one checkable NavItem pill per page, a large
+       PageTitle + muted PageSubtitle heading each page, and settings as
+       rows — bold SettingName over muted SettingDesc with the control
+       pinned right — split by RowSeparator hairlines inside the same
+       #CardFrame rounded group. ButtonBarLine is the hairline over the
+       Cancel/Save bar. */
+    QFrame#SettingsSidebar {{
+        background-color: {c['bg']};
+        border-right: 1px solid {c['grey_light']};
+    }}
+    QLabel#SidebarAppName {{ font-size: 15px; font-weight: 700; }}
+    QLabel#SidebarVersion {{ color: {c['text_muted']}; font-size: 11px; }}
+    QPushButton#NavItem {{
+        background-color: transparent;
+        color: {c['text']};
+        border: none;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-weight: 600;
+        text-align: left;
+    }}
+    QPushButton#NavItem:hover {{ background-color: {c['hover_subtle']}; }}
+    QPushButton#NavItem:checked {{
+        background-color: {c['blue']};
+        color: white;
+    }}
+    QLabel#PageTitle {{ font-size: 24px; font-weight: 800; }}
+    QLabel#PageSubtitle {{ color: {c['text_muted']}; font-size: 12px; }}
+    QLabel#SettingName {{ font-size: 13px; font-weight: 600; }}
+    QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 11px; }}
+    QFrame#RowSeparator {{
+        background-color: {c['grey_light']};
+        border: none;
+        max-height: 1px;
+    }}
+    QFrame#ButtonBarLine {{
+        background-color: {c['grey_light']};
+        border: none;
+        max-height: 1px;
+    }}
     QCheckBox {{ color: {c['text']}; spacing: 10px; padding: 4px 0px; }}
     QCheckBox::indicator {{
         width: 18px; height: 18px;

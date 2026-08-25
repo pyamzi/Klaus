@@ -55,6 +55,22 @@ lib = theme.library_qss(False)
 check("library inverts: grey default + PrimaryButton opt-in",
       "QPushButton#PrimaryButton" in lib)
 
+section("settings shell (K-106)")
+# The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
+for night in (False, True):
+    d2 = theme.dialog_qss(night)
+    for oid in ("QFrame#SettingsSidebar", "QPushButton#NavItem",
+                "QLabel#PageTitle", "QLabel#PageSubtitle",
+                "QLabel#SettingName", "QLabel#SettingDesc",
+                "QFrame#RowSeparator", "QFrame#ButtonBarLine",
+                "QLabel#SidebarAppName", "QLabel#SidebarVersion"):
+        check(f"dialog_qss(night={night}) styles {oid}", oid in d2)
+d2 = theme.dialog_qss(False)
+check("selected nav pill is the blue accent with white text",
+      "QPushButton#NavItem:checked" in d2
+      and d2.index("QPushButton#NavItem:hover")
+      < d2.index("QPushButton#NavItem:checked"))
+
 section("drop zone + helpers")
 dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")
 check("drop zone scopes rules to the given objectName",

@@ -756,27 +756,44 @@ check("appearance block guards with its own flag",
       '_bg_state["syncing"]' in _bg_block)
 
 
-print("== SynapsePro card layout (K-105) ==")
+print("== SynapsePro settings shell (K-106) ==")
+# The CURRENT SynapsePro settings window (their 1.5.x, from Pouya's
+# screenshot): sidebar of nav pills + a QStackedWidget of pages, each
+# page a PageTitle/PageSubtitle over ONE rounded group of _row()s.
+# Replaced the K-105 card grid outright.
 _src2 = open("klausmate/manage_models.py").read()
-check("no tabs left — sections are cards in one page",
-      "QTabWidget" not in _src2)
-check("every section is a CardFrame via the _card helper",
-      _src2.count('= _card("') == 4
-      and 'setObjectName("CardFrame")' in _src2)
-check("cards carry SubHeaderLabel headings",
-      'setObjectName("SubHeaderLabel")' in _src2)
-check("all four cards registered for the responsive layouts",
-      all(f'_cards.append(("{r}"' in _src2
-          for r in ("embed", "library", "general", "appearance")))
-check("grid when wide, stack when narrow, at SynapsePro's breakpoint",
-      "COMPACT_BREAKPOINT = 720" in _src2
-      and "_install_grid_layout" in _src2
-      and "_install_stack_layout" in _src2)
-check("layout swap re-parents cards BEFORE killing the old layout",
-      _src2.index("card.setParent(cards_container)")
-      < _src2.index("QWidget().setLayout(old_layout)"))
-check("dialog resize drives the swap",
-      "on_resize_cb = _apply_responsive_layout" in _src2)
+check("no tabs and no card grid left — sidebar + stacked pages",
+      "QTabWidget" not in _src2
+      and "_install_grid_layout" not in _src2
+      and "_cards.append" not in _src2)
+check("sidebar carries the app identity",
+      'setObjectName("SettingsSidebar")' in _src2
+      and 'setObjectName("SidebarAppName")' in _src2
+      and 'QLabel("KlausMate")' in _src2)
+check("sidebar logo is drawn from the top bar's star data",
+      "_top_bar.star_points()" in _src2
+      and "_top_bar.STAR_VIEWBOX" in _src2)
+check("every section is a page with a sidebar pill and a big title",
+      _src2.count("= _page(") == 4
+      and 'setObjectName("NavItem")' in _src2
+      and 'setObjectName("PageTitle")' in _src2
+      and 'setObjectName("PageSubtitle")' in _src2)
+check("display order is decoupled from build order via _finish_nav",
+      '_finish_nav("General", "Appearance", "Semantic Search", '
+      '"Local Models")' in _src2)
+check("settings are SynapsePro rows — name + desc left, control right, "
+      "hairline separated",
+      'setObjectName("SettingName")' in _src2
+      and 'setObjectName("SettingDesc")' in _src2
+      and 'setObjectName("RowSeparator")' in _src2)
+check("nav pills stay mutually exclusive through _select_page",
+      "btn.setChecked(lbl_text == label)" in _src2)
+check("the API-key ROW hides for Ollama — separator included, "
+      "not just the field",
+      "key_row.setVisible(is_cloud)" in _src2
+      and "key_row.klaus_sep" in _src2)
+check("the Cancel/Save bar sits under a full-width hairline",
+      'setObjectName("ButtonBarLine")' in _src2)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

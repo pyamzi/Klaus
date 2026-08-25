@@ -259,13 +259,20 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
     also first-run setup; Tools menu label "KlausMate Preferences…", and
-    the top bar's star opens it too). **SynapsePro card layout (K-105)**:
-    no tabs — the four sections are `QFrame#CardFrame`s with
-    `SubHeaderLabel` headings in one scrollable page, a 2-column grid
-    when the dialog is ≥720px wide and a single stack below that
-    (`_apply_responsive_layout` on the dialog's `on_resize_cb`; the swap
-    re-parents cards before replacing the layout or they die with it).
-    Sections: **Semantic search** (embedding
+    the top bar's star opens it too). **SynapsePro settings shell
+    (K-106 — replaced the K-105 card grid; built from a screenshot of
+    SynapsePro 1.5.x, the vendored source only has their older grid)**:
+    a fixed `SettingsSidebar` (star-logo pixmap drawn from
+    `top_bar.star_points()`, app name + manifest `human_version`, one
+    checkable `NavItem` pill per page) beside a QStackedWidget of pages.
+    Each page = `PageTitle`/`PageSubtitle` over ONE rounded `CardFrame`
+    group; every simple setting is a `_row()` — bold `SettingName` +
+    muted `SettingDesc` left, control right, `RowSeparator` hairlines
+    between. Sidebar display order comes from `_finish_nav(...)`,
+    decoupled from widget build order; the API-key row hides whole
+    (`key_row` + `key_row.klaus_sep`) for Ollama; Cancel/Save sit under
+    a full-width `ButtonBarLine` hairline outside the pages.
+    Pages: **Semantic Search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),
     **Local model library (Ollama)** (pull/delete embedding models only —

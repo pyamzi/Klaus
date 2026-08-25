@@ -35,7 +35,6 @@ from aqt.qt import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -96,6 +95,72 @@ _EMBED_KEY_PLACEHOLDERS = {
 }
 
 
+def _addon_version() -> str:
+    """human_version from manifest.json, "" when unreadable."""
+    try:
+        import json
+        import os
+
+        path = os.path.join(os.path.dirname(__file__), "manifest.json")
+        with open(path, encoding="utf-8") as fh:
+            return str(json.load(fh).get("human_version") or "")
+    except Exception:
+        return ""
+
+
+def _logo_pixmap(size: int) -> Any:
+    """The Klaus star as an app-icon pixmap for the Preferences sidebar:
+    white stroke on a blue rounded square, drawn from the SAME
+    top_bar.star_points() data the toolbar's SVG logo uses."""
+    try:
+        from aqt.qt import (
+            QColor,
+            QPainter,
+            QPen,
+            QPixmap,
+            QPointF,
+            QPolygonF,
+            QRectF,
+        )
+
+        from . import theme as _theme
+        from . import top_bar as _top_bar
+
+        dpr = 2.0
+        px = QPixmap(int(size * dpr), int(size * dpr))
+        px.setDevicePixelRatio(dpr)
+        px.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(px)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        c = _theme.palette(_theme.night_mode())
+        painter.setBrush(QColor(c["blue"]))
+        painter.setPen(Qt.PenStyle.NoPen)
+        radius = size * 0.22
+        painter.drawRoundedRect(
+            QRectF(0.0, 0.0, float(size), float(size)), radius, radius
+        )
+        scale = size / _top_bar.STAR_VIEWBOX * 0.72
+        offset = (size - _top_bar.STAR_VIEWBOX * scale) / 2.0
+        poly = QPolygonF(
+            [
+                QPointF(x * scale + offset, y * scale + offset)
+                for x, y in _top_bar.star_points()
+            ]
+        )
+        pen = QPen(QColor("white"))
+        pen.setWidthF(max(1.5, size * 0.075))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(poly)
+        painter.end()
+        return px
+    except Exception as exc:
+        print(f"[klausmate] sidebar logo failed: {exc}")
+        return None
+
+
 def _format_pull_event(ev: dict) -> tuple[str, int]:
     """Return (human status, percent 0-100) for an Ollama pull progress event."""
     status = str(ev.get("status") or "")
@@ -152,17 +217,6 @@ class _KlausManageDialog(QDialog):
     """
 
     confirm_close_cb: Callable[[], None] | None = None
-    # SynapsePro-style responsive settings: the card grid re-lays out on
-    # width changes (grid when wide, single stack when narrow).
-    on_resize_cb: Callable[[int], None] | None = None
-
-    def resizeEvent(self, event: Any) -> None:  # noqa: N802 — Qt naming
-        try:
-            if self.on_resize_cb is not None:
-                self.on_resize_cb(self.width())
-        except Exception:
-            pass
-        super().resizeEvent(event)
 
     def reject(self) -> None:  # Esc key
         if self.confirm_close_cb is not None:
@@ -203,7 +257,11 @@ def manage_models_dialog(setup: bool = False) -> None:
         print(f"[klausmate] preferences theme failed: {_exc}")
         _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
     outer = QVBoxLayout(dlg)
-    outer.setSpacing(10)
+    # Edge-to-edge: the sidebar must run into the window edges and
+    # down to the button-bar hairline; the footer carries its own
+    # margins instead.
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.setSpacing(0)
 
     stack = QStackedWidget()
     outer.addWidget(stack)
@@ -211,6 +269,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # ----- Page 0: Install Ollama -----------------------------------------
     install_page = QWidget()
     install_layout = QVBoxLayout(install_page)
+    install_layout.setContentsMargins(24, 20, 24, 12)
     install_layout.setSpacing(8)
 
     install_heading = QLabel("Set up local AI")
@@ -279,195 +338,248 @@ def manage_models_dialog(setup: bool = False) -> None:
     models_page_layout = QVBoxLayout(models_page)
     models_page_layout.setContentsMargins(0, 0, 0, 0)
 
-    # Page 1 used to be one long scroll of three group boxes and kept
-    # growing (K-052). The install page (page 0) stays a separate
-    # QStackedWidget page rather than a tab: a user with no Ollama should
-    # not see tabs offering settings that cannot work yet (Local model
-    # library) until they've set up local AI or picked a cloud provider.
-    # Split follows the existing group boxes 1:1 — Semantic search /
-    # Models / General — since that's already the natural job boundary and
-    # needed no rethinking to tab cleanly.
-    # SynapsePro's settings shape (K-105, transcribed from
-    # scripts/SynapsePro-main/settings_dialog.py): no tabs — every
-    # section is a CardFrame in ONE scrollable page, laid out as a
-    # two-column grid when the dialog is wide and a single-column stack
-    # when narrow. _cards is the ordered registry both installers read;
-    # _replace_container_layout re-parents each card off the old layout
-    # BEFORE deleting it, or the cards die with their parent layout.
-    from aqt.qt import QGridLayout, QScrollArea
+    # SynapsePro's CURRENT settings shell (K-106, built from Pouya's
+    # screenshot of their 1.5.x window — the vendored source only has
+    # the older card grid this replaced): a fixed sidebar on the left
+    # carrying the app identity and one checkable pill per page, and a
+    # QStackedWidget of pages on the right. Each page is a large title
+    # + muted subtitle over ONE rounded #CardFrame group inside a
+    # transparent scroll area, and each simple setting is a _row():
+    # bold name + muted description on the left, its control pinned
+    # right, hairline-separated. The install page (page 0 of the OUTER
+    # stack) stays a full-frame page with no sidebar: a user with no
+    # Ollama should not see navigation offering settings that cannot
+    # work yet.
+    from aqt.qt import QFrame, QScrollArea
 
-    scroll = QScrollArea()
-    scroll.setObjectName("ContentScrollArea")
-    scroll.setWidgetResizable(True)
-    cards_container = QWidget()
-    scroll.setWidget(cards_container)
-    models_page_layout.addWidget(scroll)
+    body = QHBoxLayout()
+    body.setContentsMargins(0, 0, 0, 0)
+    body.setSpacing(0)
+    models_page_layout.addLayout(body)
 
-    _cards: list[tuple[str, QWidget]] = []
-    _layout_state = {"mode": ""}
+    sidebar = QFrame()
+    sidebar.setObjectName("SettingsSidebar")
+    sidebar.setFixedWidth(192)
+    side_lay = QVBoxLayout(sidebar)
+    side_lay.setContentsMargins(10, 14, 10, 12)
+    side_lay.setSpacing(4)
 
-    COMPACT_BREAKPOINT = 720  # SynapsePro's
+    head_row = QHBoxLayout()
+    head_row.setSpacing(8)
+    logo_lbl = QLabel()
+    _logo = _logo_pixmap(30)
+    if _logo is not None:
+        logo_lbl.setPixmap(_logo)
+    head_row.addWidget(logo_lbl)
+    name_col = QVBoxLayout()
+    name_col.setSpacing(0)
+    app_name_lbl = QLabel("KlausMate")
+    app_name_lbl.setObjectName("SidebarAppName")
+    name_col.addWidget(app_name_lbl)
+    _ver = _addon_version()
+    if _ver:
+        ver_lbl = QLabel(f"Version {_ver}")
+        ver_lbl.setObjectName("SidebarVersion")
+        name_col.addWidget(ver_lbl)
+    head_row.addLayout(name_col)
+    head_row.addStretch(1)
+    side_lay.addLayout(head_row)
+    side_lay.addSpacing(12)
 
-    def _install_grid_layout() -> None:
-        grid = QGridLayout()
-        grid.setContentsMargins(12, 12, 12, 12)
-        grid.setSpacing(12)
-        cards = dict(_cards)
-        grid.addWidget(cards["embed"], 0, 0)
-        grid.addWidget(cards["library"], 0, 1)
-        grid.addWidget(cards["general"], 1, 0)
-        grid.addWidget(cards["appearance"], 1, 1)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setRowStretch(2, 1)
-        cards_container.setLayout(grid)
+    pages = QStackedWidget()
+    body.addWidget(sidebar)
+    body.addWidget(pages, 1)
 
-    def _install_stack_layout() -> None:
-        vbox = QVBoxLayout()
-        vbox.setContentsMargins(12, 12, 12, 12)
-        vbox.setSpacing(12)
-        for _role, card in _cards:
-            vbox.addWidget(card)
-        vbox.addStretch(1)
-        cards_container.setLayout(vbox)
+    _nav_by_label: dict[str, QPushButton] = {}
+    _page_index: dict[str, int] = {}
 
-    def _replace_container_layout(installer: Callable[[], None]) -> None:
-        old_layout = cards_container.layout()
-        if old_layout is not None:
-            for _role, card in _cards:
-                old_layout.removeWidget(card)
-                card.setParent(cards_container)  # survive the layout's death
-            # A QWidget's layout can't be replaced while one is set;
-            # re-home the old one on a throwaway widget (the standard
-            # Qt idiom) and let it die there.
-            QWidget().setLayout(old_layout)
-        installer()
+    def _select_page(label: str) -> None:
+        pages.setCurrentIndex(_page_index[label])
+        for lbl_text, btn in _nav_by_label.items():
+            btn.setChecked(lbl_text == label)
 
-    def _apply_responsive_layout(width: int) -> None:
-        mode = "stack" if width < COMPACT_BREAKPOINT else "grid"
-        if mode == _layout_state["mode"] or not _cards:
-            return
-        _layout_state["mode"] = mode
-        _replace_container_layout(
-            _install_stack_layout if mode == "stack" else _install_grid_layout
-        )
+    def _page(nav_label: str, title: str, subtitle: str) -> QVBoxLayout:
+        """One settings page + its sidebar pill. Returns the layout of
+        the page's rounded group — call sites append to it exactly like
+        the old per-card layouts. Sidebar placement is deferred to
+        _finish_nav so display order is decoupled from build order."""
+        page = QWidget()
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(24, 18, 24, 8)
+        page_lay.setSpacing(4)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("PageTitle")
+        page_lay.addWidget(title_lbl)
+        sub_lbl = QLabel(subtitle)
+        sub_lbl.setObjectName("PageSubtitle")
+        sub_lbl.setWordWrap(True)
+        page_lay.addWidget(sub_lbl)
+        page_lay.addSpacing(8)
 
-    def _card(title: str) -> tuple[QWidget, QVBoxLayout]:
-        """A SynapsePro settings card: QFrame#CardFrame with a
-        SubHeaderLabel heading. Content goes into the returned layout —
-        call sites read exactly like the old QGroupBox+QVBoxLayout."""
-        from aqt.qt import QFrame
+        scroll = QScrollArea()
+        scroll.setObjectName("ContentScrollArea")
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setContentsMargins(0, 0, 0, 0)
+        group = QFrame()
+        group.setObjectName("CardFrame")
+        group_lay = QVBoxLayout(group)
+        group_lay.setContentsMargins(16, 6, 16, 6)
+        group_lay.setSpacing(0)
+        inner_lay.addWidget(group)
+        inner_lay.addStretch(1)
+        scroll.setWidget(inner)
+        page_lay.addWidget(scroll, 1)
 
-        frame = QFrame()
-        frame.setObjectName("CardFrame")
-        lay = QVBoxLayout(frame)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
-        header = QLabel(title)
-        header.setObjectName("SubHeaderLabel")
-        lay.addWidget(header)
-        return frame, lay
+        _page_index[nav_label] = pages.count()
+        pages.addWidget(page)
+        nav = QPushButton(nav_label)
+        nav.setObjectName("NavItem")
+        nav.setCheckable(True)
+        nav.clicked.connect(lambda _=False, l=nav_label: _select_page(l))
+        _nav_by_label[nav_label] = nav
+        return group_lay
 
-    def _caption(text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setStyleSheet(_MUTED)
-        lbl.setWordWrap(True)
-        return lbl
+    def _finish_nav(*order: str) -> None:
+        """Install the sidebar pills in display order and select the
+        first page. Runs once, after every _page() call."""
+        for label in order:
+            side_lay.addWidget(_nav_by_label[label])
+        side_lay.addStretch(1)
+        _select_page(order[0])
 
-    embed_box, embed_layout = _card("Semantic search")
-    embed_layout.setSpacing(8)
-    embed_layout.addWidget(
-        _caption(
-            "Finds cards and decks by meaning, not just keywords — powers "
-            "Curate Deck and the Library's retention scores."
-        )
+    def _row(
+        group: QVBoxLayout,
+        name: str,
+        desc: str | QLabel,
+        control: Any = None,
+    ) -> QWidget:
+        """A SynapsePro settings row: bold name over a muted description
+        on the left, the control pinned right. ``desc`` may be an
+        existing QLabel for rows whose description repaints live;
+        ``control`` a widget or a layout. Returns the row widget, with
+        ``klaus_desc`` (the description label) and ``klaus_sep`` (the
+        hairline above it, None on the first row) attached so callers
+        can repaint or hide the whole row."""
+        sep = None
+        if group.count():
+            sep = QFrame()
+            sep.setObjectName("RowSeparator")
+            sep.setFixedHeight(1)
+            group.addWidget(sep)
+        roww = QWidget()
+        row = QHBoxLayout(roww)
+        row.setContentsMargins(0, 10, 0, 10)
+        row.setSpacing(16)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        name_lbl = QLabel(name)
+        name_lbl.setObjectName("SettingName")
+        text_col.addWidget(name_lbl)
+        desc_lbl = desc if isinstance(desc, QLabel) else QLabel(desc)
+        desc_lbl.setObjectName("SettingDesc")
+        desc_lbl.setWordWrap(True)
+        text_col.addWidget(desc_lbl)
+        row.addLayout(text_col, 1)
+        if isinstance(control, QWidget):
+            row.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+        elif control is not None:
+            row.addLayout(control)
+        group.addWidget(roww)
+        roww.klaus_desc = desc_lbl
+        roww.klaus_sep = sep
+        return roww
+
+    embed_layout = _page(
+        "Semantic Search",
+        "Semantic Search",
+        "Finds cards and decks by meaning, not just keywords — powers "
+        "Curate Deck and the Library's retention scores. Needs a Voyage "
+        "or OpenAI key (both have free tiers) or a local Ollama model "
+        "from the Local Models page.",
     )
-    embed_form = QFormLayout()
-    embed_form.setContentsMargins(0, 0, 0, 0)
-    embed_form.setSpacing(6)
-    embed_form.setLabelAlignment(
-        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-    )
-    embed_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
     embed_provider_combo = QComboBox()
     embed_provider_combo.addItem("Voyage API (default)", "voyage")
     embed_provider_combo.addItem("OpenAI API", "openai")
     embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
-    embed_provider_combo.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-    )
-    embed_row = QHBoxLayout()
-    embed_row.setContentsMargins(0, 0, 0, 0)
-    embed_row.addWidget(embed_provider_combo, 1)
+    embed_provider_combo.setMinimumWidth(220)
     embed_fix_btn = QPushButton("Pull it")
     embed_fix_btn.setVisible(False)
-    embed_row.addWidget(embed_fix_btn)
-    embed_form.addRow("Embeddings from:", embed_row)
+    provider_ctl = QHBoxLayout()
+    provider_ctl.setContentsMargins(0, 0, 0, 0)
+    provider_ctl.addWidget(embed_provider_combo)
+    provider_ctl.addWidget(embed_fix_btn)
+    _row(
+        embed_layout,
+        "Embeddings from",
+        "Voyage and OpenAI are cloud APIs; Ollama runs on your machine, "
+        "private and free.",
+        provider_ctl,
+    )
 
-    embed_model_lbl = QLabel("Search model:")
     embed_model_combo = QComboBox()
     embed_model_combo.setEditable(True)
-    embed_model_combo.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-    )
     embed_model_combo.setMinimumWidth(220)
-    embed_form.addRow(embed_model_lbl, embed_model_combo)
+    _row(
+        embed_layout,
+        "Search model",
+        "Blank uses the provider's default. Changing provider or model "
+        "rebuilds the card index.",
+        embed_model_combo,
+    )
 
-    embed_key_lbl = QLabel("API key:")
     embed_key_edit = QLineEdit()
     embed_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    embed_form.addRow(embed_key_lbl, embed_key_edit)
-    embed_layout.addLayout(embed_form)
-
-    index_row = QHBoxLayout()
-    embed_status = QLabel()
-    embed_status.setWordWrap(True)
-    embed_status.setStyleSheet(_MUTED)
-    index_row.addWidget(embed_status, 1)
-    index_btn = QPushButton("Index cards now")
-    index_row.addWidget(index_btn)
-    embed_layout.addLayout(index_row)
-    embed_layout.addWidget(
-        _caption(
-            "Needs a Voyage or OpenAI key (both have free tiers) or a local "
-            "Ollama model from the library below — that's the only setup "
-            "Klaus asks for."
-        )
+    embed_key_edit.setMinimumWidth(220)
+    # The whole row hides for Ollama (update_embed_status) — the local
+    # provider has no key to ask for.
+    key_row = _row(
+        embed_layout,
+        "API key",
+        "For the selected cloud provider. Stored in this add-on's "
+        "config on your machine.",
+        embed_key_edit,
     )
 
-    # ----- Default match sensitivity ---------------------------------------
+    embed_status = QLabel()
+    embed_status.setWordWrap(True)
+    index_btn = QPushButton("Index cards now")
+    _row(embed_layout, "Card index", embed_status, index_btn)
+
+    # ----- Default match sensitivity -----------------------------------
     # The global starting point for retention._migrate_default_threshold /
-    # pdf_match_threshold. Same 20-80 range and live numeric readout as the
-    # Library's per-PDF slider (pdf_drive._on_threshold) — same control,
-    # different scope, so it should look and feel like the same control.
-    threshold_row = QHBoxLayout()
-    threshold_row.setContentsMargins(0, 0, 0, 0)
-    threshold_row.addWidget(QLabel("Default match sensitivity:"))
+    # pdf_match_threshold. Same 20-80 range and live numeric readout as
+    # the Library's per-PDF slider (pdf_drive._on_threshold) — same
+    # control, different scope, so it should look and feel the same.
     threshold_slider = QSlider(Qt.Orientation.Horizontal)
     threshold_slider.setMinimum(20)
     threshold_slider.setMaximum(80)
-    threshold_slider.setSizePolicy(
-        QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-    )
-    threshold_row.addWidget(threshold_slider, 1)
+    threshold_slider.setFixedWidth(160)
     threshold_value_lbl = QLabel()
     threshold_value_lbl.setMinimumWidth(36)
-    threshold_row.addWidget(threshold_value_lbl)
-    embed_layout.addLayout(threshold_row)
-    embed_layout.addWidget(
-        _caption(
-            "Sensitivity for every PDF that hasn't been tuned individually. "
-            "Changing it offers to reset tuned PDFs too; any single PDF can "
-            "still be adjusted afterwards in the Library (right-click → "
-            "Match sensitivity)."
-        )
+    threshold_ctl = QHBoxLayout()
+    threshold_ctl.setContentsMargins(0, 0, 0, 0)
+    threshold_ctl.addWidget(threshold_slider)
+    threshold_ctl.addWidget(threshold_value_lbl)
+    _row(
+        embed_layout,
+        "Default match sensitivity",
+        "For every PDF that hasn't been tuned individually. Changing it "
+        "offers to reset tuned PDFs too; any single PDF can still be "
+        "adjusted in the Library (right-click → Match sensitivity).",
+        threshold_ctl,
     )
 
-    _cards.append(("embed", embed_box))
-
-    # ----- Local model library (inventory only) ----------------------------
-    lib_box, lib_layout = _card("Local model library (Ollama)")
+    # ----- Local model library (inventory only) -------------------------
+    lib_layout = _page(
+        "Local Models",
+        "Local Models",
+        "Ollama embedding models installed on this machine — pull new "
+        "ones, delete what you no longer use.",
+    )
+    lib_layout.setContentsMargins(16, 12, 16, 12)
     lib_layout.setSpacing(6)
 
     status_lbl = QLabel()
@@ -504,114 +616,129 @@ def manage_models_dialog(setup: bool = False) -> None:
     pull_row.addWidget(delete_btn)
     pull_row.addWidget(refresh_btn)
     lib_layout.addLayout(pull_row)
-    _cards.append(("library", lib_box))
 
-    # ----- General ----------------------------------------------------------
-    # The two toggles orphaned by settings_ui.py's deletion (A5) — labels,
-    # keys and defaults read from that file, which this card does not edit.
-    general_box, general_layout = _card("General")
-    general_layout.setSpacing(6)
-
-    image_crop_cb = QCheckBox(
-        "Image crop (right-click or double-click an image in a note field)"
+    # ----- General ------------------------------------------------------
+    general_layout = _page(
+        "General",
+        "General",
+        "Feature toggles, the Library folder on disk, and the PDF "
+        "renderer.",
     )
-    general_layout.addWidget(image_crop_cb)
 
-    runtime_auto_cb = QCheckBox(
-        "Manage Ollama automatically (start it in the background; offer "
-        "one-click setup)"
+    image_crop_cb = QCheckBox()
+    _row(
+        general_layout,
+        "Image crop",
+        "Right-click or double-click an image in a note field to crop a "
+        "copy — the original file is untouched.",
+        image_crop_cb,
     )
-    general_layout.addWidget(runtime_auto_cb)
+
+    runtime_auto_cb = QCheckBox()
+    _row(
+        general_layout,
+        "Manage Ollama automatically",
+        "Start the local AI engine in the background and offer one-click "
+        "setup when it's missing.",
+        runtime_auto_cb,
+    )
 
     # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
     # config's pdf_renderer ("native"/"pdfjs") onto one checkbox — the
     # only UI that touches the key.
-    pdfjs_cb = QCheckBox(
-        "Use the new pdf.js viewer — smoother, flicker-free scrolling "
-        "(beta: highlights and find are still arriving; takes effect "
-        "after restart)"
+    pdfjs_cb = QCheckBox()
+    _row(
+        general_layout,
+        "Use the new pdf.js viewer",
+        "Smoother, flicker-free scrolling (beta: some features are still "
+        "arriving). Takes effect after Anki restarts.",
+        pdfjs_cb,
     )
-    general_layout.addWidget(pdfjs_cb)
-
-    # ---- Appearance: custom background + the frosted top bar ----
-    # A blurred flat colour IS that colour, so "Solid colour" also makes
-    # the top bar match the window chrome exactly (background.py).
-    appearance_box, appearance_layout = _card("Appearance")
-    appearance_layout.setSpacing(6)
-    appearance_layout.addWidget(
-        _caption(
-            "Sets the background of Anki's deck, overview and congrats "
-            "screens. The Klaus top bar shows the same background, "
-            "blurred, so it reads as frosted glass over it."
-        )
-    )
-
-    bg_row = QHBoxLayout()
-    bg_row.setContentsMargins(0, 0, 0, 0)
-    bg_row.addWidget(QLabel("Background:"))
-    bg_mode_combo = QComboBox()
-    bg_mode_combo.addItem("Anki's own (default)", "theme")
-    bg_mode_combo.addItem("Solid colour", "color")
-    bg_mode_combo.addItem("Image", "image")
-    bg_row.addWidget(bg_mode_combo, 1)
-    bg_colour_btn = QPushButton("Colour…")
-    bg_colour_btn.setObjectName("SecondaryButton")
-    bg_row.addWidget(bg_colour_btn)
-    bg_image_btn = QPushButton("Choose image…")
-    bg_image_btn.setObjectName("SecondaryButton")
-    bg_row.addWidget(bg_image_btn)
-    appearance_layout.addLayout(bg_row)
-
-    bg_image_lbl = QLabel()
-    bg_image_lbl.setWordWrap(True)
-    bg_image_lbl.setStyleSheet(_MUTED)
-    appearance_layout.addWidget(bg_image_lbl)
-
-    bg_fit_row = QHBoxLayout()
-    bg_fit_row.setContentsMargins(0, 0, 0, 0)
-    bg_fit_row.addWidget(QLabel("Fit:"))
-    bg_fit_combo = QComboBox()
-    bg_fit_combo.addItem("Fill the window", "cover")
-    bg_fit_combo.addItem("Fit inside", "contain")
-    bg_fit_combo.addItem("Tile", "tile")
-    bg_fit_row.addWidget(bg_fit_combo)
-    bg_fit_row.addSpacing(12)
-    bg_fit_row.addWidget(QLabel("Bar blur:"))
-    bg_blur_slider = QSlider(Qt.Orientation.Horizontal)
-    bg_blur_slider.setRange(0, 60)
-    bg_blur_slider.setFixedWidth(120)
-    bg_fit_row.addWidget(bg_blur_slider)
-    bg_blur_lbl = QLabel()
-    bg_blur_lbl.setStyleSheet(_MUTED)
-    bg_fit_row.addWidget(bg_blur_lbl)
-    bg_fit_row.addStretch(1)
-    appearance_layout.addLayout(bg_fit_row)
 
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
-    # just from the old root to the new one.
-    library_row = QHBoxLayout()
-    library_row.setContentsMargins(0, 0, 0, 0)
-    library_row.addWidget(QLabel("Library folder:"))
+    # just from the old root to the new one. The row's description IS the
+    # live path label (_refresh_library_label repaints it).
     library_path_lbl = QLabel()
     library_path_lbl.setWordWrap(True)
     library_change_btn = QPushButton("Change…")
     library_change_btn.setObjectName("SecondaryButton")
-    library_row.addWidget(library_path_lbl, 1)
-    library_row.addWidget(library_change_btn)
-    general_layout.addLayout(library_row)
+    _row(general_layout, "Library folder", library_path_lbl, library_change_btn)
 
-    # Maintenance — the two actions that used to live in the Tools > Klaus
-    # submenu (K-045). Moved here rather than dropped: a menu item that
-    # vanishes is worse than one that's a click deeper.
-    maintenance_row = QHBoxLayout()
-    maintenance_row.setContentsMargins(0, 0, 0, 0)
+    # Maintenance — the connection check that used to live in the
+    # Tools > Klaus submenu (K-045).
     test_conn_btn = QPushButton("Test connection")
     test_conn_btn.setObjectName("SecondaryButton")
-    maintenance_row.addWidget(test_conn_btn)
-    maintenance_row.addStretch(1)
-    general_layout.addLayout(maintenance_row)
+    _row(
+        general_layout,
+        "Connection",
+        "Check that the embedding provider is reachable.",
+        test_conn_btn,
+    )
+
+    # ---- Appearance: custom background + the frosted top bar ----
+    # A blurred flat colour IS that colour, so "Solid colour" also makes
+    # the top bar match the window chrome exactly (background.py).
+    appearance_layout = _page(
+        "Appearance",
+        "Appearance",
+        "Sets the background of Anki's deck, overview and congrats "
+        "screens. The Klaus top bar shows the same background blurred, "
+        "so it reads as frosted glass over it.",
+    )
+
+    bg_mode_combo = QComboBox()
+    bg_mode_combo.addItem("Anki's own (default)", "theme")
+    bg_mode_combo.addItem("Solid colour", "color")
+    bg_mode_combo.addItem("Image", "image")
+    bg_colour_btn = QPushButton("Colour…")
+    bg_colour_btn.setObjectName("SecondaryButton")
+    bg_image_btn = QPushButton("Choose image…")
+    bg_image_btn.setObjectName("SecondaryButton")
+    bg_ctl = QHBoxLayout()
+    bg_ctl.setContentsMargins(0, 0, 0, 0)
+    bg_ctl.addWidget(bg_mode_combo)
+    bg_ctl.addWidget(bg_colour_btn)
+    bg_ctl.addWidget(bg_image_btn)
+    _row(
+        appearance_layout,
+        "Background",
+        "Anki's own look, a solid colour, or an image of yours.",
+        bg_ctl,
+    )
+
+    bg_image_lbl = QLabel()
+    bg_image_lbl.setWordWrap(True)
+    bg_image_lbl.setObjectName("SettingDesc")
+    appearance_layout.addWidget(bg_image_lbl)
+
+    bg_fit_combo = QComboBox()
+    bg_fit_combo.addItem("Fill the window", "cover")
+    bg_fit_combo.addItem("Fit inside", "contain")
+    bg_fit_combo.addItem("Tile", "tile")
+    _row(
+        appearance_layout,
+        "Fit",
+        "How an image is scaled to the window.",
+        bg_fit_combo,
+    )
+
+    bg_blur_slider = QSlider(Qt.Orientation.Horizontal)
+    bg_blur_slider.setRange(0, 60)
+    bg_blur_slider.setFixedWidth(140)
+    bg_blur_lbl = QLabel()
+    bg_blur_lbl.setObjectName("SettingDesc")
+    blur_ctl = QHBoxLayout()
+    blur_ctl.setContentsMargins(0, 0, 0, 0)
+    blur_ctl.addWidget(bg_blur_slider)
+    blur_ctl.addWidget(bg_blur_lbl)
+    _row(
+        appearance_layout,
+        "Bar blur",
+        "How strongly the top bar blurs an image behind it.",
+        blur_ctl,
+    )
 
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
@@ -718,25 +845,32 @@ def manage_models_dialog(setup: bool = False) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    _cards.append(("general", general_box))
-    _cards.append(("appearance", appearance_box))
-    _apply_responsive_layout(dlg.width())
-    dlg.on_resize_cb = _apply_responsive_layout
+    _finish_nav("General", "Appearance", "Semantic Search", "Local Models")
 
     stack.addWidget(models_page)
 
     # ----- Shared footer --------------------------------------------------
+    bar_line = QFrame()
+    bar_line.setObjectName("ButtonBarLine")
+    bar_line.setFixedHeight(1)
+    outer.addWidget(bar_line)
+
+    foot = QVBoxLayout()
+    foot.setContentsMargins(12, 8, 12, 10)
+    foot.setSpacing(6)
+    outer.addLayout(foot)
+
     progress = QProgressBar()
     progress.setRange(0, 100)
     progress.setValue(0)
     progress.setTextVisible(True)
     progress.setVisible(False)
-    outer.addWidget(progress)
+    foot.addWidget(progress)
 
     progress_lbl = QLabel("")
     progress_lbl.setStyleSheet(_MUTED)
     progress_lbl.setVisible(False)
-    outer.addWidget(progress_lbl)
+    foot.addWidget(progress_lbl)
 
     close_row = QHBoxLayout()
     unsaved_lbl = QLabel("")
@@ -755,7 +889,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     save_btn = QPushButton("Save")
     save_btn.setEnabled(False)
     close_row.addWidget(save_btn)
-    outer.addLayout(close_row)
+    foot.addLayout(close_row)
 
     install_action_btns: list[QPushButton] = []
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
@@ -1277,8 +1411,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         sig = embeddings.index_signature(cfg)
         provider = embed_provider_combo.currentData() or "ollama"
         is_cloud = provider != "ollama"
-        for w in (embed_key_lbl, embed_key_edit):
-            w.setVisible(is_cloud)
+        key_row.setVisible(is_cloud)
+        if key_row.klaus_sep is not None:
+            key_row.klaus_sep.setVisible(is_cloud)
         st = curation.index_stats()
         if not st["exists"]:
             txt = "No card index yet — click “Index cards now” to enable semantic search."
