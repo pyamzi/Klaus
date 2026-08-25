@@ -550,21 +550,42 @@ class _SelectionOverlay(QWidget):
         painter.end()
 
     def _paint_texts(self, painter: Any) -> None:
-        """Adopted outside text (K-078): each record's contents drawn
-        word-wrapped inside its page box, scaled with the zoom, in the
-        record's color. Approximate fidelity by design — it is the
-        user's own typed note, not typeset content."""
+        """Mirrored outside text (K-078/K-083): each record's contents
+        drawn in its page box, scaled with the zoom, in the record's
+        color. Only EXPLICIT line breaks wrap — Preview never soft-wraps
+        a FreeText, and Qt's wider font metrics used to re-wrap
+        'This is a test' and clip the overflow. If the widest line still
+        exceeds the box, the font shrinks to fit instead of clipping."""
         try:
-            flags = int(Qt.TextFlag.TextWordWrap)
             for rect, text, color, px in self._text_boxes:
-                text = (text or "").strip()
-                if not text:
+                text = (text or "").strip("\n")
+                if not text.strip():
                     continue
                 font = painter.font()
+                try:
+                    font.setFamily("Helvetica")
+                except Exception:
+                    pass
                 font.setPixelSize(max(6, int(px)))
                 painter.setFont(font)
+                fm = painter.fontMetrics()
+                lines = text.split("\n")
+                widest = max(
+                    (fm.horizontalAdvance(ln) for ln in lines), default=0
+                )
+                if widest > rect.width() > 0 and widest > 0:
+                    shrunk = max(
+                        6, int(int(px) * rect.width() / widest)
+                    )
+                    if shrunk < font.pixelSize():
+                        font.setPixelSize(shrunk)
+                        painter.setFont(font)
+                        fm = painter.fontMetrics()
                 painter.setPen(color)
-                painter.drawText(rect, flags, text)
+                y = rect.y() + fm.ascent()
+                for ln in lines:
+                    painter.drawText(rect.x(), y, ln)
+                    y += fm.lineSpacing()
         except Exception:
             pass
 
