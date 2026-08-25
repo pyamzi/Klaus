@@ -819,3 +819,34 @@ highlights unaffected; no crash on float/dock during reload.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator, self-executed) pending live verification. Landed in 4a15a79: overlay text layer (record color + zoom-scaled font, word-wrapped), per-record highlight colors on screen, Remove Text context action, adoption-on-load (scan + pristine capture on daemon thread, merge on main via taskman, stale-generation apply still persists + bakes), hot-reload via WeakSet of sidebars + (inode,mtime_ns,size) fingerprint polled from the watcher tick, deferred one tick, scroll preserved. Review catch fixed pre-commit: successful bakes re-fingerprint their own sidebars so Klaus's own writes never trigger a self-reload loop (~2s flicker after every highlight edit otherwise). Engine adopt(scanned=) red-first. 191+82 green, AST sweep clean on all three modules. Files touched beyond card spec: pdf_handler.py (scanned param), pdf_drive.py (watcher hook) — solo execution, disjointness moot. LIVE CHECKS for Pouya: restart; open a PDF you marked in Preview -> text/highlights appear (tooltip reports import); type in Preview while the tab is open -> updates ~1s; right-click adopted text -> Remove Text; highlight edits do NOT flicker-reload the tab.
+
+### K-080: Preview FreeText has no /Contents — recover text from the /AP stream
+owner: -
+priority: P1
+tags: bug,orchestrator
+files: klausmate/pdf_handler.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py
+created: 2026-08-24
+
+Live K-078 verification failed: "The text is not showing up." Diagnosis
+from the real file (read-only): Anki restarted AFTER 4a15a79 (code live),
+and Biostatistics.pdf page 0 carries the Preview text as
+  /FreeText NM='' Contents=None RC=no AP=yes
+— macOS Preview writes FreeText annotations with NO /Contents at all;
+the text exists only as the appearance stream's text-showing operators.
+scan_foreign_annotations requires non-empty /Contents, so it skips
+exactly this annotation -> nothing adopted, nothing rendered.
+
+Fix (pdf_handler): _freetext_text(o, reader) resolution order
+/Contents -> /RC (markup stripped) -> /AP normal-appearance stream text:
+parse via pypdf.generic.ContentStream, collect Tj / ' / " / TJ strings,
+Td/TD/T* between text runs become newlines, bytes decoded utf-16-be (BOM)
+or latin-1. Scan's FreeText branch uses it instead of raw /Contents.
+
+Verify: red-first test in test_klausmate.py recreating the live shape
+(FreeText with /Contents deleted + hand-built /AP Form XObject stream,
+two Tj runs split by Td) -> scan must find it and recover
+"added in\nPreview"; adopt + bake + clean rescan on top.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Root cause proven from the live file: Preview FreeText has no /Contents; text only in /AP. Fixed via _freetext_text (/Contents -> /RC -> /AP ContentStream parse, Td/TD/T* = line breaks). Red-first on the recreated live shape; verified read-only against the real Biostatistics.pdf — decodes its actual content ('Text', black, 12pt, p0). 196+82 green. Needs live retest after restart.
