@@ -9,6 +9,8 @@ klausmate/meta.json*
 # ─── Separate projects / vendored reference material ──────────────────────
 SynapsePro-main/
 addon-docs-main/
+References/
+scripts/vscode-main/
 
 # ─── Build output ─────────────────────────────────────────────────────────
 dist/
