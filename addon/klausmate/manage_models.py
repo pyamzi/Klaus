@@ -516,6 +516,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     outer.addWidget(progress_lbl)
 
     close_row = QHBoxLayout()
+    unsaved_lbl = QLabel("")
+    unsaved_lbl.setStyleSheet(_MUTED)
+    close_row.addWidget(unsaved_lbl)
     close_row.addStretch(1)
     cancel_btn = QPushButton("Cancel download")
     cancel_btn.setObjectName("SecondaryButton")
@@ -524,13 +527,27 @@ def manage_models_dialog(setup: bool = False) -> None:
     close_btn = QPushButton("Close")
     close_btn.setObjectName("SecondaryButton")
     close_row.addWidget(close_btn)
+    # Save is the primary action (theme default = blue) and the ONLY
+    # writer of preference keys — see mark_dirty()/save_all().
+    save_btn = QPushButton("Save")
+    save_btn.setEnabled(False)
+    close_row.addWidget(save_btn)
     outer.addLayout(close_row)
 
     install_action_btns: list[QPushButton] = []
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
     # Written by refresh(); read by the index pipeline (missing-model check)
     # and the section-sync guards (avoid save-on-programmatic-set loops).
-    ui_state: dict[str, Any] = {"models": [], "syncing": False}
+    # "dirty"/"shown_provider" back the deferred-save model: preference
+    # widgets no longer write on every keystroke or toggle — Save does.
+    # "shown_provider" is the provider the embed widgets are currently
+    # DISPLAYING, which runs ahead of the stored config while unsaved.
+    ui_state: dict[str, Any] = {
+        "models": [],
+        "syncing": False,
+        "dirty": False,
+        "shown_provider": "",
+    }
 
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
@@ -928,13 +945,21 @@ def manage_models_dialog(setup: bool = False) -> None:
     def _embed_cfg_key(provider: str) -> str:
         return f"embedding_api_key_{provider}"
 
-    def sync_embed_widgets() -> None:
+    def sync_embed_widgets(provider_override: str | None = None) -> None:
         from . import curation, embeddings
 
+        # Refreshes (model pulls, connection checks) must never overwrite
+        # unsaved edits with stored values. A provider switch passes
+        # provider_override and is exempt — it IS the edit being applied,
+        # and it needs the model/key fields reloaded for the new provider
+        # without anything being written to disk.
+        if provider_override is None and ui_state["dirty"]:
+            return
         ui_state["syncing"] = True
         try:
             cfg = _pkg().get_config()
-            provider = embeddings.provider_name(cfg)
+            provider = provider_override or embeddings.provider_name(cfg)
+            ui_state["shown_provider"] = provider
             idx = max(0, embed_provider_combo.findData(provider))
             embed_provider_combo.setCurrentIndex(idx)
             # Local provider → offer every installed model (the library is
@@ -945,6 +970,10 @@ def manage_models_dialog(setup: bool = False) -> None:
                 for name in ui_state["models"]:
                     embed_model_combo.addItem(name, name)
             configured_model = str(cfg.get("embedding_model") or "")
+            if provider_override is not None:
+                # Moving the widgets to a different provider than the one
+                # stored: the stored model name belongs to the old one.
+                configured_model = ""
             if provider == "ollama":
                 st = curation.index_stats()
                 indexed_model = st["model"] if st["exists"] else ""
@@ -954,7 +983,11 @@ def manage_models_dialog(setup: bool = False) -> None:
                     indexed_model,
                     embeddings.DEFAULT_MODELS["ollama"],
                 )
-                if resolved != configured_model and ui_state["models"]:
+                if (
+                    resolved != configured_model
+                    and ui_state["models"]
+                    and provider_override is None
+                ):
                     # Heal the config now, not just the widget — an empty
                     # field must not silently mean DEFAULT_MODELS['ollama']
                     # everywhere else this config is read (index_signature,
@@ -1066,10 +1099,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         provider = str(embed_provider_combo.currentData() or "ollama")
         prev = embeddings.provider_name(cfg)
         cfg["embedding_provider"] = provider
-        if provider == prev:
+        # The widgets were repopulated for `provider` the moment it was
+        # picked (on_provider_changed), so by Save time their contents
+        # already belong to it — take them. Comparing against the STORED
+        # provider here (as this did under auto-save, when the widgets
+        # still held the old provider's model at signal time) would now
+        # discard a model the user deliberately typed for the new one.
+        if ui_state.get("shown_provider", provider) == provider:
             cfg["embedding_model"] = embed_model_combo.currentText().strip()
         else:
-            # Provider switched: the typed model belongs to the old provider.
             cfg["embedding_model"] = ""
         if provider != "ollama":
             cfg[_embed_cfg_key(provider)] = embed_key_edit.text().strip()
@@ -1086,6 +1124,8 @@ def manage_models_dialog(setup: bool = False) -> None:
     def sync_threshold_widget() -> None:
         from . import retention
 
+        if ui_state["dirty"]:
+            return  # never clobber an unsaved slider position
         ui_state["syncing"] = True
         try:
             cfg = retention._cfg()  # applies the default-bump migration
@@ -1319,6 +1359,19 @@ def manage_models_dialog(setup: bool = False) -> None:
             _run_index()
 
     def confirm_close() -> None:
+        # Checked BEFORE the running-operation branches: several of those
+        # accept() straight away, and unsaved edits must not slip out
+        # through one of them unmentioned.
+        if ui_state["dirty"]:
+            ok = QMessageBox.question(
+                dlg,
+                "Discard changes?",
+                "You have unsaved preference changes.\n\n"
+                "Close without saving them?",
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return
+            clear_dirty()
         if op_state["active"]:
             if op_state["kind"] == "index":
                 ok = QMessageBox.question(
@@ -1370,6 +1423,59 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
         _pkg().write_config(cfg)
+
+    def mark_dirty() -> None:
+        """A preference widget changed — nothing is written until Save.
+
+        Every preference used to write config on its own change signal.
+        That made "I changed it and it didn't take" indistinguishable
+        from "I never committed it", and it silently lost any setting
+        whose signal was left unconnected (exactly what happened to the
+        pdf_renderer checkbox). Save is now the single writer, so an
+        unwired signal costs a missing dirty mark, never a lost setting.
+        """
+        if ui_state["syncing"]:
+            return
+        ui_state["dirty"] = True
+        save_btn.setEnabled(True)
+        unsaved_lbl.setText("Unsaved changes")
+
+    def clear_dirty() -> None:
+        ui_state["dirty"] = False
+        save_btn.setEnabled(False)
+        unsaved_lbl.setText("")
+
+    def on_provider_changed(_idx: int) -> None:
+        """Reload the model list and key field for the newly picked
+        provider WITHOUT writing config. The provider is passed through
+        explicitly because config still holds the old one until Save."""
+        if ui_state["syncing"]:
+            return
+        mark_dirty()
+        sync_embed_widgets(
+            provider_override=str(embed_provider_combo.currentData() or "ollama")
+        )
+
+    def save_all() -> None:
+        """The one writer of preference keys (the Save button).
+
+        clear_dirty() runs FIRST because save_embed()/save_threshold()
+        re-sync widgets afterwards and those syncs are skipped while the
+        dirty guard is up.
+        """
+        prev_renderer = _renderer_from_config(_pkg().get_config())
+        clear_dirty()
+        save_embed()
+        save_threshold()
+        save_general()
+        if _renderer_from_config(_pkg().get_config()) != prev_renderer:
+            showInfo(
+                "Preferences saved.\n\nThe PDF viewer change takes effect "
+                "the next time you start Anki.",
+                parent=dlg,
+            )
+        else:
+            tooltip("Klaus: preferences saved", parent=dlg)
 
     def change_library_folder() -> None:
         """Point the Library at a different on-disk folder, moving
@@ -1469,17 +1575,22 @@ def manage_models_dialog(setup: bool = False) -> None:
     pull_btn.clicked.connect(start_pull)
     close_btn.clicked.connect(confirm_close)
     embed_fix_btn.clicked.connect(on_embed_fix_clicked)
-    embed_provider_combo.currentIndexChanged.connect(lambda _i: save_embed())
+    # Preference widgets only MARK DIRTY; save_all() (Save button) is the
+    # single writer. textEdited rather than editingFinished so the Save
+    # button lights up as you type, not only on focus-out.
+    embed_provider_combo.currentIndexChanged.connect(on_provider_changed)
     _embed_model_edit_widget = embed_model_combo.lineEdit()
     if _embed_model_edit_widget is not None:
-        _embed_model_edit_widget.editingFinished.connect(save_embed)
-    embed_model_combo.currentIndexChanged.connect(lambda _i: save_embed())
-    embed_key_edit.editingFinished.connect(save_embed)
+        _embed_model_edit_widget.textEdited.connect(lambda _t: mark_dirty())
+    embed_model_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
+    embed_key_edit.textEdited.connect(lambda _t: mark_dirty())
     threshold_slider.valueChanged.connect(_update_threshold_label)
-    threshold_slider.sliderReleased.connect(save_threshold)
+    threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
-    image_crop_cb.toggled.connect(lambda _checked: save_general())
-    runtime_auto_cb.toggled.connect(lambda _checked: save_general())
+    image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
+    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
+    pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
+    save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
 
     rebuild_install_method_buttons()

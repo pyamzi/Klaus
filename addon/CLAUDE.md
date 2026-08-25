@@ -218,7 +218,18 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     mxbai-embed-large, embeddinggemma), **General** (`image_crop_enabled`,
     `runtime_auto_setup`, and `pdf_renderer` toggles — no other UI
     touches these keys; the pdf.js checkbox maps "native"/"pdfjs" and
-    needs a restart).
+    needs a restart). **Preferences are deferred-save**: widgets only
+    call `mark_dirty()`; `save_all()` behind the **Save** button is the
+    single writer of preference keys, closing dirty prompts to discard,
+    and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
+    a background `refresh()` can't clobber unsaved edits. Adding a
+    preference = widget + `mark_dirty` signal + a line in the matching
+    `save_*`; a forgotten signal now costs a missing dirty mark, not a
+    silently unsaved setting (which is exactly how `pdf_renderer`
+    shipped broken). `sync_embed_widgets(provider_override=...)` is how
+    a provider switch reloads the model/key fields without writing, and
+    `ui_state["shown_provider"]` — not the stored provider — is what
+    `save_embed` compares against.
   - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
     readiness checks, gated on `embeddings.provider_name(cfg)` — a
     Voyage/OpenAI profile never sees Ollama-flavored copy or probes.

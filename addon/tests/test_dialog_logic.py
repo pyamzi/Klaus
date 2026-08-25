@@ -136,17 +136,21 @@ class World:
         # indexed_model mirrors curation.index_stats()["model"] when an
         # index already exists, else "".
         self.indexed_model = indexed_model
-        self.ui_state = {"models": list(models), "syncing": False, "embed_fix_kind": ""}
+        self.ui_state = {
+            "models": list(models), "syncing": False, "embed_fix_kind": "",
+            "dirty": False, "shown_provider": "",
+        }
         self.saves = 0
         self.opened_key_pages = []
         self.pulled_models = []
 
-        self.embed_provider_combo = Combo(on_change=self.save_embed)
+        # Deferred save: widgets mark dirty, save_all() writes.
+        self.embed_provider_combo = Combo(on_change=self.on_provider_changed)
         self.embed_provider_combo.addItem("Voyage API (default)", "voyage")
         self.embed_provider_combo.addItem("OpenAI API", "openai")
         self.embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
-        self.embed_model_combo = Combo(on_change=self.save_embed)
-        self.embed_key_edit = LineEdit(on_finish=self.save_embed)
+        self.embed_model_combo = Combo(on_change=lambda: self.mark_dirty())
+        self.embed_key_edit = LineEdit(on_finish=lambda: self.mark_dirty())
 
         self.sync_embed_widgets()
 
@@ -179,10 +183,33 @@ class World:
         combo.setEditText(name)
         combo.setCurrentIndex(i)
 
-    def sync_embed_widgets(self):
+    def mark_dirty(self):
+        if self.ui_state["syncing"]:
+            return
+        self.ui_state["dirty"] = True
+
+    def clear_dirty(self):
+        self.ui_state["dirty"] = False
+
+    def on_provider_changed(self):
+        if self.ui_state["syncing"]:
+            return
+        self.mark_dirty()
+        self.sync_embed_widgets(
+            provider_override=str(self.embed_provider_combo.currentData() or "ollama")
+        )
+
+    def save_all(self):
+        self.clear_dirty()
+        self.save_embed()
+
+    def sync_embed_widgets(self, provider_override=None):
+        if provider_override is None and self.ui_state["dirty"]:
+            return  # never clobber unsaved edits
         self.ui_state["syncing"] = True
         try:
-            provider = self._provider_name()
+            provider = provider_override or self._provider_name()
+            self.ui_state["shown_provider"] = provider
             idx = max(0, self.embed_provider_combo.findData(provider))
             self.embed_provider_combo.setCurrentIndex(idx)
             # Local provider -> offer every installed model; cloud -> free
@@ -192,12 +219,20 @@ class World:
                 for name in self.ui_state["models"]:
                     self.embed_model_combo.addItem(name, name)
             configured_model = str(self.cfg.get("embedding_model") or "")
+            if provider_override is not None:
+                # Widgets moving to a provider other than the stored one:
+                # the stored model name belongs to the old provider.
+                configured_model = ""
             if provider == "ollama":
                 resolved = _resolve_ollama_model(
                     configured_model, self.ui_state["models"], self.indexed_model,
                     _EMBED_DEFAULTS["ollama"],
                 )
-                if resolved != configured_model and self.ui_state["models"]:
+                if (
+                    resolved != configured_model
+                    and self.ui_state["models"]
+                    and provider_override is None
+                ):
                     # Heal the config now, not just the widget (K-039) —
                     # only when models were actually enumerated, so an
                     # unreachable Ollama can't durably orphan an index.
@@ -244,11 +279,13 @@ class World:
         provider = str(self.embed_provider_combo.currentData() or "ollama")
         prev = self._provider_name()
         self.cfg["embedding_provider"] = provider
-        if provider == prev:
+        # Widgets were repopulated for `provider` when it was picked, so
+        # their contents already belong to it (comparing against the
+        # STORED provider here would discard a model typed for the new
+        # one — the auto-save-era bug).
+        if self.ui_state.get("shown_provider", provider) == provider:
             self.cfg["embedding_model"] = self.embed_model_combo.currentText().strip()
         else:
-            # Provider switched: the typed/selected model belonged to the
-            # old provider.
             self.cfg["embedding_model"] = ""
         if provider != "ollama":
             self.cfg[self._embed_cfg_key(provider)] = self.embed_key_edit.text().strip()
@@ -317,27 +354,61 @@ check("and writes it back to config (the sync_embed_widgets heal branch)",
       w.cfg["embedding_model"] == "embeddinggemma")
 check("healing on open does not count as a user save", w.saves == 0)
 
-print("== assignment round-trips ==")
+print("== deferred save: edits do not reach config until Save ==")
 w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
           models=["nomic-embed-text", "all-minilm"])
 w.pick_model("all-minilm")
-check("picking a model writes config", w.cfg["embedding_model"] == "all-minilm")
-check("one save for one pick", w.saves == 1)
+check("picking a model marks dirty", w.ui_state["dirty"] is True)
+check("picking a model writes NOTHING yet",
+      w.cfg["embedding_model"] == "nomic-embed-text")
+check("no save happened", w.saves == 0)
+w.save_all()
+check("Save persists the pick", w.cfg["embedding_model"] == "all-minilm")
+check("Save clears dirty", w.ui_state["dirty"] is False)
 
 w = World(BASE, models=[])
 w.embed_key_edit.type_and_leave("pa-new-key")
-check("typing a key writes config", w.cfg["embedding_api_key_voyage"] == "pa-new-key")
-check("key entered clears the fix warning", w.ui_state["embed_fix_kind"] == "")
+check("typing a key marks dirty but writes nothing",
+      w.ui_state["dirty"] is True
+      and w.cfg.get("embedding_api_key_voyage") == "")
+w.save_all()
+check("Save persists the key", w.cfg["embedding_api_key_voyage"] == "pa-new-key")
 
-print("== switching provider drops the old model and resyncs without a double-save ==")
+print("== a refresh while dirty must not clobber unsaved edits ==")
+w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
+          models=["nomic-embed-text", "all-minilm"])
+w.pick_model("all-minilm")
+w.sync_embed_widgets()          # what refresh() does after a pull/check
+check("unsaved pick survives a refresh",
+      w.embed_model_combo.currentText() == "all-minilm")
+w.save_all()
+check("and still saves correctly afterwards",
+      w.cfg["embedding_model"] == "all-minilm")
+
+print("== switching provider reloads the fields without writing ==")
 w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
           models=["nomic-embed-text"])
 w.embed_provider_combo.pick("openai")
-check("provider switch writes the new provider", w.cfg["embedding_provider"] == "openai")
-check("old provider's model is dropped, not carried over", w.cfg["embedding_model"] == "")
-check("switching provider is exactly one save (inner resync must not re-save)",
-      w.saves == 1)
+check("provider switch writes nothing yet",
+      w.cfg["embedding_provider"] == "ollama")
+check("but the widgets already show the new provider",
+      w.ui_state["shown_provider"] == "openai")
 check("cloud fields reset to empty (no openai key yet)", w.embed_key_edit.text() == "")
+w.save_all()
+check("Save writes the new provider", w.cfg["embedding_provider"] == "openai")
+check("old provider's model is dropped, not carried over", w.cfg["embedding_model"] == "")
+
+print("== provider switch THEN a typed model keeps the typed model (regression) ==")
+# Under the auto-save-era logic (compare against the STORED provider) this
+# silently saved "" and the typed model vanished.
+w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
+          models=["nomic-embed-text"])
+w.embed_provider_combo.pick("openai")
+w.embed_model_combo.setEditText("text-embedding-3-large")
+w.save_all()
+check("the model typed for the NEW provider survives Save",
+      w.cfg["embedding_model"] == "text-embedding-3-large")
+check("provider saved alongside it", w.cfg["embedding_provider"] == "openai")
 
 print("== empty embedding_model resolver (K-039, manage_models._resolve_ollama_model) ==")
 
@@ -523,12 +594,25 @@ class ThresholdWorld:
 
     def __init__(self, cfg):
         self.cfg = dict(cfg)
-        self.ui_state = {"syncing": False}
+        self.ui_state = {"syncing": False, "dirty": False}
         self.writes = 0
-        self.slider = Slider(on_release=self.save_threshold)
+        # Deferred save: a release marks dirty; save_all() (the Save
+        # button) is what calls save_threshold.
+        self.slider = Slider(on_release=self.mark_dirty)
         self.sync_threshold_widget()
 
+    def mark_dirty(self):
+        if self.ui_state["syncing"]:
+            return
+        self.ui_state["dirty"] = True
+
+    def save_all(self):
+        self.ui_state["dirty"] = False
+        self.save_threshold()
+
     def sync_threshold_widget(self):
+        if self.ui_state["dirty"]:
+            return  # never clobber an unsaved slider position
         self.ui_state["syncing"] = True
         try:
             try:
@@ -578,19 +662,28 @@ check(
 
 w = ThresholdWorld({"pdf_match_threshold": 0.55})
 w.slider.user_click_release_no_move()
+w.save_all()
 check("a click-release that changes nothing writes nothing", w.writes == 0)
 check("no user-set flag from a no-op release", "_threshold_user_set" not in w.cfg)
 
 w = ThresholdWorld({"pdf_match_threshold": 0.75})
 w.slider.user_drag_and_release(55)
-check("dragging and releasing persists the new value",
+check("dragging alone writes nothing until Save",
+      "pdf_match_threshold" in w.cfg and w.cfg["pdf_match_threshold"] == 0.75
+      and w.writes == 0)
+check("dragging marks dirty", w.ui_state["dirty"] is True)
+w.sync_threshold_widget()   # a refresh landing mid-edit
+check("an unsaved slider position survives a refresh", w.slider.value() == 55)
+w.save_all()
+check("dragging and releasing then saving persists the new value",
       w.cfg["pdf_match_threshold"] == 0.55)
-check("dragging and releasing stamps the user-set flag",
+check("dragging and releasing then saving stamps the user-set flag",
       w.cfg.get("_threshold_user_set") is True)
-check("exactly one write for one drag-and-release", w.writes == 1)
+check("exactly one write for one drag-and-release-and-save", w.writes == 1)
 
 w = ThresholdWorld({"pdf_match_threshold": 0.55})
 w.slider.user_drag_and_release(55)  # releases at the value already stored
+w.save_all()
 check("releasing at the already-stored value writes nothing", w.writes == 0)
 check(
     "no user-set flag when the value didn't actually change",
@@ -637,6 +730,7 @@ check("which is the path that legitimately stamps the flag", w.cfg["_threshold_u
 print("== end to end: a slider-set value survives a later default bump ==")
 w = ThresholdWorld({"pdf_match_threshold": 0.75})
 w.slider.user_drag_and_release(55)  # user deliberately picks 0.55
+w.save_all()                        # ...and commits it with Save
 bumped = _migrate_default_threshold(w.cfg, 0.85)
 check(
     "the dialog's own output config is untouched by a later migration",

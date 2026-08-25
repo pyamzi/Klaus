@@ -114,4 +114,5 @@ wouldn't already need.
   flicker-free scrolling, but still reaching feature parity (highlights,
   find, and thumbnails land there incrementally — see the K-095 board
   umbrella). Toggle it from **Klausmate Preferences → General → "Use the
-  new pdf.js viewer"**. Requires an Anki restart to take effect.
+  new pdf.js viewer"**, then press **Save**. Requires an Anki restart to
+  take effect.
