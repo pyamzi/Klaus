@@ -68,6 +68,16 @@ check("scale factor tracks every scale change (build + rezoom)",
 check("text layer is pinned against host CSS (Anki stdHtml)",
       "text-size-adjust: none" in html and "box-sizing: content-box" in html
       and "max-width: none !important" in html)
+# The native viewer's documented double-draw rule, transplanted: baked
+# marks are REAL PDF annotations, and the on-screen overlay draws the
+# same records — so every canvas render (pages, thumbs, image copies)
+# must suppress annotation painting or highlights/outside text show
+# twice (found live 2026-08-25). Four render sites, four flags.
+check("every render call disables annotation painting",
+      html.count("annotationMode: pdfjsLib.AnnotationMode.DISABLE")
+      == html.count("page.render({"))
+check("there are exactly four render sites",
+      html.count("page.render({") == 4)
 
 section("bridge parsing")
 check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)

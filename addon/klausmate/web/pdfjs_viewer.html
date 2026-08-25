@@ -309,6 +309,7 @@ async function renderPage(num, div) {
     await page.render({
       canvasContext: ctx, viewport: viewport,
       transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+      annotationMode: pdfjsLib.AnnotationMode.DISABLE,
     }).promise;
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
@@ -544,7 +545,7 @@ async function copyPageImage(page0) {
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
     post("copy-image:" + canvas.toDataURL("image/png").split(",", 2)[1]);
   } catch (e) { post("log:copy page image failed: " + e.message); }
 }
@@ -557,7 +558,7 @@ async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
     const full = document.createElement("canvas");
     full.width = Math.floor(viewport.width);
     full.height = Math.floor(viewport.height);
-    await page.render({ canvasContext: full.getContext("2d"), viewport }).promise;
+    await page.render({ canvasContext: full.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
     const out = document.createElement("canvas");
     out.width = Math.max(1, Math.floor(wPt * q));
     out.height = Math.max(1, Math.floor(hPt * q));
@@ -821,7 +822,7 @@ async function renderThumb(num) {
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
     t.insertBefore(canvas, t.firstChild);
   } catch (e) { post("log:thumb " + num + " failed: " + e.message); }
 }
