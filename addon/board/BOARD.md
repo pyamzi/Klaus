@@ -288,3 +288,41 @@ gone); remove_records helper; report stat matches the written file.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). Bake-level resurrection guard (ledger + surviving-mark clobber rule, same as mirror), exact-stat fingerprint pinning, post-bake record removal + overlay refresh, primary-only marked_ids, debounces 500/350ms. Red-first; falsified guard -> bake writes the deleted highlight + sticky back (the exact live symptom). 234+82 green, AST clean. Live: delete a Klaus highlight in Preview right after making another edit in Klaus -> stays deleted; both directions land <1s.
+
+### K-086: Ghost highlights on add: stale mirror applies discarded; tombstone TTL
+owner: -
+priority: P1
+tags: bug,orchestrator
+files: klausmate/pdf_handler.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py && python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: "Removal seems to do well, but sometimes when you add a
+highlight, it's not removed" — strays appear around ADDS.
+
+Causes:
+1. OUT-OF-ORDER MIRROR APPLIES: every scan runs on its own thread
+   (load path, tick path, multiple sidebars). Add a mark then change
+   something quickly -> two scans in flight; if the OLDER scan's apply
+   lands after the newer one, it re-imports a mark already gone from
+   the file. Ghost record in Klaus, absent from the file, and no
+   further tick corrects it (nothing changes on disk). Fix: scans are
+   fingerprint-stamped (stat of the working file taken at scan time);
+   mirror_foreign_annotations re-stats at apply time and DISCARDS a
+   result whose fingerprint no longer matches — a fresher pass always
+   follows via the tick machinery, which compares against fingerprints
+   captured BEFORE scans start.
+2. TOMBSTONE SWALLOWS RE-ADDS: re-highlighting the exact same text in
+   Preview after deleting that mark in Klaus produces byte-identical
+   quads — indistinguishable from stale-model resurrection, so the
+   precision tombstone blocks it forever (and the next bake deletes it
+   from the file behind the user's back). Resurrection risk is
+   session-scoped; fix: tombstones carry ts and only match for 10
+   minutes; aged/legacy entries expire on the next mirror prune.
+
+Verify (red-first): scan result carries stat; stale apply discarded
+(scan v1 with {A,B}, file moves to v2 {A}, apply v2 then v1 -> B NOT
+re-imported); aged tombstone no longer blocks; fresh one still does.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Fingerprint-stamped scans + apply-time discard (falsified: guard off resurrects the deleted mark); tombstone TTL 10min (identical re-adds import after the stale-model window; legacy entries age out). 239+82 green, AST clean. Live: rapid add/remove sequences in either app settle with no strays; re-highlighting the same text after a Klaus-side delete works once ~10min have passed (or immediately at a slightly different spot).
