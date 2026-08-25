@@ -131,6 +131,66 @@ created: 2026-08-24
 - [2026-08-24 opus] Design pass done. Split: K-070 (Ready) is part A — storage root, path mapping, migration, setup step, Preferences row. Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) gets filed once A lands, on pdf_drive/tag_sync/drive_store. This card stays as the umbrella.
 - [2026-08-24 opus] Part B shipped as K-073 (two-way sync + single-copy). Umbrella is now functionally complete: root folder chosen at setup/Preferences, disk<->tree<->tags all mirror, one copy of every PDF living in the root. Remaining live verification rides Pouya's next restart.
 
+### K-078: Outside annotations, viewer: render text records, adopt on load, reload on external change
+owner: -
+priority: P2
+tags: feature
+files: klausmate/pdf_viewer.py,tests/test_drive.py
+created: 2026-08-24
+
+Depends on the engine card (scan/adopt in pdf_handler). Work:
+1. Overlay paints type:"text" records: the text inside its rect, scaled
+   with zoom, record color (approximate fidelity is fine — it is the
+   user's own typed note). Right-click on it -> "Remove text note"
+   (deletes the record, schedules bake). Read-only otherwise in v1.
+2. On document load: background adopt_foreign_annotations; if >0,
+   reload annotations json, schedule bake, repaint overlay.
+3. External-change hot-reload: viewer records the working file's
+   (mtime, size) at load; when the library rescan/watcher tick fires (or
+   on window activation), an open tab whose file changed reloads the
+   QPdfDocument and re-runs adoption. DANGER ZONE: document reload on
+   the SHARED QPdfDocument must bump _doc_generation and respect the
+   K-068/K-072 lessons — never reparent/reload inside event delivery;
+   defer via QTimer.singleShot(0) with liveness guard. Preview saves
+   replace the inode (atomic), which is why the open view never sees
+   external edits today.
+Live checks: type text in Preview on an open PDF -> appears in Klaus
+within ~1s of the watcher tick without reopening the tab; Klaus
+highlights unaffected; no crash on float/dock during reload.
+
+### K-079: Per-PDF notes space: side pane + sidecar + baked appended Notes page
+owner: -
+priority: P2
+tags: feature
+files: klausmate/pdf_viewer.py,klausmate/pdf_handler.py,tests/test_klausmate.py
+created: 2026-08-24
+
+Pouya: each PDF should be "a space where you can take notes on the
+side", "embedded into the PDFs in some way that's viewable in other
+files but doesn't overwrite the PDF".
+
+Recommended design (fits the regenerative bake exactly):
+1. SOURCE OF TRUTH: sidecar annotations/<safe>.notes.md in user_files;
+   plain-text/markdown.
+2. UI: toggleable notes pane in the PDF viewer (per-tab toolbar button),
+   QPlainTextEdit, autosave debounce ~800ms, feeding the same bake
+   debounce highlights use.
+3. EMBED: bake appends rendered "Notes — <display>" page(s) AFTER the
+   last content page: Helvetica base-14 (no font embedding), wrapped
+   text, multi-page as needed. Because every bake regenerates from the
+   pristine original, the notes page never accumulates or duplicates;
+   empty notes (+ no highlights) = un-bake back to pristine. Content
+   pages are never touched -> "doesn't overwrite the PDF"; a real page
+   -> visible in Preview/Acrobat/anything -> "viewable in other files".
+   pypdf-only page synthesis (raw content stream, Tj ops, manual wrap):
+   no new deps. Limitation v1: plain text only, WinAnsi charset
+   (non-Latin chars degrade) — flagged.
+Rejected alternative: embedded file attachment (EmbeddedFiles tree) —
+macOS Preview ignores attachments, failing "viewable in other files".
+Tests: notes page appended once across repeated bakes; page count =
+pristine+N; un-bake restores pristine byte-identical; text extraction
+of the notes page contains the note; wrap/pagination on a long note.
+
 ## Ready
 
 ## Doing
@@ -703,3 +763,55 @@ disappears without reopen.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator, self-executed). Root causes verified in code + live breadcrumbs: (1) _refresh_rows never rebuilt the tree — data synced, view stale until reopen; (2) folder drags rejected while Qt InternalMove still removed the row from the view; (3) context-menu folder rename was store-only (rename_mapped_folder had zero callers) so the disk-truth rescan reverted it. Fix: refresh rebuilds (expansion/selection/scroll preserved), folder drag+rename share apply_folder_change (disk dir + store + mapping, merge-refusing), every drop path ends IgnoreAction+heal-rebuild, watcher is module-level so sync is live with the window closed. Falsified: disk half disabled -> survives-rescan test red with the exact live revert. 82+165 green, AST sweep clean. Commit 20a5b5f. Live checks owed: Finder move updates open window ~1s; folder drag sticks; nothing disappears.
+
+### K-077: Outside annotations, engine: mark Klaus bakes, scan+adopt foreign text/highlights
+owner: orchestrator
+priority: P2
+tags: feature
+files: klausmate/pdf_handler.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Design (agreed direction: ADOPTION, not annotation-layer rendering).
+Rendering the PDF annotation layer was rejected: it double-draws Klaus's
+own baked highlights under the live overlay, and it would NOT stop the
+regenerative bake from erasing outside markup from the file. Instead
+Klaus imports outside annotations into its own data model, after which
+they survive bakes, render in the overlay, and are deletable in Klaus.
+
+Scope: /Highlight and /FreeText only (Pouya: "text and highlights are
+enough"). /Text stickies are a trivial later extension of the same scan.
+
+Work in pdf_handler.py:
+1. bake_annotations writes /NM "klausmate:<stable-id>" on EVERY
+   annotation it creates (highlight + any popup/text it emits). Stable id
+   derived from the record (hash of page+rects+type) so re-bakes keep ids.
+2. scan_foreign_annotations(uf, name) -> list[dict]: pypdf-read the
+   working file (pdf_path_for choke point); collect annotations of
+   subtype Highlight/FreeText whose /NM lacks the klausmate: prefix.
+   Convert coordinates PDF->Qt (y_qt = mediabox_h - y_top; account for
+   nonzero mediabox origin, same as bake's flip, verified pixel-exact).
+   Highlights: QuadPoints -> rects list. FreeText: /Rect + /Contents
+   (+ color from /C or /DA when parseable, else default).
+3. adopt_foreign_annotations(uf, name) -> int: append converted records
+   to the annotations json with origin:"external"; NEW record type for
+   text, e.g. {"type":"text","page","rect","text","color"} alongside the
+   existing highlight records; returns count adopted. Caller re-bakes:
+   pristine + full json regenerates the file, so the foreign originals
+   are replaced by Klaus-owned marked equivalents — no duplication.
+
+Semantics to preserve (ONE-WAY VALVE, flagged to Pouya): once adopted,
+the item is Klaus data — further edits belong in Klaus. A Preview edit
+of an adopted item either keeps /NM (Klaus ignores it and the next bake
+reverts the edit) or drops /NM (it re-imports as a second copy). True
+two-way merge is out of scope.
+
+Tests (red-first) in test_klausmate.py: build a scratch PDF via vendored
+pypdf with one foreign FreeText + one foreign Highlight; scan finds both;
+adopt writes records; bake; re-scan finds ZERO foreign (marker works);
+Klaus-baked highlight is never scanned as foreign; adoption idempotent
+across repeated scan+bake cycles; coordinate round-trip within 1pt.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator, self-executed). Engine landed in 0ae0680: /NM klausmate: markers on every baked annotation (highlight + sticky + new FreeText branch), scan_foreign_annotations (Highlight+FreeText, inverse of the verified coordinate flip, /C + /DA style parsing), adopt_foreign_annotations (signature-deduped, refuses on failed pristine capture), stripped pristine capture on first adoption, validator extended with kind/text/size/origin while keeping legacy records byte-identical. Red-first gate (166 green + section red on missing functions). Falsified BOTH guards: markers off -> 4 red (self-adoption loop), strip off -> 4 red (pristine duplication). 187+82 green, AST sweep clean. Bonus: test bootstrap typing_extensions shim makes vendored pypdf real under py3.9 = bake paths now actually tested; fixed one pre-existing section that only passed because pypdf was invisible. Viewer half (render text records, adopt on load, hot-reload) is K-078.
