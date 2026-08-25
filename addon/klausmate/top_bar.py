@@ -26,12 +26,16 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# The hand-drawn five-point star from Pouya's sketch: one open
-# pentagram stroke with deliberately irregular vertices and a slight
-# tilt so it keeps the sketched feel at 26px. Colour comes from the
+# Pouya's hand-drawn star, traced from his sketch (2026-08-25 revision):
+# a POINT-DOWN pentagram — two peaks along the top, a point out each
+# side, and one long point at the bottom — drawn as a single continuous
+# stroke that crosses itself, with the sketch's slight tilt and uneven
+# vertices preserved. Vertices were traced in the sketch's own pixel
+# space and normalised into this 26x26 viewBox, so the proportions are
+# the drawing's, not an idealised star's. Colour comes from the
 # --klaus-accent CSS variable theme.toolbar_css defines — no hex here.
 _STAR_PATH = (
-    "M14.2 1.8 L19.6 23.4 L1.7 11.6 L24.3 10.1 L6.9 24.0 Z"
+    "M5.5 1.5 L23.6 13.7 L2.4 16.4 L17.8 1.8 L12.8 24.5 Z"
 )
 
 
