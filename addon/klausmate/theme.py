@@ -214,6 +214,25 @@ def dialog_qss(night: bool) -> str:
         selection-background-color: {c['selection_bg']};
         selection-color: {c['text']};
     }}
+    /* SynapsePro settings cards (K-105): QFrame#CardFrame is the
+       section container, QLabel#SubHeaderLabel its heading, and the
+       hosting scroll area is transparent so the dialog bg shows
+       through — all three transcribed from SynapsePro's
+       settings_dialog styles. */
+    QFrame#CardFrame {{
+        background-color: {c['surface']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 12px;
+    }}
+    QLabel#SubHeaderLabel {{
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }}
+    QScrollArea#ContentScrollArea {{ background: transparent; border: none; }}
+    QScrollArea#ContentScrollArea > QWidget > QWidget {{
+        background: transparent;
+    }}
     QCheckBox {{ color: {c['text']}; spacing: 10px; padding: 4px 0px; }}
     QCheckBox::indicator {{
         width: 18px; height: 18px;

@@ -242,7 +242,7 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             print(f"[klausmate] pdfjs webview failed: {exc}")
             fallback = QLabel(
                 "pdf.js viewer could not start — switch off the pdf.js "
-                "viewer in Klausmate Preferences.",
+                "viewer in KlausMate Preferences.",
                 self,
             )
             fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)

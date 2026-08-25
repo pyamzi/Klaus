@@ -1,9 +1,9 @@
-"""Klausmate Preferences dialog: provision the local AI runtime, pull a
+"""KlausMate Preferences dialog: provision the local AI runtime, pull a
 local embedding model, configure semantic search, and hold the two
 maintenance actions (Test connection, Clear library tag).
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
-split). Backs Tools > Klausmate Preferences — the single Tools-menu entry
+split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
 point (K-045 folded the old 'Klaus' submenu's three items in here) — plus
 the first-run one-click setup path.
 
@@ -36,7 +36,6 @@ from aqt.qt import (
     QComboBox,
     QDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -48,7 +47,6 @@ from aqt.qt import (
     QSizePolicy,
     QSlider,
     QStackedWidget,
-    QTabWidget,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -154,6 +152,17 @@ class _KlausManageDialog(QDialog):
     """
 
     confirm_close_cb: Callable[[], None] | None = None
+    # SynapsePro-style responsive settings: the card grid re-lays out on
+    # width changes (grid when wide, single stack when narrow).
+    on_resize_cb: Callable[[int], None] | None = None
+
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802 — Qt naming
+        try:
+            if self.on_resize_cb is not None:
+                self.on_resize_cb(self.width())
+        except Exception:
+            pass
+        super().resizeEvent(event)
 
     def reject(self) -> None:  # Esc key
         if self.confirm_close_cb is not None:
@@ -178,8 +187,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     chains straight into pulling the starter model when none exist.
     """
     dlg = _KlausManageDialog(mw)
-    dlg.setWindowTitle("Klausmate Preferences")
-    dlg.setMinimumWidth(560)
+    dlg.setWindowTitle("KlausMate Preferences")
+    dlg.setMinimumWidth(480)
+    dlg.resize(960, 680)
     # SynapsePro dialog language (theme.dialog_qss): window on bg, group
     # boxes as white cards, blue-primary buttons (objectName
     # SecondaryButton/DangerButton opt out per button below).
@@ -277,18 +287,86 @@ def manage_models_dialog(setup: bool = False) -> None:
     # Split follows the existing group boxes 1:1 — Semantic search /
     # Models / General — since that's already the natural job boundary and
     # needed no rethinking to tab cleanly.
-    tabs = QTabWidget()
-    models_page_layout.addWidget(tabs)
+    # SynapsePro's settings shape (K-105, transcribed from
+    # scripts/SynapsePro-main/settings_dialog.py): no tabs — every
+    # section is a CardFrame in ONE scrollable page, laid out as a
+    # two-column grid when the dialog is wide and a single-column stack
+    # when narrow. _cards is the ordered registry both installers read;
+    # _replace_container_layout re-parents each card off the old layout
+    # BEFORE deleting it, or the cards die with their parent layout.
+    from aqt.qt import QGridLayout, QScrollArea
 
-    def _tab(*widgets: QWidget) -> QWidget:
-        tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
-        tab_layout.setContentsMargins(10, 10, 10, 10)
-        tab_layout.setSpacing(8)
-        for w in widgets:
-            tab_layout.addWidget(w)
-        tab_layout.addStretch(1)
-        return tab
+    scroll = QScrollArea()
+    scroll.setObjectName("ContentScrollArea")
+    scroll.setWidgetResizable(True)
+    cards_container = QWidget()
+    scroll.setWidget(cards_container)
+    models_page_layout.addWidget(scroll)
+
+    _cards: list[tuple[str, QWidget]] = []
+    _layout_state = {"mode": ""}
+
+    COMPACT_BREAKPOINT = 720  # SynapsePro's
+
+    def _install_grid_layout() -> None:
+        grid = QGridLayout()
+        grid.setContentsMargins(12, 12, 12, 12)
+        grid.setSpacing(12)
+        cards = dict(_cards)
+        grid.addWidget(cards["embed"], 0, 0)
+        grid.addWidget(cards["library"], 0, 1)
+        grid.addWidget(cards["general"], 1, 0)
+        grid.addWidget(cards["appearance"], 1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(2, 1)
+        cards_container.setLayout(grid)
+
+    def _install_stack_layout() -> None:
+        vbox = QVBoxLayout()
+        vbox.setContentsMargins(12, 12, 12, 12)
+        vbox.setSpacing(12)
+        for _role, card in _cards:
+            vbox.addWidget(card)
+        vbox.addStretch(1)
+        cards_container.setLayout(vbox)
+
+    def _replace_container_layout(installer: Callable[[], None]) -> None:
+        old_layout = cards_container.layout()
+        if old_layout is not None:
+            for _role, card in _cards:
+                old_layout.removeWidget(card)
+                card.setParent(cards_container)  # survive the layout's death
+            # A QWidget's layout can't be replaced while one is set;
+            # re-home the old one on a throwaway widget (the standard
+            # Qt idiom) and let it die there.
+            QWidget().setLayout(old_layout)
+        installer()
+
+    def _apply_responsive_layout(width: int) -> None:
+        mode = "stack" if width < COMPACT_BREAKPOINT else "grid"
+        if mode == _layout_state["mode"] or not _cards:
+            return
+        _layout_state["mode"] = mode
+        _replace_container_layout(
+            _install_stack_layout if mode == "stack" else _install_grid_layout
+        )
+
+    def _card(title: str) -> tuple[QWidget, QVBoxLayout]:
+        """A SynapsePro settings card: QFrame#CardFrame with a
+        SubHeaderLabel heading. Content goes into the returned layout —
+        call sites read exactly like the old QGroupBox+QVBoxLayout."""
+        from aqt.qt import QFrame
+
+        frame = QFrame()
+        frame.setObjectName("CardFrame")
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(6)
+        header = QLabel(title)
+        header.setObjectName("SubHeaderLabel")
+        lay.addWidget(header)
+        return frame, lay
 
     def _caption(text: str) -> QLabel:
         lbl = QLabel(text)
@@ -296,8 +374,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         lbl.setWordWrap(True)
         return lbl
 
-    embed_box = QGroupBox("Semantic search")
-    embed_layout = QVBoxLayout(embed_box)
+    embed_box, embed_layout = _card("Semantic search")
     embed_layout.setSpacing(8)
     embed_layout.addWidget(
         _caption(
@@ -387,11 +464,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         )
     )
 
-    tabs.addTab(_tab(embed_box), "Semantic search")
+    _cards.append(("embed", embed_box))
 
     # ----- Local model library (inventory only) ----------------------------
-    lib_box = QGroupBox("Local model library (Ollama)")
-    lib_layout = QVBoxLayout(lib_box)
+    lib_box, lib_layout = _card("Local model library (Ollama)")
     lib_layout.setSpacing(6)
 
     status_lbl = QLabel()
@@ -428,13 +504,12 @@ def manage_models_dialog(setup: bool = False) -> None:
     pull_row.addWidget(delete_btn)
     pull_row.addWidget(refresh_btn)
     lib_layout.addLayout(pull_row)
-    tabs.addTab(_tab(lib_box), "Models")
+    _cards.append(("library", lib_box))
 
     # ----- General ----------------------------------------------------------
     # The two toggles orphaned by settings_ui.py's deletion (A5) — labels,
     # keys and defaults read from that file, which this card does not edit.
-    general_box = QGroupBox("General")
-    general_layout = QVBoxLayout(general_box)
+    general_box, general_layout = _card("General")
     general_layout.setSpacing(6)
 
     image_crop_cb = QCheckBox(
@@ -461,8 +536,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # ---- Appearance: custom background + the frosted top bar ----
     # A blurred flat colour IS that colour, so "Solid colour" also makes
     # the top bar match the window chrome exactly (background.py).
-    appearance_box = QGroupBox("Appearance")
-    appearance_layout = QVBoxLayout(appearance_box)
+    appearance_box, appearance_layout = _card("Appearance")
     appearance_layout.setSpacing(6)
     appearance_layout.addWidget(
         _caption(
@@ -644,7 +718,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    tabs.addTab(_tab(general_box, appearance_box), "General")
+    _cards.append(("general", general_box))
+    _cards.append(("appearance", appearance_box))
+    _apply_responsive_layout(dlg.width())
+    dlg.on_resize_cb = _apply_responsive_layout
 
     stack.addWidget(models_page)
 

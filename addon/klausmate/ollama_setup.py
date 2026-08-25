@@ -1,4 +1,4 @@
-"""Ollama installation helpers for Klausmate.
+"""Ollama installation helpers for KlausMate.
 
 Detects platform, lists optional package-manager install commands, and runs
 them via subprocess when the user confirms.

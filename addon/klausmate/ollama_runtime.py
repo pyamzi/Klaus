@@ -1,4 +1,4 @@
-"""Managed Ollama runtime for Klausmate.
+"""Managed Ollama runtime for KlausMate.
 
 Lets a user install the add-on and immediately pick a model — no separate
 Ollama install. On first run we download the standalone Ollama binary from

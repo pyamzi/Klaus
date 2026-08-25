@@ -1394,7 +1394,7 @@ _instance: DriveWindow | None = None
 def refresh_open_library() -> None:
     """Re-aggregate the open Library window, if there is one.
 
-    Called from Klausmate Preferences when the DEFAULT sensitivity is
+    Called from KlausMate Preferences when the DEFAULT sensitivity is
     saved (manage_models.save_threshold): every PDF without a per-PDF
     override reads that default through retention.get_threshold, so the
     retention/cards columns an open Library is showing go stale the

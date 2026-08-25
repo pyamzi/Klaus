@@ -1,4 +1,4 @@
-# Klausmate — semantic deck curation for Anki
+# KlausMate — semantic deck curation for Anki
 
 Klaus finds the cards in your collection that match a lecture PDF, and gives
 you a library to keep those PDFs organized alongside your deck. A native PDF
@@ -74,7 +74,7 @@ Restart Anki. Without pypdf, PDF import, the viewer, and Library are all disable
 ## Project structure
 
 ```
-Klausmate/
+KlausMate/
 ├── README.md                 # This file (repo entry point)
 ├── AGENTS.md                 # Architecture & contributor guide
 ├── ANKIWEB.md                # Description blurb for the AnkiWeb listing

@@ -738,8 +738,6 @@ check(
 )
 
 
-print(f"\n{PASS} passed, {FAIL} failed")
-sys.exit(1 if FAIL else 0)
 print("== appearance block scoping (live NameError regression) ==")
 # sync_background_widgets() runs at dialog-build time, BEFORE the
 # ui_state assignment further down manage_models_dialog. A closure's
@@ -748,7 +746,7 @@ print("== appearance block scoping (live NameError regression) ==")
 # stay self-contained on _bg_state.
 _src = open("klausmate/manage_models.py").read()
 _dlg = _src.split("def manage_models_dialog", 1)[1]
-_call_at = _dlg.index("sync_background_widgets()")
+_call_at = _dlg.index("\n    sync_background_widgets()\n")  # the CALL, not the def
 _ui_state_at = _dlg.index('ui_state: dict')
 check("the immediate sync call still precedes ui_state's assignment "
       "(the ordering that makes this dangerous)", _call_at < _ui_state_at)
@@ -757,4 +755,28 @@ check("appearance block never touches ui_state", "ui_state" not in _bg_block)
 check("appearance block guards with its own flag",
       '_bg_state["syncing"]' in _bg_block)
 
-raise SystemExit(report())
+
+print("== SynapsePro card layout (K-105) ==")
+_src2 = open("klausmate/manage_models.py").read()
+check("no tabs left — sections are cards in one page",
+      "QTabWidget" not in _src2)
+check("every section is a CardFrame via the _card helper",
+      _src2.count('= _card("') == 4
+      and 'setObjectName("CardFrame")' in _src2)
+check("cards carry SubHeaderLabel headings",
+      'setObjectName("SubHeaderLabel")' in _src2)
+check("all four cards registered for the responsive layouts",
+      all(f'_cards.append(("{r}"' in _src2
+          for r in ("embed", "library", "general", "appearance")))
+check("grid when wide, stack when narrow, at SynapsePro's breakpoint",
+      "COMPACT_BREAKPOINT = 720" in _src2
+      and "_install_grid_layout" in _src2
+      and "_install_stack_layout" in _src2)
+check("layout swap re-parents cards BEFORE killing the old layout",
+      _src2.index("card.setParent(cards_container)")
+      < _src2.index("QWidget().setLayout(old_layout)"))
+check("dialog resize drives the swap",
+      "on_resize_cb = _apply_responsive_layout" in _src2)
+
+print(f"\n{PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)

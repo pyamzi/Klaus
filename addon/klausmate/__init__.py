@@ -1,4 +1,4 @@
-"""Klausmate — semantic PDF library and deck curation for Anki.
+"""KlausMate — semantic PDF library and deck curation for Anki.
 
 Bootstrap and Qt glue for the add-on: the PDF viewer panel and its tabs,
 the editor's PDF bar, image cropping, and the Browse toolbar toggles.
@@ -604,7 +604,7 @@ def install_menu() -> None:
     """Single Tools-menu entry point, at the top of the menu.
 
     Everything that used to live in a 'Klaus' submenu (Clear library tag,
-    Manage models…, Test connection) now lives inside the Klausmate
+    Manage models…, Test connection) now lives inside the KlausMate
     Preferences dialog itself (manage_models.py) — a menu that only ever
     grows one deeper is still one click, and it keeps this menu from
     forking into a second place users have to think to look. Anki has
@@ -613,7 +613,7 @@ def install_menu() -> None:
     ahead of Anki's own items rather than appending after them.
     """
     menu = mw.form.menuTools
-    action = QAction("Klausmate Preferences", mw)
+    action = QAction("KlausMate Preferences…", mw)
     action.triggered.connect(manage_models_dialog)
     existing_actions = menu.actions()
     if existing_actions:

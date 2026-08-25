@@ -1,4 +1,4 @@
-# Klausmate Configuration
+# KlausMate Configuration
 
 ## Connection
 
@@ -113,7 +113,7 @@ wouldn't already need.
   `"pdfjs"` switches to the bundled pdf.js webview renderer — smoother,
   flicker-free scrolling, but still reaching feature parity (highlights,
   find, and thumbnails land there incrementally — see the K-095 board
-  umbrella). Toggle it from **Klausmate Preferences → General → "Use the
+  umbrella). Toggle it from **KlausMate Preferences → General → "Use the
   new pdf.js viewer"**, then press **Save**. Requires an Anki restart to
   take effect.
 
@@ -136,5 +136,5 @@ wouldn't already need.
 - **background_blur**: 0–100 px of blur under the top bar. Default
   `22`.
 
-All five live in **Klausmate Preferences → General → Appearance**;
+All five live in **KlausMate Preferences → General → Appearance**;
 press **Save** and they apply immediately (no restart).

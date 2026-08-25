@@ -258,12 +258,19 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     (a plain list return here crashed every profile open — `on_op_finished`
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
-    also first-run setup) — three sections: **Semantic search** (embedding
+    also first-run setup; Tools menu label "KlausMate Preferences…", and
+    the top bar's star opens it too). **SynapsePro card layout (K-105)**:
+    no tabs — the four sections are `QFrame#CardFrame`s with
+    `SubHeaderLabel` headings in one scrollable page, a 2-column grid
+    when the dialog is ≥720px wide and a single stack below that
+    (`_apply_responsive_layout` on the dialog's `on_resize_cb`; the swap
+    re-parents cards before replacing the layout or they die with it).
+    Sections: **Semantic search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),
     **Local model library (Ollama)** (pull/delete embedding models only —
     `_EMBED_PRESETS`: nomic-embed-text, snowflake-arctic-embed,
-    mxbai-embed-large, embeddinggemma), **General** (`image_crop_enabled`,
+    mxbai-embed-large, embeddinggemma), **General**/**Appearance** (`image_crop_enabled`,
     `runtime_auto_setup`, and `pdf_renderer` toggles — no other UI
     touches these keys; the pdf.js checkbox maps "native"/"pdfjs" and
     needs a restart). **Preferences are deferred-save**: widgets only
