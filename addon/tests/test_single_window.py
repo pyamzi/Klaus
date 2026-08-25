@@ -333,5 +333,104 @@ sw._nudge_webviews(np)
 check("nudge is repeatable on every switch (once-flag dropped)",
       np.cycles.count("show") == 2, repr(np.cycles))
 
+print("== K-092: black detection + delegate rebind ==")
+
+
+class _Color:
+    def __init__(self, r, g, b):
+        self._c = (r, g, b)
+    def red(self):
+        return self._c[0]
+    def green(self):
+        return self._c[1]
+    def blue(self):
+        return self._c[2]
+
+
+class _Img:
+    def __init__(self, color):
+        self._color = color
+    def isNull(self):
+        return False
+    def width(self):
+        return 100
+    def height(self):
+        return 100
+    def pixelColor(self, x, y):
+        return self._color
+
+
+class _GrabView:
+    def __init__(self, color):
+        self._img = _Img(color)
+    def grab(self):
+        return SimpleNamespace(toImage=lambda: self._img)
+
+
+blk, why = sw._looks_black(_GrabView(_Color(0, 0, 0)))
+check("pure-black frame detected", blk is True, why)
+blk, why = sw._looks_black(_GrabView(_Color(44, 44, 44)))
+check("night-mode gray is NOT black", blk is False, why)
+
+
+class _RebindLayout:
+    def __init__(self):
+        self.ops = []
+    def indexOf(self, w):
+        return 2
+    def stretch(self, i):
+        return 7
+    def removeWidget(self, w):
+        self.ops.append("remove")
+    def insertWidget(self, i, w, s):
+        self.ops.append(("insert", i, s))
+
+
+class _RebindView:
+    def __init__(self, parent):
+        self._p = parent
+        self.ops = []
+    def parentWidget(self):
+        return self._p
+    def hide(self):
+        self.ops.append("hide")
+    def show(self):
+        self.ops.append("show")
+    def setParent(self, p):
+        self.ops.append(("parent", p))
+
+
+lay = _RebindLayout()
+parent = SimpleNamespace(layout=lambda: lay)
+v = _RebindView(parent)
+check("layout rebind preserves slot and stretch",
+      sw._rebind_webview(v) is True
+      and lay.ops == ["remove", ("insert", 2, 7)]
+      and v.ops == ["hide", ("parent", None), "show"],
+      repr((lay.ops, v.ops)))
+
+
+class _Splitter:
+    def __init__(self):
+        self.ops = []
+    def layout(self):
+        return None
+    def indexOf(self, w):
+        return 1
+    def insertWidget(self, i, w):
+        self.ops.append(("insert", i))
+    def sizes(self):
+        return [300, 700]
+    def setSizes(self, s):
+        self.ops.append(("sizes", tuple(s)))
+
+
+spl = _Splitter()
+v2 = _RebindView(spl)
+check("splitter rebind preserves slot and sizes",
+      sw._rebind_webview(v2) is True
+      and spl.ops == [("insert", 1), ("sizes", (300, 700))],
+      repr(spl.ops))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

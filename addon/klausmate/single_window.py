@@ -222,6 +222,116 @@ def _nudge_webviews(win: Any) -> None:
         print(f"[klausmate] single-window webview nudge failed: {e}")
 
 
+def _looks_black(wv: Any) -> tuple:
+    """Sample the widget's rendered frame (K-092): a never-attached
+    Chromium surface grabs as pure black; even night-mode editor
+    backgrounds (#2c2c2c) sum ~40x higher. Returns (is_black, detail
+    string for the breadcrumbs)."""
+    try:
+        img = wv.grab().toImage()
+        if img.isNull() or img.width() < 8 or img.height() < 8:
+            return False, "no-image"
+        w, h = img.width(), img.height()
+        total = 0
+        for fx in (0.15, 0.5, 0.85):
+            for fy in (0.15, 0.5, 0.85):
+                c = img.pixelColor(int(w * fx), int(h * fy))
+                total += c.red() + c.green() + c.blue()
+        mid = img.pixelColor(w // 2, h // 2)
+        detail = f"sum={total} mid=({mid.red()},{mid.green()},{mid.blue()})"
+        return total <= 27, detail
+    except Exception as e:  # noqa: BLE001
+        return False, f"grab-failed {e}"
+
+
+def _rebind_webview(wv: Any) -> bool:
+    """The cure for a delegate bound to a dead window (K-092): reparent
+    the VIEW itself once — same slot, layout stretch / splitter sizes
+    preserved — so QtWebEngine rebinds its render surface to the real
+    native window."""
+    try:
+        parent = wv.parentWidget()
+        if parent is None:
+            return False
+        lay = parent.layout() if hasattr(parent, "layout") else None
+        if lay is not None and hasattr(lay, "indexOf"):
+            idx = lay.indexOf(wv)
+            if idx < 0:
+                return False
+            stretch = lay.stretch(idx) if hasattr(lay, "stretch") else 0
+            wv.hide()
+            lay.removeWidget(wv)
+            wv.setParent(None)
+            try:
+                lay.insertWidget(idx, wv, stretch)
+            except TypeError:
+                lay.insertWidget(idx, wv)
+            wv.show()
+            return True
+        if hasattr(parent, "indexOf") and hasattr(parent, "insertWidget"):
+            # QSplitter child (Browser's editor area).
+            idx = parent.indexOf(wv)
+            if idx < 0:
+                return False
+            sizes = parent.sizes() if hasattr(parent, "sizes") else None
+            wv.hide()
+            wv.setParent(None)
+            parent.insertWidget(idx, wv)
+            if sizes is not None:
+                try:
+                    parent.setSizes(sizes)
+                except Exception:
+                    pass
+            wv.show()
+            return True
+        return False
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window webview rebind failed: {e}")
+        return False
+
+
+def _heal_black_panes(win: Any, attempt: int = 0) -> None:
+    """Detect-and-repair loop for black webview surfaces (K-092).
+    Evidence-driven: only rebinds views whose grabbed frame is actually
+    black, retries with a top-level resize wiggle, and breadcrumbs every
+    verdict so a grab() false-negative is visible in the log."""
+    try:
+        if not _alive(win) or not win.isVisible():
+            return
+        from aqt.webview import AnkiWebView
+
+        views = win.findChildren(AnkiWebView)
+        black = []
+        for wv in views:
+            is_black, detail = _looks_black(wv)
+            _swdbg(
+                f"  heal a{attempt} {type(win).__name__} "
+                f"{wv.width()}x{wv.height()} black={is_black} {detail}"
+            )
+            if is_black:
+                black.append(wv)
+        if not black:
+            return
+        for wv in black:
+            ok = _rebind_webview(wv)
+            _swdbg(f"  rebind -> {ok}")
+        _focus_pane(win)
+        if attempt >= 1:
+            try:
+                sz = mw.size()
+                mw.resize(sz.width(), sz.height() + 1)
+                mw.resize(sz)
+                _swdbg("  wiggled mw")
+            except Exception:
+                pass
+        if attempt < 3:
+            QTimer.singleShot(
+                700, lambda: _heal_black_panes(win, attempt + 1)
+            )
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window heal failed: {e}")
+
+
 def _focus_pane(win: Any) -> None:
     """activateWindow/raise_ are no-ops on child widgets — route focus
     by hand or typing keeps landing in the previous pane (K-090)."""
@@ -278,6 +388,9 @@ def _on_stack_changed(index: int) -> None:
             # The 0ms pass can predate the render surface — second pass
             # once Chromium has had a beat (K-091).
             QTimer.singleShot(400, lambda w=pane: _nudge_webviews(w))
+            # Pixel-evidence repair loop for surfaces that stayed black
+            # anyway (K-092).
+            QTimer.singleShot(300, lambda w=pane: _heal_black_panes(w))
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] single-window stack-change failed: {e}")
 
