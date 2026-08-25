@@ -37,17 +37,25 @@ except ImportError:
 try:
     from pypdf import PdfReader, PdfWriter  # type: ignore
     from pypdf.annotations import (  # type: ignore
+        FreeText as _BakeFreeText,
         Highlight as _BakeHighlight,
         Text as _BakeText,
     )
     from pypdf.generic import (  # type: ignore
         ArrayObject as _BakeArray,
         FloatObject as _BakeFloat,
+        NameObject as _BakeName,
+        TextStringObject as _BakeString,
     )
 
     BAKE_AVAILABLE = True
 except Exception:
     BAKE_AVAILABLE = False
+
+# Every annotation Klaus bakes carries this /NM (annotation name) prefix
+# (K-077). It is how the foreign-annotation scan tells outside markup
+# (Preview text boxes, highlights) from Klaus's own regenerated bakes.
+_KLAUS_NM = "klausmate:"
 
 _ACTIVE_PDF_FILE = "active_pdf.txt"
 
@@ -1087,13 +1095,33 @@ def _validate_highlight(entry) -> dict | None:
     note = entry.get("note", "")
     if not isinstance(note, str):
         note = ""
-    return {
+    out = {
         "id": hl_id,
         "page": page,
         "rects": clean_rects,
         "color": color,
         "note": note,
     }
+    # K-077 extensions — adopted outside markup. kind "text" is a
+    # FreeText record (rects[0] is its box, ``text`` its contents);
+    # anything else normalizes to the classic highlight shape, keeping
+    # pre-K-077 records byte-identical through save/load.
+    if entry.get("kind") == "text":
+        text = entry.get("text", "")
+        out["kind"] = "text"
+        out["text"] = text if isinstance(text, str) else ""
+        size = entry.get("size")
+        if (
+            isinstance(size, (int, float))
+            and not isinstance(size, bool)
+            and math.isfinite(size)
+            and size > 0
+        ):
+            out["size"] = float(size)
+    origin = entry.get("origin")
+    if isinstance(origin, str) and origin:
+        out["origin"] = origin
+    return out
 
 
 def load_annotations(user_files_dir: str, name: str) -> list[dict]:
@@ -1175,6 +1203,28 @@ def _atomic_replace_from(src_path: str, dest_path: str) -> None:
                 pass
 
 
+def _mark_klaus(anno, record: dict, suffix: str = "") -> None:
+    """Stamp a pypdf annotation object with the Klaus /NM marker
+    (K-077) — ``klausmate:<record id>``, plus a suffix for satellite
+    annotations (a highlight's sticky note)."""
+    try:
+        anno[_BakeName("/NM")] = _BakeString(
+            _KLAUS_NM + str(record.get("id") or uuid.uuid4().hex) + suffix
+        )
+    except Exception:
+        pass
+
+
+def _bake_color(value, fallback: str) -> str:
+    """Record color ("#rrggbb" or "rrggbb") -> the bare hex pypdf's
+    annotation builders take; ``fallback`` for anything malformed."""
+    if isinstance(value, str):
+        v = value.lstrip("#").lower()
+        if len(v) == 6 and all(c in "0123456789abcdef" for c in v):
+            return v
+    return fallback
+
+
 def bake_annotations(user_files_dir: str, name: str) -> bool:
     """Bake stored highlights/notes into ``pdfs/<base>.pdf`` as REAL PDF
     annotations (visible in Preview/Acrobat). Returns False on failure.
@@ -1245,6 +1295,30 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                 oy = float(mb.bottom)
             except Exception:
                 ox = oy = 0.0
+            if hl.get("kind") == "text":
+                # Adopted outside text (K-077): one FreeText per record,
+                # rects[0] is its box in Qt page points.
+                rects = hl.get("rects") or []
+                if not rects:
+                    continue
+                x, y, w, h = (float(v) for v in rects[0])
+                free = _BakeFreeText(
+                    text=str(hl.get("text") or ""),
+                    rect=(
+                        ox + x,
+                        oy + ph - (y + h),
+                        ox + x + w,
+                        oy + ph - y,
+                    ),
+                    font_size=f"{hl.get('size') or 12}pt",
+                    font_color=_bake_color(hl.get("color"), "000000"),
+                    border_color=None,
+                    background_color=None,
+                )
+                _mark_klaus(free, hl)
+                writer.add_annotation(page, free)
+                baked += 1
+                continue
             # One Highlight annotation per record: quad_points cover ALL
             # its rects, rect is their union. 8 floats per quad:
             # x0,y_top, x1,y_top, x0,y_bot, x1,y_bot.
@@ -1265,29 +1339,27 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                 uy1 = y_top if uy1 is None else max(uy1, y_top)
             if not quads or ux0 is None:
                 continue
-            writer.add_annotation(
-                page,
-                _BakeHighlight(
-                    rect=(ux0, uy0, ux1, uy1),
-                    quad_points=_BakeArray(_BakeFloat(v) for v in quads),
-                    highlight_color="fadc50",
-                    printing=True,
-                ),
+            anno = _BakeHighlight(
+                rect=(ux0, uy0, ux1, uy1),
+                quad_points=_BakeArray(_BakeFloat(v) for v in quads),
+                highlight_color=_bake_color(hl.get("color"), "fadc50"),
+                printing=True,
             )
+            _mark_klaus(anno, hl)
+            writer.add_annotation(page, anno)
             baked += 1
             note = hl.get("note")
             note = note.strip() if isinstance(note, str) else ""
             if note:
                 # Sticky note: 18x18 icon anchored at the union's
                 # top-right corner.
-                writer.add_annotation(
-                    page,
-                    _BakeText(
-                        rect=(ux1, uy1 - 18, ux1 + 18, uy1),
-                        text=note,
-                        open=False,
-                    ),
+                sticky = _BakeText(
+                    rect=(ux1, uy1 - 18, ux1 + 18, uy1),
+                    text=note,
+                    open=False,
                 )
+                _mark_klaus(sticky, hl, suffix=":note")
+                writer.add_annotation(page, sticky)
 
         tmp = os.path.join(
             os.path.dirname(working),
@@ -1310,6 +1382,278 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
     except Exception as exc:
         print(f"[klausmate] bake failed for {name}: {exc}")
         return False
+
+
+# ------------------------------- foreign annotations (K-077) -------------
+#
+# Outside markup (macOS Preview text boxes and highlights) is ADOPTED into
+# Klaus's own records rather than rendered from the file: after the next
+# bake it is Klaus-owned — marked, regenerated from pristine, deletable in
+# Klaus. One-way valve by design: further edits belong in Klaus; an outside
+# re-edit of an adopted item is either reverted by the next bake (marker
+# kept) or re-imported as a second copy (marker dropped).
+
+
+def _annots_of(pg) -> list:
+    raw = pg.get("/Annots")
+    if raw is None:
+        return []
+    try:
+        return list(raw.get_object())
+    except Exception:
+        return []
+
+
+def _page_frame(pg) -> tuple[float, float, float]:
+    try:
+        mb = pg.mediabox
+        return float(mb.height), float(mb.left), float(mb.bottom)
+    except Exception:
+        return 792.0, 0.0, 0.0
+
+
+def _rect_to_qt(rect, ph: float, ox: float, oy: float) -> list[float] | None:
+    try:
+        a, b, c, d = (float(v) for v in rect)
+    except Exception:
+        return None
+    x0, x1 = min(a, c), max(a, c)
+    yb, yt = min(b, d), max(b, d)
+    return [x0 - ox, oy + ph - yt, x1 - x0, yt - yb]
+
+
+def _quads_to_qt_rects(o, ph: float, ox: float, oy: float) -> list[list[float]]:
+    rects: list[list[float]] = []
+    try:
+        qp = o.get("/QuadPoints")
+        if qp:
+            vals = [float(v) for v in qp.get_object()]
+            for i in range(0, len(vals) - 7, 8):
+                xs = vals[i:i + 8:2]
+                ys = vals[i + 1:i + 8:2]
+                x0, x1 = min(xs), max(xs)
+                yb, yt = min(ys), max(ys)
+                rects.append([x0 - ox, oy + ph - yt, x1 - x0, yt - yb])
+    except Exception:
+        rects = []
+    if not rects:
+        r = _rect_to_qt(o.get("/Rect"), ph, ox, oy)
+        if r is not None:
+            rects = [r]
+    return rects
+
+
+def _annot_color(o) -> str | None:
+    """/C array (1=gray, 3=rgb, 4=cmyk components) -> "#rrggbb"."""
+    try:
+        c = o.get("/C")
+        if not c:
+            return None
+        vals = [max(0.0, min(1.0, float(v))) for v in c.get_object()]
+        if len(vals) == 1:
+            r = g = b = vals[0]
+        elif len(vals) == 3:
+            r, g, b = vals
+        elif len(vals) == 4:
+            cc, mm, yy, kk = vals
+            r, g, b = (1 - cc) * (1 - kk), (1 - mm) * (1 - kk), (1 - yy) * (1 - kk)
+        else:
+            return None
+        return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+    except Exception:
+        return None
+
+
+def _freetext_style(o) -> tuple[str, float | None]:
+    """Best-effort text color + font size from a FreeText /DA string
+    (e.g. "0 0 1 rg /Helv 12 Tf"); black / None when unparseable."""
+    color: str = "#000000"
+    size: float | None = None
+    try:
+        toks = str(o.get("/DA") or "").split()
+        for i, t in enumerate(toks):
+            if t == "rg" and i >= 3:
+                r, g, b = (float(x) for x in toks[i - 3:i])
+                color = "#%02x%02x%02x" % (
+                    round(r * 255), round(g * 255), round(b * 255)
+                )
+            elif t == "g" and i >= 1:
+                v = round(float(toks[i - 1]) * 255)
+                color = "#%02x%02x%02x" % (v, v, v)
+            elif t == "Tf" and i >= 1:
+                s = float(toks[i - 1])
+                if s > 0:
+                    size = s
+    except Exception:
+        pass
+    return color, size
+
+
+def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
+    """Annotations in ``name``'s working PDF that Klaus did not write:
+    /Highlight and /FreeText entries whose /NM lacks the klausmate:
+    marker. Returns adoption-ready records in Klaus page-point space
+    (origin top-left); [] when the file is missing, unreadable, or
+    clean. Never raises."""
+    out: list[dict] = []
+    try:
+        if not BAKE_AVAILABLE:
+            return []
+        working = _working_pdf_path(user_files_dir, name)
+        if not os.path.isfile(working):
+            return []
+        reader = PdfReader(working)
+        for pageno, pg in enumerate(reader.pages):
+            ph, ox, oy = _page_frame(pg)
+            for ref in _annots_of(pg):
+                try:
+                    o = ref.get_object()
+                    sub = str(o.get("/Subtype"))
+                    if sub not in ("/Highlight", "/FreeText"):
+                        continue
+                    if str(o.get("/NM") or "").startswith(_KLAUS_NM):
+                        continue
+                    contents = o.get("/Contents")
+                    contents = str(contents) if contents else ""
+                    if sub == "/Highlight":
+                        rects = _quads_to_qt_rects(o, ph, ox, oy)
+                        if not rects:
+                            continue
+                        out.append({
+                            "kind": "highlight",
+                            "page": pageno,
+                            "rects": rects,
+                            "note": contents,
+                            "color": _annot_color(o) or _HIGHLIGHT_COLOR_DEFAULT,
+                        })
+                    else:
+                        rect = _rect_to_qt(o.get("/Rect"), ph, ox, oy)
+                        if rect is None or not contents.strip():
+                            continue
+                        color, size = _freetext_style(o)
+                        rec: dict = {
+                            "kind": "text",
+                            "page": pageno,
+                            "rects": [rect],
+                            "text": contents,
+                            "note": "",
+                            "color": color,
+                        }
+                        if size:
+                            rec["size"] = size
+                        out.append(rec)
+                except Exception:
+                    continue
+    except Exception as exc:
+        print(f"[klausmate] foreign annotation scan failed for {name}: {exc}")
+        return []
+    return out
+
+
+def _capture_pristine_stripped(
+    user_files_dir: str, name: str, working: str
+) -> bool:
+    """First-adoption pristine capture: the baseline must NOT contain
+    the foreign annotations being adopted, or every regenerating bake
+    would double them (pristine copy + marked Klaus copy). A pristine
+    that already exists predates the foreign markup and stands."""
+    try:
+        base = _safe_basename(name)
+        pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
+        if os.path.isfile(pristine):
+            return True
+        reader = PdfReader(working)
+        writer = PdfWriter(clone_from=reader)
+        for pg in writer.pages:
+            annots = _annots_of(pg)
+            if not annots:
+                continue
+            kept = []
+            for ref in annots:
+                try:
+                    o = ref.get_object()
+                    sub = str(o.get("/Subtype"))
+                    if sub in ("/Highlight", "/FreeText") and not str(
+                        o.get("/NM") or ""
+                    ).startswith(_KLAUS_NM):
+                        continue
+                except Exception:
+                    pass
+                kept.append(ref)
+            if len(kept) == len(annots):
+                continue
+            if kept:
+                pg[_BakeName("/Annots")] = _BakeArray(kept)
+            else:
+                del pg[_BakeName("/Annots")]
+        os.makedirs(_originals_dir(user_files_dir), exist_ok=True)
+        tmp = pristine + f".{uuid.uuid4().hex}.tmp"
+        try:
+            with open(tmp, "wb") as f:
+                writer.write(f)
+            os.replace(tmp, pristine)
+        finally:
+            if os.path.isfile(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        print(f"[klausmate] captured pristine (foreign-stripped): {base}.pdf")
+        return True
+    except Exception as exc:
+        print(f"[klausmate] stripped pristine capture failed for {name}: {exc}")
+        return False
+
+
+def _record_signature(rec: dict) -> tuple:
+    return (
+        rec.get("page"),
+        "text" if rec.get("kind") == "text" else "highlight",
+        tuple(
+            tuple(round(float(v), 1) for v in r)
+            for r in rec.get("rects") or []
+        ),
+        (rec.get("text") or "") if rec.get("kind") == "text" else "",
+    )
+
+
+def adopt_foreign_annotations(user_files_dir: str, name: str) -> int:
+    """Import outside /Highlight + /FreeText markup into Klaus records.
+
+    Idempotent WITHOUT relying on a bake landing in between: a content
+    signature (page, kind, rounded rects, text) dedupes re-scans of the
+    same unmarked originals. Returns records added; 0 on any failure —
+    including a failed pristine capture, where adopting would set the
+    next bake up to duplicate the marks. Never raises."""
+    try:
+        foreign = scan_foreign_annotations(user_files_dir, name)
+        if not foreign:
+            return 0
+        working = _working_pdf_path(user_files_dir, name)
+        if not _capture_pristine_stripped(user_files_dir, name, working):
+            return 0
+        records = load_annotations(user_files_dir, name)
+        seen = {_record_signature(r) for r in records}
+        added = 0
+        for f in foreign:
+            if _record_signature(f) in seen:
+                continue
+            rec = dict(f)
+            rec["id"] = uuid.uuid4().hex
+            rec["origin"] = "external"
+            records.append(rec)
+            seen.add(_record_signature(rec))
+            added += 1
+        if added:
+            save_annotations(user_files_dir, name, records)
+            print(
+                f"[klausmate] adopted {added} outside annotation(s) "
+                f"for {name}"
+            )
+        return added
+    except Exception as exc:
+        print(f"[klausmate] foreign annotation adopt failed for {name}: {exc}")
+        return 0
 
 
 def list_contexts(user_files_dir: str) -> list[str]:

@@ -25,6 +25,28 @@ sys.modules["klausmate"] = pkg
 
 import importlib
 
+# Vendored pypdf needs typing_extensions, which this machine's python3.9
+# does not ship — shim it BEFORE pdf_handler's guarded import so
+# BAKE_AVAILABLE matches the Anki runtime (py3.13 has it) instead of
+# silently disabling every bake-path test.
+try:
+    import typing_extensions  # noqa: F401
+except ImportError:
+    import typing as _typing
+
+    class _TESub:
+        def __getitem__(self, _i):
+            return _typing.Any
+
+        def __call__(self, *a, **k):
+            return _typing.Any
+
+    class _TEModule(types.ModuleType):
+        def __getattr__(self, n):
+            return getattr(_typing, n, _TESub())
+
+    sys.modules["typing_extensions"] = _TEModule("typing_extensions")
+
 embeddings = importlib.import_module("klausmate.embeddings")
 card_index = importlib.import_module("klausmate.card_index")
 pdf_handler = importlib.import_module("klausmate.pdf_handler")
@@ -277,16 +299,24 @@ sp_tmp = tempfile.mkdtemp(prefix="klaus_test_savepdf_")
 raw_pdf = os.path.join(sp_tmp, "raw.pdf")
 with open(raw_pdf, "wb") as f:
     f.write(b"%PDF-1.4\n%%EOF")
-t0 = time.time()
-pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)
-lu1 = pdf_handler.load_last_used(sp_tmp)
-check("save_pdf touches last_used on first import",
-      lu1.get("Old_Lecture", 0) >= t0, str(lu1))
+# The fake bytes above aren't parseable PDF — stub extraction like the
+# later save_pdf sections do (with the typing_extensions shim, pypdf is
+# real here, matching the Anki runtime).
+_orig_extract_sp = pdf_handler.extract_pages
+pdf_handler.extract_pages = lambda p: ["page text"]
+try:
+    t0 = time.time()
+    pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)
+    lu1 = pdf_handler.load_last_used(sp_tmp)
+    check("save_pdf touches last_used on first import",
+          lu1.get("Old_Lecture", 0) >= t0, str(lu1))
 
-time.sleep(0.05)
-t1 = time.time()
-pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)  # re-import, same basename
-lu2 = pdf_handler.load_last_used(sp_tmp)
+    time.sleep(0.05)
+    t1 = time.time()
+    pdf_handler.save_pdf(sp_tmp, "Old Lecture", raw_pdf)  # re-import, same basename
+    lu2 = pdf_handler.load_last_used(sp_tmp)
+finally:
+    pdf_handler.extract_pages = _orig_extract_sp
 check("re-import bumps last_used forward (doesn't keep the stale timestamp)",
       lu2.get("Old_Lecture", 0) >= t1 > lu1["Old_Lecture"],
       f"{lu1} -> {lu2}")
@@ -1054,6 +1084,151 @@ os.makedirs(os.path.join(ad_root, "Clash"))
 check("rename refuses to merge into an existing directory",
       pdf_handler.rename_mapped_folder(ad_user, ad_root, "Anatomy", "Clash") is False
       and os.path.isdir(os.path.join(ad_root, "Anatomy")))
+
+print("== K-077: foreign annotation scan/adopt (outside text + highlights) ==")
+fa_uf = tempfile.mkdtemp(prefix="klaus_fa_uf_")
+try:
+    check("bake stack available under test shim", pdf_handler.BAKE_AVAILABLE)
+    from pypdf import PdfReader as _FaReader, PdfWriter as _FaWriter
+    from pypdf.annotations import FreeText as _FaFreeText, Highlight as _FaHighlight
+    from pypdf.generic import ArrayObject as _FaArray, FloatObject as _FaFloat
+    from pypdf.generic import NameObject as _FaName, TextStringObject as _FaString
+
+    FA = "K77_Lecture"
+    os.makedirs(os.path.join(fa_uf, "pdfs"))
+    fa_working = os.path.join(fa_uf, "pdfs", FA + ".pdf")
+
+    def fa_write_foreign(path):
+        w = _FaWriter()
+        w.add_blank_page(width=612, height=792)
+        buf_path = path + ".base"
+        with open(buf_path, "wb") as f:
+            w.write(f)
+        r = _FaReader(buf_path)
+        w2 = _FaWriter(clone_from=r)
+        # Foreign highlight over PDF-space (100,600)-(200,620), with a
+        # popup note. PDF y-up: quad order UL,UR,LL,LR.
+        hl = _FaHighlight(
+            rect=(100, 600, 200, 620),
+            quad_points=_FaArray(
+                _FaFloat(v)
+                for v in [100, 620, 200, 620, 100, 600, 200, 600]
+            ),
+        )
+        hl[_FaName("/Contents")] = _FaString("margin note")
+        w2.add_annotation(0, hl)
+        w2.add_annotation(0, _FaFreeText(
+            text="added in Preview",
+            rect=(300, 500, 450, 530),
+            font_size="12pt",
+            font_color="000000",
+            border_color=None,
+            background_color=None,
+        ))
+        with open(path, "wb") as f:
+            w2.write(f)
+        os.remove(buf_path)
+
+    fa_write_foreign(fa_working)
+
+    found = pdf_handler.scan_foreign_annotations(fa_uf, FA)
+    check("scan finds both foreign annotations", len(found) == 2, repr(found))
+    fa_hl = next((x for x in found if x.get("kind") == "highlight"), None)
+    fa_tx = next((x for x in found if x.get("kind") == "text"), None)
+    check("scan classifies one highlight + one text",
+          fa_hl is not None and fa_tx is not None, repr(found))
+    # Qt-space conversion (page h=792, origin 0): y_qt = 792 - y_top.
+    check("highlight rect converts PDF->Qt",
+          fa_hl is not None and len(fa_hl["rects"]) == 1
+          and all(abs(a - b) < 0.01 for a, b in
+                  zip(fa_hl["rects"][0], [100.0, 172.0, 100.0, 20.0])),
+          repr(fa_hl))
+    check("highlight popup note carried", fa_hl is not None
+          and fa_hl.get("note") == "margin note")
+    check("text rect converts PDF->Qt",
+          fa_tx is not None and len(fa_tx["rects"]) == 1
+          and all(abs(a - b) < 0.01 for a, b in
+                  zip(fa_tx["rects"][0], [300.0, 262.0, 150.0, 30.0])),
+          repr(fa_tx))
+    check("text contents carried", fa_tx is not None
+          and fa_tx.get("text") == "added in Preview")
+
+    adopted = pdf_handler.adopt_foreign_annotations(fa_uf, FA)
+    check("adopt imports both", adopted == 2, adopted)
+    fa_recs = pdf_handler.load_annotations(fa_uf, FA)
+    check("adopted records survive the validator", len(fa_recs) == 2,
+          repr(fa_recs))
+    fa_rec_tx = next((r for r in fa_recs if r.get("kind") == "text"), None)
+    check("text record keeps kind/text/origin through save+load",
+          fa_rec_tx is not None
+          and fa_rec_tx.get("text") == "added in Preview"
+          and fa_rec_tx.get("origin") == "external",
+          repr(fa_rec_tx))
+
+    fa_pristine = os.path.join(fa_uf, "pdf_originals", FA + ".pdf")
+    check("pristine captured on adoption", os.path.isfile(fa_pristine))
+    pr = _FaReader(fa_pristine)
+    pr_annots = [
+        str(a.get_object().get("/Subtype"))
+        for a in (pr.pages[0].get("/Annots") or [])
+    ]
+    check("pristine is STRIPPED of the foreign annotations",
+          "/Highlight" not in pr_annots and "/FreeText" not in pr_annots,
+          repr(pr_annots))
+
+    check("re-adopt before any bake is a no-op (signature dedup)",
+          pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
+
+    check("bake succeeds", pdf_handler.bake_annotations(fa_uf, FA))
+    check("post-bake scan finds ZERO foreign (markers work)",
+          pdf_handler.scan_foreign_annotations(fa_uf, FA) == [])
+    wr = _FaReader(fa_working)
+    wr_annots = [a.get_object() for a in (wr.pages[0].get("/Annots") or [])]
+    fa_marked = [o for o in wr_annots
+                 if str(o.get("/NM") or "").startswith("klausmate:")]
+    fa_subs = sorted(str(o.get("/Subtype")) for o in fa_marked)
+    # /Text is the sticky the bake emits for the adopted highlight's
+    # popup note ("margin note") — the note survives adoption too.
+    check("baked file carries all three annotations, Klaus-marked",
+          fa_subs == ["/FreeText", "/Highlight", "/Text"], repr(fa_subs))
+    fa_baked_hl = next(
+        (o for o in fa_marked if str(o.get("/Subtype")) == "/Highlight"), None
+    )
+    fa_qp = [float(v) for v in (fa_baked_hl.get("/QuadPoints") or [])] \
+        if fa_baked_hl is not None else []
+    check("highlight quad round-trips within 0.5pt",
+          len(fa_qp) == 8 and all(
+              abs(a - b) < 0.5 for a, b in
+              zip(fa_qp, [100, 620, 200, 620, 100, 600, 200, 600])),
+          repr(fa_qp))
+
+    check("adopt after bake is a no-op",
+          pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
+
+    # A native Klaus highlight bakes marked too — never self-adopts.
+    fa_recs.append({
+        "id": "cafe" * 8, "page": 0,
+        "rects": [[50.0, 50.0, 80.0, 12.0]],
+        "color": "#fadc50", "note": "",
+    })
+    pdf_handler.save_annotations(fa_uf, FA, fa_recs)
+    check("bake with native highlight succeeds",
+          pdf_handler.bake_annotations(fa_uf, FA))
+    check("native Klaus highlight is never scanned as foreign",
+          pdf_handler.scan_foreign_annotations(fa_uf, FA) == [])
+
+    # One-way valve: emptying Klaus records un-bakes EVERYTHING —
+    # including adopted outside markup (it is Klaus data now).
+    pdf_handler.save_annotations(fa_uf, FA, [])
+    check("un-bake succeeds", pdf_handler.bake_annotations(fa_uf, FA))
+    ur = _FaReader(fa_working)
+    check("un-bake restores the stripped pristine (adopted text gone)",
+          not (ur.pages[0].get("/Annots") or []))
+except Exception as e:
+    import traceback
+    check("K-077 section", False, f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(fa_uf, ignore_errors=True)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
