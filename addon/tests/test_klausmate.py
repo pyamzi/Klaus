@@ -1242,5 +1242,67 @@ except Exception as e:
 finally:
     shutil.rmtree(fa_uf, ignore_errors=True)
 
+print("== K-080: Preview FreeText with no /Contents (text lives in /AP) ==")
+ap_uf = tempfile.mkdtemp(prefix="klaus_ap_uf_")
+try:
+    from pypdf import PdfReader as _ApReader, PdfWriter as _ApWriter
+    from pypdf.annotations import FreeText as _ApFreeText
+    from pypdf.generic import (
+        DictionaryObject as _ApDict, NameObject as _ApName,
+        RectangleObject as _ApRect, StreamObject as _ApStream,
+    )
+
+    APN = "K80_Preview"
+    os.makedirs(os.path.join(ap_uf, "pdfs"))
+    ap_working = os.path.join(ap_uf, "pdfs", APN + ".pdf")
+    w = _ApWriter()
+    w.add_blank_page(width=612, height=792)
+    ap_base = ap_working + ".base"
+    with open(ap_base, "wb") as f:
+        w.write(f)
+    w2 = _ApWriter(clone_from=_ApReader(ap_base))
+    w2.add_annotation(0, _ApFreeText(
+        text="placeholder", rect=(300, 500, 450, 530),
+        font_size="12pt", font_color="000000",
+        border_color=None, background_color=None))
+    # Recreate what macOS Preview actually ships (live Biostatistics.pdf,
+    # K-080): NO /Contents — the text exists only as the appearance
+    # stream's text-showing operators. Two Tj runs split by Td = the
+    # user pressed Return once.
+    ap_annot = [a.get_object() for a in w2.pages[0]["/Annots"]][-1]
+    del ap_annot[_ApName("/Contents")]
+    ap_st = _ApStream()
+    ap_st[_ApName("/Type")] = _ApName("/XObject")
+    ap_st[_ApName("/Subtype")] = _ApName("/Form")
+    ap_st[_ApName("/BBox")] = _ApRect((0, 0, 150, 30))
+    ap_st.set_data(
+        b"BT /Helv 12 Tf 2 18 Td (added in) Tj 0 -14 Td (Preview) Tj ET"
+    )
+    ap_annot[_ApName("/AP")] = _ApDict(
+        {_ApName("/N"): w2._add_object(ap_st)}
+    )
+    with open(ap_working, "wb") as f:
+        w2.write(f)
+    os.remove(ap_base)
+
+    ap_found = pdf_handler.scan_foreign_annotations(ap_uf, APN)
+    check("scan finds the Contents-less FreeText", len(ap_found) == 1,
+          repr(ap_found))
+    ap_rec = ap_found[0] if ap_found else {}
+    check("text recovered from the appearance stream, line break kept",
+          ap_rec.get("text") == "added in\nPreview",
+          repr(ap_rec.get("text")))
+    check("adopts and bakes",
+          pdf_handler.adopt_foreign_annotations(ap_uf, APN, scanned=ap_found) == 1
+          and pdf_handler.bake_annotations(ap_uf, APN))
+    check("post-bake scan clean",
+          pdf_handler.scan_foreign_annotations(ap_uf, APN) == [])
+except Exception as e:
+    import traceback
+    check("K-080 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(ap_uf, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

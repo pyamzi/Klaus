@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -1464,6 +1465,84 @@ def _annot_color(o) -> str | None:
         return None
 
 
+def _ap_text(o, reader) -> str:
+    """Text-showing operators of an annotation's /AP normal appearance
+    (K-080): Tj / ' / \" / TJ strings collected in order, with Td/TD/T*
+    between runs treated as line breaks. macOS Preview writes FreeText
+    annotations whose text lives ONLY here — /Contents is absent."""
+    try:
+        from pypdf.generic import ContentStream  # vendored
+
+        ap = o.get("/AP")
+        if ap is None:
+            return ""
+        n = ap.get_object().get("/N")
+        if n is None:
+            return ""
+        n = n.get_object()
+        if not hasattr(n, "get_data"):
+            # Appearance-state subdictionary: take the first stream.
+            streams = [
+                v.get_object()
+                for v in n.values()
+                if hasattr(v.get_object(), "get_data")
+            ]
+            if not streams:
+                return ""
+            n = streams[0]
+
+        def _s(x) -> str:
+            if isinstance(x, bytes):
+                try:
+                    if x.startswith(b"\xfe\xff"):
+                        return x.decode("utf-16-be", "ignore")
+                    return x.decode("latin-1", "ignore")
+                except Exception:
+                    return ""
+            return x if isinstance(x, str) else ""
+
+        pieces: list[str] = []
+        newline = False
+        for operands, op in ContentStream(n, reader).operations:
+            if op in (b"Td", b"TD", b"T*"):
+                newline = True
+                continue
+            if op in (b"Tj", b"'", b'"'):
+                s = _s(operands[-1]) if operands else ""
+            elif op == b"TJ" and operands:
+                s = "".join(_s(x) for x in operands[0])
+            else:
+                continue
+            if not s:
+                continue
+            if newline and pieces:
+                pieces.append("\n")
+            pieces.append(s)
+            newline = False
+        return "".join(pieces).strip()
+    except Exception:
+        return ""
+
+
+def _freetext_text(o, reader) -> str:
+    """A FreeText annotation's text, Preview quirks included (K-080):
+    /Contents when present, else /RC with its markup stripped, else the
+    /AP appearance stream's text runs."""
+    try:
+        c = o.get("/Contents")
+        if c is not None and str(c).strip():
+            return str(c)
+        rc = o.get("/RC")
+        if rc is not None:
+            txt = re.sub(r"<[^>]+>", " ", str(rc))
+            txt = re.sub(r"[ \t]+", " ", txt).strip()
+            if txt:
+                return txt
+        return _ap_text(o, reader)
+    except Exception:
+        return ""
+
+
 def _freetext_style(o) -> tuple[str, float | None]:
     """Best-effort text color + font size from a FreeText /DA string
     (e.g. "0 0 1 rg /Helv 12 Tf"); black / None when unparseable."""
@@ -1528,14 +1607,17 @@ def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
                         })
                     else:
                         rect = _rect_to_qt(o.get("/Rect"), ph, ox, oy)
-                        if rect is None or not contents.strip():
+                        # NOT the raw /Contents: Preview omits it and
+                        # keeps the text in /AP only (K-080).
+                        text = _freetext_text(o, reader)
+                        if rect is None or not text.strip():
                             continue
                         color, size = _freetext_style(o)
                         rec: dict = {
                             "kind": "text",
                             "page": pageno,
                             "rects": [rect],
-                            "text": contents,
+                            "text": text,
                             "note": "",
                             "color": color,
                         }
