@@ -447,41 +447,67 @@ def toolbar_css(night: bool) -> str:
     :root {{ --klaus-accent: {c['blue_bright']}; }}
     html, body {{
         background: {c['surface']} !important;
-        margin: 0; padding: 0;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    /* ONE LAYER. Anki's "fancy" toolbar paints .toolbar as its own
+       elevated card — canvas-elevated background, rounded bottom
+       corners, box-shadow, backdrop blur — and gives every .hitem a
+       glass button background. That inner card is the second layer.
+       Flattened with !important because Anki's own selectors
+       (body.fancy:not(.flat) .hitem = 0,3,1) outrank anything
+       class-level an addon can write. Anki's layout grid is left
+       alone; only paint and alignment change. */
+    body.fancy {{ margin-bottom: 0 !important; }}
+    .header .toolbar {{
+        background: transparent !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        backdrop-filter: none !important;
+        overflow: visible !important;
     }}
     .header {{
         min-height: 44px;
         background: {c['surface']};
-        border-bottom: 1px solid {c['grey_light']};
-        display: flex;
-        align-items: center;
-        padding: 0 10px;
+        border-bottom: 1px solid {c['grey_light']} !important;
+        padding: 0 12px;
         box-sizing: border-box;
+        /* Anki pins the trays to the TOP (align-items/align-self:
+           start) — centre them so the logo and links sit on the bar's
+           centre line. */
+        align-items: center !important;
+        align-content: center !important;
     }}
-    .header .toolbar {{
-        display: flex; align-items: center; justify-content: center;
-        flex: 1 1 auto; gap: 2px;
+    .header .left-tray, .header .right-tray {{
+        align-self: center !important;
+        align-items: center !important;
     }}
-    .left-tray, .right-tray {{
-        display: flex; align-items: center; gap: 6px;
+    .header .tray-item {{
+        display: flex !important;
+        align-items: center !important;
     }}
     .header .hitem {{
-        color: {c['text_muted']};
-        text-decoration: none;
+        color: {c['text_muted']} !important;
+        background: transparent !important;
+        border: 1px solid transparent !important;
+        box-shadow: none !important;
+        text-decoration: none !important;
         font-family: {FONT_FAMILY};
         font-size: 13px;
         font-weight: 600;
-        padding: 5px 12px;
+        padding: 5px 12px !important;
         border-radius: 8px;
     }}
     .header .hitem:hover {{
-        background: {c['hover_subtle']};
-        color: {c['text']};
-        text-decoration: none;
+        background: {c['hover_subtle']} !important;
+        color: {c['text']} !important;
+        border-color: transparent !important;
+        text-decoration: none !important;
     }}
     #klaus-logo {{
-        display: flex; align-items: center;
-        padding: 2px 6px 2px 2px;
+        display: flex;
+        align-items: center;
+        padding: 0 8px 0 2px;
         cursor: pointer;
     }}
     #klaus-logo svg {{ display: block; }}

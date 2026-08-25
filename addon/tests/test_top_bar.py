@@ -38,6 +38,40 @@ for night in (False, True):
           "display: none" not in css and "display:none" not in css)
 check("logo slot styled", "#klaus-logo" in theme.toolbar_css(False))
 
+section("one layer (Anki's fancy toolbar card must be flattened)")
+# Anki's body.fancy paints .toolbar as an elevated card (background,
+# rounded bottom corners, box-shadow, backdrop blur) and .hitem as a
+# glass button — that inner card was the visible second layer. Its
+# selectors (body.fancy:not(.flat) .hitem) outrank class-level rules,
+# so the neutralisers MUST carry !important.
+css = theme.toolbar_css(False)
+toolbar_block = css.split(".header .toolbar {", 1)[1].split("}", 1)[0]
+for prop in ("background: transparent !important",
+             "box-shadow: none !important",
+             "border-radius: 0 !important",
+             "backdrop-filter: none !important"):
+    check(f"inner .toolbar neutralised: {prop.split(':')[0]}",
+          prop in toolbar_block)
+hitem_block = css.split(".header .hitem {", 1)[1].split("}", 1)[0]
+check("hitem paints no button of its own",
+      "background: transparent !important" in hitem_block
+      and "box-shadow: none !important" in hitem_block)
+check("fancy body margin removed (bar sits flush)",
+      "body.fancy" in css and "margin-bottom: 0 !important" in css)
+
+section("vertical centring (Anki pins trays to the top)")
+header_block = css.split("\n    .header {", 1)[1].split("}", 1)[0]
+check("header centres its children",
+      "align-items: center !important" in header_block
+      and "align-content: center !important" in header_block)
+tray_block = css.split(".header .left-tray, .header .right-tray {", 1)[1] \
+                .split("}", 1)[0]
+check("trays override Anki's align-self: start",
+      "align-self: center !important" in tray_block)
+check("tray items are flex-centred (logo sits on the centre line)",
+      "align-items: center !important"
+      in css.split(".header .tray-item {", 1)[1].split("}", 1)[0])
+
 section("hook wiring shape")
 check("left-tray handler prepends (logo must be leftmost)",
       callable(top_bar._on_left_tray))
