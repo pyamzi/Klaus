@@ -533,3 +533,36 @@ preserving sizes, heal dispatch on black-only).
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Pixel-evidence heal loop: grab-sample -> rebind only actually-black views (layout slot+stretch preserved, splitter slot+sizes preserved) -> retry x3 with mw wiggle -> refocus; every verdict breadcrumbed with sampled colors so a grab() false-negative is visible. 253+85+25 green, AST clean. LIVE: restart, open Add and Browse — webviews should self-heal within ~1s of first switch; if still black, the debug file now proves whether grab lied (0-black verdicts) and round 4 goes unconditional-rebind.
+
+### K-093: Dark panes round 4: unconditional embed-time webview rebind (grab lies about the screen)
+owner: -
+priority: P1
+tags: bug,single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: python3 tests/test_single_window.py
+created: 2026-08-24
+
+Round 4. K-092's breadcrumbs are decisive: heal verdicts read
+black=False sum=6795 mid=(245,245,245) while the SCREEN shows black —
+wv.grab() renders a perfect frame offscreen, so Chromium composites
+the page correctly and the dead half is PRESENTATION: the delegate
+still paints toward the backing store of the hidden window the pane
+was born in. Pixel detection therefore can never trigger (grab lies
+about the screen), and the K-092 rebind never fired.
+
+Fix: rebind EVERY webview unconditionally at embed time — one tick
+after the pane lands in the stack (its top-level is mw by then, and
+first paint has not happened, so no flicker): hide, detach to None,
+reinsert in the same slot (layout stretch / splitter sizes preserved
+by the K-092 helper), show. Breadcrumb each rebind. The heal loop
+stays as a harmless regression net.
+
+Fallback recorded for round 5 if presentation still fails:
+wv.setAttribute(WA_NativeWindow) to give the view its own backing
+store (input/stacking quirks make it second choice).
+
+Verify: python3 tests/test_single_window.py (_rebind_all_webviews
+loops the K-092 rebind over findChildren).
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Unconditional embed-time rebind (one tick after stack insert, pre-first-paint), per-view isolation, breadcrumb per rebind; K-092 loop kept as regression net; WA_NativeWindow recorded as round-5 fallback. 253+85+26 green, AST clean. LIVE: restart, open Add + Browse; debug file will show 'embed-rebind AddCards ... -> True' — if the screen is STILL black after a confirmed-True rebind, round 5 goes native-window.
