@@ -22,6 +22,14 @@ origin, matching the native viewer and the bake pipeline exactly
     font-size: 13px;
   }
   #root { position: absolute; inset: 0; display: flex; }
+  /* Hosted inside Anki's stdHtml, whose injected stylesheet reaches for
+     bare element selectors (button chrome, box-sizing, image bounds).
+     Pin everything those rules could bend — sizes here are exact px
+     geometry, not layout hints. */
+  #root, #root * { box-sizing: content-box; }
+  #root button { -webkit-appearance: none; appearance: none; margin: 0; }
+  .page canvas.pg { max-width: none !important; max-height: none !important; }
+  .page { margin: 0; padding: 0; }
   /* ---- thumbnail strip ---- */
   #thumbs {
     width: 170px; flex: 0 0 auto; overflow-y: auto; display: none;
@@ -73,12 +81,15 @@ origin, matching the native viewer and the bake pipeline exactly
   /* pdf.js text layer: invisible glyph spans over the canvas so native
      browser selection works. */
   .textLayer {
-    position: absolute; inset: 0; overflow: hidden;
+    position: absolute; left: 0; top: 0; overflow: hidden;
     line-height: 1; opacity: 1; pointer-events: auto; z-index: 3;
+    text-align: initial;
+    -webkit-text-size-adjust: none; text-size-adjust: none;
+    forced-color-adjust: none; transform-origin: 0 0;
   }
   .textLayer span {
     color: transparent; position: absolute; white-space: pre;
-    cursor: text; transform-origin: 0% 0%;
+    cursor: text; transform-origin: 0% 0%; margin: 0; padding: 0;
   }
   .textLayer ::selection { background: var(--accent-selection); }
   .textLayer span.findCurrent {
@@ -167,6 +178,17 @@ const state = {
 function post(msg) {
   try { pycmd("klausmate_pdfjs:" + msg); } catch (e) { /* headless */ }
 }
+
+/* pdf.js 3.x CONTRACT: the text layer sizes its glyph spans with
+   calc(var(--scale-factor) * ...). Without this property the calc() is
+   invalid, every span falls back to the default font size, and the
+   selection layer no longer matches the painted page (the exact
+   misalignment + broken-highlight bug found live). Must track
+   state.scale everywhere it changes. */
+function applyScaleFactor() {
+  document.getElementById("pages").style.setProperty(
+    "--scale-factor", String(state.scale));
+}
 function postB64(action, obj) {
   const json = JSON.stringify(obj);
   post(action + ":" + btoa(unescape(encodeURIComponent(json))));
@@ -222,6 +244,7 @@ async function buildPlaceholders() {
   const base = first.getViewport({ scale: 1.0 });
   const avail = await availWidth();
   state.scale = Math.max(0.25, Math.min(4.0, avail / base.width));
+  applyScaleFactor();
   for (let i = 1; i <= state.doc.numPages; i++) {
     const div = document.createElement("div");
     div.className = "page";
@@ -289,6 +312,14 @@ async function renderPage(num, div) {
     }).promise;
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
+    textLayer.style.width = Math.floor(viewport.width) + "px";
+    textLayer.style.height = Math.floor(viewport.height) + "px";
+    // Attach BEFORE rendering the text layer: pdf.js measures each
+    // span's real width against its computed style to derive the
+    // per-span scaleX correction, and a detached node has no computed
+    // style — glyphs drift horizontally without this.
+    div.appendChild(canvas);
+    div.appendChild(textLayer);
     const textContent = await page.getTextContent();
     const task = pdfjsLib.renderTextLayer({
       textContentSource: textContent,
@@ -296,8 +327,6 @@ async function renderPage(num, div) {
       viewport: viewport,
     });
     if (task && task.promise) { try { await task.promise; } catch (e) {} }
-    div.appendChild(canvas);
-    div.appendChild(textLayer);
     const spans = Array.from(textLayer.querySelectorAll("span"));
     state.rendered.set(num, { canvas, textLayer, spans });
     renderAnnotLayers(num, div);
@@ -435,7 +464,10 @@ function renderAnnotLayers(num, div) {
   div.appendChild(noteLayer);
 }
 
-/* Selection -> {pageIndex0: [[x,y,w,h] page pts]} */
+/* Selection -> {pageIndex0: [[x,y,w,h] page pts]}. A rect belongs to
+   the page containing its CENTER (full containment was too strict —
+   sub-pixel span overhang silently dropped rects), then gets clamped
+   into that page's box. */
 function selectionRectMap() {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -444,15 +476,19 @@ function selectionRectMap() {
   for (let i = 0; i < sel.rangeCount; i++) {
     for (const cr of sel.getRangeAt(i).getClientRects()) {
       if (cr.width < 1 || cr.height < 1) continue;
+      const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
       for (const div of state.pageDivs) {
         const pr = div.getBoundingClientRect();
-        if (cr.left >= pr.left - 1 && cr.right <= pr.right + 1 &&
-            cr.top >= pr.top - 1 && cr.bottom <= pr.bottom + 1) {
+        if (cx >= pr.left && cx <= pr.right && cy >= pr.top && cy <= pr.bottom) {
           const page = parseInt(div.dataset.page, 10) - 1;
-          (map[page] = map[page] || []).push([
-            (cr.left - pr.left) / s, (cr.top - pr.top) / s,
-            cr.width / s, cr.height / s,
-          ]);
+          const x0 = Math.max(cr.left, pr.left), y0 = Math.max(cr.top, pr.top);
+          const x1 = Math.min(cr.right, pr.right), y1 = Math.min(cr.bottom, pr.bottom);
+          if (x1 - x0 >= 1 && y1 - y0 >= 1) {
+            (map[page] = map[page] || []).push([
+              (x0 - pr.left) / s, (y0 - pr.top) / s,
+              (x1 - x0) / s, (y1 - y0) / s,
+            ]);
+          }
           break;
         }
       }
@@ -857,6 +893,7 @@ window.klausZoomReset = async function () {
 };
 
 async function rezoom(keepPage) {
+  applyScaleFactor();
   const first = await state.doc.getPage(1);
   const base = first.getViewport({ scale: 1.0 });
   for (const d of state.pageDivs) {

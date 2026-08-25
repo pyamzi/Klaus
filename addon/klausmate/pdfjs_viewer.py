@@ -250,10 +250,44 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             lay.addWidget(fallback, 1)
         self._page_loaded = False
 
+    # Keys the PAGE owns. Without claiming these via ShortcutOverride
+    # (the same gotcha the native viewer documents), Anki's window-level
+    # QActions fire first: Cmd+/- zooms the WHOLE webview frame (page,
+    # sidebar and all) instead of the PDF, and Cmd+F opens the host
+    # window's find. Accepting the override delivers the key to the
+    # focused webview instead, where the page's JS keydown handler is
+    # the single owner of the behaviour.
+    _CLAIMED_KEYS: Any = None  # built lazily; Qt enums need aqt present
+
+    def _claimed(self, event: Any) -> bool:
+        try:
+            if PdfJsViewer._CLAIMED_KEYS is None:
+                K, M = Qt.Key, Qt.KeyboardModifier
+                ctrl, shift, alt = M.ControlModifier, M.ShiftModifier, M.AltModifier
+                PdfJsViewer._CLAIMED_KEYS = {
+                    (K.Key_Plus, ctrl), (K.Key_Equal, ctrl),
+                    (K.Key_Minus, ctrl), (K.Key_0, ctrl),
+                    (K.Key_F, ctrl),
+                    (K.Key_G, ctrl), (K.Key_G, ctrl | shift),
+                    (K.Key_G, ctrl | alt),
+                    (K.Key_H, ctrl | shift), (K.Key_A, ctrl | shift),
+                }
+            mods = event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.ShiftModifier
+                | Qt.KeyboardModifier.AltModifier
+            )
+            return (event.key(), mods) in PdfJsViewer._CLAIMED_KEYS
+        except Exception:
+            return False
+
     def eventFilter(self, obj: Any, event: Any) -> bool:
         try:
             if obj is self._page_label and event.type() == event.Type.MouseButtonRelease:
                 self._goto_dialog()
+                return True
+            if event.type() == event.Type.ShortcutOverride and self._claimed(event):
+                event.accept()
                 return True
         except Exception:
             pass
@@ -261,6 +295,21 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             return super().eventFilter(obj, event)
         except Exception:
             return False
+
+    def _claim_shortcuts(self) -> None:
+        """Filter the webview AND its focusProxy — QWebEngineView routes
+        key events through the proxy child, which only exists once the
+        page is up, so this is (re)run per load; installEventFilter is
+        idempotent."""
+        if self._web is None:
+            return
+        try:
+            self._web.installEventFilter(self)
+            proxy = self._web.focusProxy()
+            if proxy is not None:
+                proxy.installEventFilter(self)
+        except Exception:
+            pass
 
     # ---- bridge ---------------------------------------------------------
 
@@ -509,12 +558,25 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             self._page_loaded = True
         except Exception as exc:
             print(f"[klausmate] pdfjs page load failed: {exc}")
+            return
+        # Frame zoom must stay 1.0 — PDF zoom is the page's own
+        # re-render (klausSetZoom), not Chromium magnification.
+        try:
+            self._web.setZoomFactor(1.0)
+        except Exception:
+            pass
+        self._claim_shortcuts()
 
     def load_path(self, path: str, name: str) -> None:
         """Read the stored PDF and feed it to pdf.js (chunked base64)."""
         if self._web is None:
             return
         self._ensure_page()
+        self._claim_shortcuts()  # focusProxy may only exist by now
+        try:
+            self._web.setZoomFactor(1.0)
+        except Exception:
+            pass
         self._name = name
         self._scroll_pos = 0
         try:

@@ -57,6 +57,17 @@ check("bridge prefix wired", "klausmate_pdfjs:" in html)
 for feature in ("findbar", "findinput", "ctxmenu", "thumbs", "marquee",
                 "hlLayer", "noteLayer"):
     check(f"page has {feature}", feature in html)
+# pdf.js 3.x text-layer contract: spans are sized via
+# calc(var(--scale-factor) * ...). Shipping without setting it made
+# every span fall back to ~13px — invisible-selection misalignment and
+# broken highlights, found live. Never again.
+check("--scale-factor is set on the pages container",
+      '"--scale-factor"' in html and "applyScaleFactor" in html)
+check("scale factor tracks every scale change (build + rezoom)",
+      html.count("applyScaleFactor()") >= 2)
+check("text layer is pinned against host CSS (Anki stdHtml)",
+      "text-size-adjust: none" in html and "box-sizing: content-box" in html
+      and "max-width: none !important" in html)
 
 section("bridge parsing")
 check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)
