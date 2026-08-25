@@ -2,6 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "_comment": "Attach-only: start the server yourself with `python3 board/serve.py`, then this opens the preview. A launching config (runtimeExecutable) is refused here — the preview sandbox cannot exec files under the project directory.",
       "name": "board-dashboard",
       "url": "http://localhost:8765"
     }
