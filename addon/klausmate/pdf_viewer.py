@@ -4015,6 +4015,21 @@ class PdfViewer(QWidget):
 _open_sidebars: "weakref.WeakSet" = weakref.WeakSet()
 
 
+def cleanup_all_sidebars() -> None:
+    """Backstop for the AnkiWebView-hook leak (see PdfSidebar.cleanup).
+
+    The explicit teardown paths (Library close, editor panel close)
+    cover the common cases; this sweeps every live sidebar on profile
+    switch and on quit so a path nobody enumerated still can't leave a
+    dangling webview in Anki's theme_did_change hook. Idempotent —
+    cleanup() is safe to call twice."""
+    for sb in list(_open_sidebars):
+        try:
+            sb.cleanup()
+        except Exception as exc:
+            print(f"[klausmate] sidebar cleanup sweep failed: {exc}")
+
+
 def _stat_of(path: str) -> tuple | None:
     """(inode, mtime_ns, size) — the external-change fingerprint. The
     inode is what actually flips on a Preview save (atomic replace) and
@@ -4364,6 +4379,21 @@ class PdfSidebar(QWidget):
             return
         page = max(0, min(int(page), self._page_count - 1))
         self._viewer.go_to_page(page)
+
+    def cleanup(self) -> None:
+        """Release renderer resources before this widget tree is
+        destroyed. Duck-typed: only the pdf.js renderer needs it (it
+        owns an AnkiWebView, which must be unregistered from Anki's
+        global hooks — see PdfJsViewer.cleanup); QPdfView has nothing
+        to release. Call from every path that tears a sidebar down."""
+        v = self._viewer
+        fn = getattr(v, "cleanup", None) if v is not None else None
+        if fn is None:
+            return
+        try:
+            fn()
+        except Exception as exc:
+            print(f"[klausmate] viewer cleanup failed: {exc}")
 
     def clear(self) -> None:
         self._name = None

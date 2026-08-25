@@ -732,3 +732,27 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
 
     def toggle_thumbnails(self) -> None:
         self._eval("window.klausToggleThumbs && window.klausToggleThumbs();")
+
+    def cleanup(self) -> None:
+        """Unregister the webview from Anki's global hooks BEFORE its
+        C++ object dies.
+
+        ``AnkiWebView.__init__`` appends ``on_theme_did_change`` to
+        ``gui_hooks.theme_did_change`` (and other global hooks) and only
+        ``AnkiWebView.cleanup()`` removes them — Anki even logs
+        "destroyed without a cleanup() call" for the ones it catches.
+        A webview destroyed without it leaves a dead bound method in
+        that hook, so the user's NEXT theme change crashes inside
+        Anki's own iteration with "wrapped C/C++ object of type
+        AnkiWebView has been deleted" (live traceback 2026-08-25:
+        Library window closed, then the theme was switched). Idempotent
+        and safe to call twice.
+        """
+        web, self._web = self._web, None
+        self._page_loaded = False
+        if web is None:
+            return
+        try:
+            web.cleanup()
+        except Exception as exc:
+            print(f"[klausmate] pdfjs webview cleanup failed: {exc}")

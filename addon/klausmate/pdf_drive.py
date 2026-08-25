@@ -1366,6 +1366,11 @@ class DriveWindow(QWidget):
             self._on_cancel()
             self._save_geometry()
             self.sidebar.clear()
+            # Unregister the renderer's webview from Anki's global hooks
+            # while its C++ object is still alive (see
+            # PdfSidebar.cleanup) — otherwise the next theme change
+            # crashes on a dangling AnkiWebView.
+            self.sidebar.cleanup()
         except Exception as e:
             print(f"[klausmate] drive close cleanup failed: {e}")
         if _instance is self:

@@ -1197,6 +1197,14 @@ class _PdfTabContainer(QWidget):
             self._persist_state()
         except Exception:
             pass
+        # Release the renderer's webview from Anki's global hooks while
+        # its C++ object still exists — a webview destroyed without
+        # AnkiWebView.cleanup() crashes Anki's next theme change (see
+        # PdfSidebar.cleanup).
+        try:
+            self._sidebar.cleanup()
+        except Exception:
+            pass
         # The drop-zone overlay is a parentless top-level window too.
         ov = self._zone_overlay
         if ov is not None:
@@ -2209,6 +2217,19 @@ gui_hooks.main_window_did_init.append(install_menu)
 from . import curation as _curation
 
 _curation.setup_hooks()
+
+try:
+    # Backstop against dangling AnkiWebViews in Anki's global hooks
+    # (see pdf_viewer.PdfSidebar.cleanup): sweep every live sidebar on
+    # profile switch and on quit.
+    from . import pdf_viewer as _pdf_viewer_cleanup
+
+    gui_hooks.profile_will_close.append(
+        _pdf_viewer_cleanup.cleanup_all_sidebars
+    )
+    mw.app.aboutToQuit.connect(_pdf_viewer_cleanup.cleanup_all_sidebars)
+except Exception as _e:
+    print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 
 gui_hooks.profile_did_open.append(_migrate_config)
 # One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config

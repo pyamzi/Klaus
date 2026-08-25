@@ -122,6 +122,83 @@ for attr in ("load_path", "set_page_texts", "load_annotations",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))
 
+section("webview cleanup (theme_did_change dangling-hook crash)")
+# Anki's AnkiWebView.__init__ registers on_theme_did_change with the
+# global theme_did_change hook and ONLY cleanup() unregisters it. A
+# webview destroyed without that call left a dead bound method in the
+# hook, so the user's next theme change crashed inside Anki's own
+# iteration ("wrapped C/C++ object of type AnkiWebView has been
+# deleted", live traceback 2026-08-25). Simulate that lifecycle.
+theme_hook: list = []
+
+
+class _FakeWeb:
+    """Stands in for AnkiWebView: registers on construction, and its
+    cleanup() is the only thing that unregisters."""
+
+    def __init__(self) -> None:
+        self.alive = True
+        theme_hook.append(self.on_theme_did_change)
+
+    def on_theme_did_change(self) -> None:
+        if not self.alive:
+            raise RuntimeError(
+                "wrapped C/C++ object of type AnkiWebView has been deleted"
+            )
+
+    def cleanup(self) -> None:
+        try:
+            theme_hook.remove(self.on_theme_did_change)
+        except ValueError:
+            pass
+
+    def destroy_cpp(self) -> None:
+        self.alive = False
+
+
+def _fire_theme_change() -> bool:
+    """True when Anki's hook iteration survives (no dangling entry)."""
+    try:
+        for fn in list(theme_hook):
+            fn()
+        return True
+    except RuntimeError:
+        return False
+
+
+viewer = pv.PdfJsViewer.__new__(pv.PdfJsViewer)  # no Qt construction
+viewer._web = _FakeWeb()
+viewer._page_loaded = True
+check("webview registered with the theme hook", len(theme_hook) == 1)
+check("PdfJsViewer exposes cleanup()", hasattr(viewer, "cleanup"))
+viewer.cleanup()
+check("cleanup unregisters the webview", theme_hook == [])
+viewer._web = None  # simulate: C++ side now torn down
+check("a theme change after cleanup does not crash", _fire_theme_change())
+check("cleanup is idempotent (teardown paths may overlap)",
+      viewer.cleanup() is None and theme_hook == [])
+# ...and prove the test itself can catch the regression it guards.
+leaked = _FakeWeb()
+leaked.destroy_cpp()
+check("the guard is real: a webview destroyed WITHOUT cleanup crashes",
+      _fire_theme_change() is False)
+leaked.cleanup()
+
+section("cleanup is wired into every teardown path")
+pdf_viewer = importlib.import_module("klausmate.pdf_viewer")
+check("PdfSidebar forwards cleanup to the renderer",
+      hasattr(pdf_viewer.PdfSidebar, "cleanup"))
+check("a profile/quit sweep exists as backstop",
+      hasattr(pdf_viewer, "cleanup_all_sidebars"))
+_here = os.path.dirname(os.path.abspath(__file__))
+_src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
+check("Library close tears the sidebar down",
+      "sidebar.cleanup()" in _src("pdf_drive.py"))
+check("editor panel close tears the sidebar down",
+      "_sidebar.cleanup()" in _src("__init__.py"))
+check("sweep registered on profile switch AND quit",
+      _src("__init__.py").count("cleanup_all_sidebars") >= 2)
+
 section("vendored pdf.js present")
 here = os.path.dirname(os.path.abspath(__file__))
 pdfjs = os.path.join(here, "..", "klausmate", "web", "pdfjs")
