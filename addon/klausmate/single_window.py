@@ -290,6 +290,34 @@ def _rebind_webview(wv: Any) -> bool:
         return False
 
 
+def _rebind_all_webviews(win: Any) -> None:
+    """Unconditional embed-time rebind (K-093). grab() proved Chromium
+    renders the page perfectly OFFSCREEN while the screen stays black:
+    the delegate still presents into the backing store of the hidden
+    window the pane was born in, and no pixel test can see that (the
+    grab lies about the screen). Every webview is therefore rebound
+    once, right after the pane lands in the stack — its top-level is
+    already mw and first paint has not happened, so there is nothing
+    to flicker."""
+    try:
+        from aqt.webview import AnkiWebView
+
+        for wv in win.findChildren(AnkiWebView):
+            try:
+                ok = _rebind_webview(wv)
+                try:
+                    dims = f"{wv.width()}x{wv.height()}"
+                except Exception:
+                    dims = "?"
+                _swdbg(
+                    f"  embed-rebind {type(win).__name__} {dims} -> {ok}"
+                )
+            except Exception:
+                continue
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window embed rebind failed: {e}")
+
+
 def _heal_black_panes(win: Any, attempt: int = 0) -> None:
     """Detect-and-repair loop for black webview surfaces (K-092).
     Evidence-driven: only rebinds views whose grabbed frame is actually
@@ -581,6 +609,13 @@ def _embed(name: str, win: QWidget) -> None:
         pass
     stack.addWidget(win)
     _state["panes"][name] = win
+    # K-093: rebind the render delegates now that the pane's top-level
+    # is the main window — deferred one tick so the reparent has fully
+    # settled, still ahead of first paint.
+    try:
+        QTimer.singleShot(0, lambda w=win: _rebind_all_webviews(w))
+    except Exception:
+        pass
     watcher = _CloseWatcher(name)
     win.installEventFilter(watcher)
     _state["watchers"][name] = watcher

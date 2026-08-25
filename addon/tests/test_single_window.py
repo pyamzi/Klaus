@@ -432,5 +432,17 @@ check("splitter rebind preserves slot and sizes",
       and spl.ops == [("insert", 1), ("sizes", (300, 700))],
       repr(spl.ops))
 
+print("== K-093: unconditional embed-time rebind ==")
+lay2 = _RebindLayout()
+parent2 = SimpleNamespace(layout=lambda: lay2)
+v3 = _RebindView(parent2)
+v4 = _RebindView(parent2)
+host = SimpleNamespace(findChildren=lambda cls: [v3, v4])
+sw._rebind_all_webviews(host)
+check("every webview rebound at embed",
+      v3.ops == ["hide", ("parent", None), "show"]
+      and v4.ops == ["hide", ("parent", None), "show"],
+      repr((v3.ops, v4.ops)))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
