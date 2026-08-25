@@ -107,3 +107,10 @@ wouldn't already need.
   those tags entirely; since that same tag is also **Curate Deck**'s
   preview vehicle in Browse, the curation Browse-preview step is skipped
   while this is off (the final deck copy is unaffected).
+
+- **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
+  viewer panel and Library. `"native"` is Qt's built-in QPdfView;
+  `"pdfjs"` switches to the bundled pdf.js webview renderer — smoother,
+  flicker-free scrolling, but still reaching feature parity (highlights,
+  find, and thumbnails land there incrementally — see the K-095 board
+  umbrella). Requires an Anki restart to take effect.

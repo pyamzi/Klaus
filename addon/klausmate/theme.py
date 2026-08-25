@@ -434,6 +434,25 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
+def css_vars(night: bool) -> str:
+    """Theme tokens as CSS custom properties for webview surfaces
+    (pdfjs_viewer.html's ``__THEME_VARS__`` substitution) — the same
+    Qt-side tokens rendered for HTML, so webviews and widgets cannot
+    drift (SynapsePro mirrors its palette into ``:root`` the same way)."""
+    c = palette(night)
+    return (
+        f"--bg: {c['bg']};"
+        f" --surface: {c['surface']};"
+        f" --text: {c['text']};"
+        f" --text-muted: {c['text_muted']};"
+        f" --grey-light: {c['grey_light']};"
+        f" --grey-mid: {c['grey_mid']};"
+        f" --accent: {c['blue_bright']};"
+        f" --accent-selection: {accent_rgba(night, 0.35)};"
+        f" --font: {FONT_FAMILY};"
+    )
+
+
 def muted_label_qss(night: bool, size_px: int = 11) -> str:
     """Inline style for secondary/status labels (SynapsePro's text_muted)."""
     c = palette(night)

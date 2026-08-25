@@ -1,0 +1,289 @@
+<!-- Klaus pdf.js viewer (K-096 foundation).
+
+Loaded by pdfjs_viewer.PdfJsViewer via AnkiWebView.stdHtml after two
+substitutions: __ADDON__ -> the addon web-export name, __THEME_VARS__ ->
+CSS custom properties generated from theme.py tokens (single source of
+truth for colours — do not hardcode hex here).
+
+Architecture (why this doesn't flicker where QPdfView does): every page
+gets a correctly-sized placeholder div up front, so scrolling never
+causes layout shift; an IntersectionObserver renders real canvases +
+text layers only near the viewport and Chromium's compositor translates
+them during scroll — no repaint, no async blank flash at the wrong time.
+The PDF arrives base64-chunked into window globals (SynapsePro's feed
+pattern) — see klausPdfChunk/klausPdfLoad at the bottom.
+-->
+<style>
+  :root { __THEME_VARS__ }
+  html, body {
+    margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: var(--font); overflow: hidden; height: 100%;
+  }
+  #scroll {
+    position: absolute; inset: 0; overflow-y: auto; overflow-x: auto;
+  }
+  #pages { display: flex; flex-direction: column; align-items: center;
+           gap: 12px; padding: 12px; }
+  .page {
+    position: relative; background: white;
+    border: 1px solid var(--grey-light); border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+  }
+  .page canvas { display: block; border-radius: 4px; }
+  /* pdf.js text layer: invisible glyph spans positioned over the canvas
+     so native browser selection works. */
+  .textLayer {
+    position: absolute; inset: 0; overflow: hidden;
+    line-height: 1; opacity: 1; pointer-events: auto;
+  }
+  .textLayer span {
+    color: transparent; position: absolute; white-space: pre;
+    cursor: text; transform-origin: 0% 0%;
+  }
+  .textLayer ::selection { background: var(--accent-selection); }
+  #error {
+    display: none; margin: 40px auto; max-width: 420px; padding: 20px;
+    background: var(--surface); border: 1px solid var(--grey-light);
+    border-radius: 12px; color: var(--text-muted); font-size: 13px;
+    text-align: center;
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--grey-mid); border-radius: 4px; }
+</style>
+
+<div id="scroll"><div id="pages"></div><div id="error"></div></div>
+<script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>
+<script>
+"use strict";
+/* global pdfjsLib */
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "/_addons/__ADDON__/web/pdfjs/pdf.worker.min.js";
+
+const state = {
+  doc: null,
+  scale: 1.0,          // computed fit-width on load
+  userZoomed: false,   // manual zoom suspends fit-width refitting
+  pageDivs: [],        // index -> .page div
+  rendered: new Map(), // pageIndex -> {canvas, textLayer} for teardown
+  observer: null,
+  currentPage: 0,
+  b64parts: [],
+};
+
+/* Refit on container resize (splitter drags, panel re-dock) unless the
+   user chose an explicit zoom. */
+new ResizeObserver(async () => {
+  if (!state.doc || state.userZoomed) return;
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  const target = Math.max(
+    0.25,
+    Math.min(4.0, (document.getElementById("scroll").clientWidth - 24) / base.width)
+  );
+  if (Math.abs(target - state.scale) / state.scale > 0.02) {
+    state.scale = target;
+    rezoom(state.currentPage || 1);
+  }
+}).observe(document.getElementById("scroll"));
+
+function post(msg) {
+  try { pycmd("klausmate_pdfjs:" + msg); } catch (e) { /* headless */ }
+}
+
+/* ---- feed: Python pushes base64 in chunks, then calls klausPdfLoad --- */
+window.klausPdfChunk = function (part) { state.b64parts.push(part); };
+
+window.klausPdfLoad = function () {
+  const b64 = state.b64parts.join("");
+  state.b64parts = [];
+  const raw = atob(b64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  openDocument(bytes);
+};
+
+window.klausPdfError = function (text) {
+  const el = document.getElementById("error");
+  el.textContent = text;
+  el.style.display = "block";
+};
+
+async function openDocument(bytes) {
+  teardown();
+  try {
+    state.doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  } catch (e) {
+    window.klausPdfError("Could not open this PDF: " + e.message);
+    post("log:open failed: " + e.message);
+    return;
+  }
+  post("count:" + state.doc.numPages);
+  await buildPlaceholders();
+  observePages();
+  post("ready");
+}
+
+/* Correctly-sized placeholders for every page BEFORE any rendering, so
+   the scroll geometry is final from the first frame (no layout shift —
+   the anti-flicker core). Page 1's viewport sets fit-width scale. */
+async function availWidth() {
+  // The host panel may not be laid out yet (webview created before the
+  // splitter sizes it — caught live in the browser harness where the
+  // load-time width was 0 and every page rendered at the 0.25 floor).
+  // Wait up to ~1s for real width before deriving fit-width.
+  const el = document.getElementById("scroll");
+  for (let i = 0; i < 60 && el.clientWidth < 60; i++) {
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return Math.max(60, el.clientWidth) - 24;
+}
+
+async function buildPlaceholders() {
+  const pagesEl = document.getElementById("pages");
+  pagesEl.textContent = "";
+  state.pageDivs = [];
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  const avail = await availWidth();
+  state.scale = Math.max(0.25, Math.min(4.0, avail / base.width));
+  for (let i = 1; i <= state.doc.numPages; i++) {
+    // Most PDFs are uniform-size; assume page 1's aspect for the
+    // placeholder and let render() correct any oddball page.
+    const div = document.createElement("div");
+    div.className = "page";
+    div.dataset.page = String(i);
+    div.style.width = Math.floor(base.width * state.scale) + "px";
+    div.style.height = Math.floor(base.height * state.scale) + "px";
+    pagesEl.appendChild(div);
+    state.pageDivs.push(div);
+  }
+}
+
+function observePages() {
+  if (state.observer) state.observer.disconnect();
+  state.observer = new IntersectionObserver(onIntersect, {
+    root: document.getElementById("scroll"),
+    rootMargin: "150% 0px",     // render ~1.5 viewports ahead/behind
+  });
+  for (const d of state.pageDivs) state.observer.observe(d);
+  document.getElementById("scroll")
+      .addEventListener("scroll", trackCurrentPage, { passive: true });
+}
+
+function onIntersect(entries) {
+  for (const en of entries) {
+    const idx = parseInt(en.target.dataset.page, 10);
+    if (en.isIntersecting) renderPage(idx, en.target);
+    else teardownPage(idx, en.target);
+  }
+}
+
+async function renderPage(num, div) {
+  if (state.rendered.has(num) || !state.doc) return;
+  state.rendered.set(num, {});   // claim before await (re-entrancy)
+  try {
+    const page = await state.doc.getPage(num);
+    const viewport = page.getViewport({ scale: state.scale });
+    div.style.width = Math.floor(viewport.width) + "px";
+    div.style.height = Math.floor(viewport.height) + "px";
+    const canvas = document.createElement("canvas");
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(viewport.width * ratio);
+    canvas.height = Math.floor(viewport.height * ratio);
+    canvas.style.width = Math.floor(viewport.width) + "px";
+    canvas.style.height = Math.floor(viewport.height) + "px";
+    const ctx = canvas.getContext("2d");
+    await page.render({
+      canvasContext: ctx, viewport: viewport,
+      transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
+    }).promise;
+    const textLayer = document.createElement("div");
+    textLayer.className = "textLayer";
+    const textContent = await page.getTextContent();
+    pdfjsLib.renderTextLayer({
+      textContentSource: textContent,
+      container: textLayer,
+      viewport: viewport,
+    });
+    div.appendChild(canvas);
+    div.appendChild(textLayer);
+    state.rendered.set(num, { canvas: canvas, textLayer: textLayer });
+  } catch (e) {
+    state.rendered.delete(num);
+    post("log:render " + num + " failed: " + e.message);
+  }
+}
+
+function teardownPage(num, div) {
+  const r = state.rendered.get(num);
+  if (!r || !r.canvas) return;   // never tear down a mid-render claim
+  try { div.removeChild(r.canvas); div.removeChild(r.textLayer); }
+  catch (e) { /* already gone */ }
+  state.rendered.delete(num);
+}
+
+function teardown() {
+  if (state.observer) state.observer.disconnect();
+  state.rendered.clear();
+  state.pageDivs = [];
+  document.getElementById("pages").textContent = "";
+  document.getElementById("error").style.display = "none";
+  state.doc = null;
+  state.currentPage = 0;
+}
+
+function trackCurrentPage() {
+  const scroll = document.getElementById("scroll");
+  const mid = scroll.scrollTop + scroll.clientHeight / 3;
+  let page = 1;
+  for (const d of state.pageDivs) {
+    if (d.offsetTop <= mid) page = parseInt(d.dataset.page, 10);
+    else break;
+  }
+  if (page !== state.currentPage) {
+    state.currentPage = page;
+    post("page:" + page + ":" + (state.doc ? state.doc.numPages : 0));
+  }
+}
+
+/* ---- API called from Python ---------------------------------------- */
+window.klausGoToPage = function (num) {
+  const d = state.pageDivs[num - 1];
+  if (d) d.scrollIntoView({ block: "start" });
+};
+
+window.klausSetZoom = function (factor) {
+  // factor relative to current scale; re-derive layout then re-render
+  // what's visible. Placeholder sizes update synchronously (no shift).
+  if (!state.doc) return;
+  state.userZoomed = true;
+  state.scale = Math.max(0.25, Math.min(4.0, state.scale * factor));
+  const keep = state.currentPage;
+  rezoom(keep);
+};
+
+async function rezoom(keepPage) {
+  const first = await state.doc.getPage(1);
+  const base = first.getViewport({ scale: 1.0 });
+  for (const d of state.pageDivs) {
+    const r = state.rendered.get(parseInt(d.dataset.page, 10));
+    if (r && r.canvas) {
+      try { d.removeChild(r.canvas); d.removeChild(r.textLayer); }
+      catch (e) { /* ok */ }
+    }
+    d.style.width = Math.floor(base.width * state.scale) + "px";
+    d.style.height = Math.floor(base.height * state.scale) + "px";
+  }
+  state.rendered.clear();
+  window.klausGoToPage(keepPage);
+  // Observer re-fires for whatever is now visible.
+}
+
+window.klausScrollPosition = function () {
+  return document.getElementById("scroll").scrollTop;
+};
+
+post("boot");
+</script>

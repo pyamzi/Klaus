@@ -4111,7 +4111,32 @@ class PdfSidebar(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        if PDF_VIEWER_AVAILABLE and QPdfDocument is not None:
+        # Renderer selection (K-095): config pdf_renderer == "pdfjs"
+        # swaps in the webview/pdf.js viewer; anything else (or any
+        # failure reading config) stays on the proven QPdfView path.
+        self._renderer = "native"
+        try:
+            from . import pdfjs_viewer as _pdfjs
+
+            if _pdfjs.PDFJS_AVAILABLE:
+                from aqt import mw as _mw
+
+                cfg = _mw.addonManager.getConfig(__package__) or {}
+                self._renderer = _pdfjs.renderer_from_config(cfg)
+        except Exception as exc:
+            print(f"[klausmate] renderer flag read failed: {exc}")
+
+        if self._renderer == "pdfjs":
+            from . import pdfjs_viewer as _pdfjs
+
+            self._doc = None
+            self._viewer = _pdfjs.PdfJsViewer(
+                on_page_changed=self.notify_page_changed,
+                parent=self,
+            )
+            outer.addWidget(self._viewer, 1)
+            self._fallback_label = None
+        elif PDF_VIEWER_AVAILABLE and QPdfDocument is not None:
             self._doc = QPdfDocument(self)
             self._viewer = PdfViewer(
                 on_page_changed=self.notify_page_changed,
@@ -4158,6 +4183,20 @@ class PdfSidebar(QWidget):
             return
         self._file_stat = _stat_of(path)
 
+        if self._renderer == "pdfjs" and self._viewer is not None:
+            # pdf.js path: the webview loads from bytes; page count
+            # arrives async over the bridge (on_count refines the
+            # text-pages approximation used until then).
+            self._name = name
+            pages_text = pdf_handler.load_pages(USER_FILES, name) or []
+            self._page_count = len(pages_text)
+            self._viewer.set_page_texts(pages_text)
+            self._viewer.on_count = self._on_pdfjs_count
+            self._viewer.load_path(path, name)
+            self._on_page_changed(0)
+            self._notify_loaded(name)
+            return
+
         if not PDF_VIEWER_AVAILABLE or self._doc is None:
             self._name = name
             pages = pdf_handler.load_pages(USER_FILES, name) or []
@@ -4194,6 +4233,10 @@ class PdfSidebar(QWidget):
                 print(f"[klausmate] annotations restore failed: {exc}")
         self._on_page_changed(0)
         self._notify_loaded(name)
+
+    def _on_pdfjs_count(self, count: int) -> None:
+        if count > 0:
+            self._page_count = count
 
     def _notify_loaded(self, name: str) -> None:
         cb = self.on_loaded

@@ -8,5 +8,6 @@
   "embedding_api_key_voyage": "",
   "pdf_match_threshold": 0.75,
   "pdf_match_agg": "max",
-  "pdf_index_max_chunks": 1000
+  "pdf_index_max_chunks": 1000,
+  "pdf_renderer": "native"
 }

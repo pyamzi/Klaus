@@ -60,6 +60,59 @@ of the notes page contains the note; wrap/pagination on a long note.
 owner: -
 created: 2026-08-24
 
+### K-095: pdf.js migration umbrella: replace QPdfView rendering to kill flicker
+owner: -
+priority: P2
+tags: pdfjs,orchestrator
+created: 2026-08-25
+
+Pouya: 'I want to do the real fix… PDFjs is the thing I will have to do eventually.' QPdfView flickers structurally (async pdfium page delivery, overlay repaint races); SynapsePro proves the pdf.js-in-webview architecture (scripts/SynapsePro-main/web_notebook/pdf_viewer.html): canvas layers GPU-composited by Chromium, base64 PDF feed, no repaint during scroll. Strategy: new PdfJsViewer behind config flag pdf_renderer ('native' default) satisfying PdfSidebar's six-method surface (set_document/set_page_texts/load_annotations/clear_document/go_to_page/scroll_position + toggle_thumbnails/_page_label); build parity feature-by-feature (K-096..K-099); flip default + retire native path only after live soak (K-100). The annotations JSON and bake pipeline are renderer-independent and MUST NOT change.
+
+### K-097: pdfjs parity: selection + clipboard (copy text, copy page/marquee as image)
+owner: -
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+
+Text-layer selection already native; add: right-click menu (Copy page text / Copy slide as image), Cmd/Ctrl-double-click page → image to clipboard (canvas.toDataURL → Python QImage), Option/Alt-drag marquee → region image. Match native viewer's silent Preview-style copy (tooltips only for capture actions).
+
+### K-098: pdfjs parity: highlights, sticky notes, outside text
+owner: -
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+
+Render the EXISTING annotations JSON (page-point rects) as positioned divs over the text layer; create highlight from selection; delete; notes as anchored boxes; K-078 adopted outside text with zoom-scaled font. Bake pipeline (pdf_handler.bake_annotations) consumes the same JSON — zero changes there. Coordinate mapping: pdf.js viewport.convertToViewportRectangle vs our y-flip convention — write the round-trip test FIRST.
+
+### K-099: pdfjs parity: find bar, go-to-page, thumbnails
+owner: -
+priority: P2
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+
+In-page find via pdf.js text content (match count, Enter/Shift+Enter cycling, Esc — same shortcuts the native bar claims via ShortcutOverride), Cmd+Option+G go-to-page, thumbnail strip (lazy page renders at ~140px, click to jump) behind the existing ◫ toggle.
+
+### K-100: pdfjs parity: page-insert into editor field + crop integration
+owner: -
+priority: P3
+tags: pdfjs
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py,klausmate/__init__.py
+created: 2026-08-25
+
+Whatever the editor integration surface uses from the native viewer (page-as-image insert into the focused field, image-crop trigger) reproduced from the pdf.js canvases. Audit __init__.py call sites before scoping details.
+
+### K-101: pdfjs cutover: flip default renderer after live soak, then retire QPdfView path
+owner: -
+priority: P3
+tags: pdfjs,needs-human
+files: klausmate/config.json,klausmate/pdf_viewer.py,klausmate/pdfjs_viewer.py
+created: 2026-08-25
+
+GATE: Pouya uses pdf_renderer:'pdfjs' daily until satisfied (no flicker, parity holds incl. bake round-trips). Then default flips to 'pdfjs'; native path stays one release as fallback; final card deletes the QPdfView machinery (KEEP: annotations JSON, bake, pdf_handler — renderer-independent).
+
 ## Ready
 
 ## Doing
@@ -596,3 +649,17 @@ inside mw from the start) — noted, not expected.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). WA_NativeWindow + winId() per embedded webview at embed time, per-view isolation, breadcrumbs. 253+85+26 green, AST clean. LIVE: restart, open Add/Browse — expect 'nativeized AddCards view winId=0x...' in the debug file and a rendering editor. If STILL black with a nonzero winId, the remaining path is architectural (construct panes inside mw) — flagged on the card.
+
+### K-096: pdfjs foundation: vendored pdf.js viewer behind pdf_renderer flag
+owner: orchestrator
+priority: P1
+tags: pdfjs
+files: klausmate/pdfjs_viewer.py,klausmate/web/pdfjs_viewer.html,klausmate/web/pdfjs/pdf.min.js,klausmate/web/pdfjs/pdf.worker.min.js,klausmate/pdf_viewer.py,klausmate/config.json,klausmate/config.md,tests/test_pdfjs_viewer.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_pdfjs_viewer.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+Vendor pdf.js 3.11.174 (copy SynapsePro's bundled pdf.min.js + pdf.worker.min.js — no CDN, offline-safe). New web/pdfjs_viewer.html: continuous-scroll canvas rendering with text layer (native browser selection), fit-width zoom + controls, theme.py tokens injected as CSS variables (__THEME_VARS__ substitution). New pdfjs_viewer.py: PdfJsViewer(QWidget) hosting AnkiWebView; load_path() reads via pdf_handler.pdf_path_for, base64-chunks into window globals (SynapsePro's feed, ~8MB eval chunks, size guard); bridge via set_bridge_command for page-changed → _page_label. Stubs satisfying PdfSidebar surface. config.json gains pdf_renderer:'native' (docs in config.md); PdfSidebar branches on the flag. ACCEPTANCE: flag off → zero behavior change (all existing tests green); flag on → PDF renders, scrolls, zooms, page indicator tracks; test_pdfjs_viewer.py covers flag resolution, chunking math, HTML placeholders present, theme var injection.
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped. Vendored pdf.js 3.11.174 (copied from SynapsePro's bundle), web/pdfjs_viewer.html (sized-placeholder + IntersectionObserver lazy render + text layer; theme.css_vars injected), pdfjs_viewer.py host (AnkiWebView, chunked-base64 feed, bridge -> page label), PdfSidebar branches on pdf_renderer (default native — zero behavior change verified, full suite green). Browser-harness verified: chunk feed -> open -> fit-width -> canvas+text render -> page tracking -> bridge posts. HARNESS CAUGHT A REAL BUG: layout-before-width rendered everything at the 0.25 scale floor; fixed with availWidth() rAF wait + ResizeObserver refit (userZoomed suspends refit). NEEDS-LIVE-VERIFY: set pdf_renderer:'pdfjs' in meta.json config, restart Anki, open a PDF — scroll smoothness is the whole point; IO/scroll-event delivery could not be exercised in the hidden harness pane (background throttling).

@@ -103,6 +103,17 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   flip catches up on next open). Dialog buttons are blue-primary by
   default with `SecondaryButton`/`DangerButton` objectName opt-outs; the
   Library window inverts (grey default, `PrimaryButton` opt-in).
+- `pdfjs_viewer.py` + `web/pdfjs_viewer.html` + `web/pdfjs/` (vendored
+  pdf.js 3.11.174): the flicker-free webview renderer (K-095 umbrella),
+  selected by config `pdf_renderer` (`"native"` default until the K-101
+  cutover; parity cards K-097..K-100). `PdfSidebar` branches at
+  construction; the PDF is fed as chunked base64 into window globals
+  (SynapsePro's pattern), pages render lazily via IntersectionObserver
+  over sized placeholders, the pdf.js text layer gives native selection,
+  and theme tokens arrive as CSS vars (`theme.css_vars`). Pure helpers
+  (`renderer_from_config`, `chunk_b64`, `build_page_html`) are aqt-free
+  for `tests/test_pdfjs_viewer.py`. The annotations JSON + bake pipeline
+  are renderer-independent — parity work must not fork them.
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
   `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"
