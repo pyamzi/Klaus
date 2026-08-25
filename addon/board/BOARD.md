@@ -241,3 +241,50 @@ still blocked); tombstone expiry on clean scan.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). Native-delete propagation via baked_native_ids ledger (bake out-param, main-thread write) with three safety guards (unbaked window, zero-marks clobber, None scan); tombstone precision (3pt + text equality) + expiry on clean scan. Red-first x5; falsified removal branch (3 red). 225+82 green, AST clean. Live checks: delete a Klaus highlight in Preview (with >=2 Klaus marks in the file) -> disappears from Klaus ~1s; highlight new text near a previously deleted spot -> imports; rapid Klaus highlighting never loses records.
+
+### K-085: Leftover highlights: satellite masking, bake resurrection race, sub-second sync
+owner: -
+priority: P1
+tags: bug,orchestrator
+files: klausmate/pdf_handler.py,klausmate/pdf_viewer.py,klausmate/pdf_drive.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py && python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: better, but "sometimes highlights left over when it's supposed to
+be gone"; wants both directions effectively live.
+
+Causes found:
+1. SATELLITE MASKING (the likely "sometimes"): a native highlight WITH a
+   note bakes as TWO annotations sharing the id — the /Highlight and a
+   /Text sticky marked klausmate:<id>:note. Deleting the highlight in
+   Preview leaves the sticky; scan's marked_ids stripped the suffix, so
+   the id still read as present -> record kept -> next bake resurrects
+   BOTH. Fix: marked_ids counts only PRIMARY marks (suffix-less /NM);
+   orphaned satellites are dropped by the next bake automatically (not
+   carried, not regenerated).
+2. BAKE RESURRECTION RACE: a bake pending when Preview deletes a mark
+   regenerates it from still-stale records; the post-bake fingerprint
+   then masks the tick, so the mirror never sees the deletion. Fix: the
+   bake itself applies the K-084 deletion rule (ledger + >=1-surviving-
+   mark clobber guard) while scanning the working file for the carry:
+   deleted-in-file natives are OMITTED from regeneration and reported;
+   the viewer's post-bake main callback removes those records
+   (remove_records), refreshes open overlays, THEN records the ledger.
+3. FINGERPRINT RACE: _refresh_stats_for stat'ed the file at callback
+   time — a Preview save landing between the bake's os.replace and the
+   callback got recorded as "current" and never mirrored. The bake now
+   reports the exact stat of the file it wrote; the callback stores
+   that, so any later write mismatches and mirrors normally.
+4. LATENCY: viewer bake debounce 1200 -> 500ms (Klaus->Preview),
+   watcher debounce 700 -> 350ms (Preview->Klaus). Both directions land
+   well under a second.
+API: bake_annotations(report: dict) replaces baked_native_out (K-084
+tests updated); report = {native_ids, omitted_native, stat}.
+
+Verify (red-first): satellite exclusion (sticky present, highlight
+stripped -> id NOT in marked_ids; mirror drops the record); bake
+omission (report lists it, file regenerated without it, orphan sticky
+gone); remove_records helper; report stat matches the written file.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Bake-level resurrection guard (ledger + surviving-mark clobber rule, same as mirror), exact-stat fingerprint pinning, post-bake record removal + overlay refresh, primary-only marked_ids, debounces 500/350ms. Red-first; falsified guard -> bake writes the deleted highlight + sticky back (the exact live symptom). 234+82 green, AST clean. Live: delete a Klaus highlight in Preview right after making another edit in Klaus -> stays deleted; both directions land <1s.
