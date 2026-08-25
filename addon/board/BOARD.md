@@ -131,33 +131,6 @@ created: 2026-08-24
 - [2026-08-24 opus] Design pass done. Split: K-070 (Ready) is part A — storage root, path mapping, migration, setup step, Preferences row. Part B (disk<->tree mirroring, rename/move sync both directions, rescan on profile open, tag follow-through) gets filed once A lands, on pdf_drive/tag_sync/drive_store. This card stays as the umbrella.
 - [2026-08-24 opus] Part B shipped as K-073 (two-way sync + single-copy). Umbrella is now functionally complete: root folder chosen at setup/Preferences, disk<->tree<->tags all mirror, one copy of every PDF living in the root. Remaining live verification rides Pouya's next restart.
 
-### K-078: Outside annotations, viewer: render text records, adopt on load, reload on external change
-owner: -
-priority: P2
-tags: feature
-files: klausmate/pdf_viewer.py,tests/test_drive.py
-created: 2026-08-24
-
-Depends on the engine card (scan/adopt in pdf_handler). Work:
-1. Overlay paints type:"text" records: the text inside its rect, scaled
-   with zoom, record color (approximate fidelity is fine — it is the
-   user's own typed note). Right-click on it -> "Remove text note"
-   (deletes the record, schedules bake). Read-only otherwise in v1.
-2. On document load: background adopt_foreign_annotations; if >0,
-   reload annotations json, schedule bake, repaint overlay.
-3. External-change hot-reload: viewer records the working file's
-   (mtime, size) at load; when the library rescan/watcher tick fires (or
-   on window activation), an open tab whose file changed reloads the
-   QPdfDocument and re-runs adoption. DANGER ZONE: document reload on
-   the SHARED QPdfDocument must bump _doc_generation and respect the
-   K-068/K-072 lessons — never reparent/reload inside event delivery;
-   defer via QTimer.singleShot(0) with liveness guard. Preview saves
-   replace the inode (atomic), which is why the open view never sees
-   external edits today.
-Live checks: type text in Preview on an open PDF -> appears in Klaus
-within ~1s of the watcher tick without reopening the tab; Klaus
-highlights unaffected; no crash on float/dock during reload.
-
 ### K-079: Per-PDF notes space: side pane + sidecar + baked appended Notes page
 owner: -
 priority: P2
@@ -815,3 +788,34 @@ across repeated scan+bake cycles; coordinate round-trip within 1pt.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator, self-executed). Engine landed in 0ae0680: /NM klausmate: markers on every baked annotation (highlight + sticky + new FreeText branch), scan_foreign_annotations (Highlight+FreeText, inverse of the verified coordinate flip, /C + /DA style parsing), adopt_foreign_annotations (signature-deduped, refuses on failed pristine capture), stripped pristine capture on first adoption, validator extended with kind/text/size/origin while keeping legacy records byte-identical. Red-first gate (166 green + section red on missing functions). Falsified BOTH guards: markers off -> 4 red (self-adoption loop), strip off -> 4 red (pristine duplication). 187+82 green, AST sweep clean. Bonus: test bootstrap typing_extensions shim makes vendored pypdf real under py3.9 = bake paths now actually tested; fixed one pre-existing section that only passed because pypdf was invisible. Viewer half (render text records, adopt on load, hot-reload) is K-078.
+
+### K-078: Outside annotations, viewer: render text records, adopt on load, reload on external change
+owner: orchestrator
+priority: P2
+tags: feature
+files: klausmate/pdf_viewer.py,tests/test_drive.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Depends on the engine card (scan/adopt in pdf_handler). Work:
+1. Overlay paints type:"text" records: the text inside its rect, scaled
+   with zoom, record color (approximate fidelity is fine — it is the
+   user's own typed note). Right-click on it -> "Remove text note"
+   (deletes the record, schedules bake). Read-only otherwise in v1.
+2. On document load: background adopt_foreign_annotations; if >0,
+   reload annotations json, schedule bake, repaint overlay.
+3. External-change hot-reload: viewer records the working file's
+   (mtime, size) at load; when the library rescan/watcher tick fires (or
+   on window activation), an open tab whose file changed reloads the
+   QPdfDocument and re-runs adoption. DANGER ZONE: document reload on
+   the SHARED QPdfDocument must bump _doc_generation and respect the
+   K-068/K-072 lessons — never reparent/reload inside event delivery;
+   defer via QTimer.singleShot(0) with liveness guard. Preview saves
+   replace the inode (atomic), which is why the open view never sees
+   external edits today.
+Live checks: type text in Preview on an open PDF -> appears in Klaus
+within ~1s of the watcher tick without reopening the tab; Klaus
+highlights unaffected; no crash on float/dock during reload.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator, self-executed) pending live verification. Landed in 4a15a79: overlay text layer (record color + zoom-scaled font, word-wrapped), per-record highlight colors on screen, Remove Text context action, adoption-on-load (scan + pristine capture on daemon thread, merge on main via taskman, stale-generation apply still persists + bakes), hot-reload via WeakSet of sidebars + (inode,mtime_ns,size) fingerprint polled from the watcher tick, deferred one tick, scroll preserved. Review catch fixed pre-commit: successful bakes re-fingerprint their own sidebars so Klaus's own writes never trigger a self-reload loop (~2s flicker after every highlight edit otherwise). Engine adopt(scanned=) red-first. 191+82 green, AST sweep clean on all three modules. Files touched beyond card spec: pdf_handler.py (scanned param), pdf_drive.py (watcher hook) — solo execution, disjointness moot. LIVE CHECKS for Pouya: restart; open a PDF you marked in Preview -> text/highlights appear (tooltip reports import); type in Preview while the tab is open -> updates ~1s; right-click adopted text -> Remove Text; highlight edits do NOT flicker-reload the tab.
