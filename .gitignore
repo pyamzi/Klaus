@@ -4,11 +4,8 @@ __pycache__/
 *.pyc
 
 # Node
-app/node_modules/
-app/dist/
-
-# Rust / Tauri
-app/src-tauri/target/
+extensions/*/node_modules/
+extensions/*/out/
 
 # OS
 .DS_Store

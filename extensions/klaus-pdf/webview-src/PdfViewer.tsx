@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { fetchPdfBytes } from "../lib/core";
+import { fetchPdfBytes } from "./core";
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  "pdfjs-dist/build/pdf.worker.min.mjs",
-  import.meta.url,
-).toString();
+// GlobalWorkerOptions.workerSrc is set by index.tsx before render (the
+// webview CSP requires a blob: worker).
 
 const PAGE_GAP = 16;
 const VIEW_PADDING = 24;

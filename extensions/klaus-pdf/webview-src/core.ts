@@ -1,7 +1,9 @@
-// Client for the local klaus-core service.
+// Client for the local klaus-core service, configured by the extension
+// host via window.__KLAUS__ (see extension.ts / index.tsx).
 
-const BASE = import.meta.env.VITE_KLAUS_CORE_URL ?? "http://127.0.0.1:7863";
-const TOKEN = import.meta.env.VITE_KLAUS_CORE_TOKEN ?? "dev";
+const cfg = window.__KLAUS__ ?? ({} as Partial<Window["__KLAUS__"]>);
+const BASE = cfg.coreUrl ?? "http://127.0.0.1:7863";
+const TOKEN = cfg.coreToken ?? "dev";
 
 export interface PdfMeta {
   id: string;

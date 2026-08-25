@@ -1,0 +1,78 @@
+{
+  "name": "klaus-pdf",
+  "displayName": "Klaus PDF",
+  "description": "Klaus library view and PDF viewer, backed by the local klaus-core service",
+  "version": "0.1.0",
+  "publisher": "klaus",
+  "private": true,
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "klaus",
+          "title": "Klaus",
+          "icon": "media/klaus.svg"
+        }
+      ]
+    },
+    "views": {
+      "klaus": [
+        {
+          "id": "klausLibrary",
+          "name": "Library"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "klaus.refreshLibrary",
+        "title": "Klaus: Refresh Library",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "klaus.openPdf",
+        "title": "Klaus: Open PDF"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "klaus.refreshLibrary",
+          "when": "view == klausLibrary",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "klaus.openPdf",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^6.2.108",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/vscode": "^1.95.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
