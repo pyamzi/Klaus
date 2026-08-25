@@ -198,3 +198,46 @@ renders its full text on one line matching Preview.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). Paint-only: Helvetica family, explicit \n lines only (no soft re-wrap), fit-to-width shrink (floor 6px), manual baselines with no clip rect. Compile + 218/82 green (no paint assertions possible headless). Live check owed: 'This is a test' renders whole, one line, matching Preview.
+
+### K-084: Highlight sync: native deletes propagate; tombstones stop over-blocking
+owner: -
+priority: P1
+tags: bug,orchestrator
+files: klausmate/pdf_handler.py,klausmate/pdf_viewer.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py && python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: text sync perfect; "sometimes when I highlight something on the
+PDF or remove a highlight, it doesn't do the same thing in Anki."
+
+Two design gaps found by audit:
+1. NATIVE DELETES DON'T PROPAGATE: mirror never removes native records,
+   so a Klaus-baked highlight deleted in Preview stays in Klaus and the
+   next bake resurrects it in the file. Fix: bake reports exactly which
+   native ids it wrote (baked_native_out param -> main-thread
+   mark_native_baked -> baked_native_ids doc key, replaced wholesale per
+   bake). Mirror removes a native record that IS in baked_native_ids
+   but NOT among the file's marked ids — meaning the save that produced
+   this file version knew Klaus marks and this one was deliberately
+   deleted. CLOBBER GUARD: removal only when >=1 Klaus mark survived in
+   the file — a stale Preview model (opened pre-bake) saves with ZERO
+   Klaus marks and must read as clobber (re-bake restores), never as
+   mass-deletion. Unbaked records (debounce window) are never touched.
+2. TOMBSTONE OVER-SUPPRESSION: 30%-overlap matching blocks NEW
+   highlights near a previously deleted one ("sometimes my highlight
+   doesn't appear"). Fix: precision matching — a tombstone blocks only
+   the RESURRECTION of the specific deleted mark (same kind/page, text
+   equal for text, bbox within 3pt), never the location. Plus expiry:
+   a successful mirror scan that no longer finds the stale copy prunes
+   the tombstone.
+Also: Preview sometimes defers writing to disk until focus loss — sync
+can only fire when the file actually changes (document, not fix).
+
+Verify (red-first): native-delete propagation (2 baked marks, file
+rewritten without one -> record drops, other kept); zero-marks clobber
+guard (both removed from file -> records KEPT); unbaked-record guard;
+tombstone precision (4pt-shifted new highlight imports; identical copy
+still blocked); tombstone expiry on clean scan.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Native-delete propagation via baked_native_ids ledger (bake out-param, main-thread write) with three safety guards (unbaked window, zero-marks clobber, None scan); tombstone precision (3pt + text equality) + expiry on clean scan. Red-first x5; falsified removal branch (3 red). 225+82 green, AST clean. Live checks: delete a Klaus highlight in Preview (with >=2 Klaus marks in the file) -> disappears from Klaus ~1s; highlight new text near a previously deleted spot -> imports; rapid Klaus highlighting never loses records.
