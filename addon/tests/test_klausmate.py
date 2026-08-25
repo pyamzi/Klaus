@@ -1564,5 +1564,118 @@ except Exception as e:
 finally:
     shutil.rmtree(mi_uf, ignore_errors=True)
 
+print("== K-084: native deletes propagate; tombstone precision ==")
+nd_uf = tempfile.mkdtemp(prefix="klaus_nd_uf_")
+try:
+    from pypdf import PdfReader as _NdReader, PdfWriter as _NdWriter
+    from pypdf.generic import ArrayObject as _NdArray, NameObject as _NdName
+
+    ND = "K84_Native"
+    os.makedirs(os.path.join(nd_uf, "pdfs"))
+    nd_working = os.path.join(nd_uf, "pdfs", ND + ".pdf")
+    w = _NdWriter()
+    w.add_blank_page(width=612, height=792)
+    with open(nd_working, "wb") as f:
+        w.write(f)
+
+    ida, idb = "a1" * 16, "b2" * 16
+    pdf_handler.save_annotations(nd_uf, ND, [
+        {"id": ida, "page": 0, "rects": [[50.0, 100.0, 90.0, 12.0]],
+         "color": "#fadc50", "note": ""},
+        {"id": idb, "page": 0, "rects": [[50.0, 200.0, 90.0, 12.0]],
+         "color": "#fadc50", "note": ""},
+    ])
+    nd_out = []
+    check("bake reports the native ids it wrote",
+          pdf_handler.bake_annotations(nd_uf, ND, baked_native_out=nd_out)
+          and sorted(nd_out) == sorted([ida, idb]), repr(nd_out))
+    pdf_handler.mark_native_baked(nd_uf, ND, nd_out)
+
+    def nd_strip(drop_ids):
+        r = _NdReader(nd_working)
+        w2 = _NdWriter(clone_from=r)
+        for pg in w2.pages:
+            raw = pg.get("/Annots")
+            if raw is None:
+                continue
+            keep = [
+                a for a in list(raw.get_object())
+                if not any(
+                    str(a.get_object().get("/NM") or "")
+                    == "klausmate:" + d
+                    for d in drop_ids
+                )
+            ]
+            pg[_NdName("/Annots")] = _NdArray(keep)
+        tmp = nd_working + ".tmp"
+        with open(tmp, "wb") as f:
+            w2.write(f)
+        os.replace(tmp, nd_working)
+
+    # User deletes highlight A in Preview; B survives -> the save KNEW
+    # Klaus marks, so A's disappearance is deliberate.
+    nd_strip([ida])
+    nd_res = pdf_handler.scan_working_annotations(nd_uf, ND)
+    check("native delete in Preview propagates",
+          pdf_handler.mirror_foreign_annotations(nd_uf, ND, nd_res) == 1
+          and [r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND)]
+          == [idb],
+          repr(pdf_handler.load_annotations(nd_uf, ND)))
+
+    # Unbaked record (debounce window): never removed by a mirror pass.
+    idc = "c3" * 16
+    nd_recs = pdf_handler.load_annotations(nd_uf, ND)
+    nd_recs.append({"id": idc, "page": 0,
+                    "rects": [[50.0, 300.0, 90.0, 12.0]],
+                    "color": "#fadc50", "note": ""})
+    pdf_handler.save_annotations(nd_uf, ND, nd_recs)
+    nd_res = pdf_handler.scan_working_annotations(nd_uf, ND)
+    pdf_handler.mirror_foreign_annotations(nd_uf, ND, nd_res)
+    check("unbaked native record survives the mirror",
+          sorted(r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND))
+          == sorted([idb, idc]))
+
+    # Preview stale-model clobber: ZERO Klaus marks left in the file ->
+    # must read as clobber, never as mass-deletion.
+    nd_strip([idb])
+    nd_res = pdf_handler.scan_working_annotations(nd_uf, ND)
+    pdf_handler.mirror_foreign_annotations(nd_uf, ND, nd_res)
+    check("zero-marks save is a clobber, records KEPT",
+          sorted(r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND))
+          == sorted([idb, idc]))
+
+    # Tombstone precision: a tombstone blocks only the exact deleted
+    # mark, not the neighborhood.
+    ts_rec = {"id": "d4" * 16, "page": 0,
+              "rects": [[100.0, 400.0, 60.0, 12.0]], "color": "#ffff00",
+              "note": "", "origin": "external"}
+    pdf_handler.add_suppressed(nd_uf, ND, ts_rec)
+    identical = {"kind": "highlight", "page": 0,
+                 "rects": [[100.0, 400.0, 60.0, 12.0]],
+                 "note": "", "color": "#ffff00"}
+    shifted = {"kind": "highlight", "page": 0,
+               "rects": [[108.0, 400.0, 60.0, 12.0]],
+               "note": "", "color": "#ffff00"}
+    check("identical stale copy still blocked",
+          pdf_handler.adopt_foreign_annotations(
+              nd_uf, ND, scanned=[identical]) == 0)
+    check("shifted NEW highlight at the same spot imports",
+          pdf_handler.adopt_foreign_annotations(
+              nd_uf, ND, scanned=[shifted]) == 1)
+
+    # Expiry: a successful mirror scan with no trace of the stale copy
+    # prunes the tombstone.
+    nd_res = pdf_handler.scan_working_annotations(nd_uf, ND)
+    pdf_handler.mirror_foreign_annotations(nd_uf, ND, nd_res)
+    check("tombstone expires once the stale copy is gone",
+          pdf_handler.load_suppressed(nd_uf, ND) == [],
+          repr(pdf_handler.load_suppressed(nd_uf, ND)))
+except Exception as e:
+    import traceback
+    check("K-084 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(nd_uf, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

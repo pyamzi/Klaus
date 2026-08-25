@@ -1207,29 +1207,59 @@ def load_suppressed(user_files_dir: str, name: str) -> list[dict]:
     return [s for s in raw if isinstance(s, dict)]
 
 
+def _update_doc_keys(user_files_dir: str, name: str, updates: dict) -> None:
+    """Read-modify-write of top-level annotation-doc keys. Main-thread
+    only, like every other json write here."""
+    doc = _load_annotation_doc(user_files_dir, name)
+    doc.update(updates)
+    path = annotations_path_for(user_files_dir, name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+
+
 def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
-    """Tombstone one external record (called on delete, K-081)."""
+    """Tombstone one external record (called on delete, K-081). Stores
+    the full geometry + text so matching can be PRECISE (K-084): a
+    tombstone blocks the resurrection of the specific deleted mark,
+    never the location."""
     try:
+        rects = [list(r) for r in record.get("rects") or []]
+        if not rects:
+            return
         entry = {
             "page": record.get("page"),
             "kind": "text" if record.get("kind") == "text" else "highlight",
-            "rect": _bbox_of(record),
+            "rects": rects,
             "text": str(record.get("text") or ""),
         }
-        if entry["rect"] is None:
-            return
-        doc = _load_annotation_doc(user_files_dir, name)
-        sup = doc.get("suppressed_external")
-        if not isinstance(sup, list):
-            sup = []
+        sup = load_suppressed(user_files_dir, name)
         sup.append(entry)
-        doc["suppressed_external"] = sup
-        path = annotations_path_for(user_files_dir, name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(doc, f)
+        _update_doc_keys(user_files_dir, name, {"suppressed_external": sup})
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] tombstone write failed for {name}: {exc}")
+
+
+def load_baked_native(user_files_dir: str, name: str) -> set:
+    """Ids of the native records present as marks in the file as of the
+    last successful bake (K-084) — replaced wholesale per bake."""
+    raw = _load_annotation_doc(user_files_dir, name).get("baked_native_ids")
+    return {str(x) for x in raw} if isinstance(raw, list) else set()
+
+
+def mark_native_baked(user_files_dir: str, name: str, ids) -> None:
+    """Main-thread bookkeeping after a successful bake (K-084): exactly
+    these native records exist as marks in the file. One of them later
+    missing from the file — while other Klaus marks survived — was
+    deleted in the outside app, and the mirror drops its record."""
+    try:
+        _update_doc_keys(
+            user_files_dir,
+            name,
+            {"baked_native_ids": sorted({str(i) for i in ids if i})},
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] baked-ids record failed for {name}: {exc}")
 
 
 def _originals_dir(user_files_dir: str) -> str:
@@ -1280,7 +1310,11 @@ def _bake_color(value, fallback: str) -> str:
     return fallback
 
 
-def bake_annotations(user_files_dir: str, name: str) -> bool:
+def bake_annotations(
+    user_files_dir: str,
+    name: str,
+    baked_native_out: list | None = None,
+) -> bool:
     """Bake stored highlights/notes into ``pdfs/<base>.pdf`` as REAL PDF
     annotations (visible in Preview/Acrobat). Returns False on failure.
 
@@ -1374,6 +1408,13 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                                         else "highlight"
                                     ),
                                     "rects": rects,
+                                    # Precision tombstones compare text
+                                    # for text marks (K-084).
+                                    "text": (
+                                        _freetext_text(o, wreader)
+                                        if sub == "/FreeText"
+                                        else ""
+                                    ),
                                 }
                                 if _matches_tombstone(pseudo, suppressed):
                                     # Deleted in Klaus: drop for real.
@@ -1418,6 +1459,7 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                     f"({base}): {exc}"
                 )
         baked = 0
+        baked_ids_now: list[str] = []
         for hl in native:
             page = hl.get("page")
             if not isinstance(page, int) or not (0 <= page < n_pages):
@@ -1460,6 +1502,8 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                 _mark_klaus(free, hl)
                 writer.add_annotation(page, free)
                 baked += 1
+                if hl.get("id"):
+                    baked_ids_now.append(str(hl["id"]))
                 continue
             # One Highlight annotation per record: quad_points cover ALL
             # its rects, rect is their union. 8 floats per quad:
@@ -1490,6 +1534,8 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
             _mark_klaus(anno, hl)
             writer.add_annotation(page, anno)
             baked += 1
+            if hl.get("id"):
+                baked_ids_now.append(str(hl["id"]))
             note = hl.get("note")
             note = note.strip() if isinstance(note, str) else ""
             if note:
@@ -1517,6 +1563,8 @@ def bake_annotations(user_files_dir: str, name: str) -> bool:
                     os.remove(tmp)
                 except OSError:
                     pass
+        if baked_native_out is not None:
+            baked_native_out.extend(baked_ids_now)
         print(
             f"[klausmate] baked {baked} annotation record(s) into "
             f"{base}.pdf ({len(carried)} outside mark(s) carried)"
@@ -1917,24 +1965,38 @@ def _record_signature(rec: dict) -> tuple:
     )
 
 
-def _matches_tombstone(rec: dict, suppressed: list[dict]) -> bool:
-    """True when ``rec`` sits on a tombstone (K-081): same page, same
-    kind, overlapping box — the user deleted this outside mark in Klaus
-    and it must not come back."""
+def _tombstone_hits(s: dict, rec: dict) -> bool:
+    """PRECISE tombstone match (K-084): same page and kind, equal text
+    for text marks, and bounding box within 3pt per coordinate — i.e.
+    the specific deleted mark resurfacing, NOT a new mark the user drew
+    near the same spot (the old 30%-overlap match blocked those:
+    'sometimes my highlight doesn't appear')."""
+    if s.get("page") != rec.get("page"):
+        return False
+    kind = "text" if rec.get("kind") == "text" else "highlight"
+    if ("text" if s.get("kind") == "text" else "highlight") != kind:
+        return False
+    if kind == "text" and (
+        str(s.get("text") or "").strip()
+        != str(rec.get("text") or "").strip()
+    ):
+        return False
     fb = _bbox_of(rec)
     if fb is None:
         return False
-    kind = "text" if rec.get("kind") == "text" else "highlight"
-    for s in suppressed:
-        if (
-            s.get("page") == rec.get("page")
-            and ("text" if s.get("kind") == "text" else "highlight") == kind
-            and isinstance(s.get("rect"), list)
-            and len(s["rect"]) == 4
-            and _overlaps(s["rect"], fb)
-        ):
-            return True
-    return False
+    if isinstance(s.get("rects"), list) and s["rects"]:
+        sb = _bbox_of({"rects": s["rects"]})
+    elif isinstance(s.get("rect"), list) and len(s["rect"]) == 4:
+        sb = [float(v) for v in s["rect"]]  # legacy K-081 entries
+    else:
+        sb = None
+    if sb is None:
+        return False
+    return all(abs(float(a) - float(b)) <= 3.0 for a, b in zip(sb, fb))
+
+
+def _matches_tombstone(rec: dict, suppressed: list[dict]) -> bool:
+    return any(_tombstone_hits(s, rec) for s in suppressed)
 
 
 def _mirror_core(
@@ -2012,7 +2074,8 @@ def _mirror_core(
         matched.add(rec["id"])
         changes += 1
     if remove_missing:
-        marked = marked_ids or set()
+        marked = {str(x) for x in (marked_ids or set())}
+        baked = load_baked_native(user_files_dir, name)
         survivors: list[dict] = []
         for r in records:
             rid = str(r.get("id"))
@@ -2024,8 +2087,43 @@ def _mirror_core(
                 # Its original left the file — deleted outside.
                 changes += 1
                 continue
+            if (
+                r.get("origin") != "external"
+                and marked
+                and rid in baked
+                and rid not in marked
+            ):
+                # This native record WAS a mark in the file at the last
+                # bake and is gone now, while other Klaus marks survived
+                # — the outside save knew our marks, so this one was
+                # deliberately deleted there (K-084). With ZERO Klaus
+                # marks left, the save came from a stale model that
+                # never saw them (Preview opened pre-bake): that is a
+                # clobber, never a mass-deletion — records stand and
+                # the next bake restores the file.
+                changes += 1
+                continue
             survivors.append(r)
         records = survivors
+        if suppressed:
+            # Tombstone expiry (K-084): the stale copy it guards
+            # against is no longer in the file — job done. If it were
+            # still being resurrected by an open stale model, this very
+            # scan would contain it.
+            still = [
+                s
+                for s in suppressed
+                if any(_tombstone_hits(s, f) for f in foreign)
+            ]
+            if len(still) != len(suppressed):
+                try:
+                    _update_doc_keys(
+                        user_files_dir,
+                        name,
+                        {"suppressed_external": still},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[klausmate] tombstone expiry failed: {exc}")
     if changes:
         save_annotations(user_files_dir, name, records)
         print(

@@ -1782,17 +1782,38 @@ class PdfViewer(QWidget):
                 for user_files_dir, name in jobs:
                     try:
                         print(f"[klausmate] bake started: {name}")
+                        baked_ids: list = []
                         ok = pdf_handler.bake_annotations(
-                            user_files_dir, name
+                            user_files_dir,
+                            name,
+                            baked_native_out=baked_ids,
                         )
                         print(
                             f"[klausmate] bake finished: {name} "
                             f"({'ok' if ok else 'FAILED'})"
                         )
                         if ok:
-                            # Our own write must not read as an external
-                            # change on the next watcher tick (K-078).
-                            _run_on_main(lambda n=name: _refresh_stats_for(n))
+                            # Main thread: refresh fingerprints (our own
+                            # write must not read as an external change,
+                            # K-078) and record which native marks the
+                            # file now holds (K-084 delete detection).
+                            def _post(
+                                d=user_files_dir,
+                                n=name,
+                                ids=list(baked_ids),
+                            ) -> None:
+                                _refresh_stats_for(n)
+                                try:
+                                    from . import pdf_handler as _ph
+
+                                    _ph.mark_native_baked(d, n, ids)
+                                except Exception as exc:
+                                    print(
+                                        "[klausmate] baked-ids record "
+                                        f"failed: {exc}"
+                                    )
+
+                            _run_on_main(_post)
                     except Exception as exc:
                         print(
                             f"[klausmate] bake worker error for "
