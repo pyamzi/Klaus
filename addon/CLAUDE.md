@@ -216,7 +216,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     **Local model library (Ollama)** (pull/delete embedding models only —
     `_EMBED_PRESETS`: nomic-embed-text, snowflake-arctic-embed,
     mxbai-embed-large, embeddinggemma), **General** (`image_crop_enabled`,
-    `runtime_auto_setup` toggles — no other UI touches either key).
+    `runtime_auto_setup`, and `pdf_renderer` toggles — no other UI
+    touches these keys; the pdf.js checkbox maps "native"/"pdfjs" and
+    needs a restart).
   - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
     readiness checks, gated on `embeddings.provider_name(cfg)` — a
     Voyage/OpenAI profile never sees Ollama-flavored copy or probes.

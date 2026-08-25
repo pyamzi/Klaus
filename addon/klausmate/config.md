@@ -113,4 +113,5 @@ wouldn't already need.
   `"pdfjs"` switches to the bundled pdf.js webview renderer — smoother,
   flicker-free scrolling, but still reaching feature parity (highlights,
   find, and thumbnails land there incrementally — see the K-095 board
-  umbrella). Requires an Anki restart to take effect.
+  umbrella). Toggle it from **Klausmate Preferences → General → "Use the
+  new pdf.js viewer"**. Requires an Anki restart to take effect.

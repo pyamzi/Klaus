@@ -448,6 +448,16 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(runtime_auto_cb)
 
+    # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
+    # config's pdf_renderer ("native"/"pdfjs") onto one checkbox — the
+    # only UI that touches the key.
+    pdfjs_cb = QCheckBox(
+        "Use the new pdf.js viewer — smoother, flicker-free scrolling "
+        "(beta: highlights and find are still arriving; takes effect "
+        "after restart)"
+    )
+    general_layout.addWidget(pdfjs_cb)
+
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -477,6 +487,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
+    from .pdfjs_viewer import renderer_from_config as _renderer_from_config
+
+    pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
 
     def _refresh_library_label() -> None:
         from . import pdf_handler
@@ -1355,6 +1368,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
+        cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
         _pkg().write_config(cfg)
 
     def change_library_folder() -> None:
