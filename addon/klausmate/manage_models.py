@@ -180,6 +180,18 @@ def manage_models_dialog(setup: bool = False) -> None:
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("Klausmate Preferences")
     dlg.setMinimumWidth(560)
+    # SynapsePro dialog language (theme.dialog_qss): window on bg, group
+    # boxes as white cards, blue-primary buttons (objectName
+    # SecondaryButton/DangerButton opt out per button below).
+    try:
+        from . import theme as _theme
+
+        _night = _theme.night_mode()
+        dlg.setStyleSheet(_theme.dialog_qss(_night))
+        _MUTED = _theme.muted_label_qss(_night, 11)
+    except Exception as _exc:
+        print(f"[klausmate] preferences theme failed: {_exc}")
+        _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
     outer = QVBoxLayout(dlg)
     outer.setSpacing(10)
 
@@ -205,7 +217,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     install_status = QLabel()
     install_status.setWordWrap(True)
-    install_status.setStyleSheet("color: rgba(140,140,140,0.95); font-size: 11px;")
+    install_status.setStyleSheet(_MUTED)
     install_layout.addWidget(install_status)
 
     auto_setup_btn = QPushButton(
@@ -219,6 +231,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     install_layout.addWidget(manual_lbl)
 
     download_btn = QPushButton("Open download page")
+    download_btn.setObjectName("SecondaryButton")
     install_layout.addWidget(download_btn)
 
     install_methods_box = QWidget()
@@ -234,11 +247,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         "3. Click Check connection, then pull a model on the next screen."
     )
     install_steps.setWordWrap(True)
-    install_steps.setStyleSheet("color: rgba(120,120,120,0.95); font-size: 11px;")
+    install_steps.setStyleSheet(_MUTED)
     install_layout.addWidget(install_steps)
 
     install_btn_row = QHBoxLayout()
     check_conn_btn = QPushButton("Check connection")
+    check_conn_btn.setObjectName("SecondaryButton")
     install_btn_row.addWidget(check_conn_btn)
     install_btn_row.addStretch(1)
     install_layout.addLayout(install_btn_row)
@@ -276,9 +290,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         tab_layout.addStretch(1)
         return tab
 
-    _MUTED = "color: rgba(140,140,140,0.95); font-size: 11px;"
-    _BOLD_TITLE = "QGroupBox { font-weight: 600; }"
-
     def _caption(text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(_MUTED)
@@ -286,7 +297,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         return lbl
 
     embed_box = QGroupBox("Semantic search")
-    embed_box.setStyleSheet(_BOLD_TITLE)
     embed_layout = QVBoxLayout(embed_box)
     embed_layout.setSpacing(8)
     embed_layout.addWidget(
@@ -381,7 +391,6 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     # ----- Local model library (inventory only) ----------------------------
     lib_box = QGroupBox("Local model library (Ollama)")
-    lib_box.setStyleSheet(_BOLD_TITLE)
     lib_layout = QVBoxLayout(lib_box)
     lib_layout.setSpacing(6)
 
@@ -411,7 +420,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     _fill_pull_presets()
     pull_btn = QPushButton("Pull")
     delete_btn = QPushButton("Delete")
+    delete_btn.setObjectName("DangerButton")
     refresh_btn = QPushButton("Refresh")
+    refresh_btn.setObjectName("SecondaryButton")
     pull_row.addWidget(pull_input, 1)
     pull_row.addWidget(pull_btn)
     pull_row.addWidget(delete_btn)
@@ -423,7 +434,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     # The two toggles orphaned by settings_ui.py's deletion (A5) — labels,
     # keys and defaults read from that file, which this card does not edit.
     general_box = QGroupBox("General")
-    general_box.setStyleSheet(_BOLD_TITLE)
     general_layout = QVBoxLayout(general_box)
     general_layout.setSpacing(6)
 
@@ -448,6 +458,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     library_path_lbl = QLabel()
     library_path_lbl.setWordWrap(True)
     library_change_btn = QPushButton("Change…")
+    library_change_btn.setObjectName("SecondaryButton")
     library_row.addWidget(library_path_lbl, 1)
     library_row.addWidget(library_change_btn)
     general_layout.addLayout(library_row)
@@ -458,6 +469,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     maintenance_row = QHBoxLayout()
     maintenance_row.setContentsMargins(0, 0, 0, 0)
     test_conn_btn = QPushButton("Test connection")
+    test_conn_btn.setObjectName("SecondaryButton")
     maintenance_row.addWidget(test_conn_btn)
     maintenance_row.addStretch(1)
     general_layout.addLayout(maintenance_row)
@@ -486,16 +498,18 @@ def manage_models_dialog(setup: bool = False) -> None:
     outer.addWidget(progress)
 
     progress_lbl = QLabel("")
-    progress_lbl.setStyleSheet("color: rgba(140,140,140,0.85); font-size: 11px;")
+    progress_lbl.setStyleSheet(_MUTED)
     progress_lbl.setVisible(False)
     outer.addWidget(progress_lbl)
 
     close_row = QHBoxLayout()
     close_row.addStretch(1)
     cancel_btn = QPushButton("Cancel download")
+    cancel_btn.setObjectName("SecondaryButton")
     cancel_btn.setVisible(False)
     close_row.addWidget(cancel_btn)
     close_btn = QPushButton("Close")
+    close_btn.setObjectName("SecondaryButton")
     close_row.addWidget(close_btn)
     outer.addLayout(close_row)
 

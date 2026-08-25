@@ -373,6 +373,20 @@ def _drop_square_html() -> str:
     the edge of the content webview, which is exactly where the separate
     bottom-bar webview begins.
     """
+    # Colours from the shared theme tokens (theme.drop_zone_qss renders
+    # the same values as QSS for the Library's Qt drop zone).
+    try:
+        from . import theme as _theme
+
+        _night = _theme.night_mode()
+        _c = _theme.palette(_night)
+        _armed_border = f"1px solid {_theme.accent_rgba(_night, 0.85)}"
+        _idle_border = f"1px dashed {_c['grey_mid']}"
+        _btn_border = f"1px solid {_c['grey_mid']}"
+    except Exception:
+        _armed_border = "1px solid rgba(58,130,247,0.85)"
+        _idle_border = "1px dashed rgba(128,128,128,0.55)"
+        _btn_border = "1px solid rgba(128,128,128,0.55)"
     if _armed_pdf:
         label = _display_name(_armed_pdf)
         safe_label = (
@@ -385,17 +399,17 @@ def _drop_square_html() -> str:
             "style='flex:0 0 auto;color:inherit;text-decoration:none;'>"
             "&times;</a>"
         )
-        border = "1px solid rgba(58,130,247,0.85)"
+        border = _armed_border
     else:
         body = (
             "<span style='flex:1;text-align:left;'>Drop a PDF to curate</span>"
             f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
             "style='flex:0 0 auto;padding:3px 10px;"
-            "border:1px solid rgba(128,128,128,0.55);border-radius:6px;"
+            f"border:{_btn_border};border-radius:6px;"
             "font-size:12px;color:inherit;text-decoration:none;'>"
             "Browse&hellip;</a>"
         )
-        border = "1px dashed rgba(128,128,128,0.55)"
+        border = _idle_border
     # One flex row, not a stacked block: the label takes the free space and
     # the action (Browse… / ×) sits hard right, matching the Qt surfaces in
     # pdf_drive._LibraryDropZone and __init__._PdfBar. Both states use the

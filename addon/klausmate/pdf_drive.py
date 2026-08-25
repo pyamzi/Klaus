@@ -422,15 +422,10 @@ class _LibraryDropZone(QWidget):
     is only "get the file into the store and show it in the tree").
 
     Style values (idle border/radius, font-size, Browse-button chrome)
-    are copied from deck_curate._drop_square_html() rather than shared,
-    because this card's file scope is pdf_drive.py only and sharing them
-    would mean also editing deck_curate.py. __init__._PdfBar already
-    duplicates the same values for the same reason (see its docstring) —
-    this makes three copies where until now there were two. Owed: pull
-    idle-square border/radius/font-size/Browse-button styling into one
-    module all three can import from. If you change these values here,
-    update deck_curate._drop_square_html and __init__._PdfBar to match,
-    and vice versa.
+    come from theme.drop_zone_qss — the shared drop-square language.
+    deck_curate._drop_square_html renders the same theme tokens as
+    inline HTML for the deck screens, so the surfaces cannot drift.
+    (This discharges the old "three duplicated copies" debt.)
     """
 
     _IDLE_TEXT = "Drop a PDF to add"
@@ -445,16 +440,25 @@ class _LibraryDropZone(QWidget):
         self.setAcceptDrops(True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("klausmateLibraryDropZone")
-        self.setStyleSheet(
-            "#klausmateLibraryDropZone {"
-            " border: 1px dashed rgba(128, 128, 128, 0.55);"
-            " border-radius: 10px;"
-            " background: transparent;"
-            "}"
-            "#klausmateLibraryDropZone[dragOver=\"true\"] {"
-            " border: 1px solid rgba(58, 130, 247, 0.85);"
-            "}"
-        )
+        try:
+            from . import theme as _theme
+
+            self.setStyleSheet(
+                _theme.drop_zone_qss(
+                    _theme.night_mode(), "klausmateLibraryDropZone"
+                )
+            )
+        except Exception:
+            self.setStyleSheet(
+                "#klausmateLibraryDropZone {"
+                " border: 1px dashed rgba(128, 128, 128, 0.55);"
+                " border-radius: 10px;"
+                " background: transparent;"
+                "}"
+                "#klausmateLibraryDropZone[dragOver=\"true\"] {"
+                " border: 1px solid rgba(58, 130, 247, 0.85);"
+                "}"
+            )
         # One row: label takes the free space, Browse… sits hard right —
         # same shape as the deck square's flex row and _PdfBar's QHBoxLayout,
         # so all three drop surfaces read as the same component.
@@ -467,26 +471,21 @@ class _LibraryDropZone(QWidget):
         label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
-        label.setStyleSheet(
-            "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
-        )
+        try:
+            from . import theme as _theme
+
+            label.setStyleSheet(_theme.muted_label_qss(_theme.night_mode(), 13))
+        except Exception:
+            label.setStyleSheet(
+                "font-size: 13px; color: rgba(120, 120, 120, 0.95);"
+            )
         lay.addWidget(label, 1)
 
+        # Chrome comes from the drop-zone QSS on the parent (the shared
+        # drop-square language in theme.drop_zone_qss) — no inline style.
         browse_btn = QPushButton("Browse…", self)
         browse_btn.setFlat(True)
         browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        browse_btn.setStyleSheet(
-            "QPushButton {"
-            " border: 1px solid rgba(128, 128, 128, 0.55);"
-            " border-radius: 6px;"
-            " font-size: 12px;"
-            " padding: 3px 10px;"
-            " background: transparent;"
-            "}"
-            "QPushButton:hover {"
-            " border-color: rgba(58, 130, 247, 0.55);"
-            "}"
-        )
         browse_btn.clicked.connect(self._browse)
         lay.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -543,6 +542,16 @@ class DriveWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Klaus — Library")
         self.setMinimumSize(720, 420)
+        # SynapsePro card-on-canvas language: window on bg, tree as a
+        # white rounded card, quiet grey utility buttons.
+        try:
+            from . import theme as _theme
+
+            self.setObjectName("KlausLibraryWindow")
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setStyleSheet(_theme.library_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] library theme failed: {exc}")
 
         self.busy = False
         self.seq = 0
@@ -591,7 +600,14 @@ class DriveWindow(QWidget):
 
         self.status = QLabel("", left)
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("font-size: 11px; opacity: 0.8;")
+        try:
+            from . import theme as _theme
+
+            self.status.setStyleSheet(
+                _theme.muted_label_qss(_theme.night_mode(), 11)
+            )
+        except Exception:
+            self.status.setStyleSheet("font-size: 11px; opacity: 0.8;")
         lay.addWidget(self.status)
 
         self.cancel_btn = QPushButton("Cancel", left)

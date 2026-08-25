@@ -25,7 +25,9 @@ import time
 import types
 from array import array
 
-ADDON = "/Users/pyamzi/Documents/Github/Addons/klausmate"
+ADDON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+)
 
 # Synthetic package so relative imports inside the modules resolve.
 pkg = types.ModuleType("klausmate")

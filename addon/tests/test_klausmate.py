@@ -14,7 +14,9 @@ import types
 from array import array
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-ADDON = "/Users/pyamzi/Documents/Github/Addons/klausmate"
+ADDON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+)
 APP_PACKAGES = "/Applications/Anki.app/Contents/Resources/app_packages"
 
 # Synthetic package so relative imports inside the modules resolve.

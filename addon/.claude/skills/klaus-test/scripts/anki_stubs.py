@@ -52,10 +52,20 @@ which is exactly the surface klausmate does not own.
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 
-ADDON = "/Users/pyamzi/Documents/Github/Addons/klausmate"
+# Repo root derived from this file's own location (four levels up from
+# .claude/skills/klaus-test/scripts/) so renaming the repo folder can
+# never silently break the harness — a hardcoded path did exactly that
+# when Addons/ became KlausMate-Context/ (2026-08-25).
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    )
+)
+ADDON = os.path.join(_REPO_ROOT, "klausmate")
 
 _PASS = 0
 _FAIL = 0

@@ -766,9 +766,16 @@ class PdfViewer(QWidget):
         # the slide as an image; plain double-click selects a word. See the
         # MouseButtonDblClick handler in eventFilter.)
         self._page_label = QLabel("", self)
-        self._page_label.setStyleSheet(
-            "color: rgba(100,100,100,0.95); font-size: 10px;"
-        )
+        try:
+            from . import theme as _theme
+
+            self._page_label.setStyleSheet(
+                _theme.muted_label_qss(_theme.night_mode(), 10)
+            )
+        except Exception:
+            self._page_label.setStyleSheet(
+                "color: rgba(100,100,100,0.95); font-size: 10px;"
+            )
         self._page_label.setVisible(False)
         # Clicking the page label opens Go to Page (plan A3). The event
         # filter travels with the label when the dock header adopts it;
@@ -3264,6 +3271,17 @@ class PdfViewer(QWidget):
         except Exception:
             pass
         bar = QWidget(self)
+        try:
+            from . import theme as _theme
+
+            _night = _theme.night_mode()
+            bar.setObjectName("KlausFindBar")
+            bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            bar.setStyleSheet(_theme.find_bar_qss(_night))
+        except Exception as exc:
+            _theme = None  # type: ignore[assignment]
+            _night = False
+            print(f"[klausmate] find bar theme failed: {exc}")
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(6, 3, 6, 3)
         lay.setSpacing(4)
@@ -3278,9 +3296,14 @@ class PdfViewer(QWidget):
         self._find_edit.installEventFilter(self)
         lay.addWidget(self._find_edit, 1)
         self._find_count_label = QLabel("", bar)
-        self._find_count_label.setStyleSheet(
-            "color: rgba(100,100,100,0.95); font-size: 10px;"
-        )
+        try:
+            self._find_count_label.setStyleSheet(
+                _theme.muted_label_qss(_night, 10)  # type: ignore[union-attr]
+            )
+        except Exception:
+            self._find_count_label.setStyleSheet(
+                "color: rgba(100,100,100,0.95); font-size: 10px;"
+            )
         lay.addWidget(self._find_count_label)
         self._find_prev_btn = QToolButton(bar)
         self._find_prev_btn.setText("‹")
@@ -3575,6 +3598,13 @@ class PdfViewer(QWidget):
         ):
             raise RuntimeError("thumbnail widgets unavailable")
         lst = QListWidget(self)
+        try:
+            from . import theme as _theme
+
+            lst.setObjectName("KlausThumbStrip")
+            lst.setStyleSheet(_theme.thumb_strip_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] thumb strip theme failed: {exc}")
         try:
             lst.setViewMode(QListView.ViewMode.ListMode)
         except Exception:

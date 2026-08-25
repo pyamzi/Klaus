@@ -9,7 +9,9 @@ import sys
 import tempfile
 import types
 
-ADDON = "/Users/pyamzi/Documents/Github/Addons/klausmate"
+ADDON = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
+)
 
 pkg = types.ModuleType("klausmate")
 pkg.__path__ = [ADDON]

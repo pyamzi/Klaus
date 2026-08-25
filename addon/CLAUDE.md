@@ -92,6 +92,17 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   Manage models…, Test connection).
 - `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
   split out of `__init__.py`.
+- `theme.py` (aqt-free at module top): central design tokens + shared QSS
+  builders, adapted from SynapsePro (`scripts/SynapsePro-main/theme.py`) —
+  the Apple system palette as semantic keys, LIGHT/DARK with identical key
+  sets, `palette(night)`, `night_mode()` (lazy aqt, light fallback), and
+  per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
+  `library_qss`, `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
+  `accent_rgba`). **UI files must not hardcode colours** — import theme and
+  reference tokens; styles are computed at widget creation (a night-mode
+  flip catches up on next open). Dialog buttons are blue-primary by
+  default with `SecondaryButton`/`DangerButton` objectName opt-outs; the
+  Library window inverts (grey default, `PrimaryButton` opt-in).
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
   `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"

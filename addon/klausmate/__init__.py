@@ -874,6 +874,21 @@ class _PdfTabContainer(QWidget):
         self._header = QWidget(self)
         self._header.setFixedHeight(30)
         self._header.setCursor(Qt.CursorShape.OpenHandCursor)
+        # SynapsePro-style chrome: surface bar, hairline bottom border,
+        # pill tabs/buttons (theme.panel_header_qss). WA_StyledBackground
+        # because a plain QWidget won't paint a stylesheet background.
+        try:
+            from . import theme as _theme
+
+            self._header.setObjectName("KlausPanelHeader")
+            self._header.setAttribute(
+                Qt.WidgetAttribute.WA_StyledBackground, True
+            )
+            self._header.setStyleSheet(
+                _theme.panel_header_qss(_theme.night_mode())
+            )
+        except Exception as exc:
+            print(f"[klausmate] panel header theme failed: {exc}")
         header = QHBoxLayout(self._header)
         header.setContentsMargins(6, 2, 6, 0)
         header.setSpacing(4)
@@ -1882,9 +1897,18 @@ class _PdfTabContainer(QWidget):
             ov.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
             lab = QLabel(ov)
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            try:
+                from . import theme as _theme
+
+                _night = _theme.night_mode()
+                _fill = _theme.accent_rgba(_night, 0.30)
+                _edge = _theme.accent_rgba(_night, 0.85)
+            except Exception:
+                _fill = "rgba(58, 130, 247, 0.30)"
+                _edge = "rgba(58, 130, 247, 0.85)"
             lab.setStyleSheet(
-                "background: rgba(58, 130, 247, 0.30);"
-                "border: 2px solid rgba(58, 130, 247, 0.85);"
+                f"background: {_fill};"
+                f"border: 2px solid {_edge};"
                 "border-radius: 10px;"
                 "color: white; font-size: 20px; font-weight: 600;"
             )
