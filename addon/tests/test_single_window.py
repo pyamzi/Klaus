@@ -55,6 +55,7 @@ class _QTimer:
 QtNS = SimpleNamespace(
     ShortcutContext=SimpleNamespace(WidgetWithChildrenShortcut="WWCS"),
     WindowType=SimpleNamespace(Widget="W-FLAG", Window="TOP-FLAG"),
+    WidgetAttribute=SimpleNamespace(WA_NativeWindow="NATIVE"),
 )
 
 _config = {"single_window_mode": True}
@@ -432,17 +433,32 @@ check("splitter rebind preserves slot and sizes",
       and spl.ops == [("insert", 1), ("sizes", (300, 700))],
       repr(spl.ops))
 
-print("== K-093: unconditional embed-time rebind ==")
-lay2 = _RebindLayout()
-parent2 = SimpleNamespace(layout=lambda: lay2)
-v3 = _RebindView(parent2)
-v4 = _RebindView(parent2)
-host = SimpleNamespace(findChildren=lambda cls: [v3, v4])
-sw._rebind_all_webviews(host)
-check("every webview rebound at embed",
-      v3.ops == ["hide", ("parent", None), "show"]
-      and v4.ops == ["hide", ("parent", None), "show"],
-      repr((v3.ops, v4.ops)))
+print("== K-094: embedded webviews get native windows ==")
+
+
+class _NativeView:
+    def __init__(self, fail=False):
+        self.attrs = []
+        self._fail = fail
+        self.wid_called = 0
+    def setAttribute(self, a, v):
+        if self._fail:
+            raise RuntimeError("boom")
+        self.attrs.append((a, v))
+    def winId(self):
+        self.wid_called += 1
+        return 0xBEEF
+
+
+v3 = _NativeView()
+v_bad = _NativeView(fail=True)
+v4 = _NativeView()
+host = SimpleNamespace(findChildren=lambda cls: [v3, v_bad, v4])
+sw._nativeize_webviews(host)
+check("every webview nativeized, failures isolated",
+      v3.attrs == [("NATIVE", True)] and v3.wid_called == 1
+      and v4.attrs == [("NATIVE", True)] and v4.wid_called == 1,
+      repr((v3.attrs, v4.attrs)))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

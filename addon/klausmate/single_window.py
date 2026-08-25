@@ -290,32 +290,32 @@ def _rebind_webview(wv: Any) -> bool:
         return False
 
 
-def _rebind_all_webviews(win: Any) -> None:
-    """Unconditional embed-time rebind (K-093). grab() proved Chromium
-    renders the page perfectly OFFSCREEN while the screen stays black:
-    the delegate still presents into the backing store of the hidden
-    window the pane was born in, and no pixel test can see that (the
-    grab lies about the screen). Every webview is therefore rebound
-    once, right after the pane lands in the stack — its top-level is
-    already mw and first paint has not happened, so there is nothing
-    to flicker."""
+def _nativeize_webviews(win: Any) -> None:
+    """Round 5 (K-094): rebinding proved insufficient — the delegate
+    kept presenting through the top-level backing-store route that
+    never worked for these panes (offscreen frames perfect, screen
+    black, rebind -> True). WA_NativeWindow gives each embedded webview
+    its OWN native window and backing store, so it presents directly
+    and the broken route stops mattering. winId() forces the native
+    handle into existence before first paint."""
     try:
         from aqt.webview import AnkiWebView
 
         for wv in win.findChildren(AnkiWebView):
             try:
-                ok = _rebind_webview(wv)
-                try:
-                    dims = f"{wv.width()}x{wv.height()}"
-                except Exception:
-                    dims = "?"
-                _swdbg(
-                    f"  embed-rebind {type(win).__name__} {dims} -> {ok}"
+                wv.setAttribute(
+                    Qt.WidgetAttribute.WA_NativeWindow, True
                 )
-            except Exception:
+                wid = wv.winId()
+                _swdbg(
+                    f"  nativeized {type(win).__name__} view "
+                    f"winId={int(wid) if wid else 0:#x}"
+                )
+            except Exception as e:  # noqa: BLE001
+                _swdbg(f"  nativeize failed: {e}")
                 continue
     except Exception as e:  # noqa: BLE001
-        print(f"[klausmate] single-window embed rebind failed: {e}")
+        print(f"[klausmate] single-window nativeize failed: {e}")
 
 
 def _heal_black_panes(win: Any, attempt: int = 0) -> None:
@@ -609,11 +609,11 @@ def _embed(name: str, win: QWidget) -> None:
         pass
     stack.addWidget(win)
     _state["panes"][name] = win
-    # K-093: rebind the render delegates now that the pane's top-level
-    # is the main window — deferred one tick so the reparent has fully
-    # settled, still ahead of first paint.
+    # K-094: give the render delegates their own native windows now
+    # that the pane's top-level is the main window — deferred one tick
+    # so the reparent has fully settled, still ahead of first paint.
     try:
-        QTimer.singleShot(0, lambda w=win: _rebind_all_webviews(w))
+        QTimer.singleShot(0, lambda w=win: _nativeize_webviews(w))
     except Exception:
         pass
     watcher = _CloseWatcher(name)
