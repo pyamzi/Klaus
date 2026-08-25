@@ -1304,5 +1304,94 @@ except Exception as e:
 finally:
     shutil.rmtree(ap_uf, ignore_errors=True)
 
+print("== K-081: adoption audit (drift updates, self-heal, tombstones) ==")
+au_uf = tempfile.mkdtemp(prefix="klaus_audit_uf_")
+try:
+    AU = "K81_Audit"
+    os.makedirs(os.path.join(au_uf, "pdfs"))
+    os.makedirs(os.path.join(au_uf, "pdf_originals"))
+    # A pristine placeholder so adopt's capture path is satisfied without
+    # a real working PDF — these tests drive adopt via `scanned` only.
+    au_working = os.path.join(au_uf, "pdfs", AU + ".pdf")
+    au_pristine = os.path.join(au_uf, "pdf_originals", AU + ".pdf")
+    for p in (au_working, au_pristine):
+        with open(p, "wb") as f:
+            f.write(b"%PDF-1.4 audit")
+
+    # 1. THE live doubling (Preview autosaves while typing): the same
+    # text box scanned twice with grown text + drifted rect must UPDATE
+    # the record, not append a second one.
+    gen1 = [{"kind": "text", "page": 0, "rects": [[42.5, 211.6, 87.6, 17.9]],
+             "text": "This is more text", "note": "", "color": "#000000"}]
+    gen2 = [{"kind": "text", "page": 0, "rects": [[45.8, 215.6, 80.9, 9.9]],
+             "text": "This is more text for the output", "note": "",
+             "color": "#000000"}]
+    check("first adopt imports one",
+          pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen1) == 1)
+    n2 = pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen2)
+    au_recs = pdf_handler.load_annotations(au_uf, AU)
+    check("drifted rescan is ONE change, not a new record",
+          n2 == 1 and len(au_recs) == 1, f"changes={n2} records={len(au_recs)}")
+    check("record carries the newest text",
+          au_recs and au_recs[0].get("text") == "This is more text for the output",
+          repr([r.get("text") for r in au_recs]))
+
+    # 2. Self-heal: pre-seeded overlapping external duplicates (what
+    # Pouya's live json has NOW) collapse on the next adopt pass — even
+    # an empty-scan one — keeping the newest.
+    dupes = [
+        {"id": "a" * 32, "page": 0, "rects": [[42.5, 211.6, 87.6, 17.9]],
+         "color": "#000000", "note": "", "kind": "text",
+         "text": "This is more text", "origin": "external"},
+        {"id": "b" * 32, "page": 0, "rects": [[45.8, 215.6, 80.9, 9.9]],
+         "color": "#000000", "note": "", "kind": "text",
+         "text": "This is more text for the output", "origin": "external"},
+    ]
+    pdf_handler.save_annotations(au_uf, AU, dupes)
+    healed = pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=[])
+    au_recs = pdf_handler.load_annotations(au_uf, AU)
+    check("empty-scan adopt collapses existing dupes",
+          healed >= 1 and len(au_recs) == 1,
+          f"changes={healed} records={len(au_recs)}")
+    check("collapse keeps the newest generation",
+          au_recs and au_recs[0].get("text") == "This is more text for the output")
+
+    # Native records must never collapse, even overlapping.
+    natives = [
+        {"id": "c" * 32, "page": 3, "rects": [[10, 10, 50, 12]],
+         "color": "#fadc50", "note": ""},
+        {"id": "d" * 32, "page": 3, "rects": [[12, 12, 50, 12]],
+         "color": "#fadc50", "note": ""},
+    ]
+    pdf_handler.save_annotations(au_uf, AU, natives)
+    pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=[])
+    check("overlapping NATIVE highlights are never collapsed",
+          len(pdf_handler.load_annotations(au_uf, AU)) == 2)
+
+    # 3. Tombstones: a deleted external record must STAY deleted when the
+    # unmarked original shows up in a later scan.
+    pdf_handler.save_annotations(au_uf, AU, [])
+    check("re-adopt after wipe", pdf_handler.adopt_foreign_annotations(
+        au_uf, AU, scanned=gen2) == 1)
+    au_rec = pdf_handler.load_annotations(au_uf, AU)[0]
+    pdf_handler.add_suppressed(au_uf, AU, au_rec)
+    pdf_handler.save_annotations(au_uf, AU, [])
+    check("tombstoned original is not re-adopted",
+          pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen2) == 0
+          and pdf_handler.load_annotations(au_uf, AU) == [])
+    # 4. save_annotations must preserve the tombstones (today it drops
+    # every top-level key it doesn't know).
+    pdf_handler.save_annotations(au_uf, AU, [])
+    with open(os.path.join(au_uf, "annotations", AU + ".json")) as f:
+        au_doc = json.load(f)
+    check("save_annotations preserves suppressed_external",
+          bool(au_doc.get("suppressed_external")), repr(sorted(au_doc)))
+except Exception as e:
+    import traceback
+    check("K-081 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(au_uf, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

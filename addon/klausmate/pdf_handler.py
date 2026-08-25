@@ -1159,6 +1159,20 @@ def load_annotations(user_files_dir: str, name: str) -> list[dict]:
     return out
 
 
+def _load_annotation_doc(user_files_dir: str, name: str) -> dict:
+    """The whole annotations json as a dict (K-081) — highlights plus
+    any other top-level keys (suppressed_external tombstones)."""
+    path = annotations_path_for(user_files_dir, name)
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+        if isinstance(doc, dict):
+            return doc
+    except (OSError, ValueError):
+        pass
+    return {"version": 1, "highlights": []}
+
+
 def save_annotations(
     user_files_dir: str, name: str, highlights: list[dict]
 ) -> None:
@@ -1166,16 +1180,55 @@ def save_annotations(
 
     Saves are rare and tiny; a debounce would risk cross-tab loss when
     ``load_pdf`` swaps the shared QPdfDocument before the flush fires.
+    Top-level keys other than ``highlights`` are preserved (K-081: the
+    suppressed_external tombstones used to be dropped on every save).
     """
     path = annotations_path_for(user_files_dir, name)
     try:
+        doc = _load_annotation_doc(user_files_dir, name)
+        doc["version"] = 1
+        doc["highlights"] = list(highlights or [])
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(
-                {"version": 1, "highlights": list(highlights or [])}, f
-            )
+            json.dump(doc, f)
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klausmate] failed to save annotations {path}: {exc}")
+
+
+def load_suppressed(user_files_dir: str, name: str) -> list[dict]:
+    """Tombstones of deleted external records (K-081): a Remove on an
+    adopted mark must survive the unmarked original reappearing (bake
+    still pending, or Preview re-saving its stale model)."""
+    doc = _load_annotation_doc(user_files_dir, name)
+    raw = doc.get("suppressed_external")
+    if not isinstance(raw, list):
+        return []
+    return [s for s in raw if isinstance(s, dict)]
+
+
+def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
+    """Tombstone one external record (called on delete, K-081)."""
+    try:
+        entry = {
+            "page": record.get("page"),
+            "kind": "text" if record.get("kind") == "text" else "highlight",
+            "rect": _bbox_of(record),
+            "text": str(record.get("text") or ""),
+        }
+        if entry["rect"] is None:
+            return
+        doc = _load_annotation_doc(user_files_dir, name)
+        sup = doc.get("suppressed_external")
+        if not isinstance(sup, list):
+            sup = []
+        sup.append(entry)
+        doc["suppressed_external"] = sup
+        path = annotations_path_for(user_files_dir, name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] tombstone write failed for {name}: {exc}")
 
 
 def _originals_dir(user_files_dir: str) -> str:
@@ -1687,6 +1740,60 @@ def _capture_pristine_stripped(
         return False
 
 
+def _bbox_of(rec: dict) -> list[float] | None:
+    """Union bounding box of a record's rects in page points."""
+    xs0: list[float] = []
+    ys0: list[float] = []
+    xs1: list[float] = []
+    ys1: list[float] = []
+    for r in rec.get("rects") or []:
+        try:
+            x, y, w, h = (float(v) for v in r)
+        except Exception:
+            continue
+        xs0.append(x)
+        ys0.append(y)
+        xs1.append(x + w)
+        ys1.append(y + h)
+    if not xs0:
+        return None
+    return [min(xs0), min(ys0), max(xs1) - min(xs0), max(ys1) - min(ys0)]
+
+
+def _overlaps(a: list[float], b: list[float]) -> bool:
+    """True when boxes overlap meaningfully (intersection >= 30% of the
+    smaller area). Tolerant enough to recognize an outside annotation
+    whose box drifted between Preview autosaves (K-081), strict enough
+    to keep genuinely separate side-by-side notes apart."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    if inter <= 0.0:
+        return False
+    smaller = min(max(aw, 0.0) * max(ah, 0.0), max(bw, 0.0) * max(bh, 0.0))
+    if smaller <= 0.0:
+        return True
+    return inter >= 0.3 * smaller
+
+
+def _same_annotation(a: dict, b: dict) -> bool:
+    """Same page, same kind, overlapping boxes — two sightings of ONE
+    outside annotation (possibly edited in between)."""
+    if a.get("page") != b.get("page"):
+        return False
+    ka = "text" if a.get("kind") == "text" else "highlight"
+    kb = "text" if b.get("kind") == "text" else "highlight"
+    if ka != kb:
+        return False
+    ba = _bbox_of(a)
+    bb = _bbox_of(b)
+    if ba is None or bb is None:
+        return False
+    return _overlaps(ba, bb)
+
+
 def _record_signature(rec: dict) -> tuple:
     return (
         rec.get("page"),
@@ -1718,30 +1825,88 @@ def adopt_foreign_annotations(
             if scanned is not None
             else scan_foreign_annotations(user_files_dir, name)
         )
-        if not foreign:
-            return 0
-        working = _working_pdf_path(user_files_dir, name)
-        if not _capture_pristine_stripped(user_files_dir, name, working):
-            return 0
         records = load_annotations(user_files_dir, name)
+        changes = 0
+        # Self-heal (K-081): overlapping EXTERNAL records of the same
+        # kind on the same page are generations of one outside
+        # annotation adopted more than once — keep the newest (later in
+        # the list). Native Klaus records are never touched.
+        kept: list[dict] = []
+        for rec in records:
+            if rec.get("origin") == "external":
+                for i, prev in enumerate(kept):
+                    if (
+                        prev.get("origin") == "external"
+                        and _same_annotation(prev, rec)
+                    ):
+                        kept[i] = rec
+                        changes += 1
+                        break
+                else:
+                    kept.append(rec)
+            else:
+                kept.append(rec)
+        records = kept
+        if foreign:
+            working = _working_pdf_path(user_files_dir, name)
+            if not _capture_pristine_stripped(user_files_dir, name, working):
+                foreign = []
+        suppressed = load_suppressed(user_files_dir, name)
         seen = {_record_signature(r) for r in records}
-        added = 0
         for f in foreign:
             if _record_signature(f) in seen:
+                continue
+            fb = _bbox_of(f)
+            fkind = "text" if f.get("kind") == "text" else "highlight"
+            if fb is not None and any(
+                s.get("page") == f.get("page")
+                and ("text" if s.get("kind") == "text" else "highlight")
+                == fkind
+                and isinstance(s.get("rect"), list)
+                and len(s["rect"]) == 4
+                and _overlaps(s["rect"], fb)
+                for s in suppressed
+            ):
+                # Tombstoned: the user deleted this adopted mark in
+                # Klaus; the unmarked original resurfacing (bake still
+                # pending, Preview re-save) must not resurrect it.
+                continue
+            target = next(
+                (
+                    r
+                    for r in records
+                    if r.get("origin") == "external"
+                    and _same_annotation(r, f)
+                ),
+                None,
+            )
+            if target is not None:
+                # Same spot -> the outside annotation was EDITED
+                # (Preview autosaves mid-typing): update in place. This
+                # WAS the K-081 doubling — every autosave became a new
+                # record.
+                updated = False
+                for key in ("rects", "text", "color", "size", "note"):
+                    if key in f and f.get(key) != target.get(key):
+                        target[key] = f[key]
+                        updated = True
+                if updated:
+                    changes += 1
+                seen.add(_record_signature(target))
                 continue
             rec = dict(f)
             rec["id"] = uuid.uuid4().hex
             rec["origin"] = "external"
             records.append(rec)
             seen.add(_record_signature(rec))
-            added += 1
-        if added:
+            changes += 1
+        if changes:
             save_annotations(user_files_dir, name, records)
             print(
-                f"[klausmate] adopted {added} outside annotation(s) "
-                f"for {name}"
+                f"[klausmate] synced {changes} outside annotation "
+                f"change(s) for {name}"
             )
-        return added
+        return changes
     except Exception as exc:
         print(f"[klausmate] foreign annotation adopt failed for {name}: {exc}")
         return 0

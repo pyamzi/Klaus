@@ -1666,7 +1666,7 @@ class PdfViewer(QWidget):
                     )
                     self._refresh_highlight_overlay()
                     tooltip(
-                        f"Klaus: imported {added} outside annotation(s)"
+                        f"Klaus: synced {added} outside annotation(s)"
                     )
             except Exception as exc:
                 print(f"[klausmate] adoption apply failed: {exc}")
@@ -1676,13 +1676,16 @@ class PdfViewer(QWidget):
                 foreign = pdf_handler.scan_foreign_annotations(
                     USER_FILES, name
                 )
-                if not foreign:
-                    return
-                working = pdf_handler._working_pdf_path(USER_FILES, name)
-                if not pdf_handler._capture_pristine_stripped(
-                    USER_FILES, name, working
-                ):
-                    return
+                if foreign:
+                    working = pdf_handler._working_pdf_path(
+                        USER_FILES, name
+                    )
+                    if not pdf_handler._capture_pristine_stripped(
+                        USER_FILES, name, working
+                    ):
+                        foreign = []
+                # Apply even with an empty scan (K-081): the adopt pass
+                # also collapses previously-duplicated external records.
                 _run_on_main(lambda: _apply(foreign))
             except Exception as exc:
                 print(f"[klausmate] foreign scan failed: {exc}")
@@ -1914,11 +1917,29 @@ class PdfViewer(QWidget):
         return None
 
     def _remove_highlight(self, hl_id: str) -> None:
-        before = len(self._highlights)
+        removed = [h for h in self._highlights if h.get("id") == hl_id]
         self._highlights = [
             h for h in self._highlights if h.get("id") != hl_id
         ]
-        if len(self._highlights) != before:
+        if removed:
+            # A deleted ADOPTED mark must stay deleted (K-081): the
+            # unmarked original can still be in the file (bake pending,
+            # or Preview re-saving its stale model) — tombstone it so
+            # the next scan doesn't resurrect it.
+            try:
+                rec = removed[0]
+                if (
+                    rec.get("origin") == "external"
+                    and self._annotations_name
+                ):
+                    from . import pdf_handler
+                    from . import USER_FILES  # type: ignore
+
+                    pdf_handler.add_suppressed(
+                        USER_FILES, self._annotations_name, rec
+                    )
+            except Exception as exc:
+                print(f"[klausmate] tombstone failed: {exc}")
             self._save_annotations()
             self._refresh_highlight_overlay()
 
