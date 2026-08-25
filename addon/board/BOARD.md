@@ -498,3 +498,38 @@ every-call semantics with page/size-capable stubs).
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Page-level visibility forcing + lifecycle thaw + size wiggle, every-switch + 400ms second pass, rich per-view breadcrumbs (lifecycle state, sizes, url, pane size). 253+85+21 green, AST clean. LIVE: restart, open Add; if still dark, /tmp/klausmate-debug.txt now tells us whether the page is Frozen/Discarded, the view is 0-sized, or the PANE itself is 0x0 — three different round-3 pivots.
+
+### K-092: Dark panes round 3: rebind webview delegates, pixel-evidence driven
+owner: -
+priority: P1
+tags: bug,single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: python3 tests/test_single_window.py
+created: 2026-08-24
+
+Round 3 of the dark panes. Live evidence: BOTH Add and Browse render
+all native widgets; ONLY the webviews are black, correctly laid out.
+K-091 breadcrumbs show LifecycleState.Active, vis=True, correct sizes,
+url loaded — Chromium believes the page is fine while painting
+nothing. That is the render-delegate-bound-to-dead-window class: the
+pane was born as a hidden top-level, the webview delegate bound to
+that never-realized QWindow, and reparenting the PANE did not rebind
+the delegate. Page-level pokes (K-091) cannot fix a delegate binding.
+
+Fix: rebind by reparenting the VIEW itself once — hide, detach to
+None, reinsert at the same slot (layout path preserves index+stretch;
+QSplitter path preserves index+sizes), show. Driven by evidence:
+_looks_black samples 9 pixels of wv.grab() (pure-black surface vs
+night-mode grays are ~40x apart); heal runs 300ms after a pane becomes
+current, retries up to 3x at 700ms, adds a 1px mw resize wiggle from
+attempt 1, refocuses after rebinds, and breadcrumbs every verdict with
+the sampled color — if grab() lies (renders content offscreen while
+the screen stays black), the log will show 0/1 black and round 4 makes
+the rebind unconditional instead.
+
+Verify: python3 tests/test_single_window.py (black detection both
+ways, layout rebind preserving index+stretch, splitter fallback
+preserving sizes, heal dispatch on black-only).
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Pixel-evidence heal loop: grab-sample -> rebind only actually-black views (layout slot+stretch preserved, splitter slot+sizes preserved) -> retry x3 with mw wiggle -> refocus; every verdict breadcrumbed with sampled colors so a grab() false-negative is visible. 253+85+25 green, AST clean. LIVE: restart, open Add and Browse — webviews should self-heal within ~1s of first switch; if still black, the debug file now proves whether grab lied (0-black verdicts) and round 4 goes unconditional-rebind.
