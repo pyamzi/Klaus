@@ -1415,18 +1415,31 @@ def _close_drive() -> None:
 
 
 def _on_toolbar_links(links: list, toolbar: Any) -> None:
-    """Prepend the drive link so it sits left of Decks…Sync."""
+    """Insert the Library link so the bar reads
+    Decks · Add · Library · Browse · Stats · Sync (K-088).
+
+    Anki builds the list and other addons may add to it, so the slot is
+    found by locating Browse rather than trusting a fixed index; with no
+    Browse link (a future rename) it falls back to third place, which is
+    that same slot in the stock layout.
+    """
     try:
-        links.insert(
-            0,
-            toolbar.create_link(
-                "klausDriveOpen",
-                "Library",
-                open_drive,
-                tip="Klaus PDF library",
-                id="klaus-drive",
-            ),
+        link = toolbar.create_link(
+            "klausDriveOpen",
+            "Library",
+            open_drive,
+            tip="Klaus PDF library",
+            id="klaus-drive",
         )
+        idx = next(
+            (
+                i
+                for i, item in enumerate(links)
+                if "browse" in str(item).lower()
+            ),
+            min(2, len(links)),
+        )
+        links.insert(idx, link)
     except Exception as e:
         print(f"[klausmate] drive toolbar link failed: {e}")
 

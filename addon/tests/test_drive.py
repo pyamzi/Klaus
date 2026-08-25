@@ -503,5 +503,46 @@ finally:
     shutil.rmtree(_k_uf, ignore_errors=True)
     shutil.rmtree(_k_root, ignore_errors=True)
 
+print("== K-088: toolbar order (Decks Add Library Browse Stats Sync) ==")
+try:
+    class _FakeToolbar:
+        def create_link(self, cmd, label, func, tip=None, id=None):
+            return f"<a id={id!r} cmd={cmd!r}>{label}</a>"
+
+    # Stock 26.8.1 shape: each link is an HTML string carrying its name.
+    stock = [
+        "<a id='decks' cmd='decks'>Decks</a>",
+        "<a id='add' cmd='add'>Add</a>",
+        "<a id='browse' cmd='browse'>Browse</a>",
+        "<a id='stats' cmd='stats'>Stats</a>",
+        "<a id='sync' cmd='sync'>Sync</a>",
+    ]
+    links = list(stock)
+    pdf_drive._on_toolbar_links(links, _FakeToolbar())
+    labels = [l.split(">")[1].split("<")[0] for l in links]
+    check("Library sits between Add and Browse",
+          labels == ["Decks", "Add", "Library", "Browse", "Stats", "Sync"],
+          repr(labels))
+
+    # Another addon added its own link first: position still resolves
+    # off Browse, not off a fixed index.
+    links = ["<a id='other' cmd='other'>Other</a>"] + list(stock)
+    pdf_drive._on_toolbar_links(links, _FakeToolbar())
+    labels = [l.split(">")[1].split("<")[0] for l in links]
+    check("still lands directly before Browse when the list shifts",
+          labels.index("Library") == labels.index("Browse") - 1,
+          repr(labels))
+
+    # No Browse link at all (future rename): must not raise, must still
+    # land in a sane spot.
+    links = ["<a id='decks' cmd='decks'>Decks</a>",
+             "<a id='add' cmd='add'>Add</a>"]
+    pdf_drive._on_toolbar_links(links, _FakeToolbar())
+    labels = [l.split(">")[1].split("<")[0] for l in links]
+    check("degrades to third place with no Browse link",
+          labels == ["Decks", "Add", "Library"], repr(labels))
+except Exception as e:
+    check("K-088 section", False, f"{type(e).__name__}: {e}")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
