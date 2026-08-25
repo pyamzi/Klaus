@@ -169,23 +169,55 @@ def _show_decks() -> None:
 
 
 def _nudge_webviews(win: Any) -> None:
-    """QtWebEngine composites out-of-process; a view reparented before
-    its first show can miss the visibility transition and come up as a
-    BLACK surface (K-090: the dark Add pane). One hide/show cycle after
-    the pane is first current re-attaches the delegate. Once per pane."""
+    """QtWebEngine composites out-of-process, and Chromium tracks PAGE
+    visibility separately from the Qt widget: a view whose window was
+    never shown can stay render-suspended (occluded) after the widget
+    appears — the dark Add pane. Round 2 (K-091: widget hide/show alone
+    proved insufficient live): force the page itself visible, thaw its
+    lifecycle, and wiggle the size so the compositor must produce a
+    frame. Runs on every switch — cheap and idempotent."""
     try:
-        if getattr(win, "_klaus_nudged", False):
-            return
-        win._klaus_nudged = True
         from aqt.webview import AnkiWebView
 
-        for wv in win.findChildren(AnkiWebView):
+        views = win.findChildren(AnkiWebView)
+        for wv in views:
             try:
+                page = wv.page()
+                try:
+                    page.setVisible(True)
+                except Exception:
+                    pass
+                try:
+                    page.setLifecycleState(page.LifecycleState.Active)
+                except Exception:
+                    pass
+                try:
+                    _swdbg(
+                        f"  view state={page.lifecycleState()} "
+                        f"vis={wv.isVisible()} "
+                        f"size={wv.width()}x{wv.height()} "
+                        f"url={page.url().toString()[:60]}"
+                    )
+                except Exception:
+                    pass
                 wv.hide()
                 wv.show()
+                try:
+                    sz = wv.size()
+                    if sz.height() > 2:
+                        wv.resize(sz.width(), sz.height() - 1)
+                        wv.resize(sz)
+                except Exception:
+                    pass
             except Exception:
                 continue
-        _swdbg(f"nudged webviews of {type(win).__name__}")
+        try:
+            _swdbg(
+                f"nudged {len(views)} webview(s) of {type(win).__name__} "
+                f"pane={win.width()}x{win.height()}"
+            )
+        except Exception:
+            _swdbg(f"nudged webviews of {type(win).__name__}")
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] single-window webview nudge failed: {e}")
 
@@ -243,6 +275,9 @@ def _on_stack_changed(index: int) -> None:
         pane = stack.currentWidget() if stack is not None else None
         if pane is not None:
             QTimer.singleShot(0, lambda w=pane: (_nudge_webviews(w), _focus_pane(w)))
+            # The 0ms pass can predate the render surface — second pass
+            # once Chromium has had a beat (K-091).
+            QTimer.singleShot(400, lambda w=pane: _nudge_webviews(w))
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] single-window stack-change failed: {e}")
 

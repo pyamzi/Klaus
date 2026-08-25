@@ -297,13 +297,28 @@ sw._focus_pane(plain)
 check("plain pane takes focus itself", plain.self_focused == 1)
 
 
+class _FakePage:
+    def __init__(self, log):
+        self._log = log
+    def setVisible(self, v):
+        self._log.append(("page-visible", v))
+
+
 class _NudgePane:
     def __init__(self):
         self.cycles = []
+        self._page = _FakePage(self.cycles)
     def findChildren(self, cls):
-        wv = SimpleNamespace(hide=lambda: self.cycles.append("hide"),
-                             show=lambda: self.cycles.append("show"))
+        wv = SimpleNamespace(
+            hide=lambda: self.cycles.append("hide"),
+            show=lambda: self.cycles.append("show"),
+            page=lambda: self._page,
+        )
         return [wv]
+    def width(self):
+        return 800
+    def height(self):
+        return 600
 
 
 webview_mod = types.ModuleType("aqt.webview")
@@ -311,9 +326,12 @@ webview_mod.AnkiWebView = object
 sys.modules["aqt.webview"] = webview_mod
 np = _NudgePane()
 sw._nudge_webviews(np)
+check("nudge forces PAGE visibility before the widget cycle (K-091)",
+      np.cycles[:1] == [("page-visible", True)]
+      and np.cycles[1:3] == ["hide", "show"], repr(np.cycles))
 sw._nudge_webviews(np)
-check("webview nudge runs hide/show exactly once per pane",
-      np.cycles == ["hide", "show"], repr(np.cycles))
+check("nudge is repeatable on every switch (once-flag dropped)",
+      np.cycles.count("show") == 2, repr(np.cycles))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
