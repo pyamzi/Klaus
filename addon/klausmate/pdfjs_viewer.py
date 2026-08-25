@@ -477,6 +477,13 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             + ");"
         )
 
+    def _refresh_highlight_overlay(self) -> None:
+        """Duck-typed by shared sidebar code (_reload_records_for's
+        post-bake refresh sets ``v._highlights`` then calls this) — for
+        this renderer, refreshing the overlay means pushing the records
+        to the page."""
+        self._push_annotations()
+
     def _save_annotations(self) -> None:
         """Synchronous write-through + debounced bake (native parity)."""
         if self._annotations_name is None:
@@ -624,6 +631,74 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             print(f"[klausmate] pdfjs annotations load failed: {exc}")
             self._highlights = []
         self._push_annotations()
+        self._start_foreign_mirror(name)
+
+    # ---- outside-annotation mirror (K-082) -------------------------------
+    # PdfSidebar's external-change poller duck-types the viewer: it calls
+    # v._apply_mirror(name, res) on whichever renderer is active (this
+    # crashed live as AttributeError until PdfJsViewer grew the method).
+    # The scan/merge machinery is pdf_handler's and fully shared; only
+    # the last hop — putting refreshed records on screen — differs, and
+    # here that is a push through klausSetAnnotations.
+
+    def _apply_mirror(self, name: str, res: dict) -> None:
+        """Main-thread half of the mirror: records follow the file for
+        outside marks. Schedules NO bake — the file already holds those
+        marks, and baking here would re-feed the watcher loop."""
+        try:
+            from . import USER_FILES  # type: ignore
+            from . import pdf_handler
+
+            changed = pdf_handler.mirror_foreign_annotations(
+                USER_FILES, name, res
+            )
+            if not changed:
+                return
+            if self._annotations_name == name:
+                self._highlights = pdf_handler.load_annotations(
+                    USER_FILES, name
+                )
+                self._push_annotations()
+                if tooltip is not None:
+                    tooltip(f"Klaus: synced {changed} outside change(s)")
+        except Exception as exc:
+            print(f"[klausmate] pdfjs mirror apply failed: {exc}")
+
+    def _start_foreign_mirror(self, name: str) -> None:
+        """Scan the working PDF for outside text/highlights on a daemon
+        thread (multi-MB pypdf parse must never block the UI); the
+        merge/save hops back to the main thread so it cannot race the
+        synchronous _save_annotations writes. Same shape as the native
+        viewer's method."""
+        try:
+            from . import USER_FILES  # type: ignore
+            from . import pdf_handler
+        except Exception:
+            return
+        if not getattr(pdf_handler, "BAKE_AVAILABLE", False):
+            return
+
+        def _worker() -> None:
+            try:
+                res = pdf_handler.scan_working_annotations(USER_FILES, name)
+                if res is None:
+                    return
+                if res.get("foreign"):
+                    working = pdf_handler._working_pdf_path(USER_FILES, name)
+                    if not pdf_handler._capture_pristine_stripped(
+                        USER_FILES, name, working
+                    ):
+                        return
+                if mw is not None:
+                    mw.taskman.run_on_main(
+                        lambda: self._apply_mirror(name, res)
+                    )
+            except Exception as exc:
+                print(f"[klausmate] pdfjs mirror scan failed: {exc}")
+
+        threading.Thread(
+            target=_worker, name="klausmate-pdfjs-extmirror", daemon=True
+        ).start()
 
     def set_document(self, *_a: Any) -> None:
         pass  # native-renderer concept; load_path is the pdfjs entry
