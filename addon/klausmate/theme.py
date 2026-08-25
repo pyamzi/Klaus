@@ -434,19 +434,45 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
-def toolbar_css(night: bool) -> str:
+def _toolbar_vars(c: dict) -> str:
+    """One palette as Klaus custom properties for the toolbar."""
+    return (
+        f"--klaus-surface: {c['surface']};"
+        f" --klaus-border: {c['grey_light']};"
+        f" --klaus-text: {c['text']};"
+        f" --klaus-text-muted: {c['text_muted']};"
+        f" --klaus-hover: {c['hover_subtle']};"
+        f" --klaus-accent: {c['blue_bright']};"
+    )
+
+
+def toolbar_css() -> str:
     """Web CSS for Anki's top-toolbar webview (top_bar.py injects it via
     webview_will_set_content). RESTYLE ONLY — nothing is hidden or
     removed, so Anki's links, Klaus's Library link, and other addons'
     toolbar items (AnkiHub) keep working and inherit the look through
     the shared ``.hitem`` class. The bar reads as SynapsePro's nav rail
     turned horizontal: surface strip edge to edge, hairline bottom
-    border, pill links, the star logo at the far left."""
-    c = palette(night)
+    border, pill links, the star logo at the far left.
+
+    THEME-REACTIVE BY CONSTRUCTION — takes no ``night`` argument on
+    purpose. Anki's theme switch does NOT re-run
+    ``webview_will_set_content``; it only runs JS on the live document
+    (``documentElement.classList.add("night-mode")`` plus
+    ``body.night_mode``/``nightMode``). A stylesheet baked from a
+    ``night_mode()`` snapshot therefore goes stale the first time the
+    user toggles the theme. So both palettes ship in one sheet, keyed
+    on those classes — the same pattern Anki's own toolbar.css uses —
+    and the bar (logo included, it strokes ``var(--klaus-accent)``)
+    follows the theme instantly with no re-injection.
+    """
     return f"""
-    :root {{ --klaus-accent: {c['blue_bright']}; }}
+    :root {{ {_toolbar_vars(palette(False))} }}
+    :root.night-mode, body.night_mode, body.nightMode {{
+        {_toolbar_vars(palette(True))}
+    }}
     html, body {{
-        background: {c['surface']} !important;
+        background: var(--klaus-surface) !important;
         margin: 0 !important;
         padding: 0 !important;
     }}
@@ -468,8 +494,8 @@ def toolbar_css(night: bool) -> str:
     }}
     .header {{
         min-height: 44px;
-        background: {c['surface']};
-        border-bottom: 1px solid {c['grey_light']} !important;
+        background: var(--klaus-surface);
+        border-bottom: 1px solid var(--klaus-border) !important;
         padding: 0 12px;
         box-sizing: border-box;
         /* Anki pins the trays to the TOP (align-items/align-self:
@@ -487,7 +513,7 @@ def toolbar_css(night: bool) -> str:
         align-items: center !important;
     }}
     .header .hitem {{
-        color: {c['text_muted']} !important;
+        color: var(--klaus-text-muted) !important;
         background: transparent !important;
         border: 1px solid transparent !important;
         box-shadow: none !important;
@@ -499,8 +525,8 @@ def toolbar_css(night: bool) -> str:
         border-radius: 8px;
     }}
     .header .hitem:hover {{
-        background: {c['hover_subtle']} !important;
-        color: {c['text']} !important;
+        background: var(--klaus-hover) !important;
+        color: var(--klaus-text) !important;
         border-color: transparent !important;
         text-decoration: none !important;
     }}

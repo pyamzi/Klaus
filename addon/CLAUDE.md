@@ -150,8 +150,14 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   1200ms debounce → daemon thread.
 - `top_bar.py`: the **Klaus top bar** — restyles Anki's main-window top
   toolbar IN PLACE (never rebuilds it): `webview_will_set_content` with
-  an `aqt.toolbar.TopToolbar` context injects `theme.toolbar_css` into
-  the head (SynapsePro's mechanism), and
+  an `aqt.toolbar.TopToolbar` context injects `theme.toolbar_css()`
+  into the head (SynapsePro's mechanism). **`toolbar_css()` takes no
+  `night` argument on purpose** — Anki's theme switch never re-runs
+  that hook, it only toggles classes with JS
+  (`documentElement.night-mode`, `body.night_mode`/`nightMode`), so a
+  baked palette froze on the theme that was active at draw time; the
+  sheet ships BOTH palettes keyed on those classes and the bar (logo
+  included) follows live. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
   hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
   decks). Because it only restyles, Anki's links, Klaus's Library link,

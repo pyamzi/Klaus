@@ -22,21 +22,42 @@ check("click goes to Decks via Anki's own pycmd",
 check("addressable for styling", 'id="klaus-logo"' in html)
 
 section("toolbar css")
-for night in (False, True):
-    css = theme.toolbar_css(night)
-    c = theme.palette(night)
-    check(f"night={night}: surface + hairline + hover tokens substituted",
-          c["surface"] in css and c["grey_light"] in css
-          and c["hover_subtle"] in css)
-    check(f"night={night}: defines --klaus-accent from blue_bright",
-          f"--klaus-accent: {c['blue_bright']}" in css)
-    check(f"night={night}: no unsubstituted tokens",
-          "{c[" not in css and "{{" not in css)
-    check(f"night={night}: styles .header and .hitem",
-          ".header" in css and ".hitem" in css)
-    check(f"night={night}: RESTYLE ONLY — hides nothing",
-          "display: none" not in css and "display:none" not in css)
-check("logo slot styled", "#klaus-logo" in theme.toolbar_css(False))
+css = theme.toolbar_css()
+check("no unsubstituted tokens", "{c[" not in css and "{{" not in css)
+check("styles .header and .hitem", ".header" in css and ".hitem" in css)
+check("RESTYLE ONLY — hides nothing",
+      "display: none" not in css and "display:none" not in css)
+check("logo slot styled", "#klaus-logo" in css)
+
+section("theme-reactive (a baked palette went stale on toggle)")
+# Anki's theme switch does NOT re-run webview_will_set_content — it only
+# runs JS on the live document (documentElement.night-mode +
+# body.night_mode/nightMode). A sheet built from a night_mode()
+# snapshot therefore froze on the theme that was active when the
+# toolbar last drew. Both palettes must ship in one sheet.
+import inspect
+check("toolbar_css takes no night argument (can't bake a snapshot)",
+      list(inspect.signature(theme.toolbar_css).parameters) == [])
+for key, tok in (("surface", "surface"), ("border", "grey_light"),
+                 ("text", "text"), ("text-muted", "text_muted"),
+                 ("hover", "hover_subtle"), ("accent", "blue_bright")):
+    check(f"--klaus-{key}: both palettes present",
+          f"--klaus-{key}: {theme.LIGHT[tok]};" in css
+          and f"--klaus-{key}: {theme.DARK[tok]};" in css)
+check("dark palette keyed on Anki's night-mode classes",
+      ":root.night-mode" in css and "body.night_mode" in css
+      and "body.nightMode" in css)
+# The rules themselves must reference vars only — a single baked hex
+# there is a colour that cannot follow the theme.
+rules = css.split("}", 2)[2]
+import re
+check("rule bodies contain NO baked hex colours",
+      re.search(r"#[0-9A-Fa-f]{6}", rules) is None)
+check("rule bodies reference the klaus vars", "var(--klaus-" in rules)
+check("the logo strokes a var, so it recolours too",
+      "var(--klaus-accent)" in top_bar.logo_html())
+check("top_bar injects without a snapshot",
+      "toolbar_css()" in open("klausmate/top_bar.py").read())
 
 section("one layer (Anki's fancy toolbar card must be flattened)")
 # Anki's body.fancy paints .toolbar as an elevated card (background,
@@ -44,7 +65,6 @@ section("one layer (Anki's fancy toolbar card must be flattened)")
 # glass button — that inner card was the visible second layer. Its
 # selectors (body.fancy:not(.flat) .hitem) outrank class-level rules,
 # so the neutralisers MUST carry !important.
-css = theme.toolbar_css(False)
 toolbar_block = css.split(".header .toolbar {", 1)[1].split("}", 1)[0]
 for prop in ("background: transparent !important",
              "box-shadow: none !important",

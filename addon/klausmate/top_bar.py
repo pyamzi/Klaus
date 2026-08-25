@@ -66,9 +66,11 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
             return
         from . import theme
 
-        web_content.head += (
-            "<style>" + theme.toolbar_css(theme.night_mode()) + "</style>"
-        )
+        # No night_mode() snapshot on purpose: the sheet carries BOTH
+        # palettes keyed on Anki's own night-mode classes, so the bar
+        # follows a theme switch live (Anki toggles those classes with
+        # JS and never re-runs this hook). See theme.toolbar_css.
+        web_content.head += "<style>" + theme.toolbar_css() + "</style>"
     except Exception as exc:
         print(f"[klausmate] top bar css failed: {exc}")
 
