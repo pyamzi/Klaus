@@ -42,6 +42,8 @@ from aqt.qt import (
     QDialog,
     QEvent,
     QObject,
+    QShortcut,
+    QSize,
     QSizePolicy,
     QStackedWidget,
     Qt,
@@ -93,6 +95,17 @@ def _alive(w: Any) -> bool:
         return False
 
 
+def _swdbg(msg: str) -> None:
+    """K-090 diagnostics — stdout is invisible under live Anki."""
+    try:
+        import time as _t
+
+        with open("/tmp/klausmate-debug.txt", "a", encoding="utf-8") as fh:
+            fh.write(f"{_t.strftime('%H:%M:%S')} sw: {msg}\n")
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------- shell
 
 
@@ -122,6 +135,23 @@ def _install_shell() -> bool:
         _state["stack"] = stack
         _state["decks_page"] = page
         _state["installed"] = True
+        try:
+            stack.currentChanged.connect(_on_stack_changed)
+        except Exception:
+            pass
+        # K-090 tiling: macOS refuses a tile smaller than the window's
+        # minimum — Anki's stock 640x480 beats a MacBook's top/bottom
+        # tile height (~478pt). An explicit minimum overrides layout
+        # hints, so the single window tiles anywhere.
+        try:
+            hint = mw.minimumSizeHint()
+            mw.setMinimumSize(QSize(400, 300))
+            _swdbg(
+                f"shell up; min hint was {hint.width()}x{hint.height()}"
+                f", forced 400x300"
+            )
+        except Exception as e:
+            print(f"[klausmate] single-window min-size relax failed: {e}")
         print("[klausmate] single-window shell installed")
         return True
     except Exception as e:  # noqa: BLE001
@@ -136,6 +166,85 @@ def _show_decks() -> None:
             stack.setCurrentIndex(0)
     except Exception:
         pass
+
+
+def _nudge_webviews(win: Any) -> None:
+    """QtWebEngine composites out-of-process; a view reparented before
+    its first show can miss the visibility transition and come up as a
+    BLACK surface (K-090: the dark Add pane). One hide/show cycle after
+    the pane is first current re-attaches the delegate. Once per pane."""
+    try:
+        if getattr(win, "_klaus_nudged", False):
+            return
+        win._klaus_nudged = True
+        from aqt.webview import AnkiWebView
+
+        for wv in win.findChildren(AnkiWebView):
+            try:
+                wv.hide()
+                wv.show()
+            except Exception:
+                continue
+        _swdbg(f"nudged webviews of {type(win).__name__}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window webview nudge failed: {e}")
+
+
+def _focus_pane(win: Any) -> None:
+    """activateWindow/raise_ are no-ops on child widgets — route focus
+    by hand or typing keeps landing in the previous pane (K-090)."""
+    try:
+        ed = getattr(win, "editor", None)
+        web = getattr(ed, "web", None) if ed is not None else None
+        if web is not None:
+            web.setFocus()
+            return
+        win.setFocus()
+    except Exception:
+        pass
+
+
+def _set_mw_shortcuts_enabled(on: bool) -> None:
+    """mw's QShortcuts (a/b/t/s/d, state keys...) are window-scoped and
+    would fire from inside a pane's card table (K-090). Disable them
+    while a pane is current; pane-descendant shortcuts are excluded via
+    a parent-chain walk (panes are mw children, so findChildren sees
+    their shortcuts too)."""
+    try:
+        panes = list(_state["panes"].values())
+        for qs in mw.findChildren(QShortcut):
+            try:
+                inside = False
+                p = qs.parent()
+                while p is not None:
+                    if any(p is pane for pane in panes):
+                        inside = True
+                        break
+                    p = p.parent()
+                if not inside:
+                    qs.setEnabled(on)
+            except Exception:
+                continue
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window shortcut toggle failed: {e}")
+
+
+def _on_stack_changed(index: int) -> None:
+    try:
+        if index == 0:
+            _set_mw_shortcuts_enabled(True)
+            try:
+                mw.web.setFocus()
+            except Exception:
+                pass
+            return
+        _set_mw_shortcuts_enabled(False)
+        stack = _state["stack"]
+        pane = stack.currentWidget() if stack is not None else None
+        if pane is not None:
+            QTimer.singleShot(0, lambda w=pane: (_nudge_webviews(w), _focus_pane(w)))
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] single-window stack-change failed: {e}")
 
 
 def _switch_to(name: str) -> None:

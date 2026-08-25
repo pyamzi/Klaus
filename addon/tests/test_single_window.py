@@ -84,6 +84,20 @@ qt_mod.Qt = QtNS
 qt_mod.QTimer = _QTimer
 qt_mod.QVBoxLayout = _QWidget
 qt_mod.QWidget = _QWidget
+
+
+class _QShortcut:
+    def __init__(self, parent=None):
+        self._parent = parent
+        self.enabled = True
+    def parent(self):
+        return self._parent
+    def setEnabled(self, on):
+        self.enabled = bool(on)
+
+
+qt_mod.QShortcut = _QShortcut
+qt_mod.QSize = lambda w, h: (w, h)
 sys.modules["aqt.qt"] = qt_mod
 
 import importlib
@@ -232,6 +246,74 @@ sw._drop_pane("Browser")
 check("hidden pane dropped from the stack, Decks fronted",
       "Browser" not in sw._state["panes"]
       and stack.removed == [gone] and stack.index == 0)
+
+print("== K-090: shortcut gating, focus routing, nudge once-flag ==")
+
+
+class _Node:
+    """parent()-chain node standing in for widgets."""
+    def __init__(self, parent=None):
+        self._p = parent
+    def parent(self):
+        return self._p
+
+
+pane_widget = _Node()
+inner = _Node(pane_widget)
+sw._state["panes"] = {"Browser": pane_widget}
+qs_mw = _QShortcut(_Node())          # parented under mw, not a pane
+qs_pane = _QShortcut(inner)          # deep inside the Browser pane
+mw_stub.findChildren = lambda cls: [qs_mw, qs_pane]
+sw._set_mw_shortcuts_enabled(False)
+check("mw-owned shortcut disabled while a pane is current",
+      qs_mw.enabled is False)
+check("pane-descendant shortcut untouched", qs_pane.enabled is True)
+sw._set_mw_shortcuts_enabled(True)
+check("mw shortcut re-enabled on Decks", qs_mw.enabled is True)
+
+
+class _FocusWeb:
+    def __init__(self):
+        self.focused = 0
+    def setFocus(self, *a):
+        self.focused += 1
+
+
+class _EditorPane:
+    def __init__(self):
+        self.editor = SimpleNamespace(web=_FocusWeb())
+        self.self_focused = 0
+    def setFocus(self, *a):
+        self.self_focused += 1
+
+
+ep = _EditorPane()
+sw._focus_pane(ep)
+check("editor pane routes focus into the editor webview",
+      ep.editor.web.focused == 1 and ep.self_focused == 0)
+plain = _EditorPane()
+plain.editor = None
+sw._focus_pane(plain)
+check("plain pane takes focus itself", plain.self_focused == 1)
+
+
+class _NudgePane:
+    def __init__(self):
+        self.cycles = []
+    def findChildren(self, cls):
+        wv = SimpleNamespace(hide=lambda: self.cycles.append("hide"),
+                             show=lambda: self.cycles.append("show"))
+        return [wv]
+
+
+webview_mod = types.ModuleType("aqt.webview")
+webview_mod.AnkiWebView = object
+sys.modules["aqt.webview"] = webview_mod
+np = _NudgePane()
+sw._nudge_webviews(np)
+sw._nudge_webviews(np)
+check("webview nudge runs hide/show exactly once per pane",
+      np.cycles == ["hide", "show"], repr(np.cycles))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
