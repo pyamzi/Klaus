@@ -468,3 +468,33 @@ min-size override recorded).
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Webview hide/show nudge (once per pane, deferred), focus routing on switch/front, mw QShortcut gating with pane-descendant exclusion (falsified red), explicit 400x300 minimum for macOS tiling + breadcrumbs. 253+85+20 green, AST clean. LIVE: restart -> Add pane must render; type immediately (focus in first field); press 'a' inside Browse's table (must NOT open Add); tile the window top/bottom on the MacBook screen; if tiling still refuses, /tmp/klausmate-debug.txt now records the minimum-size numbers.
+
+### K-091: Dark Add pane round 2: force Chromium page visibility, instrument pane state
+owner: -
+priority: P1
+tags: bug,single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: python3 tests/test_single_window.py
+created: 2026-08-24
+
+K-090 live result: tiling FIXED; Add pane still dark. Breadcrumbs prove
+the hide/show nudge RAN on AddCards (23:39:46) — widget-level cycling is
+insufficient. Chromium tracks page visibility/occlusion separately from
+the Qt widget: a page whose view was born hidden can stay
+render-suspended after the widget shows.
+
+Round 2, layered and instrumented:
+- page().setVisible(True) + guarded setLifecycleState(Active) — drives
+  Chromium's own visibility, the state widget hide/show never touched;
+- size wiggle (h-1 then back) so the compositor must produce a frame;
+- nudge now runs on EVERY switch to a pane plus a second pass 400ms
+  after (the 0ms pass may predate surface creation), once-flag dropped;
+- breadcrumbs record per-view page lifecycle state and url plus the
+  PANE's size — if the pane itself is 0x0 the bug is layout, not
+  compositing, and the next round pivots accordingly.
+
+Verify: python3 tests/test_single_window.py (nudge test updated to
+every-call semantics with page/size-capable stubs).
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Page-level visibility forcing + lifecycle thaw + size wiggle, every-switch + 400ms second pass, rich per-view breadcrumbs (lifecycle state, sizes, url, pane size). 253+85+21 green, AST clean. LIVE: restart, open Add; if still dark, /tmp/klausmate-debug.txt now tells us whether the page is Frozen/Discarded, the view is 0-sized, or the PANE itself is 0x0 — three different round-3 pivots.
