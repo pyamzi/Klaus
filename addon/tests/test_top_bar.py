@@ -18,8 +18,8 @@ check("hand-drawn star is a stroked open path",
       and 'd="M' in html)
 check("colour comes from the CSS var, no hardcoded hex",
       "var(--klaus-accent)" in html and "#" not in html.split("href=#")[1])
-check("click goes to Decks via Anki's own pycmd",
-      "pycmd('decks')" in html)
+check("clicking the star opens Klaus's own settings",
+      "pycmd('klausmate:settings')" in html)
 check("addressable for styling", 'id="klaus-logo"' in html)
 
 section("toolbar css")
@@ -92,9 +92,19 @@ check("...and the colour is the only interpolated part",
       _js_h.replace(json.dumps(_hostile), "") .count('"') == 0)
 check("theme changes repaint the bar (Anki won't re-inject)",
       "theme_did_change" in open("klausmate/top_bar.py").read())
-check("first paint uses the live colour (no flash of the token shade)",
-      "native_chrome_color()"
-      in open("klausmate/top_bar.py").read().split("def _on_webview")[1])
+# The old first-paint override set --klaus-chrome on BOTH the light and
+# dark selectors at once, pinning both themes to one draw-time snapshot
+# — that is why the bar came up light in dark mode. It is gone; the
+# background CSS is what the injector adds now, and the live window
+# colour is only ever pushed imperatively (theme_did_change).
+_src = open("klausmate/top_bar.py").read()
+_inject = _src.split("def _on_webview_will_set_content")[1].split("def setup")[0]
+check("first paint no longer pins both themes to one snapshot",
+      ":root.night-mode" not in _inject)
+check("first paint injects the chosen background instead",
+      "_background_css(bar=True)" in _inject)
+check("the star's settings command is intercepted",
+      "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
 
 section("one layer (Anki's fancy toolbar card must be flattened)")
 # Anki's body.fancy paints .toolbar as an elevated card (background,

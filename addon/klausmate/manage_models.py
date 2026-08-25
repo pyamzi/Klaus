@@ -458,6 +458,61 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(pdfjs_cb)
 
+    # ---- Appearance: custom background + the frosted top bar ----
+    # A blurred flat colour IS that colour, so "Solid colour" also makes
+    # the top bar match the window chrome exactly (background.py).
+    appearance_box = QGroupBox("Appearance")
+    appearance_layout = QVBoxLayout(appearance_box)
+    appearance_layout.setSpacing(6)
+    appearance_layout.addWidget(
+        _caption(
+            "Sets the background of Anki's deck, overview and congrats "
+            "screens. The Klaus top bar shows the same background, "
+            "blurred, so it reads as frosted glass over it."
+        )
+    )
+
+    bg_row = QHBoxLayout()
+    bg_row.setContentsMargins(0, 0, 0, 0)
+    bg_row.addWidget(QLabel("Background:"))
+    bg_mode_combo = QComboBox()
+    bg_mode_combo.addItem("Anki's own (default)", "theme")
+    bg_mode_combo.addItem("Solid colour", "color")
+    bg_mode_combo.addItem("Image", "image")
+    bg_row.addWidget(bg_mode_combo, 1)
+    bg_colour_btn = QPushButton("Colour…")
+    bg_colour_btn.setObjectName("SecondaryButton")
+    bg_row.addWidget(bg_colour_btn)
+    bg_image_btn = QPushButton("Choose image…")
+    bg_image_btn.setObjectName("SecondaryButton")
+    bg_row.addWidget(bg_image_btn)
+    appearance_layout.addLayout(bg_row)
+
+    bg_image_lbl = QLabel()
+    bg_image_lbl.setWordWrap(True)
+    bg_image_lbl.setStyleSheet(_MUTED)
+    appearance_layout.addWidget(bg_image_lbl)
+
+    bg_fit_row = QHBoxLayout()
+    bg_fit_row.setContentsMargins(0, 0, 0, 0)
+    bg_fit_row.addWidget(QLabel("Fit:"))
+    bg_fit_combo = QComboBox()
+    bg_fit_combo.addItem("Fill the window", "cover")
+    bg_fit_combo.addItem("Fit inside", "contain")
+    bg_fit_combo.addItem("Tile", "tile")
+    bg_fit_row.addWidget(bg_fit_combo)
+    bg_fit_row.addSpacing(12)
+    bg_fit_row.addWidget(QLabel("Bar blur:"))
+    bg_blur_slider = QSlider(Qt.Orientation.Horizontal)
+    bg_blur_slider.setRange(0, 60)
+    bg_blur_slider.setFixedWidth(120)
+    bg_fit_row.addWidget(bg_blur_slider)
+    bg_blur_lbl = QLabel()
+    bg_blur_lbl.setStyleSheet(_MUTED)
+    bg_fit_row.addWidget(bg_blur_lbl)
+    bg_fit_row.addStretch(1)
+    appearance_layout.addLayout(bg_fit_row)
+
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -491,6 +546,92 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
 
+    from . import background as _background
+
+    _bg_state = {"spec": _background.resolve(_general_cfg)}
+
+    def sync_background_widgets() -> None:
+        """Repaint the Appearance controls from _bg_state (never from
+        config directly — the spec is the pending, unsaved value)."""
+        spec = _bg_state["spec"]
+        ui_state["syncing"] = True
+        try:
+            idx = max(0, bg_mode_combo.findData(spec["mode"]))
+            bg_mode_combo.setCurrentIndex(idx)
+            bg_fit_combo.setCurrentIndex(
+                max(0, bg_fit_combo.findData(spec["fit"]))
+            )
+            bg_blur_slider.setValue(int(spec["blur"]))
+        finally:
+            ui_state["syncing"] = False
+        bg_blur_lbl.setText(f"{spec['blur']}px")
+        is_image = spec["mode"] == "image"
+        is_colour = spec["mode"] == "color"
+        bg_colour_btn.setEnabled(is_colour or is_image)
+        bg_image_btn.setEnabled(is_image)
+        bg_fit_combo.setEnabled(is_image)
+        bg_blur_slider.setEnabled(is_image)
+        bg_image_lbl.setText(
+            f"Image: {spec['image']}" if spec["image"]
+            else ("No image chosen yet." if is_image else "")
+        )
+        bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
+
+    def on_bg_mode_changed(_i: int) -> None:
+        if ui_state["syncing"]:
+            return
+        _bg_state["spec"]["mode"] = str(
+            bg_mode_combo.currentData() or "theme"
+        )
+        mark_dirty()
+        sync_background_widgets()
+
+    def on_bg_fit_changed(_i: int) -> None:
+        if ui_state["syncing"]:
+            return
+        _bg_state["spec"]["fit"] = str(bg_fit_combo.currentData() or "cover")
+        mark_dirty()
+
+    def on_bg_blur_changed(value: int) -> None:
+        bg_blur_lbl.setText(f"{value}px")
+        if ui_state["syncing"]:
+            return
+        _bg_state["spec"]["blur"] = int(value)
+        mark_dirty()
+
+    def pick_bg_colour() -> None:
+        from aqt.qt import QColor, QColorDialog
+
+        current = QColor(_bg_state["spec"]["color"])
+        chosen = QColorDialog.getColor(current, dlg, "Background colour")
+        if not chosen.isValid():
+            return
+        _bg_state["spec"]["color"] = chosen.name()
+        mark_dirty()
+        sync_background_widgets()
+
+    def pick_bg_image() -> None:
+        from aqt.qt import QFileDialog
+
+        path, _f = QFileDialog.getOpenFileName(
+            dlg, "Choose a background image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.gif)",
+        )
+        if not path:
+            return
+        from . import USER_FILES  # type: ignore
+
+        stored = _background.store_image(USER_FILES, path)
+        if not stored:
+            showWarning("Could not use that image.", parent=dlg)
+            return
+        _bg_state["spec"]["image"] = stored
+        _bg_state["spec"]["mode"] = "image"
+        mark_dirty()
+        sync_background_widgets()
+
+    sync_background_widgets()
+
     def _refresh_library_label() -> None:
         from . import pdf_handler
 
@@ -498,7 +639,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    tabs.addTab(_tab(general_box), "General")
+    tabs.addTab(_tab(general_box, appearance_box), "General")
 
     stack.addWidget(models_page)
 
@@ -1422,6 +1563,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
+        spec = _bg_state["spec"]
+        cfg["background_mode"] = spec["mode"]
+        cfg["background_color"] = spec["color"]
+        cfg["background_image"] = spec["image"]
+        cfg["background_fit"] = spec["fit"]
+        cfg["background_blur"] = int(spec["blur"])
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -1468,6 +1615,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         save_embed()
         save_threshold()
         save_general()
+        try:
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] background refresh failed: {_exc}")
         if _renderer_from_config(_pkg().get_config()) != prev_renderer:
             showInfo(
                 "Preferences saved.\n\nThe PDF viewer change takes effect "
@@ -1590,6 +1743,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
+    bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
+    bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
+    bg_blur_slider.valueChanged.connect(on_bg_blur_changed)
+    bg_colour_btn.clicked.connect(pick_bg_colour)
+    bg_image_btn.clicked.connect(pick_bg_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
 

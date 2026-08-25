@@ -117,3 +117,24 @@ wouldn't already need.
   new pdf.js viewer"**, then press **Save**. Requires an Anki restart to
   take effect.
 
+
+## Appearance
+
+- **background_mode**: `"theme"` (default — Klaus paints nothing and
+  Anki looks stock), `"color"`, or `"image"`. Sets the background of
+  Anki's deck, overview and congrats screens. The Klaus top bar shows
+  the *same* background blurred, so it reads as frosted glass over it —
+  and because a Gaussian blur of a flat colour is that same colour,
+  `"color"` mode also makes the bar match the window chrome exactly.
+- **background_color**: `#rrggbb` fill for `"color"` mode (also the
+  colour behind a transparent or still-loading image). Default
+  `"#1E2225"`.
+- **background_image**: filename of an image stored in
+  `user_files/backgrounds/`. Choosing one in Preferences copies it
+  there, so the background survives the original being moved.
+- **background_fit**: `"cover"` (default), `"contain"` or `"tile"`.
+- **background_blur**: 0–100 px of blur under the top bar. Default
+  `22`.
+
+All five live in **Klausmate Preferences → General → Appearance**;
+press **Save** and they apply immediately (no restart).

@@ -167,11 +167,24 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   only the fallback. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
   hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
-  decks). Because it only restyles, Anki's links, Klaus's Library link,
+  Klaus Preferences via `klausmate:settings` on
+  `webview_did_receive_js_message`). Because it only restyles, Anki's links, Klaus's Library link,
   and AnkiHub's toolbar items all keep working and inherit the look via
   the shared `.hitem` class. Pure builders are aqt-free for
   `tests/test_top_bar.py`. Night-mode catches up on the toolbar's own
   redraw.
+- `background.py` (aqt-free): the custom app background + the **frosted
+  top bar**. `resolve(cfg)` validates the five `background_*` keys into a
+  spec; `main_css` paints Anki's deck/overview/congrats screens; `bar_css`
+  paints the SAME background blurred under the toolbar. **Why a copy and
+  not `backdrop-filter`**: the toolbar is its own webview, so the window
+  behind it never composites into that document — real vibrancy would
+  mean NSWindow/DWM. A Gaussian blur of a flat colour is that colour, so
+  `"color"` mode makes the bar match the window chrome exactly and the
+  seam disappears without measuring anything. Images are copied into
+  `user_files/backgrounds/` (`store_image`, name-versioned) and served by
+  the widened `setWebExports` pattern; `safe_image_name` keeps that URL
+  inside the folder and to allow-listed extensions.
 - `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
   UI; file/class names still say drive) — folder tree (`drive_store.py`,
   `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073

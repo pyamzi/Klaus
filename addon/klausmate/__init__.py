@@ -2190,7 +2190,13 @@ def on_editor_did_init(editor: Editor) -> None:
 
 # ----------------------------- bootstrap ----------------------------------
 
-mw.addonManager.setWebExports(__name__, r"web/.*\.(css|js)")
+# web/ assets plus the user's chosen background image — the top bar
+# and the deck screens load it by URL rather than inlining megabytes
+# of base64 into every webview.
+mw.addonManager.setWebExports(
+    __name__,
+    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(png|jpg|jpeg|webp|gif))",
+)
 mw.addonManager.setConfigAction(__name__, open_config)
 
 

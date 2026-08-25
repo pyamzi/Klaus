@@ -9,5 +9,10 @@
   "pdf_match_threshold": 0.75,
   "pdf_match_agg": "max",
   "pdf_index_max_chunks": 1000,
-  "pdf_renderer": "native"
+  "pdf_renderer": "native",
+  "background_mode": "theme",
+  "background_color": "#1E2225",
+  "background_image": "",
+  "background_fit": "cover",
+  "background_blur": 22
 }

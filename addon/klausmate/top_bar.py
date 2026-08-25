@@ -40,11 +40,13 @@ _STAR_PATH = (
 
 
 def logo_html() -> str:
-    """The left-edge logo: inline SVG star, click goes to Decks (the
-    same ``pycmd('decks')`` Anki's own Decks link uses)."""
+    """The left-edge logo: inline SVG star. Clicking it opens Klaus's
+    own Preferences (``pycmd('klausmate:settings')``, intercepted in
+    :func:`_on_js_message`) — Anki's Decks link sits right beside it,
+    so the star is better spent on the settings Anki has no entry for."""
     return (
-        '<a id="klaus-logo" href=# onclick="return pycmd(\'decks\')" '
-        'title="Klaus" aria-label="Klaus">'
+        '<a id="klaus-logo" href=# onclick="return pycmd(\'klausmate:settings\')" '
+        'title="Klaus settings" aria-label="Klaus settings">'
         '<svg width="26" height="26" viewBox="0 0 26 26" '
         'xmlns="http://www.w3.org/2000/svg">'
         f'<path d="{_STAR_PATH}" fill="none" '
@@ -124,6 +126,91 @@ def _push_chrome_colour() -> None:
         print(f"[klausmate] top bar chrome schedule failed: {exc}")
 
 
+def _addon() -> str:
+    """The addon's web-export name (its folder under addons21)."""
+    try:
+        from aqt import mw
+
+        return mw.addonManager.addonFromModule(__name__)
+    except Exception:
+        return "klausmate"
+
+
+def _config() -> dict:
+    try:
+        from aqt import mw
+
+        return mw.addonManager.getConfig(__package__) or {}
+    except Exception:
+        return {}
+
+
+def _background_css(bar: bool) -> str:
+    """CSS for the chosen background — the frosted variant for the bar,
+    the plain one for Anki's own screens. Empty in "theme" mode, so the
+    default install paints nothing."""
+    try:
+        from . import background
+
+        spec = background.resolve(_config())
+        url = background.image_url(_addon(), spec["image"])
+        return (background.bar_css if bar else background.main_css)(spec, url)
+    except Exception as exc:
+        print(f"[klausmate] background css failed: {exc}")
+        return ""
+
+
+def _on_main_webview_content(web_content: Any, context: Any) -> None:
+    """Paint the custom background on Anki's own screens (deck list,
+    overview, congrats). The reviewer is deliberately excluded — a
+    wallpaper behind cards fights the card styling."""
+    try:
+        from aqt.deckbrowser import DeckBrowser
+        from aqt.overview import Overview
+
+        targets: tuple = (DeckBrowser, Overview)
+        try:
+            from aqt.deckdescription import CongratsPage  # type: ignore
+
+            targets = targets + (CongratsPage,)
+        except Exception:
+            pass
+        if not isinstance(context, targets):
+            return
+        css = _background_css(bar=False)
+        if css:
+            web_content.head += "<style>" + css + "</style>"
+    except Exception as exc:
+        print(f"[klausmate] background inject failed: {exc}")
+
+
+def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
+    """Intercept the star logo's pycmd. Anki's toolbar would otherwise
+    treat the unknown command as a link and do nothing."""
+    if message == "klausmate:settings":
+        try:
+            from .manage_models import manage_models_dialog
+
+            manage_models_dialog()
+        except Exception as exc:
+            print(f"[klausmate] settings open failed: {exc}")
+        return (True, None)
+    return handled
+
+
+def refresh() -> None:
+    """Redraw the toolbar and the current screen after a settings change,
+    so a new background lands without restarting Anki."""
+    try:
+        from aqt import mw
+
+        if getattr(mw, "toolbar", None) is not None:
+            mw.toolbar.draw()
+        mw.reset()
+    except Exception as exc:
+        print(f"[klausmate] background refresh failed: {exc}")
+
+
 def _on_left_tray(content: list, toolbar: Any) -> None:
     """First left-tray item = leftmost element of the bar. Other addons
     appending here (AnkiHub) land to the star's right, untouched."""
@@ -146,14 +233,12 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         # follows a theme switch live (Anki toggles those classes with
         # JS and never re-runs this hook). See theme.toolbar_css.
         web_content.head += "<style>" + theme.toolbar_css() + "</style>"
-        # First paint: apply the live window colour immediately so the
-        # bar never flashes the token shade before the theme hook runs.
-        colour = native_chrome_color()
-        if colour:
-            web_content.head += (
-                "<style>:root, :root.night-mode, body.night_mode,"
-                f" body.nightMode {{ --klaus-chrome: {colour}; }}</style>"
-            )
+        # The custom background's frosted copy under the bar. A blurred
+        # flat colour IS that colour, so "colour" mode makes the bar
+        # match the window with no measuring at all.
+        css = _background_css(bar=True)
+        if css:
+            web_content.head += "<style>" + css + "</style>"
     except Exception as exc:
         print(f"[klausmate] top bar css failed: {exc}")
 
@@ -164,6 +249,8 @@ def setup() -> None:
 
         gui_hooks.top_toolbar_will_set_left_tray_content.append(_on_left_tray)
         gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
+        gui_hooks.webview_will_set_content.append(_on_main_webview_content)
+        gui_hooks.webview_did_receive_js_message.append(_on_js_message)
         # Anki only toggles CSS classes on theme change; the native
         # window colour has to be re-read and pushed by us.
         gui_hooks.theme_did_change.append(_push_chrome_colour)
