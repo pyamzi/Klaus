@@ -416,3 +416,55 @@ other genuinely modal dialogs STAY dialogs — single-window apps keep modals.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). NewDeckStats (QDialog) rides the registry with a finished-signal hook — done() hides without a Close event, so the Close button retires the pane through the same drop path. Deck Options/Preferences/Import stay real dialogs. Live: checklist item 4.
+
+### K-090: Single-window audit: dark webview panes, focus, bare-key leaks, macOS tiling minimum
+owner: -
+priority: P1
+tags: bug,single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: python3 tests/test_single_window.py
+created: 2026-08-24
+
+Pouya post-restart: (1) Add pane shows a dark screen; (2) audit what
+single-window mode broke; (3) macOS native tiling still not responding.
+
+DIAGNOSES:
+1. DARK PANE: QtWebEngine composites out-of-process; a view reparented
+   BEFORE first show can miss its visibility transition and never
+   attach a surface -> black rectangle. The editor webview is the
+   largest in the app. Fix: one-time hide/show nudge of every
+   AnkiWebView in a pane after it first becomes current (deferred one
+   tick), flagged so it never re-runs.
+2. AUDIT (full walk of top-level-window assumptions):
+   a. FOCUS: activateWindow/raise_ are no-ops on child widgets — after
+      a switch, keyboard focus stays on the previous pane. Fix: focus
+      the pane (editor webview when present) on switch; mw.web when
+      Decks fronts.
+   b. BARE-KEY SHORTCUTS: mw's QShortcuts (a/b/t/s/d...) are
+      window-scoped — with panes in the same window they now fire from
+      inside Browse's card table etc. Fix: disable mw-owned QShortcuts
+      (pane-descendant shortcuts excluded via parent-chain walk) while
+      a pane is current; re-enable on Decks.
+   c. GEOMETRY: pane closeEvents save child geometry into Anki's
+      geom store — harmless while single-window is on; re-established
+      by one manual resize if the mode is turned off. Documented, not
+      coded around.
+   d. WINDOW TITLES (Browser's card-count title) invisible — cosmetic,
+      accepted.
+   e. Verified unaffected: dialog manager bookkeeping incl. closeAll,
+      AddCards unsaved-note veto, reopen routing, pane-parented
+      dialogs (FindReplace/Previewer stay top-level), fullscreen (we
+      never touch toolbarWeb), Escape-to-close.
+3. TILING: stock main-window minimum (640x480 from main.ui) exceeds a
+   MacBook's top/bottom tile height (~478pt) — macOS refuses tiles
+   smaller than a window's minimum. Fix: explicit
+   mw.setMinimumSize(400x300) at shell install (explicit minimum
+   overrides layout hints); breadcrumb before/after minimums + window
+   flags to /tmp/klausmate-debug.txt for live confirmation.
+
+Verify: extended tests/test_single_window.py (nudge once-flag, focus
+routing, shortcut disable/enable with pane-descendant exclusion,
+min-size override recorded).
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Webview hide/show nudge (once per pane, deferred), focus routing on switch/front, mw QShortcut gating with pane-descendant exclusion (falsified red), explicit 400x300 minimum for macOS tiling + breadcrumbs. 253+85+20 green, AST clean. LIVE: restart -> Add pane must render; type immediately (focus in first field); press 'a' inside Browse's table (must NOT open Add); tile the window top/bottom on the MacBook screen; if tiling still refuses, /tmp/klausmate-debug.txt now records the minimum-size numbers.
