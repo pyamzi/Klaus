@@ -62,41 +62,6 @@ created: 2026-08-24
 
 ## Ready
 
-### K-061: Single-window mode: Library opens as a tab
-owner: -
-priority: P2
-tags: single-window,needs-live-verify
-files: klausmate/pdf_drive.py,klausmate/single_window.py,klausmate/__init__.py
-verify: grep -q 'single_window' klausmate/pdf_drive.py
-created: 2026-08-24
-
-Depends on the shell card. The Library window is ours (pdf_drive), so this
-is the easy one: when single_window_mode is on, the top-toolbar Library link
-switches to a Library pane in the stack instead of opening a separate window.
-Keep the existing separate-window path intact for single_window_mode=False.
-refresh_open_library() must keep working for the embedded pane (its
-alive+visible guard should treat 'pane is current' as visible).
-
-#### Comments
-- [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). KlausDrive rides the registry (open_drive already routes через aqt.dialogs.open); _switch_to runs the pane's catch-up _refresh_rows since refresh_open_library's isVisible guard skips hidden panes (contract documented in pdf_drive). Live: checklist item 3.
-
-### K-062: Single-window mode: Stats as a tab (follow-up)
-owner: -
-priority: P2
-tags: single-window,needs-live-verify
-files: klausmate/single_window.py
-verify: grep -q 'Stats' klausmate/single_window.py
-created: 2026-08-24
-
-Optional follow-up once Browse/Add/Library tabs are proven live. Stats
-(NewDeckStats) is a QDialog, not a QMainWindow — embedding a QDialog as a pane
-also works (clear window flags) but its close/accept semantics differ; verify
-aqt.dialogs bookkeeping still balances. Deck Options, Preferences, Import and
-other genuinely modal dialogs STAY dialogs — single-window apps keep modals.
-
-#### Comments
-- [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). NewDeckStats (QDialog) rides the registry with a finished-signal hook — done() hides without a Close event, so the Close button retires the pane through the same drop path. Deck Options/Preferences/Import stay real dialogs. Live: checklist item 4.
-
 ## Doing
 
 ## Review
@@ -414,3 +379,40 @@ Closing the Add pane must still run AddCards' unsaved-note guard
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). AddCards rides the pane registry; close-veto logic keeps the pane when the unsaved-note guard ignores the close (falsified red). Live: Add pane + veto check per K-059 checklist item 2.
+
+### K-061: Single-window mode: Library opens as a tab
+owner: orchestrator
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/pdf_drive.py,klausmate/single_window.py,klausmate/__init__.py
+verify: grep -q 'single_window' klausmate/pdf_drive.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Depends on the shell card. The Library window is ours (pdf_drive), so this
+is the easy one: when single_window_mode is on, the top-toolbar Library link
+switches to a Library pane in the stack instead of opening a separate window.
+Keep the existing separate-window path intact for single_window_mode=False.
+refresh_open_library() must keep working for the embedded pane (its
+alive+visible guard should treat 'pane is current' as visible).
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). KlausDrive rides the registry (open_drive already routes через aqt.dialogs.open); _switch_to runs the pane's catch-up _refresh_rows since refresh_open_library's isVisible guard skips hidden panes (contract documented in pdf_drive). Live: checklist item 3.
+
+### K-062: Single-window mode: Stats as a tab (follow-up)
+owner: orchestrator
+priority: P2
+tags: single-window,needs-live-verify
+files: klausmate/single_window.py
+verify: grep -q 'Stats' klausmate/single_window.py
+created: 2026-08-24
+claimed: 2026-08-24
+
+Optional follow-up once Browse/Add/Library tabs are proven live. Stats
+(NewDeckStats) is a QDialog, not a QMainWindow — embedding a QDialog as a pane
+also works (clear window flags) but its close/accept semantics differ; verify
+aqt.dialogs bookkeeping still balances. Deck Options, Preferences, Import and
+other genuinely modal dialogs STAY dialogs — single-window apps keep modals.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (0be02b4). NewDeckStats (QDialog) rides the registry with a finished-signal hook — done() hides without a Close event, so the Close button retires the pane through the same drop path. Deck Options/Preferences/Import stay real dialogs. Live: checklist item 4.
