@@ -538,10 +538,19 @@ class DriveWindow(QWidget):
     # Required by the dialog manager for profile-switch teardown.
     silentlyClose = True
 
-    def __init__(self) -> None:
+    def __init__(self, hosted: bool = False) -> None:
+        """``hosted=True`` (K-102): built as a CHILD of the Klaus
+        Workspace instead of a top-level window — window chrome
+        (title, geometry, show/raise, closeEvent) belongs to the host;
+        this widget still owns everything inside it, and module-level
+        hooks keep reaching it through ``_instance`` unchanged. The
+        widget is parented before any native window exists, so the
+        Cocoa no-reparent rule is never in play."""
         super().__init__()
-        self.setWindowTitle("Klaus — Library")
-        self.setMinimumSize(720, 420)
+        self._hosted = bool(hosted)
+        if not self._hosted:
+            self.setWindowTitle("Klaus — Library")
+            self.setMinimumSize(720, 420)
         # SynapsePro card-on-canvas language: window on bg, tree as a
         # white rounded card, quiet grey utility buttons.
         try:
@@ -630,12 +639,13 @@ class DriveWindow(QWidget):
         self.rebuild_tree()
         self._refresh_rows()
 
-        try:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-        except Exception as e:
-            print(f"[klausmate] drive show failed: {e}")
+        if not self._hosted:
+            try:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            except Exception as e:
+                print(f"[klausmate] drive show failed: {e}")
 
     # -------------------------------------------------------- geometry
 
@@ -657,6 +667,14 @@ class DriveWindow(QWidget):
     def _restore_geometry(self) -> None:
         try:
             state = drive_store.get_window_state(_user_files())
+            if self._hosted:
+                # Child of the Workspace: the host owns window geometry;
+                # only the splitter split is this widget's to restore.
+                sane = self._sane_splitter_sizes(state.get("splitter"))
+                self.splitter.setSizes(
+                    sane if sane is not None else [300, 740]
+                )
+                return
             if state.get("w") and state.get("h"):
                 self.resize(int(state["w"]), int(state["h"]))
                 if state.get("x") is not None and state.get("y") is not None:
@@ -667,7 +685,8 @@ class DriveWindow(QWidget):
             self.splitter.setSizes(sane if sane is not None else [300, 740])
         except Exception as e:
             print(f"[klausmate] drive geometry restore failed: {e}")
-            self.resize(1040, 680)
+            if not self._hosted:
+                self.resize(1040, 680)
 
     def _save_geometry(self) -> None:
         try:
@@ -678,6 +697,17 @@ class DriveWindow(QWidget):
                 # next restore. Nothing to save in that case.
                 return
             sizes = list(self.splitter.sizes())
+            if self._hosted:
+                # Only the splitter is ours; window geometry belongs to
+                # the Workspace host. MERGE, don't clobber, the stored
+                # x/y/w/h a standalone session may have written.
+                if self._sane_splitter_sizes(sizes) is not None:
+                    state = dict(
+                        drive_store.get_window_state(_user_files())
+                    )
+                    state["splitter"] = sizes
+                    drive_store.save_window_state(_user_files(), state)
+                return
             geo = self.geometry()
             state = {
                 "x": geo.x(),
@@ -1358,7 +1388,11 @@ class DriveWindow(QWidget):
         except Exception as e:
             print(f"[klausmate] drive reopen show failed: {e}")
 
-    def closeEvent(self, evt) -> None:  # noqa: N802 — Qt naming
+    def shutdown(self) -> None:
+        """Teardown shared by both close paths: the standalone window's
+        closeEvent, and the Workspace host closing around a hosted
+        instance (a child widget never receives a window closeEvent, so
+        the host calls this directly — K-102)."""
         global _instance
         try:
             self._on_cancel()
@@ -1368,6 +1402,9 @@ class DriveWindow(QWidget):
             print(f"[klausmate] drive close cleanup failed: {e}")
         if _instance is self:
             _instance = None
+
+    def closeEvent(self, evt) -> None:  # noqa: N802 — Qt naming
+        self.shutdown()
         try:
             aqt.dialogs.markClosed(DIALOG_NAME)
         except Exception:
@@ -1402,10 +1439,41 @@ def refresh_open_library() -> None:
         print(f"[klausmate] library refresh after settings change failed: {e}")
 
 
-def _create() -> DriveWindow:
-    global _instance
+_workspace = None  # WorkspaceWindow when the flag is on; None otherwise
+
+
+def _create():
+    """Creator registered with aqt.dialogs. Flag off (default): the
+    standalone Library window, byte-identical to before K-102. Flag on:
+    the Klaus Workspace, hosting a DriveWindow(hosted=True) as its
+    Library view — ``_instance`` still points at the DriveWindow so
+    refresh_open_library/rescan_library_root reach it unchanged."""
+    global _instance, _workspace
+    use_workspace = False
+    try:
+        from . import workspace as workspace_mod
+
+        cfg = mw.addonManager.getConfig(__package__) or {}
+        use_workspace = workspace_mod.workspace_from_config(cfg)
+    except Exception as e:
+        print(f"[klausmate] workspace flag read failed: {e}")
+    if use_workspace:
+        try:
+            drive = DriveWindow(hosted=True)
+            _instance = drive
+            _workspace = workspace_mod.WorkspaceWindow(
+                library=drive, on_closed=_on_workspace_closed
+            )
+            return _workspace
+        except Exception as e:
+            print(f"[klausmate] workspace failed, standalone library: {e}")
     _instance = DriveWindow()
     return _instance
+
+
+def _on_workspace_closed() -> None:
+    global _workspace
+    _workspace = None
 
 
 def open_drive() -> None:
@@ -1417,9 +1485,13 @@ def open_drive() -> None:
 
 
 def _close_drive() -> None:
-    """Close the window if open — geometry is persisted by closeEvent."""
-    global _instance
-    window, _instance = _instance, None
+    """Close the window if open — geometry is persisted by closeEvent.
+    When the Workspace hosts the Library, the WORKSPACE is the window
+    to close; its closeEvent runs the hosted DriveWindow's shutdown."""
+    global _instance, _workspace
+    window = _workspace if _workspace is not None else _instance
+    _workspace = None
+    _instance = None
     if window is None:
         return
     try:

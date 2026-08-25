@@ -116,3 +116,11 @@ wouldn't already need.
   umbrella). Toggle it from **Klausmate Preferences → General → "Use the
   new pdf.js viewer"**, then press **Save**. Requires an Anki restart to
   take effect.
+
+- **workspace_enabled**: Default `false`. When `true`, the top-toolbar
+  **Library** link opens the unified **Klaus Workspace** — one window
+  with a sidebar holding the Library plus quick-launch buttons that
+  open Anki's own Decks/Add/Browse/Statistics/Sync screens (Anki's
+  windows are never embedded; addons like AnkiHub are unaffected).
+  Toggle it from **Klausmate Preferences → General**, press **Save**,
+  and restart Anki.

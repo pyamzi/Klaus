@@ -458,6 +458,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
     general_layout.addWidget(pdfjs_cb)
 
+    workspace_cb = QCheckBox(
+        "Unified Klaus Workspace (the Library opens inside a workspace "
+        "window with quick-launch buttons for Anki's screens — takes "
+        "effect after restart)"
+    )
+    general_layout.addWidget(workspace_cb)
+
     # Library folder (K-070, part A of K-057) — where Library PDFs live
     # on disk. "Change…" re-runs the same guarded migration the
     # per-profile-open setup prompt uses (setup_flow._library_root_check),
@@ -490,6 +497,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     from .pdfjs_viewer import renderer_from_config as _renderer_from_config
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
+    from .workspace import workspace_from_config as _workspace_from_config
+
+    workspace_cb.setChecked(_workspace_from_config(_general_cfg))
 
     def _refresh_library_label() -> None:
         from . import pdf_handler
@@ -1422,6 +1432,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
+        cfg["workspace_enabled"] = bool(workspace_cb.isChecked())
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -1590,6 +1601,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
+    workspace_cb.toggled.connect(lambda _checked: mark_dirty())
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
 

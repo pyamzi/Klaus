@@ -148,6 +148,20 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
   QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
   1200ms debounce → daemon thread.
+- `workspace.py`: the **Klaus Workspace** (K-102) — one window for
+  Klaus-OWNED surfaces only, behind config `workspace_enabled` (default
+  false; toggle in Preferences → General, restart). Sidebar rail
+  (`theme.workspace_qss`) + QStackedWidget; view 0 hosts
+  `DriveWindow(hosted=True)` (hosted skips window chrome/geometry but
+  keeps splitter persistence and the `_instance` invariant, so refresh
+  hooks reach it unchanged); Decks/Add/Browse/Stats/Sync are LAUNCHERS
+  opening stock Anki windows (`mw.moveToState`, `aqt.dialogs.open`,
+  `mw.onStats`, `mw.on_sync_button_clicked` — verified against 26.8.1
+  bytecode). Registered under the Library's `aqt.dialogs` name via
+  `pdf_drive._create`'s branch; Workspace `closeEvent` runs the hosted
+  Library's `shutdown()`. Anki windows are NEVER embedded here — that
+  is the deleted single-window mode, and it stays deleted. Future home
+  of Phase D's embedding map + a curation view.
 - `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
   UI; file/class names still say drive) — folder tree (`drive_store.py`,
   `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073
@@ -259,7 +273,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   panes-in-one-window mode from K-059..K-062 was removed as too buggy:
   dark webview panes survived five rework rounds, K-090..K-094. Anki is
   stock multi-window again; `_migrate_config` scrubs the
-  `single_window_mode` key). Config lives in `klausmate/config.json` +
+  `single_window_mode` key). **Embedding Anki's windows stays deleted**
+  — `workspace.py` (K-102) is the sanctioned successor and hosts
+  Klaus-owned surfaces only, with launchers for Anki's screens. Config lives in `klausmate/config.json` +
   Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.

@@ -434,6 +434,50 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
+def workspace_qss(night: bool) -> str:
+    """The Klaus Workspace window (K-102): sidebar rail on ``surface``
+    with a hairline border, nav buttons transparent → ``hover_subtle``
+    on hover → accent-filled when checked (ported from the
+    single-window design study onto tokens). The content side sits on
+    ``bg`` like every other Klaus window."""
+    c = palette(night)
+    return f"""
+    QWidget#KlausWorkspace {{
+        background-color: {c['bg']};
+        color: {c['text']};
+    }}
+    QWidget#KlausWorkspaceSidebar {{
+        background-color: {c['surface']};
+        border-right: 1px solid {c['grey_light']};
+    }}
+    QWidget#KlausWorkspaceSidebar QLabel#WorkspaceLogo {{
+        color: {c['text_muted']};
+        border: 1px dashed {c['grey_mid']};
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 700;
+    }}
+    QWidget#KlausWorkspaceSidebar QPushButton {{
+        background: transparent;
+        color: {c['text_muted']};
+        border: none;
+        border-radius: 8px;
+        padding: 9px 14px;
+        text-align: left;
+        font-size: 13px;
+        font-weight: 600;
+    }}
+    QWidget#KlausWorkspaceSidebar QPushButton:hover {{
+        background: {c['hover_subtle']};
+        color: {c['text']};
+    }}
+    QWidget#KlausWorkspaceSidebar QPushButton:checked {{
+        background: {c['blue']};
+        color: white;
+    }}
+    """
+
+
 def css_vars(night: bool) -> str:
     """Theme tokens as CSS custom properties for webview surfaces
     (pdfjs_viewer.html's ``__THEME_VARS__`` substitution) — the same

@@ -13,6 +13,7 @@ created: 2026-08-24
 
 #### Comments
 - [2026-08-24 opus] Started: K-071 (Ready) is Phase D1 — the embedding-map projection + graph data, headless foundation. D2 (the window + canvas UI) follows once D1 lands. Phase E begins with the designer audit of the PDF viewer (E0) — that is orchestrator-tier work, queued after this swarm.
+- [2026-08-25 orchestrator] Phase D note: the Klaus Workspace (K-102, shipped behind workspace_enabled) is the intended home for the embedding-map view — add it as a second stack view + sidebar entry rather than a new window.
 
 ### K-057: I want to have some Obsidian-like features for the library panel. Specifically, I want all of the PDFs that we import into the library to be hosted in a directory that points to a specific directory, and then you should be able to choose that directory right away. The first time you open the Anki app, it forces you to choose a directory to host the library in, and then you can change what that directory is.  All the PDFs are in that directory. The way the directory is controlled, the way the folders are arranged, is the same as in the library as well. If something is in a certain folder type, then all the PDFs are also arranged in that folder type in the library and also in the tags. Does that make sense?
 owner: -
@@ -683,3 +684,31 @@ In-page find via pdf.js text content (match count, Enter/Shift+Enter cycling, Es
 
 #### Comments
 - [2026-08-25 orchestrator] Shipped. Find bar in-page (Cmd-F, 250ms debounce, n/m count, Enter/Shift+Enter + Cmd-G/Cmd-Shift-G cycling, Esc): search runs over cached getTextContent of ALL pages (unrendered included), navigation renders the page then rings the owning text span — item-level highlight, not exact substring (noted gap vs QPdfSearchModel's all-match paint). Go to page: Cmd-Option-G or click the page label -> Python getInt dialog. Thumbnails: in-page strip behind the existing header toggle, lazy 140px renders via IntersectionObserver, click-jump, current-page ring. Zoom Cmd+/-/0 (0 = refit; manual zoom suspends the ResizeObserver refit). Scroll position reported over the bridge (300ms debounce) and restored on ready.
+
+### K-102: Klaus Workspace shell: sidebar + stacked views hosting the Library, behind workspace_enabled
+owner: orchestrator
+priority: P1
+tags: workspace
+files: klausmate/workspace.py,klausmate/pdf_drive.py,klausmate/theme.py,klausmate/config.json,tests/test_workspace.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_workspace.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+Approved plan (~/.claude/plans/tell-me-your-opinion-majestic-tiger.md): one window for KLAUS-OWNED surfaces only — the K-059 embedding of Anki windows stays dead (K-090..K-094 evidence); Anki windows get LAUNCHER buttons (mw.moveToState('deckBrowser'), aqt.dialogs.open AddCards/Browser, mw.onStats, mw.on_sync_button_clicked — verified against 26.8.1 bytecode). WorkspaceWindow(QWidget): sidebar rail (theme.workspace_qss) + QStackedWidget; view 0 = DriveWindow(hosted=True) — hosted skips _restore_geometry/show/raise/title, keeps _instance invariant so refresh_open_library/rescan reach it. _create() branches on workspace_from_config(cfg) (default OFF; flag off = byte-identical to today). Same DIALOG_NAME so profile_will_close/aboutToQuit teardown is shared. ACCEPTANCE: verify fails before/passes after; whole suite green; flag-off path untouched (existing tests prove).
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped per the approved plan. workspace.py: WorkspaceWindow (sidebar rail themed by new theme.workspace_qss, QStackedWidget), view 0 = DriveWindow(hosted=True); hosted mode skips window chrome/geometry/show but keeps splitter persistence (MERGED into drive.json, not clobbered) and the _instance invariant. Launchers verified against 26.8.1 bytecode (moveToState/AddCards/Browser/onStats/on_sync_button_clicked). pdf_drive._create branches on workspace_from_config (strict opt-in: only workspace_enabled=True); Workspace closeEvent runs library.shutdown() + markClosed; _close_drive closes whichever window exists. drive_store window state grew an optional key= (workspace_window whitelisted in load() — the silent-key-drop trap was caught and pinned by test). 31-check tests/test_workspace.py green; full suite + symlink compile green. NEEDS-LIVE-VERIFY: flag on -> toolbar Library opens Workspace; checklist on the card body.
+
+### K-103: Klaus Workspace: Preferences toggle + docs
+owner: orchestrator
+priority: P2
+tags: workspace
+files: klausmate/manage_models.py,klausmate/config.md,CLAUDE.md
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_dialog_logic.py
+created: 2026-08-25
+claimed: 2026-08-25
+
+General-section checkbox 'Unified Klaus Workspace…' following the deferred-save recipe EXACTLY (widget + mark_dirty signal + save_general line — pdf_renderer shipped broken by skipping the signal). config.md entry (toggle + Save + restart). CLAUDE.md: workspace.py module-map entry; amend Deleted note — embedding stays deleted, Workspace is the sanctioned successor. Comment on K-058: Phase D map view targets the Workspace.
+
+#### Comments
+- [2026-08-25 orchestrator] Shipped with K-102. Preferences -> General checkbox with ALL FOUR recipe legs (widget, setChecked via workspace_from_config, save_general line, mark_dirty toggled signal — the pdf_renderer lesson). config.md + CLAUDE.md updated: workspace.py module-map entry; Deleted note amended — embedding Anki windows stays deleted, Workspace is the sanctioned successor.
