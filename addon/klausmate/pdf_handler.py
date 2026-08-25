@@ -1256,6 +1256,17 @@ def remove_records(user_files_dir: str, name: str, ids) -> int:
     return removed
 
 
+def load_removed_native(user_files_dir: str, name: str) -> list[dict]:
+    """Recovery bucket (K-087): native records the mirror removed
+    because their marks were deleted in an outside app. There is no
+    content difference between "the user deleted them" and "an app
+    saved a stale model that never had them", so deletions are trusted
+    (the user's priority) and the removed records are kept here —
+    capped and aged out — rather than lost outright."""
+    raw = _load_annotation_doc(user_files_dir, name).get("removed_native")
+    return [r for r in raw if isinstance(r, dict)] if isinstance(raw, list) else []
+
+
 def load_baked_native(user_files_dir: str, name: str) -> set:
     """Ids of the native records present as marks in the file as of the
     last successful bake (K-084) — replaced wholesale per bake."""
@@ -1461,11 +1472,12 @@ def bake_annotations(
         native_to_bake: list[dict] = []
         for hl in native:
             rid = str(hl.get("id"))
-            if (
-                present_primary
-                and rid in ledger
-                and rid not in present_primary
-            ):
+            if rid in ledger and rid not in present_primary:
+                # Ledger says this mark was in the file; it is not there
+                # now — deleted in an outside app, so regenerating it
+                # would resurrect a deliberate deletion. (K-087 dropped
+                # the "some Klaus mark must survive" precondition: it
+                # made deleting the last highlight impossible.)
                 omitted.append(rid)
                 continue
             native_to_bake.append(hl)
@@ -2154,8 +2166,34 @@ def _mirror_core(
         changes += 1
     if remove_missing:
         marked = {str(x) for x in (marked_ids or set())}
-        baked = load_baked_native(user_files_dir, name)
+        doc = _load_annotation_doc(user_files_dir, name)
+        baked = {str(x) for x in (doc.get("baked_native_ids") or [])}
+        # Legacy reconciliation (K-087): a json predating the ledger
+        # can never satisfy "was baked", so pre-ledger highlights were
+        # undeletable from outside apps. Trust the file ONCE — but only
+        # when it is NEWER than the records, so a bake still pending
+        # (records newer) can never be mistaken for an outside delete.
+        if "baked_native_ids" not in doc:
+            try:
+                pdf_mtime = os.path.getmtime(
+                    _working_pdf_path(user_files_dir, name)
+                )
+                json_mtime = os.path.getmtime(
+                    annotations_path_for(user_files_dir, name)
+                )
+            except OSError:
+                pdf_mtime = json_mtime = 0.0
+            if pdf_mtime > json_mtime:
+                baked |= {
+                    str(r.get("id"))
+                    for r in records
+                    if r.get("origin") != "external"
+                }
+        # Self-seed (K-087): a mark observed in the file IS baked, so
+        # the ledger heals itself for records baked before it existed.
+        baked |= {str(r.get("id")) for r in records if str(r.get("id")) in marked}
         survivors: list[dict] = []
+        removed_native: list[dict] = []
         for r in records:
             rid = str(r.get("id"))
             if (
@@ -2168,22 +2206,37 @@ def _mirror_core(
                 continue
             if (
                 r.get("origin") != "external"
-                and marked
                 and rid in baked
                 and rid not in marked
             ):
-                # This native record WAS a mark in the file at the last
-                # bake and is gone now, while other Klaus marks survived
-                # — the outside save knew our marks, so this one was
-                # deliberately deleted there (K-084). With ZERO Klaus
-                # marks left, the save came from a stale model that
-                # never saw them (Preview opened pre-bake): that is a
-                # clobber, never a mass-deletion — records stand and
-                # the next bake restores the file.
+                # Its mark was in the file and is gone from this FRESH
+                # scan: deleted in the outside app (K-087 — the old
+                # "at least one Klaus mark must survive" guard made
+                # deleting the last/only highlight impossible, and no
+                # content signal can separate that from a stale-model
+                # save, so the removal is trusted and the record is
+                # kept in the recovery bucket instead).
+                removed_native.append({"ts": time.time(), "record": r})
                 changes += 1
                 continue
             survivors.append(r)
         records = survivors
+        live_ids = {str(r.get("id")) for r in records}
+        updates: dict = {"baked_native_ids": sorted(baked & live_ids)}
+        if removed_native:
+            cutoff = time.time() - 86400.0
+            bucket = [
+                e
+                for e in load_removed_native(user_files_dir, name)
+                if float(e.get("ts") or 0) >= cutoff
+            ]
+            bucket.extend(removed_native)
+            updates["removed_native"] = bucket[-50:]
+            print(
+                f"[klausmate] {len(removed_native)} highlight(s) deleted "
+                f"outside — removed from {name} (recoverable for 24h)"
+            )
+        _update_doc_keys(user_files_dir, name, updates)
         if suppressed:
             # Tombstone expiry (K-084): the stale copy it guards
             # against is no longer in the file — job done. If it were

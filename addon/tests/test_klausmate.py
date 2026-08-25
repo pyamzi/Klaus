@@ -1636,14 +1636,23 @@ try:
           sorted(r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND))
           == sorted([idb, idc]))
 
-    # Preview stale-model clobber: ZERO Klaus marks left in the file ->
-    # must read as clobber, never as mass-deletion.
+    # K-087 POLICY REVERSAL: deleting the LAST Klaus mark used to be
+    # refused as a possible stale-model clobber, which made a
+    # single-highlight delete impossible. No content signal separates
+    # the two cases, so the deletion is trusted and the record goes to
+    # the recovery bucket. The unbaked record (idc) is still immune.
     nd_strip([idb])
     nd_res = pdf_handler.scan_working_annotations(nd_uf, ND)
     pdf_handler.mirror_foreign_annotations(nd_uf, ND, nd_res)
-    check("zero-marks save is a clobber, records KEPT",
-          sorted(r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND))
-          == sorted([idb, idc]))
+    check("deleting the last Klaus mark propagates",
+          [r.get("id") for r in pdf_handler.load_annotations(nd_uf, ND)]
+          == [idc],
+          repr(pdf_handler.load_annotations(nd_uf, ND)))
+    check("both outside deletions are recoverable from the bucket",
+          [r.get("record", {}).get("id")
+           for r in pdf_handler.load_removed_native(nd_uf, ND)]
+          == [ida, idb],
+          repr(pdf_handler.load_removed_native(nd_uf, ND)))
 
     # Tombstone precision: a tombstone blocks only the exact deleted
     # mark, not the neighborhood.
@@ -1851,6 +1860,111 @@ except Exception as e:
           f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 finally:
     shutil.rmtree(st_uf, ignore_errors=True)
+
+print("== K-087: Preview deletes propagate (ledger seed, no clobber guard) ==")
+pv_uf = tempfile.mkdtemp(prefix="klaus_pv_uf_")
+try:
+    from pypdf import PdfReader as _PvReader, PdfWriter as _PvWriter
+
+    PV = "K87_Del"
+    os.makedirs(os.path.join(pv_uf, "pdfs"))
+    pv_working = os.path.join(pv_uf, "pdfs", PV + ".pdf")
+    w = _PvWriter()
+    w.add_blank_page(width=612, height=792)
+    with open(pv_working, "wb") as f:
+        w.write(f)
+    pv_json = os.path.join(pv_uf, "annotations", PV + ".json")
+
+    idh = "77" * 16
+    pdf_handler.save_annotations(pv_uf, PV, [
+        {"id": idh, "page": 0, "rects": [[50.0, 100.0, 90.0, 12.0]],
+         "color": "#fadc50", "note": ""},
+    ])
+    check("bake writes the mark", pdf_handler.bake_annotations(pv_uf, PV))
+    # Ledger deliberately NOT recorded — the pre-K-084 situation.
+    check("ledger starts empty", pdf_handler.load_baked_native(pv_uf, PV) == set())
+    pv_res = pdf_handler.scan_working_annotations(pv_uf, PV)
+    pdf_handler.mirror_foreign_annotations(pv_uf, PV, pv_res)
+    check("ledger self-seeds from the observed mark",
+          pdf_handler.load_baked_native(pv_uf, PV) == {idh},
+          repr(pdf_handler.load_baked_native(pv_uf, PV)))
+
+    # Preview deletes the ONLY Klaus mark -> zero marks left in the
+    # file. K-084's clobber guard used to block this forever.
+    pdf_handler._atomic_replace_from(
+        os.path.join(pv_uf, "pdf_originals", PV + ".pdf"), pv_working
+    )
+    pv_res = pdf_handler.scan_working_annotations(pv_uf, PV)
+    check("delete-them-all propagates",
+          pdf_handler.mirror_foreign_annotations(pv_uf, PV, pv_res) == 1
+          and pdf_handler.load_annotations(pv_uf, PV) == [])
+    check("removed record is recoverable from the bucket",
+          [r.get("record", {}).get("id")
+           for r in pdf_handler.load_removed_native(pv_uf, PV)] == [idh],
+          repr(pdf_handler.load_removed_native(pv_uf, PV)))
+    check("ledger drops the removed id",
+          pdf_handler.load_baked_native(pv_uf, PV) == set())
+
+    # Legacy reconciliation: a json predating the ledger key at all.
+    PL = "K87_Legacy"
+    pl_working = os.path.join(pv_uf, "pdfs", PL + ".pdf")
+    w = _PvWriter()
+    w.add_blank_page(width=612, height=792)
+    with open(pl_working, "wb") as f:
+        w.write(f)
+    pl_json = os.path.join(pv_uf, "annotations", PL + ".json")
+    os.makedirs(os.path.dirname(pl_json), exist_ok=True)
+    legacy = {"version": 1, "highlights": [
+        {"id": "88" * 16, "page": 0, "rects": [[10.0, 10.0, 40.0, 12.0]],
+         "color": "#fadc50", "note": ""}]}
+    with open(pl_json, "w") as f:
+        json.dump(legacy, f)
+    # Records newer than the file (a bake still pending): KEEP.
+    os.utime(pl_working, (time.time() - 60, time.time() - 60))
+    pl_res = pdf_handler.scan_working_annotations(pv_uf, PL)
+    pdf_handler.mirror_foreign_annotations(pv_uf, PL, pl_res)
+    check("legacy file KEEPS records when the json is newer (bake pending)",
+          len(pdf_handler.load_annotations(pv_uf, PL)) == 1)
+    # File newer than the records: the file is authoritative.
+    with open(pl_json, "w") as f:
+        json.dump(legacy, f)
+    os.utime(pl_json, (time.time() - 120, time.time() - 120))
+    os.utime(pl_working, None)
+    pl_res = pdf_handler.scan_working_annotations(pv_uf, PL)
+    check("legacy leftovers removed when the pdf is newer",
+          pdf_handler.mirror_foreign_annotations(pv_uf, PL, pl_res) == 1
+          and pdf_handler.load_annotations(pv_uf, PL) == [])
+    check("legacy reconciliation runs once (ledger key now present)",
+          "baked_native_ids" in pdf_handler._load_annotation_doc(pv_uf, PL))
+
+    # Observation-seeding in ISOLATION: ledger key present (no legacy
+    # path) and this id was never recorded by a bake callback — only
+    # seeing its mark in the file can make it deletable later.
+    idn = "99" * 16
+    pdf_handler.save_annotations(pv_uf, PL, [
+        {"id": idn, "page": 0, "rects": [[20.0, 20.0, 40.0, 12.0]],
+         "color": "#fadc50", "note": ""}])
+    check("bake the unrecorded mark", pdf_handler.bake_annotations(pv_uf, PL))
+    check("ledger does not know it yet",
+          idn not in pdf_handler.load_baked_native(pv_uf, PL))
+    pl_res = pdf_handler.scan_working_annotations(pv_uf, PL)
+    pdf_handler.mirror_foreign_annotations(pv_uf, PL, pl_res)
+    check("observing the mark seeds the ledger",
+          idn in pdf_handler.load_baked_native(pv_uf, PL),
+          repr(pdf_handler.load_baked_native(pv_uf, PL)))
+    pdf_handler._atomic_replace_from(
+        os.path.join(pv_uf, "pdf_originals", PL + ".pdf"), pl_working
+    )
+    pl_res = pdf_handler.scan_working_annotations(pv_uf, PL)
+    check("seeded record is then deletable from outside",
+          pdf_handler.mirror_foreign_annotations(pv_uf, PL, pl_res) == 1
+          and pdf_handler.load_annotations(pv_uf, PL) == [])
+except Exception as e:
+    import traceback
+    check("K-087 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(pv_uf, ignore_errors=True)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
