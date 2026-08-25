@@ -1,5 +1,6 @@
 """Headless tests for the Klaus top bar (toolbar restyle + star logo)."""
 import importlib
+import json
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -66,6 +67,34 @@ check("the logo strokes a var, so it recolours too",
       "var(--klaus-accent)" in top_bar.logo_html())
 check("top_bar injects without a snapshot",
       "toolbar_css()" in open("klausmate/top_bar.py").read())
+
+section("seamless with the OS title bar")
+check("no hairline under the bar (would break the seam)",
+      "border-bottom: none !important" in css)
+check("...and Anki's own header border is overridden too",
+      css.count("border-bottom") == 1)
+# The bar takes the window's real colour at runtime so it matches the
+# system title bar on macOS AND Windows — no hardcoded shade can.
+check("native_chrome_color degrades to None headlessly (no aqt)",
+      top_bar.native_chrome_color() is None)
+js = top_bar.chrome_override_js("#1e2225")
+check("override sets the same var the stylesheet defines",
+      "--klaus-chrome" in js and "#1e2225" in js and "setProperty" in js)
+check("no colour clears the override, restoring the token",
+      "removeProperty" in top_bar.chrome_override_js(None))
+check("the colour is JSON-quoted, not string-glued",
+      '"#1e2225"' in js)
+_hostile = '"; alert(1); //'
+_js_h = top_bar.chrome_override_js(_hostile)
+check("a hostile value stays inside ONE escaped JS string literal",
+      json.dumps(_hostile) in _js_h and '\\"' in json.dumps(_hostile))
+check("...and the colour is the only interpolated part",
+      _js_h.replace(json.dumps(_hostile), "") .count('"') == 0)
+check("theme changes repaint the bar (Anki won't re-inject)",
+      "theme_did_change" in open("klausmate/top_bar.py").read())
+check("first paint uses the live colour (no flash of the token shade)",
+      "native_chrome_color()"
+      in open("klausmate/top_bar.py").read().split("def _on_webview")[1])
 
 section("one layer (Anki's fancy toolbar card must be flattened)")
 # Anki's body.fancy paints .toolbar as an elevated card (background,

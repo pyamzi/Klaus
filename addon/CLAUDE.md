@@ -157,7 +157,14 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   (`documentElement.night-mode`, `body.night_mode`/`nightMode`), so a
   baked palette froze on the theme that was active at draw time; the
   sheet ships BOTH palettes keyed on those classes and the bar (logo
-  included) follows live. Also
+  included) follows live. The bar is **seamless with the OS title
+  bar**: no bottom border at all, and its colour is the *live* window
+  colour — `native_chrome_color()` reads `mw.palette()`'s Window role
+  and pushes it as `--klaus-chrome` (baked into the first paint, and
+  re-pushed from our own `theme_did_change` hook, one tick later so
+  Qt's palette has updated). That matches system chrome on macOS and
+  Windows without touching NSWindow/DWM; the palette `chrome` token is
+  only the fallback. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
   hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
   decks). Because it only restyles, Anki's links, Klaus's Library link,

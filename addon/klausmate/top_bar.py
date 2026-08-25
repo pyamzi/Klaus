@@ -23,6 +23,7 @@ new look via the shared ``.hitem`` class.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 # The hand-drawn five-point star from Pouya's sketch: one open
@@ -49,6 +50,76 @@ def logo_html() -> str:
     )
 
 
+def native_chrome_color() -> str | None:
+    """The window's ACTUAL background colour as Qt reports it, ``#rrggbb``.
+
+    Pouya wants the bar to read as one surface with the OS title bar
+    ("no lines, same exact color", macOS and Windows alike). Hardcoding
+    a shade can't do that: the system chrome differs per OS, per
+    version and per appearance. Qt's window-role colour follows all of
+    that, so it is the closest thing to the title bar we can read
+    without touching native window internals (NSWindow / DWM — the
+    class of fiddling that killed single-window mode twice here).
+
+    None whenever Qt is unavailable or the colour looks unusable, and
+    the CSS token then stands as the fallback.
+    """
+    try:
+        from aqt import mw
+        from aqt.qt import QPalette
+
+        colour = mw.palette().color(QPalette.ColorRole.Window)
+        if not colour.isValid():
+            return None
+        return f"#{colour.red():02x}{colour.green():02x}{colour.blue():02x}"
+    except Exception:
+        return None
+
+
+def chrome_override_js(colour: str | None) -> str:
+    """JS that repaints the bar to ``colour`` (or clears the override).
+
+    Sets the same custom property theme.toolbar_css defines, so the
+    stylesheet stays the single source of the rules and this only
+    overrides the one value. Clearing restores the token.
+    """
+    if not colour:
+        return (
+            "document.documentElement.style.removeProperty('--klaus-chrome');"
+        )
+    return (
+        "document.documentElement.style.setProperty('--klaus-chrome', "
+        + json.dumps(colour)
+        + ");"
+    )
+
+
+def _push_chrome_colour() -> None:
+    """Send the live window colour to the toolbar webview.
+
+    Anki's theme switch never re-runs webview_will_set_content (it only
+    toggles classes with JS), so the colour is pushed imperatively here
+    instead — from our own theme_did_change hook, one tick later so
+    Qt's palette has already been updated by Anki's own handler.
+    """
+    try:
+        from aqt import mw
+        from aqt.qt import QTimer
+
+        def _send() -> None:
+            try:
+                web = getattr(getattr(mw, "toolbar", None), "web", None)
+                if web is None:
+                    return
+                web.eval(chrome_override_js(native_chrome_color()))
+            except Exception as exc:
+                print(f"[klausmate] top bar chrome push failed: {exc}")
+
+        QTimer.singleShot(0, _send)
+    except Exception as exc:
+        print(f"[klausmate] top bar chrome schedule failed: {exc}")
+
+
 def _on_left_tray(content: list, toolbar: Any) -> None:
     """First left-tray item = leftmost element of the bar. Other addons
     appending here (AnkiHub) land to the star's right, untouched."""
@@ -71,6 +142,14 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         # follows a theme switch live (Anki toggles those classes with
         # JS and never re-runs this hook). See theme.toolbar_css.
         web_content.head += "<style>" + theme.toolbar_css() + "</style>"
+        # First paint: apply the live window colour immediately so the
+        # bar never flashes the token shade before the theme hook runs.
+        colour = native_chrome_color()
+        if colour:
+            web_content.head += (
+                "<style>:root, :root.night-mode, body.night_mode,"
+                f" body.nightMode {{ --klaus-chrome: {colour}; }}</style>"
+            )
     except Exception as exc:
         print(f"[klausmate] top bar css failed: {exc}")
 
@@ -81,5 +160,8 @@ def setup() -> None:
 
         gui_hooks.top_toolbar_will_set_left_tray_content.append(_on_left_tray)
         gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
+        # Anki only toggles CSS classes on theme change; the native
+        # window colour has to be re-read and pushed by us.
+        gui_hooks.theme_did_change.append(_push_chrome_colour)
     except Exception as exc:
         print(f"[klausmate] top bar setup failed: {exc}")

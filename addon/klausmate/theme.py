@@ -504,7 +504,10 @@ def toolbar_css() -> str:
     .header {{
         min-height: 44px;
         background: var(--klaus-chrome);
-        border-bottom: 1px solid var(--klaus-border) !important;
+        /* No seam: the bar should read as one surface with the
+           window's own title bar, so nothing is drawn between
+           them and nothing under the bar either. */
+        border-bottom: none !important;
         padding: 0 12px;
         box-sizing: border-box;
         /* Anki pins the trays to the TOP (align-items/align-self:
