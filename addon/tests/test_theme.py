@@ -70,6 +70,9 @@ check("selected nav pill is the blue accent with white text",
       "QPushButton#NavItem:checked" in d2
       and d2.index("QPushButton#NavItem:hover")
       < d2.index("QPushButton#NavItem:checked"))
+check("sidebar wordmark is set in Garamond, like Claude's",
+      "Garamond" in theme.dialog_qss(False)
+      and "QLabel#SidebarAppName" in theme.dialog_qss(False))
 
 section("drop zone + helpers")
 dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")

@@ -246,7 +246,11 @@ def dialog_qss(night: bool) -> str:
         background-color: {c['bg']};
         border-right: 1px solid {c['grey_light']};
     }}
-    QLabel#SidebarAppName {{ font-size: 15px; font-weight: 700; }}
+    QLabel#SidebarAppName {{
+        font-family: "EB Garamond", Garamond, "Apple Garamond", Georgia, serif;
+        font-size: 17px;
+        font-weight: 600;
+    }}
     QLabel#SidebarVersion {{ color: {c['text_muted']}; font-size: 11px; }}
     QPushButton#NavItem {{
         background-color: transparent;

@@ -109,9 +109,10 @@ def _addon_version() -> str:
 
 
 def _logo_pixmap(size: int) -> Any:
-    """The Klaus star as an app-icon pixmap for the Preferences sidebar:
-    white stroke on a blue rounded square, drawn from the SAME
-    top_bar.star_points() data the toolbar's SVG logo uses."""
+    """The Klaus star, drawn exactly like the top bar's: an open stroke
+    in the accent colour on a transparent ground, no icon-square
+    treatment — the SAME top_bar.star_points() data the toolbar's SVG
+    logo strokes, just rasterised for a QLabel pixmap."""
     try:
         from aqt.qt import (
             QColor,
@@ -120,7 +121,6 @@ def _logo_pixmap(size: int) -> Any:
             QPixmap,
             QPointF,
             QPolygonF,
-            QRectF,
         )
 
         from . import theme as _theme
@@ -133,22 +133,15 @@ def _logo_pixmap(size: int) -> Any:
         painter = QPainter(px)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = _theme.palette(_theme.night_mode())
-        painter.setBrush(QColor(c["blue"]))
-        painter.setPen(Qt.PenStyle.NoPen)
-        radius = size * 0.22
-        painter.drawRoundedRect(
-            QRectF(0.0, 0.0, float(size), float(size)), radius, radius
-        )
-        scale = size / _top_bar.STAR_VIEWBOX * 0.72
-        offset = (size - _top_bar.STAR_VIEWBOX * scale) / 2.0
+        scale = size / _top_bar.STAR_VIEWBOX
         poly = QPolygonF(
             [
-                QPointF(x * scale + offset, y * scale + offset)
+                QPointF(x * scale, y * scale)
                 for x, y in _top_bar.star_points()
             ]
         )
-        pen = QPen(QColor("white"))
-        pen.setWidthF(max(1.5, size * 0.075))
+        pen = QPen(QColor(c["blue_bright"]))
+        pen.setWidthF(max(1.3, size * 0.09))
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
