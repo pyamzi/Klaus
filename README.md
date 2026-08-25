@@ -1,32 +1,32 @@
-# Klausnote
+# Klausbook
 
 The ultimate PDF reader / notetaker for spaced-repetition learners.
-Klausnote organizes lecture PDFs and notes, connects to Anki (which keeps
+Klausbook organizes lecture PDFs and notes, connects to Anki (which keeps
 doing the flashcards), and will grow an AI chat assistant that follows your
-notes plus retention-driven podcast episodes. Klausnote is the standalone
-successor to the klausmate Anki addon, which becomes Klausnote's Anki
+notes plus retention-driven podcast episodes. Klausbook is the standalone
+successor to the klausmate Anki addon, which becomes Klausbook's Anki
 bridge.
 
 ## Architecture
 
-Klausnote is a **minimal-patch fork of VS Code** (Electron) so the whole
-VS Code extension ecosystem keeps working (via Open VSX). Klausnote
+Klausbook is a **minimal-patch fork of VS Code** (Electron) so the whole
+VS Code extension ecosystem keeps working (via Open VSX). Klausbook
 features live in bundled extensions and webviews, not core patches — core
 changes stay limited to branding/product.json so upstream merges stay
 cheap.
 
 ```
-klausnote/        this repo — the product
+klausbook/        this repo — the product
   core/             klaus-core: local Python service (FastAPI). PDF library now;
                     annotations, embeddings/semantic search, chat agent, and the
                     podcast pipeline later. Stays free of GUI imports.
-  extensions/       Klausnote's own VS Code extensions
+  extensions/       Klausbook's own VS Code extensions
     klaus-pdf/        PDF library view + PDF.js webview viewer
   board/            the kanban board: BOARD.md + CLI + dashboard
   context/          agent-tier docs: ROLES.md, PROJECT.md, prompts/
   tests/            headless suites (python3 tests/test_*.py)
 
-klausnote-code/   sibling repo — the VS Code fork (branch `klaus`, remote
+klausbook-code/   sibling repo — the VS Code fork (branch `klaus`, remote
                   `upstream` = microsoft/vscode). Branding + product.json only.
 ```
 
@@ -52,19 +52,19 @@ cd core && .venv/bin/uvicorn klaus_core.app:app --host 127.0.0.1 --port 7863
 Fork (Node pinned by its `.nvmrc` — 24.18.0 via fnm):
 
 ```bash
-cd ../klausnote-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
-  --extensionDevelopmentPath="$PWD/../klausnote/extensions/klaus-pdf"
+cd ../klausbook-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
+  --extensionDevelopmentPath="$PWD/../klausbook/extensions/klaus-pdf"
 ```
 
 ## The board
 
 All project work is tracked on a kanban board (same system as the klausmate
 repo): `board/BOARD.md` is the source of truth, and every state change goes
-through the CLI so parallel agents cannot collide. Card ids are `KN-###`.
+through the CLI so parallel agents cannot collide. Card ids are `KB-###`.
 
 ```bash
 python3 board/board.py list          # the board
-python3 board/board.py show KN-001   # one card in full
+python3 board/board.py show KB-001   # one card in full
 python3 board/serve.py               # dashboard → 127.0.0.1:8765
 python3 tests/test_board.py          # board engine suite
 ```

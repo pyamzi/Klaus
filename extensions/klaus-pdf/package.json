@@ -1,7 +1,7 @@
 {
   "name": "klaus-pdf",
-  "displayName": "Klausnote PDF",
-  "description": "Klausnote library view and PDF viewer, backed by the local klaus-core service",
+  "displayName": "Klausbook PDF",
+  "description": "Klausbook library view and PDF viewer, backed by the local klaus-core service",
   "version": "0.1.0",
   "publisher": "klaus",
   "private": true,
@@ -17,7 +17,7 @@
       "activitybar": [
         {
           "id": "klaus",
-          "title": "Klausnote",
+          "title": "Klausbook",
           "icon": "media/klaus.svg"
         }
       ]

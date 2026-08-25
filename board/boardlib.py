@@ -44,14 +44,14 @@ TRANSITIONS = {
 
 FIELD_ORDER = ["owner", "priority", "tags", "files", "verify", "created", "claimed"]
 
-_CARD_RE = re.compile(r"^### (KN-\d{3}): (.+)$")
+_CARD_RE = re.compile(r"^### (KB-\d{3}): (.+)$")
 _FIELD_RE = re.compile(r"^([a-z_]+): ?(.*)$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 LOCK_TIMEOUT_S = 10.0
 LOCK_STALE_S = 120.0
 
-BOARD_HEADER = """# klausnote board
+BOARD_HEADER = """# klausbook board
 
 <!-- Source of truth for all agent work. State changes (claim/move/comment)
      MUST go through board/board.py so they are serialized by its lockfile.
@@ -59,7 +59,7 @@ BOARD_HEADER = """# klausnote board
      or designer. See context/ROLES.md. -->
 """
 
-ARCHIVE_HEADER = """# klausnote archive
+ARCHIVE_HEADER = """# klausbook archive
 
 <!-- Durable record of Done cards removed from BOARD.md by `board.py archive`.
      Append-only: each entry is a card's full text (fields, body, comments)
@@ -110,13 +110,13 @@ class Board:
         return None, None
 
     def next_id(self, extra=None) -> str:
-        """Lowest unused KN-NNN. ``extra`` folds in ids that must not be
+        """Lowest unused KB-NNN. ``extra`` folds in ids that must not be
         reused (e.g. archived ones) without the Board itself knowing where
         those come from — see ``_archived_ids`` / ``add``."""
         nums = [int(c.id[3:]) for _col, c in self.all_cards()]
         if extra:
             nums.extend(extra)
-        return "KN-%03d" % ((max(nums) + 1) if nums else 1)
+        return "KB-%03d" % ((max(nums) + 1) if nums else 1)
 
 
 # ------------------------------------------------------------------ paths
@@ -125,7 +125,7 @@ class Board:
 def board_dir() -> str:
     """Overridable so tests can operate on a scratch board."""
     return os.environ.get(
-        "KLAUSNOTE_BOARD_DIR", os.path.dirname(os.path.abspath(__file__))
+        "KLAUSBOOK_BOARD_DIR", os.path.dirname(os.path.abspath(__file__))
     )
 
 
@@ -349,7 +349,7 @@ def _write(board: Board) -> None:
 
 
 def _archived_ids() -> set:
-    """Numeric ids (the int after 'KN-') already spent in ARCHIVE.md.
+    """Numeric ids (the int after 'KB-') already spent in ARCHIVE.md.
 
     A regex scan over the archive file, not a persisted high-water mark: it
     needs no extra state to keep in sync with reality, matches how
@@ -363,7 +363,7 @@ def _archived_ids() -> set:
             text = f.read()
     except FileNotFoundError:
         return set()
-    return {int(m) for m in re.findall(r"^### KN-(\d+):", text, re.MULTILINE)}
+    return {int(m) for m in re.findall(r"^### KB-(\d+):", text, re.MULTILINE)}
 
 
 def _append_archive(card: Card) -> None:

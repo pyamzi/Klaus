@@ -47,7 +47,7 @@ def board_mtime() -> float:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "klausnoteboard/1.0"
+    server_version = "klausbookboard/1.0"
 
     def log_message(self, fmt, *args):  # quieter than the default
         if "--verbose" in sys.argv:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>klausnote board</title>
+<title>klausbook board</title>
 <style>
 /* Dispatch console for unattended agent work.
    Organising principle: lit vs unlit. Idle columns are near-greyscale; the
@@ -372,7 +372,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 <body>
 
 <div class="rail">
-  <h1>klausnote<span>/</span>board</h1>
+  <h1>klausbook<span>/</span>board</h1>
   <span class="stat live"><span class="pulse" id="pulse"></span><b id="n-doing">0</b> in flight</span>
   <span class="stat"><b id="n-ready">0</b> ready</span>
   <span class="stat"><b id="n-review">0</b> in review</span>
@@ -408,7 +408,7 @@ const ADDABLE = ["Backlog", "Ready"];
    in every browser view this dashboard gets opened in. */
 function me() {
   const el = document.getElementById("me");
-  const v = (el && el.value.trim()) || localStorage.getItem("klausnote.me") || "human";
+  const v = (el && el.value.trim()) || localStorage.getItem("klausbook.me") || "human";
   return v;
 }
 
@@ -975,11 +975,11 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(
 $("refresh").onclick = () => load(true);
 
 const meEl = $("me");
-meEl.value = localStorage.getItem("klausnote.me") || "human";
+meEl.value = localStorage.getItem("klausbook.me") || "human";
 meEl.addEventListener("change", () => {
   const v = meEl.value.trim() || "human";
   meEl.value = v;
-  localStorage.setItem("klausnote.me", v);
+  localStorage.setItem("klausbook.me", v);
   if (openId) openDrawer(openId);   // the composer shows who you post as
 });
 

@@ -1,10 +1,10 @@
 # Worker brief
 
-You are a worker on the Klausnote board. You take exactly one card, finish
+You are a worker on the Klausbook board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
 
-Repo root: `/Users/pyamzi/Documents/Github/klausnote`
+Repo root: `/Users/pyamzi/Documents/Github/klausbook`
 
 ## Success predicate
 
@@ -31,7 +31,7 @@ should not return claiming success on any of them:
 **1. Claim.**
 
 ```bash
-cd /Users/pyamzi/Documents/Github/klausnote
+cd /Users/pyamzi/Documents/Github/klausbook
 python3 board/board.py claim <CARD-ID> --owner <your-name>
 ```
 
@@ -127,8 +127,8 @@ These hold for every card in this repo:
   typecheck with `npx tsc --noEmit`, both from the extension directory.
   Webviews run under a strict CSP — no external resources, workers via
   `blob:` only.
-- **Fork work** (`../klausnote-code/`) is minimal-patch: branding and
-  product.json only; Klausnote features belong in extensions. Never
+- **Fork work** (`../klausbook-code/`) is minimal-patch: branding and
+  product.json only; Klausbook features belong in extensions. Never
   regenerate `.build/electron/` while a window launched from it is running —
   it crashes the live instance.
 - **Secrets:** never commit API keys; config with keys stays out of git.

@@ -26,7 +26,7 @@ orchestrator and designer, because those sessions are few and deliberate.
 
 ```bash
 python3 board/board.py list                  # what is happening
-python3 board/board.py show KN-004           # one card in full
+python3 board/board.py show KB-004           # one card in full
 python3 board/board.py check-disjoint        # would any claimable work collide?
 python3 board/serve.py                       # dashboard on 127.0.0.1:8765
 ```
@@ -94,7 +94,7 @@ These are inherited from the klausmate board, where each was paid for once:
   blocks every other card touching that directory. Split it along real
   seams first; leave it in Backlog until you have.
 - **Tag honestly.** `sonnet-safe` means a worker with no design judgement
-  and no running Klausnote can finish it. `design` means it needs a spec
+  and no running Klausbook can finish it. `design` means it needs a spec
   first. `needs-human` means no agent can do it at all.
 - **Sweep stale claims.** A card sitting in Doing with an old `claimed:`
   date and no recent comment is an abandoned claim. `release` it.
@@ -106,6 +106,6 @@ once it is older than 120s and its process is gone. Its **claim** does not —
 the card sits in Doing forever. Release it:
 
 ```bash
-python3 board/board.py release KN-004
-python3 board/board.py comment KN-004 --author orchestrator --text "worker vanished; released"
+python3 board/board.py release KB-004
+python3 board/board.py comment KB-004 --author orchestrator --text "worker vanished; released"
 ```

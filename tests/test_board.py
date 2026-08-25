@@ -1,7 +1,7 @@
 """Tests for the kanban board (board/boardlib.py + board/board.py).
 
 Board code is Anki-free, so no aqt stubs are needed. Every test runs against
-a scratch board via KLAUSNOTE_BOARD_DIR so the real BOARD.md is never touched.
+a scratch board via KLAUSBOOK_BOARD_DIR so the real BOARD.md is never touched.
 
 Run: python3 tests/test_board.py
 """
@@ -36,7 +36,7 @@ def section(title):
 
 def new_board_dir():
     d = tempfile.mkdtemp(prefix="klausboard_")
-    os.environ["KLAUSNOTE_BOARD_DIR"] = d
+    os.environ["KLAUSBOOK_BOARD_DIR"] = d
     return d
 
 
@@ -63,7 +63,7 @@ d = new_board_dir(); tmpdirs.append(d)
 SAMPLE = B.BOARD_HEADER + """
 ## Backlog
 
-### KN-001: A card with tricky body
+### KB-001: A card with tricky body
 owner: -
 priority: P1
 files: core/klaus_core/library.py
@@ -72,7 +72,7 @@ created: 2026-08-23
 Prose with a fenced block that contains headings:
 
 ```markdown
-### KN-999: not a real card
+### KB-999: not a real card
 ## Doing
 ```
 
@@ -91,14 +91,14 @@ Trailing prose after the fence.
 """
 
 b = B.parse(SAMPLE)
-check("card parsed", b.find("KN-001")[1] is not None)
-check("fenced '###' not parsed as a card", b.find("KN-999")[1] is None)
-_col, c1 = b.find("KN-001")
+check("card parsed", b.find("KB-001")[1] is not None)
+check("fenced '###' not parsed as a card", b.find("KB-999")[1] is None)
+_col, c1 = b.find("KB-001")
 check("fenced '## Doing' did not switch column", _col == "Backlog", _col)
 check("fields parsed", c1.fields.get("priority") == "P1")
 check("files parsed", c1.file_list() == ["core/klaus_core/library.py"])
 check("comment parsed", len(c1.comments) == 1)
-check("fence content preserved in body", "### KN-999: not a real card" in c1.body)
+check("fence content preserved in body", "### KB-999: not a real card" in c1.body)
 check("post-fence prose preserved", "Trailing prose after the fence." in c1.body)
 
 once = B.serialize(b)
@@ -109,11 +109,11 @@ section("id allocation")
 b2 = B.Board(columns={c: [] for c in B.COLUMNS})
 B.add(b2, "Backlog", "one")
 B.add(b2, "Backlog", "two")
-check("sequential ids", [c.id for _c, c in b2.all_cards()] == ["KN-001", "KN-002"])
+check("sequential ids", [c.id for _c, c in b2.all_cards()] == ["KB-001", "KB-002"])
 b2.columns["Backlog"].pop(0)
 n = B.add(b2, "Backlog", "three")
-check("ids do not reuse gaps", n.id == "KN-003", n.id)
-check("ids zero-padded", B.Board().next_id() == "KN-001")
+check("ids do not reuse gaps", n.id == "KB-003", n.id)
+check("ids zero-padded", B.Board().next_id() == "KB-001")
 
 # ------------------------------------------------------------ transitions
 
@@ -229,7 +229,7 @@ try:
 except B.BoardError:
     check("archive refuses a Doing card", True)
 try:
-    B.archive(b10, "KN-999")
+    B.archive(b10, "KB-999")
     check("archive rejects an unknown id", False, "was allowed")
 except B.BoardError:
     check("archive rejects an unknown id", True)
@@ -242,7 +242,7 @@ cli("add", "--col", "Ready", "--title", "still ready", "--files", "keep.py")
 rc, out, err = cli("archive", "--all-done")
 check("archive --all-done exits 0", rc == 0, err)
 check("archive --all-done reports both cards",
-      "KN-001" in out and "KN-002" in out, out)
+      "KB-001" in out and "KB-002" in out, out)
 
 rc, out, _e = cli("list", "--json")
 data = json.loads(out)
@@ -255,7 +255,7 @@ check("archive --all-done is a no-op when nothing is Done", rc == 0, err)
 check("no-op sweep says so", "no Done cards" in out, out)
 
 section("archive id-reuse regression")
-# Grooming note on KN-019: next_id() is max+1 over *live* cards, so removing
+# Grooming note on KB-019: next_id() is max+1 over *live* cards, so removing
 # the highest-numbered card (by delete, or now by archive) frees its number
 # for reuse — except an archived card's id is still permanently recorded in
 # ARCHIVE.md, so reusing it would collide with real history.
@@ -269,7 +269,7 @@ check("add after archiving the max card exits 0", rc == 0, new_id)
 check("new id is not the archived id", new_id != highest_id, new_id)
 expect_num = int(highest_id[3:]) + 1
 check("new id advances past the archived id",
-      new_id == "KN-%03d" % expect_num, "%s vs expected KN-%03d" % (new_id, expect_num))
+      new_id == "KB-%03d" % expect_num, "%s vs expected KB-%03d" % (new_id, expect_num))
 
 # ------------------------------------------------------------------ CLI
 
@@ -278,17 +278,17 @@ d = new_board_dir(); tmpdirs.append(d)
 rc, out, _ = cli("add", "--col", "Ready", "--title", "cli card",
                  "--files", "z.py", "--verify", "true")
 check("add exits 0", rc == 0)
-check("add prints the new id", out == "KN-001", out)
-rc, _o, _e = cli("claim", "KN-001", "--owner", "w1")
+check("add prints the new id", out == "KB-001", out)
+rc, _o, _e = cli("claim", "KB-001", "--owner", "w1")
 check("claim exits 0", rc == 0)
-rc, _o, err = cli("claim", "KN-001", "--owner", "w2")
+rc, _o, err = cli("claim", "KB-001", "--owner", "w2")
 check("re-claim exits 1", rc == 1, f"rc={rc}")
 check("rejection reason on stderr", "not Ready" in err, err)
-rc, _o, _e = cli("move", "KN-001", "Done")
+rc, _o, _e = cli("move", "KB-001", "Done")
 check("illegal move exits 1", rc == 1)
 rc, out, _e = cli("list", "--json")
 check("list --json is valid JSON", json.loads(out)["columns"][2]["name"] == "Doing")
-rc, _o, _e = cli("show", "KN-999")
+rc, _o, _e = cli("show", "KB-999")
 check("show on missing card exits 1", rc == 1)
 rc, _o, _e = cli("check-disjoint")
 check("check-disjoint exits 0 when clean", rc == 0)
@@ -297,7 +297,7 @@ section("concurrent claims: exactly one winner")
 d = new_board_dir(); tmpdirs.append(d)
 cli("add", "--col", "Ready", "--title", "contested", "--files", "hot.py")
 procs = [
-    subprocess.Popen([sys.executable, BOARD_PY, "claim", "KN-001",
+    subprocess.Popen([sys.executable, BOARD_PY, "claim", "KB-001",
                       "--owner", f"w{i}"],
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                      text=True, env=dict(os.environ))
@@ -321,7 +321,7 @@ with open(lock, "w") as f:
     json.dump({"pid": 999999, "host": os.uname().nodename,
                "ts": time.time() - 9999}, f)
 os.utime(lock, (time.time() - 9999, time.time() - 9999))
-rc, _o, err = cli("comment", "KN-001", "--author", "a", "--text", "t")
+rc, _o, err = cli("comment", "KB-001", "--author", "a", "--text", "t")
 check("stale lock with dead pid is broken", rc == 0, err)
 
 # A lock owned by a live pid must NOT be broken; caller times out at 2.
@@ -330,11 +330,11 @@ with open(lock, "w") as f:
                "ts": time.time() - 9999}, f)
 os.utime(lock, (time.time() - 9999, time.time() - 9999))
 t0 = time.time()
-env = {"KLAUSNOTE_BOARD_DIR": d}
+env = {"KLAUSBOOK_BOARD_DIR": d}
 p = subprocess.run([sys.executable, "-c",
                     f"import sys;sys.path.insert(0,{os.path.join(REPO,'board')!r});"
                     "import boardlib as B;B.LOCK_TIMEOUT_S=0.5;"
-                    "import board as BD;sys.exit(BD.main(['comment','KN-001','--author','a','--text','t']))"],
+                    "import board as BD;sys.exit(BD.main(['comment','KB-001','--author','a','--text','t']))"],
                    capture_output=True, text=True, env={**os.environ, **env})
 check("live lock is respected (exit 2)", p.returncode == 2, f"rc={p.returncode} {p.stderr[:120]}")
 check("timed out rather than hanging", time.time() - t0 < 8)
