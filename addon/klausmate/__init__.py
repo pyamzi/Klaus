@@ -2233,6 +2233,15 @@ try:
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
 
+try:
+    from . import single_window as _single_window
+
+    _single_window.setup()
+except Exception as _e:
+    print(
+        f"[klausmate] single-window setup failed: {type(_e).__name__}: {_e}"
+    )
+
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
 # (note: Note, current_field_idx: int) — it does not provide the Editor,
