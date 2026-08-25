@@ -566,3 +566,33 @@ loops the K-092 rebind over findChildren).
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). Unconditional embed-time rebind (one tick after stack insert, pre-first-paint), per-view isolation, breadcrumb per rebind; K-092 loop kept as regression net; WA_NativeWindow recorded as round-5 fallback. 253+85+26 green, AST clean. LIVE: restart, open Add + Browse; debug file will show 'embed-rebind AddCards ... -> True' — if the screen is STILL black after a confirmed-True rebind, round 5 goes native-window.
+
+### K-094: Dark panes round 5: WA_NativeWindow on embedded webviews
+owner: -
+priority: P1
+tags: bug,single-window,needs-live-verify
+files: klausmate/single_window.py,tests/test_single_window.py
+verify: python3 tests/test_single_window.py
+created: 2026-08-24
+
+Round 5. K-093 breadcrumbs: embed-rebind AddCards -> True, offscreen
+frame perfect (sum=6795), screen still black. Reparenting the view
+does not rebuild the presentation path on Qt 6.9/macOS — the delegate
+keeps presenting through the top-level backing store route that never
+worked for these panes.
+
+Fix: WA_NativeWindow on every embedded webview at embed time, plus
+winId() to force immediate native-handle creation — the view gets its
+OWN NSView/backing store and presents directly, bypassing the broken
+path. This is the standard cure for webengine-in-reparented-container
+black screens; it was held back until now because native child
+widgets can have stacking/input quirks (the editor webview has no
+overlapping Qt siblings, so exposure is minimal). Replaces the
+embed-time rebind loop (K-092's per-view rebind helper stays for the
+heal net); test updated to assert attr+winId per view.
+
+If THIS fails, the remaining option is architectural (construct panes
+inside mw from the start) — noted, not expected.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off pending live verification (orchestrator). WA_NativeWindow + winId() per embedded webview at embed time, per-view isolation, breadcrumbs. 253+85+26 green, AST clean. LIVE: restart, open Add/Browse — expect 'nativeized AddCards view winId=0x...' in the debug file and a rendering editor. If STILL black with a nonzero winId, the remaining path is architectural (construct panes inside mw) — flagged on the card.
