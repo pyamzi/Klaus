@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import time
 import uuid
+import weakref
 
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -431,6 +433,45 @@ def _selection_highlight_color() -> Any:
     return fallback
 
 
+def _run_on_main(cb: Callable[[], None]) -> None:
+    """Queue ``cb`` on the Qt main thread (K-078 adoption apply). Falls
+    back to a direct call only when aqt's taskman is unavailable — i.e.
+    headless harnesses, where there is no other thread to conflict."""
+    try:
+        from aqt import mw
+
+        if mw is not None:
+            mw.taskman.run_on_main(cb)
+            return
+    except Exception:
+        pass
+    try:
+        cb()
+    except Exception as exc:
+        print(f"[klausmate] main-thread callback failed: {exc}")
+
+
+def _record_color(record: dict, fallback: str, alpha: int) -> Any:
+    """QColor for an annotation record's ``color`` field (K-078) —
+    adopted outside marks keep their Preview color on screen; anything
+    malformed falls back (highlights: Klaus yellow, text: black)."""
+    if QColor is None:
+        return None
+    col = None
+    try:
+        c = record.get("color")
+        if isinstance(c, str) and c:
+            col = QColor(c if c.startswith("#") else "#" + c)
+            if not col.isValid():
+                col = None
+    except Exception:
+        col = None
+    if col is None:
+        col = QColor(fallback)
+    col.setAlpha(alpha)
+    return col
+
+
 class _SelectionOverlay(QWidget):
     """Draws text-selection highlights over the PDF viewport."""
 
@@ -439,7 +480,12 @@ class _SelectionOverlay(QWidget):
         self._rects: list[QRect] = []
         # Persistent highlights (plan B) in viewport coordinates —
         # painted FIRST, i.e. beneath the live selection and marquee.
-        self._highlight_rects: list[QRect] = []
+        # (rect, QColor) since K-078: adopted outside highlights keep
+        # their own color on screen.
+        self._highlight_rects: list[tuple[QRect, Any]] = []
+        # Adopted outside text (K-078): (viewport rect, text, QColor,
+        # pixel size) — the record's contents drawn inside its box.
+        self._text_boxes: list[tuple[QRect, str, Any, int]] = []
         # Marquee (Option/Alt+drag copy-as-image) rectangle in viewport
         # coordinates; None hides it.
         self._marquee: QRect | None = None
@@ -455,8 +501,14 @@ class _SelectionOverlay(QWidget):
         self._rects = rects
         self.update()
 
-    def set_highlight_rects(self, rects: list[QRect]) -> None:
+    def set_highlight_rects(self, rects: list[tuple[QRect, Any]]) -> None:
         self._highlight_rects = rects
+        self.update()
+
+    def set_text_boxes(
+        self, boxes: list[tuple[QRect, str, Any, int]]
+    ) -> None:
+        self._text_boxes = boxes
         self.update()
 
     def set_note_boxes(self, notes: list[tuple[QPoint, str]]) -> None:
@@ -471,6 +523,7 @@ class _SelectionOverlay(QWidget):
         if QPainter is None or (
             not self._rects
             and not self._highlight_rects
+            and not self._text_boxes
             and not self._note_boxes
             and self._marquee is None
         ):
@@ -478,11 +531,13 @@ class _SelectionOverlay(QWidget):
         painter = QPainter(self)
         if QColor is not None and self._highlight_rects:
             # Persistent highlights go beneath everything else:
-            # translucent yellow, Preview-style.
+            # translucent, Preview-style, in each record's own color.
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(250, 220, 80, 110))
-            for rect in self._highlight_rects:
+            for rect, color in self._highlight_rects:
+                painter.setBrush(color)
                 painter.drawRect(rect)
+        if QColor is not None and self._text_boxes:
+            self._paint_texts(painter)
         if QColor is not None and self._rects:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(_selection_highlight_color())
@@ -493,6 +548,25 @@ class _SelectionOverlay(QWidget):
         if QColor is not None and self._note_boxes:
             self._paint_notes(painter)
         painter.end()
+
+    def _paint_texts(self, painter: Any) -> None:
+        """Adopted outside text (K-078): each record's contents drawn
+        word-wrapped inside its page box, scaled with the zoom, in the
+        record's color. Approximate fidelity by design — it is the
+        user's own typed note, not typeset content."""
+        try:
+            flags = int(Qt.TextFlag.TextWordWrap)
+            for rect, text, color, px in self._text_boxes:
+                text = (text or "").strip()
+                if not text:
+                    continue
+                font = painter.font()
+                font.setPixelSize(max(6, int(px)))
+                painter.setFont(font)
+                painter.setPen(color)
+                painter.drawText(rect, flags, text)
+        except Exception:
+            pass
 
     def _paint_notes(self, painter: Any) -> None:
         """Sticky-note boxes for annotated highlights (N1).
@@ -859,6 +933,7 @@ class PdfViewer(QWidget):
         self._annotations_name = None
         if self._overlay is not None:
             self._overlay.set_highlight_rects([])
+            self._overlay.set_text_boxes([])
         self._last_dblclick = None
         self._gesture_press_pos = None
         self._reset_find_bar(doc)
@@ -1479,6 +1554,25 @@ class PdfViewer(QWidget):
     # Persistent highlights (plan B)
     # ------------------------------------------------------------------
 
+    def scroll_position(self) -> tuple[int, int] | None:
+        """Current (vertical, horizontal) scrollbar values — captured
+        before an external-change reload so the reader keeps their
+        place (K-078)."""
+        try:
+            return (
+                int(self._pdf_view.verticalScrollBar().value()),
+                int(self._pdf_view.horizontalScrollBar().value()),
+            )
+        except Exception:
+            return None
+
+    def restore_scroll_position(self, pos: tuple[int, int]) -> None:
+        try:
+            self._pdf_view.verticalScrollBar().setValue(int(pos[0]))
+            self._pdf_view.horizontalScrollBar().setValue(int(pos[1]))
+        except Exception:
+            pass
+
     def load_annotations(self, name: str) -> None:
         """Load persisted highlights for ``name`` and paint them.
 
@@ -1527,6 +1621,7 @@ class PdfViewer(QWidget):
             QTimer.singleShot(0, lambda: self._deferred_highlight_remap(gen))
         except Exception:
             pass
+        self._start_foreign_adoption(name)
 
     def _deferred_highlight_remap(self, gen: int) -> None:
         """One-tick-later remap, dropped if the document swapped since."""
@@ -1536,6 +1631,68 @@ class PdfViewer(QWidget):
             self._refresh_highlight_overlay()
         except Exception:
             pass
+
+    def _start_foreign_adoption(self, name: str) -> None:
+        """Import outside text/highlights (Preview markup) for the
+        loaded PDF (K-078). The pypdf scan and the one-time pristine
+        capture run on a daemon thread — a multi-MB parse must never
+        block the UI — while the merge/save hops back to the main thread
+        so it cannot race the synchronous _save_annotations writes."""
+        gen = self._doc_generation
+        try:
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+        except Exception:
+            return
+        if not getattr(pdf_handler, "BAKE_AVAILABLE", False):
+            return
+
+        def _apply(foreign: list) -> None:
+            try:
+                added = pdf_handler.adopt_foreign_annotations(
+                    USER_FILES, name, scanned=foreign
+                )
+                if not added:
+                    return
+                # Markers must land even if the user switched tabs while
+                # the scan ran — bake jobs are keyed by name.
+                self._schedule_bake(USER_FILES, name)
+                if (
+                    self._doc_generation == gen
+                    and self._annotations_name == name
+                ):
+                    self._highlights = pdf_handler.load_annotations(
+                        USER_FILES, name
+                    )
+                    self._refresh_highlight_overlay()
+                    tooltip(
+                        f"Klaus: imported {added} outside annotation(s)"
+                    )
+            except Exception as exc:
+                print(f"[klausmate] adoption apply failed: {exc}")
+
+        def _worker() -> None:
+            try:
+                foreign = pdf_handler.scan_foreign_annotations(
+                    USER_FILES, name
+                )
+                if not foreign:
+                    return
+                working = pdf_handler._working_pdf_path(USER_FILES, name)
+                if not pdf_handler._capture_pristine_stripped(
+                    USER_FILES, name, working
+                ):
+                    return
+                _run_on_main(lambda: _apply(foreign))
+            except Exception as exc:
+                print(f"[klausmate] foreign scan failed: {exc}")
+
+        try:
+            threading.Thread(
+                target=_worker, name="klausmate-adopt", daemon=True
+            ).start()
+        except Exception as exc:
+            print(f"[klausmate] adopt thread failed to start: {exc}")
 
     def _save_annotations(self) -> None:
         """Synchronous write-through (rare, tiny — see pdf_handler)."""
@@ -1610,6 +1767,10 @@ class PdfViewer(QWidget):
                             f"[klausmate] bake finished: {name} "
                             f"({'ok' if ok else 'FAILED'})"
                         )
+                        if ok:
+                            # Our own write must not read as an external
+                            # change on the next watcher tick (K-078).
+                            _run_on_main(lambda n=name: _refresh_stats_for(n))
                     except Exception as exc:
                         print(
                             f"[klausmate] bake worker error for "
@@ -1639,13 +1800,16 @@ class PdfViewer(QWidget):
             return
         if not self._highlights or self._doc is None:
             self._overlay.set_highlight_rects([])
+            self._overlay.set_text_boxes([])
             self._overlay.set_note_boxes([])
             return
         geoms = self._document_page_geometries()
-        rects: list[QRect] = []
+        rects: list[tuple[QRect, Any]] = []
+        texts: list[tuple[QRect, str, Any, int]] = []
         notes: list[tuple[QPoint, str]] = []
         for hl in self._highlights:
             page = hl.get("page")
+            is_text = hl.get("kind") == "text"
             first_vr: QRect | None = None
             for r in hl.get("rects", []):
                 try:
@@ -1655,10 +1819,25 @@ class PdfViewer(QWidget):
                 except Exception:
                     continue
                 vr = self._point_rect_to_viewport(page, rf, geoms)
-                if vr is not None:
-                    rects.append(vr)
-                    if first_vr is None:
-                        first_vr = vr
+                if vr is None:
+                    continue
+                if is_text:
+                    # Adopted outside text (K-078): rects[0] is the box;
+                    # font pixel size = page-point size x current zoom.
+                    scale = (
+                        vr.width() / rf.width() if rf.width() > 0 else 1.0
+                    )
+                    px = int(round(float(hl.get("size") or 12.0) * scale))
+                    texts.append((
+                        vr,
+                        str(hl.get("text") or ""),
+                        _record_color(hl, "#000000", 255),
+                        px,
+                    ))
+                    break
+                rects.append((vr, _record_color(hl, "#fadc50", 110)))
+                if first_vr is None:
+                    first_vr = vr
             try:
                 note = str(hl.get("note") or "").strip()
             except Exception:
@@ -1668,6 +1847,7 @@ class PdfViewer(QWidget):
                     (QPoint(first_vr.right(), first_vr.top()), note)
                 )
         self._overlay.set_highlight_rects(rects)
+        self._overlay.set_text_boxes(texts)
         self._overlay.set_note_boxes(notes)
 
     def _add_highlight_from_selection(self) -> None:
@@ -2219,19 +2399,23 @@ class PdfViewer(QWidget):
             except Exception:
                 hl_hit_id = None
             if hl_hit_id is not None:
-                # Sticky note on the highlight under the cursor (N1).
-                has_note = False
+                rec = None
                 try:
                     rec = self._highlight_record(hl_hit_id)
+                except Exception:
+                    rec = None
+                if rec is not None and rec.get("kind") == "text":
+                    # Adopted outside text (K-078): deletable, no sticky.
+                    remove_hl_act = menu.addAction("Remove Text")
+                else:
+                    # Sticky note on the highlight under the cursor (N1).
                     has_note = bool(
                         rec is not None and str(rec.get("note") or "").strip()
                     )
-                except Exception:
-                    has_note = False
-                note_act = menu.addAction(
-                    "Edit note…" if has_note else "Add note…"
-                )
-                remove_hl_act = menu.addAction("Remove Highlight")
+                    note_act = menu.addAction(
+                        "Edit note…" if has_note else "Add note…"
+                    )
+                    remove_hl_act = menu.addAction("Remove Highlight")
         fallback = (
             self._page_texts[page] if 0 <= page < len(self._page_texts) else ""
         )
@@ -3727,6 +3911,54 @@ class PdfViewer(QWidget):
         self._arm_thumb_render()
 
 
+# Every live PdfSidebar, weakly held (K-078): the library watcher asks
+# them all to reload when their working PDF changed on disk. Weak so a
+# closed Library window's sidebar can be collected.
+_open_sidebars: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _stat_of(path: str) -> tuple | None:
+    """(inode, mtime_ns, size) — the external-change fingerprint. The
+    inode is what actually flips on a Preview save (atomic replace) and
+    on a Finder move; mtime/size catch in-place rewrites."""
+    try:
+        st = os.stat(path)
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def poll_external_changes() -> None:
+    """Called from pdf_drive's watcher tick (K-078). Each open sidebar
+    checks its own file fingerprint and reloads if it changed — always
+    one tick deferred, never inside the caller's event delivery
+    (K-072 lesson). Never raises."""
+    for sb in list(_open_sidebars):
+        try:
+            QTimer.singleShot(0, sb.reload_if_externally_changed)
+        except Exception:
+            pass
+
+
+def _refresh_stats_for(name: str) -> None:
+    """Re-fingerprint every sidebar showing ``name`` — called after a
+    successful bake so Klaus's OWN write to the working file never
+    reads as an external change (without this, every highlight edit
+    would reload the viewer ~2s later via the watcher)."""
+    for sb in list(_open_sidebars):
+        try:
+            if getattr(sb, "_name", None) != name:
+                continue
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            path = pdf_handler.pdf_path_for(USER_FILES, name)
+            if path:
+                sb._file_stat = _stat_of(path)
+        except Exception:
+            pass
+
+
 class PdfSidebar(QWidget):
     """Right-side sidebar: one scrollable PDF document."""
 
@@ -3734,6 +3966,12 @@ class PdfSidebar(QWidget):
         super().__init__(parent)
         self._editor = editor
         self._name: Optional[str] = None
+        # External-change fingerprint of the loaded working PDF (K-078).
+        self._file_stat: tuple | None = None
+        try:
+            _open_sidebars.add(self)
+        except Exception:
+            pass
         self._doc: Optional[QPdfDocument] = None
         self._page_count = 0
         self._current_page = 0
@@ -3791,8 +4029,10 @@ class PdfSidebar(QWidget):
                     "Re-add it via the editor's PDF panel or the Library to enable the viewer."
                 )
             self._name = None
+            self._file_stat = None
             self._set_active(None)
             return
+        self._file_stat = _stat_of(path)
 
         if not PDF_VIEWER_AVAILABLE or self._doc is None:
             self._name = name
@@ -3839,6 +4079,58 @@ class PdfSidebar(QWidget):
             cb(name)
         except Exception:
             pass
+
+    def reload_if_externally_changed(self) -> None:
+        """Reload the shown PDF if its file changed on disk (K-078) —
+        Preview saves swap the inode, so the open QPdfDocument keeps
+        showing stale content otherwise. Cheap no-op when nothing
+        changed; keeps the reader's scroll position; re-runs adoption
+        via the normal load path. Never raises."""
+        try:
+            try:
+                self.isVisible()
+            except RuntimeError:
+                return  # C++ side already deleted
+            name = self._name
+            if name is None or self._file_stat is None:
+                return
+            from . import pdf_handler
+            from . import USER_FILES  # type: ignore
+
+            path = pdf_handler.pdf_path_for(USER_FILES, name)
+            if not path:
+                return
+            st = _stat_of(path)
+            if st is None or st == self._file_stat:
+                return
+            print(
+                f"[klausmate] {name} changed on disk — reloading viewer"
+            )
+            pos = None
+            try:
+                if self._viewer is not None:
+                    pos = self._viewer.scroll_position()
+            except Exception:
+                pos = None
+            self.load_pdf(name)
+            if pos is not None and self._viewer is not None:
+                v = self._viewer
+                gen = getattr(v, "_doc_generation", None)
+                saved = pos
+
+                def _restore() -> None:
+                    try:
+                        if getattr(v, "_doc_generation", None) == gen:
+                            v.restore_scroll_position(saved)
+                    except Exception:
+                        pass
+
+                try:
+                    QTimer.singleShot(0, _restore)
+                except Exception:
+                    pass
+        except Exception as exc:
+            print(f"[klausmate] external reload failed: {exc}")
 
     def jump_to_page(self, page: int) -> None:
         if self._viewer is None or self._page_count <= 0:

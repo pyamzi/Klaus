@@ -1617,16 +1617,25 @@ def _record_signature(rec: dict) -> tuple:
     )
 
 
-def adopt_foreign_annotations(user_files_dir: str, name: str) -> int:
+def adopt_foreign_annotations(
+    user_files_dir: str, name: str, scanned: list[dict] | None = None
+) -> int:
     """Import outside /Highlight + /FreeText markup into Klaus records.
 
     Idempotent WITHOUT relying on a bake landing in between: a content
     signature (page, kind, rounded rects, text) dedupes re-scans of the
-    same unmarked originals. Returns records added; 0 on any failure —
-    including a failed pristine capture, where adopting would set the
-    next bake up to duplicate the marks. Never raises."""
+    same unmarked originals. ``scanned`` lets the viewer pass a list it
+    already collected on a worker thread (K-078) — the multi-MB pypdf
+    parse never runs on the main thread that way. Returns records
+    added; 0 on any failure — including a failed pristine capture,
+    where adopting would set the next bake up to duplicate the marks.
+    Never raises."""
     try:
-        foreign = scan_foreign_annotations(user_files_dir, name)
+        foreign = (
+            scanned
+            if scanned is not None
+            else scan_foreign_annotations(user_files_dir, name)
+        )
         if not foreign:
             return 0
         working = _working_pdf_path(user_files_dir, name)

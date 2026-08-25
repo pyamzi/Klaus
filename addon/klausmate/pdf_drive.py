@@ -151,6 +151,15 @@ def _on_fs_tick() -> None:
             rescan_library_root()
     except Exception as e:  # noqa: BLE001
         print(f"[klausmate] library watcher tick failed: {e}")
+    # After the rescan settled the mapping: any open viewer showing a
+    # file that changed on disk reloads it (K-078 — Preview saves swap
+    # the inode, so the open QPdfDocument goes stale otherwise).
+    try:
+        from . import pdf_viewer
+
+        pdf_viewer.poll_external_changes()
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] viewer external-change poll failed: {e}")
 
 
 def _rearm_watcher(root: str | None) -> None:

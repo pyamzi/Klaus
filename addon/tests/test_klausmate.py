@@ -1217,6 +1217,18 @@ try:
     check("native Klaus highlight is never scanned as foreign",
           pdf_handler.scan_foreign_annotations(fa_uf, FA) == [])
 
+    # K-078: the viewer scans on a daemon thread and applies on the main
+    # thread — adopt must accept the pre-scanned list without re-parsing.
+    fa_write_foreign(fa_working)
+    os.remove(os.path.join(fa_uf, "annotations", FA + ".json"))
+    fa_pre = pdf_handler.scan_foreign_annotations(fa_uf, FA)
+    check("pre-scan finds the rewritten foreign pair", len(fa_pre) == 2)
+    check("adopt honors a pre-scanned list",
+          pdf_handler.adopt_foreign_annotations(fa_uf, FA, scanned=fa_pre) == 2)
+    check("pre-scanned adopt is signature-deduped too",
+          pdf_handler.adopt_foreign_annotations(fa_uf, FA, scanned=fa_pre) == 0)
+    check("bake after pre-scanned adopt", pdf_handler.bake_annotations(fa_uf, FA))
+
     # One-way valve: emptying Klaus records un-bakes EVERYTHING —
     # including adopted outside markup (it is Klaus data now).
     pdf_handler.save_annotations(fa_uf, FA, [])
