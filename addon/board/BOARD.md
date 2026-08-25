@@ -326,3 +326,50 @@ re-imported); aged tombstone no longer blocks; fresh one still does.
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). Fingerprint-stamped scans + apply-time discard (falsified: guard off resurrects the deleted mark); tombstone TTL 10min (identical re-adds import after the stale-model window; legacy entries age out). 239+82 green, AST clean. Live: rapid add/remove sequences in either app settle with no strays; re-highlighting the same text after a Klaus-side delete works once ~10min have passed (or immediately at a slightly different spot).
+
+### K-087: Preview deletes of highlights must propagate: ledger self-seed, drop clobber guard, recovery bucket
+owner: -
+priority: P1
+tags: bug,orchestrator
+files: klausmate/pdf_handler.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py && python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: Preview->Klaus DELETE of highlights still doesn't propagate (the
+other three directions work). Proven from live data: RCTs json has 2
+native records, the PDF has ZERO annotations, ledger empty, json still
+on the pre-K-084 schema.
+
+Two blockers, both mine:
+1. LEDGER NEVER SEEDED for marks baked before K-084 (it is written only
+   by post-K-084 bakes) -> `rid in ledger` false -> removal impossible.
+2. ZERO-MARKS CLOBBER GUARD (K-084): removal required >=1 surviving
+   Klaus mark, to tell a deliberate delete-them-all from a stale-model
+   Preview save. There is NO content discriminator between those two
+   (verified by reasoning through the file states: both yield pristine
+   + Preview's own marks), so the guard permanently blocked the
+   single-highlight and delete-all cases — exactly what he keeps
+   hitting.
+
+Policy change (his explicit priority: deletes must propagate):
+- Ledger self-seeds from OBSERVED primary marks on every mirror pass
+  (heals legacy files going forward).
+- Removal rule drops the surviving-mark requirement: ledger says baked
+  + absent from a FRESH scan (K-086 fingerprint) -> remove. Same rule
+  applied in the bake's omission branch.
+- SAFETY NET replaces the guard: removed native records are kept in
+  `removed_native` (record + ts, capped 50 / 24h) so a stale-model
+  clobber is recoverable rather than silent data loss.
+- LEGACY RECONCILIATION for files whose json predates the ledger (key
+  absent): one-time, and ONLY when the working file's mtime is NEWER
+  than the annotations json — i.e. the file reflects a later state than
+  the records, so absent marks are real deletions and not a bake still
+  pending. Fixes his current RCTs leftovers.
+
+Verify (red-first): ledger self-seed; zero-marks delete propagates;
+removed records land in the bucket; legacy reconciliation removes when
+pdf newer; legacy KEEPS records when json newer (pending bake);
+ledger drops removed ids; bake omits with zero marks present.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Ledger self-seeds from observed marks + prunes to live records; clobber guard replaced by trust-the-delete plus removed_native recovery bucket (50 entries / 24h); one-time legacy reconciliation gated on pdf-newer-than-json; bake omission aligned. Falsified seed and legacy paths separately (seeding test strengthened after v1 passed via the legacy path). 253+82 green, AST clean. Live: his RCTs leftovers should clear on next tab load (pdf newer than json); delete-the-only-highlight in Preview now propagates.
