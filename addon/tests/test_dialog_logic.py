@@ -740,3 +740,21 @@ check(
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
+print("== appearance block scoping (live NameError regression) ==")
+# sync_background_widgets() runs at dialog-build time, BEFORE the
+# ui_state assignment further down manage_models_dialog. A closure's
+# free variables bind at call time, so referencing ui_state there
+# crashed Preferences on open with NameError. The appearance block must
+# stay self-contained on _bg_state.
+_src = open("klausmate/manage_models.py").read()
+_dlg = _src.split("def manage_models_dialog", 1)[1]
+_call_at = _dlg.index("sync_background_widgets()")
+_ui_state_at = _dlg.index('ui_state: dict')
+check("the immediate sync call still precedes ui_state's assignment "
+      "(the ordering that makes this dangerous)", _call_at < _ui_state_at)
+_bg_block = _dlg[_dlg.index("_bg_state = {"):_call_at]
+check("appearance block never touches ui_state", "ui_state" not in _bg_block)
+check("appearance block guards with its own flag",
+      '_bg_state["syncing"]' in _bg_block)
+
+raise SystemExit(report())

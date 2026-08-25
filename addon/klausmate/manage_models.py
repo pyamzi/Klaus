@@ -548,13 +548,18 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     from . import background as _background
 
-    _bg_state = {"spec": _background.resolve(_general_cfg)}
+    # Own syncing flag, NOT ui_state["syncing"]: this block builds and
+    # runs sync_background_widgets() BEFORE ui_state is assigned further
+    # down the function, and a closure's free variable is only looked up
+    # at call time — referencing ui_state here crashed the dialog with
+    # NameError the moment Preferences opened (live traceback).
+    _bg_state = {"spec": _background.resolve(_general_cfg), "syncing": False}
 
     def sync_background_widgets() -> None:
         """Repaint the Appearance controls from _bg_state (never from
         config directly — the spec is the pending, unsaved value)."""
         spec = _bg_state["spec"]
-        ui_state["syncing"] = True
+        _bg_state["syncing"] = True
         try:
             idx = max(0, bg_mode_combo.findData(spec["mode"]))
             bg_mode_combo.setCurrentIndex(idx)
@@ -563,7 +568,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             )
             bg_blur_slider.setValue(int(spec["blur"]))
         finally:
-            ui_state["syncing"] = False
+            _bg_state["syncing"] = False
         bg_blur_lbl.setText(f"{spec['blur']}px")
         is_image = spec["mode"] == "image"
         is_colour = spec["mode"] == "color"
@@ -578,7 +583,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
 
     def on_bg_mode_changed(_i: int) -> None:
-        if ui_state["syncing"]:
+        if _bg_state["syncing"]:
             return
         _bg_state["spec"]["mode"] = str(
             bg_mode_combo.currentData() or "theme"
@@ -587,14 +592,14 @@ def manage_models_dialog(setup: bool = False) -> None:
         sync_background_widgets()
 
     def on_bg_fit_changed(_i: int) -> None:
-        if ui_state["syncing"]:
+        if _bg_state["syncing"]:
             return
         _bg_state["spec"]["fit"] = str(bg_fit_combo.currentData() or "cover")
         mark_dirty()
 
     def on_bg_blur_changed(value: int) -> None:
         bg_blur_lbl.setText(f"{value}px")
-        if ui_state["syncing"]:
+        if _bg_state["syncing"]:
             return
         _bg_state["spec"]["blur"] = int(value)
         mark_dirty()
