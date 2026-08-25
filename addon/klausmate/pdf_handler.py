@@ -1232,6 +1232,7 @@ def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
             "kind": "text" if record.get("kind") == "text" else "highlight",
             "rects": rects,
             "text": str(record.get("text") or ""),
+            "ts": time.time(),
         }
         sup = load_suppressed(user_files_dir, name)
         sup.append(entry)
@@ -1842,6 +1843,11 @@ def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
         working = _working_pdf_path(user_files_dir, name)
         if not os.path.isfile(working):
             return None
+        # Fingerprint of the file THIS scan reads (K-086): scans run on
+        # threads and can complete out of order; the mirror discards a
+        # result whose fingerprint no longer matches the file.
+        st = os.stat(working)
+        stat = (st.st_ino, st.st_mtime_ns, st.st_size)
         reader = PdfReader(working)
         for pageno, pg in enumerate(reader.pages):
             ph, ox, oy = _page_frame(pg)
@@ -1902,6 +1908,7 @@ def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
         "foreign": out,
         "marked_ids": marked_ids,
         "page_count": len(reader.pages),
+        "stat": stat,
     }
 
 
@@ -2032,6 +2039,17 @@ def _tombstone_hits(s: dict, rec: dict) -> bool:
     the specific deleted mark resurfacing, NOT a new mark the user drew
     near the same spot (the old 30%-overlap match blocked those:
     'sometimes my highlight doesn't appear')."""
+    ts = s.get("ts")
+    if (
+        not isinstance(ts, (int, float))
+        or time.time() - float(ts) > 600.0
+    ):
+        # TTL (K-086): a tombstone guards against a stale open model
+        # resurrecting the deleted mark — a session-scoped risk. Past
+        # ten minutes, an identical mark is a deliberate re-add
+        # (re-highlighting the same selection yields identical quads)
+        # and must import. Legacy ts-less entries count as aged.
+        return False
     if s.get("page") != rec.get("page"):
         return False
     kind = "text" if rec.get("kind") == "text" else "highlight"
@@ -2229,6 +2247,26 @@ def mirror_foreign_annotations(
     try:
         if not isinstance(scan_result, dict):
             return 0
+        scanned_stat = scan_result.get("stat")
+        if scanned_stat is not None:
+            # Stale-apply guard (K-086): scans run on threads and can
+            # land out of order — applying an older scan after a newer
+            # one re-imports marks already gone ("ghost highlights").
+            # The file changed since this scan read it? Discard; the
+            # tick machinery always follows a change with a fresh pass.
+            try:
+                working = _working_pdf_path(user_files_dir, name)
+                st = os.stat(working)
+                if (st.st_ino, st.st_mtime_ns, st.st_size) != tuple(
+                    scanned_stat
+                ):
+                    print(
+                        f"[klausmate] stale mirror scan discarded "
+                        f"for {name}"
+                    )
+                    return 0
+            except OSError:
+                return 0
         foreign = list(scan_result.get("foreign") or [])
         marked = {str(x) for x in scan_result.get("marked_ids") or []}
         if foreign:

@@ -1779,5 +1779,78 @@ except Exception as e:
 finally:
     shutil.rmtree(sm_uf, ignore_errors=True)
 
+print("== K-086: stale mirror applies discarded; tombstone TTL ==")
+st_uf = tempfile.mkdtemp(prefix="klaus_st_uf_")
+try:
+    from pypdf import PdfReader as _StReader, PdfWriter as _StWriter
+    from pypdf.annotations import FreeText as _StFreeText
+
+    ST = "K86_Stale"
+    os.makedirs(os.path.join(st_uf, "pdfs"))
+    st_working = os.path.join(st_uf, "pdfs", ST + ".pdf")
+
+    def st_write(texts):
+        w = _StWriter()
+        w.add_blank_page(width=612, height=792)
+        b = st_working + ".base"
+        with open(b, "wb") as f:
+            w.write(f)
+        w2 = _StWriter(clone_from=_StReader(b))
+        for text, y in texts:
+            w2.add_annotation(0, _StFreeText(
+                text=text, rect=(100, y, 250, y + 24), font_size="12pt",
+                font_color="000000", border_color=None,
+                background_color=None))
+        tmp = st_working + ".tmp"
+        with open(tmp, "wb") as f:
+            w2.write(f)
+        os.replace(tmp, st_working)
+        os.remove(b)
+
+    st_write([("mark A", 600), ("mark B", 500)])
+    res_v1 = pdf_handler.scan_working_annotations(st_uf, ST)
+    check("scan result carries the file fingerprint",
+          isinstance(res_v1, dict) and bool(res_v1.get("stat")),
+          repr(res_v1 and res_v1.get("stat")))
+    # The file moves on (B deleted) while res_v1 is still in flight.
+    time.sleep(0.01)
+    st_write([("mark A", 600)])
+    res_v2 = pdf_handler.scan_working_annotations(st_uf, ST)
+    check("fresh scan applies",
+          pdf_handler.mirror_foreign_annotations(st_uf, ST, res_v2) == 1
+          and [r.get("text") for r in pdf_handler.load_annotations(st_uf, ST)]
+          == ["mark A"])
+    check("STALE scan is discarded, B is not resurrected",
+          pdf_handler.mirror_foreign_annotations(st_uf, ST, res_v1) == 0
+          and [r.get("text") for r in pdf_handler.load_annotations(st_uf, ST)]
+          == ["mark A"],
+          repr(pdf_handler.load_annotations(st_uf, ST)))
+
+    # Tombstone TTL: an aged (or legacy ts-less) tombstone no longer
+    # blocks a deliberate re-add; a fresh one still blocks resurrection.
+    ghost = {"kind": "text", "page": 0,
+             "rects": [[100.0, 168.0, 150.0, 24.0]],
+             "text": "mark B", "note": "", "color": "#000000"}
+    rec_b = {"id": "ab" * 16, "page": 0,
+             "rects": [[100.0, 168.0, 150.0, 24.0]],
+             "color": "#000000", "note": "", "kind": "text",
+             "text": "mark B", "origin": "external"}
+    pdf_handler.add_suppressed(st_uf, ST, rec_b)
+    check("fresh tombstone still blocks the identical copy",
+          pdf_handler.adopt_foreign_annotations(st_uf, ST, scanned=[ghost])
+          == 0)
+    sup = pdf_handler.load_suppressed(st_uf, ST)
+    sup[-1]["ts"] = time.time() - 3600
+    pdf_handler._update_doc_keys(st_uf, ST, {"suppressed_external": sup})
+    check("aged tombstone no longer blocks a deliberate re-add",
+          pdf_handler.adopt_foreign_annotations(st_uf, ST, scanned=[ghost])
+          == 1)
+except Exception as e:
+    import traceback
+    check("K-086 section", False,
+          f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+finally:
+    shutil.rmtree(st_uf, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
