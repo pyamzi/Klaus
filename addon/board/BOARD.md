@@ -216,3 +216,55 @@ updated, not 2), heal pass (pre-seeded dupes collapse), tombstone
 
 #### Comments
 - [2026-08-24 orchestrator] Signed off (orchestrator). All four audit findings fixed red-first: overlap-update adoption (drift = update, not append), collapse pass heals existing dupes even on empty scans, delete tombstones with bbox matching, save_annotations preserves unknown keys. Falsified the matcher -> 4 red. 204+82 green, AST sweep clean. Pouya's duplicated record self-heals on next load of the Biostatistics tab.
+
+### K-082: Mirror, don't adopt: file owns outside marks; bake carries them verbatim
+owner: -
+priority: P1
+tags: bug,redesign,orchestrator
+files: klausmate/pdf_handler.py,klausmate/pdf_viewer.py,tests/test_klausmate.py
+verify: python3 tests/test_klausmate.py && python3 tests/test_drive.py
+created: 2026-08-24
+
+Pouya: "the sync is still not working... this whole sync back and forth
+is so, so buggy". Live state: records still hold his two texts, the FILE
+holds ZERO annotations — Preview and Klaus each rewrite the whole file
+from their own model, last writer wins. Adoption-and-rebake made Klaus a
+second full-file writer of PREVIEW'S OWN marks: every bake replaced his
+text boxes with pypdf-rendered copies, Preview's next autosave clobbered
+them back, deletions in Preview resurrected on the next bake, and each
+cycle reloaded the tab.
+
+REDESIGN — mirror, don't adopt:
+1. For OUTSIDE marks the FILE is the source of truth. Records mirror it:
+   scan adds/updates (overlap logic from K-081) AND REMOVES external
+   records whose original vanished (Preview deletes finally propagate).
+2. Bake never writes external records. It regenerates ONLY native Klaus
+   marks (marked) from pristine, and CARRIES the unmarked foreign
+   /Highlight+/FreeText annots over VERBATIM (pypdf clone) — Preview's
+   objects are never rewritten, so its appearance/behavior never changes
+   under its feet. Tombstoned ones are dropped from the carry (Klaus
+   deletes propagate to the file). Bake's own pristine capture switches
+   to the stripped variant (plain copy2 would double carried marks).
+   Un-bake keeps outside marks: empty records -> pristine + carry.
+3. scan_working_annotations returns None on failure vs dict on success
+   ({foreign, marked_ids, page_count}) — a failed scan must never
+   mass-remove mirrored records. marked_ids protect legacy adopted
+   copies (matched by /NM id) from removal; bake carries those verbatim
+   too.
+4. Viewer: external change with SAME page count = annotation-only edit
+   -> mirror records, no document reload (kills the per-autosave
+   flicker); page-count change -> full reload. Mirror pass schedules NO
+   bake (the file is already right; baking here re-fed the watcher loop).
+
+Remaining accepted churn: Preview's save can still drop Klaus's NATIVE
+baked marks from the file (stale model) — records are truth, next bake
+restores them; invisible in Klaus.
+
+Verify: reworked invariants in test_klausmate (carry-verbatim incl.
+Contents-less AP fingerprint, no marked external, foreign survive native
+bake, un-bake keeps foreign, Preview-delete propagation, None-scan
+mass-removal guard, tombstone-drop-from-carry, marked-by-id legacy,
+page_count). Falsify carry and removal separately.
+
+#### Comments
+- [2026-08-24 orchestrator] Signed off (orchestrator). Redesign landed: file owns outside marks, records mirror (add/update/remove), bake carries foreign verbatim + drops tombstoned, stripped pristine capture in bake, None-vs-dict scan contract, page_count-gated reload (annotation edits no longer flicker the tab), mirror schedules no bake. Falsified carry (9 red) and removal (3 red) separately. 218+82 green, AST clean. Live: Pouya's stale records will mirror-remove on next tab load (file currently has no annots — converges to Preview truth); new Preview text mirrors in live; deletes propagate BOTH ways now.
