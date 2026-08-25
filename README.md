@@ -1,36 +1,40 @@
-# Klaus
+# Klausnote
 
-The ultimate PDF reader / notetaker for spaced-repetition learners. Klaus
-organizes lecture PDFs and notes, connects to Anki (which keeps doing the
-flashcards), and will grow an AI chat assistant that follows your notes plus
-retention-driven podcast episodes. Standalone successor to the klausmate
-Anki addon, which becomes Klaus's Anki bridge.
+The ultimate PDF reader / notetaker for spaced-repetition learners.
+Klausnote organizes lecture PDFs and notes, connects to Anki (which keeps
+doing the flashcards), and will grow an AI chat assistant that follows your
+notes plus retention-driven podcast episodes. Klausnote is the standalone
+successor to the klausmate Anki addon, which becomes Klausnote's Anki
+bridge.
 
 ## Architecture
 
-Klaus is a **minimal-patch fork of VS Code** (Electron) so the whole VS Code
-extension ecosystem keeps working (via Open VSX). Klaus features live in
-bundled extensions and webviews, not core patches — core changes stay
-limited to branding/product.json so upstream merges stay cheap.
+Klausnote is a **minimal-patch fork of VS Code** (Electron) so the whole
+VS Code extension ecosystem keeps working (via Open VSX). Klausnote
+features live in bundled extensions and webviews, not core patches — core
+changes stay limited to branding/product.json so upstream merges stay
+cheap.
 
 ```
-klaus/        this repo — the product
-  core/         klaus-core: local Python service (FastAPI). PDF library now;
-                annotations, embeddings/semantic search, chat agent, and the
-                podcast pipeline later. Stays free of GUI imports.
-  extensions/   Klaus's own VS Code extensions
-    klaus-pdf/    PDF library view + PDF.js custom-editor webview
-                  (webview-src/ holds the React viewer, pending extension wiring)
+klausnote/        this repo — the product
+  core/             klaus-core: local Python service (FastAPI). PDF library now;
+                    annotations, embeddings/semantic search, chat agent, and the
+                    podcast pipeline later. Stays free of GUI imports.
+  extensions/       Klausnote's own VS Code extensions
+    klaus-pdf/        PDF library view + PDF.js webview viewer
+  board/            the kanban board: BOARD.md + CLI + dashboard
+  context/          agent-tier docs: ROLES.md, PROJECT.md, prompts/
+  tests/            headless suites (python3 tests/test_*.py)
 
-klaus-code/   sibling repo — the VS Code fork (branch `klaus`, remote
-              `upstream` = microsoft/vscode). Branding + product.json only.
+klausnote-code/   sibling repo — the VS Code fork (branch `klaus`, remote
+                  `upstream` = microsoft/vscode). Branding + product.json only.
 ```
 
 The UI talks to klaus-core over localhost HTTP (`127.0.0.1:7863`) with a
 shared secret in the `X-Klaus-Token` header (`KLAUS_CORE_TOKEN`, default
 `dev`).
 
-Milestone 1 (current): read-only library + viewer. Core lists PDFs from the
+Milestone 1 (done): read-only library + viewer. Core lists PDFs from the
 existing klausmate library (`…/Addons/klausmate/user_files/{pdfs,pdf_originals}`,
 baked copies shadow pristine originals) and never writes there. Override the
 library location with `KLAUS_LIBRARY_DIR`.
@@ -45,11 +49,28 @@ cd core && .venv/bin/uvicorn klaus_core.app:app --host 127.0.0.1 --port 7863
 
 (First time: `python3 -m venv core/.venv && core/.venv/bin/pip install fastapi 'uvicorn[standard]'`.)
 
-Fork (first build takes a while; Node version pinned by `.nvmrc`):
+Fork (Node pinned by its `.nvmrc` — 24.18.0 via fnm):
 
 ```bash
-cd ../klaus-code && npm i && npm run compile && ./scripts/code.sh
+cd ../klausnote-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
+  --extensionDevelopmentPath="$PWD/../klausnote/extensions/klaus-pdf"
 ```
+
+## The board
+
+All project work is tracked on a kanban board (same system as the klausmate
+repo): `board/BOARD.md` is the source of truth, and every state change goes
+through the CLI so parallel agents cannot collide. Card ids are `KN-###`.
+
+```bash
+python3 board/board.py list          # the board
+python3 board/board.py show KN-001   # one card in full
+python3 board/serve.py               # dashboard → 127.0.0.1:8765
+python3 tests/test_board.py          # board engine suite
+```
+
+Roles, column gates, and grooming rules: `context/ROLES.md`. Tier briefs
+for agents: `context/prompts/worker.md` and `context/prompts/designer.md`.
 
 ## Constraints inherited by forking
 
@@ -61,13 +82,8 @@ cd ../klaus-code && npm i && npm run compile && ./scripts/code.sh
 
 ## Roadmap
 
-1. Walking skeleton: vanilla fork builds and runs; klaus-pdf extension shows
-   the library and renders PDFs from klaus-core
-2. Branding (product.json, icons) — Klaus, not Code OSS
-3. Annotations + per-slide notes (JSON source of truth, baked into the PDF
-   from a pristine original — klausmate's bake model, ported)
-4. Embedding index + semantic search across the library (Voyage default)
-5. Anki bridge addon (slim klausmate) → retention scoring, deck curation
-6. Chat assistant with tools; HTML pane as the AI's canvas
-7. Retention-driven podcast episodes ("what you're about to forget")
-8. Packaging/signing; web version via openvscode-server + hosted core
+The live version is the board (`python3 board/board.py list`). In rough
+order: bundle klaus-pdf as a built-in → port klausmate's annotation/bake
+model → embedding index + semantic search → Anki bridge + retention →
+chat assistant + Markdown notes → retention-driven podcast → packaging,
+then a web version via openvscode-server + hosted core.
