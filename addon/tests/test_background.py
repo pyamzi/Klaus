@@ -193,38 +193,65 @@ check("Anki's RTL rules are more specific than its plain ones, so the "
       and "[dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
       in _panels)
 
-section("the studied-today line joins the deck panel")
-# Anki's template is <center><table>..</table><br>%(stats)s</center>, so
-# the line is already a sibling of the deck table — it just LOOKED
-# stranded on the bare photo. Welded on with CSS rather than by
-# reparenting Anki's DOM, which would have to survive every re-render.
-check("the stats line picks up the same glass as the panel",
-      "#studiedToday {" in _panels
-      and "background: var(--klaus-panel) !important;"
-      in _panels.split("#studiedToday {", 1)[1])
-check("the seam is closed from BOTH sides — the table gives up its "
-      "bottom rounding and border, the line gives up its top ones",
-      "border-bottom: none !important;" in _panels
-      and "border-bottom-left-radius: 0 !important;" in _panels
-      and "border-top: none !important;" in _panels
-      and "border-top-left-radius: 0 !important;" in _panels)
-check("the panel's rounded bottom corners move onto the stats line, so "
-      "the joined pair still reads as one rounded panel",
-      "border-bottom-left-radius: var(--border-radius-medium, 12px)"
-      in _panels.replace("\n", " ").replace("  ", " "))
-check("the <br> Anki puts between them is removed, or the weld shows a "
-      "gap",
-      "center:has(#studiedToday) > br { display: none !important; }"
+section("the studied-today line lives INSIDE the deck panel")
+# Anki renders <center><table>..</table><br>%(stats)s</center>, so the
+# line is a SIBLING of the panel. It was first styled as a second box
+# made to look joined, which meant keeping two widths in agreement —
+# and forcing width:100% overflowed the panel off-screen, because Anki
+# gives the table padding:1rem with content-box sizing. panel_js now
+# reparents it into the table instead: one box, the table's own width.
+check("the row is styled for life inside the table, not as its own box",
+      "tr.klaus-studied td {" in _panels
+      and "tr.klaus-studied #studiedToday { margin: 0 !important; }"
       in _panels)
-check("the join NEVER sets a width: forcing width:100% overflowed the "
-      "panel off-screen, because Anki gives the table padding:1rem and "
-      "content-box sizing, so 100% + padding exceeds the container",
-      "width: 100%" not in _panels
-      and "width:" not in _panels.replace("min-width", ""))
-check("the table half is scoped with :has(tr.deck) to the DECK LIST — "
-      "the overview is a <center> with a table too, and flattening its "
-      "bottom corners would break the panel this look was tuned on",
-      "center > table:has(tr.deck) {" in _panels)
+check("no width is set anywhere — that overflow is exactly what the "
+      "reparenting removed the need for",
+      "width:" not in _panels.replace("min-width", ""))
+check("the old two-box weld is fully gone (no flattened table corners, "
+      "no <br> hiding, no second panel box)",
+      "center > table:has(tr.deck)" not in _panels
+      and "center:has(#studiedToday)" not in _panels)
+check("the moved row is NOT a tr.deck, so the hover/current rule cannot "
+      "highlight it as if it were a deck",
+      "tr.klaus-studied" not in _row_rule)
+check("the script ships exactly when the panel styling does, so the two "
+      "can never disagree about whether Klaus styles this screen",
+      bool(bg.panel_js(_img))
+      and bool(bg.panel_js(bg.resolve(
+          {"background_mode": "color", "background_color": "#123456"})))
+      and bg.panel_js(bg.resolve({"background_mode": "theme"})) == "")
+check("it is a self-contained, fully guarded <script>",
+      bg.panel_js(_img).startswith("<script>")
+      and bg.panel_js(_img).endswith("</script>")
+      and "try{" in bg.panel_js(_img))
+
+# The script is the ONE piece of Klaus that manipulates Anki's DOM, and
+# no string pin can tell whether it actually works. tests/
+# panel_js_dom_test.js runs it against a fake DOM shaped like Anki's
+# real markup. node is not required to develop this addon, so when it is
+# missing this is reported as SKIPPED rather than counted as a pass —
+# an unverified behaviour must never look like a verified one.
+import shutil
+import subprocess
+
+if shutil.which("node"):
+    _js_body = bg.panel_js(_img).replace("<script>", "").replace(
+        "</script>", "")
+    _js_path = os.path.join(tempfile.mkdtemp(), "panel.js")
+    open(_js_path, "w").write(_js_body)
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _proc = subprocess.run(
+        ["node", os.path.join(_here, "panel_js_dom_test.js"), _js_path],
+        capture_output=True, text=True)
+    check("the generated script is valid JS and behaves correctly against "
+          "a DOM shaped like Anki's — moves the line into the deck table, "
+          "removes the gap, is idempotent across re-renders, leaves the "
+          "overview alone, and no-ops when there is nothing to move",
+          _proc.returncode == 0,
+          (_proc.stdout + _proc.stderr).strip().replace("\n", " | "))
+else:
+    print("  SKIP  panel_js DOM behaviour (node not installed) — NOT "
+          "counted as a pass")
 
 _colour_panels = bg.panel_css(bg.resolve(
     {"background_mode": "color", "background_color": "#123456"}))

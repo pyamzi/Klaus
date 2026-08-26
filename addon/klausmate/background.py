@@ -284,45 +284,59 @@ def panel_css(spec: dict) -> str:
         " [dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
         " background: var(--klaus-panel-strong) !important;"
         " }"
-        # "Studied N cards in M seconds today" was left stranded on the
-        # bare photo under the panel. Anki's own template is
-        #   <center><table>…</table><br>%(stats)s</center>
-        # (verified in aqt/deckbrowser.pyc), so the line is ALREADY a
-        # sibling of the deck table in the same box — it only looks
-        # detached. Rather than reparent another app's DOM (which would
-        # have to survive every deck-browser re-render), the two are
-        # welded into one continuous panel: the table drops its bottom
-        # rounding and border, the <br> gap goes, and the stats line
-        # picks the panel up again with matching bottom corners.
-        #
-        # :has(tr.deck) scopes the table half to the DECK LIST. The
-        # overview is also a <center> with a table, and flattening ITS
-        # bottom corners would break the panel this look was tuned on.
-        # Both halves are forced to the same width, or the join lands as
-        # a visible step where the two boxes disagree.
-        " center > table:has(tr.deck) {"
-        " margin-bottom: 0 !important;"
-        " border-bottom: none !important;"
-        " border-bottom-left-radius: 0 !important;"
-        " border-bottom-right-radius: 0 !important;"
+        # "Studied N cards in M seconds today" is moved INTO this table
+        # by panel_js(), as a final full-width row, so it is GENUINELY
+        # inside the panel instead of a second box styled to look joined.
+        # That removes the width problem entirely: the table's own width
+        # is its width, nothing to keep in sync. It is not a tr.deck, so
+        # the hover/current rule above deliberately never touches it.
+        " tr.klaus-studied td {"
+        " padding: 0.7em 12px 0.4em 12px !important;"
+        " border: none !important;"
+        " text-align: center !important;"
         " }"
-        " center:has(#studiedToday) > br { display: none !important; }"
-        " #studiedToday {"
-        " display: block !important;"
-        " box-sizing: border-box !important;"
-        " margin: 0 auto !important;"
-        " padding: 0.6em 1rem 0.9em 1rem !important;"
-        " background: var(--klaus-panel) !important;"
-        + frost +
-        " border: 1px solid var(--klaus-panel-edge) !important;"
-        " border-top: none !important;"
-        " border-top-left-radius: 0 !important;"
-        " border-top-right-radius: 0 !important;"
-        " border-bottom-left-radius:"
-        " var(--border-radius-medium, 12px) !important;"
-        " border-bottom-right-radius:"
-        " var(--border-radius-medium, 12px) !important;"
-        " }"
+        # Anki gives the line margin:2em 0 for life outside the table.
+        " tr.klaus-studied #studiedToday { margin: 0 !important; }"
+    )
+
+
+def panel_js(spec: dict) -> str:
+    """Script that moves the studied-today line INTO the deck table.
+
+    Anki renders ``<center><table>…</table><br>%(stats)s</center>``, so
+    the line is a sibling of the panel, not part of it. Styling it as a
+    second box to look joined meant keeping two widths in agreement —
+    which is exactly what went wrong (forcing width:100% overflowed the
+    panel, because Anki gives the table padding:1rem with content-box
+    sizing). Reparenting it into the table sidesteps that permanently:
+    one box, the table's own width, nothing to keep in sync.
+
+    Runs on every deck-browser render because Anki rebuilds the whole
+    page through ``stdHtml`` — the same hook that injects this. It is
+    idempotent and entirely defensive: any failure leaves Anki's own
+    layout exactly as it was, which is the pre-existing look.
+
+    Empty whenever panel_css is (theme mode), so the two never disagree
+    about whether Klaus is styling this screen at all.
+    """
+    if not panel_css(spec):
+        return ""
+    return (
+        "<script>(function(){try{"
+        "var s=document.getElementById('studiedToday');"
+        "if(!s||s.closest('table'))return;"          # absent, or already moved
+        "var t=null,ts=document.querySelectorAll('center > table');"
+        "for(var i=0;i<ts.length;i++){"
+        "if(ts[i].querySelector('tr.deck')){t=ts[i];break;}}"
+        "if(!t)return;"                              # not the deck list
+        "var r=t.insertRow(-1);r.className='klaus-studied';"
+        "var c=r.insertCell(-1);"
+        # Deliberately larger than any real column count: HTML clamps a
+        # colspan to the row's actual width, so this spans the whole
+        # table without hardcoding Anki's 9-column deck layout.
+        "c.colSpan=99;c.appendChild(s);"
+        "var b=t.parentNode.querySelector('br');if(b)b.remove();"
+        "}catch(e){}})();</script>"
     )
 
 

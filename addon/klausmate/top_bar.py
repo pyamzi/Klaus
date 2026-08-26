@@ -200,6 +200,14 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
         css = _background_css(bar=False)
         if css:
             web_content.head += "<style>" + css + "</style>"
+            # Moves the studied-today line into the deck table so it is
+            # really inside the panel. No-op on the other two screens
+            # (nothing there has that id) and in theme mode (empty).
+            from . import background
+
+            web_content.body += background.panel_js(
+                background.resolve(background.effective_cfg(_config()))
+            )
     except Exception as exc:
         print(f"[klausmate] background inject failed: {exc}")
 
