@@ -1,6 +1,6 @@
 """KlausMate Preferences dialog: provision the local AI runtime, pull a
 local embedding model, configure semantic search, and hold the two
-maintenance actions (Test connection, Clear library tag).
+maintenance action (Test connection).
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
 split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
@@ -11,9 +11,10 @@ Klaus is embeddings-only (K-027 dropped autocomplete and the Ask ⌘K
 popover): the Semantic search and Local model library sections are one
 job — where semantic search's embeddings come from (Voyage / OpenAI / a
 local Ollama model). General holds the two toggles orphaned by
-settings_ui.py's deletion, plus Test connection and Clear library tag
-(K-045 moved both out of the Tools menu so they stay reachable — a menu
-item that vanishes is worse than one click deeper).
+settings_ui.py's deletion, plus Test connection (K-045 moved it out
+of the Tools menu so it stays reachable — a menu item that vanishes is
+worse than one click deeper; the old Clear-library-tag action is gone
+entirely, K-critique caught this docstring still advertising it).
 
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
@@ -408,7 +409,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     nav_list = QListWidget()
     nav_list.setObjectName("SettingsNav")
     nav_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-    nav_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    # Tab reaches the nav, arrows switch pages (currentRowChanged
+    # already drives the stack) — NoFocus made the whole page-switcher
+    # keyboard-unreachable (critique P1). The native focus rect is
+    # suppressed in QSS; the selected row's tint is the focus story.
+    nav_list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     nav_list.setSpacing(3)
     nav_list.setCursor(Qt.CursorShape.PointingHandCursor)
     nav_list.setHorizontalScrollBarPolicy(
@@ -782,8 +787,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     _row(
         general_layout,
         "Use the new pdf.js viewer",
-        "Smoother, flicker-free scrolling (beta: some features are still "
-        "arriving). Takes effect after Anki restarts.",
+        "Smoother, flicker-free scrolling. Beta — not yet in it: "
+        "inserting a page image into the editor's focused field, and "
+        "exact-phrase find highlighting. Takes effect after Anki "
+        "restarts.",
         pdfjs_cb,
     )
 

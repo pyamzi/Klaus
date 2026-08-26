@@ -33,25 +33,38 @@ def _pkg():
     return importlib.import_module(__package__)
 
 
-_KLAUS_TOGGLE_QSS = (
-    "QToolButton {"
-    " border: 1px solid rgba(120, 120, 120, 0.35);"
-    " border-radius: 5px;"
-    " font-size: 14px;"
-    " color: rgba(80, 80, 80, 0.95);"
-    " background: rgba(120, 120, 120, 0.06);"
-    "}"
-    "QToolButton:hover {"
-    " color: rgba(58, 130, 247, 0.95);"
-    " border-color: rgba(58, 130, 247, 0.45);"
-    " background: rgba(58, 130, 247, 0.10);"
-    "}"
-    "QToolButton:checked {"
-    " color: rgba(58, 130, 247, 0.95);"
-    " border-color: rgba(58, 130, 247, 0.55);"
-    " background: rgba(58, 130, 247, 0.14);"
-    "}"
-)
+def _toggle_qss() -> str:
+    """The ◧/◨ toggle chip, from theme tokens — accent-aware and
+    night-aware (this predated the theme migration and was the last
+    surface with its own hardcoded blue; found in the K-critique)."""
+    try:
+        from . import theme
+
+        night = theme.night_mode()
+        c = theme.palette(night)
+        accent = theme.accent_rgba
+        return (
+            "QToolButton {"
+            f" border: 1px solid {c['grey_mid']};"
+            " border-radius: 6px;"
+            " font-size: 14px;"
+            f" color: {c['text_muted']};"
+            f" background: {c['hover_subtle']};"
+            "}"
+            "QToolButton:hover {"
+            f" color: {c['blue_accent']};"
+            f" border-color: {accent(night, 0.45)};"
+            f" background: {accent(night, 0.10)};"
+            "}"
+            "QToolButton:checked {"
+            f" color: {c['blue_accent']};"
+            f" border-color: {accent(night, 0.55)};"
+            f" background: {accent(night, 0.14)};"
+            "}"
+        )
+    except Exception as exc:
+        print(f"[klausmate] browse toggle theme failed: {exc}")
+        return ""
 
 
 def _make_klaus_toggle(glyph: str, tip: str, checked: bool) -> QToolButton:
@@ -61,7 +74,7 @@ def _make_klaus_toggle(glyph: str, tip: str, checked: bool) -> QToolButton:
     btn.setToolTip(tip)
     btn.setCheckable(True)
     btn.setChecked(checked)
-    btn.setStyleSheet(_KLAUS_TOGGLE_QSS)
+    btn.setStyleSheet(_toggle_qss())
     return btn
 
 

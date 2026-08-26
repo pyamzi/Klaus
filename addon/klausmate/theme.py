@@ -428,6 +428,10 @@ def dialog_qss(night: bool) -> str:
     }}
     QPushButton:hover {{ background-color: {c['blue_hover']}; }}
     QPushButton:pressed {{ background-color: {c['blue_pressed']}; }}
+    /* Keyboard focus must be visible (critique P1): a bright-accent
+       ring via border. Buttons whose base border is "none" gain 1px on
+       focus — acceptable jitter; an invisible focus is not. */
+    QPushButton:focus {{ border: 1px solid {c['blue_bright']}; }}
     QPushButton:disabled {{
         background-color: {c['grey_light']};
         color: {c['text_faint']};
@@ -521,6 +525,7 @@ def dialog_qss(night: bool) -> str:
         padding: 0px;
         font-weight: 600;
         font-size: 13px;
+        outline: none; /* the selected row's tint carries focus */
     }}
     QListWidget#SettingsNav::item {{
         color: {c['text']};

@@ -38,8 +38,17 @@ from aqt.qt import (
     Qt,
 )
 
-# Match Klaus brand accent (Anki-aligned link blue #3a82f7, see pdf_viewer.py).
-_KLAUS_BLUE = QColor(58, 130, 247)
+def _accent_color() -> QColor:
+    """The crop rectangle/handles in the USER'S accent — the one moment
+    of active manipulation should carry the theme, not a frozen blue."""
+    try:
+        from . import theme
+
+        return QColor(theme.palette(theme.night_mode())["blue_accent"])
+    except Exception:
+        return QColor(58, 130, 247)
+
+
 _MASK = QColor(0, 0, 0, 120)
 _HANDLE_PX = 8  # logical px, drawn handle squares
 _HIT_PAD = 6  # grab tolerance around edges/handles
@@ -282,12 +291,12 @@ class _CropCanvas(QWidget):
             path.addRect(display_rect)
             path.addRect(sel_rect)
             painter.fillPath(path, _MASK)
-            painter.setPen(QPen(_KLAUS_BLUE, 2))
+            painter.setPen(QPen(_accent_color(), 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(sel_rect)
             # 8 handle squares.
             painter.setPen(QPen(QColor(255, 255, 255), 1))
-            painter.setBrush(_KLAUS_BLUE)
+            painter.setBrush(_accent_color())
             half = _HANDLE_PX / 2.0
             cx = sel_rect.center().x()
             cy = sel_rect.center().y()
@@ -318,7 +327,7 @@ class ImageCropDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._image = image
-        self.setWindowTitle(f"Crop image — {fname}")
+        self.setWindowTitle(f"Crop Image — {fname}")
         self.setModal(True)
 
         # Shared dialog chrome (theme.dialog_qss): window bg, blue-primary

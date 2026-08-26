@@ -88,8 +88,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   (tabbed PDF panel + window management: embed above/below/left/right of the
   editor pane via a QSplitter wrapper, or float as a parentless real window;
   native drag via `startSystemMove` with a watchdog + ghost fallback);
-  image-crop plumbing; Tools → Klaus menu (`install_menu`: Clear library tag,
-  Manage models…, Test connection).
+  image-crop plumbing; Tools menu (`install_menu`: ONE entry,
+  "KlausMate Preferences…", inserted ahead of Anki's own items — the old
+  Klaus submenu's actions live inside the Preferences dialog now).
 - `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
   split out of `__init__.py`.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
@@ -295,7 +296,7 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     muted `SettingDesc` left, control right, `RowSeparator` hairlines
     between. Sidebar display order comes from `_finish_nav(...)`,
     decoupled from widget build order; the sidebar header is the
-    Garamond wordmark alone (no logo) over a search field that filters
+    star logo beside the Garamond wordmark, over a search field that filters
     setting rows across pages (`_apply_search`; rows carry
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
     how the API-key row hides whole for Ollama — always beats a search

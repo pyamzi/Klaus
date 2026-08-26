@@ -265,8 +265,13 @@ Gaussian, bled past every edge so the kernel never samples emptiness)
 under a 55%-opacity chrome tint — frosted glass without compositor
 access. Over a flat colour the bar simply *is* that colour, because a
 Gaussian blur of a flat fill is that fill; the seam disappears by
-construction, not by measurement. The single sanctioned shadow is a
-soft text-shadow on toolbar text over photos, for legibility only.
+construction, not by measurement. Two sanctioned exceptions,
+both inside the PDF viewer's webview canvas: **paper** (rendered PDF
+pages carry a soft 1-4px page shadow — the paper metaphor, as Preview
+does) and **floating overlays** (the viewer's custom context menu
+floats on a soft 16px shadow, as native menus do). Plus a soft
+text-shadow on toolbar text over photos, for legibility only. Nothing
+else casts.
 
 **The Veil Rule.** On the chrome bars, interactive state feedback is a
 translucent veil — rgba black over light chrome (5% hover / 9% press),

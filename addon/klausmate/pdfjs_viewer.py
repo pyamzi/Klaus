@@ -435,7 +435,16 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         if text and QApplication is not None:
             cb = QApplication.clipboard()
             if cb is not None:
-                cb.setText(text)  # silent, Preview-style
+                cb.setText(text)  # selection copy: silent, Preview-style
+                if data.get("toast"):
+                    # Menu-driven page capture — parity with the native
+                    # viewer's confirmation (critique H1 finding).
+                    try:
+                        from aqt.utils import tooltip
+
+                        tooltip("Klaus: page text copied")
+                    except Exception:
+                        pass
 
     def _bridge_copy_image(self, payload: str) -> None:
         if QImage is None or QApplication is None:

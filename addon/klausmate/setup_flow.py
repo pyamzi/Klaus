@@ -384,7 +384,7 @@ def _readiness_check_body() -> None:
                 "Open download page", QMessageBox.ButtonRole.ActionRole
             )
             msg.addButton(
-                "Skip", QMessageBox.ButtonRole.AcceptRole
+                "Later", QMessageBox.ButtonRole.AcceptRole
             ).setObjectName("SecondaryButton")
             msg.exec()
             if msg.clickedButton() is open_btn:
@@ -416,7 +416,7 @@ def _readiness_check_body() -> None:
         )
         manual_btn.setObjectName("SecondaryButton")
         msg.addButton(
-            "Skip", QMessageBox.ButtonRole.AcceptRole
+            "Later", QMessageBox.ButtonRole.AcceptRole
         ).setObjectName("SecondaryButton")
         msg.setDefaultButton(setup_btn)
         msg.exec()
@@ -464,7 +464,7 @@ def _readiness_check_body() -> None:
         "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
     )
     msg.addButton(
-        "Skip", QMessageBox.ButtonRole.AcceptRole
+        "Later", QMessageBox.ButtonRole.AcceptRole
     ).setObjectName("SecondaryButton")
     msg.exec()
     if msg.clickedButton() is manage_btn:
@@ -502,7 +502,7 @@ def _cloud_readiness_check(cfg: dict, provider: str) -> None:
         "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
     )
     msg.addButton(
-        "Skip", QMessageBox.ButtonRole.AcceptRole
+        "Later", QMessageBox.ButtonRole.AcceptRole
     ).setObjectName("SecondaryButton")
     msg.exec()
     if msg.clickedButton() is manage_btn:

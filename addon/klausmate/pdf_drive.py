@@ -584,6 +584,12 @@ class DriveWindow(QWidget):
             self.tree.setColumnWidth(1, 80)
             self.tree.header().setSectionsClickable(True)
             self.tree.setSortingEnabled(True)
+            # Worst-first by default: the Library's job (PRODUCT.md) is
+            # ranking lecture material by how poorly it is retained —
+            # that ranking must be the view you open, not one hiding
+            # behind a header click. Column 1 = Retention, ascending =
+            # lowest retention (study this first) on top.
+            self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
         except Exception:
             pass
         lay.addWidget(self.tree, 1)
@@ -769,8 +775,8 @@ class DriveWindow(QWidget):
                     pass
             if not contexts:
                 self.status.setText(
-                    "No PDFs yet — drop one on the deck list or the editor's "
-                    "PDF bar to add it here."
+                    "No PDFs yet — drop a PDF on the zone below, or onto "
+                    "the deck list."
                 )
         except Exception as e:
             print(f"[klausmate] drive tree rebuild failed: {e}")
@@ -1035,7 +1041,13 @@ class DriveWindow(QWidget):
         cfg = retention._cfg()
         current = retention.get_threshold(safe, cfg)
         dlg = QDialog(self)
-        dlg.setWindowTitle("Match sensitivity")
+        dlg.setWindowTitle("Match Sensitivity")
+        try:
+            from . import theme as _theme
+
+            dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as _exc:
+            print(f"[klausmate] sensitivity dialog theme failed: {_exc}")
         lay = QVBoxLayout(dlg)
         label = QLabel("", dlg)
         lay.addWidget(

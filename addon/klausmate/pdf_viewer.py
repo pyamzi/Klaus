@@ -2490,7 +2490,7 @@ class PdfViewer(QWidget):
                     note_act = menu.addAction(
                         "Edit note…" if has_note else "Add note…"
                     )
-                    remove_hl_act = menu.addAction("Remove Highlight")
+                    remove_hl_act = menu.addAction("Remove highlight")
         fallback = (
             self._page_texts[page] if 0 <= page < len(self._page_texts) else ""
         )
@@ -2499,6 +2499,13 @@ class PdfViewer(QWidget):
         # Discoverability twin of Cmd/Ctrl+double-click (A2).
         slide_act = menu.addAction("Copy slide as image")
         slide_act.setEnabled(self._doc is not None and self._page_count > 0)
+        menu.addSeparator()
+        # Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
+        # (critique P3) — the menu is its discoverable twin. The "\t"
+        # right-aligns the key hint without registering a shortcut.
+        zoom_in_act = menu.addAction("Zoom in\t⌘+")
+        zoom_out_act = menu.addAction("Zoom out\t⌘−")
+        zoom_reset_act = menu.addAction("Actual size\t⌘0")
         chosen = menu.exec(self._pdf_view.mapToGlobal(pos))
         if chosen is None:
             return
@@ -2521,6 +2528,12 @@ class PdfViewer(QWidget):
                 tooltip("Klaus: page text copied")
         elif chosen == slide_act and self._doc is not None:
             copy_pdf_page_image_to_clipboard(self._doc, img_page)
+        elif chosen == zoom_in_act:
+            self._zoom_in()
+        elif chosen == zoom_out_act:
+            self._zoom_out()
+        elif chosen == zoom_reset_act:
+            self._zoom_reset()
 
     def _match_shortcut_combo(self, event) -> str | None:
         """Name of OUR shortcut combo for a key event, or None.

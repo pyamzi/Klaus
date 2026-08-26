@@ -115,10 +115,11 @@ section("crop_dialog.py: no hardcoded hex outside comments")
 hits2 = _hex_hits_outside_comments(_CROP_SRC)
 check("zero literal hex colours in code (comments are exempt)",
       len(hits2) == 0, str(hits2))
-check("the one hex mention left is inside a comment",
-      "#3a82f7" in _CROP_SRC
-      and all(ln.strip().startswith("#")
-              for ln in _CROP_SRC.splitlines() if "#3a82f7" in ln))
+check("the frozen brand blue is gone entirely — the crop selection "
+      "draws in the USER'S accent from the palette (K-critique P2)",
+      "#3a82f7" not in _CROP_SRC
+      and "_KLAUS_BLUE" not in _CROP_SRC
+      and 'palette(theme.night_mode())["blue_accent"]' in _CROP_SRC)
 
 section("crop_dialog.py: crop behaviour untouched (style only)")
 check("rubber-band selection state machine intact",
@@ -128,6 +129,6 @@ check("rubber-band selection state machine intact",
 check("save-as-new-file encode path intact",
       "def encode_cropped" in _CROP_SRC and "_KEEP_FORMATS" in _CROP_SRC)
 check("crop dialog title still names the file, not renamed to KlausMate",
-      'f"Crop image — {fname}"' in _CROP_SRC)
+      'f"Crop Image — {fname}"' in _CROP_SRC)
 
 raise SystemExit(report())

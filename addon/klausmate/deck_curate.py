@@ -133,7 +133,13 @@ def _import_and_arm(paths: list[str], skipped: int = 0) -> None:
 def choose_deck_scope(parent) -> tuple[bool, str | None]:
     """Ask which deck to curate against. Returns (accepted, deck_name)."""
     dlg = QDialog(parent)
-    dlg.setWindowTitle("Curate deck")
+    dlg.setWindowTitle("Curate Deck")
+    try:
+        from . import theme as _theme
+
+        dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+    except Exception as _exc:
+        print(f"[klausmate] curate dialog theme failed: {_exc}")
     layout = QVBoxLayout(dlg)
     layout.addWidget(QLabel("Search for matching cards in:"))
     combo = QComboBox()
@@ -420,7 +426,7 @@ def _drop_square_html() -> str:
         f"display:flex;align-items:center;gap:10px;"
         f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
         f"box-sizing:border-box;background:var(--window-bg,transparent);"
-        f"border:{border};border-radius:10px;"
+        f"border:{border};border-radius:12px;"
         f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
     )
 

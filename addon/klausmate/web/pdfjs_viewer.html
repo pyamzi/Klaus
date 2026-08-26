@@ -572,7 +572,9 @@ async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
 async function copyPageText(page0) {
   const texts = await ensurePageTexts();
   const t = (texts[page0] && texts[page0].str) || "";
-  postB64("copy-text", { text: t });
+  /* toast: menu-driven page capture confirms like the native viewer;
+     plain selection copy stays silent (Preview-style). */
+  postB64("copy-text", { text: t, toast: true });
 }
 
 /* ==== context menu ================================================= */
@@ -607,17 +609,23 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   }
   if (rec) {
     if (rec.kind === "text") {
-      items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
+      items.push(["Remove text", () => postB64("hl-remove", { id: rec.id })]);
     } else {
       const hasNote = String(rec.note || "").trim().length > 0;
-      items.push([hasNote ? "Edit Note…" : "Add Note…",
+      items.push([hasNote ? "Edit note…" : "Add note…",
                   () => postB64("note-edit", { id: rec.id })]);
-      items.push(["Remove Highlight", () => postB64("hl-remove", { id: rec.id })]);
+      items.push(["Remove highlight", () => postB64("hl-remove", { id: rec.id })]);
     }
     items.push(null);
   }
   items.push(["Copy page text", () => copyPageText(hit.page0)]);
   items.push(["Copy slide as image", () => copyPageImage(hit.page0)]);
+  items.push(null);
+  /* Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
+     (critique P3) — the menu is its discoverable twin. */
+  items.push(["Zoom in\u2002\u2318+", () => window.klausSetZoom(1.1)]);
+  items.push(["Zoom out\u2002\u2318\u2212", () => window.klausSetZoom(1 / 1.1)]);
+  items.push(["Actual size\u2002\u23180", () => window.klausZoomReset()]);
   ctxmenu.textContent = "";
   for (const it of items) {
     if (it === null) {
