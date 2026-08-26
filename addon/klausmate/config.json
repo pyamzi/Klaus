@@ -2,6 +2,7 @@
   "endpoint": "http://localhost:11434",
   "image_crop_enabled": true,
   "runtime_auto_setup": true,
+  "browse_highlight_default": true,
   "embedding_provider": "voyage",
   "embedding_model": "",
   "embedding_api_key_openai": "",

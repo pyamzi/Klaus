@@ -2317,6 +2317,13 @@ try:
 except Exception as _e:
     print(f"[klausmate] top bar setup failed: {type(_e).__name__}: {_e}")
 
+try:
+    from . import browse_highlight as _browse_highlight
+
+    _browse_highlight.setup()
+except Exception as _e:
+    print(f"[klausmate] browse highlight setup failed: {type(_e).__name__}: {_e}")
+
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
 # (note: Note, current_field_idx: int) — it does not provide the Editor,

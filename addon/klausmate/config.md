@@ -99,6 +99,11 @@ wouldn't already need.
   image in a note field → **Crop image**, or double-click the image). The
   crop is always saved as a *new* media file — the original is untouched.
   Default `true`.
+- **browse_highlight_default**: Default `true`. Whether Browse's "Highlight
+  Search Results" is on by default in a fresh Browser window — while
+  searching, matched terms are highlighted in the editor pane of the
+  selected row (View menu → **Highlight Search Results** toggles it per
+  window; this config key is only the starting state).
 - **library_tags_enabled**: Default `true`. Keeps every indexed PDF's
   per-PDF `!Library` tag (one tag per PDF, holding exactly the notes
   matched at or above its sensitivity — see `pdf_match_threshold` above)
