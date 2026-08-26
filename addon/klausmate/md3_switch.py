@@ -127,7 +127,9 @@ try:
         QEasingCurve,
         QPainter,
         QPen,
+        QPointF,
         QPropertyAnimation,
+        QRectF,
         Qt,
         pyqtProperty,
     )
@@ -215,15 +217,37 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
         painter = QPainter(self)
         try:
             self._paint(painter, c, p, enabled)
+        except Exception as exc:
+            # A drawing bug must degrade to "the switch didn't draw",
+            # never to an exception escaping mid-paint. Reported once per
+            # paint to stdout rather than through Anki's error dialog,
+            # which a repainting widget would spam.
+            print(f"[klausmate] MD3 switch paint failed: {exc}")
         finally:
-            # ALWAYS end the painter, even if a token lookup or a Qt call
-            # above raises: a QPainter left active on a widget corrupts
-            # the backing store for every later flush.
+            # ALWAYS close the painter, however the block above exits: a
+            # QPainter left live on a widget corrupts the window's
+            # backing store and segfaults Qt on the next flush. That is
+            # the whole 2026-08-26 crash spree in one sentence.
             painter.end()
+
+    def _pill(self, painter, inset: float, track_top: float) -> None:
+        """Stroke/fill the track pill at ``inset`` with the CURRENT pen and
+        brush.
+
+        Always a QRectF: PyQt6's float-coordinate overload of
+        drawRoundedRect takes a QRectF, and the positional
+        ``x, y, w, h`` one accepts ints ONLY. Passing floats positionally
+        (as this widget did from the day it shipped) raises TypeError on
+        every single paint — and before paintEvent guaranteed
+        ``painter.end()``, that escaping exception left a live QPainter on
+        the widget and segfaulted Qt's next backing-store flush.
+        """
+        x, y, w, h, r = pill_rect(inset, track_top)
+        painter.drawRoundedRect(QRectF(x, y, w, h), r, r)
 
     def _paint(self, painter, c: dict, p: float, enabled: bool) -> None:
         """The actual drawing, split out so paintEvent's try/finally can
-        guarantee painter.end() no matter how this returns."""
+        guarantee the painter is closed no matter how this returns."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # Track, vertically centred with room left for the focus ring.
@@ -235,8 +259,7 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             fill = disabled_track_color(c, p >= 0.5)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(fill))
-        x, y, w, h, r = pill_rect(0.0, track_top)
-        painter.drawRoundedRect(x, y, w, h, r, r)
+        self._pill(painter, 0.0, track_top)
         # Unchecked track keeps a hairline outline (MD3's outlined-off
         # track) — a filled track dissolves into a light-mode fog page.
         if p < 0.999:
@@ -244,8 +267,7 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             outline.setWidthF(1.0)
             painter.setPen(outline)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            x, y, w, h, r = pill_rect(0.5, track_top)
-            painter.drawRoundedRect(x, y, w, h, r, r)
+            self._pill(painter, 0.5, track_top)
 
         # Thumb: grows and slides together (MD3's signature switch move).
         d = thumb_diameter(p)
@@ -258,9 +280,9 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
         )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(thumb_fill))
-        painter.drawEllipse(
-            float(cx - d / 2.0), float(cy - d / 2.0), float(d), float(d)
-        )
+        # Same overload trap as the pill: drawEllipse's positional form is
+        # int-only, so use the QPointF centre + float radii signature.
+        painter.drawEllipse(QPointF(cx, cy), d / 2.0, d / 2.0)
 
         # Keyboard focus ring: this widget bypasses QStyle entirely, so
         # the shared QPushButton:focus rule in dialog_qss cannot reach
@@ -270,7 +292,6 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             ring.setWidthF(1.5)
             painter.setPen(ring)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            x, y, w, h, r = pill_rect(1.0, track_top)
-            painter.drawRoundedRect(x, y, w, h, r, r)
-        # Deliberately NOT ended here: paintEvent's finally block owns
-        # closing the painter, and ending it twice is its own corruption.
+            self._pill(painter, 1.0, track_top)
+        # Deliberately NOT closed here: paintEvent's finally block owns
+        # that, and closing twice is its own kind of corruption.

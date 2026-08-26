@@ -109,6 +109,16 @@ created: 2026-08-26
 
 Seven live segfaults (2026-08-26, Qt 6.11 + macOS 26.5) proved that showing a Python dialog APPLICATION-modal via exec() crashes in its first backing-store flush (QPaintDevice::devicePixelRatio on null), regardless of dispatch shape (webchannel, QAction, deferred timer all crashed identically). manage_models_dialog is already fixed (dlg.open(), pinned in tests/test_bridge_reentrancy.py). Convert the remaining app-modal exec sites to window-modal open()/show() with callback-driven results: deck_curate.py:160 choose_deck_scope (returns a value -> needs CPS refactor of _curate_with), __init__.py:512 crop dialog, pdf_drive.py:1087, setup_flow.py's five msg.exec() QMessageBoxes (clickedButton() read after exec -> use buttonClicked signal or open+finished), pdfjs_viewer.py's two static QInputDialog helpers (_do_note_edit getMultiLineText, _goto_dialog getInt -> QInputDialog instances with open() + textValueSelected/intValueSelected). Each conversion must keep its existing test pins passing or strengthen them; add an exec-ban pin per converted file mirroring the manage_models one. Full context: context/SESSION-HANDOFF.md crash section.
 
+### K-115: Guarantee painter.end() in the two remaining paintEvents
+owner: -
+priority: P1
+tags: crash,paint
+files: klausmate/crop_dialog.py,klausmate/pdf_viewer.py,tests/test_setup_crop_theme.py
+verify: python3 -c "import ast,sys; bad=[]; [bad.append(f) for f in ['klausmate/crop_dialog.py','klausmate/pdf_viewer.py'] if not any(isinstance(n,ast.Try) and n.finalbody for t in ast.walk(ast.parse(open(f).read())) if isinstance(t,ast.FunctionDef) and t.name=='paintEvent' for n in ast.walk(t))]; sys.exit(1 if bad else 0)"
+created: 2026-08-26
+
+PROVEN-FATAL PATTERN (see md3_switch and context/SESSION-HANDOFF.md): a QPainter left live on a widget because an exception escaped between QPainter(self) and painter.end() corrupts the window's backing store, and Qt segfaults on the next flush (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush). That cost nine crashes to diagnose in Md3Switch, where a TypeError raised on every paint. crop_dialog.paintEvent (line ~272) and pdf_viewer.paintEvent (line ~522) each construct a QPainter and call .end() OUTSIDE any try/finally, so they are latent instances of the same bug — they simply do not raise today. Wrap each body in try/except-log/finally-end, mirroring md3_switch.paintEvent. Do NOT change what they draw. pdf_viewer's is on the PDF render hot path, so verify scrolling/zoom/marquee still perform after the change. Audit note: every other draw call in the addon passes a real QRect/QRectF/QPolygonF or genuine ints, so no other float-overload TypeErrors are lurking.
+
 ## Doing
 
 ## Review

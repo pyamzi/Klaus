@@ -113,14 +113,24 @@ dialog still crashed the same way from a normal posted-paint. Modality
 is NOT the cause. `open()` is kept anyway (more correct than app-modal
 for a settings window) but is NOT the fix.
 
-**ACTUAL ROOT CAUSE (found 2026-08-26 by staged live bisection):**
-`Md3Switch`. The dialog builds its rows and then calls `setChecked()`
-to load saved settings (`manage_models.py` ~995-999). That fired
-`toggled` → `_animate_to` → started a 200ms `QPropertyAnimation` whose
-per-frame `update()` **repainted the switch while the dialog window was
-still being composited for its first appearance**. Qt's Cocoa
-backing-store flush then dereferenced a paint device that did not exist
-yet → SIGSEGV. Nine crashes, one widget.
+**ACTUAL ROOT CAUSE (found 2026-08-26 by staged live bisection, then
+confirmed exactly by a traceback):** `Md3Switch.paintEvent` raised a
+`TypeError` on **every** paint, and the escaping exception left a live
+`QPainter` on the widget, which corrupts the window's backing store so
+Qt segfaults on the next flush.
+
+The `TypeError`: PyQt6's only float-coordinate `drawRoundedRect`
+overload takes a `QRectF`; the positional `x, y, w, h` form is
+**int-only**. This widget passed floats positionally from the day it
+shipped (`d837bde`), so **the MD3 switches never once rendered** — and
+`_logo`-style live verification had never been done (it sat unchecked
+in this file's own live-verify list). `drawEllipse` had the same trap.
+
+Chain: float args → `TypeError` → exception escapes `paintEvent` with
+the painter still active → backing store corrupted → SIGSEGV in
+`QPaintDevice::devicePixelRatio` inside `QBackingStore::flush`.
+
+Nine crashes, one widget, two lines of geometry.
 
 How it was found — a staged probe behind `_BARE_DIALOG_PROBE` in
 `manage_models.py`, one new variable per restart:
@@ -131,16 +141,33 @@ How it was found — a staged probe behind `_BARE_DIALOG_PROBE` in
 | 2 | + `theme.dialog_qss` on the top level | fine |
 | 3 | + ONE `Md3Switch` (`setChecked(True)`) | **crash** |
 
-**Fix (`md3_switch.py`), three layers:** an off-screen switch jumps
-straight to its target instead of animating; `_set_progress` only calls
-`update()` when visible; `paintEvent` refuses a zero-size widget and
-guarantees `painter.end()` in a `finally`. Pinned and verified
-self-falsifying in `tests/test_md3_switch.py`.
+**Fix (`md3_switch.py`):** the real one is the geometry — every pill
+stroke now goes through ONE `_pill()` helper that builds a `QRectF`,
+and the thumb uses `drawEllipse(QPointF, rx, ry)`. Around it, three
+layers of containment so this class of bug can never again reach the
+backing store: `paintEvent` catches drawing exceptions and logs them,
+closes the painter in a `finally`, and refuses a zero-size widget.
+(The `_animate_to` visibility guard shipped in the same pass and is
+sound behaviour — a control should not animate into its initial state —
+but it was **not** what fixed the segfault; the `finally` was.)
+
+**Audit done:** every other `draw*` call in the addon passes a real
+`QRect`/`QRectF`/`QPolygonF` or genuine ints, so no other float-overload
+`TypeError`s lurk. But `crop_dialog.paintEvent` and
+`pdf_viewer.paintEvent` still call `.end()` outside a `finally` — the
+same latent leaked-painter hazard, filed as **K-115**.
 
 Ruled out along the way (do not re-suspect): webchannel reentrancy;
 modality (`exec` vs `open`); translucent/frameless window attributes;
 `dialog_qss` contents. The probe is left in place, switched off — flip
 `_BARE_DIALOG_PROBE` True to bisect a future paint crash the same way.
+
+**Lesson, stated plainly:** three theories were shipped as fixes before
+the bisect (webchannel reentrancy, app-modal `exec`, animation timing).
+Each pattern-matched the stack trace; none was tested against a
+discriminating case first. What actually worked: change one variable
+per run and let the failure speak. A traceback beats a stack trace,
+and a stack trace beats a hypothesis.
 
 The deferral rule is KEPT as hygiene (Qt documents the hazard), with
 its enforcement machinery: two auto-discovered rosters (js-message

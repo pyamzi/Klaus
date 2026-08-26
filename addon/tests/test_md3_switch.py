@@ -140,6 +140,30 @@ check("painter.end() is guaranteed by finally, and is not also called "
       "backing store)",
       "finally:" in _CODE
       and _CODE.count("painter.end()") == 1)
+check("a drawing bug cannot escape paintEvent — it is caught, so a "
+      "future overload slip degrades to 'did not draw', not a segfault",
+      "except Exception as exc:" in _CODE
+      and "MD3 switch paint failed" in _SRC)
+
+# PyQt6 overload reality (from the live TypeError, 2026-08-26): the only
+# float-coordinate form of drawRoundedRect takes a QRectF, and the
+# positional x,y,w,h form is int-ONLY. This widget passed floats
+# positionally from the day it shipped, so it raised on EVERY paint and
+# never once rendered — the escaping exception is what corrupted the
+# backing store. Same trap on drawEllipse.
+check("drawRoundedRect is handed a QRectF, never bare float coordinates",
+      "drawRoundedRect(QRectF(" in _CODE
+      and "drawRoundedRect(x," not in _CODE)
+check("drawEllipse uses the QPointF-centre overload, not float x,y,w,h",
+      "drawEllipse(QPointF(" in _CODE
+      and "drawEllipse(float(" not in _CODE)
+check("QRectF and QPointF are imported, or the draw calls above are "
+      "NameErrors at paint time",
+      "QRectF," in _SRC and "QPointF," in _SRC)
+check("all three pill strokes go through the ONE _pill helper, so the "
+      "QRectF rule is enforced in a single place",
+      _CODE.count("self._pill(painter,") == 3
+      and _CODE.count("drawRoundedRect") == 1)
 check("keyboard focus gets its own ring — paintEvent bypasses QStyle "
       "entirely, so the shared QPushButton:focus rule can't reach here",
       "self.hasFocus()" in _SRC and 'c["blue_bright"]' in _SRC)
