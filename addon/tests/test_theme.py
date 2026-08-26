@@ -60,7 +60,7 @@ section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
 for night in (False, True):
     d2 = theme.dialog_qss(night)
-    for oid in ("QFrame#SettingsSidebar", "QPushButton#NavItem",
+    for oid in ("QFrame#SettingsSidebar", "QListWidget#SettingsNav",
                 "QLabel#PageTitle", "QLabel#PageSubtitle",
                 "QLabel#SettingName", "QLabel#SettingDesc",
                 "QFrame#RowSeparator", "QFrame#ButtonBarLine",
@@ -68,17 +68,17 @@ for night in (False, True):
         check(f"dialog_qss(night={night}) styles {oid}", oid in d2)
 d2 = theme.dialog_qss(False)
 check("selected nav pill is the blue accent with white text",
-      "QPushButton#NavItem:checked" in d2
-      and d2.index("QPushButton#NavItem:hover")
-      < d2.index("QPushButton#NavItem:checked"))
+      "QListWidget#SettingsNav::item:selected" in d2
+      and d2.index("QListWidget#SettingsNav::item:hover")
+      < d2.index("QListWidget#SettingsNav::item:selected"))
 check("sidebar wordmark is set in Garamond, like Claude's",
       "Garamond" in theme.dialog_qss(False)
       and "QLabel#SidebarAppName" in theme.dialog_qss(False))
 check("settings search field is styled in both palettes",
       all("QLineEdit#SettingsSearch" in theme.dialog_qss(n)
           for n in (False, True)))
-check("no-hit nav pills have a faint disabled state",
-      "QPushButton#NavItem:disabled" in theme.dialog_qss(False))
+check("no NavItem button styling survives — the nav is one list",
+      "NavItem" not in theme.dialog_qss(False))
 
 section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",

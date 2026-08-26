@@ -398,7 +398,26 @@ def manage_models_dialog(setup: bool = False) -> None:
     body.addWidget(sidebar)
     body.addWidget(pages, 1)
 
-    _nav_by_label: dict[str, QPushButton] = {}
+    # The nav is ONE QListWidget, not per-page buttons. Three rounds of
+    # pill-mush fixes (QSS margins, layout spacing, fixed heights) all
+    # fought the same disease: four separately-polished checkable
+    # QPushButtons, each free to lay out/paint differently on first
+    # show vs after a restyle. A single list view with delegate-drawn
+    # rows and hard setSizeHint geometry has one style path and one
+    # layout pass — the bug class has no surface left.
+    nav_list = QListWidget()
+    nav_list.setObjectName("SettingsNav")
+    nav_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+    nav_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    nav_list.setSpacing(3)
+    nav_list.setCursor(Qt.CursorShape.PointingHandCursor)
+    nav_list.setHorizontalScrollBarPolicy(
+        Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    _nav_items: dict[str, QListWidgetItem] = {}
+    _nav_state = {"label": ""}
     _page_index: dict[str, int] = {}
     _page_haystack: dict[str, str] = {}
     _rows_by_page: dict[str, list[QWidget]] = {}
@@ -406,8 +425,24 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     def _select_page(label: str) -> None:
         pages.setCurrentIndex(_page_index[label])
-        for lbl_text, btn in _nav_by_label.items():
-            btn.setChecked(lbl_text == label)
+        _nav_state["label"] = label
+        item = _nav_items.get(label)
+        if item is not None and nav_list.currentItem() is not item:
+            nav_list.setCurrentItem(item)
+
+    def _on_nav_row(row: int) -> None:
+        item = nav_list.item(row)
+        if item is None:
+            # Clicking blank viewport clears the selection — reassert
+            # the current page so exactly one row is always selected.
+            if _nav_state["label"]:
+                _select_page(_nav_state["label"])
+            return
+        label = str(item.text())
+        _nav_state["label"] = label
+        pages.setCurrentIndex(_page_index[label])
+
+    nav_list.currentRowChanged.connect(_on_nav_row)
 
     def _page(nav_label: str, title: str, subtitle: str) -> QVBoxLayout:
         """One settings page + its sidebar pill. Returns the layout of
@@ -445,18 +480,8 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         _page_index[nav_label] = pages.count()
         pages.addWidget(page)
-        nav = QPushButton(nav_label)
-        nav.setObjectName("NavItem")
-        nav.setCheckable(True)
-        nav.setCursor(Qt.CursorShape.PointingHandCursor)
-        # Fixed height, macOS-sidebar style (System Settings rows are
-        # fixed too). The pill's height must never come from a
-        # QSS-derived sizeHint: stylesheet padding/fonts only reach the
-        # hint on (re)polish, which made the sidebar lay out mushed on
-        # first paint and only find its spacing after a later restyle.
-        nav.setFixedHeight(30)
-        nav.clicked.connect(lambda _=False, l=nav_label: _select_page(l))
-        _nav_by_label[nav_label] = nav
+        # The sidebar row itself is created in _finish_nav, in display
+        # order — _page only registers the page.
         # Search bookkeeping: rows register against this label, and the
         # page itself is findable by its title/subtitle (so pages with
         # no _row()s, like Local Models, still match).
@@ -466,21 +491,27 @@ def manage_models_dialog(setup: bool = False) -> None:
         return group_lay
 
     def _finish_nav(*order: str) -> None:
-        """Install the sidebar pills in display order and select the
-        first page. Runs once, after every _page() call."""
+        """Fill the nav list in display order and select the first
+        page. Runs once, after every _page() call. Row height comes
+        from setSizeHint — view geometry, never a QSS-derived hint —
+        and the list's fixed height deliberately OVERSHOOTS (slack is
+        an invisible transparent strip; undershoot would clip a row)."""
+        from aqt.qt import QSize
+
         _nav_order[:] = order
-        # Pills live in their OWN layout whose spacing is the pill gap.
-        # The gap used to be a QSS margin on #NavItem — but QSS margins
-        # only reach a button's sizeHint on (re)polish, so the sidebar
-        # laid out mushed on first open and only found its rhythm after
-        # a later restyle (save_all's sheet swap). Layout spacing is
-        # deterministic from the first paint.
-        nav_lay = QVBoxLayout()
-        nav_lay.setContentsMargins(0, 0, 0, 0)
-        nav_lay.setSpacing(6)
+        row_h = 32
         for label in order:
-            nav_lay.addWidget(_nav_by_label[label])
-        side_lay.addLayout(nav_lay)
+            item = QListWidgetItem(label)
+            item.setSizeHint(QSize(0, row_h))
+            _nav_items[label] = item
+            nav_list.addItem(item)
+        sp = nav_list.spacing()
+        rows = nav_list.count()
+        nav_list.setFixedHeight(
+            rows * row_h + (rows + 1) * 2 * sp
+            + 2 * nav_list.frameWidth() + 8
+        )
+        side_lay.addWidget(nav_list)
         side_lay.addStretch(1)
         _select_page(order[0])
 
@@ -558,9 +589,33 @@ def manage_models_dialog(setup: bool = False) -> None:
                 (not q) or any_visible
                 or q in _page_haystack.get(label, "")
             )
-            btn = _nav_by_label.get(label)
-            if btn is not None:
-                btn.setEnabled(page_hit)
+            item = _nav_items.get(label)
+            if item is not None:
+                # Dim + unclickable, but never removed: flags for the
+                # click, ForegroundRole for the colour (None resets to
+                # the stylesheet default; the faint tone comes from the
+                # theme palette, not a literal).
+                flags = item.flags()
+                if page_hit:
+                    item.setFlags(flags | Qt.ItemFlag.ItemIsEnabled)
+                    item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                else:
+                    item.setFlags(flags & ~Qt.ItemFlag.ItemIsEnabled)
+                    try:
+                        from aqt.qt import QColor
+
+                        from . import theme as _theme_nav
+
+                        item.setData(
+                            Qt.ItemDataRole.ForegroundRole,
+                            QColor(
+                                _theme_nav.palette(
+                                    _theme_nav.night_mode()
+                                )["text_faint"]
+                            ),
+                        )
+                    except Exception:
+                        pass
             if q and page_hit and not first_hit:
                 first_hit = label
         if q and first_hit:

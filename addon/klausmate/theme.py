@@ -367,7 +367,7 @@ def night_mode() -> bool:
 #   12  cards / containers        — QGroupBox, CardFrame, TreeWidget,
 #                                    drop-zone squares
 #    8  buttons / inputs / chips / pills — QPushButton, QLineEdit,
-#                                    QComboBox, NavItem, the toolbar
+#                                    QComboBox, nav rows, the toolbar
 #                                    .hitem chip (pinned, see below)
 #    6  small controls            — swatches, list items, checkbox
 #                                    indicators, tab pills, tool-button
@@ -489,7 +489,7 @@ def dialog_qss(night: bool) -> str:
     /* K-106 — SynapsePro's CURRENT settings shell (their 1.5.x window,
        built from Pouya's screenshot; the vendored source only has the
        older card grid): a fixed SettingsSidebar carrying the app
-       identity plus one checkable NavItem pill per page, a large
+       identity plus a SettingsNav list with one row per page, a large
        PageTitle + muted PageSubtitle heading each page, and settings as
        rows — bold SettingName over muted SettingDesc with the control
        pinned right — split by RowSeparator hairlines inside the same
@@ -512,21 +512,25 @@ def dialog_qss(night: bool) -> str:
         padding: 4px 10px;
         font-size: 12px;
     }}
-    QPushButton#NavItem {{
-        background-color: transparent;
-        color: {c['text']};
+    /* The Preferences nav — ONE QListWidget (see manage_models), so
+       every row shares a single style/paint path. The id-scoped rules
+       must beat the generic QListWidget polish below (id > type). */
+    QListWidget#SettingsNav {{
+        background: transparent;
         border: none;
-        border-radius: 8px;
-        padding: 6px 12px;
+        padding: 0px;
         font-weight: 600;
-        text-align: left;
+        font-size: 13px;
     }}
-    QPushButton#NavItem:hover {{ background-color: {c['hover_subtle']}; }}
-    QPushButton#NavItem:disabled {{
-        background-color: transparent;
-        color: {c['text_faint']};
+    QListWidget#SettingsNav::item {{
+        color: {c['text']};
+        border-radius: 8px;
+        padding-left: 12px;
     }}
-    QPushButton#NavItem:checked {{
+    QListWidget#SettingsNav::item:hover {{
+        background-color: {c['hover_subtle']};
+    }}
+    QListWidget#SettingsNav::item:selected {{
         background-color: {accent_rgba(night, 0.16)};
         color: {c['blue']};
     }}

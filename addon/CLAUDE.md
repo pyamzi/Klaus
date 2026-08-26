@@ -287,8 +287,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     (K-106 — replaced the K-105 card grid; built from a screenshot of
     SynapsePro 1.5.x, the vendored source only has their older grid)**:
     a fixed `SettingsSidebar` (star-logo pixmap drawn from
-    `top_bar.star_points()`, app name + manifest `human_version`, one
-    checkable `NavItem` pill per page) beside a QStackedWidget of pages.
+    `top_bar.star_points()`, app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
+    per-page buttons; three pill-mush rounds proved per-button polish
+    timing unfixable) with a row per page) beside a QStackedWidget of pages.
     Each page = `PageTitle`/`PageSubtitle` over ONE rounded `CardFrame`
     group; every simple setting is a `_row()` — bold `SettingName` +
     muted `SettingDesc` left, control right, `RowSeparator` hairlines

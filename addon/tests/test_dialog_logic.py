@@ -788,11 +788,12 @@ check("structural hiding beats a search hit (Ollama key row)",
       and "key_row.klaus_hidden = not is_cloud" in _src2)
 check("pages without rows stay findable by their haystack",
       "_page_haystack[nav_label]" in _src2)
-check("no-hit pills dim instead of vanishing",
-      "btn.setEnabled(page_hit)" in _src2)
+check("no-hit pages dim + lose clickability instead of vanishing",
+      "Qt.ItemFlag.ItemIsEnabled" in _src2
+      and "ForegroundRole" in _src2)
 check("every section is a page with a sidebar pill and a big title",
       _src2.count("= _page(") == 4
-      and 'setObjectName("NavItem")' in _src2
+      and 'setObjectName("SettingsNav")' in _src2
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
@@ -803,8 +804,11 @@ check("settings are SynapsePro rows — name + desc left, control right, "
       'setObjectName("SettingName")' in _src2
       and 'setObjectName("SettingDesc")' in _src2
       and 'setObjectName("RowSeparator")' in _src2)
-check("nav pills stay mutually exclusive through _select_page",
-      "btn.setChecked(lbl_text == label)" in _src2)
+check("the nav is ONE list — no per-page nav buttons remain",
+      "QListWidgetItem(label)" in _src2
+      and "nav.setCheckable" not in _src2)
+check("blank-viewport clicks cannot clear the selection",
+      "_select_page(_nav_state" in _src2)
 check("the API-key ROW hides whole for Ollama — via the search "
       "filter's structural-hide channel, separator handling included",
       "key_row.klaus_hidden = not is_cloud" in _src2
@@ -867,14 +871,13 @@ check("profile open loads the custom colour before the theme name",
 check("Fit and Bar blur disable as WHOLE rows, labels included",
       "bg_fit_row.setEnabled(is_image)" in _src2
       and "bg_blur_row.setEnabled(is_image)" in _src2)
-check("pill gaps come from layout spacing, never a QSS margin "
-      "(margins only reach sizeHint on re-polish -> mushed first paint)",
-      "nav_lay.setSpacing(6)" in _src2
-      and "margin" not in open("klausmate/theme.py").read().split(
-          "QPushButton#NavItem {", 1)[1].split("}", 1)[0])
-check("pill HEIGHT is fixed too — QSS fonts/padding reach sizeHint on "
-      "the same re-polish schedule as margins did",
-      "nav.setFixedHeight(30)" in _src2)
+check("nav geometry is pure view geometry: setSizeHint rows + list "
+      "setSpacing + an overshooting fixed height — nothing QSS-derived "
+      "(three pill-era fixes fought polish timing; a single list view "
+      "has no per-button hints to get wrong)",
+      "item.setSizeHint(QSize(0, row_h))" in _src2
+      and "nav_list.setSpacing(3)" in _src2
+      and "nav_list.setFixedHeight(" in _src2)
 
 
 print("== install page onto the K-106 shell language (K-111) ==")
