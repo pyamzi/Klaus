@@ -224,6 +224,22 @@ def panel_css(spec: dict) -> str:
         # a solid slab through the frosted table above. It gets the glass
         # too, just heavier, so it still reads as raised and selected.
         #
+        # MUST be scoped to tr.deck. Anki's own version of this rule is
+        # unscoped, but it lives in deckbrowser.css and so only ever
+        # reaches the deck list; ours is injected into the overview and
+        # congrats screens as well, where a bare `tr:hover td` lit up the
+        # overview's LAYOUT table — its cells turned into opaque white
+        # slabs inside the frosted panel on hover. Anki emits deck rows as
+        # <tr class='deck'> / <tr class='deck current'> (verified in
+        # aqt/deckbrowser.pyc), so .deck is exactly the deck list and
+        # nothing else.
+        #
+        # That also makes :not(.top-level-drag-row) redundant here — drag
+        # rows are emitted as <tr class='top-level-drag-row'> with no
+        # .deck — but it is kept so this selector still mirrors Anki's,
+        # and because dropping it would LOWER specificity below Anki's
+        # [dir=rtl] hover rule.
+        #
         # No backdrop-filter of its own on purpose: the table beneath it
         # is already a backdrop root, so this tint composites straight
         # over the blur the table produced. Adding a second filter here
@@ -233,10 +249,10 @@ def panel_css(spec: dict) -> str:
         # The [dir=rtl] variants are spelled out because Anki's own RTL
         # rules are MORE specific than the plain ones; matching their
         # specificity is what lets this win there too.
-        " .current td,"
-        " tr:hover:not(.top-level-drag-row) td,"
-        " [dir=rtl] .current td,"
-        " [dir=rtl] tr:hover:not(.top-level-drag-row) td {"
+        " tr.deck.current td,"
+        " tr.deck:hover:not(.top-level-drag-row) td,"
+        " [dir=rtl] tr.deck.current td,"
+        " [dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
         " background: var(--klaus-panel-strong) !important;"
         " }"
     )

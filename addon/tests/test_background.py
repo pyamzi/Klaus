@@ -148,9 +148,16 @@ check("panels round to Anki's own container radius, with a fallback",
 
 check("the current/hovered deck row joins the glass instead of punching "
       "an opaque slab through it (Anki fills it with --border-subtle)",
-      ".current td," in _panels
-      and "tr:hover:not(.top-level-drag-row) td," in _panels
+      "tr.deck.current td," in _panels
+      and "tr.deck:hover:not(.top-level-drag-row) td," in _panels
       and "background: var(--klaus-panel-strong) !important;" in _panels)
+check("the row rule is scoped to tr.deck — unscoped, it also matched the "
+      "OVERVIEW's layout table and turned its cells into opaque slabs on "
+      "hover, inside the frosted panel (Anki's own copy of this rule is "
+      "unscoped but ships only in deckbrowser.css; ours is injected into "
+      "the overview and congrats screens too)",
+      "tr:hover" not in _panels.replace("tr.deck:hover", "")
+      and " .current td," not in _panels)
 def _alphas(css, token):
     """Every alpha declared for a token, light palette then night."""
     import re
@@ -169,9 +176,11 @@ check("the row does NOT stack a second backdrop-filter — the table "
       "beneath it is already a backdrop root, so one blur is enough",
       _panels.count("backdrop-filter") == 2)  # the -webkit- pair, once
 check("Anki's RTL rules are more specific than its plain ones, so the "
-      "row selector spells the [dir=rtl] variants out to match them",
-      "[dir=rtl] .current td," in _panels
-      and "[dir=rtl] tr:hover:not(.top-level-drag-row) td {" in _panels)
+      "row selector spells the [dir=rtl] variants out to match them — "
+      "scoped to tr.deck like their LTR twins",
+      "[dir=rtl] tr.deck.current td," in _panels
+      and "[dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
+      in _panels)
 
 check("NO frost in colour mode — blurring a flat colour yields that "
       "same colour, so it would cost a compositing layer for nothing",
