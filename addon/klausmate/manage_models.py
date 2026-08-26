@@ -280,10 +280,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     install_layout.addWidget(install_body)
     install_layout.addSpacing(8)
 
-    install_heading = QLabel("Set up local AI")
-    install_heading.setObjectName("InstallHeading")
-    install_layout.addWidget(install_heading)
-
     install_status = QLabel()
     install_status.setWordWrap(True)
     install_status.setStyleSheet(_MUTED)

@@ -896,7 +896,10 @@ check("the install page opens with a PageTitle + PageSubtitle pair, "
       and "install_body.setWordWrap(True)" in _install_src
       and "setContentsMargins(24, 18, 24, 8)" in _install_src)
 check("the two hand-styled labels moved to InstallHeading / InstallSection",
-      'install_heading.setObjectName("InstallHeading")' in _install_src
+      # The old "Set up local AI" heading label is GONE — with a real
+      # PageTitle above it, keeping it duplicated the title (caught in
+      # orchestrator review of K-111).
+      "install_heading" not in _install_src
       and 'manual_lbl.setObjectName("InstallSection")' in _install_src)
 
 print(f"\n{PASS} passed, {FAIL} failed")
