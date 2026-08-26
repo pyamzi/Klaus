@@ -4,6 +4,7 @@ theme.py must stay aqt-free at module top (only night_mode() touches aqt,
 lazily, degrading to light mode) so every QSS builder is testable here.
 """
 import importlib
+import re
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -214,5 +215,51 @@ check("accent_rgba dark = bright dark-mode accent",
 m = theme.muted_label_qss(False, 10)
 check("muted label carries text_muted + size",
       theme.LIGHT["text_muted"] in m and "font-size: 10px" in m)
+
+section("design scale (K-110): every builder stays on-scale")
+# Sanctioned sets — must match the "Design scale" comment block above
+# theme.dialog_qss. This scans the ACTUAL emitted CSS of every QSS/CSS
+# builder in the module (not just dialog_qss's known ids) so an
+# off-scale border-radius or font-size anywhere fails the suite the
+# moment it lands, not just the two outliers this card fixed (the
+# checkbox indicator's 5px and the drop-zone's 10px).
+RADIUS_SCALE = {0, 2, 4, 6, 7, 8, 12}
+FONT_SIZE_SCALE = {10, 11, 12, 13, 14, 18, 24}
+# border-radius: 0 ships bare (no "px") as a flattener — see toolbar_css
+# — so the unit is optional; font-size always ships with "px".
+RADIUS_RE = re.compile(r"border-radius:\s*(\d+)(?:px)?")
+FONT_SIZE_RE = re.compile(r"font-size:\s*(\d+)px")
+
+scale_builders = builders + [
+    ("drop_zone_qss",
+     lambda night: theme.drop_zone_qss(night, "ScaleAuditDropZone")),
+    ("toolbar_css", lambda night: theme.toolbar_css()),
+    ("bottombar_css", lambda night: theme.bottombar_css()),
+]
+for name, fn in scale_builders:
+    for night in (False, True):
+        css = fn(night)
+        radii = {int(v) for v in RADIUS_RE.findall(css)}
+        sizes = {int(v) for v in FONT_SIZE_RE.findall(css)}
+        off_radii = sorted(radii - RADIUS_SCALE)
+        off_sizes = sorted(sizes - FONT_SIZE_SCALE)
+        check(f"{name}(night={night}) border-radius values are all in "
+              f"the sanctioned set {sorted(RADIUS_SCALE)} "
+              f"(off-scale: {off_radii})",
+              not off_radii)
+        check(f"{name}(night={night}) font-size values are all in the "
+              f"sanctioned set {sorted(FONT_SIZE_SCALE)} "
+              f"(off-scale: {off_sizes})",
+              not off_sizes)
+check("muted_label_qss's default size is on-scale",
+      int(FONT_SIZE_RE.search(theme.muted_label_qss(False)).group(1))
+      in FONT_SIZE_SCALE)
+check("dialog_qss documents the K-111 install-page ids on-scale",
+      "QLabel#InstallHeading {" in theme.dialog_qss(False)
+      and "font-size: 14px" in theme.dialog_qss(False).split(
+          "QLabel#InstallHeading", 1)[1][:40]
+      and "QLabel#InstallSection {" in theme.dialog_qss(False)
+      and "margin-top: 8px"
+      in theme.dialog_qss(False).split("QLabel#InstallSection", 1)[1][:80])
 
 raise SystemExit(report())

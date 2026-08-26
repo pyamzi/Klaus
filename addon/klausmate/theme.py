@@ -356,6 +356,38 @@ def night_mode() -> bool:
 # functions of ``night`` so the headless tests can exercise every branch.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Design scale (K-110) — every QSS builder below draws its border-radius
+# and font-size values from these two sanctioned sets. An off-scale value
+# is drift, not a style choice — tests/test_theme.py scans the emitted
+# CSS of every builder and fails the suite if either set gains a member
+# it wasn't given here.
+#
+# border-radius (px):
+#   12  cards / containers        — QGroupBox, CardFrame, TreeWidget,
+#                                    drop-zone squares
+#    8  buttons / inputs / chips / pills — QPushButton, QLineEdit,
+#                                    QComboBox, NavItem, the toolbar
+#                                    .hitem chip (pinned, see below)
+#    6  small controls            — swatches, list items, checkbox
+#                                    indicators, tab pills, tool-button
+#                                    glyphs
+#    7  slider-handle circle ONLY — height / 2 (a 14px handle is a
+#                                    circle, not a rounded square)
+#    4  slim fill                 — progress bar + its chunk
+#    2  slim fill                 — slider groove + sub-page
+#    0  a deliberate flattener (killing a corner Anki itself drew, e.g.
+#       toolbar_css's `.header .toolbar`) — never a default
+#
+# font-size (px): 10 micro · 11 captions · 12 subtitles · 13 body ·
+#   14 section headings · 18 wordmark · 24 page titles
+#
+# The toolbar/bottombar chip blocks (_chip_base_rules, _chip_hover_rules,
+# _chip_active_rules, toolbar_css, bottombar_css) already sit on this
+# scale (8px radius, 13px font) and are pinned byte-identical by
+# tests/test_top_bar.py — this audit does not touch their values.
+# ─────────────────────────────────────────────────────────────────────────────
+
 def dialog_qss(night: bool) -> str:
     """Dialog foundation (Manage models, future dialogs).
 
@@ -502,6 +534,15 @@ def dialog_qss(night: bool) -> str:
     QLabel#PageSubtitle {{ color: {c['text_muted']}; font-size: 12px; }}
     QLabel#SettingName {{ font-size: 13px; font-weight: 600; }}
     QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 11px; }}
+    /* K-111 (manage_models's install/setup page): heading + subsection
+       typography, sized like SubHeaderLabel/SettingName above so the
+       install flow doesn't invent its own scale. */
+    QLabel#InstallHeading {{ font-size: 14px; font-weight: 700; }}
+    QLabel#InstallSection {{
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: 8px;
+    }}
     QFrame#RowSeparator {{
         background-color: {c['grey_light']};
         border: none;
@@ -515,7 +556,9 @@ def dialog_qss(night: bool) -> str:
     QCheckBox {{ color: {c['text']}; spacing: 10px; padding: 4px 0px; }}
     QCheckBox::indicator {{
         width: 18px; height: 18px;
-        border-radius: 5px;
+        /* Small control (checkbox indicator) — 6px per the design
+           scale above; this had drifted to a bespoke 5px. */
+        border-radius: 6px;
         border: 1px solid {c['grey_mid']};
         background-color: {c['surface']};
     }}
@@ -793,7 +836,10 @@ def drop_zone_qss(night: bool, object_name: str) -> str:
     return f"""
     #{object_name} {{
         border: 1px dashed {c['grey_mid']};
-        border-radius: 10px;
+        /* Container role (a droppable card, not a button/chip) — 12px
+           per the design scale above; this had drifted to a bespoke
+           10px. */
+        border-radius: 12px;
         background: transparent;
     }}
     #{object_name}[dragOver="true"] {{
