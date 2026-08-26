@@ -257,14 +257,15 @@ def dialog_qss(night: bool) -> str:
         color: {c['text']};
         border: none;
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 5px 12px;
+        margin: 1px 0px;
         font-weight: 600;
         text-align: left;
     }}
     QPushButton#NavItem:hover {{ background-color: {c['hover_subtle']}; }}
     QPushButton#NavItem:checked {{
-        background-color: {c['blue']};
-        color: white;
+        background-color: {accent_rgba(night, 0.16)};
+        color: {c['blue']};
     }}
     QLabel#PageTitle {{ font-size: 24px; font-weight: 800; }}
     QLabel#PageSubtitle {{ color: {c['text_muted']}; font-size: 12px; }}

@@ -355,7 +355,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     sidebar.setFixedWidth(192)
     side_lay = QVBoxLayout(sidebar)
     side_lay.setContentsMargins(10, 14, 10, 12)
-    side_lay.setSpacing(4)
+    side_lay.setSpacing(2)
 
     head_row = QHBoxLayout()
     head_row.setSpacing(8)
