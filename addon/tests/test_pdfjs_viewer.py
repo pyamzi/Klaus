@@ -213,4 +213,44 @@ cfg = json.load(open(os.path.join(here, "..", "klausmate", "config.json")))
 check("config.json defaults pdf_renderer to native",
       cfg.get("pdf_renderer") == "native")
 
+section("bridge dialogs deferred past the webchannel call (live crash)")
+# Live traceback: SIGSEGV in QPaintDevice::devicePixelRatio, inside
+# QBackingStore::flush, reached from a QWebChannel-dispatched bridge
+# call (set_bridge_command rides QWebChannel in modern Anki) that
+# opened a modal QInputDialog synchronously — a nested .exec() inside
+# the same re-entrant Chromium/Qt stack a pending paint can land on.
+# Both dialog-opening bridge entry points must defer via
+# QTimer.singleShot(0, ...) so the modal only opens on a clean
+# top-level event-loop iteration, after the bridge call has unwound.
+_SRC = open("klausmate/pdfjs_viewer.py").read()
+check("_bridge_note_edit defers instead of opening the dialog itself",
+      "def _bridge_note_edit(self, payload: str) -> None:\n"
+      "        data = decode_b64_json(payload) or {}\n"
+      "        hl_id = data.get(\"id\")\n"
+      "        if hl_id is None:\n"
+      "            return\n" in _SRC
+      and "QTimer.singleShot(0, lambda: self._do_note_edit(hl_id))" in _SRC)
+check("the actual dialog logic moved to a separate _do_note_edit, "
+      "which re-looks-up the record by id rather than trusting a "
+      "captured reference across the deferred tick",
+      "def _do_note_edit(self, hl_id: str) -> None:" in _SRC
+      and _SRC.index("def _do_note_edit")
+      > _SRC.index("def _bridge_note_edit"))
+check("_bridge_goto_request defers too — same reentrancy class",
+      "def _bridge_goto_request(self, _payload: str) -> None:\n"
+      "        # Deferred for the same reason" in _SRC
+      and "QTimer.singleShot(0, self._goto_dialog)" in _SRC)
+check("_goto_dialog's OTHER caller (a native QLabel click, not the "
+      "webchannel) stays synchronous — only the bridge entry defers",
+      "self._goto_dialog()" in _SRC.split("def eventFilter", 1)[1]
+      .split("def ", 1)[0])
+check("no dialog-opening bridge handler calls a blocking QInputDialog "
+      "static directly anymore — only the deferred helpers do",
+      "getMultiLineText" not in _SRC.split(
+          "def _bridge_note_edit", 1)[1].split(
+          "def _do_note_edit", 1)[0]
+      and "getInt" not in _SRC.split(
+          "def _bridge_goto_request", 1)[1].split(
+          "def _goto_dialog", 1)[0])
+
 raise SystemExit(report())

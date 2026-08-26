@@ -405,6 +405,23 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
     def _bridge_note_edit(self, payload: str) -> None:
         data = decode_b64_json(payload) or {}
         hl_id = data.get("id")
+        if hl_id is None:
+            return
+        # Deferred to the next event-loop tick (live crash: SIGSEGV in
+        # QPaintDevice::devicePixelRatio during QBackingStore::flush).
+        # Anki's bridge (set_bridge_command above) rides QWebChannel, so
+        # this handler runs INSIDE the same re-entrant Chromium/Qt call
+        # stack a pending paint can land on. Opening a modal
+        # QInputDialog synchronously from there — a nested .exec() —
+        # corrupted a backing-store flush and crashed. QTimer.singleShot
+        # (0, ...) unwinds back to a clean top-level event-loop
+        # iteration first, same defer top_bar._push_chrome_colour uses
+        # for the analogous "can't safely act from inside this
+        # callback" situation. Re-look-up by id rather than capturing
+        # ``record`` directly, in case annotations reload in between.
+        QTimer.singleShot(0, lambda: self._do_note_edit(hl_id))
+
+    def _do_note_edit(self, hl_id: str) -> None:
         record = next(
             (h for h in self._highlights if h.get("id") == hl_id), None
         )
@@ -462,7 +479,13 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
                     tooltip("Klaus: copied as image")
 
     def _bridge_goto_request(self, _payload: str) -> None:
-        self._goto_dialog()
+        # Deferred for the same reason _bridge_note_edit is — see its
+        # comment (live crash: modal QInputDialog opened synchronously
+        # inside a QWebChannel-dispatched bridge call). The eventFilter
+        # caller of _goto_dialog below stays synchronous on purpose:
+        # that one fires from a normal Qt mouse event on a native
+        # QLabel, never from inside the webchannel's call stack.
+        QTimer.singleShot(0, self._goto_dialog)
 
     def _goto_dialog(self) -> None:
         if QInputDialog is None or self._page_count <= 0:
