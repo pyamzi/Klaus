@@ -263,6 +263,48 @@ def panel_css(spec: dict) -> str:
         " [dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
         " background: var(--klaus-panel-strong) !important;"
         " }"
+        # "Studied N cards in M seconds today" was left stranded on the
+        # bare photo under the panel. Anki's own template is
+        #   <center><table>…</table><br>%(stats)s</center>
+        # (verified in aqt/deckbrowser.pyc), so the line is ALREADY a
+        # sibling of the deck table in the same box — it only looks
+        # detached. Rather than reparent another app's DOM (which would
+        # have to survive every deck-browser re-render), the two are
+        # welded into one continuous panel: the table drops its bottom
+        # rounding and border, the <br> gap goes, and the stats line
+        # picks the panel up again with matching bottom corners.
+        #
+        # :has(tr.deck) scopes the table half to the DECK LIST. The
+        # overview is also a <center> with a table, and flattening ITS
+        # bottom corners would break the panel this look was tuned on.
+        # Both halves are forced to the same width, or the join lands as
+        # a visible step where the two boxes disagree.
+        " center > table:has(tr.deck) {"
+        " width: 100% !important;"
+        " margin-bottom: 0 !important;"
+        " border-bottom: none !important;"
+        " border-bottom-left-radius: 0 !important;"
+        " border-bottom-right-radius: 0 !important;"
+        " }"
+        " center:has(#studiedToday) > br { display: none !important; }"
+        " #studiedToday {"
+        " display: block !important;"
+        " width: 100% !important;"
+        " box-sizing: border-box !important;"
+        " margin: 0 auto !important;"
+        " padding: 0.6em 1rem 0.9em 1rem !important;"
+        " background: var(--klaus-panel) !important;"
+        f" -webkit-backdrop-filter: {filt} !important;"
+        f" backdrop-filter: {filt} !important;"
+        " border: 1px solid var(--klaus-panel-edge) !important;"
+        " border-top: none !important;"
+        " border-top-left-radius: 0 !important;"
+        " border-top-right-radius: 0 !important;"
+        " border-bottom-left-radius:"
+        " var(--border-radius-medium, 12px) !important;"
+        " border-bottom-right-radius:"
+        " var(--border-radius-medium, 12px) !important;"
+        " }"
     )
 
 

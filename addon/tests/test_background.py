@@ -180,15 +180,49 @@ check("...and is heavier than the panel in BOTH palettes, but only by a "
       "own. The RELATIONSHIP is the design; either number may be retuned",
       len(_pa) == 2 and len(_sa) == 2
       and all(0 < (s - p) <= 0.25 for s, p in zip(_sa, _pa)))
-check("the row does NOT stack a second backdrop-filter — the table "
-      "beneath it is already a backdrop root, so one blur is enough",
-      _panels.count("backdrop-filter") == 2)  # the -webkit- pair, once
+_row_rule = _panels.split("tr.deck.current td,", 1)[1].split("}", 1)[0]
+check("the row does NOT stack a second backdrop-filter — it sits INSIDE "
+      "the table, which is already a backdrop root, so one blur is "
+      "enough (#studiedToday is a SIBLING of the table and does need "
+      "its own, which is why this asks about the row rule specifically)",
+      "backdrop-filter" not in _row_rule)
 check("Anki's RTL rules are more specific than its plain ones, so the "
       "row selector spells the [dir=rtl] variants out to match them — "
       "scoped to tr.deck like their LTR twins",
       "[dir=rtl] tr.deck.current td," in _panels
       and "[dir=rtl] tr.deck:hover:not(.top-level-drag-row) td {"
       in _panels)
+
+section("the studied-today line joins the deck panel")
+# Anki's template is <center><table>..</table><br>%(stats)s</center>, so
+# the line is already a sibling of the deck table — it just LOOKED
+# stranded on the bare photo. Welded on with CSS rather than by
+# reparenting Anki's DOM, which would have to survive every re-render.
+check("the stats line picks up the same glass as the panel",
+      "#studiedToday {" in _panels
+      and "background: var(--klaus-panel) !important;"
+      in _panels.split("#studiedToday {", 1)[1])
+check("the seam is closed from BOTH sides — the table gives up its "
+      "bottom rounding and border, the line gives up its top ones",
+      "border-bottom: none !important;" in _panels
+      and "border-bottom-left-radius: 0 !important;" in _panels
+      and "border-top: none !important;" in _panels
+      and "border-top-left-radius: 0 !important;" in _panels)
+check("the panel's rounded bottom corners move onto the stats line, so "
+      "the joined pair still reads as one rounded panel",
+      "border-bottom-left-radius: var(--border-radius-medium, 12px)"
+      in _panels.replace("\n", " ").replace("  ", " "))
+check("the <br> Anki puts between them is removed, or the weld shows a "
+      "gap",
+      "center:has(#studiedToday) > br { display: none !important; }"
+      in _panels)
+check("BOTH halves are forced to the same width — mismatched boxes would "
+      "land the join as a visible step",
+      _panels.count("width: 100% !important;") == 2)
+check("the table half is scoped with :has(tr.deck) to the DECK LIST — "
+      "the overview is a <center> with a table too, and flattening its "
+      "bottom corners would break the panel this look was tuned on",
+      "center > table:has(tr.deck) {" in _panels)
 
 check("NO frost in colour mode — blurring a flat colour yields that "
       "same colour, so it would cost a compositing layer for nothing",
