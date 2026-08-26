@@ -203,10 +203,12 @@ def panel_css(spec: dict) -> str:
         ":root {"
         " --klaus-panel: rgba(255,255,255,0.62);"
         " --klaus-panel-edge: rgba(255,255,255,0.55);"
+        " --klaus-panel-strong: rgba(255,255,255,0.85);"
         " }"
         ":root.night-mode {"
         " --klaus-panel: rgba(38,38,38,0.62);"
         " --klaus-panel-edge: rgba(255,255,255,0.10);"
+        " --klaus-panel-strong: rgba(48,48,48,0.85);"
         " }"
         # table = the deck list and the overview's count table; .callout =
         # Anki's notice box. Both are real surfaces that carry text.
@@ -216,6 +218,26 @@ def panel_css(spec: dict) -> str:
         f" backdrop-filter: {filt} !important;"
         " border: 1px solid var(--klaus-panel-edge) !important;"
         " border-radius: var(--border-radius-medium, 12px) !important;"
+        " }"
+        # The current/hovered deck row. Anki fills it with an OPAQUE
+        # --border-subtle (--canvas-inset under [dir=rtl]), which punched
+        # a solid slab through the frosted table above. It gets the glass
+        # too, just heavier, so it still reads as raised and selected.
+        #
+        # No backdrop-filter of its own on purpose: the table beneath it
+        # is already a backdrop root, so this tint composites straight
+        # over the blur the table produced. Adding a second filter here
+        # would blur an already-blurred result and cost another
+        # compositing layer per row.
+        #
+        # The [dir=rtl] variants are spelled out because Anki's own RTL
+        # rules are MORE specific than the plain ones; matching their
+        # specificity is what lets this win there too.
+        " .current td,"
+        " tr:hover:not(.top-level-drag-row) td,"
+        " [dir=rtl] .current td,"
+        " [dir=rtl] tr:hover:not(.top-level-drag-row) td {"
+        " background: var(--klaus-panel-strong) !important;"
         " }"
     )
 

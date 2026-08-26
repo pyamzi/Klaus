@@ -146,6 +146,33 @@ check("rules use !important, since Anki's own sheet also sets these",
 check("panels round to Anki's own container radius, with a fallback",
       "var(--border-radius-medium, 12px)" in _panels)
 
+check("the current/hovered deck row joins the glass instead of punching "
+      "an opaque slab through it (Anki fills it with --border-subtle)",
+      ".current td," in _panels
+      and "tr:hover:not(.top-level-drag-row) td," in _panels
+      and "background: var(--klaus-panel-strong) !important;" in _panels)
+def _alphas(css, token):
+    """Every alpha declared for a token, light palette then night."""
+    import re
+    return [float(m) for m in
+            re.findall(rf"{token}: rgba\([\d, ]+,\s*([\d.]+)\)", css)]
+
+
+_pa, _sa = _alphas(_panels, "--klaus-panel"), _alphas(_panels,
+                                                      "--klaus-panel-strong")
+check("...and is MORE opaque than the panel in BOTH palettes — computed "
+      "from the emitted alphas, so tweaking the values cannot silently "
+      "invert the relationship the user actually asked for",
+      len(_pa) == 2 and len(_sa) == 2
+      and all(s > p for s, p in zip(_sa, _pa)))
+check("the row does NOT stack a second backdrop-filter — the table "
+      "beneath it is already a backdrop root, so one blur is enough",
+      _panels.count("backdrop-filter") == 2)  # the -webkit- pair, once
+check("Anki's RTL rules are more specific than its plain ones, so the "
+      "row selector spells the [dir=rtl] variants out to match them",
+      "[dir=rtl] .current td," in _panels
+      and "[dir=rtl] tr:hover:not(.top-level-drag-row) td {" in _panels)
+
 check("NO frost in colour mode — blurring a flat colour yields that "
       "same colour, so it would cost a compositing layer for nothing",
       bg.panel_css(bg.resolve({"background_mode": "color"})) == "")
