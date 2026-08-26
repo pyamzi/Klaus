@@ -1,0 +1,489 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-26T05:41:18Z",
+  "title": "Design System: KlausMate",
+  "extensions": {
+    "colorMeta": {
+      "system-blue": {
+        "role": "primary",
+        "displayName": "System Blue",
+        "canonical": "#0071D3",
+        "tonalRamp": [
+          "#00294C",
+          "#004887",
+          "#0067C1",
+          "#0087FB",
+          "#37A2FF",
+          "#71BDFF",
+          "#ABD8FF",
+          "#E6F3FF"
+        ]
+      },
+      "system-blue-bright": {
+        "role": "primary",
+        "displayName": "System Blue Bright",
+        "canonical": "#007AFF",
+        "tonalRamp": [
+          "#00254C",
+          "#004087",
+          "#005CC1",
+          "#0078FB",
+          "#3796FF",
+          "#71B5FF",
+          "#ABD3FF",
+          "#E6F2FF"
+        ]
+      },
+      "night-accent": {
+        "role": "primary",
+        "displayName": "Night Accent",
+        "canonical": "#4FACFE",
+        "tonalRamp": [
+          "#00294C",
+          "#014886",
+          "#0167C0",
+          "#0185FA",
+          "#38A1FE",
+          "#72BCFE",
+          "#ACD8FF",
+          "#E6F3FF"
+        ]
+      },
+      "claude-terracotta": {
+        "role": "primary",
+        "displayName": "Claude Terracotta",
+        "canonical": "#D97757",
+        "tonalRamp": [
+          "#3E1A0E",
+          "#6E2E19",
+          "#9D4224",
+          "#CD552E",
+          "#DA7B5C",
+          "#E5A18B",
+          "#F0C8BB",
+          "#FAEEEA"
+        ]
+      },
+      "fog-white": {
+        "role": "neutral",
+        "displayName": "Fog White",
+        "canonical": "#F5F5F7",
+        "tonalRamp": [
+          "#22222A",
+          "#3C3C4B",
+          "#56566B",
+          "#70708C",
+          "#9090A6",
+          "#B0B0C0",
+          "#D0D0DA",
+          "#F1F1F4"
+        ]
+      },
+      "pure-surface": {
+        "role": "neutral",
+        "displayName": "Pure Surface",
+        "canonical": "#FFFFFF",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "graphite-chrome": {
+        "role": "neutral",
+        "displayName": "Graphite Chrome",
+        "canonical": "#232323",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "night-window": {
+        "role": "neutral",
+        "displayName": "Night Window",
+        "canonical": "#191919",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "night-surface": {
+        "role": "neutral",
+        "displayName": "Night Surface",
+        "canonical": "#2C2C2C",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "fog-border": {
+        "role": "neutral",
+        "displayName": "Fog Border",
+        "canonical": "#E5E5EA",
+        "tonalRamp": [
+          "#22222A",
+          "#3C3C4B",
+          "#56566B",
+          "#70708B",
+          "#9090A5",
+          "#B0B0C0",
+          "#D1D1DA",
+          "#F1F1F4"
+        ]
+      },
+      "fog-mid": {
+        "role": "neutral",
+        "displayName": "Fog Mid",
+        "canonical": "#D1D1D6",
+        "tonalRamp": [
+          "#242428",
+          "#404047",
+          "#5B5B66",
+          "#767685",
+          "#9595A1",
+          "#B4B4BC",
+          "#D3D3D8",
+          "#F2F2F3"
+        ]
+      },
+      "fog-deep": {
+        "role": "neutral",
+        "displayName": "Fog Deep",
+        "canonical": "#AEAEB2",
+        "tonalRamp": [
+          "#252527",
+          "#424245",
+          "#5E5E63",
+          "#7A7A81",
+          "#98989D",
+          "#B6B6BA",
+          "#D4D4D6",
+          "#F2F2F3"
+        ]
+      },
+      "whisper-hover": {
+        "role": "neutral",
+        "displayName": "Whisper Hover",
+        "canonical": "#F0F0F0",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "selection-tint": {
+        "role": "neutral",
+        "displayName": "Selection Tint",
+        "canonical": "#E4F2FF",
+        "tonalRamp": [
+          "#00284C",
+          "#004687",
+          "#0064C1",
+          "#0082FB",
+          "#379FFF",
+          "#71BBFF",
+          "#ABD7FF",
+          "#E6F3FF"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1D1D1F",
+        "tonalRamp": [
+          "#252528",
+          "#414146",
+          "#5D5D64",
+          "#797982",
+          "#97979E",
+          "#B6B6BA",
+          "#D4D4D7",
+          "#F2F2F3"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Ink Muted",
+        "canonical": "#86868B",
+        "tonalRamp": [
+          "#252527",
+          "#424245",
+          "#5E5E63",
+          "#7B7B80",
+          "#99999D",
+          "#B6B6B9",
+          "#D4D4D6",
+          "#F2F2F3"
+        ]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "Ink Faint",
+        "canonical": "#AAAAAA",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "night-ink": {
+        "role": "neutral",
+        "displayName": "Night Ink",
+        "canonical": "#E0E0E0",
+        "tonalRamp": [
+          "#262626",
+          "#434343",
+          "#616161",
+          "#7E7E7E",
+          "#9B9B9B",
+          "#B8B8B8",
+          "#D5D5D5",
+          "#F2F2F2"
+        ]
+      },
+      "system-red": {
+        "role": "tertiary",
+        "displayName": "System Red",
+        "canonical": "#FF3B30",
+        "tonalRamp": [
+          "#4C0400",
+          "#870700",
+          "#C10A00",
+          "#FB0D00",
+          "#FF4137",
+          "#FF7871",
+          "#FFB0AB",
+          "#FFE7E6"
+        ]
+      },
+      "system-green": {
+        "role": "tertiary",
+        "displayName": "System Green",
+        "canonical": "#28CD41",
+        "tonalRamp": [
+          "#0C4014",
+          "#167124",
+          "#20A233",
+          "#29D243",
+          "#57DE6C",
+          "#88E897",
+          "#B9F1C1",
+          "#EAFBEC"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "wordmark": {
+        "displayName": "Wordmark",
+        "purpose": "The KlausMate identity in light Garamond \u2014 sidebar and identity moments only; the system's one serif."
+      },
+      "page-title": {
+        "displayName": "Page Title",
+        "purpose": "One per settings page."
+      },
+      "heading": {
+        "displayName": "Heading",
+        "purpose": "Section and card headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default text; 600 weight for setting names and chips."
+      },
+      "subtitle": {
+        "displayName": "Subtitle",
+        "purpose": "Muted page subtitles."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Hints, statuses, row descriptions \u2014 always Ink Muted."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Progress text, tab-close glyphs."
+      }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "preferences-dialog",
+        "value": "960x680 default, 480 min width"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The dialog default \u2014 every button is primary unless it opts out.",
+      "html": "<button class=\"ds-btn-primary\">Save</button>",
+      "css": ".ds-btn-primary { background: #0071D3; color: #fff; border: none; border-radius: 8px; padding: 6px 16px; font-weight: 600; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; } .ds-btn-primary:hover { background: #0062C4; } .ds-btn-primary:active { background: #004990; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The grey opt-out for cancel and auxiliary actions.",
+      "html": "<button class=\"ds-btn-secondary\">Cancel</button>",
+      "css": ".ds-btn-secondary { background: #E5E5EA; color: #1D1D1F; border: none; border-radius: 8px; padding: 6px 16px; font-weight: 600; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; } .ds-btn-secondary:hover { background: #D1D1D6; } .ds-btn-secondary:active { background: #AEAEB2; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Destructive intent, quiet until engaged: soft red ground filling solid on hover.",
+      "html": "<button class=\"ds-btn-danger\">Delete</button>",
+      "css": ".ds-btn-danger { background: #FFEBEB; color: #D32F2F; border: none; border-radius: 8px; padding: 6px 16px; font-weight: 600; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; } .ds-btn-danger:hover { background: #FF3B30; color: #fff; }"
+    },
+    {
+      "name": "Toolbar Chip",
+      "kind": "chip",
+      "refersTo": "chip-toolbar",
+      "description": "The chrome-bar link/button: transparent at rest, translucent veil on hover, byte-identical on the top and bottom bars.",
+      "html": "<a class=\"ds-chip\">Decks</a>",
+      "css": ".ds-chip { display: inline-block; background: transparent; color: #86868B; border: 1px solid transparent; border-radius: 8px; padding: 5px 12px; font-weight: 600; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; text-decoration: none; cursor: default; } .ds-chip:hover { background: rgba(0, 0, 0, 0.05); color: #1D1D1F; } .ds-chip:active { background: rgba(0, 0, 0, 0.09); }"
+    },
+    {
+      "name": "Sidebar Nav Row",
+      "kind": "nav",
+      "refersTo": "nav-row",
+      "description": "One row of the Preferences SettingsNav list; selection is a muted accent tint, never a solid block.",
+      "html": "<nav class=\"ds-nav\"><div class=\"ds-nav-row ds-nav-row-selected\">General</div><div class=\"ds-nav-row\">Appearance</div><div class=\"ds-nav-row\">Semantic Search</div></nav>",
+      "css": ".ds-nav { width: 172px; display: flex; flex-direction: column; gap: 3px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; } .ds-nav-row { height: 32px; line-height: 32px; padding-left: 12px; border-radius: 8px; font-weight: 600; font-size: 13px; color: #1D1D1F; cursor: pointer; } .ds-nav-row:hover { background: #F0F0F0; } .ds-nav-row-selected, .ds-nav-row-selected:hover { background: rgba(0, 122, 255, 0.16); color: #0071D3; }"
+    },
+    {
+      "name": "Settings Row",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "The SynapsePro settings row: bold name over muted description left, control right, hairline separators.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-row\"><div class=\"ds-row-text\"><div class=\"ds-row-name\">Image crop</div><div class=\"ds-row-desc\">Right-click or double-click an image in a note field to crop a copy.</div></div><button class=\"ds-btn-secondary-sm\">Change\u2026</button></div><div class=\"ds-row-sep\"></div><div class=\"ds-row\"><div class=\"ds-row-text\"><div class=\"ds-row-name\">Bar blur</div><div class=\"ds-row-desc\">How strongly the top bar blurs an image behind it.</div></div></div></div>",
+      "css": ".ds-card { background: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 12px; padding: 6px 16px; width: 420px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; } .ds-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; } .ds-row-text { flex: 1; } .ds-row-name { font-size: 13px; font-weight: 600; color: #1D1D1F; } .ds-row-desc { font-size: 11px; color: #86868B; margin-top: 2px; } .ds-row-sep { height: 1px; background: #E5E5EA; } .ds-btn-secondary-sm { background: #E5E5EA; color: #1D1D1F; border: none; border-radius: 8px; padding: 6px 16px; font-weight: 600; font-size: 13px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; }"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "The sidebar settings-search: quiet surface field, border-flip focus.",
+      "html": "<input class=\"ds-search\" placeholder=\"Search\" />",
+      "css": ".ds-search { background: #FFFFFF; color: #1D1D1F; border: 1px solid #E5E5EA; border-radius: 8px; padding: 4px 10px; font-size: 12px; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; width: 168px; } .ds-search:focus { outline: none; border-color: #007AFF; } .ds-search::placeholder { color: #AAAAAA; }"
+    },
+    {
+      "name": "Accent Swatch",
+      "kind": "custom",
+      "refersTo": "nav-row",
+      "description": "A bare colour square \u2014 the swatch IS the label; selection is a white inner ring.",
+      "html": "<div class=\"ds-swatches\"><button class=\"ds-swatch ds-swatch-selected\" style=\"background:#0071D3\" title=\"Ocean\"></button><button class=\"ds-swatch\" style=\"background:#619971\" title=\"Forest\"></button><button class=\"ds-swatch\" style=\"background:#D97757\" title=\"Claude\"></button></div>",
+      "css": ".ds-swatches { display: flex; gap: 6px; } .ds-swatch { width: 22px; height: 22px; border-radius: 6px; border: 2px solid transparent; cursor: pointer; } .ds-swatch-selected { border-color: rgba(255,255,255,0.9); outline: 1px solid #86868B; }"
+    },
+    {
+      "name": "Wordmark",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "The KlausMate identity: light Garamond over a muted version line \u2014 the one serif moment in the system.",
+      "html": "<div class=\"ds-wordmark\">KlausMate<div class=\"ds-wordmark-ver\">Version 0.1.3</div></div>",
+      "css": ".ds-wordmark { font-family: \"EB Garamond\", Garamond, \"Apple Garamond\", Georgia, serif; font-size: 18px; font-weight: 300; color: #1D1D1F; } .ds-wordmark-ver { font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; font-size: 11px; color: #86868B; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Clinic",
+    "overview": "KlausMate dresses Anki the way a well-run clinic dresses a hospital: calm, sterile-clean Apple surfaces where nothing shouts, because the user \u2014 a medical student mid-exam-cycle \u2014 is already carrying enough stimulation. One hand-drawn star and one light-Garamond wordmark are the human pulse in the sterile field; everything else defers to the system. The entire look of every surface is a function of theme.palette(night): one token module, thirteen accent presets plus a custom colour, light and dark as parallel worlds with identical vocabularies. Controls are refined and restrained \u2014 visible but understated, answering interaction with soft tints rather than hard state flips.",
+    "keyCharacteristics": [
+      "Apple system palette, light and dark, with identical semantic key sets",
+      "One accent family, user-selectable (13 presets + custom), overriding only blue-family tokens",
+      "Flat, hairline-divided surfaces; depth from tone and translucency, never drop shadows",
+      "Seamless frosted window chrome \u2014 top and bottom toolbars matching",
+      "One hand-drawn mark and one Garamond wordmark carrying the entire brand"
+    ],
+    "rules": [
+      {
+        "name": "The One Module Rule",
+        "body": "No UI file hardcodes a colour. Every surface builds its stylesheet from theme.palette(night); an accent or theme change must reach every surface with zero per-surface code.",
+        "section": "colors"
+      },
+      {
+        "name": "The Blue-Family-Only Rule",
+        "body": "Accent themes override the six blue-family tokens and nothing else. Backgrounds, text, and greys never fork per theme.",
+        "section": "colors"
+      },
+      {
+        "name": "The Chrome Separation Rule",
+        "body": "Chrome is never the canvas colour: brighter than canvas in light, darker in dark.",
+        "section": "colors"
+      },
+      {
+        "name": "The Scale-Or-Drift Rule",
+        "body": "Only the sanctioned font sizes (10/11/12/13/14/18/24) and radii (12/8/6/7/4/2/0) exist; the test suite scans emitted CSS and fails on any other value.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Serif Rule",
+        "body": "Garamond appears exactly once \u2014 the wordmark. No headings, no body text, no second serif moment.",
+        "section": "typography"
+      },
+      {
+        "name": "The Hard Geometry Rule",
+        "body": "Sidebar and row geometry comes from view properties (fixed heights, setSizeHint, layout spacing) \u2014 never from QSS-derived size hints. Navigation lists are ONE QListWidget, never per-item buttons.",
+        "section": "layout"
+      },
+      {
+        "name": "The Veil Rule",
+        "body": "On the chrome bars, state feedback is a translucent veil \u2014 rgba black over light chrome, rgba white over dark \u2014 never an opaque fill, so highlights tint whatever is behind them.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Byte-Identical Chip Rule",
+        "body": "Top-bar links and bottom-bar buttons emit the same shared declaration blocks, pinned byte-identical by tests. The two bars cannot drift apart.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do build every stylesheet from theme.palette(night) and the shared builders; add new ids to dialog_qss rather than styling widgets inline.",
+      "Do ship BOTH palettes in one sheet for webview surfaces, keyed on Anki's night-mode classes.",
+      "Do disable and hide settings rows as whole units.",
+      "Do keep the accent reachable everywhere: any new surface must recolour under all presets + custom, both modes, with no code changes.",
+      "Do repeat the id selector in every :disabled rule that must beat an id-styled base."
+    ],
+    "donts": [
+      "Don't hardcode hex, font families, radii, or font sizes in UI files.",
+      "Don't use drop shadows; depth is tone, hairline, and frost.",
+      "Don't use opaque fills for chrome-bar hover states \u2014 veils only.",
+      "Don't box, fill, or iconify the star; don't introduce a second serif moment.",
+      "Don't build sidebar navigation from per-item buttons or derive control geometry from QSS size hints.",
+      "Don't fork backgrounds or text per accent theme, and don't let any accent state read as a loud solid block."
+    ]
+  }
+}
