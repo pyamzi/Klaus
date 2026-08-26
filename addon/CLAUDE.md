@@ -245,6 +245,15 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   imported lazily inside `build_graph_data`. No window/canvas yet.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
   chunks, `card_index.py`'s sibling for the PDF side.
+- `md3_switch.py`: `Md3Switch(QCheckBox)` — the MD3 track-and-thumb
+  switch used for every settings-row on/off (K-material3 audit;
+  replaced bare checkboxes in `manage_models.py`). Pure geometry/colour
+  math (`thumb_diameter`, `thumb_center_x`, `_lerp_hex`, `track_color`,
+  `thumb_color`) is aqt-free at module top; the widget paints itself
+  entirely (no QSS indicator reaches it), animates progress 0→1 over
+  200ms, and draws its own focus ring since a self-painted widget
+  bypasses `QPushButton:focus`. Checked-state bookkeeping is 100%
+  inherited from `QCheckBox` — every call site keeps working unchanged.
 - `crop_dialog.py`: image-crop dialog (crop saved as NEW media file).
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks

@@ -17,7 +17,7 @@ colors:
   whisper-hover: "#F0F0F0"
   selection-tint: "#E4F2FF"
   ink: "#1D1D1F"
-  ink-muted: "#86868B"
+  ink-muted: "#6A6A6F"
   ink-faint: "#AAAAAA"
   night-ink: "#E0E0E0"
   system-red: "#FF3B30"
@@ -173,9 +173,11 @@ vocabulary.
   (#AEAEB2): hairlines/secondary fills, input borders/hovers, pressed
   states — three greys, three jobs.
 - **Whisper Hover** (#F0F0F0): the barely-there Qt hover ground.
-- **Ink** (#1D1D1F), **Ink Muted** (#86868B), **Ink Faint** (#AAAAAA):
+- **Ink** (#1D1D1F), **Ink Muted** (#6A6A6F), **Ink Faint** (#AAAAAA):
   body text, secondary labels, placeholders/disabled — every label is
-  one of these three.
+  one of these three. Ink Muted was darkened from an original #86868B
+  (3.3:1 on Fog White — failed WCAG AA for the 11px captions it backs
+  everywhere) to 4.9:1+ in both light contexts, same cool lean.
 - **Night Window** (#191919), **Night Surface** (#2C2C2C), **Night
   Ink** (#E0E0E0): the dark-mode counterparts, same keys, same jobs.
 
@@ -345,6 +347,19 @@ imperfection deliberately preserved.
   hairline. Rows carry search haystacks; structural hiding (a provider
   hiding its key row) always beats a search hit.
 
+### Switches (signature control)
+- MD3's track-and-thumb switch, not a checkbox — the semantically
+  correct control for a settings row's on/off, and the one place MD3
+  language was deliberately adopted into an otherwise Apple-system
+  world. Track: Fog Border off, the active accent on, crossfading
+  rather than snapping; thumb: Fog Deep off (a small MD3-spec dot),
+  white on, growing as it slides (MD3's signature switch motion,
+  200ms). Recolours under all 13 accent presets like everything else —
+  the switch is drawn from `theme.palette()`, never a fixed hex.
+  Clicking anywhere on the control toggles it; keyboard focus draws
+  its own accent ring, since a self-painted widget can't inherit the
+  shared `QPushButton:focus` rule.
+
 ### Accent Swatches
 - Bare 22px colour squares, 6px radius — the swatch IS the label
   (names live in tooltips); selection is a white inner ring. The last
@@ -361,6 +376,8 @@ imperfection deliberately preserved.
 ## Do's and Don'ts
 
 ### Do:
+- **Do** use the MD3 switch (`md3_switch.Md3Switch`) for any settings
+  row on/off — never a bare `QCheckBox` for that job again.
 - **Do** build every stylesheet from `theme.palette(night)` and the
   shared builders; add new ids to `dialog_qss` rather than styling
   widgets inline.

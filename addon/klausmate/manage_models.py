@@ -54,6 +54,7 @@ from aqt.qt import (
 )
 from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 
+from .md3_switch import Md3Switch
 from .ollama_client import OllamaError
 from .ollama_runtime import RuntimeProvisionError, full_setup, runtime_download_size_hint
 from .ollama_setup import (
@@ -762,7 +763,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         "renderer.",
     )
 
-    image_crop_cb = QCheckBox()
+    image_crop_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         general_layout,
         "Image crop",
@@ -771,7 +772,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         image_crop_cb,
     )
 
-    runtime_auto_cb = QCheckBox()
+    runtime_auto_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         general_layout,
         "Manage Ollama automatically",
@@ -783,7 +784,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
     # config's pdf_renderer ("native"/"pdfjs") onto one checkbox — the
     # only UI that touches the key.
-    pdfjs_cb = QCheckBox()
+    pdfjs_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         general_layout,
         "Use the new pdf.js viewer",

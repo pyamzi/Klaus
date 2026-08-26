@@ -55,7 +55,13 @@ LIGHT: dict = {
 
     # ── Text ─────────────────────────────────────────────────────────────
     "text":         "#1D1D1F",   # Primary body text
-    "text_muted":   "#86868B",   # Secondary labels, hints, status lines
+    "text_muted":   "#6A6A6F",   # Secondary labels, hints, status lines.
+                                 # WCAG AA fix (K-critique/MD3 audit): the
+                                 # original #86868B was 3.33:1 on `bg`
+                                 # (Fog White) — fails 4.5:1 for the 11px
+                                 # captions it backs everywhere. This
+                                 # value clears 4.94:1 on `bg`, 5.38:1 on
+                                 # `surface`, keeping the same cool lean.
     "text_faint":   "#AAAAAA",   # Placeholder / disabled
 
     # ── Blue (primary accent) ────────────────────────────────────────────

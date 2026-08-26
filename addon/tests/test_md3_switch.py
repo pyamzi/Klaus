@@ -1,0 +1,134 @@
+"""Headless tests for the MD3 track-and-thumb switch (K-material3).
+
+Painting/animation can't run headlessly (Qt widgets are never
+constructed for real in this harness — see the klaus-test bootstrap's
+own docstring), so this exercises the pure geometry/colour math at
+module top plus source pins for the parts that only a running Qt event
+loop could verify.
+"""
+import sys
+
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+from anki_stubs import check, install, report, section
+
+install()
+import importlib
+
+sw = importlib.import_module("klausmate.md3_switch")
+
+section("thumb geometry: grows and slides together")
+check("unchecked thumb is the small MD3 dot",
+      sw.thumb_diameter(0.0) == sw.THUMB_OFF_D)
+check("checked thumb is the larger MD3 dot",
+      sw.thumb_diameter(1.0) == sw.THUMB_ON_D)
+check("diameter is monotonically non-decreasing across progress",
+      all(sw.thumb_diameter(i / 10) <= sw.thumb_diameter((i + 1) / 10)
+          for i in range(10)))
+check("out-of-range progress is clamped, not extrapolated",
+      sw.thumb_diameter(-5.0) == sw.THUMB_OFF_D
+      and sw.thumb_diameter(5.0) == sw.THUMB_ON_D)
+
+check("unchecked thumb sits left-of-centre, centred in its margin",
+      sw.thumb_center_x(0.0) == sw.THUMB_MARGIN + sw.THUMB_OFF_D / 2.0)
+check("checked thumb sits right-of-centre, centred in its margin",
+      sw.thumb_center_x(1.0)
+      == sw.TRACK_W - sw.THUMB_MARGIN - sw.THUMB_ON_D / 2.0)
+check("the thumb travels strictly rightward as progress increases",
+      all(sw.thumb_center_x(i / 10) < sw.thumb_center_x((i + 1) / 10)
+          for i in range(10)))
+check("checked position never overruns the track",
+      sw.thumb_center_x(1.0) + sw.THUMB_ON_D / 2.0 <= sw.TRACK_W)
+
+section("colour interpolation: the track crossfades, it doesn't snap")
+check("progress 0 is exactly the off colour",
+      sw._lerp_hex("#000000", "#FFFFFF", 0.0) == "#000000")
+check("progress 1 is exactly the on colour",
+      sw._lerp_hex("#000000", "#FFFFFF", 1.0) == "#FFFFFF")
+check("progress 0.5 is the true midpoint",
+      sw._lerp_hex("#000000", "#FFFFFF", 0.5) == "#808080")
+check("out-of-range t is clamped",
+      sw._lerp_hex("#000000", "#FFFFFF", -1.0) == "#000000"
+      and sw._lerp_hex("#000000", "#FFFFFF", 2.0) == "#FFFFFF")
+
+_LIGHT = {"grey_light": "#E5E5EA", "grey_mid": "#D1D1D6",
+          "grey_dark": "#AEAEB2", "blue_accent": "#0071D3",
+          "surface": "#FFFFFF", "text_faint": "#AAAAAA"}
+check("track_color reaches the accent token, not a fixed blue — a "
+      "theme switch must recolour this control too",
+      sw.track_color(_LIGHT, 1.0) == "#0071D3")
+check("thumb_color reaches white ON, grey_dark OFF",
+      sw.thumb_color(_LIGHT, 1.0) == "#FFFFFF"
+      and sw.thumb_color(_LIGHT, 0.0) == _LIGHT["grey_dark"])
+check("disabled track never claims a third colour — it's the current "
+      "state, washed out, not a distinct disabled hue",
+      sw.disabled_track_color(_LIGHT, True) == _LIGHT["blue_accent"]
+      and sw.disabled_track_color(_LIGHT, False) == _LIGHT["grey_light"])
+
+section("module imports aqt-free logic without a live Qt session")
+check("Md3Switch is defined and importable under the stub harness",
+      hasattr(sw, "Md3Switch"))
+_SRC = open("klausmate/md3_switch.py").read()
+check("no UI file hardcodes colour — every fill routes through "
+      "theme.palette(), never a literal hex swatch for track/thumb",
+      "theme.palette(" in _SRC
+      and _SRC.count('QColor("#') == 0)
+check("checked-state bookkeeping is 100% inherited from QCheckBox — "
+      "isChecked/setChecked/toggled are never shadowed",
+      "def isChecked" not in _SRC
+      and "def setChecked" not in _SRC
+      and "def toggled" not in _SRC)
+check("clicking anywhere on the widget toggles it (no style-computed "
+      "indicator rect to miss, since paintEvent draws no native one)",
+      "def hitButton" in _SRC and "self.rect().contains(pos)" in _SRC)
+check("animation uses MD3's standard 200ms duration",
+      "setDuration(200)" in _SRC)
+check("keyboard focus gets its own ring — paintEvent bypasses QStyle "
+      "entirely, so the shared QPushButton:focus rule can't reach here",
+      "self.hasFocus()" in _SRC and 'c["blue_bright"]' in _SRC)
+
+section("manage_models.py wiring")
+_MM = open("klausmate/manage_models.py").read()
+check("from .md3_switch import Md3Switch",
+      "from .md3_switch import Md3Switch" in _MM)
+check("all three Preferences toggles are switches, not checkboxes",
+      _MM.count("= Md3Switch()") == 3
+      and "image_crop_cb = QCheckBox()" not in _MM
+      and "runtime_auto_cb = QCheckBox()" not in _MM
+      and "pdfjs_cb = QCheckBox()" not in _MM)
+check("deferred-save wiring is untouched — the switches still only "
+      "mark_dirty(), Save is still the sole writer",
+      "image_crop_cb.toggled.connect(lambda _checked: mark_dirty())" in _MM
+      and "runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())"
+      in _MM
+      and "pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())" in _MM)
+
+section("theme.py: caption contrast fix (MD3 audit accessibility finding)")
+_THEME = open("klausmate/theme.py").read()
+def _luminance(hexcolor: str) -> float:
+    h = hexcolor.lstrip("#")
+    chans = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255.0
+        c = c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+        chans.append(c)
+    return 0.2126 * chans[0] + 0.7152 * chans[1] + 0.0722 * chans[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    la, lb = _luminance(a), _luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+import importlib as _il
+theme = _il.import_module("klausmate.theme")
+check("LIGHT text_muted clears WCAG AA (4.5:1) against the page ground",
+      _contrast(theme.LIGHT["text_muted"], theme.LIGHT["bg"]) >= 4.5)
+check("LIGHT text_muted clears WCAG AA against white cards too",
+      _contrast(theme.LIGHT["text_muted"], theme.LIGHT["surface"]) >= 4.5)
+check("DARK text_muted still clears WCAG AA (was already passing)",
+      _contrast(theme.DARK["text_muted"], theme.DARK["bg"]) >= 4.5)
+check("the old failing value is gone from the light palette",
+      theme.LIGHT["text_muted"] != "#86868B")
+
+raise SystemExit(report())
