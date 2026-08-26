@@ -225,16 +225,68 @@ class _KlausManageDialog(QDialog):
 # ── DIAGNOSTIC (2026-08-26) ──────────────────────────────────────────────
 # The Preferences dialog segfaults on macOS 26.5 + Qt 6.11 the instant it
 # first flushes its backing store to screen (QPaintDevice::devicePixelRatio
-# on a null paint device inside QBackingStore::flush) — and it does so
-# whether shown app-modal via exec() OR window-modal via open(), so
-# modality (the earlier suspect) is NOT the cause. With the probe ON, the
-# Preferences entry points instead open a BARE, unstyled QDialog to
-# localize the fault: if that also crashes, ANY dialog we parent to the
-# main window crashes (an upstream Qt/Cocoa-on-Tahoe bug); if it opens
-# fine, the fault is in this dialog's own styling/content. Set False to
-# restore the real dialog.
+# on a null paint device inside QBackingStore::flush) — whether shown
+# app-modal (exec) or window-modal (open), so modality is NOT the cause.
+# CONFIRMED: a bare QDialog(mw) opens fine, so this is NOT a platform-wide
+# Qt/Cocoa bug — the fault is in THIS dialog's styling or widgets. The
+# probe now adds one variable per stage so a single restart localizes it:
+#   1  bare dialog ............................. FINE (confirmed)
+#   2  + our top-level dialog_qss stylesheet ... ?
+#   3  + one MD3 switch (newest custom paint) .. ?
+#   4  + the SettingsSidebar (star pixmap) ..... ?
+# The first stage that crashes is the culprit. Set _BARE_DIALOG_PROBE
+# False to restore the real dialog once localized.
 _BARE_DIALOG_PROBE = True
+_PROBE_STAGE = 2
 _PROBE_KEEPALIVE: list = []
+
+
+def _run_dialog_probe() -> None:
+    """Staged bisection of the Preferences backing-store crash. Each stage
+    is the previous one plus exactly one new variable; whichever stage
+    first fails to appear (Anki dies) is where the fault lives."""
+    from . import theme
+
+    probe = QDialog(mw)
+    probe.setWindowTitle(f"KlausMate diagnostic — stage {_PROBE_STAGE}")
+    lay = QVBoxLayout(probe)
+    note = QLabel("Stage 1: bare dialog (already known good).")
+    note.setWordWrap(True)
+    lay.addWidget(note)
+
+    if _PROBE_STAGE >= 2:
+        # The stylesheet is applied to the top-level QDialog, so it acts on
+        # the whole window's backing store — the exact thing that crashes.
+        probe.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+        note.setText(
+            "Stage 2: the Preferences stylesheet is applied to this "
+            "window. If you can read this, our stylesheet is NOT the "
+            "cause — tell me and I'll test the MD3 switches next."
+        )
+    if _PROBE_STAGE >= 3:
+        from .md3_switch import Md3Switch
+
+        # Parented construction on purpose: the bare-parens spelling is a
+        # counted source pin in test_md3_switch (exactly three real ones).
+        sw = Md3Switch(probe)
+        sw.setChecked(True)
+        lay.addWidget(sw)
+        note.setText(
+            "Stage 3: an MD3 switch (the newest custom-painted widget) is "
+            "added. If you can read this, the switch paint is NOT the "
+            "cause — tell me and I'll test the sidebar next."
+        )
+    if _PROBE_STAGE >= 4:
+        from .top_bar import star_points  # noqa: F401 — proves import path
+        note.setText(
+            "Stage 4: sidebar/star not yet wired into the probe — ping me."
+        )
+
+    probe.resize(440, 200)
+    _PROBE_KEEPALIVE.append(probe)  # non-modal: outlive this call
+    probe.open()
+    print(f"[klausmate] dialog probe stage {_PROBE_STAGE} shown — "
+          "backing-store flush did NOT crash")
 
 
 def manage_models_dialog(setup: bool = False) -> None:
@@ -247,21 +299,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     """
     if _BARE_DIALOG_PROBE:
         try:
-            probe = QDialog(mw)
-            probe.setWindowTitle("KlausMate diagnostic")
-            _lay = QVBoxLayout(probe)
-            _lay.addWidget(QLabel(
-                "Bare dialog — no stylesheet, no custom widgets.\n\n"
-                "If you can read this, plain dialogs work on your Mac and "
-                "the crash is in the Preferences dialog's own content."
-            ))
-            probe.resize(400, 160)
-            _PROBE_KEEPALIVE.append(probe)  # non-modal: outlive this call
-            probe.open()
-            print("[klausmate] bare-dialog probe shown — backing-store "
-                  "flush did NOT crash")
+            _run_dialog_probe()
         except Exception as exc:
-            print(f"[klausmate] bare-dialog probe failed: {exc}")
+            print(f"[klausmate] dialog probe failed: {exc}")
         return
 
     dlg = _KlausManageDialog(mw)
