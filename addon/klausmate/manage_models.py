@@ -231,13 +231,13 @@ class _KlausManageDialog(QDialog):
 # Qt/Cocoa bug — the fault is in THIS dialog's styling or widgets. The
 # probe now adds one variable per stage so a single restart localizes it:
 #   1  bare dialog ............................. FINE (confirmed)
-#   2  + our top-level dialog_qss stylesheet ... ?
+#   2  + our top-level dialog_qss stylesheet ... FINE (confirmed)
 #   3  + one MD3 switch (newest custom paint) .. ?
 #   4  + the SettingsSidebar (star pixmap) ..... ?
 # The first stage that crashes is the culprit. Set _BARE_DIALOG_PROBE
 # False to restore the real dialog once localized.
 _BARE_DIALOG_PROBE = True
-_PROBE_STAGE = 2
+_PROBE_STAGE = 3
 _PROBE_KEEPALIVE: list = []
 
 
@@ -277,9 +277,47 @@ def _run_dialog_probe() -> None:
             "cause — tell me and I'll test the sidebar next."
         )
     if _PROBE_STAGE >= 4:
-        from .top_bar import star_points  # noqa: F401 — proves import path
+        # The sidebar shell: star PIXMAP (drawn with its own QPainter at
+        # dpr 2.0 — a second paint device, the prime suspect if we get
+        # this far), wordmark, search field, nav list, stacked pages.
+        from aqt.qt import (
+            QFrame,
+            QHBoxLayout,
+            QLineEdit,
+            QListWidget,
+            QStackedWidget,
+        )
+
+        row = QHBoxLayout()
+        sidebar = QFrame()
+        sidebar.setObjectName("SettingsSidebar")
+        sidebar.setFixedWidth(192)
+        side = QVBoxLayout(sidebar)
+        logo_lbl = QLabel()
+        _logo = _logo_pixmap(24)
+        if _logo is not None:
+            logo_lbl.setPixmap(_logo)
+        logo_lbl.setFixedSize(24, 24)
+        side.addWidget(logo_lbl)
+        wordmark = QLabel("KlausMate")
+        wordmark.setObjectName("SidebarAppName")
+        side.addWidget(wordmark)
+        search = QLineEdit()
+        search.setObjectName("SettingsSearch")
+        search.setPlaceholderText("Search")
+        search.setClearButtonEnabled(True)
+        side.addWidget(search)
+        nav = QListWidget()
+        nav.setObjectName("SettingsNav")
+        nav.addItem("General")
+        side.addWidget(nav)
+        row.addWidget(sidebar)
+        row.addWidget(QStackedWidget(), 1)
+        lay.addLayout(row)
         note.setText(
-            "Stage 4: sidebar/star not yet wired into the probe — ping me."
+            "Stage 4: the sidebar shell (star pixmap, wordmark, search, "
+            "nav list, stacked pages). If you can read this, the shell is "
+            "NOT the cause — tell me and I'll bisect the pages next."
         )
 
     probe.resize(440, 200)
