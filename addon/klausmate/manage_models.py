@@ -108,52 +108,6 @@ def _addon_version() -> str:
         return ""
 
 
-def _logo_pixmap(size: int) -> Any:
-    """The Klaus star, drawn exactly like the top bar's: an open stroke
-    in the accent colour on a transparent ground, no icon-square
-    treatment — the SAME top_bar.star_points() data the toolbar's SVG
-    logo strokes, just rasterised for a QLabel pixmap."""
-    try:
-        from aqt.qt import (
-            QColor,
-            QPainter,
-            QPen,
-            QPixmap,
-            QPointF,
-            QPolygonF,
-        )
-
-        from . import theme as _theme
-        from . import top_bar as _top_bar
-
-        dpr = 2.0
-        px = QPixmap(int(size * dpr), int(size * dpr))
-        px.setDevicePixelRatio(dpr)
-        px.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(px)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        c = _theme.palette(_theme.night_mode())
-        scale = size / _top_bar.STAR_VIEWBOX
-        poly = QPolygonF(
-            [
-                QPointF(x * scale, y * scale)
-                for x, y in _top_bar.star_points()
-            ]
-        )
-        pen = QPen(QColor(c["blue_bright"]))
-        pen.setWidthF(max(1.3, size * 0.09))
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPolygon(poly)
-        painter.end()
-        return px
-    except Exception as exc:
-        print(f"[klausmate] sidebar logo failed: {exc}")
-        return None
-
-
 def _format_pull_event(ev: dict) -> tuple[str, int]:
     """Return (human status, percent 0-100) for an Ollama pull progress event."""
     status = str(ev.get("status") or "")
@@ -357,27 +311,25 @@ def manage_models_dialog(setup: bool = False) -> None:
     side_lay.setContentsMargins(10, 14, 10, 12)
     side_lay.setSpacing(2)
 
-    head_row = QHBoxLayout()
-    head_row.setSpacing(8)
-    logo_lbl = QLabel()
-    _logo = _logo_pixmap(30)
-    if _logo is not None:
-        logo_lbl.setPixmap(_logo)
-    head_row.addWidget(logo_lbl)
-    name_col = QVBoxLayout()
-    name_col.setSpacing(0)
+    # Wordmark only (no logo — Pouya's call): "KlausMate" in Garamond,
+    # version tucked under it, then a search field that filters the
+    # setting rows across every page (macOS System Settings pattern).
     app_name_lbl = QLabel("KlausMate")
     app_name_lbl.setObjectName("SidebarAppName")
-    name_col.addWidget(app_name_lbl)
+    side_lay.addWidget(app_name_lbl)
     _ver = _addon_version()
     if _ver:
         ver_lbl = QLabel(f"Version {_ver}")
         ver_lbl.setObjectName("SidebarVersion")
-        name_col.addWidget(ver_lbl)
-    head_row.addLayout(name_col)
-    head_row.addStretch(1)
-    side_lay.addLayout(head_row)
-    side_lay.addSpacing(12)
+        side_lay.addWidget(ver_lbl)
+    side_lay.addSpacing(10)
+
+    search_edit = QLineEdit()
+    search_edit.setObjectName("SettingsSearch")
+    search_edit.setPlaceholderText("Search")
+    search_edit.setClearButtonEnabled(True)
+    side_lay.addWidget(search_edit)
+    side_lay.addSpacing(8)
 
     pages = QStackedWidget()
     body.addWidget(sidebar)
@@ -385,6 +337,9 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     _nav_by_label: dict[str, QPushButton] = {}
     _page_index: dict[str, int] = {}
+    _page_haystack: dict[str, str] = {}
+    _rows_by_page: dict[str, list[QWidget]] = {}
+    _nav_order: list[str] = []
 
     def _select_page(label: str) -> None:
         pages.setCurrentIndex(_page_index[label])
@@ -432,11 +387,18 @@ def manage_models_dialog(setup: bool = False) -> None:
         nav.setCheckable(True)
         nav.clicked.connect(lambda _=False, l=nav_label: _select_page(l))
         _nav_by_label[nav_label] = nav
+        # Search bookkeeping: rows register against this label, and the
+        # page itself is findable by its title/subtitle (so pages with
+        # no _row()s, like Local Models, still match).
+        group_lay.klaus_page = nav_label
+        _page_haystack[nav_label] = f"{nav_label} {title} {subtitle}".lower()
+        _rows_by_page[nav_label] = []
         return group_lay
 
     def _finish_nav(*order: str) -> None:
         """Install the sidebar pills in display order and select the
         first page. Runs once, after every _page() call."""
+        _nav_order[:] = order
         for label in order:
             side_lay.addWidget(_nav_by_label[label])
         side_lay.addStretch(1)
@@ -482,7 +444,49 @@ def manage_models_dialog(setup: bool = False) -> None:
         group.addWidget(roww)
         roww.klaus_desc = desc_lbl
         roww.klaus_sep = sep
+        # klaus_hidden = structurally hidden (e.g. the API-key row under
+        # Ollama) — it always beats a search hit in _apply_search.
+        roww.klaus_hidden = False
+        roww.klaus_search = f"{name} {desc_lbl.text()}".lower()
+        _rows_by_page.setdefault(
+            getattr(group, "klaus_page", ""), []
+        ).append(roww)
         return roww
+
+    def _apply_search(text: str) -> None:
+        """Filter every page's setting rows by name + description, dim
+        the pills of pages with no hits, and jump to the first page (in
+        sidebar display order) that has one. Clearing the field
+        restores everything except structurally hidden rows."""
+        q = str(text).strip().lower()
+        first_hit = ""
+        for label in _nav_order or list(_page_index):
+            any_visible = False
+            seen = False
+            for roww in _rows_by_page.get(label, ()):
+                hit = (not q) or q in roww.klaus_search
+                show = hit and not roww.klaus_hidden
+                roww.setVisible(show)
+                # The first visible row in a group carries no hairline
+                # above it; every later visible one does.
+                if roww.klaus_sep is not None:
+                    roww.klaus_sep.setVisible(show and seen)
+                if show:
+                    seen = True
+                    any_visible = True
+            page_hit = (
+                (not q) or any_visible
+                or q in _page_haystack.get(label, "")
+            )
+            btn = _nav_by_label.get(label)
+            if btn is not None:
+                btn.setEnabled(page_hit)
+            if q and page_hit and not first_hit:
+                first_hit = label
+        if q and first_hit:
+            _select_page(first_hit)
+
+    search_edit.textChanged.connect(_apply_search)
 
     embed_layout = _page(
         "Semantic Search",
@@ -1404,9 +1408,8 @@ def manage_models_dialog(setup: bool = False) -> None:
         sig = embeddings.index_signature(cfg)
         provider = embed_provider_combo.currentData() or "ollama"
         is_cloud = provider != "ollama"
-        key_row.setVisible(is_cloud)
-        if key_row.klaus_sep is not None:
-            key_row.klaus_sep.setVisible(is_cloud)
+        key_row.klaus_hidden = not is_cloud
+        _apply_search(search_edit.text())
         st = curation.index_stats()
         if not st["exists"]:
             txt = "No card index yet — click “Index cards now” to enable semantic search."

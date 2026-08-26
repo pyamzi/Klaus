@@ -252,6 +252,13 @@ def dialog_qss(night: bool) -> str:
         font-weight: 300;
     }}
     QLabel#SidebarVersion {{ color: {c['text_muted']}; font-size: 11px; }}
+    QLineEdit#SettingsSearch {{
+        background-color: {c['surface']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 8px;
+        padding: 4px 10px;
+        font-size: 12px;
+    }}
     QPushButton#NavItem {{
         background-color: transparent;
         color: {c['text']};
@@ -263,6 +270,10 @@ def dialog_qss(night: bool) -> str:
         text-align: left;
     }}
     QPushButton#NavItem:hover {{ background-color: {c['hover_subtle']}; }}
+    QPushButton#NavItem:disabled {{
+        background-color: transparent;
+        color: {c['text_faint']};
+    }}
     QPushButton#NavItem:checked {{
         background-color: {accent_rgba(night, 0.16)};
         color: {c['blue']};

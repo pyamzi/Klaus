@@ -73,6 +73,11 @@ check("selected nav pill is the blue accent with white text",
 check("sidebar wordmark is set in Garamond, like Claude's",
       "Garamond" in theme.dialog_qss(False)
       and "QLabel#SidebarAppName" in theme.dialog_qss(False))
+check("settings search field is styled in both palettes",
+      all("QLineEdit#SettingsSearch" in theme.dialog_qss(n)
+          for n in (False, True)))
+check("no-hit nav pills have a faint disabled state",
+      "QPushButton#NavItem:disabled" in theme.dialog_qss(False))
 
 section("drop zone + helpers")
 dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")

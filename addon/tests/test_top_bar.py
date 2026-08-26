@@ -148,14 +148,4 @@ check("logo lands FIRST, other addons' items untouched after it",
       content[0] == top_bar.logo_html()
       and content[1] == "<div>ankihub-item</div>")
 
-section("star geometry shared with Qt surfaces")
-pts = top_bar.star_points()
-check("star_points parses every vertex of the hand-drawn path",
-      len(pts) == 5 and pts[0] == (5.5, 1.5) and pts[-1] == (12.8, 24.5))
-check("all vertices live inside the declared viewBox",
-      all(0 <= x <= top_bar.STAR_VIEWBOX and 0 <= y <= top_bar.STAR_VIEWBOX
-          for x, y in pts))
-check("the parsed points ARE the SVG path (one source of truth)",
-      all(f"{x:g} {y:g}" in top_bar._STAR_PATH for x, y in pts))
-
 raise SystemExit(report())

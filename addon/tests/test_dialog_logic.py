@@ -770,9 +770,22 @@ check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
       and 'QLabel("KlausMate")' in _src2)
-check("sidebar logo is drawn from the top bar's star data",
-      "_top_bar.star_points()" in _src2
-      and "_top_bar.STAR_VIEWBOX" in _src2)
+check("no logo — the sidebar identity is the wordmark alone",
+      "_logo_pixmap" not in _src2
+      and 'QLabel("KlausMate")' in _src2)
+check("settings search: a filter field sits in the sidebar",
+      'setObjectName("SettingsSearch")' in _src2
+      and "search_edit.textChanged.connect(_apply_search)" in _src2)
+check("search rows carry haystacks and register per page",
+      "roww.klaus_search" in _src2
+      and "_rows_by_page.setdefault(" in _src2)
+check("structural hiding beats a search hit (Ollama key row)",
+      "hit and not roww.klaus_hidden" in _src2
+      and "key_row.klaus_hidden = not is_cloud" in _src2)
+check("pages without rows stay findable by their haystack",
+      "_page_haystack[nav_label]" in _src2)
+check("no-hit pills dim instead of vanishing",
+      "btn.setEnabled(page_hit)" in _src2)
 check("every section is a page with a sidebar pill and a big title",
       _src2.count("= _page(") == 4
       and 'setObjectName("NavItem")' in _src2
@@ -788,10 +801,10 @@ check("settings are SynapsePro rows — name + desc left, control right, "
       and 'setObjectName("RowSeparator")' in _src2)
 check("nav pills stay mutually exclusive through _select_page",
       "btn.setChecked(lbl_text == label)" in _src2)
-check("the API-key ROW hides for Ollama — separator included, "
-      "not just the field",
-      "key_row.setVisible(is_cloud)" in _src2
-      and "key_row.klaus_sep" in _src2)
+check("the API-key ROW hides whole for Ollama — via the search "
+      "filter's structural-hide channel, separator handling included",
+      "key_row.klaus_hidden = not is_cloud" in _src2
+      and "roww.klaus_sep.setVisible(show and seen)" in _src2)
 check("the Cancel/Save bar sits under a full-width hairline",
       'setObjectName("ButtonBarLine")' in _src2)
 
