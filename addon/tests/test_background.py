@@ -174,11 +174,12 @@ check("the row rule is scoped to tr.deck — unscoped, it also matched the "
       and " .current td," not in _panels)
 _pa, _sa = _alphas(_panels, "--klaus-panel"), _alphas(_panels,
                                                       "--klaus-panel-strong")
-check("...and is MORE opaque than the panel in BOTH palettes — computed "
-      "from the emitted alphas, so tweaking the values cannot silently "
-      "invert the relationship the user actually asked for",
+check("...and is heavier than the panel in BOTH palettes, but only by a "
+      "step — computed from the emitted alphas, so the row can neither "
+      "dissolve into the panel nor go back to being a bright slab of its "
+      "own. The RELATIONSHIP is the design; either number may be retuned",
       len(_pa) == 2 and len(_sa) == 2
-      and all(s > p for s, p in zip(_sa, _pa)))
+      and all(0 < (s - p) <= 0.25 for s, p in zip(_sa, _pa)))
 check("the row does NOT stack a second backdrop-filter — the table "
       "beneath it is already a backdrop root, so one blur is enough",
       _panels.count("backdrop-filter") == 2)  # the -webkit- pair, once

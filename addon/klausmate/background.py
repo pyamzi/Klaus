@@ -206,12 +206,12 @@ def panel_css(spec: dict) -> str:
         ":root {"
         " --klaus-panel: rgba(255,255,255,0.50);"
         " --klaus-panel-edge: rgba(255,255,255,0.55);"
-        " --klaus-panel-strong: rgba(255,255,255,0.85);"
+        " --klaus-panel-strong: rgba(255,255,255,0.62);"
         " }"
         ":root.night-mode {"
         " --klaus-panel: rgba(38,38,38,0.50);"
         " --klaus-panel-edge: rgba(255,255,255,0.10);"
-        " --klaus-panel-strong: rgba(48,48,48,0.85);"
+        " --klaus-panel-strong: rgba(48,48,48,0.62);"
         " }"
         # table = the deck list and the overview's count table; .callout =
         # Anki's notice box. Both are real surfaces that carry text.
@@ -225,7 +225,12 @@ def panel_css(spec: dict) -> str:
         # The current/hovered deck row. Anki fills it with an OPAQUE
         # --border-subtle (--canvas-inset under [dir=rtl]), which punched
         # a solid slab through the frosted table above. It gets the glass
-        # too, just heavier, so it still reads as raised and selected.
+        # too, only a step heavier than the panel — enough to read as
+        # raised and selected, not so much that it becomes a bright slab
+        # of its own. It first shipped at 0.85 against a 0.62 panel; once
+        # the panel went sheerer that gap read as inconsistent, so the
+        # row tracks it. Keep the two in proportion when retuning: the
+        # relationship is the design, not either number.
         #
         # MUST be scoped to tr.deck. Anki's own version of this rule is
         # unscoped, but it lives in deckbrowser.css and so only ever
