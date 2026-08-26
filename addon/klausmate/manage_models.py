@@ -456,8 +456,18 @@ def manage_models_dialog(setup: bool = False) -> None:
         """Install the sidebar pills in display order and select the
         first page. Runs once, after every _page() call."""
         _nav_order[:] = order
+        # Pills live in their OWN layout whose spacing is the pill gap.
+        # The gap used to be a QSS margin on #NavItem — but QSS margins
+        # only reach a button's sizeHint on (re)polish, so the sidebar
+        # laid out mushed on first open and only found its rhythm after
+        # a later restyle (save_all's sheet swap). Layout spacing is
+        # deterministic from the first paint.
+        nav_lay = QVBoxLayout()
+        nav_lay.setContentsMargins(0, 0, 0, 0)
+        nav_lay.setSpacing(6)
         for label in order:
-            side_lay.addWidget(_nav_by_label[label])
+            nav_lay.addWidget(_nav_by_label[label])
+        side_lay.addLayout(nav_lay)
         side_lay.addStretch(1)
         _select_page(order[0])
 

@@ -867,6 +867,11 @@ check("profile open loads the custom colour before the theme name",
 check("Fit and Bar blur disable as WHOLE rows, labels included",
       "bg_fit_row.setEnabled(is_image)" in _src2
       and "bg_blur_row.setEnabled(is_image)" in _src2)
+check("pill gaps come from layout spacing, never a QSS margin "
+      "(margins only reach sizeHint on re-polish -> mushed first paint)",
+      "nav_lay.setSpacing(6)" in _src2
+      and "margin" not in open("klausmate/theme.py").read().split(
+          "QPushButton#NavItem {", 1)[1].split("}", 1)[0])
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

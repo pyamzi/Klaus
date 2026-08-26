@@ -485,8 +485,7 @@ def dialog_qss(night: bool) -> str:
         color: {c['text']};
         border: none;
         border-radius: 8px;
-        padding: 5px 12px;
-        margin: 1px 0px;
+        padding: 6px 12px;
         font-weight: 600;
         text-align: left;
     }}
