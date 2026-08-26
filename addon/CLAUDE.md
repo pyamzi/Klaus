@@ -92,6 +92,14 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   Manage models…, Test connection).
 - `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
   split out of `__init__.py`.
+- `browse_highlight.py` (aqt-free at module top): Browse search-term
+  highlighting (K-113), adapted from Glutanimate's
+  highlight-search-results (AGPLv3 — its header must stay intact;
+  vendored source in `References/highlight-search-results-main`). Pure
+  `SearchTokenizer`/`get_searchable_tokens` (ANKI2124 dialect) at top;
+  highlighting is `webview.findText` per term on the Browse editor,
+  re-run on `browser_did_change_row`, toggled per-browser from a
+  checkable View-menu action seeded by config `browse_highlight_default`.
 - `theme.py` (aqt-free at module top): central design tokens + shared QSS
   builders, adapted from SynapsePro (`scripts/SynapsePro-main/theme.py`) —
   the Apple system palette as semantic keys, LIGHT/DARK with identical key
