@@ -248,8 +248,8 @@ def dialog_qss(night: bool) -> str:
     }}
     QLabel#SidebarAppName {{
         font-family: "EB Garamond", Garamond, "Apple Garamond", Georgia, serif;
-        font-size: 17px;
-        font-weight: 600;
+        font-size: 18px;
+        font-weight: 300;
     }}
     QLabel#SidebarVersion {{ color: {c['text_muted']}; font-size: 11px; }}
     QPushButton#NavItem {{
