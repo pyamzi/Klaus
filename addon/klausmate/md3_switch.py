@@ -18,6 +18,11 @@ Qt widgets are never constructed in headless tests). ``Md3Switch``
 itself is a thin ``QCheckBox`` subclass — every existing call site
 (``.isChecked()``, ``.setChecked()``, ``.toggled.connect(...)``) keeps
 working unchanged; only how it paints and animates is new.
+
+PAINT SAFETY (this widget segfaulted Anki nine times — see
+``_animate_to``): never repaint while off screen, never paint into a
+zero-size widget, and never leave a ``QPainter`` active. The three
+rules are pinned in tests/test_md3_switch.py.
 """
 from __future__ import annotations
 
@@ -154,14 +159,37 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
 
     def _set_progress(self, value: float) -> None:
         self._progress = float(value)
-        self.update()
+        # Only ask for a repaint once we are actually on screen. A repaint
+        # requested while the window is still being composited is what
+        # crashed Anki (see _animate_to); when the widget is finally shown
+        # Qt paints it from _progress anyway, so nothing is lost.
+        if self.isVisible():
+            self.update()
 
     progress = pyqtProperty(float, _get_progress, _set_progress)
 
     def _animate_to(self, checked: bool) -> None:
+        """Animate toward the new state — but ONLY when already on screen.
+
+        LIVE CRASH (2026-08-26, macOS 26.5 + Qt 6.11): the dialog builds
+        its rows and then calls setChecked() to load saved settings, which
+        fires `toggled` and used to start this animation immediately. The
+        animation then repainted the switch WHILE the dialog window was
+        still being composited for its first appearance, and Qt's Cocoa
+        backing-store flush dereferenced a paint device that did not exist
+        yet -> SIGSEGV in QPaintDevice::devicePixelRatio inside
+        QBackingStore::flush. Bisected to this widget with a staged probe:
+        a bare dialog was fine, + our stylesheet was fine, + one switch
+        crashed. A control has no business animating into its initial
+        state anyway, so an invisible widget jumps straight to the target.
+        """
+        target = 1.0 if checked else 0.0
         self._anim.stop()
+        if not self.isVisible():
+            self._progress = target
+            return
         self._anim.setStartValue(self._progress)
-        self._anim.setEndValue(1.0 if checked else 0.0)
+        self._anim.setEndValue(target)
         self._anim.start()
 
     # -- hit testing: the whole widget is the target, not a style-computed
@@ -175,11 +203,27 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             from . import theme
         except Exception:
             return
+        # No surface yet = nothing safe to paint on. Painting into a
+        # widget with no valid size is the other way to hand Qt's flush a
+        # paint device it cannot use (see _animate_to's crash note).
+        if self.width() <= 0 or self.height() <= 0:
+            return
         c = theme.palette(theme.night_mode())
         p = self._progress
         enabled = self.isEnabled()
 
         painter = QPainter(self)
+        try:
+            self._paint(painter, c, p, enabled)
+        finally:
+            # ALWAYS end the painter, even if a token lookup or a Qt call
+            # above raises: a QPainter left active on a widget corrupts
+            # the backing store for every later flush.
+            painter.end()
+
+    def _paint(self, painter, c: dict, p: float, enabled: bool) -> None:
+        """The actual drawing, split out so paintEvent's try/finally can
+        guarantee painter.end() no matter how this returns."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # Track, vertically centred with room left for the focus ring.
@@ -228,4 +272,5 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             painter.setBrush(Qt.BrushStyle.NoBrush)
             x, y, w, h, r = pill_rect(1.0, track_top)
             painter.drawRoundedRect(x, y, w, h, r, r)
-        painter.end()
+        # Deliberately NOT ended here: paintEvent's finally block owns
+        # closing the painter, and ending it twice is its own corruption.

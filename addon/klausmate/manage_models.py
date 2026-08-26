@@ -230,13 +230,15 @@ class _KlausManageDialog(QDialog):
 # CONFIRMED: a bare QDialog(mw) opens fine, so this is NOT a platform-wide
 # Qt/Cocoa bug — the fault is in THIS dialog's styling or widgets. The
 # probe now adds one variable per stage so a single restart localizes it:
-#   1  bare dialog ............................. FINE (confirmed)
-#   2  + our top-level dialog_qss stylesheet ... FINE (confirmed)
-#   3  + one MD3 switch (newest custom paint) .. ?
-#   4  + the SettingsSidebar (star pixmap) ..... ?
-# The first stage that crashes is the culprit. Set _BARE_DIALOG_PROBE
-# False to restore the real dialog once localized.
-_BARE_DIALOG_PROBE = True
+#   1  bare dialog ............................. FINE
+#   2  + our top-level dialog_qss stylesheet ... FINE
+#   3  + one MD3 switch (newest custom paint) .. CRASHED  <- culprit
+# Root cause and fix live in md3_switch._animate_to: setChecked() during
+# dialog build started the switch's animation, which repainted it while
+# the window was still being composited. FIXED — probe left in place
+# (off) because it localized this in three restarts and would do so
+# again; flip _BARE_DIALOG_PROBE True and pick a stage to re-bisect.
+_BARE_DIALOG_PROBE = False
 _PROBE_STAGE = 3
 _PROBE_KEEPALIVE: list = []
 

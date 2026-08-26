@@ -100,6 +100,46 @@ check("clicking anywhere on the widget toggles it (no style-computed "
       "def hitButton" in _SRC and "self.rect().contains(pos)" in _SRC)
 check("animation uses MD3's standard 200ms duration",
       "setDuration(200)" in _SRC)
+
+section("paint safety — the nine-crash regression (macOS 26 + Qt 6.11)")
+# Bisected with a staged live probe: bare dialog fine, + our stylesheet
+# fine, + ONE Md3Switch crashed. The dialog calls setChecked() while
+# building, which fired toggled -> started the animation -> repainted
+# the switch while the window was still being composited, and Qt's
+# backing-store flush hit a paint device that did not exist yet.
+check("an off-screen switch JUMPS to its state instead of animating — "
+      "setChecked() during dialog build must not start a repaint loop",
+      "if not self.isVisible():" in _SRC
+      and "self._progress = target" in _SRC)
+check("the animated property only repaints once on screen",
+      "if self.isVisible():\n            self.update()" in _SRC)
+check("paint bails out when the widget has no surface yet",
+      "if self.width() <= 0 or self.height() <= 0:" in _SRC)
+def _code_only(src: str) -> str:
+    """Source with comments AND string literals dropped, layout kept, so
+    prose that merely *describes* a call can never satisfy or break a
+    pin. Three checks in this repo have now been tripped by their own
+    documentation; counting real code is the fix."""
+    import io
+    import tokenize as _tk
+
+    kept = [
+        tok
+        for tok in _tk.generate_tokens(io.StringIO(src).readline)
+        if tok.type not in (_tk.COMMENT, _tk.STRING)
+    ]
+    return _tk.untokenize(kept)
+
+
+_CODE = _code_only(_SRC)
+check("the pin below reads real code, not prose — docstrings and "
+      "comments are stripped, so a described call cannot fake a pass",
+      "painter.end()" in _CODE and "nine-crash" not in _CODE)
+check("painter.end() is guaranteed by finally, and is not also called "
+      "inline (a double-end or a leaked painter both corrupt the "
+      "backing store)",
+      "finally:" in _CODE
+      and _CODE.count("painter.end()") == 1)
 check("keyboard focus gets its own ring — paintEvent bypasses QStyle "
       "entirely, so the shared QPushButton:focus rule can't reach here",
       "self.hasFocus()" in _SRC and 'c["blue_bright"]' in _SRC)

@@ -113,22 +113,34 @@ dialog still crashed the same way from a normal posted-paint. Modality
 is NOT the cause. `open()` is kept anyway (more correct than app-modal
 for a settings window) but is NOT the fix.
 
-**Where it actually stands:** the crash is Qt flushing THIS dialog's
-Cocoa backing store and finding a null paint device, independent of how
-the dialog is shown. Ruled out by inspection: webchannel reentrancy;
-modality; translucent/frameless window attributes (none on our
-dialog); alpha/border-radius/gradient on the top-level in
-`theme.dialog_qss` (none — opaque bg, radius only on child group
-boxes). Dialogs WE create crash; Anki's own don't. Very likely a Qt
-6.11 + macOS 26.5 platform bug tied to the Tahoe window-appear
-animation (`QApplicationPrivate::enabledAnimations` in the crash
-registers; `NSAnimation _runBlocking` on a background queue in earlier
-reports). **Current state: a bare-dialog probe is wired in
-(`manage_models._BARE_DIALOG_PROBE = True`)** — Preferences opens a
-plain unstyled `QDialog(mw)` to decide whether ANY dialog we open
-crashes (⇒ upstream, report to Anki/Qt) or only our styled/complex one
-(⇒ bisect styling → widgets). Set the flag False to restore the real
-dialog once the fault is localized.
+**ACTUAL ROOT CAUSE (found 2026-08-26 by staged live bisection):**
+`Md3Switch`. The dialog builds its rows and then calls `setChecked()`
+to load saved settings (`manage_models.py` ~995-999). That fired
+`toggled` → `_animate_to` → started a 200ms `QPropertyAnimation` whose
+per-frame `update()` **repainted the switch while the dialog window was
+still being composited for its first appearance**. Qt's Cocoa
+backing-store flush then dereferenced a paint device that did not exist
+yet → SIGSEGV. Nine crashes, one widget.
+
+How it was found — a staged probe behind `_BARE_DIALOG_PROBE` in
+`manage_models.py`, one new variable per restart:
+
+| stage | contents | result |
+|---|---|---|
+| 1 | bare `QDialog(mw)` | fine |
+| 2 | + `theme.dialog_qss` on the top level | fine |
+| 3 | + ONE `Md3Switch` (`setChecked(True)`) | **crash** |
+
+**Fix (`md3_switch.py`), three layers:** an off-screen switch jumps
+straight to its target instead of animating; `_set_progress` only calls
+`update()` when visible; `paintEvent` refuses a zero-size widget and
+guarantees `painter.end()` in a `finally`. Pinned and verified
+self-falsifying in `tests/test_md3_switch.py`.
+
+Ruled out along the way (do not re-suspect): webchannel reentrancy;
+modality (`exec` vs `open`); translucent/frameless window attributes;
+`dialog_qss` contents. The probe is left in place, switched off — flip
+`_BARE_DIALOG_PROBE` True to bisect a future paint crash the same way.
 
 The deferral rule is KEPT as hygiene (Qt documents the hazard), with
 its enforcement machinery: two auto-discovered rosters (js-message
