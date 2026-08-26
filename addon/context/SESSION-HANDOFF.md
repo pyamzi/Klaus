@@ -21,8 +21,8 @@ mid-arc and were fixed.
 
 ## Current state (verified, not recalled)
 
-- Working tree **clean**; 22 commits this arc, HEAD `a2374e2`.
-- Test suite: **1113 checks across 15 files, all green**.
+- 23 commits this arc plus a post-arc `/simplify` cleanup pass.
+- Test suite: **1129 checks across 15 files, all green**.
 - Addon compiles through the addons21 symlink.
 - Board: 31 Done, 0 in flight, **2 open in Backlog** (K-100, K-101).
 
@@ -103,13 +103,18 @@ store that is not in a valid state.
 **Process lesson worth keeping:** the first fix was scoped to one file
 when the bug was a cross-module rule, so it left the other violators
 live and the user hit the very next one. `tests/test_bridge_reentrancy.py`
-now enforces the rule across modules and **asserts the roster of
-registered js-message handlers**, so adding a new handler fails the
-suite until someone confirms it defers. Verified self-falsifying.
+now enforces the rule across modules and **auto-discovers two rosters**
+— the registered js-message handlers AND pdfjs_viewer's `_bridge_*`
+dispatch table — so a new handler either fails the roster pin or lands
+in the modal scan automatically. Verified self-falsifying.
 
-Known, deliberately unchanged: `pdf_drive.open_drive`'s except-branch
-`showWarning` is modal on a bridge path, but only on an error that has
-not occurred; its normal path is non-modal and correct.
+The one known straggler (`pdf_drive.open_drive`'s except-branch
+`showWarning`, modal on the toolbar-link bridge path) was closed in
+the post-arc cleanup pass and is pinned in the same test. That pass
+also fixed the test's comment-stripper: its space-joined token output
+could never match any `_MODAL` spelling, so the final scan had been
+silently vacuous — it now preserves layout via `untokenize` and
+self-tests its own matchability.
 
 ## Open work
 

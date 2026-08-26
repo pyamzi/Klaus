@@ -15,6 +15,7 @@ install()
 import importlib
 
 sw = importlib.import_module("klausmate.md3_switch")
+theme = importlib.import_module("klausmate.theme")
 
 section("thumb geometry: grows and slides together")
 check("unchecked thumb is the small MD3 dot",
@@ -39,6 +40,18 @@ check("the thumb travels strictly rightward as progress increases",
 check("checked position never overruns the track",
       sw.thumb_center_x(1.0) + sw.THUMB_ON_D / 2.0 <= sw.TRACK_W)
 
+check("the three pill strokes (fill 0 / outline 0.5 / ring 1.0) come "
+      "from ONE formula and stay concentric — same centre at every inset",
+      all(
+          (x + w / 2.0, y + h / 2.0)
+          == (sw.TRACK_W / 2.0, 2.0 + sw.TRACK_H / 2.0)
+          for x, y, w, h, _r in
+          (sw.pill_rect(i) for i in (0.0, 0.5, 1.0))
+      ))
+check("pill radius is always the half-height (a true capsule end)",
+      all(sw.pill_rect(i)[4] == sw.pill_rect(i)[3] / 2.0
+          for i in (0.0, 0.5, 1.0)))
+
 section("colour interpolation: the track crossfades, it doesn't snap")
 check("progress 0 is exactly the off colour",
       sw._lerp_hex("#000000", "#FFFFFF", 0.0) == "#000000")
@@ -50,12 +63,13 @@ check("out-of-range t is clamped",
       sw._lerp_hex("#000000", "#FFFFFF", -1.0) == "#000000"
       and sw._lerp_hex("#000000", "#FFFFFF", 2.0) == "#FFFFFF")
 
-_LIGHT = {"grey_light": "#E5E5EA", "grey_mid": "#D1D1D6",
-          "grey_dark": "#AEAEB2", "blue_accent": "#0071D3",
-          "surface": "#FFFFFF", "text_faint": "#AAAAAA"}
+# The REAL light palette, not a hand-copied fixture — theme.py is the
+# single source of truth for these tokens, and a copy here would keep
+# passing against values production no longer uses.
+_LIGHT = theme.LIGHT
 check("track_color reaches the accent token, not a fixed blue — a "
       "theme switch must recolour this control too",
-      sw.track_color(_LIGHT, 1.0) == "#0071D3")
+      sw.track_color(_LIGHT, 1.0) == _LIGHT["blue_accent"])
 check("thumb_color reaches white ON, grey_dark OFF",
       sw.thumb_color(_LIGHT, 1.0) == "#FFFFFF"
       and sw.thumb_color(_LIGHT, 0.0) == _LIGHT["grey_dark"])
@@ -63,6 +77,10 @@ check("disabled track never claims a third colour — it's the current "
       "state, washed out, not a distinct disabled hue",
       sw.disabled_track_color(_LIGHT, True) == _LIGHT["blue_accent"]
       and sw.disabled_track_color(_LIGHT, False) == _LIGHT["grey_light"])
+check("disabled thumb follows the same endpoint rule — surface off, "
+      "white on — via its own tested function, not inline paint logic",
+      sw.disabled_thumb_color(_LIGHT, True) == "#FFFFFF"
+      and sw.disabled_thumb_color(_LIGHT, False) == _LIGHT["surface"])
 
 section("module imports aqt-free logic without a live Qt session")
 check("Md3Switch is defined and importable under the stub harness",
@@ -103,7 +121,6 @@ check("deferred-save wiring is untouched — the switches still only "
       and "pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())" in _MM)
 
 section("theme.py: caption contrast fix (MD3 audit accessibility finding)")
-_THEME = open("klausmate/theme.py").read()
 def _luminance(hexcolor: str) -> float:
     h = hexcolor.lstrip("#")
     chans = []
@@ -120,8 +137,6 @@ def _contrast(a: str, b: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-import importlib as _il
-theme = _il.import_module("klausmate.theme")
 check("LIGHT text_muted clears WCAG AA (4.5:1) against the page ground",
       _contrast(theme.LIGHT["text_muted"], theme.LIGHT["bg"]) >= 4.5)
 check("LIGHT text_muted clears WCAG AA against white cards too",

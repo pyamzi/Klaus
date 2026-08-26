@@ -33,7 +33,6 @@ from typing import Any, Callable
 from aqt import mw
 from aqt.operations import QueryOp
 from aqt.qt import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,

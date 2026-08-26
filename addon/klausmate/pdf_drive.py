@@ -1435,7 +1435,15 @@ def open_drive() -> None:
         aqt.dialogs.open(DIALOG_NAME)
     except Exception as e:
         print(f"[klausmate] drive open failed: {e}")
-        showWarning(f"Could not open the PDF drive.\n\n{e}")
+        # Deferred: the toolbar Library link reaches here over the
+        # webchannel, and showWarning is modal — the bridge-reentrancy
+        # rule (tests/test_bridge_reentrancy.py) applies to this error
+        # branch too. The message is frozen as a default because the
+        # except-variable is unbound by the time the timer fires.
+        QTimer.singleShot(
+            0,
+            lambda msg=f"Could not open the PDF drive.\n\n{e}": showWarning(msg),
+        )
 
 
 def _close_drive() -> None:

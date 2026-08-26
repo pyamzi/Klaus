@@ -55,6 +55,18 @@ def thumb_center_x(progress: float, track_w: float = TRACK_W) -> float:
     return left + (right - left) * p
 
 
+def pill_rect(
+    inset: float, track_top: float = 2.0
+) -> tuple[float, float, float, float, float]:
+    """The track pill as ``(x, y, w, h, radius)`` at ``inset`` — ONE
+    formula for the fill (inset 0), the unchecked hairline outline
+    (0.5) and the focus ring (1.0), so the three strokes stay
+    concentric by construction instead of by three hand-copied
+    drawRoundedRect calls agreeing."""
+    h = TRACK_H - 2.0 * inset
+    return (inset, track_top + inset, TRACK_W - 2.0 * inset, h, h / 2.0)
+
+
 def _lerp(a: int, b: int, t: float) -> int:
     return round(a + (b - a) * max(0.0, min(1.0, t)))
 
@@ -91,6 +103,14 @@ def disabled_track_color(c: dict, checked: bool) -> str:
     matches how disabled buttons/inputs behave elsewhere in the theme
     (`grey_light` fill, `text_faint` content)."""
     return c["blue_accent"] if checked else c["grey_light"]
+
+
+def disabled_thumb_color(c: dict, checked: bool) -> str:
+    """Sibling of :func:`disabled_track_color`, same rule: the current
+    state's endpoint colour, washed out — `surface` on the grey off
+    track, white on the accent on track (the enabled endpoints, minus
+    the crossfade)."""
+    return "#FFFFFF" if checked else c["surface"]
 
 
 # ── The widget ──────────────────────────────────────────────────────────
@@ -163,22 +183,16 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         # Track, vertically centred with room left for the focus ring.
+        # All three pill strokes come from pill_rect at their inset.
         track_top = 2.0
-        track_rect_h = float(TRACK_H)
         if enabled:
             fill = track_color(c, p)
         else:
             fill = disabled_track_color(c, p >= 0.5)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(fill))
-        painter.drawRoundedRect(
-            0.0,
-            track_top,
-            float(TRACK_W),
-            track_rect_h,
-            track_rect_h / 2.0,
-            track_rect_h / 2.0,
-        )
+        x, y, w, h, r = pill_rect(0.0, track_top)
+        painter.drawRoundedRect(x, y, w, h, r, r)
         # Unchecked track keeps a hairline outline (MD3's outlined-off
         # track) — a filled track dissolves into a light-mode fog page.
         if p < 0.999:
@@ -186,23 +200,17 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             outline.setWidthF(1.0)
             painter.setPen(outline)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(
-                0.5,
-                track_top + 0.5,
-                float(TRACK_W) - 1.0,
-                track_rect_h - 1.0,
-                (track_rect_h - 1.0) / 2.0,
-                (track_rect_h - 1.0) / 2.0,
-            )
+            x, y, w, h, r = pill_rect(0.5, track_top)
+            painter.drawRoundedRect(x, y, w, h, r, r)
 
         # Thumb: grows and slides together (MD3's signature switch move).
         d = thumb_diameter(p)
         cx = thumb_center_x(p, TRACK_W)
-        cy = track_top + track_rect_h / 2.0
+        cy = track_top + TRACK_H / 2.0
         thumb_fill = (
             thumb_color(c, p)
             if enabled
-            else (c["surface"] if p < 0.5 else "#FFFFFF")
+            else disabled_thumb_color(c, p >= 0.5)
         )
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(thumb_fill))
@@ -218,12 +226,6 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
             ring.setWidthF(1.5)
             painter.setPen(ring)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRoundedRect(
-                1.0,
-                track_top + 1.0,
-                float(TRACK_W) - 2.0,
-                track_rect_h - 2.0,
-                (track_rect_h - 2.0) / 2.0,
-                (track_rect_h - 2.0) / 2.0,
-            )
+            x, y, w, h, r = pill_rect(1.0, track_top)
+            painter.drawRoundedRect(x, y, w, h, r, r)
         painter.end()
