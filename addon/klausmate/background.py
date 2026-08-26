@@ -145,12 +145,17 @@ def main_css(spec: dict, url: str = "") -> str:
     """Background for Anki's own screens (deck list, overview, congrats).
 
     Empty string in ``theme`` mode — Klaus paints nothing and Anki's
-    stock look is untouched, which is the default.
+    stock look is untouched, which is the default. Both painted modes
+    also carry panel_css, so panels look the same either way.
     """
     mode = spec.get("mode")
     if mode == "color":
         return (
             "html, body { background: %s !important; }" % spec["color"]
+            # Panels get the same treatment over a flat colour as
+            # over a photo, so the look does not change with the
+            # background that was chosen.
+            + panel_css(spec)
         )
     if mode == "image" and url:
         return (
@@ -170,10 +175,13 @@ def main_css(spec: dict, url: str = "") -> str:
 def panel_css(spec: dict) -> str:
     """Frost Anki's content panels so they stay readable over a photo.
 
-    IMAGE MODE ONLY, by the same logic bar_css relies on: a Gaussian blur
-    of a flat colour is that colour, so in ``color`` mode this would cost
-    a compositing layer to change nothing, and in ``theme`` mode Klaus
-    paints no background at all.
+    Applies to BOTH painted backgrounds so the panel look does not
+    change with the background chosen. The blur itself is image-only, by
+    the same logic bar_css relies on — a Gaussian blur of a flat colour
+    is that colour, so over a colour background backdrop-filter would
+    cost a compositing layer per panel to change nothing. Theme mode is
+    left alone: Klaus paints no background there, and Anki's stock look
+    already gives these surfaces its own glass.
 
     Unlike the bars, this really is ``backdrop-filter``. The bars can't
     use it — the toolbar is a separate webview, so the window behind it
@@ -189,19 +197,33 @@ def panel_css(spec: dict) -> str:
     theme.toolbar_css takes no ``night`` argument: Anki flips that class
     with JS and never re-runs the hook that injected this.
     """
-    if spec.get("mode") != "image":
+    mode = spec.get("mode")
+    if mode not in ("image", "color"):
+        # theme mode only. Klaus paints no background there, and Anki's
+        # own stock look ALREADY gives these surfaces a glass treatment
+        # (.fancy table is painted with --canvas-glass). Restyling them
+        # would override Anki's default with our own for no gain.
         return ""
     blur = spec.get("blur", DEFAULT_BLUR)
     if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
         blur = DEFAULT_BLUR
     blur = int(blur)
+    # The frost itself is IMAGE-ONLY: a Gaussian blur of a flat colour is
+    # that colour, so over a colour background backdrop-filter would cost
+    # a compositing layer per panel to change nothing. The tint, borders,
+    # corners and the welded stats line apply to both modes, so the panel
+    # LOOK is consistent whichever background is chosen.
+    filt = f"blur({blur}px) saturate(140%)"
+    frost = (
+        f" -webkit-backdrop-filter: {filt} !important;"
+        f" backdrop-filter: {filt} !important;"
+    ) if mode == "image" else ""
     # Tint sits just above Anki's 0.4 --canvas-glass: that value is tuned
     # for a flat window colour, and an arbitrary photo (bright, busy,
     # high-contrast) needs a little more to keep small text legible.
-    # Deliberately sheer — the BLUR is what earns the legibility here, so
+    # Deliberately sheer — over a photo the BLUR earns the legibility, so
     # the picture still reads as a picture behind the glass. Tint and
     # blur are independent knobs: lowering one does not weaken the other.
-    filt = f"blur({blur}px) saturate(140%)"
     return (
         ":root {"
         " --klaus-panel: rgba(255,255,255,0.50);"
@@ -217,8 +239,7 @@ def panel_css(spec: dict) -> str:
         # Anki's notice box. Both are real surfaces that carry text.
         " table, .callout {"
         " background: var(--klaus-panel) !important;"
-        f" -webkit-backdrop-filter: {filt} !important;"
-        f" backdrop-filter: {filt} !important;"
+        + frost +
         " border: 1px solid var(--klaus-panel-edge) !important;"
         " border-radius: var(--border-radius-medium, 12px) !important;"
         " }"
@@ -280,7 +301,6 @@ def panel_css(spec: dict) -> str:
         # Both halves are forced to the same width, or the join lands as
         # a visible step where the two boxes disagree.
         " center > table:has(tr.deck) {"
-        " width: 100% !important;"
         " margin-bottom: 0 !important;"
         " border-bottom: none !important;"
         " border-bottom-left-radius: 0 !important;"
@@ -289,13 +309,11 @@ def panel_css(spec: dict) -> str:
         " center:has(#studiedToday) > br { display: none !important; }"
         " #studiedToday {"
         " display: block !important;"
-        " width: 100% !important;"
         " box-sizing: border-box !important;"
         " margin: 0 auto !important;"
         " padding: 0.6em 1rem 0.9em 1rem !important;"
         " background: var(--klaus-panel) !important;"
-        f" -webkit-backdrop-filter: {filt} !important;"
-        f" backdrop-filter: {filt} !important;"
+        + frost +
         " border: 1px solid var(--klaus-panel-edge) !important;"
         " border-top: none !important;"
         " border-top-left-radius: 0 !important;"

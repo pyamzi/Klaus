@@ -216,19 +216,34 @@ check("the <br> Anki puts between them is removed, or the weld shows a "
       "gap",
       "center:has(#studiedToday) > br { display: none !important; }"
       in _panels)
-check("BOTH halves are forced to the same width — mismatched boxes would "
-      "land the join as a visible step",
-      _panels.count("width: 100% !important;") == 2)
+check("the join NEVER sets a width: forcing width:100% overflowed the "
+      "panel off-screen, because Anki gives the table padding:1rem and "
+      "content-box sizing, so 100% + padding exceeds the container",
+      "width: 100%" not in _panels
+      and "width:" not in _panels.replace("min-width", ""))
 check("the table half is scoped with :has(tr.deck) to the DECK LIST — "
       "the overview is a <center> with a table too, and flattening its "
       "bottom corners would break the panel this look was tuned on",
       "center > table:has(tr.deck) {" in _panels)
 
-check("NO frost in colour mode — blurring a flat colour yields that "
-      "same colour, so it would cost a compositing layer for nothing",
-      bg.panel_css(bg.resolve({"background_mode": "color"})) == "")
-check("NO frost in theme mode — Klaus paints no background there at all",
+_colour_panels = bg.panel_css(bg.resolve(
+    {"background_mode": "color", "background_color": "#123456"}))
+check("panels look the SAME whichever background is painted — colour "
+      "mode gets the tint, borders, corners and welded stats line too",
+      "table, .callout {" in _colour_panels
+      and "#studiedToday {" in _colour_panels
+      and "--klaus-panel:" in _colour_panels)
+check("...but NOT the blur: a Gaussian blur of a flat colour is that "
+      "colour, so backdrop-filter there would cost a compositing layer "
+      "per panel to change nothing",
+      "backdrop-filter" not in _colour_panels)
+check("theme mode stays untouched — Klaus paints no background there, "
+      "and Anki's stock look already glasses these surfaces itself",
       bg.panel_css(bg.resolve({"background_mode": "theme"})) == "")
+check("main_css carries the panels in BOTH painted modes",
+      "--klaus-panel:" in bg.main_css(bg.resolve(
+          {"background_mode": "color", "background_color": "#123456"}))
+      and "--klaus-panel:" in bg.main_css(_img, "pic.png"))
 check("an out-of-range blur falls back rather than emitting junk CSS",
       f"blur({bg.DEFAULT_BLUR}px)" in bg.panel_css(
           {"mode": "image", "blur": 9999}))
