@@ -108,6 +108,48 @@ def _addon_version() -> str:
         return ""
 
 
+def _logo_pixmap(size: int) -> Any:
+    """The Klaus star for the Preferences sidebar, drawn exactly like
+    the top bar's: an open stroke in the accent colour on a transparent
+    ground — no icon-square treatment — from the same
+    top_bar.star_points() data the toolbar's SVG strokes."""
+    try:
+        from aqt.qt import QColor, QPainter, QPen, QPixmap, QPointF, QPolygonF
+
+        from . import theme as _theme
+        from . import top_bar as _top_bar
+
+        dpr = 2.0
+        px = QPixmap(int(size * dpr), int(size * dpr))
+        px.setDevicePixelRatio(dpr)
+        px.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(px)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        c = _theme.palette(_theme.night_mode())
+        # Inset by the pen's radius so the stroke can't clip at the edges.
+        width = max(1.3, size * 0.09)
+        inset = width / 2.0
+        scale = (size - width) / _top_bar.STAR_VIEWBOX
+        poly = QPolygonF(
+            [
+                QPointF(x * scale + inset, y * scale + inset)
+                for x, y in _top_bar.star_points()
+            ]
+        )
+        pen = QPen(QColor(c["blue_accent"]))
+        pen.setWidthF(width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(poly)
+        painter.end()
+        return px
+    except Exception as exc:
+        print(f"[klausmate] sidebar logo failed: {exc}")
+        return None
+
+
 def _format_pull_event(ev: dict) -> tuple[str, int]:
     """Return (human status, percent 0-100) for an Ollama pull progress event."""
     status = str(ev.get("status") or "")
@@ -311,17 +353,31 @@ def manage_models_dialog(setup: bool = False) -> None:
     side_lay.setContentsMargins(10, 14, 10, 12)
     side_lay.setSpacing(2)
 
-    # Wordmark only (no logo — Pouya's call): "KlausMate" in Garamond,
-    # version tucked under it, then a search field that filters the
-    # setting rows across every page (macOS System Settings pattern).
+    # Identity: the star logo beside the Garamond "KlausMate" wordmark,
+    # version under it, then a search field that filters the setting
+    # rows across every page (macOS System Settings pattern).
+    head_row = QHBoxLayout()
+    head_row.setContentsMargins(0, 0, 0, 0)
+    head_row.setSpacing(7)
+    logo_lbl = QLabel()
+    _logo = _logo_pixmap(24)
+    if _logo is not None:
+        logo_lbl.setPixmap(_logo)
+    logo_lbl.setFixedSize(24, 24)
+    head_row.addWidget(logo_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+    name_col = QVBoxLayout()
+    name_col.setContentsMargins(0, 0, 0, 0)
+    name_col.setSpacing(0)
     app_name_lbl = QLabel("KlausMate")
     app_name_lbl.setObjectName("SidebarAppName")
-    side_lay.addWidget(app_name_lbl)
+    name_col.addWidget(app_name_lbl)
     _ver = _addon_version()
     if _ver:
         ver_lbl = QLabel(f"Version {_ver}")
         ver_lbl.setObjectName("SidebarVersion")
-        side_lay.addWidget(ver_lbl)
+        name_col.addWidget(ver_lbl)
+    head_row.addLayout(name_col, 1)
+    side_lay.addLayout(head_row)
     side_lay.addSpacing(10)
 
     search_edit = QLineEdit()
@@ -715,7 +771,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_fit_combo.addItem("Fill the window", "cover")
     bg_fit_combo.addItem("Fit inside", "contain")
     bg_fit_combo.addItem("Tile", "tile")
-    _row(
+    bg_fit_row = _row(
         appearance_layout,
         "Fit",
         "How an image is scaled to the window.",
@@ -731,7 +787,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     blur_ctl.setContentsMargins(0, 0, 0, 0)
     blur_ctl.addWidget(bg_blur_slider)
     blur_ctl.addWidget(bg_blur_lbl)
-    _row(
+    bg_blur_row = _row(
         appearance_layout,
         "Bar blur",
         "How strongly the top bar blurs an image behind it.",
@@ -773,8 +829,11 @@ def manage_models_dialog(setup: bool = False) -> None:
         is_colour = spec["mode"] == "color"
         bg_colour_btn.setEnabled(is_colour or is_image)
         bg_image_btn.setEnabled(is_image)
-        bg_fit_combo.setEnabled(is_image)
-        bg_blur_slider.setEnabled(is_image)
+        # Whole rows, so the name and description grey out with the
+        # control — a live-looking label over a dead slider was the
+        # reason these read as broken rather than inactive.
+        bg_fit_row.setEnabled(is_image)
+        bg_blur_row.setEnabled(is_image)
         bg_image_lbl.setText(
             f"Image: {spec['image']}" if spec["image"]
             else ("No image chosen yet." if is_image else "")
@@ -837,61 +896,112 @@ def manage_models_dialog(setup: bool = False) -> None:
     sync_background_widgets()
 
     # ----- Accent colour (SynapsePro's colour themes, K-107) ------------
-    # Six preset pills, colours straight from theme.COLOR_THEMES — the
-    # ONLY place accents are defined; this block just renders them.
-    # Deferred-save like every other preference: clicking a pill only
-    # updates _accent_state + the dirty flag; save_general writes the
-    # color_theme key and save_all applies it live.
+    # Bare colour squares — no names, the swatch IS the label (the name
+    # lives in the tooltip, since a colour square alone tells a
+    # screen-reader user nothing). Preset colours come straight from
+    # theme.COLOR_THEMES; the last square is the user's own colour and
+    # opens a picker. Deferred-save like every other preference:
+    # choosing only updates _accent_state + the dirty flag; save_general
+    # writes color_theme/color_theme_custom and save_all applies live.
     from . import theme as _theme_presets
 
-    _accent_state = {"name": "ocean"}
+    _accent_state = {
+        "name": "ocean",
+        "custom": _theme_presets.DEFAULT_CUSTOM_COLOR,
+    }
     _accent_buttons: dict[str, QPushButton] = {}
 
-    def _accent_pill_style(name: str, checked: bool) -> str:
-        t = _theme_presets.COLOR_THEMES[name][False]
-        ring = "rgba(255,255,255,0.85)" if checked else "transparent"
+    def _accent_swatch_style(fill: str, checked: bool) -> str:
+        """A colour square. Checked = a white inner ring (SynapsePro's
+        selection mark) over a neutral outer border, so the selection
+        reads on a pale swatch as well as a saturated one."""
+        c = _theme_presets.palette(_theme_presets.night_mode())
+        outer = c["text_muted"] if checked else c["grey_mid"]
+        ring = "rgba(255,255,255,0.9)" if checked else "transparent"
         return (
             "QPushButton {"
-            f" background-color: {t['blue']}; color: white;"
-            f" border-radius: 6px; border: 2px solid {ring};"
-            " font-weight: 600; font-size: 10px; padding: 1px 6px;"
-            " min-width: 40px; }"
-            "QPushButton:hover {"
-            f" background-color: {t['blue_pressed']}; }}"
+            f" background-color: {fill};"
+            f" border-radius: 6px;"
+            f" border: 2px solid {ring};"
+            f" outline: 1px solid {outer};"
+            " }"
         )
 
-    def sync_accent_pills() -> None:
+    def _accent_fill(name: str) -> str:
+        if name == _theme_presets.CUSTOM_THEME:
+            return str(_accent_state["custom"])
+        return _theme_presets.COLOR_THEMES[name][False]["blue"]
+
+    def sync_accent_swatches() -> None:
         for name, btn in _accent_buttons.items():
             checked = name == _accent_state["name"]
             btn.setChecked(checked)
-            btn.setStyleSheet(_accent_pill_style(name, checked))
+            btn.setStyleSheet(_accent_swatch_style(_accent_fill(name), checked))
 
     def _pick_accent(name: str) -> None:
         _accent_state["name"] = name
         mark_dirty()
-        sync_accent_pills()
+        sync_accent_swatches()
 
-    accent_ctl = QHBoxLayout()
+    def _pick_custom_accent() -> None:
+        """Open the colour picker for the custom swatch. Cancelling
+        still selects custom (with whatever colour it already held) —
+        the click was a choice of swatch, the dialog only refines it."""
+        from aqt.qt import QColor, QColorDialog
+
+        chosen = QColorDialog.getColor(
+            QColor(str(_accent_state["custom"])), dlg, "Accent colour"
+        )
+        if chosen.isValid():
+            _accent_state["custom"] = chosen.name()
+        _pick_accent(_theme_presets.CUSTOM_THEME)
+
+    # 14 swatches (13 presets + custom) — wrapped 7 per row so the
+    # control side of the row stays narrow enough for a compact dialog.
+    from aqt.qt import QGridLayout as _QGridLayout
+
+    accent_ctl = _QGridLayout()
     accent_ctl.setContentsMargins(0, 0, 0, 0)
-    accent_ctl.setSpacing(5)
-    for _name in _theme_presets.COLOR_THEMES:
-        pill = QPushButton(_name.capitalize())
-        pill.setCheckable(True)
-        pill.setFixedHeight(22)
-        pill.setCursor(Qt.CursorShape.PointingHandCursor)
-        pill.clicked.connect(lambda _=False, n=_name: _pick_accent(n))
-        _accent_buttons[_name] = pill
-        accent_ctl.addWidget(pill)
+    accent_ctl.setHorizontalSpacing(6)
+    accent_ctl.setVerticalSpacing(6)
+    _SWATCHES_PER_ROW = 7
+    for _idx, _name in enumerate(
+        list(_theme_presets.COLOR_THEMES) + [_theme_presets.CUSTOM_THEME]
+    ):
+        _is_custom = _name == _theme_presets.CUSTOM_THEME
+        sw = QPushButton()
+        sw.setCheckable(True)
+        sw.setFixedSize(22, 22)
+        sw.setCursor(Qt.CursorShape.PointingHandCursor)
+        sw.setToolTip(
+            "Custom colour — click to pick" if _is_custom
+            else _name.capitalize()
+        )
+        sw.clicked.connect(
+            (lambda _=False: _pick_custom_accent()) if _is_custom
+            else (lambda _=False, n=_name: _pick_accent(n))
+        )
+        _accent_buttons[_name] = sw
+        accent_ctl.addWidget(
+            sw, _idx // _SWATCHES_PER_ROW, _idx % _SWATCHES_PER_ROW
+        )
+
+    _cfg_custom = str(_general_cfg.get("color_theme_custom") or "")
+    if _theme_presets.is_hex_colour(_cfg_custom):
+        _accent_state["custom"] = _cfg_custom
     _cfg_accent = str(_general_cfg.get("color_theme") or "ocean")
     _accent_state["name"] = (
-        _cfg_accent if _cfg_accent in _theme_presets.COLOR_THEMES else "ocean"
+        _cfg_accent
+        if _cfg_accent in _theme_presets.COLOR_THEMES
+        or _cfg_accent == _theme_presets.CUSTOM_THEME
+        else "ocean"
     )
-    sync_accent_pills()
+    sync_accent_swatches()
     _row(
         appearance_layout,
         "Accent colour",
         "Recolours buttons, pills and highlights across every Klaus "
-        "surface — SynapsePro's presets.",
+        "surface. The last square is your own colour — click it to pick.",
         accent_ctl,
     )
 
@@ -1843,6 +1953,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
         cfg["color_theme"] = _accent_state["name"]
+        cfg["color_theme_custom"] = _accent_state["custom"]
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -1892,10 +2003,19 @@ def manage_models_dialog(setup: bool = False) -> None:
         try:
             # Accent first: top_bar.refresh() below re-bakes the toolbar
             # palettes, and this dialog restyles itself immediately.
+            _theme_presets.set_custom_colour(str(_accent_state["custom"]))
             _theme_presets.set_active_theme(_accent_state["name"])
             dlg.setStyleSheet(
                 _theme_presets.dialog_qss(_theme_presets.night_mode())
             )
+            # The swatches carry their own inline QSS, so the dialog
+            # sheet swap above wipes them — repaint from _accent_state.
+            sync_accent_swatches()
+            # The sidebar star is a baked pixmap stroked in blue_accent;
+            # re-render it or it keeps the old accent until reopen.
+            _new_logo = _logo_pixmap(24)
+            if _new_logo is not None:
+                logo_lbl.setPixmap(_new_logo)
         except Exception as _exc:
             print(f"[klausmate] accent apply failed: {_exc}")
         try:

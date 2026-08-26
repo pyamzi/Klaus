@@ -120,12 +120,21 @@ wouldn't already need.
 
 ## Appearance
 
-- **color_theme**: Accent-colour preset, one of `ocean` (default,
-  blue), `orchid`, `forest`, `deluge`, `horizon`, `dusty` —
-  SynapsePro's palette, applied to buttons, pills, highlights and the
-  top-bar star everywhere Klaus draws. Pick it in **KlausMate
-  Preferences → Appearance → Accent colour** and press **Save**;
-  applies immediately.
+- **color_theme**: Accent-colour preset — SynapsePro's six (`ocean`
+  default-blue, `orchid`, `forest`, `deluge`, `horizon`, `dusty`),
+  the community palettes (`nord`, `solarized`, `catppuccin`,
+  `gruvbox`, `everforest`, `dracula`), `claude` (Anthropic's
+  terracotta), or `custom` to use `color_theme_custom`.
+  Applied to buttons, pills, highlights and the star logo everywhere
+  Klaus draws. Pick it in **KlausMate Preferences → Appearance →
+  Accent colour** — the row of colour squares, last one being your own
+  — and press **Save**; applies immediately.
+- **color_theme_custom**: `#rrggbb` behind the `custom` preset.
+  Default `"#0071D3"`. You pick one colour; the hover, pressed and
+  bright variants Klaus needs are derived from it (and the bright tone
+  lifts further in dark mode, matching how the built-in presets
+  behave). An invalid value falls back to the default rather than
+  blanking the accent.
 - **background_mode**: `"theme"` (default — Klaus paints nothing and
   Anki looks stock), `"color"`, or `"image"`. Sets the background of
   Anki's deck, overview and congrats screens. The Klaus top bar shows

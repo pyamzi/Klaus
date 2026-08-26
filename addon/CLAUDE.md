@@ -96,13 +96,22 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   builders, adapted from SynapsePro (`scripts/SynapsePro-main/theme.py`) —
   the Apple system palette as semantic keys, LIGHT/DARK with identical key
   sets, `palette(night)`, `night_mode()` (lazy aqt, light fallback), and
-  **accent colour themes (K-107)**: `COLOR_THEMES` carries SynapsePro's
-  six presets (ocean/orchid/forest/deluge/horizon/dusty) as blue-family
-  token overlays; `set_active_theme(name)` (from config `color_theme`,
-  applied on `profile_did_open` by `__init__._apply_color_theme` BEFORE
-  any surface draws) makes every later `palette()` call carry them, so
-  all builders — dialogs, Library, panels, toolbar, pdf.js css_vars —
-  recolour with zero per-surface code. Also
+  **accent colour themes (K-107/K-108)**: `COLOR_THEMES` carries
+  SynapsePro's six presets plus community palettes (nord, solarized,
+  catppuccin, gruvbox, everforest, dracula — via `_community_preset`,
+  which derives hover/pressed from one canonical base and takes the
+  palette's published bright tone) and `claude` (#D97757 terracotta),
+  all as blue-family token overlays ONLY (backgrounds/text never fork
+  per theme — pinned). A `custom` theme derives the whole family from
+  ONE user colour (`custom_overrides`; config `color_theme_custom`).
+  `set_active_theme(name)` + `set_custom_colour(hex)` (from config,
+  applied on `profile_did_open` by `__init__._apply_color_theme`
+  BEFORE any surface draws, colour before name) make every later
+  `palette()` call carry them, so all builders — dialogs, Library,
+  panels, toolbar, pdf.js css_vars — recolour with zero per-surface
+  code. Disabled-state QSS must repeat any id selector it has to beat
+  (`QPushButton#SecondaryButton:disabled` — an id outranks a
+  pseudo-state, which is why disabled controls once looked live). Also
   per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
   `library_qss`, `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
   `accent_rgba`). **UI files must not hardcode colours** — import theme and
@@ -282,9 +291,16 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
     how the API-key row hides whole for Ollama — always beats a search
     hit); Cancel/Save sit under a full-width `ButtonBarLine` hairline
-    outside the pages. Appearance also hosts the accent-colour pill row
-    (rendered from `theme.COLOR_THEMES`, saved as `color_theme`,
-    applied live in `save_all` before `top_bar.refresh()`).
+    outside the pages. Appearance also hosts the accent swatch grid —
+    bare colour squares 7 per row, names in tooltips, last square =
+    custom colour opening QColorDialog (cancelling still selects
+    custom with its held colour) — rendered from `theme.COLOR_THEMES`,
+    saved as `color_theme`/`color_theme_custom`, applied live in
+    `save_all` (custom colour before theme name, both before
+    `top_bar.refresh()`; the sheet swap wipes the swatches' inline QSS
+    so `sync_accent_swatches()` + a logo repaint follow). Fit/Bar-blur
+    rows disable WHOLE (`bg_fit_row`/`bg_blur_row`) so labels dim with
+    their controls.
     Pages: **Semantic Search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),

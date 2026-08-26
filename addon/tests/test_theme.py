@@ -82,12 +82,26 @@ check("no-hit nav pills have a faint disabled state",
 section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",
              "blue_bright", "blue_accent"}
-check("all six presets ship light AND dark override sets",
-      set(theme.COLOR_THEMES) == {"ocean", "orchid", "forest",
-                                  "deluge", "horizon", "dusty"}
+check("every preset ships light AND dark override sets — "
+      "SynapsePro's six, the community palettes, and Claude",
+      set(theme.COLOR_THEMES) == {
+          "ocean", "orchid", "forest", "deluge", "horizon", "dusty",
+          "nord", "solarized", "catppuccin", "gruvbox", "everforest",
+          "dracula", "claude"}
       and all(set(t) == {False, True}
               and set(t[False]) == BLUE_KEYS == set(t[True])
               for t in theme.COLOR_THEMES.values()))
+check("community presets carry their canonical colours",
+      theme.COLOR_THEMES["nord"][False]["blue"] == "#5E81AC"
+      and theme.COLOR_THEMES["nord"][True]["blue_bright"] == "#88C0D0"
+      and theme.COLOR_THEMES["dracula"][True]["blue_bright"] == "#BD93F9"
+      and theme.COLOR_THEMES["gruvbox"][True]["blue_bright"] == "#FE8019"
+      and theme.COLOR_THEMES["catppuccin"][True]["blue_bright"] == "#CBA6F7"
+      and theme.COLOR_THEMES["claude"][False]["blue"] == "#D97757")
+check("a palette's canonical dark bright is also its dark accent",
+      all(theme.COLOR_THEMES[n][True]["blue_accent"]
+          == theme.COLOR_THEMES[n][True]["blue_bright"]
+          for n in ("nord", "dracula", "claude", "solarized")))
 check("only blue-family tokens are overridden — backgrounds and text "
       "always come from the base palettes",
       all(k.startswith("blue") for t in theme.COLOR_THEMES.values()
@@ -115,6 +129,67 @@ check("unknown names are ignored, not crashed on",
 theme.set_active_theme("ocean")  # reset — later checks assume the default
 check("reset back to ocean for the rest of the suite",
       theme.palette(False)["blue"] == "#0071D3")
+
+section("custom accent colour (K-108)")
+check("hex validation accepts #rgb and #rrggbb, rejects the rest",
+      theme.is_hex_colour("#abc") and theme.is_hex_colour("#0071D3")
+      and not theme.is_hex_colour("red")
+      and not theme.is_hex_colour("#gg0011")
+      and not theme.is_hex_colour("") and not theme.is_hex_colour(None))
+_ov = theme.custom_overrides("#0071D3", False)
+check("one colour derives the whole blue family",
+      set(_ov) == BLUE_KEYS and _ov["blue"] == "#0071D3")
+check("derived tones land near SynapsePro's hand-tuned ocean values",
+      _ov["blue_hover"] == "#0066BE" and _ov["blue_pressed"] == "#004F94")
+check("hover is darker than base, pressed darker than hover",
+      _ov["blue_pressed"] < _ov["blue_hover"] < _ov["blue"])
+_ovd = theme.custom_overrides("#0071D3", True)
+check("dark mode lifts the bright tone further than light does",
+      _ovd["blue_bright"] > _ov["blue_bright"])
+check("border follows the preset rule: none in light, pressed in dark",
+      _ov["blue_border"] == "none"
+      and _ovd["blue_border"] == f"1px solid {_ovd['blue_pressed']}")
+check("accent = base in light, bright in dark (same as every preset)",
+      _ov["blue_accent"] == "#0071D3"
+      and _ovd["blue_accent"] == _ovd["blue_bright"])
+check("a fully saturated colour still brightens (mix toward white, "
+      "not a channel scale)",
+      theme.custom_overrides("#FF0000", True)["blue_bright"] != "#FF0000")
+check("garbage falls back to the default instead of blanking the accent",
+      theme.custom_overrides("nonsense", False)["blue"]
+      == theme.DEFAULT_CUSTOM_COLOR)
+theme.set_custom_colour("#E95ACC")
+theme.set_active_theme("custom")
+check("custom is selectable and reaches palette() + the QSS builders",
+      theme.get_active_theme() == "custom"
+      and theme.palette(False)["blue"] == "#E95ACC"
+      and "#E95ACC" in theme.dialog_qss(False))
+theme.set_custom_colour("not-a-colour")
+check("an invalid colour is ignored, keeping the last good one",
+      theme.get_custom_colour() == "#E95ACC")
+theme.set_active_theme("ocean")
+theme.set_custom_colour(theme.DEFAULT_CUSTOM_COLOR)
+check("reset to ocean/default for the rest of the suite",
+      theme.palette(False)["blue"] == "#0071D3")
+
+section("disabled states are visible (K-108)")
+# An id selector outranks a pseudo-state one, so every :disabled rule
+# must repeat the id it has to beat — that specificity loss is exactly
+# why disabled Appearance controls looked fully live.
+for night in (False, True):
+    d4 = theme.dialog_qss(night)
+    for sel in ("QPushButton#SecondaryButton:disabled",
+                "QPushButton#DangerButton:disabled",
+                "QComboBox:disabled", "QLineEdit:disabled",
+                "QSlider::groove:horizontal:disabled",
+                "QSlider::handle:horizontal:disabled",
+                "QLabel#SettingName:disabled",
+                "QLabel#SettingDesc:disabled",
+                "QCheckBox::indicator:disabled"):
+        check(f"dialog_qss(night={night}) has {sel}", sel in d4)
+d4 = theme.dialog_qss(False)
+check("disabled text uses the faint token, not the live one",
+      theme.LIGHT["text_faint"] in d4.split("QLabel:disabled", 1)[1][:200])
 
 section("widget polish (K-107): progress, slider, list")
 for night in (False, True):

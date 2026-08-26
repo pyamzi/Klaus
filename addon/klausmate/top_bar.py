@@ -38,6 +38,21 @@ _STAR_PATH = (
     "M5.5 1.5 L23.6 13.7 L2.4 16.4 L17.8 1.8 L12.8 24.5 Z"
 )
 
+# The star's coordinate space (the SVG viewBox is 0 0 26 26).
+STAR_VIEWBOX = 26.0
+
+
+def star_points() -> list[tuple[float, float]]:
+    """The star's vertices inside STAR_VIEWBOX, parsed from _STAR_PATH,
+    so Qt surfaces (the Preferences sidebar logo) stroke the SAME
+    hand-drawn mark the toolbar's SVG shows, from the same data."""
+    pts: list[tuple[float, float]] = []
+    for cmd in _STAR_PATH.replace("M", "").replace("Z", "").split("L"):
+        parts = cmd.split()
+        if len(parts) == 2:
+            pts.append((float(parts[0]), float(parts[1])))
+    return pts
+
 
 def logo_html() -> str:
     """The left-edge logo: inline SVG star. Clicking it opens Klaus's

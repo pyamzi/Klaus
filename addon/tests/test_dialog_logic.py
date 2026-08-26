@@ -770,9 +770,13 @@ check("sidebar carries the app identity",
       'setObjectName("SettingsSidebar")' in _src2
       and 'setObjectName("SidebarAppName")' in _src2
       and 'QLabel("KlausMate")' in _src2)
-check("no logo — the sidebar identity is the wordmark alone",
-      "_logo_pixmap" not in _src2
-      and 'QLabel("KlausMate")' in _src2)
+check("sidebar identity: star logo beside the Garamond wordmark",
+      "_logo_pixmap" in _src2
+      and 'QLabel("KlausMate")' in _src2
+      and "_top_bar.star_points()" in _src2)
+check("the logo strokes blue_accent and repaints on an accent save",
+      'QColor(c["blue_accent"])' in _src2
+      and "logo_lbl.setPixmap(_new_logo)" in _src2)
 check("settings search: a filter field sits in the sidebar",
       'setObjectName("SettingsSearch")' in _src2
       and "search_edit.textChanged.connect(_apply_search)" in _src2)
@@ -811,10 +815,10 @@ check("the Cancel/Save bar sits under a full-width hairline",
 
 print("== SynapsePro UI/UX audit (K-107) ==")
 # Accent colour themes + interaction polish, mimicking SynapsePro's UX.
-check("accent pills render from theme.COLOR_THEMES — the UI defines "
-      "no colours of its own",
+check("accent swatches render from theme.COLOR_THEMES — the UI "
+      "defines no colours of its own",
       "_theme_presets.COLOR_THEMES" in _src2
-      and "_accent_pill_style" in _src2)
+      and "_accent_swatch_style" in _src2)
 check("accent choice is deferred-save like every other preference",
       'cfg["color_theme"] = _accent_state["name"]' in _src2
       and "mark_dirty()" in _src2.split("def _pick_accent", 1)[1]
@@ -837,7 +841,32 @@ check("the accent preset is applied at profile open, before any "
       < _init_src.index("append(_migrate_config)"))
 _cfgj = open("klausmate/config.json").read()
 check("color_theme ships in config.json with the ocean default",
-      '"color_theme": "ocean"' in _cfgj)
+      '"color_theme": "ocean"' in _cfgj
+      and '"color_theme_custom": "#0071D3"' in _cfgj)
+
+
+print("== accent swatches + disabled rows (K-108) ==")
+check("swatches are bare colour squares — name in the tooltip only",
+      "QPushButton()" in _src2
+      and "sw.setToolTip(" in _src2
+      and "_accent_swatch_style" in _src2)
+check("swatches wrap 7 per row so 14 of them fit a compact dialog",
+      "_SWATCHES_PER_ROW = 7" in _src2
+      and "_idx // _SWATCHES_PER_ROW" in _src2)
+check("the custom swatch opens a colour picker; cancelling still "
+      "selects custom with its held colour",
+      "QColorDialog.getColor(" in _src2.split("def _pick_custom_accent",
+                                              1)[1].split("def ", 1)[0])
+check("custom colour is saved and applied before the theme name",
+      'cfg["color_theme_custom"] = _accent_state["custom"]' in _src2
+      and _src2.index("set_custom_colour(str(_accent_state")
+      < _src2.index('set_active_theme(_accent_state["name"])'))
+check("profile open loads the custom colour before the theme name",
+      _init_src.index("set_custom_colour(")
+      < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
+check("Fit and Bar blur disable as WHOLE rows, labels included",
+      "bg_fit_row.setEnabled(is_image)" in _src2
+      and "bg_blur_row.setEnabled(is_image)" in _src2)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

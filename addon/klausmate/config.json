@@ -11,6 +11,7 @@
   "pdf_index_max_chunks": 1000,
   "pdf_renderer": "native",
   "color_theme": "ocean",
+  "color_theme_custom": "#0071D3",
   "background_mode": "theme",
   "background_color": "#1E2225",
   "background_image": "",

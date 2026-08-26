@@ -2246,7 +2246,11 @@ def _apply_color_theme() -> None:
     try:
         from . import theme as _theme
 
-        _theme.set_active_theme(str(get_config().get("color_theme") or "ocean"))
+        cfg = get_config()
+        # Colour first: set_active_theme("custom") is only meaningful
+        # once the colour behind it is loaded.
+        _theme.set_custom_colour(str(cfg.get("color_theme_custom") or ""))
+        _theme.set_active_theme(str(cfg.get("color_theme") or "ocean"))
     except Exception as _exc:
         print(f"[klausmate] colour theme failed: {_exc}")
 

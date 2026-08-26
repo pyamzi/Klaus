@@ -182,17 +182,131 @@ COLOR_THEMES: dict = {
     },
 }
 
+CUSTOM_THEME = "custom"
+
 # The user's chosen accent, set once at profile open (config key
 # ``color_theme``); every later palette() call overlays it. UI files
 # never need to know a preference exists — SynapsePro's mechanism.
 _ACTIVE_THEME: str = "ocean"
 
+# The single ``#rrggbb`` behind CUSTOM_THEME. SynapsePro asks the user
+# for four colours; Klaus asks for one and derives the rest, because a
+# picker that demands a matching hover AND pressed AND bright shade is a
+# design task, not a preference.
+_CUSTOM_COLOR: str = "#0071D3"
+
+DEFAULT_CUSTOM_COLOR = "#0071D3"
+
+
+def is_hex_colour(value: object) -> bool:
+    """True for ``#rgb`` / ``#rrggbb`` strings — the only accepted form."""
+    s = str(value or "").strip()
+    if not s.startswith("#") or len(s) not in (4, 7):
+        return False
+    try:
+        int(s[1:], 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _rgb(hex_colour: str) -> tuple[int, int, int]:
+    h = hex_colour.lstrip("#")
+    if len(h) == 3:  # #abc -> #aabbcc
+        h = "".join(ch * 2 for ch in h)
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _shade(hex_colour: str, factor: float) -> str:
+    """Darken (``factor`` < 1) or lighten (> 1) a colour, clamped.
+
+    Lightening mixes toward white rather than scaling channels, so a
+    fully saturated colour still brightens instead of staying put.
+    """
+    r, g, b = _rgb(hex_colour)
+    if factor <= 1.0:
+        vals = [c * factor for c in (r, g, b)]
+    else:
+        t = min(1.0, factor - 1.0)
+        vals = [c + (255 - c) * t for c in (r, g, b)]
+    return "#%02X%02X%02X" % tuple(max(0, min(255, round(v))) for v in vals)
+
+
+def custom_overrides(base_colour: str, night: bool) -> dict:
+    """The six blue-family tokens derived from ONE user colour.
+
+    Ratios are read off SynapsePro's own presets (hover ≈ 10% darker,
+    pressed ≈ 30% darker, bright a lift toward white — much stronger in
+    dark mode, where their accents are visibly lighter than the base).
+    """
+    if not is_hex_colour(base_colour):
+        base_colour = DEFAULT_CUSTOM_COLOR
+    pressed = _shade(base_colour, 0.70)
+    bright = _shade(base_colour, 1.35 if night else 1.08)
+    return {
+        "blue": base_colour,
+        "blue_hover": _shade(base_colour, 0.90),
+        "blue_pressed": pressed,
+        "blue_border": f"1px solid {pressed}" if night else "none",
+        "blue_bright": bright,
+        # Same rule as every preset: the accent is the base in light and
+        # the brightened tone in dark.
+        "blue_accent": bright if night else base_colour,
+    }
+
+
+def _community_preset(
+    base: str,
+    bright_light: str | None = None,
+    bright_dark: str | None = None,
+) -> dict:
+    """A COLOR_THEMES entry from a palette's canonical accent colour.
+
+    The community palettes (Nord, Solarized, …) publish a signature
+    accent but not our exact six-token family, so hover/pressed are
+    derived with the same ratios as the custom theme; where a palette
+    DOES publish a canonical bright tone (Nord's frost, Dracula's
+    purple), it is passed in rather than derived. Backgrounds and text
+    stay on the base palettes by design — these are accent presets, not
+    full re-skins.
+    """
+    ov_l = custom_overrides(base, False)
+    ov_d = custom_overrides(base, True)
+    if bright_light:
+        ov_l["blue_bright"] = bright_light
+    if bright_dark:
+        ov_d["blue_bright"] = bright_dark
+        ov_d["blue_accent"] = bright_dark
+    return {False: ov_l, True: ov_d}
+
+
+# Community palettes + Claude, as accent presets. Base colours are each
+# palette's published signature accent; bright tones are the palette's
+# own lighter companion where one exists.
+COLOR_THEMES.update({
+    # nord10 base; nord9 / nord8 (frost) brights.
+    "nord": _community_preset("#5E81AC", "#81A1C1", "#88C0D0"),
+    # Solarized blue — its accents are already tuned for both modes.
+    "solarized": _community_preset("#268BD2"),
+    # Latte mauve base; Mocha mauve as the dark bright.
+    "catppuccin": _community_preset("#8839EF", None, "#CBA6F7"),
+    # Neutral gruvbox orange; dark-mode bright is the iconic #FE8019.
+    "gruvbox": _community_preset("#D65D0E", None, "#FE8019"),
+    # Everforest green (light palette); dark palette green as bright.
+    "everforest": _community_preset("#8DA101", None, "#A7C080"),
+    # Dracula's ANSI purple for light surfaces; the iconic #BD93F9 dark.
+    "dracula": _community_preset("#7C53C3", None, "#BD93F9"),
+    # Claude's terracotta ("Crail"), Anthropic's primary accent.
+    "claude": _community_preset("#D97757"),
+})
+
 
 def set_active_theme(name: str) -> None:
     """Persist the accent-preset name for all later palette() calls.
-    Unknown names are ignored (stays on the current theme)."""
+    Accepts any COLOR_THEMES key or ``"custom"``; unknown names are
+    ignored (stays on the current theme)."""
     global _ACTIVE_THEME
-    if name in COLOR_THEMES:
+    if name in COLOR_THEMES or name == CUSTOM_THEME:
         _ACTIVE_THEME = name
 
 
@@ -201,11 +315,29 @@ def get_active_theme() -> str:
     return _ACTIVE_THEME
 
 
+def set_custom_colour(hex_colour: str) -> None:
+    """Store the colour behind ``"custom"``. Ignored unless it is a
+    valid hex string, so a corrupt config can never blank the accent."""
+    global _CUSTOM_COLOR
+    if is_hex_colour(hex_colour):
+        _CUSTOM_COLOR = str(hex_colour).strip()
+
+
+def get_custom_colour() -> str:
+    """The colour behind ``"custom"`` (``#rrggbb``)."""
+    return _CUSTOM_COLOR
+
+
 def palette(night: bool) -> dict:
     """The colour-token dict for *night* mode with the active accent
     theme's blue-family overrides applied (a copy — mutate freely)."""
     base = (DARK if night else LIGHT).copy()
-    base.update(COLOR_THEMES.get(_ACTIVE_THEME, COLOR_THEMES["ocean"])[night])
+    if _ACTIVE_THEME == CUSTOM_THEME:
+        base.update(custom_overrides(_CUSTOM_COLOR, night))
+    else:
+        base.update(
+            COLOR_THEMES.get(_ACTIVE_THEME, COLOR_THEMES["ocean"])[night]
+        )
     return base
 
 
@@ -440,6 +572,39 @@ def dialog_qss(night: bool) -> str:
     QListWidget::item:selected {{
         background-color: {c['selection_bg']};
         color: {c['text']};
+    }}
+    /* Disabled states (K-108). An inert control MUST look inert: the
+       Appearance page disables Fit/Bar blur/Choose image unless the
+       background is an image, and those controls read as fully live.
+       Cause: an id selector (QPushButton#SecondaryButton) outranks a
+       pseudo-state one (QPushButton:disabled), so the enabled style
+       won — every :disabled rule below therefore repeats the id it
+       has to beat, and rows are disabled WHOLE so their labels dim
+       with the control. */
+    QLabel:disabled,
+    QLabel#SettingName:disabled,
+    QLabel#SettingDesc:disabled,
+    QCheckBox:disabled {{ color: {c['text_faint']}; }}
+    QPushButton#SecondaryButton:disabled,
+    QPushButton#DangerButton:disabled {{
+        background-color: {c['grey_light']};
+        color: {c['text_faint']};
+        border: none;
+    }}
+    QComboBox:disabled, QLineEdit:disabled {{
+        background-color: {c['bg']};
+        color: {c['text_faint']};
+        border: 1px solid {c['grey_light']};
+    }}
+    QSlider::groove:horizontal:disabled {{ background: {c['grey_light']}; }}
+    QSlider::sub-page:horizontal:disabled {{ background: {c['grey_mid']}; }}
+    QSlider::handle:horizontal:disabled {{
+        background: {c['bg']};
+        border: 1px solid {c['grey_light']};
+    }}
+    QCheckBox::indicator:disabled {{
+        background-color: {c['bg']};
+        border: 1px solid {c['grey_light']};
     }}
     """
 
