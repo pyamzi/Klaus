@@ -272,10 +272,16 @@ def _curate_with(safe: str) -> None:
 def _on_curate_clicked() -> None:
     if mw is None or mw.col is None:
         return
+    # Deferred for the same reason _on_browse_clicked above is: this runs
+    # from the deck surfaces' JS-message/link handlers (a QWebChannel
+    # dispatch), and BOTH branches enter a nested event loop —
+    # _curate_with reaches choose_deck_scope's dlg.exec(), _pick_pdf_menu
+    # ends in menu.exec(). The armed PDF is frozen into the callback
+    # rather than re-read a tick later.
     if _armed_pdf:
-        _curate_with(_armed_pdf)
+        QTimer.singleShot(0, lambda safe=_armed_pdf: _curate_with(safe))
     else:
-        _pick_pdf_menu()
+        QTimer.singleShot(0, _pick_pdf_menu)
 
 
 def _browse_for_pdfs() -> None:

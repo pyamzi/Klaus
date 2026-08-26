@@ -207,9 +207,20 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     treat the unknown command as a link and do nothing."""
     if message == "klausmate:settings":
         try:
+            from aqt.qt import QTimer
+
             from .manage_models import manage_models_dialog
 
-            manage_models_dialog()
+            # Deferred, never called straight from here (live crash:
+            # SIGSEGV in QPaintDevice::devicePixelRatio inside
+            # QBackingStore::flush). This hook is dispatched over
+            # QWebChannel, and manage_models_dialog ends in a modal
+            # dlg.exec() — a nested event loop inside that re-entrant
+            # Chromium/Qt stack, which a pending paint can land in.
+            # singleShot(0) unwinds back to a clean top-level event-loop
+            # iteration first. __init__.on_js_message's crop/library
+            # actions already follow exactly this rule.
+            QTimer.singleShot(0, manage_models_dialog)
         except Exception as exc:
             print(f"[klausmate] settings open failed: {exc}")
         return (True, None)
