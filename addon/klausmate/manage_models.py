@@ -222,6 +222,21 @@ class _KlausManageDialog(QDialog):
             super().closeEvent(event)
 
 
+# ── DIAGNOSTIC (2026-08-26) ──────────────────────────────────────────────
+# The Preferences dialog segfaults on macOS 26.5 + Qt 6.11 the instant it
+# first flushes its backing store to screen (QPaintDevice::devicePixelRatio
+# on a null paint device inside QBackingStore::flush) — and it does so
+# whether shown app-modal via exec() OR window-modal via open(), so
+# modality (the earlier suspect) is NOT the cause. With the probe ON, the
+# Preferences entry points instead open a BARE, unstyled QDialog to
+# localize the fault: if that also crashes, ANY dialog we parent to the
+# main window crashes (an upstream Qt/Cocoa-on-Tahoe bug); if it opens
+# fine, the fault is in this dialog's own styling/content. Set False to
+# restore the real dialog.
+_BARE_DIALOG_PROBE = True
+_PROBE_KEEPALIVE: list = []
+
+
 def manage_models_dialog(setup: bool = False) -> None:
     """Set up the local AI runtime, pull an embedding model, and configure
     semantic search.
@@ -230,6 +245,25 @@ def manage_models_dialog(setup: bool = False) -> None:
     provisioning confirm on the setup page, and after the server is up it
     chains straight into pulling the starter model when none exist.
     """
+    if _BARE_DIALOG_PROBE:
+        try:
+            probe = QDialog(mw)
+            probe.setWindowTitle("KlausMate diagnostic")
+            _lay = QVBoxLayout(probe)
+            _lay.addWidget(QLabel(
+                "Bare dialog — no stylesheet, no custom widgets.\n\n"
+                "If you can read this, plain dialogs work on your Mac and "
+                "the crash is in the Preferences dialog's own content."
+            ))
+            probe.resize(400, 160)
+            _PROBE_KEEPALIVE.append(probe)  # non-modal: outlive this call
+            probe.open()
+            print("[klausmate] bare-dialog probe shown — backing-store "
+                  "flush did NOT crash")
+        except Exception as exc:
+            print(f"[klausmate] bare-dialog probe failed: {exc}")
+        return
+
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("KlausMate Preferences")
     dlg.setMinimumWidth(480)

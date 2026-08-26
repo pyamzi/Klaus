@@ -105,16 +105,30 @@ falsified that: crashes at 01:29/01:34 were webchannel-dispatched, but
 12:10/12:18/14:07/14:08 came from the **deferred timer slot itself** —
 the fix's own clean dispatch path. Three dispatch shapes, one crash.
 
-**Actual root cause:** application-modal `exec()` on this stack. Qt
-runs app-modal windows through AppKit's NSApp modal-session machinery,
-which races Tahoe's window-appear animation (an `NSAnimation
-_runBlocking` sits on a background queue in every report) and flushes
-a backing store whose paint device is null. Everything that never
-crashed — QMenu popups, the non-modal Library window, Anki's own
-dialogs — avoids app-modal exec. **Fix: `manage_models_dialog` now
-shows with window-modal `dlg.open()`** (return value was unused; all
-close paths already callback-driven). Pinned in
-`tests/test_bridge_reentrancy.py`.
+**Second theory ALSO wrong (2026-08-26 pm):** blamed application-modal
+`exec()`, switched Preferences to window-modal `dlg.open()`. An eighth
+crash (14:44) then bottomed out at `QCoreApplication::exec()` — the
+MAIN loop, not `QDialog::exec()` — proving `open()` loaded and the
+dialog still crashed the same way from a normal posted-paint. Modality
+is NOT the cause. `open()` is kept anyway (more correct than app-modal
+for a settings window) but is NOT the fix.
+
+**Where it actually stands:** the crash is Qt flushing THIS dialog's
+Cocoa backing store and finding a null paint device, independent of how
+the dialog is shown. Ruled out by inspection: webchannel reentrancy;
+modality; translucent/frameless window attributes (none on our
+dialog); alpha/border-radius/gradient on the top-level in
+`theme.dialog_qss` (none — opaque bg, radius only on child group
+boxes). Dialogs WE create crash; Anki's own don't. Very likely a Qt
+6.11 + macOS 26.5 platform bug tied to the Tahoe window-appear
+animation (`QApplicationPrivate::enabledAnimations` in the crash
+registers; `NSAnimation _runBlocking` on a background queue in earlier
+reports). **Current state: a bare-dialog probe is wired in
+(`manage_models._BARE_DIALOG_PROBE = True`)** — Preferences opens a
+plain unstyled `QDialog(mw)` to decide whether ANY dialog we open
+crashes (⇒ upstream, report to Anki/Qt) or only our styled/complex one
+(⇒ bisect styling → widgets). Set the flag False to restore the real
+dialog once the fault is localized.
 
 The deferral rule is KEPT as hygiene (Qt documents the hazard), with
 its enforcement machinery: two auto-discovered rosters (js-message
