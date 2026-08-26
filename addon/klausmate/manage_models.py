@@ -442,6 +442,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         nav.setObjectName("NavItem")
         nav.setCheckable(True)
         nav.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Fixed height, macOS-sidebar style (System Settings rows are
+        # fixed too). The pill's height must never come from a
+        # QSS-derived sizeHint: stylesheet padding/fonts only reach the
+        # hint on (re)polish, which made the sidebar lay out mushed on
+        # first paint and only find its spacing after a later restyle.
+        nav.setFixedHeight(30)
         nav.clicked.connect(lambda _=False, l=nav_label: _select_page(l))
         _nav_by_label[nav_label] = nav
         # Search bookkeeping: rows register against this label, and the

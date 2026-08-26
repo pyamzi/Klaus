@@ -872,6 +872,9 @@ check("pill gaps come from layout spacing, never a QSS margin "
       "nav_lay.setSpacing(6)" in _src2
       and "margin" not in open("klausmate/theme.py").read().split(
           "QPushButton#NavItem {", 1)[1].split("}", 1)[0])
+check("pill HEIGHT is fixed too — QSS fonts/padding reach sizeHint on "
+      "the same re-polish schedule as margins did",
+      "nav.setFixedHeight(30)" in _src2)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

@@ -133,16 +133,25 @@ def main_css(spec: dict, url: str = "") -> str:
     return ""
 
 
-def bar_css(spec: dict, url: str = "") -> str:
-    """The frosted layer for the top bar.
+def bar_css(spec: dict, url: str = "", bottom: bool = False) -> str:
+    """The frosted layer for a toolbar — the top bar by default, the
+    bottom bar with ``bottom=True``.
 
     A ``::before`` layer under the bar's content carries the same
     background, blurred. It is inset by ``-blur`` px and scaled so the
     blur kernel never samples past the element and leaves pale edges.
     In ``color`` mode there is nothing to blur, so the bar just takes
     the colour — a Gaussian blur of a flat fill is that same fill.
+
+    The top toolbar's container is the ``.header`` class div; the
+    bottom toolbar has no such class (its table is ``#header``), so the
+    bottom frost hangs off ``body`` instead — and samples the IMAGE'S
+    BOTTOM edge, since that is the slice of the window background the
+    bar visually continues.
     """
     mode = spec.get("mode")
+    if bottom:
+        return _bottom_bar_css(spec, url)
     if mode == "color":
         return (
             ".header { background: %s !important; }" % spec["color"]
@@ -186,6 +195,53 @@ def bar_css(spec: dict, url: str = "") -> str:
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
     }}
     .header .hitem:hover {{ color: var(--klaus-text) !important; }}
+    """
+    return ""
+
+
+def _bottom_bar_css(spec: dict, url: str = "") -> str:
+    """bar_css's bottom-toolbar variant — same frost, different roots."""
+    mode = spec.get("mode")
+    if mode == "color":
+        return (
+            "html, body { background: %s !important; }" % spec["color"]
+        )
+    if mode == "image" and url:
+        blur = spec["blur"]
+        return f"""
+    body {{
+        background: {spec['color']} !important;
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+    }}
+    body::before {{
+        content: "";
+        position: absolute;
+        top: {-blur * 2}px; right: {-blur * 2}px;
+        bottom: {-blur * 2}px; left: {-blur * 2}px;
+        background-color: {spec['color']};
+        background-image: url('{url}');
+        background-position: center bottom;
+        {_fit_rules(spec['fit'])}
+        filter: blur({blur}px);
+        z-index: -1;
+    }}
+    body::after {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: var(--klaus-chrome);
+        opacity: {DEFAULT_TINT};
+        z-index: -1;
+    }}
+    #header {{ position: relative; z-index: 1; }}
+    /* Full contrast + soft shadow, same treatment as the top bar's
+       links — a photo swallows the muted tone. */
+    body button {{
+        color: var(--klaus-text) !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    }}
     """
     return ""
 

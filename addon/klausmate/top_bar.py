@@ -160,16 +160,19 @@ def _config() -> dict:
         return {}
 
 
-def _background_css(bar: bool) -> str:
-    """CSS for the chosen background — the frosted variant for the bar,
-    the plain one for Anki's own screens. Empty in "theme" mode, so the
-    default install paints nothing."""
+def _background_css(bar: bool, bottom: bool = False) -> str:
+    """CSS for the chosen background — the frosted variant for a bar
+    (top by default, ``bottom=True`` for the bottom toolbar), the plain
+    one for Anki's own screens. Empty in "theme" mode, so the default
+    install paints nothing."""
     try:
         from . import background
 
         spec = background.resolve(_config())
         url = background.image_url(_addon(), spec["image"])
-        return (background.bar_css if bar else background.main_css)(spec, url)
+        if bar:
+            return background.bar_css(spec, url, bottom=bottom)
+        return background.main_css(spec, url)
     except Exception as exc:
         print(f"[klausmate] background css failed: {exc}")
         return ""
@@ -238,6 +241,27 @@ def _on_left_tray(content: list, toolbar: Any) -> None:
 def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
     try:
         from aqt.toolbar import TopToolbar
+
+        # The bottom toolbar (deck-browser/overview buttons) gets the
+        # SAME chrome + frost as the top, so the window is bracketed by
+        # matching bars. Matched by class NAME: these contexts live in
+        # aqt.deckbrowser/aqt.overview and importing both here for an
+        # isinstance would be needless coupling. The reviewer's answer
+        # bar is deliberately excluded — its colours carry scheduling
+        # meaning.
+        if type(context).__name__ in (
+            "DeckBrowserBottomBar",
+            "OverviewBottomBar",
+        ):
+            from . import theme
+
+            web_content.head += (
+                "<style>" + theme.bottombar_css() + "</style>"
+            )
+            css = _background_css(bar=True, bottom=True)
+            if css:
+                web_content.head += "<style>" + css + "</style>"
+            return
 
         if not isinstance(context, TopToolbar):
             return

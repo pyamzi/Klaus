@@ -823,14 +823,26 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
-def _toolbar_vars(c: dict) -> str:
-    """One palette as Klaus custom properties for the toolbar."""
+def _toolbar_vars(c: dict, night: bool) -> str:
+    """One palette as Klaus custom properties for the toolbars.
+
+    Hover/press are TRANSLUCENT veils, not opaque fills — Apple's
+    material treatment (NSToolbar button states): translucent black
+    over light chrome, translucent white over dark. Over the custom
+    backgrounds (a flat colour, a frosted photo) an opaque hover chip
+    read as a grey sticker; a veil tints whatever is actually behind
+    the button, so the highlight "reflects the background" by
+    construction.
+    """
+    hover = "rgba(255, 255, 255, 0.10)" if night else "rgba(0, 0, 0, 0.05)"
+    press = "rgba(255, 255, 255, 0.16)" if night else "rgba(0, 0, 0, 0.09)"
     return (
         f"--klaus-chrome: {c['chrome']};"
         f" --klaus-border: {c['grey_light']};"
         f" --klaus-text: {c['text']};"
         f" --klaus-text-muted: {c['text_muted']};"
-        f" --klaus-hover: {c['hover_subtle']};"
+        f" --klaus-hover: {hover};"
+        f" --klaus-press: {press};"
         f" --klaus-accent: {c['blue_bright']};"
     )
 
@@ -856,9 +868,9 @@ def toolbar_css() -> str:
     follows the theme instantly with no re-injection.
     """
     return f"""
-    :root {{ {_toolbar_vars(palette(False))} }}
+    :root {{ {_toolbar_vars(palette(False), False)} }}
     :root.night-mode, body.night_mode, body.nightMode {{
-        {_toolbar_vars(palette(True))}
+        {_toolbar_vars(palette(True), True)}
     }}
     html, body {{
         background: var(--klaus-chrome) !important;
@@ -922,6 +934,9 @@ def toolbar_css() -> str:
         border-color: transparent !important;
         text-decoration: none !important;
     }}
+    .header .hitem:active {{
+        background: var(--klaus-press) !important;
+    }}
     #klaus-logo {{
         display: flex;
         align-items: center;
@@ -929,6 +944,56 @@ def toolbar_css() -> str:
         cursor: pointer;
     }}
     #klaus-logo svg {{ display: block; }}
+    """
+
+
+def bottombar_css() -> str:
+    """The bottom toolbar (deck-browser / overview buttons), matched to
+    the top bar: same chrome colour, same both-palettes theme
+    reactivity, and Anki's native ``<button>`` elements flattened into
+    the top bar's glass-chip language — borderless and transparent at
+    rest, the translucent hover/press veils on interaction, so the
+    highlight tints whatever background is behind the bar. Injected by
+    top_bar for ``DeckBrowserBottomBar``/``OverviewBottomBar`` contexts
+    only; the reviewer's answer bar keeps Anki's own styling (its
+    colours carry scheduling meaning).
+    """
+    return f"""
+    :root {{ {_toolbar_vars(palette(False), False)} }}
+    :root.night-mode,
+    body.night_mode,
+    body.nightMode {{ {_toolbar_vars(palette(True), True)} }}
+    html, body {{
+        background: var(--klaus-chrome) !important;
+        border: none !important;
+    }}
+    #header {{
+        border: none !important;
+        margin: 0 !important;
+        padding: 5px 9px !important;
+        background: transparent !important;
+    }}
+    button {{
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: var(--klaus-text-muted);
+        font-family: {FONT_FAMILY};
+        font-size: 13px;
+        font-weight: 600;
+        padding: 5px 12px;
+        margin: 0 2px;
+        cursor: pointer;
+        transition: background 120ms ease, color 120ms ease;
+    }}
+    button:hover {{
+        background: var(--klaus-hover);
+        color: var(--klaus-text);
+    }}
+    button:active {{ background: var(--klaus-press); }}
+    button:focus {{ outline: 0; }}
     """
 
 

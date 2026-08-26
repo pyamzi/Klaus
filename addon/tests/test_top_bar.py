@@ -41,10 +41,24 @@ check("toolbar_css takes no night argument (can't bake a snapshot)",
       list(inspect.signature(theme.toolbar_css).parameters) == [])
 for key, tok in (("chrome", "chrome"), ("border", "grey_light"),
                  ("text", "text"), ("text-muted", "text_muted"),
-                 ("hover", "hover_subtle"), ("accent", "blue_bright")):
+                 ("accent", "blue_bright")):
     check(f"--klaus-{key}: both palettes present",
           f"--klaus-{key}: {theme.LIGHT[tok]};" in css
           and f"--klaus-{key}: {theme.DARK[tok]};" in css)
+# Hover/press are TRANSLUCENT veils (Apple material states): black over
+# light chrome, white over dark — so the highlight tints whatever is
+# behind the button (flat chrome, custom colour, photo frost) instead
+# of pasting an opaque grey chip over it.
+check("hover veil: translucent black (light) / white (dark)",
+      "--klaus-hover: rgba(0, 0, 0, 0.05);" in css
+      and "--klaus-hover: rgba(255, 255, 255, 0.10);" in css)
+check("press veil ships too, one step stronger",
+      "--klaus-press: rgba(0, 0, 0, 0.09);" in css
+      and "--klaus-press: rgba(255, 255, 255, 0.16);" in css)
+check("no opaque hover fill remains in the bar sheet",
+      theme.LIGHT["hover_subtle"] not in css)
+check("links use the press veil on :active",
+      ".header .hitem:active" in css)
 _lum = lambda h: sum(int(h[i:i + 2], 16) for i in (1, 3, 5)) / 3
 # Anki's own canvas: --canvas #f5f5f5 light, #2c2c2c dark (toolbar.css).
 check("light chrome separates from Anki's light canvas (brighter)",
@@ -147,6 +161,28 @@ top_bar._on_left_tray(content, None)
 check("logo lands FIRST, other addons' items untouched after it",
       content[0] == top_bar.logo_html()
       and content[1] == "<div>ankihub-item</div>")
+
+section("bottom toolbar matches the top (K-109)")
+bcss = theme.bottombar_css()
+check("both palettes ship in one sheet, keyed on Anki's night classes",
+      ":root.night-mode" in bcss and "body.night_mode" in bcss
+      and f"--klaus-chrome: {theme.LIGHT['chrome']};" in bcss
+      and f"--klaus-chrome: {theme.DARK['chrome']};" in bcss)
+check("the bar IS the chrome colour, borderless",
+      "background: var(--klaus-chrome) !important;" in bcss
+      and "border: none !important;" in bcss)
+check("Anki's native buttons are flattened into the top bar's chip "
+      "language (appearance off, transparent at rest, rounded)",
+      "-webkit-appearance: none;" in bcss
+      and "background: transparent;" in bcss
+      and "border-radius: 8px;" in bcss)
+check("hover/press use the same translucent veils as the top bar",
+      "background: var(--klaus-hover);" in bcss
+      and "background: var(--klaus-press);" in bcss)
+check("hook injects it for deck-browser and overview bottom bars only",
+      '"DeckBrowserBottomBar"' in open("klausmate/top_bar.py").read()
+      and '"OverviewBottomBar"' in open("klausmate/top_bar.py").read()
+      and "ReviewerBottomBar" not in open("klausmate/top_bar.py").read())
 
 section("star geometry shared with Qt surfaces")
 pts = top_bar.star_points()
