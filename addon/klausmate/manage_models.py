@@ -256,22 +256,33 @@ def manage_models_dialog(setup: bool = False) -> None:
     outer.addWidget(stack)
 
     # ----- Page 0: Install Ollama -----------------------------------------
+    # Predates the K-106 sidebar shell; K-111 brought its title/subtitle
+    # onto the same objectName language as _page() below (PageTitle +
+    # PageSubtitle) even though this page keeps its own full-frame layout
+    # with no sidebar/nav pill — a user with no Ollama shouldn't see
+    # settings navigation offering pages that can't work yet.
     install_page = QWidget()
     install_layout = QVBoxLayout(install_page)
-    install_layout.setContentsMargins(24, 20, 24, 12)
+    install_layout.setContentsMargins(24, 18, 24, 8)
     install_layout.setSpacing(8)
 
-    install_heading = QLabel("Set up local AI")
-    install_heading.setStyleSheet("font-weight: 600; font-size: 14px;")
-    install_layout.addWidget(install_heading)
+    install_title = QLabel("Set up local AI")
+    install_title.setObjectName("PageTitle")
+    install_layout.addWidget(install_title)
 
     install_body = QLabel(
         "Klaus runs AI locally through Ollama — nothing ever leaves your "
         "computer. Klaus can download and manage its own copy "
         "automatically, or you can install Ollama yourself."
     )
+    install_body.setObjectName("PageSubtitle")
     install_body.setWordWrap(True)
     install_layout.addWidget(install_body)
+    install_layout.addSpacing(8)
+
+    install_heading = QLabel("Set up local AI")
+    install_heading.setObjectName("InstallHeading")
+    install_layout.addWidget(install_heading)
 
     install_status = QLabel()
     install_status.setWordWrap(True)
@@ -285,7 +296,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     install_layout.addWidget(auto_setup_btn)
 
     manual_lbl = QLabel("Manual options")
-    manual_lbl.setStyleSheet("font-weight: 600; margin-top: 8px;")
+    manual_lbl.setObjectName("InstallSection")
     install_layout.addWidget(manual_lbl)
 
     download_btn = QPushButton("Open download page")

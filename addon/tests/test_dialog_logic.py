@@ -876,5 +876,28 @@ check("pill HEIGHT is fixed too — QSS fonts/padding reach sizeHint on "
       "the same re-polish schedule as margins did",
       "nav.setFixedHeight(30)" in _src2)
 
+
+print("== install page onto the K-106 shell language (K-111) ==")
+# Page 0 (the pre-K-106 "Set up local AI" page) predated the sidebar shell
+# and hand-styled its two headings with literal setStyleSheet font strings.
+# K-111 gives it the same PageTitle/PageSubtitle opening as every other
+# page (built by hand here, not via _page(), since this page keeps its own
+# full-frame layout with no sidebar pill) and moves InstallHeading /
+# InstallSection onto objectNames K-110 styles centrally.
+_install_src = _src2.split("# ----- Page 0: Install Ollama", 1)[1].split(
+    "# ----- Page 1:", 1)[0]
+check("no literal font setStyleSheet remains on the install page",
+      "font-weight" not in _install_src
+      and "font-size" not in _install_src)
+check("the install page opens with a PageTitle + PageSubtitle pair, "
+      "margins matching _page()",
+      'install_title.setObjectName("PageTitle")' in _install_src
+      and 'install_body.setObjectName("PageSubtitle")' in _install_src
+      and "install_body.setWordWrap(True)" in _install_src
+      and "setContentsMargins(24, 18, 24, 8)" in _install_src)
+check("the two hand-styled labels moved to InstallHeading / InstallSection",
+      'install_heading.setObjectName("InstallHeading")' in _install_src
+      and 'manual_lbl.setObjectName("InstallSection")' in _install_src)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
