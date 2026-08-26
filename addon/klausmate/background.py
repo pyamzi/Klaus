@@ -161,8 +161,63 @@ def main_css(spec: dict, url: str = "") -> str:
             f" background-attachment: fixed !important;"
             f" {_fit_rules(spec['fit'])}"
             " }"
+            # Panels frost over the image so their text stays readable.
+            + panel_css(spec)
         )
     return ""
+
+
+def panel_css(spec: dict) -> str:
+    """Frost Anki's content panels so they stay readable over a photo.
+
+    IMAGE MODE ONLY, by the same logic bar_css relies on: a Gaussian blur
+    of a flat colour is that colour, so in ``color`` mode this would cost
+    a compositing layer to change nothing, and in ``theme`` mode Klaus
+    paints no background at all.
+
+    Unlike the bars, this really is ``backdrop-filter``. The bars can't
+    use it — the toolbar is a separate webview, so the window behind it
+    never composites into that document — but a deck table and the page
+    background it sits on ARE the same document, so the real thing works
+    here. Anki was already 90% of the way: ``.fancy table`` is painted
+    with ``--canvas-glass`` ("transparent background for surfaces
+    containing text") and the theme defines ``--blur``, but nothing ever
+    blurred behind it, so over a photo the glass was a see-through wash.
+
+    Both palettes ship keyed on Anki's own ``:root.night-mode`` class
+    rather than baking whichever is current — the same reason
+    theme.toolbar_css takes no ``night`` argument: Anki flips that class
+    with JS and never re-runs the hook that injected this.
+    """
+    if spec.get("mode") != "image":
+        return ""
+    blur = spec.get("blur", DEFAULT_BLUR)
+    if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
+        blur = DEFAULT_BLUR
+    blur = int(blur)
+    # Tint is deliberately heavier than Anki's 0.4 --canvas-glass: that
+    # value is tuned for a flat window colour, and an arbitrary photo
+    # (bright, busy, high-contrast) needs more to keep small text legible.
+    filt = f"blur({blur}px) saturate(140%)"
+    return (
+        ":root {"
+        " --klaus-panel: rgba(255,255,255,0.62);"
+        " --klaus-panel-edge: rgba(255,255,255,0.55);"
+        " }"
+        ":root.night-mode {"
+        " --klaus-panel: rgba(38,38,38,0.62);"
+        " --klaus-panel-edge: rgba(255,255,255,0.10);"
+        " }"
+        # table = the deck list and the overview's count table; .callout =
+        # Anki's notice box. Both are real surfaces that carry text.
+        " table, .callout {"
+        " background: var(--klaus-panel) !important;"
+        f" -webkit-backdrop-filter: {filt} !important;"
+        f" backdrop-filter: {filt} !important;"
+        " border: 1px solid var(--klaus-panel-edge) !important;"
+        " border-radius: var(--border-radius-medium, 12px) !important;"
+        " }"
+    )
 
 
 def bar_css(spec: dict, url: str = "", bottom: bool = False) -> str:

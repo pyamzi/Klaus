@@ -631,7 +631,7 @@ def dialog_qss(night: bool) -> str:
         color: {c['text']};
     }}
     /* Disabled states (K-108). An inert control MUST look inert: the
-       Appearance page disables Fit/Bar blur/Choose image unless the
+       Appearance page disables Fit/Blur/Choose image unless the
        background is an image, and those controls read as fully live.
        Cause: an id selector (QPushButton#SecondaryButton) outranks a
        pseudo-state one (QPushButton:disabled), so the enabled style

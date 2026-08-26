@@ -988,8 +988,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     blur_ctl.addWidget(bg_blur_lbl)
     bg_blur_row = _row(
         appearance_layout,
-        "Bar blur",
-        "How strongly the top bar blurs an image behind it.",
+        "Blur",
+        "How strongly the toolbars and content panels frost the image "
+        "behind them.",
         blur_ctl,
     )
 

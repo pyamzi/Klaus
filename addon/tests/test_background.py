@@ -115,6 +115,51 @@ check("non-images refused",
       bg.store_image(tmp, os.path.join(tmp, "nope.py")) == "")
 check("missing files refused", bg.store_image(tmp, "/no/such/file.png") == "")
 
+section("frosted panels over an image (readability)")
+# Anki paints .fancy table with --canvas-glass but never blurs behind
+# it, so over a photo the "glass" was just a see-through wash. Panels
+# are in the SAME document as the page background, so unlike the bars
+# they can use a real backdrop-filter.
+_img = bg.resolve({"background_mode": "image", "background_image": "p.png",
+                   "background_blur": 18})
+_panels = bg.panel_css(_img)
+check("panels frost with a REAL backdrop-filter (same document as the "
+      "background, unlike the separate-webview toolbars)",
+      "backdrop-filter: blur(18px)" in _panels
+      and "-webkit-backdrop-filter: blur(18px)" in _panels)
+check("the blur follows the user's own blur setting",
+      "blur(18px)" in _panels
+      and "blur(22px)" in bg.panel_css(
+          bg.resolve({"background_mode": "image",
+                      "background_image": "p.png",
+                      "background_blur": 22})))
+check("the deck table and Anki's callout box both get it",
+      "table, .callout {" in _panels)
+check("panels sit on a tint so text stays legible on a busy photo",
+      "--klaus-panel: rgba(255,255,255,0.62)" in _panels)
+check("BOTH palettes ship, keyed on Anki's own night-mode class — the "
+      "theme flips that class with JS and never re-runs our injector",
+      ":root.night-mode {" in _panels
+      and "--klaus-panel: rgba(38,38,38,0.62)" in _panels)
+check("rules use !important, since Anki's own sheet also sets these",
+      _panels.count("!important") >= 4)
+check("panels round to Anki's own container radius, with a fallback",
+      "var(--border-radius-medium, 12px)" in _panels)
+
+check("NO frost in colour mode — blurring a flat colour yields that "
+      "same colour, so it would cost a compositing layer for nothing",
+      bg.panel_css(bg.resolve({"background_mode": "color"})) == "")
+check("NO frost in theme mode — Klaus paints no background there at all",
+      bg.panel_css(bg.resolve({"background_mode": "theme"})) == "")
+check("an out-of-range blur falls back rather than emitting junk CSS",
+      f"blur({bg.DEFAULT_BLUR}px)" in bg.panel_css(
+          {"mode": "image", "blur": 9999}))
+check("main_css ships the panel rules with the image background, so one "
+      "injection covers deck list, overview and congrats alike",
+      "backdrop-filter" in bg.main_css(_img, "pic.png")
+      and "backdrop-filter" not in bg.main_css(
+          bg.resolve({"background_mode": "color"})))
+
 section("unsaved live preview (Appearance previews before Save)")
 # Appearance is judged by eye, so Preferences renders accent+background
 # live while you configure them — but Save stays the ONLY writer of

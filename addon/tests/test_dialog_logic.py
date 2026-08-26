@@ -880,7 +880,7 @@ check("custom colour is saved, and applied before the theme name",
 check("profile open loads the custom colour before the theme name",
       _init_src.index("set_custom_colour(")
       < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
-check("Fit and Bar blur disable as WHOLE rows, labels included",
+check("Fit and Blur disable as WHOLE rows, labels included",
       "bg_fit_row.setEnabled(is_image)" in _src2
       and "bg_blur_row.setEnabled(is_image)" in _src2)
 check("nav geometry is pure view geometry: setSizeHint rows + list "
