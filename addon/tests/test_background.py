@@ -123,6 +123,15 @@ section("frosted panels over an image (readability)")
 _img = bg.resolve({"background_mode": "image", "background_image": "p.png",
                    "background_blur": 18})
 _panels = bg.panel_css(_img)
+
+
+def _alphas(css, token):
+    """Every alpha declared for a token, light palette then night."""
+    import re
+    return [float(m) for m in
+            re.findall(rf"{token}: rgba\([\d, ]+,\s*([\d.]+)\)", css)]
+
+
 check("panels frost with a REAL backdrop-filter (same document as the "
       "background, unlike the separate-webview toolbars)",
       "backdrop-filter: blur(18px)" in _panels
@@ -135,12 +144,17 @@ check("the blur follows the user's own blur setting",
                       "background_blur": 22})))
 check("the deck table and Anki's callout box both get it",
       "table, .callout {" in _panels)
-check("panels sit on a tint so text stays legible on a busy photo",
-      "--klaus-panel: rgba(255,255,255,0.62)" in _panels)
+check("panels sit on a tint so text stays legible on a busy photo — "
+      "a RANGE, not an exact value, so the look can be retuned without "
+      "churning this test: sheer enough that the picture still reads as "
+      "a picture, opaque enough to lift small text off it",
+      all(0.35 <= a <= 0.75
+          for a in _alphas(_panels, "--klaus-panel")))
 check("BOTH palettes ship, keyed on Anki's own night-mode class — the "
       "theme flips that class with JS and never re-runs our injector",
       ":root.night-mode {" in _panels
-      and "--klaus-panel: rgba(38,38,38,0.62)" in _panels)
+      and "--klaus-panel: rgba(38,38,38," in _panels
+      and len(_alphas(_panels, "--klaus-panel")) == 2)
 check("rules use !important, since Anki's own sheet also sets these",
       _panels.count("!important") >= 4)
 check("panels round to Anki's own container radius, with a fallback",
@@ -158,13 +172,6 @@ check("the row rule is scoped to tr.deck — unscoped, it also matched the "
       "the overview and congrats screens too)",
       "tr:hover" not in _panels.replace("tr.deck:hover", "")
       and " .current td," not in _panels)
-def _alphas(css, token):
-    """Every alpha declared for a token, light palette then night."""
-    import re
-    return [float(m) for m in
-            re.findall(rf"{token}: rgba\([\d, ]+,\s*([\d.]+)\)", css)]
-
-
 _pa, _sa = _alphas(_panels, "--klaus-panel"), _alphas(_panels,
                                                       "--klaus-panel-strong")
 check("...and is MORE opaque than the panel in BOTH palettes — computed "

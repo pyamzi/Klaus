@@ -195,18 +195,21 @@ def panel_css(spec: dict) -> str:
     if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
         blur = DEFAULT_BLUR
     blur = int(blur)
-    # Tint is deliberately heavier than Anki's 0.4 --canvas-glass: that
-    # value is tuned for a flat window colour, and an arbitrary photo
-    # (bright, busy, high-contrast) needs more to keep small text legible.
+    # Tint sits just above Anki's 0.4 --canvas-glass: that value is tuned
+    # for a flat window colour, and an arbitrary photo (bright, busy,
+    # high-contrast) needs a little more to keep small text legible.
+    # Deliberately sheer — the BLUR is what earns the legibility here, so
+    # the picture still reads as a picture behind the glass. Tint and
+    # blur are independent knobs: lowering one does not weaken the other.
     filt = f"blur({blur}px) saturate(140%)"
     return (
         ":root {"
-        " --klaus-panel: rgba(255,255,255,0.62);"
+        " --klaus-panel: rgba(255,255,255,0.50);"
         " --klaus-panel-edge: rgba(255,255,255,0.55);"
         " --klaus-panel-strong: rgba(255,255,255,0.85);"
         " }"
         ":root.night-mode {"
-        " --klaus-panel: rgba(38,38,38,0.62);"
+        " --klaus-panel: rgba(38,38,38,0.50);"
         " --klaus-panel-edge: rgba(255,255,255,0.10);"
         " --klaus-panel-strong: rgba(48,48,48,0.85);"
         " }"
