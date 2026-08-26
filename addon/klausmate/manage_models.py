@@ -385,6 +385,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         nav = QPushButton(nav_label)
         nav.setObjectName("NavItem")
         nav.setCheckable(True)
+        nav.setCursor(Qt.CursorShape.PointingHandCursor)
         nav.clicked.connect(lambda _=False, l=nav_label: _select_page(l))
         _nav_by_label[nav_label] = nav
         # Search bookkeeping: rows register against this label, and the
@@ -835,6 +836,65 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     sync_background_widgets()
 
+    # ----- Accent colour (SynapsePro's colour themes, K-107) ------------
+    # Six preset pills, colours straight from theme.COLOR_THEMES — the
+    # ONLY place accents are defined; this block just renders them.
+    # Deferred-save like every other preference: clicking a pill only
+    # updates _accent_state + the dirty flag; save_general writes the
+    # color_theme key and save_all applies it live.
+    from . import theme as _theme_presets
+
+    _accent_state = {"name": "ocean"}
+    _accent_buttons: dict[str, QPushButton] = {}
+
+    def _accent_pill_style(name: str, checked: bool) -> str:
+        t = _theme_presets.COLOR_THEMES[name][False]
+        ring = "rgba(255,255,255,0.85)" if checked else "transparent"
+        return (
+            "QPushButton {"
+            f" background-color: {t['blue']}; color: white;"
+            f" border-radius: 6px; border: 2px solid {ring};"
+            " font-weight: 600; font-size: 10px; padding: 1px 6px;"
+            " min-width: 40px; }"
+            "QPushButton:hover {"
+            f" background-color: {t['blue_pressed']}; }}"
+        )
+
+    def sync_accent_pills() -> None:
+        for name, btn in _accent_buttons.items():
+            checked = name == _accent_state["name"]
+            btn.setChecked(checked)
+            btn.setStyleSheet(_accent_pill_style(name, checked))
+
+    def _pick_accent(name: str) -> None:
+        _accent_state["name"] = name
+        mark_dirty()
+        sync_accent_pills()
+
+    accent_ctl = QHBoxLayout()
+    accent_ctl.setContentsMargins(0, 0, 0, 0)
+    accent_ctl.setSpacing(5)
+    for _name in _theme_presets.COLOR_THEMES:
+        pill = QPushButton(_name.capitalize())
+        pill.setCheckable(True)
+        pill.setFixedHeight(22)
+        pill.setCursor(Qt.CursorShape.PointingHandCursor)
+        pill.clicked.connect(lambda _=False, n=_name: _pick_accent(n))
+        _accent_buttons[_name] = pill
+        accent_ctl.addWidget(pill)
+    _cfg_accent = str(_general_cfg.get("color_theme") or "ocean")
+    _accent_state["name"] = (
+        _cfg_accent if _cfg_accent in _theme_presets.COLOR_THEMES else "ocean"
+    )
+    sync_accent_pills()
+    _row(
+        appearance_layout,
+        "Accent colour",
+        "Recolours buttons, pills and highlights across every Klaus "
+        "surface — SynapsePro's presets.",
+        accent_ctl,
+    )
+
     def _refresh_library_label() -> None:
         from . import pdf_handler
 
@@ -878,7 +938,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     cancel_btn.setObjectName("SecondaryButton")
     cancel_btn.setVisible(False)
     close_row.addWidget(cancel_btn)
-    close_btn = QPushButton("Close")
+    close_btn = QPushButton("Cancel")
     close_btn.setObjectName("SecondaryButton")
     close_row.addWidget(close_btn)
     # Save is the primary action (theme default = blue) and the ONLY
@@ -1782,6 +1842,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_image"] = spec["image"]
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
+        cfg["color_theme"] = _accent_state["name"]
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -1828,6 +1889,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         save_embed()
         save_threshold()
         save_general()
+        try:
+            # Accent first: top_bar.refresh() below re-bakes the toolbar
+            # palettes, and this dialog restyles itself immediately.
+            _theme_presets.set_active_theme(_accent_state["name"])
+            dlg.setStyleSheet(
+                _theme_presets.dialog_qss(_theme_presets.night_mode())
+            )
+        except Exception as _exc:
+            print(f"[klausmate] accent apply failed: {_exc}")
         try:
             from . import top_bar as _top_bar
 

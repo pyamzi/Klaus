@@ -2237,6 +2237,21 @@ try:
 except Exception as _e:
     print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 
+def _apply_color_theme() -> None:
+    """Overlay the user's accent preset onto every later palette() call
+    (SynapsePro's mechanism, K-107). Must run BEFORE any Klaus surface
+    draws in this profile — profile_did_open precedes the toolbar's
+    first webview_will_set_content, so the top bar's baked palettes
+    already carry the accent."""
+    try:
+        from . import theme as _theme
+
+        _theme.set_active_theme(str(get_config().get("color_theme") or "ocean"))
+    except Exception as _exc:
+        print(f"[klausmate] colour theme failed: {_exc}")
+
+
+gui_hooks.profile_did_open.append(_apply_color_theme)
 gui_hooks.profile_did_open.append(_migrate_config)
 # One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config
 # so the config store is already scrubbed when the migration reads its

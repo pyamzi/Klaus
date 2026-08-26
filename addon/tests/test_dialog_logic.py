@@ -808,5 +808,36 @@ check("the API-key ROW hides whole for Ollama — via the search "
 check("the Cancel/Save bar sits under a full-width hairline",
       'setObjectName("ButtonBarLine")' in _src2)
 
+
+print("== SynapsePro UI/UX audit (K-107) ==")
+# Accent colour themes + interaction polish, mimicking SynapsePro's UX.
+check("accent pills render from theme.COLOR_THEMES — the UI defines "
+      "no colours of its own",
+      "_theme_presets.COLOR_THEMES" in _src2
+      and "_accent_pill_style" in _src2)
+check("accent choice is deferred-save like every other preference",
+      'cfg["color_theme"] = _accent_state["name"]' in _src2
+      and "mark_dirty()" in _src2.split("def _pick_accent", 1)[1]
+                                 .split("def ", 1)[0])
+check("save applies the accent BEFORE the toolbar re-bakes its palettes",
+      _src2.index('set_active_theme(_accent_state["name"])')
+      < _src2.index("_top_bar.refresh()"))
+check("the dialog restyles itself immediately on save",
+      "dlg.setStyleSheet(" in _src2.split("def save_all", 1)[1]
+                                   .split("def ", 1)[0])
+check("clickable pills show the pointing-hand cursor",
+      _src2.count("PointingHandCursor") >= 2)
+check("footer says Cancel, like SynapsePro's",
+      'QPushButton("Cancel")' in _src2)
+_init_src = open("klausmate/__init__.py").read()
+check("the accent preset is applied at profile open, before any "
+      "Klaus surface draws",
+      "profile_did_open.append(_apply_color_theme)" in _init_src
+      and _init_src.index("append(_apply_color_theme)")
+      < _init_src.index("append(_migrate_config)"))
+_cfgj = open("klausmate/config.json").read()
+check("color_theme ships in config.json with the ocean default",
+      '"color_theme": "ocean"' in _cfgj)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

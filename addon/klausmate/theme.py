@@ -64,6 +64,8 @@ LIGHT: dict = {
     "blue_pressed": "#004990",
     "blue_border":  "none",      # Full CSS border value for primary buttons
     "blue_bright":  "#007AFF",   # Focus rings, active-tab underline, accents
+    "blue_accent":  "#0071D3",   # Prominent accent (= blue in light,
+                                 # brighter in dark — SynapsePro's token)
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
@@ -101,6 +103,7 @@ DARK: dict = {
     "blue_pressed": "#004990",
     "blue_border":  "1px solid #0056A4",  # Dark mode: shadows don't read,
     "blue_bright":  "#4FACFE",            # borders + brighter accent do.
+    "blue_accent":  "#4FACFE",
 
     # ── Red (danger / destructive) ───────────────────────────────────────
     "red":          "#FF3B30",
@@ -115,9 +118,95 @@ DARK: dict = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Colour themes — SynapsePro's accent presets, verbatim. Only the six
+# blue-family tokens differ per theme; backgrounds, text and greys always
+# come from the base palettes so every theme works in light AND dark.
+# Structure: COLOR_THEMES[name][night_bool] = {token overrides}.
+# ─────────────────────────────────────────────────────────────────────────────
+
+COLOR_THEMES: dict = {
+    "ocean": {
+        False: {"blue": "#0071D3", "blue_hover": "#0062C4",
+                "blue_pressed": "#004990", "blue_border": "none",
+                "blue_bright": "#007AFF", "blue_accent": "#0071D3"},
+        True:  {"blue": "#0071D3", "blue_hover": "#0062C4",
+                "blue_pressed": "#004990",
+                "blue_border": "1px solid #0056A4",
+                "blue_bright": "#4FACFE", "blue_accent": "#4FACFE"},
+    },
+    "orchid": {
+        False: {"blue": "#E95ACC", "blue_hover": "#E159C6",
+                "blue_pressed": "#CB51B3", "blue_border": "none",
+                "blue_bright": "#FCABEC", "blue_accent": "#E95ACC"},
+        True:  {"blue": "#E95ACC", "blue_hover": "#E159C6",
+                "blue_pressed": "#CB51B3",
+                "blue_border": "1px solid #B8459F",
+                "blue_bright": "#FCABEC", "blue_accent": "#FCABEC"},
+    },
+    "forest": {
+        False: {"blue": "#619971", "blue_hover": "#598C68",
+                "blue_pressed": "#477154", "blue_border": "none",
+                "blue_bright": "#84CC99", "blue_accent": "#619971"},
+        True:  {"blue": "#619971", "blue_hover": "#598C68",
+                "blue_pressed": "#477154",
+                "blue_border": "1px solid #3C5E43",
+                "blue_bright": "#84CC99", "blue_accent": "#84CC99"},
+    },
+    "deluge": {
+        False: {"blue": "#7961A9", "blue_hover": "#6D5798",
+                "blue_pressed": "#65508D", "blue_border": "none",
+                "blue_bright": "#987AD2", "blue_accent": "#7961A9"},
+        True:  {"blue": "#7961A9", "blue_hover": "#6D5798",
+                "blue_pressed": "#65508D",
+                "blue_border": "1px solid #573F7A",
+                "blue_bright": "#987AD2", "blue_accent": "#987AD2"},
+    },
+    "horizon": {
+        False: {"blue": "#6183A9", "blue_hover": "#59799D",
+                "blue_pressed": "#4B6683", "blue_border": "none",
+                "blue_bright": "#7FABDC", "blue_accent": "#6183A9"},
+        True:  {"blue": "#6183A9", "blue_hover": "#59799D",
+                "blue_pressed": "#4B6683",
+                "blue_border": "1px solid #3D596F",
+                "blue_bright": "#7FABDC", "blue_accent": "#7FABDC"},
+    },
+    "dusty": {
+        False: {"blue": "#5A9491", "blue_hover": "#528885",
+                "blue_pressed": "#4E8280", "blue_border": "none",
+                "blue_bright": "#7CCDC9", "blue_accent": "#5A9491"},
+        True:  {"blue": "#5A9491", "blue_hover": "#528885",
+                "blue_pressed": "#4E8280",
+                "blue_border": "1px solid #3E6B69",
+                "blue_bright": "#7CCDC9", "blue_accent": "#7CCDC9"},
+    },
+}
+
+# The user's chosen accent, set once at profile open (config key
+# ``color_theme``); every later palette() call overlays it. UI files
+# never need to know a preference exists — SynapsePro's mechanism.
+_ACTIVE_THEME: str = "ocean"
+
+
+def set_active_theme(name: str) -> None:
+    """Persist the accent-preset name for all later palette() calls.
+    Unknown names are ignored (stays on the current theme)."""
+    global _ACTIVE_THEME
+    if name in COLOR_THEMES:
+        _ACTIVE_THEME = name
+
+
+def get_active_theme() -> str:
+    """The active accent-preset name (default ``"ocean"``)."""
+    return _ACTIVE_THEME
+
+
 def palette(night: bool) -> dict:
-    """The colour-token dict for *night* mode (a copy — mutate freely)."""
-    return (DARK if night else LIGHT).copy()
+    """The colour-token dict for *night* mode with the active accent
+    theme's blue-family overrides applied (a copy — mutate freely)."""
+    base = (DARK if night else LIGHT).copy()
+    base.update(COLOR_THEMES.get(_ACTIVE_THEME, COLOR_THEMES["ocean"])[night])
+    return base
 
 
 def night_mode() -> bool:
@@ -302,6 +391,55 @@ def dialog_qss(night: bool) -> str:
     QCheckBox::indicator:checked {{
         background-color: {c['blue']};
         border: 1px solid {c['blue']};
+    }}
+    /* SynapsePro widget polish (K-107 audit): progress bars, sliders
+       and lists were bare native Qt while every neighbouring control
+       was themed — grey_light grooves, blue fills, rounded lists. */
+    QProgressBar {{
+        border: none;
+        border-radius: 4px;
+        background-color: {c['grey_light']};
+        color: {c['text_muted']};
+        font-size: 10px;
+        text-align: center;
+    }}
+    QProgressBar::chunk {{
+        background-color: {c['blue']};
+        border-radius: 4px;
+    }}
+    QSlider::groove:horizontal {{
+        border: none;
+        height: 4px;
+        border-radius: 2px;
+        background: {c['grey_light']};
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {c['blue']};
+        border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        background: {c['surface']};
+        border: 1px solid {c['grey_mid']};
+        width: 14px;
+        height: 14px;
+        margin: -6px 0;
+        border-radius: 7px;
+    }}
+    QListWidget {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    QListWidget::item {{
+        border-radius: 6px;
+        padding: 3px 6px;
+    }}
+    QListWidget::item:hover {{ background-color: {c['hover_subtle']}; }}
+    QListWidget::item:selected {{
+        background-color: {c['selection_bg']};
+        color: {c['text']};
     }}
     """
 

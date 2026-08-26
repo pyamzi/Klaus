@@ -79,6 +79,52 @@ check("settings search field is styled in both palettes",
 check("no-hit nav pills have a faint disabled state",
       "QPushButton#NavItem:disabled" in theme.dialog_qss(False))
 
+section("colour themes (K-107 — SynapsePro's accent presets)")
+BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",
+             "blue_bright", "blue_accent"}
+check("all six presets ship light AND dark override sets",
+      set(theme.COLOR_THEMES) == {"ocean", "orchid", "forest",
+                                  "deluge", "horizon", "dusty"}
+      and all(set(t) == {False, True}
+              and set(t[False]) == BLUE_KEYS == set(t[True])
+              for t in theme.COLOR_THEMES.values()))
+check("only blue-family tokens are overridden — backgrounds and text "
+      "always come from the base palettes",
+      all(k.startswith("blue") for t in theme.COLOR_THEMES.values()
+          for n in (False, True) for k in t[n]))
+check("default theme is ocean and matches the base palette",
+      theme.get_active_theme() == "ocean"
+      and theme.palette(False)["blue"] == "#0071D3")
+check("blue_accent = blue in light, blue_bright in dark (ocean)",
+      theme.palette(False)["blue_accent"] == theme.palette(False)["blue"]
+      and theme.palette(True)["blue_accent"]
+      == theme.palette(True)["blue_bright"])
+theme.set_active_theme("orchid")
+check("set_active_theme overlays every later palette() call",
+      theme.get_active_theme() == "orchid"
+      and theme.palette(False)["blue"] == "#E95ACC"
+      and theme.palette(True)["blue_accent"] == "#FCABEC")
+check("the overlay reaches the QSS builders too",
+      "#E95ACC" in theme.dialog_qss(False))
+check("non-blue tokens are untouched by a theme switch",
+      theme.palette(False)["bg"] == theme.LIGHT["bg"]
+      and theme.palette(True)["surface"] == theme.DARK["surface"])
+theme.set_active_theme("no-such-theme")
+check("unknown names are ignored, not crashed on",
+      theme.get_active_theme() == "orchid")
+theme.set_active_theme("ocean")  # reset — later checks assume the default
+check("reset back to ocean for the rest of the suite",
+      theme.palette(False)["blue"] == "#0071D3")
+
+section("widget polish (K-107): progress, slider, list")
+for night in (False, True):
+    d3 = theme.dialog_qss(night)
+    for sel in ("QProgressBar", "QProgressBar::chunk",
+                "QSlider::groove:horizontal", "QSlider::handle:horizontal",
+                "QSlider::sub-page:horizontal",
+                "QListWidget", "QListWidget::item:selected"):
+        check(f"dialog_qss(night={night}) styles {sel}", sel in d3)
+
 section("drop zone + helpers")
 dz = theme.drop_zone_qss(False, "klausmateLibraryDropZone")
 check("drop zone scopes rules to the given objectName",

@@ -96,6 +96,13 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   builders, adapted from SynapsePro (`scripts/SynapsePro-main/theme.py`) —
   the Apple system palette as semantic keys, LIGHT/DARK with identical key
   sets, `palette(night)`, `night_mode()` (lazy aqt, light fallback), and
+  **accent colour themes (K-107)**: `COLOR_THEMES` carries SynapsePro's
+  six presets (ocean/orchid/forest/deluge/horizon/dusty) as blue-family
+  token overlays; `set_active_theme(name)` (from config `color_theme`,
+  applied on `profile_did_open` by `__init__._apply_color_theme` BEFORE
+  any surface draws) makes every later `palette()` call carry them, so
+  all builders — dialogs, Library, panels, toolbar, pdf.js css_vars —
+  recolour with zero per-surface code. Also
   per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
   `library_qss`, `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
   `accent_rgba`). **UI files must not hardcode colours** — import theme and
@@ -269,9 +276,15 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     group; every simple setting is a `_row()` — bold `SettingName` +
     muted `SettingDesc` left, control right, `RowSeparator` hairlines
     between. Sidebar display order comes from `_finish_nav(...)`,
-    decoupled from widget build order; the API-key row hides whole
-    (`key_row` + `key_row.klaus_sep`) for Ollama; Cancel/Save sit under
-    a full-width `ButtonBarLine` hairline outside the pages.
+    decoupled from widget build order; the sidebar header is the
+    Garamond wordmark alone (no logo) over a search field that filters
+    setting rows across pages (`_apply_search`; rows carry
+    `klaus_search` haystacks, structural hiding via `klaus_hidden` —
+    how the API-key row hides whole for Ollama — always beats a search
+    hit); Cancel/Save sit under a full-width `ButtonBarLine` hairline
+    outside the pages. Appearance also hosts the accent-colour pill row
+    (rendered from `theme.COLOR_THEMES`, saved as `color_theme`,
+    applied live in `save_all` before `top_bar.refresh()`).
     Pages: **Semantic Search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),
