@@ -86,8 +86,9 @@ check("image mode frosts off body and samples the image's BOTTOM edge "
       and "filter: blur(" in bot_img)
 check("same tint + bleed discipline as the top bar",
       "--klaus-chrome" in bot_img and f"{-img['blur'] * 2}px" in bot_img)
-check("buttons take full contrast + shadow over a photo",
-      "body button" in bot_img and "text-shadow" in bot_img)
+check("buttons take full contrast + shadow over a photo, from a "
+      "selector that outranks the chip base",
+      "body #header button" in bot_img and "text-shadow" in bot_img)
 check("bottom frost also degrades to nothing without a url",
       bg.bar_css(img, "", bottom=True) == "")
 check("top output is byte-identical to before the bottom param",

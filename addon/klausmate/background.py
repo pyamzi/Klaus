@@ -237,8 +237,10 @@ def _bottom_bar_css(spec: dict, url: str = "") -> str:
     }}
     #header {{ position: relative; z-index: 1; }}
     /* Full contrast + soft shadow, same treatment as the top bar's
-       links — a photo swallows the muted tone. */
-    body button {{
+       links — a photo swallows the muted tone. body #header button
+       (1,1,1) must outrank the chip base's #header button (1,0,1);
+       both carry !important, so specificity decides. */
+    body #header button {{
         color: var(--klaus-text) !important;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
     }}

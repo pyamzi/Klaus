@@ -847,6 +847,43 @@ def _toolbar_vars(c: dict, night: bool) -> str:
     )
 
 
+def _chip_base_rules() -> str:
+    """THE Klaus toolbar chip — the declarations behind the top bar's
+    .hitem links, shared VERBATIM with the bottom bar's buttons so the
+    two bars can never drift apart (Pouya: "EXACTLY the same").
+    !important throughout: Anki's own sheets outrank plain injected
+    rules — toolbar.css's body.fancy:not(.flat) .hitem is specificity
+    0,3,1, and webview.css ships `button { background/border/... }`
+    rules that load with stdHtml regardless of injection order."""
+    return (
+        "color: var(--klaus-text-muted) !important;"
+        " background: transparent !important;"
+        " border: 1px solid transparent !important;"
+        " box-shadow: none !important;"
+        " text-decoration: none !important;"
+        f" font-family: {FONT_FAMILY};"
+        " font-size: 13px !important;"
+        " font-weight: 600;"
+        " padding: 5px 12px !important;"
+        " border-radius: 8px !important;"
+    )
+
+
+def _chip_hover_rules() -> str:
+    """Chip hover: the translucent veil + text lifting to full."""
+    return (
+        "background: var(--klaus-hover) !important;"
+        " color: var(--klaus-text) !important;"
+        " border-color: transparent !important;"
+        " text-decoration: none !important;"
+    )
+
+
+def _chip_active_rules() -> str:
+    """Chip press: one veil step stronger."""
+    return "background: var(--klaus-press) !important;"
+
+
 def toolbar_css() -> str:
     """Web CSS for Anki's top-toolbar webview (top_bar.py injects it via
     webview_will_set_content). RESTYLE ONLY — nothing is hidden or
@@ -916,27 +953,9 @@ def toolbar_css() -> str:
         display: flex !important;
         align-items: center !important;
     }}
-    .header .hitem {{
-        color: var(--klaus-text-muted) !important;
-        background: transparent !important;
-        border: 1px solid transparent !important;
-        box-shadow: none !important;
-        text-decoration: none !important;
-        font-family: {FONT_FAMILY};
-        font-size: 13px;
-        font-weight: 600;
-        padding: 5px 12px !important;
-        border-radius: 8px;
-    }}
-    .header .hitem:hover {{
-        background: var(--klaus-hover) !important;
-        color: var(--klaus-text) !important;
-        border-color: transparent !important;
-        text-decoration: none !important;
-    }}
-    .header .hitem:active {{
-        background: var(--klaus-press) !important;
-    }}
+    .header .hitem {{ {_chip_base_rules()} }}
+    .header .hitem:hover {{ {_chip_hover_rules()} }}
+    .header .hitem:active {{ {_chip_active_rules()} }}
     #klaus-logo {{
         display: flex;
         align-items: center;
@@ -973,27 +992,18 @@ def bottombar_css() -> str:
         padding: 5px 9px !important;
         background: transparent !important;
     }}
-    button {{
-        -webkit-appearance: none;
-        appearance: none;
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        color: var(--klaus-text-muted);
-        font-family: {FONT_FAMILY};
-        font-size: 13px;
-        font-weight: 600;
-        padding: 5px 12px;
-        margin: 0 2px;
-        cursor: pointer;
-        transition: background 120ms ease, color 120ms ease;
+    /* The chips are the top bar's .hitem, verbatim — same shared
+       declaration blocks, so "exactly the same" holds by construction.
+       Only the <button>-specific native chrome strip is extra. */
+    #header button {{
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        margin: 0 !important;
+        {_chip_base_rules()}
     }}
-    button:hover {{
-        background: var(--klaus-hover);
-        color: var(--klaus-text);
-    }}
-    button:active {{ background: var(--klaus-press); }}
-    button:focus {{ outline: 0; }}
+    #header button:hover {{ {_chip_hover_rules()} }}
+    #header button:active {{ {_chip_active_rules()} }}
+    #header button:focus {{ outline: 0 !important; }}
     """
 
 

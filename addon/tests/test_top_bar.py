@@ -171,14 +171,22 @@ check("both palettes ship in one sheet, keyed on Anki's night classes",
 check("the bar IS the chrome colour, borderless",
       "background: var(--klaus-chrome) !important;" in bcss
       and "border: none !important;" in bcss)
-check("Anki's native buttons are flattened into the top bar's chip "
-      "language (appearance off, transparent at rest, rounded)",
-      "-webkit-appearance: none;" in bcss
-      and "background: transparent;" in bcss
-      and "border-radius: 8px;" in bcss)
-check("hover/press use the same translucent veils as the top bar",
-      "background: var(--klaus-hover);" in bcss
-      and "background: var(--klaus-press);" in bcss)
+# Pouya: "EXACTLY the same as the top buttons." Not a lookalike —
+# both sheets must emit the SAME shared declaration blocks, byte for
+# byte, so the two bars cannot drift apart.
+tcss = theme.toolbar_css()
+for blk_name, blk in (("base", theme._chip_base_rules()),
+                      ("hover", theme._chip_hover_rules()),
+                      ("active", theme._chip_active_rules())):
+    check(f"chip {blk_name} block is byte-identical in BOTH bar sheets",
+          blk in tcss and blk in bcss)
+check("chip blocks are fully !important — webview.css ships plain "
+      "`button` rules that load with stdHtml regardless of order",
+      "background: transparent !important;" in theme._chip_base_rules()
+      and "border-radius: 8px !important;" in theme._chip_base_rules())
+check("only the <button>-specific native strip is extra on the bottom",
+      "-webkit-appearance: none !important;" in bcss
+      and "#header button" in bcss)
 check("hook injects it for deck-browser and overview bottom bars only",
       '"DeckBrowserBottomBar"' in open("klausmate/top_bar.py").read()
       and '"OverviewBottomBar"' in open("klausmate/top_bar.py").read()
