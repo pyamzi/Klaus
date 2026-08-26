@@ -321,15 +321,30 @@ class ImageCropDialog(QDialog):
         self.setWindowTitle(f"Crop image — {fname}")
         self.setModal(True)
 
+        # Shared dialog chrome (theme.dialog_qss): window bg, blue-primary
+        # buttons by default, SecondaryButton opt-out below — same guarded
+        # pattern as manage_models.py's dialog theming.
+        try:
+            from . import theme
+
+            _night = theme.night_mode()
+            self.setStyleSheet(theme.dialog_qss(_night))
+            _muted = theme.muted_label_qss(_night, 11)
+        except Exception as exc:
+            print(f"[klausmate] crop dialog theme failed: {exc}")
+            _muted = "color: rgba(140,140,140,0.95); font-size: 11px;"
+
         layout = QVBoxLayout(self)
         self._canvas = _CropCanvas(image, parent=self)
         layout.addWidget(self._canvas, 1)
 
         bottom = QHBoxLayout()
         self._size_label = QLabel("Drag to select crop area")
+        self._size_label.setStyleSheet(_muted)
         bottom.addWidget(self._size_label)
         bottom.addStretch(1)
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("SecondaryButton")
         cancel_btn.clicked.connect(self.reject)
         bottom.addWidget(cancel_btn)
         self._crop_btn = QPushButton("Crop")

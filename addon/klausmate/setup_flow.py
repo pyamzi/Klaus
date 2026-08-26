@@ -42,6 +42,25 @@ def _pkg():
     return importlib.import_module(__package__)
 
 
+def _themed_message_box(parent: Any, title: str, icon: Any) -> QMessageBox:
+    """Build a QMessageBox styled with the shared dialog QSS.
+
+    Every readiness/warning prompt in this module goes through here, so
+    theming (and its guarded fallback) lives in one place — same pattern
+    as manage_models.py's dialog_qss application.
+    """
+    msg = QMessageBox(parent)
+    msg.setWindowTitle(title)
+    msg.setIcon(icon)
+    try:
+        from . import theme
+
+        msg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+    except Exception as exc:
+        print(f"[klausmate] setup dialog theme failed: {exc}")
+    return msg
+
+
 # Session-scoped flag set when the welcome dialog actually fires. Used by
 # setup_readiness_check (registered as a sibling profile-open hook) to
 # avoid stacking a second dialog on top of the welcome screen during a
@@ -121,16 +140,16 @@ def first_run_check() -> None:
             "switch to a local embedding model there."
         )
 
-    msg = QMessageBox(mw)
-    msg.setWindowTitle("Welcome to Klaus")
+    msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
     msg.setText("\n".join(body_lines))
-    msg.setIcon(QMessageBox.Icon.Information)
     setup_btn = None
     if ready:
+        # "Got it" is the primary/dismissive action here — stays default blue.
         msg.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
         manage_btn = msg.addButton(
             "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
         )
+        manage_btn.setObjectName("SecondaryButton")
     elif is_ollama:
         setup_btn = msg.addButton(
             "Set up Klaus", QMessageBox.ButtonRole.ActionRole
@@ -138,13 +157,18 @@ def first_run_check() -> None:
         manage_btn = msg.addButton(
             "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
         )
-        msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
+        manage_btn.setObjectName("SecondaryButton")
+        msg.addButton(
+            "Later", QMessageBox.ButtonRole.AcceptRole
+        ).setObjectName("SecondaryButton")
         msg.setDefaultButton(setup_btn)
     else:
         manage_btn = msg.addButton(
             "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
         )
-        msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton(
+            "Later", QMessageBox.ButtonRole.AcceptRole
+        ).setObjectName("SecondaryButton")
         msg.setDefaultButton(manage_btn)
     msg.exec()
     clicked = msg.clickedButton()
@@ -347,9 +371,9 @@ def _readiness_check_body() -> None:
         if not auto:
             # runtime_auto_setup: false means fully manual behavior — no
             # unprompted setup offers, just the old-style warning.
-            msg = QMessageBox(mw)
-            msg.setWindowTitle("Klaus: Ollama isn't running")
-            msg.setIcon(QMessageBox.Icon.Warning)
+            msg = _themed_message_box(
+                mw, "KlausMate: Ollama isn't running", QMessageBox.Icon.Warning
+            )
             msg.setText(
                 "Semantic search is set to use a local Ollama model, but "
                 "Ollama isn't running. Install it from https://ollama.com, "
@@ -359,7 +383,9 @@ def _readiness_check_body() -> None:
             open_btn = msg.addButton(
                 "Open download page", QMessageBox.ButtonRole.ActionRole
             )
-            msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton(
+                "Skip", QMessageBox.ButtonRole.AcceptRole
+            ).setObjectName("SecondaryButton")
             msg.exec()
             if msg.clickedButton() is open_btn:
                 openLink(OLLAMA_DOWNLOAD_URL)
@@ -367,9 +393,11 @@ def _readiness_check_body() -> None:
         if cfg.get("_runtime_setup_declined"):
             print("[klausmate] Ollama unreachable; auto-setup previously declined")
             return
-        msg = QMessageBox(mw)
-        msg.setWindowTitle("Klaus: local embedding model isn't set up yet")
-        msg.setIcon(QMessageBox.Icon.Warning)
+        msg = _themed_message_box(
+            mw,
+            "KlausMate: local embedding model isn't set up yet",
+            QMessageBox.Icon.Warning,
+        )
         msg.setText(
             "Semantic search is set to use a local Ollama model, and "
             "Klaus can set it up automatically (one-time "
@@ -386,7 +414,10 @@ def _readiness_check_body() -> None:
         manual_btn = msg.addButton(
             "Install manually…", QMessageBox.ButtonRole.ActionRole
         )
-        msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
+        manual_btn.setObjectName("SecondaryButton")
+        msg.addButton(
+            "Skip", QMessageBox.ButtonRole.AcceptRole
+        ).setObjectName("SecondaryButton")
         msg.setDefaultButton(setup_btn)
         msg.exec()
         clicked = msg.clickedButton()
@@ -416,9 +447,9 @@ def _readiness_check_body() -> None:
     if model in installed:
         return  # All set — silent
 
-    msg = QMessageBox(mw)
-    msg.setWindowTitle("Klaus: embedding model needed")
-    msg.setIcon(QMessageBox.Icon.Warning)
+    msg = _themed_message_box(
+        mw, "KlausMate: embedding model needed", QMessageBox.Icon.Warning
+    )
     msg.setText(
         "Klaus is connected to Ollama, but the embedding model it's "
         f"configured to use isn't installed yet: {model}\n\n"
@@ -432,7 +463,9 @@ def _readiness_check_body() -> None:
     manage_btn = msg.addButton(
         "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
     )
-    msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
+    msg.addButton(
+        "Skip", QMessageBox.ButtonRole.AcceptRole
+    ).setObjectName("SecondaryButton")
     msg.exec()
     if msg.clickedButton() is manage_btn:
         try:
@@ -453,9 +486,9 @@ def _cloud_readiness_check(cfg: dict, provider: str) -> None:
 
     provider_label = "Voyage" if provider == "voyage" else "OpenAI"
     site = "voyageai.com" if provider == "voyage" else "platform.openai.com"
-    msg = QMessageBox(mw)
-    msg.setWindowTitle("Klaus: semantic search needs an API key")
-    msg.setIcon(QMessageBox.Icon.Warning)
+    msg = _themed_message_box(
+        mw, "KlausMate: semantic search needs an API key", QMessageBox.Icon.Warning
+    )
     msg.setText(
         f"Semantic search uses {provider_label}, but no API key is set. "
         f"Add a free key from {site} under KlausMate Preferences, or switch "
@@ -468,7 +501,9 @@ def _cloud_readiness_check(cfg: dict, provider: str) -> None:
     manage_btn = msg.addButton(
         "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
     )
-    msg.addButton("Skip", QMessageBox.ButtonRole.AcceptRole)
+    msg.addButton(
+        "Skip", QMessageBox.ButtonRole.AcceptRole
+    ).setObjectName("SecondaryButton")
     msg.exec()
     if msg.clickedButton() is manage_btn:
         try:
