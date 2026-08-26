@@ -211,15 +211,14 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
 
             from .manage_models import manage_models_dialog
 
-            # Deferred, never called straight from here (live crash:
-            # SIGSEGV in QPaintDevice::devicePixelRatio inside
-            # QBackingStore::flush). This hook is dispatched over
-            # QWebChannel, and manage_models_dialog ends in a modal
-            # dlg.exec() — a nested event loop inside that re-entrant
-            # Chromium/Qt stack, which a pending paint can land in.
-            # singleShot(0) unwinds back to a clean top-level event-loop
-            # iteration first. __init__.on_js_message's crop/library
-            # actions already follow exactly this rule.
+            # Deferred so the webchannel bridge call unwinds before any
+            # dialog work runs (hygiene per tests/test_bridge_reentrancy).
+            # NOTE the deferral alone did NOT stop the 2026-08-26 segfault
+            # spree — crash reports showed the same devicePixelRatio/
+            # flush crash from webchannel, QAction, AND timer dispatch
+            # alike. The actual fix is manage_models_dialog opening
+            # window-modal via dlg.open() instead of app-modal exec()
+            # (see the comment there).
             QTimer.singleShot(0, manage_models_dialog)
         except Exception as exc:
             print(f"[klausmate] settings open failed: {exc}")

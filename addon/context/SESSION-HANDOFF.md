@@ -83,38 +83,56 @@ fresh instinct.
    `save_all()` is the single writer. A forgotten signal costs a missing
    dirty mark, not a silently unsaved setting (how `pdf_renderer`
    originally shipped broken).
-7. **Never open a modal from a webchannel-dispatched handler** — see
-   the crash section below. This is now a suite-enforced rule.
+7. **Never show a dialog application-modal via `exec()` on this stack
+   (Qt 6.11 + macOS 26)** — use window-modal `dlg.open()` with
+   callback-driven close paths. Suite-enforced for Preferences. The
+   older "never open a modal from a webchannel handler" deferral rule
+   stays as hygiene but was falsified as the crash's cause — see the
+   crash section below.
 
-## The two crashes (same root cause, different sites)
+## The crash saga (SEVEN crashes — root cause CORRECTED 2026-08-26 pm)
 
-Signature both times: `EXC_BAD_ACCESS` in
-`QPaintDevice::devicePixelRatio` inside `QBackingStore::flush`, with
-`QMetaObjectPublisher::invokeMethod` → a Python slot → `QDialog::exec()`
-on the stack. A modal spins a nested event loop inside the re-entrant
-Chromium/Qt bridge dispatch, and a posted paint lands against a backing
-store that is not in a valid state.
+Signature every time: `EXC_BAD_ACCESS` in
+`QPaintDevice::devicePixelRatio` inside `QBackingStore::flush`, during
+a Python `QDialog`'s `exec()` (the Preferences dialog), on
+**Qt 6.11.0 + macOS 26.5.1 (Tahoe)**.
 
-- `20997c6` fixed `pdfjs_viewer._bridge_note_edit` and
-  `_bridge_goto_request`.
-- `a2374e2` fixed `top_bar._on_js_message` (the star → Preferences path)
-  and `deck_curate._on_curate_clicked`.
+**The original diagnosis was wrong.** `20997c6`/`a2374e2` blamed
+webchannel reentrancy and deferred every bridge-dispatched modal via
+`QTimer.singleShot(0, ...)`. The machine's DiagnosticReports then
+falsified that: crashes at 01:29/01:34 were webchannel-dispatched, but
+01:35 came from a **Tools-menu QAction** (no webchannel anywhere), and
+12:10/12:18/14:07/14:08 came from the **deferred timer slot itself** —
+the fix's own clean dispatch path. Three dispatch shapes, one crash.
 
-**Process lesson worth keeping:** the first fix was scoped to one file
-when the bug was a cross-module rule, so it left the other violators
-live and the user hit the very next one. `tests/test_bridge_reentrancy.py`
-now enforces the rule across modules and **auto-discovers two rosters**
-— the registered js-message handlers AND pdfjs_viewer's `_bridge_*`
-dispatch table — so a new handler either fails the roster pin or lands
-in the modal scan automatically. Verified self-falsifying.
+**Actual root cause:** application-modal `exec()` on this stack. Qt
+runs app-modal windows through AppKit's NSApp modal-session machinery,
+which races Tahoe's window-appear animation (an `NSAnimation
+_runBlocking` sits on a background queue in every report) and flushes
+a backing store whose paint device is null. Everything that never
+crashed — QMenu popups, the non-modal Library window, Anki's own
+dialogs — avoids app-modal exec. **Fix: `manage_models_dialog` now
+shows with window-modal `dlg.open()`** (return value was unused; all
+close paths already callback-driven). Pinned in
+`tests/test_bridge_reentrancy.py`.
 
-The one known straggler (`pdf_drive.open_drive`'s except-branch
-`showWarning`, modal on the toolbar-link bridge path) was closed in
-the post-arc cleanup pass and is pinned in the same test. That pass
-also fixed the test's comment-stripper: its space-joined token output
-could never match any `_MODAL` spelling, so the final scan had been
-silently vacuous — it now preserves layout via `untokenize` and
-self-tests its own matchability.
+The deferral rule is KEPT as hygiene (Qt documents the hazard), with
+its enforcement machinery: two auto-discovered rosters (js-message
+handlers + pdfjs `_bridge_*` table), per-site pins, the untokenize
+comment-stripper with a non-vacuity self-check, and the
+`pdf_drive.open_drive` straggler closed.
+
+**Process lessons:** (1) a fix scoped to one file when the bug looks
+cross-module leaves violators live — but (2) a plausible mechanism that
+pattern-matches the stack is not the root cause until a discriminating
+sample confirms it; the falsifying QAction crash sat unread in
+`~/Library/Logs/DiagnosticReports` the whole time. Check ALL the crash
+reports, not just the ones the user pastes.
+
+Remaining app-modal exec sites (same risk class, on the board):
+`deck_curate.choose_deck_scope`, `__init__` crop dialog,
+`pdf_drive:1087`, `setup_flow`'s five `msg.exec()` QMessageBoxes,
+pdfjs's two static `QInputDialog` helpers.
 
 ## Open work
 

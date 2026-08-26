@@ -2248,5 +2248,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         else:
             # Server already fine — jump to getting a first model.
             QTimer.singleShot(0, maybe_auto_pull_starter)
-    dlg.exec()
+    # open(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
+    # Qt 6.11, showing this dialog application-modal via exec()
+    # segfaulted in its first backing-store flush
+    # (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush)
+    # SEVEN times across THREE dispatch shapes — webchannel, a Tools-menu
+    # QAction, and a clean QTimer slot — so the app-modal nested loop
+    # (Qt runs it through AppKit's NSApp modal-session machinery, which
+    # races Tahoe's window-appear animation) is the trigger, not how the
+    # dialog was opened. Window-modal open() takes the normal window
+    # path, like Anki's own dialogs and our QMenus, none of which crash.
+    # Nothing here consumed exec()'s return value; every close path is
+    # already callback-driven (confirm_close / save_all).
+    dlg.open()
 

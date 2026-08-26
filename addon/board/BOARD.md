@@ -99,6 +99,16 @@ GATE: Pouya uses pdf_renderer:'pdfjs' daily until satisfied (no flicker, parity 
 
 ## Ready
 
+### K-114: Retire app-modal exec() addon-wide (macOS 26 segfault class)
+owner: -
+priority: P1
+tags: crash,macos26
+files: klausmate/deck_curate.py,klausmate/__init__.py,klausmate/pdf_drive.py,klausmate/setup_flow.py,klausmate/pdfjs_viewer.py,tests/test_bridge_reentrancy.py
+verify: python3 -c "import sys; srcs={f: open(f).read() for f in ['klausmate/deck_curate.py','klausmate/__init__.py','klausmate/pdf_drive.py','klausmate/setup_flow.py']}; bad=[f for f,s in srcs.items() if 'dlg.exec()' in s or 'msg.exec()' in s]; sys.exit(1 if bad else 0)"
+created: 2026-08-26
+
+Seven live segfaults (2026-08-26, Qt 6.11 + macOS 26.5) proved that showing a Python dialog APPLICATION-modal via exec() crashes in its first backing-store flush (QPaintDevice::devicePixelRatio on null), regardless of dispatch shape (webchannel, QAction, deferred timer all crashed identically). manage_models_dialog is already fixed (dlg.open(), pinned in tests/test_bridge_reentrancy.py). Convert the remaining app-modal exec sites to window-modal open()/show() with callback-driven results: deck_curate.py:160 choose_deck_scope (returns a value -> needs CPS refactor of _curate_with), __init__.py:512 crop dialog, pdf_drive.py:1087, setup_flow.py's five msg.exec() QMessageBoxes (clickedButton() read after exec -> use buttonClicked signal or open+finished), pdfjs_viewer.py's two static QInputDialog helpers (_do_note_edit getMultiLineText, _goto_dialog getInt -> QInputDialog instances with open() + textValueSelected/intValueSelected). Each conversion must keep its existing test pins passing or strengthen them; add an exec-ban pin per converted file mirroring the manage_models one. Full context: context/SESSION-HANDOFF.md crash section.
+
 ## Doing
 
 ## Review

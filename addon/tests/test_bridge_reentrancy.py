@@ -1,17 +1,25 @@
-"""The webchannel-reentrancy rule, enforced across the whole addon.
+"""The dialog crash rules, enforced across the whole addon.
 
-THE RULE: never open a modal dialog (or any nested event loop — a
-QMenu.exec counts) synchronously from a handler that Anki dispatches
-over QWebChannel. Defer it with QTimer.singleShot(0, ...) so the bridge
-call unwinds back to a clean top-level event-loop iteration first.
+TWO RULES, one crash saga (seven live segfaults, 2026-08-24..26, all
+EXC_BAD_ACCESS in QPaintDevice::devicePixelRatio inside
+QBackingStore::flush during a Python QDialog's exec()):
 
-Why it is a rule and not a preference: breaking it segfaults Anki.
-Twice now, live, same signature — EXC_BAD_ACCESS in
-QPaintDevice::devicePixelRatio inside QBackingStore::flush, with
-QMetaObjectPublisher::invokeMethod -> a Python slot -> QDialog::exec()
-on the stack. A modal spins a nested loop inside the re-entrant
-Chromium/Qt dispatch, and a paint posted for some widget lands against
-a backing store that is not in a valid state.
+1. Never open a modal dialog (or any nested event loop) synchronously
+   from a handler Anki dispatches over QWebChannel — defer with
+   QTimer.singleShot(0, ...) so the bridge call unwinds first. This
+   was the ORIGINAL diagnosis; it is kept as real hygiene (Qt's docs
+   warn about it), but the crash reports later FALSIFIED it as the
+   cause: the identical crash fired from a Tools-menu QAction and
+   from a clean deferred timer slot too.
+
+2. THE ACTUAL FIX — never show a dialog application-modal via exec()
+   on this stack (Qt 6.11 + macOS 26 "Tahoe"): app-modal exec runs
+   through AppKit's NSApp modal-session machinery, which races
+   Tahoe's window-appear animation and flushes a backing store whose
+   paint device is null. Window-modal dlg.open() (what Anki's own
+   dialogs use) and popup QMenu.exec take different AppKit paths and
+   never crashed. Preferences now opens with dlg.open(), pinned below;
+   the remaining app-modal exec sites are tracked on the board.
 
 The crash is invisible to the rest of the suite (Qt widgets are never
 constructed headlessly), so these are source pins. They are deliberately
@@ -184,6 +192,17 @@ for qualified in sorted(_registered | _bridge_methods):
     direct = [tok for tok in _MODAL if tok in body]
     check(f"{qualified} opens no modal directly in its own body",
           not direct, str(direct))
+
+section("manage_models: Preferences opens window-modal, never exec()")
+# Seven identical segfaults (macOS 26.5 + Qt 6.11) killed this dialog's
+# app-modal exec() from three different dispatch shapes; dlg.open() is
+# the fix. Nothing consumed exec()'s return value — every close path is
+# callback-driven — so this pin has no behavioural cost to hold.
+_MM_SRC = open("klausmate/manage_models.py").read()
+check("the Preferences dialog is shown with dlg.open()",
+      "dlg.open()" in _MM_SRC)
+check("no app-modal dlg.exec() remains in manage_models",
+      "dlg.exec()" not in _MM_SRC)
 
 section("pdf_drive: the toolbar Library link (third dispatch shape)")
 # open_drive is the Library link's callback — toolbar links are
