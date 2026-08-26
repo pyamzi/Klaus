@@ -823,16 +823,28 @@ check("accent swatches render from theme.COLOR_THEMES — the UI "
       "defines no colours of its own",
       "_theme_presets.COLOR_THEMES" in _src2
       and "_accent_swatch_style" in _src2)
-check("accent choice is deferred-save like every other preference",
+_pick_accent_body = _src2.split("def _pick_accent", 1)[1].split("def ", 1)[0]
+check("accent choice is deferred-save like every other preference — it "
+      "previews live (appearance_changed marks dirty) but writes nothing",
       'cfg["color_theme"] = _accent_state["name"]' in _src2
-      and "mark_dirty()" in _src2.split("def _pick_accent", 1)[1]
-                                 .split("def ", 1)[0])
-check("save applies the accent BEFORE the toolbar re-bakes its palettes",
-      _src2.index('set_active_theme(_accent_state["name"])')
-      < _src2.index("_top_bar.refresh()"))
-check("the dialog restyles itself immediately on save",
-      "dlg.setStyleSheet(" in _src2.split("def save_all", 1)[1]
-                                   .split("def ", 1)[0])
+      and "appearance_changed()" in _pick_accent_body
+      and "write_config" not in _pick_accent_body)
+# CODE only: this function's docstring names set_active_theme("custom")
+# before the real calls, which silently inverted the ordering pin below
+# until code_only() was introduced. Prose must not be able to fool a pin.
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+from anki_stubs import code_only  # noqa: E402
+
+_apply_live = code_only(
+    _src2.split("def apply_appearance_live", 1)[1].split("\n    def ", 1)[0]
+)
+check("the accent is applied BEFORE the toolbar re-bakes its palettes, "
+      "and the colour before the name (custom is meaningless without it)",
+      _apply_live.index("set_custom_colour(")
+      < _apply_live.index("set_active_theme(")
+      < _apply_live.index("_top_bar.refresh()"))
+check("the dialog restyles itself on every live apply, not only on save",
+      "dlg.setStyleSheet(" in _apply_live)
 check("clickable pills show the pointing-hand cursor",
       _src2.count("PointingHandCursor") >= 2)
 check("footer says Cancel, like SynapsePro's",
@@ -861,10 +873,10 @@ check("the custom swatch opens a colour picker; cancelling still "
       "selects custom with its held colour",
       "QColorDialog.getColor(" in _src2.split("def _pick_custom_accent",
                                               1)[1].split("def ", 1)[0])
-check("custom colour is saved and applied before the theme name",
+check("custom colour is saved, and applied before the theme name",
       'cfg["color_theme_custom"] = _accent_state["custom"]' in _src2
-      and _src2.index("set_custom_colour(str(_accent_state")
-      < _src2.index('set_active_theme(_accent_state["name"])'))
+      and _apply_live.index("set_custom_colour(str(_accent_state")
+      < _apply_live.index("set_active_theme(str(_accent_state"))
 check("profile open loads the custom colour before the theme name",
       _init_src.index("set_custom_colour(")
       < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
@@ -904,6 +916,52 @@ check("the two hand-styled labels moved to InstallHeading / InstallSection",
       # orchestrator review of K-111).
       "install_heading" not in _install_src
       and 'manual_lbl.setObjectName("InstallSection")' in _install_src)
+
+# ── Appearance: live preview, deferred save ──────────────────────────────
+# The user's ask: appearance changes show up live while configuring, but
+# only persist on Save. That splits "apply" from "write", so the pins
+# below guard the three ways that split can rot: an appearance widget
+# that only marks dirty (no preview), a Save that leaves the override
+# armed (a stale preview would shadow later config), and a close that
+# forgets to revert (a discarded accent lingering all session).
+_mm_src = open("klausmate/manage_models.py").read()
+_init_src = open("klausmate/__init__.py").read()
+_tb_src = open("klausmate/top_bar.py").read()
+
+check("every appearance widget previews live, not just marks dirty — "
+      "six handlers: mode, fit, blur, colour, image, accent swatch",
+      _mm_src.count("        appearance_changed()") == 6)
+check("appearance_changed both marks unsaved AND schedules the preview",
+      "def appearance_changed() -> None:" in _mm_src
+      and "mark_dirty()\n        _preview_timer.start()" in _mm_src)
+check("the preview is debounced — top_bar.refresh() resets the main "
+      "window and the blur slider fires continuously while dragged",
+      "_preview_timer = QTimer(dlg)" in _mm_src
+      and "_preview_timer.setSingleShot(True)" in _mm_src
+      and "_preview_timer.timeout.connect(apply_appearance_live)" in _mm_src)
+check("Save is still the ONLY writer of the appearance config keys",
+      _mm_src.count('cfg["color_theme"] = ') == 1
+      and _mm_src.count('cfg["background_mode"] = ') == 1
+      and "def save_general() -> None:" in _mm_src)
+check("Save paints through the same one path, THEN drops the override so "
+      "a stale preview cannot shadow later config changes",
+      "        apply_appearance_live()\n        _background.set_preview(None)"
+      in _mm_src)
+check("every close path reverts — finished() covers Save, Cancel, Esc "
+      "and the title-bar close alike",
+      "dlg.finished.connect(lambda _result: revert_appearance_preview())"
+      in _mm_src)
+check("revert is a no-op when nothing was previewed (so an ordinary "
+      "close does not needlessly reset the main window)",
+      "if not _background.preview_active():" in _mm_src)
+check("revert re-applies from config via the addon's OWN profile-open "
+      "applier, so revert and load-from-config cannot drift apart",
+      "_pkg()._apply_color_theme()" in _mm_src)
+check("...and that applier really is a top-level name in __init__, or "
+      "the revert above would fail silently into its except",
+      "\ndef _apply_color_theme() -> None:" in _init_src)
+check("the background paint seam honours the preview",
+      "background.resolve(background.effective_cfg(_config()))" in _tb_src)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

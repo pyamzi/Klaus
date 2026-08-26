@@ -115,4 +115,40 @@ check("non-images refused",
       bg.store_image(tmp, os.path.join(tmp, "nope.py")) == "")
 check("missing files refused", bg.store_image(tmp, "/no/such/file.png") == "")
 
+section("unsaved live preview (Appearance previews before Save)")
+# Appearance is judged by eye, so Preferences renders accent+background
+# live while you configure them — but Save stays the ONLY writer of
+# config. The pending background lives here as an override that every
+# painting surface consults through effective_cfg().
+_STORED = {"background_mode": "color", "background_color": "#112233"}
+_PENDING = {"background_mode": "image", "background_image": "pic.png",
+            "background_fit": "tile", "background_blur": 5}
+
+bg.set_preview(None)
+check("nothing armed by default — a fresh session paints stored config",
+      bg.preview_active() is False
+      and bg.effective_cfg(_STORED) is _STORED)
+
+bg.set_preview(_PENDING)
+check("an armed preview shadows stored config at the paint seam",
+      bg.preview_active() is True
+      and bg.effective_cfg(_STORED) is _PENDING)
+check("the preview really changes what gets painted, end to end",
+      bg.resolve(bg.effective_cfg(_STORED))["mode"] == "image"
+      and bg.resolve(bg.effective_cfg(_STORED))["fit"] == "tile")
+check("resolve() stays a PURE function of its argument — the override "
+      "lives at the seam, so every existing resolve(cfg) test still "
+      "tests exactly what it says",
+      bg.resolve(_STORED)["mode"] == "color"
+      and bg.resolve(_STORED)["color"] == "#112233")
+
+bg.set_preview(None)
+check("clearing restores stored config (Save and Cancel both land here)",
+      bg.preview_active() is False
+      and bg.resolve(bg.effective_cfg(_STORED))["mode"] == "color")
+bg.set_preview("not a dict")
+check("a non-dict clears rather than half-arming the preview",
+      bg.preview_active() is False)
+bg.set_preview(None)
+
 raise SystemExit(report())

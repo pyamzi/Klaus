@@ -254,3 +254,32 @@ def report() -> int:
     """Print the tally; return an exit code for `raise SystemExit(report())`."""
     print(f"\n{_PASS} passed, {_FAIL} failed")
     return 1 if _FAIL else 0
+
+
+def code_only(src: str) -> str:
+    """Source with comments AND string literals removed, layout kept.
+
+    Source-pin tests assert on the TEXT of klausmate modules, so any pin
+    can be silently satisfied — or silently broken — by prose that merely
+    *mentions* the thing it looks for. That has now bitten four separate
+    checks in this repo (a commented-out `dlg.exec()`, a `painter.end()`
+    named in a docstring, an ordering pin fooled by a docstring naming
+    the calls in the opposite order). Pins that care about real code
+    should read this instead of the raw source.
+
+    Falls back to crude line-wise comment stripping if the source will
+    not tokenize, so a syntax error surfaces as a failing pin rather
+    than a crashing test file.
+    """
+    import io
+    import tokenize
+
+    try:
+        kept = [
+            tok
+            for tok in tokenize.generate_tokens(io.StringIO(src).readline)
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING)
+        ]
+        return tokenize.untokenize(kept)
+    except Exception:
+        return "\n".join(ln.split("#", 1)[0] for ln in src.splitlines())

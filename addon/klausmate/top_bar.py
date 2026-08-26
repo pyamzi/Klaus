@@ -168,7 +168,9 @@ def _background_css(bar: bool, bottom: bool = False) -> str:
     try:
         from . import background
 
-        spec = background.resolve(_config())
+        # effective_cfg: an unsaved Preferences preview wins over stored
+        # config, so appearance edits render live before Save.
+        spec = background.resolve(background.effective_cfg(_config()))
         url = background.image_url(_addon(), spec["image"])
         if bar:
             return background.bar_css(spec, url, bottom=bottom)

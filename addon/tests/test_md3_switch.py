@@ -9,7 +9,7 @@ loop could verify.
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
-from anki_stubs import check, install, report, section
+from anki_stubs import check, code_only, install, report, section
 
 install()
 import importlib
@@ -115,23 +115,8 @@ check("the animated property only repaints once on screen",
       "if self.isVisible():\n            self.update()" in _SRC)
 check("paint bails out when the widget has no surface yet",
       "if self.width() <= 0 or self.height() <= 0:" in _SRC)
-def _code_only(src: str) -> str:
-    """Source with comments AND string literals dropped, layout kept, so
-    prose that merely *describes* a call can never satisfy or break a
-    pin. Three checks in this repo have now been tripped by their own
-    documentation; counting real code is the fix."""
-    import io
-    import tokenize as _tk
-
-    kept = [
-        tok
-        for tok in _tk.generate_tokens(io.StringIO(src).readline)
-        if tok.type not in (_tk.COMMENT, _tk.STRING)
-    ]
-    return _tk.untokenize(kept)
-
-
-_CODE = _code_only(_SRC)
+# Shared helper: prose must never be able to satisfy or break a pin.
+_CODE = code_only(_SRC)
 check("the pin below reads real code, not prose — docstrings and "
       "comments are stripped, so a described call cannot fake a pass",
       "painter.end()" in _CODE and "nine-crash" not in _CODE)

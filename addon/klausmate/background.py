@@ -40,6 +40,38 @@ DEFAULT_TINT = 0.55        # chrome tint over the blur. Tuned for
 IMAGE_DIR = "backgrounds"
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
+# ── Unsaved live preview ────────────────────────────────────────────────
+# Appearance is the one class of setting a user judges by eye, so the
+# Preferences dialog renders it LIVE while they configure it — but Save
+# is still the only writer of config (see manage_models.mark_dirty). This
+# holds the pending background keys in config shape; while it is armed
+# every surface paints from it instead of from what is stored. Cleared on
+# Save (stored config now matches) and on Cancel (revert to stored).
+#
+# Deliberately NOT consulted inside resolve(): that stays a pure function
+# of its argument, so the hundreds of existing resolve(cfg) tests keep
+# testing exactly what they say. The override is applied at the seam, by
+# effective_cfg(), where a surface decides what to paint.
+_PREVIEW_CFG: dict | None = None
+
+
+def set_preview(cfg: Any) -> None:
+    """Arm the unsaved preview with a config-shaped dict, or clear it
+    with None (anything not a dict clears, so a caller cannot half-arm)."""
+    global _PREVIEW_CFG
+    _PREVIEW_CFG = cfg if isinstance(cfg, dict) else None
+
+
+def preview_active() -> bool:
+    """True while an unsaved appearance preview is on screen."""
+    return _PREVIEW_CFG is not None
+
+
+def effective_cfg(cfg: Any) -> Any:
+    """What a surface should paint RIGHT NOW: the unsaved preview when
+    one is armed, otherwise the stored config it was given."""
+    return _PREVIEW_CFG if _PREVIEW_CFG is not None else cfg
+
 
 def resolve(cfg: Any) -> dict:
     """Normalise the background config into a spec dict.

@@ -1008,6 +1008,14 @@ def manage_models_dialog(setup: bool = False) -> None:
     # at call time — referencing ui_state here crashed the dialog with
     # NameError the moment Preferences opened (live traceback).
     _bg_state = {"spec": _background.resolve(_general_cfg), "syncing": False}
+    # Coalesces live appearance previews: top_bar.refresh() redraws the
+    # toolbar and resets the main window, and the blur slider fires
+    # continuously while dragged, so previewing per signal would repaint
+    # per pixel. 140ms is under the ~200ms that reads as "instant" while
+    # still collapsing a drag into a handful of repaints.
+    _preview_timer = QTimer(dlg)
+    _preview_timer.setSingleShot(True)
+    _preview_timer.setInterval(140)
 
     def sync_background_widgets() -> None:
         """Repaint the Appearance controls from _bg_state (never from
@@ -1045,21 +1053,21 @@ def manage_models_dialog(setup: bool = False) -> None:
         _bg_state["spec"]["mode"] = str(
             bg_mode_combo.currentData() or "theme"
         )
-        mark_dirty()
+        appearance_changed()
         sync_background_widgets()
 
     def on_bg_fit_changed(_i: int) -> None:
         if _bg_state["syncing"]:
             return
         _bg_state["spec"]["fit"] = str(bg_fit_combo.currentData() or "cover")
-        mark_dirty()
+        appearance_changed()
 
     def on_bg_blur_changed(value: int) -> None:
         bg_blur_lbl.setText(f"{value}px")
         if _bg_state["syncing"]:
             return
         _bg_state["spec"]["blur"] = int(value)
-        mark_dirty()
+        appearance_changed()
 
     def pick_bg_colour() -> None:
         from aqt.qt import QColor, QColorDialog
@@ -1069,7 +1077,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         if not chosen.isValid():
             return
         _bg_state["spec"]["color"] = chosen.name()
-        mark_dirty()
+        appearance_changed()
         sync_background_widgets()
 
     def pick_bg_image() -> None:
@@ -1089,7 +1097,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             return
         _bg_state["spec"]["image"] = stored
         _bg_state["spec"]["mode"] = "image"
-        mark_dirty()
+        appearance_changed()
         sync_background_widgets()
 
     sync_background_widgets()
@@ -1139,7 +1147,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     def _pick_accent(name: str) -> None:
         _accent_state["name"] = name
-        mark_dirty()
+        appearance_changed()
         sync_accent_swatches()
 
     def _pick_custom_accent() -> None:
@@ -2187,23 +2195,34 @@ def manage_models_dialog(setup: bool = False) -> None:
             provider_override=str(embed_provider_combo.currentData() or "ollama")
         )
 
-    def save_all() -> None:
-        """The one writer of preference keys (the Save button).
+    def _bg_preview_cfg() -> dict:
+        """The PENDING background spec in config shape, for background's
+        preview override — the same five keys save_general() writes."""
+        spec = _bg_state["spec"]
+        return {
+            "background_mode": spec["mode"],
+            "background_color": spec["color"],
+            "background_image": spec["image"],
+            "background_fit": spec["fit"],
+            "background_blur": int(spec["blur"]),
+        }
 
-        clear_dirty() runs FIRST because save_embed()/save_threshold()
-        re-sync widgets afterwards and those syncs are skipped while the
-        dirty guard is up.
+    def apply_appearance_live() -> None:
+        """Render the pending accent + background EVERYWHERE, saving
+        nothing.
+
+        Appearance is the one class of setting judged by eye, so it
+        previews live while the dialog is open; Save remains the only
+        writer of config (see mark_dirty). Cancelling runs
+        revert_appearance_preview() to put the stored look back.
         """
-        prev_renderer = _renderer_from_config(_pkg().get_config())
-        clear_dirty()
-        save_embed()
-        save_threshold()
-        save_general()
         try:
-            # Accent first: top_bar.refresh() below re-bakes the toolbar
-            # palettes, and this dialog restyles itself immediately.
+            # Background first: top_bar.refresh() below repaints from it.
+            _background.set_preview(_bg_preview_cfg())
+            # Accent colour before name: set_active_theme("custom") is
+            # only meaningful once the colour behind it is loaded.
             _theme_presets.set_custom_colour(str(_accent_state["custom"]))
-            _theme_presets.set_active_theme(_accent_state["name"])
+            _theme_presets.set_active_theme(str(_accent_state["name"]))
             dlg.setStyleSheet(
                 _theme_presets.dialog_qss(_theme_presets.night_mode())
             )
@@ -2223,6 +2242,61 @@ def manage_models_dialog(setup: bool = False) -> None:
             _top_bar.refresh()
         except Exception as _exc:
             print(f"[klausmate] background refresh failed: {_exc}")
+
+    def revert_appearance_preview() -> None:
+        """Put the STORED appearance back on screen.
+
+        Wired to dlg.finished, so it runs on EVERY close — Save, Cancel,
+        Esc, the title-bar ✕ — because "re-apply from config" is the
+        right answer for all of them: after Save config already matches
+        (visually a no-op), and after a discard it undoes the preview.
+        Without it a previewed accent would linger for the rest of the
+        session despite being discarded, snapping back only on restart.
+        Re-runs the addon's own profile-open applier so "revert" and
+        "load from config" can never drift apart.
+        """
+        if not _background.preview_active():
+            return  # nothing previewed — stored config is already drawn
+        _background.set_preview(None)
+        try:
+            _pkg()._apply_color_theme()
+        except Exception as _exc:
+            print(f"[klausmate] appearance revert failed: {_exc}")
+        try:
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] appearance revert refresh failed: {_exc}")
+
+    def appearance_changed() -> None:
+        """An appearance widget moved: mark unsaved AND preview it live.
+
+        Debounced — top_bar.refresh() redraws the toolbar and resets the
+        main window, and the blur slider emits continuously while it is
+        dragged, so an undebounced preview would repaint per pixel.
+        """
+        mark_dirty()
+        _preview_timer.start()
+
+    def save_all() -> None:
+        """The one writer of preference keys (the Save button).
+
+        clear_dirty() runs FIRST because save_embed()/save_threshold()
+        re-sync widgets afterwards and those syncs are skipped while the
+        dirty guard is up.
+        """
+        prev_renderer = _renderer_from_config(_pkg().get_config())
+        clear_dirty()
+        save_embed()
+        save_threshold()
+        save_general()
+        # Paint through the same one path as every live edit, THEN drop
+        # the override: stored config now holds identical values, so
+        # leaving it armed would let a stale preview shadow a later
+        # config change for the rest of the session.
+        apply_appearance_live()
+        _background.set_preview(None)
         if _renderer_from_config(_pkg().get_config()) != prev_renderer:
             showInfo(
                 "Preferences saved.\n\nThe PDF viewer change takes effect "
@@ -2352,6 +2426,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_image_btn.clicked.connect(pick_bg_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
+    _preview_timer.timeout.connect(apply_appearance_live)
+    # finished fires on EVERY close path (Save, Cancel, Esc, title-bar ✕),
+    # so it is the one place an unsaved preview can be guaranteed not to
+    # outlive the dialog. No-op unless a preview is actually armed.
+    dlg.finished.connect(lambda _result: revert_appearance_preview())
 
     rebuild_install_method_buttons()
     refresh()
