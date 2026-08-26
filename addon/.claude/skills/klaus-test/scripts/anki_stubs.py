@@ -52,6 +52,7 @@ which is exactly the surface klausmate does not own.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 import types
@@ -71,8 +72,40 @@ _PASS = 0
 _FAIL = 0
 
 
+def _purge_stale_bytecode(addon_dir: str) -> None:
+    """Guarantee the tests execute the SOURCE they are asserting on.
+
+    Python decides a cached .pyc is still valid from (mtime, size) alone.
+    Editing a value to another of the SAME LENGTH within the same second
+    — `0.85` -> `0.40`, exactly what a self-falsification check does —
+    keeps both equal, so the stale bytecode is reused and the suite runs
+    code that is no longer on disk. That really happened here: a pin was
+    reported failing against a file that already held the correct value.
+
+    Worse, `rm -rf klausmate/__pycache__` does NOT fix it on this Mac:
+    the system Python sets sys.pycache_prefix, so caches live in a MIRROR
+    tree under ~/Library/Caches/com.apple.python/<abs source path>/. And
+    `python3 -B` only stops bytecode being WRITTEN, not read.
+
+    So: stop writing it, drop both cache locations, and re-scan.
+    """
+    import shutil
+
+    sys.dont_write_bytecode = True
+    roots = [os.path.join(addon_dir, "__pycache__")]
+    prefix = getattr(sys, "pycache_prefix", None)
+    if prefix:
+        # The mirror tree mangles the absolute source path under prefix.
+        roots.append(os.path.join(prefix, addon_dir.lstrip(os.sep),
+                                  "__pycache__"))
+    for root in roots:
+        shutil.rmtree(root, ignore_errors=True)
+    importlib.invalidate_caches()
+
+
 def install_package_stub(addon_dir: str = ADDON) -> None:
     """Make `import klausmate.<mod>` resolve to the working tree."""
+    _purge_stale_bytecode(addon_dir)
     pkg = types.ModuleType("klausmate")
     pkg.__path__ = [addon_dir]
     pkg.__package__ = "klausmate"
