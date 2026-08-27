@@ -1,6 +1,7 @@
 """Headless tests for the custom background + frosted top bar."""
 import importlib
 import os
+import re
 import sys
 import tempfile
 
@@ -203,9 +204,38 @@ section("the studied-today line lives INSIDE the deck panel")
 # gives the table padding:1rem with content-box sizing. panel_js now
 # reparents it into the table instead: one box, the table's own width.
 check("the row is styled for life inside the table, not as its own box",
-      "tr.klaus-studied td {" in _panels
+      "tr.klaus-studied td," in _panels
       and "tr.klaus-studied #studiedToday { margin: 0 !important; }"
       in _panels)
+
+# Anki's deckbrowser.css hover rule is UNSCOPED (`.current td,
+# tr:hover:not(.top-level-drag-row) td`) so it reaches this injected
+# row too, and its :first-child/:last-child radius rules both fire on
+# the one colSpan cell — the row lit up as a solid grey PILL on hover.
+_studied_rule = _panels.split(" tr.klaus-studied td,", 1)[1].split("}")[0]
+check("hovering the studied line paints NOTHING — background forced "
+      "transparent with !important, which beats Anki's rule at any "
+      "specificity since Anki's carries none",
+      "background: transparent !important" in _studied_rule
+      and "tr.klaus-studied:hover td," in _panels)
+check("...in RTL too: Anki's [dir=rtl] hover variant is its most "
+      "specific rule (0,3,2), so the RTL twin is spelled out like the "
+      "deck-row rule's",
+      "[dir=rtl] tr.klaus-studied:hover td {" in _panels)
+check("the pill radius is neutralised — first/last-child rounding both "
+      "fire on a single colSpan cell",
+      "border-radius: 0 !important" in _studied_rule)
+_pad = re.search(
+    r"padding: ([\d.]+)em 12px ([\d.]+)em", _studied_rule)
+check("padding is a RELATIONSHIP, not two magic numbers: generous air "
+      "above (>= 1.2em, so the line stands off the decks), snug below "
+      "(<= 0.6em, hugging the panel's bottom edge), top more than "
+      "double the bottom — retunable without churning this test",
+      _pad is not None
+      and float(_pad.group(1)) >= 1.2
+      and float(_pad.group(2)) <= 0.6
+      and float(_pad.group(1)) > 2 * float(_pad.group(2)),
+      _pad.group(0) if _pad else "no padding rule")
 check("no width is set anywhere — that overflow is exactly what the "
       "reparenting removed the need for",
       "width:" not in _panels.replace("min-width", ""))

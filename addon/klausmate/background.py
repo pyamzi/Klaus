@@ -294,8 +294,28 @@ def panel_css(spec: dict) -> str:
         # That removes the width problem entirely: the table's own width
         # is its width, nothing to keep in sync. It is not a tr.deck, so
         # the hover/current rule above deliberately never touches it.
-        " tr.klaus-studied td {"
-        " padding: 0.7em 12px 0.4em 12px !important;"
+        # This row must NEVER take the hover treatment. Anki's own
+        # deckbrowser.css hover rule is UNSCOPED — `.current td,
+        # tr:hover:not(.top-level-drag-row) td` — so it matches ANY row
+        # in the page, this injected one included; and its
+        # :first-child/:last-child radius rules BOTH fire on the single
+        # colSpan cell (it is first and last), which is what turned the
+        # line into a solid grey pill on hover. None of Anki's rules
+        # carry !important, so importance alone wins even against the
+        # highest-specificity RTL variant ((0,3,2)); the :hover and
+        # [dir=rtl] selectors are spelled out anyway, matching how the
+        # deck-row rule above documents its RTL twins.
+        #
+        # Padding is a relationship, not a pair of numbers: generous
+        # above (air between the last deck and the line), snug below
+        # (the line hugs the panel's bottom edge) — top well over twice
+        # the bottom. Pinned as that relationship in test_background.
+        " tr.klaus-studied td,"
+        " tr.klaus-studied:hover td,"
+        " [dir=rtl] tr.klaus-studied:hover td {"
+        " background: transparent !important;"
+        " border-radius: 0 !important;"
+        " padding: 1.4em 12px 0.5em 12px !important;"
         " border: none !important;"
         " text-align: center !important;"
         " }"
