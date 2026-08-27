@@ -74,7 +74,7 @@ Restart Anki. Without pypdf, PDF import, the viewer, and Library are all disable
 ## Project structure
 
 ```
-KlausMate/
+KlausMate-Context/
 ├── README.md                 # This file (repo entry point)
 ├── AGENTS.md                 # Architecture & contributor guide
 ├── ANKIWEB.md                # Description blurb for the AnkiWeb listing
