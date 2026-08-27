@@ -119,6 +119,34 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   need deck-scoped queries). Config `heatmap_enabled`; the Preferences
   switch previews live, which is why `_bg_preview_cfg` carries that key
   too — that dict REPLACES config for every `effective_cfg` reader.
+- `dashboard.py` (aqt-free above its "aqt glue" divider) +
+  `web/dashboard.js`: **Control-Center-style widget editing** on the
+  deck browser. Python owns the registry (`WIDGETS`: decks mandatory,
+  heatmap removable — future widget = one tuple), the config policy
+  (`apply_action` is the ONLY gate between bridge payloads and config;
+  JS is never trusted), the chrome stylesheet, and the transient
+  `_EDIT` flag (edit mode survives stdHtml rebuilds; reset on profile
+  switch). The JS owns the DOM: wraps the deck table (+ in theme mode
+  the still-sibling `<br>`+`#studiedToday` trio) and `.klaus-hm` into
+  `.klaus-widget` divs, applies `dashboard_order`, and runs the whole
+  edit mode — right-click → "Edit Widgets…" (JS preventDefault beats
+  AnkiWebView's menu; pdfjs precedent), iOS jiggle (disabled under
+  Anki's `body.reduce-motion` class — Anki ships NO
+  prefers-reduced-motion CSS), per-widget shields so deck clicks/drags
+  are unreachable while jiggling, ⊖ badge, ＋ popover, Done/outside/
+  Esc, and pointer-event drag-reorder (HTML5 DnD is dead on this
+  screen: MainWebView.dragEnterEvent eats non-file drags). Wrapper
+  sizing is `width:fit-content; max-width:100%` — BOTH measured
+  necessary (block = full-width badge misplacement; bare fit-content
+  can't go below the heatmap grid's min-content, 859px). Visibility
+  stays on per-widget bools (`heatmap_enabled`); `dashboard_order` is
+  order ONLY. `_bg_preview_cfg` carries it, and `_write_cfg` patches an
+  armed preview so a dashboard edit survives the next preview tick.
+  Bridge `klausmate:dash:<b64 json>`; only `add` refreshes (deferred,
+  guarded on `mw.state`). Hook order: dashboard.setup() AFTER
+  heatmap's, so its body script parses after panel_js's weld. DOM
+  behaviour is tested by `tests/dashboard_js_dom_test.js` (node, run
+  from test_dashboard.py, honest SKIP without node).
 - `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
   split out of `__init__.py`.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term

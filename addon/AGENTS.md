@@ -165,6 +165,7 @@ pdf_drive.setup()                                                   # Library wi
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
+dashboard.setup()                                                   # Control-Center widget editing (independent try/except; MUST stay after heatmap — body order)
 ```
 
 `heatmap.setup()` adds four of its own:
@@ -190,6 +191,11 @@ the action name:
 | `focus` | `{field}` | Sets `editor._klausmate_target_field_index` / `_target_field_name` — used for PDF page-insert targeting |
 | `crop` | `{...}` | Opens `crop_dialog.py` for the referenced image |
 | `log` / `dbg` | plain string | Console logging |
+
+Two more prefixes ride the same gui_hook from other modules:
+`klausmate:heatmap:<day>` (a heatmap cell click → Browse) and
+`klausmate:dash:<b64 json>` (dashboard edit/order/remove/add —
+validated by `dashboard.apply_action`, the only gate to config).
 
 The old `"klaus:"`-prefixed bridge belonged to the deleted chat panel
 (`chat_dock.py` / `web/search.js`) and no longer exists.
@@ -219,7 +225,10 @@ Notable keys: `embedding_provider` (`voyage` default | `openai` | `ollama`),
 `curate_top_k`, `curate_min_score`, `pdf_match_threshold`, `pdf_match_agg`,
 `pdf_index_max_chunks`, `endpoint` (Ollama server URL), `runtime_auto_setup`
 (Klaus manages its own local Ollama install when needed), `image_crop_enabled`,
-`heatmap_enabled` (the review heatmap under the deck list).
+`heatmap_enabled` (the review heatmap under the deck list),
+`dashboard_order` (deck-screen widget order; written by the dashboard's
+right-click → Edit Widgets mode — drag to reorder, ⊖/＋ toggle the
+per-widget bools).
 
 `_migrate_config()` (on `profile_did_open`) cleans up legacy `chat_*` /
 `claude_*` config keys left over from the deleted Ask-on-Claude feature —

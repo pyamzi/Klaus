@@ -18,5 +18,9 @@
   "background_image": "",
   "background_fit": "cover",
   "background_blur": 22,
-  "heatmap_enabled": true
+  "heatmap_enabled": true,
+  "dashboard_order": [
+    "decks",
+    "heatmap"
+  ]
 }

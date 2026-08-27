@@ -1015,6 +1015,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
 
+    from . import dashboard as _dashboard
     from . import heatmap as _heatmap
 
     heatmap_cb.setChecked(_heatmap.enabled(_general_cfg))
@@ -2234,6 +2235,10 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
             "heatmap_enabled": bool(heatmap_cb.isChecked()),
+            # The dashboard reads its order through effective_cfg too;
+            # Preferences has no order UI, so carry the stored value —
+            # read live per tick, in case the dashboard writes mid-preview.
+            "dashboard_order": _dashboard.order_from_cfg(_pkg().get_config()),
         }
 
     def apply_appearance_live() -> None:

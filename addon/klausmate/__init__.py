@@ -2331,6 +2331,17 @@ try:
 except Exception as _e:
     print(f"[klausmate] heatmap setup failed: {type(_e).__name__}: {_e}")
 
+# AFTER heatmap on purpose: hook order is body order, and the dashboard
+# boot script must parse after top_bar's panel_js weld AND after the
+# heatmap exists to be wrapped. (The matching comment lives in
+# dashboard._on_webview_will_set_content.)
+try:
+    from . import dashboard as _dashboard
+
+    _dashboard.setup()
+except Exception as _e:
+    print(f"[klausmate] dashboard setup failed: {type(_e).__name__}: {_e}")
+
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
 # (note: Note, current_field_idx: int) — it does not provide the Editor,

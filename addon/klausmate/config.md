@@ -159,6 +159,12 @@ wouldn't already need.
   year of study activity, plus the next four weeks of scheduled cards —
   under the deck list. Clicking a day opens it in Browse. `false`
   removes it entirely, hooks and query included.
+- **dashboard_order**: the order of the deck-screen widgets, top to
+  bottom (default `["decks", "heatmap"]`). Normally written by the
+  dashboard itself: right-click a widget → *Edit Widgets…*, then drag
+  to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
+  the widget's own toggle, e.g. `heatmap_enabled`). Unknown entries are
+  ignored; missing ones reappear in default order.
 
 All six live in **KlausMate Preferences → General → Appearance**;
 press **Save** and they apply immediately (no restart).

@@ -49,6 +49,7 @@ _MODULES = {
     "pdfjs_viewer": open("klausmate/pdfjs_viewer.py").read(),
     "pdf_drive": open("klausmate/pdf_drive.py").read(),
     "heatmap": open("klausmate/heatmap.py").read(),
+    "dashboard": open("klausmate/dashboard.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -88,13 +89,14 @@ for mod in _MODULES:
         ):
             _registered.add(f"{mod}.{node.args[0].id}")
 
-check("exactly the four known js-message handlers are registered — a "
+check("exactly the five known js-message handlers are registered — a "
       "NEW one must be audited against the deferral rule and added here",
       _registered == {
           "__init__.on_js_message",
           "top_bar._on_js_message",
           "deck_curate.on_deck_js_message",
           "heatmap._on_js_message",
+          "dashboard._on_js_message",
       }, str(sorted(_registered)))
 
 section("pdfjs_viewer: the _bridge_* dispatch table (crash #1's shape)")
@@ -204,6 +206,15 @@ check("opening the Browser is deferred like every other window this "
       and "        _open_day(day)" not in _HM)
 check("the day is frozen into the deferred callback rather than "
       "re-parsed a tick later", "int(message.rsplit" in _HM)
+
+
+section("dashboard: add-refresh tears the webview down under the bridge")
+_DASH = _func_src("dashboard", "_on_js_message")
+check("the dashboard handler was found in the source", bool(_DASH))
+check("the refresh a widget-add triggers is deferred — it rebuilds the "
+      "very webview the webchannel message arrived from",
+      "QTimer.singleShot(0, _refresh)" in _DASH
+      and "\n        _refresh()" not in _DASH)
 
 
 section("manage_models: Preferences opens window-modal, never exec()")
