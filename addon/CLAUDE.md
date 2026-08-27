@@ -91,6 +91,34 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   image-crop plumbing; Tools menu (`install_menu`: ONE entry,
   "KlausMate Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).
+- `heatmap.py` (aqt-free above its "aqt glue" divider): the **review
+  heatmap** — a GitHub-style year grid under the deck list, past days
+  coloured by reviews answered and the next four weeks ghosted by cards
+  due, with streak / daily-average / share-of-days stats. Adapted from
+  Glutanimate's Review Heatmap (`References/review-heatmap-main`,
+  AGPLv3) for its DEFINITIONS only — no code vendored: that 1.0.1 tree
+  is four years stale (`anki.lang._`, `addHook`), ships its web layer
+  unbuilt (TypeScript + cal-heatmap + 150KB d3 that CSS grid replaces),
+  and carries libaddon plus Section 7 terms. **The styling is all
+  borrowed, never invented**: the panel joins `background.panel_css`'s
+  frosted family by being named in that one selector (`table, .callout,
+  .klaus-hm`), so it frosts/tints/rounds exactly like the deck table in
+  every background mode; and every cell colour is the ACTIVE accent at
+  four alphas from `theme.palette`, so it re-colours with every colour
+  theme including a custom one, with zero per-theme code. Both palettes
+  ship keyed on `:root.night-mode` (same reason as `toolbar_css`).
+  **`ease > 0` is load-bearing, not hygiene**: revlog rows with ease 0
+  are manual entries (set due date, forget, bulk FSRS reschedules) — on
+  Pouya's collection 155,254 of 189,956 rows, four ~35k spikes on days
+  he never studied; unfiltered they set the ramp and flatten every real
+  day. Days are integer DAY NUMBERS throughout, bucketed by SQLite with
+  `'localtime'` so a DST shift can't smear a day. Clicking a cell opens
+  Browse — `prop:due=N` ahead, our own `klausday:<day>` token behind,
+  resolved in `browser_will_search` because Anki has no operator for
+  "reviewed on this exact day". Deck browser only (the overview would
+  need deck-scoped queries). Config `heatmap_enabled`; the Preferences
+  switch previews live, which is why `_bg_preview_cfg` carries that key
+  too — that dict REPLACES config for every `effective_cfg` reader.
 - `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
   split out of `__init__.py`.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term

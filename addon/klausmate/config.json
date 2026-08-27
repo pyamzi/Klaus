@@ -17,5 +17,6 @@
   "background_color": "#1E2225",
   "background_image": "",
   "background_fit": "cover",
-  "background_blur": 22
+  "background_blur": 22,
+  "heatmap_enabled": true
 }

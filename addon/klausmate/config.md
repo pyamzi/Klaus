@@ -155,6 +155,10 @@ wouldn't already need.
 - **background_fit**: `"cover"` (default), `"contain"` or `"tile"`.
 - **background_blur**: 0–100 px of blur under the top bar. Default
   `22`.
+- **heatmap_enabled**: `true` (default) draws the review heatmap — a
+  year of study activity, plus the next four weeks of scheduled cards —
+  under the deck list. Clicking a day opens it in Browse. `false`
+  removes it entirely, hooks and query included.
 
-All five live in **KlausMate Preferences → General → Appearance**;
+All six live in **KlausMate Preferences → General → Appearance**;
 press **Save** and they apply immediately (no restart).

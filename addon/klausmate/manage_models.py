@@ -936,9 +936,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "Sets the background of Anki's deck, overview and congrats "
-        "screens. The Klaus top bar shows the same background blurred, "
-        "so it reads as frosted glass over it.",
+        "The background of Anki's deck, overview and congrats screens, "
+        "the accent colour, and the review heatmap. The Klaus top bar "
+        "shows the same background blurred, so it reads as frosted "
+        "glass over it.",
     )
 
     bg_mode_combo = QComboBox()
@@ -994,12 +995,29 @@ def manage_models_dialog(setup: bool = False) -> None:
         blur_ctl,
     )
 
+    # Not a background setting, but it lives and dies by the same
+    # frosted-panel look, so it belongs on this page rather than under
+    # General's feature toggles.
+    heatmap_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
+    _row(
+        appearance_layout,
+        "Review heatmap",
+        "Show a year of study activity under the deck list, with the "
+        "next four weeks of scheduled cards. Click a day to open it in "
+        "Browse.",
+        heatmap_cb,
+    )
+
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
     from .pdfjs_viewer import renderer_from_config as _renderer_from_config
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
+
+    from . import heatmap as _heatmap
+
+    heatmap_cb.setChecked(_heatmap.enabled(_general_cfg))
 
     from . import background as _background
 
@@ -2162,6 +2180,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_blur"] = int(spec["blur"])
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
+        cfg["heatmap_enabled"] = bool(heatmap_cb.isChecked())
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -2197,8 +2216,16 @@ def manage_models_dialog(setup: bool = False) -> None:
         )
 
     def _bg_preview_cfg() -> dict:
-        """The PENDING background spec in config shape, for background's
-        preview override — the same five keys save_general() writes."""
+        """The PENDING appearance keys in config shape, for background's
+        preview override — the same keys save_general() writes.
+
+        This dict REPLACES config for every reader of
+        background.effective_cfg, so a key left out of it does not fall
+        back to the stored value, it falls back to that reader's own
+        default. heatmap_enabled is here for exactly that reason:
+        without it, opening Preferences with the heatmap switched off
+        and nudging the blur would preview it back into existence.
+        """
         spec = _bg_state["spec"]
         return {
             "background_mode": spec["mode"],
@@ -2206,6 +2233,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_image": spec["image"],
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
+            "heatmap_enabled": bool(heatmap_cb.isChecked()),
         }
 
     def apply_appearance_live() -> None:
@@ -2420,6 +2448,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
+    heatmap_cb.toggled.connect(lambda _checked: appearance_changed())
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)

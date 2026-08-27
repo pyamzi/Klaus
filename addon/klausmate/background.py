@@ -236,8 +236,12 @@ def panel_css(spec: dict) -> str:
         " --klaus-panel-strong: rgba(48,48,48,0.62);"
         " }"
         # table = the deck list and the overview's count table; .callout =
-        # Anki's notice box. Both are real surfaces that carry text.
-        " table, .callout {"
+        # Anki's notice box; .klaus-hm = the review heatmap. All three are
+        # real surfaces that carry text. The heatmap opts in here rather
+        # than frosting itself so the panel family stays ONE rule —
+        # retuning the tint or blur retunes the heatmap with it, and it
+        # can never drift out of step with the deck table above it.
+        " table, .callout, .klaus-hm {"
         " background: var(--klaus-panel) !important;"
         + frost +
         " border: 1px solid var(--klaus-panel-edge) !important;"

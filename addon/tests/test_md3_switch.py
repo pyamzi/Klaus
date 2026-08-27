@@ -6,6 +6,7 @@ own docstring), so this exercises the pure geometry/colour math at
 module top plus source pins for the parts that only a running Qt event
 loop could verify.
 """
+import re
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -157,17 +158,27 @@ section("manage_models.py wiring")
 _MM = open("klausmate/manage_models.py").read()
 check("from .md3_switch import Md3Switch",
       "from .md3_switch import Md3Switch" in _MM)
-check("all three Preferences toggles are switches, not checkboxes",
-      _MM.count("= Md3Switch()") == 3
-      and "image_crop_cb = QCheckBox()" not in _MM
-      and "runtime_auto_cb = QCheckBox()" not in _MM
-      and "pdfjs_cb = QCheckBox()" not in _MM)
-check("deferred-save wiring is untouched — the switches still only "
-      "mark_dirty(), Save is still the sole writer",
-      "image_crop_cb.toggled.connect(lambda _checked: mark_dirty())" in _MM
-      and "runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())"
-      in _MM
-      and "pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())" in _MM)
+# Stated as a RULE, not a head count. This pin used to assert
+# `== 3`, which meant every new preference toggle broke it and got
+# "fixed" by bumping the number — a pin nobody reads is a pin that
+# stops catching the thing it was written for. Read the toggles out of
+# the source instead, so a QCheckBox slipping back in fails loudly and
+# a fourth switch does not.
+_MM_CODE = code_only(_MM)
+_TOGGLES = dict(re.findall(r"(\w+_cb) = (\w+)\(", _MM_CODE))
+check("every Preferences toggle is an Md3Switch, whatever their number",
+      len(_TOGGLES) >= 4
+      and set(_TOGGLES.values()) == {"Md3Switch"},
+      str(sorted(_TOGGLES.items())))
+check("the toggles that predate live appearance preview still only "
+      "mark_dirty(), so Save stays the sole writer",
+      all(f"{name}.toggled.connect(lambda _checked: mark_dirty())" in _MM_CODE
+          for name in ("image_crop_cb", "runtime_auto_cb", "pdfjs_cb")))
+check("...and the appearance ones route through appearance_changed(), "
+      "which marks dirty AND previews live — same deferred save, "
+      "visible before you commit to it",
+      "heatmap_cb.toggled.connect(lambda _checked: appearance_changed())"
+      in _MM_CODE)
 
 section("theme.py: caption contrast fix (MD3 audit accessibility finding)")
 def _luminance(hexcolor: str) -> float:

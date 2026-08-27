@@ -2324,6 +2324,13 @@ try:
 except Exception as _e:
     print(f"[klausmate] browse highlight setup failed: {type(_e).__name__}: {_e}")
 
+try:
+    from . import heatmap as _heatmap
+
+    _heatmap.setup()
+except Exception as _e:
+    print(f"[klausmate] heatmap setup failed: {type(_e).__name__}: {_e}")
+
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
 # (note: Note, current_field_idx: int) — it does not provide the Editor,

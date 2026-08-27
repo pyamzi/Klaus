@@ -162,7 +162,16 @@ gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse too
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
 deck_curate.setup()                                                 # "Curate Deck" on deck screens (independent try/except)
 pdf_drive.setup()                                                   # Library window + top-toolbar link (independent try/except)
+top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
+browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
+heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
 ```
+
+`heatmap.setup()` adds four of its own:
+`deck_browser_will_render_content` (the panel HTML into `content.stats`),
+`webview_will_set_content` (its stylesheet, DeckBrowser only),
+`webview_did_receive_js_message` (a clicked day) and `browser_will_search`
+(resolving the `klausday:` token those clicks produce).
 
 `deck_curate.setup()` and `pdf_drive.setup()` are each wrapped in their own
 `try/except` at import time — a failure in one must not cost the user the
@@ -209,7 +218,8 @@ Notable keys: `embedding_provider` (`voyage` default | `openai` | `ollama`),
 `embedding_model`, `embedding_api_key_voyage` / `embedding_api_key_openai`,
 `curate_top_k`, `curate_min_score`, `pdf_match_threshold`, `pdf_match_agg`,
 `pdf_index_max_chunks`, `endpoint` (Ollama server URL), `runtime_auto_setup`
-(Klaus manages its own local Ollama install when needed), `image_crop_enabled`.
+(Klaus manages its own local Ollama install when needed), `image_crop_enabled`,
+`heatmap_enabled` (the review heatmap under the deck list).
 
 `_migrate_config()` (on `profile_did_open`) cleans up legacy `chat_*` /
 `claude_*` config keys left over from the deleted Ask-on-Claude feature —

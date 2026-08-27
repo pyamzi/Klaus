@@ -142,8 +142,10 @@ check("the blur follows the user's own blur setting",
           bg.resolve({"background_mode": "image",
                       "background_image": "p.png",
                       "background_blur": 22})))
-check("the deck table and Anki's callout box both get it",
-      "table, .callout {" in _panels)
+check("the deck table, Anki's callout box and the review heatmap all "
+      "get it — the heatmap joins this ONE rule instead of frosting "
+      "itself, so it cannot drift out of step with the deck table",
+      "table, .callout, .klaus-hm {" in _panels)
 check("panels sit on a tint so text stays legible on a busy photo — "
       "a RANGE, not an exact value, so the look can be retuned without "
       "churning this test: sheer enough that the picture still reads as "
@@ -257,7 +259,7 @@ _colour_panels = bg.panel_css(bg.resolve(
     {"background_mode": "color", "background_color": "#123456"}))
 check("panels look the SAME whichever background is painted — colour "
       "mode gets the tint, borders, corners and welded stats line too",
-      "table, .callout {" in _colour_panels
+      "table, .callout, .klaus-hm {" in _colour_panels
       and "#studiedToday {" in _colour_panels
       and "--klaus-panel:" in _colour_panels)
 check("...but NOT the blur: a Gaussian blur of a flat colour is that "
