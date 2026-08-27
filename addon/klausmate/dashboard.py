@@ -404,10 +404,22 @@ def _refresh() -> None:
 
 
 def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
+    global _EDIT
     try:
         from aqt.deckbrowser import DeckBrowser
 
         if not isinstance(context, DeckBrowser):
+            return
+        # Widget editing belongs to the KlausBook design layer: with it
+        # off, no css and no boot script — no wrap, no jiggle, and the
+        # heatmap renders in Anki's stock position. The flag reset
+        # matters: toggling the layer off MID-JIGGLE renders a page
+        # with no JS to ever send edit-off, so without this a later
+        # re-enable would boot the dashboard jiggling unprompted.
+        # (Toggled off and on again entirely from another screen, the
+        # flag survives — acceptable; it self-heals on any off-render.)
+        if not background.design_enabled(_config()):
+            _EDIT = False
             return
         web_content.head += "<style>" + dashboard_css() + "</style>"
         # Body-appended, so it parses AFTER background.panel_js (hook

@@ -140,9 +140,19 @@ wouldn't already need.
   lifts further in dark mode, matching how the built-in presets
   behave). An invalid value falls back to the default rather than
   blanking the accent.
+- **klausbook_design**: the master switch for the KlausBook design
+  layer — the restyled toolbar and bottom bars, chrome-matched top
+  bar, custom backgrounds, frosted panels, the studied-line weld and
+  dashboard widget editing. **Default `false`: Klaus ships as tools
+  inside a STOCK Anki**, and the KlausBook look is the opt-in — an
+  existing profile that had the design reverts to Anki's native look
+  after updating until this is switched on (nothing is lost: every
+  background/accent setting stays stored and comes back with the
+  switch). Klaus's own windows (Preferences, Library, PDF viewer) keep
+  their design either way, and every tool keeps working.
 - **background_mode**: `"theme"` (default — Klaus paints nothing and
   Anki looks stock), `"color"`, or `"image"`. Sets the background of
-  Anki's deck, overview and congrats screens. The Klaus top bar shows
+  Anki's deck and overview screens. The Klaus top bar shows
   the *same* background blurred, so it reads as frosted glass over it —
   and because a Gaussian blur of a flat colour is that same colour,
   `"color"` mode also makes the bar match the window chrome exactly.
@@ -164,7 +174,9 @@ wouldn't already need.
   dashboard itself: right-click a widget → *Edit Widgets…*, then drag
   to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
   the widget's own toggle, e.g. `heatmap_enabled`). Unknown entries are
-  ignored; missing ones reappear in default order.
+  ignored; missing ones reappear in default order. Inert while
+  `klausbook_design` is off — the widgets render in Anki's stock
+  layout, and the saved order waits for the design layer.
 
-All six live in **KlausMate Preferences → General → Appearance**;
+All of these live in **KlausMate Preferences → Appearance**;
 press **Save** and they apply immediately (no restart).

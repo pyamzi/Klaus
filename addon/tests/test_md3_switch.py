@@ -178,7 +178,8 @@ check("...and the appearance ones route through appearance_changed(), "
       "which marks dirty AND previews live — same deferred save, "
       "visible before you commit to it",
       "heatmap_cb.toggled.connect(lambda _checked: appearance_changed())"
-      in _MM_CODE)
+      in _MM_CODE
+      and "klausbook_cb.toggled.connect(on_design_toggled)" in _MM_CODE)
 
 section("theme.py: caption contrast fix (MD3 audit accessibility finding)")
 def _luminance(hexcolor: str) -> float:

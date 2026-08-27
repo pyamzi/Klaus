@@ -880,9 +880,12 @@ check("custom colour is saved, and applied before the theme name",
 check("profile open loads the custom colour before the theme name",
       _init_src.index("set_custom_colour(")
       < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
-check("Fit and Blur disable as WHOLE rows, labels included",
-      "bg_fit_row.setEnabled(is_image)" in _src2
-      and "bg_blur_row.setEnabled(is_image)" in _src2)
+check("Fit and Blur disable as WHOLE rows, labels included — and only "
+      "while the KlausBook design layer is on, since with it off the "
+      "background settings are inert whatever the mode",
+      "bg_fit_row.setEnabled(design_on and is_image)" in _src2
+      and "bg_blur_row.setEnabled(design_on and is_image)" in _src2
+      and "bg_mode_row.setEnabled(design_on)" in _src2)
 check("nav geometry is pure view geometry: setSizeHint rows + list "
       "setSpacing + an overshooting fixed height — nothing QSS-derived "
       "(three pill-era fixes fought polish timing; a single list view "
@@ -929,8 +932,20 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "six handlers: mode, fit, blur, colour, image, accent swatch",
-      _mm_src.count("        appearance_changed()") == 6)
+      "seven handlers: design toggle, mode, fit, blur, colour, image, "
+      "accent swatch",
+      _mm_src.count("        appearance_changed()") == 7)
+check("save and preview carry the design key as the IDENTICAL "
+      "expression — the preview dict replaces config and the gates "
+      "default OFF, so a preview missing the key strips the whole "
+      "look mid-drag, while a save missing it leaves a zombie screen "
+      "that snaps back on the next redraw",
+      _mm_src.split("def save_general")[1].split("def mark_dirty")[0]
+      .count('cfg["klausbook_design"] = bool(klausbook_cb.isChecked())')
+      == 1
+      and '"klausbook_design": bool(klausbook_cb.isChecked()),'
+      in _mm_src.split("def _bg_preview_cfg")[1].split(
+          "def apply_appearance_live")[0])
 check("appearance_changed both marks unsaved AND schedules the preview",
       "def appearance_changed() -> None:" in _mm_src
       and "mark_dirty()\n        _preview_timer.start()" in _mm_src)

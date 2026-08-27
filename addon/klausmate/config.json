@@ -13,6 +13,7 @@
   "pdf_renderer": "native",
   "color_theme": "ocean",
   "color_theme_custom": "#0071D3",
+  "klausbook_design": false,
   "background_mode": "theme",
   "background_color": "#1E2225",
   "background_image": "",

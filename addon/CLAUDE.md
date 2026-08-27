@@ -255,8 +255,25 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   `tests/test_top_bar.py`. Night-mode catches up on the toolbar's own
   redraw.
 - `background.py` (aqt-free): the custom app background + the **frosted
-  top bar**. `resolve(cfg)` validates the five `background_*` keys into a
-  spec; `main_css` paints Anki's deck/overview/congrats screens; `bar_css`
+  top bar** + **`design_enabled(cfg)` — the KlausBook design gate**
+  (config `klausbook_design`, default FALSE: Klaus ships as tools in a
+  stock Anki; the full look is the opt-in). The gate is enforced at the
+  PAINTERS, never inside `resolve()` — Preferences seeds its widgets
+  through `resolve(stored)` and writes the spec back on Save, so a
+  resolve-level gate would wipe a stored image background. Gated:
+  `top_bar._background_css` (one early return kills main/panel/bar css
+  + the panel_js weld), the toolbar/bottombar restyle, the chrome push,
+  and the whole dashboard injection (which also resets `_EDIT` so
+  toggling off mid-jiggle can't strand edit mode). NOT gated: the star
+  (strokes `var(--klaus-accent, currentColor)` so it survives on the
+  stock bar), the heatmap, every functional injection, and Klaus's own
+  windows. Corrupt values read as OFF — opposite of heatmap's rule — so
+  bad config can't surprise-restyle the app. `resolve(cfg)` validates
+  the five `background_*` keys into a
+  spec; `main_css` paints Anki's deck and overview screens (NOT the
+  congrats screen — it is sveltekit-loaded and never fires
+  `webview_will_set_content`; a dead import claiming otherwise was
+  removed 2026-08-27); `bar_css`
   paints the SAME background blurred under the toolbar. **Why a copy and
   not `backdrop-filter`**: the toolbar is its own webview, so the window
   behind it never composites into that document — real vibrancy would

@@ -167,6 +167,16 @@ check("a dragged widget stops jiggling — a CSS animation would "
 section("the wiring (source pins)")
 _SRC = open("klausmate/dashboard.py").read()
 _CODE = code_only(_SRC)
+_gate_slice = _SRC.split("def _on_webview_will_set_content")[1].split(
+    "def _on_js_message")[0]
+check("the whole dashboard is behind the KlausBook design gate — "
+      "widget editing IS design layer, so native mode gets Anki's "
+      "stock deck screen with the heatmap in its stock position",
+      "design_enabled" in _gate_slice)
+check("the off-branch clears the edit flag: toggling the layer off "
+      "mid-jiggle leaves no JS to ever send edit-off, and a stale "
+      "flag would boot a later re-enable jiggling unprompted",
+      "_EDIT = False" in _gate_slice)
 check("setup registers content, js-message and profile-open hooks",
       "webview_will_set_content.append(_on_webview_will_set_content)"
       in _CODE

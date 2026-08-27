@@ -936,10 +936,24 @@ def manage_models_dialog(setup: bool = False) -> None:
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "The background of Anki's deck, overview and congrats screens, "
-        "the accent colour, and the review heatmap. The Klaus top bar "
-        "shows the same background blurred, so it reads as frosted "
-        "glass over it.",
+        "The KlausBook design layer, the background of Anki's deck and "
+        "overview screens, the accent colour, and the review heatmap. "
+        "The Klaus top bar shows the same background blurred, so it "
+        "reads as frosted glass over it.",
+    )
+
+    # The master switch, first — everything below it on this page is
+    # either gated by it (backgrounds) or independent of it (accent,
+    # heatmap), and reading it first makes that hierarchy legible.
+    klausbook_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
+    _row(
+        appearance_layout,
+        "KlausBook design",
+        "Restyle Anki toward the KlausBook look — toolbar, backgrounds, "
+        "frosted panels, and widget editing on the deck screen. "
+        "Off, Anki keeps its native design and Klaus adds only its "
+        "tools.",
+        klausbook_cb,
     )
 
     bg_mode_combo = QComboBox()
@@ -955,7 +969,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_ctl.addWidget(bg_mode_combo)
     bg_ctl.addWidget(bg_colour_btn)
     bg_ctl.addWidget(bg_image_btn)
-    _row(
+    bg_mode_row = _row(
         appearance_layout,
         "Background",
         "Anki's own look, a solid colour, or an image of yours.",
@@ -1022,6 +1036,8 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     from . import background as _background
 
+    klausbook_cb.setChecked(_background.design_enabled(_general_cfg))
+
     # Own syncing flag, NOT ui_state["syncing"]: this block builds and
     # runs sync_background_widgets() BEFORE ui_state is assigned further
     # down the function, and a closure's free variable is only looked up
@@ -1054,18 +1070,30 @@ def manage_models_dialog(setup: bool = False) -> None:
         bg_blur_lbl.setText(f"{spec['blur']}px")
         is_image = spec["mode"] == "image"
         is_colour = spec["mode"] == "color"
-        bg_colour_btn.setEnabled(is_colour or is_image)
-        bg_image_btn.setEnabled(is_image)
+        # With the design layer off the background settings are inert —
+        # nothing paints them — so their rows grey out whole, leaving
+        # accent (Klaus's own windows) and the heatmap (a tool) live.
+        design_on = klausbook_cb.isChecked()
+        bg_mode_row.setEnabled(design_on)
+        bg_colour_btn.setEnabled(design_on and (is_colour or is_image))
+        bg_image_btn.setEnabled(design_on and is_image)
         # Whole rows, so the name and description grey out with the
         # control — a live-looking label over a dead slider was the
         # reason these read as broken rather than inactive.
-        bg_fit_row.setEnabled(is_image)
-        bg_blur_row.setEnabled(is_image)
+        bg_fit_row.setEnabled(design_on and is_image)
+        bg_blur_row.setEnabled(design_on and is_image)
+        bg_image_lbl.setEnabled(design_on)
         bg_image_lbl.setText(
             f"Image: {spec['image']}" if spec["image"]
             else ("No image chosen yet." if is_image else "")
         )
         bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
+
+    def on_design_toggled(_checked: bool) -> None:
+        # Live-preview like every appearance edit, then re-grey the
+        # background rows the switch governs.
+        appearance_changed()
+        sync_background_widgets()
 
     def on_bg_mode_changed(_i: int) -> None:
         if _bg_state["syncing"]:
@@ -2182,6 +2210,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
         cfg["heatmap_enabled"] = bool(heatmap_cb.isChecked())
+        cfg["klausbook_design"] = bool(klausbook_cb.isChecked())
         _pkg().write_config(cfg)
 
     def mark_dirty() -> None:
@@ -2235,6 +2264,11 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
             "heatmap_enabled": bool(heatmap_cb.isChecked()),
+            # Same expression save_general writes. The design gates all
+            # read through effective_cfg and their default is OFF, so a
+            # preview dict missing this key would strip the whole look
+            # on the first blur nudge.
+            "klausbook_design": bool(klausbook_cb.isChecked()),
             # The dashboard reads its order through effective_cfg too;
             # Preferences has no order UI, so carry the stored value —
             # read live per tick, in case the dashboard writes mid-preview.
@@ -2454,6 +2488,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
     heatmap_cb.toggled.connect(lambda _checked: appearance_changed())
+    klausbook_cb.toggled.connect(on_design_toggled)
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)

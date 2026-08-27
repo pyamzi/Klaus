@@ -16,8 +16,12 @@ check("inline svg", "<svg" in html and "</svg>" in html)
 check("hand-drawn star is a stroked open path",
       'fill="none"' in html and "stroke-linejoin" in html
       and 'd="M' in html)
-check("colour comes from the CSS var, no hardcoded hex",
-      "var(--klaus-accent)" in html and "#" not in html.split("href=#")[1])
+check("colour comes from the CSS var with a currentColor fallback — "
+      "the var only exists while the design layer injects toolbar_css; "
+      "on a stock toolbar the star must inherit Anki's own link colour "
+      "rather than vanish (an unresolvable var() makes stroke invalid)",
+      "var(--klaus-accent, currentColor)" in html
+      and "#" not in html.split("href=#")[1])
 check("clicking the star opens Klaus's own settings",
       "pycmd('klausmate:settings')" in html)
 check("addressable for styling", 'id="klaus-logo"' in html)
@@ -78,7 +82,7 @@ check("rule bodies contain NO baked hex colours",
       re.search(r"#[0-9A-Fa-f]{6}", rules) is None)
 check("rule bodies reference the klaus vars", "var(--klaus-" in rules)
 check("the logo strokes a var, so it recolours too",
-      "var(--klaus-accent)" in top_bar.logo_html())
+      "var(--klaus-accent," in top_bar.logo_html())
 check("top_bar injects without a snapshot",
       "toolbar_css()" in open("klausmate/top_bar.py").read())
 
@@ -119,6 +123,31 @@ check("first paint injects the chosen background instead",
       "_background_css(bar=True)" in _inject)
 check("the star's settings command is intercepted",
       "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
+
+section("the KlausBook design gate")
+# klausbook_design (default OFF) is the master switch between "stock
+# Anki + Klaus tools" and the full KlausBook look. Every visual
+# injection into an Anki-owned surface must consult it; the functional
+# ones (star, Library link, settings pycmd) must not.
+check("the toolbar/bottombar restyle is gated — it was the one part of "
+      "the design layer no config key reached",
+      "design_enabled" in _inject)
+_bgcss = _src.split("def _background_css")[1].split("def _on_main_webview_content")[0]
+check("the background paint funnel is gated AT THE FUNNEL, not inside "
+      "background.resolve() — Preferences seeds its widgets through "
+      "resolve(stored) and writes the spec back on Save, so a "
+      "resolve-level gate would wipe a stored image background",
+      "design_enabled" in _bgcss and 'return ""' in _bgcss)
+_push = _src.split("def _push_chrome_colour")[1].split("def _addon")[0]
+check("the chrome-colour push is gated — an off state must not eval "
+      "into Anki's toolbar on every theme flip",
+      "design_enabled" in _push)
+check("the star itself is NOT gated: it survives native mode as the "
+      "one Klaus mark and the in-window Preferences entry",
+      "design_enabled" not in _src.split("def _on_left_tray")[1].split("def _on_webview_will_set_content")[0])
+check("the dead congrats import is gone for good — that class does not "
+      "exist in this Anki and the congrats page never fires this hook",
+      "CongratsPage" not in _src and "deckdescription" not in _src)
 
 section("one layer (Anki's fancy toolbar card must be flattened)")
 # Anki's body.fancy paints .toolbar as an elevated card (background,

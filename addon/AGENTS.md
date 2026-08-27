@@ -225,6 +225,9 @@ Notable keys: `embedding_provider` (`voyage` default | `openai` | `ollama`),
 `curate_top_k`, `curate_min_score`, `pdf_match_threshold`, `pdf_match_agg`,
 `pdf_index_max_chunks`, `endpoint` (Ollama server URL), `runtime_auto_setup`
 (Klaus manages its own local Ollama install when needed), `image_crop_enabled`,
+`klausbook_design` (default false — master switch for the design
+layer: toolbar/bottombar restyle, backgrounds, frosted panels,
+dashboard editing; tools always work),
 `heatmap_enabled` (the review heatmap under the deck list),
 `dashboard_order` (deck-screen widget order; written by the dashboard's
 right-click → Edit Widgets mode — drag to reorder, ⊖/＋ toggle the

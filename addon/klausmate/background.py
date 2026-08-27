@@ -67,6 +67,24 @@ def preview_active() -> bool:
     return _PREVIEW_CFG is not None
 
 
+def design_enabled(cfg: Any) -> bool:
+    """Whether the KlausBook design layer restyles Anki's own surfaces.
+
+    Default OFF: Klaus ships as tools inside a stock Anki, and the
+    KlausBook look is the opt-in. Deliberately the OPPOSITE polarity of
+    heatmap.enabled's corrupt-reads-as-on rule — a corrupt config value
+    must not surprise-restyle the user's whole app, so anything that is
+    not literally True reads as off.
+
+    This gates only what Klaus does to ANKI-owned surfaces (toolbar and
+    bottom bars, backgrounds, frosted panels, the studied-line weld,
+    dashboard widget editing). Klaus's own windows keep their design in
+    both modes, and functional injections — the Library link, Curate
+    Deck, the heatmap panel, every bridge — are never gated.
+    """
+    return isinstance(cfg, dict) and cfg.get("klausbook_design") is True
+
+
 def effective_cfg(cfg: Any) -> Any:
     """What a surface should paint RIGHT NOW: the unsaved preview when
     one is armed, otherwise the stored config it was given."""
@@ -142,7 +160,7 @@ def _fit_rules(fit: str) -> str:
 
 
 def main_css(spec: dict, url: str = "") -> str:
-    """Background for Anki's own screens (deck list, overview, congrats).
+    """Background for Anki's own screens (deck list and overview).
 
     Empty string in ``theme`` mode — Klaus paints nothing and Anki's
     stock look is untouched, which is the default. Both painted modes
@@ -260,7 +278,7 @@ def panel_css(spec: dict) -> str:
         # MUST be scoped to tr.deck. Anki's own version of this rule is
         # unscoped, but it lives in deckbrowser.css and so only ever
         # reaches the deck list; ours is injected into the overview and
-        # congrats screens as well, where a bare `tr:hover td` lit up the
+        # overview screen as well, where a bare `tr:hover td` lit up the
         # overview's LAYOUT table — its cells turned into opaque white
         # slabs inside the frosted panel on hover. Anki emits deck rows as
         # <tr class='deck'> / <tr class='deck current'> (verified in

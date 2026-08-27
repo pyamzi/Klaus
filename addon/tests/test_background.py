@@ -172,7 +172,7 @@ check("the row rule is scoped to tr.deck — unscoped, it also matched the "
       "OVERVIEW's layout table and turned its cells into opaque slabs on "
       "hover, inside the frosted panel (Anki's own copy of this rule is "
       "unscoped but ships only in deckbrowser.css; ours is injected into "
-      "the overview and congrats screens too)",
+      "the overview screen too)",
       "tr:hover" not in _panels.replace("tr.deck:hover", "")
       and " .current td," not in _panels)
 _pa, _sa = _alphas(_panels, "--klaus-panel"), _alphas(_panels,
@@ -290,6 +290,26 @@ else:
     print("  SKIP  panel_js DOM behaviour (node not installed) — NOT "
           "counted as a pass")
 
+section("the KlausBook design gate (design_enabled)")
+check("default OFF: Klaus ships as tools inside a stock Anki, and the "
+      "KlausBook look is the opt-in",
+      bg.design_enabled({}) is False and bg.design_enabled(None) is False)
+check("on only when literally True",
+      bg.design_enabled({"klausbook_design": True}) is True)
+check("corrupt values read as OFF — the OPPOSITE polarity of "
+      "heatmap.enabled's corrupt-reads-as-on rule, because a corrupt "
+      "entry must not surprise-restyle the user's whole app",
+      bg.design_enabled({"klausbook_design": "yes"}) is False
+      and bg.design_enabled({"klausbook_design": 1}) is False)
+check("resolve() IGNORES the design key — the gate lives at the paint "
+      "funnel (top_bar._background_css), never in resolve: Preferences "
+      "seeds its widgets through resolve(stored config) and writes the "
+      "spec back on Save, so a resolve-level gate would display "
+      "'theme' for a stored image background and Save would silently "
+      "WIPE it",
+      bg.resolve({"background_mode": "image", "background_image": "x.png",
+                  "klausbook_design": False})["mode"] == "image")
+
 _colour_panels = bg.panel_css(bg.resolve(
     {"background_mode": "color", "background_color": "#123456"}))
 check("panels look the SAME whichever background is painted — colour "
@@ -312,7 +332,7 @@ check("an out-of-range blur falls back rather than emitting junk CSS",
       f"blur({bg.DEFAULT_BLUR}px)" in bg.panel_css(
           {"mode": "image", "blur": 9999}))
 check("main_css ships the panel rules with the image background, so one "
-      "injection covers deck list, overview and congrats alike",
+      "injection covers the deck list and the overview alike",
       "backdrop-filter" in bg.main_css(_img, "pic.png")
       and "backdrop-filter" not in bg.main_css(
           bg.resolve({"background_mode": "color"})))

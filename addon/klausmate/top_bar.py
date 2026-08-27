@@ -59,13 +59,21 @@ def logo_html() -> str:
     own Preferences (``pycmd('klausmate:settings')``, intercepted in
     :func:`_on_js_message`) — Anki's Decks link sits right beside it,
     so the star is better spent on the settings Anki has no entry for."""
+    # currentColor fallback: --klaus-accent only exists while the
+    # KlausBook design layer injects toolbar_css. On a stock toolbar
+    # (design off) the star instead strokes in the link's own computed
+    # colour — Anki's native foreground — rather than vanishing, since
+    # an unresolvable var() makes the stroke invalid. The inline
+    # vertical-align seats the 26px mark among stock text links, where
+    # toolbar_css's #klaus-logo rules are absent.
     return (
         '<a id="klaus-logo" href=# onclick="return pycmd(\'klausmate:settings\')" '
         'title="Klaus settings" aria-label="Klaus settings">'
         '<svg width="26" height="26" viewBox="0 0 26 26" '
+        'style="vertical-align: middle" '
         'xmlns="http://www.w3.org/2000/svg">'
         f'<path d="{_STAR_PATH}" fill="none" '
-        'stroke="var(--klaus-accent)" stroke-width="2.3" '
+        'stroke="var(--klaus-accent, currentColor)" stroke-width="2.3" '
         'stroke-linecap="round" stroke-linejoin="round"/>'
         "</svg></a>"
     )
@@ -127,6 +135,15 @@ def _push_chrome_colour() -> None:
         from aqt import mw
         from aqt.qt import QTimer
 
+        from . import background
+
+        # With the design layer off there is nothing consuming the
+        # variable, and an off state should not be evaling into Anki's
+        # toolbar at all. A toggle rebuilds the toolbar page outright,
+        # so no stale value survives being un-pushed.
+        if not background.design_enabled(background.effective_cfg(_config())):
+            return
+
         def _send() -> None:
             try:
                 web = getattr(getattr(mw, "toolbar", None), "web", None)
@@ -170,6 +187,13 @@ def _background_css(bar: bool, bottom: bool = False) -> str:
 
         # effective_cfg: an unsaved Preferences preview wins over stored
         # config, so appearance edits render live before Save.
+        # The design gate lives HERE, at the paint funnel, and NOT in
+        # background.resolve(): Preferences seeds its widgets through
+        # resolve(stored config) and writes that spec back on Save, so
+        # a resolve-level gate would show "theme" for a stored image
+        # background and Save would silently wipe it.
+        if not background.design_enabled(background.effective_cfg(_config())):
+            return ""
         spec = background.resolve(background.effective_cfg(_config()))
         url = background.image_url(_addon(), spec["image"])
         if bar:
@@ -181,21 +205,20 @@ def _background_css(bar: bool, bottom: bool = False) -> str:
 
 
 def _on_main_webview_content(web_content: Any, context: Any) -> None:
-    """Paint the custom background on Anki's own screens (deck list,
-    overview, congrats). The reviewer is deliberately excluded — a
-    wallpaper behind cards fights the card styling."""
+    """Paint the custom background on Anki's own screens (deck list
+    and overview). The reviewer is deliberately excluded — a wallpaper
+    behind cards fights the card styling."""
     try:
         from aqt.deckbrowser import DeckBrowser
         from aqt.overview import Overview
 
-        targets: tuple = (DeckBrowser, Overview)
-        try:
-            from aqt.deckdescription import CongratsPage  # type: ignore
-
-            targets = targets + (CongratsPage,)
-        except Exception:
-            pass
-        if not isinstance(context, targets):
+        # No congrats screen here on purpose: aqt's deck-description
+        # module still exists but the congrats-page class is gone from
+        # it in this Anki, and the congrats page itself is a sveltekit
+        # page loaded via load_url — it never goes through stdHtml, so
+        # this hook never fires for it. An import of that dead symbol
+        # lived here for a while, silently failing on every draw.
+        if not isinstance(context, (DeckBrowser, Overview)):
             return
         css = _background_css(bar=False)
         if css:
@@ -261,6 +284,18 @@ def _on_left_tray(content: list, toolbar: Any) -> None:
 def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
     try:
         from aqt.toolbar import TopToolbar
+
+        from . import background
+
+        # The KlausBook design gate. Without it these two sheets were
+        # injected UNCONDITIONALLY — the one part of the design layer
+        # no config key reached. The _background_css calls below gate
+        # themselves through the same check; this return also covers
+        # the theme.*_css restyles.
+        if not background.design_enabled(
+            background.effective_cfg(_config())
+        ):
+            return
 
         # The bottom toolbar (deck-browser/overview buttons) gets the
         # SAME chrome + frost as the top, so the window is bracketed by
