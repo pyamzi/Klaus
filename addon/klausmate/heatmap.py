@@ -288,16 +288,43 @@ def _cells_html(columns: list, levels: list) -> str:
 
 
 def _stats_html(stats: dict) -> str:
+    # The chips wrap on a narrow window, so every label must survive
+    # being read alone — "best" and "of days" had no noun without
+    # their neighbours.
     chips = (
         (stats["streak_cur"], "day streak"),
-        (stats["streak_max"], "best"),
+        (stats["streak_max"], "best streak"),
         (stats["daily_avg"], "cards/day"),
-        (f"{stats['pct_days_active']}%", "of days"),
+        (f"{stats['pct_days_active']}%", "of days studied"),
     )
     return "".join(
         f'<span class="klaus-hm-stat"><b>{value}</b>{label}</span>'
         for value, label in chips
     )
+
+
+def _legend_titles(levels: list) -> list:
+    """One tooltip per legend swatch: the real count band each colour
+    step stands for, read off the very cut-offs :func:`level_for`
+    colours by, so the legend can never disagree with the grid it
+    explains. Ranges take an en dash, only the outer bands name the
+    unit, and a band one count wide is just its number.
+    """
+    titles = ["No reviews"]
+    low = 1
+    for index, threshold in enumerate(levels[:-1]):
+        band = str(low) if low == threshold else f"{low}–{threshold}"
+        if index == 0:
+            band = (
+                _plural(low, "review") if low == threshold
+                else f"{band} reviews"
+            )
+        titles.append(band)
+        low = threshold + 1
+    # The top step is open above: level_for files every count past the
+    # second-to-last cut-off here, so this band has no upper edge.
+    titles.append(f"{low}+ reviews")
+    return titles
 
 
 def heatmap_html(
@@ -327,8 +354,10 @@ def heatmap_html(
         f'{_WEEKDAYS[row] if row in _WEEKDAY_LABEL_ROWS else ""}</span>'
         for row in range(7)
     )
+    titles = _legend_titles(levels)
     legend = "".join(
-        f'<span class="klaus-hm-c l{step}"></span>' for step in range(5)
+        f'<span class="klaus-hm-c l{step}" title="{titles[step]}"></span>'
+        for step in range(5)
     )
 
     return (
@@ -347,7 +376,11 @@ def heatmap_html(
         f'<div class="klaus-hm-cells">{_cells_html(columns, levels)}</div>'
         "</div></div>"
         '<div class="klaus-hm-legend">'
-        f'<span>Less</span>{legend}<span>More</span>'
+        # Not GitHub's "Less … More": this ramp is PERSONAL — quartiles
+        # of the user's own daily average — so the legend says what the
+        # ink means for THIS user, from nothing to a full day's work.
+        f'<span>0</span>{legend}'
+        f'<span>a full day ({levels[-1]})</span>'
         "</div>"
         "</div>"
     )
@@ -443,8 +476,14 @@ def heatmap_css() -> str:
         f" display: grid; grid-auto-flow: column;"
         f" grid-auto-columns: {week}px; height: 11px;"
         " }"
+        # Month and weekday labels are the smallest type in the app,
+        # sitting on a frosted panel over an ARBITRARY user photo — so
+        # they wear full text colour: muted's contrast was AA-checked
+        # against bg/surface, never against a photo behind a 50% tint.
+        # Only the stat labels stay muted; their bold accent numbers
+        # anchor them.
         " .klaus-hm-m {"
-        " font-size: 10px; color: var(--klaus-hm-muted);"
+        " font-size: 10px; color: var(--klaus-hm-text);"
         " white-space: nowrap; overflow: visible; line-height: 11px;"
         " }"
         " .klaus-hm-wd {"
@@ -452,7 +491,7 @@ def heatmap_css() -> str:
         f" row-gap: {GAP}px;"
         " }"
         " .klaus-hm-w {"
-        " font-size: 10px; color: var(--klaus-hm-muted);"
+        " font-size: 10px; color: var(--klaus-hm-text);"
         f" line-height: {CELL}px; text-align: right; white-space: nowrap;"
         " }"
         " .klaus-hm-cells {"
@@ -482,10 +521,12 @@ def heatmap_css() -> str:
         " .klaus-hm-c.hit:hover {"
         " outline: 1px solid var(--klaus-hm-accent); outline-offset: 1px;"
         " }"
+        # The legend line is information now (0 → a full day), not
+        # decoration — full text colour, same reason as the labels.
         " .klaus-hm-legend {"
         " display: flex; align-items: center; justify-content: flex-end;"
         f" gap: {GAP}px; margin-top: 9px;"
-        " font-size: 10px; color: var(--klaus-hm-muted);"
+        " font-size: 10px; color: var(--klaus-hm-text);"
         " }"
         " .klaus-hm-legend span:first-child { margin-right: 3px; }"
         " .klaus-hm-legend span:last-child { margin-left: 3px; }"

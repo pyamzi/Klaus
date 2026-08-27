@@ -186,8 +186,11 @@ check("cells carry a plain-language tooltip",
       and "No reviews" in _html)
 check("one review is not '1 reviews'",
       "1 review ·" in heatmap.heatmap_html({100: 1}, {}, 100, _stats, 5, 0))
-check("the stats line is in the panel",
-      "day streak" in _html and "cards/day" in _html and "of days" in _html)
+check("the stats line is in the panel, and every chip label survives "
+      "being read alone — the chips wrap on a narrow window, where "
+      "'best' and 'of days' had no noun to lean on",
+      "day streak" in _html and "best streak" in _html
+      and "cards/day" in _html and "of days studied" in _html)
 _cells = heatmap.build_columns({99: 40}, {101: 6}, 100, 14, 7)
 # Anchored so `klaus-hm-cells` and `klaus-hm-corner` cannot be counted
 # as cells: the class must end right after the `c`.
@@ -205,6 +208,35 @@ check("out-of-window slots render as padding, so a window that does "
       "klaus-hm-c pad" in _ragged)
 check("weekday labels appear on alternate rows only",
       _html.count(">Mon<") == 1 and ">Tue<" not in _html)
+
+# The legend. Its ramp is PERSONAL — quartiles of the user's own daily
+# average — so expectations are computed from ramp_levels on this
+# test's own stats, never hardcoded: the real-collection section below
+# renders whatever the live average is.
+_lv = heatmap.ramp_levels(_stats["daily_avg"])
+check("the legend runs 0 → 'a full day (N)' with N computed from THIS "
+      "user's ramp — GitHub's Less/More says nothing about a ramp that "
+      "is quartiles of the user's own daily average",
+      "<span>0</span>" in _html
+      and f"a full day ({_lv[-1]})" in _html
+      and "Less" not in _html and "More" not in _html)
+check("each legend swatch's tooltip is the exact count band it stands "
+      "for, derived from the same cut-offs level_for colours by",
+      'title="No reviews"' in _html
+      and f'title="1–{_lv[0]} reviews"' in _html
+      and f'title="{_lv[-2] + 1}+ reviews"' in _html)
+_legend_body = re.search(r'<div class="klaus-hm-legend">(.*?)</div>', _html)
+check("still exactly five swatches in the legend, one per colour step",
+      _legend_body is not None
+      and _legend_body.group(1).count("klaus-hm-c") == 5)
+check("the audit's worked example: levels [28,56,83,111] spell their "
+      "bands with en dashes, only the outer bands naming the unit",
+      heatmap._legend_titles([28, 56, 83, 111])
+      == ["No reviews", "1–28 reviews", "29–56", "57–83", "84+ reviews"])
+check("a tiny ramp still reads: a band one count wide is just its "
+      "number, and one review is never '1 reviews'",
+      heatmap._legend_titles([1, 2, 3, 4])
+      == ["No reviews", "1 review", "2", "3", "4+ reviews"])
 
 
 # ----------------------------------------------------------------- css
@@ -255,6 +287,31 @@ check("all four done-steps and all four due-steps are defined",
 check("scheduled days are hollow, not just paler — 'done' and 'to "
       "come' must not read as the same weight of ink",
       "inset 0 0 0 1px var(--klaus-hm-ring)" in _css)
+
+
+def _rule(selector):
+    """The declaration block of *selector*'s own rule in _css."""
+    _m = re.search(re.escape(selector) + r"\s*\{([^{}]*)\}", _css)
+    return _m.group(1) if _m else ""
+
+
+check("month and weekday labels wear FULL text colour at their 10px — "
+      "muted's contrast was AA-checked against bg/surface, never "
+      "against an arbitrary photo behind a 50% tint, and these are the "
+      "smallest words in the app on exactly that glass",
+      "color: var(--klaus-hm-text)" in _rule(".klaus-hm-m")
+      and "color: var(--klaus-hm-text)" in _rule(".klaus-hm-w")
+      and "font-size: 10px" in _rule(".klaus-hm-m")
+      and "--klaus-hm-muted" not in _rule(".klaus-hm-m")
+      and "--klaus-hm-muted" not in _rule(".klaus-hm-w"))
+check("the legend line too — it carries information now (0 → a full "
+      "day), not boilerplate",
+      "color: var(--klaus-hm-text)" in _rule(".klaus-hm-legend")
+      and "--klaus-hm-muted" not in _rule(".klaus-hm-legend"))
+check("the stat labels alone STAY muted — their bold accent numbers "
+      "anchor them — so the muted token must stay defined",
+      "color: var(--klaus-hm-muted)" in _rule(".klaus-hm-stat")
+      and "--klaus-hm-muted:" in _css)
 
 section("the panel family")
 _frosted = background.panel_css(background.resolve(
