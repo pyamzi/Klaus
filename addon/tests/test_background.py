@@ -225,6 +225,11 @@ check("...in RTL too: Anki's [dir=rtl] hover variant is its most "
 check("the pill radius is neutralised — first/last-child rounding both "
       "fire on a single colSpan cell",
       "border-radius: 0 !important" in _studied_rule)
+check("the line reads as a status footnote, not a peer of the deck "
+      "names — colour demoted to Anki's own muted foreground token "
+      "(never a baked hex), so night mode flips the shade for free",
+      re.search(r"color: var\(--fg-[^;]*!important", _studied_rule)
+      is not None)
 _pad = re.search(
     r"padding: ([\d.]+)em 12px ([\d.]+)em", _studied_rule)
 check("padding is a RELATIONSHIP, not two magic numbers: generous air "

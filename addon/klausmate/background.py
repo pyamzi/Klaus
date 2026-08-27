@@ -317,6 +317,10 @@ def panel_css(spec: dict) -> str:
         " border-radius: 0 !important;"
         " padding: 1.4em 12px 0.5em 12px !important;"
         " border: none !important;"
+        # Muted on purpose: the line is a status footnote, not a peer
+        # of the deck names above it. Anki's own token, never a baked
+        # hex, so night mode flips the shade for free.
+        " color: var(--fg-subtle, var(--fg-faint)) !important;"
         " text-align: center !important;"
         " }"
         # Anki gives the line margin:2em 0 for life outside the table.
