@@ -704,6 +704,17 @@ def _on_deck_browser_content(deck_browser: Any, content: Any) -> None:
     try:
         from aqt import mw
 
+        # Deck-screen widgets belong to the KlausBook design layer: with
+        # it off, Anki's deck screen is left exactly as Anki draws it.
+        #
+        # Gated HERE and not inside enabled(), for the same reason the
+        # background gate is not inside resolve(): Preferences seeds
+        # heatmap_cb from enabled(stored config) and save_general writes
+        # that state back, so folding the design gate into enabled()
+        # would uncheck the switch and quietly persist heatmap_enabled
+        # False — losing a preference the user never touched.
+        if not background.design_enabled(_config()):
+            return
         col = getattr(mw, "col", None)
         if col is None:
             return
@@ -720,7 +731,8 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
 
         if not isinstance(context, DeckBrowser):
             return
-        if not enabled(_config()):
+        cfg = _config()
+        if not background.design_enabled(cfg) or not enabled(cfg):
             return
         web_content.head += "<style>" + heatmap_css() + "</style>"
     except Exception as exc:

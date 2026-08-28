@@ -1017,13 +1017,10 @@ def toolbar_css() -> str:
     .header .hitem {{ {_chip_base_rules()} }}
     .header .hitem:hover {{ {_chip_hover_rules()} }}
     .header .hitem:active {{ {_chip_active_rules()} }}
-    #klaus-logo {{
-        display: flex;
-        align-items: center;
-        padding: 0 8px 0 2px;
-        cursor: pointer;
-    }}
-    #klaus-logo svg {{ display: block; }}
+    /* #klaus-logo carries its own geometry inline (top_bar.logo_html)
+       so the star sits in the SAME spot whether or not this sheet is
+       injected — the design gate must never move the mark. Nothing
+       mode-specific is left to say about it here. */
     """
 
 

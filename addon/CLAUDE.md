@@ -267,8 +267,14 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   toggling off mid-jiggle can't strand edit mode). NOT gated: the star
   (strokes `var(--klaus-accent, currentColor)` so it survives on the
   stock bar), the heatmap, every functional injection, and Klaus's own
-  windows. Corrupt values read as OFF — opposite of heatmap's rule — so
-  bad config can't surprise-restyle the app. `resolve(cfg)` validates
+  windows. In native mode the deck screen draws NO Klaus widgets: the
+  heatmap's two injections are gated too (at the injections, never
+  inside `enabled()` — Preferences seeds its switch from
+  `enabled(stored)` and saves it back, so gating there would persist a
+  `heatmap_enabled` False the user never chose). The star is the one
+  survivor, and it carries its own geometry inline (`logo_html`) so the
+  gate cannot move it. Corrupt values read as OFF — opposite of
+  heatmap's rule — so bad config can't surprise-restyle the app. `resolve(cfg)` validates
   the five `background_*` keys into a
   spec; `main_css` paints Anki's deck and overview screens (NOT the
   congrats screen — it is sveltekit-loaded and never fires

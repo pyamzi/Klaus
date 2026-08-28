@@ -59,18 +59,33 @@ def logo_html() -> str:
     own Preferences (``pycmd('klausmate:settings')``, intercepted in
     :func:`_on_js_message`) — Anki's Decks link sits right beside it,
     so the star is better spent on the settings Anki has no entry for."""
+    # The SEAT IS INLINE, and that is the point: these declarations
+    # used to live in theme.toolbar_css's #klaus-logo block, which the
+    # KlausBook design gate switches off — so the star moved every time
+    # the design layer did. Carrying its own geometry means one
+    # definition serves both modes and the mark cannot shift.
+    #
+    # inline-flex, not flex: as a flex item (the KlausBook tray) it is
+    # blockified to flex anyway, but on a stock toolbar's inline run it
+    # must not claim its own line. vertical-align centres it against
+    # the text links there, and is simply ignored once it IS a flex
+    # item. display:block on the svg drops the inline descender gap.
+    #
     # currentColor fallback: --klaus-accent only exists while the
-    # KlausBook design layer injects toolbar_css. On a stock toolbar
-    # (design off) the star instead strokes in the link's own computed
-    # colour — Anki's native foreground — rather than vanishing, since
-    # an unresolvable var() makes the stroke invalid. The inline
-    # vertical-align seats the 26px mark among stock text links, where
-    # toolbar_css's #klaus-logo rules are absent.
+    # design layer injects toolbar_css. On a stock toolbar the star
+    # strokes in the link's own computed colour — Anki's native
+    # foreground — rather than vanishing, since an unresolvable var()
+    # makes the stroke invalid.
+    seat = (
+        "display: inline-flex; align-items: center;"
+        " vertical-align: middle; padding: 0 8px 0 2px; cursor: pointer"
+    )
     return (
-        '<a id="klaus-logo" href=# onclick="return pycmd(\'klausmate:settings\')" '
+        f'<a id="klaus-logo" style="{seat}" '
+        'href=# onclick="return pycmd(\'klausmate:settings\')" '
         'title="Klaus settings" aria-label="Klaus settings">'
         '<svg width="26" height="26" viewBox="0 0 26 26" '
-        'style="vertical-align: middle" '
+        'style="display: block" '
         'xmlns="http://www.w3.org/2000/svg">'
         f'<path d="{_STAR_PATH}" fill="none" '
         'stroke="var(--klaus-accent, currentColor)" stroke-width="2.3" '

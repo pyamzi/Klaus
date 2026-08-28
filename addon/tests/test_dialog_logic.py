@@ -885,7 +885,8 @@ check("Fit and Blur disable as WHOLE rows, labels included — and only "
       "background settings are inert whatever the mode",
       "bg_fit_row.setEnabled(design_on and is_image)" in _src2
       and "bg_blur_row.setEnabled(design_on and is_image)" in _src2
-      and "bg_mode_row.setEnabled(design_on)" in _src2)
+      and "bg_mode_row.setEnabled(design_on)" in _src2
+      and "heatmap_row.setEnabled(design_on)" in _src2)
 check("nav geometry is pure view geometry: setSizeHint rows + list "
       "setSpacing + an overshooting fixed height — nothing QSS-derived "
       "(three pill-era fixes fought polish timing; a single list view "

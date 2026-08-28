@@ -936,10 +936,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "The KlausBook design layer, the background of Anki's deck and "
-        "overview screens, the accent colour, and the review heatmap. "
-        "The Klaus top bar shows the same background blurred, so it "
-        "reads as frosted glass over it.",
+        "The KlausBook design layer and everything it draws — the "
+        "background of Anki's deck and overview screens, the frosted "
+        "top bar, and the deck-screen widgets — plus the accent colour, "
+        "which styles Klaus's own windows in either mode.",
     )
 
     # The master switch, first — everything below it on this page is
@@ -1013,12 +1013,12 @@ def manage_models_dialog(setup: bool = False) -> None:
     # frosted-panel look, so it belongs on this page rather than under
     # General's feature toggles.
     heatmap_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
+    heatmap_row = _row(
         appearance_layout,
         "Review heatmap",
         "Show a year of study activity under the deck list, with the "
         "next four weeks of scheduled cards. Click a day to open it in "
-        "Browse.",
+        "Browse. Needs the KlausBook design.",
         heatmap_cb,
     )
 
@@ -1070,11 +1070,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         bg_blur_lbl.setText(f"{spec['blur']}px")
         is_image = spec["mode"] == "image"
         is_colour = spec["mode"] == "color"
-        # With the design layer off the background settings are inert —
-        # nothing paints them — so their rows grey out whole, leaving
-        # accent (Klaus's own windows) and the heatmap (a tool) live.
+        # With the design layer off the background settings and the
+        # deck-screen widgets are inert — nothing paints them — so their
+        # rows grey out whole. Only the accent survives: it colours
+        # Klaus's own windows, which keep their design in both modes.
         design_on = klausbook_cb.isChecked()
         bg_mode_row.setEnabled(design_on)
+        heatmap_row.setEnabled(design_on)
         bg_colour_btn.setEnabled(design_on and (is_colour or is_image))
         bg_image_btn.setEnabled(design_on and is_image)
         # Whole rows, so the name and description grey out with the

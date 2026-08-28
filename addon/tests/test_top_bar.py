@@ -1,6 +1,7 @@
 """Headless tests for the Klaus top bar (toolbar restyle + star logo)."""
 import importlib
 import json
+import re
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -32,7 +33,21 @@ check("no unsubstituted tokens", "{c[" not in css and "{{" not in css)
 check("styles .header and .hitem", ".header" in css and ".hitem" in css)
 check("RESTYLE ONLY — hides nothing",
       "display: none" not in css and "display:none" not in css)
-check("logo slot styled", "#klaus-logo" in css)
+# The star's geometry used to live in this sheet, which the KlausBook
+# design gate switches off — so the mark moved whenever the design
+# layer did. It now travels inline on the element (logo_html), and this
+# sheet must NOT re-declare it, or the two could drift apart again.
+# Comments are stripped first: a CSS comment naming #klaus-logo would
+# otherwise satisfy this pin with no rule present (prose has faked four
+# pins in this repo already).
+_css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+check("the star's seat is NOT in this sheet — it rides inline so the "
+      "design gate cannot move the mark",
+      "#klaus-logo" not in _css_code)
+check("...and logo_html carries the whole seat itself",
+      all(prop in top_bar.logo_html()
+          for prop in ("display: inline-flex", "align-items: center",
+                       "vertical-align: middle", "padding: 0 8px 0 2px")))
 
 section("theme-reactive (a baked palette went stale on toggle)")
 # Anki's theme switch does NOT re-run webview_will_set_content — it only

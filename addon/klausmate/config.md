@@ -168,15 +168,19 @@ wouldn't already need.
 - **heatmap_enabled**: `true` (default) draws the review heatmap — a
   year of study activity, plus the next four weeks of scheduled cards —
   under the deck list. Clicking a day opens it in Browse. `false`
-  removes it entirely, hooks and query included.
+  removes it entirely, hooks and query included. **Needs
+  `klausbook_design`**: the heatmap is a deck-screen widget, so native
+  mode leaves Anki's deck screen stock and this setting waits (it is
+  never rewritten by the design switch, so it comes back as you left
+  it).
 - **dashboard_order**: the order of the deck-screen widgets, top to
   bottom (default `["decks", "heatmap"]`). Normally written by the
   dashboard itself: right-click a widget → *Edit Widgets…*, then drag
   to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
   the widget's own toggle, e.g. `heatmap_enabled`). Unknown entries are
   ignored; missing ones reappear in default order. Inert while
-  `klausbook_design` is off — the widgets render in Anki's stock
-  layout, and the saved order waits for the design layer.
+  `klausbook_design` is off — native mode draws no widgets at all, and
+  the saved order waits for the design layer.
 
 All of these live in **KlausMate Preferences → Appearance**;
 press **Save** and they apply immediately (no restart).

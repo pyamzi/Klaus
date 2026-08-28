@@ -421,6 +421,25 @@ check("switched off, nothing is rendered and no query runs",
           {"heatmap_enabled": False}) == ""
       )
 
+section("the KlausBook design gate")
+_HM_SRC = open("klausmate/heatmap.py", encoding="utf8").read()
+_render_slice = _HM_SRC.split("def _on_deck_browser_content")[1].split(
+    "def _on_webview_will_set_content")[0]
+_css_slice = _HM_SRC.split("def _on_webview_will_set_content")[1].split(
+    "def _open_day")[0]
+check("the panel is a deck-screen WIDGET, so it renders only with the "
+      "KlausBook design layer on — native mode leaves Anki's deck "
+      "screen exactly as Anki draws it",
+      "design_enabled" in _render_slice)
+check("its stylesheet is gated the same way, so the css can never "
+      "outlive the markup it styles",
+      "design_enabled" in _css_slice)
+check("the gate is NOT folded into enabled(): Preferences seeds its "
+      "switch from enabled(stored) and saves that state back, so "
+      "gating there would uncheck the switch and quietly persist "
+      "heatmap_enabled False — losing an untouched preference",
+      heatmap.enabled({"klausbook_design": False}) is True)
+
 section("bridge")
 check("a click is deferred, never run inside the webchannel handler",
       "QTimer.singleShot" in open("klausmate/heatmap.py", encoding="utf8").read())
