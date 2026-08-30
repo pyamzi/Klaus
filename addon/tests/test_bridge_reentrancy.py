@@ -18,8 +18,11 @@ QBackingStore::flush during a Python QDialog's exec()):
    Tahoe's window-appear animation and flushes a backing store whose
    paint device is null. Window-modal dlg.open() (what Anki's own
    dialogs use) and popup QMenu.exec take different AppKit paths and
-   never crashed. Preferences now opens with dlg.open(), pinned below;
-   the remaining app-modal exec sites are tracked on the board.
+   never crashed. Preferences now opens NON-MODAL with dlg.show() —
+   the same normal window path as open(), minus the modality (dropped
+   2026-08-30 so it works as a live control panel beside the main
+   window) — pinned below; the remaining app-modal exec sites are
+   tracked on the board.
 
 The crash is invisible to the rest of the suite (Qt widgets are never
 constructed headlessly), so these are source pins. They are deliberately
@@ -217,16 +220,38 @@ check("the refresh a widget-add triggers is deferred — it rebuilds the "
       and "\n        _refresh()" not in _DASH)
 
 
-section("manage_models: Preferences opens window-modal, never exec()")
+section("manage_models: Preferences opens non-modal, never exec()")
 # Seven identical segfaults (macOS 26.5 + Qt 6.11) killed this dialog's
-# app-modal exec() from three different dispatch shapes; dlg.open() is
-# the fix. Nothing consumed exec()'s return value — every close path is
-# callback-driven — so this pin has no behavioural cost to hold.
+# app-modal exec() from three different dispatch shapes; the normal
+# window path (first window-modal open(), non-modal show() since
+# 2026-08-30 — same path, no modality) is the fix. Nothing consumed
+# exec()'s return value — every close path is callback-driven — so
+# this pin has no behavioural cost to hold. anki_stubs.code_only (the
+# strings-stripped variant, NOT this file's own comments-only
+# _code_only — that one deliberately keeps strings for its ".exec()"
+# spelling scan): the show/open story is told in comments and
+# docstrings right next to the call.
+from anki_stubs import code_only as _no_prose  # noqa: E402
+
 _MM_SRC = open("klausmate/manage_models.py").read()
-check("the Preferences dialog is shown with dlg.open()",
-      "dlg.open()" in _MM_SRC)
+_MM_CODE2 = _no_prose(_MM_SRC)
+check("the Preferences dialog is shown non-modal with dlg.show()",
+      "dlg.show()" in _MM_CODE2 and "dlg.open()" not in _MM_CODE2)
 check("no app-modal dlg.exec() remains in manage_models",
-      "dlg.exec()" not in _MM_SRC)
+      "dlg.exec()" not in _MM_CODE2)
+# Non-modal consequences, each load-bearing: a second star click must
+# front the live window (not stack a second dialog over the same
+# preview seam), and a profile switch must close it before the
+# collection goes away.
+check("a live Preferences window is a singleton (front, don't stack)",
+      "_OPEN_DLG.raise_()" in _MM_CODE2
+      and "_OPEN_DLG.activateWindow()" in _MM_CODE2
+      and "_OPEN_DLG=dlg" in _MM_CODE2.replace(" ", ""))
+check("profile_will_close rejects the open dialog (and the handler is "
+      "removed again on finished)",
+      "profile_will_close.append(_on_profile_will_close)" in _MM_CODE2
+      and "profile_will_close.remove(_on_profile_will_close)" in _MM_CODE2
+      and "dlg.reject()" in _MM_CODE2)
 
 section("pdf_drive: the toolbar Library link (third dispatch shape)")
 # open_drive is the Library link's callback — toolbar links are

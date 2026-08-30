@@ -242,6 +242,13 @@ _BARE_DIALOG_PROBE = False
 _PROBE_STAGE = 3
 _PROBE_KEEPALIVE: list = []
 
+# The one live Preferences window (None when closed). Non-modal since
+# 2026-08-30, so the star can be clicked while it is already open —
+# this is what lets that front the existing window instead of stacking
+# a second one (two dialogs would fight over the preview seam and race
+# each other's Save).
+_OPEN_DLG: Any = None
+
 
 def _run_dialog_probe() -> None:
     """Staged bisection of the Preferences backing-store crash. Each stage
@@ -343,6 +350,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         except Exception as exc:
             print(f"[klausmate] dialog probe failed: {exc}")
         return
+
+    global _OPEN_DLG
+    if _OPEN_DLG is not None:
+        try:
+            if _OPEN_DLG.isVisible():
+                _OPEN_DLG.raise_()
+                _OPEN_DLG.activateWindow()
+                return
+        except Exception:
+            pass  # a dead/half-torn-down window: fall through and rebuild
+        _OPEN_DLG = None
 
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("KlausMate Preferences")
@@ -2661,6 +2679,35 @@ def manage_models_dialog(setup: bool = False) -> None:
     # outlive the dialog. No-op unless a preview is actually armed.
     dlg.finished.connect(lambda _result: revert_appearance_preview())
 
+    def _on_profile_will_close() -> None:
+        # A NON-MODAL window can outlive its profile — close it before
+        # the collection goes away. reject() routes through finished →
+        # revert_appearance_preview, so an armed preview cannot leak
+        # into the next profile either.
+        try:
+            dlg.reject()
+        except Exception:
+            pass
+
+    try:
+        from aqt import gui_hooks as _gui_hooks
+
+        _gui_hooks.profile_will_close.append(_on_profile_will_close)
+    except Exception as _exc:
+        print(f"[klausmate] preferences profile guard failed: {_exc}")
+
+    def _forget_dialog(_result: int) -> None:
+        global _OPEN_DLG
+        _OPEN_DLG = None
+        try:
+            from aqt import gui_hooks as _gui_hooks2
+
+            _gui_hooks2.profile_will_close.remove(_on_profile_will_close)
+        except Exception:
+            pass
+
+    dlg.finished.connect(_forget_dialog)
+
     rebuild_install_method_buttons()
     refresh()
     if setup:
@@ -2670,7 +2717,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         else:
             # Server already fine — jump to getting a first model.
             QTimer.singleShot(0, maybe_auto_pull_starter)
-    # open(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
+    # show(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
     # Qt 6.11, showing this dialog application-modal via exec()
     # segfaulted in its first backing-store flush
     # (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush)
@@ -2678,9 +2725,15 @@ def manage_models_dialog(setup: bool = False) -> None:
     # QAction, and a clean QTimer slot — so the app-modal nested loop
     # (Qt runs it through AppKit's NSApp modal-session machinery, which
     # races Tahoe's window-appear animation) is the trigger, not how the
-    # dialog was opened. Window-modal open() takes the normal window
-    # path, like Anki's own dialogs and our QMenus, none of which crash.
+    # dialog was opened. The window-modal open() that replaced exec()
+    # takes the normal window path; show() is that same path minus the
+    # modality — dropped on purpose (2026-08-30, Pouya): Preferences is
+    # a live control panel now, used BESIDE the main window while
+    # appearance edits preview on it (and the on-screen gradient
+    # handles need the deck screen clickable at all). _OPEN_DLG above
+    # keeps it a singleton; profile_will_close closes it in time.
     # Nothing here consumed exec()'s return value; every close path is
     # already callback-driven (confirm_close / save_all).
-    dlg.open()
+    _OPEN_DLG = dlg
+    dlg.show()
 

@@ -283,7 +283,14 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
         if isinstance(context, Reviewer):
             css = _reviewer_background_css()
             if css:
-                web_content.head += "<style>" + css + "</style>"
+                # The id matters: refresh() previews live edits into
+                # this SAME tag by id (reviewer_style_push_js), so the
+                # build-time sheet and every later push are one tag —
+                # a push can restyle or even empty it, never stack a
+                # second sheet under it.
+                web_content.head += (
+                    '<style id="klaus-reviewer-bg">' + css + "</style>"
+                )
     except Exception as exc:
         print(f"[klausmate] background inject failed: {exc}")
 
@@ -312,6 +319,25 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     return handled
 
 
+def reviewer_style_push_js(css: str) -> str:
+    """JS that installs ``css`` as the reviewer's Klaus background
+    sheet, replace-not-stack (window_chrome's Stats pattern): one
+    ``<style id="klaus-reviewer-bg">`` — the same tag the
+    will_set_content injection writes — is created on demand, has its
+    text swapped on every push, and is removed outright when ``css``
+    is empty (theme mode / design off), so a discarded preview leaves
+    no sheet behind. Pure string builder, aqt-free for tests."""
+    return (
+        "(function(){"
+        "var el=document.getElementById('klaus-reviewer-bg');"
+        f"var css={json.dumps(css)};"
+        "if(!css){if(el){el.remove();}return;}"
+        "if(!el){el=document.createElement('style');"
+        "el.id='klaus-reviewer-bg';document.head.appendChild(el);}"
+        "el.textContent=css;})();"
+    )
+
+
 def refresh() -> None:
     """Redraw the toolbar and the current screen after a settings change,
     so a new background lands without restarting Anki."""
@@ -320,6 +346,20 @@ def refresh() -> None:
 
         if getattr(mw, "toolbar", None) is not None:
             mw.toolbar.draw()
+        # Mid-review, mw.reset() REBUILDS THE STUDY QUEUES (its own
+        # comment in aqt/main.py says so) and re-renders the card —
+        # and with Preferences non-modal (2026-08-30) a live-preview
+        # tick can land while a card is up, so resetting per tick
+        # would flip the answer side away under the user. Push the
+        # style into the live page instead: same CSS the
+        # will_set_content hook injects, same tag, no rebuild. The
+        # deck and overview screens keep the reset — their rebuild is
+        # what re-runs the injection hooks and the panel_js weld.
+        if getattr(mw, "state", None) == "review":
+            web = getattr(getattr(mw, "reviewer", None), "web", None)
+            if web is not None:
+                web.eval(reviewer_style_push_js(_reviewer_background_css()))
+            return
         mw.reset()
     except Exception as exc:
         print(f"[klausmate] background refresh failed: {exc}")

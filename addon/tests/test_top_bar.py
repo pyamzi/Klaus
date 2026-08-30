@@ -303,4 +303,38 @@ check("all vertices live inside the declared viewBox",
       all(0 <= x <= top_bar.STAR_VIEWBOX and 0 <= y <= top_bar.STAR_VIEWBOX
           for x, y in pts))
 
+section("live preview mid-review (non-modal Preferences, 2026-08-30)")
+# mw.reset() rebuilds the study queues (aqt/main.py says so in its own
+# comment) — with Preferences non-modal a preview tick can land while
+# a card is up, so refresh() must push CSS into the live page instead.
+_push = top_bar.reviewer_style_push_js("html{background:red}")
+check("push JS replaces ONE tag by id — created on demand, text "
+      "swapped, never a second sheet stacked",
+      "getElementById('klaus-reviewer-bg')" in _push
+      and _push.count("appendChild") == 1
+      and "el.textContent=css" in _push)
+check("an empty push REMOVES the sheet, so a discarded preview leaves "
+      "nothing behind",
+      "el.remove()" in top_bar.reviewer_style_push_js(""))
+check("the css rides as one JSON string literal (quotes survive)",
+      json.dumps("html{background:red}") in _push)
+_refresh_code = code_only(inspect.getsource(top_bar.refresh))
+# Guarded split (never a blind [1] — a missing marker must FAIL the
+# pin, not crash the file): the push call must come BEFORE mw.reset()
+# and return without reaching it.
+_after_push = _refresh_code.split(
+    "reviewer_style_push_js(_reviewer_background_css())", 1
+)
+check("refresh() pushes the reviewer css and RETURNS before mw.reset() "
+      "— the review state never takes the queue-rebuilding reset",
+      len(_after_push) > 1
+      and "return" in _after_push[1].split("mw.reset()", 1)[0]
+      and "mw.reset()" in _after_push[1])
+check("the will_set_content injection and the push share one tag id, "
+      "so a push can restyle or empty the build-time sheet",
+      "klaus-reviewer-bg"
+      in inspect.getsource(top_bar._on_main_webview_content)
+      and "klaus-reviewer-bg"
+      in inspect.getsource(top_bar.reviewer_style_push_js))
+
 raise SystemExit(report())
