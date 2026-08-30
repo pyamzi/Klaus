@@ -132,7 +132,7 @@ wouldn't already need.
   terracotta), or `custom` to use `color_theme_custom`.
   Applied to buttons, pills, highlights and the star logo everywhere
   Klaus draws. Pick it in **KlausMate Preferences → Appearance →
-  Accent colour** — the row of colour squares, last one being your own
+  Accent color** — the row of color squares, last one being your own
   — and press **Save**; applies immediately.
 - **color_theme_custom**: `#rrggbb` behind the `custom` preset.
   Default `"#0071D3"`. You pick one colour; the hover, pressed and

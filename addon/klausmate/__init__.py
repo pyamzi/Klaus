@@ -570,7 +570,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
 
 
 def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
-    """Add "Crop image" when the editor context menu opened on an <img>."""
+    """Add "Crop Image" when the editor context menu opened on an <img>."""
     try:
         if not bool(get_config().get("image_crop_enabled", True)):
             return
@@ -585,7 +585,7 @@ def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
         fname = req.mediaUrl().fileName()  # QUrl.fileName() -> decoded
         if not fname:
             return  # data: URIs / mathjax have no filename
-        action = menu.addAction("Crop image")
+        action = menu.addAction("Crop Image")
         action.triggered.connect(
             lambda _=False, e=editor, f=fname: _launch_crop_dialog(e, f)
         )
@@ -604,7 +604,7 @@ def install_menu() -> None:
     """Single Tools-menu entry point, at the top of the menu.
 
     Everything that used to live in a 'Klaus' submenu (Clear library tag,
-    Manage models…, Test connection) now lives inside the KlausMate
+    Manage models…, Check Connection) now lives inside the KlausMate
     Preferences dialog itself (manage_models.py) — a menu that only ever
     grows one deeper is still one click, and it keeps this menu from
     forking into a second place users have to think to look. Anki has
@@ -1110,7 +1110,7 @@ class _PdfTabContainer(QWidget):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.WindowMinMaxButtonsHint
         )
-        self.setWindowTitle("PDF — Klaus")
+        self.setWindowTitle("PDF — KlausMate")
         if geom is not None and geom.width() > 200 and geom.height() > 200:
             self.setGeometry(geom)
         else:

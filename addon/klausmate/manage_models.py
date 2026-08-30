@@ -1,6 +1,6 @@
 """KlausMate Preferences dialog: provision the local AI runtime, pull a
 local embedding model, configure semantic search, and hold the two
-maintenance action (Test connection).
+maintenance action (Check Connection).
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
 split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
@@ -179,7 +179,7 @@ def _resolve_ollama_model(
     the config's embedding_model is empty, instead of silently falling
     through to embeddings.DEFAULT_MODELS['ollama'] — a stored index built
     with a different model would then look orphaned, and one click on
-    'Index cards now' would discard it (K-039). Dialog-level resolution
+    'Index Now' would discard it (K-039). Dialog-level resolution
     only; the embedding contract in embeddings.py is untouched.
 
     Precedence: (a) the model the existing index was actually built with,
@@ -410,7 +410,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     manual_lbl.setObjectName("InstallSection")
     install_layout.addWidget(manual_lbl)
 
-    download_btn = QPushButton("Open download page")
+    download_btn = QPushButton("Open Download Page")
     download_btn.setObjectName("SecondaryButton")
     install_layout.addWidget(download_btn)
 
@@ -431,7 +431,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     install_layout.addWidget(install_steps)
 
     install_btn_row = QHBoxLayout()
-    check_conn_btn = QPushButton("Check connection")
+    check_conn_btn = QPushButton("Check Connection")
     check_conn_btn.setObjectName("SecondaryButton")
     install_btn_row.addWidget(check_conn_btn)
     install_btn_row.addStretch(1)
@@ -752,11 +752,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
 
     embed_provider_combo = QComboBox()
-    embed_provider_combo.addItem("Voyage API (default)", "voyage")
+    embed_provider_combo.addItem("Voyage API (Default)", "voyage")
     embed_provider_combo.addItem("OpenAI API", "openai")
-    embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
+    embed_provider_combo.addItem("Local Ollama (Private, Free)", "ollama")
     embed_provider_combo.setMinimumWidth(220)
-    embed_fix_btn = QPushButton("Pull it")
+    embed_fix_btn = QPushButton("Download")
     embed_fix_btn.setVisible(False)
     provider_ctl = QHBoxLayout()
     provider_ctl.setContentsMargins(0, 0, 0, 0)
@@ -796,7 +796,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
-    index_btn = QPushButton("Index cards now")
+    index_btn = QPushButton("Index Now")
     _row(embed_layout, "Card index", embed_status, index_btn)
 
     # ----- Default match sensitivity -----------------------------------
@@ -857,7 +857,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             edit.setPlaceholderText("pick or type an embedding model to download")
 
     _fill_pull_presets()
-    pull_btn = QPushButton("Pull")
+    pull_btn = QPushButton("Download")
     delete_btn = QPushButton("Delete")
     delete_btn.setObjectName("DangerButton")
     refresh_btn = QPushButton("Refresh")
@@ -921,7 +921,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     # Maintenance — the connection check that used to live in the
     # Tools > Klaus submenu (K-045).
-    test_conn_btn = QPushButton("Test connection")
+    test_conn_btn = QPushButton("Check Connection")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
         general_layout,
@@ -931,14 +931,14 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
 
     # ---- Appearance: custom background + the frosted top bar ----
-    # A blurred flat colour IS that colour, so "Solid colour" also makes
+    # A blurred flat colour IS that colour, so "Solid Color" also makes
     # the top bar match the window chrome exactly (background.py).
     appearance_layout = _page(
         "Appearance",
         "Appearance",
         "The KlausBook design layer and everything it draws — the "
         "background of Anki's deck and overview screens, the frosted "
-        "top bar, and the deck-screen widgets — plus the accent colour, "
+        "top bar, and the deck-screen widgets — plus the accent color, "
         "which styles Klaus's own windows in either mode.",
     )
 
@@ -957,12 +957,12 @@ def manage_models_dialog(setup: bool = False) -> None:
     )
 
     bg_mode_combo = QComboBox()
-    bg_mode_combo.addItem("Anki's own (default)", "theme")
-    bg_mode_combo.addItem("Solid colour", "color")
+    bg_mode_combo.addItem("Anki's Own (Default)", "theme")
+    bg_mode_combo.addItem("Solid Color", "color")
     bg_mode_combo.addItem("Image", "image")
-    bg_colour_btn = QPushButton("Colour…")
+    bg_colour_btn = QPushButton("Color…")
     bg_colour_btn.setObjectName("SecondaryButton")
-    bg_image_btn = QPushButton("Choose image…")
+    bg_image_btn = QPushButton("Choose Image…")
     bg_image_btn.setObjectName("SecondaryButton")
     bg_ctl = QHBoxLayout()
     bg_ctl.setContentsMargins(0, 0, 0, 0)
@@ -972,7 +972,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_mode_row = _row(
         appearance_layout,
         "Background",
-        "Anki's own look, a solid colour, or an image of yours.",
+        "Anki's own look, a solid color, or an image of yours.",
         bg_ctl,
     )
 
@@ -982,8 +982,8 @@ def manage_models_dialog(setup: bool = False) -> None:
     appearance_layout.addWidget(bg_image_lbl)
 
     bg_fit_combo = QComboBox()
-    bg_fit_combo.addItem("Fill the window", "cover")
-    bg_fit_combo.addItem("Fit inside", "contain")
+    bg_fit_combo.addItem("Fill the Window", "cover")
+    bg_fit_combo.addItem("Fit Inside", "contain")
     bg_fit_combo.addItem("Tile", "tile")
     bg_fit_row = _row(
         appearance_layout,
@@ -1123,7 +1123,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         from aqt.qt import QColor, QColorDialog
 
         current = QColor(_bg_state["spec"]["color"])
-        chosen = QColorDialog.getColor(current, dlg, "Background colour")
+        chosen = QColorDialog.getColor(current, dlg, "Background Color")
         if not chosen.isValid():
             return
         _bg_state["spec"]["color"] = chosen.name()
@@ -1207,7 +1207,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         from aqt.qt import QColor, QColorDialog
 
         chosen = QColorDialog.getColor(
-            QColor(str(_accent_state["custom"])), dlg, "Accent colour"
+            QColor(str(_accent_state["custom"])), dlg, "Accent Color"
         )
         if chosen.isValid():
             _accent_state["custom"] = chosen.name()
@@ -1231,7 +1231,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         sw.setFixedSize(22, 22)
         sw.setCursor(Qt.CursorShape.PointingHandCursor)
         sw.setToolTip(
-            "Custom colour — click to pick" if _is_custom
+            "Custom color — click to pick" if _is_custom
             else _name.capitalize()
         )
         sw.clicked.connect(
@@ -1256,9 +1256,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     sync_accent_swatches()
     _row(
         appearance_layout,
-        "Accent colour",
-        "Recolours buttons, pills and highlights across every Klaus "
-        "surface. The last square is your own colour — click it to pick.",
+        "Accent color",
+        "Recolors buttons, pills and highlights across every Klaus "
+        "surface. The last square is your own color — click it to pick.",
         accent_ctl,
     )
 
@@ -1301,7 +1301,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     unsaved_lbl.setStyleSheet(_MUTED)
     close_row.addWidget(unsaved_lbl)
     close_row.addStretch(1)
-    cancel_btn = QPushButton("Cancel download")
+    cancel_btn = QPushButton("Cancel Download")
     cancel_btn.setObjectName("SecondaryButton")
     cancel_btn.setVisible(False)
     close_row.addWidget(cancel_btn)
@@ -1706,7 +1706,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         def on_done(_: Any) -> None:
             progress.setValue(100)
-            progress_lbl.setText(f"Pulled {name} ✓")
+            progress_lbl.setText(f"Downloaded {name} ✓")
             set_busy(False)
             op_state["kind"] = ""
             tooltip(f"Klaus: {name} ready")
@@ -1839,7 +1839,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         _apply_search(search_edit.text())
         st = curation.index_stats()
         if not st["exists"]:
-            txt = "No card index yet — click “Index cards now” to enable semantic search."
+            txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
             if (st["provider"], st["model"]) != sig:
@@ -1855,7 +1855,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         if kind == "key":
             embed_fix_btn.setText("Get key")
         elif kind == "model":
-            embed_fix_btn.setText("Pull it")
+            embed_fix_btn.setText("Download")
         embed_fix_btn.setVisible(bool(kind))
 
     def on_embed_fix_clicked() -> None:

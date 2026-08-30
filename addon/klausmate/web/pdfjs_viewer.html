@@ -593,7 +593,7 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   const items = [];
   if (hasSel) {
     items.push(["Copy", () => postB64("copy-text", { text: String(sel) })]);
-    items.push(["Copy selection as image", () => {
+    items.push(["Copy Selection as Image", () => {
       const map = selectionRectMap();
       if (!map) return;
       const page0 = parseInt(Object.keys(map)[0], 10);
@@ -609,23 +609,23 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   }
   if (rec) {
     if (rec.kind === "text") {
-      items.push(["Remove text", () => postB64("hl-remove", { id: rec.id })]);
+      items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
     } else {
       const hasNote = String(rec.note || "").trim().length > 0;
       items.push([hasNote ? "Edit note…" : "Add note…",
                   () => postB64("note-edit", { id: rec.id })]);
-      items.push(["Remove highlight", () => postB64("hl-remove", { id: rec.id })]);
+      items.push(["Remove Highlight", () => postB64("hl-remove", { id: rec.id })]);
     }
     items.push(null);
   }
-  items.push(["Copy page text", () => copyPageText(hit.page0)]);
-  items.push(["Copy slide as image", () => copyPageImage(hit.page0)]);
+  items.push(["Copy Page Text", () => copyPageText(hit.page0)]);
+  items.push(["Copy Slide as Image", () => copyPageImage(hit.page0)]);
   items.push(null);
   /* Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
      (critique P3) — the menu is its discoverable twin. */
-  items.push(["Zoom in\u2002\u2318+", () => window.klausSetZoom(1.1)]);
-  items.push(["Zoom out\u2002\u2318\u2212", () => window.klausSetZoom(1 / 1.1)]);
-  items.push(["Actual size\u2002\u23180", () => window.klausZoomReset()]);
+  items.push(["Zoom In\u2002\u2318+", () => window.klausSetZoom(1.1)]);
+  items.push(["Zoom Out\u2002\u2318\u2212", () => window.klausSetZoom(1 / 1.1)]);
+  items.push(["Actual Size\u2002\u23180", () => window.klausZoomReset()]);
   ctxmenu.textContent = "";
   for (const it of items) {
     if (it === null) {

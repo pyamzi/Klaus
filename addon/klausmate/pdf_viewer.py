@@ -2443,7 +2443,7 @@ class PdfViewer(QWidget):
         copy_act = menu.addAction("Copy")
         copy_act.setEnabled(bool(self._selection_text.strip()))
         # Re-copy a persisted Option/Alt+drag marquee (plan A2).
-        marquee_act = menu.addAction("Copy selection as image")
+        marquee_act = menu.addAction("Copy Selection as Image")
         marquee_act.setEnabled(self._marquee_rect_pts is not None)
         # Persistent highlight from the live selection (plan B). Stays
         # disabled on image-only/scanned PDFs — no text selection there.
@@ -2490,22 +2490,22 @@ class PdfViewer(QWidget):
                     note_act = menu.addAction(
                         "Edit note…" if has_note else "Add note…"
                     )
-                    remove_hl_act = menu.addAction("Remove highlight")
+                    remove_hl_act = menu.addAction("Remove Highlight")
         fallback = (
             self._page_texts[page] if 0 <= page < len(self._page_texts) else ""
         )
-        page_act = menu.addAction("Copy page text")
+        page_act = menu.addAction("Copy Page Text")
         page_act.setEnabled(bool(fallback.strip()))
         # Discoverability twin of Cmd/Ctrl+double-click (A2).
-        slide_act = menu.addAction("Copy slide as image")
+        slide_act = menu.addAction("Copy Slide as Image")
         slide_act.setEnabled(self._doc is not None and self._page_count > 0)
         menu.addSeparator()
         # Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
         # (critique P3) — the menu is its discoverable twin. The "\t"
         # right-aligns the key hint without registering a shortcut.
-        zoom_in_act = menu.addAction("Zoom in\t⌘+")
-        zoom_out_act = menu.addAction("Zoom out\t⌘−")
-        zoom_reset_act = menu.addAction("Actual size\t⌘0")
+        zoom_in_act = menu.addAction("Zoom In\t⌘+")
+        zoom_out_act = menu.addAction("Zoom Out\t⌘−")
+        zoom_reset_act = menu.addAction("Actual Size\t⌘0")
         chosen = menu.exec(self._pdf_view.mapToGlobal(pos))
         if chosen is None:
             return

@@ -144,8 +144,8 @@ def first_run_check() -> None:
     msg.setText("\n".join(body_lines))
     setup_btn = None
     if ready:
-        # "Got it" is the primary/dismissive action here — stays default blue.
-        msg.addButton("Got it", QMessageBox.ButtonRole.AcceptRole)
+        # "OK" is the primary/dismissive action here — stays default blue.
+        msg.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
         manage_btn = msg.addButton(
             "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
         )
@@ -381,7 +381,7 @@ def _readiness_check_body() -> None:
                 "(Automatic management is disabled in Klaus settings.)"
             )
             open_btn = msg.addButton(
-                "Open download page", QMessageBox.ButtonRole.ActionRole
+                "Open Download Page", QMessageBox.ButtonRole.ActionRole
             )
             msg.addButton(
                 "Later", QMessageBox.ButtonRole.AcceptRole

@@ -179,7 +179,7 @@ const widget = (id) =>
 
 const STATE = {
   order: ["decks", "heatmap"], edit: false,
-  removable: ["heatmap"], labels: { heatmap: "Review heatmap" }, hidden: [],
+  removable: ["heatmap"], labels: { heatmap: "Review Heatmap" }, hidden: [],
 };
 
 // 1. Painted-mode page: both widgets wrapped, nothing else moved.
@@ -274,8 +274,8 @@ fire(document.querySelectorAll(".klaus-dash-bar")[0]
   .children.find((c) => c.id === "klaus-dash-add"), "click");
 const addMenu = document.querySelectorAll(".klaus-dash-menu")[0];
 ok("＋ opens a menu naming the hidden widget",
-   addMenu && addMenu.children.some((c) => c.textContent === "Review heatmap"));
-fire(addMenu.children.find((c) => c.textContent === "Review heatmap"), "click");
+   addMenu && addMenu.children.some((c) => c.textContent === "Review Heatmap"));
+fire(addMenu.children.find((c) => c.textContent === "Review Heatmap"), "click");
 ok("picking it reports {add, heatmap}",
    JSON.stringify(decoded(1)) === '{"action":"add","id":"heatmap"}');
 

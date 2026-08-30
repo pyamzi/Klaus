@@ -143,7 +143,7 @@ def choose_deck_scope(parent) -> tuple[bool, str | None]:
     layout = QVBoxLayout(dlg)
     layout.addWidget(QLabel("Search for matching cards in:"))
     combo = QComboBox()
-    combo.addItem("All decks", None)
+    combo.addItem("All Decks", None)
     try:
         if mw.col is not None:
             for entry in mw.col.decks.all_names_and_ids():
@@ -241,7 +241,7 @@ def _pick_pdf_menu() -> None:
         return
     menu = QMenu(mw)
     # addAction(QAction) returns None in PyQt6 — build, configure, then add.
-    header = QAction("Curate a deck from…", menu)
+    header = QAction("Curate a Deck From…", menu)
     header.setEnabled(False)
     menu.addAction(header)
     menu.addSeparator()

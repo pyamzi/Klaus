@@ -49,7 +49,7 @@ from . import background, theme
 # visibility bool in config.json.
 WIDGETS: tuple = (
     ("decks", None, "Decks"),
-    ("heatmap", "heatmap_enabled", "Review heatmap"),
+    ("heatmap", "heatmap_enabled", "Review Heatmap"),
 )
 
 

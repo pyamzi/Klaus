@@ -108,10 +108,10 @@ _state = dash.boot_state({"heatmap_enabled": False,
 check("order, edit flag, removables and labels all ship",
       _state["order"] == ["heatmap", "decks"] and _state["edit"] is True
       and _state["removable"] == ["heatmap"]
-      and _state["labels"] == {"heatmap": "Review heatmap"})
+      and _state["labels"] == {"heatmap": "Review Heatmap"})
 check("hidden is CONFIG-driven — the disabled heatmap is offered "
       "under ＋ even though no DOM was consulted",
-      _state["hidden"] == [{"id": "heatmap", "label": "Review heatmap"}])
+      _state["hidden"] == [{"id": "heatmap", "label": "Review Heatmap"}])
 check("nothing hidden when everything is enabled",
       dash.boot_state({}, False)["hidden"] == [])
 

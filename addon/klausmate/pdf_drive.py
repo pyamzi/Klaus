@@ -540,7 +540,7 @@ class DriveWindow(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Klaus — Library")
+        self.setWindowTitle("Library — KlausMate")
         self.setMinimumSize(720, 420)
         # SynapsePro card-on-canvas language: window on bg, tree as a
         # white rounded card, quiet grey utility buttons.
@@ -595,7 +595,7 @@ class DriveWindow(QWidget):
         lay.addWidget(self.tree, 1)
 
         btn_row = QHBoxLayout()
-        new_folder = QPushButton("New folder", left)
+        new_folder = QPushButton("New Folder…", left)
         new_folder.clicked.connect(lambda: self._new_folder())
         btn_row.addWidget(new_folder)
         refresh = QPushButton("Refresh", left)
@@ -1159,7 +1159,7 @@ class DriveWindow(QWidget):
             self.rebuild_tree()
 
     def _new_folder(self, parent_path: str | None = None) -> str | None:
-        name, ok = QInputDialog.getText(self, "New folder", "Folder name:")
+        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
         name = (name or "").strip().strip("/")
         if not ok or not name:
             return None
@@ -1178,7 +1178,7 @@ class DriveWindow(QWidget):
         elif item is not None and item.data(0, _ROLE_FOLDER):
             self._build_folder_menu(menu, item.data(0, _ROLE_FOLDER))
         else:
-            menu.addAction("New folder…").triggered.connect(lambda: self._new_folder())
+            menu.addAction("New Folder…").triggered.connect(lambda: self._new_folder())
         menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _build_pdf_menu(self, menu: QMenu, item: QTreeWidgetItem) -> None:
@@ -1190,7 +1190,7 @@ class DriveWindow(QWidget):
         )
         menu.addAction("Rename…").triggered.connect(lambda: self._rename_pdf(safe))
 
-        move = menu.addMenu("Move to folder")
+        move = menu.addMenu("Move to Folder")
         move.addAction("(root)").triggered.connect(
             lambda: self._move_pdf(safe, None)
         )
@@ -1199,33 +1199,33 @@ class DriveWindow(QWidget):
                 lambda _c=False, p=path: self._move_pdf(safe, p)
             )
         move.addSeparator()
-        move.addAction("New folder…").triggered.connect(
+        move.addAction("New Folder…").triggered.connect(
             lambda: self._move_to_new_folder(safe)
         )
 
         menu.addSeparator()
         embed_label = "Re-index" if row.get("indexed") else "Add to index"
         menu.addAction(embed_label).triggered.connect(lambda: self._on_embed(safe))
-        menu.addAction("Match sensitivity…").triggered.connect(
+        menu.addAction("Match Sensitivity…").triggered.connect(
             lambda: self._on_threshold(safe)
         )
-        menu.addAction("Show matched cards in Browse").triggered.connect(
+        menu.addAction("Show Matched Cards in Browse").triggered.connect(
             lambda: self._on_browse(safe)
         )
-        menu.addAction("Curate deck from this PDF…").triggered.connect(
+        menu.addAction("Curate Deck from This PDF…").triggered.connect(
             lambda: self._curate(safe)
         )
         menu.addSeparator()
         menu.addAction("Delete…").triggered.connect(lambda: self._delete_pdf(safe))
 
     def _build_folder_menu(self, menu: QMenu, path: str) -> None:
-        menu.addAction("New subfolder…").triggered.connect(
+        menu.addAction("New Subfolder…").triggered.connect(
             lambda: self._new_folder(path)
         )
-        menu.addAction("Rename folder…").triggered.connect(
+        menu.addAction("Rename Folder…").triggered.connect(
             lambda: self._rename_folder(path)
         )
-        menu.addAction("Remove folder").triggered.connect(
+        menu.addAction("Remove Folder").triggered.connect(
             lambda: self._remove_folder(path)
         )
 

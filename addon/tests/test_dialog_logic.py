@@ -146,7 +146,7 @@ class World:
 
         # Deferred save: widgets mark dirty, save_all() writes.
         self.embed_provider_combo = Combo(on_change=self.on_provider_changed)
-        self.embed_provider_combo.addItem("Voyage API (default)", "voyage")
+        self.embed_provider_combo.addItem("Voyage API (Default)", "voyage")
         self.embed_provider_combo.addItem("OpenAI API", "openai")
         self.embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
         self.embed_model_combo = Combo(on_change=lambda: self.mark_dirty())
@@ -419,7 +419,7 @@ def _resolve_ollama_model(configured, models, indexed_model, default):
     ollama 'Search model' field should show/hold when embedding_model is
     empty, instead of silently falling through to
     embeddings.DEFAULT_MODELS['ollama'] (which can mismatch an existing
-    index and make one click on 'Index cards now' discard it)."""
+    index and make one click on 'Index Now' discard it)."""
     configured = configured.strip()
     if configured:
         return configured

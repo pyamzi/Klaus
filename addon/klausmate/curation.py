@@ -524,7 +524,7 @@ def _create_from_browser(browser) -> None:
 
 
 def on_browser_menus_did_init(browser) -> None:
-    action = QAction("Klaus: Create curated deck from selection…", browser)
+    action = QAction("KlausMate: Create Curated Deck from Selection…", browser)
     qconnect(action.triggered, lambda: _create_from_browser(browser))
     menu = getattr(browser.form, "menu_Notes", None) or browser.form.menuEdit
     menu.addSeparator()
