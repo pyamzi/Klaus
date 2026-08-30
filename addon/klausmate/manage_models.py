@@ -938,12 +938,14 @@ def manage_models_dialog(setup: bool = False) -> None:
         "background of Anki's deck and overview screens and its "
         "panels, a separate background for the study screen, and the "
         "deck-screen widgets — plus the accent color, which styles "
-        "Klaus's own windows in either mode.",
+        "Klaus's own windows in either mode. Widgets like the review "
+        "heatmap are added or removed on the deck screen itself: "
+        "right-click it and choose Edit Widgets….",
     )
 
     # The master switch, first — everything below it on this page is
-    # either gated by it (backgrounds) or independent of it (accent,
-    # heatmap), and reading it first makes that hierarchy legible.
+    # either gated by it (backgrounds) or independent of it (accent),
+    # and reading it first makes that hierarchy legible.
     klausbook_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         appearance_layout,
@@ -1050,18 +1052,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         study_fit_combo,
     )
 
-    # Not a background setting, but it lives and dies by the same
-    # frosted-panel look, so it belongs on this page rather than under
-    # General's feature toggles.
-    heatmap_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    heatmap_row = _row(
-        appearance_layout,
-        "Review heatmap",
-        "Show a year of study activity under the deck list, with the "
-        "next four weeks of scheduled cards. Click a day to open it in "
-        "Browse. Needs the KlausBook design.",
-        heatmap_cb,
-    )
+    # No Review-heatmap switch here (removed 2026-08-30, Pouya: "I can
+    # add / remove widgets another way") — the deck screen's Edit
+    # Widgets mode (⊖ / ＋) is the ONE writer of heatmap_enabled now.
+    # _bg_preview_cfg still carries the key, read from stored config.
 
     _general_cfg = _pkg().get_config()
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
@@ -1072,8 +1066,6 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     from . import dashboard as _dashboard
     from . import heatmap as _heatmap
-
-    heatmap_cb.setChecked(_heatmap.enabled(_general_cfg))
 
     from . import background as _background
 
@@ -1130,7 +1122,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         # Klaus's own windows, which keep their design in both modes.
         design_on = klausbook_cb.isChecked()
         bg_mode_row.setEnabled(design_on)
-        heatmap_row.setEnabled(design_on)
         bg_colour_btn.setEnabled(design_on and (is_colour or is_image))
         bg_image_btn.setEnabled(design_on and is_image)
         # Whole rows, so the name and description grey out with the
@@ -2342,7 +2333,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["reviewer_background_fit"] = r_spec["fit"]
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
-        cfg["heatmap_enabled"] = bool(heatmap_cb.isChecked())
+        # No heatmap_enabled write: since 2026-08-30 the deck screen's
+        # Edit Widgets mode is the only UI that owns that key, and a
+        # write here would clobber a mid-session ⊖/＋ edit with the
+        # value this dialog happened to open with.
         cfg["klausbook_design"] = bool(klausbook_cb.isChecked())
         _pkg().write_config(cfg)
 
@@ -2386,8 +2380,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         background.effective_cfg, so a key left out of it does not fall
         back to the stored value, it falls back to that reader's own
         default. heatmap_enabled is here for exactly that reason:
-        without it, opening Preferences with the heatmap switched off
-        and nudging the blur would preview it back into existence.
+        without it, opening Preferences with the heatmap removed and
+        nudging the blur would preview it back into existence. This
+        dialog no longer edits that key (Edit Widgets on the deck
+        screen does), so it is carried from STORED config, read live
+        per tick like dashboard_order below — a ⊖/＋ edit made while
+        Preferences is open must survive the next preview tick.
         """
         spec = _bg_state["spec"]
         return {
@@ -2406,7 +2404,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             "reviewer_background_color": _bg_state["reviewer_spec"]["color"],
             "reviewer_background_image": _bg_state["reviewer_spec"]["image"],
             "reviewer_background_fit": _bg_state["reviewer_spec"]["fit"],
-            "heatmap_enabled": bool(heatmap_cb.isChecked()),
+            "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
             # Same expression save_general writes. The design gates all
             # read through effective_cfg and their default is OFF, so a
             # preview dict missing this key would strip the whole look
@@ -2645,7 +2643,6 @@ def manage_models_dialog(setup: bool = False) -> None:
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
-    heatmap_cb.toggled.connect(lambda _checked: appearance_changed())
     klausbook_cb.toggled.connect(on_design_toggled)
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)

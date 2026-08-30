@@ -885,8 +885,24 @@ check("Fit and Blur disable as WHOLE rows, labels included — and only "
       "background settings are inert whatever the mode",
       "bg_fit_row.setEnabled(design_on and is_image)" in _src2
       and "bg_blur_row.setEnabled(design_on and is_image)" in _src2
-      and "bg_mode_row.setEnabled(design_on)" in _src2
-      and "heatmap_row.setEnabled(design_on)" in _src2)
+      and "bg_mode_row.setEnabled(design_on)" in _src2)
+# The Review-heatmap switch left Preferences on 2026-08-30 (Pouya: "I
+# can add / remove widgets another way") — the deck screen's Edit
+# Widgets mode is the one writer of that key now. Three pins: the
+# widget is gone as CODE (code_only, so this comment can't fake it),
+# Save no longer writes the key, and the preview dict still CARRIES it
+# — from stored config, read live per tick (the preview dict replaces
+# config outright, so dropping the key would resurrect a removed
+# heatmap on the first blur nudge).
+check("the heatmap switch is gone from Preferences as code",
+      "heatmap_cb" not in code_only(_src2)
+      and "heatmap_row" not in code_only(_src2))
+check("save_general no longer writes heatmap_enabled (Edit Widgets "
+      "owns it; a save here would clobber a mid-session ⊖/＋ edit)",
+      'cfg["heatmap_enabled"]' not in _src2)
+check("the preview dict still carries heatmap_enabled, from STORED "
+      "config read live per tick (dashboard_order's pattern)",
+      "bool(_heatmap.enabled(_pkg().get_config()))" in code_only(_src2))
 check("nav geometry is pure view geometry: setSizeHint rows + list "
       "setSpacing + an overshooting fixed height — nothing QSS-derived "
       "(three pill-era fixes fought polish timing; a single list view "

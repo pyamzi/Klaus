@@ -189,12 +189,12 @@ check("the toggles that predate live appearance preview still only "
       "mark_dirty(), so Save stays the sole writer",
       all(f"{name}.toggled.connect(lambda _checked: mark_dirty())" in _MM_CODE
           for name in ("image_crop_cb", "runtime_auto_cb", "pdfjs_cb")))
-check("...and the appearance ones route through appearance_changed(), "
-      "which marks dirty AND previews live — same deferred save, "
-      "visible before you commit to it",
-      "heatmap_cb.toggled.connect(lambda _checked: appearance_changed())"
-      in _MM_CODE
-      and "klausbook_cb.toggled.connect(on_design_toggled)" in _MM_CODE)
+check("...and the appearance one (the design master switch — the "
+      "heatmap switch left Preferences 2026-08-30) routes through "
+      "on_design_toggled → appearance_changed(): marks dirty AND "
+      "previews live, same deferred save",
+      "klausbook_cb.toggled.connect(on_design_toggled)" in _MM_CODE
+      and "heatmap_cb" not in _MM_CODE)
 
 section("theme.py: caption contrast fix (MD3 audit accessibility finding)")
 def _luminance(hexcolor: str) -> float:

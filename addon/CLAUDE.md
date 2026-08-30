@@ -116,9 +116,11 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   Browse — `prop:due=N` ahead, our own `klausday:<day>` token behind,
   resolved in `browser_will_search` because Anki has no operator for
   "reviewed on this exact day". Deck browser only (the overview would
-  need deck-scoped queries). Config `heatmap_enabled`; the Preferences
-  switch previews live, which is why `_bg_preview_cfg` carries that key
-  too — that dict REPLACES config for every `effective_cfg` reader.
+  need deck-scoped queries). Config `heatmap_enabled` — written ONLY
+  by the dashboard's Edit Widgets ⊖/＋ since 2026-08-30 (the
+  Preferences switch was removed as redundant); `_bg_preview_cfg`
+  still carries the key, read from STORED config live per tick — that
+  dict REPLACES config for every `effective_cfg` reader.
 - `dashboard.py` (aqt-free above its "aqt glue" divider) +
   `web/dashboard.js`: **Control-Center-style widget editing** on the
   deck browser. Python owns the registry (`WIDGETS`: decks mandatory,
@@ -269,9 +271,10 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   survives on the stock bar), the heatmap, every functional injection,
   and Klaus's own windows. In native mode the deck screen draws NO
   Klaus widgets: the heatmap's two injections are gated too (at the
-  injections, never inside `enabled()` — Preferences seeds its switch
-  from `enabled(stored)` and saves it back, so gating there would
-  persist a `heatmap_enabled` False the user never chose). The star is
+  injections, never inside `enabled()` — the same round-trip rule as
+  `resolve()` above: a reader whose value any UI seeds from and writes
+  back must never be gated, or it persists a `heatmap_enabled` False
+  the user never chose). The star is
   the one survivor, and it carries its own geometry inline (`logo_html`)
   so the gate cannot move it. Corrupt values read as OFF — opposite of
   heatmap's rule — so bad config can't surprise-restyle the app.
