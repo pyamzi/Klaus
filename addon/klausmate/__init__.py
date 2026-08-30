@@ -2239,10 +2239,13 @@ except Exception as _e:
 
 def _apply_color_theme() -> None:
     """Overlay the user's accent preset onto every later palette() call
-    (SynapsePro's mechanism, K-107). Must run BEFORE any Klaus surface
-    draws in this profile — profile_did_open precedes the toolbar's
-    first webview_will_set_content, so the top bar's baked palettes
-    already carry the accent."""
+    (SynapsePro's mechanism, K-107). Runs on profile_did_open — before
+    the deck screen and its panels draw, but NOT before the top
+    toolbar: Anki draws that once in finish_ui_setup(), before any
+    profile opens (verified in aqt/main.py), so the bar's first sheet
+    bakes the default accent. top_bar._on_profile_open_redraw shares
+    this hook and redraws the bar a tick later; without it the star
+    launched blue on every restart (live repro, 2026-08-30)."""
     try:
         from . import theme as _theme
 

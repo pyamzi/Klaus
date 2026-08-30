@@ -383,6 +383,38 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         print(f"[klausmate] top bar css failed: {exc}")
 
 
+def _on_profile_open_redraw() -> None:
+    """Redraw the top toolbar once the profile's accent theme is loaded.
+
+    Anki draws the toolbar in ``finish_ui_setup()`` — BEFORE any profile
+    opens (verified in aqt/main.py: finish_ui_setup runs during app
+    setup, profile_did_open fires later inside loadProfile) — so the
+    bar's first sheet bakes the DEFAULT accent, and the star launched
+    blue on every restart whatever theme was saved (live repro,
+    2026-08-30). ``__init__._apply_color_theme`` loads the saved accent
+    on profile_did_open; this handler shares that hook and redraws the
+    bar so its baked palette catches up. Deferred one tick
+    (window_chrome's pattern) so it runs after EVERY other profile-open
+    handler regardless of registration order. Ungated on purpose: in
+    native mode the redraw just repaints the stock bar once — cheaper
+    than a gate that would go stale if a profile flips the design on.
+    """
+    try:
+        from aqt import mw
+        from aqt.qt import QTimer
+
+        def _redraw() -> None:
+            try:
+                if getattr(mw, "toolbar", None) is not None:
+                    mw.toolbar.draw()
+            except Exception as exc:
+                print(f"[klausmate] toolbar accent redraw failed: {exc}")
+
+        QTimer.singleShot(0, _redraw)
+    except Exception as exc:
+        print(f"[klausmate] toolbar accent redraw schedule failed: {exc}")
+
+
 def setup() -> None:
     try:
         from aqt import gui_hooks
@@ -394,5 +426,8 @@ def setup() -> None:
         # Anki only toggles CSS classes on theme change; the native
         # window colour has to be re-read and pushed by us.
         gui_hooks.theme_did_change.append(_push_chrome_colour)
+        # The bar is drawn before any profile opens (finish_ui_setup),
+        # so the saved accent has to be redrawn onto it per profile.
+        gui_hooks.profile_did_open.append(_on_profile_open_redraw)
     except Exception as exc:
         print(f"[klausmate] top bar setup failed: {exc}")

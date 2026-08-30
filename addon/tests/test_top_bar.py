@@ -5,7 +5,7 @@ import re
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
-from anki_stubs import check, install, report, section
+from anki_stubs import check, code_only, install, report, section
 
 install()
 top_bar = importlib.import_module("klausmate.top_bar")
@@ -251,6 +251,19 @@ top_bar._on_left_tray(content, None)
 check("logo lands FIRST, other addons' items untouched after it",
       content[0] == top_bar.logo_html()
       and content[1] == "<div>ankihub-item</div>")
+# Anki draws the toolbar in finish_ui_setup — BEFORE any profile opens —
+# so the first sheet bakes the DEFAULT accent; without this profile-open
+# redraw the star launched blue on every restart whatever theme was
+# saved (live repro, 2026-08-30). code_only so prose can't fake the pin.
+_wiring_code = code_only(open("klausmate/top_bar.py").read())
+check("setup registers a profile-open toolbar redraw (saved accent "
+      "reaches the bar only through it)",
+      "gui_hooks.profile_did_open.append(_on_profile_open_redraw)"
+      in _wiring_code)
+check("that redraw is deferred one tick, so it runs after every other "
+      "profile-open handler including _apply_color_theme",
+      "QTimer.singleShot(0, _redraw)"
+      in code_only(inspect.getsource(top_bar._on_profile_open_redraw)))
 
 section("bottom toolbar matches the top (K-109)")
 bcss = theme.bottombar_css()
