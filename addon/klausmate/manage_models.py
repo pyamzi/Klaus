@@ -936,8 +936,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         "Appearance",
         "The KlausBook design layer and everything it draws — the "
         "background of Anki's deck and overview screens and its "
-        "panels, and the deck-screen widgets — plus the accent color, "
-        "which styles Klaus's own windows in either mode.",
+        "panels, a separate background for the study screen, and the "
+        "deck-screen widgets — plus the accent color, which styles "
+        "Klaus's own windows in either mode.",
     )
 
     # The master switch, first — everything below it on this page is
@@ -1006,6 +1007,49 @@ def manage_models_dialog(setup: bool = False) -> None:
         blur_ctl,
     )
 
+    # A SEPARATE picture for the study screen — Pouya: "this needs to
+    # be separate from the background I set for the regular main
+    # section." Same mode/colour/image/fit shape as the deck screen's
+    # own group above, its own independent state, no Blur row: a card
+    # has no panels to frost, so there is nothing a blur control would
+    # visibly do.
+    study_mode_combo = QComboBox()
+    study_mode_combo.addItem("Anki's Own (Default)", "theme")
+    study_mode_combo.addItem("Solid Color", "color")
+    study_mode_combo.addItem("Image", "image")
+    study_colour_btn = QPushButton("Color…")
+    study_colour_btn.setObjectName("SecondaryButton")
+    study_image_btn = QPushButton("Choose Image…")
+    study_image_btn.setObjectName("SecondaryButton")
+    study_ctl = QHBoxLayout()
+    study_ctl.setContentsMargins(0, 0, 0, 0)
+    study_ctl.addWidget(study_mode_combo)
+    study_ctl.addWidget(study_colour_btn)
+    study_ctl.addWidget(study_image_btn)
+    study_mode_row = _row(
+        appearance_layout,
+        "Study screen background",
+        "A different picture than the deck screen's, shown behind "
+        "your cards while you study.",
+        study_ctl,
+    )
+
+    study_image_lbl = QLabel()
+    study_image_lbl.setWordWrap(True)
+    study_image_lbl.setObjectName("SettingDesc")
+    appearance_layout.addWidget(study_image_lbl)
+
+    study_fit_combo = QComboBox()
+    study_fit_combo.addItem("Fill the Window", "cover")
+    study_fit_combo.addItem("Fit Inside", "contain")
+    study_fit_combo.addItem("Tile", "tile")
+    study_fit_row = _row(
+        appearance_layout,
+        "Fit",
+        "How an image is scaled to the window.",
+        study_fit_combo,
+    )
+
     # Not a background setting, but it lives and dies by the same
     # frosted-panel look, so it belongs on this page rather than under
     # General's feature toggles.
@@ -1040,7 +1084,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     # down the function, and a closure's free variable is only looked up
     # at call time — referencing ui_state here crashed the dialog with
     # NameError the moment Preferences opened (live traceback).
-    _bg_state = {"spec": _background.resolve(_general_cfg), "syncing": False}
+    _bg_state = {
+        "spec": _background.resolve(_general_cfg),
+        "reviewer_spec": _background.resolve(
+            _general_cfg, prefix="reviewer_background"
+        ),
+        "syncing": False,
+    }
     # Coalesces live appearance previews: top_bar.refresh() redraws the
     # toolbar and resets the main window, and the blur slider fires
     # continuously while dragged, so previewing per signal would repaint
@@ -1062,6 +1112,13 @@ def manage_models_dialog(setup: bool = False) -> None:
                 max(0, bg_fit_combo.findData(spec["fit"]))
             )
             bg_blur_slider.setValue(int(spec["blur"]))
+            r_spec = _bg_state["reviewer_spec"]
+            study_mode_combo.setCurrentIndex(
+                max(0, study_mode_combo.findData(r_spec["mode"]))
+            )
+            study_fit_combo.setCurrentIndex(
+                max(0, study_fit_combo.findData(r_spec["fit"]))
+            )
         finally:
             _bg_state["syncing"] = False
         bg_blur_lbl.setText(f"{spec['blur']}px")
@@ -1087,6 +1144,20 @@ def manage_models_dialog(setup: bool = False) -> None:
             else ("No image chosen yet." if is_image else "")
         )
         bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
+
+        r_spec = _bg_state["reviewer_spec"]
+        r_is_image = r_spec["mode"] == "image"
+        r_is_colour = r_spec["mode"] == "color"
+        study_mode_row.setEnabled(design_on)
+        study_colour_btn.setEnabled(design_on and (r_is_colour or r_is_image))
+        study_image_btn.setEnabled(design_on and r_is_image)
+        study_fit_row.setEnabled(design_on and r_is_image)
+        study_image_lbl.setEnabled(design_on)
+        study_image_lbl.setText(
+            f"Image: {r_spec['image']}" if r_spec["image"]
+            else ("No image chosen yet." if r_is_image else "")
+        )
+        study_image_lbl.setVisible(bool(study_image_lbl.text()))
 
     def on_design_toggled(_checked: bool) -> None:
         # Live-preview like every appearance edit, then re-grey the
@@ -1144,6 +1215,54 @@ def manage_models_dialog(setup: bool = False) -> None:
             return
         _bg_state["spec"]["image"] = stored
         _bg_state["spec"]["mode"] = "image"
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_study_mode_changed(_i: int) -> None:
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["mode"] = str(
+            study_mode_combo.currentData() or "theme"
+        )
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_study_fit_changed(_i: int) -> None:
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["fit"] = str(
+            study_fit_combo.currentData() or "cover"
+        )
+        appearance_changed()
+
+    def pick_study_colour() -> None:
+        from aqt.qt import QColor, QColorDialog
+
+        current = QColor(_bg_state["reviewer_spec"]["color"])
+        chosen = QColorDialog.getColor(current, dlg, "Study Screen Color")
+        if not chosen.isValid():
+            return
+        _bg_state["reviewer_spec"]["color"] = chosen.name()
+        appearance_changed()
+        sync_background_widgets()
+
+    def pick_study_image() -> None:
+        from aqt.qt import QFileDialog
+
+        path, _f = QFileDialog.getOpenFileName(
+            dlg, "Choose a study screen image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.gif)",
+        )
+        if not path:
+            return
+        from . import USER_FILES  # type: ignore
+
+        stored = _background.store_image(USER_FILES, path)
+        if not stored:
+            showWarning("Could not use that image.", parent=dlg)
+            return
+        _bg_state["reviewer_spec"]["image"] = stored
+        _bg_state["reviewer_spec"]["mode"] = "image"
         appearance_changed()
         sync_background_widgets()
 
@@ -2216,6 +2335,11 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_image"] = spec["image"]
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
+        r_spec = _bg_state["reviewer_spec"]
+        cfg["reviewer_background_mode"] = r_spec["mode"]
+        cfg["reviewer_background_color"] = r_spec["color"]
+        cfg["reviewer_background_image"] = r_spec["image"]
+        cfg["reviewer_background_fit"] = r_spec["fit"]
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
         cfg["heatmap_enabled"] = bool(heatmap_cb.isChecked())
@@ -2272,6 +2396,16 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_image": spec["image"],
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
+            # The study screen's OWN spec — carried for the same reason
+            # as every key here: the preview dict REPLACES config, so
+            # omitting these would snap the study background back to
+            # its stored value (or default) on the very next preview
+            # tick, even though the main background's edit is what
+            # triggered it.
+            "reviewer_background_mode": _bg_state["reviewer_spec"]["mode"],
+            "reviewer_background_color": _bg_state["reviewer_spec"]["color"],
+            "reviewer_background_image": _bg_state["reviewer_spec"]["image"],
+            "reviewer_background_fit": _bg_state["reviewer_spec"]["fit"],
             "heatmap_enabled": bool(heatmap_cb.isChecked()),
             # Same expression save_general writes. The design gates all
             # read through effective_cfg and their default is OFF, so a
@@ -2518,6 +2652,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)
     bg_colour_btn.clicked.connect(pick_bg_colour)
     bg_image_btn.clicked.connect(pick_bg_image)
+    study_mode_combo.currentIndexChanged.connect(on_study_mode_changed)
+    study_fit_combo.currentIndexChanged.connect(on_study_fit_changed)
+    study_colour_btn.clicked.connect(pick_study_colour)
+    study_image_btn.clicked.connect(pick_study_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
     _preview_timer.timeout.connect(apply_appearance_live)

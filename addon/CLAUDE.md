@@ -293,7 +293,18 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   document. Images are copied into `user_files/backgrounds/`
   (`store_image`, name-versioned) and served by the widened
   `setWebExports` pattern; `safe_image_name` keeps that URL inside the
-  folder and to allow-listed extensions.
+  folder and to allow-listed extensions. **`resolve(cfg, prefix=...)`**
+  reads a SECOND, independent spec off `reviewer_background_*` keys —
+  the study screen's own wallpaper, Pouya wanted it decoupled from the
+  deck screen's. `reviewer_css(spec, url)` paints `html, body` on the
+  reviewer's main webview (`context=self` in `Reviewer._initWeb`,
+  verified against Anki's source — NOT `ReviewerBottomBar`, which
+  window_chrome owns) with no `panel_css` and no blur: a card is the
+  user's own notetype, never Klaus's to restyle, so there are no
+  panels to frost and no control that would do anything. Wired from
+  `top_bar._on_main_webview_content`'s second branch, gated by its own
+  `_reviewer_background_css()` (same shape as `_background_css`, just
+  a different prefix and builder).
 - `window_chrome.py` (aqt-free above its "aqt glue" divider): the
   **KlausBook layer on Anki's OTHER windows** — Add Cards, Browse,
   Stats, and the reviewer's bottom bar. Every style string is a

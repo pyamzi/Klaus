@@ -58,6 +58,78 @@ check("image mode without a url degrades to panels-without-wallpaper "
       "background-image" not in bg.main_css(img, "")
       and "--klaus-panel:" in bg.main_css(img, ""))
 
+section("resolve(cfg, prefix=...): a second, INDEPENDENT background")
+# Pouya: "this needs to be separate from the background I set for the
+# regular main section." One validator, two isolated results.
+check("prefix defaults to the deck screen's own keys — every existing "
+      "caller (resolve(cfg), no second argument) is unaffected",
+      bg.resolve({"background_mode": "color"})["mode"] == "color")
+_both = {
+    "background_mode": "color", "background_color": "#111111",
+    "reviewer_background_mode": "image",
+    "reviewer_background_image": "study.jpg",
+    "reviewer_background_color": "#222222",
+}
+_main = bg.resolve(_both)
+_study = bg.resolve(_both, prefix="reviewer_background")
+check("the two reads never cross-contaminate — setting the deck "
+      "screen to a colour has NO effect on the study screen's own "
+      "mode, and vice versa",
+      _main["mode"] == "color" and _main["color"] == "#111111"
+      and _study["mode"] == "image" and _study["color"] == "#222222")
+check("the study screen's image is its OWN key, never the deck "
+      "screen's (there isn't one here to fall back to)",
+      _study["image"] == "study.jpg")
+check("an unset study background degrades to theme mode, same as an "
+      "unset main one — a profile that never touched this setting "
+      "gets Anki's own reviewer background, not a crash",
+      bg.resolve({}, prefix="reviewer_background")["mode"] == "theme")
+check("bad values in the study prefix fall back exactly like the "
+      "main prefix's do — one validator, one set of guarantees",
+      bg.resolve({"reviewer_background_color": "not-a-colour"},
+                 prefix="reviewer_background")["color"] == bg.DEFAULT_COLOR
+      and bg.resolve({"reviewer_background_fit": "zoom"},
+                     prefix="reviewer_background")["fit"] == "cover")
+
+section("reviewer_css: the study screen's wallpaper — no panels, no blur")
+check("theme mode paints nothing — Anki's own reviewer background, "
+      "untouched",
+      bg.reviewer_css(bg.resolve({}, prefix="reviewer_background")) == "")
+_study_colour = bg.resolve(
+    {"reviewer_background_mode": "color",
+     "reviewer_background_color": "#654321"},
+    prefix="reviewer_background",
+)
+_colour_css = bg.reviewer_css(_study_colour)
+check("colour mode fills html/body", "#654321" in _colour_css)
+check("NO panel family — a card's background is the user's own "
+      "notetype, never Klaus's to touch",
+      "table, .callout" not in _colour_css
+      and "--klaus-panel" not in _colour_css)
+_study_image = bg.resolve(
+    {"reviewer_background_mode": "image",
+     "reviewer_background_image": "study.jpg"},
+    prefix="reviewer_background",
+)
+_study_url = bg.image_url("klausmate", "study.jpg")
+_image_css = bg.reviewer_css(_study_image, _study_url)
+check("image mode references the export url, fixed + covering",
+      _study_url in _image_css
+      and "background-attachment: fixed" in _image_css
+      and "cover" in _image_css)
+check("image mode without a url degrades to nothing — same discipline "
+      "as the deck screen, a broken image must not paint a blank fill",
+      bg.reviewer_css(_study_image, "") == "")
+check("NO blur anywhere — there is nothing behind the card for a "
+      "compositing layer to frost, so no control does anything here",
+      "blur(" not in _colour_css and "blur(" not in _image_css
+      and "backdrop-filter" not in _colour_css
+      and "backdrop-filter" not in _image_css)
+check("the reviewer's own spec still carries a validated blur field "
+      "(resolve() is one validator for both) — it is simply never "
+      "READ by reviewer_css, which is the guarantee that matters",
+      "blur" in _study_colour)
+
 section("store_image")
 tmp = tempfile.mkdtemp()
 src = os.path.join(tmp, "pic.png")

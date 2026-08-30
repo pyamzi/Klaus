@@ -933,9 +933,11 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "seven handlers: design toggle, mode, fit, blur, colour, image, "
-      "accent swatch",
-      _mm_src.count("        appearance_changed()") == 7)
+      "eleven handlers: design toggle, mode, fit, blur, colour, image, "
+      "accent swatch, and the study screen's own mode/fit/colour/image "
+      "(a separate background needs the same live-preview discipline "
+      "as the one it must never be confused with)",
+      _mm_src.count("        appearance_changed()") == 11)
 check("save and preview carry the design key as the IDENTICAL "
       "expression — the preview dict replaces config and the gates "
       "default OFF, so a preview missing the key strips the whole "
@@ -947,6 +949,19 @@ check("save and preview carry the design key as the IDENTICAL "
       and '"klausbook_design": bool(klausbook_cb.isChecked()),'
       in _mm_src.split("def _bg_preview_cfg")[1].split(
           "def apply_appearance_live")[0])
+_save_slice = _mm_src.split("def save_general")[1].split("def mark_dirty")[0]
+_preview_slice = _mm_src.split("def _bg_preview_cfg")[1].split(
+    "def apply_appearance_live")[0]
+check("the study screen's four keys are written from r_spec in "
+      "save_general AND read from the identical _bg_state expression "
+      "in _bg_preview_cfg — same lesson as klausbook_design, applied "
+      "to the background this session just added",
+      all(f'cfg["reviewer_background_{field}"]' in _save_slice
+          for field in ("mode", "color", "image", "fit"))
+      and all(
+          f'"reviewer_background_{field}": _bg_state["reviewer_spec"]'
+          f'["{field}"],' in _preview_slice
+          for field in ("mode", "color", "image", "fit")))
 check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",

@@ -145,6 +145,46 @@ check("_background_css takes no bar/bottom distinction any more — its "
 check("the star's settings command is intercepted",
       "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
 
+section("a SEPARATE background for the study screen")
+# Pouya: "this needs to be separate from the background I set for the
+# regular main section." One dispatch function, two independent paths.
+_main_src = open("klausmate/top_bar.py").read()
+_dispatch = _main_src.split("def _on_main_webview_content")[1].split(
+    "def _on_js_message")[0]
+check("the reviewer's own webview is handled — context=self in "
+      "Reviewer._initWeb, verified against Anki's own source",
+      "isinstance(context, Reviewer)" in _dispatch)
+check("it calls its OWN css helper, resolved from its OWN prefix — "
+      "never the deck screen's _background_css",
+      "_reviewer_background_css()" in _dispatch)
+# .split(marker, 1) + a length check, never a blind [1] — a marker
+# that has genuinely disappeared (the regression these two pins exist
+# to catch) must FAIL the check, not IndexError and crash the rest of
+# this file's checks along with it (this suite was bitten by exactly
+# that shape of bug before: a crashing test file silently dropped
+# every pin after it).
+_reviewer_parts = _dispatch.split("isinstance(context, Reviewer)", 1)
+check("NO panel_js weld on the reviewer branch — that DOM surgery "
+      "targets the deck table, which does not exist on this screen, "
+      "and the intent (a card is the user's content) rules it out "
+      "even where it would happen to no-op",
+      len(_reviewer_parts) > 1 and "panel_js" not in _reviewer_parts[1])
+_deck_parts = _dispatch.split("isinstance(context, (DeckBrowser", 1)
+_deck_branch = (
+    _deck_parts[1].split("isinstance(context, Reviewer)", 1)[0]
+    if len(_deck_parts) > 1 else ""
+)
+check("the deck screens keep doing exactly what they did before — "
+      "panel_js weld still fires there, unaffected by the new branch",
+      bool(_deck_branch) and "background.panel_js" in _deck_branch)
+check("_reviewer_background_css shares the exact gate shape as "
+      "_background_css — resolved from a DIFFERENT prefix, never "
+      "reading the deck screen's own keys",
+      'prefix="reviewer_background"' in _main_src
+      and "design_enabled" in _main_src.split(
+          "def _reviewer_background_css")[1].split(
+          "def _on_main_webview_content")[0])
+
 section("the KlausBook design gate")
 # klausbook_design (default OFF) is the master switch between "stock
 # Anki + Klaus tools" and the full KlausBook look. Every visual

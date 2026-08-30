@@ -219,13 +219,42 @@ def _background_css() -> str:
         return ""
 
 
+def _reviewer_background_css() -> str:
+    """CSS for the reviewer's card screen — its OWN spec, resolved
+    from ``reviewer_background_*`` keys, never the deck screen's
+    (Pouya: "this needs to be separate from the background I set for
+    the regular main section"). Same gate, same preview seam, same
+    shape as :func:`_background_css` — just a different prefix and a
+    different builder (no panels: see background.reviewer_css)."""
+    try:
+        from . import background
+
+        if not background.design_enabled(background.effective_cfg(_config())):
+            return ""
+        cfg = background.effective_cfg(_config())
+        spec = background.resolve(cfg, prefix="reviewer_background")
+        url = background.image_url(_addon(), spec["image"])
+        return background.reviewer_css(spec, url)
+    except Exception as exc:
+        print(f"[klausmate] reviewer background css failed: {exc}")
+        return ""
+
+
 def _on_main_webview_content(web_content: Any, context: Any) -> None:
-    """Paint the custom background on Anki's own screens (deck list
-    and overview). The reviewer is deliberately excluded — a wallpaper
-    behind cards fights the card styling."""
+    """Paint custom backgrounds on Anki's own screens.
+
+    The deck list and overview share ONE wallpaper, with the Klaus
+    panel family and the studied-line weld on top of it. The reviewer
+    gets a SEPARATE, independently configured wallpaper — no panels,
+    since a card's background is the user's own notetype, never
+    Klaus's to touch (see background.reviewer_css). Deliberately
+    excluding the reviewer entirely was the original call here; Pouya
+    asked for a study-screen picture of its own instead (2026-08-30).
+    """
     try:
         from aqt.deckbrowser import DeckBrowser
         from aqt.overview import Overview
+        from aqt.reviewer import Reviewer
 
         # No congrats screen here on purpose: aqt's deck-description
         # module still exists but the congrats-page class is gone from
@@ -233,19 +262,28 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
         # page loaded via load_url — it never goes through stdHtml, so
         # this hook never fires for it. An import of that dead symbol
         # lived here for a while, silently failing on every draw.
-        if not isinstance(context, (DeckBrowser, Overview)):
-            return
-        css = _background_css()
-        if css:
-            web_content.head += "<style>" + css + "</style>"
-            # Moves the studied-today line into the deck table so it is
-            # really inside the panel. No-op on the other two screens
-            # (nothing there has that id) and in theme mode (empty).
-            from . import background
+        if isinstance(context, (DeckBrowser, Overview)):
+            css = _background_css()
+            if css:
+                web_content.head += "<style>" + css + "</style>"
+                # Moves the studied-today line into the deck table so it
+                # is really inside the panel. No-op on the other screen
+                # (nothing there has that id) and in theme mode (empty).
+                from . import background
 
-            web_content.body += background.panel_js(
-                background.resolve(background.effective_cfg(_config()))
-            )
+                web_content.body += background.panel_js(
+                    background.resolve(background.effective_cfg(_config()))
+                )
+            return
+
+        # context=self in Reviewer._initWeb (verified against Anki's
+        # own source) — the SAME webview showing #qa, not the bottom
+        # answer bar (a different context class entirely, owned by
+        # window_chrome's chrome-only reviewer sheet).
+        if isinstance(context, Reviewer):
+            css = _reviewer_background_css()
+            if css:
+                web_content.head += "<style>" + css + "</style>"
     except Exception as exc:
         print(f"[klausmate] background inject failed: {exc}")
 

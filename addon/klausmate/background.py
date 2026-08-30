@@ -89,30 +89,36 @@ def effective_cfg(cfg: Any) -> Any:
     return _PREVIEW_CFG if _PREVIEW_CFG is not None else cfg
 
 
-def resolve(cfg: Any) -> dict:
-    """Normalise the background config into a spec dict.
+def resolve(cfg: Any, prefix: str = "background") -> dict:
+    """Normalise ONE background's config into a spec dict.
 
     Every field is validated and falls back to a safe default, so a
-    hand-edited config can never produce broken CSS.
+    hand-edited config can never produce broken CSS. *prefix* picks
+    WHICH background: the deck screen's own ``background_*`` keys by
+    default, or a second, independent set — ``reviewer_background_*``
+    for the study screen (Pouya: separate from the main one on
+    purpose, so `reviewer_css` is never tempted to fall back to the
+    deck screen's picture). One validator for both keeps them
+    trustworthy in the same way and on the same test coverage.
     """
     if not isinstance(cfg, dict):
         cfg = {}
-    mode = cfg.get("background_mode")
+    mode = cfg.get(f"{prefix}_mode")
     if mode not in MODES:
         mode = "theme"
-    colour = cfg.get("background_color")
+    colour = cfg.get(f"{prefix}_color")
     if not isinstance(colour, str) or not _is_hex(colour):
         colour = DEFAULT_COLOR
-    image = cfg.get("background_image")
+    image = cfg.get(f"{prefix}_image")
     if not isinstance(image, str) or not image.strip():
         image = ""
     # An image mode with no image selected is just the theme.
     if mode == "image" and not image:
         mode = "theme"
-    fit = cfg.get("background_fit")
+    fit = cfg.get(f"{prefix}_fit")
     if fit not in FITS:
         fit = "cover"
-    blur = cfg.get("background_blur")
+    blur = cfg.get(f"{prefix}_blur")
     if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
         blur = DEFAULT_BLUR
     return {
@@ -189,6 +195,44 @@ def main_css(spec: dict, url: str = "") -> str:
         )
     # Theme mode: no wallpaper — Anki's own ground, Klaus panels on it.
     return panel_css(spec)
+
+
+def reviewer_css(spec: dict, url: str = "") -> str:
+    """Background for the reviewer's card screen — a SEPARATE picture
+    from the deck screen's, on purpose (Pouya: "this needs to be
+    separate from the background I set for the regular main section").
+    Resolved from its own ``reviewer_background_*`` keys via
+    ``resolve(cfg, prefix="reviewer_background")``, never coupled to
+    the deck screen's spec.
+
+    No panel_css here, and that is deliberate, not an oversight: the
+    "panels" being frosted on the deck screen are ANKI'S surfaces
+    (the deck table, the heatmap) that Klaus is choosing to restyle —
+    the card is the user's own notetype, and Klaus never touches
+    content that belongs to the collection. A wallpaper behind the
+    card is exactly as far as this goes; if a notetype's own card
+    background is opaque, it simply sits on top of it unchanged, the
+    same freedom `main_css` already gives the deck screen.
+
+    No blur control either: blur exists to frost something BEHIND it,
+    and there is nothing to frost here — no compositing layer, no
+    control that would do anything, so none is offered.
+    """
+    mode = spec.get("mode")
+    if mode == "color":
+        return "html, body { background: %s !important; }" % spec["color"]
+    if mode == "image" and url:
+        return (
+            "html, body {"
+            f" background-color: {spec['color']} !important;"
+            f" background-image: url('{url}') !important;"
+            f" background-position: center top !important;"
+            f" background-attachment: fixed !important;"
+            f" {_fit_rules(spec['fit'])}"
+            " }"
+        )
+    # Theme mode: Anki's own reviewer background, untouched.
+    return ""
 
 
 def panel_css(spec: dict) -> str:
