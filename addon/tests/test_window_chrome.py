@@ -41,11 +41,26 @@ check("no layout transformation: the sheet never touches row heights, "
 section("sidebar tree: an instance sheet that re-declares Anki's")
 for night in (False, True):
     q = theme.sidebar_tree_qss(night)
+    c = theme.palette(night)
     check(f"night={night}: re-declares the padding and zero border "
           "Anki's own widget-level sheet carried — replacing it "
           "wholesale must not visibly shift the tree",
           "padding: 3px;" in q and "padding-right: 0px;" in q
           and "border: 0;" in q)
+    check(f"night={night}: a selected row is TWO paint regions and "
+          "both are covered — the branch (disclosure-arrow) cell is "
+          "recoloured in step with the item, or Qt paints it system "
+          "dark blue (the corner-fragment artifact, live screenshot "
+          "2026-08-29)",
+          "QTreeView::branch:selected {" in q
+          and q.count(c["selection_bg"]) >= 2)
+    check(f"night={night}: the style's own selection underlay is "
+          "switched OFF — it is what peeked through rounded corners",
+          "selection-background-color: transparent;" in q)
+    check(f"night={night}: selection stays Anki's full-width "
+          "RECTANGLE, recoloured — harmonize means stock geometry, "
+          "and square corners have nothing to leak through",
+          "border-radius" not in q)
 
 section("utility windows: grey polarity, one accent")
 _u = theme.utility_window_qss(False)

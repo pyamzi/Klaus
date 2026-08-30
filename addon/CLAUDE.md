@@ -479,6 +479,13 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
+- **A styled QTreeView selection is TWO paint regions** — the item AND
+  the branch (disclosure-arrow) cell, plus the style's own selection
+  underlay. Style only `::item:selected` and Qt paints the rest in
+  palette-highlight dark blue: fragments at the row edge, and corner
+  peek-through if the item is rounded. Full fix: `::branch:{hover,
+  selected}` rules + `selection-background-color: transparent` + keep
+  square geometry (see `theme.sidebar_tree_qss`).
 - **pdfium hit tolerance**: `QPdfDocument.getSelection()` silently returns an
   INVALID selection if an endpoint is >~7pt from a glyph, or if both endpoints
   hit the same character. Never anchor at page corners/edges — use

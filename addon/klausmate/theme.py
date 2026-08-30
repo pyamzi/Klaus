@@ -1185,6 +1185,22 @@ def sidebar_tree_qss(night: bool) -> str:
     beats any ancestor's. So this replaces Anki's wholesale, which
     means it must RE-DECLARE what Anki's carried (the padding and the
     zero border) or replacing it would visibly shift the tree.
+
+    A selected tree ROW is two paint regions, not one: the BRANCH cell
+    (the disclosure-arrow column) and the item. Styling only
+    ``::item:selected`` left Qt painting the branch cell and the
+    selection underlay with the palette highlight — system dark blue —
+    which surfaced as dark fragments at the row's left edge, and
+    peeked through the corner cutouts of a rounded item (live
+    screenshot, 2026-08-29). Hence three rules here, not one:
+    ``selection-background-color: transparent`` stops the style's own
+    underlay painting entirely, the ``::branch`` states recolour the
+    arrow column in step with the item, and the selection stays a
+    FULL-WIDTH RECTANGLE — Anki's stock geometry, recoloured, which is
+    what "harmonize" means, and square corners have nothing to leak
+    through. ``outline: 0`` drops the style's dotted focus rect for
+    the same reason; the selection colour itself carries focus, as it
+    does in every macOS sidebar.
     """
     c = palette(night)
     return f"""
@@ -1194,9 +1210,11 @@ def sidebar_tree_qss(night: bool) -> str:
         border: 0;
         background: {c['bg']};
         color: {c['text']};
+        selection-background-color: transparent;
+        show-decoration-selected: 1;
+        outline: 0;
     }}
     QTreeView::item {{
-        border-radius: 6px;
         padding: 1px 0px;
     }}
     QTreeView::item:hover {{
@@ -1205,6 +1223,15 @@ def sidebar_tree_qss(night: bool) -> str:
     QTreeView::item:selected {{
         background: {c['selection_bg']};
         color: {c['text']};
+    }}
+    QTreeView::branch {{
+        background: transparent;
+    }}
+    QTreeView::branch:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QTreeView::branch:selected {{
+        background: {c['selection_bg']};
     }}
     """
 
