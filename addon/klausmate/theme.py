@@ -756,7 +756,20 @@ def library_qss(night: bool) -> str:
     white card with rounded corners and quiet selection, buttons
     secondary-grey by default (``PrimaryButton`` opts into blue —
     inverse of :func:`dialog_qss`, because the Library's row of utility
-    buttons must not scream)."""
+    buttons must not scream).
+
+    A selected tree ROW is two paint regions, not one: the item AND
+    the branch (indentation/disclosure-arrow) cell that every row
+    reserves, folder or not — same trap as Browse's sidebar
+    (``sidebar_tree_qss``). Styling only ``::item:selected`` left Qt
+    painting the branch cell with the raw palette Highlight colour —
+    system blue — which showed up as a stray tinted block jammed
+    against the item's rounded corner (live screenshot, 2026-08-30).
+    ``selection-background-color: transparent`` stops that underlay
+    outright; the ``::branch`` states recolour the reserved cell to
+    match the item exactly, so the block becomes a same-colour seam
+    instead of a colour clash.
+    """
     c = palette(night)
     return f"""
     QWidget#KlausLibraryWindow {{
@@ -770,6 +783,8 @@ def library_qss(night: bool) -> str:
         border: 1px solid {c['grey_light']};
         border-radius: 12px;
         padding: 4px;
+        selection-background-color: transparent;
+        outline: 0;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item {{
         border-radius: 6px;
@@ -781,6 +796,15 @@ def library_qss(night: bool) -> str:
     QWidget#KlausLibraryWindow QTreeWidget::item:selected {{
         background: {c['selection_bg']};
         color: {c['text']};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch {{
+        background: transparent;
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
+        background: {c['selection_bg']};
     }}
     QWidget#KlausLibraryWindow QHeaderView::section {{
         background: transparent;

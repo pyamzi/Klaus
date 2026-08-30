@@ -62,6 +62,21 @@ check("dialog defines DangerButton", "QPushButton#DangerButton" in d)
 lib = theme.library_qss(False)
 check("library inverts: grey default + PrimaryButton opt-in",
       "QPushButton#PrimaryButton" in lib)
+for night in (False, True):
+    lq = theme.library_qss(night)
+    c = theme.palette(night)
+    check(f"library_qss(night={night}): a selected row's branch "
+          "(indentation/disclosure) cell is recoloured in step with "
+          "the item — every row reserves that cell whether or not "
+          "it's a folder, and unstyled it painted the raw palette "
+          "Highlight colour (the stray blue block, live screenshot "
+          "2026-08-30)",
+          "QTreeWidget::branch:selected {" in lq
+          and lq.count(c["selection_bg"]) >= 2)
+    check(f"library_qss(night={night}): the tree's own selection "
+          "underlay is switched off, so nothing paints beneath the "
+          "branch/item recolouring",
+          "selection-background-color: transparent;" in lq)
 
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
