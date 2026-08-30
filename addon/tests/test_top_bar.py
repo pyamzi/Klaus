@@ -65,9 +65,8 @@ for key, tok in (("chrome", "chrome"), ("border", "grey_light"),
           f"--klaus-{key}: {theme.LIGHT[tok]};" in css
           and f"--klaus-{key}: {theme.DARK[tok]};" in css)
 # Hover/press are TRANSLUCENT veils (Apple material states): black over
-# light chrome, white over dark — so the highlight tints whatever is
-# behind the button (flat chrome, custom colour, photo frost) instead
-# of pasting an opaque grey chip over it.
+# light chrome, white over dark — so the highlight tints the flat
+# chrome colour instead of pasting an opaque grey chip over it.
 check("hover veil: translucent black (light) / white (dark)",
       "--klaus-hover: rgba(0, 0, 0, 0.05);" in css
       and "--klaus-hover: rgba(255, 255, 255, 0.10);" in css)
@@ -134,8 +133,15 @@ _src = open("klausmate/top_bar.py").read()
 _inject = _src.split("def _on_webview_will_set_content")[1].split("def setup")[0]
 check("first paint no longer pins both themes to one snapshot",
       ":root.night-mode" not in _inject)
-check("first paint injects the chosen background instead",
-      "_background_css(bar=True)" in _inject)
+check("first paint does NOT inject the chosen wallpaper — the bars "
+      "used to paint a blurred copy of it and no longer do (removed "
+      "2026-08-30); they show flat chrome regardless of background "
+      "mode",
+      "_background_css()" not in _inject
+      and "background.bar_css" not in _src)
+check("_background_css takes no bar/bottom distinction any more — its "
+      "only remaining caller wants the deck/overview background",
+      "def _background_css() -> str:" in _src)
 check("the star's settings command is intercepted",
       "klausmate:settings" in _src and "webview_did_receive_js_message" in _src)
 

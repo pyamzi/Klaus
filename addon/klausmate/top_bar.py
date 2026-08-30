@@ -192,11 +192,13 @@ def _config() -> dict:
         return {}
 
 
-def _background_css(bar: bool, bottom: bool = False) -> str:
-    """CSS for the chosen background — the frosted variant for a bar
-    (top by default, ``bottom=True`` for the bottom toolbar), the plain
-    one for Anki's own screens. Empty in "theme" mode, so the default
-    install paints nothing."""
+def _background_css() -> str:
+    """CSS for Anki's own screens (deck list, overview) — the chosen
+    wallpaper plus the panel family. The top and bottom toolbars no
+    longer call this: they used to paint a blurred copy of the same
+    background under themselves, and Pouya asked for that removed
+    (2026-08-30) — the bars now always show flat chrome, independent
+    of whatever is chosen here."""
     try:
         from . import background
 
@@ -211,8 +213,6 @@ def _background_css(bar: bool, bottom: bool = False) -> str:
             return ""
         spec = background.resolve(background.effective_cfg(_config()))
         url = background.image_url(_addon(), spec["image"])
-        if bar:
-            return background.bar_css(spec, url, bottom=bottom)
         return background.main_css(spec, url)
     except Exception as exc:
         print(f"[klausmate] background css failed: {exc}")
@@ -235,7 +235,7 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
         # lived here for a while, silently failing on every draw.
         if not isinstance(context, (DeckBrowser, Overview)):
             return
-        css = _background_css(bar=False)
+        css = _background_css()
         if css:
             web_content.head += "<style>" + css + "</style>"
             # Moves the studied-today line into the deck table so it is
@@ -313,12 +313,14 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
             return
 
         # The bottom toolbar (deck-browser/overview buttons) gets the
-        # SAME chrome + frost as the top, so the window is bracketed by
+        # SAME chrome as the top, so the window is bracketed by
         # matching bars. Matched by class NAME: these contexts live in
         # aqt.deckbrowser/aqt.overview and importing both here for an
         # isinstance would be needless coupling. The reviewer's answer
         # bar is deliberately excluded — its colours carry scheduling
-        # meaning.
+        # meaning. No wallpaper copy here (removed 2026-08-30, Pouya's
+        # call) — the bar is always flat chrome, whatever background
+        # mode the deck screen is painted with.
         if type(context).__name__ in (
             "DeckBrowserBottomBar",
             "OverviewBottomBar",
@@ -328,9 +330,6 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
             web_content.head += (
                 "<style>" + theme.bottombar_css() + "</style>"
             )
-            css = _background_css(bar=True, bottom=True)
-            if css:
-                web_content.head += "<style>" + css + "</style>"
             return
 
         if not isinstance(context, TopToolbar):
@@ -342,12 +341,6 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         # follows a theme switch live (Anki toggles those classes with
         # JS and never re-runs this hook). See theme.toolbar_css.
         web_content.head += "<style>" + theme.toolbar_css() + "</style>"
-        # The custom background's frosted copy under the bar. A blurred
-        # flat colour IS that colour, so "colour" mode makes the bar
-        # match the window with no measuring at all.
-        css = _background_css(bar=True)
-        if css:
-            web_content.head += "<style>" + css + "</style>"
     except Exception as exc:
         print(f"[klausmate] top bar css failed: {exc}")
 

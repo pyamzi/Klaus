@@ -157,10 +157,10 @@ wouldn't already need.
   ground, with the Klaus panels on it whenever the design is on),
   `"color"`, or `"image"`. Sets the background of Anki's deck and
   overview screens; the panel family itself follows `klausbook_design`
-  in every mode — native mode is where Anki looks stock. The Klaus top bar shows
-  the *same* background blurred, so it reads as frosted glass over it —
-  and because a Gaussian blur of a flat colour is that same colour,
-  `"color"` mode also makes the bar match the window chrome exactly.
+  in every mode — native mode is where Anki looks stock. The top and
+  bottom toolbars are independent of this setting — they always show
+  flat chrome matching the window's own colour, whatever wallpaper (or
+  none) is chosen here.
 - **background_color**: `#rrggbb` fill for `"color"` mode (also the
   colour behind a transparent or still-loading image). Default
   `"#1E2225"`.
@@ -168,8 +168,9 @@ wouldn't already need.
   `user_files/backgrounds/`. Choosing one in Preferences copies it
   there, so the background survives the original being moved.
 - **background_fit**: `"cover"` (default), `"contain"` or `"tile"`.
-- **background_blur**: 0–100 px of blur under the top bar. Default
-  `22`.
+- **background_blur**: 0–100 px of blur behind the deck panels in
+  `"image"` mode (a no-op in `"color"`/`"theme"` mode — blurring a
+  flat ground changes nothing). Default `22`.
 - **heatmap_enabled**: `true` (default) draws the review heatmap — a
   year of study activity, plus the next four weeks of scheduled cards —
   under the deck list. Clicking a day opens it in Browse. `false`

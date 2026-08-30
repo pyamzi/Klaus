@@ -1,18 +1,19 @@
-"""Custom app background + the frosted top bar that sits over it.
+"""Custom app background for Anki's deck and overview screens.
 
 Pouya: "make it have a Gaussian blur of whatever the background is. If
 the background is just a color, it should just be that color" — plus a
-way to choose that background in Preferences.
+way to choose that background in Preferences. That request is realised
+on the content panels only: a deck table and the page background it
+sits on are the SAME document, so panel_css's ``backdrop-filter`` is
+the real thing, no compositor tricks needed.
 
-How the frosting actually works. The toolbar is its OWN webview, so CSS
-``backdrop-filter`` there has nothing to blur: the window behind it is a
-different widget and never composites into that document. Real vibrancy
-would mean NSVisualEffectView / DWM — the native fiddling that killed
-single-window mode twice here. So the bar instead paints THE SAME
-background itself, blurred and top-aligned, in a layer beneath its
-content. Over a photo that reads as frosted glass; over a solid colour a
-Gaussian blur is a no-op, so the bar is exactly that colour and the seam
-with the window chrome disappears on its own — which is the whole point.
+The top and bottom toolbars used to fake the same frost by painting a
+blurred COPY of the background under them — their webview is a
+separate document, so real backdrop-filter had nothing to blur. Pouya
+asked for that removed (2026-08-30): the bars now always show flat
+``--klaus-chrome`` (theme.toolbar_css / theme.bottombar_css), matching
+the OS window's own colour, independent of whatever wallpaper is
+chosen here.
 
 Everything here is pure string/dict work (aqt-free) so
 tests/test_background.py can exercise every branch; callers supply the
@@ -30,10 +31,7 @@ MODES = ("theme", "color", "image")
 FITS = ("cover", "contain", "tile")
 
 DEFAULT_COLOR = "#1E2225"
-DEFAULT_BLUR = 22          # px of Gaussian blur under the bar
-DEFAULT_TINT = 0.55        # chrome tint over the blur. Tuned for
-                           # READABILITY: a bright photo washed the
-                           # muted link colour out entirely.
+DEFAULT_BLUR = 22          # px of Gaussian blur behind the deck panels
 
 # Where chosen images are copied. Inside the addon folder so Anki's
 # web exports can serve them; user_files is gitignored.
@@ -207,19 +205,17 @@ def panel_css(spec: dict) -> str:
     all: the design gate lives upstream at top_bar._background_css,
     which returns "" for every caller when the toggle is off.
 
-    Only the FROST is mode-dependent (image-only), by the same logic
-    bar_css relies on — a Gaussian blur of a flat colour is that
-    colour, so anywhere else backdrop-filter would cost a compositing
-    layer per panel to change nothing.
+    Only the FROST is mode-dependent (image-only) — a Gaussian blur of
+    a flat colour is that colour, so anywhere else backdrop-filter
+    would cost a compositing layer per panel to change nothing.
 
-    Unlike the bars, this really is ``backdrop-filter``. The bars can't
-    use it — the toolbar is a separate webview, so the window behind it
-    never composites into that document — but a deck table and the page
-    background it sits on ARE the same document, so the real thing works
-    here. Anki was already 90% of the way: ``.fancy table`` is painted
-    with ``--canvas-glass`` ("transparent background for surfaces
-    containing text") and the theme defines ``--blur``, but nothing ever
-    blurred behind it, so over a photo the glass was a see-through wash.
+    This is a REAL ``backdrop-filter``, not a painted copy: a deck
+    table and the page background it sits on are the same document, so
+    the compositor does the actual blurring. Anki was already 90% of
+    the way there — ``.fancy table`` is painted with ``--canvas-glass``
+    ("transparent background for surfaces containing text") and the
+    theme defines ``--blur``, but nothing ever blurred behind it, so
+    over a photo the glass was a see-through wash.
 
     Both palettes ship keyed on Anki's own ``:root.night-mode`` class
     rather than baking whichever is current — the same reason
@@ -233,9 +229,11 @@ def panel_css(spec: dict) -> str:
     blur = int(blur)
     # The frost itself is IMAGE-ONLY: a Gaussian blur of a flat colour is
     # that colour, so over a colour or theme ground backdrop-filter would
-    # cost a compositing layer per panel to change nothing. The tint,
-    # borders, corners and the welded stats line apply in EVERY mode, so
-    # the panel LOOK is consistent whichever background is chosen.
+    # cost a compositing layer per panel to change nothing (this is the
+    # panels' OWN frost — the toolbars no longer copy the background at
+    # all). The tint, borders, corners and the welded stats line apply
+    # in EVERY mode, so the panel LOOK is consistent whichever
+    # background is chosen.
     filt = f"blur({blur}px) saturate(140%)"
     frost = (
         f" -webkit-backdrop-filter: {filt} !important;"
@@ -389,121 +387,6 @@ def panel_js(spec: dict) -> str:
         "var b=t.parentNode.querySelector('br');if(b)b.remove();"
         "}catch(e){}})();</script>"
     )
-
-
-def bar_css(spec: dict, url: str = "", bottom: bool = False) -> str:
-    """The frosted layer for a toolbar — the top bar by default, the
-    bottom bar with ``bottom=True``.
-
-    A ``::before`` layer under the bar's content carries the same
-    background, blurred. It is inset by ``-blur`` px and scaled so the
-    blur kernel never samples past the element and leaves pale edges.
-    In ``color`` mode there is nothing to blur, so the bar just takes
-    the colour — a Gaussian blur of a flat fill is that same fill.
-
-    The top toolbar's container is the ``.header`` class div; the
-    bottom toolbar has no such class (its table is ``#header``), so the
-    bottom frost hangs off ``body`` instead — and samples the IMAGE'S
-    BOTTOM edge, since that is the slice of the window background the
-    bar visually continues.
-    """
-    mode = spec.get("mode")
-    if bottom:
-        return _bottom_bar_css(spec, url)
-    if mode == "color":
-        return (
-            ".header { background: %s !important; }" % spec["color"]
-        )
-    if mode == "image" and url:
-        blur = spec["blur"]
-        return f"""
-    .header {{
-        background: {spec['color']} !important;
-        position: relative;
-        isolation: isolate;
-        overflow: hidden;
-    }}
-    .header::before {{
-        content: "";
-        position: absolute;
-        /* Bleed past every edge so the blur never samples emptiness. */
-        top: {-blur * 2}px; right: {-blur * 2}px;
-        bottom: {-blur * 2}px; left: {-blur * 2}px;
-        background-color: {spec['color']};
-        background-image: url('{url}');
-        background-position: center top;
-        {_fit_rules(spec['fit'])}
-        filter: blur({blur}px);
-        z-index: -1;
-    }}
-    /* Chrome tint over the frost, so links stay readable on any photo. */
-    .header::after {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: var(--klaus-chrome);
-        opacity: {DEFAULT_TINT};
-        z-index: -1;
-    }}
-    .header > * {{ position: relative; z-index: 1; }}
-    /* Over a photo the muted link colour disappears — take full
-       contrast, and a soft shadow so light patches can't swallow it. */
-    .header .hitem {{
-        color: var(--klaus-text) !important;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-    }}
-    .header .hitem:hover {{ color: var(--klaus-text) !important; }}
-    """
-    return ""
-
-
-def _bottom_bar_css(spec: dict, url: str = "") -> str:
-    """bar_css's bottom-toolbar variant — same frost, different roots."""
-    mode = spec.get("mode")
-    if mode == "color":
-        return (
-            "html, body { background: %s !important; }" % spec["color"]
-        )
-    if mode == "image" and url:
-        blur = spec["blur"]
-        return f"""
-    body {{
-        background: {spec['color']} !important;
-        position: relative;
-        isolation: isolate;
-        overflow: hidden;
-    }}
-    body::before {{
-        content: "";
-        position: absolute;
-        top: {-blur * 2}px; right: {-blur * 2}px;
-        bottom: {-blur * 2}px; left: {-blur * 2}px;
-        background-color: {spec['color']};
-        background-image: url('{url}');
-        background-position: center bottom;
-        {_fit_rules(spec['fit'])}
-        filter: blur({blur}px);
-        z-index: -1;
-    }}
-    body::after {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: var(--klaus-chrome);
-        opacity: {DEFAULT_TINT};
-        z-index: -1;
-    }}
-    #header {{ position: relative; z-index: 1; }}
-    /* Full contrast + soft shadow, same treatment as the top bar's
-       links — a photo swallows the muted tone. body #header button
-       (1,1,1) must outrank the chip base's #header button (1,0,1);
-       both carry !important, so specificity decides. */
-    body #header button {{
-        color: var(--klaus-text) !important;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
-    }}
-    """
-    return ""
 
 
 def store_image(user_files_dir: str, src_path: str) -> str:

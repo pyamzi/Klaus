@@ -930,15 +930,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         test_conn_btn,
     )
 
-    # ---- Appearance: custom background + the frosted top bar ----
-    # A blurred flat colour IS that colour, so "Solid Color" also makes
-    # the top bar match the window chrome exactly (background.py).
+    # ---- Appearance: custom background + the deck-screen panels ----
     appearance_layout = _page(
         "Appearance",
         "Appearance",
         "The KlausBook design layer and everything it draws — the "
-        "background of Anki's deck and overview screens, the frosted "
-        "top bar, and the deck-screen widgets — plus the accent color, "
+        "background of Anki's deck and overview screens and its "
+        "panels, and the deck-screen widgets — plus the accent color, "
         "which styles Klaus's own windows in either mode.",
     )
 
@@ -1004,8 +1002,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_blur_row = _row(
         appearance_layout,
         "Blur",
-        "How strongly the toolbars and content panels frost the image "
-        "behind them.",
+        "How strongly the content panels frost the image behind them.",
         blur_ctl,
     )
 

@@ -107,8 +107,11 @@ Volunteered and binding from the owner:
   light/dark key sets, user-selectable accent themes (six presets +
   custom colour), translucent Apple-material state veils, a documented
   radius/type scale enforced by tests. Seamless window chrome (top and
-  bottom toolbars matching, frosted over custom backgrounds) is a
-  committed identity feature.
+  bottom toolbars matching each other and the OS window's own colour)
+  is a committed identity feature. The bars are deliberately NOT tied
+  to the custom wallpaper (removed 2026-08-30, Pouya's call) — that
+  frost is the deck panels' job now, via real `backdrop-filter` on the
+  same document.
 
 ## Evidence on Hand
 

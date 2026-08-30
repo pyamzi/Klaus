@@ -1,4 +1,4 @@
-"""Headless tests for the custom background + frosted top bar."""
+"""Headless tests for the custom background + frosted deck panels."""
 import importlib
 import os
 import re
@@ -57,49 +57,6 @@ check("image mode without a url degrades to panels-without-wallpaper "
       "— a broken image must not strip the whole panel family",
       "background-image" not in bg.main_css(img, "")
       and "--klaus-panel:" in bg.main_css(img, ""))
-
-section("bar_css: the frost")
-# The whole point: blurring a flat colour is a no-op, so the bar simply
-# IS that colour and matches the window chrome with no measuring.
-bar = bg.bar_css(colour)
-check("colour mode needs no blur at all",
-      "#123456" in bar and "blur(" not in bar)
-check("theme mode leaves the bar to the theme tokens",
-      bg.bar_css(bg.resolve({})) == "")
-bar_img = bg.bar_css(img, url)
-check("image mode blurs a copy of the background",
-      "filter: blur(" in bar_img and url in bar_img)
-check("the blurred layer sits behind the links", "z-index: -1" in bar_img)
-check("content is lifted above the frost", ".header > *" in bar_img)
-check("a tint keeps links readable over any photo",
-      "--klaus-chrome" in bar_img and "opacity:" in bar_img)
-# Blur samples outside the element; without bleed the edges go pale.
-blur_px = img["blur"]
-check("the frost layer bleeds past every edge",
-      f"{-blur_px * 2}px" in bar_img)
-check("no url means no frost", bg.bar_css(img, "") == "")
-
-section("bar_css bottom variant (K-109): the bottom toolbar")
-bot_col = bg.bar_css(colour, bottom=True)
-check("colour mode paints html+body — the bottom bar has no .header "
-      "class, only the #header table",
-      "#123456" in bot_col and "html, body" in bot_col
-      and ".header" not in bot_col)
-bot_img = bg.bar_css(img, url, bottom=True)
-check("image mode frosts off body and samples the image's BOTTOM edge "
-      "(the slice of the window background the bar continues)",
-      "body::before" in bot_img
-      and "background-position: center bottom" in bot_img
-      and "filter: blur(" in bot_img)
-check("same tint + bleed discipline as the top bar",
-      "--klaus-chrome" in bot_img and f"{-img['blur'] * 2}px" in bot_img)
-check("buttons take full contrast + shadow over a photo, from a "
-      "selector that outranks the chip base",
-      "body #header button" in bot_img and "text-shadow" in bot_img)
-check("bottom frost also degrades to nothing without a url",
-      bg.bar_css(img, "", bottom=True) == "")
-check("top output is byte-identical to before the bottom param",
-      bg.bar_css(colour) == bg.bar_css(colour, bottom=False) == bar)
 
 section("store_image")
 tmp = tempfile.mkdtemp()

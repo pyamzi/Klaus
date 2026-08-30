@@ -254,43 +254,46 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   the shared `.hitem` class. Pure builders are aqt-free for
   `tests/test_top_bar.py`. Night-mode catches up on the toolbar's own
   redraw.
-- `background.py` (aqt-free): the custom app background + the **frosted
-  top bar** + **`design_enabled(cfg)` — the KlausBook design gate**
-  (config `klausbook_design`, default FALSE: Klaus ships as tools in a
-  stock Anki; the full look is the opt-in). The gate is enforced at the
-  PAINTERS, never inside `resolve()` — Preferences seeds its widgets
-  through `resolve(stored)` and writes the spec back on Save, so a
-  resolve-level gate would wipe a stored image background. Gated:
-  `top_bar._background_css` (one early return kills main/panel/bar css
-  + the panel_js weld), the toolbar/bottombar restyle, the chrome push,
-  and the whole dashboard injection (which also resets `_EDIT` so
-  toggling off mid-jiggle can't strand edit mode). NOT gated: the star
-  (strokes `var(--klaus-accent, currentColor)` so it survives on the
-  stock bar), the heatmap, every functional injection, and Klaus's own
-  windows. In native mode the deck screen draws NO Klaus widgets: the
-  heatmap's two injections are gated too (at the injections, never
-  inside `enabled()` — Preferences seeds its switch from
-  `enabled(stored)` and saves it back, so gating there would persist a
-  `heatmap_enabled` False the user never chose). The star is the one
-  survivor, and it carries its own geometry inline (`logo_html`) so the
-  gate cannot move it. Corrupt values read as OFF — opposite of
-  heatmap's rule — so bad config can't surprise-restyle the app. `resolve(cfg)` validates
-  the five `background_*` keys into a
-  spec; `main_css` paints Anki's deck and overview screens — panel_css in
+- `background.py` (aqt-free): the custom app background for Anki's deck
+  and overview screens + **`design_enabled(cfg)` — the KlausBook design
+  gate** (config `klausbook_design`, default FALSE: Klaus ships as
+  tools in a stock Anki; the full look is the opt-in). The gate is
+  enforced at the PAINTERS, never inside `resolve()` — Preferences
+  seeds its widgets through `resolve(stored)` and writes the spec back
+  on Save, so a resolve-level gate would wipe a stored image
+  background. Gated: `top_bar._background_css` (one early return kills
+  main/panel css + the panel_js weld), the toolbar/bottombar restyle,
+  the chrome push, and the whole dashboard injection (which also resets
+  `_EDIT` so toggling off mid-jiggle can't strand edit mode). NOT
+  gated: the star (strokes `var(--klaus-accent, currentColor)` so it
+  survives on the stock bar), the heatmap, every functional injection,
+  and Klaus's own windows. In native mode the deck screen draws NO
+  Klaus widgets: the heatmap's two injections are gated too (at the
+  injections, never inside `enabled()` — Preferences seeds its switch
+  from `enabled(stored)` and saves it back, so gating there would
+  persist a `heatmap_enabled` False the user never chose). The star is
+  the one survivor, and it carries its own geometry inline (`logo_html`)
+  so the gate cannot move it. Corrupt values read as OFF — opposite of
+  heatmap's rule — so bad config can't surprise-restyle the app.
+  `resolve(cfg)` validates the five `background_*` keys into a spec;
+  `main_css` paints Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
   congrats screen — it is sveltekit-loaded and never fires
   `webview_will_set_content`; a dead import claiming otherwise was
-  removed 2026-08-27); `bar_css`
-  paints the SAME background blurred under the toolbar. **Why a copy and
-  not `backdrop-filter`**: the toolbar is its own webview, so the window
-  behind it never composites into that document — real vibrancy would
-  mean NSWindow/DWM. A Gaussian blur of a flat colour is that colour, so
-  `"color"` mode makes the bar match the window chrome exactly and the
-  seam disappears without measuring anything. Images are copied into
-  `user_files/backgrounds/` (`store_image`, name-versioned) and served by
-  the widened `setWebExports` pattern; `safe_image_name` keeps that URL
-  inside the folder and to allow-listed extensions.
+  removed 2026-08-27). **The top and bottom toolbars are independent of
+  this file** (`bar_css`/`_bottom_bar_css` — a manual painted copy of
+  the background, blurred, since the toolbar's own webview can't
+  `backdrop-filter` through to the window behind it — were deleted
+  2026-08-30, Pouya's call): the bars always show flat
+  `theme.toolbar_css`/`bottombar_css` chrome, whatever background mode
+  the deck screen is painted with. The deck PANELS still frost over an
+  image background, but for real — `panel_css`'s `backdrop-filter`,
+  since a deck table and the page background it sits on ARE the same
+  document. Images are copied into `user_files/backgrounds/`
+  (`store_image`, name-versioned) and served by the widened
+  `setWebExports` pattern; `safe_image_name` keeps that URL inside the
+  folder and to allow-listed extensions.
 - `window_chrome.py` (aqt-free above its "aqt glue" divider): the
   **KlausBook layer on Anki's OTHER windows** — Add Cards, Browse,
   Stats, and the reviewer's bottom bar. Every style string is a
