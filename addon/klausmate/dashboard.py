@@ -272,6 +272,14 @@ def dashboard_css() -> str:
         " box-shadow: 0 1px 4px rgba(0,0,0,0.25);"
         f" font-family: {theme.FONT_FAMILY};"
         " }"
+        # An invisible halo grows the 22px disc to a ~34px hit target
+        # (HIG asks ~28+ for pointer targets) with zero visual change —
+        # a pseudo-element is part of its button's hit area.
+        " .klaus-w-remove::after {"
+        " content: \"\"; position: absolute; inset: -6px;"
+        " }"
+        # RTL mirrors the badge to the leading corner, like iOS does.
+        " [dir=rtl] .klaus-w-remove { left: auto; right: -8px; }"
         # Top-right, the corner opposite deck_curate's armed-PDF drop
         # square (fixed, bottom-left family, z 50) — and above it.
         " .klaus-dash-bar {"

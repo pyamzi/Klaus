@@ -424,7 +424,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         "After installing manually:\n"
         "1. Finish the installer and grant permissions if prompted.\n"
         "2. Start Ollama (open the app or ensure the service is running).\n"
-        "3. Click Check connection, then pull a model on the next screen."
+        "3. Click Check Connection, then download a model on the next screen."
     )
     install_steps.setWordWrap(True)
     install_steps.setStyleSheet(_MUTED)
@@ -827,7 +827,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     lib_layout = _page(
         "Local Models",
         "Local Models",
-        "Ollama embedding models installed on this machine — pull new "
+        "Ollama embedding models installed on this machine — download new "
         "ones, delete what you no longer use.",
     )
     lib_layout.setContentsMargins(16, 12, 16, 12)
@@ -1234,6 +1234,12 @@ def manage_models_dialog(setup: bool = False) -> None:
             "Custom color — click to pick" if _is_custom
             else _name.capitalize()
         )
+        # A bare colour square is silent in VoiceOver; the accessible
+        # name carries the identity the tooltip shows sighted users.
+        sw.setAccessibleName(
+            "Custom accent color" if _is_custom
+            else f"{_name.capitalize()} accent color"
+        )
         sw.clicked.connect(
             (lambda _=False: _pick_custom_accent()) if _is_custom
             else (lambda _=False, n=_name: _pick_accent(n))
@@ -1312,6 +1318,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     # writer of preference keys — see mark_dirty()/save_all().
     save_btn = QPushButton("Save")
     save_btn.setEnabled(False)
+    # The dialog's default button: Return saves once there is something
+    # to save (Qt never fires a disabled default). HIG: a dialog names
+    # its default action; crop_dialog and setup_flow already comply.
+    save_btn.setDefault(True)
     close_row.addWidget(save_btn)
     foot.addLayout(close_row)
 
@@ -1434,7 +1444,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         )
 
         if not models:
-            placeholder = QListWidgetItem("(no models installed — pull one below)")
+            placeholder = QListWidgetItem("(no models installed — download one below)")
             placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
             lib_lst.addItem(placeholder)
             return
@@ -1514,7 +1524,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             return
         starter_note = (
             "Afterwards, if no model is installed yet, Klaus will also "
-            f"pull the starter embedding model {_EMBED_PRESETS[0][0]} "
+            f"download the starter embedding model {_EMBED_PRESETS[0][0]} "
             "(~274 MB).\n\n"
             if setup
             else ""
@@ -1643,7 +1653,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             dlg,
             "Delete model",
             f"Delete '{name}' from Ollama?\n\nThis frees disk space but you'll "
-            f"need to pull it again to use it.{warn}",
+            f"need to download it again to use it.{warn}",
         )
         if ok != QMessageBox.StandardButton.Yes:
             return

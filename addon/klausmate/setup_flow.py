@@ -453,7 +453,7 @@ def _readiness_check_body() -> None:
     msg.setText(
         "Klaus is connected to Ollama, but the embedding model it's "
         f"configured to use isn't installed yet: {model}\n\n"
-        "Open KlausMate Preferences to pull it, or choose a different "
+        "Open KlausMate Preferences to download it, or choose a different "
         "embedding model there."
     )
     msg.setInformativeText(

@@ -87,6 +87,7 @@ section("module imports aqt-free logic without a live Qt session")
 check("Md3Switch is defined and importable under the stub harness",
       hasattr(sw, "Md3Switch"))
 _SRC = open("klausmate/md3_switch.py").read()
+_CODE = code_only(_SRC)
 check("no UI file hardcodes colour — every fill routes through "
       "theme.palette(), never a literal hex swatch for track/thumb",
       "theme.palette(" in _SRC
@@ -109,15 +110,17 @@ section("paint safety — the nine-crash regression (macOS 26 + Qt 6.11)")
 # the switch while the window was still being composited, and Qt's
 # backing-store flush hit a paint device that did not exist yet.
 check("an off-screen switch JUMPS to its state instead of animating — "
-      "setChecked() during dialog build must not start a repaint loop",
-      "if not self.isVisible():" in _SRC
-      and "self._progress = target" in _SRC)
+      "setChecked() during dialog build must not start a repaint loop "
+      "(the jump goes through _set_progress, whose visible-only update "
+      "the next pin holds; Reduce Motion shares the same jump branch)",
+      "if not self.isVisible() or _reduce_motion():" in _CODE
+      and "self._set_progress(target)" in _CODE
+      and "self._anim.start()" in _CODE)
 check("the animated property only repaints once on screen",
       "if self.isVisible():\n            self.update()" in _SRC)
 check("paint bails out when the widget has no surface yet",
       "if self.width() <= 0 or self.height() <= 0:" in _SRC)
 # Shared helper: prose must never be able to satisfy or break a pin.
-_CODE = code_only(_SRC)
 check("the pin below reads real code, not prose — docstrings and "
       "comments are stripped, so a described call cannot fake a pass",
       "painter.end()" in _CODE and "nine-crash" not in _CODE)
@@ -153,6 +156,18 @@ check("all three pill strokes go through the ONE _pill helper, so the "
 check("keyboard focus gets its own ring — paintEvent bypasses QStyle "
       "entirely, so the shared QPushButton:focus rule can't reach here",
       "self.hasFocus()" in _SRC and 'c["blue_bright"]' in _SRC)
+
+section("reduce motion")
+check("the switch honours Anki's Reduce Motion preference — the jump "
+      "branch covers it alongside the off-screen case, and BOTH go "
+      "through _set_progress (which repaints only when visible)",
+      "def _reduce_motion" in _SRC
+      and "if not self.isVisible() or _reduce_motion():" in _CODE
+      and "self._set_progress(target)" in _CODE)
+check("...and reads it through aqt guarded, so headless tests and a "
+      "missing preference read as motion-on, never a crash",
+      "mw.pm.reduce_motion()" in _SRC
+      and "except Exception:" in _SRC.split("def _reduce_motion")[1].split("class Md3Switch")[0])
 
 section("manage_models.py wiring")
 _MM = open("klausmate/manage_models.py").read()

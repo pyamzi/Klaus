@@ -947,6 +947,14 @@ check("save and preview carry the design key as the IDENTICAL "
       and '"klausbook_design": bool(klausbook_cb.isChecked()),'
       in _mm_src.split("def _bg_preview_cfg")[1].split(
           "def apply_appearance_live")[0])
+check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
+      "default action, and Return should save once there is something "
+      "to save (Qt never fires a disabled default)",
+      "save_btn.setDefault(True)" in _mm_src)
+check("accent swatches carry accessible names — a bare colour square "
+      "is silent in VoiceOver; the name mirrors the tooltip identity",
+      'sw.setAccessibleName(' in _mm_src
+      and '"Custom accent color"' in _mm_src)
 check("appearance_changed both marks unsaved AND schedules the preview",
       "def appearance_changed() -> None:" in _mm_src
       and "mark_dirty()\n        _preview_timer.start()" in _mm_src)

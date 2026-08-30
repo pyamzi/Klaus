@@ -137,6 +137,17 @@ except Exception:  # pragma: no cover — degrades to plain checkbox
     QCheckBox = object  # type: ignore[assignment,misc]
 
 
+def _reduce_motion() -> bool:
+    """Anki's Reduce Motion preference; False when aqt is unavailable
+    (headless tests) or the preference cannot be read."""
+    try:
+        from aqt import mw
+
+        return bool(mw.pm.reduce_motion())
+    except Exception:
+        return False
+
+
 class Md3Switch(QCheckBox):  # type: ignore[misc]
     """Drop-in replacement for a label-less ``QCheckBox()`` row control.
 
@@ -187,8 +198,12 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
         """
         target = 1.0 if checked else 0.0
         self._anim.stop()
-        if not self.isVisible():
-            self._progress = target
+        # Reduce Motion is Anki's own preference (HIG says honour it);
+        # the deck-screen jiggle already keys on body.reduce-motion —
+        # this is the Qt-side counterpart. _set_progress repaints only
+        # when visible, which both branches want.
+        if not self.isVisible() or _reduce_motion():
+            self._set_progress(target)
             return
         self._anim.setStartValue(self._progress)
         self._anim.setEndValue(target)

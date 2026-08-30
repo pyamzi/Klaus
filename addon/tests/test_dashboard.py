@@ -160,6 +160,13 @@ check("edit chrome floats ABOVE deck_curate's armed-PDF drop square "
       "z-index: 60" in _css and "z-index: 70" in _css)
 check("the shield outranks page content but sits under the badge",
       "z-index: 5;" in _css and "z-index: 6;" in _css)
+check("the ⊖ badge's hit target outgrows its 22px disc via an "
+      "invisible halo (HIG asks ~28px+ for pointer targets) — a "
+      "pseudo-element is part of the button's hit area",
+      ".klaus-w-remove::after {" in _css
+      and "inset: -6px" in _css.split(".klaus-w-remove::after {")[1])
+check("the badge mirrors to the leading corner in RTL",
+      "[dir=rtl] .klaus-w-remove { left: auto; right: -8px; }" in _css)
 check("a dragged widget stops jiggling — a CSS animation would "
       "otherwise override the inline drag transform outright",
       "animation: none !important; z-index: 7;" in _css)
