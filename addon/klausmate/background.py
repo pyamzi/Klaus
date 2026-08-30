@@ -162,9 +162,11 @@ def _fit_rules(fit: str) -> str:
 def main_css(spec: dict, url: str = "") -> str:
     """Background for Anki's own screens (deck list and overview).
 
-    Empty string in ``theme`` mode — Klaus paints nothing and Anki's
-    stock look is untouched, which is the default. Both painted modes
-    also carry panel_css, so panels look the same either way.
+    Every mode carries panel_css — panels follow the DESIGN. The modes
+    only decide the wallpaper: a photo, a flat colour, or (theme mode)
+    none at all, leaving Anki's own ground with Klaus panels on it.
+    Native mode never reaches here — top_bar._background_css returns
+    "" for the whole design layer when the toggle is off.
     """
     mode = spec.get("mode")
     if mode == "color":
@@ -187,19 +189,28 @@ def main_css(spec: dict, url: str = "") -> str:
             # Panels frost over the image so their text stays readable.
             + panel_css(spec)
         )
-    return ""
+    # Theme mode: no wallpaper — Anki's own ground, Klaus panels on it.
+    return panel_css(spec)
 
 
 def panel_css(spec: dict) -> str:
-    """Frost Anki's content panels so they stay readable over a photo.
+    """The Klaus panel family — tint, border, corners, the welded
+    stats line — for Anki's content panels, in EVERY background mode.
 
-    Applies to BOTH painted backgrounds so the panel look does not
-    change with the background chosen. The blur itself is image-only, by
-    the same logic bar_css relies on — a Gaussian blur of a flat colour
-    is that colour, so over a colour background backdrop-filter would
-    cost a compositing layer per panel to change nothing. Theme mode is
-    left alone: Klaus paints no background there, and Anki's stock look
-    already gives these surfaces its own glass.
+    Panels follow the DESIGN, the wallpaper follows the MODE: since the
+    klausbook_design toggle shipped, native mode is where Anki looks
+    stock, so "design on" must mean the same panel family whether the
+    ground is a photo, a flat colour, or Anki's own — the old
+    theme-mode early-return here made KlausBook-over-Anki's-own render
+    a half-designed screen (stock grey hover pill, stranded studied
+    line, live screenshots 2026-08-30). No gate in this function at
+    all: the design gate lives upstream at top_bar._background_css,
+    which returns "" for every caller when the toggle is off.
+
+    Only the FROST is mode-dependent (image-only), by the same logic
+    bar_css relies on — a Gaussian blur of a flat colour is that
+    colour, so anywhere else backdrop-filter would cost a compositing
+    layer per panel to change nothing.
 
     Unlike the bars, this really is ``backdrop-filter``. The bars can't
     use it — the toolbar is a separate webview, so the window behind it
@@ -216,21 +227,15 @@ def panel_css(spec: dict) -> str:
     with JS and never re-runs the hook that injected this.
     """
     mode = spec.get("mode")
-    if mode not in ("image", "color"):
-        # theme mode only. Klaus paints no background there, and Anki's
-        # own stock look ALREADY gives these surfaces a glass treatment
-        # (.fancy table is painted with --canvas-glass). Restyling them
-        # would override Anki's default with our own for no gain.
-        return ""
     blur = spec.get("blur", DEFAULT_BLUR)
     if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
         blur = DEFAULT_BLUR
     blur = int(blur)
     # The frost itself is IMAGE-ONLY: a Gaussian blur of a flat colour is
-    # that colour, so over a colour background backdrop-filter would cost
-    # a compositing layer per panel to change nothing. The tint, borders,
-    # corners and the welded stats line apply to both modes, so the panel
-    # LOOK is consistent whichever background is chosen.
+    # that colour, so over a colour or theme ground backdrop-filter would
+    # cost a compositing layer per panel to change nothing. The tint,
+    # borders, corners and the welded stats line apply in EVERY mode, so
+    # the panel LOOK is consistent whichever background is chosen.
     filt = f"blur({blur}px) saturate(140%)"
     frost = (
         f" -webkit-backdrop-filter: {filt} !important;"

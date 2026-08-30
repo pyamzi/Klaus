@@ -276,7 +276,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   gate cannot move it. Corrupt values read as OFF — opposite of
   heatmap's rule — so bad config can't surprise-restyle the app. `resolve(cfg)` validates
   the five `background_*` keys into a
-  spec; `main_css` paints Anki's deck and overview screens (NOT the
+  spec; `main_css` paints Anki's deck and overview screens — panel_css in
+  EVERY mode (panels follow the DESIGN; only the wallpaper follows the
+  mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
   congrats screen — it is sveltekit-loaded and never fires
   `webview_will_set_content`; a dead import claiming otherwise was
   removed 2026-08-27); `bar_css`

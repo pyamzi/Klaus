@@ -153,9 +153,11 @@ wouldn't already need.
   background/accent setting stays stored and comes back with the
   switch). Klaus's own windows (Preferences, Library, PDF viewer) keep
   their design either way, and every tool keeps working.
-- **background_mode**: `"theme"` (default — Klaus paints nothing and
-  Anki looks stock), `"color"`, or `"image"`. Sets the background of
-  Anki's deck and overview screens. The Klaus top bar shows
+- **background_mode**: `"theme"` (default — no wallpaper: Anki's own
+  ground, with the Klaus panels on it whenever the design is on),
+  `"color"`, or `"image"`. Sets the background of Anki's deck and
+  overview screens; the panel family itself follows `klausbook_design`
+  in every mode — native mode is where Anki looks stock. The Klaus top bar shows
   the *same* background blurred, so it reads as frosted glass over it —
   and because a Gaussian blur of a flat colour is that same colour,
   `"color"` mode also makes the bar match the window chrome exactly.

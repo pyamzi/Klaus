@@ -167,6 +167,13 @@ check("the ⊖ badge's hit target outgrows its 22px disc via an "
       and "inset: -6px" in _css.split(".klaus-w-remove::after {")[1])
 check("the badge mirrors to the leading corner in RTL",
       "[dir=rtl] .klaus-w-remove { left: auto; right: -8px; }" in _css)
+check("the wrapper hugs what the user can SEE: a wrapped heatmap's "
+      "own margins are neutralised, because a child margin sits "
+      "INSIDE the wrapper box and floated the \u2296 badge into empty "
+      "page space above the panel (screenshot 2026-08-30)",
+      ".klaus-widget > .klaus-hm { margin: 0; }" in _css)
+check("...and the wrapper carries the vertical rhythm itself",
+      "margin: 0 auto 1.1em auto;" in _css)
 check("a dragged widget stops jiggling — a CSS animation would "
       "otherwise override the inline drag transform outright",
       "animation: none !important; z-index: 7;" in _css)

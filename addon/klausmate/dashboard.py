@@ -229,8 +229,18 @@ def dashboard_css() -> str:
         # padded box) cannot happen with them.
         " .klaus-widget {"
         " position: relative; width: fit-content; max-width: 100%;"
-        " margin: 0 auto;"
+        " margin: 0 auto 1.1em auto;"
         " }"
+        # The wrapper must hug what the user can SEE: the edit badge
+        # anchors to its corners, and a wrapped child's own margin sits
+        # INSIDE the wrapper box — the heatmap's 1.4em margin-top
+        # floated the ⊖ into empty page space above the panel (live
+        # screenshot 2026-08-30). The child's rhythm is neutralised
+        # here and the wrapper's bottom margin carries spacing instead;
+        # native mode is untouched, since this sheet only exists with
+        # the design on. Child selector outranks heatmap_css's own
+        # .klaus-hm margin rule — no !important needed.
+        " .klaus-widget > .klaus-hm { margin: 0; }"
         " @keyframes klaus-jiggle {"
         " 0% { transform: rotate(-0.4deg); }"
         " 50% { transform: rotate(0.4deg); }"

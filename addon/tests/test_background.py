@@ -39,8 +39,12 @@ check("url built under the addon's web export",
 check("no url without a valid image", bg.image_url("klausmate", "x.py") == "")
 
 section("main_css: Anki's own screens")
-check("theme mode paints nothing at all",
-      bg.main_css(bg.resolve({})) == "")
+check("theme mode paints no WALLPAPER — but the panel family still "
+      "ships: panels follow the design, only the wallpaper follows "
+      "the mode (KlausBook over Anki's own ground was a half-designed "
+      "screen before — stock grey hover, stranded studied line)",
+      "html, body { background" not in bg.main_css(bg.resolve({}))
+      and "--klaus-panel:" in bg.main_css(bg.resolve({})))
 colour = bg.resolve({"background_mode": "color", "background_color": "#123456"})
 check("colour mode fills html/body", "#123456" in bg.main_css(colour))
 img = bg.resolve({"background_mode": "image", "background_image": "w.jpg"})
@@ -49,8 +53,10 @@ css = bg.main_css(img, url)
 check("image mode references the export url", url in css)
 check("image mode is fixed + covering",
       "background-attachment: fixed" in css and "cover" in css)
-check("image mode without a url degrades to nothing",
-      bg.main_css(img, "") == "")
+check("image mode without a url degrades to panels-without-wallpaper "
+      "— a broken image must not strip the whole panel family",
+      "background-image" not in bg.main_css(img, "")
+      and "--klaus-panel:" in bg.main_css(img, ""))
 
 section("bar_css: the frost")
 # The whole point: blurring a flat colour is a no-op, so the bar simply
@@ -251,12 +257,13 @@ check("the old two-box weld is fully gone (no flattened table corners, "
 check("the moved row is NOT a tr.deck, so the hover/current rule cannot "
       "highlight it as if it were a deck",
       "tr.klaus-studied" not in _row_rule)
-check("the script ships exactly when the panel styling does, so the two "
-      "can never disagree about whether Klaus styles this screen",
+check("the script ships exactly when the panel styling does — which "
+      "is now EVERY mode, theme included: the weld belongs to the "
+      "design, not to the wallpaper",
       bool(bg.panel_js(_img))
       and bool(bg.panel_js(bg.resolve(
           {"background_mode": "color", "background_color": "#123456"})))
-      and bg.panel_js(bg.resolve({"background_mode": "theme"})) == "")
+      and bool(bg.panel_js(bg.resolve({"background_mode": "theme"}))))
 check("it is a self-contained, fully guarded <script>",
       bg.panel_js(_img).startswith("<script>")
       and bg.panel_js(_img).endswith("</script>")
@@ -321,9 +328,18 @@ check("...but NOT the blur: a Gaussian blur of a flat colour is that "
       "colour, so backdrop-filter there would cost a compositing layer "
       "per panel to change nothing",
       "backdrop-filter" not in _colour_panels)
-check("theme mode stays untouched — Klaus paints no background there, "
-      "and Anki's stock look already glasses these surfaces itself",
-      bg.panel_css(bg.resolve({"background_mode": "theme"})) == "")
+_theme_panels = bg.panel_css(bg.resolve({"background_mode": "theme"}))
+check("theme mode gets the SAME panel family as the painted modes — "
+      "since the klausbook_design toggle shipped, NATIVE mode is the "
+      "stock-keeper, so 'design on' must mean one look on every "
+      "ground (Pouya's call, 2026-08-30)",
+      "table, .callout, .klaus-hm {" in _theme_panels
+      and "tr.klaus-studied td," in _theme_panels
+      and "--klaus-panel:" in _theme_panels)
+check("...but the FROST stays image-only in theme mode too — blurring "
+      "Anki's flat ground would cost a compositing layer per panel to "
+      "change nothing",
+      "backdrop-filter" not in _theme_panels)
 check("main_css carries the panels in BOTH painted modes",
       "--klaus-panel:" in bg.main_css(bg.resolve(
           {"background_mode": "color", "background_color": "#123456"}))
