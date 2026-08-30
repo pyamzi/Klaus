@@ -2342,6 +2342,13 @@ try:
 except Exception as _e:
     print(f"[klausmate] dashboard setup failed: {type(_e).__name__}: {_e}")
 
+try:
+    from . import window_chrome as _window_chrome
+
+    _window_chrome.setup()
+except Exception as _e:
+    print(f"[klausmate] window chrome setup failed: {type(_e).__name__}: {_e}")
+
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is
 # (note: Note, current_field_idx: int) — it does not provide the Editor,

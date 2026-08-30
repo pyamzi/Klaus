@@ -166,6 +166,7 @@ top_bar.setup()                                                     # toolbar re
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
 dashboard.setup()                                                   # Control-Center widget editing (independent try/except; MUST stay after heatmap — body order)
+window_chrome.setup()                                               # KlausBook chrome for Add/Browse/Stats/reviewer-bar (independent try/except)
 ```
 
 `heatmap.setup()` adds four of its own:

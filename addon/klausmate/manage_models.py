@@ -2322,6 +2322,15 @@ def manage_models_dialog(setup: bool = False) -> None:
             _top_bar.refresh()
         except Exception as _exc:
             print(f"[klausmate] background refresh failed: {_exc}")
+        try:
+            # Already-open Anki windows (Browse, Add, Stats — cached by
+            # aqt.dialogs) restyle through the tracked walk, so the
+            # toggle and every accent edit preview there live too.
+            from . import window_chrome as _window_chrome
+
+            _window_chrome.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] window chrome refresh failed: {_exc}")
 
     def revert_appearance_preview() -> None:
         """Put the STORED appearance back on screen.
@@ -2348,6 +2357,12 @@ def manage_models_dialog(setup: bool = False) -> None:
             _top_bar.refresh()
         except Exception as _exc:
             print(f"[klausmate] appearance revert refresh failed: {_exc}")
+        try:
+            from . import window_chrome as _window_chrome
+
+            _window_chrome.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] window chrome revert failed: {_exc}")
 
     def appearance_changed() -> None:
         """An appearance widget moved: mark unsaved AND preview it live.

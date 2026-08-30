@@ -1032,8 +1032,10 @@ def bottombar_css() -> str:
     rest, the translucent hover/press veils on interaction, so the
     highlight tints whatever background is behind the bar. Injected by
     top_bar for ``DeckBrowserBottomBar``/``OverviewBottomBar`` contexts
-    only; the reviewer's answer bar keeps Anki's own styling (its
-    colours carry scheduling meaning).
+    only; the reviewer's answer bar has its own sheet
+    (:func:`reviewer_bar_css`, injected by window_chrome) built from
+    the SAME chip blocks — its scheduling colours live in the count
+    and interval spans, which that sheet deliberately never styles.
     """
     return f"""
     :root {{ {_toolbar_vars(palette(False), False)} }}
@@ -1088,3 +1090,334 @@ def muted_label_qss(night: bool, size_px: int = 11) -> str:
     """Inline style for secondary/status labels (SynapsePro's text_muted)."""
     c = palette(night)
     return f"color: {c['text_muted']}; font-size: {size_px}px;"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anki-window builders (the KlausBook layer beyond the deck screen).
+# Consumed by window_chrome.py, gated on klausbook_design at the
+# painters — these are pure strings and know nothing about the gate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def browse_qss(night: bool) -> str:
+    """The Browse window, HARMONIZED — tokens, never transformation.
+
+    Browse is Anki's densest work surface, so this sheet recolours and
+    nothing else: table selection/hairlines, header typography, the
+    search combo in the find bar's language. Layout, density and row
+    heights stay Anki's. Deliberately unreachable and left semantic:
+    the flag/marked/suspended row tints (delegate-painted from
+    aqt.colors at paint time) and the Cards/Notes switch (custom
+    paintEvent). The window background is EXPLICIT because Anki's
+    optional "Anki" widget style ships an app-scope
+    ``QWidget{background:none}`` — a widget-scope sheet with a real
+    background survives it.
+
+    Applied to the Browser instance by window_chrome (the sidebar tree
+    needs its own instance sheet — see :func:`sidebar_tree_qss`).
+    """
+    c = palette(night)
+    return f"""
+    QMainWindow {{
+        background-color: {c['bg']};
+    }}
+    QTableView {{
+        background-color: {c['surface']};
+        alternate-background-color: {c['surface']};
+        color: {c['text']};
+        border: none;
+        gridline-color: {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QHeaderView::section {{
+        background: {c['surface']};
+        color: {c['text_muted']};
+        border: none;
+        border-bottom: 1px solid {c['grey_light']};
+        padding: 4px 6px;
+        font-weight: 600;
+    }}
+    QComboBox#searchEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QComboBox#searchEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QComboBox#searchEdit::drop-down {{
+        border: none;
+        width: 18px;
+    }}
+    QComboBox#searchEdit QAbstractItemView {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 6px;
+        padding: 2px 6px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QSplitter::handle {{
+        background: {c['grey_light']};
+    }}
+    QDockWidget {{
+        background-color: {c['bg']};
+    }}
+    """
+
+
+def sidebar_tree_qss(night: bool) -> str:
+    """The Browse sidebar tree — an INSTANCE sheet, and that is the
+    point: Anki's SidebarTreeView sets its own widget-level stylesheet
+    and re-applies it on every theme flip, and a widget-level sheet
+    beats any ancestor's. So this replaces Anki's wholesale, which
+    means it must RE-DECLARE what Anki's carried (the padding and the
+    zero border) or replacing it would visibly shift the tree.
+    """
+    c = palette(night)
+    return f"""
+    QTreeView {{
+        padding: 3px;
+        padding-right: 0px;
+        border: 0;
+        background: {c['bg']};
+        color: {c['text']};
+    }}
+    QTreeView::item {{
+        border-radius: 6px;
+        padding: 1px 0px;
+    }}
+    QTreeView::item:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QTreeView::item:selected {{
+        background: {c['selection_bg']};
+        color: {c['text']};
+    }}
+    """
+
+
+def utility_window_qss(night: bool) -> str:
+    """Shared Qt chrome for Add Cards and the Stats dialog.
+
+    Library polarity on purpose: these windows are rows of utility
+    buttons (Add, Close, Help, History, the deck/notetype choosers,
+    Save PDF) and a wall of blue would shout — grey secondary by
+    default, with ONLY the dialog-default action (:default) taking the
+    accent. Explicit window background for the same "Anki" widget
+    style reason as :func:`browse_qss`.
+    """
+    c = palette(night)
+    return f"""
+    QMainWindow, QDialog {{
+        background-color: {c['bg']};
+    }}
+    QLabel {{
+        color: {c['text']};
+        background: transparent;
+    }}
+    QPushButton {{
+        background-color: {c['grey_light']};
+        color: {c['text']};
+        border: none;
+        border-radius: 8px;
+        padding: 5px 14px;
+        font-weight: 600;
+    }}
+    QPushButton:hover {{
+        background-color: {c['grey_mid']};
+    }}
+    QPushButton:pressed {{
+        background-color: {c['grey_dark']};
+    }}
+    QPushButton:disabled {{
+        color: {c['text_faint']};
+    }}
+    QPushButton:default {{
+        background-color: {c['blue']};
+        color: white;
+        border: {c['blue_border']};
+    }}
+    QPushButton:default:hover {{
+        background-color: {c['blue_hover']};
+    }}
+    QComboBox {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    """
+
+
+def editor_tags_qss(night: bool) -> str:
+    """The legacy editor's Qt tag bar — another INSTANCE sheet, for
+    the same reason as the sidebar tree: Anki gives the group box and
+    the TagEdit widget-level sheets, so only a sheet on the widgets
+    themselves can restyle them. TagEdit extends QLineEdit, so the
+    input rule reaches it by class.
+    """
+    c = palette(night)
+    return f"""
+    QGroupBox {{
+        border: none;
+        background: transparent;
+    }}
+    QLabel {{
+        color: {c['text_muted']};
+        background: transparent;
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    """
+
+
+def reviewer_bar_css() -> str:
+    """The reviewer's bottom bar — CHROME ONLY, and the scheduling
+    semantics survive BY OMISSION: this sheet contains no rule for the
+    count spans or the interval labels above the buttons, so their
+    colours pass through untouched. The buttons themselves were never
+    coloured by Anki (verified: they are generic <button>s inheriting
+    the platform sheet) — reshaping them into the Klaus chip language
+    changes shape, not meaning.
+
+    Same both-palettes/no-argument contract as :func:`toolbar_css`,
+    and the chips are the SAME shared declaration blocks the top and
+    deck bottom bars use, so all three bars agree by construction.
+    Flat chrome on purpose — no frosted background copy here: the
+    reviewer's main webview is deliberately wallpaper-free, and a
+    frosted photo strip under a flat card screen would read detached.
+    """
+    return f"""
+    :root {{ {_toolbar_vars(palette(False), False)} }}
+    :root.night-mode,
+    body.night_mode,
+    body.nightMode {{ {_toolbar_vars(palette(True), True)} }}
+    html, body {{
+        background: var(--klaus-chrome) !important;
+        border: none !important;
+    }}
+    #outer {{
+        border-top: none !important;
+        background: transparent !important;
+    }}
+    button {{
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        {_chip_base_rules()}
+    }}
+    button:hover {{ {_chip_hover_rules()} }}
+    button:active {{ {_chip_active_rules()} }}
+    button:focus {{ outline: 0 !important; border: none !important; }}
+    button:focus-visible {{
+        outline: 2px solid var(--klaus-accent) !important;
+        outline-offset: 1px !important;
+    }}
+    """
+
+
+def editor_css() -> str:
+    """The editor webview (Add Cards, Browse, Edit Current) —
+    harmonization for the chrome AROUND the fields: toolbar strip on
+    the window ground, field containers as quiet hairline cards with
+    an accent focus, muted field labels. The fields' CONTENT is the
+    user's card text and is never styled. Both palettes keyed on the
+    night classes AnkiWebView flips live; injected via
+    ``web_content.head``, which lands after css/editor.css and wins
+    ties without needing !important.
+    """
+    light = palette(False)
+    dark = palette(True)
+    def vars_for(c: dict) -> str:
+        return (
+            f"--klaus-bg: {c['bg']};"
+            f" --klaus-surface: {c['surface']};"
+            f" --klaus-border: {c['grey_light']};"
+            f" --klaus-border-mid: {c['grey_mid']};"
+            f" --klaus-text-muted: {c['text_muted']};"
+            f" --klaus-accent: {c['blue_bright']};"
+        )
+    return f"""
+    :root {{ {vars_for(light)} }}
+    :root.night-mode,
+    body.night_mode,
+    body.nightMode {{ {vars_for(dark)} }}
+    .editor-toolbar,
+    .button-toolbar {{
+        background: var(--klaus-bg);
+    }}
+    .field-container {{
+        border: 1px solid var(--klaus-border);
+        border-radius: 8px;
+    }}
+    .field-container:focus-within {{
+        border-color: var(--klaus-accent);
+    }}
+    .label-container {{
+        color: var(--klaus-text-muted);
+        font-size: 11px;
+    }}
+    """
+
+
+def stats_css() -> str:
+    """The Stats (graphs) page — variables only, and ONLY the
+    structural ones: page ground, graph-card surface, hairlines. The
+    page's components consume Anki's own custom properties, so
+    harmonizing means overriding four vars, not fighting sveltekit
+    markup. Never touched: every ``--fg`` variable and every
+    graph-semantic colour (young/mature/ease series carry meaning).
+    Injected post-load by window_chrome through
+    ``webview_did_inject_style_into_page``.
+    """
+    light = palette(False)
+    dark = palette(True)
+    def vars_for(c: dict) -> str:
+        return (
+            f"--canvas: {c['bg']};"
+            f" --canvas-elevated: {c['surface']};"
+            f" --border: {c['grey_light']};"
+            f" --border-subtle: {c['grey_light']};"
+        )
+    return f"""
+    :root {{ {vars_for(light)} }}
+    :root.night-mode {{ {vars_for(dark)} }}
+    """

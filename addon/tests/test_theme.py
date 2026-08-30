@@ -34,6 +34,13 @@ builders = [
     ("find_bar_qss", theme.find_bar_qss),
     ("library_qss", theme.library_qss),
     ("thumb_strip_qss", theme.thumb_strip_qss),
+    # The Anki-window builders (window_chrome consumers) join here so
+    # every audit below — tokens substituted, background present, the
+    # K-110 radius/font design scale — applies to them by construction.
+    ("browse_qss", theme.browse_qss),
+    ("sidebar_tree_qss", theme.sidebar_tree_qss),
+    ("utility_window_qss", theme.utility_window_qss),
+    ("editor_tags_qss", theme.editor_tags_qss),
 ]
 for name, fn in builders:
     for night in (False, True):
@@ -235,6 +242,9 @@ scale_builders = builders + [
      lambda night: theme.drop_zone_qss(night, "ScaleAuditDropZone")),
     ("toolbar_css", lambda night: theme.toolbar_css()),
     ("bottombar_css", lambda night: theme.bottombar_css()),
+    ("reviewer_bar_css", lambda night: theme.reviewer_bar_css()),
+    ("editor_css", lambda night: theme.editor_css()),
+    ("stats_css", lambda night: theme.stats_css()),
 ]
 for name, fn in scale_builders:
     for night in (False, True):

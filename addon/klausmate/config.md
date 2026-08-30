@@ -142,8 +142,11 @@ wouldn't already need.
   blanking the accent.
 - **klausbook_design**: the master switch for the KlausBook design
   layer — the restyled toolbar and bottom bars, chrome-matched top
-  bar, custom backgrounds, frosted panels, the studied-line weld and
-  dashboard widget editing. **Default `false`: Klaus ships as tools
+  bar, custom backgrounds, frosted panels, the studied-line weld,
+  dashboard widget editing, and the harmonized Add Cards, Browse,
+  Stats and reviewer-bar chrome (Browse keeps Anki's layout and
+  density; the reviewer's scheduling colours and the cards themselves
+  are never touched). **Default `false`: Klaus ships as tools
   inside a STOCK Anki**, and the KlausBook look is the opt-in — an
   existing profile that had the design reverts to Anki's native look
   after updating until this is switched on (nothing is lost: every

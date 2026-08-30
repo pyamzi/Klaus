@@ -289,6 +289,37 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   `user_files/backgrounds/` (`store_image`, name-versioned) and served by
   the widened `setWebExports` pattern; `safe_image_name` keeps that URL
   inside the folder and to allow-listed extensions.
+- `window_chrome.py` (aqt-free above its "aqt glue" divider): the
+  **KlausBook layer on Anki's OTHER windows** — Add Cards, Browse,
+  Stats, and the reviewer's bottom bar. Every style string is a
+  theme.py builder (`browse_qss`, `sidebar_tree_qss`,
+  `utility_window_qss`, `editor_tags_qss`, `reviewer_bar_css`,
+  `editor_css`, `stats_css` — all under test_theme's design-scale
+  audit); this module is glue only, gated on `klausbook_design` at
+  every painter. **Tracked refresh, not style-at-open**: aqt.dialogs
+  caches Browser/AddCards all session, so widgets register in a
+  WeakKeyDictionary at their init hooks UNGATED, and `refresh()`
+  (called from the Preferences live-preview seam) applies or restores
+  against the gate read at walk time — un-apply restores each
+  widget's STASHED original sheet, because the sidebar tree and tag
+  bar carry Anki's own widget-level QSS that a bare "" would strip.
+  The sidebar tree re-applies its stock sheet on every theme flip
+  from a handler registered at Browser construction, so our
+  theme_did_change work runs ONE DEFERRED TICK after the whole chain
+  (top_bar's pattern). Browse is HARMONIZED only (tokens; layout and
+  density stay; flag/marked row tints and the Cards/Notes switch are
+  delegate/custom-painted semantics, deliberately untouched). The
+  reviewer sheet reuses the shared `_chip_*_rules()` blocks (three
+  bars agree by construction; top_bar.py never names that surface —
+  its test pin stands) and contains NO rule for
+  `.stattxt`/`.new-count`/`.learn-count`/`.review-count`: scheduling
+  semantics survive by omission, pinned by absence. Stats (sveltekit
+  "graphs" — stdHtml hooks never fire) is reached via
+  `webview_did_inject_style_into_page` (hasattr-guarded; kind check +
+  URL fallback) with an eval-injected replace-not-stack `<style>`
+  overriding ONLY `--canvas/--canvas-elevated/--border/--border-subtle`.
+  The editor is dual-path: legacy stdHtml gets `editor_css` via
+  web_content.head; the flag-gated Svelte editor degrades to stock.
 - `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
   UI; file/class names still say drive) — folder tree (`drive_store.py`,
   `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073
