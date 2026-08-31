@@ -760,12 +760,12 @@ def heatmap_css() -> str:
         " .klaus-hm-c.hit:hover {"
         " outline: 1px solid var(--klaus-hm-accent); outline-offset: 1px;"
         " }"
-        # Anki's own webviews get a slim scrollbar; match it rather than
-        # letting a chunky default cut into the panel's bottom padding.
-        " .klaus-hm-scroll::-webkit-scrollbar { height: 6px; }"
-        " .klaus-hm-scroll::-webkit-scrollbar-thumb {"
-        " background: var(--klaus-hm-empty); border-radius: 3px;"
-        " }"
+        # No visible scrollbar (Pouya, 2026-08-31: "remove the little
+        # thing at the bottom"). The box still SCROLLS — trackpad and
+        # shift-wheel work, overflow-x stays auto — it just does not
+        # spend a row of the panel drawing a bar under the grid.
+        " .klaus-hm-scroll { scrollbar-width: none; }"
+        " .klaus-hm-scroll::-webkit-scrollbar { display: none; }"
     )
 
 
@@ -773,12 +773,12 @@ def heatmap_css() -> str:
 # aqt glue — everything below here talks to Anki
 # ─────────────────────────────────────────────────────────────────────
 
-# Our own search token, resolved in _on_browser_will_search. Anki has no
-# operator for "reviewed on this exact day": `rated:` counts backwards
-# from today and is capped, so it cannot address the far end of a year
-# of history. Resolving the ids ourselves is exact for any day and needs
-# no guess about which cap this Anki enforces.
-SEARCH_PREFIX = "klausday:"
+# A private klausday: token used to live here, on the reasoning that
+# `rated:` "is capped, so it cannot address the far end of a year of
+# history". That was wrong twice over: rated:365 reaches back 364 days,
+# which is the whole drawn window, and the token's resolver assigned a
+# SearchContext field that does not exist, so it matched nothing at all.
+# day_query() builds native searches instead — see its docstring.
 
 # revlog rows with ease 0 are not reviews — they are manual entries:
 # "set due date", "forget", and the bulk reschedules FSRS and add-ons
@@ -891,24 +891,6 @@ def _collect(col: Any, forecast_days: int) -> tuple:
     return history, forecast, today
 
 
-def cards_reviewed_on(col: Any, day: int) -> list:
-    """Card ids answered on day number *day*.
-
-    Selected through `cards` so rows whose card has since been deleted
-    drop out, and matched by re-running the very expression that built
-    the bucket — inverting a local-midnight day number back into a
-    timestamp range would reintroduce every timezone question
-    :func:`_day_expr` exists to avoid.
-    """
-    offset = _rollover_hours(col) * 3600
-    return col.db.list(
-        "SELECT id FROM cards WHERE id IN ("
-        f" SELECT cid FROM revlog WHERE {_REAL_REVIEWS}"
-        f" AND {_day_expr('id', offset)} = ?)",
-        int(day) * SECS_PER_DAY,
-    )
-
-
 def render_for_collection(col: Any, cfg: Any = None) -> str:
     """The heatmap panel's HTML for *col*, or "" when switched off."""
     cfg = cfg if isinstance(cfg, dict) else _config()
@@ -975,6 +957,35 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         print(f"[klausmate] heatmap css failed: {exc}")
 
 
+def day_query(day: int, today: int) -> str:
+    """Anki's OWN search for the cards on day number *day*.
+
+    Ahead of today, that is ``prop:due=N``. Behind it, a bounded pair of
+    ``rated:`` terms: ``rated:n`` means "answered in the last n days", so
+    subtracting the shorter window leaves exactly one day. Both are
+    native operators — the query that lands in the search bar is one the
+    user can read, edit, widen, or combine with a deck.
+
+    This replaces a private ``klausday:<n>`` token (2026-08-31, Pouya:
+    "that doesn't show me anything"), which was opaque AND broken: it
+    was resolved by assigning ``search_context.card_ids``, and Anki's
+    SearchContext has no such field — the real one is ``ids`` — so the
+    assignment did nothing and Anki went on to parse the token as a
+    field search, matching no cards at all.
+
+    ``rated:`` counts revlog rows with ``ease > 0``, the same filter the
+    grid itself uses (verified in the backend's SQL), so the Browse
+    result agrees with the number in the tooltip. Anki caps ``rated:``
+    at 365 days, which is why RANGE_CHOICES tops out there.
+    """
+    delta = today - int(day)
+    if delta < 0:
+        return f"prop:due={-delta}"
+    if delta == 0:
+        return "rated:1"
+    return f"rated:{delta + 1} -rated:{delta}"
+
+
 def _open_day(day: int) -> None:
     """Show a day's cards in Browse: what was answered, or what is due."""
     try:
@@ -984,13 +995,8 @@ def _open_day(day: int) -> None:
         col = getattr(mw, "col", None)
         if col is None:
             return
-        today = _today(col)
-        query = (
-            f"prop:due={day - today}" if day > today
-            else f"{SEARCH_PREFIX}{day}"
-        )
         browser = aqt.dialogs.open("Browser", mw)
-        browser.search_for(query)
+        browser.search_for(day_query(day, _today(col)))
     except Exception as exc:
         print(f"[klausmate] heatmap browse failed: {exc}")
 
@@ -1080,29 +1086,6 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     return (True, None)
 
 
-def _on_browser_will_search(search_context: Any) -> None:
-    """Resolve our own ``klausday:`` token into card ids.
-
-    Setting ``card_ids`` replaces the whole query, so this token does
-    not combine with other search terms — acceptable because the deck
-    browser's heatmap is collection-wide and the token is only ever
-    produced by a cell click.
-    """
-    try:
-        search = getattr(search_context, "search", "") or ""
-        if not search.startswith(SEARCH_PREFIX):
-            return
-        day = int(search[len(SEARCH_PREFIX):])
-    except Exception:
-        return
-    try:
-        from aqt import mw
-
-        search_context.card_ids = cards_reviewed_on(mw.col, day)
-    except Exception as exc:
-        print(f"[klausmate] heatmap search failed: {exc}")
-
-
 def setup() -> None:
     try:
         from aqt import gui_hooks
@@ -1112,6 +1095,5 @@ def setup() -> None:
         )
         gui_hooks.webview_will_set_content.append(_on_webview_will_set_content)
         gui_hooks.webview_did_receive_js_message.append(_on_js_message)
-        gui_hooks.browser_will_search.append(_on_browser_will_search)
     except Exception as exc:
         print(f"[klausmate] heatmap setup failed: {exc}")

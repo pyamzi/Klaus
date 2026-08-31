@@ -370,6 +370,13 @@ check("_legend_titles is gone with it, not left as dead code",
 section("stylesheet")
 
 _css = heatmap.heatmap_css()
+check("the bar under the grid is gone in BOTH engines (Pouya, "
+      "2026-08-31) while the box still scrolls — hidden, not disabled: "
+      "trackpad and shift-wheel still reach a year that overflows",
+      "scrollbar-width: none" in _css
+      and "::-webkit-scrollbar { display: none; }" in _css
+      and "overflow-x: auto" in _css
+      and "scrollbar { height" not in _css)
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "
@@ -545,22 +552,49 @@ check("history is NOT date-limited — the streak and the share of days "
       "studied are only honest over everything",
       "FROM revlog WHERE ease > 0 GROUP BY day" in _sql)
 
-_db2 = FakeDB(ids=[1, 2, 3])
-check("a day's cards are found by re-running the very expression that "
-      "built the bucket, so no timezone question is reintroduced",
-      heatmap.cards_reviewed_on(FakeCol(_db2, day_cutoff=_cutoff), 20000)
-      == [1, 2, 3])
-_sql2, _params2 = _db2.calls[0]
-check("...matched against that day number in seconds",
-      _params2 == (20000 * DAY,))
-check("and selected through `cards`, so rows whose card was deleted "
-      "drop out", "FROM cards WHERE id IN" in _sql2)
-
 check("switched off, nothing is rendered and no query runs",
       heatmap.render_for_collection(
           FakeCol(FakeDB(), day_cutoff=_cutoff),
           {"heatmap_enabled": False}) == ""
       )
+
+section("clicking a day (K-131)")
+
+# Pouya, 2026-08-31: "when I click on an individual output, it doesn't
+# show this klausday search query... the klausday thing does not help."
+# It was opaque AND inert: the token was resolved by assigning
+# search_context.card_ids, and Anki's SearchContext has no such field
+# (its fields are search/browser/order/reverse/addon_metadata/ids —
+# read out of aqt/browser/table/__init__.pyc), so the assignment did
+# nothing and Anki parsed "klausday:20000" as a field search matching
+# no cards. Native operators now, which are also editable by hand.
+_T = 20000
+check("a future day asks Anki what is due that many days out",
+      heatmap.day_query(_T + 5, _T) == "prop:due=5"
+      and heatmap.day_query(_T + 1, _T) == "prop:due=1")
+check("today is simply rated:1",
+      heatmap.day_query(_T, _T) == "rated:1")
+check("a past day is a bounded pair — 'answered within n days' minus "
+      "'answered within n-1', which leaves exactly that one day",
+      heatmap.day_query(_T - 1, _T) == "rated:2 -rated:1"
+      and heatmap.day_query(_T - 30, _T) == "rated:31 -rated:30")
+check("the oldest drawable day still lands inside Anki's 365-day cap "
+      "on rated: — which is WHY the range menu stops at a year",
+      heatmap.day_query(_T - (max(heatmap.RANGE_CHOICES) - 1), _T)
+      == "rated:365 -rated:364"
+      and max(heatmap.RANGE_CHOICES) <= 365)
+check("every query is built from NATIVE operators only — nothing "
+      "private left for Anki to fail to understand",
+      all(q.split(":")[0].lstrip("-") in ("prop", "rated")
+          for day in (_T + 3, _T, _T - 1, _T - 200)
+          for q in heatmap.day_query(day, _T).split()))
+check("the klausday token, its resolver hook and its query helper are "
+      "GONE, not left as dead code",
+      not hasattr(heatmap, "SEARCH_PREFIX")
+      and not hasattr(heatmap, "cards_reviewed_on")
+      and not hasattr(heatmap, "_on_browser_will_search")
+      and "browser_will_search"
+      not in open("klausmate/heatmap.py", encoding="utf8").read())
 
 section("the KlausBook design gate")
 _HM_SRC = open("klausmate/heatmap.py", encoding="utf8").read()

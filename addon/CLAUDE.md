@@ -120,9 +120,17 @@ instead. Signed-off history is in
   he never studied; unfiltered they set the ramp and flatten every real
   day. Days are integer DAY NUMBERS throughout, bucketed by SQLite with
   `'localtime'` so a DST shift can't smear a day. Clicking a cell opens
-  Browse — `prop:due=N` ahead, our own `klausday:<day>` token behind,
-  resolved in `browser_will_search` because Anki has no operator for
-  "reviewed on this exact day". Deck browser only (the overview would
+  Browse with NATIVE searches only (`day_query`, K-131): `prop:due=N`
+  ahead, `rated:n -rated:n-1` behind — "answered within n days" minus
+  the shorter window is exactly one day, and `rated:` counts `ease > 0`
+  rows, the same filter the grid uses, so Browse agrees with the
+  tooltip. It also caps at 365 days, which is WHY `RANGE_CHOICES` stops
+  at a year. The old private `klausday:` token + `browser_will_search`
+  resolver are deleted: they were opaque AND inert — the resolver
+  assigned `search_context.card_ids`, and `SearchContext` has no such
+  field (it is `ids`), so Anki parsed the token as a field search and
+  matched nothing. Its stated justification ("rated: is capped, so it
+  cannot address the far end of a year") was wrong on both counts. Deck browser only (the overview would
   need deck-scoped queries). Config `heatmap_enabled` — written ONLY
   by the dashboard's Edit Widgets ⊖/＋ since 2026-08-30 (the
   Preferences switch was removed as redundant); `_bg_preview_cfg`
