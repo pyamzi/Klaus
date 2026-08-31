@@ -78,6 +78,11 @@ DEFAULT_MAX_CHUNKS = 1000
 
 PDF_FLUSH_EVERY = 256  # vectors between partial saves while embedding a PDF
 
+# IN-list chunk for the nid→queue batch (card_queues). SQLite's default
+# host-parameter cap is 999; 900 leaves headroom without multiplying
+# round-trips on a 30k-note pool.
+CARD_QUEUE_CHUNK = 900
+
 ProgressFn = Callable[[str, int, int], None]
 
 try:
@@ -261,6 +266,41 @@ def pdf_retention(
         "new_pct": (new_cards / matched_cards) if matched_cards else 0.0,
         "priority": priority,
     }
+
+
+def note_card_counts(
+    matches: list[tuple[int, float]],
+    threshold: float,
+    queue_map: dict[int, list[int]],
+) -> tuple[int, int, int]:
+    """(note_count, card_count, suspended_count) over matches at/above
+    ``threshold`` — the Library's Cards/Notes split (K-118).
+
+    ``queue_map``: nid → [queue per card] (card_queues below). A note
+    absent from the map (deleted since indexing) is skipped, mirroring
+    pdf_retention's card_r rule, so note_count == pdf_retention's
+    matched_notes for the same threshold. ``card_count`` is the VIEWABLE
+    cards — queue != -1 — so buried cards (-2/-3, back on their own
+    tomorrow) still count as viewable; only suspension (-1) moves a card
+    to ``suspended_count``. card_count + suspended_count == pdf_retention's
+    matched_cards by construction.
+    """
+    notes = 0
+    viewable = 0
+    suspended = 0
+    for nid, sim in matches:
+        if sim < threshold:
+            continue
+        queues = queue_map.get(nid)
+        if not queues:
+            continue
+        notes += 1
+        for q in queues:
+            if q == -1:
+                suspended += 1
+            else:
+                viewable += 1
+    return notes, viewable, suspended
 
 
 # ------------------------------------------------------- matches.json cache
@@ -501,6 +541,29 @@ def card_retrievability(col, nids: set[int]) -> dict[int, list[tuple[float, bool
     return out
 
 
+def card_queues(col, nids: set[int]) -> dict[int, list[int]]:
+    """nid → [queue value per card], from ONE batched query over the pool.
+
+    ``queue == -1`` means suspended; everything else is viewable (new,
+    learning, review, buried). Chunked at CARD_QUEUE_CHUNK because
+    SQLite's default host-parameter cap is 999 — a 30k-note pool must
+    not become 30k placeholders in one statement, and per-row queries
+    are the other failure mode this exists to prevent. Sorted pool =
+    deterministic chunks (and warmer index walks) for free.
+    """
+    out: dict[int, list[int]] = {}
+    pool = sorted(nids)
+    for i in range(0, len(pool), CARD_QUEUE_CHUNK):
+        chunk = pool[i : i + CARD_QUEUE_CHUNK]
+        marks = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"select nid, queue from cards where nid in ({marks})", *chunk
+        )
+        for nid, queue in rows:
+            out.setdefault(int(nid), []).append(int(queue))
+    return out
+
+
 # ------------------------------------------------------------ aqt pipeline
 
 
@@ -719,8 +782,24 @@ def priority_rows(col, cfg: dict) -> dict:
 
     Uses only cached artifacts (pdf indexes, match caches) — never embeds.
     Freshness flags drive the panel's Embed/Refresh buttons instead.
-    Returns {"rows": [...], "approx": bool, "card_r": {nid: [...]}} — card_r
-    is handed back so threshold changes can re-aggregate without the col.
+    Returns {"rows": [...], "approx": bool, "card_r": {nid: [...]},
+    "matches", "card_index_ok", "card_queues"} — card_r (and, same trick,
+    card_queues) are handed back so threshold changes can re-aggregate
+    without the col: pdf_retention and note_card_counts are both pure.
+
+    Count keys per row (K-118, additive — the Library's Cards/Notes split
+    and per-PDF suspend read them; every row carries them, unindexed rows
+    at 0): ``note_count`` = matched notes at/above the row's threshold,
+    ``card_count`` = those notes' cards with queue != -1 (viewable),
+    ``suspended_count`` = cards with queue == -1. Aggregated from ONE
+    batched nid→queue query (card_queues) over the whole match pool, as
+    of each row's CONFIGURED threshold — a live threshold-slider preview
+    that re-aggregates retention via card_r can re-derive counts the same
+    way from card_queues, or simply show them as-of-configured.
+
+    Right before returning, a retention snapshot per PDF is appended to
+    retention_history.json (retention_history.record_rows) — guarded, so
+    history can never break the Library.
     """
     sig = embeddings.index_signature(cfg)
     agg = str(cfg.get("pdf_match_agg") or DEFAULT_AGG)
@@ -762,6 +841,9 @@ def priority_rows(col, cfg: dict) -> dict:
             "matched_cards": 0,
             "new_pct": 0.0,
             "priority": 0.0,
+            "note_count": 0,
+            "card_count": 0,
+            "suspended_count": 0,
         }
         if matches is not None:
             all_matches[safe] = matches
@@ -769,22 +851,38 @@ def priority_rows(col, cfg: dict) -> dict:
         rows.append(row)
 
     card_r = card_retrievability(col, nid_pool) if nid_pool else {}
+    queue_map = card_queues(col, nid_pool) if nid_pool else {}
     for row in rows:
         matches = all_matches.get(row["name"])
         if matches is None:
             continue
         agg_out = pdf_retention(matches, row["threshold"], card_r)
+        n_notes, n_viewable, n_suspended = note_card_counts(
+            matches, row["threshold"], queue_map
+        )
         row.update(
             retention=agg_out["retention"],
             matched_cards=agg_out["matched_cards"],
             new_pct=agg_out["new_pct"],
             priority=agg_out["priority"],
+            note_count=n_notes,
+            card_count=n_viewable,
+            suspended_count=n_suspended,
         )
     rows.sort(key=lambda r: (r["retention"] is None, -r["priority"], r["label"]))
+    try:
+        # Lazy import inside the guard: even an import-time failure in the
+        # history module must degrade to a log line, never a dead Library.
+        from . import retention_history
+
+        retention_history.record_rows(USER_FILES, rows)
+    except Exception as exc:
+        print(f"[klausmate] retention history not recorded: {exc}")
     return {
         "rows": rows,
         "approx": not fsrs_on,
         "card_r": card_r,
         "matches": all_matches,
         "card_index_ok": card_ok,
+        "card_queues": queue_map,
     }
