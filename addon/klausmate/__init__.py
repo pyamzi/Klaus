@@ -2314,6 +2314,13 @@ except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    from . import lecture_view as _lecture_view
+
+    _lecture_view.setup()
+except Exception as _e:
+    print(f"[klausmate] lecture view setup failed: {type(_e).__name__}: {_e}")
+
+try:
     from . import top_bar as _top_bar
 
     _top_bar.setup()

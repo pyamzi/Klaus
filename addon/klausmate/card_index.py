@@ -363,3 +363,67 @@ def top_k(
         elif score > heap[0][0]:
             heapq.heapreplace(heap, (score, nid))
     return [(nid, score) for score, nid in sorted(heap, reverse=True)]
+
+
+# ------------------------------------------------- targeted row access
+# (K-119) The lecture view needs ONE note's vector per card flip; load()
+# would drag the whole vectors.f32 (~90MB at 30k notes x 768 dims) into
+# RAM for that. RowMap is the manifest alone; read_vector seeks a
+# single row.
+
+
+@dataclass
+class RowMap:
+    provider: str
+    model: str
+    dims: int
+    rows: dict[int, int]
+    skipped: set[int]
+    updated_at: float
+
+
+def load_row_map(dir_path: str) -> RowMap | None:
+    """Manifest-only view of the index; None on missing/corrupt
+    (load()'s tolerance, minus the vector read)."""
+    try:
+        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
+            m = json.load(f)
+        if m.get("version") != INDEX_VERSION:
+            return None
+        nids = [int(n) for n in m["nids"]]
+        mods = m["mods"]
+        hashes = m["hashes"]
+        dims = int(m["dims"])
+        if not (len(nids) == len(mods) == len(hashes)):
+            return None
+        if nids and dims <= 0:
+            return None
+        return RowMap(
+            provider=str(m["provider"]),
+            model=str(m["model"]),
+            dims=dims,
+            rows={nid: i for i, nid in enumerate(nids)},
+            skipped={int(k) for k in (m.get("skipped") or {})},
+            updated_at=float(m.get("updated_at") or 0.0),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def read_vector(dir_path: str, row: int, dims: int) -> array | None:
+    """One vector row by seek. The size check is the mid-rebuild guard:
+    vectors.f32 is replaced atomically, but a stale RowMap can point
+    past the end of a shrunk file."""
+    if row < 0 or dims <= 0:
+        return None
+    vec = array("f")
+    path = os.path.join(dir_path, VECTORS_FILE)
+    try:
+        if os.path.getsize(path) < (row + 1) * dims * vec.itemsize:
+            return None
+        with open(path, "rb") as f:
+            f.seek(row * dims * vec.itemsize)
+            vec.fromfile(f, dims)
+        return vec
+    except (OSError, EOFError, ValueError):
+        return None

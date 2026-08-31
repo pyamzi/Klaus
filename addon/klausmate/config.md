@@ -93,6 +93,20 @@ wouldn't already need.
 - **pdf_index_max_chunks**: Cap on embedded chunks per PDF (default
   `1000`). Very large PDFs are evenly down-sampled to this many chunks.
 
+### Lecture view (review screen)
+
+- **`lecture_view_reopen`** (default `true`): when the Lecture panel was
+  left open, reopen it automatically the next time a review starts.
+  The panel itself is toggled from the reviewer's bottom-bar
+  **Library** button (next to More), the **L** key, or the reviewer's
+  context menu -> Lecture View. It shows the lecture page that best
+  matches the current card (resolved from the same embeddings the
+  Library's matching uses — the note's `!Library` tag picks the PDF,
+  the argmax chunk picks the page) and follows along as cards change;
+  when a card has no matching lecture it says "No lecture page
+  available for this card." Panel width and open-state live in
+  `pdf_tabs.json` (`lecture_view` key) — state, not preferences.
+
 ## Feature toggles
 
 - **image_crop_enabled**: Enable the image crop feature (right-click an

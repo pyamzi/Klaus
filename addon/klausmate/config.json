@@ -31,6 +31,7 @@
   "reviewer_background_grad_x": 50,
   "reviewer_background_grad_y": 42,
   "reviewer_background_grad_size": 100,
+  "lecture_view_reopen": true,
   "heatmap_enabled": true,
   "dashboard_order": [
     "decks",

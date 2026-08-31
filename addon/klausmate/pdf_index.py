@@ -237,3 +237,35 @@ def delete(user_files_dir: str, name: str) -> None:
         shutil.rmtree(index_dir(user_files_dir, name))
     except OSError:
         pass
+
+
+try:
+    from math import sumprod as _sumprod
+except ImportError:  # pre-3.12 fallback (Anki bundles 3.13)
+    def _sumprod(a, b):  # type: ignore[misc]
+        return sum(x * y for x, y in zip(a, b))
+
+
+def best_chunk(index: PdfIndex, vec) -> tuple[int, float]:
+    """Argmax-dot chunk row for one unit query vector (K-119) —
+    match_scores' inner loop, keeping the argmax it discards. The page
+    for row j is index.chunks[j][0] (1-based). (-1, 0.0) when the
+    index is empty or the dims disagree."""
+    dims = index.dims
+    rows = index.embedded_rows
+    if rows <= 0 or dims <= 0:
+        return (-1, 0.0)
+    try:
+        if len(vec) != dims:
+            return (-1, 0.0)
+    except TypeError:
+        return (-1, 0.0)
+    mv = memoryview(index.vectors)
+    best_j = -1
+    best_s = float("-inf")
+    for j in range(rows):
+        s = _sumprod(mv[j * dims : (j + 1) * dims], vec)
+        if s > best_s:
+            best_s = s
+            best_j = j
+    return (best_j, float(best_s))
