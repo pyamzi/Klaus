@@ -263,7 +263,15 @@ instead. Signed-off history is in
   `klausSetAnnotations`. Pure helpers (`renderer_from_config`,
   `chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
   `records_from_rect_map`) are aqt-free for `tests/test_pdfjs_viewer.py`.
-  Remaining gaps live on the K-100 card. The annotations JSON + bake
+  Parity completed by K-100:
+  Cmd/Ctrl-double-click copies the slide (through the shared
+  copyPageImage bridge — the native "insert into field" surface IS the
+  clipboard), the marquee persists across zoom/re-render with native
+  press semantics + drag-out (PNG dragstart; the drop-into-field leg
+  awaits live-Anki verification on the K-101 soak — re-copy+paste is
+  the working fallback), and find highlights the exact substring via
+  the CSS Custom Highlight API with the whole-span ring as guarded
+  fallback. Cutover gate: K-101 (needs-human). The annotations JSON + bake
   pipeline are renderer-independent — parity work must not fork them.
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
@@ -467,7 +475,8 @@ instead. Signed-off history is in
   (theme.library_qss: flat 22px rows on `surface`, one full-width
   hover/selection band, chevron twisties via
   `web/chevron-right-{day,night}.svg`, uppercase LIBRARY caption with
-  New Folder/Refresh beside it, quiet flat buttons — PrimaryButton
+  New Folder/Refresh/Map beside it (Map opens `pdf_map.open_map_window`
+  through a guarded import — K-124), quiet flat buttons — PrimaryButton
   opt-in kept); columns are PDF/Retention/Cards/Notes (Cards =
   VIEWABLE cards only, counts from priority_rows' K-118 keys via
   .get; a fully suspended PDF renders dimmed with "suspended" in its
@@ -545,6 +554,22 @@ instead. Signed-off history is in
   graph dict — PDF nodes at their matched notes' 2D centroid, edges to
   every note at/above threshold. `retention` (which imports aqt) is
   imported lazily inside `build_graph_data`. No window/canvas yet.
+- `pdf_map.py` (aqt-free above its aqt-glue divider; K-123/K-124): the
+  **embedding map window** — Phase D2. Pure viewport model on top
+  (world↔screen transform, `fit_to_view`, cursor-anchored `zoom_at`
+  whose fixed-point derivation is in its docstring, `hit_test`,
+  `node_radius`, `edges_for_selection`, LOD `labels_visible`); glue is a
+  singleton top-level window (show() never exec, raise_ never
+  activateWindow, WA_DeleteOnClose clearing the singleton) painting
+  `pdf_graph.build_graph_data` with K-115-guarded QPainter: notes as
+  muted dots, PDFs as accent nodes sized by match count, edges drawn
+  for the hovered/selected PDF only, QToolTip carrying
+  display/folder/match-count/retention-when-live. The viewport is
+  range-agnostic (`graph_bounds` measures the data) because projection
+  emits [-1,1] per axis. Entry point: the Library caption row's **Map**
+  button (`pdf_drive._open_map`, guarded import). Retention fills in
+  lazily from the open collection; headless it stays None and the
+  tooltip omits the line.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
   chunks, `card_index.py`'s sibling for the PDF side. K-119 adds
   `best_chunk(idx, vec)` — match_scores' inner max-dot loop keeping
@@ -748,6 +773,15 @@ instead. Signed-off history is in
 
 ## Conventions
 
+- **No app-modal `exec()` anywhere** (K-114, completed by K-125): every
+  dialog is window-modal `open()`/`show()` with signal-driven results —
+  `finished`+`clickedButton`, `textValueSelected`/`intValueSelected`,
+  or an accepted-callback CPS where a return value used to be consumed.
+  Closures keep shown dialogs referenced (a non-exec dialog with no
+  Python ref is GC'd shut); `deleteLater` rides `finished`; `aqt.utils
+  .askUser`/static `QInputDialog.getX`/`QMessageBox.question` are in
+  the banned class too (they exec internally). QMenu.exec is fine.
+  Ban pins live in tests/test_bridge_reentrancy.py + test_drive.py.
 - Defensive `try/except` around every Qt call; guarded imports with `None`
   fallbacks (`PDF_VIEWER_AVAILABLE` pattern); log with
   `print("[klausmate] ...")`; tooltips only for capture-style actions
