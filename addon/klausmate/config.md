@@ -163,7 +163,18 @@ wouldn't already need.
   none) is chosen here.
 - **background_color**: `#rrggbb` fill for `"color"` mode (also the
   colour behind a transparent or still-loading image). Default
-  `"#1E2225"`.
+  `"#1E2225"`. When a gradient is armed (below) this is its CENTRE
+  colour.
+- **background_color2**: the gradient's EDGE colour. Empty (the
+  default) means flat — exactly the plain solid colour. Set via
+  **Edge Color…** next to the Color button; the caption's **Make
+  Flat** link clears it.
+- **background_grad_x** / **background_grad_y**: the gradient's
+  centre, as % of the window (defaults `50`/`42`). Adjusted by
+  dragging the handle ON the deck screen itself while Preferences is
+  open, not with sliders.
+- **background_grad_size**: how far out the fade reaches, 10–200 %
+  (default `100`) — dragged on-screen as well.
 - **background_image**: filename of an image stored in
   `user_files/backgrounds/`. Choosing one in Preferences copies it
   there, so the background survives the original being moved.
@@ -181,7 +192,8 @@ wouldn't already need.
   instead of glowing. Image mode only.
 - **reviewer_background_mode** / **reviewer_background_color** /
   **reviewer_background_image** / **reviewer_background_fit** /
-  **reviewer_background_wash**: the SAME settings, `"theme"`-mode
+  **reviewer_background_wash** / **reviewer_background_color2** /
+  **reviewer_background_grad_x/_y/_size**: the SAME settings, `"theme"`-mode
   default, but for the study screen — completely independent of
   `background_*` above, so you can show a different picture while
   reviewing cards than the one behind the deck list. No matching

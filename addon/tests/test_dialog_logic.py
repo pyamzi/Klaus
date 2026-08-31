@@ -949,12 +949,12 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "thirteen handlers: design toggle, mode, fit, blur, wash, "
-      "colour, image, accent swatch, and the study screen's own "
-      "mode/fit/wash/colour/image (a separate background needs the "
-      "same live-preview discipline as the one it must never be "
-      "confused with)",
-      _mm_src.count("        appearance_changed()") == 13)
+      "seventeen handlers: design toggle, mode, fit, blur, wash, "
+      "colour, edge colour, make-flat, image, accent swatch, and the "
+      "study screen's own mode/fit/wash/colour/edge-colour/make-flat/"
+      "image (a separate background needs the same live-preview "
+      "discipline as the one it must never be confused with)",
+      _mm_src.count("        appearance_changed()") == 17)
 check("save and preview carry the design key as the IDENTICAL "
       "expression — the preview dict replaces config and the gates "
       "default OFF, so a preview missing the key strips the whole "
@@ -978,7 +978,19 @@ check("the study screen's four keys are written from r_spec in "
       and all(
           f'"reviewer_background_{field}": _bg_state["reviewer_spec"]'
           f'["{field}"],' in _preview_slice
-          for field in ("mode", "color", "image", "fit")))
+          for field in ("mode", "color", "image", "fit", "color2",
+                        "grad_x", "grad_y")))
+check("the gradient keys ride save AND preview for both screens — "
+      "edge colour, centre and size (grad_size wraps in the preview "
+      "dict, so its exact-expression pin is the split form)",
+      all(f'cfg["background_{f}"]' in _save_slice
+          and f'cfg["reviewer_background_{f}"]' in _save_slice
+          for f in ("color2", "grad_x", "grad_y", "grad_size"))
+      and '"background_color2": spec["color2"],' in _preview_slice
+      and '"background_grad_size": int(spec["grad_size"]),'
+      in _preview_slice
+      and '"reviewer_background_grad_size": _bg_state["reviewer_spec"]['
+      in _preview_slice)
 check("the wash keys ride save AND preview for both screens — the "
       "same parity lesson, fifth field",
       'cfg["background_wash"] = int(spec["wash"])' in _save_slice

@@ -104,6 +104,45 @@ check("the reviewer gets the same veil from its OWN key — and its "
                       "reviewer_background_image": "s.jpg"},
                      prefix="reviewer_background"), "u.png"))
 
+section("colour mode grows a two-stop radial gradient")
+check("no edge colour = flat, byte-identical to the old solid colour "
+      "— every pre-gradient config keeps rendering unchanged",
+      bg.gradient_css_value(bg.resolve({"background_mode": "color"})) == ""
+      and bg.main_css(colour)
+      == "html, body { background: #123456 !important; }"
+      + bg.panel_css(colour))
+_grad = bg.resolve({"background_mode": "color",
+                    "background_color": "#102030",
+                    "background_color2": "#a0b0c0",
+                    "background_grad_x": 30, "background_grad_y": 70,
+                    "background_grad_size": 120})
+check("gradient value: the centre colour at the dragged position "
+      "fading to the edge colour at the dragged size (ellipse shape, "
+      "so it scales with the viewport's aspect)",
+      bg.gradient_css_value(_grad)
+      == "radial-gradient(at 30% 70%, #102030 0%, #a0b0c0 120%)")
+_gcss = bg.main_css(_grad)
+check("colour mode paints the gradient fixed — scrolling must not "
+      "slide its centre — with the panel family still on top",
+      "radial-gradient(at 30% 70%" in _gcss
+      and "background-attachment: fixed" in _gcss
+      and "--klaus-panel:" in _gcss)
+check("geometry is clamped and defaulted — bad values land on centre "
+      "50/42 and size 100, and a bad edge colour reads as flat: "
+      "hand-edited config can never emit broken CSS",
+      bg.resolve({"background_grad_x": 999})["grad_x"] == 50
+      and bg.resolve({"background_grad_y": -3})["grad_y"] == 42
+      and bg.resolve({"background_grad_size": 5})["grad_size"] == 100
+      and bg.resolve({"background_color2": "red"})["color2"] == "")
+_rev_grad = bg.reviewer_css(bg.resolve(
+    {"reviewer_background_mode": "color",
+     "reviewer_background_color2": "#ffffff"},
+    prefix="reviewer_background"))
+check("the reviewer's colour mode takes the same gradient from its "
+      "OWN keys — and still no panel family",
+      "radial-gradient(" in _rev_grad
+      and "--klaus-panel" not in _rev_grad)
+
 section("resolve(cfg, prefix=...): a second, INDEPENDENT background")
 # Pouya: "this needs to be separate from the background I set for the
 # regular main section." One validator, two isolated results.

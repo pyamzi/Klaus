@@ -124,6 +124,21 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
     wash = cfg.get(f"{prefix}_wash")
     if not isinstance(wash, (int, float)) or not 0 <= wash <= 100:
         wash = 0
+    # The gradient half of colour mode (K-gradients, 2026-08-30):
+    # color2 is the EDGE colour — "" means flat, exactly yesterday's
+    # solid colour, so every stored config keeps rendering unchanged.
+    # grad_x/grad_y are the centre as % of the viewport, grad_size the
+    # edge colour's stop position along the gradient ray.
+    colour2 = cfg.get(f"{prefix}_color2")
+    if not isinstance(colour2, str) or not _is_hex(colour2):
+        colour2 = ""
+
+    def _pct(key: str, lo: int, hi: int, default: int) -> int:
+        v = cfg.get(f"{prefix}_{key}")
+        if not isinstance(v, (int, float)) or not lo <= v <= hi:
+            return default
+        return int(v)
+
     return {
         "mode": mode,
         "color": colour,
@@ -131,6 +146,10 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
         "fit": fit,
         "blur": int(blur),
         "wash": int(wash),
+        "color2": colour2,
+        "grad_x": _pct("grad_x", 0, 100, 50),
+        "grad_y": _pct("grad_y", 0, 100, 42),
+        "grad_size": _pct("grad_size", 10, 200, 100),
     }
 
 
@@ -157,6 +176,23 @@ def image_url(addon: str, name: str) -> str:
     """Web-export URL for a stored background image."""
     safe = safe_image_name(name)
     return f"/_addons/{addon}/user_files/{IMAGE_DIR}/{safe}" if safe else ""
+
+
+def gradient_css_value(spec: dict) -> str:
+    """The CSS background value for colour mode's gradient half: a
+    two-stop radial gradient, the centre colour (``color``) fading to
+    the edge colour (``color2``) — "" when the spec is flat (no edge
+    colour), which is every pre-gradient config. Default ellipse shape
+    on purpose: it scales with the viewport's aspect, so a wide window
+    doesn't render a circle with clipped corners. Centre and size come
+    from ``grad_x``/``grad_y``/``grad_size`` — the values the
+    on-screen drag editor writes."""
+    if not spec.get("color2"):
+        return ""
+    return (
+        f"radial-gradient(at {spec['grad_x']}% {spec['grad_y']}%, "
+        f"{spec['color']} 0%, {spec['color2']} {spec['grad_size']}%)"
+    )
 
 
 def _wash_css(spec: dict) -> str:
@@ -223,6 +259,18 @@ def main_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
+        grad = gradient_css_value(spec)
+        if grad:
+            return (
+                # Fixed attachment so scrolling the deck list doesn't
+                # slide the gradient's centre — same behaviour as the
+                # image wallpaper.
+                "html, body {"
+                f" background: {grad} !important;"
+                " background-attachment: fixed !important;"
+                " }"
+                + panel_css(spec)
+            )
         return (
             "html, body { background: %s !important; }" % spec["color"]
             # Panels get the same treatment over a flat colour as
@@ -283,6 +331,14 @@ def reviewer_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
+        grad = gradient_css_value(spec)
+        if grad:
+            return (
+                "html, body {"
+                f" background: {grad} !important;"
+                " background-attachment: fixed !important;"
+                " }"
+            )
         return "html, body { background: %s !important; }" % spec["color"]
     if mode == "image" and url:
         return (

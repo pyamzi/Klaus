@@ -1025,19 +1025,35 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_mode_combo.addItem("Image", "image")
     bg_colour_btn = QPushButton("Color…")
     bg_colour_btn.setObjectName("SecondaryButton")
+    # Colour mode is gradient-capable (Pouya picked "Color mode grows"
+    # over a fourth mode): Color… is the CENTRE colour, Edge Color…
+    # arms a two-stop radial fade out to a second one. No edge colour
+    # = flat, exactly the old solid colour, so stored configs keep
+    # rendering unchanged. Centre/size are dragged ON the screen
+    # itself while this window is open, not with sliders here.
+    bg_colour2_btn = QPushButton("Edge Color…")
+    bg_colour2_btn.setObjectName("SecondaryButton")
     bg_image_btn = QPushButton("Choose Image…")
     bg_image_btn.setObjectName("SecondaryButton")
     bg_ctl = QHBoxLayout()
     bg_ctl.setContentsMargins(0, 0, 0, 0)
     bg_ctl.addWidget(bg_mode_combo)
     bg_ctl.addWidget(bg_colour_btn)
+    bg_ctl.addWidget(bg_colour2_btn)
     bg_ctl.addWidget(bg_image_btn)
     bg_mode_row = _row(
         appearance_layout,
         "Background",
-        "Anki's own look, a solid color, or an image of yours.",
+        "Anki's own look, a solid color or gradient, or an image of "
+        "yours.",
         bg_ctl,
     )
+
+    # Caption line for the gradient state: names both colours and
+    # carries the way back to flat.
+    bg_grad_lbl = QLabel()
+    bg_grad_lbl.setObjectName("SettingDesc")
+    appearance_layout.addWidget(bg_grad_lbl)
 
     # Caption line under the mode row: a rounded thumbnail of the
     # chosen picture beside its filename (thumbnail per Pouya,
@@ -1113,12 +1129,15 @@ def manage_models_dialog(setup: bool = False) -> None:
     study_mode_combo.addItem("Image", "image")
     study_colour_btn = QPushButton("Color…")
     study_colour_btn.setObjectName("SecondaryButton")
+    study_colour2_btn = QPushButton("Edge Color…")
+    study_colour2_btn.setObjectName("SecondaryButton")
     study_image_btn = QPushButton("Choose Image…")
     study_image_btn.setObjectName("SecondaryButton")
     study_ctl = QHBoxLayout()
     study_ctl.setContentsMargins(0, 0, 0, 0)
     study_ctl.addWidget(study_mode_combo)
     study_ctl.addWidget(study_colour_btn)
+    study_ctl.addWidget(study_colour2_btn)
     study_ctl.addWidget(study_image_btn)
     study_mode_row = _row(
         appearance_layout,
@@ -1127,6 +1146,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         "your cards while you study.",
         study_ctl,
     )
+
+    study_grad_lbl = QLabel()
+    study_grad_lbl.setObjectName("SettingDesc")
+    appearance_layout.addWidget(study_grad_lbl)
 
     study_thumb_lbl = QLabel()
     study_image_lbl = QLabel()
@@ -1249,6 +1272,24 @@ def manage_models_dialog(setup: bool = False) -> None:
         container.setEnabled(design_on)
         container.setVisible(bool(text_lbl.text()) or pix is not None)
 
+    def _sync_grad_caption(
+        lbl: Any, spec_x: dict, is_colour: bool, design_on: bool
+    ) -> None:
+        """The gradient caption: both colours by swatch and hex, plus
+        the one-click way back to a flat colour. Hidden whenever the
+        mode isn't colour or no edge colour is set."""
+        c, c2 = spec_x["color"], spec_x["color2"]
+        if is_colour and c2:
+            lbl.setText(
+                f'Gradient: <span style="color:{c}">&#9632;</span> {c} '
+                f'fades to <span style="color:{c2}">&#9632;</span> {c2} '
+                f'&nbsp;&middot;&nbsp; <a href="flat">Make Flat</a>'
+            )
+        else:
+            lbl.setText("")
+        lbl.setEnabled(design_on)
+        lbl.setVisible(bool(lbl.text()))
+
     def sync_background_widgets() -> None:
         """Repaint the Appearance controls from _bg_state (never from
         config directly — the spec is the pending, unsaved value)."""
@@ -1283,7 +1324,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         design_on = klausbook_cb.isChecked()
         bg_mode_row.setEnabled(design_on)
         bg_colour_btn.setEnabled(design_on and (is_colour or is_image))
+        # Edge colour is colour-mode only — in image mode the centre
+        # colour doubles as the under-image fill, but a gradient has
+        # nothing to paint under a picture.
+        bg_colour2_btn.setEnabled(design_on and is_colour)
         bg_image_btn.setEnabled(design_on and is_image)
+        _sync_grad_caption(bg_grad_lbl, spec, is_colour, design_on)
         # Whole rows, so the name and description grey out with the
         # control — a live-looking label over a dead slider was the
         # reason these read as broken rather than inactive.
@@ -1300,7 +1346,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         study_wash_lbl.setText(f"{r_spec['wash']}%")
         study_mode_row.setEnabled(design_on)
         study_colour_btn.setEnabled(design_on and (r_is_colour or r_is_image))
+        study_colour2_btn.setEnabled(design_on and r_is_colour)
         study_image_btn.setEnabled(design_on and r_is_image)
+        _sync_grad_caption(study_grad_lbl, r_spec, r_is_colour, design_on)
         study_fit_row.setEnabled(design_on and r_is_image)
         study_wash_row.setEnabled(design_on and r_is_image)
         _sync_caption(
@@ -1358,6 +1406,24 @@ def manage_models_dialog(setup: bool = False) -> None:
         appearance_changed()
         sync_background_widgets()
 
+    def pick_bg_colour2() -> None:
+        from aqt.qt import QColor, QColorDialog
+
+        current = QColor(
+            _bg_state["spec"]["color2"] or _bg_state["spec"]["color"]
+        )
+        chosen = QColorDialog.getColor(current, dlg, "Edge Color")
+        if not chosen.isValid():
+            return
+        _bg_state["spec"]["color2"] = chosen.name()
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_bg_make_flat(_href: str) -> None:
+        _bg_state["spec"]["color2"] = ""
+        appearance_changed()
+        sync_background_widgets()
+
     def pick_bg_image() -> None:
         from aqt.qt import QFileDialog
 
@@ -1410,6 +1476,25 @@ def manage_models_dialog(setup: bool = False) -> None:
         if not chosen.isValid():
             return
         _bg_state["reviewer_spec"]["color"] = chosen.name()
+        appearance_changed()
+        sync_background_widgets()
+
+    def pick_study_colour2() -> None:
+        from aqt.qt import QColor, QColorDialog
+
+        current = QColor(
+            _bg_state["reviewer_spec"]["color2"]
+            or _bg_state["reviewer_spec"]["color"]
+        )
+        chosen = QColorDialog.getColor(current, dlg, "Study Edge Color")
+        if not chosen.isValid():
+            return
+        _bg_state["reviewer_spec"]["color2"] = chosen.name()
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_study_make_flat(_href: str) -> None:
+        _bg_state["reviewer_spec"]["color2"] = ""
         appearance_changed()
         sync_background_widgets()
 
@@ -2503,12 +2588,20 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
         cfg["background_wash"] = int(spec["wash"])
+        cfg["background_color2"] = spec["color2"]
+        cfg["background_grad_x"] = int(spec["grad_x"])
+        cfg["background_grad_y"] = int(spec["grad_y"])
+        cfg["background_grad_size"] = int(spec["grad_size"])
         r_spec = _bg_state["reviewer_spec"]
         cfg["reviewer_background_mode"] = r_spec["mode"]
         cfg["reviewer_background_color"] = r_spec["color"]
         cfg["reviewer_background_image"] = r_spec["image"]
         cfg["reviewer_background_fit"] = r_spec["fit"]
         cfg["reviewer_background_wash"] = int(r_spec["wash"])
+        cfg["reviewer_background_color2"] = r_spec["color2"]
+        cfg["reviewer_background_grad_x"] = int(r_spec["grad_x"])
+        cfg["reviewer_background_grad_y"] = int(r_spec["grad_y"])
+        cfg["reviewer_background_grad_size"] = int(r_spec["grad_size"])
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
         # No heatmap_enabled write: since 2026-08-30 the deck screen's
@@ -2573,6 +2666,10 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
             "background_wash": int(spec["wash"]),
+            "background_color2": spec["color2"],
+            "background_grad_x": int(spec["grad_x"]),
+            "background_grad_y": int(spec["grad_y"]),
+            "background_grad_size": int(spec["grad_size"]),
             # The study screen's OWN spec — carried for the same reason
             # as every key here: the preview dict REPLACES config, so
             # omitting these would snap the study background back to
@@ -2586,6 +2683,12 @@ def manage_models_dialog(setup: bool = False) -> None:
             "reviewer_background_wash": int(
                 _bg_state["reviewer_spec"]["wash"]
             ),
+            "reviewer_background_color2": _bg_state["reviewer_spec"]["color2"],
+            "reviewer_background_grad_x": _bg_state["reviewer_spec"]["grad_x"],
+            "reviewer_background_grad_y": _bg_state["reviewer_spec"]["grad_y"],
+            "reviewer_background_grad_size": _bg_state["reviewer_spec"][
+                "grad_size"
+            ],
             "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
             # Same expression save_general writes. The design gates all
             # read through effective_cfg and their default is OFF, so a
@@ -2831,11 +2934,15 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)
     bg_wash_slider.valueChanged.connect(on_bg_wash_changed)
     bg_colour_btn.clicked.connect(pick_bg_colour)
+    bg_colour2_btn.clicked.connect(pick_bg_colour2)
+    bg_grad_lbl.linkActivated.connect(on_bg_make_flat)
     bg_image_btn.clicked.connect(pick_bg_image)
     study_mode_combo.currentIndexChanged.connect(on_study_mode_changed)
     study_fit_combo.currentIndexChanged.connect(on_study_fit_changed)
     study_wash_slider.valueChanged.connect(on_study_wash_changed)
     study_colour_btn.clicked.connect(pick_study_colour)
+    study_colour2_btn.clicked.connect(pick_study_colour2)
+    study_grad_lbl.linkActivated.connect(on_study_make_flat)
     study_image_btn.clicked.connect(pick_study_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
