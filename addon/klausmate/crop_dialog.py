@@ -271,49 +271,62 @@ class _CropCanvas(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        s, off = self._fit()
-        display_rect = QRectF(
-            off.x(),
-            off.y(),
-            self._image.width() * s,
-            self._image.height() * s,
-        )
-        # Target-rect drawImage keeps retina crisp (painter handles the
-        # devicePixelRatio for us).
-        painter.drawImage(display_rect, self._image)
-        if self._sel is not None:
-            sel_rect = self._img_rect_to_widget(self._sel)
-            # Dim everything outside the selection (odd-even hole punch).
-            path = QPainterPath()
-            path.setFillRule(Qt.FillRule.OddEvenFill)
-            path.addRect(display_rect)
-            path.addRect(sel_rect)
-            painter.fillPath(path, _MASK)
-            painter.setPen(QPen(_accent_color(), 2))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(sel_rect)
-            # 8 handle squares.
-            painter.setPen(QPen(QColor(255, 255, 255), 1))
-            painter.setBrush(_accent_color())
-            half = _HANDLE_PX / 2.0
-            cx = sel_rect.center().x()
-            cy = sel_rect.center().y()
-            for hx, hy in (
-                (sel_rect.left(), sel_rect.top()),
-                (cx, sel_rect.top()),
-                (sel_rect.right(), sel_rect.top()),
-                (sel_rect.right(), cy),
-                (sel_rect.right(), sel_rect.bottom()),
-                (cx, sel_rect.bottom()),
-                (sel_rect.left(), sel_rect.bottom()),
-                (sel_rect.left(), cy),
-            ):
-                painter.drawRect(
-                    QRectF(hx - half, hy - half, _HANDLE_PX, _HANDLE_PX)
-                )
-        painter.end()
+        try:
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform, True
+            )
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            s, off = self._fit()
+            display_rect = QRectF(
+                off.x(),
+                off.y(),
+                self._image.width() * s,
+                self._image.height() * s,
+            )
+            # Target-rect drawImage keeps retina crisp (painter handles the
+            # devicePixelRatio for us).
+            painter.drawImage(display_rect, self._image)
+            if self._sel is not None:
+                sel_rect = self._img_rect_to_widget(self._sel)
+                # Dim everything outside the selection (odd-even hole punch).
+                path = QPainterPath()
+                path.setFillRule(Qt.FillRule.OddEvenFill)
+                path.addRect(display_rect)
+                path.addRect(sel_rect)
+                painter.fillPath(path, _MASK)
+                painter.setPen(QPen(_accent_color(), 2))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(sel_rect)
+                # 8 handle squares.
+                painter.setPen(QPen(QColor(255, 255, 255), 1))
+                painter.setBrush(_accent_color())
+                half = _HANDLE_PX / 2.0
+                cx = sel_rect.center().x()
+                cy = sel_rect.center().y()
+                for hx, hy in (
+                    (sel_rect.left(), sel_rect.top()),
+                    (cx, sel_rect.top()),
+                    (sel_rect.right(), sel_rect.top()),
+                    (sel_rect.right(), cy),
+                    (sel_rect.right(), sel_rect.bottom()),
+                    (cx, sel_rect.bottom()),
+                    (sel_rect.left(), sel_rect.bottom()),
+                    (sel_rect.left(), cy),
+                ):
+                    painter.drawRect(
+                        QRectF(hx - half, hy - half, _HANDLE_PX, _HANDLE_PX)
+                    )
+        except Exception as exc:
+            # A drawing bug must degrade to "the crop preview didn't
+            # draw", never to an exception escaping mid-paint (stdout,
+            # not Anki's error dialog — a repainting widget would spam).
+            print(f"[klausmate] crop paint failed: {exc}")
+        finally:
+            # ALWAYS close the painter, however the block above exits: a
+            # QPainter left live on a widget corrupts the window's
+            # backing store and segfaults Qt on the next flush — the
+            # md3_switch 2026-08-26 crash spree in one sentence.
+            painter.end()
 
 
 class ImageCropDialog(QDialog):

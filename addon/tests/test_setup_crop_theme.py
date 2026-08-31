@@ -121,6 +121,45 @@ check("the frozen brand blue is gone entirely — the crop selection "
       and "_KLAUS_BLUE" not in _CROP_SRC
       and 'palette(theme.night_mode())["blue_accent"]' in _CROP_SRC)
 
+section("K-115: paintEvent guards its QPainter (md3_switch's rule)")
+# A QPainter constructed and .end()ed with no try/finally between them
+# is the proven-fatal md3_switch pattern: any exception in the body
+# leaves a live painter on the widget, corrupts the backing store, and
+# segfaults Qt on the next flush (nine crashes, 2026-08-26). Pin BOTH
+# custom-painted widgets: crop_dialog's canvas and pdf_viewer's
+# selection overlay.
+import ast as _ast
+
+_PDFV_SRC = open("klausmate/pdf_viewer.py").read()
+
+
+def _paint_event_guarded(src: str) -> tuple:
+    """(has_try_finally, finally_ends_painter, except_logs) for the
+    file's paintEvent, via AST so comments can't fake a pass."""
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.FunctionDef) and node.name == "paintEvent":
+            for t in _ast.walk(node):
+                if isinstance(t, _ast.Try) and t.finalbody:
+                    fin = _ast.unparse(_ast.Module(t.finalbody, []))
+                    exc = (
+                        _ast.unparse(_ast.Module(t.handlers[0].body, []))
+                        if t.handlers
+                        else ""
+                    )
+                    return (
+                        True,
+                        "painter.end()" in fin,
+                        "[klausmate]" in exc,
+                    )
+    return (False, False, False)
+
+
+for _label, _s in (("crop_dialog", _CROP_SRC), ("pdf_viewer", _PDFV_SRC)):
+    _tf, _fe, _el = _paint_event_guarded(_s)
+    check(f"{_label}.paintEvent wraps its body in try/finally", _tf)
+    check(f"{_label}.paintEvent's finally closes the painter", _fe)
+    check(f"{_label}.paintEvent's except logs, never re-raises", _el)
+
 section("crop_dialog.py: crop behaviour untouched (style only)")
 check("rubber-band selection state machine intact",
       'self._mode = "draw"' in _CROP_SRC

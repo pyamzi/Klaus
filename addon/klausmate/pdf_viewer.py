@@ -529,25 +529,36 @@ class _SelectionOverlay(QWidget):
         ):
             return
         painter = QPainter(self)
-        if QColor is not None and self._highlight_rects:
-            # Persistent highlights go beneath everything else:
-            # translucent, Preview-style, in each record's own color.
-            painter.setPen(Qt.PenStyle.NoPen)
-            for rect, color in self._highlight_rects:
-                painter.setBrush(color)
-                painter.drawRect(rect)
-        if QColor is not None and self._text_boxes:
-            self._paint_texts(painter)
-        if QColor is not None and self._rects:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(_selection_highlight_color())
-            for rect in self._rects:
-                painter.drawRect(rect)
-        if self._marquee is not None:
-            self._paint_marquee(painter)
-        if QColor is not None and self._note_boxes:
-            self._paint_notes(painter)
-        painter.end()
+        try:
+            if QColor is not None and self._highlight_rects:
+                # Persistent highlights go beneath everything else:
+                # translucent, Preview-style, in each record's own color.
+                painter.setPen(Qt.PenStyle.NoPen)
+                for rect, color in self._highlight_rects:
+                    painter.setBrush(color)
+                    painter.drawRect(rect)
+            if QColor is not None and self._text_boxes:
+                self._paint_texts(painter)
+            if QColor is not None and self._rects:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(_selection_highlight_color())
+                for rect in self._rects:
+                    painter.drawRect(rect)
+            if self._marquee is not None:
+                self._paint_marquee(painter)
+            if QColor is not None and self._note_boxes:
+                self._paint_notes(painter)
+        except Exception as exc:
+            # A drawing bug must degrade to "the overlay didn't draw",
+            # never to an exception escaping mid-paint (stdout, not
+            # Anki's error dialog — a repainting widget would spam).
+            print(f"[klausmate] overlay paint failed: {exc}")
+        finally:
+            # ALWAYS close the painter, however the block above exits: a
+            # QPainter left live on a widget corrupts the window's
+            # backing store and segfaults Qt on the next flush — the
+            # md3_switch 2026-08-26 crash spree in one sentence.
+            painter.end()
 
     def _paint_texts(self, painter: Any) -> None:
         """Mirrored outside text (K-078/K-083): each record's contents
