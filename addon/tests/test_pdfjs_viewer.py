@@ -232,4 +232,28 @@ check("_goto_dialog's OTHER caller (a native QLabel click, not the "
       "self._goto_dialog()" in _SRC.split("def eventFilter", 1)[1]
       .split("def ", 1)[0])
 
+section("context menu keeps the selection alive (live Blink repro)")
+# Every selection-dependent menu item reads window.getSelection() inside
+# its CLICK handler. Blink collapses the selection on a trusted mousedown
+# over a non-editable element, and does it BEFORE click fires — so the
+# menu offered "Highlight" on a real selection and the handler then saw
+# nothing, reporting "select text first". Verified with actual mouse
+# input in a real Blink engine: click-only wiring reads the selection as
+# collapsed (alive: false, text: ""), the mousedown guard keeps it
+# (alive: true, full text).
+_HTML = _src(os.path.join("web", "pdfjs_viewer.html"))
+check("the context menu cancels mousedown, so the selection survives to "
+      "the click handler",
+      'ctxmenu.addEventListener("mousedown"' in _HTML
+      and "ev.preventDefault()" in _HTML.split(
+          'ctxmenu.addEventListener("mousedown"', 1)[1].split("\n", 1)[0])
+check("the guard is on the MENU CONTAINER, not per item — items are "
+      "rebuilt on every open, a container listener catches them all",
+      _HTML.index('ctxmenu.addEventListener("mousedown"')
+      < _HTML.index('mi.addEventListener("click"'))
+for _item in ("Highlight", "Copy Selection as Image"):
+    check(f"'{_item}' is still offered only when there IS a selection "
+          "(hasSel gate) — the guard fixes the handler, not the gate",
+          f'["{_item}"' in _HTML and "if (hasSel) {" in _HTML)
+
 raise SystemExit(report())

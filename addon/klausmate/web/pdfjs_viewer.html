@@ -580,6 +580,20 @@ async function copyPageText(page0) {
 /* ==== context menu ================================================= */
 const ctxmenu = document.getElementById("ctxmenu");
 function hideMenu() { ctxmenu.style.display = "none"; }
+/* Cancel mousedown anywhere in the menu so the text selection SURVIVES
+   until the click handler runs. Blink collapses the selection on a
+   trusted mousedown over a non-editable element, and it does so BEFORE
+   click fires — so every selection-dependent item ("Highlight", "Copy",
+   "Copy Selection as Image") saw an empty selection and behaved as
+   though nothing had been selected. "Highlight" reported "select text
+   first" on a selection the menu had just used to decide to offer the
+   item at all, which is what made highlighting look completely broken.
+   Verified in a real Blink engine with actual mouse input: click-only
+   wiring reads the selection as collapsed, this listener keeps it alive.
+   preventDefault on mousedown suppresses only the focus/collapse default
+   — click still fires, and the items are plain divs with nothing to
+   focus. */
+ctxmenu.addEventListener("mousedown", (ev) => ev.preventDefault());
 document.addEventListener("click", hideMenu);
 document.addEventListener("scroll", hideMenu, true);
 
