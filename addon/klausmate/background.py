@@ -300,7 +300,7 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
         "grip.style.cssText='position:absolute;width:14px;height:14px;"
         "border-radius:50%;transform:translate(-50%,-50%);background:#fff;"
         "border:2px solid rgba(0,0,0,0.35);box-shadow:0 1px 3px "
-        "rgba(0,0,0,0.4);pointer-events:auto;cursor:ew-resize;';"
+        "rgba(0,0,0,0.4);pointer-events:auto;cursor:crosshair;';"
         "wrap.appendChild(ring);wrap.appendChild(dot);wrap.appendChild(grip);"
         "document.body.appendChild(wrap);"
         "function place(){"
@@ -309,7 +309,17 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
         "dot.style.left=cx+'px';dot.style.top=cy+'px';"
         "ring.style.left=(cx-r)+'px';ring.style.top=(cy-r)+'px';"
         "ring.style.width=2*r+'px';ring.style.height=2*r+'px';"
-        "grip.style.left=(cx+r)+'px';grip.style.top=cy+'px';}"
+        # The grip rides the ring along the ray toward the viewport
+        # centre, CLAMPED into view: at grad_size 100 the ring's
+        # radius is the half-diagonal, i.e. off-screen — an unclamped
+        # grip was unreachable and the radius could then never be
+        # adjusted at all. Its drag math is distance-based, so a
+        # clamped grip still resizes correctly from wherever it sits.
+        "var ga=Math.atan2(h/2-cy,w/2-cx);"
+        "var gx=cx+r*Math.cos(ga),gy=cy+r*Math.sin(ga);"
+        "gx=Math.max(16,Math.min(w-16,gx));"
+        "gy=Math.max(16,Math.min(h-16,gy));"
+        "grip.style.left=gx+'px';grip.style.top=gy+'px';}"
         "function paintBg(){"
         "var g='radial-gradient(at '+X+'% '+Y+'%, '+C+' 0%, '+C2+' '+S+'%)';"
         "[document.documentElement,document.body].forEach(function(el){"

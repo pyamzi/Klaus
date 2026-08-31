@@ -183,6 +183,13 @@ check("self-guarding, clamped drag math, drag-end bridge message "
       and "klausmate:bggrad:" in _ed
       and "clamp(" in _ed
       and "setPointerCapture" in _ed)
+check("the size grip is CLAMPED into the viewport along the ray "
+      "toward the screen centre — at grad_size 100 the ring's radius "
+      "is the half-diagonal, so an unclamped grip sat off-screen and "
+      "the radius could never be adjusted at all (Pouya's ask)",
+      "Math.atan2(h/2-cy,w/2-cx)" in _ed
+      and "Math.max(16,Math.min(w-16,gx))" in _ed
+      and "Math.max(16,Math.min(h-16,gy))" in _ed)
 check("the body wrapper is the same core in a <script> tag, and "
       "empty exactly when the core is",
       bg.gradient_edit_js(_grad, "main").startswith("<script>")
