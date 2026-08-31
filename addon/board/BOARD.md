@@ -109,15 +109,8 @@ created: 2026-08-26
 
 Seven live segfaults (2026-08-26, Qt 6.11 + macOS 26.5) proved that showing a Python dialog APPLICATION-modal via exec() crashes in its first backing-store flush (QPaintDevice::devicePixelRatio on null), regardless of dispatch shape (webchannel, QAction, deferred timer all crashed identically). manage_models_dialog is already fixed (dlg.open(), pinned in tests/test_bridge_reentrancy.py). Convert the remaining app-modal exec sites to window-modal open()/show() with callback-driven results: deck_curate.py:160 choose_deck_scope (returns a value -> needs CPS refactor of _curate_with), __init__.py:512 crop dialog, pdf_drive.py:1087, setup_flow.py's five msg.exec() QMessageBoxes (clickedButton() read after exec -> use buttonClicked signal or open+finished), pdfjs_viewer.py's two static QInputDialog helpers (_do_note_edit getMultiLineText, _goto_dialog getInt -> QInputDialog instances with open() + textValueSelected/intValueSelected). Each conversion must keep its existing test pins passing or strengthen them; add an exec-ban pin per converted file mirroring the manage_models one. Full context: context/SESSION-HANDOFF.md crash section.
 
-### K-115: Guarantee painter.end() in the two remaining paintEvents
-owner: -
-priority: P1
-tags: crash,paint
-files: klausmate/crop_dialog.py,klausmate/pdf_viewer.py,tests/test_setup_crop_theme.py
-verify: python3 -c "import ast,sys; bad=[]; [bad.append(f) for f in ['klausmate/crop_dialog.py','klausmate/pdf_viewer.py'] if not any(isinstance(n,ast.Try) and n.finalbody for t in ast.walk(ast.parse(open(f).read())) if isinstance(t,ast.FunctionDef) and t.name=='paintEvent' for n in ast.walk(t))]; sys.exit(1 if bad else 0)"
-created: 2026-08-26
-
-PROVEN-FATAL PATTERN (see md3_switch and context/SESSION-HANDOFF.md): a QPainter left live on a widget because an exception escaped between QPainter(self) and painter.end() corrupts the window's backing store, and Qt segfaults on the next flush (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush). That cost nine crashes to diagnose in Md3Switch, where a TypeError raised on every paint. crop_dialog.paintEvent (line ~272) and pdf_viewer.paintEvent (line ~522) each construct a QPainter and call .end() OUTSIDE any try/finally, so they are latent instances of the same bug — they simply do not raise today. Wrap each body in try/except-log/finally-end, mirroring md3_switch.paintEvent. Do NOT change what they draw. pdf_viewer's is on the PDF render hot path, so verify scrolling/zoom/marquee still perform after the change. Audit note: every other draw call in the addon passes a real QRect/QRectF/QPolygonF or genuine ints, so no other float-overload TypeErrors are lurking.
+#### Comments
+- [2026-08-31 orchestrator] Progress: pdf_drive.py:1087 (_on_threshold) converted to dlg.open()+accepted callback under K-117, with a per-file exec-ban pin in tests/test_drive.py. Remaining sites on this card: deck_curate.py choose_deck_scope CPS, __init__.py crop dialog, setup_flow.py five msg.exec(), pdfjs_viewer.py two QInputDialog statics.
 
 ## Doing
 
@@ -878,3 +871,73 @@ Integrate References/highlight-search-results-main (Glutanimate, AGPLv3) as a na
 #### Comments
 - [2026-08-25 worker-highlight] Implemented klausmate/browse_highlight.py: ported SearchTokenizer + get_searchable_tokens from References/highlight-search-results-main/src/highlight_search_results/search.py (ANKI2124 dialect only, enum and 2100 branches dropped), pure/aqt-free at module top. AGPL header kept intact from source (search.py/webview.py/browser.py share it) plus an 'Adapted for KlausMate' note. highlight_terms/clear_highlights ported from webview.py (webview.findText per term / findText('')). setup() registers gui_hooks.browser_did_change_row (re-highlight on row change) and gui_hooks.browser_menus_did_init (checkable View-menu 'Highlight Search Results', with the existence-check pattern for browser.menuView) — select-next/select-all shortcuts from upstream intentionally skipped. Per-Browser state stored as browser._klausmate_highlight_results (repo's attribute-guard convention). Added browse_highlight_default (true) to config.json + documented under config.md Feature toggles; each Browser toggle seeds from it via highlight_default(). Wired setup() into __init__.py as one guarded try/except block next to the other gui_hooks registrations (single Edit, matching deck_curate/pdf_drive/top_bar pattern exactly). No Preferences UI row added (out of scope, owned by another card). Created tests/test_browse_highlight.py (24 checks): ported upstream's _assert_common_tokenizations cases for 2124, plus pins for deck:/tag:/re:/nc: ignored, quoted phrases surviving tokenizing, AND/OR/'-'-marker operators dropped, and quote/wildcard stripping in get_searchable_tokens (also documents the upstream quirk that a negated word's text itself still passes through as searchable — only the '-' marker token is filtered, matching the real algorithm). Verify: python3 tests/test_browse_highlight.py -> 24 passed, 0 failed. Full suite (13 files): all green, including test_imports.py (browse_highlight imports cleanly, aqt-free) and test_klausmate.py (253 passed, __init__.py bootstrap intact). Files touched: klausmate/browse_highlight.py (new), klausmate/__init__.py, klausmate/config.json, klausmate/config.md, tests/test_browse_highlight.py (new). Committed as 1dbbeab.
 - [2026-08-25 orchestrator] Reviewed: gate green (24/24), full suite + symlink compile green; AGPL header verbatim with adaptation note (licence honoured); pure tokenizer at module top per the background.py pattern; hooks guarded, wiring in __init__.py matches the neighbouring blocks exactly; toggle rides the _klausmate_* attribute convention; upstream shortcuts correctly skipped. Signing off.
+
+### K-118: Retention history: per-PDF score snapshots over time + chart dialog + count columns data
+owner: retention-agent
+priority: P1
+tags: swarm,retention
+files: klausmate/retention.py,klausmate/retention_history.py,tests/test_retention_history.py
+verify: bash -c "test -f klausmate/retention_history.py && python3 tests/test_retention_history.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya: allow viewing how retention has changed for a PDF over time. (1) priority_rows records a per-day snapshot {safe: [[date, retention]]} to user_files/retention_history.json (atomic, deduped per day, capped) whenever it computes rows. (2) New retention_history.py: aqt-free storage + chart math at top; open_history_dialog(parent, safe_name, display_name) QDialog — show() never exec() (K-114 class), QPainter line chart with try/finally paint guard (K-115 class), theme tokens. EXACT signature is a contract with K-117. (3) priority_rows rows gain note_count / card_count (queue != -1) / suspended_count — additive keys only.
+
+#### Comments
+- [2026-08-31 orchestrator] Signed off (orchestrator). Snapshots per Library refresh (single writer, background col-held thread); chart dialog with contract signature open_history_dialog(parent, safe_name, display_name); counts as additive keys note_count/card_count/suspended_count + card_queues return key for col-free re-aggregation. 57 checks, 8/8 self-falsifications, full sweep 1708 green mid-churn. Committed c41e6d3. Live checks owed: chart on a real refresh; col.db.all positional args; paint path.
+
+### K-119: Lecture view: auto-follow the current card's lecture page during review
+owner: orchestrator
+priority: P1
+tags: feature,reviewer
+files: klausmate/lecture_view.py,klausmate/pdf_index.py,klausmate/card_index.py,klausmate/__init__.py,klausmate/config.json,klausmate/config.md,tests/test_lecture_view.py
+verify: bash -c "test -f klausmate/lecture_view.py && python3 tests/test_lecture_view.py && python3 tests/test_klausmate.py && python3 tests/test_imports.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya (while actively reviewing): view the exact lecture page associated with the card being studied; if none, say 'No lecture page available for this card.' UI decided with him: a 'Library' button on the reviewer bottom bar next to More opens a right-docked side panel (QDockWidget on mw hosting a standalone PdfSidebar) that auto-follows every card once opened; open-state + width persist (pdf_tabs.json merge key lecture_view). Resolution: note tags -> !Library candidates via prefs.json inversion; targeted card-vector row read (RowMap + seek, never the 90MB load); pdf_index.best_chunk argmax (page = chunks[j][0], already stored); pages_known via pdf_handler.load_pages; no threshold re-gating (tag = membership authority); MATCH_FLOOR sanity only. pdfjs jump = generation-stamped retry ladder (count: posts before page divs exist). Hooks: reviewer_did_show_question, state_did_change, state_shortcuts_will_change ('l', collision-scanned), reviewer_will_show_context_menu, profile_will_close/aboutToQuit with sidebar.cleanup() (K-095 crash class). Config: lecture_view_reopen (default true). Sequenced after K-115..K-118; file-disjoint from all four.
+
+#### Comments
+- [2026-08-31 orchestrator] Signed off (orchestrator). Bottom-bar Library button (right cell beside More, cloneNode of Anki's own button, functional injection - never design-gated), right dock on mw with frameless chrome, stamp-validated resolver (nid+tags key; the tags-in-key requirement was caught by the suite's own no-tags check - a nid-only cache served a stale match). 75 checks, 6/6 falsifications, verify + test_klausmate + test_imports green. Committed dd852b0. Live checks owed: button lands beside More on a real bottom bar; dock width restore; pdfjs jump ladder on first load; L shortcut.
+
+### K-115: Guarantee painter.end() in the two remaining paintEvents
+owner: viewer-agent
+priority: P1
+tags: crash,paint
+files: klausmate/crop_dialog.py,klausmate/pdf_viewer.py,tests/test_setup_crop_theme.py
+verify: python3 -c "import ast,sys; bad=[]; [bad.append(f) for f in ['klausmate/crop_dialog.py','klausmate/pdf_viewer.py'] if not any(isinstance(n,ast.Try) and n.finalbody for t in ast.walk(ast.parse(open(f).read())) if isinstance(t,ast.FunctionDef) and t.name=='paintEvent' for n in ast.walk(t))]; sys.exit(1 if bad else 0)"
+created: 2026-08-26
+claimed: 2026-08-31
+
+PROVEN-FATAL PATTERN (see md3_switch and context/SESSION-HANDOFF.md): a QPainter left live on a widget because an exception escaped between QPainter(self) and painter.end() corrupts the window's backing store, and Qt segfaults on the next flush (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush). That cost nine crashes to diagnose in Md3Switch, where a TypeError raised on every paint. crop_dialog.paintEvent (line ~272) and pdf_viewer.paintEvent (line ~522) each construct a QPainter and call .end() OUTSIDE any try/finally, so they are latent instances of the same bug — they simply do not raise today. Wrap each body in try/except-log/finally-end, mirroring md3_switch.paintEvent. Do NOT change what they draw. pdf_viewer's is on the PDF render hot path, so verify scrolling/zoom/marquee still perform after the change. Audit note: every other draw call in the addon passes a real QRect/QRectF/QPolygonF or genuine ints, so no other float-overload TypeErrors are lurking.
+
+#### Comments
+- [2026-08-31 orchestrator] Signed off (orchestrator). Both paintEvents guarded try/except-log/finally-end, drawing untouched; card verify failed before / passes after; 6 AST pins in test_setup_crop_theme.py each self-falsified. Committed 80d151c. Live check owed: scroll/zoom/marquee perf unchanged (guard is on the render hot path).
+
+### K-117: Library window: VSCode-style UI, Cards/Notes columns, per-PDF suspend, tree drops, menu clarity
+owner: library-agent
+priority: P1
+tags: swarm,library,ui
+files: klausmate/pdf_drive.py,klausmate/theme.py,klausmate/web/chevron-right-day.svg,klausmate/web/chevron-right-night.svg,tests/test_drive.py,tests/test_theme.py
+verify: bash -c "grep -q Suspend klausmate/pdf_drive.py && python3 tests/test_drive.py && python3 tests/test_theme.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya: the Library looks awful — make it look like the VSCode UI. Separate Cards and Notes columns (card count excludes suspended cards); per-PDF Suspend/Unsuspend of matched cards (via the tag_sync tag, undoable); drag-and-drop PDFs onto the left folder tree (external file drops routed to the existing import, landing in the hovered folder); clearer Re-index vs Curate menu copy + tooltips; menu entry for Retention History (module lands via K-118, guarded import). Count keys note_count/card_count/suspended_count arrive from retention.priority_rows (K-118 contract) — consume via .get so this card stands alone.
+
+#### Comments
+- [2026-08-31 orchestrator] Signed off (orchestrator). VS Code Explorer sheet (tokens-only, both palettes, offscreen renders eyeballed day+night incl. a caught night QHeaderView flash), 4 columns with numeric sort + suspended dim, tag-membership suspend/unsuspend via one CollectionOp, external tree drops with folder targeting, menu clarity renames + visible tooltips, Retention History wired to K-118's contract, pdf_drive exec->open. 128+241 checks, 45/45 falsifications (two pycache-staleness misses diagnosed and re-proven - purge pycache in falsification drivers). Committed 0f0a704. Live checks: chevrons/band/headers both palettes, Finder drop into a folder row, suspend round-trip with Ctrl+Z.
+
+### K-116: pdfjs viewer: trackpad pinch zoom + visible annotation/zoom toolbar
+owner: viewer-agent
+priority: P1
+tags: swarm,pdfjs,ui
+files: klausmate/web/pdfjs_viewer.html,klausmate/pdfjs_viewer.py,tests/test_pdfjs_viewer.py
+verify: bash -c "grep -q annobar klausmate/web/pdfjs_viewer.html && grep -q text-add klausmate/pdfjs_viewer.py && python3 tests/test_pdfjs_viewer.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya: macOS two-finger (pinch) zoom does not work properly in the PDF viewer — make it work (preferred) or remove it; and there is no visible highlight or text tool. He live-soaks pdf_renderer=pdfjs daily (K-101 gate), so this card targets the pdfjs page. (1) Pinch: Chromium delivers macOS trackpad pinch as wheel events with ctrlKey — the page has NO wheel handler (klausSetZoom is keyboard/menu only, Chromium magnification pinned to 1.0 in pdfjs_viewer.py). Add cursor-anchored smooth pinch zoom. (2) A visible mini-toolbar: Highlight tool, Text/Note tool (new text-add bridge op, existing record schema — bake pipeline must not fork), zoom −/%/+/reset. (3) Rides with K-115 (same owner, disjoint files).
+
+#### Comments
+- [2026-08-31 orchestrator] Signed off (orchestrator). One zoom session for all five paths (clamp 0.25-4.0), compositor preview + settle + visible-first in-place canvas swaps; annobar wired (highlight mode, text-add bridge with aqt-free clamp_text_add/make_text_record, zoom cluster); ctrl-wheel preventDefault kills the frame-zoom fight; #pages max-content fixes unreachable left edge. Live feedback (dead toolbar, slow zoom) drove the amendments. 138 checks, 64 falsifications, harness screenshots both palettes. Committed bcb16e6. Live checks owed: real-trackpad feel; text baked as FreeText visible in Preview; hover-subtle fallback until theme.css_vars owns the var.
