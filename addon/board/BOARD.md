@@ -988,3 +988,25 @@ Deliberately NOT added: a week-start option (the reference has none) and a colou
 
 #### Comments
 - [2026-08-31 orchestrator] Shipped in ec638ce. Rendered against the real collection (319 study days, 35,273 ease>0 reviews) in both palettes at all three ranges: month gaps read clearly, rail is S M T W T F S, stats centre, gear opens a dark-on-dark / light-on-light menu with the live values marked. Suite green: 21 files, 1964 checks. Needs one live look after restart.
+
+### K-122: Heatmap month labels walk off their columns (drift + wrong week)
+owner: orchestrator
+priority: P1
+tags: bug,ui,heatmap
+files: klausmate/heatmap.py,tests/test_heatmap.py
+verify: python3 tests/test_heatmap.py && python3 tests/test_imports.py
+created: 2026-08-31
+claimed: 2026-08-31
+
+LIVE REPORT (Pouya, screenshot): 'the month labels are not aligned right with the actual months'.
+
+TWO defects, measured in a Chromium harness against the real panel:
+
+1. DRIFT (regression from K-121, mine). The month strip became a flex row in K-121. A flex item's automatic minimum size is its MIN-CONTENT size, and .klaus-hm-m carries white-space: nowrap — so a month name floors its box at ~20px and the 10px flex-basis is ignored. Only LABELLED boxes inflate, so each one shoves every later column right: ~8px per label, accumulating to 103px of drift by the far end of a year. The pre-flex grid never had this (a fixed grid-auto-columns track is not sized by its item). Fix: min-width: 0 on .klaus-hm-m. Measured drift after: 0px at every column, all three ranges.
+
+2. WRONG WEEK (pre-existing, exposed by K-121's gaps). month_labels read the month off each week's SUNDAY, which labels the first week that *starts* in the new month — up to six days late. On the 2026-08-31 year, 11 of 13 labels sat a full week right of their month; the two exceptions (Feb, Mar 2026) are the months that happen to begin on a Sunday. Cosmetic while the grid was one ribbon; not once MONTH_GAP made the label a visible BLOCK boundary, because then Oct 1-4 really do sit inside the September block. Fix: a week belongs to the month holding most of its seven days = the month of its MIDDLE day (a week spans at most two months, so index 3 is in the majority side by construction). Leading column: named when the month owning the week is the month its VISIBLE days are in, blank otherwise (a window opening on a Friday sits in a week the previous month owns).
+
+New invariant test walks 11 different year windows and asserts every week sits under the month owning most of its days.
+
+#### Comments
+- [2026-08-31 orchestrator] Shipped. Harness measurement after the fix: 0px drift at every column across all three ranges, and every label lands on the week holding the majority of its month (Oct on the week of Sep 28, which holds Oct 1-4; Feb on Feb 1, a Sunday; etc). All 13 labels present on Pouya's live window, Sep through Sep. Suite green: 21 files, 1968 checks.
