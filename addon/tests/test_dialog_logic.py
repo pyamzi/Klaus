@@ -1031,6 +1031,15 @@ check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",
       "save_btn.setDefault(True)" in _mm_src)
+# Anki's own Light/Dark switch, mirrored into KlausMate Preferences
+# (2026-08-30, Pouya) — the ONE row writing an Anki preference.
+check("the Anki theme row seeds from mw.pm.theme(), marks dirty like "
+      "every deferred pref, and Save applies via mw.set_theme ONLY on "
+      "an actual change (setupStyle repaints every webview)",
+      "anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())"
+      in _mm_src
+      and "mw.set_theme(_Theme(_want))" in _mm_src
+      and 'int(getattr(mw.pm.theme(), "value", 0)) != _want' in _mm_src)
 check("accent swatches carry accessible names — a bare colour square "
       "is silent in VoiceOver; the name mirrors the tooltip identity",
       'sw.setAccessibleName(' in _mm_src

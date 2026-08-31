@@ -1005,7 +1005,26 @@ def manage_models_dialog(setup: bool = False) -> None:
         "right-click it and choose Edit Widgets….",
     )
 
-    # The master switch, first — everything below it on this page is
+    # Anki's own Light/Dark switch, mirrored here (Pouya: "add the
+    # light mode / dark mode in the main settings to the klausmate
+    # settings") — the ONE row on this page that writes an Anki
+    # preference (profile meta via mw.set_theme), not a Klaus config
+    # key. Applied on Save, deferred like every non-background pref: a
+    # live-previewed theme flip would flash the whole app twice on a
+    # Cancel.
+    anki_theme_combo = QComboBox()
+    anki_theme_combo.addItem("Follow System", 0)
+    anki_theme_combo.addItem("Light", 1)
+    anki_theme_combo.addItem("Dark", 2)
+    _row(
+        appearance_layout,
+        "Theme",
+        "Light or dark for all of Anki — the same switch as Anki's "
+        "own preferences. Applies when you press Save.",
+        anki_theme_combo,
+    )
+
+    # The master switch, next — everything below it on this page is
     # either gated by it (backgrounds) or independent of it (accent),
     # and reading it first makes that hierarchy legible.
     klausbook_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
@@ -1200,6 +1219,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     # _bg_preview_cfg still carries the key, read from stored config.
 
     _general_cfg = _pkg().get_config()
+    try:
+        _cur_theme = int(getattr(mw.pm.theme(), "value", 0))
+    except Exception:
+        _cur_theme = 0
+    anki_theme_combo.setCurrentIndex(
+        max(0, anki_theme_combo.findData(_cur_theme))
+    )
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
     runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
     from .pdfjs_viewer import renderer_from_config as _renderer_from_config
@@ -2598,6 +2624,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         # value this dialog happened to open with.
         cfg["klausbook_design"] = bool(klausbook_cb.isChecked())
         _pkg().write_config(cfg)
+        # Anki's own theme — the one non-Klaus preference this dialog
+        # writes. Only when actually changed: mw.set_theme re-runs
+        # setupStyle, which repaints every webview in the app.
+        try:
+            from aqt.theme import Theme as _Theme
+
+            _want = int(anki_theme_combo.currentData() or 0)
+            if int(getattr(mw.pm.theme(), "value", 0)) != _want:
+                mw.set_theme(_Theme(_want))
+        except Exception as _exc:
+            print(f"[klausmate] theme apply failed: {_exc}")
 
     def mark_dirty() -> None:
         """A preference widget changed — nothing is written until Save.
@@ -2916,6 +2953,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
     runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
+    anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
     klausbook_cb.toggled.connect(on_design_toggled)
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
