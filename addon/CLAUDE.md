@@ -419,7 +419,48 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   note against them (max cosine, cached in `matches.json`) → pull FSRS
   retrievability for matched cards → aggregate. The old
   `!Library::Matching` preview tag was retired in K-055 — "Show matches
-  in Browse" now hops to the per-PDF `tag_sync` tag.
+  in Browse" now hops to the per-PDF `tag_sync` tag. Since K-118
+  every priority row also carries `note_count`/`card_count`/
+  `suspended_count` (matched notes at/above threshold; their cards
+  split viewable vs queue −1 via ONE chunked `card_queues` batch —
+  900/chunk for SQLite's parameter cap), the return dict adds
+  `card_queues` beside `card_r` for col-free re-aggregation, and a
+  guarded `retention_history.record_rows` snapshot fires right before
+  return.
+- `retention_history.py` (aqt-free above its aqt-glue divider; K-118):
+  per-PDF retention snapshots — `user_files/retention_history.json`,
+  `{safe: [[YYYY-MM-DD, r], ...]}` local-time chronological, one entry
+  per day (same-day refresh replaces), capped 730, atomic
+  tmp+os.replace, corrupt reads as empty; recorded by every
+  `priority_rows` pass (single writer, guarded — history can never
+  break the Library). `open_history_dialog(parent, safe_name,
+  display_name)` (the signature is the Library menu's contract) draws
+  the QPainter line chart — show() never exec() (K-114),
+  WA_DeleteOnClose, K-115 try/finally painter.end(), colours only
+  theme.palette tokens (accent line + accent-at-alpha fill).
+- `lecture_view.py` (aqt-free above its aqt-glue divider; K-119): the
+  review-time Lecture panel. A FUNCTIONAL (never design-gated)
+  "Library" button injected beside More on the reviewer's bottom bar
+  (`ReviewerBottomBar` name-match; `pycmd("klausmate:lecture")`,
+  answered by this module's own js-message handler — the hook filters
+  CHAIN and the final return wins, so `__init__`'s blanket non-Editor
+  swallow upstream is harmless) toggles a right QDockWidget on mw
+  hosting a standalone `PdfSidebar`. Once open it follows
+  `reviewer_did_show_question`: note tags → `!Library` candidates
+  (prefs.json inverted, casefolded; the tag IS the membership verdict
+  — deliberately NO threshold re-gating, `MATCH_FLOOR` sanity only) →
+  one seek-read card vector (`card_index.load_row_map`/`read_vector`)
+  → `pdf_index.best_chunk` argmax → that chunk's stored 1-based page;
+  results cached per (nid, tags), revalidated by file stamps. No match
+  shows exactly "No lecture page available for this card." pdfjs
+  first-load jumps ride a generation-stamped retry ladder (the page
+  posts `count:` before its divs exist); leaving review hides the dock
+  (mw.web is shared across states); open-state + width persist under
+  `pdf_tabs.json`'s `lecture_view` key; EVERY teardown path runs
+  `sidebar.cleanup()` (K-095). Config `lecture_view_reopen`. Shortcut
+  "l" via `state_shortcuts_will_change` (collision-scanned) + a
+  reviewer context-menu toggle; never activateWindow — answer keys
+  stay on the reviewer.
 - `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
   deflation over one packed `array('d')` buffer (`math.sumprod` on
   memoryview slices, strided slices for the transpose — never the d×d
@@ -429,7 +470,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   every note at/above threshold. `retention` (which imports aqt) is
   imported lazily inside `build_graph_data`. No window/canvas yet.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
-  chunks, `card_index.py`'s sibling for the PDF side.
+  chunks, `card_index.py`'s sibling for the PDF side. K-119 adds
+  `best_chunk(idx, vec)` — match_scores' inner max-dot loop keeping
+  the argmax it discards; page for row j = `chunks[j][0]` (1-based).
 - `md3_switch.py`: `Md3Switch(QCheckBox)` — the MD3 track-and-thumb
   switch used for every settings-row on/off (K-material3 audit;
   replaced bare checkboxes in `manage_models.py`). Pure geometry/colour
@@ -458,7 +501,9 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     with its vector → cancelled indexing resumes for free. Manifest is
     written AFTER vectors (size mismatch on load ⇒ rebuild). `top_k` =
     `math.sumprod` over memoryview rows (C-speed; **no numpy in Anki's
-    bundled Python**) — 30k×768 ranks in ~0.25 s.
+    bundled Python**) — 30k×768 ranks in ~0.25 s. K-119 adds `RowMap`/`load_row_map`
+    (manifest-only) + `read_vector` (single-row seek) so per-card
+    lookups never pay the full vector load.
   - `curation.py` (aqt glue): two-phase `ensure_index` (snapshot with col
     via `select id, mod, flds from notes` + `flds.split("\x1f")`; embed
     without col, partial save every ~1k vectors), `run_curation`, preview
