@@ -143,8 +143,41 @@ section("no invented colours (the addon's standing rule)")
 # failure mode it exists to catch. (Caught by mutation-testing it.)
 check("no literal hex colour anywhere", not re.search(r"#[0-9A-Fa-f]{6}", _SRC))
 check("hues come from the palette", "theme.palette(" in _CODE)
-check("tints come from the live accent", "accent_rgba(" in _CODE)
 check("night mode is read, never baked", "night_mode()" in _CODE)
+
+section("every colour handed to QColor is one QColor can actually PARSE")
+# The bug this section exists for: theme.accent_rgba() returns a CSS
+# "rgba(r, g, b, a)" string for stylesheets. QColor cannot parse functional
+# notation — it returns an INVALID colour, which paints opaque BLACK. The
+# control shipped with black chips because of it, and no geometry test
+# could see it: the failure is in colour parsing, and the SVG preview used
+# to check the design renders rgba() correctly, because in CSS it IS valid.
+theme = importlib.import_module("klausmate.theme")
+# _SRC, not _CODE: palette KEY NAMES are string literals, and
+# code_only() strips those along with comments — the same trap that
+# hid the hex pin above.
+_KEYS = sorted(set(re.findall(r'(?:\bc|palette\([^)]*\))\["(\w+)"\]', _SRC)))
+check("the module does read palette keys", len(_KEYS) >= 3)
+for key in _KEYS:
+    for night in (False, True):
+        val = theme.palette(night)[key]
+        check(
+            f"{key} is a bare hex in {'dark' if night else 'light'} mode",
+            isinstance(val, str)
+            and re.fullmatch(r"#[0-9A-Fa-f]{3,8}", val) is not None,
+        )
+check(
+    "no rgba()/QSS-fragment string is ever fed to QColor",
+    not re.search(r"QColor\([^)]*(?:accent_rgba|rgba\()", _CODE),
+)
+check(
+    "translucency is applied on the QColor, not baked into a string",
+    "setAlphaF(" in _CODE,
+)
+check(
+    "the accent tint still comes from the live accent token",
+    '"blue_bright"' in _SRC,
+)
 
 section("the crash rules Md3Switch already paid for")
 check(

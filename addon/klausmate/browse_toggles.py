@@ -233,6 +233,21 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         finally:
             painter.end()
 
+    def _tint(self, theme, night: bool, alpha: float) -> "QColor":
+        """The live accent at ``alpha``, as a QColor.
+
+        Deliberately NOT theme.accent_rgba: that returns a CSS
+        ``rgba(...)`` string for STYLESHEETS, and QColor cannot parse
+        functional notation — fed one it yields an INVALID colour, which
+        paints opaque black. That is exactly how this control first
+        shipped (black chips under an accent icon), and no amount of
+        geometry testing could see it, because the bug is in colour
+        PARSING. Alpha belongs on the QColor, never in the string.
+        """
+        col = QColor(theme.palette(night)["blue_bright"])
+        col.setAlphaF(alpha)
+        return col
+
     def _paint(self, painter, theme, c: dict, night: bool) -> None:
         """The drawing itself, split out so paintEvent's try/finally can
         guarantee the painter is closed however this returns."""
@@ -245,14 +260,14 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         if not self.isEnabled():
             fill = None
         elif self.isDown():
-            fill = theme.accent_rgba(night, 0.22)
+            fill = self._tint(theme, night, 0.22)
         elif on:
-            fill = theme.accent_rgba(night, 0.14)
+            fill = self._tint(theme, night, 0.14)
         elif self._hovered:
-            fill = c["hover_subtle"]
+            fill = QColor(c["hover_subtle"])
         if fill is not None:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(fill))
+            painter.setBrush(fill)
             painter.drawRoundedRect(
                 QRectF(0.0, 0.0, w, h), CHIP_RADIUS, CHIP_RADIUS
             )
@@ -273,7 +288,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         if self.hasFocus():
             # A self-painted widget bypasses QStyle entirely, so the shared
             # :focus rule in dialog_qss can never reach this one.
-            pen = QPen(QColor(theme.accent_rgba(night, 0.9)))
+            pen = QPen(self._tint(theme, night, 0.9))
             pen.setWidthF(2.0)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
