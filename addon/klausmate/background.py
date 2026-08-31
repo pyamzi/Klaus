@@ -36,6 +36,12 @@ FITS = ("cover", "contain", "tile")
 # plain white ground; the old near-black #1E2225 made a fresh
 # colour-mode switch open on a dark blob.
 DEFAULT_COLOR = "#FFFFFF"
+# ...by DAY. The ground follows Anki's theme (house rule: both
+# palettes in one sheet, keyed on :root.night-mode — Anki flips the
+# class with JS and never re-runs the injection): at night the white
+# ground would be a floodlight (live complaint, 2026-08-30), so night
+# mode grounds on the original designed dark tone instead.
+NIGHT_COLOR = "#1E2225"
 DEFAULT_BLUR = 22          # px of Gaussian blur behind the deck panels
 
 # Where chosen images are copied. Inside the addon folder so Anki's
@@ -341,7 +347,7 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
     return (
         "(function(){"
         "if(document.getElementById('klaus-grad-edit')){return;}"
-        f"var T={json.dumps(tgt)},E={json.dumps(spec['color2'])},"
+        f"var T={json.dumps(tgt)},DEF={json.dumps(DEFAULT_COLOR.lower())},"
         f"G={packed},CAP={int(MAX_SPHERES)};"
         "var wrap=document.createElement('div');"
         "wrap.id='klaus-grad-edit';"
@@ -349,14 +355,19 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
         "pointer-events:none;';"
         "document.body.appendChild(wrap);"
         "var spheres=[];"
+        # The JS mirrors gradient_css_value's unset-white skip, and
+        # NEVER touches background-color inline: the ground lives in
+        # the sheet, keyed on :root.night-mode — an inline colour
+        # would floodlight night mode for the rest of the session the
+        # moment a drag repainted (geom stays quiet, nothing rebuilds).
         "function stack(){var parts=[];"
         "for(var k=0;k<G.length;k++){var g=G[k];"
+        "if(g[0].toLowerCase()===DEF){continue;}"
         "parts.push('radial-gradient(at '+g[1]+'% '+g[2]+'%, '+g[0]"
         "+' 0%, '+g[0]+'00 '+g[3]+'%)');}"
         "return parts.join(', ');}"
         "function paintBg(){"
         "[document.documentElement,document.body].forEach(function(el){"
-        "el.style.setProperty('background-color',E,'important');"
         "el.style.setProperty('background-image',stack(),'important');"
         "el.style.setProperty('background-attachment','fixed',"
         "'important');});}"
@@ -413,7 +424,8 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
         "right-click to remove';"
         "dot.style.cssText='position:absolute;width:18px;height:18px;"
         "border-radius:50%;transform:translate(-50%,-50%);"
-        "border:2.5px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.45);"
+        "border:2.5px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.28),"
+        "0 1px 4px rgba(0,0,0,0.45);"
         "pointer-events:auto;cursor:grab;';"
         "dot.style.background=G[i][0];"
         "var grip=document.createElement('div');"
@@ -478,10 +490,17 @@ def gradient_css_value(spec: dict) -> str:
     gradients = spec.get("gradients")
     if not isinstance(gradients, list) or not gradients:
         return ""
+    # A sphere still wearing the default white is UNSET — it paints
+    # nothing (over the white day-ground it is invisible anyway, and
+    # at night it would sit as a phantom white glow the user never
+    # chose). It keeps its handles in the editor; clicking its dot
+    # gives it a colour and it joins the paint. Deliberate whites are
+    # a hair off-white away.
     return ", ".join(
         f"radial-gradient(at {g['x']}% {g['y']}%, "
         f"{g['color']} 0%, {g['color']}00 {g['size']}%)"
         for g in gradients
+        if g["color"].lower() != DEFAULT_COLOR.lower()
     )
 
 
@@ -549,27 +568,28 @@ def main_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
-        # Colour mode is ALWAYS a gradient stack now (flat colour
-        # removed 2026-08-30): spheres as background-image layers over
-        # the shared edge colour as background-color — the pair, not
-        # the shorthand, so N spheres compose over one backdrop. The
-        # bare-colour fallback only guards a raw dict that never went
-        # through resolve().
+        # Colour mode: gradient spheres as background-image layers
+        # over the THEME-AWARE ground as background-color — white by
+        # day, the dark tone under :root.night-mode (both palettes in
+        # one sheet, the house rule; a baked white ground was a
+        # floodlight at night, live complaint 2026-08-30). The pair,
+        # not the shorthand, so N spheres compose over one ground. An
+        # all-unset stack (every sphere still default white) paints
+        # the plain ground alone.
         stack = gradient_css_value(spec)
-        if stack:
-            return (
-                # Fixed attachment so scrolling the deck list doesn't
-                # slide the spheres — same behaviour as the image
-                # wallpaper.
-                "html, body {"
-                f" background-color: {spec['color2']} !important;"
-                f" background-image: {stack} !important;"
-                " background-attachment: fixed !important;"
-                " }"
-                + panel_css(spec)
-            )
+        image_rule = (
+            f" background-image: {stack} !important;"
+            " background-attachment: fixed !important;"
+            if stack else ""
+        )
         return (
-            "html, body { background: %s !important; }" % spec["color"]
+            "html, body {"
+            f" background-color: {DEFAULT_COLOR} !important;"
+            f"{image_rule}"
+            " }"
+            ":root.night-mode, :root.night-mode body {"
+            f" background-color: {NIGHT_COLOR} !important;"
+            " }"
             + panel_css(spec)
         )
     if mode == "image" and url:
@@ -626,15 +646,20 @@ def reviewer_css(spec: dict, url: str = "") -> str:
     mode = spec.get("mode")
     if mode == "color":
         stack = gradient_css_value(spec)
-        if stack:
-            return (
-                "html, body {"
-                f" background-color: {spec['color2']} !important;"
-                f" background-image: {stack} !important;"
-                " background-attachment: fixed !important;"
-                " }"
-            )
-        return "html, body { background: %s !important; }" % spec["color"]
+        image_rule = (
+            f" background-image: {stack} !important;"
+            " background-attachment: fixed !important;"
+            if stack else ""
+        )
+        return (
+            "html, body {"
+            f" background-color: {DEFAULT_COLOR} !important;"
+            f"{image_rule}"
+            " }"
+            ":root.night-mode, :root.night-mode body {"
+            f" background-color: {NIGHT_COLOR} !important;"
+            " }"
+        )
     if mode == "image" and url:
         return (
             # html-only + transparent body, same reason as main_css:

@@ -294,12 +294,17 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   quartet `color2`/`grad_x`/`grad_y`/`grad_size` plus `gradients` —
   a list of up to MAX_SPHERES {color,x,y,size} SPHERE dicts, each a
   radial blob fading its own colour to alpha-0 (`{color}00`, same-hue
-  transparency) over the DEFAULT WHITE ground as the one backdrop
-  (background-color under the background-image stack, which is what
-  lets N spheres compose; `color2` is always DEFAULT_COLOR — Pouya:
-  the edge "shouldn't be an option at all", so stored color2 values
-  are ignored). Colour mode IS this stack — flat colour removed
-  2026-08-30; a missing list is built from the legacy single keys. `main_css` paints
+  transparency) over the THEME-AWARE ground as the one backdrop —
+  DEFAULT_COLOR white by day, NIGHT_COLOR under `:root.night-mode`
+  (both palettes in one sheet, house rule; a baked white ground was a
+  night floodlight) — via background-color under the background-image
+  stack, which is what lets N spheres compose. `color2` is never an
+  option (stored values ignored), a sphere still wearing the default
+  white is UNSET and paints nothing (handles stay; the editor's
+  inline drag-paint mirrors the skip and never touches
+  background-color, or a night drag would floodlight the session).
+  Colour mode IS this stack — flat colour removed 2026-08-30; a
+  missing list is built from the legacy single keys. `main_css` paints
   Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the

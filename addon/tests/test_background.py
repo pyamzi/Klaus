@@ -116,12 +116,28 @@ check("the backdrop is ALWAYS the default ground — a stored color2 "
       and bg.resolve({"background_color2": "#123456"})["color2"]
       == bg.DEFAULT_COLOR
       and not hasattr(bg, "derive_edge_colour"))
-check("so colour mode ALWAYS paints a gradient — both builders, no "
-      "flat branch left for a resolve()-produced spec",
-      "radial-gradient(" in bg.main_css(colour)
-      and "radial-gradient(" in bg.reviewer_css(bg.resolve(
+check("the GROUND follows the theme — white by day, the dark tone "
+      "under :root.night-mode, both palettes in one sheet (house "
+      "rule; a baked white ground was a floodlight at night — live "
+      "complaint 2026-08-30) — in BOTH builders",
+      f"background-color: {bg.DEFAULT_COLOR} !important;"
+      in bg.main_css(colour)
+      and ":root.night-mode, :root.night-mode body {"
+      in bg.main_css(colour)
+      and f"background-color: {bg.NIGHT_COLOR} !important;"
+      in bg.main_css(colour)
+      and f"background-color: {bg.NIGHT_COLOR} !important;"
+      in bg.reviewer_css(bg.resolve(
           {"reviewer_background_mode": "color"},
           prefix="reviewer_background")))
+check("an UNSET sphere (still default white) paints nothing — over "
+      "the white day-ground it is invisible anyway, and at night it "
+      "would sit as a phantom glow the user never chose; the default "
+      "colour spec renders as the plain theme-aware ground",
+      bg.gradient_css_value(bg.resolve({"background_mode": "color"})) == ""
+      and "background-image" not in bg.main_css(
+          bg.resolve({"background_mode": "color"}))
+      and "radial-gradient(" in bg.main_css(colour))
 _grad = bg.resolve({"background_mode": "color",
                     "background_color": "#102030",
                     "background_color2": "#a0b0c0",
@@ -175,7 +191,8 @@ check("geometry is clamped and defaulted — bad values land on centre "
       == bg.DEFAULT_COLOR)
 _rev_grad = bg.reviewer_css(bg.resolve(
     {"reviewer_background_mode": "color",
-     "reviewer_background_color2": "#ffffff"},
+     "reviewer_background_gradients": [
+         {"color": "#3a6ea5", "x": 40, "y": 40, "size": 80}]},
     prefix="reviewer_background"))
 check("the reviewer's colour mode takes the same gradient from its "
       "OWN keys — and still no panel family",
@@ -234,6 +251,14 @@ check("the editor grows one handle set PER sphere, the dot painted "
       and "dot.style.background=G[i][0];" in _ed
       and "op:'pick'" in _ed and "op:'remove'" in _ed
       and "op:'add'" in _ed and "if(G.length<CAP){" in _ed)
+check("the editor never sets background-color inline (the ground "
+      "lives in the sheet, keyed on night-mode — an inline colour "
+      "would floodlight night for the session) and mirrors the "
+      "unset-white skip during drags; the dot carries a hairline "
+      "ring so a white sphere's chip stays findable on white",
+      "background-color" not in _ed
+      and "if(g[0].toLowerCase()===DEF){continue;}" in _ed
+      and "0 0 0 1px rgba(0,0,0,0.28)" in _ed)
 check("drag/click gestures take the PRIMARY button only — without "
       "the filter a right-press's buttonless release read as a "
       "click, so right-click sent remove AND pick and the colour "

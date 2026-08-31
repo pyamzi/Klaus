@@ -172,7 +172,10 @@ wouldn't already need.
 - **background_gradients**: the gradient SPHERES — a list of up to 4
   `{color, x, y, size}` entries, each painted as its own radial blob
   (its colour at the centre fading to transparent at its edge) over
-  the plain default-white ground; the backdrop is not configurable.
+  the plain ground; the backdrop is not configurable and follows
+  Anki's theme — white in light mode, dark at night. A sphere still
+  wearing the default white counts as UNSET and paints nothing (its
+  handles stay on screen — click its dot to give it a colour).
   Edited entirely ON the deck screen while Preferences is open: drag
   a sphere's dot to move it, its ring grip to resize, click the dot
   to recolor, right-click it to remove, and the ＋ pill adds another.
