@@ -251,9 +251,20 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
   hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
   Klaus Preferences via `klausmate:settings` on
-  `webview_did_receive_js_message`). Because it only restyles, Anki's links, Klaus's Library link,
+  `webview_did_receive_js_message`; the same hook also routes the
+  on-screen gradient editor's `klausmate:bggrad` drag-end messages
+  into `background.grad_edit_event`). Because it only restyles, Anki's links, Klaus's Library link,
   and AnkiHub's toolbar items all keep working and inherit the look via
-  the shared `.hitem` class. Pure builders are aqt-free for
+  the shared `.hitem` class. **Anki draws the toolbar in
+  `finish_ui_setup()`, BEFORE any profile opens** — so the accent a
+  profile saved reaches the bar only via `_on_profile_open_redraw`
+  (profile_did_open, one-tick-deferred toolbar.draw); without it the
+  star launched default-blue on every restart. `refresh()` is
+  review-safe: in the review state it never calls `mw.reset()` (that
+  rebuilds the study queues) — it evals `reviewer_style_push_js`
+  (replace-not-stack on the one `#klaus-reviewer-bg` tag the
+  will_set_content injection also writes) plus gradient-editor
+  clean-then-replant instead. Pure builders are aqt-free for
   `tests/test_top_bar.py`. Night-mode catches up on the toolbar's own
   redraw.
 - `background.py` (aqt-free): the custom app background for Anki's deck
@@ -278,13 +289,29 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   the one survivor, and it carries its own geometry inline (`logo_html`)
   so the gate cannot move it. Corrupt values read as OFF — opposite of
   heatmap's rule — so bad config can't surprise-restyle the app.
-  `resolve(cfg)` validates the five `background_*` keys into a spec;
-  `main_css` paints Anki's deck and overview screens — panel_css in
+  `resolve(cfg)` validates the `background_*` keys into a spec —
+  mode/color/image/fit/blur plus (2026-08-30) `wash` and the gradient
+  quartet `color2`/`grad_x`/`grad_y`/`grad_size` (colour mode is
+  gradient-capable: color = CENTRE, color2 = EDGE, empty color2 =
+  flat and byte-identical to the old solid colour). `main_css` paints
+  Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
   congrats screen — it is sveltekit-loaded and never fires
   `webview_will_set_content`; a dead import claiming otherwise was
-  removed 2026-08-27). **The top and bottom toolbars are independent of
+  removed 2026-08-27). Since the wash, image mode paints the picture
+  on `<html>` ALONE with body forced transparent: `_wash_css`'s veil
+  (`body::before`, z-index -1, white by day / near-black at night,
+  backdrop-blurring the picture) sits exactly between wallpaper and
+  content — with body still painting the image it would be buried
+  under a second copy. The **on-screen gradient editor** also lives
+  here: `set_grad_edit(active, sink)` is armed by the OPEN (non-modal)
+  Preferences dialog, `gradient_edit_eval_js`/`gradient_edit_js` grow
+  a draggable centre dot + size ring on each gradient screen (JS
+  repaints the page inline per pointermove; drag-end lands as a
+  `klausmate:bggrad` pycmd, clamped in `grad_edit_event` — JS never
+  trusted — and flows through the sink into the dialog's pending
+  spec, which must NEVER refresh mid-drag). **The top and bottom toolbars are independent of
   this file** (`bar_css`/`_bottom_bar_css` — a manual painted copy of
   the background, blurred, since the toolbar's own webview can't
   `backdrop-filter` through to the window behind it — were deleted
@@ -302,9 +329,10 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   deck screen's. `reviewer_css(spec, url)` paints `html, body` on the
   reviewer's main webview (`context=self` in `Reviewer._initWeb`,
   verified against Anki's source — NOT `ReviewerBottomBar`, which
-  window_chrome owns) with no `panel_css` and no blur: a card is the
-  user's own notetype, never Klaus's to restyle, so there are no
-  panels to frost and no control that would do anything. Wired from
+  window_chrome owns) with no `panel_css` and no panel-frost blur: a
+  card is the user's own notetype, never Klaus's to restyle, so there
+  are no panels to frost — the image WASH is a different layer and
+  does apply, off the screen's own `reviewer_background_wash` key. Wired from
   `top_bar._on_main_webview_content`'s second branch, gated by its own
   `_reviewer_background_css()` (same shape as `_background_css`, just
   a different prefix and builder).
@@ -422,7 +450,12 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
     also first-run setup; Tools menu label "KlausMate Preferences…", and
-    the top bar's star opens it too). **SynapsePro settings shell
+    the top bar's star opens it too). **NON-MODAL since 2026-08-30**
+    (`dlg.show()`, NEVER exec() — the 2026-08-26 segfault was
+    app-modal exec's nested loop): a live control panel used beside
+    the main window while appearance edits preview on it. `_OPEN_DLG`
+    keeps it a singleton (a second star click fronts it);
+    `profile_will_close` rejects it before the collection goes away. **SynapsePro settings shell
     (K-106 — replaced the K-105 card grid; built from a screenshot of
     SynapsePro 1.5.x, the vendored source only has their older grid)**:
     a fixed `SettingsSidebar` (star-logo pixmap drawn from
@@ -446,9 +479,21 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     saved as `color_theme`/`color_theme_custom`, applied live in
     `save_all` (custom colour before theme name, both before
     `top_bar.refresh()`; the sheet swap wipes the swatches' inline QSS
-    so `sync_accent_swatches()` + a logo repaint follow). Fit/Bar-blur
-    rows disable WHOLE (`bg_fit_row`/`bg_blur_row`) so labels dim with
-    their controls.
+    so `sync_accent_swatches()` + a logo repaint follow). The
+    background groups (deck + study, one each): mode combo, centre
+    Color…, Edge Color… (gradient — the caption names both colours and
+    carries Make Flat), Choose Image… with a rounded 2× thumbnail
+    caption (`_image_thumb`, rendered from the STORED copy), Fit,
+    Panel Frost (deck only) and Image Wash sliders. Gradient geometry
+    has NO sliders — centre/size are dragged ON the screen itself
+    (`background.set_grad_edit` armed while the dialog is open; the
+    sink updates the pending spec and arms the preview QUIETLY, never
+    refreshing mid-drag; disarm is connected BEFORE the preview revert
+    so exactly one refresh clears the handles). No Review-heatmap row
+    — Edit Widgets on the deck screen owns `heatmap_enabled`, and
+    `_bg_preview_cfg` carries that key from STORED config live per
+    tick. Image-only rows disable WHOLE (`bg_fit_row`/`bg_blur_row`/
+    `bg_wash_row`) so labels dim with their controls.
     Pages: **Semantic Search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),
