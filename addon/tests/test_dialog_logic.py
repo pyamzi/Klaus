@@ -904,6 +904,34 @@ check("the chosen image can be REMOVED from its caption link, per "
       in _src2
       and "study_image_lbl.linkActivated.connect(on_study_image_removed)"
       in _src2)
+# One unwrappable line is all it takes to force the page's minimum
+# width past the window — the sphere captions and long stored
+# filenames did exactly that (horizontal scrollbar, live screenshot
+# 2026-08-30).
+check("pages never scroll horizontally — the scroll area forbids it "
+      "and the long captions WRAP instead",
+      "scroll.setHorizontalScrollBarPolicy(" in _src2
+      and "ScrollBarAlwaysOff"
+      in _src2.split("scroll.setHorizontalScrollBarPolicy(", 1)[1][:120]
+      and "bg_grad_lbl.setWordWrap(True)" in _src2
+      and "study_grad_lbl.setWordWrap(True)" in _src2)
+_el_parts = _src2.split("def _elide_middle", 1)
+_el_ns: dict = {}
+if len(_el_parts) > 1:
+    exec("def _elide_middle" + _el_parts[1].split("\ndef ", 1)[0], _el_ns)
+_elide = _el_ns.get("_elide_middle")
+_long_name = "hf_20260827_161844_c5554d2e-3576-4139-b966-880ca0345684.jpg"
+check("long unbroken filenames are middle-elided in the caption — "
+      "word wrap can't break one token — with the full name in the "
+      "tooltip (the REAL function, exec'd from source)",
+      _elide is not None
+      and _elide("short.jpg") == "short.jpg"
+      and len(_elide(_long_name)) <= 44
+      and _elide(_long_name).startswith("hf_2026")
+      and _elide(_long_name).endswith(".jpg")
+      and "…" in _elide(_long_name)
+      and "_elide_middle(name)" in _src2
+      and "text_lbl.setToolTip(name)" in _src2)
 # The Review-heatmap switch left Preferences on 2026-08-30 (Pouya: "I
 # can add / remove widgets another way") — the deck screen's Edit
 # Widgets mode is the one writer of that key now. Three pins: the

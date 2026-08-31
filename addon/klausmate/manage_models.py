@@ -151,6 +151,21 @@ def _logo_pixmap(size: int) -> Any:
         return None
 
 
+def _elide_middle(name: str, max_len: int = 44) -> str:
+    """Middle-elide a long filename for the image captions.
+
+    Word wrap cannot break an unbroken token, so one long stored
+    filename (they arrive as e.g. hf_20260827_161844_<uuid>.jpg) sets
+    the page's minimum width and brings back the horizontal scrollbar
+    the captions were cured of. The middle goes because the ends are
+    the identifying parts: prefix and extension. Full name lives in
+    the tooltip."""
+    if len(name) <= max_len:
+        return name
+    keep = (max_len - 1) // 2
+    return f"{name[:keep]}…{name[-keep:]}"
+
+
 def _image_thumb(path: str, w: int = 88, h: int = 54) -> Any:
     """A small rounded preview of a stored background image, for the
     Appearance captions (Pouya: "I want to be able to see a thumbnail
@@ -646,6 +661,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         scroll = QScrollArea()
         scroll.setObjectName("ContentScrollArea")
         scroll.setWidgetResizable(True)
+        # Never sideways (Pouya: "It's so annoying to have to scroll
+        # horizontally") — pages scroll vertically only, like the nav.
+        # Content must WRAP into the viewport instead: every caption
+        # label word-wraps, and long unbroken filenames are elided
+        # (_elide_middle), because one unwrappable line is all it
+        # takes to push the page's minimum width past the window.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         inner = QWidget()
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -1060,10 +1084,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         bg_ctl,
     )
 
-    # Caption line for the gradient state: names both colours and
-    # carries the way back to flat.
+    # Caption line for the gradient state — word-wrapped: this is the
+    # longest line on the page, and an unwrapped QLabel's one-line
+    # width becomes the whole page's minimum width (the horizontal
+    # scrollbar, live screenshot 2026-08-30).
     bg_grad_lbl = QLabel()
     bg_grad_lbl.setObjectName("SettingDesc")
+    bg_grad_lbl.setWordWrap(True)
     appearance_layout.addWidget(bg_grad_lbl)
 
     # Caption line under the mode row: a rounded thumbnail of the
@@ -1154,6 +1181,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     study_grad_lbl = QLabel()
     study_grad_lbl.setObjectName("SettingDesc")
+    study_grad_lbl.setWordWrap(True)
     appearance_layout.addWidget(study_grad_lbl)
 
     study_thumb_lbl = QLabel()
@@ -1261,10 +1289,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         wallpaper will actually load, not the original file."""
         name = spec_x["image"]
         text_lbl.setText(
-            f'Image: {name} &nbsp;&middot;&nbsp; <a href="rm">Remove</a>'
+            f'Image: {_elide_middle(name)} &nbsp;&middot;&nbsp; '
+            f'<a href="rm">Remove</a>'
             if name
             else ("No image chosen yet." if is_image else "")
         )
+        text_lbl.setToolTip(name)
         pix = None
         if name:
             try:
