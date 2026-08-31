@@ -101,6 +101,23 @@ check("settings search field is styled in both palettes",
           for n in (False, True)))
 check("no NavItem button styling survives — the nav is one list",
       "NavItem" not in theme.dialog_qss(False))
+# Combos read as pickers, not dead line-edits (2026-08-30, Pouya:
+# "make the dropdowns look better"): QSS draws NO arrow once
+# ::drop-down is styled, so a real chevron must ship as a file.
+check("dialog combos carry a real chevron per palette, a hover "
+      "state, and a rounded padded popup with item selection",
+      "chevron-day.svg" in theme.dialog_qss(False)
+      and "chevron-night.svg" in theme.dialog_qss(True)
+      and "chevron-night.svg" not in theme.dialog_qss(False)
+      and "QComboBox:hover" in theme.dialog_qss(False)
+      and "QComboBox::down-arrow" in theme.dialog_qss(False)
+      and "QComboBox QAbstractItemView::item" in theme.dialog_qss(False))
+import os as _os  # noqa: E402
+
+check("both chevron assets actually ship in klausmate/web (a QSS "
+      "url() to a missing file is silently blank — back to no arrow)",
+      _os.path.exists("klausmate/web/chevron-day.svg")
+      and _os.path.exists("klausmate/web/chevron-night.svg"))
 
 section("colour themes (K-107 — SynapsePro's accent presets)")
 BLUE_KEYS = {"blue", "blue_hover", "blue_pressed", "blue_border",

@@ -24,6 +24,21 @@ a night-mode flip mid-session catches up on the next open.
 
 from __future__ import annotations
 
+import os
+
+
+def _asset_url(name: str) -> str:
+    """A Qt-stylesheet ``url(...)`` for a file shipped in klausmate/web.
+
+    QSS images cannot be data: URIs or drawn with borders the way a
+    web sheet would — they must be real files — so the few chrome
+    glyphs QSS needs (the combo chevron) ship as tiny SVGs next to the
+    web assets. Forward slashes on purpose: Qt's stylesheet parser
+    wants them on every platform, Windows included."""
+    path = os.path.join(os.path.dirname(__file__), "web", name)
+    return 'url("%s")' % path.replace("\\", "/")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Typography
 # ─────────────────────────────────────────────────────────────────────────────
@@ -467,15 +482,53 @@ def dialog_qss(night: bool) -> str:
         border-radius: 8px;
         padding: 4px 8px;
     }}
+    /* Combos read as pickers, not text fields (Pouya: "make the
+       dropdowns look better"): room on the right for a real chevron
+       — QSS draws NO arrow once ::drop-down is styled, which is
+       exactly why these looked like dead line-edits — plus a hover
+       state so they invite the click. The chevron is a shipped SVG
+       (see _asset_url): QSS images must be files. */
+    QComboBox {{
+        padding: 4px 26px 4px 10px;
+        min-height: 20px;
+    }}
+    QComboBox:hover {{
+        border: 1px solid {c['grey_dark']};
+        background-color: {c['bg']};
+    }}
     QComboBox:focus, QLineEdit:focus {{
         border: 1px solid {c['blue_bright']};
     }}
-    QComboBox::drop-down {{ border: none; width: 25px; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 24px;
+        border: none;
+        background: transparent;
+    }}
+    QComboBox::down-arrow {{
+        image: {_asset_url('chevron-night.svg' if night else 'chevron-day.svg')};
+        width: 10px;
+        height: 6px;
+    }}
     QComboBox QAbstractItemView {{
         background-color: {c['surface']};
         color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 4px;
+        outline: 0;
         selection-background-color: {c['selection_bg']};
         selection-color: {c['text']};
+    }}
+    QComboBox QAbstractItemView::item {{
+        min-height: 22px;
+        padding: 3px 8px;
+        border-radius: 6px;
+    }}
+    QComboBox QAbstractItemView::item:selected {{
+        background-color: {c['blue_accent']};
+        color: white;
     }}
     /* SynapsePro settings cards (K-105): QFrame#CardFrame is the
        section container, QLabel#SubHeaderLabel its heading, and the
