@@ -1315,5 +1315,101 @@ check("...and the arithmetic is pinned against the REAL column widths, "
       "so widening a numeric column re-runs this check",
       _numeric135 == 84 + 88 + 88, f"numeric total {_numeric135}")
 
+print("== K-136: the name column has a FLOOR, not just a good default ==")
+# K-135 widened the DEFAULT splitter (300 -> 560). That fixed first run,
+# but it moved the cliff edge rather than removing it: the tree reports
+# an 88px minimum while its own Fixed columns consume 260, so QSplitter
+# will still hand it 288 the moment the user drags — and
+# _sane_splitter_sizes accepts any pane >= _MIN_PANE (120), so ONE narrow
+# drag PERSISTS and the Library opens nameless on every launch after.
+# The fix is for the tree to declare the width it actually needs.
+_D136 = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+check("a named floor for the PDF-name column exists",
+      "_NAME_COL_FLOOR" in _D136)
+check("the tree DECLARES its own minimum width — the lie that the "
+      "splitter believed (88px reported vs 260px of Fixed columns) is "
+      "what let the name column collapse",
+      "setMinimumWidth" in _D136 and "_NAME_COL_FLOOR" in _D136)
+check("...and that minimum is SUMMED from the real column widths, not a "
+      "hardcoded total — K-127 and K-130 both widened these columns, and "
+      "a literal 260 here would be a second number to keep in step",
+      _re135.search(
+          r"sum\(\s*self\.tree\.columnWidth\(c\)\s*for c in \(1, 2, 3\)\s*\)",
+          _D136) is not None)
+check("the stale K-132 arithmetic is gone — that comment still said the "
+      "pane 'opens at 300px' after K-135 made it 560",
+      "opens at 300px" not in _D136)
+
+if _HAVE_QT:
+    # BEHAVIOUR, on a real DriveWindow: the point of the floor is that
+    # Qt CLAMPS a narrow setSizes back up. A source regex cannot show
+    # that, so this drives the real splitter and measures the column.
+    try:
+        _w136 = pdf_drive.DriveWindow()
+        app.processEvents()
+        _floor = pdf_drive._NAME_COL_FLOOR
+        _col0 = lambda: _w136.tree.columnWidth(0)
+
+        check("the Library still OPENS wide (K-135 stands — the floor is "
+              "a floor, not a new default)",
+              _col0() >= 200, f"col0 = {_col0()}px")
+
+        _w136.splitter.setSizes([300, 740])
+        app.processEvents()
+        check("dragging the pane to the old 300px no longer empties the "
+              "name column — Qt clamps the splitter up to the tree's "
+              "declared minimum",
+              _col0() >= _floor, f"col0 = {_col0()}px, floor {_floor}")
+
+        _w136.splitter.setSizes([150, 890])
+        app.processEvents()
+        check("...and a hostile/degenerate narrow value is clamped too, "
+              "so a persisted bad splitter cannot reopen the bug",
+              _col0() >= _floor, f"col0 = {_col0()}px, floor {_floor}")
+
+        # The round trip is the ACTUAL failure mode the user reported:
+        # the splitter is persisted on close, so before this floor ONE
+        # narrow drag was saved and every later launch reopened
+        # nameless. Drag, close, reopen, measure.
+        _prev_uf = pkg.USER_FILES
+        try:
+            _uf136 = tempfile.mkdtemp(prefix="klaus_k136_uf_")
+            os.makedirs(os.path.join(_uf136, "contexts"), exist_ok=True)
+            pkg.USER_FILES = _uf136
+            _rt = pdf_drive.DriveWindow()
+            app.processEvents()
+            _rt.splitter.setSizes([300, 740])
+            app.processEvents()
+            _rt.close()
+            app.processEvents()
+            _saved = pdf_drive.drive_store.get_window_state(
+                _uf136).get("splitter")
+            _rt2 = pdf_drive.DriveWindow()
+            app.processEvents()
+            check("a narrow drag SAVED and REOPENED still shows names — "
+                  "the persisted-forever half of the bug, which a wider "
+                  "default alone could not reach",
+                  _rt2.tree.columnWidth(0) >= _floor,
+                  f"saved {_saved}, reopened col0 = "
+                  f"{_rt2.tree.columnWidth(0)}px")
+            _rt2.close()
+        finally:
+            pkg.USER_FILES = _prev_uf
+
+        # The floor has to be worth having: a real short PDF name must
+        # fit at depth 1, where the text starts 32px in.
+        _fm136 = _w136.tree.fontMetrics()
+        _need = _fm136.horizontalAdvance("Renal Phys.pdf") + 32
+        check("the floor actually fits a real nested PDF name, not just "
+              "a nonzero number of pixels",
+              _floor >= _need, f"floor {_floor}px, 'Renal Phys.pdf' at "
+              f"depth 1 needs {_need}px")
+        _w136.close()
+    except Exception as _e136:  # noqa: BLE001
+        check(f"K-136 offscreen DriveWindow checks ran ({_e136})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — K-136 source pins above still ran")
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

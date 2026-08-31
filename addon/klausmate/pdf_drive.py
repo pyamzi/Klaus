@@ -65,6 +65,15 @@ _ROLE_FOLDER = Qt.ItemDataRole.UserRole + 1
 _ROLE_SORT = Qt.ItemDataRole.UserRole + 2
 _UNKNOWN_SORT = -1.0
 
+# The narrowest PDF-name column that still reads. A row nested under a
+# folder starts its text 32px in (the 16px tree indent, twice), and a
+# short real name — "Renal Phys.pdf" — measures 93px, so 160 leaves a
+# depth-1 row ~128px of text. Long names ELIDE at this width, which is
+# correct and always was; the bug this floor closes is names rendering
+# as nothing at all. Paired with DriveWindow's setMinimumWidth below —
+# the constant alone is inert.
+_NAME_COL_FLOOR = 160
+
 
 def _user_files() -> str:
     from . import USER_FILES
@@ -342,11 +351,14 @@ class _LibraryItem(QTreeWidgetItem):
 # card's phrasing said "or use the context menu" — there is no import
 # action in either Library context menu (_build_folder_menu / the
 # blank-space menu offer folder actions only), and copy must not teach
-# a route the user cannot take. Length is load-bearing too: the left
-# pane opens at 300px (_restore_geometry), which leaves 224px of text
-# width inside the block, and this hint measures 214px at 11px — one
-# clean line at the default width instead of a wrap that orphaned
-# "Browse… below" onto its own line (offscreen render, 2026-08-31).
+# a route the user cannot take. Length is load-bearing too: this hint
+# measures 214px at 11px and has to sit on ONE clean line rather than
+# wrapping and orphaning "Browse… below" onto its own (offscreen
+# render, 2026-08-31). It was sized against the 300px pane of the day;
+# K-135 opened the pane to 560 and _NAME_COL_FLOOR now stops it going
+# back below ~432, so the block only ever has MORE room than the line
+# needs — the constraint is a floor under the width, not a guess at
+# it.
 LIBRARY_EMPTY_TEXT = "No PDFs in your library yet"
 LIBRARY_EMPTY_HINT = "Drag PDFs here, or use Browse… below"
 
@@ -909,6 +921,25 @@ class DriveWindow(QWidget):
             # elided those to "suspe…" (offscreen render, 2026-08-31).
             self.tree.setColumnWidth(2, 88)
             self.tree.setColumnWidth(3, 88)
+            # Declare the width this tree actually needs. Left alone it
+            # reports an 88px minimum while its own Fixed columns
+            # consume 260 (both measured offscreen) — so QSplitter hands
+            # it 288px in good faith and the Stretch name column
+            # collapses to 28, rendering every row nameless. K-135
+            # widened the DEFAULT, which moves that cliff edge but does
+            # not remove it: _sane_splitter_sizes accepts any pane at or
+            # above _MIN_PANE (120), so ONE narrow drag persists and the
+            # Library opens nameless on every launch after, with nothing
+            # on screen to suggest dragging wider is the cure. With a
+            # real minimum declared, Qt clamps both a narrow drag and a
+            # hostile restored value back up. Summed from the live
+            # column widths, never a literal 260: K-127 and K-130 each
+            # widened these columns, and a hardcoded total here would be
+            # a second number to keep in step.
+            self.tree.setMinimumWidth(
+                sum(self.tree.columnWidth(c) for c in (1, 2, 3))
+                + _NAME_COL_FLOOR
+            )
             head.setSectionsClickable(True)
             # VS Code Explorer density: shallow indent, uniform 22px
             # rows (the QSS min-height; uniformity also speeds layout).
