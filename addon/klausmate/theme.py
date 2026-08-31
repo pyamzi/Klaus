@@ -840,7 +840,17 @@ def library_qss(night: bool) -> str:
         outline: 0;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item {{
-        border-radius: 6px;
+        /* Deliberately NO border-radius here. ::item is a per-CELL
+           subcontrol, never a row, and this tree has three columns
+           (PDF / Retention / Cards) — so a radius rounds each column's
+           selection box on its own, and the adjacent rounded corners
+           notch the band at every column boundary. That is the visible
+           bug: "bumps" along what should be one straight highlight.
+           sidebar_tree_qss, the addon's other tree, has never carried a
+           radius on ::item; this one was the outlier.
+           A rounded FULL-ROW pill is not expressible in Qt QSS at all —
+           there is no first-/last-column selector — so it would take a
+           QStyledItemDelegate painting one rect across the viewport. */
         padding: 2px 0px;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:hover {{

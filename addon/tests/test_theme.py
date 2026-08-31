@@ -77,6 +77,25 @@ for night in (False, True):
           "underlay is switched off, so nothing paints beneath the "
           "branch/item recolouring",
           "selection-background-color: transparent;" in lq)
+    # ::item is a per-CELL subcontrol. The Library tree has three columns
+    # (PDF / Retention / Cards), so ANY radius here rounds each column's
+    # selection box separately and the adjacent corners notch the band at
+    # every column boundary — the "bumps" along the highlight (live
+    # screenshot, 2026-08-30). Comments are stripped first: the rule
+    # carries prose explaining the trap, and the words would satisfy a
+    # naive substring check on their own.
+    _no_comments = re.sub(r"/\*.*?\*/", "", lq, flags=re.S)
+    for sub in ("::item", "::item:hover", "::item:selected"):
+        _blk = re.search(
+            r"QTreeWidget" + re.escape(sub) + r" \{(.*?)\}", _no_comments, re.S
+        )
+        check(f"library_qss(night={night}): {sub} carries no border-radius "
+              "— per-cell rounding is what notches a multi-column row",
+              _blk is not None and "border-radius" not in _blk.group(1))
+    check(f"library_qss(night={night}): the selection is still painted "
+          "(straightening it must not mean losing it)",
+          "QTreeWidget::item:selected {" in lq
+          and c["selection_bg"] in lq)
 
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
