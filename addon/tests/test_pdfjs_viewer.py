@@ -76,8 +76,10 @@ check("text layer is pinned against host CSS (Anki stdHtml)",
 check("every render call disables annotation painting",
       html.count("annotationMode: pdfjsLib.AnnotationMode.DISABLE")
       == html.count("page.render({"))
-check("there are exactly four render sites",
-      html.count("page.render({") == 4)
+# Audited 2026-08-31 (K-116): the fifth site is refreshPage, the
+# swap-in-place zoom re-renderer — flag verified by the pin above.
+check("there are exactly five render sites",
+      html.count("page.render({") == 5)
 
 section("bridge parsing")
 check("non-klaus command ignored", pv.parse_bridge("ankiweb:xyz") is None)
@@ -255,5 +257,220 @@ for _item in ("Highlight", "Copy Selection as Image"):
     check(f"'{_item}' is still offered only when there IS a selection "
           "(hasSel gate) — the guard fixes the handler, not the gate",
           f'["{_item}"' in _HTML and "if (hasSel) {" in _HTML)
+
+section("K-116: one zoom engine behind every zoom path")
+_HTML116 = _src(os.path.join("web", "pdfjs_viewer.html"))
+check("a single clamp bounds every zoom writer",
+      "const MIN_SCALE = 0.25, MAX_SCALE = 4.0;" in _HTML116
+      and _HTML116.count("clampScale(") >= 5
+      and "Math.min(4.0" not in _HTML116)
+check("ctrl-wheel (macOS pinch) is claimed with a NON-passive listener "
+      "so preventDefault can stop QtWebEngine's frame zoom",
+      'document.addEventListener("wheel"' in _HTML116
+      and "{ passive: false }" in _HTML116)
+_WHEEL = _HTML116.split('document.addEventListener("wheel"', 1)[1]
+_WHEEL = _WHEEL.split("},", 1)[0]
+check("plain two-finger scroll is untouched; ctrl-pinch is consumed",
+      "if (!ev.ctrlKey) return;" in _WHEEL
+      and "ev.preventDefault();" in _WHEEL)
+check("pinch zooms through the session, anchored at the cursor",
+      "zoomTo(sessionTarget() * Math.exp(-ev.deltaY * PINCH_K)" in _HTML116)
+check("gesture events are cancelled so nothing double-zooms",
+      '"gesturestart"' in _HTML116 and '"gesturechange"' in _HTML116
+      and '"gestureend"' in _HTML116)
+_KSZ = _HTML116.split("window.klausSetZoom = function", 1)[1]
+_KSZ = _KSZ.split("};", 1)[0]
+_KZR = _HTML116.split("window.klausZoomReset = async function", 1)[1]
+_KZR = _KZR.split("};", 1)[0]
+check("keyboard/menu/toolbar zoom rides the SAME session — no direct "
+      "synchronous rezoom left on the zoom paths (the width-refit "
+      "observer legitimately keeps its rezoom)",
+      "zoomTo(sessionTarget() * factor" in _KSZ
+      and "rezoom(" not in _KSZ and "rezoom(" not in _KZR)
+check("the fit/reset path rides it too, flagged so the width-refit "
+      "observer stays armed", "zoomTo(fit, c[0], c[1], true)" in _HTML116)
+check("zoom settle is debounced behind rapid steps",
+      "setTimeout(zoomSettle, ZOOM_SETTLE_MS)" in _HTML116)
+check("the interim is a compositor transform on #pages, origined at "
+      "the anchor",
+      "transformOrigin" in _HTML116
+      and 'transform = "scale(" + p.factor + ")"' in _HTML116)
+check("a page zoomed WIDER than the scroller stays scrollable — "
+      "#pages sizes to its content (the old fixed width centered wide "
+      "pages with the left half at unreachable negative offsets; "
+      "caught by the K-116 harness' anchor check)",
+      "width: max-content; min-width: 100%;" in _HTML116)
+check("the settle puts the anchored PDF point back under the pointer "
+      "(page-exact, proportional fallback over gaps)",
+      "div.offsetTop + p.hit.yPt * state.scale - vy" in _HTML116
+      and "p.cy0 * r - vy" in _HTML116)
+
+section("K-116: zoom never blanks a rendered page")
+_SETTLE = _HTML116.split("async function zoomSettle", 1)[1]
+_SETTLE = _SETTLE.split("\n}\n", 1)[0]
+check("zoomSettle re-lays-out softly, never the teardown twin",
+      "softRelayout()" in _SETTLE
+      and "relayout()" not in _SETTLE.replace("softRelayout()", ""))
+check("zoomSettle neither tears a page down nor clears the render "
+      "cache",
+      "teardownPage" not in _SETTLE and "rendered.clear" not in _SETTLE)
+check("softRelayout stretches the EXISTING canvas into the new "
+      "geometry — old pixels stay up while crisp ones render",
+      "r.canvas.style.width = w" in _HTML116)
+check("crisp replacements swap in atomically, only once fully drawn",
+      "replaceChild(canvas, entry.canvas)" in _HTML116)
+check("the replacement text layer renders attached-but-hidden (pdf.js "
+      "measures spans against computed style)",
+      'textLayer.style.visibility = "hidden";' in _HTML116)
+check("re-renders go visible pages first",
+      "function refreshVisibleFirst" in _HTML116
+      and "refreshVisibleFirst();" in _SETTLE)
+check("superseded refreshes discard themselves (zoom generation)",
+      "zoomGen++" in _HTML116 and "gen !== zoomGen" in _HTML116)
+check("a render the settle overtook corrects itself",
+      "Math.abs(viewport.scale - state.scale)" in _HTML116)
+
+section("K-116: annobar — the always-visible tool bar")
+check("annobar exists with all six controls",
+      'id="annobar"' in _HTML116
+      and all('id="%s"' % i in _HTML116 for i in
+              ("abHl", "abText", "abZoomOut", "abZoomPct", "abZoomIn",
+               "abZoomFit")))
+check("HIG Title Case control-name tooltips, shortcuts in parens "
+      "(glossary commit 14e2b05)",
+      'title="Highlight"' in _HTML116
+      and 'title="Add Text"' in _HTML116
+      and 'title="Zoom Out (&#8984;&#8722;)"' in _HTML116
+      and 'title="Zoom In (&#8984;+)"' in _HTML116
+      and 'title="Actual Size (&#8984;0)"' in _HTML116)
+_AB_CSS = _HTML116.split("#annobar {", 1)[1].split("}", 1)[0]
+_AB_ACT = _HTML116.split("#annobar button.active", 1)[1].split("}", 1)[0]
+check("annobar chrome stays in the findbar's var family",
+      "var(--surface)" in _AB_CSS and "var(--grey-light)" in _AB_CSS
+      and "var(--accent)" in _AB_ACT)
+check("the family's hover token gets a fallback BEFORE the theme "
+      "substitution (an undefined var() paints nothing)",
+      0 <= _HTML116.find("--hover-subtle: rgba")
+      < _HTML116.find(":root { __THEME_VARS__ }"))
+_AB_MD = _HTML116.split('("annobar").addEventListener(', 1)[1][:80]
+check("the bar cancels mousedown so a live selection survives a "
+      "Highlight click (ctxmenu's documented Blink rule)",
+      '"mousedown"' in _AB_MD and "preventDefault" in _AB_MD)
+check("highlight tool: releasing a selection auto-highlights, gated "
+      "on selectionRectMap so a bare click can never toast",
+      'state.tool === "hl" && selectionRectMap()' in _HTML116)
+check("arming Highlight consumes a selection that already exists",
+      "if (arming && selectionRectMap()) addHighlightFromSelection()"
+      in _HTML116)
+check("text tool: a page click posts text-add with page-point coords "
+      "and disarms (one-shot; the dialog flow owns the rest)",
+      'postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt })'
+      in _HTML116 and "setTool(null);" in _HTML116)
+check("Escape clears an armed tool (menu/findbar behaviour unchanged)",
+      "if (state.tool) setTool(null);" in _HTML116)
+check("the zoom readout is fed from the applyScaleFactor choke point",
+      "updateZoomReadout(state.scale)" in _HTML116)
+check("annobar zoom buttons ride the shared zoom API",
+      'abZoomIn").addEventListener(\n  "click", () => window.klausSetZoom(1.2))'
+      in _HTML116
+      and 'abZoomFit").addEventListener(\n  "click", () => window.klausZoomReset())'
+      in _HTML116)
+
+section("K-116: text-add bridge — Python clamps, JS is never trusted")
+check("parse_bridge routes text-add",
+      pv.parse_bridge("klausmate_pdfjs:text-add:eyJ4IjogMX0=")
+      == ("text-add", "eyJ4IjogMX0="))
+check("valid payload -> (page, x, y)",
+      pv.clamp_text_add({"page": 2, "x": 10.5, "y": 20.25}, 5)
+      == (2, 10.5, 20.25))
+check("page beyond the document is rejected",
+      pv.clamp_text_add({"page": 5, "x": 1, "y": 1}, 5) is None)
+check("unknown page_count admits any non-negative page",
+      pv.clamp_text_add({"page": 99, "x": 1, "y": 1}, 0)
+      == (99, 1.0, 1.0))
+check("negative coords clamp to the page origin",
+      pv.clamp_text_add({"page": 0, "x": -5, "y": -0.1}, 1)
+      == (0, 0.0, 0.0))
+check("absurd coords cap at the PDF spec's 14,400 pt",
+      pv.clamp_text_add({"page": 0, "x": 1e9, "y": 2}, 1)
+      == (0, 14400.0, 2.0))
+check("non-finite coords are rejected (json admits NaN/Infinity)",
+      pv.clamp_text_add({"page": 0, "x": float("nan"), "y": 1}, 1)
+      is None
+      and pv.clamp_text_add({"page": 0, "x": 1, "y": float("inf")}, 1)
+      is None)
+check("bool page is rejected (bool IS an int in Python)",
+      pv.clamp_text_add({"page": True, "x": 1, "y": 1}, 5) is None)
+check("bool/str coords, negative page, and junk all reject",
+      pv.clamp_text_add({"page": 0, "x": True, "y": 1}, 1) is None
+      and pv.clamp_text_add({"page": 0, "x": "1", "y": 1}, 1) is None
+      and pv.clamp_text_add({"page": -1, "x": 1, "y": 1}, 1) is None
+      and pv.clamp_text_add("nope", 1) is None
+      and pv.clamp_text_add(None, 1) is None
+      and pv.clamp_text_add({}, 1) is None)
+
+section("K-116: outside-text record minting (K-077/K-083 shape)")
+rec = pv.make_text_record(3, 100.0, 200.0, "hello world")
+check("exact key set of the adopted-text schema",
+      set(rec) == {"id", "kind", "page", "rects", "text", "note",
+                   "color", "size"})
+check("kind text, 0-based int page, single box rect",
+      rec["kind"] == "text" and rec["page"] == 3
+      and len(rec["rects"]) == 1 and len(rec["rects"][0]) == 4)
+check("box is anchored at the click point",
+      rec["rects"][0][0] == 100.0 and rec["rects"][0][1] == 200.0)
+check("explicit black + 12pt — the validator backfills a missing "
+      "color with highlight YELLOW",
+      rec["color"] == "#000000" and rec["size"] == 12.0)
+check("uuid id, empty note", len(rec["id"]) == 32 and rec["note"] == "")
+check("NO origin key — native records must not claim to be external",
+      "origin" not in rec)
+_ph = importlib.import_module("klausmate.pdf_handler")
+check("pdf_handler validation round-trips the record UNCHANGED",
+      _ph._validate_highlight(rec) == rec)
+_w1 = pv.text_box_size("abc")
+_w2 = pv.text_box_size("abcdefghijklmnopqrstuvwxyz")
+_w3 = pv.text_box_size("a\nb\nc")
+check("box grows with the longest line", _w2[0] > _w1[0])
+check("box grows with line count", _w3[1] > _w1[1])
+check("bounds hold for degenerate and absurd input",
+      pv.text_box_size("")[0] == 60.0
+      and pv.text_box_size("x" * 10000)[0] == 480.0
+      and pv.text_box_size("\n".join("x" * 999))[1] == 720.0)
+
+section("K-116: the new dialog obeys K-114 (open(), never exec)")
+import ast as _ast116
+_SRC116 = _src("pdfjs_viewer.py")
+_TREE116 = _ast116.parse(_SRC116)
+
+
+def _fn116(name):
+    for node in _ast116.walk(_TREE116):
+        if isinstance(node, _ast116.FunctionDef) and node.name == name:
+            return _ast116.get_source_segment(_SRC116, node) or ""
+    return ""
+
+
+_TA = _fn116("_bridge_text_add")
+check("_bridge_text_add clamps THEN defers past the webchannel tick",
+      "clamp_text_add" in _TA and "QTimer.singleShot" in _TA
+      and -1 < _TA.find("clamp_text_add") < _TA.find("QTimer.singleShot"))
+_OD = _fn116("_open_text_dialog")
+check("the prompt opens window-modal via open() + signal callbacks",
+      "dlg.open()" in _OD and "textValueSelected.connect" in _OD)
+check("no exec()-shaped modal anywhere in the new flow",
+      ".exec(" not in _OD and "QInputDialog.get" not in _OD)
+from anki_stubs import code_only as _code_only116
+check("the whole module still contains zero .exec( calls in CODE "
+      "(the crash-history comments may spell it)",
+      ".exec(" not in _code_only116(_SRC116))
+check("a live prompt is a singleton (front, don't stack)",
+      "raise_()" in _OD and "activateWindow()" in _OD)
+_OA = _fn116("_on_text_added")
+check("accepting persists through the SAME save + debounced-bake path "
+      "and pushes canonical records back",
+      "_save_annotations()" in _OA and "_push_annotations()" in _OA
+      and "make_text_record" in _OA)
+check("empty text mints nothing", "if not body:" in _OA)
 
 raise SystemExit(report())

@@ -13,7 +13,8 @@ K-101 cutover). ``PdfSidebar`` branches on :func:`renderer_from_config`.
 
 Division of labour (K-097..K-099): the page owns rendering and gestures;
 THIS MODULE OWNS THE ANNOTATIONS JSON. JS sends mutations over the bridge
-(``hl-add``/``hl-remove``/``note-edit``), Python mutates ``_highlights``,
+(``hl-add``/``hl-remove``/``note-edit``/``text-add``), Python mutates
+``_highlights``,
 persists via ``pdf_handler.save_annotations`` + the same debounced bake
 the native viewer uses, then pushes the canonical records back through
 ``window.klausSetAnnotations``. Record schema is identical to the native
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import threading
 import uuid
 from typing import Any, Callable, Optional
@@ -76,6 +78,17 @@ MAX_PDF_MB = 200
 _BRIDGE_PREFIX = "klausmate_pdfjs:"
 
 HIGHLIGHT_COLOR = "#fadc50"  # native viewer's default highlight yellow
+
+# Outside-text defaults, matching what the bake assumes when a record
+# omits them (12pt, black) — but written EXPLICITLY into new records:
+# pdf_handler._validate_highlight backfills a missing/empty ``color``
+# with the highlight YELLOW, which would repaint the text on reload.
+TEXT_COLOR_DEFAULT = "#000000"
+TEXT_SIZE_DEFAULT = 12.0
+
+# The PDF spec caps a page dimension at 14,400 pt (200 in) — any
+# coordinate beyond that is garbage whatever the document says.
+MAX_PAGE_PT = 14400.0
 
 
 def renderer_from_config(cfg: Any) -> str:
@@ -174,6 +187,76 @@ def records_from_rect_map(
     return out
 
 
+def clamp_text_add(
+    data: Any, page_count: int = 0
+) -> tuple[int, float, float] | None:
+    """Validated ``(page, x, y)`` out of a ``text-add`` bridge payload.
+
+    JS is never trusted (house rule): ``page`` must be a real 0-based
+    int (bools rejected) inside ``page_count`` when the count is known;
+    ``x``/``y`` must be finite numbers and are clamped into
+    ``[0, MAX_PAGE_PT]``. None for anything else — a malformed payload
+    places nothing rather than something somewhere surprising.
+    """
+    if not isinstance(data, dict):
+        return None
+    page = data.get("page")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 0:
+        return None
+    if page_count > 0 and page >= page_count:
+        return None
+    coords: list[float] = []
+    for key in ("x", "y"):
+        v = data.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        f = float(v)
+        if not math.isfinite(f):
+            return None
+        coords.append(min(max(f, 0.0), MAX_PAGE_PT))
+    return page, coords[0], coords[1]
+
+
+def text_box_size(
+    text: str, size: float = TEXT_SIZE_DEFAULT
+) -> tuple[float, float]:
+    """A FreeText box sized for freshly typed *text*, in page points.
+
+    Width fits the longest line at ~0.6 em/char (a Helvetica-ish
+    average; the renderers clip/shrink gracefully either side), height
+    fits every line at 1.35 leading — both clamped to sane page-scale
+    bounds so pathological input cannot mint an absurd box.
+    """
+    lines = (text or "").splitlines() or [""]
+    longest = max(len(line) for line in lines)
+    w = min(max(longest * size * 0.6 + 8.0, 60.0), 480.0)
+    h = min(max(len(lines) * size * 1.35 + 6.0, size * 1.5), 720.0)
+    return w, h
+
+
+def make_text_record(page: int, x: float, y: float, text: str) -> dict:
+    """A Klaus-native outside-text record at (*x*, *y*) page points.
+
+    EXACTLY the K-077/K-083 ``kind: "text"`` shape the whole pipeline
+    already speaks — pdf_handler._validate_highlight round-trips it
+    unchanged, the page's ``hltext`` branch renders it, and the bake
+    regenerates it as a Klaus-marked FreeText. Deliberately NO
+    ``origin`` key: this is native markup, so K-081 tombstones and the
+    K-082 foreign mirror ignore it.
+    """
+    w, h = text_box_size(text)
+    return {
+        "id": uuid.uuid4().hex,
+        "kind": "text",
+        "page": int(page),
+        "rects": [[float(x), float(y), w, h]],
+        "text": str(text),
+        "note": "",
+        "color": TEXT_COLOR_DEFAULT,
+        "size": TEXT_SIZE_DEFAULT,
+    }
+
+
 class PdfJsViewer(QWidget):  # type: ignore[misc]
     """Drop-in for ``PdfViewer`` behind the ``pdf_renderer`` flag.
 
@@ -197,6 +280,7 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         self._page_count = 0
         self._scroll_pos = 0
         self.on_count: Optional[Callable[[int], None]] = None
+        self._text_dialog: Any = None  # live Add Text prompt (singleton)
 
         # Debounced bake, same shape as the native viewer's: pending
         # jobs are a SET so annotating PDF A then PDF B inside one
@@ -401,6 +485,89 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
             print(f"[klausmate] pdfjs tombstone failed: {exc}")
         self._save_annotations()
         self._push_annotations()
+
+    def _bridge_text_add(self, payload: str) -> None:
+        data = decode_b64_json(payload) or {}
+        hit = clamp_text_add(data, self._page_count)
+        if hit is None:
+            return
+        page, x, y = hit
+        # Deferred to the next tick for the same webchannel re-entrancy
+        # reason as _bridge_note_edit below (see its comment). The
+        # dialog it reaches is window-modal via open() + signal
+        # callbacks — the K-114 rule: app-modal nested loops segfault
+        # on this stack. Coordinates are frozen into the lambda.
+        QTimer.singleShot(
+            0, lambda: self._open_text_dialog(page, x, y)
+        )
+
+    def _open_text_dialog(self, page: int, x: float, y: float) -> None:
+        """Window-modal multiline prompt for a new outside-text record.
+
+        Built as an INSTANCE wired to signal callbacks and shown with
+        open() — the sanctioned non-nested path (test_bridge_reentrancy
+        pins the why; the static input-dialog helpers run an app-modal
+        nested loop under the hood, the exact crash class K-114 bans).
+        """
+        if QInputDialog is None:
+            return
+        if self._text_dialog is not None:
+            # One placement at a time: front the open prompt instead of
+            # stacking a second (the page disarms its tool per click,
+            # but the bridge is still not to be trusted).
+            try:
+                self._text_dialog.raise_()
+                self._text_dialog.activateWindow()
+            except Exception:
+                pass
+            return
+        try:
+            dlg = QInputDialog(self)
+            dlg.setWindowTitle("Add Text")
+            dlg.setLabelText("Text:")
+            try:
+                dlg.setOption(
+                    QInputDialog.InputDialogOption
+                    .UsePlainTextEditForTextInput,
+                    True,
+                )
+            except Exception:
+                pass
+            try:
+                from . import theme
+
+                dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+            except Exception:
+                pass
+            dlg.textValueSelected.connect(
+                lambda text: self._on_text_added(page, x, y, text)
+            )
+            dlg.finished.connect(lambda _r: self._on_text_dialog_closed())
+            self._text_dialog = dlg
+            dlg.open()
+        except Exception as exc:
+            self._text_dialog = None
+            print(f"[klausmate] pdfjs text dialog failed: {exc}")
+
+    def _on_text_dialog_closed(self) -> None:
+        dlg, self._text_dialog = self._text_dialog, None
+        if dlg is not None:
+            try:
+                dlg.deleteLater()
+            except Exception:
+                pass
+
+    def _on_text_added(
+        self, page: int, x: float, y: float, text: Any
+    ) -> None:
+        body = str(text).strip()
+        if not body:
+            return  # OK on an empty box mints nothing
+        self._highlights.append(make_text_record(page, x, y, body))
+        self._save_annotations()
+        self._push_annotations()
+        if tooltip is not None:
+            tooltip("Klaus: text added")
 
     def _bridge_note_edit(self, payload: str) -> None:
         data = decode_b64_json(payload) or {}
