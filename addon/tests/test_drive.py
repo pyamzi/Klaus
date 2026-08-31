@@ -587,6 +587,38 @@ check("Match Sensitivity opens window-modal with a callback (K-114: "
       "dlg.open() + accepted, never exec)",
       "dlg.open()" in _PD_FLAT and "dlg.accepted.connect(apply)" in _PD_FLAT)
 
+print("== K-125: the statics that exec() internally are gone too ==")
+# K-100's audit: QInputDialog.getText and QMessageBox.question run an
+# app-modal exec() under the hood — the same macOS 26 + Qt 6.11 crash
+# class K-114 retired. All four pdf_drive sites converted to the
+# instance + open() + signal patterns; bans on code_only text so a
+# comment spelling a static can never trip them.
+check("no QInputDialog static and no QMessageBox.question left in code",
+      "QInputDialog.get" not in _PD_CODE
+      and "QMessageBox.question" not in _PD_CODE)
+check("the three text prompts (new folder, rename PDF, rename folder) "
+      "are INSTANCES via open() + textValueSelected",
+      _PD_CODE.count("textValueSelected.connect(") == 3
+      and _PD_FLAT.count("QInputDialog(self)") == 3)
+check("_new_folder is CPS — on_done(path) only on a real create, and "
+      "_move_to_new_folder rides it",
+      "on_done(path)" in _PD_FLAT
+      and "self._new_folder(on_done=lambdapath:self._move_pdf(safe,path))"
+      in _PD_FLAT)
+check("delete confirm: window-modal Yes/No (No default) read via "
+      "clickedButton() on finished; the destructive back half runs "
+      "only from the Yes",
+      "msg.open()" in _PD_FLAT
+      and "msg.finished.connect(_on_answered)" in _PD_FLAT
+      and "setDefaultButton(QMessageBox.StandardButton.No)" in _PD_FLAT
+      and "self._delete_pdf_confirmed(safe,display)" in _PD_FLAT)
+# Raw source here on purpose: code_only strips string literals, and an
+# objectName IS a string literal (test_setup_crop_theme's precedent).
+check("delete confirm wears the theme's destructive role (DangerButton "
+      "on Yes, SecondaryButton on No)",
+      'setObjectName("DangerButton")' in _PD_SRC
+      and 'setObjectName("SecondaryButton")' in _PD_SRC)
+
 print("== K-117: real offscreen Qt — drops, sort, rows, menus, suspend ==")
 # PyQt6 is installed for this interpreter (unlike Anki's bundled one),
 # so the drag/drop and row logic runs on GENUINE widgets offscreen. The

@@ -350,7 +350,7 @@ aqt_mod.dialogs = types.SimpleNamespace(open=lambda *a, **k: None)
 _stub("aqt.operations", CollectionOp=_AnyOp, QueryOp=_AnyOp)
 _stub("aqt.utils", tooltip=lambda *a, **k: None, askUser=lambda *a, **k: False,
       showWarning=lambda *a, **k: None)
-_stub("aqt.qt", QAction=object, QInputDialog=object, qconnect=lambda *a, **k: None)
+_stub("aqt.qt", QAction=object, QInputDialog=object, QMessageBox=object, qconnect=lambda *a, **k: None)
 _stub("aqt.gui_hooks")
 aqt_mod.gui_hooks = sys.modules["aqt.gui_hooks"]
 _stub("anki")

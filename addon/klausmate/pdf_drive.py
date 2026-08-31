@@ -1400,17 +1400,43 @@ class DriveWindow(QWidget):
         if imported:
             self.rebuild_tree()
 
-    def _new_folder(self, parent_path: str | None = None) -> str | None:
-        name, ok = QInputDialog.getText(self, "New Folder", "Folder name:")
-        name = (name or "").strip().strip("/")
-        if not ok or not name:
-            return None
-        path = f"{parent_path}/{name}" if parent_path else name
-        if not drive_store.add_folder(_user_files(), path):
-            showWarning("That folder name isn't valid.")
-            return None
-        self.rebuild_tree()
-        return path
+    def _new_folder(
+        self, parent_path: str | None = None, on_done=None
+    ) -> None:
+        """Prompt for a folder name, window-modal (K-125).
+
+        A QInputDialog INSTANCE via open() + textValueSelected — the
+        getText static it replaces exec()s app-modal internally, the
+        K-114 segfault class. ``on_done(path)`` fires only when the
+        folder was actually created (the accepted-callback CPS shape);
+        cancel, an emptied name, and an invalid name all end the flow
+        exactly as the old blocking return-None paths did.
+        """
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("New Folder")
+        dlg.setLabelText("Folder name:")
+        try:
+            from . import theme as _theme
+
+            dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as _exc:
+            print(f"[klausmate] new-folder dialog theme failed: {_exc}")
+
+        def _create(raw) -> None:
+            name = str(raw or "").strip().strip("/")
+            if not name:
+                return
+            path = f"{parent_path}/{name}" if parent_path else name
+            if not drive_store.add_folder(_user_files(), path):
+                showWarning("That folder name isn't valid.")
+                return
+            self.rebuild_tree()
+            if on_done is not None:
+                on_done(path)
+
+        dlg.textValueSelected.connect(_create)
+        dlg.finished.connect(lambda _r: dlg.deleteLater())
+        dlg.open()
 
     def _on_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
@@ -1520,23 +1546,41 @@ class DriveWindow(QWidget):
         )
 
     def _rename_pdf(self, safe: str) -> None:
+        # K-125: instance + open() + textValueSelected, never the
+        # app-modal getText static. Cancel/empty keep their old
+        # do-nothing meaning (the signal only fires on OK).
         current = drive_store.display_name(_user_files(), safe)
-        name, ok = QInputDialog.getText(
-            self, "Rename PDF", "Display name:", text=current
-        )
-        if ok and (name or "").strip():
-            drive_store.rename_display(_user_files(), safe, name.strip())
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Rename PDF")
+        dlg.setLabelText("Display name:")
+        dlg.setTextValue(current)
+        try:
+            from . import theme as _theme
+
+            dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as _exc:
+            print(f"[klausmate] rename dialog theme failed: {_exc}")
+
+        def _apply(raw) -> None:
+            name = str(raw or "").strip()
+            if not name:
+                return
+            drive_store.rename_display(_user_files(), safe, name)
             # Disk rename follows the display rename (K-075).
             try:
                 root = pdf_handler._live_library_root()
                 if root and os.path.isdir(root):
                     pdf_handler.rename_mapped_file(
-                        _user_files(), root, safe, name.strip()
+                        _user_files(), root, safe, name
                     )
             except Exception as e:  # noqa: BLE001
                 print(f"[klausmate] disk rename failed for {safe!r}: {e}")
             self.rebuild_tree()
             tag_sync.sync_after_rename(mw, safe)
+
+        dlg.textValueSelected.connect(_apply)
+        dlg.finished.connect(lambda _r: dlg.deleteLater())
+        dlg.open()
 
     def _move_pdf(self, safe: str, folder: str | None) -> None:
         drive_store.set_folder(_user_files(), safe, folder)
@@ -1554,22 +1598,36 @@ class DriveWindow(QWidget):
         tag_sync.sync_after_rename(mw, safe)
 
     def _move_to_new_folder(self, safe: str) -> None:
-        path = self._new_folder()
-        if path:
-            self._move_pdf(safe, path)
+        # K-125 CPS: the move rides _new_folder's created-path callback.
+        self._new_folder(on_done=lambda path: self._move_pdf(safe, path))
 
     def _rename_folder(self, path: str) -> None:
+        # K-125: instance + open() + textValueSelected (see _rename_pdf).
         leaf = path.rsplit("/", 1)[-1]
-        name, ok = QInputDialog.getText(
-            self, "Rename folder", "Folder name:", text=leaf
-        )
-        name = (name or "").strip().strip("/")
-        if not ok or not name or name == leaf:
-            return
-        parent = path.rsplit("/", 1)[0] if "/" in path else ""
-        # Same path as a drag-move (K-076): the store-only rename this
-        # shipped as was reverted by the very next disk-truth rescan.
-        self._move_folder(path, f"{parent}/{name}" if parent else name)
+        dlg = QInputDialog(self)
+        dlg.setWindowTitle("Rename folder")
+        dlg.setLabelText("Folder name:")
+        dlg.setTextValue(leaf)
+        try:
+            from . import theme as _theme
+
+            dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as _exc:
+            print(f"[klausmate] rename dialog theme failed: {_exc}")
+
+        def _apply(raw) -> None:
+            name = str(raw or "").strip().strip("/")
+            if not name or name == leaf:
+                return
+            parent = path.rsplit("/", 1)[0] if "/" in path else ""
+            # Same path as a drag-move (K-076): the store-only rename
+            # this shipped as was reverted by the very next disk-truth
+            # rescan.
+            self._move_folder(path, f"{parent}/{name}" if parent else name)
+
+        dlg.textValueSelected.connect(_apply)
+        dlg.finished.connect(lambda _r: dlg.deleteLater())
+        dlg.open()
 
     def _move_folder(self, old: str, new: str) -> None:
         """Folder rename/reparent, disk directory included; the shared
@@ -1606,17 +1664,53 @@ class DriveWindow(QWidget):
 
     def _delete_pdf(self, safe: str) -> None:
         display = drive_store.display_name(_user_files(), safe)
-        answer = QMessageBox.question(
-            self,
-            "Delete PDF",
+        # K-125: instance + open() + finished/clickedButton, never the
+        # question() static (its internal exec is app-modal, the K-114
+        # segfault class). Yes/No with No default as before; Esc/close
+        # land on No, exactly the static's reject path. The closure
+        # keeps ``msg`` referenced; themed per K-112 with the delete
+        # action wearing DangerButton.
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Delete PDF")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(
             f"Delete “{display}”?\n\n"
             "This removes the PDF, its extracted text, your highlights and "
-            "notes, and its retention index. Cards are not touched.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            "notes, and its retention index. Cards are not touched."
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = msg.button(QMessageBox.StandardButton.Yes)
+        if yes_btn is not None:
+            yes_btn.setObjectName("DangerButton")
+        no_btn = msg.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setObjectName("SecondaryButton")
+        try:
+            from . import theme as _theme
+
+            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as _exc:
+            print(f"[klausmate] delete dialog theme failed: {_exc}")
+
+        def _on_answered(_r: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = (
+                clicked is not None
+                and msg.standardButton(clicked)
+                == QMessageBox.StandardButton.Yes
+            )
+            msg.deleteLater()
+            if confirmed:
+                self._delete_pdf_confirmed(safe, display)
+
+        msg.finished.connect(_on_answered)
+        msg.open()
+
+    def _delete_pdf_confirmed(self, safe: str, display: str) -> None:
+        """The destructive back half, run only from the confirm's Yes."""
         try:
             if self.sidebar.is_loaded(safe):
                 self.sidebar.clear()

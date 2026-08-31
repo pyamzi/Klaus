@@ -42,8 +42,8 @@ import aqt
 from anki.collection import AddNoteRequest
 from aqt import gui_hooks, mw
 from aqt.operations import CollectionOp, QueryOp
-from aqt.qt import QAction, QInputDialog, qconnect
-from aqt.utils import askUser, showWarning, tooltip
+from aqt.qt import QAction, QInputDialog, QMessageBox, qconnect
+from aqt.utils import showWarning, tooltip
 
 from . import card_index, embeddings
 
@@ -478,34 +478,84 @@ def create_curated_deck(
 
 
 def prompt_and_create(parent, nids: list[int], on_done: Callable[[int], None] | None = None) -> None:
-    """Name dialog (prefilled from the last search) → create the deck."""
+    """Name dialog (prefilled from the last search) → create the deck.
+
+    Window-modal all the way down (K-125, K-114's rule: app-modal exec —
+    which the getText/askUser statics run internally — segfaults on
+    Qt 6.11 + macOS 26). The old while-loop's edges keep their meaning
+    as a callback chain: cancel ends the flow, an emptied name
+    re-prompts, and declining the merge re-prompts with the same name
+    so it can be edited.
+    """
     suggested = DECK_PREFIX + (
         (last_run or {}).get("suggested_name") or "Curated"
     )
-    name = suggested
-    while True:
-        name, ok = QInputDialog.getText(
-            parent,
-            "Klaus: create curated deck",
-            f"Copy {len(nids)} notes into deck:",
-            text=name,
-        )
-        if not ok:
-            return
-        name = name.strip()
+
+    def ask_name(prefill: str) -> None:
+        dlg = QInputDialog(parent)
+        dlg.setWindowTitle("Klaus: create curated deck")
+        dlg.setLabelText(f"Copy {len(nids)} notes into deck:")
+        dlg.setTextValue(prefill)
+        try:
+            from . import theme
+
+            dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+        except Exception:
+            pass
+        dlg.textValueSelected.connect(on_named)
+        dlg.finished.connect(lambda _r: dlg.deleteLater())
+        dlg.open()
+
+    def on_named(raw: Any) -> None:
+        name = str(raw or "").strip()
         if not name:
-            continue
+            ask_name(name)  # the old loop's continue: empty re-prompts
+            return
         if mw.col.decks.by_name(name):
-            if askUser(
-                f'Deck "{name}" already exists. Add the {len(nids)} copied '
-                "notes to it?",
-                parent=parent,
-                defaultno=True,
-            ):
-                break
-            continue  # re-prompt for a different name
-        break
-    create_curated_deck(parent, nids, name, on_done=on_done)
+            confirm_merge(name)
+            return
+        create_curated_deck(parent, nids, name, on_done=on_done)
+
+    def confirm_merge(name: str) -> None:
+        msg = QMessageBox(parent)
+        msg.setWindowTitle("Klaus: create curated deck")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(
+            f'Deck "{name}" already exists. Add the {len(nids)} copied '
+            "notes to it?"
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        # askUser(defaultno=True) parity; No is the quiet secondary.
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        no_btn = msg.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setObjectName("SecondaryButton")
+        try:
+            from . import theme
+
+            msg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+        except Exception:
+            pass
+
+        def _on_answered(_r: int) -> None:
+            clicked = msg.clickedButton()
+            merge = (
+                clicked is not None
+                and msg.standardButton(clicked)
+                == QMessageBox.StandardButton.Yes
+            )
+            msg.deleteLater()
+            if merge:
+                create_curated_deck(parent, nids, name, on_done=on_done)
+            else:
+                ask_name(name)  # decline re-prompts, same name, editable
+
+        msg.finished.connect(_on_answered)
+        msg.open()
+
+    ask_name(suggested)
 
 
 # ------------------------------------------------------------ browser glue

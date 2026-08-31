@@ -57,6 +57,7 @@ _MODULES = {
     "heatmap": open("klausmate/heatmap.py").read(),
     "dashboard": open("klausmate/dashboard.py").read(),
     "setup_flow": open("klausmate/setup_flow.py").read(),
+    "curation": open("klausmate/curation.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -309,13 +310,14 @@ check("__init__: the crop dialog opens window-modal — crop work rides "
       and "dlg.exec()" not in _K114["__init__"]
       and "msg.exec()" not in _K114["__init__"])
 
-check("setup_flow: all five welcome/readiness QMessageBoxes open "
-      "window-modal with finished callbacks reading clickedButton() "
-      "(Esc/close keep their exec-era fall-through meaning); the file "
-      "carries NO nested-loop .exec() at all. A sixth box must be "
-      "added open()-shaped to keep these counts honest",
-      _K114["setup_flow"].count("msg.open()") == 5
-      and _K114["setup_flow"].count("msg.finished.connect(") == 5
+check("setup_flow: all seven welcome/readiness QMessageBoxes (K-114's "
+      "five + K-125's two ex-askUser questions) open window-modal with "
+      "finished callbacks reading clickedButton() (Esc/close keep "
+      "their exec-era fall-through meaning); the file carries NO "
+      "nested-loop .exec() at all. An eighth box must be added "
+      "open()-shaped to keep these counts honest",
+      _K114["setup_flow"].count("msg.open()") == 7
+      and _K114["setup_flow"].count("msg.finished.connect(") == 7
       and ".exec()" not in _K114["setup_flow"])
 
 check("pdfjs_viewer: note-edit and go-to-page are QInputDialog "
@@ -331,5 +333,46 @@ check("pdf_drive: no dialog exec either (converted under K-117, pinned "
       "in test_drive.py; K-114's board verify covers this file too)",
       "dlg.exec()" not in _K114["pdf_drive"]
       and "msg.exec()" not in _K114["pdf_drive"])
+
+
+section("K-125: the statics/utilities that exec() internally are gone")
+# K-100's audit found the K-114 crash class hiding inside statics and
+# aqt helpers: QInputDialog.getText, QMessageBox.question, and
+# aqt.utils.askUser all run an app-modal exec() under the hood. The
+# pdf_drive sites are pinned in test_drive.py beside its K-117 block;
+# here: curation's name-prompt flow and setup_flow's two ex-askUser
+# questions. Bans on code_only text; file dialogs (native sheets, a
+# different AppKit path) stay legal.
+check("curation: no QInputDialog static, no askUser, no .exec() — the "
+      "name prompt is an INSTANCE via open() + textValueSelected",
+      "QInputDialog.get" not in _K114["curation"]
+      and "askUser" not in _K114["curation"]
+      and ".exec()" not in _K114["curation"]
+      and "dlg.textValueSelected.connect(on_named)" in _K114["curation"]
+      and "dlg.open()" in _K114["curation"])
+check("curation: the old while-loop's edges survive as callbacks — "
+      "empty name re-prompts, a declined merge re-prompts with the "
+      "same name, the merge confirm reads clickedButton() on finished",
+      _K114["curation"].count("ask_name(name)") == 2
+      and "msg.finished.connect(_on_answered)" in _K114["curation"]
+      and "msg.open()" in _K114["curation"])
+check("setup_flow: askUser is gone entirely (identifier and import) — "
+      "both questions are themed QMessageBoxes via open()",
+      "askUser" not in _K114["setup_flow"])
+check("setup_flow: the two converted offers thread a continuation so "
+      "the readiness dialogs never stack on them — every early return "
+      "and both answers reach then() (the ordering blocking gave for "
+      "free)",
+      "def _library_root_check(then" in _MODULES["setup_flow"]
+      and "def _maybe_offer_runtime_update(res: Any, then"
+      in _MODULES["setup_flow"]
+      and "_library_root_check(_readiness_after_library_root)"
+      in _K114["setup_flow"]
+      and "_maybe_offer_runtime_update(res, _readiness_check_body)"
+      in _K114["setup_flow"]
+      and _K114["setup_flow"].count("then()") >= 8)
+check("setup_flow: the native folder sheet is deferred a tick past the "
+      "finished handler, never nested inside it",
+      "QTimer.singleShot(0, _pick_folder)" in _K114["setup_flow"])
 
 raise SystemExit(report())

@@ -23,12 +23,12 @@ open_settings_dialog.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from aqt import mw
 from aqt.operations import QueryOp
-from aqt.qt import QMessageBox
-from aqt.utils import askUser, openLink, showWarning, tooltip
+from aqt.qt import QMessageBox, QTimer
+from aqt.utils import openLink, showWarning, tooltip
 
 from . import embeddings, ollama_runtime
 from .manage_models import manage_models_dialog
@@ -202,7 +202,7 @@ def first_run_check() -> None:
     msg.open()
 
 
-def _library_root_check() -> None:
+def _library_root_check(then: Callable[[], None]) -> None:
     """Offer to pick a real on-disk folder for the Library (K-070, part A
     of K-057) once ``library_root`` is unset. Runs as one step of the
     per-profile-open readiness check, before the embedding-provider
@@ -213,56 +213,98 @@ def _library_root_check() -> None:
     which itself fires once per profile-open. No "stop asking forever"
     flag exists on purpose: an unset Library folder is a state worth
     re-surfacing, unlike a one-time API-key nudge.
+
+    ``then()`` continues the caller's readiness flow once this step has
+    fully resolved (root already set, declined, folder pick cancelled,
+    or the migration op kicked off in the background) — the blocking
+    askUser this replaced (K-125: its internal exec() is the K-114
+    app-modal segfault class) gave callers that ordering for free, and
+    the chain keeps the readiness dialogs from stacking on this one.
     """
     from . import pdf_handler
 
     cfg = _pkg().get_config()
     if pdf_handler.get_library_root(cfg):
+        then()
         return
 
-    from aqt.qt import QFileDialog
-
-    if not askUser(
+    msg = _themed_message_box(
+        mw, "KlausMate: Library folder", QMessageBox.Icon.Question
+    )
+    msg.setText(
         "Klaus can keep your Library PDFs in a real folder on disk "
         "(instead of tucked inside the add-on) so they show up in "
         "Finder/Explorer too, and any existing PDFs get moved there.\n\n"
-        "Choose a folder now?",
-        parent=mw,
-    ):
-        return  # ask again next profile open — nothing persisted
-
-    chosen = QFileDialog.getExistingDirectory(
-        mw, "Choose a folder for your Klaus Library"
+        "Choose a folder now?"
     )
-    if not chosen:
-        return
+    msg.setStandardButtons(
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    )
+    # askUser parity: default Yes (no defaultno was passed), Esc = No.
+    msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+    no_btn = msg.button(QMessageBox.StandardButton.No)
+    if no_btn is not None:
+        no_btn.setObjectName("SecondaryButton")
 
-    def do(_col: Any) -> Any:
-        from . import USER_FILES, drive_store
+    def _pick_folder() -> None:
+        from aqt.qt import QFileDialog
 
-        folders = drive_store.load(USER_FILES).get("pdfs", {})
-        return pdf_handler.migrate_to_root(USER_FILES, chosen, folders)
+        chosen = QFileDialog.getExistingDirectory(
+            mw, "Choose a folder for your Klaus Library"
+        )
+        if not chosen:
+            then()
+            return
 
-    def on_done(result: Any) -> None:
-        cfg2 = _pkg().get_config()
-        cfg2["library_root"] = chosen
-        _pkg().write_config(cfg2)
-        failed = (result or {}).get("failed") or {}
-        if failed:
-            tooltip(
-                f"Klaus: Library folder set — {len(failed)} file(s) "
-                "couldn't be moved and stay in the old location"
+        def do(_col: Any) -> Any:
+            from . import USER_FILES, drive_store
+
+            folders = drive_store.load(USER_FILES).get("pdfs", {})
+            return pdf_handler.migrate_to_root(USER_FILES, chosen, folders)
+
+        def on_done(result: Any) -> None:
+            cfg2 = _pkg().get_config()
+            cfg2["library_root"] = chosen
+            _pkg().write_config(cfg2)
+            failed = (result or {}).get("failed") or {}
+            if failed:
+                tooltip(
+                    f"Klaus: Library folder set — {len(failed)} file(s) "
+                    "couldn't be moved and stay in the old location"
+                )
+            else:
+                tooltip("Klaus: Library folder set")
+
+        def on_fail(exc: Exception) -> None:
+            print(f"[klausmate] library migration failed: {exc}")
+            showWarning(
+                f"Could not set up the Library folder: {exc}", parent=mw
             )
-        else:
-            tooltip("Klaus: Library folder set")
 
-    def on_fail(exc: Exception) -> None:
-        print(f"[klausmate] library migration failed: {exc}")
-        showWarning(f"Could not set up the Library folder: {exc}", parent=mw)
+        op = QueryOp(parent=mw, op=do, success=on_done)
+        op.failure(on_fail)
+        op.without_collection().run_in_background()
+        # The old blocking flow continued to the readiness checks as
+        # soon as the op was launched, not when it finished — kept.
+        then()
 
-    op = QueryOp(parent=mw, op=do, success=on_done)
-    op.failure(on_fail)
-    op.without_collection().run_in_background()
+    def _on_answered(_r: int) -> None:
+        clicked = msg.clickedButton()
+        accepted = (
+            clicked is not None
+            and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+        )
+        msg.deleteLater()
+        if not accepted:
+            then()  # ask again next profile open — nothing persisted
+            return
+        # The native folder sheet nests its own loop — run it a tick
+        # after this finished handler unwinds, never from inside it.
+        QTimer.singleShot(0, _pick_folder)
+
+    # K-125: open() + finished, never a blocking askUser (see docstring).
+    msg.finished.connect(_on_answered)
+    msg.open()
 
 
 def setup_readiness_check() -> None:
@@ -285,8 +327,15 @@ def setup_readiness_check() -> None:
     if _first_run_dialog_shown_this_session:
         return
 
-    _library_root_check()
+    # K-125: the Library-folder offer is callback-driven now, so the
+    # provider checks run through its continuation — the old blocking
+    # askUser ordered the two prompt families for free.
+    _library_root_check(_readiness_after_library_root)
 
+
+def _readiness_after_library_root() -> None:
+    """The provider-readiness half of setup_readiness_check, chained
+    behind the Library-folder offer's continuation (K-125)."""
     cfg = _pkg().get_config()
     if embeddings.provider_name(cfg) != "ollama":
         _readiness_check_body()
@@ -310,58 +359,97 @@ def setup_readiness_check() -> None:
     def on_ensure_done(res: Any) -> None:
         if getattr(res, "port_moved", False):
             tooltip(f"Klaus: local AI running on {res.endpoint}")
-        _maybe_offer_runtime_update(res)
-        _readiness_check_body()
+        # K-125: the readiness dialogs run through the update offer's
+        # continuation so they can never stack on its question.
+        _maybe_offer_runtime_update(res, _readiness_check_body)
 
     op = QueryOp(parent=mw, op=lambda col: do(), success=on_ensure_done)
     op.failure(lambda _e: _readiness_check_body())
     op.without_collection().run_in_background()
 
 
-def _maybe_offer_runtime_update(res: Any) -> None:
+def _maybe_offer_runtime_update(res: Any, then: Callable[[], None]) -> None:
     """Non-blocking, once-per-version offer to move a managed server onto
     the add-on's newly pinned Ollama version. The old version keeps
     working regardless — never block startup on an upgrade.
 
     Irrelevant to a cloud embedding provider, which has no local runtime
     to update.
+
+    ``then()`` continues the caller's flow once the offer has resolved —
+    every early return and both dialog answers reach it exactly once,
+    the ordering the blocking askUser (K-125: internal app-modal exec,
+    the K-114 segfault class) used to provide by blocking.
     """
     cfg = _pkg().get_config()
     if embeddings.provider_name(cfg) != "ollama":
+        then()
         return
     if getattr(res, "detail", "") != "update_available":
+        then()
         return
     offered_key = f"_runtime_update_offered_{ollama_runtime.OLLAMA_VERSION}"
     if cfg.get(offered_key):
+        then()
         return
     cfg[offered_key] = True
     _pkg().write_config(cfg)
-    if not askUser(
+
+    msg = _themed_message_box(
+        mw, "KlausMate: local AI engine update", QMessageBox.Icon.Question
+    )
+    msg.setText(
         "Klaus can update its local AI engine to Ollama "
         f"v{ollama_runtime.OLLAMA_VERSION} "
         f"({runtime_download_size_hint()} download).\n\n"
         "Update in the background? The engine restarts briefly once the "
         "download finishes; you can keep studying meanwhile."
-    ):
-        return
+    )
+    msg.setStandardButtons(
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+    )
+    # askUser parity: default Yes (no defaultno was passed), Esc = No.
+    msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+    no_btn = msg.button(QMessageBox.StandardButton.No)
+    if no_btn is not None:
+        no_btn.setObjectName("SecondaryButton")
 
-    def do() -> Any:
-        return ollama_runtime.update_runtime(
-            _pkg().get_config(), save_config=_pkg()._save_config_on_main
+    def _on_answered(_r: int) -> None:
+        clicked = msg.clickedButton()
+        accepted = (
+            clicked is not None
+            and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
         )
+        msg.deleteLater()
+        if accepted:
 
-    def on_done(res2: Any) -> None:
-        if getattr(res2, "ok", False):
-            tooltip("Klaus: local AI engine updated")
-        else:
-            print(
-                "[klausmate] runtime update failed: "
-                f"{getattr(res2, 'detail', '')}"
+            def do() -> Any:
+                return ollama_runtime.update_runtime(
+                    _pkg().get_config(),
+                    save_config=_pkg()._save_config_on_main,
+                )
+
+            def on_update_done(res2: Any) -> None:
+                if getattr(res2, "ok", False):
+                    tooltip("Klaus: local AI engine updated")
+                else:
+                    print(
+                        "[klausmate] runtime update failed: "
+                        f"{getattr(res2, 'detail', '')}"
+                    )
+
+            op = QueryOp(parent=mw, op=lambda col: do(), success=on_update_done)
+            op.failure(
+                lambda e: print(f"[klausmate] runtime update failed: {e}")
             )
+            op.without_collection().run_in_background()
+        # Continue whether the update was taken or declined — the old
+        # blocking flow did after its answer either way.
+        then()
 
-    op = QueryOp(parent=mw, op=lambda col: do(), success=on_done)
-    op.failure(lambda e: print(f"[klausmate] runtime update failed: {e}"))
-    op.without_collection().run_in_background()
+    # K-125: open() + finished, never a blocking askUser.
+    msg.finished.connect(_on_answered)
+    msg.open()
 
 
 def _readiness_check_body() -> None:
