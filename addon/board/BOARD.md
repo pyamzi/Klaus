@@ -70,6 +70,24 @@ GATE: Pouya uses pdf_renderer:'pdfjs' daily until satisfied (no flicker, parity 
 #### Comments
 - [2026-08-31 orchestrator] Status 2026-08-31: still gated on the needs-human soak, and the gate is now much easier to open — K-116 shipped the full zoom overhaul (instant pinch/keys/toolbar zoom, no blank pages, reachable left edge) and the wired annobar (highlight mode, add-text, zoom pill), and K-100 (the last parity card) is being executed right now. Once K-100 lands: Pouya flips KlausMate Preferences -> General -> 'Use the new pdf.js viewer' + restart, uses it daily, and reports. When satisfied, the default flips and the QPdfView machinery retires (annotations JSON/bake/pdf_handler stay — renderer-independent).
 
+### K-128: Library empty state: centered guidance + drop affordance when no PDFs are imported
+owner: -
+priority: P3
+tags: ui,design,library
+files: klausmate/pdf_drive.py,klausmate/theme.py
+created: 2026-08-31
+
+HIG: an empty pane should teach. When the tree has zero PDFs, show a centered muted hint (import paths: drag PDFs from Finder onto the folder tree / the + flow) instead of bare void. Filed from the 2026-08-31 screenshot audit (the vast dead area below three rows).
+
+### K-129: Map window HIG polish after first live look
+owner: -
+priority: P3
+tags: ui,design,phase-d
+files: klausmate/pdf_map.py,tests/test_pdf_map.py
+created: 2026-08-31
+
+K-123 shipped headless-verified. After Pouya uses it live: node label legibility over dense fields, zoom limits feel, edge alpha, selection affordance, window sizing/remember. File concrete deltas here rather than polishing blind.
+
 ## Ready
 
 ## Doing
@@ -188,3 +206,50 @@ Worker-A's K-100 audit found more members of the K-114 segfault class (app-modal
 #### Comments
 - [2026-08-31 worker-A] Done — every remaining app-modal static/utility converted to the K-114 instance+open()+signal patterns. pdf_drive (4 sites): _new_folder is CPS (on_done(path) fires only on a real create; _move_to_new_folder rides it; the three return-ignoring callers unchanged), _rename_pdf and _rename_folder are QInputDialog instances via open()+textValueSelected (cancel/empty/same-name keep their do-nothing meanings — the signal only fires on OK), _delete_pdf is a themed QMessageBox via open()+finished/clickedButton, Yes/No with No default (Esc/close = No, the static's reject path), Yes wears DangerButton / No SecondaryButton, and the destructive body moved whole into _delete_pdf_confirmed so it runs only from the Yes. curation.prompt_and_create: the getText+askUser while-loop became a callback chain — ask_name (instance, prefilled, themed) -> on_named -> confirm_merge (themed QMessageBox, defaultno parity: No default); every loop edge keeps its meaning (cancel ends, empty re-prompts, declined merge re-prompts with the SAME name for editing). ALSO converted curation:499's askUser (not on the card text but in the same flow being restructured — leaving one nested blocking modal inside the new chain would have defeated the card). setup_flow: both askUser sites are themed QMessageBoxes via open()+finished (default Yes as askUser-without-defaultno was), AND both now thread a then() continuation — setup_readiness_check chains the provider checks through _library_root_check(_readiness_after_library_root), and on_ensure_done passes _readiness_check_body into _maybe_offer_runtime_update — so the readiness dialogs can never stack on the offers (the ordering blocking used to give for free); the native folder sheet is deferred one tick past the finished handler (QTimer.singleShot). askUser import dropped from setup_flow and curation. Verify: failed before, PASSES now. Tests: test_bridge_reentrancy 47->52 (K-125 section: curation bans+loop-edge pins, setup_flow askUser-gone + continuation-threading + sheet-deferral pins; the K-114 five-box count pin deliberately widened 5->7 and was updated); test_drive 128->136 (K-125 block beside the K-117 pins: statics ban on code_only, 3x textValueSelected instances, _new_folder CPS, delete finished/clickedButton + DangerButton on raw source — code_only strips string literals, noted inline). All 11 new pins falsified (10 in one mutation pass incl. a real askUser/QMessageBox.question reintroduction; the delete-finished pin needed a second focused pass because its first mutation was whitespace, invisible to the space-stripped _PD_FLAT), restored, re-green. Fallout fixed: tests/test_klausmate.py + tests/test_projection.py build their own aqt.qt stubs with explicit export lists — added QMessageBox=object to both (curation now imports it; 253 and 30 pass). Full sweep 22/22 green; py_compile through the symlink OK.
 - [2026-08-31 orchestrator] Reviewed and committed. Verify re-run fails-before/passes-after independently; curation callback chain preserves all four loop edges (read by eye); setup_flow continuations sequence rather than stack; caller of prompt_and_create unchanged and compatible (on_done optional). 22/22 sweep. With this, the app-modal exec class is EXTINCT addon-wide — pinned per file.
+
+### K-130: Library chrome HIG pass: header + sort indicator + caption buttons + selection band
+owner: worker-C
+priority: P1
+tags: ui,design,library
+files: klausmate/theme.py,tests/test_theme.py
+verify: bash -c "grep -q \"KlausLibraryWindow QHeaderView::down-arrow\" klausmate/theme.py && python3 tests/test_theme.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya (screenshot, 2026-08-31): the Library is "super ugly — follow human interface design principles". Orchestrator-designer audit, chrome half (theme.library_qss owns all of it):
+
+1. SORT INDICATOR COLLISION (the "Note∧" mess): the LIBRARY header sections carry no reserved space and no arrow subcontrol rules, so Qt paints the sort chevron OVER the caption text. Fix: style QWidget#KlausLibraryWindow QHeaderView::up-arrow AND ::down-arrow (small, muted, subcontrol-position right-center — NOTE: other builders already style arrows for combos/trees; scope these to the Library window selector, which is also what the verify greps) and reserve section padding-right (~16px) so text and glyph can never overlap at any column width.
+2. HEADER TYPE: keep 11px muted, weight 600 -> 500 (HIG: column headers are secondary structure), regular case, padding 4px 8px, hairline below only (exists). Header-beyond-last-column stays surface (existing rule — keep).
+3. CAPTION ROW: "New Folder… / Refresh / Map" read as bare labels. Keep them QUIET (K-117 vernacular stands) but give real affordance: 3-4px/8px padding, 5px radius, hover fill = hover_subtle token, pressed one step deeper, visible focus.
+4. SELECTION BAND: grey -> accent-tinted (accent_rgba low alpha, full-strength text), hover stays hover_subtle. PRESERVE the two-paint-region fix (::branch rules + show-decoration-selected + transparent selection-background-color) — CLAUDE.md gotcha; regressing it brings back palette-blue fragments at the row edge.
+5. DENSITY PINNED: 22px rows / 13px type were Pouya's explicit VS Code ask (K-117). Refine within it; do not inflate.
+
+Both palettes, tokens only, design-scale audit green; new pins (arrow subcontrols, padding reserve, accent selection) each falsified once.
+
+#### Comments
+- [2026-08-31 worker-C] DONE, all 5 spec points, both palettes, tokens only. 266 checks green (16 new K-130 pins + 2 legacy selection pins retargeted); card verify exit 1 before work -> 0 after; symlink py_compile OK. Rule-by-rule: (1) ::up-arrow/::down-arrow styled under the KlausLibraryWindow QHeaderView scope — border-triangle technique (8x5px, text_muted, subcontrol-origin padding, subcontrol-position center right, margin-right 4px), NOT an image: no up-chevron SVG ships in web/, QSS image: cannot take data: URIs, and new web/ assets were outside this card's file claim; ::section padding is now 4px 16px 4px 8px — the 16px right reserve means text (content box) and glyph (padding box) can never overlap, narrow columns elide instead. (2) headers weight 600->500, 11px muted kept, hairline kept, beyond-last-column surface rule kept. (3) caption buttons stay quiet: padding 4px 8px, hover hover_subtle + full text (kept), pressed one VISIBLE step past hover per palette — light grey_mid (panel-header convention), dark grey_dark because dark grey_mid == dark hover_subtle #404040 (a no-op press); focus ring blue_bright on a pre-reserved 'border: 1px solid transparent' (zero layout jitter, improves on dialog_qss's documented 1px shift). ADAPTED: radius kept 6px, not the spec's 5px — 5 is off the K-110 sanctioned scale {0,2,4,6,7,8,12} and the design-scale audit fails it; 6 is the small-control step and the existing value. (4) selection band = accent_rgba(night, 0.16) — the SettingsNav selected-pill fill, follows the active colour theme by construction — full-strength c[text]; two-paint-region trio untouched (branch:selected same fill, selection-background-color transparent, show-decoration-selected 1, no ::item radius). Legacy pins retargeted to the rgba string (in dark, selection_bg == hover_subtle so the old count was soft). (5) 22px/13px density untouched. Falsifications: 7, each surgical (only the targeted pins failed, restore byte-identical diff-verified): up-arrow glyph rogue hex; down-arrow block deleted (also proved the verify grep half fails alone); padding reserve dropped; item fill back to selection_bg; show-decoration-selected removed (new trio pin + K-117 span pin both catch); pressed fill = hover fill; weight back to 600. Nothing needed from pdf_drive.py.
+- [2026-08-31 orchestrator] Reviewed and committed. Verify re-run green independently; padding-box/content-box separation is the right structural kill for the collision; the 6px radius pushback against my own spec was correct (K-110 scale). 266 checks. Awaiting K-127 for the joint sweep + offscreen render.
+- [2026-08-31 orchestrator] Integration delta (renders, not review, caught these): border-triangle arrows replaced with real sized SVGs + default placement (zero-size subcontrol => bogus Qt reserve => every caption elided; manual position + 16px reserve => double-reserve), selection rgba -> opaque accent_mix (two paint regions composite over different bases), pins rewritten to probed truth. Your padding-box theory was sound; Qt's indicator metric arithmetic was the hidden variable.
+
+### K-127: Library data presentation: semantic retention colour, column layout, tabular figures
+owner: worker-D
+priority: P1
+tags: ui,design,library
+files: klausmate/pdf_drive.py,klausmate/drive_store.py,tests/test_drive.py
+verify: bash -c "! grep -q hsv_to_rgb klausmate/drive_store.py && grep -q retention_level klausmate/drive_store.py && grep -q ResizeMode.Stretch klausmate/pdf_drive.py && python3 tests/test_drive.py"
+created: 2026-08-31
+claimed: 2026-08-31
+
+Same screenshot audit, data half:
+
+1. KILL THE RAINBOW: drive_store.retention_color sweeps HSV hue 0-120, so 59% renders CHARTREUSE — an arbitrary tertiary hue with no meaning, different for every row (the single ugliest thing in the screenshot, and exactly what HIG colour-restraint warns against). Replace with a pure drive_store.retention_level(fraction) -> "low"|"mid"|"high" (thresholds 0.70 / 0.85; docstring: FSRS desired retention sits ~0.9, so >=0.85 is "at target"). pdf_drive._set_retention_color maps: low -> palette red_text, mid -> plain text colour (NO colour — "fine" needs no ink), high -> palette green; regular weight. Delete retention_color + the colorsys import; rework its tests (they currently pin the rainbow).
+2. DEAD RIGHT GUTTER: column 0 is fixed 240px so the table ends mid-pane and the header hairline runs on into nothing. Fix: header().setSectionResizeMode(0, Stretch), numeric columns Fixed (Retention 76, Cards 88 — KEEP the 88px suspended-cell comment, Notes 72 so the new indicator reserve never elides the caption), setStretchLastSection(False) stays. Drop the setColumnWidth(0, 240) line.
+3. TABULAR FIGURES: right-aligned numeric cells get tabular numerals via QFont.setFeature("tnum") in a guarded try/except (Qt 6.7+; silently fine without) so digits align down the column.
+4. Status-in-Cards-cell behaviour ("suspended" / "not embedded") and worst-first default sort are behaviour, not looks — unchanged, keep their pins green.
+
+Pins for level thresholds/boundaries, the mapping, stretch mode, and the tnum guard; each falsified once with the pycache discipline.
+
+#### Comments
+- [2026-08-31 worker-D] Done, verify green (exit 0; 155 passed / 0 failed, up from 136 baseline). (1) drive_store: retention_color + colorsys DELETED, replaced by pure retention_level(fraction) -> low|mid|high (low < 0.70 <= mid < 0.85 <= high; docstring cites FSRS ~0.9 target; clamps like the old ramp, non-numeric raises into the caller's guard). (2) pdf_drive._set_retention_color: low -> palette red_text, high -> palette green (via theme.palette(theme.night_mode()), QBrush), mid/None RESET ForegroundRole to None rather than skip — _apply_row reuses items across refreshes, so a row moving low->mid sheds its stale red there (the un-dim in _set_suspended_dim deliberately leaves col 1 to this method — unchanged). Regular weight, pinned. (3) Column layout: col 0 setSectionResizeMode Stretch (240px fixed line dropped), cols 1-3 Fixed at 76/88/72, 88px suspended-cell comment kept verbatim, setStretchLastSection(False) stays; QHeaderView imported (and added to the test stub's qt_names). (4) tnum via f.setFeature(QFont.Tag(b'tnum'), 1) on cols 1-3 in _apply_row, guarded try/except (Qt 6.7+; comment says why). Status-in-Cards-cell + worst-first sort untouched, their pins still green. New pins: 9 pure boundary/garbage, 5 source (Stretch+no-240, Fixed widths, 88-comment, tnum-guard structure, mapping text), 5 offscreen real-Qt (red_text/green vs LIVE palette(False) — not hex literals, so theme token edits can't split them; mid-reset; never-bold; tnum feature actually set, hasattr-skipped on old Qt). Falsified in 9 runs, each pin seen failing then restored byte-identical (pycache purged, PYTHONDONTWRITEBYTECODE=1): both thresholds shifted twice (all 4 boundary sides), retention_color resurrected, None swallowed, keys swapped, mid-skip, Stretch/72/comment removed, guard unwrapped (guard pin failed ALONE — behaviour pin isolated it), setFeature dropped, bold added. py_compile through the symlink OK. Nothing needed from theme.py: red_text + green already exist in both palettes — no token ask for integration.
+- [2026-08-31 orchestrator] Reviewed and committed. Verify green independently; the mid-reset-vs-skip reasoning checked out against _apply_row's item reuse and _set_suspended_dim's column-1 handoff; live-palette test comparisons were the right call for concurrent-lane safety. 155 checks. Serial sweep 22/22.
+- [2026-08-31 orchestrator] Integration delta: high-retention ink moved from palette green (vivid #28CD41 — neon on dark) to new green_text token pairing red_text's calm; widths settled 84/88/88 after the indicator-reserve saga. Everything else stood as shipped.
