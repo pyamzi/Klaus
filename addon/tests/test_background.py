@@ -116,20 +116,32 @@ check("the backdrop is ALWAYS the default ground — a stored color2 "
       and bg.resolve({"background_color2": "#123456"})["color2"]
       == bg.DEFAULT_COLOR
       and not hasattr(bg, "derive_edge_colour"))
-check("the GROUND follows the theme — white by day, the dark tone "
-      "under :root.night-mode, both palettes in one sheet (house "
-      "rule; a baked white ground was a floodlight at night — live "
-      "complaint 2026-08-30) — in BOTH builders",
+check("the GROUND follows the theme — white by day, dark under "
+      ":root.night-mode, both palettes in one sheet (house rule; a "
+      "baked white ground was a floodlight at night) — in BOTH "
+      "builders, painted on <html> ALONE with body transparent: "
+      "painting both composited every sphere layer TWICE, and where "
+      "the body box ended the doubled intensity stopped — a faint "
+      "line across the gradient (live complaint, 2026-08-30)",
       f"background-color: {bg.DEFAULT_COLOR} !important;"
       in bg.main_css(colour)
-      and ":root.night-mode, :root.night-mode body {"
+      and ":root.night-mode {" in bg.main_css(colour)
+      and "html, body" not in bg.main_css(colour)
+      and "body { background: transparent !important; }"
       in bg.main_css(colour)
       and f"background-color: {bg.NIGHT_COLOR} !important;"
       in bg.main_css(colour)
-      and f"background-color: {bg.NIGHT_COLOR} !important;"
+      and "body { background: transparent !important; }"
       in bg.reviewer_css(bg.resolve(
           {"reviewer_background_mode": "color"},
           prefix="reviewer_background")))
+_theme_mod = importlib.import_module("klausmate.theme")
+check("both grounds ARE the bars' chrome tokens, by reference — the "
+      "window reads as one surface with its top and bottom bars "
+      "(Pouya: night's #1E2225 drew a visible edge at both bar "
+      "boundaries)",
+      bg.NIGHT_COLOR == _theme_mod.DARK["chrome"]
+      and bg.DEFAULT_COLOR == _theme_mod.LIGHT["chrome"])
 check("an UNSET sphere (still default white) paints nothing — over "
       "the white day-ground it is invisible anyway, and at night it "
       "would sit as a phantom glow the user never chose; the default "
@@ -253,10 +265,14 @@ check("the editor grows one handle set PER sphere, the dot painted "
       and "op:'add'" in _ed and "if(G.length<CAP){" in _ed)
 check("the editor never sets background-color inline (the ground "
       "lives in the sheet, keyed on night-mode — an inline colour "
-      "would floodlight night for the session) and mirrors the "
-      "unset-white skip during drags; the dot carries a hairline "
-      "ring so a white sphere's chip stays findable on white",
+      "would floodlight night for the session), paints the drag "
+      "stack on documentElement ALONE (inline body paint would "
+      "re-double the layers the sheet just un-doubled), and mirrors "
+      "the unset-white skip; the dot carries a hairline ring so a "
+      "white sphere's chip stays findable on white",
       "background-color" not in _ed
+      and "var el=document.documentElement;" in _ed
+      and "document.body].forEach" not in _ed
       and "if(g[0].toLowerCase()===DEF){continue;}" in _ed
       and "0 0 0 1px rgba(0,0,0,0.28)" in _ed)
 check("drag/click gestures take the PRIMARY button only — without "

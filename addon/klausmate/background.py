@@ -26,6 +26,8 @@ import json
 import os
 from typing import Any
 
+from . import theme as _theme
+
 # mode: "theme" keeps Anki's own background (the default — Klaus paints
 # nothing), "color" a flat fill, "image" a picture from user_files.
 MODES = ("theme", "color", "image")
@@ -39,9 +41,13 @@ DEFAULT_COLOR = "#FFFFFF"
 # ...by DAY. The ground follows Anki's theme (house rule: both
 # palettes in one sheet, keyed on :root.night-mode — Anki flips the
 # class with JS and never re-runs the injection): at night the white
-# ground would be a floodlight (live complaint, 2026-08-30), so night
-# mode grounds on the original designed dark tone instead.
-NIGHT_COLOR = "#1E2225"
+# ground would be a floodlight (live complaint, 2026-08-30). The
+# night ground is the BARS' own dark chrome token, by reference, so
+# the window reads as one surface with its top and bottom bars
+# (Pouya: "match the same color as the top and bottom bars" — the
+# old #1E2225 drew a visible edge at both bar boundaries). Day
+# matches for free: LIGHT["chrome"] IS white.
+NIGHT_COLOR = _theme.DARK["chrome"]
 DEFAULT_BLUR = 22          # px of Gaussian blur behind the deck panels
 
 # Where chosen images are copied. Inside the addon folder so Anki's
@@ -366,11 +372,13 @@ def gradient_edit_eval_js(spec: dict, target: str) -> str:
         "parts.push('radial-gradient(at '+g[1]+'% '+g[2]+'%, '+g[0]"
         "+' 0%, '+g[0]+'00 '+g[3]+'%)');}"
         "return parts.join(', ');}"
+        # html only, like the sheet — inline-painting body too would
+        # re-double the sphere layers the sheet just un-doubled.
         "function paintBg(){"
-        "[document.documentElement,document.body].forEach(function(el){"
+        "var el=document.documentElement;"
         "el.style.setProperty('background-image',stack(),'important');"
         "el.style.setProperty('background-attachment','fixed',"
-        "'important');});}"
+        "'important');}"
         "function send(o){try{pycmd('klausmate:bggrad:'"
         "+btoa(JSON.stringify(o)));}catch(e){}}"
         "function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}"
@@ -583,11 +591,18 @@ def main_css(spec: dict, url: str = "") -> str:
             if stack else ""
         )
         return (
-            "html, body {"
+            # html ALONE paints the stack, body forced transparent —
+            # the image branch's proven layering. Painting both used
+            # to composite every semi-transparent sphere layer TWICE,
+            # and where the body box ended mid-screen the doubled
+            # intensity stopped: a faint horizontal line across the
+            # gradient (live complaint, 2026-08-30).
+            "html {"
             f" background-color: {DEFAULT_COLOR} !important;"
             f"{image_rule}"
             " }"
-            ":root.night-mode, :root.night-mode body {"
+            " body { background: transparent !important; }"
+            ":root.night-mode {"
             f" background-color: {NIGHT_COLOR} !important;"
             " }"
             + panel_css(spec)
@@ -652,11 +667,14 @@ def reviewer_css(spec: dict, url: str = "") -> str:
             if stack else ""
         )
         return (
-            "html, body {"
+            # html-only + transparent body, same double-paint-seam
+            # reason as main_css.
+            "html {"
             f" background-color: {DEFAULT_COLOR} !important;"
             f"{image_rule}"
             " }"
-            ":root.night-mode, :root.night-mode body {"
+            " body { background: transparent !important; }"
+            ":root.night-mode {"
             f" background-color: {NIGHT_COLOR} !important;"
             " }"
         )

@@ -295,10 +295,13 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   a list of up to MAX_SPHERES {color,x,y,size} SPHERE dicts, each a
   radial blob fading its own colour to alpha-0 (`{color}00`, same-hue
   transparency) over the THEME-AWARE ground as the one backdrop —
-  DEFAULT_COLOR white by day, NIGHT_COLOR under `:root.night-mode`
-  (both palettes in one sheet, house rule; a baked white ground was a
-  night floodlight) — via background-color under the background-image
-  stack, which is what lets N spheres compose. `color2` is never an
+  DEFAULT_COLOR white by day, NIGHT_COLOR = the bars' DARK["chrome"]
+  token by reference under `:root.night-mode` (one surface with the
+  bars; both palettes in one sheet, house rule; a baked white ground
+  was a night floodlight) — painted on `<html>` ALONE with body
+  transparent (html+body double-painted every translucent layer and
+  drew a seam at the body's bottom edge) via background-color under
+  the background-image stack, which is what lets N spheres compose. `color2` is never an
   option (stored values ignored), a sphere still wearing the default
   white is UNSET and paints nothing (handles stay; the editor's
   inline drag-paint mirrors the skip and never touches
