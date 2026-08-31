@@ -129,22 +129,19 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
     wash = cfg.get(f"{prefix}_wash")
     if not isinstance(wash, (int, float)) or not 0 <= wash <= 100:
         wash = 0
-    # Colour mode IS a gradient (flat colour removed 2026-08-30,
-    # Pouya: "remove the flat color feature"), and since the same day
-    # it is a STACK of gradient SPHERES ("I don't have to just add one
-    # gradient"): `{prefix}_gradients` is a list of up to four
-    # {color, x, y, size} dicts, each painted as its own radial blob —
-    # the sphere's colour at its centre fading to fully transparent at
-    # its edge — over ONE shared backdrop, `color2` (the "edge of the
-    # gradient"). A missing/invalid color2 is DERIVED from the first
-    # sphere's colour; a missing/invalid list is built from the legacy
+    # Colour mode IS a stack of gradient SPHERES (flat colour removed
+    # 2026-08-30; multi-sphere the same day): `{prefix}_gradients` is
+    # a list of up to four {color, x, y, size} dicts, each painted as
+    # its own radial blob — the sphere's colour at its centre fading
+    # to fully transparent at its edge. They compose over ONE
+    # backdrop, and that backdrop is NOT an option (Pouya: "the edge
+    # color... shouldn't be an option at all") — it is always the
+    # default ground colour, white. Any stored {prefix}_color2 from
+    # the brief era when it was configurable is ignored. A
+    # missing/invalid sphere list is built from the legacy
     # single-gradient keys (color/grad_x/grad_y/grad_size), so every
-    # older config keeps rendering. Filled whatever the mode, so a
-    # spec that flips to "color" in the open dialog is never caught
-    # sphereless.
-    colour2 = cfg.get(f"{prefix}_color2")
-    if not isinstance(colour2, str) or not _is_hex(colour2):
-        colour2 = derive_edge_colour(colour)
+    # older config keeps rendering.
+    colour2 = DEFAULT_COLOR
 
     def _pct(key: str, lo: int, hi: int, default: int) -> int:
         v = cfg.get(f"{prefix}_{key}")
@@ -214,23 +211,6 @@ def _norm_hex(value: str) -> str:
     if len(v) == 4:
         return "#" + "".join(ch * 2 for ch in v[1:]).lower()
     return v.lower()
-
-
-def derive_edge_colour(colour: str) -> str:
-    """The edge colour a gradient falls back to when none is stored:
-    the centre colour pulled ~45% toward black — a quiet vignette, so
-    an upgraded pre-gradient config reads as depth, not as a new look.
-    Handles both #rgb and #rrggbb (everything _is_hex admits); any
-    parse surprise falls back to DEFAULT_COLOR rather than raising."""
-    try:
-        v = colour.strip().lstrip("#")
-        if len(v) == 3:
-            v = "".join(ch * 2 for ch in v)
-        r, g, b = (int(v[i:i + 2], 16) for i in (0, 2, 4))
-        f = 0.55
-        return "#%02x%02x%02x" % (int(r * f), int(g * f), int(b * f))
-    except Exception:
-        return DEFAULT_COLOR
 
 
 def _is_hex(value: str) -> bool:

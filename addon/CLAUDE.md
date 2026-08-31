@@ -294,12 +294,12 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   quartet `color2`/`grad_x`/`grad_y`/`grad_size` plus `gradients` —
   a list of up to MAX_SPHERES {color,x,y,size} SPHERE dicts, each a
   radial blob fading its own colour to alpha-0 (`{color}00`, same-hue
-  transparency) over `color2` as the ONE shared backdrop
+  transparency) over the DEFAULT WHITE ground as the one backdrop
   (background-color under the background-image stack, which is what
-  lets N spheres compose). Colour mode IS this stack — flat colour
-  removed 2026-08-30; a missing list is built from the legacy single
-  keys, a missing color2 DERIVED (~45% toward black,
-  `derive_edge_colour`), defaults white throughout. `main_css` paints
+  lets N spheres compose; `color2` is always DEFAULT_COLOR — Pouya:
+  the edge "shouldn't be an option at all", so stored color2 values
+  are ignored). Colour mode IS this stack — flat colour removed
+  2026-08-30; a missing list is built from the legacy single keys. `main_css` paints
   Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
@@ -493,11 +493,15 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     `save_all` (custom colour before theme name, both before
     `top_bar.refresh()`; the sheet swap wipes the swatches' inline QSS
     so `sync_accent_swatches()` + a logo repaint follow). The
-    background groups (deck + study, one each): mode combo, centre
-    Color…, Edge Color… (the caption names both colours; there is no
-    flat mode), Choose Image… with a rounded 2× thumbnail
-    caption (`_image_thumb`, rendered from the STORED copy), Fit,
-    Panel Frost (deck only) and Image Wash sliders. Gradient geometry
+    background groups (deck + study, one each): ONE mode combo, with
+    PROGRESSIVE DISCLOSURE — every other row hides outright unless
+    its mode is selected (klaus_hidden + an _apply_search re-walk,
+    the API-key row's pattern; design off hides the whole block).
+    Image mode shows Choose Image… with a rounded 2× thumbnail
+    caption (`_image_thumb`, rendered from the STORED copy; its
+    Remove link clears the picture), Fit, Panel Frost (deck only)
+    and Image Wash sliders; colour mode shows only the sphere
+    caption — no colour buttons, the on-screen dots are the chips. Gradient geometry
     has NO sliders — centre/size are dragged ON the screen itself
     (`background.set_grad_edit` armed while the dialog is open; the
     sink updates the pending spec and arms the preview QUIETLY, never

@@ -880,12 +880,30 @@ check("custom colour is saved, and applied before the theme name",
 check("profile open loads the custom colour before the theme name",
       _init_src.index("set_custom_colour(")
       < _init_src.index('set_active_theme(str(cfg.get("color_theme")'))
-check("Fit and Blur disable as WHOLE rows, labels included — and only "
-      "while the KlausBook design layer is on, since with it off the "
-      "background settings are inert whatever the mode",
-      "bg_fit_row.setEnabled(design_on and is_image)" in _src2
-      and "bg_blur_row.setEnabled(design_on and is_image)" in _src2
-      and "bg_mode_row.setEnabled(design_on)" in _src2)
+check("progressive disclosure: image-only rows HIDE outright unless "
+      "image mode is selected, via klaus_hidden (the API-key row's "
+      "structural flag, so a settings search can never resurface "
+      "them) + an _apply_search re-walk — and design off hides the "
+      "whole background block",
+      "bg_fit_row.klaus_hidden = not (design_on and is_image)" in _src2
+      and "bg_blur_row.klaus_hidden = not (design_on and is_image)"
+      in _src2
+      and "bg_wash_row.klaus_hidden = not (design_on and is_image)"
+      in _src2
+      and "bg_mode_row.klaus_hidden = not design_on" in _src2
+      and "study_mode_row.klaus_hidden = not design_on" in _src2
+      and "_apply_search(search_edit.text())"
+      in _src2.split("def sync_background_widgets", 1)[1]
+      .split("\n    def ", 1)[0])
+check("the chosen image can be REMOVED from its caption link, per "
+      "screen (Pouya: \"allow me to remove the image\")",
+      '<a href="rm">Remove</a>' in _src2
+      and "def on_bg_image_removed" in _src2
+      and "def on_study_image_removed" in _src2
+      and "bg_image_lbl.linkActivated.connect(on_bg_image_removed)"
+      in _src2
+      and "study_image_lbl.linkActivated.connect(on_study_image_removed)"
+      in _src2)
 # The Review-heatmap switch left Preferences on 2026-08-30 (Pouya: "I
 # can add / remove widgets another way") — the deck screen's Edit
 # Widgets mode is the one writer of that key now. Three pins: the
@@ -949,13 +967,12 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "fifteen handlers: design toggle, mode, fit, blur, wash, "
-      "colour, edge colour, image, accent swatch, and the study "
-      "screen's own mode/fit/wash/colour/edge-colour/image (a "
-      "separate background needs the same live-preview discipline as "
-      "the one it must never be confused with; the make-flat pair "
-      "left with the flat-colour feature, 2026-08-30)",
-      _mm_src.count("        appearance_changed()") == 15)
+      "thirteen handlers: design toggle, mode, fit, blur, wash, "
+      "image chosen, image removed, accent swatch, and the study "
+      "screen's own mode/fit/wash/image-chosen/image-removed (sphere "
+      "colours live on the on-screen dots now — the four colour-"
+      "picker buttons left with the edge-colour option, 2026-08-30)",
+      _mm_src.count("        appearance_changed()") == 13)
 check("save and preview carry the design key as the IDENTICAL "
       "expression — the preview dict replaces config and the gates "
       "default OFF, so a preview missing the key strips the whole "
@@ -979,15 +996,16 @@ check("the study screen's four keys are written from r_spec in "
       and all(
           f'"reviewer_background_{field}": _bg_state["reviewer_spec"]'
           f'["{field}"],' in _preview_slice
-          for field in ("mode", "color", "image", "fit", "color2",
+          for field in ("mode", "color", "image", "fit",
                         "grad_x", "grad_y")))
 check("the gradient keys ride save AND preview for both screens — "
-      "edge colour, centre and size (grad_size wraps in the preview "
-      "dict, so its exact-expression pin is the split form)",
+      "and color2 rides NEITHER: the backdrop stopped being a "
+      "setting (a write would resurrect the option in config)",
       all(f'cfg["background_{f}"]' in _save_slice
           and f'cfg["reviewer_background_{f}"]' in _save_slice
-          for f in ("color2", "grad_x", "grad_y", "grad_size"))
-      and '"background_color2": spec["color2"],' in _preview_slice
+          for f in ("grad_x", "grad_y", "grad_size"))
+      and "color2" not in _save_slice
+      and "color2" not in _preview_slice
       and '"background_grad_size": int(spec["grad_size"]),'
       in _preview_slice
       and '"reviewer_background_grad_size": _bg_state["reviewer_spec"]['

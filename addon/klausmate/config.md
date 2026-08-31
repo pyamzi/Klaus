@@ -155,8 +155,11 @@ wouldn't already need.
   their design either way, and every tool keeps working.
 - **background_mode**: `"theme"` (default — no wallpaper: Anki's own
   ground, with the Klaus panels on it whenever the design is on),
-  `"color"` (a radial colour gradient — there is no flat-colour mode),
-  or `"image"`. Sets the background of Anki's deck and
+  `"color"` (gradient spheres — there is no flat-colour mode), or
+  `"image"`. The Preferences rows below it only appear for the mode
+  that is actually selected (and only while the KlausBook design is
+  on); a chosen image can be removed again from its caption's
+  **Remove** link. Sets the background of Anki's deck and
   overview screens; the panel family itself follows `klausbook_design`
   in every mode — native mode is where Anki looks stock. The top and
   bottom toolbars are independent of this setting — they always show
@@ -166,19 +169,16 @@ wouldn't already need.
   colour behind a transparent or still-loading image). Default
   `"#FFFFFF"` — both screens default to a plain white ground. When a
   gradient is armed (below) this is its CENTRE colour.
-- **background_color2**: the shared EDGE colour every sphere fades
-  into — the backdrop behind the whole stack. Ships white by
-  default; when unset it is derived from the centre colour (~45%
-  toward black). Set it via **Edge Color…** next to the Center Color
-  button. There is no flat mode.
 - **background_gradients**: the gradient SPHERES — a list of up to 4
   `{color, x, y, size}` entries, each painted as its own radial blob
   (its colour at the centre fading to transparent at its edge) over
-  the shared edge colour. Edited entirely ON the deck screen while
-  Preferences is open: drag a sphere's dot to move it, its ring grip
-  to resize, click the dot to recolor, right-click it to remove, and
-  the ＋ pill adds another. When this list is missing it is built
-  from the legacy single-gradient keys below.
+  the plain default-white ground; the backdrop is not configurable.
+  Edited entirely ON the deck screen while Preferences is open: drag
+  a sphere's dot to move it, its ring grip to resize, click the dot
+  to recolor, right-click it to remove, and the ＋ pill adds another.
+  When this list is missing it is built from the legacy
+  single-gradient keys below. (A `background_color2` from the brief
+  era the backdrop was configurable is ignored.)
 - **background_grad_x** / **background_grad_y** /
   **background_grad_size**: legacy single-gradient geometry (mirrors
   of the first sphere; defaults `50`/`42`/`100`) — kept so a
@@ -200,8 +200,7 @@ wouldn't already need.
   instead of glowing. Image mode only.
 - **reviewer_background_mode** / **reviewer_background_color** /
   **reviewer_background_image** / **reviewer_background_fit** /
-  **reviewer_background_wash** / **reviewer_background_color2** /
-  **reviewer_background_gradients** /
+  **reviewer_background_wash** / **reviewer_background_gradients** /
   **reviewer_background_grad_x/_y/_size**: the SAME settings, `"theme"`-mode
   default, but for the study screen — completely independent of
   `background_*` above, so you can show a different picture while

@@ -104,19 +104,18 @@ check("the reviewer gets the same veil from its OWN key — and its "
                       "reviewer_background_image": "s.jpg"},
                      prefix="reviewer_background"), "u.png"))
 
-section("colour mode IS a two-stop radial gradient (flat removed)")
-# Flat colour was removed outright (2026-08-30, Pouya: "remove the
-# flat color feature"): resolve() DERIVES an edge colour whenever the
-# config has none, so a pre-gradient config upgrades to a quiet
-# vignette instead of keeping a mode the UI no longer offers.
-check("a missing edge colour is derived from the centre (~45% toward "
-      "black), never read as flat",
+section("colour mode IS a stack of gradient spheres (flat removed)")
+# Flat colour was removed outright (2026-08-30), and the backdrop is
+# NOT an option (Pouya: "the edge color... shouldn't be an option at
+# all") — every sphere fades over the default white ground, and any
+# color2 stored during the brief era it was configurable is ignored.
+check("the backdrop is ALWAYS the default ground — a stored color2 "
+      "is ignored, never an option",
       bg.resolve({"background_mode": "color"})["color2"]
-      == bg.derive_edge_colour(bg.DEFAULT_COLOR)
-      and colour["color2"] == bg.derive_edge_colour("#123456")
-      and bg.derive_edge_colour("#ffffff") == "#8c8c8c"
-      and bg.derive_edge_colour("#abc") == bg.derive_edge_colour("#aabbcc")
-      and bg.derive_edge_colour("garbage") == bg.DEFAULT_COLOR)
+      == bg.DEFAULT_COLOR
+      and bg.resolve({"background_color2": "#123456"})["color2"]
+      == bg.DEFAULT_COLOR
+      and not hasattr(bg, "derive_edge_colour"))
 check("so colour mode ALWAYS paints a gradient — both builders, no "
       "flat branch left for a resolve()-produced spec",
       "radial-gradient(" in bg.main_css(colour)
@@ -148,7 +147,8 @@ check("MULTIPLE spheres stack first-on-top over ONE backdrop — bad "
       bg.gradient_css_value(_multi)
       == "radial-gradient(at 20% 30%, #ff0000 0%, #ff000000 50%), "
          "radial-gradient(at 80% 60%, #00ff00 0%, #00ff0000 90%)"
-      and "background-color: #0b0b10 !important;" in bg.main_css(_multi)
+      and f"background-color: {bg.DEFAULT_COLOR} !important;"
+      in bg.main_css(_multi)
       and "background-image: radial-gradient" in bg.main_css(_multi))
 check("the sphere list is capped at MAX_SPHERES and a missing list "
       "is built from the legacy single-gradient keys, #rgb colours "
@@ -172,7 +172,7 @@ check("geometry is clamped and defaulted — bad values land on centre "
       and bg.resolve({"background_grad_y": -3})["grad_y"] == 42
       and bg.resolve({"background_grad_size": 5})["grad_size"] == 100
       and bg.resolve({"background_color2": "red"})["color2"]
-      == bg.derive_edge_colour(bg.DEFAULT_COLOR))
+      == bg.DEFAULT_COLOR)
 _rev_grad = bg.reviewer_css(bg.resolve(
     {"reviewer_background_mode": "color",
      "reviewer_background_color2": "#ffffff"},
