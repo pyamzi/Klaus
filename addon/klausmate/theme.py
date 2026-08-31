@@ -818,6 +818,15 @@ def library_qss(night: bool) -> str:
     Library keeps its button inversion of :func:`dialog_qss` — quiet
     default, ``PrimaryButton`` opts into blue.
 
+    K-130 (HIG pass, Pouya screenshot 2026-08-31) refines WITHIN that
+    vernacular: styled ``::up-arrow``/``::down-arrow`` sort glyphs
+    parked in a 16px ``::section`` padding-right reserve (Qt's stock
+    chevron used to paint OVER the caption text — "Note∧"); weight-500
+    headers; hover/pressed/focus affordance on the still-quiet caption
+    buttons; and the selection band tinted with the ACTIVE accent
+    (:func:`accent_rgba` at 0.16, the SettingsNav fill) instead of the
+    grey ``selection_bg``, with full-strength text.
+
     A selected tree ROW is two paint regions, not one: the item AND
     the branch (indentation/disclosure-arrow) cell that every row
     reserves, folder or not — same trap as Browse's sidebar
@@ -877,7 +886,10 @@ def library_qss(night: bool) -> str:
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:selected {{
-        background: {c['selection_bg']};
+        /* The ACTIVE accent at the SettingsNav alpha, not the grey
+           selection_bg (K-130): the band recolours with every colour
+           theme, and full-strength text rides on top. */
+        background: {accent_rgba(night, 0.16)};
         color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch {{
@@ -887,7 +899,7 @@ def library_qss(night: bool) -> str:
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
-        background: {c['selection_bg']};
+        background: {accent_rgba(night, 0.16)};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
         image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
@@ -908,16 +920,56 @@ def library_qss(night: bool) -> str:
         color: {c['text_muted']};
         border: none;
         border-bottom: 1px solid {c['grey_light']};
-        padding: 3px 6px;
+        /* The 16px right padding is a RESERVE for the sort glyph
+           (K-130): the ::up/down-arrow subcontrols below live in the
+           section's padding box, so caption text (the content box)
+           and glyph can never overlap at any column width — a narrow
+           column elides the text instead. */
+        padding: 4px 16px 4px 8px;
         font-size: 11px;
-        font-weight: 600;
+        /* 500, not 600 — column headers are secondary structure
+           (HIG); 600 shouted over 13px body rows. */
+        font-weight: 500;
+    }}
+    /* Sort indicator (K-130). Unstyled, Qt drew its stock chevron
+       INSIDE the caption's text area — the "Note∧" mess (screenshot,
+       2026-08-31). Styling the subcontrols makes the glyph ours: a
+       small muted triangle via the border trick (QSS ``image:``
+       cannot take a data: URI and no up-chevron SVG ships in web/),
+       parked centre-right in the padding reserve above. */
+    QWidget#KlausLibraryWindow QHeaderView::down-arrow {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 0px;
+        height: 0px;
+        margin-right: 4px;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid {c['text_muted']};
+        border-bottom: none;
+    }}
+    QWidget#KlausLibraryWindow QHeaderView::up-arrow {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 0px;
+        height: 0px;
+        margin-right: 4px;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 5px solid {c['text_muted']};
+        border-top: none;
     }}
     QWidget#KlausLibraryWindow QPushButton {{
         background-color: transparent;
         color: {c['text_muted']};
-        border: none;
+        /* Transparent 1px border, not none: :focus recolours it in
+           place, so the ring costs zero layout jitter (dialog_qss's
+           border-none buttons accept a 1px shift on focus; the quiet
+           caption row shouldn't). Radius stays 6px — the K-110
+           small-control step; the spec's 5px is off-scale. */
+        border: 1px solid transparent;
         border-radius: 6px;
-        padding: 3px 10px;
+        padding: 4px 8px;
         font-size: 12px;
         font-weight: 600;
     }}
@@ -926,7 +978,14 @@ def library_qss(night: bool) -> str:
         color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QPushButton:pressed {{
-        background-color: {c['grey_light']};
+        /* One VISIBLE step past the hover fill in each palette: dark
+           grey_mid equals dark hover_subtle (#404040), so dark steps
+           on to grey_dark; light steps hover_subtle -> grey_mid (the
+           panel-header quiet-toolbutton convention). */
+        background-color: {c['grey_dark'] if night else c['grey_mid']};
+    }}
+    QWidget#KlausLibraryWindow QPushButton:focus {{
+        border: 1px solid {c['blue_bright']};
     }}
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton {{
         background-color: {c['blue']};

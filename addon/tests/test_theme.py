@@ -65,6 +65,11 @@ check("library inverts: grey default + PrimaryButton opt-in",
 for night in (False, True):
     lq = theme.library_qss(night)
     c = theme.palette(night)
+    # The selection fill since K-130: the ACTIVE accent at the
+    # SettingsNav alpha. Counting c["selection_bg"] was soft in dark
+    # (it equals hover_subtle there, so hover fills padded the count);
+    # this rgba string is emitted by the selection rules alone.
+    _sel_fill = theme.accent_rgba(night, 0.16)
     check(f"library_qss(night={night}): a selected row's branch "
           "(indentation/disclosure) cell is recoloured in step with "
           "the item — every row reserves that cell whether or not "
@@ -72,7 +77,7 @@ for night in (False, True):
           "Highlight colour (the stray blue block, live screenshot "
           "2026-08-30)",
           "QTreeWidget::branch:selected {" in lq
-          and lq.count(c["selection_bg"]) >= 2)
+          and lq.count(_sel_fill) >= 2)
     check(f"library_qss(night={night}): the tree's own selection "
           "underlay is switched off, so nothing paints beneath the "
           "branch/item recolouring",
@@ -95,7 +100,7 @@ for night in (False, True):
     check(f"library_qss(night={night}): the selection is still painted "
           "(straightening it must not mean losing it)",
           "QTreeWidget::item:selected {" in lq
-          and c["selection_bg"] in lq)
+          and _sel_fill in lq)
 
 section("library VS Code vernacular (K-117)")
 import os as _os  # noqa: E402 — also imported later; harmless rebind
@@ -153,6 +158,80 @@ check("the right-chevron assets actually ship in klausmate/web (a QSS "
       "url() to a missing file is silently blank — twisties vanish)",
       _os.path.exists("klausmate/web/chevron-right-day.svg")
       and _os.path.exists("klausmate/web/chevron-right-night.svg"))
+
+section("library chrome HIG pass (K-130)")
+# Pouya (screenshot 2026-08-31): Qt painted its stock sort chevron OVER
+# the header captions — "Note∧". The cure is two-part and BOTH parts
+# are load-bearing: styled ::up-arrow/::down-arrow subcontrols parked
+# centre-right in the section's PADDING box, and a padding-right
+# reserve on ::section so the caption's content box always ends before
+# the glyph starts (a narrow column elides text, never overlaps).
+for night in (False, True):
+    lq = theme.library_qss(night)
+    c = theme.palette(night)
+    _no_c = re.sub(r"/\*.*?\*/", "", lq, flags=re.S)
+    for _arrow in ("down-arrow", "up-arrow"):
+        _blk = re.search(
+            r"QWidget#KlausLibraryWindow QHeaderView::" + _arrow
+            + r" \{(.*?)\}", _no_c, re.S)
+        check(f"library_qss(night={night}): ::{_arrow} is styled under "
+              "the Library-window scope, positioned centre-right in "
+              "the section's padding box, and draws a muted glyph",
+              _blk is not None
+              and "subcontrol-origin: padding" in _blk.group(1)
+              and "subcontrol-position: center right" in _blk.group(1)
+              and c["text_muted"] in _blk.group(1))
+    _hdr_blk = re.search(r"QHeaderView::section \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): ::section reserves 16px right "
+          "padding for the sort glyph — text and arrow can never "
+          "overlap at any column width",
+          _hdr_blk is not None
+          and "padding: 4px 16px 4px 8px" in _hdr_blk.group(1))
+    check(f"library_qss(night={night}): headers are weight-500 "
+          "secondary structure (HIG), no longer 600",
+          _hdr_blk is not None
+          and "font-weight: 500" in _hdr_blk.group(1)
+          and "font-weight: 600" not in _hdr_blk.group(1))
+    # Selection band (K-130): the ACTIVE accent at the SettingsNav
+    # alpha in BOTH paint regions, same fill, full-strength text.
+    _sel_fill = theme.accent_rgba(night, 0.16)
+    _item_sel = re.search(
+        r"QTreeWidget::item:selected \{(.*?)\}", _no_c, re.S)
+    _br_sel = re.search(
+        r"QTreeWidget::branch:selected \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the selection band is the "
+          "accent at low alpha with FULL-strength text, identical in "
+          "both paint regions (item + branch)",
+          _item_sel is not None and _br_sel is not None
+          and _sel_fill in _item_sel.group(1)
+          and c["text"] in _item_sel.group(1)
+          and _sel_fill in _br_sel.group(1))
+    check(f"library_qss(night={night}): the two-paint-region trio is "
+          "intact — branch recolour + transparent selection underlay "
+          "+ show-decoration-selected (drop any one and palette-blue "
+          "fragments return at the row edge, CLAUDE.md gotcha)",
+          "QTreeWidget::branch:selected {" in lq
+          and "selection-background-color: transparent;" in lq
+          and "show-decoration-selected: 1;" in lq)
+    # Caption buttons: quiet at rest stands (K-117), but with real
+    # affordance — hover fill (pinned above), pressed a VISIBLE step
+    # past hover in this palette (dark grey_mid == dark hover_subtle,
+    # so dark must step to grey_dark), and a focus ring on a
+    # pre-reserved transparent border (zero layout jitter).
+    _press_blk = re.search(r"QPushButton:pressed \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): caption-button pressed fill "
+          "is one visible step past the hover fill in this palette",
+          _press_blk is not None
+          and (c["grey_dark"] if night else c["grey_mid"])
+          in _press_blk.group(1)
+          and c["hover_subtle"] not in _press_blk.group(1))
+    _btn_blk2 = re.search(r"QPushButton \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): caption buttons carry a "
+          "visible focus ring on a pre-reserved transparent border",
+          "QPushButton:focus" in lq
+          and c["blue_bright"] in lq.split("QPushButton:focus", 1)[1][:120]
+          and _btn_blk2 is not None
+          and "border: 1px solid transparent" in _btn_blk2.group(1))
 
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
