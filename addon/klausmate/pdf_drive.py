@@ -322,6 +322,126 @@ class _LibraryItem(QTreeWidgetItem):
             return 0
 
 
+# K-132: the Library's empty state. ONE pair of strings for BOTH empty
+# shapes — a wholly blank first-run Library and one that already holds
+# folders but no PDFs read exactly the same.
+#
+# Judgement (a), deliberate: the pane's content is PDFs. A folder is
+# scaffolding the user just made; it changes neither what to do next nor
+# how to do it, so a second variant ("Nothing in these folders yet…")
+# would be a second string to keep true and to translate for a state
+# whose instruction is identical. The show condition is therefore "no
+# PDFs" — never "no rows" — and the layout answers the folders case
+# instead of the copy does: the block is positioned in the free space
+# BELOW whatever rows exist (see _LibraryTree._reposition_empty), which
+# is exactly the "vast dead area" this card was opened about.
+#
+# The second line names the two routes that actually EXIST today: the
+# tree's own external .pdf drop (K-117 — "here" IS the tree the text is
+# printed on) and the Browse… button on the drop square below. The
+# card's phrasing said "or use the context menu" — there is no import
+# action in either Library context menu (_build_folder_menu / the
+# blank-space menu offer folder actions only), and copy must not teach
+# a route the user cannot take. Length is load-bearing too: the left
+# pane opens at 300px (_restore_geometry), which leaves 224px of text
+# width inside the block, and this hint measures 214px at 11px — one
+# clean line at the default width instead of a wrap that orphaned
+# "Browse… below" onto its own line (offscreen render, 2026-08-31).
+LIBRARY_EMPTY_TEXT = "No PDFs in your library yet"
+LIBRARY_EMPTY_HINT = "Drag PDFs here, or use Browse… below"
+
+
+class _LibraryEmptyState(QWidget):
+    """Quiet guidance block shown over an empty Library tree.
+
+    Judgement (b), deliberate: this is an OVERLAY parented to the
+    tree's viewport, never a replacement for the tree, and
+    ``WA_TransparentForMouseEvents`` is what makes that safe.
+    ``QWidget::childAt()`` — the lookup Qt's drop-target search runs
+    (``QWidgetWindow::findDnDTarget``) — SKIPS children carrying that
+    attribute, so a drag over this block is delivered to the tree's
+    viewport as if the block were not in the hierarchy at all. Dropping
+    a PDF on the empty state therefore runs the unchanged
+    ``_LibraryTree.dropEvent`` → ``_dest_folder_at(point)`` →
+    ``DriveWindow._on_dropped_paths`` path and files the file exactly as
+    a drop on the bare tree would (root over blank space, that folder
+    over a folder row). Swapping the tree out for this widget — a
+    QStackedWidget page, say — would have taken ``_dest_folder_at``,
+    folder targeting and the whole K-117 drop path off screen and
+    needed a second drop handler to drift from the first.
+
+    The block is not inert, though: the TREE owns the affordance and
+    calls :meth:`set_drag_active` from its own drag handlers, so the
+    empty state lights up as a target under a .pdf drag without ever
+    handling an event itself.
+
+    Styling is ``theme.drop_zone_qss(..., idle_border=False)`` — the
+    shared drop-square language, minus the idle dashed box (the pane
+    already carries one of those below the tree, and the K-117
+    vernacular is quiet). No colour literal appears here: if theme
+    can't be imported the widget simply ships unstyled.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("klausmateLibraryEmpty")
+        try:
+            # WA_StyledBackground: a bare QWidget ignores stylesheet
+            # background/border without it (_LibraryDropZone's note).
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+            )
+        except Exception as e:
+            print(f"[klausmate] library empty-state attrs failed: {e}")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(24, 16, 24, 16)
+        lay.setSpacing(4)
+        lay.addStretch(1)
+        # 13px headline over an 11px hint: the Library's own body and
+        # caption sizes (library_qss), both in text_muted — guidance,
+        # not an announcement. No illustration, no button.
+        self.title = QLabel(LIBRARY_EMPTY_TEXT, self)
+        self.hint = QLabel(LIBRARY_EMPTY_HINT, self)
+        for label, size in ((self.title, 13), (self.hint, 11)):
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setWordWrap(True)
+            try:
+                from . import theme as _theme
+
+                label.setStyleSheet(
+                    _theme.muted_label_qss(_theme.night_mode(), size)
+                )
+            except Exception as e:
+                print(f"[klausmate] library empty-state label theme failed: {e}")
+            lay.addWidget(label)
+        lay.addStretch(1)
+
+        try:
+            from . import theme as _theme
+
+            self.setStyleSheet(
+                _theme.drop_zone_qss(
+                    _theme.night_mode(),
+                    "klausmateLibraryEmpty",
+                    idle_border=False,
+                )
+            )
+        except Exception as e:
+            print(f"[klausmate] library empty-state theme failed: {e}")
+
+    def set_drag_active(self, active: bool) -> None:
+        """Paint (or clear) the shared drag-over treatment. Driven by
+        _LibraryTree, which is the widget that actually sees the drag."""
+        try:
+            self.setProperty("dragOver", "true" if active else "false")
+            self.style().unpolish(self)
+            self.style().polish(self)
+        except Exception as e:
+            print(f"[klausmate] library empty-state polish failed: {e}")
+
+
 class _LibraryTree(QTreeWidget):
     """QTreeWidget with drag-and-drop folder moves.
 
@@ -342,6 +462,92 @@ class _LibraryTree(QTreeWidget):
             self.setDropIndicatorShown(True)
         except Exception as e:
             print(f"[klausmate] library tree dnd setup failed: {e}")
+        # K-132's empty state, owned by the tree it covers: no seam to
+        # the window (which tests substitute), and the drag handlers
+        # below can light it up directly.
+        self._empty = None
+        try:
+            self._empty = _LibraryEmptyState(self.viewport())
+            self._empty.hide()
+        except Exception as e:
+            print(f"[klausmate] library empty-state setup failed: {e}")
+
+    # ---------------------------------------------------------- K-132
+
+    def set_empty_state(self, empty: bool) -> None:
+        """Show the guidance block iff the Library holds no PDFs.
+        Called from DriveWindow.rebuild_tree with ``not contexts``."""
+        try:
+            if self._empty is None:
+                return
+            self._empty.setVisible(bool(empty))
+            if empty:
+                self._empty.raise_()
+                self._reposition_empty()
+        except Exception as e:
+            print(f"[klausmate] library empty-state toggle failed: {e}")
+
+    def _rows_bottom(self) -> int:
+        """Bottom edge (viewport y) of the last visible row, 0 for a
+        tree with no rows at all. Walks the last top-level item's
+        expanded last-child chain — O(depth), not O(rows)."""
+        try:
+            count = self.topLevelItemCount()
+            if not count:
+                return 0
+            item = self.topLevelItem(count - 1)
+            while item is not None and item.isExpanded() and item.childCount():
+                item = item.child(item.childCount() - 1)
+            if item is None:
+                return 0
+            return max(0, int(self.visualItemRect(item).bottom()) + 1)
+        except Exception:
+            return 0
+
+    def _reposition_empty(self) -> None:
+        """Park the block in the FREE area under the rows.
+
+        With no rows the free area is the whole viewport and the block
+        centres in it. With folder rows (the "folders but no PDFs"
+        case) it starts below them, so quiet guidance text can never
+        print over a row. The half-viewport clamp is what makes a
+        scroll hook unnecessary: rows that FIT can't be scrolled, and
+        rows that overflow push _rows_bottom past the half line at
+        every scroll position, where the clamp pins the block anyway.
+        """
+        try:
+            if self._empty is None:
+                return
+            vp = self.viewport()
+            w, h = vp.width(), vp.height()
+            top = min(self._rows_bottom(), max(0, h // 2))
+            inset = 8
+            self._empty.setGeometry(
+                inset,
+                top + inset,
+                max(0, w - 2 * inset),
+                max(0, h - top - 2 * inset),
+            )
+        except Exception as e:
+            print(f"[klausmate] library empty-state layout failed: {e}")
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        # Unconditional: a child's isVisible() is False while its window
+        # is still hidden, and DriveWindow builds the tree before show().
+        super().resizeEvent(event)
+        self._reposition_empty()
+
+    def _set_empty_drag(self, active: bool) -> None:
+        # isVisibleTo, not isVisible: a child reports invisible while its
+        # window is merely not shown yet, and this must be true the
+        # instant the block is up, not one show() later.
+        try:
+            if self._empty is not None and self._empty.isVisibleTo(
+                self.viewport()
+            ):
+                self._empty.set_drag_active(active)
+        except Exception as e:
+            print(f"[klausmate] library empty-state drag paint failed: {e}")
 
     @staticmethod
     def _external_pdf_paths(md: Any) -> list[str]:
@@ -384,6 +590,10 @@ class _LibraryTree(QTreeWidget):
             if event.source() is not self and self._external_pdf_paths(
                 event.mimeData()
             ):
+                # K-132: the same test that accepts the drag arms the
+                # empty state's active look — one condition, so the
+                # block can never advertise a drop the tree refuses.
+                self._set_empty_drag(True)
                 event.acceptProposedAction()
                 return
         except Exception as e:
@@ -400,6 +610,12 @@ class _LibraryTree(QTreeWidget):
         except Exception as e:
             print(f"[klausmate] library dragMove failed: {e}")
         super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event) -> None:  # type: ignore[override]
+        # A drag that wanders back out must not leave the block lit
+        # (K-132). Nothing else about leave behaviour changes.
+        self._set_empty_drag(False)
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # type: ignore[override]
         """Resolve what moved where and hand off to DriveWindow; the
@@ -447,6 +663,8 @@ class _LibraryTree(QTreeWidget):
                         if new:
                             self._window._move_folder(folder_path, new)
             finally:
+                # The drag is over however this ended (K-132).
+                self._set_empty_drag(False)
                 try:
                     event.setDropAction(Qt.DropAction.IgnoreAction)
                     event.accept()
@@ -881,11 +1099,16 @@ class DriveWindow(QWidget):
                     self.tree.verticalScrollBar().setValue(scroll)
                 except Exception:
                     pass
-            if not contexts:
-                self.status.setText(
-                    "No PDFs yet — drop a PDF on the zone below, or onto "
-                    "the deck list."
-                )
+            # K-132: the empty state, on the PDF count and nothing else.
+            # `not contexts`, never "no rows": a Library holding folders
+            # but no PDFs is still empty of the thing this pane is for,
+            # and it keeps the block (parked below those folder rows).
+            # This REPLACES the old one-line status message — the status
+            # label is also where _refresh_rows writes its retention
+            # notes, so that message was overwritten seconds later by
+            # every refresh; an empty state that survives its own pane
+            # is the point of the card.
+            self.tree.set_empty_state(not contexts)
         except Exception as e:
             print(f"[klausmate] drive tree rebuild failed: {e}")
 

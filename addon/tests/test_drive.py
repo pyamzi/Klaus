@@ -2,11 +2,14 @@
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_drive.py
 """
+import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
+import tokenize
 import types
 
 ADDON = os.path.join(
@@ -682,6 +685,62 @@ check("retention ink maps low -> red_text and high -> green off the "
       and "drive_store.retention_level(fraction)" in _PD_SRC
       and "drive_store.retention_color" not in _PD_SRC)
 
+print("== K-132: Library empty state — source pins ==")
+_TITLE_M = re.search(r'LIBRARY_EMPTY_TEXT = "(.*)"', _PD_SRC)
+_HINT_M = re.search(r'LIBRARY_EMPTY_HINT = "(.*)"', _PD_SRC)
+check("the copy lives in module constants, not inline strings",
+      "LIBRARY_EMPTY_TEXT" in _PD_CODE and "LIBRARY_EMPTY_HINT" in _PD_CODE
+      and _TITLE_M is not None and _HINT_M is not None)
+_TITLE = _TITLE_M.group(1) if _TITLE_M else ""
+_HINT = _HINT_M.group(1) if _HINT_M else ""
+check("the headline says NO PDFS — the wording that stays true when "
+      "the tree holds folders and no PDFs (judgement (a): one copy "
+      "for both empty shapes)",
+      "PDF" in _TITLE and "empty" not in _TITLE.lower(), repr(_TITLE))
+check("the hint names BOTH routes that exist — the tree drop and the "
+      "drop square's Browse… (never the context menu, which has no "
+      "import action to point at)",
+      "Drag" in _HINT and "Browse…" in _HINT
+      and "context menu" not in _HINT, repr(_HINT))
+# THE show/hide condition. `not contexts` — the PDF list — and never a
+# row count: a Library holding folders but no PDFs is still empty of the
+# thing the pane is for (K-132 judgement (a)), and the offscreen section
+# proves the block survives folder rows.
+check("the condition is the PDF count, evaluated in rebuild_tree",
+      "self.tree.set_empty_state(notcontexts)" in _PD_FLAT)
+check("no second empty-state message left to contradict it — the old "
+      "status line is gone (and it was overwritten by every "
+      "_refresh_rows anyway)",
+      "No PDFs yet" not in _PD_SRC)
+check("the block reuses the shared drop-square language rather than "
+      "inventing one, minus the idle dashed box",
+      "idle_border=False" in _PD_FLAT
+      and "theme.drop_zone_qss" in _PD_SRC.replace("_theme.", "theme."))
+check("drop-through is structural: the block is transparent to the "
+      "hit test Qt's drop-target search runs, so _LibraryTree keeps "
+      "every drag itself",
+      "WA_TransparentForMouseEvents" in _PD_CODE)
+
+print("== K-132: pdf_drive carries no literal hex (tokens only) ==")
+# theme.py is the single source of colour (CLAUDE.md: "UI files must
+# not hardcode colours"), so a colour literal in a UI module is a bug
+# by construction — it cannot follow a colour theme or a night flip.
+#
+# TOKENISED, not line-split. The line-split shape (test_setup_crop_theme's
+# _hex_hits_outside_comments) drops everything after the first "#" on a
+# line to skip comments — but a hex literal in Python ALWAYS lives
+# inside a string, and the "#" that opens it is that same first "#", so
+# the value being hunted is exactly what gets discarded. That helper can
+# never report a hit. Dropping COMMENT tokens instead exempts comments
+# (where these values are documented) while still seeing every string.
+_HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}\b")
+_hex_hits = []
+for _tok in tokenize.generate_tokens(io.StringIO(_PD_SRC).readline):
+    if _tok.type != tokenize.COMMENT and _HEX_RE.search(_tok.string):
+        _hex_hits.append((_tok.start[0], _tok.string.strip()[:60]))
+check("zero literal hex colours in pdf_drive.py code (comments exempt)",
+      not _hex_hits, str(_hex_hits))
+
 print("== K-117: real offscreen Qt — drops, sort, rows, menus, suspend ==")
 # PyQt6 is installed for this interpreter (unlike Anki's bundled one),
 # so the drag/drop and row logic runs on GENUINE widgets offscreen. The
@@ -860,6 +919,99 @@ if _HAVE_QT:
     check("internal folder drag still routes through plan_folder_move",
           _fw.folder_moves == [("Anatomy", "Zoo/Anatomy")],
           repr(_fw.folder_moves))
+
+    print("== K-132: the empty state on a REAL tree ==")
+    # Behaviour, not source: the block is a child of the tree's
+    # viewport, so everything here — visibility, where it parks, and
+    # above all that a drop over it still reaches _dest_folder_at —
+    # runs against genuine Qt geometry and hit-testing.
+    _ew = _K117Win()
+    _etree = pdf_drive._LibraryTree(_ew)
+    _etree.setColumnCount(4)
+    _etree.resize(420, 480)
+    _etree.show()
+    app.processEvents()
+    _blk = _etree._empty
+    check("a fresh tree ships the block built but hidden",
+          _blk is not None and not _blk.isVisibleTo(_etree.viewport()))
+    check("the block renders the two constants verbatim",
+          _blk.title.text() == pdf_drive.LIBRARY_EMPTY_TEXT
+          and _blk.hint.text() == pdf_drive.LIBRARY_EMPTY_HINT,
+          repr((_blk.title.text(), _blk.hint.text())))
+    _etree.set_empty_state(True)
+    app.processEvents()
+    check("set_empty_state(True) shows it",
+          _blk.isVisibleTo(_etree.viewport()))
+    _etree.set_empty_state(False)
+    check("set_empty_state(False) hides it — the moment a PDF row "
+          "exists the pane is a plain tree again",
+          not _blk.isVisibleTo(_etree.viewport()))
+
+    # Judgement (a): folders are not PDFs. The block stays up over a
+    # folder-only tree, and the LAYOUT (not a second string) keeps it
+    # clear of the rows.
+    _etree.set_empty_state(True)
+    _ef = pdf_drive._LibraryItem(_etree, ["Anatomy"])
+    _ef.setData(0, pdf_drive._ROLE_FOLDER, "Anatomy")
+    _etree.set_empty_state(True)
+    app.processEvents()
+    _rows_bottom = _etree.visualItemRect(_ef).bottom()
+    check("with folders but no PDFs the block stays up and parks in "
+          "the free area BELOW the last row (never over it)",
+          _blk.isVisibleTo(_etree.viewport())
+          and _blk.geometry().top() > _rows_bottom,
+          f"block top {_blk.geometry().top()} vs rows bottom "
+          f"{_rows_bottom}")
+
+    # THE drop-through pin (judgement (b)). Two independent proofs:
+    # the Qt hit test that QWidgetWindow::findDnDTarget runs skips the
+    # block outright, and a drop delivered at a point the block covers
+    # still resolves through _dest_folder_at exactly as on a bare tree.
+    check("the block is transparent to mouse/drag hit-testing",
+          _blk.testAttribute(
+              _QtC.Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+    _inside = _blk.geometry().center()
+    check("Qt's own childAt() — the lookup the DnD target search uses "
+          "— cannot see the block, so the viewport keeps the drag",
+          _etree.viewport().childAt(_inside) is None,
+          repr(_etree.viewport().childAt(_inside)))
+    _ew.dropped.clear()
+    _drop_over = _QtG.QDropEvent(_QtC.QPointF(_inside), _COPY, _md_pdf,
+                                 _BTN, _MOD)
+    _etree.dropEvent(_drop_over)
+    check("a .pdf dropped ON the empty state files at the root — the "
+          "same (paths, folder) a drop on blank tree space produces",
+          _ew.dropped == [(["/tmp/Lecture 3.pdf"], None)],
+          repr(_ew.dropped))
+    _ew.dropped.clear()
+    _on_folder = _QtC.QPointF(_etree.visualItemRect(_ef).center())
+    _etree.dropEvent(_QtG.QDropEvent(_on_folder, _COPY, _md_pdf, _BTN, _MOD))
+    check("folder targeting survives the empty state — a drop on the "
+          "folder row still files into that folder",
+          _ew.dropped == [(["/tmp/Lecture 3.pdf"], "Anatomy")],
+          repr(_ew.dropped))
+
+    # The affordance: the TREE lights the block, off the same test that
+    # accepts the drag, so it can never advertise a refused drop.
+    _blk.set_drag_active(False)
+    _e_enter = _QtG.QDragEnterEvent(_QtC.QPoint(30, 30), _COPY, _md_pdf,
+                                    _BTN, _MOD)
+    _etree.dragEnterEvent(_e_enter)
+    check("a .pdf drag over the tree arms the block's drag-over look",
+          _blk.property("dragOver") == "true" and _e_enter.isAccepted())
+    _etree.dragLeaveEvent(_QtG.QDragLeaveEvent())
+    check("dragging back out disarms it", _blk.property("dragOver") == "false")
+    _etree.dragEnterEvent(
+        _QtG.QDragEnterEvent(_QtC.QPoint(30, 30), _COPY, _md_pdf, _BTN, _MOD))
+    _etree.dropEvent(
+        _QtG.QDropEvent(_QtC.QPointF(_inside), _COPY, _md_pdf, _BTN, _MOD))
+    check("the drop itself disarms it too (no lit block left behind)",
+          _blk.property("dragOver") == "false")
+    _e_txt = _QtG.QDragEnterEvent(_QtC.QPoint(30, 30), _COPY, _md_txt,
+                                  _BTN, _MOD)
+    _etree.dragEnterEvent(_e_txt)
+    check("a non-.pdf drag neither is accepted nor lights the block",
+          not _e_txt.isAccepted() and _blk.property("dragOver") == "false")
 
     print("== K-117: numeric sort on the new columns ==")
     _sort_tree = pdf_drive._LibraryTree(_K117Win())

@@ -1035,14 +1035,29 @@ def thumb_strip_qss(night: bool) -> str:
     """
 
 
-def drop_zone_qss(night: bool, object_name: str) -> str:
+def drop_zone_qss(
+    night: bool, object_name: str, idle_border: bool = True
+) -> str:
     """The shared drop-square language (Library drop zone; the deck-screen
     squares in deck_curate render the same values as HTML). Dashed grey
-    idle border that turns solid accent on drag-over."""
+    idle border that turns solid accent on drag-over.
+
+    ``idle_border=False`` keeps the drag-over half and drops the idle
+    dashed box, for a surface that is a drop target but must not
+    ADVERTISE as a box while idle — the Library's empty state (K-132),
+    which is quiet muted guidance text until a .pdf drag arrives, in a
+    pane that already carries one dashed square below the tree (two
+    would read as two targets). The idle border is not removed but made
+    TRANSPARENT: the box model stays identical, so the text cannot
+    shift by a pixel when the accent border appears under the drag.
+    """
     c = palette(night)
+    idle_edge = (
+        f"1px dashed {c['grey_mid']}" if idle_border else "1px solid transparent"
+    )
     return f"""
     #{object_name} {{
-        border: 1px dashed {c['grey_mid']};
+        border: {idle_edge};
         /* Container role (a droppable card, not a button/chip) — 12px
            per the design scale above; this had drifted to a bespoke
            10px. */
