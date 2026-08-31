@@ -139,9 +139,20 @@ origin, matching the native viewer and the bake pipeline exactly
     cursor: text; transform-origin: 0% 0%; margin: 0; padding: 0;
   }
   .textLayer ::selection { background: var(--accent-selection); }
+  /* Fallback ring only — when the CSS Custom Highlight API is missing,
+     the whole owning span is ringed as before K-100. */
   .textLayer span.findCurrent {
     outline: 2px solid var(--accent); outline-offset: 1px;
     background: var(--accent-selection);
+  }
+  /* Exact-substring find paint (K-100): only background/decoration
+     properties apply inside a highlight pseudo, so the "current" cue
+     is bg + a thick accent underline instead of the span ring. */
+  ::highlight(klaus-find) {
+    background-color: var(--accent-selection);
+    text-decoration: underline;
+    text-decoration-color: var(--accent);
+    text-decoration-thickness: 2px;
   }
   /* highlights render UNDER the text layer, above the canvas */
   .hlLayer { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
@@ -159,6 +170,14 @@ origin, matching the native viewer and the bake pipeline exactly
   #marquee {
     position: absolute; display: none; z-index: 6; pointer-events: none;
     background: var(--accent-selection); border: 1px solid var(--accent);
+  }
+  /* Persisted marquee (K-100): the region survives release inside its
+     page div — drag it into a note field, right-click to copy again,
+     click (or click anywhere) to dismiss. z 5: over notes/text, under
+     the live rubber band. */
+  #marqueeKeep {
+    position: absolute; z-index: 5; cursor: grab; box-sizing: border-box;
+    background: var(--accent-selection); border: 1px dashed var(--accent);
   }
   /* ---- custom context menu ---- */
   #ctxmenu {
@@ -250,6 +269,7 @@ const state = {
   pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
   find: { query: "", matches: [], index: -1 },
   marquee: null,         // {page, x0, y0} while alt-dragging
+  persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
   tool: null,            // "hl" | "text" | null — annobar mode
 };
@@ -446,6 +466,7 @@ function teardown() {
   state.pageDivs = [];
   state.annots = [];
   state.pageTexts = null;
+  state.persistMarquee = null;   // its overlay dies with #pages below
   state.find = { query: "", matches: [], index: -1 };
   document.getElementById("pages").textContent = "";
   document.getElementById("thumbs").textContent = "";
@@ -555,6 +576,11 @@ function renderAnnotLayers(num, div) {
   }
   div.appendChild(hlLayer);
   div.appendChild(noteLayer);
+  /* Every overlay pass (render, refresh, zoom relayout) re-lands the
+     persisted marquee at the new scale (K-100). */
+  if (state.persistMarquee && state.persistMarquee.page0 === num - 1) {
+    positionPersistMarquee();
+  }
 }
 
 /* Selection -> {pageIndex0: [[x,y,w,h] page pts]}. A rect belongs to
@@ -642,21 +668,28 @@ async function copyPageImage(page0) {
   } catch (e) { post("log:copy page image failed: " + e.message); }
 }
 
+/* Offscreen render of one page region at fixed quality — shared by the
+   clipboard copy and the persisted marquee's drag-out cache (K-100). */
+async function renderRegionCanvas(page0, xPt, yPt, wPt, hPt) {
+  const page = await state.doc.getPage(page0 + 1);
+  const q = 2.0;
+  const viewport = page.getViewport({ scale: q });
+  const full = document.createElement("canvas");
+  full.width = Math.floor(viewport.width);
+  full.height = Math.floor(viewport.height);
+  await page.render({ canvasContext: full.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.floor(wPt * q));
+  out.height = Math.max(1, Math.floor(hPt * q));
+  out.getContext("2d").drawImage(
+    full, xPt * q, yPt * q, wPt * q, hPt * q,
+    0, 0, out.width, out.height);
+  return out;
+}
+
 async function copyRegionImage(page0, xPt, yPt, wPt, hPt) {
   try {
-    const page = await state.doc.getPage(page0 + 1);
-    const q = 2.0;
-    const viewport = page.getViewport({ scale: q });
-    const full = document.createElement("canvas");
-    full.width = Math.floor(viewport.width);
-    full.height = Math.floor(viewport.height);
-    await page.render({ canvasContext: full.getContext("2d"), viewport, annotationMode: pdfjsLib.AnnotationMode.DISABLE }).promise;
-    const out = document.createElement("canvas");
-    out.width = Math.max(1, Math.floor(wPt * q));
-    out.height = Math.max(1, Math.floor(hPt * q));
-    out.getContext("2d").drawImage(
-      full, xPt * q, yPt * q, wPt * q, hPt * q,
-      0, 0, out.width, out.height);
+    const out = await renderRegionCanvas(page0, xPt, yPt, wPt, hPt);
     post("copy-image:" + out.toDataURL("image/png").split(",", 2)[1]);
   } catch (e) { post("log:copy region failed: " + e.message); }
 }
@@ -712,6 +745,15 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
     }]);
     items.push(["Highlight", addHighlightFromSelection]);
     items.push(null);
+  } else if (state.persistMarquee) {
+    /* Native parity (K-100): while a marquee stands, the menu re-offers
+       its copy — the native menu's marquee_act, same label. The region
+       is frozen into the closure so the menu press clearing state (it
+       cannot: ctxmenu lives outside #scroll) could never blank it. */
+    const pm = state.persistMarquee;
+    items.push(["Copy Selection as Image",
+                () => copyRegionImage(pm.page0, pm.x, pm.y, pm.w, pm.h)]);
+    items.push(null);
   }
   if (rec) {
     if (rec.kind === "text") {
@@ -749,14 +791,108 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   ctxmenu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 4) + "px";
 });
 
-/* ==== marquee (Option/Alt+drag copy-as-image) ====================== */
-const marqueeEl = document.getElementById("marquee");
-document.getElementById("scroll").addEventListener("mousedown", (ev) => {
-  if (!ev.altKey || ev.button !== 0) return;
+/* ==== page image copy: Cmd/Ctrl + double-click (K-100) ============= */
+/* The native viewer's slide-copy gesture, reproduced: Cmd (macOS) /
+   Ctrl (Windows) + double-click copies the page as an image through
+   the SAME copy-image bridge the context menu uses — clipboard, then
+   paste into the note field, so the editor-side path stays shared.
+   Plain double-click stays the browser's word selection. */
+document.getElementById("scroll").addEventListener("dblclick", (ev) => {
+  if (!(ev.metaKey || ev.ctrlKey)) return;
   const hit = pageAndPoint(ev.clientX, ev.clientY);
   if (!hit) return;
   ev.preventDefault();
-  state.marquee = { page0: hit.page0, x0: ev.clientX, y0: ev.clientY };
+  const sel = window.getSelection();
+  if (sel) { try { sel.removeAllRanges(); } catch (e) {} }
+  copyPageImage(hit.page0);
+});
+
+/* ==== marquee (Option/Alt+drag copy-as-image) ====================== */
+const marqueeEl = document.getElementById("marquee");
+
+/* ---- persisted marquee (K-100): the region survives release ------- */
+/* Native semantics mirrored from pdf_viewer.py: the rect is kept after
+   the creation drag (like Preview); a plain left press anywhere else
+   collapses it; press-and-move INSIDE it drags the region image out;
+   a click inside that never becomes a drag clears it on release; the
+   context menu re-offers "Copy Selection as Image" while it stands. */
+function clearPersistMarquee() {
+  state.persistMarquee = null;
+  const el = document.getElementById("marqueeKeep");
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function positionPersistMarquee() {
+  const pm = state.persistMarquee;
+  if (!pm) return;
+  const div = state.pageDivs[pm.page0];
+  if (!div) return;
+  let el = document.getElementById("marqueeKeep");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "marqueeKeep";
+    el.draggable = true;
+    el.title = "Drag into a note field · right-click to copy again";
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      clearPersistMarquee();   /* click that never became a drag */
+    });
+    el.addEventListener("dragstart", (ev) => {
+      const cur = state.persistMarquee;
+      if (!cur || !cur.dataUrl) { ev.preventDefault(); return; }
+      /* Drag-out, webview edition: the page cannot start the native
+         QDrag+QMimeData image drag QPdfView uses, so the region
+         travels as HTML carrying a data: URI image — what Anki's
+         editor webview accepts on drop and inlines through its own
+         paste pipeline. Rendered/cached at persist time because
+         setData must be synchronous. */
+      try {
+        ev.dataTransfer.effectAllowed = "copy";
+        ev.dataTransfer.setData(
+          "text/html", '<img src="' + cur.dataUrl + '">');
+      } catch (e) { post("log:marquee dragstart failed: " + e.message); }
+    });
+  }
+  if (el.parentNode !== div) {
+    if (el.parentNode) el.parentNode.removeChild(el);
+    div.appendChild(el);
+  }
+  const s = state.scale;
+  el.style.left = pm.x * s + "px";
+  el.style.top = pm.y * s + "px";
+  el.style.width = pm.w * s + "px";
+  el.style.height = pm.h * s + "px";
+}
+
+function persistMarquee(page0, x, y, w, h) {
+  clearPersistMarquee();
+  const pm = { page0, x, y, w, h, dataUrl: null };
+  state.persistMarquee = pm;
+  positionPersistMarquee();
+  renderRegionCanvas(page0, x, y, w, h).then((out) => {
+    /* Cache the PNG for the synchronous dragstart. Stale results (a
+       newer marquee, a dismissal) drop on the floor. */
+    if (state.persistMarquee === pm) pm.dataUrl = out.toDataURL("image/png");
+  }).catch((e) => post("log:marquee cache failed: " + e.message));
+}
+
+document.getElementById("scroll").addEventListener("mousedown", (ev) => {
+  if (ev.button !== 0) return;
+  if (ev.altKey) {
+    /* Alt+press starts a NEW marquee — collapse the persisted one
+       first, exactly like the native press handler does. */
+    clearPersistMarquee();
+    const hit = pageAndPoint(ev.clientX, ev.clientY);
+    if (!hit) return;
+    ev.preventDefault();
+    state.marquee = { page0: hit.page0, x0: ev.clientX, y0: ev.clientY };
+    return;
+  }
+  /* ANY plain left press outside the kept region clears it, like
+     Preview collapsing the old selection (native rule). A press ON
+     the region is the drag-out arm and must not. */
+  if (ev.target && ev.target.id === "marqueeKeep") return;
+  clearPersistMarquee();
 });
 document.addEventListener("mousemove", (ev) => {
   if (!state.marquee) return;
@@ -780,7 +916,10 @@ document.addEventListener("mouseup", (ev) => {
   const y0 = (Math.min(m.y0, ev.clientY) - pr.top) / s;
   const w = Math.abs(ev.clientX - m.x0) / s;
   const h = Math.abs(ev.clientY - m.y0) / s;
-  if (w > 4 && h > 4) copyRegionImage(m.page0, x0, y0, w, h);
+  if (w > 4 && h > 4) {
+    copyRegionImage(m.page0, x0, y0, w, h);
+    persistMarquee(m.page0, x0, y0, w, h);  /* kept, like Preview (K-100) */
+  }
 });
 
 /* ==== zoom engine (K-116) ========================================== */
@@ -918,6 +1057,9 @@ async function softRelayout() {
       renderAnnotLayers(num, d);
     }
   }
+  /* The marquee's page may be outside the rendered set — its div was
+     just resized above regardless, so re-land the overlay (K-100). */
+  positionPersistMarquee();
 }
 
 /* Crisp replacement render for one already-rendered page, swapped in
@@ -1150,7 +1292,9 @@ async function runFind() {
         if (items[k].start > at) break;
         itemIdx = k;
       }
-      matches.push({ page0: p, itemIdx });
+      /* start/len (page-string coords) drive the exact-substring paint
+         (K-100); itemIdx stays the scroll anchor + ring fallback. */
+      matches.push({ page0: p, itemIdx, start: at, len: q.length });
       at = hay.indexOf(q, at + Math.max(1, q.length));
     }
   }
@@ -1169,9 +1313,35 @@ function stepFind(dir) {
 }
 
 function clearFindHighlight() {
+  try {
+    if (typeof CSS !== "undefined" && CSS.highlights) {
+      CSS.highlights.delete("klaus-find");
+    }
+  } catch (e) {}
   for (const el of document.querySelectorAll(".findCurrent")) {
     el.classList.remove("findCurrent");
   }
+}
+
+/* The per-span slices covering one match (K-100). A page's find string
+   is the concatenation of its text items (plus "\n" joiners that live
+   in NO item), and items map 1:1 onto the rendered text-layer spans —
+   so a match crossing item boundaries becomes one [a,b) slice per
+   owning span, each in that span's own character coordinates. */
+function matchSegments(m) {
+  const texts = state.pageTexts;
+  if (!texts || !texts[m.page0]) return [];
+  const items = texts[m.page0].items;
+  const end = m.start + m.len;
+  const segs = [];
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    if (it.start >= end) break;
+    const a = Math.max(m.start, it.start);
+    const b = Math.min(end, it.start + it.len);
+    if (b > a) segs.push({ itemIdx: k, a: a - it.start, b: b - it.start });
+  }
+  return segs;
 }
 
 async function jumpToMatch() {
@@ -1193,10 +1363,39 @@ function highlightCurrentMatchIfVisible(scrollTo) {
   if (!m) return;
   const r = state.rendered.get(m.page0 + 1);
   if (!r || !r.spans || !r.spans.length) return;
-  const span = r.spans[Math.min(m.itemIdx, r.spans.length - 1)];
-  if (!span) return;
-  span.classList.add("findCurrent");
-  if (scrollTo) span.scrollIntoView({ block: "center" });
+  const anchor = r.spans[Math.min(m.itemIdx, r.spans.length - 1)];
+  if (!anchor) return;
+  /* Exact-substring paint (K-100) via the CSS Custom Highlight API —
+     Range objects over the text-layer spans' text nodes, so nothing
+     mutates pdf.js's DOM (a <mark> wrap would shift its measured span
+     widths). Guarded: no API, or empty ranges (an old match shape, a
+     span without a text node) fall back to ringing the owning span. */
+  let painted = false;
+  try {
+    if (typeof Highlight !== "undefined"
+        && typeof CSS !== "undefined" && CSS.highlights
+        && m.len && state.pageTexts) {
+      const ranges = [];
+      for (const seg of matchSegments(m)) {
+        const span = r.spans[seg.itemIdx];
+        const node = span && span.firstChild;
+        if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+        const max = node.data.length;
+        const a = Math.min(seg.a, max), b = Math.min(seg.b, max);
+        if (b <= a) continue;
+        const range = document.createRange();
+        range.setStart(node, a);
+        range.setEnd(node, b);
+        ranges.push(range);
+      }
+      if (ranges.length) {
+        CSS.highlights.set("klaus-find", new Highlight(...ranges));
+        painted = true;
+      }
+    }
+  } catch (e) { post("log:find highlight failed: " + e.message); }
+  if (!painted) anchor.classList.add("findCurrent");
+  if (scrollTo) anchor.scrollIntoView({ block: "center" });
 }
 
 /* ==== thumbnails =================================================== */

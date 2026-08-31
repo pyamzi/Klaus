@@ -490,4 +490,151 @@ check("accepting persists through the SAME save + debounced-bake path "
       and "make_text_record" in _OA)
 check("empty text mints nothing", "if not body:" in _OA)
 
+section("K-100: Cmd/Ctrl double-click copies the slide (native gesture)")
+_H100 = _src(os.path.join("web", "pdfjs_viewer.html"))
+check("a dblclick listener gates on meta/ctrl and routes through the "
+      "SAME copyPageImage -> copy-image bridge the menu uses, so the "
+      "editor-side insert path (clipboard, then paste) stays shared",
+      'addEventListener("dblclick"' in _H100
+      and "if (!(ev.metaKey || ev.ctrlKey)) return;" in _H100
+      and _H100.split('addEventListener("dblclick"', 1)[1]
+      .split("});", 1)[0].count("copyPageImage(hit.page0);") == 1)
+
+section("K-100: persisted marquee — kept after release, like Preview")
+check("creation release copies AND persists (native keeps the rect)",
+      "copyRegionImage(m.page0, x0, y0, w, h);" in _H100
+      and "persistMarquee(m.page0, x0, y0, w, h);" in _H100)
+check("the region render is factored out and shared by the clipboard "
+      "copy and the drag-out cache",
+      "async function renderRegionCanvas(" in _H100
+      and _H100.count("renderRegionCanvas(") >= 3)
+check("native press rules: plain left press outside collapses it; a "
+      "press ON it arms drag-out instead; alt-press starting a new "
+      "marquee collapses the old one first",
+      'ev.target.id === "marqueeKeep"' in _H100
+      and _H100.count("clearPersistMarquee();") >= 3
+      and -1 < _H100.find("if (ev.altKey) {")
+      < _H100.find("state.marquee = { page0: hit.page0"))
+check("the overlay re-lands at the current scale on every overlay pass "
+      "and on the zoom settle's soft relayout",
+      "state.persistMarquee.page0 === num - 1" in _H100
+      and "positionPersistMarquee();" in _H100.split(
+          "async function softRelayout", 1)[1].split("\n}\n", 1)[0])
+check("drag-out ships the cached PNG as HTML with a data URI — "
+      "setData is synchronous, the render is not, so the PNG is "
+      "cached at persist time and a cache miss cancels the drag",
+      'addEventListener("dragstart"' in _H100
+      and "el.draggable = true;" in _H100
+      and 'setData(\n          "text/html", \'<img src="\' + cur.dataUrl'
+      in _H100
+      and "if (!cur || !cur.dataUrl) { ev.preventDefault(); return; }"
+      in _H100)
+check("the context menu re-offers the native marquee re-copy while one "
+      "stands (marquee_act's label), region frozen into the closure",
+      "else if (state.persistMarquee) {" in _H100
+      and _H100.count('["Copy Selection as Image"') == 2
+      and "copyRegionImage(pm.page0, pm.x, pm.y, pm.w, pm.h)" in _H100)
+check("document teardown forgets it",
+      "state.persistMarquee = null;   // its overlay dies" in _H100)
+check("the overlay keeps the marquee's var family (no literal colours)",
+      "#marqueeKeep {" in _H100
+      and "var(--accent-selection)" in _H100.split("#marqueeKeep {", 1)[1]
+      .split("}", 1)[0])
+
+section("K-100: exact-substring find highlighting")
+check("matches now carry page-string offsets beside the owning span",
+      "matches.push({ page0: p, itemIdx, start: at, len: q.length });"
+      in _H100)
+check("painted via the CSS Custom Highlight API — Ranges over the text "
+      "nodes, no DOM mutation of pdf.js's measured spans",
+      'CSS.highlights.set("klaus-find", new Highlight(...ranges));'
+      in _H100
+      and 'CSS.highlights.delete("klaus-find");' in _H100
+      and "::highlight(klaus-find)" in _H100)
+check("the owning-span ring survives as the guarded fallback (no API, "
+      "no text node, stale match shape)",
+      'anchor.classList.add("findCurrent");' in _H100
+      and "if (!painted)" in _H100
+      and "span.findCurrent" in _H100)
+check("highlight styling stays in the theme var family",
+      "var(--accent-selection)" in _H100.split("::highlight(klaus-find)", 1)[1]
+      .split("}", 1)[0])
+
+section("K-100: matchSegments math (real JS under node)")
+# The offset arithmetic is the risky part — per-item slices of a match
+# that can cross item boundaries and step over the "\n" EOL joiners
+# that belong to NO item. No browser needed: the function is pure, so
+# it runs under node against a stubbed state. Honest SKIP without node
+# (dashboard_js_dom_test's precedent).
+import json as _json100
+import re as _re100
+import shutil as _shutil100
+import subprocess as _sub100
+import tempfile as _tmp100
+
+_node = _shutil100.which("node")
+_seg_src = _re100.search(
+    r"function matchSegments\(m\) \{[\s\S]*?\n\}", _H100)
+check("matchSegments extracted from the page source", _seg_src is not None)
+if _node is None:
+    print("  SKIP node not installed — matchSegments math + JS syntax "
+          "unverified on this machine")
+elif _seg_src is not None:
+    _harness = (
+        '"use strict";\n'
+        "const state = { pageTexts: [\n"
+        '  { str: "Hello\\nworld",'
+        " items: [ {start:0,len:5}, {start:6,len:5} ] },\n"
+        '  { str: "abcdefg",'
+        " items: [ {start:0,len:3}, {start:3,len:0}, {start:3,len:4} ] },\n"
+        "] };\n"
+        + _seg_src.group(0) + "\n"
+        "console.log(JSON.stringify([\n"
+        "  matchSegments({page0:0, itemIdx:0, start:3, len:5}),\n"
+        "  matchSegments({page0:0, itemIdx:1, start:6, len:5}),\n"
+        "  matchSegments({page0:1, itemIdx:0, start:2, len:3}),\n"
+        "  matchSegments({page0:9, itemIdx:0, start:0, len:1}),\n"
+        "]));\n"
+    )
+    with _tmp100.NamedTemporaryFile(
+        "w", suffix=".js", delete=False, encoding="utf-8"
+    ) as _f:
+        _f.write(_harness)
+        _hpath = _f.name
+    try:
+        _out = _sub100.run(
+            [_node, _hpath], capture_output=True, text=True, timeout=30
+        )
+        _got = _json100.loads(_out.stdout.strip() or "null")
+    except Exception as _e:
+        _got = f"node run failed: {_e}"
+    check("a match crossing the EOL joiner slices per owning span and "
+          "skips the joiner ('lo\\nwo' over Hello\\nworld)",
+          isinstance(_got, list)
+          and _got[0] == [{"itemIdx": 0, "a": 3, "b": 5},
+                          {"itemIdx": 1, "a": 0, "b": 2}], repr(_got))
+    check("an interior match maps to one span slice ('world')",
+          isinstance(_got, list)
+          and _got[1] == [{"itemIdx": 1, "a": 0, "b": 5}], repr(_got))
+    check("zero-length items are stepped over, never sliced",
+          isinstance(_got, list)
+          and _got[2] == [{"itemIdx": 0, "a": 2, "b": 3},
+                          {"itemIdx": 2, "a": 0, "b": 2}], repr(_got))
+    check("a match on a page with no text data yields no slices",
+          isinstance(_got, list) and _got[3] == [], repr(_got))
+    # And the whole inline script still parses — a net under every
+    # future JS edit, since no browser harness exists for this page.
+    _inline = _re100.findall(r"<script>([\s\S]*?)</script>", _H100)
+    with _tmp100.NamedTemporaryFile(
+        "w", suffix=".js", delete=False, encoding="utf-8"
+    ) as _f2:
+        _f2.write(max(_inline, key=len))
+        _spath = _f2.name
+    _chk = _sub100.run(
+        [_node, "--check", _spath], capture_output=True, text=True,
+        timeout=30,
+    )
+    check("the page's inline script parses clean under node --check",
+          _chk.returncode == 0, _chk.stderr[:300])
+
 raise SystemExit(report())
