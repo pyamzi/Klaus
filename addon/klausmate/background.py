@@ -31,7 +31,11 @@ from typing import Any
 MODES = ("theme", "color", "image")
 FITS = ("cover", "contain", "tile")
 
-DEFAULT_COLOR = "#1E2225"
+# White on purpose (2026-08-30, Pouya: "I just want those to be white
+# for the default") — the deck and study backgrounds both default to a
+# plain white ground; the old near-black #1E2225 made a fresh
+# colour-mode switch open on a dark blob.
+DEFAULT_COLOR = "#FFFFFF"
 DEFAULT_BLUR = 22          # px of Gaussian blur behind the deck panels
 
 # Where chosen images are copied. Inside the addon folder so Anki's

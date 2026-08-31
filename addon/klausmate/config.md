@@ -164,8 +164,8 @@ wouldn't already need.
   none) is chosen here.
 - **background_color**: `#rrggbb` fill for `"color"` mode (also the
   colour behind a transparent or still-loading image). Default
-  `"#1E2225"`. When a gradient is armed (below) this is its CENTRE
-  colour.
+  `"#FFFFFF"` — both screens default to a plain white ground. When a
+  gradient is armed (below) this is its CENTRE colour.
 - **background_color2**: the gradient's EDGE colour. When empty (the
   default) it is derived automatically from the centre colour (~45%
   toward black — a quiet vignette), so colour mode is always a
