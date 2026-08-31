@@ -291,9 +291,11 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   heatmap's rule — so bad config can't surprise-restyle the app.
   `resolve(cfg)` validates the `background_*` keys into a spec —
   mode/color/image/fit/blur plus (2026-08-30) `wash` and the gradient
-  quartet `color2`/`grad_x`/`grad_y`/`grad_size` (colour mode is
-  gradient-capable: color = CENTRE, color2 = EDGE, empty color2 =
-  flat and byte-identical to the old solid colour). `main_css` paints
+  quartet `color2`/`grad_x`/`grad_y`/`grad_size` (colour mode IS a
+  gradient — flat colour removed 2026-08-30: color = CENTRE, color2 =
+  EDGE, and an empty color2 is DERIVED from the centre via
+  `derive_edge_colour`, ~45% toward black, so pre-gradient configs
+  upgrade to a quiet vignette). `main_css` paints
   Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
@@ -450,7 +452,10 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
     also first-run setup; Tools menu label "KlausMate Preferences…", and
-    the top bar's star opens it too). **NON-MODAL since 2026-08-30**
+    the top bar's star opens it too; Appearance also carries Anki's
+    own Follow-System/Light/Dark switch, applied on Save through
+    `mw.set_theme` — the one row writing an Anki preference).
+    **NON-MODAL since 2026-08-30**
     (`dlg.show()`, NEVER exec() — the 2026-08-26 segfault was
     app-modal exec's nested loop): a live control panel used beside
     the main window while appearance edits preview on it. `_OPEN_DLG`
@@ -481,8 +486,8 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
     `top_bar.refresh()`; the sheet swap wipes the swatches' inline QSS
     so `sync_accent_swatches()` + a logo repaint follow). The
     background groups (deck + study, one each): mode combo, centre
-    Color…, Edge Color… (gradient — the caption names both colours and
-    carries Make Flat), Choose Image… with a rounded 2× thumbnail
+    Color…, Edge Color… (the caption names both colours; there is no
+    flat mode), Choose Image… with a rounded 2× thumbnail
     caption (`_image_thumb`, rendered from the STORED copy), Fit,
     Panel Frost (deck only) and Image Wash sliders. Gradient geometry
     has NO sliders — centre/size are dragged ON the screen itself
