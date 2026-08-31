@@ -964,3 +964,27 @@ HARNESS EVIDENCE (10 widths x 5 UI scales = 50 configs): zero wrap/clearance/ove
 
 #### Comments
 - [2026-08-31 orchestrator] Shipped in a9ae0ee. Harness ran the shipped _BUTTON_JS string itself over 10 widths x 5 UI scales against Anki 26.8.1's verbatim _bottomHTML + reviewer-bottom.css + AnkiHub's real injection: zero wrap/clearance/overflow regressions, click still posts klausmate:lecture, label/tooltip intact. Pouya's metrics (910px): off-centre -65 -> 0, clearance -9px (overlapping) -> +56px = stock Anki spacing. Extreme UI scales (>=96px buttons at 901px) correctly no-op instead of wrapping the ease row. Full suite green: 21 files, 1941 checks. Needs one live look after restart.
+
+### K-121: Heatmap polish: month gaps, no heading, centred stats, SMTWTF rail, corner settings menu
+owner: orchestrator
+priority: P2
+tags: ui,heatmap
+files: klausmate/heatmap.py,klausmate/dashboard.py,klausmate/manage_models.py,klausmate/config.json,klausmate/config.md,tests/test_heatmap.py,tests/test_dashboard.py,tests/test_dialog_logic.py
+verify: python3 tests/test_heatmap.py && python3 tests/test_dashboard.py && python3 tests/test_dialog_logic.py && python3 tests/test_imports.py
+created: 2026-08-31
+claimed: 2026-08-31
+
+Pouya, 2026-08-31: 'separate the months a bit more', 'remove the review activity text', 'center the statistics', 'on the left side make it SMTWTF', 'some heatmap settings accessible in the actual widget corner'.
+
+Months: cells and the month strip become FLEX rows of per-week boxes (were one auto-column grid), so a month's first column can carry .ms and open MONTH_GAP px. One rule '.klaus-hm-col.ms, .klaus-hm-m.ms' moves the gap and the label naming it together, both off the same starts list derived from month_labels — a gap the label did not follow would be worse than no gap.
+
+Heading gone; the stats row is the whole top line and centres. The gear is ABSOLUTE in the panel corner so it never enters that row's flow, and the row is padded equally on both sides to clear it.
+
+Left rail names every row as initials, _WEEKDAY_INITIALS derived from _WEEKDAYS so rail and tooltips can never name different days.
+
+Corner menu: a bare <details> (no script of ours in Anki's deck-browser document; the redraw after a choice closes it) with Range 3/6/12 months and Upcoming show/hide — the reference addon's own limhist/limfcst vocabulary. New keys heatmap_history_days + heatmap_forecast, validated in Python against RANGE_CHOICES (the page is never trusted with a config value), written through the newly-public dashboard.write_cfg so the patch-the-armed-preview rule keeps ONE implementation, and carried in _bg_preview_cfg from stored config live per tick like heatmap_enabled. Menu surface is --klaus-hm-menu from Klaus's own palette, not Anki's --canvas-overlay: a popover that lands white at night is a flashbang.
+
+Deliberately NOT added: a week-start option (the reference has none) and a colour picker (cells derive from the live accent theme, by design). heatmap_enabled stays the Edit Widgets ⊖/＋'s alone.
+
+#### Comments
+- [2026-08-31 orchestrator] Shipped in ec638ce. Rendered against the real collection (319 study days, 35,273 ease>0 reviews) in both palettes at all three ranges: month gaps read clearly, rail is S M T W T F S, stats centre, gear opens a dark-on-dark / light-on-light menu with the live values marked. Suite green: 21 files, 1964 checks. Needs one live look after restart.
