@@ -24,7 +24,6 @@ from aqt.operations import QueryOp
 from aqt.qt import (
     QAction,
     QCursor,
-    QDialog,
     QDockWidget,
     QDragEnterEvent,
     QDropEvent,
@@ -481,89 +480,107 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
             return
         if getattr(editor, "_klausmate_crop_open", False):
             return
-        editor._klausmate_crop_open = True  # type: ignore[attr-defined]
-        try:
-            # fname crosses the JS trust boundary — allow bare filenames
-            # only (the media folder is flat, so that is always correct).
-            if (
-                not fname
-                or "/" in fname
-                or "\\" in fname
-                or ".." in fname
-            ):
-                tooltip("Klaus: invalid image filename", parent=editor.widget)
-                return
-            path = os.path.join(editor.mw.col.media.dir(), fname)
-            if not os.path.isfile(path):
-                tooltip(
-                    f"Klaus: image not found: {fname}", parent=editor.widget
-                )
-                return
-            image = QImage(path)
-            if image.isNull():
-                tooltip(
-                    "Klaus: could not load image (unsupported format)",
-                    parent=editor.widget,
-                )
-                return
-            from .crop_dialog import ImageCropDialog, encode_cropped
-
-            dlg = ImageCropDialog(image, fname, parent=editor.parentWindow)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            cropped = dlg.cropped_image()
-            if cropped is None or cropped.isNull():
-                return
-            stem, _, ext = fname.rpartition(".")
-            if not stem:
-                stem, ext = fname, ""
-            data, out_ext = encode_cropped(cropped, ext)
-            new_fname = editor.mw.col.media.write_data(
-                f"{stem}_crop.{out_ext}", data
+        # fname crosses the JS trust boundary — allow bare filenames
+        # only (the media folder is flat, so that is always correct).
+        if (
+            not fname
+            or "/" in fname
+            or "\\" in fname
+            or ".." in fname
+        ):
+            tooltip("Klaus: invalid image filename", parent=editor.widget)
+            return
+        path = os.path.join(editor.mw.col.media.dir(), fname)
+        if not os.path.isfile(path):
+            tooltip(
+                f"Klaus: image not found: {fname}", parent=editor.widget
             )
+            return
+        image = QImage(path)
+        if image.isNull():
+            tooltip(
+                "Klaus: could not load image (unsupported format)",
+                parent=editor.widget,
+            )
+            return
+        from .crop_dialog import ImageCropDialog, encode_cropped
 
-            def apply_to_note() -> None:
-                try:
-                    note = editor.note
-                    if note is None:
-                        return  # editor closed while the dialog was up
-                    any_change = False
-                    for i, field_html in enumerate(note.fields):
-                        new_html, field_changed = _replace_img_src(
-                            field_html, fname, new_fname
-                        )
-                        if field_changed:
-                            note.fields[i] = new_html
-                            any_change = True
-                    if not any_change:
+        dlg = ImageCropDialog(image, fname, parent=editor.parentWindow)
+
+        def on_accepted() -> None:
+            try:
+                cropped = dlg.cropped_image()
+                if cropped is None or cropped.isNull():
+                    return
+                stem, _, ext = fname.rpartition(".")
+                if not stem:
+                    stem, ext = fname, ""
+                data, out_ext = encode_cropped(cropped, ext)
+                new_fname = editor.mw.col.media.write_data(
+                    f"{stem}_crop.{out_ext}", data
+                )
+
+                def apply_to_note() -> None:
+                    try:
+                        note = editor.note
+                        if note is None:
+                            return  # editor closed while the dialog was up
+                        any_change = False
+                        for i, field_html in enumerate(note.fields):
+                            new_html, field_changed = _replace_img_src(
+                                field_html, fname, new_fname
+                            )
+                            if field_changed:
+                                note.fields[i] = new_html
+                                any_change = True
+                        if not any_change:
+                            tooltip(
+                                f"Klaus: saved {new_fname}, but the note's "
+                                "HTML doesn't reference the original image",
+                                parent=editor.widget,
+                            )
+                            return
+                        if not editor.addMode:
+                            # Persist; initiator=editor so no auto-reload.
+                            editor._save_current_note()
+                        editor.loadNoteKeepingFocus()
                         tooltip(
-                            f"Klaus: saved {new_fname}, but the note's HTML "
-                            "doesn't reference the original image",
+                            f"Klaus: cropped image saved as {new_fname}",
                             parent=editor.widget,
                         )
-                        return
-                    if not editor.addMode:
-                        # Persist; initiator=editor so no auto-reload.
-                        editor._save_current_note()
-                    editor.loadNoteKeepingFocus()
-                    tooltip(
-                        f"Klaus: cropped image saved as {new_fname}",
-                        parent=editor.widget,
-                    )
-                except Exception as e:
-                    print(
-                        "[klausmate] crop apply failed: "
-                        f"{type(e).__name__}: {e}"
-                    )
-                    traceback.print_exc()
+                    except Exception as e:
+                        print(
+                            "[klausmate] crop apply failed: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        traceback.print_exc()
 
-            # Flush pending in-webview edits into note.fields FIRST
-            # (call_after_note_saved evals JS saveNow(); key:/blur: bridge
-            # cmds land in note.fields via onBridgeCmd before the callback
-            # fires), THEN mutate the fields.
-            editor.call_after_note_saved(apply_to_note, keepFocus=True)
-        finally:
+                # Flush pending in-webview edits into note.fields FIRST
+                # (call_after_note_saved evals JS saveNow(); key:/blur:
+                # bridge cmds land in note.fields via onBridgeCmd before
+                # the callback fires), THEN mutate the fields.
+                editor.call_after_note_saved(apply_to_note, keepFocus=True)
+            except Exception as e:
+                print(f"[klausmate] crop failed: {type(e).__name__}: {e}")
+                traceback.print_exc()
+
+        def on_finished(_r: int) -> None:
+            # The open-guard spans the DIALOG'S lifetime now, not this
+            # call's — reset here, where exec()'s finally used to.
             editor._klausmate_crop_open = False  # type: ignore[attr-defined]
+            dlg.deleteLater()
+
+        # K-114: window-modal open() + signal callbacks, never app-modal
+        # exec() (the macOS 26 + Qt 6.11 segfault class; see
+        # test_bridge_reentrancy). finished fires before accepted, but
+        # deleteLater only lands once control returns to the event loop,
+        # so on_accepted still sees a live dialog. The guard is set AFTER
+        # open() succeeds: nothing can re-enter in between on one thread,
+        # and a failed open() then can't strand the flag True.
+        dlg.accepted.connect(on_accepted)
+        dlg.finished.connect(on_finished)
+        dlg.open()
+        editor._klausmate_crop_open = True  # type: ignore[attr-defined]
     except Exception as e:
         print(f"[klausmate] crop failed: {type(e).__name__}: {e}")
         traceback.print_exc()

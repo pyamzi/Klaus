@@ -1637,9 +1637,13 @@ class DriveWindow(QWidget):
     def _curate(self, safe: str) -> None:
         if mw is None or mw.col is None:
             return
-        accepted, deck = deck_curate.choose_deck_scope(self)
-        if accepted:
-            deck_curate.run_curation_flow(safe, deck, parent=mw)
+        # K-114: the scope arrives via choose_deck_scope's accepted
+        # callback (window-modal open, never app-modal exec) — cancel
+        # simply never runs the flow.
+        deck_curate.choose_deck_scope(
+            self,
+            lambda deck: deck_curate.run_curation_flow(safe, deck, parent=mw),
+        )
 
     # --------------------------------------------------------- lifecycle
 

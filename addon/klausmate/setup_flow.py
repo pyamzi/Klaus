@@ -170,24 +170,36 @@ def first_run_check() -> None:
             "Later", QMessageBox.ButtonRole.AcceptRole
         ).setObjectName("SecondaryButton")
         msg.setDefaultButton(manage_btn)
-    msg.exec()
-    clicked = msg.clickedButton()
-    if setup_btn is not None and clicked is setup_btn:
-        try:
-            manage_models_dialog(setup=True)
-        except Exception as exc:
-            print(f"[klausmate] setup dialog failed: {exc}")
-    elif clicked is manage_btn:
-        try:
-            manage_models_dialog()
-        except Exception:
-            pass
-    # Re-read before writing: the modal setup dialog above may have written
-    # config (endpoint rewrite, model assignments) — writing the snapshot
-    # captured before the dialog would silently revert all of it.
-    cfg = _pkg().get_config()
-    cfg["_first_run_done"] = True
-    _pkg().write_config(cfg)
+    def _on_welcome_finished(_r: int) -> None:
+        clicked = msg.clickedButton()
+        if setup_btn is not None and clicked is setup_btn:
+            try:
+                manage_models_dialog(setup=True)
+            except Exception as exc:
+                print(f"[klausmate] setup dialog failed: {exc}")
+        elif clicked is manage_btn:
+            try:
+                manage_models_dialog()
+            except Exception:
+                pass
+        # Re-read before writing: the setup dialog opened above (or
+        # anything else that ran while the welcome dialog was up) may
+        # have written config — writing the snapshot captured before
+        # the dialog would silently revert all of it.
+        cfg2 = _pkg().get_config()
+        cfg2["_first_run_done"] = True
+        _pkg().write_config(cfg2)
+        msg.deleteLater()
+
+    # K-114: window-modal open() + finished callback, never app-modal
+    # exec() (the macOS 26 + Qt 6.11 segfault class pinned in
+    # test_bridge_reentrancy). clickedButton() is still valid inside a
+    # finished handler, and Esc/close land there too — the exact paths
+    # exec()'s fall-through used to cover. The closure keeps ``msg``
+    # referenced so the shown dialog can't be garbage-collected out
+    # from under the user.
+    msg.finished.connect(_on_welcome_finished)
+    msg.open()
 
 
 def _library_root_check() -> None:
@@ -386,9 +398,15 @@ def _readiness_check_body() -> None:
             msg.addButton(
                 "Later", QMessageBox.ButtonRole.AcceptRole
             ).setObjectName("SecondaryButton")
-            msg.exec()
-            if msg.clickedButton() is open_btn:
-                openLink(OLLAMA_DOWNLOAD_URL)
+
+            def _on_no_ollama_finished(_r: int) -> None:
+                if msg.clickedButton() is open_btn:
+                    openLink(OLLAMA_DOWNLOAD_URL)
+                msg.deleteLater()
+
+            # K-114: open() + finished, never exec (see first_run_check).
+            msg.finished.connect(_on_no_ollama_finished)
+            msg.open()
             return
         if cfg.get("_runtime_setup_declined"):
             print("[klausmate] Ollama unreachable; auto-setup previously declined")
@@ -419,22 +437,30 @@ def _readiness_check_body() -> None:
             "Later", QMessageBox.ButtonRole.AcceptRole
         ).setObjectName("SecondaryButton")
         msg.setDefaultButton(setup_btn)
-        msg.exec()
-        clicked = msg.clickedButton()
-        if clicked is setup_btn:
-            try:
-                manage_models_dialog(setup=True)
-            except Exception as exc:
-                print(f"[klausmate] setup dialog failed: {exc}")
-        elif clicked is manual_btn:
-            openLink(OLLAMA_DOWNLOAD_URL)
-        else:
-            # Respect the decision — don't re-prompt on every profile
-            # open. Re-read config first: a modal above us may have
-            # written it while this snapshot was held.
-            cfg = _pkg().get_config()
-            cfg["_runtime_setup_declined"] = True
-            _pkg().write_config(cfg)
+
+        def _on_offer_finished(_r: int) -> None:
+            clicked = msg.clickedButton()
+            if clicked is setup_btn:
+                try:
+                    manage_models_dialog(setup=True)
+                except Exception as exc:
+                    print(f"[klausmate] setup dialog failed: {exc}")
+            elif clicked is manual_btn:
+                openLink(OLLAMA_DOWNLOAD_URL)
+            else:
+                # Respect the decision — don't re-prompt on every profile
+                # open. Re-read config first: something else may have
+                # written it while this dialog was up.
+                cfg2 = _pkg().get_config()
+                cfg2["_runtime_setup_declined"] = True
+                _pkg().write_config(cfg2)
+            msg.deleteLater()
+
+        # K-114: open() + finished, never exec (see first_run_check) —
+        # Esc/close still land in the else branch, exactly as exec()'s
+        # fall-through did.
+        msg.finished.connect(_on_offer_finished)
+        msg.open()
         return
 
     # ---- 2. Embedding model installed? -----------------------------------
@@ -466,12 +492,18 @@ def _readiness_check_body() -> None:
     msg.addButton(
         "Later", QMessageBox.ButtonRole.AcceptRole
     ).setObjectName("SecondaryButton")
-    msg.exec()
-    if msg.clickedButton() is manage_btn:
-        try:
-            manage_models_dialog()
-        except Exception as exc:
-            print(f"[klausmate] manage_models_dialog failed: {exc}")
+
+    def _on_model_needed_finished(_r: int) -> None:
+        if msg.clickedButton() is manage_btn:
+            try:
+                manage_models_dialog()
+            except Exception as exc:
+                print(f"[klausmate] manage_models_dialog failed: {exc}")
+        msg.deleteLater()
+
+    # K-114: open() + finished, never exec (see first_run_check).
+    msg.finished.connect(_on_model_needed_finished)
+    msg.open()
 
 
 def _cloud_readiness_check(cfg: dict, provider: str) -> None:
@@ -504,14 +536,22 @@ def _cloud_readiness_check(cfg: dict, provider: str) -> None:
     msg.addButton(
         "Later", QMessageBox.ButtonRole.AcceptRole
     ).setObjectName("SecondaryButton")
-    msg.exec()
-    if msg.clickedButton() is manage_btn:
-        try:
-            manage_models_dialog()
-        except Exception as exc:
-            print(f"[klausmate] manage_models_dialog failed: {exc}")
-    else:
-        # Respect the decision — don't re-prompt on every profile open.
-        cfg = _pkg().get_config()
-        cfg["_embed_key_setup_declined"] = True
-        _pkg().write_config(cfg)
+
+    def _on_key_needed_finished(_r: int) -> None:
+        if msg.clickedButton() is manage_btn:
+            try:
+                manage_models_dialog()
+            except Exception as exc:
+                print(f"[klausmate] manage_models_dialog failed: {exc}")
+        else:
+            # Respect the decision — don't re-prompt on every profile
+            # open.
+            cfg2 = _pkg().get_config()
+            cfg2["_embed_key_setup_declined"] = True
+            _pkg().write_config(cfg2)
+        msg.deleteLater()
+
+    # K-114: open() + finished, never exec (see first_run_check) —
+    # Esc/close still count as declining, as exec()'s fall-through did.
+    msg.finished.connect(_on_key_needed_finished)
+    msg.open()

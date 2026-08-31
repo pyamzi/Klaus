@@ -130,8 +130,15 @@ def _import_and_arm(paths: list[str], skipped: int = 0) -> None:
 # ------------------------------------------------------------ deck scope
 
 
-def choose_deck_scope(parent) -> tuple[bool, str | None]:
-    """Ask which deck to curate against. Returns (accepted, deck_name)."""
+def choose_deck_scope(parent, on_done) -> None:
+    """Ask which deck to curate against, window-modal (K-114).
+
+    ``on_done(deck_name)`` fires only when the user accepts (``None``
+    deck = All Decks); cancelling simply never calls it —
+    pdf_drive._on_threshold's accepted-callback pattern. Window-modal
+    open(), never app-modal exec(): that path segfaulted seven times
+    on Qt 6.11 + macOS 26 (test_bridge_reentrancy pins the why).
+    """
     dlg = QDialog(parent)
     dlg.setWindowTitle("Curate Deck")
     try:
@@ -157,9 +164,12 @@ def choose_deck_scope(parent) -> tuple[bool, str | None]:
     buttons.accepted.connect(dlg.accept)
     buttons.rejected.connect(dlg.reject)
     layout.addWidget(buttons)
-    if dlg.exec() != QDialog.DialogCode.Accepted:
-        return False, None
-    return True, combo.currentData()
+    # finished fires before accepted, but deleteLater only lands once
+    # control returns to the event loop — the accepted lambda still
+    # reads a live combo.
+    dlg.accepted.connect(lambda: on_done(combo.currentData()))
+    dlg.finished.connect(lambda _r: dlg.deleteLater())
+    dlg.open()
 
 
 # ------------------------------------------------------------- curation
@@ -264,9 +274,7 @@ def _curate_with(safe: str) -> None:
         if deck:
             run_curation_flow(safe, deck)
             return
-    accepted, deck = choose_deck_scope(mw)
-    if accepted:
-        run_curation_flow(safe, deck)
+    choose_deck_scope(mw, lambda deck: run_curation_flow(safe, deck))
 
 
 def _on_curate_clicked() -> None:
@@ -274,10 +282,11 @@ def _on_curate_clicked() -> None:
         return
     # Deferred for the same reason _on_browse_clicked above is: this runs
     # from the deck surfaces' JS-message/link handlers (a QWebChannel
-    # dispatch), and BOTH branches enter a nested event loop —
-    # _curate_with reaches choose_deck_scope's dlg.exec(), _pick_pdf_menu
-    # ends in menu.exec(). The armed PDF is frozen into the callback
-    # rather than re-read a tick later.
+    # dispatch). _pick_pdf_menu still ends in menu.exec()'s nested loop;
+    # choose_deck_scope is window-modal open() since K-114, but raising
+    # any dialog from inside the webchannel call stack stays deferred as
+    # hygiene. The armed PDF is frozen into the callback rather than
+    # re-read a tick later.
     if _armed_pdf:
         QTimer.singleShot(0, lambda safe=_armed_pdf: _curate_with(safe))
     else:

@@ -290,6 +290,8 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         self._scroll_pos = 0
         self.on_count: Optional[Callable[[int], None]] = None
         self._text_dialog: Any = None  # live Add Text prompt (singleton)
+        self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
+        self._goto_dlg: Any = None  # live Go to Page prompt (singleton)
 
         # Debounced bake, same shape as the native viewer's: pending
         # jobs are a SET so annotating PDF A then PDF B inside one
@@ -598,25 +600,76 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         QTimer.singleShot(0, lambda: self._do_note_edit(hl_id))
 
     def _do_note_edit(self, hl_id: str) -> None:
+        """Window-modal note prompt for an existing highlight (K-114).
+
+        A QInputDialog INSTANCE wired to signal callbacks and shown with
+        open() — _open_text_dialog's pattern above; the
+        getMultiLineText/getText statics this replaces ran an app-modal
+        nested loop under the hood, the exact crash class K-114 bans
+        (test_bridge_reentrancy pins the why). The guarded multiline
+        option degrades to a single-line box exactly like the old
+        hasattr fallback did.
+        """
         record = next(
             (h for h in self._highlights if h.get("id") == hl_id), None
         )
         if record is None or QInputDialog is None:
             return
+        if self._note_dialog is not None:
+            # One note prompt at a time: front the open one instead of
+            # stacking a second.
+            try:
+                self._note_dialog.raise_()
+                self._note_dialog.activateWindow()
+            except Exception:
+                pass
+            return
         existing = str(record.get("note") or "")
         try:
-            if hasattr(QInputDialog, "getMultiLineText"):
-                text, ok = QInputDialog.getMultiLineText(
-                    self, "Highlight Note", "Note:", existing
+            dlg = QInputDialog(self)
+            dlg.setWindowTitle("Highlight Note")
+            dlg.setLabelText("Note:")
+            try:
+                dlg.setOption(
+                    QInputDialog.InputDialogOption
+                    .UsePlainTextEditForTextInput,
+                    True,
                 )
-            else:
-                text, ok = QInputDialog.getText(
-                    self, "Highlight Note", "Note:", text=existing
-                )
+            except Exception:
+                pass
+            dlg.setTextValue(existing)
+            try:
+                from . import theme
+
+                dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+            except Exception:
+                pass
+            dlg.textValueSelected.connect(
+                lambda text: self._on_note_edited(hl_id, text)
+            )
+            dlg.finished.connect(lambda _r: self._on_note_dialog_closed())
+            self._note_dialog = dlg
+            dlg.open()
         except Exception as exc:
+            self._note_dialog = None
             print(f"[klausmate] pdfjs note dialog failed: {exc}")
-            return
-        if not ok:
+
+    def _on_note_dialog_closed(self) -> None:
+        dlg, self._note_dialog = self._note_dialog, None
+        if dlg is not None:
+            try:
+                dlg.deleteLater()
+            except Exception:
+                pass
+
+    def _on_note_edited(self, hl_id: str, text: Any) -> None:
+        # Re-look-up by id: annotations may have reloaded (bake refresh)
+        # while the prompt was open. An emptied box clears the note —
+        # same as OK-on-empty did under the old static.
+        record = next(
+            (h for h in self._highlights if h.get("id") == hl_id), None
+        )
+        if record is None:
             return
         record["note"] = str(text).strip()
         self._save_annotations()
@@ -664,17 +717,48 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         QTimer.singleShot(0, self._goto_dialog)
 
     def _goto_dialog(self) -> None:
+        """Window-modal page prompt (K-114): a QInputDialog INSTANCE via
+        open() + intValueSelected, never the app-modal getInt static."""
         if QInputDialog is None or self._page_count <= 0:
             return
-        try:
-            page, ok = QInputDialog.getInt(
-                self, "Go to Page", f"Page (1–{self._page_count}):",
-                1, 1, self._page_count,
-            )
-        except Exception:
+        if self._goto_dlg is not None:
+            # One prompt at a time: front the open one.
+            try:
+                self._goto_dlg.raise_()
+                self._goto_dlg.activateWindow()
+            except Exception:
+                pass
             return
-        if ok:
-            self.go_to_page(page - 1)
+        try:
+            dlg = QInputDialog(self)
+            dlg.setWindowTitle("Go to Page")
+            dlg.setLabelText(f"Page (1–{self._page_count}):")
+            dlg.setInputMode(QInputDialog.InputMode.IntInput)
+            dlg.setIntRange(1, self._page_count)
+            dlg.setIntValue(1)
+            try:
+                from . import theme
+
+                dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+            except Exception:
+                pass
+            dlg.intValueSelected.connect(
+                lambda page: self.go_to_page(page - 1)
+            )
+            dlg.finished.connect(lambda _r: self._on_goto_dialog_closed())
+            self._goto_dlg = dlg
+            dlg.open()
+        except Exception as exc:
+            self._goto_dlg = None
+            print(f"[klausmate] pdfjs goto dialog failed: {exc}")
+
+    def _on_goto_dialog_closed(self) -> None:
+        dlg, self._goto_dlg = self._goto_dlg, None
+        if dlg is not None:
+            try:
+                dlg.deleteLater()
+            except Exception:
+                pass
 
     # ---- annotations persistence ----------------------------------------
 

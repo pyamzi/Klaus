@@ -21,8 +21,11 @@ QBackingStore::flush during a Python QDialog's exec()):
    never crashed. Preferences now opens NON-MODAL with dlg.show() —
    the same normal window path as open(), minus the modality (dropped
    2026-08-30 so it works as a live control panel beside the main
-   window) — pinned below; the remaining app-modal exec sites are
-   tracked on the board.
+   window) — pinned below. K-114 then retired every remaining
+   app-modal exec site (deck_curate's scope dialog, __init__'s crop
+   dialog, setup_flow's five message boxes, pdfjs_viewer's two input
+   prompts; pdf_drive's threshold dialog went under K-117) — per-file
+   bans pinned at the bottom of this file.
 
 The crash is invisible to the rest of the suite (Qt widgets are never
 constructed headlessly), so these are source pins. They are deliberately
@@ -53,6 +56,7 @@ _MODULES = {
     "pdf_drive": open("klausmate/pdf_drive.py").read(),
     "heatmap": open("klausmate/heatmap.py").read(),
     "dashboard": open("klausmate/dashboard.py").read(),
+    "setup_flow": open("klausmate/setup_flow.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -269,5 +273,63 @@ check("the deferred call is the ONLY modal left in open_drive's body",
       _DRIVE.count("showWarning(") == 1
       and not [tok for tok in _MODAL
                if tok != "showWarning(" and tok in _DRIVE])
+
+
+section("K-114: app-modal exec() retired addon-wide (per-file bans)")
+# manage_models was the first conversion (pinned above); K-114 finished
+# the sweep. The board card's verify greps the raw sources for
+# dlg.exec()/msg.exec(); these pins re-assert that on code_only text —
+# so prose can neither satisfy nor trip them — and pin the SHAPE of
+# each replacement. QMenu.exec(pos) is a popup, takes a different
+# AppKit path, and never crashed: the bans are dialog-spelled on
+# purpose and menus stay legal.
+_K114 = {mod: _no_prose(src) for mod, src in _MODULES.items()}
+
+check("deck_curate: choose_deck_scope opens window-modal; the result "
+      "rides an accepted callback (CPS — cancel never calls on_done)",
+      "dlg.open()" in _no_prose(_func_src("deck_curate",
+                                          "choose_deck_scope"))
+      and "def choose_deck_scope(parent, on_done)"
+      in _MODULES["deck_curate"]
+      and "dlg.exec()" not in _K114["deck_curate"]
+      and "msg.exec()" not in _K114["deck_curate"])
+check("both scope-dialog callers ride the callback — _curate_with here "
+      "and pdf_drive._curate (the old tuple return is gone)",
+      "choose_deck_scope(mw, lambda deck: run_curation_flow(safe, deck))"
+      in _MODULES["deck_curate"]
+      and "deck_curate.choose_deck_scope(" in _MODULES["pdf_drive"]
+      and "accepted, deck = " not in _MODULES["pdf_drive"])
+
+_K114_CROP = _no_prose(_func_src("__init__", "_launch_crop_dialog"))
+check("__init__: the crop dialog opens window-modal — crop work rides "
+      "accepted, the reentry guard rides finished (dialog lifetime)",
+      "dlg.open()" in _K114_CROP
+      and "dlg.accepted.connect(on_accepted)" in _K114_CROP
+      and "dlg.finished.connect(on_finished)" in _K114_CROP
+      and "dlg.exec()" not in _K114["__init__"]
+      and "msg.exec()" not in _K114["__init__"])
+
+check("setup_flow: all five welcome/readiness QMessageBoxes open "
+      "window-modal with finished callbacks reading clickedButton() "
+      "(Esc/close keep their exec-era fall-through meaning); the file "
+      "carries NO nested-loop .exec() at all. A sixth box must be "
+      "added open()-shaped to keep these counts honest",
+      _K114["setup_flow"].count("msg.open()") == 5
+      and _K114["setup_flow"].count("msg.finished.connect(") == 5
+      and ".exec()" not in _K114["setup_flow"])
+
+check("pdfjs_viewer: note-edit and go-to-page are QInputDialog "
+      "INSTANCES via open() + textValueSelected/intValueSelected — no "
+      "app-modal static helpers, no .exec() anywhere in the module",
+      "QInputDialog.get" not in _K114["pdfjs_viewer"]
+      and ".exec()" not in _K114["pdfjs_viewer"]
+      and _K114["pdfjs_viewer"].count("dlg.open()") == 3
+      and "textValueSelected.connect" in _K114["pdfjs_viewer"]
+      and "intValueSelected.connect" in _K114["pdfjs_viewer"])
+
+check("pdf_drive: no dialog exec either (converted under K-117, pinned "
+      "in test_drive.py; K-114's board verify covers this file too)",
+      "dlg.exec()" not in _K114["pdf_drive"]
+      and "msg.exec()" not in _K114["pdf_drive"])
 
 raise SystemExit(report())
