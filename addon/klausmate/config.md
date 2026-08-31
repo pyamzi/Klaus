@@ -170,15 +170,25 @@ wouldn't already need.
 - **background_fit**: `"cover"` (default), `"contain"` or `"tile"`.
 - **background_blur**: 0–100 px of blur behind the deck panels in
   `"image"` mode (a no-op in `"color"`/`"theme"` mode — blurring a
-  flat ground changes nothing). Default `22`.
+  flat ground changes nothing). Default `22`. The Preferences row is
+  labeled **Panel Frost** — it frosts what sits behind each panel,
+  as opposed to the wash below, which treats the whole picture once.
+- **background_wash**: 0–100 (default `0` = off) — the **Image Wash**:
+  one soft veil plus a Gaussian blur over the WHOLE wallpaper,
+  sitting between the picture and everything on it, so a busy photo
+  can be muted without re-picking it. Theme-aware: white in light
+  mode, near-black in night mode, so a wallpaper dims at night
+  instead of glowing. Image mode only.
 - **reviewer_background_mode** / **reviewer_background_color** /
-  **reviewer_background_image** / **reviewer_background_fit**: the
-  SAME four settings, `"theme"`-mode default, but for the study screen
-  — completely independent of `background_*` above, so you can show a
-  different picture while reviewing cards than the one behind the deck
-  list. No matching blur key: the study screen has no panels to frost,
-  so nothing would consume it. Set it under **KlausMate Preferences →
-  Appearance → Study screen background**.
+  **reviewer_background_image** / **reviewer_background_fit** /
+  **reviewer_background_wash**: the SAME settings, `"theme"`-mode
+  default, but for the study screen — completely independent of
+  `background_*` above, so you can show a different picture while
+  reviewing cards than the one behind the deck list. No matching
+  panel-frost key: the study screen has no panels to frost, so
+  nothing would consume it — the wash is its own layer and does
+  apply. Set it under **KlausMate Preferences → Appearance → Study
+  screen background**.
 - **heatmap_enabled**: `true` (default) draws the review heatmap — a
   year of study activity, plus the next four weeks of scheduled cards —
   under the deck list. Clicking a day opens it in Browse. `false`

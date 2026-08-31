@@ -19,10 +19,12 @@
   "background_image": "",
   "background_fit": "cover",
   "background_blur": 22,
+  "background_wash": 0,
   "reviewer_background_mode": "theme",
   "reviewer_background_color": "#1E2225",
   "reviewer_background_image": "",
   "reviewer_background_fit": "cover",
+  "reviewer_background_wash": 0,
   "heatmap_enabled": true,
   "dashboard_order": [
     "decks",

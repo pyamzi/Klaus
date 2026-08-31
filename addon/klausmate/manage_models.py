@@ -151,6 +151,50 @@ def _logo_pixmap(size: int) -> Any:
         return None
 
 
+def _image_thumb(path: str, w: int = 88, h: int = 54) -> Any:
+    """A small rounded preview of a stored background image, for the
+    Appearance captions (Pouya: "I want to be able to see a thumbnail
+    of the image as well in the settings panel"). Centre-cropped to
+    w×h, clipped to the design scale's 6px chip radius, rendered at 2×
+    for retina (harmless at 1×). None when the file is missing or
+    unreadable — the caller hides the label, it never shows a broken
+    frame."""
+    try:
+        from aqt.qt import QPainter, QPainterPath, QPixmap
+
+        src = QPixmap(path)
+        if src.isNull():
+            return None
+        dpr = 2
+        pw, ph = w * dpr, h * dpr
+        scaled = src.scaled(
+            pw,
+            ph,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cropped = scaled.copy(
+            max(0, (scaled.width() - pw) // 2),
+            max(0, (scaled.height() - ph) // 2),
+            pw,
+            ph,
+        )
+        out = QPixmap(pw, ph)
+        out.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        clip = QPainterPath()
+        clip.addRoundedRect(0.0, 0.0, float(pw), float(ph), 6.0 * dpr, 6.0 * dpr)
+        painter.setClipPath(clip)
+        painter.drawPixmap(0, 0, cropped)
+        painter.end()
+        out.setDevicePixelRatio(dpr)
+        return out
+    except Exception as exc:
+        print(f"[klausmate] background thumb failed: {exc}")
+        return None
+
+
 def _format_pull_event(ev: dict) -> tuple[str, int]:
     """Return (human status, percent 0-100) for an Ollama pull progress event."""
     status = str(ev.get("status") or "")
@@ -995,10 +1039,20 @@ def manage_models_dialog(setup: bool = False) -> None:
         bg_ctl,
     )
 
+    # Caption line under the mode row: a rounded thumbnail of the
+    # chosen picture beside its filename (thumbnail per Pouya,
+    # 2026-08-30). One container so the pair shows/hides whole.
+    bg_thumb_lbl = QLabel()
     bg_image_lbl = QLabel()
     bg_image_lbl.setWordWrap(True)
     bg_image_lbl.setObjectName("SettingDesc")
-    appearance_layout.addWidget(bg_image_lbl)
+    bg_caption = QWidget()
+    _bg_cap_lay = QHBoxLayout(bg_caption)
+    _bg_cap_lay.setContentsMargins(0, 0, 0, 0)
+    _bg_cap_lay.setSpacing(8)
+    _bg_cap_lay.addWidget(bg_thumb_lbl)
+    _bg_cap_lay.addWidget(bg_image_lbl, 1)
+    appearance_layout.addWidget(bg_caption)
 
     bg_fit_combo = QComboBox()
     bg_fit_combo.addItem("Fill the Window", "cover")
@@ -1022,9 +1076,29 @@ def manage_models_dialog(setup: bool = False) -> None:
     blur_ctl.addWidget(bg_blur_lbl)
     bg_blur_row = _row(
         appearance_layout,
-        "Blur",
+        "Panel Frost",
         "How strongly the content panels frost the image behind them.",
         blur_ctl,
+    )
+
+    # The image WASH — a different layer from the panel frost above:
+    # ONE theme-aware veil (white by day, dark at night) plus a blur
+    # over the whole picture, between it and everything on it.
+    bg_wash_slider = QSlider(Qt.Orientation.Horizontal)
+    bg_wash_slider.setRange(0, 100)
+    bg_wash_slider.setFixedWidth(140)
+    bg_wash_lbl = QLabel()
+    bg_wash_lbl.setObjectName("SettingDesc")
+    wash_ctl = QHBoxLayout()
+    wash_ctl.setContentsMargins(0, 0, 0, 0)
+    wash_ctl.addWidget(bg_wash_slider)
+    wash_ctl.addWidget(bg_wash_lbl)
+    bg_wash_row = _row(
+        appearance_layout,
+        "Image Wash",
+        "Mutes the whole picture behind a soft blurred veil — white "
+        "in light mode, dark at night.",
+        wash_ctl,
     )
 
     # A SEPARATE picture for the study screen — Pouya: "this needs to
@@ -1054,10 +1128,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         study_ctl,
     )
 
+    study_thumb_lbl = QLabel()
     study_image_lbl = QLabel()
     study_image_lbl.setWordWrap(True)
     study_image_lbl.setObjectName("SettingDesc")
-    appearance_layout.addWidget(study_image_lbl)
+    study_caption = QWidget()
+    _study_cap_lay = QHBoxLayout(study_caption)
+    _study_cap_lay.setContentsMargins(0, 0, 0, 0)
+    _study_cap_lay.setSpacing(8)
+    _study_cap_lay.addWidget(study_thumb_lbl)
+    _study_cap_lay.addWidget(study_image_lbl, 1)
+    appearance_layout.addWidget(study_caption)
 
     study_fit_combo = QComboBox()
     study_fit_combo.addItem("Fill the Window", "cover")
@@ -1068,6 +1149,27 @@ def manage_models_dialog(setup: bool = False) -> None:
         "Fit",
         "How an image is scaled to the window.",
         study_fit_combo,
+    )
+
+    # The study screen's own wash — same veil, its own key, so a busy
+    # picture can be muted behind the cards without touching the deck
+    # screen's. (No Panel-Frost sibling here: the study screen has no
+    # panels to frost.)
+    study_wash_slider = QSlider(Qt.Orientation.Horizontal)
+    study_wash_slider.setRange(0, 100)
+    study_wash_slider.setFixedWidth(140)
+    study_wash_lbl = QLabel()
+    study_wash_lbl.setObjectName("SettingDesc")
+    study_wash_ctl = QHBoxLayout()
+    study_wash_ctl.setContentsMargins(0, 0, 0, 0)
+    study_wash_ctl.addWidget(study_wash_slider)
+    study_wash_ctl.addWidget(study_wash_lbl)
+    study_wash_row = _row(
+        appearance_layout,
+        "Image Wash",
+        "Mutes the whole picture behind a soft blurred veil — white "
+        "in light mode, dark at night.",
+        study_wash_ctl,
     )
 
     # No Review-heatmap switch here (removed 2026-08-30, Pouya: "I can
@@ -1110,6 +1212,43 @@ def manage_models_dialog(setup: bool = False) -> None:
     _preview_timer.setSingleShot(True)
     _preview_timer.setInterval(140)
 
+    def _sync_caption(
+        thumb: Any,
+        text_lbl: Any,
+        container: Any,
+        spec_x: dict,
+        is_image: bool,
+        design_on: bool,
+    ) -> None:
+        """One caption line = rounded thumbnail + filename, shown and
+        hidden as a pair. The thumb is re-rendered from the stored copy
+        under user_files/backgrounds, so it always previews what the
+        wallpaper will actually load, not the original file."""
+        name = spec_x["image"]
+        text_lbl.setText(
+            f"Image: {name}" if name
+            else ("No image chosen yet." if is_image else "")
+        )
+        pix = None
+        if name:
+            try:
+                import os as _os
+
+                from . import USER_FILES as _UF
+
+                pix = _image_thumb(
+                    _os.path.join(_UF, _background.IMAGE_DIR, name)
+                )
+            except Exception:
+                pix = None
+        if pix is not None:
+            thumb.setPixmap(pix)
+        else:
+            thumb.clear()
+        thumb.setVisible(pix is not None)
+        container.setEnabled(design_on)
+        container.setVisible(bool(text_lbl.text()) or pix is not None)
+
     def sync_background_widgets() -> None:
         """Repaint the Appearance controls from _bg_state (never from
         config directly — the spec is the pending, unsaved value)."""
@@ -1122,6 +1261,7 @@ def manage_models_dialog(setup: bool = False) -> None:
                 max(0, bg_fit_combo.findData(spec["fit"]))
             )
             bg_blur_slider.setValue(int(spec["blur"]))
+            bg_wash_slider.setValue(int(spec["wash"]))
             r_spec = _bg_state["reviewer_spec"]
             study_mode_combo.setCurrentIndex(
                 max(0, study_mode_combo.findData(r_spec["mode"]))
@@ -1129,9 +1269,11 @@ def manage_models_dialog(setup: bool = False) -> None:
             study_fit_combo.setCurrentIndex(
                 max(0, study_fit_combo.findData(r_spec["fit"]))
             )
+            study_wash_slider.setValue(int(r_spec["wash"]))
         finally:
             _bg_state["syncing"] = False
         bg_blur_lbl.setText(f"{spec['blur']}px")
+        bg_wash_lbl.setText(f"{spec['wash']}%")
         is_image = spec["mode"] == "image"
         is_colour = spec["mode"] == "color"
         # With the design layer off the background settings and the
@@ -1147,26 +1289,28 @@ def manage_models_dialog(setup: bool = False) -> None:
         # reason these read as broken rather than inactive.
         bg_fit_row.setEnabled(design_on and is_image)
         bg_blur_row.setEnabled(design_on and is_image)
-        bg_image_lbl.setEnabled(design_on)
-        bg_image_lbl.setText(
-            f"Image: {spec['image']}" if spec["image"]
-            else ("No image chosen yet." if is_image else "")
+        bg_wash_row.setEnabled(design_on and is_image)
+        _sync_caption(
+            bg_thumb_lbl, bg_image_lbl, bg_caption, spec, is_image, design_on
         )
-        bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
 
         r_spec = _bg_state["reviewer_spec"]
         r_is_image = r_spec["mode"] == "image"
         r_is_colour = r_spec["mode"] == "color"
+        study_wash_lbl.setText(f"{r_spec['wash']}%")
         study_mode_row.setEnabled(design_on)
         study_colour_btn.setEnabled(design_on and (r_is_colour or r_is_image))
         study_image_btn.setEnabled(design_on and r_is_image)
         study_fit_row.setEnabled(design_on and r_is_image)
-        study_image_lbl.setEnabled(design_on)
-        study_image_lbl.setText(
-            f"Image: {r_spec['image']}" if r_spec["image"]
-            else ("No image chosen yet." if r_is_image else "")
+        study_wash_row.setEnabled(design_on and r_is_image)
+        _sync_caption(
+            study_thumb_lbl,
+            study_image_lbl,
+            study_caption,
+            r_spec,
+            r_is_image,
+            design_on,
         )
-        study_image_lbl.setVisible(bool(study_image_lbl.text()))
 
     def on_design_toggled(_checked: bool) -> None:
         # Live-preview like every appearance edit, then re-grey the
@@ -1194,6 +1338,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         if _bg_state["syncing"]:
             return
         _bg_state["spec"]["blur"] = int(value)
+        appearance_changed()
+
+    def on_bg_wash_changed(value: int) -> None:
+        bg_wash_lbl.setText(f"{value}%")
+        if _bg_state["syncing"]:
+            return
+        _bg_state["spec"]["wash"] = int(value)
         appearance_changed()
 
     def pick_bg_colour() -> None:
@@ -1242,6 +1393,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         _bg_state["reviewer_spec"]["fit"] = str(
             study_fit_combo.currentData() or "cover"
         )
+        appearance_changed()
+
+    def on_study_wash_changed(value: int) -> None:
+        study_wash_lbl.setText(f"{value}%")
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["wash"] = int(value)
         appearance_changed()
 
     def pick_study_colour() -> None:
@@ -2344,11 +2502,13 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_image"] = spec["image"]
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
+        cfg["background_wash"] = int(spec["wash"])
         r_spec = _bg_state["reviewer_spec"]
         cfg["reviewer_background_mode"] = r_spec["mode"]
         cfg["reviewer_background_color"] = r_spec["color"]
         cfg["reviewer_background_image"] = r_spec["image"]
         cfg["reviewer_background_fit"] = r_spec["fit"]
+        cfg["reviewer_background_wash"] = int(r_spec["wash"])
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
         # No heatmap_enabled write: since 2026-08-30 the deck screen's
@@ -2412,6 +2572,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_image": spec["image"],
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
+            "background_wash": int(spec["wash"]),
             # The study screen's OWN spec — carried for the same reason
             # as every key here: the preview dict REPLACES config, so
             # omitting these would snap the study background back to
@@ -2422,6 +2583,9 @@ def manage_models_dialog(setup: bool = False) -> None:
             "reviewer_background_color": _bg_state["reviewer_spec"]["color"],
             "reviewer_background_image": _bg_state["reviewer_spec"]["image"],
             "reviewer_background_fit": _bg_state["reviewer_spec"]["fit"],
+            "reviewer_background_wash": int(
+                _bg_state["reviewer_spec"]["wash"]
+            ),
             "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
             # Same expression save_general writes. The design gates all
             # read through effective_cfg and their default is OFF, so a
@@ -2665,10 +2829,12 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)
+    bg_wash_slider.valueChanged.connect(on_bg_wash_changed)
     bg_colour_btn.clicked.connect(pick_bg_colour)
     bg_image_btn.clicked.connect(pick_bg_image)
     study_mode_combo.currentIndexChanged.connect(on_study_mode_changed)
     study_fit_combo.currentIndexChanged.connect(on_study_fit_changed)
+    study_wash_slider.valueChanged.connect(on_study_wash_changed)
     study_colour_btn.clicked.connect(pick_study_colour)
     study_image_btn.clicked.connect(pick_study_image)
     save_btn.clicked.connect(save_all)

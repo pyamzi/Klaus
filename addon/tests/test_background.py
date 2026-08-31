@@ -58,6 +58,52 @@ check("image mode without a url degrades to panels-without-wallpaper "
       "background-image" not in bg.main_css(img, "")
       and "--klaus-panel:" in bg.main_css(img, ""))
 
+section("image wash: ONE veil between the picture and everything on it")
+check("resolve reads {prefix}_wash — clamped, default 0 (off)",
+      bg.resolve({})["wash"] == 0
+      and bg.resolve({"background_wash": 60})["wash"] == 60
+      and bg.resolve({"background_wash": 300})["wash"] == 0
+      and bg.resolve({"background_wash": "lots"})["wash"] == 0
+      and bg.resolve({"reviewer_background_wash": 40},
+                     prefix="reviewer_background")["wash"] == 40)
+_washed = bg.resolve({"background_mode": "image",
+                      "background_image": "w.jpg",
+                      "background_wash": 60})
+_wcss = bg.main_css(_washed, url)
+check("the veil ships only when wash > 0 — the default emits nothing",
+      "body::before" in _wcss and "body::before" not in css)
+check("the veil sits BETWEEN picture and content: image on <html> "
+      "ALONE, body forced transparent (Anki paints body with --canvas "
+      "— without the override the veil would be buried under a second "
+      "copy of the picture), veil fixed at z-index -1, click-through",
+      "html {" in _wcss
+      and "body { background: transparent !important; }" in _wcss
+      and "z-index: -1;" in _wcss
+      and "pointer-events: none;" in _wcss)
+check("theme-aware (Pouya picked this variant): white veil by day, "
+      "near-black under Anki's own night class — both palettes ship "
+      "in one sheet, keyed on :root.night-mode (house rule)",
+      "rgba(255,255,255,0.51)" in _wcss
+      and ":root.night-mode body::before" in _wcss
+      and "rgba(12,12,14,0.51)" in _wcss)
+check("the wash blurs the picture itself (backdrop-filter on the "
+      "veil), independent of the panels' own frost knob",
+      "backdrop-filter: blur(14.4px)" in _wcss)
+check("the panel family still frosts ON TOP of the washed picture",
+      "--klaus-panel:" in _wcss)
+check("the reviewer gets the same veil from its OWN key — and its "
+      "image also moves to html-only with the transparent body",
+      "body::before" in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "image",
+                      "reviewer_background_image": "s.jpg",
+                      "reviewer_background_wash": 30},
+                     prefix="reviewer_background"), "u.png")
+      and "body { background: transparent !important; }"
+      in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "image",
+                      "reviewer_background_image": "s.jpg"},
+                     prefix="reviewer_background"), "u.png"))
+
 section("resolve(cfg, prefix=...): a second, INDEPENDENT background")
 # Pouya: "this needs to be separate from the background I set for the
 # regular main section." One validator, two isolated results.

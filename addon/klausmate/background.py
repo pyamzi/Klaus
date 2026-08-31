@@ -121,12 +121,16 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
     blur = cfg.get(f"{prefix}_blur")
     if not isinstance(blur, (int, float)) or not 0 <= blur <= 100:
         blur = DEFAULT_BLUR
+    wash = cfg.get(f"{prefix}_wash")
+    if not isinstance(wash, (int, float)) or not 0 <= wash <= 100:
+        wash = 0
     return {
         "mode": mode,
         "color": colour,
         "image": image,
         "fit": fit,
         "blur": int(blur),
+        "wash": int(wash),
     }
 
 
@@ -153,6 +157,51 @@ def image_url(addon: str, name: str) -> str:
     """Web-export URL for a stored background image."""
     safe = safe_image_name(name)
     return f"/_addons/{addon}/user_files/{IMAGE_DIR}/{safe}" if safe else ""
+
+
+def _wash_css(spec: dict) -> str:
+    """The image wash (config ``{prefix}_wash``, 0–100, default 0 = off):
+    ONE veil over the whole wallpaper, sitting between the picture and
+    everything on it — a soft translucent layer plus a Gaussian blur of
+    the picture behind it, so a busy photo can be muted without
+    re-picking it. Theme-aware on purpose (Pouya picked this variant):
+    white in light mode, near-black in night mode, so a wallpaper dims
+    at night instead of glowing white; both palettes ship keyed on
+    ``:root.night-mode`` (house rule — Anki flips the class with JS and
+    never re-runs the injection hook).
+
+    Mechanically a ``body::before`` at ``z-index:-1``: in the root
+    stacking context a negative-z positioned descendant paints ABOVE
+    the root element's background and BELOW every in-flow box — i.e.
+    exactly between the picture (on ``<html>``, see the image branches)
+    and the panels/cards. ``pointer-events:none`` so it can never eat a
+    click. Distinct from the PANEL frost (``panel_css``): that blurs
+    what sits behind each panel, this washes the whole picture once.
+    """
+    wash = spec.get("wash", 0)
+    if not isinstance(wash, (int, float)) or not 0 < wash <= 100:
+        return ""
+    # Linear ramps, tuned by eye in the Chromium harness: full wash is
+    # a heavy-but-not-opaque 0.85 veil over a 24px blur — the picture
+    # stays findable at 100, invisible-by-default at 0.
+    alpha = round(int(wash) * 0.0085, 4)
+    blur_px = round(int(wash) * 0.24, 1)
+    filt = f"blur({blur_px}px)"
+    return (
+        "body::before {"
+        " content: '';"
+        " position: fixed;"
+        " inset: 0;"
+        " z-index: -1;"
+        " pointer-events: none;"
+        f" background: rgba(255,255,255,{alpha});"
+        f" -webkit-backdrop-filter: {filt};"
+        f" backdrop-filter: {filt};"
+        " }"
+        ":root.night-mode body::before {"
+        f" background: rgba(12,12,14,{alpha});"
+        " }"
+    )
 
 
 def _fit_rules(fit: str) -> str:
@@ -183,14 +232,26 @@ def main_css(spec: dict, url: str = "") -> str:
         )
     if mode == "image" and url:
         return (
-            "html, body {"
+            # The picture lives on <html> ALONE since the wash shipped
+            # (2026-08-30), with <body> forced transparent — not the
+            # old html+body pair — so the wash veil (body::before at
+            # z-index -1, see _wash_css) has somewhere to sit: above
+            # the root element's background, below every in-flow box.
+            # With body still painting the image, the veil would be
+            # sandwiched UNDER a second copy of the picture and wash
+            # nothing. Anki's own sheet paints body with --canvas, so
+            # the transparent override is load-bearing, not hygiene.
+            "html {"
             f" background-color: {spec['color']} !important;"
             f" background-image: url('{url}') !important;"
             f" background-position: center top !important;"
             f" background-attachment: fixed !important;"
             f" {_fit_rules(spec['fit'])}"
             " }"
-            # Panels frost over the image so their text stays readable.
+            " body { background: transparent !important; }"
+            + _wash_css(spec)
+            # Panels frost over the (washed) image so their text stays
+            # readable.
             + panel_css(spec)
         )
     # Theme mode: no wallpaper — Anki's own ground, Klaus panels on it.
@@ -214,22 +275,29 @@ def reviewer_css(spec: dict, url: str = "") -> str:
     background is opaque, it simply sits on top of it unchanged, the
     same freedom `main_css` already gives the deck screen.
 
-    No blur control either: blur exists to frost something BEHIND it,
-    and there is nothing to frost here — no compositing layer, no
-    control that would do anything, so none is offered.
+    No PANEL-frost blur control: that blur exists to frost panels, and
+    there are none here. The image WASH is a different layer and does
+    ship (``_wash_css``, since 2026-08-30) — one theme-aware veil over
+    the whole picture, between it and the card, with its own
+    ``reviewer_background_wash`` key.
     """
     mode = spec.get("mode")
     if mode == "color":
         return "html, body { background: %s !important; }" % spec["color"]
     if mode == "image" and url:
         return (
-            "html, body {"
+            # html-only + transparent body, same reason as main_css:
+            # the wash veil sits between the root's picture and the
+            # body's content, and a body-painted copy would bury it.
+            "html {"
             f" background-color: {spec['color']} !important;"
             f" background-image: url('{url}') !important;"
             f" background-position: center top !important;"
             f" background-attachment: fixed !important;"
             f" {_fit_rules(spec['fit'])}"
             " }"
+            " body { background: transparent !important; }"
+            + _wash_css(spec)
         )
     # Theme mode: Anki's own reviewer background, untouched.
     return ""

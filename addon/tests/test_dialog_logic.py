@@ -949,11 +949,12 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "eleven handlers: design toggle, mode, fit, blur, colour, image, "
-      "accent swatch, and the study screen's own mode/fit/colour/image "
-      "(a separate background needs the same live-preview discipline "
-      "as the one it must never be confused with)",
-      _mm_src.count("        appearance_changed()") == 11)
+      "thirteen handlers: design toggle, mode, fit, blur, wash, "
+      "colour, image, accent swatch, and the study screen's own "
+      "mode/fit/wash/colour/image (a separate background needs the "
+      "same live-preview discipline as the one it must never be "
+      "confused with)",
+      _mm_src.count("        appearance_changed()") == 13)
 check("save and preview carry the design key as the IDENTICAL "
       "expression — the preview dict replaces config and the gates "
       "default OFF, so a preview missing the key strips the whole "
@@ -978,6 +979,19 @@ check("the study screen's four keys are written from r_spec in "
           f'"reviewer_background_{field}": _bg_state["reviewer_spec"]'
           f'["{field}"],' in _preview_slice
           for field in ("mode", "color", "image", "fit")))
+check("the wash keys ride save AND preview for both screens — the "
+      "same parity lesson, fifth field",
+      'cfg["background_wash"] = int(spec["wash"])' in _save_slice
+      and 'cfg["reviewer_background_wash"] = int(r_spec["wash"])'
+      in _save_slice
+      and '"background_wash": int(spec["wash"]),' in _preview_slice
+      and '"reviewer_background_wash": int(' in _preview_slice)
+check("both image captions render a rounded thumbnail from the STORED "
+      "copy under user_files/backgrounds — what the wallpaper will "
+      "actually load, never the original path",
+      _mm_src.count("_sync_caption(") >= 3
+      and "_background.IMAGE_DIR" in _mm_src
+      and "_image_thumb(" in _mm_src)
 check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",
