@@ -997,7 +997,15 @@ class DriveWindow(QWidget):
             else:
                 self.resize(1040, 680)
             sane = self._sane_splitter_sizes(state.get("splitter"))
-            self.splitter.setSizes(sane if sane is not None else [300, 740])
+            # [560, 480], not [300, 740]: the numeric columns are Fixed
+            # (K-127) at 84+88+88 = 260px and the tree indents 16, so a
+            # 300px pane left 24px for the PDF NAME — every row opened
+            # nameless, the header truncated to "PL" (offscreen render,
+            # K-132). Fixed numerics do not yield; the pane has to be
+            # wide enough to hold them plus a readable name. 560 leaves
+            # 284. tests/test_drive.py pins that arithmetic so a future
+            # width change cannot silently re-break it.
+            self.splitter.setSizes(sane if sane is not None else [560, 480])
         except Exception as e:
             print(f"[klausmate] drive geometry restore failed: {e}")
             self.resize(1040, 680)

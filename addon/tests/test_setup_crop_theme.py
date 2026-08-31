@@ -31,20 +31,30 @@ _HEX_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
 
 def _hex_hits_outside_comments(src: str) -> list:
-    """Literal 6-digit hex colours that appear before any '#' comment
-    marker on their line. A whole-line comment (line stripped starts with
-    '#') never counts; only the code portion of a line — everything
-    before the first '#' — is checked, since this codebase never embeds
-    a literal '#' inside a string on these lines (confirmed by inspection
-    of both files pre-edit)."""
+    """Literal 6-digit hex colours in CODE, comments excluded.
+
+    Tokenised, not split on "#": the previous version cut each line at
+    its first "#" to drop comments — and a hex colour literal IS a "#"
+    inside a string, so it deleted the very thing it was hunting. It
+    returned [] for `BLUE = "#AABBCC"`, which made both checks below
+    vacuous from the day they were written (found while building
+    K-132, fixed as K-135). Python's own tokeniser knows which "#"
+    opens a comment and which sits inside a string; nothing else does.
+    """
+    import io as _io
+    import tokenize as _tokenize
+
     hits = []
-    for lineno, line in enumerate(src.splitlines(), 1):
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            continue
-        code_part = line.split("#", 1)[0]
-        if _HEX_RE.search(code_part):
-            hits.append((lineno, line))
+    try:
+        tokens = _tokenize.generate_tokens(_io.StringIO(src).readline)
+        for tok in tokens:
+            if tok.type == _tokenize.COMMENT:
+                continue
+            if _HEX_RE.search(tok.string):
+                hits.append((tok.start[0], tok.line.rstrip()))
+    except (_tokenize.TokenError, IndentationError, SyntaxError):
+        # A file we cannot tokenise is a finding, not a pass.
+        return [(0, "could not tokenise %d bytes" % len(src))]
     return hits
 
 

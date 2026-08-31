@@ -1292,5 +1292,28 @@ check("the import is guarded — a broken map costs a log line, never "
       "the Library",
       "map open failed" in _MAP_SRC)
 
+print("== K-135: the Library opens wide enough to show a name ==")
+# K-127 made the numeric columns Fixed, which removed the give the name
+# column used to have: at the old [300, 740] default it was left 24px
+# and every row opened nameless (header truncated to "PL", offscreen
+# render). Fixed widths do not yield, so the PANE has to fit them.
+import re as _re135
+_DRIVE = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+_m135 = _re135.search(
+    r"setSizes\(sane if sane is not None else \[(\d+), (\d+)\]\)", _DRIVE)
+_numeric135 = sum(
+    int(w) for w in _re135.findall(r"setColumnWidth\([123], (\d+)\)", _DRIVE))
+_INDENT135 = 16
+check("the default splitter leaves a READABLE PDF-name column — the "
+      "numeric columns are Fixed, so the pane must be wide enough for "
+      "them plus a name, not the other way round",
+      _m135 is not None
+      and int(_m135.group(1)) - _numeric135 - _INDENT135 >= 200,
+      f"name column = {int(_m135.group(1)) - _numeric135 - _INDENT135}px"
+      if _m135 else "no default splitter sizes found")
+check("...and the arithmetic is pinned against the REAL column widths, "
+      "so widening a numeric column re-runs this check",
+      _numeric135 == 84 + 88 + 88, f"numeric total {_numeric135}")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
