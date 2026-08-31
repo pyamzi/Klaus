@@ -495,7 +495,18 @@ instead. Signed-off history is in
   setToolTipsVisible tooltips; the folder TREE also accepts external
   .pdf drops filed into the hovered folder (internal moves
   byte-equivalent); Match Sensitivity opens window-modal (dlg.open,
-  K-114 — pdf_drive carries an exec-ban pin). tests/test_drive.py
+  K-114 — pdf_drive carries an exec-ban pin). An empty Library is not
+  a void (K-132): `_LibraryEmptyState`, owned by `_LibraryTree`, is a
+  sibling OVERLAY carrying `LIBRARY_EMPTY_TEXT`/`_HINT` and doubling as
+  a drop target — `WA_TransparentForMouseEvents` is what keeps the
+  K-117 drop path (dropEvent → `_dest_folder_at` → `_on_dropped_paths`)
+  reachable through it; a stacked-widget swap would have needed a
+  second drop handler. Folders-but-no-PDFs shows the SAME copy, moved
+  below the folder rows. **The default splitter is `[560, 480]`, not
+  `[300, 740]`** (K-135): the numeric columns are Fixed at 84+88+88, so
+  a 300px pane left 24px for the PDF NAME and every row opened nameless
+  — Fixed widths do not yield, the pane must fit them; test_drive pins
+  that arithmetic against the real constants. tests/test_drive.py
   runs a real-offscreen-PyQt6 section: PyQt6 IS importable under
   system python3 (the klaus-test skill note saying widgets can't be
   instantiated predates this).
@@ -572,12 +583,40 @@ instead. Signed-off history is in
   `pdf_graph.build_graph_data` with K-115-guarded QPainter: notes as
   muted dots, PDFs as accent nodes sized by match count, edges drawn
   for the hovered/selected PDF only, QToolTip carrying
-  display/folder/match-count/retention-when-live. The viewport is
+  display/folder/match-count/retention-when-live. Labels are
+  COUNT-aware (K-133): at or below `LABEL_MAX_NODES` (12) every node is
+  named at every zoom including fit, above it the `LABEL_ZOOM × fit`
+  gate applies, and an unknown count keeps the gate — the map used to
+  open as anonymous dots, because the fit view is the only view you get
+  on open. `label_anchor` places a name right of its node and mirrors
+  it left at the canvas edge; one muted `HINT_TEXT` line beside the
+  caption says what the shapes are and what the mouse does (its QLabel
+  raises the window's minimum width to ~625, measured). The viewport is
   range-agnostic (`graph_bounds` measures the data) because projection
   emits [-1,1] per axis. Entry point: the Library caption row's **Map**
   button (`pdf_drive._open_map`, guarded import). Retention fills in
   lazily from the open collection; headless it stays None and the
   tooltip omits the line.
+- `pdf_notes.py` (stdlib-only above a "pypdf glue" divider; K-134): the
+  per-PDF notes foundation — K-079's storage and layout, built as its
+  own module so it needed nothing from `pdf_handler.py` (another
+  session held that file). Sidecar `annotations/<safe>.notes.md`
+  (atomic tmp+os.replace; **whitespace-only text DELETES the file**,
+  which is what makes empty notes un-bake back to pristine), Helvetica
+  base-14 AFM widths where text becomes cp1252 bytes in exactly ONE
+  place so measurement and emission cannot disagree about a degraded
+  character, pure `wrap_lines`/`paginate`/`notes_pages` (30pt heading
+  reserve on page one only; a token wider than the column hard-splits),
+  and pure `notes_page_stream` returning content-stream BYTES —
+  testable without pypdf, which this machine's python3 cannot import
+  (vendor/pypdf needs typing_extensions from Anki's bundle). The lone
+  glue function `append_notes_pages(writer, text, display)` imports
+  pypdf lazily. **Still to wire in K-079**: the viewer pane, and ONE
+  call site in `bake_annotations` — whose TWO early returns (the
+  nothing-to-bake return and the un-bake branch) must learn about notes
+  or a notes-only PDF never bakes; `delete_context` also does not
+  unlink the sidecar, so a re-import under the same safe name would
+  inherit a stranger's notes.
 - `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
   chunks, `card_index.py`'s sibling for the PDF side. K-119 adds
   `best_chunk(idx, vec)` — match_scores' inner max-dot loop keeping
