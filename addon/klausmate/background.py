@@ -635,6 +635,42 @@ def main_css(spec: dict, url: str = "") -> str:
     return panel_css(spec)
 
 
+def _reviewer_body_reset() -> str:
+    """Stop the CARD from painting over the study wallpaper.
+
+    The reviewer's ``<body>`` IS the card — Anki gives it
+    ``class="card"`` plus ``nightMode``/``night_mode`` — and shared
+    notetypes paint it opaque with !important. AnKing's, verified in
+    Pouya's own collection (2026-08-31)::
+
+        .nightMode.card,
+        .night_mode .card { background-color: #272828 !important; }
+
+    That is specificity (0,2,0) WITH !important, so it outranks a
+    plain ``body { background: transparent !important }`` (0,0,1) and
+    hid the wallpaper everywhere the card's box reached — the hard
+    line across the study screen, ending at the card's bottom edge.
+    The repeated ``.card`` is a deliberate specificity ladder
+    ((0,3,2) here), enough headroom to outrank the notetypes in the
+    wild without reaching for a higher-origin trick.
+
+    A NARROW, deliberate exception to "a card is the user's own
+    notetype, never Klaus's to restyle": only the BACKGROUND is
+    neutralised — never text colour, borders, or anything else the
+    card designed — and only while a study wallpaper is actually
+    configured, since theme mode emits no CSS at all. Choosing
+    "Anki's Own" for the study screen hands the card its background
+    back.
+    """
+    return (
+        " html body,"
+        " html body.card.card,"
+        " html body.card.card.nightMode,"
+        " html body.card.card.night_mode"
+        " { background: transparent !important; }"
+    )
+
+
 def reviewer_css(spec: dict, url: str = "") -> str:
     """Background for the reviewer's card screen — a SEPARATE picture
     from the deck screen's, on purpose (Pouya: "this needs to be
@@ -673,8 +709,8 @@ def reviewer_css(spec: dict, url: str = "") -> str:
             f" background-color: {DEFAULT_COLOR} !important;"
             f"{image_rule}"
             " }"
-            " body { background: transparent !important; }"
-            ":root.night-mode {"
+            + _reviewer_body_reset()
+            + ":root.night-mode {"
             f" background-color: {NIGHT_COLOR} !important;"
             " }"
         )
@@ -690,7 +726,7 @@ def reviewer_css(spec: dict, url: str = "") -> str:
             f" background-attachment: fixed !important;"
             f" {_fit_rules(spec['fit'])}"
             " }"
-            " body { background: transparent !important; }"
+            + _reviewer_body_reset()
             + _wash_css(spec)
         )
     # Theme mode: Anki's own reviewer background, untouched.

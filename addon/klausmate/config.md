@@ -210,7 +210,13 @@ wouldn't already need.
   reviewing cards than the one behind the deck list. No matching
   panel-frost key: the study screen has no panels to frost, so
   nothing would consume it — the wash is its own layer and does
-  apply. Set it under **KlausMate Preferences → Appearance → Study
+  apply. While a study background is set, the CARD's own background
+  is neutralised so the wallpaper is actually visible (many shared
+  notetypes — AnKing's among them — paint the card opaque with
+  `!important`, which hid the wallpaper behind a hard edge at the
+  card's bottom). Only the background: the card's text colours,
+  borders and layout are untouched. Choose **Anki's Own** for the
+  study screen to hand the card its background back. Set it under **KlausMate Preferences → Appearance → Study
   screen background**.
 - **heatmap_enabled**: `true` (default) draws the review heatmap — a
   year of study activity, plus the next four weeks of scheduled cards —

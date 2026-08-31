@@ -350,7 +350,17 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   window_chrome owns) with no `panel_css` and no panel-frost blur: a
   card is the user's own notetype, never Klaus's to restyle, so there
   are no panels to frost — the image WASH is a different layer and
-  does apply, off the screen's own `reviewer_background_wash` key. Wired from
+  does apply, off the screen's own `reviewer_background_wash` key.
+  ONE narrow exception (`_reviewer_body_reset`, 2026-08-31): the
+  reviewer's `<body>` IS the card (`class="card nightMode"`), and
+  shared notetypes paint it opaque with !important — AnKing's
+  `.nightMode.card { background-color: #272828 !important }`,
+  (0,2,0), outranked a plain `body{...!important}` and hid the
+  wallpaper behind a hard edge at the card's bottom. The reset is a
+  specificity ladder (`html body.card.card.nightMode`, (0,3,2)),
+  BACKGROUND ONLY, and ships only when a study wallpaper is actually
+  configured — theme mode emits nothing, so a default profile's
+  cards stay untouched. Wired from
   `top_bar._on_main_webview_content`'s second branch, gated by its own
   `_reviewer_background_css()` (same shape as `_background_css`, just
   a different prefix and builder).

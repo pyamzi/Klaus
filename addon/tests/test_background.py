@@ -98,11 +98,20 @@ check("the reviewer gets the same veil from its OWN key — and its "
                       "reviewer_background_image": "s.jpg",
                       "reviewer_background_wash": 30},
                      prefix="reviewer_background"), "u.png")
-      and "body { background: transparent !important; }"
+      and "html body.card.card.nightMode"
       in bg.reviewer_css(
           bg.resolve({"reviewer_background_mode": "image",
                       "reviewer_background_image": "s.jpg"},
                      prefix="reviewer_background"), "u.png"))
+
+def _spec_of(sel: str) -> tuple:
+    """(classes, types) specificity of a simple compound selector —
+    enough to compare the card-background reset against real notetype
+    rules. No ids involved on either side."""
+    import re as _re
+    return (len(_re.findall(r"\.[A-Za-z0-9_-]+", sel)),
+            len(_re.findall(r"(?:^|[\s>])([a-z]+)", sel)))
+
 
 section("colour mode IS a stack of gradient spheres (flat removed)")
 # Flat colour was removed outright (2026-08-30), and the backdrop is
@@ -131,10 +140,44 @@ check("the GROUND follows the theme — white by day, dark under "
       in bg.main_css(colour)
       and f"background-color: {bg.NIGHT_COLOR} !important;"
       in bg.main_css(colour)
-      and "body { background: transparent !important; }"
+      and "html body.card.card.nightMode"
       in bg.reviewer_css(bg.resolve(
           {"reviewer_background_mode": "color"},
           prefix="reviewer_background")))
+# The reviewer's <body> IS the card: Anki gives it class="card"
+# plus nightMode/night_mode, and shared notetypes paint it opaque
+# with !important. AnKing's, read out of Pouya's own collection
+# (2026-08-31): `.nightMode.card, .night_mode .card {
+# background-color: #272828 !important; }` — specificity (0,2,0)
+# WITH !important, which outranks a plain `body { ... !important }`
+# and hid the wallpaper down to the card's bottom edge (the hard
+# line across the study screen).
+for _sel in ("html body,", "html body.card.card,",
+             "html body.card.card.nightMode",
+             "html body.card.card.night_mode"):
+    check(f"the reviewer's card-background reset carries {_sel.strip(',')}",
+          _sel in bg.reviewer_css(bg.resolve(
+              {"reviewer_background_mode": "color"},
+              prefix="reviewer_background")))
+check("...and it OUTRANKS a real notetype rule — (0,3,2) beats the "
+      "(0,2,0) AnKing selector, with headroom over (0,3,0) ones",
+      _spec_of("html body.card.card.nightMode")
+      > _spec_of(".nightMode.card")
+      and _spec_of("html body.card.card.nightMode")
+      > _spec_of(".card.nightMode.x"))
+check("ONLY the background is neutralised — the card's colours, "
+      "borders and everything else it designed stay ITS business",
+      "background: transparent !important;" in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "color"},
+                     prefix="reviewer_background"))
+      and "color:" not in bg.reviewer_css(bg.resolve(
+          {"reviewer_background_mode": "color"},
+          prefix="reviewer_background")).split("html body,")[1]
+      .split("}")[0])
+check("theme mode still emits NOTHING, so a default profile's cards "
+      "are untouched — the reset ships only with a real wallpaper",
+      bg.reviewer_css(bg.resolve({}, prefix="reviewer_background")) == "")
+
 _theme_mod = importlib.import_module("klausmate.theme")
 check("both grounds ARE the bars' chrome tokens, by reference — the "
       "window reads as one surface with its top and bottom bars "
