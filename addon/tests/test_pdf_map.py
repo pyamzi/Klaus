@@ -67,6 +67,21 @@ def _func_seg(name: str) -> str:
     return ""
 
 
+def _calls_in(fn_name: str, callee: str) -> list:
+    """Every plain-name Call to ``callee`` inside the function
+    ``fn_name`` — argument counts, not just "the name appears"."""
+    for node in ast.walk(_TREE):
+        if isinstance(node, ast.FunctionDef) and node.name == fn_name:
+            return [
+                c
+                for c in ast.walk(node)
+                if isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Name)
+                and c.func.id == callee
+            ]
+    return []
+
+
 # ------------------------------------------------------------- transform
 
 section("viewport transform — world<->screen round-trips")
@@ -227,6 +242,49 @@ check("labels are level-of-detail: on past LABEL_ZOOM x fit, off below, "
       and not pdf_map.labels_visible(363.0, 260.0)
       and pdf_map.labels_visible(500.0, 0.0)
       and pdf_map.labels_visible(1.0, -2.0))
+check("K-133: a map of LABEL_MAX_NODES or fewer PDFs is named at the FIT "
+      "view — the only view you get on open",
+      pdf_map.labels_visible(260.0, 260.0, 4)
+      and pdf_map.labels_visible(260.0, 260.0, pdf_map.LABEL_MAX_NODES)
+      and pdf_map.labels_visible(260.0, 260.0, 0))
+check("above LABEL_MAX_NODES the zoom gate still rules: crowded maps stay "
+      "anonymous at fit and name themselves once zoomed in",
+      not pdf_map.labels_visible(260.0, 260.0, pdf_map.LABEL_MAX_NODES + 1)
+      and not pdf_map.labels_visible(363.0, 260.0, 400)
+      and pdf_map.labels_visible(365.0, 260.0, 400))
+check("an unknown, junk or negative count falls back to the zoom gate — "
+      "it never turns labels on by accident",
+      not pdf_map.labels_visible(260.0, 260.0)
+      and not pdf_map.labels_visible(260.0, 260.0, None)
+      and not pdf_map.labels_visible(260.0, 260.0, "lots")
+      and not pdf_map.labels_visible(260.0, 260.0, -3))
+check("LABEL_MAX_NODES is a dozen-ish, not a disabled gate",
+      4 <= pdf_map.LABEL_MAX_NODES <= 24)
+
+# label placement: beside the node, never on it (K-133)
+check("a label clears its own node by radius + LABEL_GAP and rides the "
+      "node's centre line",
+      pdf_map.label_anchor(100.0, 50.0, 12.0)
+      == (100.0 + 12.0 + pdf_map.LABEL_GAP, 50.0 + pdf_map.LABEL_BASELINE_DY))
+check("the gap also clears the SELECTED node's ring (drawn at r + 3 with "
+      "a 2px pen, so outer edge r + 4)",
+      pdf_map.LABEL_GAP > 4.0)
+check("a label that would run past the right edge mirrors to the left of "
+      "its node — still off the node, still legible",
+      pdf_map.label_anchor(590.0, 10.0, 8.0, 120.0, 640.0)
+      == (590.0 - 8.0 - pdf_map.LABEL_GAP - 120.0, 10.0 + pdf_map.LABEL_BASELINE_DY))
+check("it mirrors only when it must, and never past the LEFT edge — a "
+      "name wider than the view keeps its head visible, not its tail",
+      pdf_map.label_anchor(100.0, 0.0, 8.0, 120.0, 640.0)[0] == 117.0
+      and pdf_map.label_anchor(30.0, 0.0, 8.0, 700.0, 640.0)[0] == 47.0)
+check("no view width (or a degenerate one) = no mirror decision to make",
+      pdf_map.label_anchor(600.0, 0.0, 8.0, 500.0)[0] == 617.0
+      and pdf_map.label_anchor(600.0, 0.0, 8.0, 500.0, 0.0)[0] == 617.0)
+check("junk coordinates degrade instead of raising mid-paint",
+      pdf_map.label_anchor("x", None, "r")
+      == (pdf_map.LABEL_GAP, pdf_map.LABEL_BASELINE_DY)
+      and pdf_map.label_anchor(10.0, 0.0, float("nan"))[0]
+      == 10.0 + pdf_map.LABEL_GAP)
 
 tip = pdf_map.tooltip_text({
     "display": "Lecture 1", "safe": "Lecture_1", "folder": "Anatomy/Week 2",
@@ -388,6 +446,24 @@ check("wheel zoom funnels through the anchored zoom_at math",
       "zoom_at(" in _func_seg("wheelEvent"))
 check("the canvas draws edges through edges_for_selection only",
       "edges_for_selection(" in _func_seg("_paint"))
+_lod_calls = _calls_in("_paint", "labels_visible")
+check("K-133: the canvas gates labels COUNT-first — its one "
+      "labels_visible call passes the node count as a third argument",
+      len(_lod_calls) == 1 and len(_lod_calls[0].args) == 3)
+check("labels are placed by label_anchor, never inline arithmetic",
+      len(_calls_in("_paint", "label_anchor")) == 1)
+check("the header hint is ONE line naming both the legend and the "
+      "gestures",
+      "\n" not in pdf_map.HINT_TEXT
+      and "PDF" in pdf_map.HINT_TEXT
+      and "note" in pdf_map.HINT_TEXT
+      and all(g in pdf_map.HINT_TEXT
+              for g in ("hover", "drag", "pan", "scroll", "zoom")))
+_hint_seg = _SRC.split("QLabel(HINT_TEXT", 1)[-1].split("addWidget(hint)", 1)[0]
+check("it is drawn exactly once, from the pinned copy, in the muted token",
+      _CODE.count("HINT_TEXT") == 2
+      and "QLabel(HINT_TEXT" in _CODE
+      and "muted_label_qss" in _hint_seg)
 check("hover tooltip rides QToolTip", "QToolTip.showText" in _CODE)
 check("house logging prefix present", '"[klausmate] ' in _SRC.replace("f\"", "\""))
 check("empty-state copy is pinned",

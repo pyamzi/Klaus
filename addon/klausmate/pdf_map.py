@@ -11,7 +11,8 @@ and a Fit reset.
 
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (world<->screen transform, fit-to-view, zoom-at-cursor,
-hit-test, node sizing, edge-subset and label level-of-detail policy) —
+hit-test, node sizing, edge-subset policy, and the count-aware label
+level-of-detail + off-node label placement) —
 for ``tests/test_pdf_map.py``. The glue imports aqt lazily inside its
 functions (retention_history's pattern), so importing this module never
 needs Qt at all.
@@ -68,13 +69,29 @@ NODE_R_SPREAD = 1.2
 NOTE_DOT_R = 1.6
 # Hover/click hit tolerance added on top of the largest node radius.
 HIT_SLOP = 4.0
-# Labels appear once zoomed in past LABEL_ZOOM x the fit scale.
+# Above LABEL_MAX_NODES PDFs, labels appear once zoomed in past
+# LABEL_ZOOM x the fit scale. At or below it every node is named at
+# EVERY zoom, fit included (K-133) — see labels_visible.
 LABEL_ZOOM = 1.4
+LABEL_MAX_NODES = 12
+# Gap in px between a node's edge and its label box. Sized to clear the
+# selected node's ring (drawn at r + 3 with a 2px pen, so outer edge
+# r + 4) with daylight left over.
+LABEL_GAP = 9.0
+# Baseline nudge that sits an 11px label on the node's centre line.
+LABEL_BASELINE_DY = 4.0
 EDGE_ALPHA = 0.25
 # One standard wheel notch (angleDelta 120) zooms by 2**(120/240) ≈ 1.41.
 WHEEL_ZOOM_DIVISOR = 240.0
 
 EMPTY_TEXT = "No indexed PDFs to map yet."
+# The header's one-line affordance (K-133): the offscreen-render audit
+# found a view that named nothing and explained nothing — no hint that
+# dots are notes, circles PDFs, or that the canvas pans and zooms.
+HINT_TEXT = (
+    "Circles are PDFs, dots are notes — hover to trace, "
+    "drag to pan, scroll to zoom"
+)
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,16 @@ def pan_by(vp: Viewport, dx: float, dy: float) -> Viewport:
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return lo if value < lo else hi if value > hi else value
+
+
+def _num(value: object, default: float = 0.0) -> float:
+    """``float(value)``, with ``default`` for junk and for NaN — the
+    paint path must never raise on one malformed row."""
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return default if f != f else f
 
 
 def fit_to_view(
@@ -274,14 +301,69 @@ def edges_for_selection(edges: Iterable[dict], selected: Optional[str]) -> list:
     return [e for e in edges if isinstance(e, dict) and e.get("pdf") == selected]
 
 
-def labels_visible(scale: float, fit_scale: float) -> bool:
-    """Level-of-detail: PDF display names appear once zoomed in past
-    ``LABEL_ZOOM`` x the fit scale (at fit, labels over a dense cloud are
-    pure clutter). A degenerate fit scale shows labels rather than hiding
-    them forever."""
+def labels_visible(
+    scale: float, fit_scale: float, pdf_count: Optional[int] = None
+) -> bool:
+    """Level-of-detail for PDF display names — COUNT-aware, not zoom-only.
+
+    K-133: the zoom-only rule (names past ``LABEL_ZOOM`` x the fit
+    scale) meant the map opened as anonymous dots, because fit is the
+    only view you get on open — a map whose whole job is "which PDF
+    sits where" that named nothing at the one view it shows. So a graph
+    of at most ``LABEL_MAX_NODES`` PDFs is named at EVERY zoom, fit
+    included: a dozen names over the cloud is a legend, not clutter.
+    Above that count the zoom gate stands, and the active
+    (hovered/selected) node is labelled unconditionally by the painter
+    either way.
+
+    ``pdf_count`` None means "count unknown" and keeps the pure zoom
+    gate; a degenerate fit scale shows labels rather than hiding them
+    forever.
+    """
+    if pdf_count is not None:
+        try:
+            n = int(pdf_count)
+        except (TypeError, ValueError):
+            n = -1
+        if 0 <= n <= LABEL_MAX_NODES:
+            return True
     if fit_scale <= 0:
         return True
     return scale >= fit_scale * LABEL_ZOOM
+
+
+def label_anchor(
+    sx: float,
+    sy: float,
+    radius: float,
+    text_width: float = 0.0,
+    view_width: Optional[float] = None,
+    gap: float = LABEL_GAP,
+) -> tuple:
+    """Text-baseline anchor ``(x, y)`` for a node's label.
+
+    The name sits BESIDE its node, never on it: x clears ``radius`` by
+    ``gap`` (which also clears the selected node's ring), on the right
+    by default and mirrored to the left when ``text_width`` would run
+    the label past ``view_width``. When neither side fits — a name
+    wider than the viewport — the right-hand placement wins, so the
+    start of the name stays readable instead of its tail. y sits on the
+    node's centre line. Junk coordinates degrade to 0.0 rather than
+    raising mid-paint.
+    """
+    x = _num(sx)
+    y = _num(sy)
+    r = abs(_num(radius))
+    g = _num(gap, LABEL_GAP)
+    tw = max(0.0, _num(text_width))
+    baseline = y + LABEL_BASELINE_DY
+    right = x + r + g
+    if view_width is not None:
+        vw = _num(view_width)
+        left = x - r - g - tw
+        if vw > 0.0 and right + tw > vw and left >= 0.0:
+            return (left, baseline)
+    return (right, baseline)
 
 
 def tooltip_text(pdf: dict) -> str:
@@ -576,9 +658,16 @@ def open_map_window(parent=None):
 
             # PDF nodes: accent circles sized by match_count; labels are
             # level-of-detail (always for the active node).
-            show_labels = labels_visible(vp.scale, self._fit_scale)
+            show_labels = labels_visible(
+                vp.scale, self._fit_scale, len(self._pdfs)
+            )
             label_font = painter.font()
             label_font.setPixelSize(11)
+            painter.setFont(label_font)
+            try:
+                metrics = painter.fontMetrics()
+            except Exception:
+                metrics = None  # widths degrade to 0 -> plain right-hand side
             for p in self._pdfs:
                 safe = str(p.get("safe"))
                 sx, sy = world_to_screen(vp, *self._pdf_xy[safe])
@@ -600,12 +689,15 @@ def open_map_window(parent=None):
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawEllipse(QPointF(sx, sy), r + 3.0, r + 3.0)
                 if show_labels or safe == active:
-                    painter.setFont(label_font)
-                    painter.setPen(QColor(c["text"]))
-                    painter.drawText(
-                        QPointF(sx + r + 5.0, sy + 4.0),
-                        str(p.get("display") or ""),
-                    )
+                    name = str(p.get("display") or "")
+                    if name:
+                        try:
+                            tw = float(metrics.horizontalAdvance(name))
+                        except Exception:
+                            tw = 0.0
+                        lx, ly = label_anchor(sx, sy, r, tw, w)
+                        painter.setPen(QColor(c["text"]))
+                        painter.drawText(QPointF(lx, ly), name)
 
         # ---- mouse ----
 
@@ -768,6 +860,21 @@ def open_map_window(parent=None):
                 except Exception:
                     pass
                 bar.addWidget(caption)
+                # ONE quiet affordance line (K-133) — same muted token
+                # as the caption, spaced off it so the two read as
+                # separate phrases rather than one run-on caption. A
+                # plain QLabel's minimum IS its text width, so this
+                # raises the window's minimum width (504 -> ~625 at the
+                # 11px default); accepted deliberately — the window
+                # opens at 900 and a clipped half-sentence would read
+                # as broken. Shorten HINT_TEXT before adding widgets.
+                bar.addSpacing(10)
+                hint = QLabel(HINT_TEXT, self)
+                try:
+                    hint.setStyleSheet(theme.muted_label_qss(night))
+                except Exception:
+                    pass
+                bar.addWidget(hint)
                 bar.addStretch(1)
                 fit_btn = QPushButton("Fit", self)
                 try:
