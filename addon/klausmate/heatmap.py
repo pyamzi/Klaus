@@ -27,7 +27,7 @@ THE STYLING IS THE POINT, so none of it is invented here:
   wearing the ``.klaus-hm`` hook listed in that selector, which is why
   it frosts, tints and rounds exactly like the deck table in every
   background mode, and why retuning the frost retunes it too;
-* every cell colour is the ACTIVE accent at four alphas, read from
+* every cell colour is the ACTIVE accent at rising alpha, read from
   ``theme.palette``, so the heatmap re-colours with every colour theme
   — the six presets, the community palettes and a custom colour alike —
   without a line of per-theme code;
@@ -57,7 +57,7 @@ DEFAULT_FORECAST_DAYS = 28
 
 # Cell geometry, in px. One week column is CELL + GAP wide, which is
 # what lets the month labels ride the same grid as the cells.
-CELL = 11
+CELL = 10  # Glutanimate's cal-heatmap cellSize
 GAP = 3
 
 _MONTHS = (
@@ -153,27 +153,70 @@ def stats_from_history(history: list, today: int) -> dict:
     }
 
 
+# Glutanimate's own ramp (``renderer._dynamic_legend_factors``), taken
+# as-is. Klaus used to run four factors ending at 1.0, which had two
+# costs the reference does not pay: every day at or above the average
+# collapsed into ONE colour — a 111-card day and a 500-card day drew
+# identical ink — and with nothing below 0.25 a light day rounded away
+# entirely. Five of these nine sit above the average, which is what lets
+# a heavy day still read as heavy.
+RAMP_FACTORS = (0.125, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0)
+
+# Also the reference's: below ~20/day the fractions stop separating
+# anything, so the ramp is computed against a floor rather than against
+# a genuinely tiny average.
+RAMP_MIN_BASE = 20
+
+
 def ramp_levels(daily_avg: int) -> list:
-    """The four cut-offs that map a day's count onto a colour step.
+    """The cut-offs that map a day's count onto a colour step.
 
     Derived from the user's own daily average rather than fixed counts,
     so the ramp means the same thing to somebody doing 20 cards a day
-    and somebody doing 800: the top step is "a full day's work". Forced
-    strictly ascending so a tiny average still yields four usable steps
-    instead of collapsing to one.
+    and somebody doing 800. Forced strictly ascending, because rounding
+    can otherwise collide two adjacent factors into one usable step.
     """
-    base = max(1, int(daily_avg))
+    base = max(RAMP_MIN_BASE, int(daily_avg))
     levels: list = []
     previous = 0
-    for fraction in (0.25, 0.5, 0.75, 1.0):
+    for fraction in RAMP_FACTORS:
         value = max(previous + 1, int(round(base * fraction)))
         levels.append(value)
         previous = value
     return levels
 
 
+# Below 1.0 this front-loads the ramp: alpha climbs fast over the early
+# steps and eases off near the top.
+#
+# It has to. The reference can afford a linear scale because its steps
+# are nine distinct HUES of a lime/ice/flame palette — its mid-steps are
+# vividly coloured. Ours are one accent at rising alpha over a dark
+# panel, where the middle of a linear 0.12→1.0 spread is muddy: spread
+# evenly, an average day landed at 0.56 and the whole grid washed out
+# (measured against the live collection, 2026-08-31). The curve restores
+# a solid average day without giving up the extra steps above it.
+RAMP_ALPHA_CURVE = 0.65
+
+
+def ramp_alphas(low: float, high: float) -> tuple:
+    """``len(RAMP_FACTORS)`` alphas from *low* to *high* along
+    :data:`RAMP_ALPHA_CURVE`.
+
+    Generated rather than written out so the ramp's length lives in ONE
+    place: adding a factor can never leave a colour step undefined.
+    """
+    steps = len(RAMP_FACTORS)
+    if steps == 1:
+        return (high,)
+    return tuple(
+        round(low + (high - low) * (i / (steps - 1)) ** RAMP_ALPHA_CURVE, 3)
+        for i in range(steps)
+    )
+
+
 def level_for(count: int, levels: list) -> int:
-    """Colour step 0-4 for *count* against :func:`ramp_levels` output."""
+    """Colour step 0-N for *count* against :func:`ramp_levels` output."""
     if count <= 0:
         return 0
     for index, threshold in enumerate(levels):
@@ -254,11 +297,15 @@ def _plural(count: int, noun: str) -> str:
 def _tooltip(day: int, count: int, future: bool) -> str:
     date = day_to_date(day)
     when = f"{_WEEKDAYS[_row(day)]}, {date.day} {_MONTHS[date.month - 1]} {date.year}"
+    # Glutanimate's wording, including its split between an empty past
+    # day ("No reviews") and an empty future one ("No cards due").
     if future:
-        return f"{_plural(count, 'card')} due · {when}"
+        if count:
+            return f"{_plural(count, 'card')} due on {when}"
+        return f"No cards due on {when}"
     if count:
-        return f"{_plural(count, 'review')} · {when}"
-    return f"No reviews · {when}"
+        return f"{_plural(count, 'card')} reviewed on {when}"
+    return f"No reviews on {when}"
 
 
 def _cells_html(columns: list, levels: list) -> str:
@@ -287,44 +334,32 @@ def _cells_html(columns: list, levels: list) -> str:
     return "".join(parts)
 
 
+# Glutanimate's stats row verbatim: its four labels, in its order, with
+# its own hover text (web_content.HTML_STREAK). Label leads, value
+# follows — the reference's arrangement, not the accent-number-first one
+# Klaus used to run.
+_STAT_ROW = (
+    ("daily_avg", "Daily average", "",
+     "Average reviews on active days"),
+    ("pct_days_active", "Days learned", "%",
+     "Percentage of days with review activity over entire review history"),
+    ("streak_max", "Longest streak", "",
+     "Longest continuous streak of review activity. "
+     "All types of repetitions included."),
+    ("streak_cur", "Current streak", "",
+     "Current card review activity streak. "
+     "All types of repetitions included."),
+)
+
+
 def _stats_html(stats: dict) -> str:
-    # The chips wrap on a narrow window, so every label must survive
-    # being read alone — "best" and "of days" had no noun without
-    # their neighbours.
-    chips = (
-        (stats["streak_cur"], "day streak"),
-        (stats["streak_max"], "best streak"),
-        (stats["daily_avg"], "cards/day"),
-        (f"{stats['pct_days_active']}%", "of days studied"),
-    )
     return "".join(
-        f'<span class="klaus-hm-stat"><b>{value}</b>{label}</span>'
-        for value, label in chips
+        f'<span class="klaus-hm-stat">'
+        f'<span class="klaus-hm-stat-label">{label}:</span>'
+        f'<b title="{tip}">{stats[key]}{suffix}</b>'
+        f"</span>"
+        for key, label, suffix, tip in _STAT_ROW
     )
-
-
-def _legend_titles(levels: list) -> list:
-    """One tooltip per legend swatch: the real count band each colour
-    step stands for, read off the very cut-offs :func:`level_for`
-    colours by, so the legend can never disagree with the grid it
-    explains. Ranges take an en dash, only the outer bands name the
-    unit, and a band one count wide is just its number.
-    """
-    titles = ["No reviews"]
-    low = 1
-    for index, threshold in enumerate(levels[:-1]):
-        band = str(low) if low == threshold else f"{low}–{threshold}"
-        if index == 0:
-            band = (
-                _plural(low, "review") if low == threshold
-                else f"{band} reviews"
-            )
-        titles.append(band)
-        low = threshold + 1
-    # The top step is open above: level_for files every count past the
-    # second-to-last cut-off here, so this band has no upper edge.
-    titles.append(f"{low}+ reviews")
-    return titles
 
 
 def heatmap_html(
@@ -354,12 +389,6 @@ def heatmap_html(
         f'{_WEEKDAYS[row] if row in _WEEKDAY_LABEL_ROWS else ""}</span>'
         for row in range(7)
     )
-    titles = _legend_titles(levels)
-    legend = "".join(
-        f'<span class="klaus-hm-c l{step}" title="{titles[step]}"></span>'
-        for step in range(5)
-    )
-
     return (
         '<div class="klaus-hm">'
         '<div class="klaus-hm-top">'
@@ -375,13 +404,10 @@ def heatmap_html(
         f'<div class="klaus-hm-wd">{weekdays}</div>'
         f'<div class="klaus-hm-cells">{_cells_html(columns, levels)}</div>'
         "</div></div>"
-        '<div class="klaus-hm-legend">'
-        # Not GitHub's "Less … More": this ramp is PERSONAL — quartiles
-        # of the user's own daily average — so the legend says what the
-        # ink means for THIS user, from nothing to a full day's work.
-        f'<span>0</span>{legend}'
-        f'<span>a full day ({levels[-1]})</span>'
-        "</div>"
+        # No legend: Glutanimate's addon renders with displayLegend
+        # false — the grid and the stats row carry the whole story. The
+        # personal "0 → a full day (N)" line the 2026-08-27 audit built
+        # was retired with it (Pouya's call, 2026-08-31).
         "</div>"
     )
 
@@ -389,8 +415,8 @@ def heatmap_html(
 def _palette_vars(night: bool) -> str:
     """One palette's worth of heatmap tokens.
 
-    The four steps are the live accent at rising alpha rather than four
-    fixed colours, which is what makes the grid follow every colour
+    The steps are the live accent at rising alpha rather than fixed
+    colours, which is what makes the grid follow every colour
     theme — and alpha over the frosted panel keeps the photo behind it
     readable instead of stamping opaque blocks on top of it.
     """
@@ -400,11 +426,11 @@ def _palette_vars(night: bool) -> str:
     # the same weight of ink.
     future = "".join(
         f" --klaus-hm-f{step}: {theme.accent_rgba(night, alpha)};"
-        for step, alpha in enumerate((0.07, 0.13, 0.19, 0.26), start=1)
+        for step, alpha in enumerate(ramp_alphas(0.05, 0.26), start=1)
     )
     done = "".join(
         f" --klaus-hm-l{step}: {theme.accent_rgba(night, alpha)};"
-        for step, alpha in enumerate((0.22, 0.44, 0.68, 1.0), start=1)
+        for step, alpha in enumerate(ramp_alphas(0.15, 1.0), start=1)
     )
     # Neutral scrims, not palette colours: a plain wash of the surface
     # for a day with nothing on it, matching how panel_css spells its
@@ -457,9 +483,13 @@ def heatmap_css() -> str:
         " font-size: 11px; color: var(--klaus-hm-muted);"
         " white-space: nowrap;"
         " }"
+        # Label first, value after — the reference's arrangement. The
+        # value keeps Klaus's accent weight so the row still has an
+        # anchor to scan by.
+        " .klaus-hm-stat-label { margin-right: 4px; }"
         " .klaus-hm-stat b {"
         " color: var(--klaus-hm-accent); font-weight: 600;"
-        " font-size: 12px; margin-right: 4px;"
+        " font-size: 12px;"
         " }"
         " .klaus-hm-scroll {"
         " overflow-x: auto; overflow-y: hidden; padding-bottom: 3px;"
@@ -505,31 +535,27 @@ def heatmap_css() -> str:
         " }"
         # Out-of-window placeholders hold their row open and nothing else.
         " .klaus-hm-c.pad { background: transparent; }"
-        " .klaus-hm-c.l1 { background: var(--klaus-hm-l1); }"
-        " .klaus-hm-c.l2 { background: var(--klaus-hm-l2); }"
-        " .klaus-hm-c.l3 { background: var(--klaus-hm-l3); }"
-        " .klaus-hm-c.l4 { background: var(--klaus-hm-l4); }"
-        " .klaus-hm-c.f1, .klaus-hm-c.f2,"
-        " .klaus-hm-c.f3, .klaus-hm-c.f4 {"
+        # Generated from the ramp's own length, so adding a factor can
+        # never leave a step with a var but no rule to use it.
+        + "".join(
+            f" .klaus-hm-c.l{n} {{ background: var(--klaus-hm-l{n}); }}"
+            for n in range(1, len(RAMP_FACTORS) + 1)
+        )
+        + ", ".join(
+            f" .klaus-hm-c.f{n}" for n in range(1, len(RAMP_FACTORS) + 1)
+        )
+        + " {"
         " box-shadow: inset 0 0 0 1px var(--klaus-hm-ring);"
         " }"
-        " .klaus-hm-c.f1 { background: var(--klaus-hm-f1); }"
-        " .klaus-hm-c.f2 { background: var(--klaus-hm-f2); }"
-        " .klaus-hm-c.f3 { background: var(--klaus-hm-f3); }"
-        " .klaus-hm-c.f4 { background: var(--klaus-hm-f4); }"
+        + "".join(
+            f" .klaus-hm-c.f{n} {{ background: var(--klaus-hm-f{n}); }}"
+            for n in range(1, len(RAMP_FACTORS) + 1)
+        )
+        +
         " .klaus-hm-c.hit { cursor: pointer; }"
         " .klaus-hm-c.hit:hover {"
         " outline: 1px solid var(--klaus-hm-accent); outline-offset: 1px;"
         " }"
-        # The legend line is information now (0 → a full day), not
-        # decoration — full text colour, same reason as the labels.
-        " .klaus-hm-legend {"
-        " display: flex; align-items: center; justify-content: flex-end;"
-        f" gap: {GAP}px; margin-top: 9px;"
-        " font-size: 10px; color: var(--klaus-hm-text);"
-        " }"
-        " .klaus-hm-legend span:first-child { margin-right: 3px; }"
-        " .klaus-hm-legend span:last-child { margin-left: 3px; }"
         # Anki's own webviews get a slim scrollbar; match it rather than
         # letting a chunky default cut into the panel's bottom padding.
         " .klaus-hm-scroll::-webkit-scrollbar { height: 6px; }"

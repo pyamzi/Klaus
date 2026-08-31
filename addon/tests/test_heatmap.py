@@ -84,33 +84,69 @@ check("a single day is a streak of one",
 # ---------------------------------------------------------------- ramp
 section("the colour ramp")
 
+# The factors are Glutanimate's (renderer._dynamic_legend_factors), and
+# so is the floor: below ~20/day the steps stop separating anything.
+_N = len(heatmap.RAMP_FACTORS)
+check("the ramp uses the reference addon's nine factors",
+      heatmap.RAMP_FACTORS
+      == (0.125, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0))
 for _avg in (0, 1, 2, 3, 7, 40, 800):
     _levels = heatmap.ramp_levels(_avg)
-    if len(_levels) != 4 or any(
-        _levels[i] >= _levels[i + 1] for i in range(3)
+    if len(_levels) != _N or any(
+        _levels[i] >= _levels[i + 1] for i in range(_N - 1)
     ):
-        check(f"ramp for avg={_avg} is four ascending steps", False,
+        check(f"ramp for avg={_avg} is {_N} ascending steps", False,
               str(_levels))
         break
 else:
-    check("every average yields four STRICTLY ascending steps — a tiny "
+    check(f"every average yields {_N} STRICTLY ascending steps — a tiny "
           "average must not collapse the ramp to one usable colour", True)
 
-check("the top step is a full day's work for this user",
-      heatmap.ramp_levels(40)[-1] == 40)
-check("the ramp scales with the user: 20/day and 800/day get the same "
-      "four meanings, not the same four numbers",
-      heatmap.ramp_levels(20) != heatmap.ramp_levels(800))
+check("a low average is floored at the reference's 20, so the steps "
+      "still separate something",
+      heatmap.ramp_levels(3) == heatmap.ramp_levels(20)
+      and heatmap.RAMP_MIN_BASE == 20)
+check("above the floor the ramp scales with the user",
+      heatmap.ramp_levels(40) != heatmap.ramp_levels(800))
+check("a full day sits MID-ramp now, not at the top — that is the whole "
+      "point of the reference's factors: days above the average stay "
+      "distinguishable instead of flattening into one colour",
+      heatmap.ramp_levels(40)[heatmap.RAMP_FACTORS.index(1.0)] == 40
+      and heatmap.ramp_levels(40)[-1] == 160)
 
-_levels = heatmap.ramp_levels(40)  # [10, 20, 30, 40]
+# Alphas. Nine steps spread LINEARLY put an average day at 0.56 and
+# washed the whole grid out — visible immediately against the live
+# collection, invisible to every pin above. The reference can spread its
+# nine steps evenly because they are nine distinct HUES; ours are one
+# accent at rising alpha over a dark panel, so the curve has to
+# front-load.
+_A = heatmap.ramp_alphas(0.15, 1.0)
+check("one alpha per ramp step", len(_A) == _N)
+check("alphas rise all the way to full accent",
+      _A == tuple(sorted(_A)) and _A[-1] == 1.0 and _A[0] >= 0.1)
+_avg_step = heatmap.RAMP_FACTORS.index(1.0)
+check("an average day still reads as SOLID ink, not a wash — this is "
+      "the whole reason the curve is not linear",
+      _A[_avg_step] >= 0.6)
+check("...and it is genuinely front-loaded, not linear in disguise",
+      _A[_avg_step] > 0.15 + (1.0 - 0.15) * _avg_step / (_N - 1) + 0.05)
+check("there is still headroom above an average day, so a 2x or 4x day "
+      "is distinguishable from it",
+      len([a for a in _A if a > _A[_avg_step]]) >= 3)
+
+_levels = heatmap.ramp_levels(40)
 check("nothing studied is step 0", heatmap.level_for(0, _levels) == 0)
 check("a negative count cannot colour a cell",
       heatmap.level_for(-5, _levels) == 0)
 check("one card is already step 1", heatmap.level_for(1, _levels) == 1)
 check("a threshold belongs to its own step",
-      [heatmap.level_for(v, _levels) for v in _levels] == [1, 2, 3, 4])
+      [heatmap.level_for(v, _levels) for v in _levels]
+      == list(range(1, _N + 1)))
 check("a monster day tops out rather than overflowing",
-      heatmap.level_for(10 ** 6, _levels) == 4)
+      heatmap.level_for(10 ** 6, _levels) == _N)
+check("an average day and a 4x day no longer draw the SAME ink "
+      "(the bug the reference's factors fix)",
+      heatmap.level_for(40, _levels) != heatmap.level_for(160, _levels))
 
 
 # ---------------------------------------------------------------- grid
@@ -181,23 +217,38 @@ check("a day with NOTHING on it is not — an empty Browse reads as a "
 check("a scheduled day is clickable too", "klausmate:heatmap:101" in _html)
 check("future cells are drawn from the future ramp",
       "f1" in _html or "f2" in _html or "f3" in _html or "f4" in _html)
-check("cells carry a plain-language tooltip",
-      "40 reviews" in _html and "6 cards due" in _html
-      and "No reviews" in _html)
-check("one review is not '1 reviews'",
-      "1 review ·" in heatmap.heatmap_html({100: 1}, {}, 100, _stats, 5, 0))
-check("the stats line is in the panel, and every chip label survives "
-      "being read alone — the chips wrap on a narrow window, where "
-      "'best' and 'of days' had no noun to lean on",
-      "day streak" in _html and "best streak" in _html
-      and "cards/day" in _html and "of days studied" in _html)
+check("tooltips use the reference's phrasing — cards reviewed / cards "
+      "due / no reviews, joined with 'on'",
+      "40 cards reviewed on" in _html and "6 cards due on" in _html
+      and "No reviews on" in _html)
+check("one card is not '1 cards'",
+      "1 card reviewed on"
+      in heatmap.heatmap_html({100: 1}, {}, 100, _stats, 5, 0))
+check("an empty FUTURE day says nothing is due, not that nothing was "
+      "reviewed — the reference splits those two",
+      "No cards due on"
+      in heatmap.heatmap_html({}, {101: 6}, 100, _stats, 5, 7))
+check("the stats row carries the reference addon's four labels, in its "
+      "order (daily average, days learned, longest, current)",
+      [m for m in re.findall(
+          r"Daily average|Days learned|Longest streak|Current streak",
+          _html)]
+      == ["Daily average", "Days learned", "Longest streak",
+          "Current streak"])
+check("labels lead, values follow — the reference's layout",
+      re.search(r"Daily average:</span>\s*<b[^>]*>", _html) is not None)
+check("each stat carries the reference's own explanatory tooltip",
+      "Average reviews on active days" in _html
+      and "Percentage of days with review activity" in _html
+      and "All types of repetitions included." in _html)
 _cells = heatmap.build_columns({99: 40}, {101: 6}, 100, 14, 7)
 # Anchored so `klaus-hm-cells` and `klaus-hm-corner` cannot be counted
 # as cells: the class must end right after the `c`.
 _cell_tags = len(re.findall(r'class="klaus-hm-c[ "]', _html))
-check("exactly one cell element per grid slot, plus the five legend "
-      "swatches",
-      _cell_tags == sum(len(c["cells"]) for c in _cells) + 5,
+check("exactly one cell element per grid slot and NOTHING else — the "
+      "reference ships displayLegend:false, so there are no legend "
+      "swatches left to count",
+      _cell_tags == sum(len(c["cells"]) for c in _cells),
       f"{_cell_tags} tags")
 # NB: the 14-day window above happens to start on a Sunday and end on a
 # Saturday, so it has no ragged ends at all. Ask for one that does.
@@ -209,34 +260,17 @@ check("out-of-window slots render as padding, so a window that does "
 check("weekday labels appear on alternate rows only",
       _html.count(">Mon<") == 1 and ">Tue<" not in _html)
 
-# The legend. Its ramp is PERSONAL — quartiles of the user's own daily
-# average — so expectations are computed from ramp_levels on this
-# test's own stats, never hardcoded: the real-collection section below
-# renders whatever the live average is.
-_lv = heatmap.ramp_levels(_stats["daily_avg"])
-check("the legend runs 0 → 'a full day (N)' with N computed from THIS "
-      "user's ramp — GitHub's Less/More says nothing about a ramp that "
-      "is quartiles of the user's own daily average",
-      "<span>0</span>" in _html
-      and f"a full day ({_lv[-1]})" in _html
+# The legend is GONE. Glutanimate's addon ships displayLegend:false —
+# it shows the grid and the stats row and nothing else — and matching it
+# was Pouya's call (2026-08-31), knowingly retiring the personal
+# "0 → a full day (N)" line the 2026-08-27 audit had built.
+check("no legend element survives",
+      'class="klaus-hm-legend"' not in _html)
+check("...nor its wording, in either dialect",
+      "a full day" not in _html
       and "Less" not in _html and "More" not in _html)
-check("each legend swatch's tooltip is the exact count band it stands "
-      "for, derived from the same cut-offs level_for colours by",
-      'title="No reviews"' in _html
-      and f'title="1–{_lv[0]} reviews"' in _html
-      and f'title="{_lv[-2] + 1}+ reviews"' in _html)
-_legend_body = re.search(r'<div class="klaus-hm-legend">(.*?)</div>', _html)
-check("still exactly five swatches in the legend, one per colour step",
-      _legend_body is not None
-      and _legend_body.group(1).count("klaus-hm-c") == 5)
-check("the audit's worked example: levels [28,56,83,111] spell their "
-      "bands with en dashes, only the outer bands naming the unit",
-      heatmap._legend_titles([28, 56, 83, 111])
-      == ["No reviews", "1–28 reviews", "29–56", "57–83", "84+ reviews"])
-check("a tiny ramp still reads: a band one count wide is just its "
-      "number, and one review is never '1 reviews'",
-      heatmap._legend_titles([1, 2, 3, 4])
-      == ["No reviews", "1 review", "2", "3", "4+ reviews"])
+check("_legend_titles is gone with it, not left as dead code",
+      not hasattr(heatmap, "_legend_titles"))
 
 
 # ----------------------------------------------------------------- css
@@ -304,10 +338,8 @@ check("month and weekday labels wear FULL text colour at their 10px — "
       and "font-size: 10px" in _rule(".klaus-hm-m")
       and "--klaus-hm-muted" not in _rule(".klaus-hm-m")
       and "--klaus-hm-muted" not in _rule(".klaus-hm-w"))
-check("the legend line too — it carries information now (0 → a full "
-      "day), not boilerplate",
-      "color: var(--klaus-hm-text)" in _rule(".klaus-hm-legend")
-      and "--klaus-hm-muted" not in _rule(".klaus-hm-legend"))
+check("no legend rule is left in the sheet either",
+      ".klaus-hm-legend" not in _css)
 check("the stat labels alone STAY muted — their bold accent numbers "
       "anchor them — so the muted token must stay defined",
       "color: var(--klaus-hm-muted)" in _rule(".klaus-hm-stat")
