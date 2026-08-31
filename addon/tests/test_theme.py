@@ -97,6 +97,63 @@ for night in (False, True):
           "QTreeWidget::item:selected {" in lq
           and c["selection_bg"] in lq)
 
+section("library VS Code vernacular (K-117)")
+import os as _os  # noqa: E402 — also imported later; harmless rebind
+
+# Pouya: "make it look like the VSCode UI" — the deliberate values:
+# compact 22px rows of 13px type, a FLAT borderless tree panel, chevron
+# twisties per palette, an uppercase letter-spaced section caption, 11px
+# muted column headers, quiet flat (transparent-at-rest) buttons, and
+# full-width bands that span the indent column.
+for night in (False, True):
+    lq = theme.library_qss(night)
+    c = theme.palette(night)
+    _no_c = re.sub(r"/\*.*?\*/", "", lq, flags=re.S)
+    check(f"library_qss(night={night}): the LIBRARY section caption id is "
+          "styled as an 11px letter-spaced muted label",
+          "QLabel#LibrarySectionHeader" in lq
+          and "letter-spacing" in lq
+          and "font-size: 11px" in lq.split("QLabel#LibrarySectionHeader", 1)[1][:160])
+    _tree_blk = re.search(r"QTreeWidget \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the tree is a FLAT panel — no "
+          "border, no card radius (VS Code sidebar, not a rounded card)",
+          _tree_blk is not None
+          and "border: none" in _tree_blk.group(1)
+          and "border-radius" not in _tree_blk.group(1))
+    check(f"library_qss(night={night}): hover/selection bands span the "
+          "indent column (show-decoration-selected)",
+          "show-decoration-selected: 1;" in lq)
+    _item_blk = re.search(r"QTreeWidget::item \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): compact 22px explorer rows",
+          _item_blk is not None and "min-height: 22px" in _item_blk.group(1))
+    _closed = "chevron-right-night.svg" if night else "chevron-right-day.svg"
+    _crossed = "chevron-right-day.svg" if night else "chevron-right-night.svg"
+    _open = "chevron-night.svg" if night else "chevron-day.svg"
+    check(f"library_qss(night={night}): closed folder twisty is THIS "
+          "palette's right chevron (and not the other palette's)",
+          "QTreeWidget::branch:has-children:closed" in lq
+          and _closed in lq and _crossed not in lq)
+    check(f"library_qss(night={night}): open folder twisty reuses the "
+          "existing down chevron for this palette",
+          "QTreeWidget::branch:has-children:open" in lq and _open in lq)
+    _hdr_blk = re.search(r"QHeaderView::section \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): column headers are 11px muted "
+          "captions on the tree's own surface",
+          _hdr_blk is not None
+          and "font-size: 11px" in _hdr_blk.group(1)
+          and c["text_muted"] in _hdr_blk.group(1)
+          and c["surface"] in _hdr_blk.group(1))
+    _btn_blk = re.search(r"QPushButton \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): toolbar buttons are quiet flat — "
+          "transparent at rest, hover fill only",
+          _btn_blk is not None
+          and "background-color: transparent" in _btn_blk.group(1)
+          and "QPushButton:hover" in lq)
+check("the right-chevron assets actually ship in klausmate/web (a QSS "
+      "url() to a missing file is silently blank — twisties vanish)",
+      _os.path.exists("klausmate/web/chevron-right-day.svg")
+      and _os.path.exists("klausmate/web/chevron-right-night.svg"))
+
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
 for night in (False, True):

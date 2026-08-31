@@ -805,11 +805,18 @@ def find_bar_qss(night: bool) -> str:
 
 
 def library_qss(night: bool) -> str:
-    """The Library window (DriveWindow): window on ``bg``, the tree a
-    white card with rounded corners and quiet selection, buttons
-    secondary-grey by default (``PrimaryButton`` opts into blue —
-    inverse of :func:`dialog_qss`, because the Library's row of utility
-    buttons must not scream).
+    """The Library window (DriveWindow), in the VS Code Explorer
+    vernacular (K-117 — Pouya: "make it look like the VSCode UI"):
+    compact 22px rows of 13px type, FLAT full-width hover/selection
+    bands, chevron twisties on folders (shipped SVG files — QSS images
+    cannot be data: URIs, see :func:`_asset_url`), an uppercase
+    letter-spaced muted section caption (``#LibrarySectionHeader`` —
+    the "LIBRARY" label; Qt QSS has no text-transform, so the text
+    itself is uppercase in pdf_drive), quiet flat toolbar buttons, and
+    11px muted column headers. Numeric-column right-alignment is
+    per-item state set in pdf_drive; this sheet only paints. The
+    Library keeps its button inversion of :func:`dialog_qss` — quiet
+    default, ``PrimaryButton`` opts into blue.
 
     A selected tree ROW is two paint regions, not one: the item AND
     the branch (indentation/disclosure-arrow) cell that every row
@@ -820,38 +827,51 @@ def library_qss(night: bool) -> str:
     against the item's rounded corner (live screenshot, 2026-08-30).
     ``selection-background-color: transparent`` stops that underlay
     outright; the ``::branch`` states recolour the reserved cell to
-    match the item exactly, so the block becomes a same-colour seam
-    instead of a colour clash.
+    match the item exactly, and ``show-decoration-selected: 1`` makes
+    the band span the indent column too, so hover/selection read as
+    ONE flat full-width bar — the VS Code treatment, and exactly what
+    the no-radius rule below already demanded.
     """
     c = palette(night)
     return f"""
     QWidget#KlausLibraryWindow {{
         background-color: {c['bg']};
         color: {c['text']};
+        font-size: 13px;
+    }}
+    QLabel#LibrarySectionHeader {{
+        color: {c['text_muted']};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        background: transparent;
     }}
     QWidget#KlausLibraryWindow QTreeWidget {{
         background-color: {c['surface']};
         alternate-background-color: {c['surface']};
         color: {c['text']};
-        border: 1px solid {c['grey_light']};
-        border-radius: 12px;
-        padding: 4px;
+        border: none;
+        padding: 0px;
+        font-size: 13px;
         selection-background-color: transparent;
+        show-decoration-selected: 1;
         outline: 0;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item {{
         /* Deliberately NO border-radius here. ::item is a per-CELL
-           subcontrol, never a row, and this tree has three columns
-           (PDF / Retention / Cards) — so a radius rounds each column's
-           selection box on its own, and the adjacent rounded corners
-           notch the band at every column boundary. That is the visible
-           bug: "bumps" along what should be one straight highlight.
-           sidebar_tree_qss, the addon's other tree, has never carried a
-           radius on ::item; this one was the outlier.
+           subcontrol, never a row, and this tree has four columns
+           (PDF / Retention / Cards / Notes) — so a radius rounds each
+           column's selection box on its own, and the adjacent rounded
+           corners notch the band at every column boundary. That is the
+           visible bug: "bumps" along what should be one straight
+           highlight. sidebar_tree_qss, the addon's other tree, has
+           never carried a radius on ::item; this one was the outlier.
            A rounded FULL-ROW pill is not expressible in Qt QSS at all —
            there is no first-/last-column selector — so it would take a
-           QStyledItemDelegate painting one rect across the viewport. */
-        padding: 2px 0px;
+           QStyledItemDelegate painting one rect across the viewport.
+           min-height 22px is the VS Code Explorer row. */
+        min-height: 22px;
+        padding: 1px 4px;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:hover {{
         background: {c['hover_subtle']};
@@ -869,27 +889,44 @@ def library_qss(night: bool) -> str:
     QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
         background: {c['selection_bg']};
     }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
+        image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:open {{
+        image: {_asset_url('chevron-night.svg' if night else 'chevron-day.svg')};
+    }}
+    QWidget#KlausLibraryWindow QHeaderView {{
+        /* The header WIDGET, not just its sections: the area beyond the
+           last column is bare QHeaderView, and unstyled it painted the
+           palette base — a bright block in night mode (offscreen
+           render, 2026-08-31). */
+        background: {c['surface']};
+        border: none;
+    }}
     QWidget#KlausLibraryWindow QHeaderView::section {{
-        background: transparent;
+        background: {c['surface']};
         color: {c['text_muted']};
         border: none;
         border-bottom: 1px solid {c['grey_light']};
-        padding: 4px 6px;
+        padding: 3px 6px;
+        font-size: 11px;
         font-weight: 600;
     }}
     QWidget#KlausLibraryWindow QPushButton {{
-        background-color: {c['grey_light']};
-        color: {c['text']};
+        background-color: transparent;
+        color: {c['text_muted']};
         border: none;
-        border-radius: 8px;
-        padding: 5px 14px;
+        border-radius: 6px;
+        padding: 3px 10px;
+        font-size: 12px;
         font-weight: 600;
     }}
     QWidget#KlausLibraryWindow QPushButton:hover {{
-        background-color: {c['grey_mid']};
+        background-color: {c['hover_subtle']};
+        color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QPushButton:pressed {{
-        background-color: {c['grey_dark']};
+        background-color: {c['grey_light']};
     }}
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton {{
         background-color: {c['blue']};
@@ -898,6 +935,9 @@ def library_qss(night: bool) -> str:
     }}
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton:hover {{
         background-color: {c['blue_hover']};
+    }}
+    QWidget#KlausLibraryWindow QSplitter::handle {{
+        background: {c['bg']};
     }}
     """
 

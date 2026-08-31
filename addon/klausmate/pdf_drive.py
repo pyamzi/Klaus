@@ -23,7 +23,7 @@ from typing import Any, Callable
 
 import aqt
 from aqt import gui_hooks, mw
-from aqt.operations import QueryOp
+from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
     QAbstractItemView,
     QDialog,
@@ -47,6 +47,16 @@ from aqt.qt import (
 from aqt.utils import showWarning, tooltip
 
 from . import deck_curate, drive_store, pdf_handler, retention, tag_sync
+
+# K-117: Retention History ships in parallel via K-118 — the menu entry
+# appears once the module exists, and its absence must never break the
+# Library. `except Exception`, not ImportError, on purpose: under a stub
+# test environment a missing Qt name inside retention_history surfaces
+# as a non-ImportError, and pdf_drive must still import.
+try:
+    from . import retention_history
+except Exception:  # noqa: BLE001
+    retention_history = None
 
 DIALOG_NAME = "KlausDrive"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
@@ -251,9 +261,10 @@ class _LibraryItem(QTreeWidgetItem):
     """Tree item with numeric sort keys and folders pinned above PDFs.
 
     Column 0 (name) falls through to the base class's text comparison.
-    Columns 1/2 (Retention, Cards) carry a numeric key in ``_ROLE_SORT``
-    set by ``_apply_row`` — otherwise Qt would compare the display
-    strings lexicographically ("100%" < "20%").
+    Columns 1/2/3 (Retention, Cards, Notes) carry a numeric key in
+    ``_ROLE_SORT`` set by ``_apply_row`` — otherwise Qt would compare
+    the display strings lexicographically ("100%" < "20%", and
+    "1,000" < "900").
 
     Two invariants need to hold in EITHER sort direction: folders always
     sit above PDFs, and PDFs with no retention data (unembedded/stale/no
@@ -277,7 +288,7 @@ class _LibraryItem(QTreeWidgetItem):
             return (not self_folder) if descending else self_folder
 
         col = self._sort_column()
-        if col in (1, 2):
+        if col in (1, 2, 3):
             self_key = self.data(col, _ROLE_SORT)
             other_key = other.data(col, _ROLE_SORT)
             if self_key is not None and other_key is not None:
@@ -331,6 +342,64 @@ class _LibraryTree(QTreeWidget):
         except Exception as e:
             print(f"[klausmate] library tree dnd setup failed: {e}")
 
+    @staticmethod
+    def _external_pdf_paths(md: Any) -> list[str]:
+        """Local ``.pdf`` paths in a drag's mime data — non-empty exactly
+        when the drag is an external file drop this tree should accept
+        (K-117). Anything else (internal row drags carry no urls) comes
+        back empty and falls through to Qt's InternalMove handling."""
+        try:
+            if md is None or not md.hasUrls():
+                return []
+            return [
+                url.toLocalFile()
+                for url in md.urls()
+                if url.toLocalFile().lower().endswith(".pdf")
+            ]
+        except Exception:
+            return []
+
+    def _dest_folder_at(self, point: Any) -> str | None:
+        """The folder a drop at *point* files into: a folder row is
+        itself, a PDF row is its parent folder, empty space is the
+        root. Shared by the internal row-move and the external
+        file-drop paths so the two can never disagree on targeting."""
+        target = self.itemAt(point)
+        if target is None:
+            return None
+        if target.data(0, _ROLE_FOLDER):
+            return target.data(0, _ROLE_FOLDER)
+        if target.data(0, _ROLE_SAFE):
+            parent = target.parent()
+            return parent.data(0, _ROLE_FOLDER) if parent is not None else None
+        return None
+
+    def dragEnterEvent(self, event) -> None:  # type: ignore[override]
+        """Accept external .pdf drags (K-117) — InternalMove alone
+        refuses foreign mime data, so without this override the tree
+        never even lights up for a Finder drop. Everything else keeps
+        Qt's internal-move handling untouched."""
+        try:
+            if event.source() is not self and self._external_pdf_paths(
+                event.mimeData()
+            ):
+                event.acceptProposedAction()
+                return
+        except Exception as e:
+            print(f"[klausmate] library dragEnter failed: {e}")
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            if event.source() is not self and self._external_pdf_paths(
+                event.mimeData()
+            ):
+                event.acceptProposedAction()
+                return
+        except Exception as e:
+            print(f"[klausmate] library dragMove failed: {e}")
+        super().dragMoveEvent(event)
+
     def dropEvent(self, event) -> None:  # type: ignore[override]
         """Resolve what moved where and hand off to DriveWindow; the
         rebuild from drive.json IS the visual move. Every path finishes
@@ -338,29 +407,30 @@ class _LibraryTree(QTreeWidget):
         rebuild: QAbstractItemView's InternalMove cleanup deletes the
         dragged row itself after an accepted MoveAction (and macOS has
         been seen doing it even for drops we ignored), which is exactly
-        how Library folders were "disappearing" until reopen (K-076)."""
+        how Library folders were "disappearing" until reopen (K-076).
+
+        Two kinds of drop land here (K-117): an EXTERNAL file drag
+        (Finder et al. — ``source()`` is not this tree) imports its
+        .pdf payload into the folder under the cursor via the same
+        ``_on_dropped_paths`` every other import surface uses; an
+        internal row drag keeps its original move logic untouched."""
         try:
             try:
-                if event.source() is self:
+                external_paths = (
+                    self._external_pdf_paths(event.mimeData())
+                    if event.source() is not self
+                    else []
+                )
+                if external_paths:
+                    dest = self._dest_folder_at(event.position().toPoint())
+                    self._window._on_dropped_paths(external_paths, dest)
+                elif event.source() is self:
                     dragged = self.currentItem()
                     safe = dragged.data(0, _ROLE_SAFE) if dragged is not None else None
                     folder_path = (
                         dragged.data(0, _ROLE_FOLDER) if dragged is not None else None
                     )
-                    target = self.itemAt(event.position().toPoint())
-                    if target is None:
-                        dest = None
-                    elif target.data(0, _ROLE_FOLDER):
-                        dest = target.data(0, _ROLE_FOLDER)
-                    elif target.data(0, _ROLE_SAFE):
-                        parent = target.parent()
-                        dest = (
-                            parent.data(0, _ROLE_FOLDER)
-                            if parent is not None
-                            else None
-                        )
-                    else:
-                        dest = None
+                    dest = self._dest_folder_at(event.position().toPoint())
 
                     if safe:
                         current_parent = dragged.parent()
@@ -542,8 +612,9 @@ class DriveWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Library — KlausMate")
         self.setMinimumSize(720, 420)
-        # SynapsePro card-on-canvas language: window on bg, tree as a
-        # white rounded card, quiet grey utility buttons.
+        # VS Code Explorer language (K-117): window on bg, the tree a
+        # flat full-bleed panel on surface with compact rows, an
+        # uppercase section caption with quiet flat actions beside it.
         try:
             from . import theme as _theme
 
@@ -565,15 +636,32 @@ class DriveWindow(QWidget):
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
         outer.addWidget(self.splitter, 1)
 
-        # ---- left: tree + status ----
+        # ---- left: section header + tree + status ----
         left = QWidget(self.splitter)
         lay = QVBoxLayout(left)
         lay.setContentsMargins(6, 6, 6, 6)
-        lay.setSpacing(6)
+        lay.setSpacing(4)
+
+        # VS Code sidebar section header: uppercase caption left, the
+        # section's quiet actions right (the old bottom button row moved
+        # up here). Uppercase in the TEXT — Qt QSS has no text-transform.
+        header_row = QHBoxLayout()
+        header_row.setSpacing(2)
+        section = QLabel("LIBRARY", left)
+        section.setObjectName("LibrarySectionHeader")
+        header_row.addWidget(section)
+        header_row.addStretch(1)
+        new_folder = QPushButton("New Folder…", left)
+        new_folder.clicked.connect(lambda: self._new_folder())
+        header_row.addWidget(new_folder)
+        refresh = QPushButton("Refresh", left)
+        refresh.clicked.connect(self._refresh_rows)
+        header_row.addWidget(refresh)
+        lay.addLayout(header_row)
 
         self.tree = _LibraryTree(self, left)
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["PDF", "Retention", "Cards"])
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["PDF", "Retention", "Cards", "Notes"])
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
@@ -582,7 +670,22 @@ class DriveWindow(QWidget):
             self.tree.setColumnWidth(0, 240)
             self.tree.header().setStretchLastSection(False)
             self.tree.setColumnWidth(1, 80)
+            # 88, not a slimmer numeric width: the Cards cell doubles as
+            # the status cell ("suspended" / "not embedded"), and 64px
+            # elided those to "suspe…" (offscreen render, 2026-08-31).
+            self.tree.setColumnWidth(2, 88)
+            self.tree.setColumnWidth(3, 64)
             self.tree.header().setSectionsClickable(True)
+            # VS Code Explorer density: shallow indent, uniform 22px
+            # rows (the QSS min-height; uniformity also speeds layout).
+            self.tree.setIndentation(16)
+            self.tree.setUniformRowHeights(True)
+            # Numeric columns read right-aligned, header cells included
+            # (per-item alignment happens in _apply_row).
+            align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            header_item = self.tree.headerItem()
+            for col in (1, 2, 3):
+                header_item.setTextAlignment(col, align)
             self.tree.setSortingEnabled(True)
             # Worst-first by default: the Library's job (PRODUCT.md) is
             # ranking lecture material by how poorly it is retained —
@@ -593,16 +696,6 @@ class DriveWindow(QWidget):
         except Exception:
             pass
         lay.addWidget(self.tree, 1)
-
-        btn_row = QHBoxLayout()
-        new_folder = QPushButton("New Folder…", left)
-        new_folder.clicked.connect(lambda: self._new_folder())
-        btn_row.addWidget(new_folder)
-        refresh = QPushButton("Refresh", left)
-        refresh.clicked.connect(self._refresh_rows)
-        btn_row.addWidget(refresh)
-        btn_row.addStretch(1)
-        lay.addLayout(btn_row)
 
         self.status = QLabel("", left)
         self.status.setWordWrap(True)
@@ -750,9 +843,8 @@ class DriveWindow(QWidget):
                         else _LibraryItem(self.tree, [leaf])
                     )
                     item.setData(0, _ROLE_FOLDER, path)
-                    font = item.font(0)
-                    font.setBold(True)
-                    item.setFont(0, font)
+                    # No bold (K-117): VS Code folders are regular
+                    # weight — the chevron twisty carries the affordance.
                     item.setExpanded(expanded.get(path, True))
                     folder_items[path] = item
                     return item
@@ -801,42 +893,110 @@ class DriveWindow(QWidget):
         return item
 
     def _apply_row(self, item: QTreeWidgetItem, row: dict | None) -> None:
+        # Numeric columns are right-aligned (VS Code report language;
+        # K-117). Runtime-only on purpose: the AlignmentFlag OR can't
+        # run under the fixed test stubs at import time.
+        try:
+            align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            for col in (1, 2, 3):
+                item.setTextAlignment(col, align)
+        except Exception:
+            pass
         retention_val: float | None = None
         cards: int | None = None
+        notes: int | None = None
+        suspended = 0
         if not row:
             item.setText(1, "—")
             item.setText(2, "")
+            item.setText(3, "")
         elif not row.get("indexed"):
             item.setText(1, "—")
             item.setText(2, "not embedded")
+            item.setText(3, "")
+            # Status strings can elide in a numeric-width column — the
+            # tooltip carries the full sentence, in the menu's language.
+            item.setToolTip(2, "Not embedded yet — run Add to Search Index.")
         elif row.get("stale"):
             item.setText(1, "—")
             item.setText(2, "re-embed needed")
+            item.setText(3, "")
+            item.setToolTip(2, "The index is stale — run Update Search Index.")
         else:
             retention_val = row.get("retention")
             item.setText(
                 1, f"{round(retention_val * 100)}%" if retention_val is not None else "—"
             )
-            cards = int(row.get("matched_cards") or 0)
+            # Separate Cards/Notes columns (K-117). card_count counts
+            # only VIEWABLE cards (suspended excluded — "don't show the
+            # cards that are not viewable") and note_count the matched
+            # notes; both computed by retention.priority_rows (K-118
+            # contract). Consumed via .get so this file stands alone:
+            # until those keys exist the cells render an em-dash and
+            # light up the moment K-118 lands.
+            raw_cards = row.get("card_count")
+            raw_notes = row.get("note_count")
+            cards = int(raw_cards) if raw_cards is not None else None
+            notes = int(raw_notes) if raw_notes is not None else None
+            suspended = int(row.get("suspended_count") or 0)
+            if cards == 0 and suspended > 0:
+                # Every matched card is suspended: say so instead of a
+                # bare 0, and dim the whole row below.
+                item.setText(2, "suspended")
+            else:
+                item.setText(2, f"{cards:,}" if cards is not None else "—")
+            item.setText(3, f"{notes:,}" if notes is not None else "—")
+            # The old composite cell's detail survives as hover text.
+            matched = int(row.get("matched_cards") or 0)
             new_pct = float(row.get("new_pct") or 0.0)
-            item.setText(
-                2,
-                f"{cards:,} cards · {round(new_pct * 100)}% unseen"
-                if cards
-                else "no matches",
-            )
+            bits = [f"{matched:,} matched cards"]
+            if suspended:
+                bits.append(f"{suspended:,} suspended")
+            bits.append(f"{round(new_pct * 100)}% unseen")
+            tip = " · ".join(bits)
+            item.setToolTip(2, tip)
+            item.setToolTip(3, tip)
         # Sort keys live in a role, not the display text, so the tree can
-        # sort numerically instead of lexicographically ("100%" < "20%").
-        # -1.0 is an out-of-range sentinel: no row/not embedded/stale have
-        # no retention *or* card count to speak of, so both columns sink
-        # them to the bottom (see _LibraryItem.__lt__). A PDF that IS
-        # embedded but matched nothing is a real, known zero — it sorts
-        # with the numbers, not with the unknowns.
+        # sort numerically instead of lexicographically ("100%" < "20%",
+        # "1,000" < "900"). -1.0 is an out-of-range sentinel: no row/not
+        # embedded/stale have no retention *or* counts to speak of, so
+        # all three columns sink them to the bottom (see
+        # _LibraryItem.__lt__). A PDF that IS embedded but matched
+        # nothing is a real, known zero — it sorts with the numbers, not
+        # with the unknowns. Absent count keys (K-118 not landed) sort
+        # as unknowns too.
         item.setData(
             1, _ROLE_SORT, float(retention_val) if retention_val is not None else _UNKNOWN_SORT
         )
         item.setData(2, _ROLE_SORT, float(cards) if cards is not None else _UNKNOWN_SORT)
+        item.setData(3, _ROLE_SORT, float(notes) if notes is not None else _UNKNOWN_SORT)
         self._set_retention_color(item, retention_val)
+        # After the retention colour on purpose: a fully suspended row's
+        # dim wash covers every column, that cell included.
+        self._set_suspended_dim(item, cards == 0 and suspended > 0)
+
+    def _set_suspended_dim(self, item: QTreeWidgetItem, dimmed: bool) -> None:
+        """A fully suspended PDF (every matched card suspended) reads as
+        dormant: the whole row drops to the faint text token (K-117).
+        Un-dimming clears the ForegroundRole with None so the default
+        foreground returns — except column 1, whose colour belongs to
+        ``_set_retention_color`` and is repainted right before this."""
+        try:
+            if dimmed:
+                from aqt.qt import QBrush, QColor
+
+                from . import theme as _theme
+
+                faint = QBrush(
+                    QColor(_theme.palette(_theme.night_mode())["text_faint"])
+                )
+                for col in range(4):
+                    item.setForeground(col, faint)
+            else:
+                for col in (0, 2, 3):
+                    item.setData(col, Qt.ItemDataRole.ForegroundRole, None)
+        except Exception as e:
+            print(f"[klausmate] suspended dim failed: {e}")
 
     def _set_retention_color(self, item: QTreeWidgetItem, fraction: float | None) -> None:
         """Color the retention cell's text only — no row background, no
@@ -1084,22 +1244,29 @@ class DriveWindow(QWidget):
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
         lay.addWidget(buttons)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-        value = slider.value() / 100.0
-        retention.set_threshold(safe, value)
-        tag_sync.sync_after_threshold(mw, safe, matches, value)
-        row = self.rows.get(safe)
-        if row is not None and matches is not None:
-            agg = retention.pdf_retention(
-                [(int(n), float(s)) for n, s in matches], value, self.card_r
-            )
-            row.update(threshold=value, **{
-                k: agg[k] for k in ("retention", "matched_cards", "new_pct", "priority")
-            })
-            for item in self._iter_pdf_items():
-                if item.data(0, _ROLE_SAFE) == safe:
-                    self._apply_row(item, row)
+
+        def apply() -> None:
+            value = slider.value() / 100.0
+            retention.set_threshold(safe, value)
+            tag_sync.sync_after_threshold(mw, safe, matches, value)
+            row = self.rows.get(safe)
+            if row is not None and matches is not None:
+                agg = retention.pdf_retention(
+                    [(int(n), float(s)) for n, s in matches], value, self.card_r
+                )
+                row.update(threshold=value, **{
+                    k: agg[k] for k in ("retention", "matched_cards", "new_pct", "priority")
+                })
+                for item in self._iter_pdf_items():
+                    if item.data(0, _ROLE_SAFE) == safe:
+                        self._apply_row(item, row)
+
+        # K-114: window-modal open() + accepted callback, never
+        # app-modal exec() — that path segfaulted seven times on
+        # Qt 6.11 + macOS 26 (manage_models' precedent; the reject
+        # path simply never fires apply).
+        dlg.accepted.connect(apply)
+        dlg.open()
 
     def _on_browse(self, safe: str) -> None:
         matches = self.matches.get(safe)
@@ -1120,6 +1287,57 @@ class DriveWindow(QWidget):
         browser = aqt.dialogs.open("Browser", mw)
         browser.search_for(f'tag:"{tag}"')
 
+    def _set_suspended_cards(self, safe: str, suspend: bool) -> None:
+        """Suspend or unsuspend every card of this PDF's matched notes
+        (K-117 — "allow me to suspend and unsuspend specific PDFs on
+        their own").
+
+        Membership IS the per-PDF !Library tag (tag_sync's invariant):
+        the stored tag when one exists — the exact string tag_sync last
+        applied, same resolution as the Browse hop — falling back to
+        the derived ``desired_tag`` for a PDF whose tag was never
+        stored. The sched call runs as ONE CollectionOp so it lands as
+        a single undoable step (curation.py's threading pattern; the
+        sched API brings its own undo entry, so no custom entry is
+        needed), and the rows refresh after so the Cards column and the
+        dimmed row treatment follow immediately.
+        """
+        if mw is None or mw.col is None:
+            return
+        tag = tag_sync.get_stored_tag(safe)
+        if not tag:
+            folder, display = tag_sync._folder_and_display(safe)
+            tag = tag_sync.desired_tag(folder, display)
+        try:
+            cids = list(
+                mw.col.find_cards(f'tag:"{tag_sync._escape_tag(tag)}"')
+            )
+        except Exception as e:  # noqa: BLE001
+            self.status.setText(f"Could not find this PDF's cards: {e}")
+            return
+        if not cids:
+            self.status.setText(
+                "No cards carry this PDF's Library tag yet — index it first."
+            )
+            return
+
+        def op(col):
+            if suspend:
+                return col.sched.suspend_cards(cids)
+            return col.sched.unsuspend_cards(cids)
+
+        verb = "Suspended" if suspend else "Unsuspended"
+
+        def done(_changes) -> None:
+            if not self._alive():
+                return
+            tooltip(f"{verb} {len(cids):,} cards (Ctrl+Z to undo)", parent=self)
+            self._refresh_rows()
+
+        # Parented to mw like the QueryOp above: the window may close
+        # mid-run; _alive() guards the callback instead.
+        CollectionOp(parent=mw, op=op).success(done).run_in_background()
+
     # ----------------------------------------------------------- actions
 
     def _on_item_activated(self, item: QTreeWidgetItem, _col: int = 0) -> None:
@@ -1134,19 +1352,28 @@ class DriveWindow(QWidget):
             print(f"[klausmate] drive open failed for {safe}: {e}")
             showWarning(f"Could not open that PDF.\n\n{e}")
 
-    def _on_dropped_paths(self, paths: list[str]) -> None:
+    def _on_dropped_paths(
+        self, paths: list[str], folder: str | None = None
+    ) -> None:
         """Import PDFs dropped on, or picked via Browse… in, the drop
-        zone. Reaches the same import_pdf_file() every other PDF entry
+        zone — and, since K-117, dropped straight onto the folder tree.
+        Reaches the same import_pdf_file() every other PDF entry
         point uses (its own docstring already names "drive window" as a
         caller) so a file lands in the store exactly like it would from
         the deck screen or the editor's PDF bar — the only difference is
         what happens after: no arm(), just a tree rebuild so the new PDF
         shows up immediately. Arming is deck-screen semantics; the
         Library's job here stops at "get it into the store and visible."
+
+        ``folder`` is the tree drop's target (None = root — what the
+        bottom drop zone always passes): each imported PDF is FILED
+        there through ``_move_pdf``, the one choke point that already
+        moves the store entry, the on-disk file, and the !Library tag
+        together.
         """
         from . import import_pdf_file
 
-        imported = 0
+        imported: list[str] = []
         for path in paths:
             try:
                 name = import_pdf_file(path)
@@ -1154,7 +1381,15 @@ class DriveWindow(QWidget):
                 print(f"[klausmate] library import failed for {path}: {e}")
                 continue
             if name:
-                imported += 1
+                imported.append(name)
+        if folder:
+            for name in imported:
+                try:
+                    self._move_pdf(name, folder)
+                except Exception as e:  # noqa: BLE001
+                    print(
+                        f"[klausmate] library drop filing failed for {name!r}: {e}"
+                    )
         if imported:
             self.rebuild_tree()
 
@@ -1173,6 +1408,12 @@ class DriveWindow(QWidget):
     def _on_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
         menu = QMenu(self)
+        try:
+            # K-117 menu clarity: the index/curate actions carry
+            # explanatory tooltips — invisible unless the menu opts in.
+            menu.setToolTipsVisible(True)
+        except Exception:
+            pass
         if item is not None and item.data(0, _ROLE_SAFE):
             self._build_pdf_menu(menu, item)
         elif item is not None and item.data(0, _ROLE_FOLDER):
@@ -1204,17 +1445,59 @@ class DriveWindow(QWidget):
         )
 
         menu.addSeparator()
-        embed_label = "Re-index" if row.get("indexed") else "Add to index"
-        menu.addAction(embed_label).triggered.connect(lambda: self._on_embed(safe))
+        # K-117 menu clarity ("I don't understand what reindex and
+        # curate deck difference is"): the index action says what it
+        # indexes, and both it and Curate carry tooltips spelling out
+        # what each one touches (visible via setToolTipsVisible above).
+        embed_label = (
+            "Update Search Index" if row.get("indexed") else "Add to Search Index"
+        )
+        embed_action = menu.addAction(embed_label)
+        embed_action.setToolTip(
+            "Re-reads the PDF and recomputes which cards match it. "
+            "Does not touch your decks."
+        )
+        embed_action.triggered.connect(lambda: self._on_embed(safe))
         menu.addAction("Match Sensitivity…").triggered.connect(
             lambda: self._on_threshold(safe)
         )
         menu.addAction("Show Matched Cards in Browse").triggered.connect(
             lambda: self._on_browse(safe)
         )
-        menu.addAction("Curate Deck from This PDF…").triggered.connect(
-            lambda: self._curate(safe)
-        )
+        if retention_history is not None:
+            # K-118's contract: open_history_dialog(parent, safe, label).
+            menu.addAction("Retention History…").triggered.connect(
+                lambda: retention_history.open_history_dialog(
+                    self, safe, row.get("label") or safe
+                )
+            )
+        curate_action = menu.addAction("Curate Deck from This PDF…")
+        curate_action.setToolTip("Copies the matching cards into a new deck.")
+        curate_action.triggered.connect(lambda: self._curate(safe))
+        menu.addSeparator()
+        # Per-PDF suspend/unsuspend (K-117). Offer by current state when
+        # the K-118 count keys are present; with counts unknown offer
+        # both — the runtime path degrades to a status line when the
+        # tag has no cards.
+        cards = row.get("card_count")
+        suspended = int(row.get("suspended_count") or 0)
+        if cards is None or int(cards) > 0:
+            suspend_action = menu.addAction("Suspend Cards")
+            suspend_action.setToolTip(
+                "Suspends every card of this PDF's matched notes — they "
+                "stop coming up in reviews until unsuspended."
+            )
+            suspend_action.triggered.connect(
+                lambda _c=False, s=safe: self._set_suspended_cards(s, True)
+            )
+        if cards is None or suspended > 0:
+            unsuspend_action = menu.addAction("Unsuspend Cards")
+            unsuspend_action.setToolTip(
+                "Returns this PDF's suspended cards to review."
+            )
+            unsuspend_action.triggered.connect(
+                lambda _c=False, s=safe: self._set_suspended_cards(s, False)
+            )
         menu.addSeparator()
         menu.addAction("Delete…").triggered.connect(lambda: self._delete_pdf(safe))
 
