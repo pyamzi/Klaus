@@ -295,6 +295,37 @@ _BUTTON_JS = """
     b.removeAttribute("onclick");
     b.onclick = function () { pycmd("klausmate:lecture"); };
     more.parentNode.insertBefore(b, more);
+
+    // Anki centres the ease buttons inside the MIDDLE cell, not the window —
+    // that cell only lands window-centred while the two side cells happen to
+    // be equal (one button each). Adding ours to the right cell drags the
+    // whole answer row ~half our width to the LEFT, into whatever the left
+    // cell holds: AnkiHub parks its "View on AnkiHub" button there as
+    // position:absolute, so it sits at its static position and cannot be
+    // pushed out of the way — the rows collide (Pouya's screenshot).
+    // Pad the left CELL by exactly our own width instead. Padding widens the
+    // column while leaving the cell's own content — and that absolute
+    // button's static position — exactly where they were; a spacer ELEMENT
+    // would shift both and end up worse than doing nothing.
+    var left = document.querySelector("#innertable > tbody > tr > td.stat:first-child");
+    var edit = left ? left.querySelector("button") : null;
+    if (!edit || left === b.parentNode) { return; }
+    var outer = function (el) {
+      var cs = window.getComputedStyle(el);
+      return el.offsetWidth + parseFloat(cs.marginLeft) + parseFloat(cs.marginRight);
+    };
+    var pad = outer(b);
+    // Never buy centring at the cost of wrapping the answer row onto a second
+    // line — the bar's height is fixed and the second line is clipped. Below
+    // this width the padding is simply not applied (bar behaves as it does
+    // today). Anki's four ease buttons are cut from the same CSS as ours, so
+    // 4 * pad bounds their row; + edit + more + our own pad = the whole bar.
+    var minw = Math.ceil(outer(edit) + outer(more) + pad * 6);
+    var st = document.createElement("style");
+    st.textContent = "@media (min-width: " + minw + "px) {"
+      + " #innertable > tbody > tr > td.stat:first-child {"
+      + " padding-right: " + pad + "px; } }";
+    document.head.appendChild(st);
   } catch (e) {}
 })();
 </script>

@@ -392,6 +392,36 @@ check("bottom bar name-matched", '"ReviewerBottomBar"' in SRC)
 check("button posts klausmate:lecture", 'pycmd("klausmate:lecture")' in SRC)
 check("button id present", "klaus-lecture-btn" in SRC)
 check("button sits beside More", "insertBefore(b, more)" in SRC)
+
+# K-120. Anki centres the ease buttons inside the MIDDLE table cell, not the
+# window — that cell is only window-centred while the two side cells are equal.
+# Our button lives in the right cell, so without a matching pad on the left the
+# whole answer row slides left, into AnkiHub's position:absolute "View on
+# AnkiHub" button (which sits at its static position and cannot be pushed away).
+# Geometry was verified in a Chromium harness against Anki 26.8.1's verbatim
+# _bottomHTML + reviewer-bottom.css + AnkiHub's real injection; these pins hold
+# the shape of the fix that harness measured.
+check(
+    "left cell is balanced with padding, not a spacer element",
+    "paddingRight" in SRC or "padding-right" in SRC,
+)
+check(
+    "balance is scoped to the OUTER table's first cell",
+    "#innertable > tbody > tr > td.stat:first-child" in SRC,
+)
+check(
+    "balance selector cannot reach the ease row's own cell",
+    "#innertable td:first-child" not in SRC,
+)
+check("balance width is measured, never hardcoded", "offsetWidth" in SRC)
+check(
+    "balance is guarded by a computed min-width media query",
+    "@media (min-width: " in SRC and "minw" in SRC,
+)
+check(
+    "min-width threshold leaves room for the four ease buttons",
+    "pad * 6" in SRC,
+)
 check("bridge matches the exact message", '"klausmate:lecture"' in CODE)
 check("toggle deferred out of the bridge", "QTimer.singleShot(0, toggle_lecture_view)" in CODE)
 check("no app-modal exec anywhere", ".exec()" not in CODE)
