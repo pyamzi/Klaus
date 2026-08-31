@@ -189,8 +189,16 @@ check("forecast_days=0 stops the grid at today",
 
 _labels = heatmap.month_labels(_cols)
 check("one label slot per column", len(_labels) == len(_cols))
-check("the first column is never labelled — its month began off-screen",
-      _labels[0] == "")
+check("the leading block is NAMED when the month owning it is the "
+      "month its visible days are in — dropping it leaves the first "
+      "weeks of the grid anonymous",
+      heatmap.month_labels(
+          heatmap.build_columns({}, {}, 20000, 365, 28))[0] != "")
+check("...and left blank when it is not: a window opening on a Friday "
+      "sits in a week the PREVIOUS month owns, and naming that block "
+      "after days that are off-screen is worse than not naming it",
+      heatmap.month_labels(
+          heatmap.build_columns({}, {}, 20000, 308, 28))[0] == "")
 _year = heatmap.month_labels(
     heatmap.build_columns({}, {}, _today, 365, 28))
 check("a year of columns names about twelve months",
@@ -198,6 +206,43 @@ check("a year of columns names about twelve months",
       str([m for m in _year if m]))
 check("month names are the real ones, in order",
       all(m in heatmap._MONTHS for m in _year if m))
+
+
+# K-122. A label is also a BLOCK boundary now (MONTH_GAP opens there), so
+# "which month does this week belong to" stopped being cosmetic. A week
+# spans at most two months; the one holding 4+ of its 7 days owns it.
+def _majority_month(column):
+    """The month holding most of *column*'s seven days."""
+    months = [heatmap.day_to_date(column["start"] + r).month
+              for r in range(7)]
+    return max(set(months), key=months.count)
+
+
+def _misfiled(columns):
+    """Columns sitting under a label that is not their majority month."""
+    labels = heatmap.month_labels(columns)
+    governing = _majority_month(columns[0])
+    bad = []
+    for index, column in enumerate(columns):
+        if labels[index]:
+            governing = heatmap._MONTHS.index(labels[index]) + 1
+        if _majority_month(column) != governing:
+            bad.append((index, heatmap.day_to_date(column["start"]),
+                        labels[index] or "-"))
+    return bad
+
+
+_wins = [heatmap.build_columns({}, {}, _today + off, 365, 28)
+         for off in range(0, 371, 37)]
+check("every week sits under the month that owns most of its days — "
+      "the label is a BLOCK boundary now, so a week filed under the "
+      "wrong side of it puts real days in the wrong month",
+      all(not _misfiled(w) for w in _wins),
+      "; ".join(f"{d} labelled {lab}" for w in _wins
+                for _i, d, lab in _misfiled(w)[:3]))
+check("...including the months that begin ON a Sunday, which the old "
+      "week-start rule got right by luck",
+      not _misfiled(heatmap.build_columns({}, {}, _today, 365, 28)))
 
 
 # ------------------------------------------------------------- markup
@@ -355,7 +400,10 @@ check("and never FORCES a width — that is what pushed the deck panel "
       "off-screen before. `max-width: 100%` caps and is welcome; a "
       "bare `width: 100%` or a `min-width` is not",
       not re.search(r"(?<!max-)width: 100%", _css)
-      and "min-width" not in _css
+      # A POSITIVE minimum is the hazard; `min-width: 0` is its
+      # opposite — it removes the automatic minimum flex would
+      # otherwise impose (see .klaus-hm-m).
+      and set(re.findall(r"min-width:\s*([^;]+);", _css)) <= {"0"}
       and "max-width: 100%" in _css)
 check("weekday labels ride the same row pitch",
       _css.count(f"repeat(7, {heatmap.CELL}px)") == 2)
@@ -378,6 +426,11 @@ check("month labels ride the same column pitch as the cells, so they "
       "are flex rows of CELL-wide items sharing the cells' own gap",
       _css.count(f"display: flex; gap: {heatmap.GAP}px") == 2
       and f"flex: 0 0 {heatmap.CELL}px" in _rule(".klaus-hm-m"))
+check("the month strip's boxes cannot be inflated by their own text — "
+      "a flex item's automatic minimum is its min-content size, and a "
+      "nowrap month name would floor each LABELLED box above the cell "
+      "pitch and walk every later label off its column",
+      "min-width: 0" in _rule(".klaus-hm-m"))
 check("the corner menu is opaque and PALETTE-owned, in both palettes "
       "— borrowing Anki's --canvas-overlay would land a white popover "
       "on a dark deck screen wherever that token is not defined",

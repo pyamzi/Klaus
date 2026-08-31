@@ -305,14 +305,36 @@ def build_columns(
 def month_labels(columns: list) -> list:
     """One label per column: the month name where a new month starts,
     otherwise empty. The first column never gets one — its month began
-    off-screen, so labelling it would point at a partial week."""
+    off-screen, so labelling it would point at a partial week.
+
+    A week belongs to the month holding MOST of its seven days, which is
+    the month of its middle day: a week spans at most two months, so the
+    day at index 3 is in the majority side by construction. Reading the
+    month off the week's SUNDAY instead — which this did until
+    2026-08-31 — labels the first week that *starts* in the new month,
+    up to six days late; on a 2026-08-31 year that put 11 of 13 labels a
+    full week right of their month, the two exceptions being the months
+    that happened to begin on a Sunday. Cosmetic while the grid was one
+    continuous ribbon; not once MONTH_GAP made the label a visible BLOCK
+    boundary, because then the first days of October really do sit
+    inside the September block.
+    """
     labels: list = []
     previous = None
     for index, column in enumerate(columns):
-        month = day_to_date(column["start"]).month
-        labels.append(
-            _MONTHS[month - 1] if index and month != previous else ""
-        )
+        month = day_to_date(column["start"] + 3).month
+        if index:
+            show = month != previous
+        else:
+            # The leading column is always a partial week — the window
+            # starts mid-week — so name it only when the month owning
+            # the week is the month its VISIBLE days are actually in.
+            # A window opening on Friday 2 October sits in a week Sep
+            # owns 4 days of; labelling that block "Sep" would name it
+            # after days that are not on screen.
+            visible = [cell for cell in column["cells"] if cell is not None]
+            show = bool(visible) and day_to_date(visible[0][0]).month == month
+        labels.append(_MONTHS[month - 1] if show else "")
         previous = month
     return labels
 
@@ -624,6 +646,16 @@ def heatmap_css() -> str:
         # Only the stat labels stay muted; their bold accent numbers
         # anchor them.
         " .klaus-hm-m {"
+        # min-width: 0 is load-bearing, not tidiness. A flex item's
+        # automatic minimum size is its MIN-CONTENT size, and
+        # white-space: nowrap makes a month name unbreakable — so
+        # "Sep" floors this box at ~20px and the 10px basis is
+        # ignored. Only the LABELLED boxes inflate, so each one shoves
+        # every later column right: ~8px a label, 103px of drift by the
+        # far end of a year, which is the labels walking away from
+        # their own months. (The pre-flex grid never had this: a fixed
+        # grid-auto-columns track is not sized by its item.)
+        " min-width: 0;"
         f" flex: 0 0 {CELL}px;"
         " font-size: 10px; color: var(--klaus-hm-text);"
         " white-space: nowrap; overflow: visible; line-height: 11px;"
