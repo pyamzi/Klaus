@@ -198,7 +198,25 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   record schema (0-based page, top-left page-point rects; CSS px = pts ×
   scale), find bar (searches cached text of unrendered pages; rings the
   owning span), thumbnails, zoom (⌘+/−/0), go-to-page, custom context
-  menu, marquee/region/page image copies. **The page owns rendering and
+  menu, marquee/region/page image copies. Since K-116 every zoom path
+  (trackpad pinch = Chromium ctrl-wheel, ⌘ keys, menu, annobar)
+  funnels through ONE session: instant compositor-transform preview
+  anchored at the cursor (pinch) or viewport centre (steps), then a
+  160ms settle that CSS-stretches existing canvases into the new
+  layout and swaps crisp re-renders in place, visible pages first —
+  zoom never blanks a page; the document-wide non-passive
+  preventDefault on ctrl-wheel is what stops QtWebEngine frame-zoom
+  fighting the pinned zoomFactor. A floating `#annobar` pill (findbar
+  family) carries Highlight (mode: selection release
+  auto-highlights), Add Text, and −/%/+/fit; `text-add` joins
+  `hl-add`/`hl-remove`/`note-edit` on the bridge — Python clamps
+  `{page,x,y}` (`clamp_text_add`, 14,400pt spec cap) and mints the
+  K-077 `kind:"text"` record (`make_text_record`, explicit
+  #000000/12pt — the validator would backfill highlight YELLOW) after
+  a window-modal `QInputDialog.open()` prompt (K-114: never exec).
+  `#pages` is `width:max-content; min-width:100%` so beyond-fit zoom
+  stays scrollable (the old fixed-width flex centred overflow off the
+  left edge, unreachable). **The page owns rendering and
   gestures; Python owns the annotations JSON** — mutations arrive over
   the bridge (`hl-add`/`hl-remove`/`note-edit`), `PdfJsViewer` persists
   via `pdf_handler.save_annotations` + the same 500ms debounced bake,

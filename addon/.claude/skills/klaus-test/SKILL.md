@@ -13,9 +13,14 @@ imported normally. This skill provides the workaround and the conventions.
 - Anki 26.8.1 ships **3.13 bytecode only** at
   `/Applications/Anki.app/Contents/Resources/app_packages`; this machine's
   `python3` is **3.9**. `import aqt` fails with `bad magic number`.
-- PyQt6 there is **not** loadable either — `sip` is a 3.13-only extension,
-  not abi3. **Qt widgets cannot be instantiated or rendered in tests.**
-  Layout and appearance can only be checked by restarting Anki and looking.
+- Anki's bundled PyQt6 is **not** loadable — `sip` is a 3.13-only
+  extension, not abi3. But system `python3` has its OWN PyQt6 installed
+  (verified 2026-08-31, K-117): **real offscreen widget tests ARE
+  possible** — see `tests/test_drive.py`'s real-Qt section (aqt.qt shim
+  over genuine PyQt6, `QT_QPA_PLATFORM=offscreen`, renders to QPixmap
+  for visual checks). Prefer logic tests; reach for real Qt when the
+  behavior lives in widget mechanics (drag/drop, sorting, menus).
+  Final look still needs a restarted Anki.
 - Therefore: test *logic*, never *widgets*.
 
 ## Writing a test
@@ -71,6 +76,14 @@ bug: with an empty model library, "Claude API…" being the only dropdown item
 silently flipped the configured engine.
 
 ## Hard rules
+
+- **Falsification drivers must purge `__pycache__` and set
+  `PYTHONDONTWRITEBYTECODE=1`** (K-117 lesson): a same-byte-size
+  mutation within one mtime second defeats cpython's (mtime,size) pyc
+  check, so the run silently executes the PREVIOUS code and the pin
+  "fails to fail". Also: a synthetic `QDropEvent` does not own its
+  `QMimeData` — keep a Python reference bound, or the event points at
+  freed memory.
 
 - **Never point tests at `klausmate/user_files/`** — it holds real PDFs,
   annotations, and the card index. Use `tempfile.mkdtemp()` and pass that as
