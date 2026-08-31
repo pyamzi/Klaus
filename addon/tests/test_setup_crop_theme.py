@@ -58,6 +58,21 @@ def _hex_hits_outside_comments(src: str) -> list:
     return hits
 
 
+section("the hex pin can actually fail (K-135)")
+# A pin that cannot fail is worse than no pin: it reads as coverage.
+# This one could not — it stripped each line at its first "#" to drop
+# comments, which is the same "#" that opens a hex literal, so it
+# returned [] for BLUE = "#AABBCC" and both checks below passed
+# unconditionally. Guard the guard: the helper must SEE a literal it is
+# supposed to catch, and still ignore one inside a comment.
+check("the helper finds a hex literal in code",
+      len(_hex_hits_outside_comments('BLUE = "#AABBCC"\n')) == 1)
+check("...and still ignores one inside a comment, trailing or whole-line",
+      _hex_hits_outside_comments("x = 1  # not #AABBCC\n") == []
+      and _hex_hits_outside_comments("# leading #AABBCC\n") == [])
+check("a file it cannot tokenise reports a finding, never a pass",
+      len(_hex_hits_outside_comments("def broken(:\n")) == 1)
+
 section("setup_flow.py: dialogs are themed")
 check("references theme.dialog_qss", "dialog_qss" in _SETUP_SRC)
 check("references theme.night_mode", "night_mode" in _SETUP_SRC)
