@@ -93,6 +93,11 @@ LIGHT: dict = {
     "red_hover":    "#D7261E",
     "red_bg":       "#FFEBEB",
     "red_text":     "#D32F2F",
+    # Text-weight green, red_text's sibling: "green" is the vivid
+    # system green (#28CD41) — right for fills and dots, neon as INK,
+    # especially on dark where red_text is a soft #FFCCCC. K-127's
+    # retention column pairs these two as calm semantic text colours.
+    "green_text":   "#1F7A3D",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
@@ -131,6 +136,7 @@ DARK: dict = {
     "red_hover":    "#D7261E",
     "red_bg":       "#5A1E1E",
     "red_text":     "#FFCCCC",
+    "green_text":   "#B9E8C9",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
@@ -887,9 +893,13 @@ def library_qss(night: bool) -> str:
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:selected {{
         /* The ACTIVE accent at the SettingsNav alpha, not the grey
-           selection_bg (K-130): the band recolours with every colour
-           theme, and full-strength text rides on top. */
-        background: {accent_rgba(night, 0.16)};
+           selection_bg (K-130) — but pre-composited OPAQUE
+           (accent_mix): the band spans two paint regions, and an rgba
+           fill composites over each region's own base (measured
+           different greys, offscreen 2026-08-31); one opaque ink is
+           identical in both by construction. Full-strength text on
+           top; recolours with every colour theme either way. */
+        background: {accent_mix(night, 0.16)};
         color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch {{
@@ -899,7 +909,7 @@ def library_qss(night: bool) -> str:
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
-        background: {accent_rgba(night, 0.16)};
+        background: {accent_mix(night, 0.16)};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
         image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
@@ -925,7 +935,7 @@ def library_qss(night: bool) -> str:
            section's padding box, so caption text (the content box)
            and glyph can never overlap at any column width — a narrow
            column elides the text instead. */
-        padding: 4px 16px 4px 8px;
+        padding: 4px 8px;
         font-size: 11px;
         /* 500, not 600 — column headers are secondary structure
            (HIG); 600 shouted over 13px body rows. */
@@ -938,26 +948,22 @@ def library_qss(night: bool) -> str:
        cannot take a data: URI and no up-chevron SVG ships in web/),
        parked centre-right in the padding reserve above. */
     QWidget#KlausLibraryWindow QHeaderView::down-arrow {{
-        subcontrol-origin: padding;
-        subcontrol-position: center right;
-        width: 0px;
-        height: 0px;
-        margin-right: 4px;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-top: 5px solid {c['text_muted']};
-        border-bottom: none;
+        /* A real image with an explicit size, NOT the zero-size
+           border-triangle hack: Qt derives the sorted section's
+           indicator reserve from this subcontrol's metrics, and the
+           zero-size hack made it compute a bogus huge reserve that
+           elided even 'Notes' at 88px (offscreen probes,
+           2026-08-31). 8x5 + margins = a truthful ~16px reserve. */
+        image: {_asset_url('sort-down-night.svg' if night else 'sort-down-day.svg')};
+        width: 8px;
+        height: 5px;
+        margin-left: 3px;
     }}
     QWidget#KlausLibraryWindow QHeaderView::up-arrow {{
-        subcontrol-origin: padding;
-        subcontrol-position: center right;
-        width: 0px;
-        height: 0px;
-        margin-right: 4px;
-        border-left: 4px solid transparent;
-        border-right: 4px solid transparent;
-        border-bottom: 5px solid {c['text_muted']};
-        border-top: none;
+        image: {_asset_url('sort-up-night.svg' if night else 'sort-up-day.svg')};
+        width: 8px;
+        height: 5px;
+        margin-left: 3px;
     }}
     QWidget#KlausLibraryWindow QPushButton {{
         background-color: transparent;
@@ -1068,6 +1074,22 @@ def accent_rgba(night: bool, alpha: float) -> str:
     h = palette(night)["blue_bright"].lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r}, {g}, {b}, {alpha:g})"
+
+
+def accent_mix(night: bool, alpha: float) -> str:
+    """``blue_bright`` pre-composited over ``surface`` at *alpha*, as
+    OPAQUE hex. For selection bands that span two QSS paint regions
+    (tree item + branch): an rgba fill composites over whatever base
+    each region happens to have — measured different greys per region
+    on the Library tree (offscreen, 2026-08-31) — while one opaque ink
+    is identical everywhere by construction."""
+    c = palette(night)
+    ah, sh = c["blue_bright"].lstrip("#"), c["surface"].lstrip("#")
+    mixed = (
+        round(int(ah[i:i + 2], 16) * alpha + int(sh[i:i + 2], 16) * (1 - alpha))
+        for i in (0, 2, 4)
+    )
+    return "#%02X%02X%02X" % tuple(mixed)
 
 
 def _toolbar_vars(c: dict, night: bool) -> str:

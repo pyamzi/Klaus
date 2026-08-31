@@ -69,7 +69,9 @@ for night in (False, True):
     # SettingsNav alpha. Counting c["selection_bg"] was soft in dark
     # (it equals hover_subtle there, so hover fills padded the count);
     # this rgba string is emitted by the selection rules alone.
-    _sel_fill = theme.accent_rgba(night, 0.16)
+    # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
+    # composited differently over each paint region's own base.
+    _sel_fill = theme.accent_mix(night, 0.16)
     check(f"library_qss(night={night}): a selected row's branch "
           "(indentation/disclosure) cell is recoloured in step with "
           "the item — every row reserves that cell whether or not "
@@ -161,11 +163,14 @@ check("the right-chevron assets actually ship in klausmate/web (a QSS "
 
 section("library chrome HIG pass (K-130)")
 # Pouya (screenshot 2026-08-31): Qt painted its stock sort chevron OVER
-# the header captions — "Note∧". The cure is two-part and BOTH parts
-# are load-bearing: styled ::up-arrow/::down-arrow subcontrols parked
-# centre-right in the section's PADDING box, and a padding-right
-# reserve on ::section so the caption's content box always ends before
-# the glyph starts (a narrow column elides text, never overlaps).
+# the header captions — "Note∧". The cure that SURVIVED offscreen
+# probing: real image arrows (web/sort-{up,down}-{day,night}.svg) with
+# explicit width/height and DEFAULT placement. Two rejected cures, both
+# probed: a zero-size border-triangle subcontrol made Qt compute a
+# bogus huge indicator reserve that elided "Notes" at ANY width; and a
+# manual centre-right-in-padding position + 16px section reserve
+# double-reserved on top of Qt's own metric. A truthfully-sized image
+# gives Qt a truthful reserve, and the caption fits.
 for night in (False, True):
     lq = theme.library_qss(night)
     c = theme.palette(night)
@@ -174,19 +179,24 @@ for night in (False, True):
         _blk = re.search(
             r"QWidget#KlausLibraryWindow QHeaderView::" + _arrow
             + r" \{(.*?)\}", _no_c, re.S)
-        check(f"library_qss(night={night}): ::{_arrow} is styled under "
-              "the Library-window scope, positioned centre-right in "
-              "the section's padding box, and draws a muted glyph",
+        check(f"library_qss(night={night}): ::{_arrow} is a real image "
+              "with explicit metrics under the Library-window scope — "
+              "the zero-size border-triangle made Qt reserve a bogus "
+              "huge indicator area and elide every caption",
               _blk is not None
-              and "subcontrol-origin: padding" in _blk.group(1)
-              and "subcontrol-position: center right" in _blk.group(1)
-              and c["text_muted"] in _blk.group(1))
+              and "sort-" + _arrow.split("-")[0] + "-" in _blk.group(1)
+              and "width: 8px" in _blk.group(1)
+              and "height: 5px" in _blk.group(1)
+              and "border-top" not in _blk.group(1)
+              and "subcontrol-position" not in _blk.group(1))
     _hdr_blk = re.search(r"QHeaderView::section \{(.*?)\}", _no_c, re.S)
-    check(f"library_qss(night={night}): ::section reserves 16px right "
-          "padding for the sort glyph — text and arrow can never "
-          "overlap at any column width",
+    check(f"library_qss(night={night}): ::section padding is symmetric "
+          "8px — Qt derives the glyph reserve from the image metrics, "
+          "and a manual 16px reserve DOUBLE-reserved (probed: it elided "
+          "captions it existed to protect)",
           _hdr_blk is not None
-          and "padding: 4px 16px 4px 8px" in _hdr_blk.group(1))
+          and "padding: 4px 8px" in _hdr_blk.group(1)
+          and "16px" not in _hdr_blk.group(1))
     check(f"library_qss(night={night}): headers are weight-500 "
           "secondary structure (HIG), no longer 600",
           _hdr_blk is not None
@@ -194,18 +204,25 @@ for night in (False, True):
           and "font-weight: 600" not in _hdr_blk.group(1))
     # Selection band (K-130): the ACTIVE accent at the SettingsNav
     # alpha in BOTH paint regions, same fill, full-strength text.
-    _sel_fill = theme.accent_rgba(night, 0.16)
+    # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
+    # composited differently over each paint region's own base.
+    _sel_fill = theme.accent_mix(night, 0.16)
     _item_sel = re.search(
         r"QTreeWidget::item:selected \{(.*?)\}", _no_c, re.S)
     _br_sel = re.search(
         r"QTreeWidget::branch:selected \{(.*?)\}", _no_c, re.S)
+    _mix_fill = theme.accent_mix(night, 0.16)
     check(f"library_qss(night={night}): the selection band is the "
-          "accent at low alpha with FULL-strength text, identical in "
-          "both paint regions (item + branch)",
+          "accent PRE-COMPOSITED OPAQUE (accent_mix), the same ink in "
+          "BOTH paint regions, full-strength text on the item — an "
+          "rgba fill composited over each region's own base to two "
+          "different greys (offscreen renders, 2026-08-31); opaque is "
+          "identical everywhere by construction",
           _item_sel is not None and _br_sel is not None
-          and _sel_fill in _item_sel.group(1)
+          and _mix_fill in _item_sel.group(1)
           and c["text"] in _item_sel.group(1)
-          and _sel_fill in _br_sel.group(1))
+          and _mix_fill in _br_sel.group(1)
+          and "rgba" not in _br_sel.group(1))
     check(f"library_qss(night={night}): the two-paint-region trio is "
           "intact — branch recolour + transparent selection underlay "
           "+ show-decoration-selected (drop any one and palette-blue "

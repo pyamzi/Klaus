@@ -653,12 +653,12 @@ check("PDF column stretches — Stretch mode set, the fixed 240px "
       "gutter-maker gone",
       "setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)" in _PD_FLAT
       and "setColumnWidth(0,240)" not in _PD_FLAT)
-check("numeric columns Fixed at 76 / 88 / 72, last-section stretch "
+check("numeric columns Fixed at 84 / 88 / 88 (widened for the K-130 16px sort-indicator reserve — 76/72 elided the captions, offscreen render), last-section stretch "
       "still off",
       "QHeaderView.ResizeMode.Fixed" in _PD_CODE
-      and "setColumnWidth(1,76)" in _PD_FLAT
+      and "setColumnWidth(1,84)" in _PD_FLAT
       and "setColumnWidth(2,88)" in _PD_FLAT
-      and "setColumnWidth(3,72)" in _PD_FLAT
+      and "setColumnWidth(3,88)" in _PD_FLAT
       and "setStretchLastSection(False)" in _PD_FLAT)
 # Raw source on purpose: this pin is ON a comment (code_only strips
 # comments), guarding the load-bearing 88px history note.
@@ -678,7 +678,7 @@ check("tnum lands in _apply_row through a guard — a try: before "
 # Raw source again: palette KEY names are string literals.
 check("retention ink maps low -> red_text and high -> green off the "
       "live palette (the offscreen section proves the behaviour)",
-      '"red_text" if level == "low" else "green"' in _PD_SRC
+      '"red_text" if level == "low" else "green_text"' in _PD_SRC
       and "drive_store.retention_level(fraction)" in _PD_SRC
       and "drive_store.retention_color" not in _PD_SRC)
 
@@ -956,7 +956,7 @@ if _HAVE_QT:
     _apply(_host, _lvl_item, dict(_full, retention=0.92))
     check("high (>= 0.85) wears the palette's green",
           _lvl_item.foreground(1).color().name().lower()
-          == _QtG.QColor(_pal_k127["green"]).name().lower(),
+          == _QtG.QColor(_pal_k127["green_text"]).name().lower(),
           _lvl_item.foreground(1).color().name())
     _apply(_host, _lvl_item, dict(_full, retention=0.75))
     check("mid RESETS the foreground — a refresh out of low sheds the "

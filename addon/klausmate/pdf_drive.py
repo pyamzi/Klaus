@@ -685,12 +685,12 @@ class DriveWindow(QWidget):
             head.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             for col in (1, 2, 3):
                 head.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-            self.tree.setColumnWidth(1, 76)
+            self.tree.setColumnWidth(1, 84)
             # 88, not a slimmer numeric width: the Cards cell doubles as
             # the status cell ("suspended" / "not embedded"), and 64px
             # elided those to "suspe…" (offscreen render, 2026-08-31).
             self.tree.setColumnWidth(2, 88)
-            self.tree.setColumnWidth(3, 72)
+            self.tree.setColumnWidth(3, 88)
             head.setSectionsClickable(True)
             # VS Code Explorer density: shallow indent, uniform 22px
             # rows (the QSS min-height; uniformity also speeds layout).
@@ -1053,7 +1053,9 @@ class DriveWindow(QWidget):
                 from . import theme as _theme
 
                 pal = _theme.palette(_theme.night_mode())
-                key = "red_text" if level == "low" else "green"
+                # green_text, not "green": the vivid system green is fill
+                # ink, neon as text on dark (offscreen render, 2026-08-31).
+                key = "red_text" if level == "low" else "green_text"
                 item.setForeground(1, QBrush(QColor(pal[key])))
             else:
                 item.setData(1, Qt.ItemDataRole.ForegroundRole, None)
