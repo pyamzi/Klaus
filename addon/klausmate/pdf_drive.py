@@ -31,6 +31,7 @@ from aqt.qt import (
     QTimer,
     QDialogButtonBox,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QMenu,
@@ -674,15 +675,23 @@ class DriveWindow(QWidget):
         self.tree.customContextMenuRequested.connect(self._on_context_menu)
         self.tree.itemDoubleClicked.connect(self._on_item_activated)
         try:
-            self.tree.setColumnWidth(0, 240)
-            self.tree.header().setStretchLastSection(False)
-            self.tree.setColumnWidth(1, 80)
+            head = self.tree.header()
+            head.setStretchLastSection(False)
+            # The PDF column stretches to swallow whatever width the
+            # numeric columns leave (K-127): a fixed 240px ended the
+            # table mid-pane, with the header hairline running on into
+            # a dead right gutter. The numeric columns are Fixed so
+            # that stretch is the only elastic part of the layout.
+            head.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            for col in (1, 2, 3):
+                head.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+            self.tree.setColumnWidth(1, 76)
             # 88, not a slimmer numeric width: the Cards cell doubles as
             # the status cell ("suspended" / "not embedded"), and 64px
             # elided those to "suspe…" (offscreen render, 2026-08-31).
             self.tree.setColumnWidth(2, 88)
-            self.tree.setColumnWidth(3, 64)
-            self.tree.header().setSectionsClickable(True)
+            self.tree.setColumnWidth(3, 72)
+            head.setSectionsClickable(True)
             # VS Code Explorer density: shallow indent, uniform 22px
             # rows (the QSS min-height; uniformity also speeds layout).
             self.tree.setIndentation(16)
@@ -909,6 +918,21 @@ class DriveWindow(QWidget):
                 item.setTextAlignment(col, align)
         except Exception:
             pass
+        # Tabular figures on the numeric cells (K-127): the "tnum"
+        # OpenType feature gives every digit the same advance width, so
+        # figures align down the column under the right-alignment above.
+        # QFont.setFeature only exists on Qt 6.7+ — guarded so an older
+        # or odd binding degrades to proportional digits, never a
+        # broken row.
+        try:
+            from aqt.qt import QFont
+
+            f = item.font(1)
+            f.setFeature(QFont.Tag(b"tnum"), 1)
+            for col in (1, 2, 3):
+                item.setFont(col, f)
+        except Exception:
+            pass
         retention_val: float | None = None
         cards: int | None = None
         notes: int | None = None
@@ -1006,26 +1030,33 @@ class DriveWindow(QWidget):
             print(f"[klausmate] suspended dim failed: {e}")
 
     def _set_retention_color(self, item: QTreeWidgetItem, fraction: float | None) -> None:
-        """Color the retention cell's text only — no row background, no
-        bold. Non-numeric states get no color override (default
-        foreground): the product bar is "Anki with a little extra you
-        barely notice."
+        """Color the retention cell's text only — no row background,
+        regular weight, never bold. Semantic levels, not a hue ramp
+        (K-127): low wears the palette's ``red_text``, high its
+        ``green``, and mid gets NO ink at all — "fine" needs no colour,
+        and the product bar is "Anki with a little extra you barely
+        notice." Mid and non-numeric states RESET the ForegroundRole
+        rather than skip: ``_apply_row`` reuses items across refreshes,
+        so a row moving low -> mid must shed its stale red here (the
+        un-dim in ``_set_suspended_dim`` deliberately leaves column 1
+        to this method).
         """
         try:
-            if fraction is None:
+            level = (
+                drive_store.retention_level(fraction)
+                if fraction is not None
+                else None
+            )
+            if level in ("low", "high"):
+                from aqt.qt import QBrush, QColor
+
+                from . import theme as _theme
+
+                pal = _theme.palette(_theme.night_mode())
+                key = "red_text" if level == "low" else "green"
+                item.setForeground(1, QBrush(QColor(pal[key])))
+            else:
                 item.setData(1, Qt.ItemDataRole.ForegroundRole, None)
-                return
-            from aqt.qt import QBrush, QColor
-
-            night = False
-            try:
-                from aqt.theme import theme_manager
-
-                night = bool(theme_manager.night_mode)
-            except Exception:
-                night = False
-            rgb = drive_store.retention_color(fraction, night)
-            item.setForeground(1, QBrush(QColor(*rgb)))
         except Exception as e:
             print(f"[klausmate] drive retention color failed: {e}")
 

@@ -200,6 +200,34 @@ check("removing an unreferenced nested folder collapses it to its parent",
       d2["folders"] == ["Orphan"] and d2["pdfs"] == {})
 shutil.rmtree(tmp_o, ignore_errors=True)
 
+print("== K-127: retention_level — semantic buckets, not a hue ramp ==")
+check("0.6999 is low (just under the boundary)",
+      drive_store.retention_level(0.6999) == "low")
+check("0.70 is mid (low < 0.70 <= mid)",
+      drive_store.retention_level(0.70) == "mid")
+check("0.8499 is still mid (just under the target boundary)",
+      drive_store.retention_level(0.8499) == "mid")
+check("0.85 is high (mid < 0.85 <= high — FSRS 'at target')",
+      drive_store.retention_level(0.85) == "high")
+check("the ends: 0.0 low, 1.0 high",
+      drive_store.retention_level(0.0) == "low"
+      and drive_store.retention_level(1.0) == "high")
+check("out-of-range clamps into [0, 1] exactly like the old ramp did",
+      drive_store.retention_level(-3) == "low"
+      and drive_store.retention_level(1.7) == "high")
+check("float()-compatible input coerces, like the old float() path",
+      drive_store.retention_level("0.9") == "high")
+_rl_raised = False
+try:
+    drive_store.retention_level(None)
+except (TypeError, ValueError):
+    _rl_raised = True
+check("None raises into the caller's guard — pdf_drive None-guards "
+      "before calling, and its try/except catches real garbage",
+      _rl_raised)
+check("the rainbow is dead: no retention_color left in drive_store",
+      not hasattr(drive_store, "retention_color"))
+
 print("== aqt-dependent modules import cleanly (stubbed) ==")
 
 
@@ -250,7 +278,8 @@ class _Any:
 
 qt_names = {n: _Any for n in (
     "QAction", "QComboBox", "QCursor", "QDialog", "QDialogButtonBox", "QLabel",
-    "QMenu", "QTimer", "QVBoxLayout", "QHBoxLayout", "QPushButton", "QSlider",
+    "QMenu", "QTimer", "QVBoxLayout", "QHBoxLayout", "QHeaderView",
+    "QPushButton", "QSlider",
     "QSplitter", "QTreeWidget", "QTreeWidgetItem", "QWidget", "QInputDialog",
     "QMessageBox", "QAbstractItemView", "QFileSystemWatcher", "qconnect")}
 # Qt is an enum namespace, not a base class — an instance chains attributes
@@ -619,6 +648,40 @@ check("delete confirm wears the theme's destructive role (DangerButton "
       'setObjectName("DangerButton")' in _PD_SRC
       and 'setObjectName("SecondaryButton")' in _PD_SRC)
 
+print("== K-127: Library data presentation — source pins ==")
+check("PDF column stretches — Stretch mode set, the fixed 240px "
+      "gutter-maker gone",
+      "setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)" in _PD_FLAT
+      and "setColumnWidth(0,240)" not in _PD_FLAT)
+check("numeric columns Fixed at 76 / 88 / 72, last-section stretch "
+      "still off",
+      "QHeaderView.ResizeMode.Fixed" in _PD_CODE
+      and "setColumnWidth(1,76)" in _PD_FLAT
+      and "setColumnWidth(2,88)" in _PD_FLAT
+      and "setColumnWidth(3,72)" in _PD_FLAT
+      and "setStretchLastSection(False)" in _PD_FLAT)
+# Raw source on purpose: this pin is ON a comment (code_only strips
+# comments), guarding the load-bearing 88px history note.
+check("the 88px suspended-cell comment survives beside its width",
+      "the Cards cell doubles as" in _PD_SRC
+      and "elided those to" in _PD_SRC)
+_APPLY_SRC = _PD_SRC.split("def _apply_row", 1)[1].split(
+    "def _set_suspended_dim", 1)[0]
+_tn = _APPLY_SRC.find("setFeature")
+check("tnum lands in _apply_row through a guard — a try: before "
+      "QFont.setFeature and an except after it, so Qt < 6.7 degrades "
+      "to proportional digits instead of a broken row",
+      'b"tnum"' in _APPLY_SRC
+      and _tn > -1
+      and "try:" in _APPLY_SRC[:_tn]
+      and "except Exception" in _APPLY_SRC[_tn:])
+# Raw source again: palette KEY names are string literals.
+check("retention ink maps low -> red_text and high -> green off the "
+      "live palette (the offscreen section proves the behaviour)",
+      '"red_text" if level == "low" else "green"' in _PD_SRC
+      and "drive_store.retention_level(fraction)" in _PD_SRC
+      and "drive_store.retention_color" not in _PD_SRC)
+
 print("== K-117: real offscreen Qt — drops, sort, rows, menus, suspend ==")
 # PyQt6 is installed for this interpreter (unlike Anki's bundled one),
 # so the drag/drop and row logic runs on GENUINE widgets offscreen. The
@@ -876,6 +939,41 @@ if _HAVE_QT:
     _apply(_host, _item, {"indexed": False})
     check("not-embedded keeps its status string in the Cards cell",
           _item.text(1) == "—" and _item.text(2) == "not embedded")
+
+    print("== K-127: retention ink — semantic levels on real items ==")
+    # Compared against the LIVE palette, not hex literals: the code and
+    # this test read the same theme.palette(False) (night_mode() falls
+    # back to light offscreen, same as the #AAAAAA dim check above), so
+    # a token-value change can never split them.
+    from klausmate import theme as _th_k127
+    _pal_k127 = _th_k127.palette(False)
+    _lvl_item = pdf_drive._LibraryItem(_sort_tree, ["Y.pdf"])
+    _apply(_host, _lvl_item, dict(_full, retention=0.42))
+    check("low (< 0.70) wears the palette's red_text",
+          _lvl_item.foreground(1).color().name().lower()
+          == _QtG.QColor(_pal_k127["red_text"]).name().lower(),
+          _lvl_item.foreground(1).color().name())
+    _apply(_host, _lvl_item, dict(_full, retention=0.92))
+    check("high (>= 0.85) wears the palette's green",
+          _lvl_item.foreground(1).color().name().lower()
+          == _QtG.QColor(_pal_k127["green"]).name().lower(),
+          _lvl_item.foreground(1).color().name())
+    _apply(_host, _lvl_item, dict(_full, retention=0.75))
+    check("mid RESETS the foreground — a refresh out of low sheds the "
+          "stale red instead of skipping the cell",
+          _lvl_item.data(1, _QtC.Qt.ItemDataRole.ForegroundRole) is None)
+    check("regular weight — the retention cell never bolds",
+          not _lvl_item.font(1).bold())
+    if hasattr(_lvl_item.font(1), "isFeatureSet"):
+        _tnum_tag = _QtG.QFont.Tag(b"tnum")
+        check("tnum actually lands on all three numeric cells' fonts "
+              "(this Qt has setFeature)",
+              all(_lvl_item.font(cc).isFeatureSet(_tnum_tag)
+                  and _lvl_item.font(cc).featureValue(_tnum_tag) == 1
+                  for cc in (1, 2, 3)))
+    else:
+        print("  SKIP: QFont.setFeature not in this Qt — the guarded "
+              "source pin above still holds")
 
     print("== K-117: suspend/unsuspend wiring ==")
 
