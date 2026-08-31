@@ -21,7 +21,7 @@ to be here" for the full list of what was removed.
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
 
-- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Addons/klausmate/`,
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/`,
   even though worktrees now contain a copy. Anki loads the addon through a
   symlink to the main checkout only, and the PostToolUse compile hook
   compiles that symlink target — so a worktree edit would report success
@@ -45,8 +45,11 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/pyamzi/Documents/Github/Addons/klausmate`. If the repo folder is ever
-  renamed, this symlink breaks silently and Anki loads nothing.
+  `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate`. If the repo
+  folder is ever renamed, this symlink breaks silently and Anki loads nothing
+  — and this file goes stale with it: the repo WAS `Addons/` until the
+  2026-08 rename, and both paths here went on naming a dead directory until
+  2026-08-31. `ls -l` the link before trusting a path written here.
 - **Never create a second copy under `addons21/`** (e.g. a numbered AnkiWeb
   install). Two copies race on the same hooks and `editor._klausmate_*`
   attribute guards make the collision silent. A removed duplicate is backed up
@@ -193,7 +196,15 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   construction; the PDF is fed as chunked base64 into window globals
   (SynapsePro's pattern), pages render lazily via IntersectionObserver
   over sized placeholders, the pdf.js text layer gives native selection,
-  and theme tokens arrive as CSS vars (`theme.css_vars`). Parity shipped
+  and theme tokens arrive as CSS vars (`theme.css_vars`) — which must
+  emit EVERY var the page hands to `var()`, since an undefined one
+  computes that declaration to nothing rather than failing loudly
+  (`--hover-subtle` shipped missing through K-116 and killed the
+  findbar/annobar/menu/thumbnail hovers; it is now the palette's
+  `hover_subtle`, the same fill the Qt-side builders use, and
+  test_theme pins the whole set). The page's in-CSS fallbacks are
+  safety nets ordered ahead of `__THEME_VARS__` so theme always wins —
+  never a second source of truth. Parity shipped
   (K-097..K-099): highlights/notes/outside-text render from the SAME
   record schema (0-based page, top-left page-point rects; CSS px = pts ×
   scale), find bar (searches cached text of unrendered pages; rings the

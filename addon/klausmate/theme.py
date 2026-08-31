@@ -1198,7 +1198,16 @@ def css_vars(night: bool) -> str:
     """Theme tokens as CSS custom properties for webview surfaces
     (pdfjs_viewer.html's ``__THEME_VARS__`` substitution) — the same
     Qt-side tokens rendered for HTML, so webviews and widgets cannot
-    drift (SynapsePro mirrors its palette into ``:root`` the same way)."""
+    drift (SynapsePro mirrors its palette into ``:root`` the same way).
+
+    ``--hover-subtle`` is the webview half of the SAME hover fill every
+    QSS builder reaches for (``find_bar_qss``, ``thumb_strip_qss``,
+    ``library_qss`` — all ``c['hover_subtle']``): the pdf.js findbar,
+    annobar, context menu and thumbnail strip hover over ``--surface``
+    exactly as their Qt siblings do, so the token, not a hand-mixed
+    neutral, is what keeps the two halves of that family in step.
+    pdfjs_viewer.html keeps a fallback for it, ordered so this
+    definition wins — a safety net, not a second source of truth."""
     c = palette(night)
     return (
         f"--bg: {c['bg']};"
@@ -1207,6 +1216,7 @@ def css_vars(night: bool) -> str:
         f" --text-muted: {c['text_muted']};"
         f" --grey-light: {c['grey_light']};"
         f" --grey-mid: {c['grey_mid']};"
+        f" --hover-subtle: {c['hover_subtle']};"
         f" --accent: {c['blue_bright']};"
         f" --accent-selection: {accent_rgba(night, 0.35)};"
         f" --font: {FONT_FAMILY};"

@@ -331,6 +331,40 @@ m = theme.muted_label_qss(False, 10)
 check("muted label carries text_muted + size",
       theme.LIGHT["text_muted"] in m and "font-size: 10px" in m)
 
+section("webview vars (css_vars): the palette mirrored into :root")
+# The one surface that reads theme tokens as CSS instead of QSS —
+# web/pdfjs_viewer.html's __THEME_VARS__ substitution. Every var the
+# page hands to var() must be emitted here or those declarations
+# compute to nothing.
+WEB_VARS = ("bg", "surface", "text", "text-muted", "grey-light",
+            "grey-mid", "hover-subtle", "accent", "accent-selection",
+            "font")
+for night in (False, True):
+    cv = theme.css_vars(night)
+    c = theme.palette(night)
+    check(f"css_vars(night={night}) leaves no unsubstituted token",
+          "{c[" not in cv and "{{" not in cv and "}}" not in cv)
+    missing = [v for v in WEB_VARS if f"--{v}: " not in cv]
+    check(f"css_vars(night={night}) emits every var the page reads "
+          f"(missing: {missing})", not missing)
+    # --hover-subtle went undefined here once: the findbar, annobar,
+    # context menu and thumbnail strip all hover with it, and K-116
+    # had to ship a neutral in-page fallback because an undefined
+    # var() paints nothing. It is now the SAME palette token the
+    # Qt-side builders hover with, so the webview half of that family
+    # cannot drift from its widget half — and the page's fallback is
+    # a safety net, never the definition.
+    check(f"css_vars(night={night}) takes --hover-subtle from the "
+          "palette token, not a hand-mixed neutral",
+          f"--hover-subtle: {c['hover_subtle']};" in cv)
+    check(f"css_vars(night={night}): that is the fill find_bar_qss "
+          "and thumb_strip_qss hover their Qt siblings with",
+          c["hover_subtle"] in theme.find_bar_qss(night)
+          and c["hover_subtle"] in theme.thumb_strip_qss(night))
+check("light and dark hover fills actually differ (a single baked "
+      "neutral would pass every check above)",
+      theme.LIGHT["hover_subtle"] != theme.DARK["hover_subtle"])
+
 section("design scale (K-110): every builder stays on-scale")
 # Sanctioned sets — must match the "Design scale" comment block above
 # theme.dialog_qss. This scans the ACTUAL emitted CSS of every QSS/CSS

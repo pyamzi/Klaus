@@ -112,7 +112,16 @@ def chunk_b64(data: bytes, chunk_chars: int = CHUNK_CHARS) -> list[str]:
 
 
 def build_page_html(addon_name: str, night: bool) -> str:
-    """The viewer page with ``__ADDON__``/``__THEME_VARS__`` filled in."""
+    """The viewer page with ``__ADDON__``/``__THEME_VARS__`` filled in.
+
+    These two placeholder names are spelled HERE and nowhere in the
+    template: both replacements are global, so a comment in the HTML
+    that mentions one gets the replacement text — the whole palette,
+    for the theme vars — spliced into it. Harmless inside a comment,
+    but it bloats every rendered page and it is a trap for anything
+    that greps the rendered output. Keep the template's prose
+    describing the placeholders rather than naming them.
+    """
     from . import theme
 
     path = os.path.join(os.path.dirname(__file__), "web", "pdfjs_viewer.html")

@@ -49,6 +49,23 @@ check("no placeholder left behind",
 check("theme tokens injected (light bg)", "--bg: #F5F5F7;" in html)
 dark = pv.build_page_html("klausmate", night=True)
 check("theme tokens injected (dark bg)", "--bg: #191919;" in dark)
+# Both substitutions are a GLOBAL str.replace, so a placeholder spelled
+# in the template's prose gets the replacement — the entire palette,
+# for the theme vars — spliced into that comment. It shipped that way
+# through K-116: harmless (it lands inside a comment) but it bloats
+# every rendered page and it is a trap for anything grepping the
+# rendered output. build_page_html's docstring is where those names
+# are spelled; the template describes them instead.
+_TPL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "..", "klausmate", "web",
+                         "pdfjs_viewer.html"), encoding="utf-8").read()
+check("template spells __THEME_VARS__ only at its real site "
+      "(a prose mention would splice the whole palette in)",
+      _TPL.count("__THEME_VARS__") == 1)
+check("template spells __ADDON__ only at its two real sites",
+      _TPL.count("__ADDON__") == 2)
+check("so the rendered page carries the palette exactly once",
+      html.count("--bg: ") == 1 and dark.count("--bg: ") == 1)
 for fn in ("klausPdfChunk", "klausPdfLoad", "klausPdfError",
            "klausGoToPage", "klausSetZoom", "klausSetAnnotations",
            "klausToggleThumbs", "klausScrollTo", "klausZoomReset"):
