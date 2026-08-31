@@ -38,8 +38,12 @@ will eventually lose a write (card *body* prose may be hand-edited by the
 orchestrator/designer only). Claiming enforces file-disjointness against
 cards already in Doing, and a card's `verify:` command must fail before
 the work and pass after. Roles, columns, and gates: `context/ROLES.md`.
-Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
-"board-dashboard" in `.claude/launch.json`). Signed-off history is in
+Dashboard: `python3 board/serve.py --port 8766` → 127.0.0.1:8766
+(preview config "board-dashboard" in `.claude/launch.json`). **Not
+8765** — an unrelated long-running `stream_server.py` owns that port on
+this machine, so the board silently failed to bind there and the
+preview served that server's "you need a WebSocket client" page
+instead. Signed-off history is in
 `board/ARCHIVE.md` — search it (K-0xx) before re-debugging anything.
 
 ## How Anki loads the addon
