@@ -143,6 +143,42 @@ check("the reviewer's colour mode takes the same gradient from its "
       "radial-gradient(" in _rev_grad
       and "--klaus-panel" not in _rev_grad)
 
+section("on-screen gradient editor (drag on the actual screen)")
+_events: list = []
+bg.set_grad_edit(True, lambda t, x, y, s: _events.append((t, x, y, s)))
+bg.grad_edit_event({"target": "reviewer", "x": 105, "y": -5, "size": 999})
+bg.grad_edit_event({"target": "weird", "x": 25.7, "y": 25, "size": 100})
+bg.set_grad_edit(False, None)
+bg.grad_edit_event({"target": "main", "x": 1, "y": 1, "size": 50})
+check("bridge events are clamped, the target normalised, and dead "
+      "after disarm — a stale dialog can never be written into, and "
+      "JS values are never trusted",
+      _events == [("reviewer", 100, 0, 200), ("main", 25, 25, 100)]
+      and bg.grad_edit_active() is False)
+_ed = bg.gradient_edit_eval_js(_grad, "main")
+check("the editor ships only for a real gradient — flat and image "
+      "specs grow no handles",
+      bg.gradient_edit_eval_js(colour, "main") == ""
+      and bg.gradient_edit_eval_js(img, "main") == ""
+      and "klaus-grad-edit" in _ed)
+check("self-guarding, clamped drag math, drag-end bridge message "
+      "(the whole loop verified LIVE in the Chromium harness: a real "
+      "drag to the upper-left sent target/x/y/size 'main'/25/25/100 "
+      "and repainted the page's gradient inline)",
+      "if(document.getElementById('klaus-grad-edit')){return;}" in _ed
+      and "klausmate:bggrad:" in _ed
+      and "clamp(" in _ed
+      and "setPointerCapture" in _ed)
+check("the body wrapper is the same core in a <script> tag, and "
+      "empty exactly when the core is",
+      bg.gradient_edit_js(_grad, "main").startswith("<script>")
+      and bg.gradient_edit_js(_grad, "main").endswith("</script>")
+      and bg.gradient_edit_js(colour, "main") == "")
+check("the cleanup JS removes the overlay by id (the reviewer's page "
+      "persists across refresh, so removal must be imperative there)",
+      "klaus-grad-edit" in bg.GRAD_EDIT_CLEANUP_JS
+      and "remove()" in bg.GRAD_EDIT_CLEANUP_JS)
+
 section("resolve(cfg, prefix=...): a second, INDEPENDENT background")
 # Pouya: "this needs to be separate from the background I set for the
 # regular main section." One validator, two isolated results.

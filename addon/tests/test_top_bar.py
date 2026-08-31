@@ -337,4 +337,40 @@ check("the will_set_content injection and the push share one tag id, "
       and "klaus-reviewer-bg"
       in inspect.getsource(top_bar.reviewer_style_push_js))
 
+section("gradient editor wiring (drag on the actual screen)")
+_tb_raw = open("klausmate/top_bar.py").read()
+_tb_code = code_only(_tb_raw)
+check("both screens plant the editor at page build while armed — two "
+      "gradient_edit_js call sites, each inside its branch's `if css` "
+      "(the design gate having passed: handles never land on a stock "
+      "screen)",
+      _tb_code.count("background.gradient_edit_js(") == 2
+      and _tb_code.count("grad_edit_active()") >= 3)
+check("refresh()'s review path cleans THEN re-plants (a planted "
+      "editor holds its colours in a closure — replacing it is what "
+      "keeps a mid-review colour edit from dragging stale paint)",
+      "background.GRAD_EDIT_CLEANUP_JS+editor_js"
+      in _tb_code.replace(" ", "")
+      and "background.gradient_edit_eval_js(" in _tb_code)
+# Behavioural: a real drag-end message through the real handler.
+import base64 as _b64
+
+_bg_mod = importlib.import_module("klausmate.background")
+_seen: list = []
+_bg_mod.set_grad_edit(True, lambda t, x, y, s: _seen.append((t, x, y, s)))
+_payload = _b64.b64encode(
+    json.dumps({"target": "main", "x": 30, "y": 40, "size": 120}).encode()
+).decode()
+_res = top_bar._on_js_message(
+    (False, None), "klausmate:bggrad:" + _payload, None
+)
+_bg_mod.set_grad_edit(False, None)
+check("a drag-end pycmd decodes, clamps, reaches the sink, and is "
+      "consumed by the handler",
+      _res == (True, None) and _seen == [("main", 30, 40, 120)])
+check("a garbage payload is swallowed, never raises out of the hook",
+      top_bar._on_js_message(
+          (False, None), "klausmate:bggrad:@@not-b64@@", None
+      ) == (True, None))
+
 raise SystemExit(report())

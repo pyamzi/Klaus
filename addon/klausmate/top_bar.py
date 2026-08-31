@@ -271,9 +271,15 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
                 # (nothing there has that id) and in theme mode (empty).
                 from . import background
 
-                web_content.body += background.panel_js(
-                    background.resolve(background.effective_cfg(_config()))
-                )
+                spec = background.resolve(background.effective_cfg(_config()))
+                web_content.body += background.panel_js(spec)
+                # Inside `if css` on purpose: css non-empty is the
+                # design gate having passed — handles must never
+                # appear on a stock screen.
+                if background.grad_edit_active():
+                    web_content.body += background.gradient_edit_js(
+                        spec, "main"
+                    )
             return
 
         # context=self in Reviewer._initWeb (verified against Anki's
@@ -291,13 +297,37 @@ def _on_main_webview_content(web_content: Any, context: Any) -> None:
                 web_content.head += (
                     '<style id="klaus-reviewer-bg">' + css + "</style>"
                 )
+                from . import background
+
+                if background.grad_edit_active():
+                    web_content.body += background.gradient_edit_js(
+                        background.resolve(
+                            background.effective_cfg(_config()),
+                            prefix="reviewer_background",
+                        ),
+                        "reviewer",
+                    )
     except Exception as exc:
         print(f"[klausmate] background inject failed: {exc}")
 
 
 def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
-    """Intercept the star logo's pycmd. Anki's toolbar would otherwise
-    treat the unknown command as a link and do nothing."""
+    """Intercept the star logo's pycmd — Anki's toolbar would otherwise
+    treat the unknown command as a link and do nothing — and the
+    on-screen gradient editor's drag-end messages."""
+    if message.startswith("klausmate:bggrad:"):
+        try:
+            import base64
+
+            from . import background
+
+            payload = message.split(":", 2)[2]
+            data = json.loads(base64.b64decode(payload).decode("utf-8"))
+            # Clamping lives in grad_edit_event — JS is never trusted.
+            background.grad_edit_event(data)
+        except Exception as exc:
+            print(f"[klausmate] gradient edit message failed: {exc}")
+        return (True, None)
     if message == "klausmate:settings":
         try:
             from aqt.qt import QTimer
@@ -359,6 +389,27 @@ def refresh() -> None:
             web = getattr(getattr(mw, "reviewer", None), "web", None)
             if web is not None:
                 web.eval(reviewer_style_push_js(_reviewer_background_css()))
+                # The reviewer page persists across this path, so the
+                # gradient editor must be planted/removed imperatively
+                # too: ALWAYS clean, then re-plant while armed — a
+                # planted editor holds the colours in its closure, so
+                # replacing it (never skipping on "already there") is
+                # what keeps a mid-review colour edit from dragging
+                # with stale paint. No drag can be in flight during a
+                # refresh: refreshes come from dialog edits, and one
+                # pointer can't do both.
+                from . import background
+
+                editor_js = ""
+                if background.grad_edit_active():
+                    editor_js = background.gradient_edit_eval_js(
+                        background.resolve(
+                            background.effective_cfg(_config()),
+                            prefix="reviewer_background",
+                        ),
+                        "reviewer",
+                    )
+                web.eval(background.GRAD_EDIT_CLEANUP_JS + editor_js)
             return
         mw.reset()
     except Exception as exc:

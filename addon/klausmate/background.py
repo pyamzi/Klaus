@@ -22,6 +22,7 @@ image URL, since only they know the addon's web-export name.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -176,6 +177,152 @@ def image_url(addon: str, name: str) -> str:
     """Web-export URL for a stored background image."""
     safe = safe_image_name(name)
     return f"/_addons/{addon}/user_files/{IMAGE_DIR}/{safe}" if safe else ""
+
+
+# ── On-screen gradient editing (transient, never persisted) ──────────
+# Armed by the OPEN Preferences dialog (dashboard._EDIT's pattern):
+# while armed, the deck and study screens grow a draggable centre dot
+# + size ring for their own gradient. JS owns the live visual during a
+# drag (it repaints the page's background inline, no Python round-trip
+# per move); Python owns the state — drag-end lands as a
+# klausmate:bggrad pycmd, is CLAMPED here (JS is never trusted), and
+# flows into the dialog's pending spec through the registered sink.
+_GRAD_EDIT = False
+_GRAD_SINK: Any = None
+
+# Removes the editor overlay from a live page (the reviewer keeps its
+# page across refresh()'s eval path, so closing Preferences mid-review
+# must clean up imperatively; the deck screen just rebuilds).
+GRAD_EDIT_CLEANUP_JS = (
+    "(function(){var e=document.getElementById('klaus-grad-edit');"
+    "if(e){e.remove();}})();"
+)
+
+
+def set_grad_edit(active: bool, sink: Any = None) -> None:
+    """Arm/disarm on-screen gradient editing. ``sink(target, x, y,
+    size)`` is the open dialog's callback; dropped on disarm so a
+    stale dialog can never be written into."""
+    global _GRAD_EDIT, _GRAD_SINK
+    _GRAD_EDIT = bool(active)
+    _GRAD_SINK = sink if active else None
+
+
+def grad_edit_active() -> bool:
+    return _GRAD_EDIT
+
+
+def grad_edit_event(data: Any) -> None:
+    """A drag landed over the bridge: clamp every value (JS is never
+    trusted — apply_action's rule) and forward to the sink, if one is
+    still registered."""
+    sink = _GRAD_SINK
+    if sink is None or not isinstance(data, dict):
+        return
+
+    def _num(key: str, lo: int, hi: int, default: int) -> int:
+        v = data.get(key)
+        if not isinstance(v, (int, float)):
+            return default
+        return int(min(hi, max(lo, v)))
+
+    target = "reviewer" if data.get("target") == "reviewer" else "main"
+    try:
+        sink(
+            target,
+            _num("x", 0, 100, 50),
+            _num("y", 0, 100, 42),
+            _num("size", 10, 200, 100),
+        )
+    except Exception as exc:
+        print(f"[klausmate] gradient edit sink failed: {exc}")
+
+
+def gradient_edit_eval_js(spec: dict, target: str) -> str:
+    """The editor itself, as raw JS (for ``web.eval`` into a LIVE page
+    — the reviewer mid-review). "" unless the spec is actually a
+    gradient. Self-guarding: a second injection is a no-op, so the
+    eval path and the page-build path can both run.
+
+    The drag repaints the gradient INLINE on html/body per pointermove
+    (same value shape gradient_css_value emits) and only sends the
+    bridge message on release — dragging costs zero Python round
+    trips, and the sink side must never refresh the page mid-drag.
+    """
+    if spec.get("mode") != "color" or not spec.get("color2"):
+        return ""
+    tgt = "reviewer" if target == "reviewer" else "main"
+    return (
+        "(function(){"
+        "if(document.getElementById('klaus-grad-edit')){return;}"
+        f"var T={json.dumps(tgt)},X={int(spec['grad_x'])},"
+        f"Y={int(spec['grad_y'])},S={int(spec['grad_size'])},"
+        f"C={json.dumps(spec['color'])},C2={json.dumps(spec['color2'])};"
+        "var wrap=document.createElement('div');"
+        "wrap.id='klaus-grad-edit';"
+        "wrap.style.cssText='position:fixed;inset:0;z-index:2147483000;"
+        "pointer-events:none;';"
+        "var ring=document.createElement('div');"
+        "ring.style.cssText='position:absolute;border:1.5px dashed "
+        "rgba(255,255,255,0.75);border-radius:50%;pointer-events:none;"
+        "box-shadow:0 0 0 1px rgba(0,0,0,0.25),inset 0 0 0 1px "
+        "rgba(0,0,0,0.25);';"
+        "var dot=document.createElement('div');"
+        "dot.title='Drag to move the gradient';"
+        "dot.style.cssText='position:absolute;width:18px;height:18px;"
+        "border-radius:50%;transform:translate(-50%,-50%);"
+        "background:var(--klaus-accent,#0a84ff);border:2.5px solid #fff;"
+        "box-shadow:0 1px 4px rgba(0,0,0,0.45);pointer-events:auto;"
+        "cursor:grab;';"
+        "var grip=document.createElement('div');"
+        "grip.title='Drag to resize the fade';"
+        "grip.style.cssText='position:absolute;width:14px;height:14px;"
+        "border-radius:50%;transform:translate(-50%,-50%);background:#fff;"
+        "border:2px solid rgba(0,0,0,0.35);box-shadow:0 1px 3px "
+        "rgba(0,0,0,0.4);pointer-events:auto;cursor:ew-resize;';"
+        "wrap.appendChild(ring);wrap.appendChild(dot);wrap.appendChild(grip);"
+        "document.body.appendChild(wrap);"
+        "function place(){"
+        "var w=innerWidth,h=innerHeight,cx=w*X/100,cy=h*Y/100;"
+        "var r=Math.hypot(w,h)/2*S/100;"
+        "dot.style.left=cx+'px';dot.style.top=cy+'px';"
+        "ring.style.left=(cx-r)+'px';ring.style.top=(cy-r)+'px';"
+        "ring.style.width=2*r+'px';ring.style.height=2*r+'px';"
+        "grip.style.left=(cx+r)+'px';grip.style.top=cy+'px';}"
+        "function paintBg(){"
+        "var g='radial-gradient(at '+X+'% '+Y+'%, '+C+' 0%, '+C2+' '+S+'%)';"
+        "[document.documentElement,document.body].forEach(function(el){"
+        "el.style.setProperty('background',g,'important');"
+        "el.style.setProperty('background-attachment','fixed','important');"
+        "});}"
+        "function send(){try{pycmd('klausmate:bggrad:'+btoa(JSON.stringify("
+        "{target:T,x:X,y:Y,size:S})));}catch(e){}}"
+        "function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}"
+        "function dragify(el,move){"
+        "el.addEventListener('pointerdown',function(ev){"
+        "ev.preventDefault();el.setPointerCapture(ev.pointerId);"
+        "function mv(e){move(e);place();paintBg();}"
+        "function up(){el.removeEventListener('pointermove',mv);"
+        "el.removeEventListener('pointerup',up);send();}"
+        "el.addEventListener('pointermove',mv);"
+        "el.addEventListener('pointerup',up);});}"
+        "dragify(dot,function(e){"
+        "X=Math.round(clamp(e.clientX/innerWidth*100,0,100));"
+        "Y=Math.round(clamp(e.clientY/innerHeight*100,0,100));});"
+        "dragify(grip,function(e){"
+        "var w=innerWidth,h=innerHeight,cx=w*X/100,cy=h*Y/100;"
+        "var r=Math.hypot(e.clientX-cx,e.clientY-cy);"
+        "S=Math.round(clamp(r/(Math.hypot(w,h)/2)*100,10,200));});"
+        "addEventListener('resize',place);"
+        "place();})();"
+    )
+
+
+def gradient_edit_js(spec: dict, target: str) -> str:
+    """The same editor as body HTML, for ``web_content.body`` at page
+    build time (deck browser rebuilds; a freshly rendered card)."""
+    core = gradient_edit_eval_js(spec, target)
+    return f"<script>{core}</script>" if core else ""
 
 
 def gradient_css_value(spec: dict) -> str:

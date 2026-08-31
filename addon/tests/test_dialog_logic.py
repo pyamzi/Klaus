@@ -1004,6 +1004,28 @@ check("both image captions render a rounded thumbnail from the STORED "
       _mm_src.count("_sync_caption(") >= 3
       and "_background.IMAGE_DIR" in _mm_src
       and "_image_thumb(" in _mm_src)
+# The on-screen gradient editor rides the OPEN dialog. Its sink must
+# never refresh — the page already shows the dragged gradient, and a
+# rebuild would land under the pointer mid-drag.
+_sink_parts = code_only(_mm_src).split("def _on_grad_dragged", 1)
+_sink_body = (
+    _sink_parts[1].split("\n    def ", 1)[0] if len(_sink_parts) > 1 else ""
+)
+check("the drag sink updates the pending spec, marks dirty, arms the "
+      "preview QUIETLY — and never refreshes mid-drag",
+      len(_sink_parts) > 1
+      and "mark_dirty()" in _sink_body
+      and "set_preview(_bg_preview_cfg())" in _sink_body
+      and "refresh" not in _sink_body)
+check("editing arms on open with the dialog's sink and disarms on "
+      "finished — connected BEFORE the preview revert, so exactly one "
+      "refresh clears the handles on every close path",
+      "set_grad_edit(True, _on_grad_dragged)" in _mm_src
+      and "set_grad_edit(False, None)" in _mm_src
+      and 0 < _mm_src.find("dlg.finished.connect(_disarm_grad_edit)")
+      < _mm_src.find(
+          "dlg.finished.connect(lambda _result: revert_appearance_preview())"
+      ))
 check("Save is the dialog's DEFAULT button — HIG: a dialog names its "
       "default action, and Return should save once there is something "
       "to save (Qt never fires a disabled default)",

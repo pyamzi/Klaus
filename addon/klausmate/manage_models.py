@@ -2947,6 +2947,44 @@ def manage_models_dialog(setup: bool = False) -> None:
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
     _preview_timer.timeout.connect(apply_appearance_live)
+    # ── On-screen gradient editing (Pouya picked drag-on-screen over
+    # sliders) ── rides the OPEN dialog: while Preferences is up, a
+    # gradient background grows a draggable centre dot + size ring on
+    # its own screen. JS repaints the page live during the drag; the
+    # release lands here through background.grad_edit_event (clamped)
+    # and this sink.
+    def _on_grad_dragged(target: str, x: int, y: int, size: int) -> None:
+        """Update the pending spec + dirty mark, and arm the preview
+        QUIETLY — never top_bar.refresh(): the page already shows the
+        dragged gradient (the editor painted it inline), and a refresh
+        would rebuild the page under the pointer."""
+        spec_key = "reviewer_spec" if target == "reviewer" else "spec"
+        s = _bg_state[spec_key]
+        s["grad_x"], s["grad_y"], s["grad_size"] = int(x), int(y), int(size)
+        mark_dirty()
+        try:
+            _background.set_preview(_bg_preview_cfg())
+        except Exception as _exc:
+            print(f"[klausmate] gradient preview failed: {_exc}")
+
+    _background.set_grad_edit(True, _on_grad_dragged)
+
+    def _disarm_grad_edit(_result: int) -> None:
+        """Connected BEFORE the preview revert below, so between them
+        exactly one refresh clears the handles on every close path:
+        with a preview armed the revert's own refresh rebuilds without
+        the flag; with nothing previewed the revert early-returns and
+        this refresh does the clearing."""
+        _background.set_grad_edit(False, None)
+        if not _background.preview_active():
+            try:
+                from . import top_bar as _top_bar
+
+                _top_bar.refresh()
+            except Exception:
+                pass
+
+    dlg.finished.connect(_disarm_grad_edit)
     # finished fires on EVERY close path (Save, Cancel, Esc, title-bar ✕),
     # so it is the one place an unsaved preview can be guaranteed not to
     # outlive the dialog. No-op unless a preview is actually armed.
@@ -3009,4 +3047,18 @@ def manage_models_dialog(setup: bool = False) -> None:
     # already callback-driven (confirm_close / save_all).
     _OPEN_DLG = dlg
     dlg.show()
+    # Plant the gradient drag handles right away when a gradient is
+    # already configured (arming an edge colour later plants them via
+    # that edit's own live-preview refresh). After show(), so the one
+    # deck-screen rebuild happens behind the appearing window.
+    try:
+        if (
+            _bg_state["spec"]["color2"]
+            or _bg_state["reviewer_spec"]["color2"]
+        ):
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+    except Exception as _exc:
+        print(f"[klausmate] gradient handle plant failed: {_exc}")
 
