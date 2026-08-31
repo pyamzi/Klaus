@@ -124,6 +124,27 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   Preferences switch was removed as redundant); `_bg_preview_cfg`
   still carries the key, read from STORED config live per tick — that
   dict REPLACES config for every `effective_cfg` reader.
+  **The panel's own corner menu (K-121)** owns two DISPLAY keys beside
+  it: `heatmap_history_days` (91/182/365, `history_window`) and
+  `heatmap_forecast` (`forecast_window`) — both validated in Python
+  against `RANGE_CHOICES`, never trusted from the page, both carried
+  through `_bg_preview_cfg` for the same replace-not-merge reason, and
+  both written through `dashboard.write_cfg` so the patch-the-armed-
+  preview rule has ONE implementation. The menu is a bare `<details>`:
+  no script of ours in Anki's deck-browser document, and the redraw
+  after a choice closes it. Its surface is `--klaus-hm-menu` from our
+  own palette, not Anki's `--canvas-overlay` — a popover that lands
+  white at night is a flashbang, and a missing token fails to the
+  fallback silently. Also K-121, all Pouya's calls: no heading (the
+  grid says what it is), stats centred (the gear is absolute in the
+  corner so it never enters that row's flow, and the row is padded
+  equally on both sides to clear it), the left rail names EVERY row as
+  initials (`_WEEKDAY_INITIALS`, derived from `_WEEKDAYS` so the rail
+  and the tooltips cannot name different days), and a month's first
+  column opens a `MONTH_GAP`. Cells and month labels are FLEX rows of
+  per-week boxes now, not one auto-column grid — that is what lets a
+  single `.klaus-hm-col.ms, .klaus-hm-m.ms` rule move the gap and the
+  label that names it together, off one `starts` list.
 - `dashboard.py` (aqt-free above its "aqt glue" divider) +
   `web/dashboard.js`: **Control-Center-style widget editing** on the
   deck browser. Python owns the registry (`WIDGETS`: decks mandatory,
@@ -148,7 +169,10 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   order ONLY. `_bg_preview_cfg` carries it, and `_write_cfg` patches an
   armed preview so a dashboard edit survives the next preview tick.
   Bridge `klausmate:dash:<b64 json>`; only `add` refreshes (deferred,
-  guarded on `mw.state`). Hook order: dashboard.setup() AFTER
+  guarded on `mw.state`). `write_cfg` is PUBLIC (K-121) because it is
+  the package's one implementation of "patch the armed appearance
+  preview too" — heatmap's corner menu writes through it rather than
+  growing a second copy. Hook order: dashboard.setup() AFTER
   heatmap's, so its body script parses after panel_js's weld. DOM
   behaviour is tested by `tests/dashboard_js_dom_test.js` (node, run
   from test_dashboard.py, honest SKIP without node).

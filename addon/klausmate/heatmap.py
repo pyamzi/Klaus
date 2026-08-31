@@ -59,15 +59,27 @@ DEFAULT_FORECAST_DAYS = 28
 # what lets the month labels ride the same grid as the cells.
 CELL = 10  # Glutanimate's cal-heatmap cellSize
 GAP = 3
+# Extra air before the column that opens a new month, so a year reads as
+# months instead of one undifferentiated ribbon. Applied to the cells
+# and to the month strip from the SAME list, so they cannot drift apart.
+MONTH_GAP = 5
+
+# Windows the gear offers, in days, with the labels it shows them under.
+# The reference addon calls these limhist/limfcst; ours are a short menu
+# rather than a free number, so a stray value can never size the grid.
+RANGE_CHOICES = (91, 182, 365)
+RANGE_LABELS = ("3 months", "6 months", "1 year")
 
 _MONTHS = (
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 )
 _WEEKDAYS = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
-# Row indices that get a weekday label. GitHub labels alternate rows so
-# the strip reads without crowding; rows are Sunday-first (see _row).
-_WEEKDAY_LABEL_ROWS = (1, 3, 5)
+# The left rail: one letter per row, Sunday-first (see _row). GitHub
+# labels alternate rows with three-letter names; Pouya asked for the
+# whole S M T W T F S column, which only fits as initials. Derived from
+# _WEEKDAYS so the rail and the tooltips can never name different days.
+_WEEKDAY_INITIALS = tuple(name[0] for name in _WEEKDAYS)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -100,6 +112,26 @@ def enabled(cfg: Any) -> bool:
         return True
     value = cfg.get("heatmap_enabled", True)
     return value if isinstance(value, bool) else True
+
+
+def history_window(cfg: Any) -> int:
+    """How much past to draw. Only the menu's own choices are honoured —
+    anything else (corrupt, hand-edited, from a future version) reads as
+    the default rather than being allowed to size the grid."""
+    if isinstance(cfg, dict):
+        value = cfg.get("heatmap_history_days", DEFAULT_HISTORY_DAYS)
+        if value in RANGE_CHOICES:
+            return int(value)
+    return DEFAULT_HISTORY_DAYS
+
+
+def forecast_window(cfg: Any) -> int:
+    """Days of scheduled-ahead ghosting, or 0 when switched off. Only an
+    explicit False hides them: a corrupt value shows the forecast, the
+    same way a corrupt value leaves the heatmap itself on."""
+    if isinstance(cfg, dict) and cfg.get("heatmap_forecast", True) is False:
+        return 0
+    return DEFAULT_FORECAST_DAYS
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -308,9 +340,19 @@ def _tooltip(day: int, count: int, future: bool) -> str:
     return f"No reviews on {when}"
 
 
-def _cells_html(columns: list, levels: list) -> str:
+def _cells_html(columns: list, levels: list, starts: list) -> str:
+    """The grid, one element per WEEK column.
+
+    Columns are their own boxes rather than one flat run of cells so the
+    first column of a month can carry ``ms`` and open a gap. *starts*
+    comes from :func:`month_labels`, so the gap and the label that names
+    it are always decided by the same list.
+    """
     parts: list = []
-    for column in columns:
+    for index, column in enumerate(columns):
+        parts.append(
+            '<div class="klaus-hm-col%s">' % (" ms" if starts[index] else "")
+        )
         for cell in column["cells"]:
             if cell is None:
                 parts.append('<span class="klaus-hm-c pad"></span>')
@@ -331,6 +373,7 @@ def _cells_html(columns: list, levels: list) -> str:
                 f'<span class="{" ".join(classes)}"'
                 f' title="{_tooltip(day, count, future)}"{attrs}></span>'
             )
+        parts.append("</div>")
     return "".join(parts)
 
 
@@ -362,6 +405,53 @@ def _stats_html(stats: dict) -> str:
     )
 
 
+# A settings glyph rather than a gear character: the emoji gear renders
+# in colour on macOS and would be the one non-monochrome mark on the
+# deck screen. Strokes are currentColor, so it follows the palette.
+_GEAR_SVG = (
+    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">'
+    '<g fill="none" stroke="currentColor" stroke-width="1.4"'
+    ' stroke-linecap="round">'
+    '<path d="M2 4.75h4.2M10.8 4.75H14M2 11.25h2.2M8.8 11.25H14"/>'
+    '<circle cx="8.5" cy="4.75" r="1.9"/><circle cx="6.5" cy="11.25" r="1.9"/>'
+    "</g></svg>"
+)
+
+SET_PREFIX = "klausmate:heatmap:set:"
+
+
+def _gear_html(history: int, forecast: int) -> str:
+    """The corner menu.
+
+    A ``<details>`` element, so it opens and closes with no script of
+    ours anywhere in Anki's own deck-browser document — one less
+    listener to leak, and it cannot fall out of sync with the markup.
+    Every option posts its choice; Python validates it (JS is never
+    trusted with a config value) and the redraw closes the menu.
+    """
+    ranges = "".join(
+        f'<button class="klaus-hm-opt{" on" if days == history else ""}"'
+        f" onclick=\"pycmd('{SET_PREFIX}history:{days}')\">{label}</button>"
+        for days, label in zip(RANGE_CHOICES, RANGE_LABELS)
+    )
+    upcoming = "".join(
+        f'<button class="klaus-hm-opt{" on" if bool(forecast) == want else ""}"'
+        f" onclick=\"pycmd('{SET_PREFIX}forecast:{int(want)}')\">{label}"
+        "</button>"
+        for want, label in ((True, "Show"), (False, "Hide"))
+    )
+    return (
+        '<details class="klaus-hm-gear">'
+        '<summary title="Heatmap settings">' + _GEAR_SVG + "</summary>"
+        '<div class="klaus-hm-menu">'
+        '<div class="klaus-hm-menu-t">Range</div>'
+        f'<div class="klaus-hm-opts">{ranges}</div>'
+        '<div class="klaus-hm-menu-t">Upcoming</div>'
+        f'<div class="klaus-hm-opts">{upcoming}</div>'
+        "</div></details>"
+    )
+
+
 def heatmap_html(
     history: dict,
     forecast: dict,
@@ -380,19 +470,24 @@ def heatmap_html(
     )
     levels = ramp_levels(stats.get("daily_avg", 0))
 
+    labels = month_labels(columns)
+    # One list decides both the gap and the label above it.
+    starts = [bool(label) for label in labels]
     months = "".join(
-        f'<span class="klaus-hm-m">{label}</span>'
-        for label in month_labels(columns)
+        '<span class="klaus-hm-m%s">%s</span>'
+        % (" ms" if starts[index] else "", label)
+        for index, label in enumerate(labels)
     )
     weekdays = "".join(
-        f'<span class="klaus-hm-w">'
-        f'{_WEEKDAYS[row] if row in _WEEKDAY_LABEL_ROWS else ""}</span>'
+        f'<span class="klaus-hm-w">{_WEEKDAY_INITIALS[row]}</span>'
         for row in range(7)
     )
     return (
         '<div class="klaus-hm">'
+        # No heading: the grid says what it is (Pouya, 2026-08-31), so
+        # the stats row is the whole top line and centres in it.
+        f'{_gear_html(history_days, forecast_days)}'
         '<div class="klaus-hm-top">'
-        '<span class="klaus-hm-heading">Review activity</span>'
         f'<span class="klaus-hm-stats">{_stats_html(stats)}</span>'
         "</div>"
         # The grid is allowed to be wider than the window and scroll
@@ -402,7 +497,8 @@ def heatmap_html(
         '<span class="klaus-hm-corner"></span>'
         f'<div class="klaus-hm-months">{months}</div>'
         f'<div class="klaus-hm-wd">{weekdays}</div>'
-        f'<div class="klaus-hm-cells">{_cells_html(columns, levels)}</div>'
+        '<div class="klaus-hm-cells">'
+        f'{_cells_html(columns, levels, starts)}</div>'
         "</div></div>"
         # No legend: Glutanimate's addon renders with displayLegend
         # false — the grid and the stats row carry the whole story. The
@@ -443,6 +539,13 @@ def _palette_vars(night: bool) -> str:
         f" --klaus-hm-accent: {colours['blue_bright']};"
         f" --klaus-hm-text: {colours['text']};"
         f" --klaus-hm-muted: {colours['text_muted']};"
+        # The corner menu is a floating surface, so it is OPAQUE — a
+        # popover you can read the grid through is a popover you cannot
+        # read. Spelled in Klaus's own palette rather than borrowing
+        # Anki's --canvas-overlay: the panel can fall back on a light
+        # value harmlessly, but a menu that lands white at night is a
+        # flashbang.
+        f" --klaus-hm-menu: {colours['surface']};"
     )
 
 
@@ -456,11 +559,15 @@ def heatmap_css() -> str:
     properties with the frosted family's, so the heatmap always matches
     whatever the deck table is doing.
     """
-    week = CELL + GAP
     return (
         f":root {{{_palette_vars(False)} }}"
         f":root.night-mode {{{_palette_vars(True)} }}"
         " .klaus-hm {"
+        # position: relative anchors the corner gear to the PANEL, which
+        # is what keeps it out of the top row's flow — the stats row can
+        # then centre on the panel rather than on whatever space a
+        # sibling control left it.
+        " position: relative;"
         " display: inline-block; text-align: left;"
         " box-sizing: border-box; max-width: 100%;"
         " margin: 1.4em auto 0.6em auto; padding: 14px 16px 11px 16px;"
@@ -472,11 +579,11 @@ def heatmap_css() -> str:
         " }"
         " .klaus-hm-top {"
         " display: flex; flex-wrap: wrap; align-items: baseline;"
-        " justify-content: space-between; gap: 6px 18px;"
+        # Centred, and padded by the same amount on BOTH sides so the
+        # row stays centred on the panel while still clearing the gear
+        # sitting in the corner above its right end.
+        " justify-content: center; gap: 6px 18px; padding: 0 22px;"
         " margin-bottom: 11px;"
-        " }"
-        " .klaus-hm-heading {"
-        " font-size: 13px; font-weight: 600; letter-spacing: 0.01em;"
         " }"
         " .klaus-hm-stats { display: flex; flex-wrap: wrap; gap: 14px; }"
         " .klaus-hm-stat {"
@@ -501,10 +608,14 @@ def heatmap_css() -> str:
         " .klaus-hm-plot {"
         " display: grid; grid-template-columns: auto auto;"
         f" gap: 4px {GAP + 3}px; width: max-content;"
+        # Centre the grid when it is narrower than the stats row above
+        # it (a 3-month range is), and go inert when it is not: auto
+        # margins resolve to 0 the moment the content overflows, so
+        # this can never fight the scroller.
+        " margin: 0 auto;"
         " }"
         " .klaus-hm-months {"
-        f" display: grid; grid-auto-flow: column;"
-        f" grid-auto-columns: {week}px; height: 11px;"
+        f" display: flex; gap: {GAP}px; height: 11px;"
         " }"
         # Month and weekday labels are the smallest type in the app,
         # sitting on a frosted panel over an ARBITRARY user photo — so
@@ -513,8 +624,14 @@ def heatmap_css() -> str:
         # Only the stat labels stay muted; their bold accent numbers
         # anchor them.
         " .klaus-hm-m {"
+        f" flex: 0 0 {CELL}px;"
         " font-size: 10px; color: var(--klaus-hm-text);"
         " white-space: nowrap; overflow: visible; line-height: 11px;"
+        " }"
+        # ONE rule for both strips: a month's gap and the label that
+        # names it can never end up on different columns.
+        " .klaus-hm-col.ms, .klaus-hm-m.ms {"
+        f" margin-left: {MONTH_GAP}px;"
         " }"
         " .klaus-hm-wd {"
         f" display: grid; grid-template-rows: repeat(7, {CELL}px);"
@@ -525,9 +642,11 @@ def heatmap_css() -> str:
         f" line-height: {CELL}px; text-align: right; white-space: nowrap;"
         " }"
         " .klaus-hm-cells {"
-        " display: grid; grid-auto-flow: column;"
-        f" grid-template-rows: repeat(7, {CELL}px);"
-        f" grid-auto-columns: {CELL}px; gap: {GAP}px;"
+        f" display: flex; gap: {GAP}px;"
+        " }"
+        " .klaus-hm-col {"
+        f" display: grid; grid-template-rows: repeat(7, {CELL}px);"
+        f" row-gap: {GAP}px;"
         " }"
         " .klaus-hm-c {"
         f" width: {CELL}px; height: {CELL}px; border-radius: 2px;"
@@ -552,6 +671,59 @@ def heatmap_css() -> str:
             for n in range(1, len(RAMP_FACTORS) + 1)
         )
         +
+        # The corner menu. <details> carries the open/closed state
+        # itself, so nothing here needs a listener in Anki's document.
+        " .klaus-hm-gear { position: absolute; top: 9px; right: 10px; }"
+        " .klaus-hm-gear > summary {"
+        " list-style: none; display: block; cursor: pointer;"
+        " padding: 3px; border-radius: 5px; line-height: 0;"
+        " color: var(--klaus-hm-muted);"
+        " }"
+        " .klaus-hm-gear > summary::-webkit-details-marker {"
+        " display: none;"
+        " }"
+        " .klaus-hm-gear > summary:hover {"
+        " color: var(--klaus-hm-text); background: var(--klaus-hm-empty);"
+        " }"
+        " .klaus-hm-gear[open] > summary {"
+        " color: var(--klaus-hm-accent);"
+        " }"
+        " .klaus-hm-menu {"
+        " position: absolute; top: 100%; right: 0; z-index: 5;"
+        " margin-top: 5px; padding: 8px;"
+        " background: var(--klaus-hm-menu);"
+        " border: 1px solid var(--klaus-hm-empty);"
+        " border-radius: 9px;"
+        " box-shadow: 0 6px 18px rgba(0,0,0,0.18);"
+        " }"
+        " .klaus-hm-menu-t {"
+        " font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase;"
+        " color: var(--klaus-hm-muted); margin: 0 0 5px 2px;"
+        " }"
+        # A column of full-width rows, stated rather than left to
+        # shrink-to-fit: a popover that lays its options out one way on
+        # one engine and another way on the next is not a menu.
+        " .klaus-hm-opts {"
+        " display: flex; flex-direction: column; align-items: stretch;"
+        " gap: 3px; margin-bottom: 9px;"
+        " }"
+        " .klaus-hm-opts:last-child { margin-bottom: 0; }"
+        # Anki styles every <button> on this page; reset to a chip.
+        " .klaus-hm-opt {"
+        " appearance: none; -webkit-appearance: none;"
+        f" font-family: {theme.FONT_FAMILY};"
+        " font-size: 11px; line-height: 1; white-space: nowrap;"
+        " margin: 0; padding: 5px 9px; border-radius: 6px; cursor: pointer;"
+        " text-align: left;"
+        " border: 1px solid transparent;"
+        " background: var(--klaus-hm-empty);"
+        " color: var(--klaus-hm-text);"
+        " }"
+        " .klaus-hm-opt:hover { border-color: var(--klaus-hm-accent); }"
+        " .klaus-hm-opt.on {"
+        " background: var(--klaus-hm-l2);"
+        " border-color: var(--klaus-hm-accent); font-weight: 600;"
+        " }"
         " .klaus-hm-c.hit { cursor: pointer; }"
         " .klaus-hm-c.hit:hover {"
         " outline: 1px solid var(--klaus-hm-accent); outline-offset: 1px;"
@@ -710,12 +882,18 @@ def render_for_collection(col: Any, cfg: Any = None) -> str:
     cfg = cfg if isinstance(cfg, dict) else _config()
     if not enabled(cfg):
         return ""
-    history, forecast, today = _collect(col, DEFAULT_FORECAST_DAYS)
+    ahead = forecast_window(cfg)
+    history, forecast, today = _collect(col, ahead)
+    # Stats stay computed over the FULL history whatever window is
+    # drawn: a streak is a fact about the collection, not about how
+    # much of it happens to be on screen.
     return heatmap_html(
         dict(history),
         forecast,
         today,
         stats_from_history(history, today),
+        history_days=history_window(cfg),
+        forecast_days=ahead,
     )
 
 
@@ -785,10 +963,76 @@ def _open_day(day: int) -> None:
         print(f"[klausmate] heatmap browse failed: {exc}")
 
 
+def _refresh() -> None:
+    """Redraw the deck browser — only while the user is still ON it.
+    This runs deferred; by then they may have moved to the overview or
+    the reviewer, and yanking those back through a deck-browser repaint
+    would be wrong. (dashboard._refresh's rule, for the same screen.)"""
+    try:
+        from aqt import mw
+
+        if getattr(mw, "state", "") == "deckBrowser":
+            mw.deckBrowser.refresh()
+    except Exception as exc:
+        print(f"[klausmate] heatmap refresh failed: {exc}")
+
+
+def _write_cfg(updates: dict) -> None:
+    """Write settings through dashboard's writer.
+
+    The deck screen's OTHER widget editor already owns the rule that an
+    armed appearance preview must be patched alongside stored config —
+    a preview dict REPLACES config for every effective_cfg reader, so a
+    key only written to storage would be reverted on the next tick.
+    One implementation of that rule, not two.
+    """
+    try:
+        from . import dashboard
+
+        dashboard.write_cfg(updates)
+    except Exception as exc:
+        print(f"[klausmate] heatmap config write failed: {exc}")
+
+
+def _apply_setting(payload: str) -> tuple:
+    """One choice from the corner menu.
+
+    Validated HERE, never in the page: the webview may post anything, so
+    only a known key carrying a value from that key's own menu is ever
+    written. Anything else is swallowed, leaving config untouched.
+    """
+    updates: dict = {}
+    key, _, raw = payload.partition(":")
+    try:
+        if key == "history" and int(raw) in RANGE_CHOICES:
+            updates = {"heatmap_history_days": int(raw)}
+        elif key == "forecast" and raw in ("0", "1"):
+            updates = {"heatmap_forecast": raw == "1"}
+    except Exception:
+        updates = {}
+    if not updates:
+        return (True, None)
+    _write_cfg(updates)
+    try:
+        from aqt.qt import QTimer
+
+        # Deferred so the webchannel call unwinds before the deck
+        # browser is rebuilt under the webview that sent it (hygiene
+        # per tests/test_bridge_reentrancy).
+        QTimer.singleShot(0, _refresh)
+    except Exception as exc:
+        print(f"[klausmate] heatmap refresh schedule failed: {exc}")
+    return (True, None)
+
+
 def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
-    """Handle a cell click from the deck browser webview."""
+    """Handle a cell click, or a choice from the corner menu."""
     if not message.startswith("klausmate:heatmap:"):
         return handled
+    # Before the day parse: a settings payload also starts with the
+    # heatmap prefix, and its trailing number would read as a day.
+    if message.startswith(SET_PREFIX):
+        return _apply_setting(message[len(SET_PREFIX):])
     try:
         day = int(message.rsplit(":", 1)[1])
     except Exception:

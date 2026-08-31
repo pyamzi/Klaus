@@ -33,6 +33,8 @@
   "reviewer_background_grad_size": 100,
   "lecture_view_reopen": true,
   "heatmap_enabled": true,
+  "heatmap_history_days": 365,
+  "heatmap_forecast": true,
   "dashboard_order": [
     "decks",
     "heatmap"

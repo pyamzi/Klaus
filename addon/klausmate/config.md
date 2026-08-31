@@ -242,6 +242,14 @@ wouldn't already need.
   deck-screen widget, so native mode leaves Anki's deck screen stock
   and this setting waits (it is never rewritten by the design switch,
   so it comes back as you left it).
+- **heatmap_history_days**: how much past the grid draws, in days —
+  `91`, `182` or `365` (default). Set it from the heatmap's own corner
+  menu (the ⚙-style glyph at the panel's top right) → **Range**. Any
+  other value reads as 365 rather than being allowed to size the grid.
+- **heatmap_forecast**: `true` (default) ghosts the next four weeks of
+  scheduled cards to the right of today; `false` stops the grid at
+  today. Same corner menu → **Upcoming**. Only an explicit `false`
+  hides them.
 - **dashboard_order**: the order of the deck-screen widgets, top to
   bottom (default `["decks", "heatmap"]`). Normally written by the
   dashboard itself: right-click a widget → *Edit Widgets…*, then drag
@@ -252,6 +260,7 @@ wouldn't already need.
   the saved order waits for the design layer.
 
 Apart from `heatmap_enabled` and `dashboard_order` (written from the
-deck screen's own Edit Widgets mode), all of these live in **KlausMate
+deck screen's own Edit Widgets mode) and the two `heatmap_*` display
+keys above (the heatmap's own corner menu), all of these live in **KlausMate
 Preferences → Appearance**; press **Save** and they apply immediately
 (no restart).

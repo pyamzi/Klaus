@@ -2711,6 +2711,16 @@ def manage_models_dialog(setup: bool = False) -> None:
                 dict(g) for g in _bg_state["reviewer_spec"]["gradients"]
             ],
             "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
+            # The heatmap's own corner menu writes these two, and it can
+            # be used while this dialog is open — so they are carried
+            # from STORED config and read live per tick, exactly like
+            # heatmap_enabled above and dashboard_order below.
+            "heatmap_history_days": _heatmap.history_window(
+                _pkg().get_config()
+            ),
+            "heatmap_forecast": _heatmap.forecast_window(
+                _pkg().get_config()
+            ) > 0,
             # Same expression save_general writes. The design gates all
             # read through effective_cfg and their default is OFF, so a
             # preview dict missing this key would strip the whole look

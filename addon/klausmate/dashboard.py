@@ -369,8 +369,12 @@ def _config() -> dict:
     return background.effective_cfg(stored)
 
 
-def _write_cfg(updates: dict) -> None:
+def write_cfg(updates: dict) -> None:
     """Apply *updates* to STORED config (never to a preview dict).
+
+    Public because it is the package's ONE implementation of the preview
+    rule below — heatmap's corner menu writes its settings through here
+    rather than growing a second copy of it.
 
     If a Preferences preview is armed, the preview REPLACES config for
     every effective_cfg reader — so the same updates are patched into a
@@ -478,7 +482,7 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     updates = apply_action(action)
     if updates is None:
         return (True, None)
-    _write_cfg(updates)
+    write_cfg(updates)
     if act == "add":
         try:
             from aqt.qt import QTimer

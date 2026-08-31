@@ -257,8 +257,56 @@ _ragged = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
 check("out-of-window slots render as padding, so a window that does "
       "not begin on a Sunday still keeps its seven rows",
       "klaus-hm-c pad" in _ragged)
-check("weekday labels appear on alternate rows only",
-      _html.count(">Mon<") == 1 and ">Tue<" not in _html)
+check("the left rail names EVERY row, as initials — S M T W T F S "
+      "(Pouya, 2026-08-31), not GitHub's alternating three-letter names",
+      re.findall(r'<span class="klaus-hm-w">(.*?)</span>', _html)
+      == ["S", "M", "T", "W", "T", "F", "S"])
+check("the rail's letters are derived from the tooltip's day names, so "
+      "the two can never name different days",
+      heatmap._WEEKDAY_INITIALS
+      == tuple(name[0] for name in heatmap._WEEKDAYS))
+check("no heading survives above the grid — the grid says what it is",
+      "Review activity" not in _html
+      and "klaus-hm-heading" not in _html
+      and "klaus-hm-heading" not in heatmap.heatmap_css())
+
+# ---- months are given air --------------------------------------- K-121
+_year_html = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
+                                  history_days=365, forecast_days=28)
+_year_cols = heatmap.build_columns({99: 40}, {}, 100, 365, 28)
+_year_starts = [bool(m) for m in heatmap.month_labels(_year_cols)]
+check("a month's first column opens a gap",
+      _year_html.count('class="klaus-hm-col ms"') == sum(_year_starts))
+check("...and the LABEL above it moves by the same rule, from the same "
+      "list — a gap the month name did not follow would be worse than "
+      "no gap at all",
+      _year_html.count('class="klaus-hm-m ms"') == sum(_year_starts))
+check("one stylesheet rule carries both, so they cannot drift apart",
+      ".klaus-hm-col.ms, .klaus-hm-m.ms {" in heatmap.heatmap_css())
+check("the gap is real air, not a whole extra column",
+      0 < heatmap.MONTH_GAP < heatmap.CELL)
+
+# ---- the corner menu --------------------------------------------- K-121
+check("the panel carries a settings control in its corner",
+      '<details class="klaus-hm-gear">' in _html)
+check("...that needs no script of ours in Anki's deck-browser document",
+      "<script" not in _html)
+check("Range offers exactly the menu's own choices",
+      all(f"{heatmap.SET_PREFIX}history:{days}" in _html
+          for days in heatmap.RANGE_CHOICES)
+      and len(heatmap.RANGE_CHOICES) == len(heatmap.RANGE_LABELS))
+check("Upcoming can be turned on and off",
+      f"{heatmap.SET_PREFIX}forecast:1" in _html
+      and f"{heatmap.SET_PREFIX}forecast:0" in _html)
+_menu = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
+                             history_days=182, forecast_days=0)
+check("the live values are the ones shown as selected",
+      "klaus-hm-opt on\" onclick=\"pycmd('%shistory:182')"
+      % heatmap.SET_PREFIX in _menu
+      and "klaus-hm-opt on\" onclick=\"pycmd('%sforecast:0')"
+      % heatmap.SET_PREFIX in _menu)
+check("exactly one Range choice and one Upcoming choice read as current",
+      _menu.count('klaus-hm-opt on"') == 2)
 
 # The legend is GONE. Glutanimate's addon ships displayLegend:false —
 # it shows the grid and the stats row and nothing else — and matching it
@@ -309,10 +357,6 @@ check("and never FORCES a width — that is what pushed the deck panel "
       not re.search(r"(?<!max-)width: 100%", _css)
       and "min-width" not in _css
       and "max-width: 100%" in _css)
-check("month labels ride the same column pitch as the cells, so they "
-      "line up by construction rather than by measurement",
-      f"grid-auto-columns: {heatmap.CELL + heatmap.GAP}px" in _css
-      and f"grid-auto-columns: {heatmap.CELL}px" in _css)
 check("weekday labels ride the same row pitch",
       _css.count(f"repeat(7, {heatmap.CELL}px)") == 2)
 check("all four done-steps and all four due-steps are defined",
@@ -328,6 +372,18 @@ def _rule(selector):
     _m = re.search(re.escape(selector) + r"\s*\{([^{}]*)\}", _css)
     return _m.group(1) if _m else ""
 
+
+check("month labels ride the same column pitch as the cells, so they "
+      "line up by construction rather than by measurement: both strips "
+      "are flex rows of CELL-wide items sharing the cells' own gap",
+      _css.count(f"display: flex; gap: {heatmap.GAP}px") == 2
+      and f"flex: 0 0 {heatmap.CELL}px" in _rule(".klaus-hm-m"))
+check("the corner menu is opaque and PALETTE-owned, in both palettes "
+      "— borrowing Anki's --canvas-overlay would land a white popover "
+      "on a dark deck screen wherever that token is not defined",
+      _css.count("--klaus-hm-menu:") == 2
+      and "background: var(--klaus-hm-menu)" in _rule(".klaus-hm-menu")
+      and "rgba" not in _rule(".klaus-hm-menu").split("box-shadow")[0])
 
 check("month and weekday labels wear FULL text colour at their 10px — "
       "muted's contrast was AA-checked against bg/surface, never "
@@ -471,6 +527,58 @@ check("the gate is NOT folded into enabled(): Preferences seeds its "
       "gating there would uncheck the switch and quietly persist "
       "heatmap_enabled False — losing an untouched preference",
       heatmap.enabled({"klausbook_design": False}) is True)
+
+section("the corner menu's settings")
+
+check("the range defaults to a year",
+      heatmap.history_window({}) == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.DEFAULT_HISTORY_DAYS in heatmap.RANGE_CHOICES)
+check("each of the menu's own choices is honoured",
+      all(heatmap.history_window({"heatmap_history_days": d}) == d
+          for d in heatmap.RANGE_CHOICES))
+check("a value the menu cannot produce is NOT allowed to size the "
+      "grid — a hand-edited 9000 would draw a 25-year ribbon",
+      heatmap.history_window({"heatmap_history_days": 9000})
+      == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.history_window({"heatmap_history_days": "365"})
+      == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.history_window(None) == heatmap.DEFAULT_HISTORY_DAYS)
+check("the forecast is on by default and off only when asked",
+      heatmap.forecast_window({}) == heatmap.DEFAULT_FORECAST_DAYS
+      and heatmap.forecast_window({"heatmap_forecast": False}) == 0)
+check("a corrupt forecast value SHOWS the forecast — the same "
+      "direction enabled() errs in, so bad config never silently "
+      "subtracts from the panel",
+      heatmap.forecast_window({"heatmap_forecast": "no"})
+      == heatmap.DEFAULT_FORECAST_DAYS)
+
+_written = []
+_orig_write = heatmap._write_cfg
+heatmap._write_cfg = lambda updates: _written.append(updates)
+try:
+    for _payload in ("history:182", "forecast:0", "forecast:1"):
+        heatmap._apply_setting(_payload)
+    check("a valid choice writes exactly its own key",
+          _written == [{"heatmap_history_days": 182},
+                       {"heatmap_forecast": False},
+                       {"heatmap_forecast": True}])
+    _written.clear()
+    for _junk in ("history:9000", "history:abc", "forecast:2", "colors:lime",
+                  "", "history:", ":", "history:365:extra"):
+        heatmap._apply_setting(_junk)
+    check("and nothing the page could invent writes ANYTHING — the "
+          "webview is never trusted with a config value",
+          _written == [], str(_written))
+    _written.clear()
+    check("a settings message is answered as handled",
+          heatmap._on_js_message(
+              (False, None), heatmap.SET_PREFIX + "history:91", None)
+          == (True, None))
+    check("...and routed as a SETTING, not as a day — 'set:history:91' "
+          "ends in a number the day parser would happily swallow",
+          _written == [{"heatmap_history_days": 91}], str(_written))
+finally:
+    heatmap._write_cfg = _orig_write
 
 section("bridge")
 check("a click is deferred, never run inside the webchannel handler",

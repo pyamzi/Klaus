@@ -949,6 +949,12 @@ check("save_general no longer writes heatmap_enabled (Edit Widgets "
 check("the preview dict still carries heatmap_enabled, from STORED "
       "config read live per tick (dashboard_order's pattern)",
       "bool(_heatmap.enabled(_pkg().get_config()))" in code_only(_src2))
+check("...and the heatmap's two DISPLAY keys with it — the corner "
+      "menu can be used while Preferences is open, and a key missing "
+      "from the preview dict falls back to its default, not to the "
+      "value the user just chose",
+      "_heatmap.history_window(" in code_only(_src2)
+      and "_heatmap.forecast_window(" in code_only(_src2))
 check("nav geometry is pure view geometry: setSizeHint rows + list "
       "setSpacing + an overshooting fixed height — nothing QSS-derived "
       "(three pill-era fixes fought polish timing; a single list view "

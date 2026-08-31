@@ -212,7 +212,7 @@ check("config writes patch an armed Preferences preview, or the next "
 
 section("bridge handler behaviour (stubbed)")
 _calls = []
-dash._write_cfg = lambda u: _calls.append(u)  # glue stubbed; policy real
+dash.write_cfg = lambda u: _calls.append(u)  # glue stubbed; policy real
 check("a foreign message passes through untouched",
       dash._on_js_message(("sentinel",), "klausmate:settings", None)
       == ("sentinel",))
