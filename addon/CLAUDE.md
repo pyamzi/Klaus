@@ -406,6 +406,25 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   labeled "Library" (`gui_hooks.top_toolbar_did_init_links`). Right-click
   per row: open, rename, move to folder, re-embed, adjust match
   sensitivity, show matches in Browse, curate deck from this PDF, delete.
+  Since K-117 the Library wears the VS Code Explorer vernacular
+  (theme.library_qss: flat 22px rows on `surface`, one full-width
+  hover/selection band, chevron twisties via
+  `web/chevron-right-{day,night}.svg`, uppercase LIBRARY caption with
+  New Folder/Refresh beside it, quiet flat buttons — PrimaryButton
+  opt-in kept); columns are PDF/Retention/Cards/Notes (Cards =
+  VIEWABLE cards only, counts from priority_rows' K-118 keys via
+  .get; a fully suspended PDF renders dimmed with "suspended" in its
+  Cards cell); the context menu gains Suspend/Unsuspend Cards
+  (stored-tag-first membership, ONE CollectionOp, undoable),
+  Retention History… (guarded retention_history import, omitted when
+  absent), and the clarity renames Update/Add to Search Index with
+  setToolTipsVisible tooltips; the folder TREE also accepts external
+  .pdf drops filed into the hovered folder (internal moves
+  byte-equivalent); Match Sensitivity opens window-modal (dlg.open,
+  K-114 — pdf_drive carries an exec-ban pin). tests/test_drive.py
+  runs a real-offscreen-PyQt6 section: PyQt6 IS importable under
+  system python3 (the klaus-test skill note saying widgets can't be
+  instantiated predates this).
 - `tag_sync.py`: per-PDF collection tags. THE INVARIANT: every indexed PDF
   owns exactly one tag `!Library::<folder path, / → ::>::<leaf>` (leaf =
   display name minus extension, tag-sanitized), whose members are exactly
