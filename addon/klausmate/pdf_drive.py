@@ -657,6 +657,13 @@ class DriveWindow(QWidget):
         refresh = QPushButton("Refresh", left)
         refresh.clicked.connect(self._refresh_rows)
         header_row.addWidget(refresh)
+        map_btn = QPushButton("Map", left)
+        map_btn.setToolTip(
+            "Embedding map — every indexed note as a point, "
+            "your PDFs where their matches cluster"
+        )
+        map_btn.clicked.connect(self._open_map)
+        header_row.addWidget(map_btn)
         lay.addLayout(header_row)
 
         self.tree = _LibraryTree(self, left)
@@ -1633,6 +1640,16 @@ class DriveWindow(QWidget):
         self.matches.pop(safe, None)
         self.rebuild_tree()
         tooltip(f"Deleted “{display}”.")
+
+    def _open_map(self) -> None:
+        """The K-123 embedding map, guarded like every optional surface
+        — a broken map import costs a log line, never the Library."""
+        try:
+            from . import pdf_map
+
+            pdf_map.open_map_window(self)
+        except Exception as exc:
+            print(f"[klausmate] map open failed: {exc}")
 
     def _curate(self, safe: str) -> None:
         if mw is None or mw.col is None:

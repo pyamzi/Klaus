@@ -999,5 +999,16 @@ if _HAVE_QT:
 
     shutil.rmtree(_rq_uf, ignore_errors=True)
 
+print("== K-124: the Map button ==")
+
+_MAP_SRC = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+check("caption row carries a Map button beside New Folder/Refresh",
+      'QPushButton("Map", left)' in _MAP_SRC)
+check("it opens K-123's public surface, nothing deeper",
+      "pdf_map.open_map_window(self)" in _MAP_SRC)
+check("the import is guarded — a broken map costs a log line, never "
+      "the Library",
+      "map open failed" in _MAP_SRC)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
