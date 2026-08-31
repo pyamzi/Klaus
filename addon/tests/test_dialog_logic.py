@@ -1005,19 +1005,35 @@ check("both image captions render a rounded thumbnail from the STORED "
       _mm_src.count("_sync_caption(") >= 3
       and "_background.IMAGE_DIR" in _mm_src
       and "_image_thumb(" in _mm_src)
-# The on-screen gradient editor rides the OPEN dialog. Its sink must
-# never refresh — the page already shows the dragged gradient, and a
-# rebuild would land under the pointer mid-drag.
-_sink_parts = code_only(_mm_src).split("def _on_grad_dragged", 1)
-_sink_body = (
-    _sink_parts[1].split("\n    def ", 1)[0] if len(_sink_parts) > 1 else ""
+# The on-screen editor rides the OPEN dialog. GEOMETRY drags must
+# never refresh — the page already shows the dragged stack, and a
+# rebuild would land under the pointer mid-drag. STRUCTURAL ops
+# (add/remove/recolor) are the opposite: they replant the editor so
+# the handles regrow with fresh indices.
+_geom_parts = code_only(_mm_src).split("def _on_grad_geom", 1)
+_geom_body = (
+    _geom_parts[1].split("\n    def ", 1)[0] if len(_geom_parts) > 1 else ""
 )
-check("the drag sink updates the pending spec, marks dirty, arms the "
+check("the geometry sink updates the sphere, marks dirty, arms the "
       "preview QUIETLY — and never refreshes mid-drag",
-      len(_sink_parts) > 1
-      and "mark_dirty()" in _sink_body
-      and "set_preview(_bg_preview_cfg())" in _sink_body
-      and "refresh" not in _sink_body)
+      len(_geom_parts) > 1
+      and "mark_dirty()" in _geom_body
+      and "_quiet_preview()" in _geom_body
+      and "refresh" not in _geom_body and "replant" not in _geom_body)
+check("structural ops are bounded and replant: add is capped at "
+      "MAX_SPHERES, the LAST sphere can never be removed (colour "
+      "mode IS a gradient), and a recolor click opens the picker "
+      "DEFERRED — modal work never runs inside a webchannel dispatch",
+      "len(gradients) < _background.MAX_SPHERES" in _mm_src
+      and "if len(gradients) > 1 and 0 <= i < len(gradients):" in _mm_src
+      and "QTimer.singleShot(\n                0, "
+          "lambda: _pick_sphere_colour(spec_key, i)\n            )"
+      in _mm_src)
+check("the sphere lists ride save AND preview for both screens as "
+      "DEEP COPIES — config must never alias live dialog state",
+      _mm_src.count('[dict(g) for g in spec["gradients"]]') == 2
+      and 'cfg["reviewer_background_gradients"] = [' in _save_slice
+      and '"reviewer_background_gradients": [' in _preview_slice)
 check("editing arms on open with the dialog's sink and disarms on "
       "finished — connected BEFORE the preview revert, so exactly one "
       "refresh clears the handles on every close path",

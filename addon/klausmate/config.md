@@ -166,17 +166,23 @@ wouldn't already need.
   colour behind a transparent or still-loading image). Default
   `"#FFFFFF"` — both screens default to a plain white ground. When a
   gradient is armed (below) this is its CENTRE colour.
-- **background_color2**: the gradient's EDGE colour. When empty (the
-  default) it is derived automatically from the centre colour (~45%
-  toward black — a quiet vignette), so colour mode is always a
-  gradient; there is no flat mode. Set it via **Edge Color…** next to
-  the Color button.
-- **background_grad_x** / **background_grad_y**: the gradient's
-  centre, as % of the window (defaults `50`/`42`). Adjusted by
-  dragging the handle ON the deck screen itself while Preferences is
-  open, not with sliders.
-- **background_grad_size**: how far out the fade reaches, 10–200 %
-  (default `100`) — dragged on-screen as well.
+- **background_color2**: the shared EDGE colour every sphere fades
+  into — the backdrop behind the whole stack. Ships white by
+  default; when unset it is derived from the centre colour (~45%
+  toward black). Set it via **Edge Color…** next to the Center Color
+  button. There is no flat mode.
+- **background_gradients**: the gradient SPHERES — a list of up to 4
+  `{color, x, y, size}` entries, each painted as its own radial blob
+  (its colour at the centre fading to transparent at its edge) over
+  the shared edge colour. Edited entirely ON the deck screen while
+  Preferences is open: drag a sphere's dot to move it, its ring grip
+  to resize, click the dot to recolor, right-click it to remove, and
+  the ＋ pill adds another. When this list is missing it is built
+  from the legacy single-gradient keys below.
+- **background_grad_x** / **background_grad_y** /
+  **background_grad_size**: legacy single-gradient geometry (mirrors
+  of the first sphere; defaults `50`/`42`/`100`) — kept so a
+  pre-sphere config renders unchanged.
 - **background_image**: filename of an image stored in
   `user_files/backgrounds/`. Choosing one in Preferences copies it
   there, so the background survives the original being moved.
@@ -195,6 +201,7 @@ wouldn't already need.
 - **reviewer_background_mode** / **reviewer_background_color** /
   **reviewer_background_image** / **reviewer_background_fit** /
   **reviewer_background_wash** / **reviewer_background_color2** /
+  **reviewer_background_gradients** /
   **reviewer_background_grad_x/_y/_size**: the SAME settings, `"theme"`-mode
   default, but for the study screen — completely independent of
   `background_*` above, so you can show a different picture while

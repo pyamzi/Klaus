@@ -128,11 +128,37 @@ _grad = bg.resolve({"background_mode": "color",
                     "background_color2": "#a0b0c0",
                     "background_grad_x": 30, "background_grad_y": 70,
                     "background_grad_size": 120})
-check("gradient value: the centre colour at the dragged position "
-      "fading to the edge colour at the dragged size (ellipse shape, "
-      "so it scales with the viewport's aspect)",
+check("one sphere = one radial layer, its own colour fading to the "
+      "SAME colour at alpha 0 (never through black transparent), at "
+      "the dragged position and size",
       bg.gradient_css_value(_grad)
-      == "radial-gradient(at 30% 70%, #102030 0%, #a0b0c0 120%)")
+      == "radial-gradient(at 30% 70%, #102030 0%, #10203000 120%)")
+_multi = bg.resolve({
+    "background_mode": "color", "background_color2": "#0b0b10",
+    "background_gradients": [
+        {"color": "#ff0000", "x": 20, "y": 30, "size": 50},
+        {"color": "#00ff00", "x": 80, "y": 60, "size": 90},
+        {"color": "not-a-colour"},
+        "junk",
+    ],
+})
+check("MULTIPLE spheres stack first-on-top over ONE backdrop — bad "
+      "entries are dropped, and the backdrop rides as "
+      "background-color so the layers can compose",
+      bg.gradient_css_value(_multi)
+      == "radial-gradient(at 20% 30%, #ff0000 0%, #ff000000 50%), "
+         "radial-gradient(at 80% 60%, #00ff00 0%, #00ff0000 90%)"
+      and "background-color: #0b0b10 !important;" in bg.main_css(_multi)
+      and "background-image: radial-gradient" in bg.main_css(_multi))
+check("the sphere list is capped at MAX_SPHERES and a missing list "
+      "is built from the legacy single-gradient keys, #rgb colours "
+      "normalised to six digits (the alpha-0 stop needs them)",
+      len(bg.resolve({"background_gradients": [
+          {"color": "#111111"}] * 9})["gradients"]) == bg.MAX_SPHERES
+      and _grad["gradients"] == [
+          {"color": "#102030", "x": 30, "y": 70, "size": 120}]
+      and bg.resolve({"background_gradients": [
+          {"color": "#AbC"}]})["gradients"][0]["color"] == "#aabbcc")
 _gcss = bg.main_css(_grad)
 check("colour mode paints the gradient fixed — scrolling must not "
       "slide its centre — with the panel family still on top",
@@ -158,15 +184,25 @@ check("the reviewer's colour mode takes the same gradient from its "
 
 section("on-screen gradient editor (drag on the actual screen)")
 _events: list = []
-bg.set_grad_edit(True, lambda t, x, y, s: _events.append((t, x, y, s)))
-bg.grad_edit_event({"target": "reviewer", "x": 105, "y": -5, "size": 999})
-bg.grad_edit_event({"target": "weird", "x": 25.7, "y": 25, "size": 100})
+bg.set_grad_edit(True, lambda t, op, d: _events.append((t, op, d)))
+bg.grad_edit_event({"target": "reviewer", "op": "geom", "i": 99,
+                    "x": 105, "y": -5, "size": 999})
+bg.grad_edit_event({"target": "weird", "op": "pick", "i": 1.9})
+bg.grad_edit_event({"target": "main", "op": "add"})
+bg.grad_edit_event({"target": "main", "op": "explode", "i": 0})
 bg.set_grad_edit(False, None)
-bg.grad_edit_event({"target": "main", "x": 1, "y": 1, "size": 50})
-check("bridge events are clamped, the target normalised, and dead "
-      "after disarm — a stale dialog can never be written into, and "
-      "JS values are never trusted",
-      _events == [("reviewer", 100, 0, 200), ("main", 25, 25, 100)]
+bg.grad_edit_event({"target": "main", "op": "geom", "i": 0,
+                    "x": 1, "y": 1, "size": 50})
+check("bridge ops are validated and every value clamped (index "
+      "included), the target normalised, unknown ops dropped, and "
+      "the whole channel dead after disarm — JS is never trusted and "
+      "a stale dialog can never be written into",
+      _events == [
+          ("reviewer", "geom",
+           {"i": bg.MAX_SPHERES - 1, "x": 100, "y": 0, "size": 200}),
+          ("main", "pick", {"i": 1}),
+          ("main", "add", {"i": 0}),
+      ]
       and bg.grad_edit_active() is False)
 _ed = bg.gradient_edit_eval_js(_grad, "main")
 check("the editor ships for every colour-mode spec (colour mode IS a "
@@ -183,13 +219,27 @@ check("self-guarding, clamped drag math, drag-end bridge message "
       and "klausmate:bggrad:" in _ed
       and "clamp(" in _ed
       and "setPointerCapture" in _ed)
-check("the size grip is CLAMPED into the viewport along the ray "
-      "toward the screen centre — at grad_size 100 the ring's radius "
-      "is the half-diagonal, so an unclamped grip sat off-screen and "
-      "the radius could never be adjusted at all (Pouya's ask)",
+check("each sphere's size grip is CLAMPED into the viewport along "
+      "the ray toward the screen centre — at size 100 a ring's "
+      "radius is the half-diagonal, so an unclamped grip sat "
+      "off-screen and the radius could never be adjusted at all",
       "Math.atan2(h/2-cy,w/2-cx)" in _ed
-      and "Math.max(16,Math.min(w-16,gx))" in _ed
-      and "Math.max(16,Math.min(h-16,gy))" in _ed)
+      and "gx=clamp(gx,16,w-16);" in _ed
+      and "gy=clamp(gy,16,h-16);" in _ed)
+check("the editor grows one handle set PER sphere, the dot painted "
+      "in that sphere's own colour (the dot IS its colour chip), "
+      "with click→pick, right-click→remove, and a ＋ pill gated on "
+      "the cap",
+      "for(var i0=0;i0<G.length;i0++){mkSphere(i0);}" in _ed
+      and "dot.style.background=G[i][0];" in _ed
+      and "op:'pick'" in _ed and "op:'remove'" in _ed
+      and "op:'add'" in _ed and "if(G.length<CAP){" in _ed)
+check("drag/click gestures take the PRIMARY button only — without "
+      "the filter a right-press's buttonless release read as a "
+      "click, so right-click sent remove AND pick and the colour "
+      "dialog opened over a just-deleted sphere (caught live in the "
+      "harness payload log)",
+      "if(ev.button!==0){return;}" in _ed)
 check("the body wrapper is the same core in a <script> tag, and "
       "empty exactly when the core is",
       bg.gradient_edit_js(_grad, "main").startswith("<script>")

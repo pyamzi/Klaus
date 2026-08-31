@@ -357,17 +357,20 @@ import base64 as _b64
 
 _bg_mod = importlib.import_module("klausmate.background")
 _seen: list = []
-_bg_mod.set_grad_edit(True, lambda t, x, y, s: _seen.append((t, x, y, s)))
+_bg_mod.set_grad_edit(True, lambda t, op, d: _seen.append((t, op, d)))
 _payload = _b64.b64encode(
-    json.dumps({"target": "main", "x": 30, "y": 40, "size": 120}).encode()
+    json.dumps({"target": "main", "op": "geom", "i": 1,
+                "x": 30, "y": 40, "size": 120}).encode()
 ).decode()
 _res = top_bar._on_js_message(
     (False, None), "klausmate:bggrad:" + _payload, None
 )
 _bg_mod.set_grad_edit(False, None)
-check("a drag-end pycmd decodes, clamps, reaches the sink, and is "
-      "consumed by the handler",
-      _res == (True, None) and _seen == [("main", 30, 40, 120)])
+check("an editor pycmd decodes, clamps, reaches the sink with its op "
+      "and sphere index, and is consumed by the handler",
+      _res == (True, None)
+      and _seen == [("main", "geom",
+                     {"i": 1, "x": 30, "y": 40, "size": 120})])
 check("a garbage payload is swallowed, never raises out of the hook",
       top_bar._on_js_message(
           (False, None), "klausmate:bggrad:@@not-b64@@", None

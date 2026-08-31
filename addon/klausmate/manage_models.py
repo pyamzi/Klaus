@@ -1042,7 +1042,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_mode_combo.addItem("Anki's Own (Default)", "theme")
     bg_mode_combo.addItem("Color Gradient", "color")
     bg_mode_combo.addItem("Image", "image")
-    bg_colour_btn = QPushButton("Color…")
+    bg_colour_btn = QPushButton("Center Color…")
     bg_colour_btn.setObjectName("SecondaryButton")
     # Colour mode IS a two-stop radial gradient (flat colour removed
     # 2026-08-30, Pouya's call): Color… is the CENTRE colour, Edge
@@ -1145,7 +1145,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     study_mode_combo.addItem("Anki's Own (Default)", "theme")
     study_mode_combo.addItem("Color Gradient", "color")
     study_mode_combo.addItem("Image", "image")
-    study_colour_btn = QPushButton("Color…")
+    study_colour_btn = QPushButton("Center Color…")
     study_colour_btn.setObjectName("SecondaryButton")
     study_colour2_btn = QPushButton("Edge Color…")
     study_colour2_btn.setObjectName("SecondaryButton")
@@ -1300,14 +1300,23 @@ def manage_models_dialog(setup: bool = False) -> None:
     def _sync_grad_caption(
         lbl: Any, spec_x: dict, is_colour: bool, design_on: bool
     ) -> None:
-        """The gradient caption: both colours by swatch and hex, plus
-        the one-click way back to a flat colour. Hidden whenever the
-        mode isn't colour or no edge colour is set."""
-        c, c2 = spec_x["color"], spec_x["color2"]
-        if is_colour and c2:
+        """The gradient caption: one swatch per sphere, the shared
+        edge colour, and the on-screen editing vocabulary — the whole
+        model in a sentence, since the handles live on the screen and
+        not in this dialog. Hidden outside colour mode."""
+        if is_colour:
+            swatches = " ".join(
+                f'<span style="color:{g["color"]}">&#11044;</span>'
+                for g in spec_x["gradients"]
+            )
+            n = len(spec_x["gradients"])
+            c2 = spec_x["color2"]
             lbl.setText(
-                f'Gradient: <span style="color:{c}">&#9632;</span> {c} '
-                f'fades to <span style="color:{c2}">&#9632;</span> {c2}'
+                f'{n} sphere{"s" if n != 1 else ""} {swatches} over edge '
+                f'<span style="color:{c2}">&#9632;</span> {c2} — on the '
+                f"screen: drag a dot to move it, its ring to resize, "
+                f"click a dot to recolor, right-click to remove, "
+                f"＋ to add another."
             )
         else:
             lbl.setText("")
@@ -1423,10 +1432,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         from aqt.qt import QColor, QColorDialog
 
         current = QColor(_bg_state["spec"]["color"])
-        chosen = QColorDialog.getColor(current, dlg, "Background Color")
+        chosen = QColorDialog.getColor(current, dlg, "Center Color")
         if not chosen.isValid():
             return
         _bg_state["spec"]["color"] = chosen.name()
+        # The sphere list is what colour mode renders — this button is
+        # sphere 0's colour chip (spec["color"] stays as the image
+        # underfill and the legacy mirror).
+        if _bg_state["spec"]["gradients"]:
+            _bg_state["spec"]["gradients"][0]["color"] = chosen.name()
         appearance_changed()
         sync_background_widgets()
 
@@ -1491,10 +1505,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         from aqt.qt import QColor, QColorDialog
 
         current = QColor(_bg_state["reviewer_spec"]["color"])
-        chosen = QColorDialog.getColor(current, dlg, "Study Screen Color")
+        chosen = QColorDialog.getColor(current, dlg, "Study Center Color")
         if not chosen.isValid():
             return
         _bg_state["reviewer_spec"]["color"] = chosen.name()
+        if _bg_state["reviewer_spec"]["gradients"]:
+            _bg_state["reviewer_spec"]["gradients"][0]["color"] = chosen.name()
         appearance_changed()
         sync_background_widgets()
 
@@ -2606,6 +2622,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["background_grad_x"] = int(spec["grad_x"])
         cfg["background_grad_y"] = int(spec["grad_y"])
         cfg["background_grad_size"] = int(spec["grad_size"])
+        cfg["background_gradients"] = [dict(g) for g in spec["gradients"]]
         r_spec = _bg_state["reviewer_spec"]
         cfg["reviewer_background_mode"] = r_spec["mode"]
         cfg["reviewer_background_color"] = r_spec["color"]
@@ -2616,6 +2633,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["reviewer_background_grad_x"] = int(r_spec["grad_x"])
         cfg["reviewer_background_grad_y"] = int(r_spec["grad_y"])
         cfg["reviewer_background_grad_size"] = int(r_spec["grad_size"])
+        cfg["reviewer_background_gradients"] = [
+            dict(g) for g in r_spec["gradients"]
+        ]
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
         # No heatmap_enabled write: since 2026-08-30 the deck screen's
@@ -2695,6 +2715,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_grad_x": int(spec["grad_x"]),
             "background_grad_y": int(spec["grad_y"]),
             "background_grad_size": int(spec["grad_size"]),
+            "background_gradients": [dict(g) for g in spec["gradients"]],
             # The study screen's OWN spec — carried for the same reason
             # as every key here: the preview dict REPLACES config, so
             # omitting these would snap the study background back to
@@ -2713,6 +2734,9 @@ def manage_models_dialog(setup: bool = False) -> None:
             "reviewer_background_grad_y": _bg_state["reviewer_spec"]["grad_y"],
             "reviewer_background_grad_size": _bg_state["reviewer_spec"][
                 "grad_size"
+            ],
+            "reviewer_background_gradients": [
+                dict(g) for g in _bg_state["reviewer_spec"]["gradients"]
             ],
             "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
             # Same expression save_general writes. The design gates all
@@ -2977,19 +3001,100 @@ def manage_models_dialog(setup: bool = False) -> None:
     # its own screen. JS repaints the page live during the drag; the
     # release lands here through background.grad_edit_event (clamped)
     # and this sink.
-    def _on_grad_dragged(target: str, x: int, y: int, size: int) -> None:
-        """Update the pending spec + dirty mark, and arm the preview
-        QUIETLY — never top_bar.refresh(): the page already shows the
-        dragged gradient (the editor painted it inline), and a refresh
-        would rebuild the page under the pointer."""
-        spec_key = "reviewer_spec" if target == "reviewer" else "spec"
-        s = _bg_state[spec_key]
-        s["grad_x"], s["grad_y"], s["grad_size"] = int(x), int(y), int(size)
-        mark_dirty()
+    def _quiet_preview() -> None:
         try:
             _background.set_preview(_bg_preview_cfg())
         except Exception as _exc:
             print(f"[klausmate] gradient preview failed: {_exc}")
+
+    def _replant_editor() -> None:
+        """Rebuild the screen so the editor regrows with fresh sphere
+        indices — for STRUCTURAL edits only (add/remove/recolor);
+        geometry drags must never come through here."""
+        try:
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] gradient replant failed: {_exc}")
+
+    def _on_grad_geom(s: dict, i: int, data: dict) -> None:
+        """A sphere moved/resized. QUIET on purpose — never
+        top_bar.refresh(): the page already shows the dragged stack
+        (the editor painted it inline), and a refresh would rebuild
+        the page under the pointer."""
+        g = s["gradients"][i]
+        g["x"], g["y"], g["size"] = data["x"], data["y"], data["size"]
+        if i == 0:
+            # Legacy single-gradient mirror (what save_general also
+            # writes), so a downgrade or hand-read config stays sane.
+            s["grad_x"], s["grad_y"], s["grad_size"] = (
+                data["x"], data["y"], data["size"],
+            )
+        mark_dirty()
+        _quiet_preview()
+
+    def _pick_sphere_colour(spec_key: str, i: int) -> None:
+        """Recolor sphere i — the on-screen dot IS the colour chip, a
+        click on it lands here (deferred one tick: modal work must
+        never run inside a webchannel dispatch)."""
+        from aqt.qt import QColor, QColorDialog
+
+        s = _bg_state[spec_key]
+        if not 0 <= i < len(s["gradients"]):
+            return
+        chosen = QColorDialog.getColor(
+            QColor(s["gradients"][i]["color"]), dlg, "Sphere Color"
+        )
+        if not chosen.isValid():
+            return
+        s["gradients"][i]["color"] = chosen.name()
+        if i == 0:
+            s["color"] = chosen.name()
+        mark_dirty()
+        _quiet_preview()
+        sync_background_widgets()
+        _replant_editor()
+
+    def _on_grad_dragged(target: str, op: str, data: dict) -> None:
+        """The on-screen editor's bridge sink (values already clamped
+        in background.grad_edit_event). List bounds and the sphere cap
+        are enforced HERE — JS indices are never trusted either."""
+        spec_key = "reviewer_spec" if target == "reviewer" else "spec"
+        s = _bg_state[spec_key]
+        gradients = s["gradients"]
+        i = int(data.get("i", 0))
+        if op == "geom":
+            if 0 <= i < len(gradients):
+                _on_grad_geom(s, i, data)
+        elif op == "add":
+            if len(gradients) < _background.MAX_SPHERES:
+                try:
+                    new_colour = _theme_presets.palette(
+                        _theme_presets.night_mode()
+                    )["blue_bright"]
+                except Exception:
+                    new_colour = "#0a84ff"
+                gradients.append(
+                    {"color": new_colour, "x": 50, "y": 45, "size": 60}
+                )
+                mark_dirty()
+                _quiet_preview()
+                sync_background_widgets()
+                _replant_editor()
+        elif op == "remove":
+            # The last sphere stays — colour mode IS a gradient; an
+            # empty stack would be flat, which was removed outright.
+            if len(gradients) > 1 and 0 <= i < len(gradients):
+                gradients.pop(i)
+                mark_dirty()
+                _quiet_preview()
+                sync_background_widgets()
+                _replant_editor()
+        elif op == "pick":
+            QTimer.singleShot(
+                0, lambda: _pick_sphere_colour(spec_key, i)
+            )
 
     _background.set_grad_edit(True, _on_grad_dragged)
 

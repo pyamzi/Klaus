@@ -130,14 +130,18 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
     if not isinstance(wash, (int, float)) or not 0 <= wash <= 100:
         wash = 0
     # Colour mode IS a gradient (flat colour removed 2026-08-30,
-    # Pouya: "remove the flat color feature"): color is the CENTRE,
-    # color2 the EDGE. A missing/invalid color2 — every pre-gradient
-    # config — is DERIVED from the centre colour rather than read as
-    # flat, so old configs upgrade to a subtle fade instead of keeping
-    # a mode the UI no longer offers. Filled whatever the mode, so a
+    # Pouya: "remove the flat color feature"), and since the same day
+    # it is a STACK of gradient SPHERES ("I don't have to just add one
+    # gradient"): `{prefix}_gradients` is a list of up to four
+    # {color, x, y, size} dicts, each painted as its own radial blob —
+    # the sphere's colour at its centre fading to fully transparent at
+    # its edge — over ONE shared backdrop, `color2` (the "edge of the
+    # gradient"). A missing/invalid color2 is DERIVED from the first
+    # sphere's colour; a missing/invalid list is built from the legacy
+    # single-gradient keys (color/grad_x/grad_y/grad_size), so every
+    # older config keeps rendering. Filled whatever the mode, so a
     # spec that flips to "color" in the open dialog is never caught
-    # edgeless. grad_x/grad_y are the centre as % of the viewport,
-    # grad_size the edge colour's stop position along the ray.
+    # sphereless.
     colour2 = cfg.get(f"{prefix}_color2")
     if not isinstance(colour2, str) or not _is_hex(colour2):
         colour2 = derive_edge_colour(colour)
@@ -148,6 +152,41 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
             return default
         return int(v)
 
+    def _entry_num(entry: dict, key: str, lo: int, hi: int, dflt: int) -> int:
+        v = entry.get(key)
+        if not isinstance(v, (int, float)) or not lo <= v <= hi:
+            return dflt
+        return int(v)
+
+    grad_x = _pct("grad_x", 0, 100, 50)
+    grad_y = _pct("grad_y", 0, 100, 42)
+    grad_size = _pct("grad_size", 10, 200, 100)
+
+    gradients: list = []
+    raw_list = cfg.get(f"{prefix}_gradients")
+    if isinstance(raw_list, list):
+        for entry in raw_list[:MAX_SPHERES]:
+            if not isinstance(entry, dict):
+                continue
+            g_col = entry.get("color")
+            if not isinstance(g_col, str) or not _is_hex(g_col):
+                continue
+            gradients.append({
+                # Normalised to #rrggbb: the CSS builder appends "00"
+                # for the transparent stop, which needs six digits.
+                "color": _norm_hex(g_col),
+                "x": _entry_num(entry, "x", 0, 100, 50),
+                "y": _entry_num(entry, "y", 0, 100, 42),
+                "size": _entry_num(entry, "size", 10, 200, 100),
+            })
+    if not gradients:
+        gradients = [{
+            "color": _norm_hex(colour),
+            "x": grad_x,
+            "y": grad_y,
+            "size": grad_size,
+        }]
+
     return {
         "mode": mode,
         "color": colour,
@@ -156,10 +195,25 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
         "blur": int(blur),
         "wash": int(wash),
         "color2": colour2,
-        "grad_x": _pct("grad_x", 0, 100, 50),
-        "grad_y": _pct("grad_y", 0, 100, 42),
-        "grad_size": _pct("grad_size", 10, 200, 100),
+        "grad_x": grad_x,
+        "grad_y": grad_y,
+        "grad_size": grad_size,
+        "gradients": gradients,
     }
+
+
+# Sphere cap: four blobs cover every wallpaper anyone has asked for,
+# and each one costs a full-viewport gradient layer per paint.
+MAX_SPHERES = 4
+
+
+def _norm_hex(value: str) -> str:
+    """#rgb → #rrggbb, lowercased — the transparent-stop trick appends
+    an alpha byte and needs exactly six digits before it."""
+    v = value.strip()
+    if len(v) == 4:
+        return "#" + "".join(ch * 2 for ch in v[1:]).lower()
+    return v.lower()
 
 
 def derive_edge_colour(colour: str) -> str:
@@ -238,11 +292,20 @@ def grad_edit_active() -> bool:
 
 
 def grad_edit_event(data: Any) -> None:
-    """A drag landed over the bridge: clamp every value (JS is never
-    trusted — apply_action's rule) and forward to the sink, if one is
-    still registered."""
+    """An editor gesture landed over the bridge: validate the op,
+    clamp every value (JS is never trusted — apply_action's rule) and
+    forward ``sink(target, op, clean)`` if one is still registered.
+
+    Ops: "geom" (a sphere moved/resized — i, x, y, size), "pick"
+    (recolor sphere i — Python opens the colour dialog), "add" (one
+    more sphere), "remove" (sphere i). The sink owns list bounds and
+    the sphere cap; this owns the numbers.
+    """
     sink = _GRAD_SINK
     if sink is None or not isinstance(data, dict):
+        return
+    op = data.get("op")
+    if op not in ("geom", "pick", "add", "remove"):
         return
 
     def _num(key: str, lo: int, hi: int, default: int) -> int:
@@ -252,104 +315,163 @@ def grad_edit_event(data: Any) -> None:
         return int(min(hi, max(lo, v)))
 
     target = "reviewer" if data.get("target") == "reviewer" else "main"
-    try:
-        sink(
-            target,
-            _num("x", 0, 100, 50),
-            _num("y", 0, 100, 42),
-            _num("size", 10, 200, 100),
+    clean: dict = {"i": _num("i", 0, MAX_SPHERES - 1, 0)}
+    if op == "geom":
+        clean.update(
+            x=_num("x", 0, 100, 50),
+            y=_num("y", 0, 100, 42),
+            size=_num("size", 10, 200, 100),
         )
+    try:
+        sink(target, op, clean)
     except Exception as exc:
         print(f"[klausmate] gradient edit sink failed: {exc}")
 
 
 def gradient_edit_eval_js(spec: dict, target: str) -> str:
-    """The editor itself, as raw JS (for ``web.eval`` into a LIVE page
-    — the reviewer mid-review). "" unless the spec is actually a
-    gradient. Self-guarding: a second injection is a no-op, so the
-    eval path and the page-build path can both run.
+    """The on-screen editor, as raw JS (for ``web.eval`` into a LIVE
+    page — the reviewer mid-review). "" unless the spec is colour
+    mode with at least one sphere. Self-guarding: a second injection
+    is a no-op, so the eval path and the page-build path can both run.
 
-    The drag repaints the gradient INLINE on html/body per pointermove
-    (same value shape gradient_css_value emits) and only sends the
-    bridge message on release — dragging costs zero Python round
-    trips, and the sink side must never refresh the page mid-drag.
+    One set of handles PER SPHERE — the dot is painted in the
+    sphere's own colour, so it doubles as its colour chip:
+
+    - drag the dot        → move that sphere (op "geom")
+    - drag its ring grip  → resize it (op "geom")
+    - CLICK the dot       → recolor it (op "pick" — Python opens the
+                            colour dialog; a click is a press that
+                            travelled < 4px)
+    - right-click the dot → remove it (op "remove")
+    - the ＋ pill          → add a sphere (op "add"; hidden at the cap)
+
+    Geometry drags repaint the whole stack INLINE per pointermove (no
+    Python round-trips mid-drag) and send one bridge message on
+    release; structural ops send immediately and Python replants the
+    editor with fresh indices.
     """
-    if spec.get("mode") != "color" or not spec.get("color2"):
+    gradients = spec.get("gradients")
+    if spec.get("mode") != "color" or not gradients:
         return ""
     tgt = "reviewer" if target == "reviewer" else "main"
+    packed = json.dumps(
+        [[g["color"], g["x"], g["y"], g["size"]] for g in gradients],
+        separators=(",", ":"),
+    )
     return (
         "(function(){"
         "if(document.getElementById('klaus-grad-edit')){return;}"
-        f"var T={json.dumps(tgt)},X={int(spec['grad_x'])},"
-        f"Y={int(spec['grad_y'])},S={int(spec['grad_size'])},"
-        f"C={json.dumps(spec['color'])},C2={json.dumps(spec['color2'])};"
+        f"var T={json.dumps(tgt)},E={json.dumps(spec['color2'])},"
+        f"G={packed},CAP={int(MAX_SPHERES)};"
         "var wrap=document.createElement('div');"
         "wrap.id='klaus-grad-edit';"
         "wrap.style.cssText='position:fixed;inset:0;z-index:2147483000;"
         "pointer-events:none;';"
+        "document.body.appendChild(wrap);"
+        "var spheres=[];"
+        "function stack(){var parts=[];"
+        "for(var k=0;k<G.length;k++){var g=G[k];"
+        "parts.push('radial-gradient(at '+g[1]+'% '+g[2]+'%, '+g[0]"
+        "+' 0%, '+g[0]+'00 '+g[3]+'%)');}"
+        "return parts.join(', ');}"
+        "function paintBg(){"
+        "[document.documentElement,document.body].forEach(function(el){"
+        "el.style.setProperty('background-color',E,'important');"
+        "el.style.setProperty('background-image',stack(),'important');"
+        "el.style.setProperty('background-attachment','fixed',"
+        "'important');});}"
+        "function send(o){try{pycmd('klausmate:bggrad:'"
+        "+btoa(JSON.stringify(o)));}catch(e){}}"
+        "function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}"
+        "function place(i){var g=G[i],el=spheres[i];"
+        "var w=innerWidth,h=innerHeight,cx=w*g[1]/100,cy=h*g[2]/100;"
+        "var r=Math.hypot(w,h)/2*g[3]/100;"
+        "el.dot.style.left=cx+'px';el.dot.style.top=cy+'px';"
+        "el.ring.style.left=(cx-r)+'px';el.ring.style.top=(cy-r)+'px';"
+        "el.ring.style.width=2*r+'px';el.ring.style.height=2*r+'px';"
+        # The grip rides the ring along the ray toward the viewport
+        # centre, CLAMPED into view (1dd33fc): at size 100 the ring
+        # radius is the half-diagonal, so an unclamped grip sat
+        # off-screen and the radius could never be adjusted. Its drag
+        # math is distance-based, so it resizes from wherever it sits.
+        "var ga=Math.atan2(h/2-cy,w/2-cx);"
+        "var gx=cx+r*Math.cos(ga),gy=cy+r*Math.sin(ga);"
+        "gx=clamp(gx,16,w-16);gy=clamp(gy,16,h-16);"
+        "el.grip.style.left=gx+'px';el.grip.style.top=gy+'px';}"
+        "function placeAll(){for(var i=0;i<spheres.length;i++){place(i);}}"
+        # Click vs drag on one element: a press that never travels 4px
+        # is a click (recolor); past 4px it is a drag (move/resize).
+        # Primary button only: a right-press otherwise starts a drag
+        # gesture whose buttonless release reads as a click — so a
+        # right-click sent remove AND pick, and the colour dialog
+        # opened over a sphere that was just deleted (caught live in
+        # the harness payload log).
+        "function dragify(el,i,move,clickFn){"
+        "el.addEventListener('pointerdown',function(ev){"
+        "if(ev.button!==0){return;}"
+        "ev.preventDefault();el.setPointerCapture(ev.pointerId);"
+        "var sx=ev.clientX,sy=ev.clientY,moved=false;"
+        "function mv(e){"
+        "if(!moved&&Math.hypot(e.clientX-sx,e.clientY-sy)<4){return;}"
+        "moved=true;move(e,G[i]);place(i);paintBg();}"
+        "function up(){"
+        "el.removeEventListener('pointermove',mv);"
+        "el.removeEventListener('pointerup',up);"
+        "if(moved){send({target:T,op:'geom',i:i,"
+        "x:G[i][1],y:G[i][2],size:G[i][3]});}"
+        "else if(clickFn){clickFn();}}"
+        "el.addEventListener('pointermove',mv);"
+        "el.addEventListener('pointerup',up);});}"
+        "function mkSphere(i){"
         "var ring=document.createElement('div');"
         "ring.style.cssText='position:absolute;border:1.5px dashed "
         "rgba(255,255,255,0.75);border-radius:50%;pointer-events:none;"
         "box-shadow:0 0 0 1px rgba(0,0,0,0.25),inset 0 0 0 1px "
         "rgba(0,0,0,0.25);';"
         "var dot=document.createElement('div');"
-        "dot.title='Drag to move the gradient';"
+        "dot.title='Drag to move — click to recolor, "
+        "right-click to remove';"
         "dot.style.cssText='position:absolute;width:18px;height:18px;"
         "border-radius:50%;transform:translate(-50%,-50%);"
-        "background:var(--klaus-accent,#0a84ff);border:2.5px solid #fff;"
-        "box-shadow:0 1px 4px rgba(0,0,0,0.45);pointer-events:auto;"
-        "cursor:grab;';"
+        "border:2.5px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.45);"
+        "pointer-events:auto;cursor:grab;';"
+        "dot.style.background=G[i][0];"
         "var grip=document.createElement('div');"
         "grip.title='Drag to resize the fade';"
         "grip.style.cssText='position:absolute;width:14px;height:14px;"
         "border-radius:50%;transform:translate(-50%,-50%);background:#fff;"
         "border:2px solid rgba(0,0,0,0.35);box-shadow:0 1px 3px "
         "rgba(0,0,0,0.4);pointer-events:auto;cursor:crosshair;';"
-        "wrap.appendChild(ring);wrap.appendChild(dot);wrap.appendChild(grip);"
-        "document.body.appendChild(wrap);"
-        "function place(){"
-        "var w=innerWidth,h=innerHeight,cx=w*X/100,cy=h*Y/100;"
-        "var r=Math.hypot(w,h)/2*S/100;"
-        "dot.style.left=cx+'px';dot.style.top=cy+'px';"
-        "ring.style.left=(cx-r)+'px';ring.style.top=(cy-r)+'px';"
-        "ring.style.width=2*r+'px';ring.style.height=2*r+'px';"
-        # The grip rides the ring along the ray toward the viewport
-        # centre, CLAMPED into view: at grad_size 100 the ring's
-        # radius is the half-diagonal, i.e. off-screen — an unclamped
-        # grip was unreachable and the radius could then never be
-        # adjusted at all. Its drag math is distance-based, so a
-        # clamped grip still resizes correctly from wherever it sits.
-        "var ga=Math.atan2(h/2-cy,w/2-cx);"
-        "var gx=cx+r*Math.cos(ga),gy=cy+r*Math.sin(ga);"
-        "gx=Math.max(16,Math.min(w-16,gx));"
-        "gy=Math.max(16,Math.min(h-16,gy));"
-        "grip.style.left=gx+'px';grip.style.top=gy+'px';}"
-        "function paintBg(){"
-        "var g='radial-gradient(at '+X+'% '+Y+'%, '+C+' 0%, '+C2+' '+S+'%)';"
-        "[document.documentElement,document.body].forEach(function(el){"
-        "el.style.setProperty('background',g,'important');"
-        "el.style.setProperty('background-attachment','fixed','important');"
-        "});}"
-        "function send(){try{pycmd('klausmate:bggrad:'+btoa(JSON.stringify("
-        "{target:T,x:X,y:Y,size:S})));}catch(e){}}"
-        "function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}"
-        "function dragify(el,move){"
-        "el.addEventListener('pointerdown',function(ev){"
-        "ev.preventDefault();el.setPointerCapture(ev.pointerId);"
-        "function mv(e){move(e);place();paintBg();}"
-        "function up(){el.removeEventListener('pointermove',mv);"
-        "el.removeEventListener('pointerup',up);send();}"
-        "el.addEventListener('pointermove',mv);"
-        "el.addEventListener('pointerup',up);});}"
-        "dragify(dot,function(e){"
-        "X=Math.round(clamp(e.clientX/innerWidth*100,0,100));"
-        "Y=Math.round(clamp(e.clientY/innerHeight*100,0,100));});"
-        "dragify(grip,function(e){"
-        "var w=innerWidth,h=innerHeight,cx=w*X/100,cy=h*Y/100;"
+        "wrap.appendChild(ring);wrap.appendChild(dot);"
+        "wrap.appendChild(grip);"
+        "dot.addEventListener('contextmenu',function(ev){"
+        "ev.preventDefault();ev.stopPropagation();"
+        "send({target:T,op:'remove',i:i});});"
+        "dragify(dot,i,function(e,g){"
+        "g[1]=Math.round(clamp(e.clientX/innerWidth*100,0,100));"
+        "g[2]=Math.round(clamp(e.clientY/innerHeight*100,0,100));},"
+        "function(){send({target:T,op:'pick',i:i});});"
+        "dragify(grip,i,function(e,g){"
+        "var w=innerWidth,h=innerHeight,cx=w*g[1]/100,cy=h*g[2]/100;"
         "var r=Math.hypot(e.clientX-cx,e.clientY-cy);"
-        "S=Math.round(clamp(r/(Math.hypot(w,h)/2)*100,10,200));});"
-        "addEventListener('resize',place);"
-        "place();})();"
+        "g[3]=Math.round(clamp(r/(Math.hypot(w,h)/2)*100,10,200));},"
+        "null);"
+        "spheres.push({ring:ring,dot:dot,grip:grip});}"
+        "for(var i0=0;i0<G.length;i0++){mkSphere(i0);}"
+        "if(G.length<CAP){"
+        "var add=document.createElement('div');"
+        "add.textContent='+ Add Sphere';"
+        "add.title='Add another gradient sphere';"
+        "add.style.cssText='position:fixed;left:50%;bottom:18px;"
+        "transform:translateX(-50%);padding:6px 14px;border-radius:8px;"
+        "background:var(--klaus-accent,#0a84ff);color:#fff;"
+        "font:600 12px -apple-system,sans-serif;pointer-events:auto;"
+        "cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.35);';"
+        "add.addEventListener('click',function(){"
+        "send({target:T,op:'add'});});"
+        "wrap.appendChild(add);}"
+        "addEventListener('resize',placeAll);"
+        "placeAll();})();"
     )
 
 
@@ -361,20 +483,25 @@ def gradient_edit_js(spec: dict, target: str) -> str:
 
 
 def gradient_css_value(spec: dict) -> str:
-    """The CSS background value for colour mode: a two-stop radial
-    gradient, the centre colour (``color``) fading to the edge colour
-    (``color2``). resolve() always supplies color2 (deriving one when
-    the config has none — flat colour was removed 2026-08-30), so ""
-    here only guards a raw dict that never went through resolve().
-    Default ellipse shape on purpose: it scales with the viewport's
-    aspect, so a wide window doesn't render a circle with clipped
-    corners. Centre and size come from ``grad_x``/``grad_y``/
-    ``grad_size`` — the values the on-screen drag editor writes."""
-    if not spec.get("color2"):
+    """The ``background-image`` stack for colour mode: one radial
+    layer per gradient sphere — the sphere's colour at its centre
+    fading to the SAME colour at alpha 0 (``{color}00``: same-hue
+    transparency, so the fade can't grey out through rgba(0,0,0,0)) —
+    listed first-on-top. The shared backdrop (``color2``) is NOT a
+    layer here: the builders paint it as ``background-color`` under
+    the stack, which is what lets any number of spheres compose
+    instead of the top one hiding the rest. "" only for a raw dict
+    that never went through resolve() (which always supplies at least
+    one sphere). Default ellipse shape on purpose: it scales with the
+    viewport's aspect, so a wide window doesn't render a circle with
+    clipped corners."""
+    gradients = spec.get("gradients")
+    if not isinstance(gradients, list) or not gradients:
         return ""
-    return (
-        f"radial-gradient(at {spec['grad_x']}% {spec['grad_y']}%, "
-        f"{spec['color']} 0%, {spec['color2']} {spec['grad_size']}%)"
+    return ", ".join(
+        f"radial-gradient(at {g['x']}% {g['y']}%, "
+        f"{g['color']} 0%, {g['color']}00 {g['size']}%)"
+        for g in gradients
     )
 
 
@@ -442,19 +569,21 @@ def main_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
-        # Colour mode is ALWAYS a gradient now (resolve() derives an
-        # edge colour when none is stored — the flat branch was
-        # removed 2026-08-30, Pouya's call). The bare-colour fallback
-        # below only guards a raw dict that never went through
-        # resolve().
-        grad = gradient_css_value(spec)
-        if grad:
+        # Colour mode is ALWAYS a gradient stack now (flat colour
+        # removed 2026-08-30): spheres as background-image layers over
+        # the shared edge colour as background-color — the pair, not
+        # the shorthand, so N spheres compose over one backdrop. The
+        # bare-colour fallback only guards a raw dict that never went
+        # through resolve().
+        stack = gradient_css_value(spec)
+        if stack:
             return (
                 # Fixed attachment so scrolling the deck list doesn't
-                # slide the gradient's centre — same behaviour as the
-                # image wallpaper.
+                # slide the spheres — same behaviour as the image
+                # wallpaper.
                 "html, body {"
-                f" background: {grad} !important;"
+                f" background-color: {spec['color2']} !important;"
+                f" background-image: {stack} !important;"
                 " background-attachment: fixed !important;"
                 " }"
                 + panel_css(spec)
@@ -516,11 +645,12 @@ def reviewer_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
-        grad = gradient_css_value(spec)
-        if grad:
+        stack = gradient_css_value(spec)
+        if stack:
             return (
                 "html, body {"
-                f" background: {grad} !important;"
+                f" background-color: {spec['color2']} !important;"
+                f" background-image: {stack} !important;"
                 " background-attachment: fixed !important;"
                 " }"
             )

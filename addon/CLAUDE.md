@@ -291,11 +291,15 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   heatmap's rule — so bad config can't surprise-restyle the app.
   `resolve(cfg)` validates the `background_*` keys into a spec —
   mode/color/image/fit/blur plus (2026-08-30) `wash` and the gradient
-  quartet `color2`/`grad_x`/`grad_y`/`grad_size` (colour mode IS a
-  gradient — flat colour removed 2026-08-30: color = CENTRE, color2 =
-  EDGE, and an empty color2 is DERIVED from the centre via
-  `derive_edge_colour`, ~45% toward black, so pre-gradient configs
-  upgrade to a quiet vignette). `main_css` paints
+  quartet `color2`/`grad_x`/`grad_y`/`grad_size` plus `gradients` —
+  a list of up to MAX_SPHERES {color,x,y,size} SPHERE dicts, each a
+  radial blob fading its own colour to alpha-0 (`{color}00`, same-hue
+  transparency) over `color2` as the ONE shared backdrop
+  (background-color under the background-image stack, which is what
+  lets N spheres compose). Colour mode IS this stack — flat colour
+  removed 2026-08-30; a missing list is built from the legacy single
+  keys, a missing color2 DERIVED (~45% toward black,
+  `derive_edge_colour`), defaults white throughout. `main_css` paints
   Anki's deck and overview screens — panel_css in
   EVERY mode (panels follow the DESIGN; only the wallpaper follows the
   mode, so theme mode = Klaus panels on Anki's own ground) (NOT the
@@ -311,9 +315,13 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
   Preferences dialog, `gradient_edit_eval_js`/`gradient_edit_js` grow
   a draggable centre dot + size ring on each gradient screen (JS
   repaints the page inline per pointermove; drag-end lands as a
-  `klausmate:bggrad` pycmd, clamped in `grad_edit_event` — JS never
-  trusted — and flows through the sink into the dialog's pending
-  spec, which must NEVER refresh mid-drag). **The top and bottom toolbars are independent of
+  `klausmate:bggrad` pycmd carrying an OP — geom / pick / add /
+  remove — clamped in `grad_edit_event`, JS never trusted, and flows
+  through the sink into the dialog's pending spec: geom stays QUIET
+  (never refresh mid-drag), structural ops replant the editor, pick
+  opens the colour dialog DEFERRED, the last sphere can never be
+  removed, adds cap at MAX_SPHERES). Each sphere's dot is painted in
+  its own colour — the dot IS its colour chip. **The top and bottom toolbars are independent of
   this file** (`bar_css`/`_bottom_bar_css` — a manual painted copy of
   the background, blurred, since the toolbar's own webview can't
   `backdrop-filter` through to the window behind it — were deleted
