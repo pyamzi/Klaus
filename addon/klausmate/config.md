@@ -155,7 +155,8 @@ wouldn't already need.
   their design either way, and every tool keeps working.
 - **background_mode**: `"theme"` (default — no wallpaper: Anki's own
   ground, with the Klaus panels on it whenever the design is on),
-  `"color"`, or `"image"`. Sets the background of Anki's deck and
+  `"color"` (a radial colour gradient — there is no flat-colour mode),
+  or `"image"`. Sets the background of Anki's deck and
   overview screens; the panel family itself follows `klausbook_design`
   in every mode — native mode is where Anki looks stock. The top and
   bottom toolbars are independent of this setting — they always show
@@ -165,10 +166,11 @@ wouldn't already need.
   colour behind a transparent or still-loading image). Default
   `"#1E2225"`. When a gradient is armed (below) this is its CENTRE
   colour.
-- **background_color2**: the gradient's EDGE colour. Empty (the
-  default) means flat — exactly the plain solid colour. Set via
-  **Edge Color…** next to the Color button; the caption's **Make
-  Flat** link clears it.
+- **background_color2**: the gradient's EDGE colour. When empty (the
+  default) it is derived automatically from the centre colour (~45%
+  toward black — a quiet vignette), so colour mode is always a
+  gradient; there is no flat mode. Set it via **Edge Color…** next to
+  the Color button.
 - **background_grad_x** / **background_grad_y**: the gradient's
   centre, as % of the window (defaults `50`/`42`). Adjusted by
   dragging the handle ON the deck screen itself while Preferences is

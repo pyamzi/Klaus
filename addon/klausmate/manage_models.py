@@ -1021,16 +1021,16 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     bg_mode_combo = QComboBox()
     bg_mode_combo.addItem("Anki's Own (Default)", "theme")
-    bg_mode_combo.addItem("Solid Color", "color")
+    bg_mode_combo.addItem("Color Gradient", "color")
     bg_mode_combo.addItem("Image", "image")
     bg_colour_btn = QPushButton("Color…")
     bg_colour_btn.setObjectName("SecondaryButton")
-    # Colour mode is gradient-capable (Pouya picked "Color mode grows"
-    # over a fourth mode): Color… is the CENTRE colour, Edge Color…
-    # arms a two-stop radial fade out to a second one. No edge colour
-    # = flat, exactly the old solid colour, so stored configs keep
-    # rendering unchanged. Centre/size are dragged ON the screen
-    # itself while this window is open, not with sliders here.
+    # Colour mode IS a two-stop radial gradient (flat colour removed
+    # 2026-08-30, Pouya's call): Color… is the CENTRE colour, Edge
+    # Color… the outer one (derived from the centre until picked, so
+    # pre-gradient configs upgrade to a quiet vignette). Centre/size
+    # are dragged ON the screen itself while this window is open, not
+    # with sliders here.
     bg_colour2_btn = QPushButton("Edge Color…")
     bg_colour2_btn.setObjectName("SecondaryButton")
     bg_image_btn = QPushButton("Choose Image…")
@@ -1044,8 +1044,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_mode_row = _row(
         appearance_layout,
         "Background",
-        "Anki's own look, a solid color or gradient, or an image of "
-        "yours.",
+        "Anki's own look, a color gradient, or an image of yours.",
         bg_ctl,
     )
 
@@ -1125,7 +1124,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # visibly do.
     study_mode_combo = QComboBox()
     study_mode_combo.addItem("Anki's Own (Default)", "theme")
-    study_mode_combo.addItem("Solid Color", "color")
+    study_mode_combo.addItem("Color Gradient", "color")
     study_mode_combo.addItem("Image", "image")
     study_colour_btn = QPushButton("Color…")
     study_colour_btn.setObjectName("SecondaryButton")
@@ -1282,8 +1281,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         if is_colour and c2:
             lbl.setText(
                 f'Gradient: <span style="color:{c}">&#9632;</span> {c} '
-                f'fades to <span style="color:{c2}">&#9632;</span> {c2} '
-                f'&nbsp;&middot;&nbsp; <a href="flat">Make Flat</a>'
+                f'fades to <span style="color:{c2}">&#9632;</span> {c2}'
             )
         else:
             lbl.setText("")
@@ -1419,11 +1417,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         appearance_changed()
         sync_background_widgets()
 
-    def on_bg_make_flat(_href: str) -> None:
-        _bg_state["spec"]["color2"] = ""
-        appearance_changed()
-        sync_background_widgets()
-
     def pick_bg_image() -> None:
         from aqt.qt import QFileDialog
 
@@ -1490,11 +1483,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         if not chosen.isValid():
             return
         _bg_state["reviewer_spec"]["color2"] = chosen.name()
-        appearance_changed()
-        sync_background_widgets()
-
-    def on_study_make_flat(_href: str) -> None:
-        _bg_state["reviewer_spec"]["color2"] = ""
         appearance_changed()
         sync_background_widgets()
 
@@ -2935,14 +2923,12 @@ def manage_models_dialog(setup: bool = False) -> None:
     bg_wash_slider.valueChanged.connect(on_bg_wash_changed)
     bg_colour_btn.clicked.connect(pick_bg_colour)
     bg_colour2_btn.clicked.connect(pick_bg_colour2)
-    bg_grad_lbl.linkActivated.connect(on_bg_make_flat)
     bg_image_btn.clicked.connect(pick_bg_image)
     study_mode_combo.currentIndexChanged.connect(on_study_mode_changed)
     study_fit_combo.currentIndexChanged.connect(on_study_fit_changed)
     study_wash_slider.valueChanged.connect(on_study_wash_changed)
     study_colour_btn.clicked.connect(pick_study_colour)
     study_colour2_btn.clicked.connect(pick_study_colour2)
-    study_grad_lbl.linkActivated.connect(on_study_make_flat)
     study_image_btn.clicked.connect(pick_study_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
@@ -3053,8 +3039,8 @@ def manage_models_dialog(setup: bool = False) -> None:
     # deck-screen rebuild happens behind the appearing window.
     try:
         if (
-            _bg_state["spec"]["color2"]
-            or _bg_state["reviewer_spec"]["color2"]
+            _bg_state["spec"]["mode"] == "color"
+            or _bg_state["reviewer_spec"]["mode"] == "color"
         ):
             from . import top_bar as _top_bar
 

@@ -949,12 +949,13 @@ _init_src = open("klausmate/__init__.py").read()
 _tb_src = open("klausmate/top_bar.py").read()
 
 check("every appearance widget previews live, not just marks dirty — "
-      "seventeen handlers: design toggle, mode, fit, blur, wash, "
-      "colour, edge colour, make-flat, image, accent swatch, and the "
-      "study screen's own mode/fit/wash/colour/edge-colour/make-flat/"
-      "image (a separate background needs the same live-preview "
-      "discipline as the one it must never be confused with)",
-      _mm_src.count("        appearance_changed()") == 17)
+      "fifteen handlers: design toggle, mode, fit, blur, wash, "
+      "colour, edge colour, image, accent swatch, and the study "
+      "screen's own mode/fit/wash/colour/edge-colour/image (a "
+      "separate background needs the same live-preview discipline as "
+      "the one it must never be confused with; the make-flat pair "
+      "left with the flat-colour feature, 2026-08-30)",
+      _mm_src.count("        appearance_changed()") == 15)
 check("save and preview carry the design key as the IDENTICAL "
       "expression — the preview dict replaces config and the gates "
       "default OFF, so a preview missing the key strips the whole "

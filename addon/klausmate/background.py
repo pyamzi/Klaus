@@ -125,14 +125,18 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
     wash = cfg.get(f"{prefix}_wash")
     if not isinstance(wash, (int, float)) or not 0 <= wash <= 100:
         wash = 0
-    # The gradient half of colour mode (K-gradients, 2026-08-30):
-    # color2 is the EDGE colour — "" means flat, exactly yesterday's
-    # solid colour, so every stored config keeps rendering unchanged.
-    # grad_x/grad_y are the centre as % of the viewport, grad_size the
-    # edge colour's stop position along the gradient ray.
+    # Colour mode IS a gradient (flat colour removed 2026-08-30,
+    # Pouya: "remove the flat color feature"): color is the CENTRE,
+    # color2 the EDGE. A missing/invalid color2 — every pre-gradient
+    # config — is DERIVED from the centre colour rather than read as
+    # flat, so old configs upgrade to a subtle fade instead of keeping
+    # a mode the UI no longer offers. Filled whatever the mode, so a
+    # spec that flips to "color" in the open dialog is never caught
+    # edgeless. grad_x/grad_y are the centre as % of the viewport,
+    # grad_size the edge colour's stop position along the ray.
     colour2 = cfg.get(f"{prefix}_color2")
     if not isinstance(colour2, str) or not _is_hex(colour2):
-        colour2 = ""
+        colour2 = derive_edge_colour(colour)
 
     def _pct(key: str, lo: int, hi: int, default: int) -> int:
         v = cfg.get(f"{prefix}_{key}")
@@ -152,6 +156,23 @@ def resolve(cfg: Any, prefix: str = "background") -> dict:
         "grad_y": _pct("grad_y", 0, 100, 42),
         "grad_size": _pct("grad_size", 10, 200, 100),
     }
+
+
+def derive_edge_colour(colour: str) -> str:
+    """The edge colour a gradient falls back to when none is stored:
+    the centre colour pulled ~45% toward black — a quiet vignette, so
+    an upgraded pre-gradient config reads as depth, not as a new look.
+    Handles both #rgb and #rrggbb (everything _is_hex admits); any
+    parse surprise falls back to DEFAULT_COLOR rather than raising."""
+    try:
+        v = colour.strip().lstrip("#")
+        if len(v) == 3:
+            v = "".join(ch * 2 for ch in v)
+        r, g, b = (int(v[i:i + 2], 16) for i in (0, 2, 4))
+        f = 0.55
+        return "#%02x%02x%02x" % (int(r * f), int(g * f), int(b * f))
+    except Exception:
+        return DEFAULT_COLOR
 
 
 def _is_hex(value: str) -> bool:
@@ -326,14 +347,15 @@ def gradient_edit_js(spec: dict, target: str) -> str:
 
 
 def gradient_css_value(spec: dict) -> str:
-    """The CSS background value for colour mode's gradient half: a
-    two-stop radial gradient, the centre colour (``color``) fading to
-    the edge colour (``color2``) — "" when the spec is flat (no edge
-    colour), which is every pre-gradient config. Default ellipse shape
-    on purpose: it scales with the viewport's aspect, so a wide window
-    doesn't render a circle with clipped corners. Centre and size come
-    from ``grad_x``/``grad_y``/``grad_size`` — the values the
-    on-screen drag editor writes."""
+    """The CSS background value for colour mode: a two-stop radial
+    gradient, the centre colour (``color``) fading to the edge colour
+    (``color2``). resolve() always supplies color2 (deriving one when
+    the config has none — flat colour was removed 2026-08-30), so ""
+    here only guards a raw dict that never went through resolve().
+    Default ellipse shape on purpose: it scales with the viewport's
+    aspect, so a wide window doesn't render a circle with clipped
+    corners. Centre and size come from ``grad_x``/``grad_y``/
+    ``grad_size`` — the values the on-screen drag editor writes."""
     if not spec.get("color2"):
         return ""
     return (
@@ -406,6 +428,11 @@ def main_css(spec: dict, url: str = "") -> str:
     """
     mode = spec.get("mode")
     if mode == "color":
+        # Colour mode is ALWAYS a gradient now (resolve() derives an
+        # edge colour when none is stored — the flat branch was
+        # removed 2026-08-30, Pouya's call). The bare-colour fallback
+        # below only guards a raw dict that never went through
+        # resolve().
         grad = gradient_css_value(spec)
         if grad:
             return (
@@ -420,9 +447,6 @@ def main_css(spec: dict, url: str = "") -> str:
             )
         return (
             "html, body { background: %s !important; }" % spec["color"]
-            # Panels get the same treatment over a flat colour as
-            # over a photo, so the look does not change with the
-            # background that was chosen.
             + panel_css(spec)
         )
     if mode == "image" and url:
