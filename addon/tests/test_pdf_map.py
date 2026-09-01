@@ -35,6 +35,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import tokenize
 import types
 
@@ -760,23 +761,267 @@ check("...and entering from the whole-cloud view lands on a real PDF "
       and pdf_map.next_focus([], "a", 1) is None)
 
 # The tier ramp's own arithmetic (the colours are pinned on real Qt).
-check("tier_index quantizes the fog ramp into GLOW_TIERS steps and "
+check("tier_index quantizes the fog ramp into STAR_TIERS steps and "
       "clamps rather than raising on the paint path",
       pdf_map.tier_index(0.0) == 0
-      and pdf_map.tier_index(1.0) == pdf_map.GLOW_TIERS - 1
+      and pdf_map.tier_index(1.0) == pdf_map.STAR_TIERS - 1
       and pdf_map.tier_index(-5.0) == 0
-      and pdf_map.tier_index(5.0) == pdf_map.GLOW_TIERS - 1
+      and pdf_map.tier_index(5.0) == pdf_map.STAR_TIERS - 1
       and pdf_map.tier_index("junk") == 0)
 check("tier_position is each tier's MIDDLE, so neither end of the ramp "
       "is forced flat by an off-by-one",
       0.0 < pdf_map.tier_position(0) < pdf_map.tier_position(
-          pdf_map.GLOW_TIERS - 1) < 1.0)
+          pdf_map.STAR_TIERS - 1) < 1.0)
 check("dot_scale is 1.0 on any surface at or above DOT_SCALE_FULL and "
       "floors on a tiny one, never zero",
       pdf_map.dot_scale((900.0, 640.0)) == 1.0
       and pdf_map.dot_scale((545.0, 185.0)) == pdf_map.DOT_SCALE_FLOOR
       and pdf_map.dot_scale((0.0, 0.0)) == 1.0
       and pdf_map.dot_scale("junk") == 1.0)
+
+# ------------------------------------- K-174: the constellation, in 3D
+
+section("K-174 — hard points, crisp links, a slow full turn")
+
+# Pouya, 2026-09-01, with aalampour.com open: "See how there's a
+# constellation type of thing... That's what I want for the graph. I
+# don't want these glowy things. I also want it to be 3D. I want each
+# node on the graph to be just randomly interconnected... I like the
+# shininess of the PDFs. I like that. For all the node connections with
+# everything else, I don't like the blurry stuff. Just have it rotate
+# slowly in 3D."
+#
+# The reference, measured off its own canvas (1262x818 device px for a
+# 631x409 CSS box — a 2x canvas):
+#   * at the star threshold the longest run of lit pixels in a row is
+#     FOUR DEVICE px, i.e. 1-2 CSS px, and there is no tail of
+#     mid-brightness pixels around it. A glow sprite cannot do that:
+#     its falloff IS a long run of mid-brightness pixels.
+#   * star blobs are 2 device px in area at the median and 23 at the
+#     largest, so a handful of 3px points and a majority of 1px ones.
+#   * lit pixels are 0.006% of the canvas at the star threshold and
+#     0.077% counting the faintest — extremely sparse and very calm.
+#   * they are NOT pure white on the glass. Zero pixels at the star
+#     threshold read 255/255/255; they read 214/222/248 and 215/215/213
+#     — a cool near-white, which is what the palette's own `text`
+#     (#E0E0E0) over `bg` mixes to. So the design brief and the "no
+#     invented colour" rule agree, which is lucky rather than clever.
+
+_STARPAL = importlib.import_module("klausmate.theme").palette(True)
+
+
+def _hexlum(h: str) -> int:
+    h = h.lstrip("#")
+    return sum(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+check("the glow system is GONE by name — its tiers, its alphas, its "
+      "sprite builder and its cache. These ARE 'these glowy things'",
+      not any(hasattr(pdf_map, n) for n in (
+          "GLOW_TIERS", "GLOW_CORE_ALPHA", "GLOW_HALO_ALPHA", "GLOW_RATIO",
+          "NOTE_R_FAR", "NOTE_R_NEAR", "tier_colours", "tier_radius"))
+      and "_glow_sprite" not in _CODE
+      and "_ensure_sprites" not in _CODE
+      and "drawPixmap" not in _CODE
+      and "CompositionMode_Plus" not in _CODE)
+check("...and so are the particle-trail beams — 'for all the node "
+      "connections with everything else, I don't like the blurry stuff'",
+      not any(hasattr(pdf_map, n) for n in (
+          "BEAM_STEP", "BEAM_MAX", "BEAM_MIN_TIER", "EDGE_BOW")))
+
+# Hardness and size. The one number that decides this look.
+check("a star is a HARD point of 1 to 3 px — the reference's longest "
+      "lit run is the whole brief, and 1-3px with no falloff is the "
+      "only thing that produces it",
+      pdf_map.STAR_SIZE_MIN == 1 and pdf_map.STAR_SIZE_MAX == 3
+      and pdf_map.star_size(0.0) == 1 and pdf_map.star_size(1.0) == 3
+      and all(1 <= pdf_map.star_size(i / 40.0) <= 3 for i in range(41)))
+check("...the size ramp is monotonic in depth (size is half of how "
+      "depth reads, now that nothing blurs)",
+      [pdf_map.star_size(i / 20.0) for i in range(21)]
+      == sorted(pdf_map.star_size(i / 20.0) for i in range(21)))
+check("...and MOST of the ramp is small: the reference's median blob "
+      "is 2 device px on a 2x canvas, so a field of 3px stars would be "
+      "four times the ink it actually has",
+      sum(1 for i in range(pdf_map.STAR_TIERS)
+          if pdf_map.star_size(pdf_map.tier_position(i)) == 3)
+      <= pdf_map.STAR_TIERS // 3)
+check("a small canvas gets smaller stars and never a zero-px one — "
+      "fit_margin's K-143 rule, one layer down",
+      pdf_map.star_size(1.0, pdf_map.dot_scale((545.0, 185.0)))
+      < pdf_map.STAR_SIZE_MAX
+      and pdf_map.star_size(0.0, 0.01) == 1
+      and pdf_map.star_size("junk") >= 1)
+
+check("depth is BRIGHTNESS and SIZE, never alpha and never blur: "
+      "K-148 measured alpha fog at 5x an opaque mix, and the reference "
+      "gets its depth exactly this way",
+      _hexlum(pdf_map.star_colour(_STARPAL, 1.0))
+      > _hexlum(pdf_map.star_colour(_STARPAL, 0.0)) + 220
+      and _hexlum(pdf_map.star_colour(_STARPAL, 1.0)) > 600)
+check("...the near end lands on the palette's own near-white rather "
+      "than on an invented 255/255/255 — which is also closer to what "
+      "the reference's pixels actually measure (214/222/248)",
+      pdf_map.star_colour(_STARPAL, 1.0).lower()
+      == _STARPAL["text"].lower())
+check("...and a focused PDF pushes the rest of the field back, so its "
+      "own notes are not lost in everything else",
+      _hexlum(pdf_map.star_colour(_STARPAL, 1.0, dim=True))
+      < _hexlum(pdf_map.star_colour(_STARPAL, 1.0)))
+
+# The constellation. Pouya: "each node on the graph to be just randomly
+# interconnected... it looks kind of cool."
+# 900 points, deliberately: at 240 the nearest-neighbour pass yields
+# 137 pairs and the cap NEVER BITES, so the seeded shuffle is dead code
+# and a mutation replacing it with an unseeded RNG survives the whole
+# suite (found by mutating it). At 900 it yields 1,016 and the cap is
+# load-bearing.
+_CPTS = [(math.cos(i * 0.7) * 0.6, math.sin(i * 1.3) * 0.55,
+          math.cos(i * 0.31) * 0.5) for i in range(900)]
+_KNN = pdf_map.constellation_links(_CPTS)
+check("the constellation is STABLE — the same collection draws the "
+      "same figure every time it opens. Re-randomising per frame "
+      "shimmers and reads as broken. Checked in BOTH modes and with "
+      "the cap biting, which is the only path the RNG is on",
+      _KNN and _KNN == pdf_map.constellation_links(list(_CPTS))
+      and len(_KNN) == pdf_map.LINK_MAX
+      and len(pdf_map.constellation_links(_CPTS, cap=10 ** 6)) > 900
+      and pdf_map.constellation_links(_CPTS, mode="chord")
+      == pdf_map.constellation_links(list(_CPTS), mode="chord"))
+check("...and the cap really CAPS, at every size, in both modes — it "
+      "is the frame budget and a topology that ignores it is a frame "
+      "budget that ignores it too",
+      all(len(pdf_map.constellation_links(_CPTS, mode=_m, cap=_c)) <= _c
+          for _m in ("knn", "chord") for _c in (7, 50, 300, 900)))
+check("...and the seed comes FROM THE GRAPH, so two collections do "
+      "not inherit one another's constellation, and no process-random "
+      "hash() is anywhere near it",
+      pdf_map.link_seed(_CPTS) == pdf_map.link_seed(list(_CPTS))
+      and pdf_map.link_seed(_CPTS) != pdf_map.link_seed(_CPTS[:200])
+      and pdf_map.link_seed([]) == pdf_map.link_seed([]))
+check("no self-links, no duplicate pairs, every index in range, and "
+      "the count is capped — the cap is the frame budget",
+      all(i != j and 0 <= i < len(_CPTS) and 0 <= j < len(_CPTS)
+          for i, j in _KNN)
+      and len({tuple(sorted(p)) for p in _KNN}) == len(_KNN)
+      and len(_KNN) <= pdf_map.LINK_MAX)
+
+
+def _span(pts, links):
+    d = sorted(math.dist(pts[i], pts[j]) for i, j in links)
+    return d[len(d) // 2] if d else 0.0
+
+
+_CHORD = pdf_map.constellation_links(_CPTS, mode="chord")
+check("the two topologies are genuinely different pictures: "
+      "nearest-neighbour links span a fraction of what uniform random "
+      "chords do. Both were rendered; the short-span one is the one "
+      "that reads as a constellation",
+      _span(_CPTS, _KNN) * 3.0 < _span(_CPTS, _CHORD)
+      and len(_CHORD) <= pdf_map.LINK_MAX)
+check("...and no nearest-neighbour link is longer than the span "
+      "ceiling, so a sparse corner of the cloud is left alone rather "
+      "than reaching across the card for a partner",
+      all(math.dist(_CPTS[i], _CPTS[j]) <= pdf_map.LINK_MAX_SPAN + 1e-9
+          for i, j in _KNN))
+check("degenerate clouds do not raise on the build path",
+      pdf_map.constellation_links([]) == []
+      and pdf_map.constellation_links([(0.0, 0.0, 0.0)]) == []
+      and pdf_map.constellation_links(_CPTS, cap=0) == []
+      and pdf_map.constellation_links(_CPTS, mode="nonsense") == [])
+
+_RAMP = [pdf_map.edge_mix(i) for i in range(pdf_map.EDGE_TAPER)]
+check("the focused PDF's spokes TAPER along their own length: a ramp "
+      "of at least three steps, brightest at the hub and falling to "
+      "EDGE_TAIL of that at the tip. Rendered FLAT first, and 90 hard "
+      "lines converging on one node is a dandelion whose far ends "
+      "carry as much weight as the node they are about",
+      pdf_map.EDGE_TAPER >= 3
+      and _RAMP == sorted(_RAMP, reverse=True)
+      and len(set(_RAMP)) == len(_RAMP)
+      and abs(_RAMP[0] - pdf_map.EDGE_MIX) < 1e-9
+      and abs(_RAMP[-1] - pdf_map.EDGE_MIX * pdf_map.EDGE_TAIL) < 1e-9,
+      f"ramp {[round(v, 3) for v in _RAMP]}")
+check("...and the ramp degrades rather than dividing by zero at one "
+      "step, and clamps rather than raising on the paint path",
+      pdf_map.edge_mix(0, 1) == pdf_map.EDGE_MIX
+      and pdf_map.edge_mix(99) == _RAMP[-1]
+      and pdf_map.edge_mix(-5) == _RAMP[0]
+      and pdf_map.edge_mix("junk") == _RAMP[0])
+
+# Rotation. "Just have it rotate slowly in 3D."
+check("the 0.42 rad sway is gone and the scene TURNS — a full "
+      "revolution, which is what 'rotate' means",
+      not hasattr(pdf_map, "IDLE_SWING")
+      and pdf_map.ROTATE_PERIOD_MS >= 30000.0)
+check("...slowly: under 15 degrees a second, and under half a degree "
+      "per tick so no frame jumps",
+      math.degrees(2.0 * math.pi) / (pdf_map.ROTATE_PERIOD_MS / 1000.0) < 15.0
+      and math.degrees(2.0 * math.pi * pdf_map.IDLE_TICK_MS
+                       / pdf_map.ROTATE_PERIOD_MS) < 0.5)
+
+# A fit that has to survive every pose, not just the resting one.
+_SBOX = (-0.8, -0.5, -0.6, 0.9, 0.4, 0.7)
+_SWEPT = pdf_map.sweep_bounds(_SBOX, pdf_map.Camera(0.0))
+check("a rotating canvas frames the SWEPT box: at every pose of a full "
+      "turn the graph still fits inside what the fit framed. A box "
+      "framed at rest is 40% too small at the diagonal and the cloud "
+      "swings out of the card every quarter turn",
+      all(pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[0] >= _SWEPT[0] - 1e-9
+          and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[1] >= _SWEPT[1] - 1e-9
+          and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[2] <= _SWEPT[2] + 1e-9
+          and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[3] <= _SWEPT[3] + 1e-9
+          for a in [i * math.pi / 32.0 for i in range(64)]))
+_CUBE = (-1.0, -1.0, -1.0, 1.0, 1.0, 1.0)
+check("...and it really is BIGGER than the resting pose, so the sweep "
+      "is doing something rather than agreeing by accident. On the "
+      "graph's own [-1,1] cube the growth is all in the VERTICAL: "
+      "face-on, perspective already magnifies the near left and right "
+      "corners, while turning brings the top and bottom corners "
+      "forward and the box grows 37% taller",
+      (pdf_map.sweep_bounds(_CUBE, pdf_map.Camera(0.0))[3]
+       - pdf_map.sweep_bounds(_CUBE, pdf_map.Camera(0.0))[1])
+      > (pdf_map.camera_bounds(_CUBE, pdf_map.Camera(0.0))[3]
+         - pdf_map.camera_bounds(_CUBE, pdf_map.Camera(0.0))[1]) * 1.3
+      and pdf_map.frame_bounds(_CUBE, pdf_map.Camera(0.0), (900.0, 640.0),
+                               pdf_map.SWEEP_STEPS).scale
+      < pdf_map.frame_bounds(_CUBE, pdf_map.Camera(0.0),
+                             (900.0, 640.0)).scale * 0.8)
+check("...and the sweep holds for a LOPSIDED box too, where the "
+      "orthographic 1/cos bound alone does not: 300 random boxes, 360 "
+      "poses each, none escaping",
+      not [1 for _b in [
+          (-0.973, -0.032, -0.982, 0.638, 0.569, 0.42),
+          (-0.2, -0.9, -0.05, 0.95, 0.1, 0.99),
+          (-1.0, -0.01, -1.0, 0.02, 0.01, 0.03)]
+          for _a in [i * math.pi / 36.0 for i in range(72)]
+          if not (
+              pdf_map.camera_bounds(_b, pdf_map.Camera(_a))[0]
+              >= pdf_map.sweep_bounds(_b, pdf_map.Camera(0.0))[0] - 1e-9
+              and pdf_map.camera_bounds(_b, pdf_map.Camera(_a))[2]
+              <= pdf_map.sweep_bounds(_b, pdf_map.Camera(0.0))[2] + 1e-9
+              and pdf_map.camera_bounds(_b, pdf_map.Camera(_a))[1]
+              >= pdf_map.sweep_bounds(_b, pdf_map.Camera(0.0))[1] - 1e-9
+              and pdf_map.camera_bounds(_b, pdf_map.Camera(_a))[3]
+              <= pdf_map.sweep_bounds(_b, pdf_map.Camera(0.0))[3] + 1e-9)])
+check("frame_bounds carries the sweep, so every fit path — first fit, "
+      "the Fit button, Escape, the flight — gets ONE rule rather than "
+      "four",
+      pdf_map.frame_bounds(_SBOX, pdf_map.Camera(0.0), (900.0, 640.0),
+                           sweep=pdf_map.SWEEP_STEPS).scale
+      < pdf_map.frame_bounds(_SBOX, pdf_map.Camera(0.0), (900.0, 640.0)).scale
+      and pdf_map.frame_bounds(_SBOX, pdf_map.Camera(0.0), (900.0, 640.0),
+                               sweep=0).scale
+      == pdf_map.frame_bounds(_SBOX, pdf_map.Camera(0.0),
+                              (900.0, 640.0)).scale)
+
+# The palette call, made deliberately (K-174 asked for it out loud).
+check("K-174's palette decision: the map is a NIGHT SKY IN BOTH "
+      "THEMES. Inverting to dark points on a light ground was the "
+      "live alternative and it throws away the one thing Pouya "
+      "singled out — 'I like the shininess of the PDFs' has no "
+      "analogue on white, where a light source is a smudge",
+      "theme.palette(True)" in _CODE)
 
 # ------------------------------------------------------------ glue pins
 
@@ -851,16 +1096,17 @@ check("labels are placed by label_anchor, never inline arithmetic",
       len(_calls_in("_paint_label", "label_anchor")) == 1)
 
 # ---- the note layer, and the name that follows the selection ----
-_paint_seg = _method_seg("_MapCanvas", "_blit_bands")
-check("K-158: the stars are BLITTED, never drawn as a gradient per "
-      "point — a QRadialGradient per dot is 2.10 ms a frame at 400 "
-      "dots against 0.42 for the cached sprite, and the sprite also "
-      "beats the round drawPoints (0.85 ms) K-148 could not afford at "
-      "28,668",
-      _paint_seg.count("drawPixmap(") == 1
+_paint_seg = _method_seg("_MapCanvas", "_paint_stars")
+check("K-174: a star is ONE C++ call per band — a square-capped "
+      "drawPoints, no gradient, no pixmap, and no Python loop over "
+      "dots. K-158's sprite blit was the last per-point Python on the "
+      "cloud's paint path (0.341 ms a frame against 0.28-0.31 for the "
+      "hard points that replace it)",
+      "drawPoints(" in _paint_seg
+      and "drawPixmap(" not in _paint_seg
       and "QRadialGradient(" not in _paint_seg
-      and "QRadialGradient(" in _method_seg("_MapCanvas", "_glow_sprite")
-      and "for wx, wy in self._notes" not in _CODE)
+      and "for wx, wy in self._notes" not in _CODE
+      and "QRadialGradient(" in _method_seg("_MapCanvas", "_paint_nodes"))
 check("the world->screen pass is QTransform.map on the POLYGON, and the "
       "PAINTER is never given a transform — a point draw under a scaled "
       "painter with a cosmetic pen degenerates into long horizontal "
@@ -877,14 +1123,30 @@ check("the note polygons are built ONCE, by the canvas's own band "
       "QPolygonF(" in _method_seg("_MapCanvas", "_make_bands")
       and _CODE.count("QPolygonF(") == 1
       and _CODE.count("_make_bands(") == 3)
-check("K-158: the beams are a capped TRAIL of the same cached sprites, "
-      "never a stroked path — 90 antialiased two-pass strokes are "
-      "6.35 ms and grow with zoom to 10.55, the particles are 0.84 ms "
-      "and do not grow at all",
-      "drawPixmap(" in _method_seg("_MapCanvas", "_paint_edges")
+_edge_seg = _method_seg("_MapCanvas", "_paint_edges")
+check("K-174: every connection is a CRISP LINE, batched into one "
+      "drawLines, with no path and no per-edge call — 'for all the "
+      "node connections with everything else, I don't like the blurry "
+      "stuff'. K-158's 6.35 ms was the AA rasterizer, not the "
+      "composition mode and not the call count; one hard pass is "
+      "0.092 ms for the same 90 spokes",
+      "drawLines(" in _edge_seg
+      and "drawLines(" in _method_seg("_MapCanvas", "_paint_constellation")
+      and "drawPixmap(" not in _edge_seg
       and "drawPath(" not in _CODE
       and "drawLine(" not in _CODE
-      and "BEAM_MAX" in _method_seg("_MapCanvas", "_paint_edges"))
+      and _CODE.count("drawLines(") == 2)
+check("...and the layer that has to be hard is drawn with "
+      "antialiasing OFF, which is the LOOK and not the optimisation: "
+      "an antialiased 1px point is a soft 2x2 smear, and the "
+      "reference's defining measurement is that nothing there runs "
+      "longer than three lit pixels with no skirt around it",
+      "RenderHint.Antialiasing, False" in _method_seg("_MapCanvas",
+                                                      "_paint")
+      and _method_seg("_MapCanvas", "_paint").index(
+          "RenderHint.Antialiasing, False")
+      < _method_seg("_MapCanvas", "_paint").index("_paint_stars(")
+      < _method_seg("_MapCanvas", "_paint").index("_paint_nodes("))
 check("K-138 reverses K-133: the painter names exactly the ACTIVE node, "
       "with no count or zoom gate left to consult",
       "if safe != active:" in _method_seg("_MapCanvas", "_paint_label")
@@ -1046,7 +1308,7 @@ check("every fit goes through frame_bounds, which carries fit_margin — "
       "so the compact-canvas cap reaches the initial fit, the Fit "
       "button and the click-to-fly landing alike, and no fit anywhere "
       "forgets that the graph is a 3D box seen from a pose",
-      "frame_bounds(self._bounds, self._cam, (w, h))"
+      "frame_bounds(\n                self._bounds, self._cam, (w, h), self._sweep()\n            )"
       in _method_seg("_MapCanvas", "_apply_fit")
       and "fit_margin(widget_size)" in _func_seg("frame_bounds")
       and [n for n in ast.walk(_TREE)
@@ -1063,23 +1325,26 @@ check("a resize RE-ANCHORS the view (half the delta) and never re-fits "
 
 # ---- K-148: motion, and who is allowed to have it ----
 
-_ramp_seg = _func_seg("tier_colours")
+_ramp_seg = _func_seg("star_colour")
 check("the depth ramp is a MIX of palette tokens, not alpha over the "
       "ground — the alpha version of this ramp cost 13.8 ms a frame "
-      "against 2.9 at 28,668 dots, and mixing is also what lets depth "
-      "drive saturation as well as brightness",
-      _ramp_seg.count("blend_hex(") == 5
+      "against 2.9 at 28,668 dots, and K-174 keeps that call: the "
+      "reference reaches for alpha only because a canvas floating over "
+      "a CSS nebula has no ground of its own to mix into",
+      _ramp_seg.count("blend_hex(") == 3
       and "setAlpha" not in _ramp_seg
       and "setAlphaF" not in _ramp_seg)
 check("...and every end of it is a palette TOKEN, so the whole star "
-      "field re-colours with the accent theme and invents no colour",
+      "field re-colours with the accent theme and invents no colour — "
+      "including the near-white core, which is `text` and NOT the "
+      "255/255/255 the reference looks like and measures not to be",
       all(t in _ramp_seg for t in
-          ('c["bg"]', 'c["blue_pressed"]', 'c["blue_bright"]', 'c["text"]')))
-check("the sprite cache is keyed on the palette's own tokens, not on "
+          ('c["bg"]', 'c["blue_bright"]', 'c["text"]')))
+check("the pen cache is keyed on the palette's own tokens, not on "
       "night_mode — the map draws in the dark palette either way, so a "
       "night flip must not rebuild while an ACCENT change must",
       'key = (c["bg"], c["blue_bright"], c["text"], scale)'
-      in _method_seg("_MapCanvas", "_ensure_sprites"))
+      in _method_seg("_MapCanvas", "_ensure_pens"))
 
 _arm = _method_seg("_MapCanvas", "_arm_idle")
 _show = _method_seg("_MapCanvas", "showEvent")
@@ -1570,73 +1835,98 @@ if _HAVE_QT:
             return _i
 
         _im_a = _ink(_spin, 700, 460)
-        _spin._cam = pdf_map.Camera(pdf_map.REST_ANGLE + pdf_map.IDLE_SWING)
+        _spin._cam = pdf_map.Camera(pdf_map.REST_ANGLE + 0.6)
         _im_b = _ink(_spin, 700, 460)
         _moved = sum(1 for y in range(0, 460, 4) for x in range(0, 700, 4)
                      if _im_a.pixelColor(x, y) != _im_b.pixelColor(x, y))
-        check("turning the camera actually MOVES the picture — the sway "
-              "reaches the pixels rather than recomputing a matrix that "
-              "changes nothing",
+        check("turning the camera actually MOVES the picture — the "
+              "rotation reaches the pixels rather than recomputing a "
+              "matrix that changes nothing",
               _moved > 200, f"{_moved} sampled pixels changed")
+        # K-174: a FULL TURN, which K-148 refused on two worries. The
+        # honest test of both is to render every pose and look at the
+        # numbers: nothing may raise, the cloud may not collapse to a
+        # line at the quarter turns, and the far half may not paint
+        # over the near half when cos(angle) changes sign.
+        _spread = []
+        for _k in range(16):
+            _spin._cam = pdf_map.Camera(2.0 * math.pi * _k / 16.0)
+            _pi = _ink(_spin, 700, 460)
+            _cols = [x for y in range(0, 460, 3) for x in range(0, 700, 3)
+                     if _pi.pixelColor(x, y).red()
+                     + _pi.pixelColor(x, y).green()
+                     + _pi.pixelColor(x, y).blue() > 260]
+            _spread.append((max(_cols) - min(_cols)) if _cols else 0)
+        check("a FULL revolution renders at every pose and the cloud "
+              "never collapses: K-148 kept a 0.42 rad sway because a "
+              "spin 'sweeps through the edge-on pose where the cloud "
+              "collapses to a line'. That is true of a PLANE; a PCA "
+              "cloud has three components, so the narrowest pose is "
+              "still most of the widest",
+              min(_spread) > 0.45 * max(_spread),
+              f"lit spans over 16 poses: min {min(_spread)} "
+              f"max {max(_spread)}")
         _spin._cam = pdf_map.Camera()
 
         # Depth has to be VISIBLE, not merely computed: the near tier's
-        # stars are both brighter and fatter than the far tier's, and
+        # stars are both brighter and bigger than the far tier's, and
         # while a PDF is focused the rest of the field steps back.
-        _spin._sprites = {}
-        _spin._ensure_sprites(theme.palette(True))
+        _spin._pens = {}
         _pal = theme.palette(True)
-        _far_h, _far_c = pdf_map.tier_colours(_pal, pdf_map.tier_position(0))
-        _near_h, _near_c = pdf_map.tier_colours(
-            _pal, pdf_map.tier_position(pdf_map.GLOW_TIERS - 1))
+        _spin._ensure_pens(_pal)
+        _far = pdf_map.star_colour(_pal, pdf_map.tier_position(0))
+        _near = pdf_map.star_colour(
+            _pal, pdf_map.tier_position(pdf_map.STAR_TIERS - 1))
 
         def _lum(hexc):
             _c = _QtG.QColor(hexc)
             return _c.red() + _c.green() + _c.blue()
 
         check("the far tier is dimmer AND smaller than the near one — "
-              "the fog and the size ramp are what turn a rotation into "
-              "a sense of depth",
-              _lum(_near_h) > _lum(_far_h) + 120
-              and _lum(_near_c) > _lum(_far_c) + 120
-              and pdf_map.tier_radius(1.0) > pdf_map.tier_radius(0.0) * 1.5,
-              f"far {_far_h}/{_far_c}, near {_near_h}/{_near_c}")
-        check("...and the ramp travels through HUE, not only through "
-              "grey — K-158's third critique was 'the cloud is grey on "
-              "grey, no hue at all', which K-148's grey_mid->text ramp "
-              "was by construction. BOTH ends now carry real colour, "
-              "and the depth between them is carried by value",
-              _QtG.QColor(_far_h).saturation() > 60
-              and _QtG.QColor(_near_h).saturation() > 60
-              and _QtG.QColor(_near_h).value()
-              > _QtG.QColor(_far_h).value() + 60,
-              f"far sat {_QtG.QColor(_far_h).saturation()} val "
-              f"{_QtG.QColor(_far_h).value()}, near sat "
-              f"{_QtG.QColor(_near_h).saturation()} val "
-              f"{_QtG.QColor(_near_h).value()}")
-        _dim_h, _dim_c = pdf_map.tier_colours(
-            _pal, pdf_map.tier_position(pdf_map.GLOW_TIERS - 1), dim=True)
+              "brightness and size are the ONLY two carriers of depth "
+              "left now that nothing blurs, which is exactly how the "
+              "reference does it",
+              _lum(_near) > _lum(_far) + 220
+              and pdf_map.star_size(1.0) > pdf_map.star_size(0.0),
+              f"far {_far} ({_lum(_far)}), near {_near} ({_lum(_near)})")
+        check("...and the ramp travels through HUE as well as value: "
+              "the far face sinks into the ground as a cold blue while "
+              "the near face lands on the palette's near-white. The "
+              "reference's own bright pixels are 214/222/248, not the "
+              "255/255/255 they look like",
+              _QtG.QColor(_far).saturation() > 60
+              and _QtG.QColor(_near).value()
+              > _QtG.QColor(_far).value() + 100,
+              f"far sat {_QtG.QColor(_far).saturation()} val "
+              f"{_QtG.QColor(_far).value()}, near sat "
+              f"{_QtG.QColor(_near).saturation()} val "
+              f"{_QtG.QColor(_near).value()}")
+        _dim = pdf_map.star_colour(
+            _pal, pdf_map.tier_position(pdf_map.STAR_TIERS - 1), dim=True)
         check("a focused PDF pushes the rest of the field BACK — the "
               "dimmed ramp is strictly darker than the lit one, which "
               "is what stops its own notes drowning in everything else",
-              _lum(_dim_h) < _lum(_near_h) and _lum(_dim_c) < _lum(_near_c))
-        check("the star sprites are real pixmaps, one per tier per "
-              "state, built once — the whole reason a glow is "
-              "affordable at all (2.10 ms a frame drawing the gradient "
-              "per point against 0.42 blitting it)",
-              len(_spin._sprites) == pdf_map.GLOW_TIERS * 3
-              and all(not pm.isNull() and pm.width() >= 4
-                      for pm in _spin._sprites.values()))
-        _spin._sprites = {}
-        _spin._ensure_sprites(_pal, 0.6)
+              _lum(_dim) < _lum(_near))
+        check("the cache holds PENS now, one per tier per state, and "
+              "every one of them is square-capped: drawPoints paints "
+              "each point as the pen's cap, and a round cap is a path "
+              "Qt has to rasterize (K-148 measured that at 16x a "
+              "square) AND a soft edge where the brief wants a hard one",
+              len(_spin._pens) == pdf_map.STAR_TIERS * 3
+              and all(pen.capStyle() == _QtC.Qt.PenCapStyle.SquareCap
+                      and 1 <= pen.width() <= pdf_map.STAR_SIZE_MAX
+                      for pen in _spin._pens.values()))
+        _spin._pens = {}
+        _spin._ensure_pens(_pal, 0.6)
         check("...and a SMALL canvas gets smaller stars (fit_margin's "
               "K-143 rule one layer down: the dock packs the whole "
               "cloud into ~110px, where a window-sized dot is a blot)",
               pdf_map.dot_scale((545.0, 185.0)) < 1.0
               and pdf_map.dot_scale((1100.0, 660.0)) == 1.0
-              and _spin._sprites[(pdf_map.GLOW_TIERS - 1, False, False)].width()
-              < pdf_map.GLOW_RATIO * 2.0 * pdf_map.NOTE_R_NEAR)
-        _spin._sprites = {}
+              and _spin._pens[
+                  (pdf_map.STAR_TIERS - 1, False, False)].width()
+              < pdf_map.STAR_SIZE_MAX)
+        _spin._pens = {}
 
         # ---- the timer, on a real widget ----
         _spin._reduce_motion = lambda: False
@@ -1780,32 +2070,105 @@ if _HAVE_QT:
         _off = _render(_lit, 700, 460)
         _lit._selected = "lec1"
         _on = _render(_lit, 700, 460)
-        _moved_edges = sum(
-            1 for y in range(0, 460, 2) for x in range(0, 700, 2)
-            if _off.pixelColor(x, y) != _on.pixelColor(x, y))
-        _sampled = len(range(0, 460, 2)) * len(range(0, 700, 2))
-        check("focusing a PDF has to CHANGE THE PICTURE — its "
-              "connections are the point of the view now, and K-148's "
-              "edge layer moved 0.59% of the pixels on the frame that "
-              "was supposed to be all edges",
-              _moved_edges > _sampled * 0.05,
-              f"{100.0 * _moved_edges / _sampled:.1f}% of sampled pixels")
+        # K-174 replaces K-158's AREA threshold with a CONTRAST one,
+        # and the reason is the whole card. K-148's edge layer moved
+        # 0.59% of the pixels and was invisible; K-158 answered with
+        # fat glowing beams that moved 5% and set the gate there. A
+        # hard 1px line is a THIRD of that area by construction — a
+        # glow's skirt is most of its footprint — so an area gate
+        # would now read "crisp" as "regressed". What actually
+        # separates drawn-and-visible from drawn-and-invisible is how
+        # HARD each pixel moved: K-148's 1px lines at 0.25 alpha over
+        # grey chips could not shift a pixel by more than a few
+        # levels, however many of them they touched.
+        def _delta(a, b):
+            return max(abs(a.red() - b.red()), abs(a.green() - b.green()),
+                       abs(a.blue() - b.blue()))
+
+        _sampled = 460 * 700
+        _moved_edges = 0
+        _hard_focus = 0
+        for _y in range(460):
+            for _x in range(700):
+                _d = _delta(_off.pixelColor(_x, _y), _on.pixelColor(_x, _y))
+                if _d:
+                    _moved_edges += 1
+                    if _d > 40:
+                        _hard_focus += 1
+        check("focusing a PDF has to CHANGE THE PICTURE, and change it "
+              "HARD — its connections are the point of the view, and "
+              "K-148's edge layer moved 0.59% of the pixels on the "
+              "frame that was supposed to be all edges",
+              _moved_edges > _sampled * 0.04
+              and _hard_focus > _sampled * 0.01,
+              f"{100.0 * _moved_edges / _sampled:.2f}% moved, "
+              f"{100.0 * _hard_focus / _sampled:.2f}% by more than 40 levels")
         _real_links = pdf_map.links_for
         pdf_map.links_for = lambda linked, active: []
         try:
             _none = _render(_lit, 700, 460)
         finally:
             pdf_map.links_for = _real_links
-        _beam_only = sum(
-            1 for y in range(0, 460, 2) for x in range(0, 700, 2)
-            if _on.pixelColor(x, y) != _none.pixelColor(x, y))
+        _beam_only = 0
+        _hard_edges = 0
+        for _y in range(460):
+            for _x in range(700):
+                _d = _delta(_on.pixelColor(_x, _y), _none.pixelColor(_x, _y))
+                if _d:
+                    _beam_only += 1
+                    if _d > 40:
+                        _hard_edges += 1
         check("...and the CONNECTION LAYER alone is a real part of it — "
               "isolated by drawing the same focused frame with the "
-              "beams removed. This is the number K-148 failed: on the "
-              "frame Pouya screenshotted its edges moved 0.59% of the "
-              "pixels, drawn and invisible over 28,670 grey chips",
-              _beam_only > _sampled * 0.02,
-              f"{100.0 * _beam_only / _sampled:.1f}% of sampled pixels")
+              "spokes removed. A THIRD of the pixels it touches move "
+              "by more than 40 levels; K-148's whole layer was 1px "
+              "lines at 0.25 alpha, which cannot move a pixel that far "
+              "no matter how many it touches, and that is why it was "
+              "drawn and invisible over 28,670 grey chips",
+              _beam_only > _sampled * 0.008
+              and _hard_edges > _sampled * 0.002
+              and _hard_edges > 0.25 * _beam_only,
+              f"{100.0 * _beam_only / _sampled:.2f}% moved, "
+              f"{100.0 * _hard_edges / _sampled:.3f}% by more than 40 "
+              f"({100.0 * _hard_edges / max(1, _beam_only):.0f}% of them)")
+
+        # The spokes TAPER. Rendered flat first, and 90 hard lines all
+        # converging on one node is a dandelion whose far ends carry as
+        # much weight as the hub they are about. Measured as the ink
+        # the edge layer adds near the node against the ink it adds far
+        # from it, on the same frame.
+        _ex, _ey, _ = pdf_map.project_point(
+            _lit._vp, _lit._cam, *_lit._pdf_xyz["lec1"])
+
+        def _edge_ink(r0, r1):
+            _tot = 0
+            _n = 0
+            for _y in range(0, 460):
+                for _x in range(0, 700):
+                    _d = math.hypot(_x - _ex, _y - _ey)
+                    if not (r0 <= _d < r1):
+                        continue
+                    _v = _delta(_on.pixelColor(_x, _y),
+                                _none.pixelColor(_x, _y))
+                    if _v:
+                        _tot += _v
+                        _n += 1
+            return _tot / max(1, _n)
+
+        _near_ink = _edge_ink(60.0, 120.0)
+        _far_ink = _edge_ink(200.0, 300.0)
+        check("...and the spokes TAPER, brightest at the hub and "
+              "dissolving into the field — the honest picture (a far "
+              "match is a weaker one) and the difference between a "
+              "constellation with an emphasised node and a dandelion. "
+              "Diluted on the pixels by two things the ratio has to "
+              "live with: the node's own halo already lights the "
+              "innermost ring in BOTH frames, and a spoke crossing a "
+              "near-white star DARKENS it. The ramp itself is pinned "
+              "exactly, in the pure section",
+              _near_ink > 1.5 * _far_ink,
+              f"mean delta {_near_ink:.0f} at 60-120px from the node, "
+              f"{_far_ink:.0f} at 200-300px")
 
         # BUG 4. The offset was never the problem: label_anchor cleared
         # the node's drawn radius by 9px, and the drawn radius does not
@@ -1964,9 +2327,15 @@ if _HAVE_QT:
                   if _one.pixelColor(x, y) != _two.pixelColor(x, y)) > 200)
 
         def _bright_box(img, cx, cy, r=12):
-            """Pixels brighter than any star in a small box round a node
-            — a lit node has a solid pale core, a ghost has a 1px ring
-            and nothing else, and the ambient field never gets there."""
+            """Bright pixels in a small box round a node.
+
+            K-158 could ask this as an absolute ("the ambient field
+            never gets there") because its stars were 46%-alpha glow
+            cores. K-174's stars ARE near-white by design — that is the
+            reference's whole look — so a box anywhere inside the cloud
+            catches a few of them, and the honest question became a
+            RATIO between the lit node and the ghost plus a control
+            reading of empty sky."""
             _n = 0
             for _y in range(max(0, int(cy - r)), min(460, int(cy + r))):
                 for _x in range(max(0, int(cx - r)), min(700, int(cx + r))):
@@ -1983,12 +2352,248 @@ if _HAVE_QT:
         _ghosted = _bright_box(_render(_foc, 700, 460), _l2x, _l2y)
         _foc._selected = "lec2"
         _lit_ink = _bright_box(_render(_foc, 700, 460), _l2x, _l2y)
+        _sky = max(_bright_box(_render(_foc, 700, 460), _cx, _cy)
+                   for _cx, _cy in ((40, 40), (660, 40), (40, 420),
+                                    (660, 420)))
         check("an UNFOCUSED PDF is a ghost, not a second lit node — "
               "PDFs sit at their matched notes' centroid (K-058), so "
               "files with overlapping matches land on top of each "
-              "other and four lit rings become one unreadable knot",
-              _lit_ink > 40 and _ghosted <= 5,
-              f"ghosted {_ghosted} bright px, lit {_lit_ink}")
+              "other and four lit rings become one unreadable knot. "
+              "Asked as a RATIO because K-174's stars are near-white "
+              "and a box inside the cloud catches two or three of them "
+              "wherever it is put",
+              _lit_ink > 40 and _lit_ink > 5 * max(1, _ghosted)
+              and _ghosted < 15,
+              f"ghosted {_ghosted} bright px, lit {_lit_ink}, "
+              f"empty sky {_sky}")
+
+        # ---- K-174: the constellation, ON THE PIXELS ----
+        # The reference's numbers, asked of our own render. This is the
+        # acceptance test the card set and it is the only one that can
+        # tell a hard point from a soft one.
+        _sky = pdf_map.map_canvas(None, {
+            "pdfs": [], "edges": [],
+            "notes": [{"nid": i, "xyz": [_rng.gauss(0, .3), _rng.gauss(0, .3),
+                                         _rng.gauss(0, .3)]}
+                      for i in range(1200)]})
+        _sky.show()
+        _sky.resize(900, 640)
+        _app.processEvents()
+        _sky._reduce_motion = lambda: True
+        _sky._ensure_fit(900.0, 640.0)
+        _si = _render(_sky, 900, 640)
+
+        def _runs(img, w, h, th=430, inset=4):
+            """Horizontal runs of lit pixels — the reference's one
+            decisive measurement. Inset past the card's own 1px border,
+            which is a full-width run of host-palette grey and nothing
+            to do with the field."""
+            out = {}
+            lit = 0
+            for y in range(inset, h - inset):
+                run = 0
+                for x in range(inset, w - inset):
+                    c = img.pixelColor(x, y)
+                    if c.red() + c.green() + c.blue() > th:
+                        run += 1
+                        lit += 1
+                    else:
+                        if run:
+                            out[run] = out.get(run, 0) + 1
+                        run = 0
+                if run:
+                    out[run] = out.get(run, 0) + 1
+            return out, lit
+
+        _r, _lit_px = _runs(_si, 900, 640)
+        check("THE measurement, on our own render: with no PDF nodes in "
+              "the frame the longest run of lit pixels in a row is at "
+              "most STAR_SIZE_MAX. On aalampour.com's canvas that "
+              "number is 4 device pixels on a 2x surface — 1 to 2 CSS "
+              "px — and it is the whole difference between a hard point "
+              "and a glow, whose falloff IS a long run of "
+              "mid-brightness pixels",
+              max(_r) <= pdf_map.STAR_SIZE_MAX,
+              f"runs {sorted(_r.items())}")
+        check("...and the field is SPARSE: under 1% of the card is lit, "
+              "against the reference's 0.08%. Deliberately denser and "
+              "the reason is the data — its starfield decorates a page "
+              "and ours is 28,670 notes, where the reference's ~20 "
+              "visible stars per megapixel would draw thirteen of them "
+              "and say nothing about the embedding",
+              0.02 < 100.0 * _lit_px / (900.0 * 640.0) < 1.0,
+              f"{100.0 * _lit_px / (900.0 * 640.0):.3f}% lit, "
+              f"{sum(_r.values())} stars")
+        check("...and most of them are the SMALL sizes, as the "
+              "reference's median blob (2 device px) says they should "
+              "be — a field of uniform 3px stars carries four times "
+              "its ink",
+              _r.get(1, 0) + _r.get(2, 0) > 2 * _r.get(3, 0),
+              f"1px {_r.get(1, 0)}, 2px {_r.get(2, 0)}, 3px {_r.get(3, 0)}")
+
+        # The constellation has to REACH THE PIXELS, and it has to be
+        # the same figure twice.
+        _links_before = list(_sky._links)
+        _with = _render(_sky, 900, 640)
+        _saved, _sky._links = _sky._links, []
+        _without = _render(_sky, 900, 640)
+        _sky._links = _saved
+        _dl = sum(1 for y in range(0, 640, 2) for x in range(0, 900, 2)
+                  if _with.pixelColor(x, y) != _without.pixelColor(x, y))
+        check("the interconnections reach the pixels — 'I want each "
+              "node on the graph to be just randomly interconnected'",
+              _dl > 300 and len(_links_before) > 60,
+              f"{len(_links_before)} segments, {_dl} sampled pixels")
+        _again = pdf_map.map_canvas(None, {
+            "pdfs": [], "edges": [],
+            "notes": [{"nid": i, "xyz": list(p)}
+                      for i, p in enumerate(_sky._notes)]})
+        check("...and they are STABLE: a canvas built again over the "
+              "same cloud draws the same figure, because the seed is "
+              "the cloud. A per-frame reroll shimmers and reads as "
+              "broken",
+              pdf_map.link_seed([(p[0], p[1], p[2]) for p in _sky._notes])
+              == pdf_map.link_seed([(p[0], p[1], p[2])
+                                    for p in _again._notes]))
+        check("...and the constellation never draws over a band it did "
+              "not map, so a segment can never be anchored at (0, 0)",
+              all(0 <= _sa < len(_sky._draw) and 0 <= _sb < len(_sky._draw)
+                  and _ka < _sky._draw[_sa][2].count()
+                  and _kb < _sky._draw[_sb][2].count()
+                  for _sa, _ka, _sb, _kb in _sky._links))
+        _sky.hide()
+
+        # ---- the rotation is a TURN, on a real timer path ----
+        _rot = pdf_map.map_canvas(None, CLOUD)
+        _rot.show()
+        _rot.resize(700, 460)
+        _rot._reduce_motion = lambda: False
+        _app.processEvents()
+        _rot._cam = pdf_map.Camera(pdf_map.REST_ANGLE)
+        _seen = []
+        for _ in range(2300):
+            _rot._idle_tick()
+            _seen.append(_rot._cam.angle)
+        _swept = max(_seen) - min(_seen)
+        check("the idle motion is a full REVOLUTION, not K-148's sway: "
+              "2300 ticks carry the camera through more than a whole "
+              "turn, and the phase only ever advances",
+              _swept > 2.0 * math.pi * 0.95
+              and all(_seen[i] <= _seen[i + 1] + 1e-9
+                      or _seen[i + 1] < 1.0
+                      for i in range(len(_seen) - 1)),
+              f"swept {_swept:.2f} rad over 2300 ticks")
+        check("...and it stays SLOW — those 2300 ticks are 76 seconds "
+              "of wall clock, so a full turn takes more than a minute",
+              2300 * pdf_map.IDLE_TICK_MS / 1000.0 > 60.0)
+        _rot.hide()
+
+        # The rotating fit has to hold every pose it will show.
+        _spin2 = pdf_map.map_canvas(None, CLOUD)
+        _spin2.set_idle_rotation(True)
+        _spin2.show()
+        _spin2.resize(700, 460)
+        _app.processEvents()
+        _spin2._reduce_motion = lambda: True
+        _spin2._ensure_fit(700.0, 460.0)
+        _escaped = []
+        for _k in range(24):
+            _spin2._cam = pdf_map.Camera(2.0 * math.pi * _k / 24.0)
+            for _p in list(_spin2._pdf_xyz.values()) + _spin2._notes[:200]:
+                _px, _py, _ = pdf_map.project_point(
+                    _spin2._vp, _spin2._cam, *_p)
+                if not (0 <= _px <= 700 and 0 <= _py <= 460):
+                    _escaped.append((_k, round(_px), round(_py)))
+        check("a canvas that ROTATES frames the swept box, so no node "
+              "and no star walks out of the card at any pose of the "
+              "turn — the failure this prevents is the cloud sliding "
+              "off the side thirty seconds after the window opens",
+              not _escaped, f"{len(_escaped)} escapes, first {_escaped[:3]}")
+        _still = pdf_map.map_canvas(None, CLOUD)
+        _still.show()
+        _still.resize(700, 460)
+        _app.processEvents()
+        _still._ensure_fit(700.0, 460.0)
+        check("...while the STILL canvas (the Library's dock, Pouya's "
+              "explicit call) keeps K-158's tighter crop, because it "
+              "only ever shows the one pose",
+              _still._vp.scale > _spin2._vp.scale * 1.05,
+              f"still {_still._vp.scale:.1f} vs rotating "
+              f"{_spin2._vp.scale:.1f}")
+        _still.hide()
+        _spin2.hide()
+
+        # ---- the frame budget ----
+        # Pouya, unprompted, on K-158: "you've made it a lot faster."
+        # That is a floor. The threshold here is deliberately loose —
+        # it exists to catch an order-of-magnitude regression (an
+        # antialiased glowing stroke layer measures 6-40 ms), not to
+        # police a tenth of a millisecond on a shared machine.
+        _bud = pdf_map.map_canvas(None, CLOUD)
+        _bud.show()
+        _bud.resize(900, 640)
+        _app.processEvents()
+        _bud._reduce_motion = lambda: True
+        _bud._ensure_fit(900.0, 640.0)
+        _bud._selected = "lec1"
+        _bimg = _QtG.QImage(900, 640, _QtG.QImage.Format.Format_ARGB32)
+        for _ in range(5):
+            _bimg.fill(0)
+            _bud.render(_bimg)
+        _times = []
+        for _ in range(25):
+            _bimg.fill(0)
+            _t0 = time.perf_counter()
+            _bud.render(_bimg)
+            _times.append((time.perf_counter() - _t0) * 1000.0)
+        _times.sort()
+        _median = _times[len(_times) // 2]
+        check("a focused frame stays well inside the budget K-158 set "
+              "and K-174 had to keep: measured on this machine at "
+              "28,670 notes and 900x640, 1.83 ms at rest / 3.26 "
+              "focused / 4.04 focused with the camera turned before "
+              "this card, and 1.32 / 1.82 / 1.79 after",
+              _median < 8.0, f"median {_median:.2f} ms over 25 frames")
+        _bud.hide()
+
+        # The coupling K-174 found by walking into it.
+        _amb90, _lk90, _pos90, _t90, _s90 = pdf_map.split_cloud(
+            _FLYG, cap=420, per_pdf=90)
+        _amb140, _lk140, _pos140, _t140, _s140 = pdf_map.split_cloud(
+            _FLYG, cap=420, per_pdf=140)
+
+        def _target_scale(pts, trim):
+            _b = pdf_map.trimmed_bounds(pts, trim)
+            _c = [(_b[0] + _b[3]) / 2, (_b[1] + _b[4]) / 2,
+                  (_b[2] + _b[5]) / 2]
+            _pd = pdf_map.FLY_PADDING
+            _bb = tuple(_c[i % 3] + (_b[i] - _c[i % 3]) * _pd
+                        for i in range(6))
+            return pdf_map.frame_bounds(
+                _bb, pdf_map.Camera(), (700.0, 460.0)).scale
+
+        _floor = pdf_map.frame_bounds(
+            pdf_map.trimmed_bounds(
+                [pdf_map.row_xyz(n) for n in _FLYG["notes"]],
+                pdf_map.FIT_TRIM),
+            pdf_map.Camera(), (700.0, 460.0)).scale
+        check("SAMPLE_PER_PDF is COUPLED TO FLY_TRIM, silently, and "
+              "this is the pin that says so. The flight frames the "
+              "SAMPLE; drawing more of a scattered PDF's matches "
+              "widens the trimmed box until the padded frame passes "
+              "the whole-graph fit and the flight clamps to no zoom at "
+              "all — the exact K-158 bug FLY_TRIM exists to fix. At 90 "
+              "it flies, at 140 it does not, and nothing but a render "
+              "would have told you",
+              _target_scale(_lk90["spread"], pdf_map.FLY_TRIM) > _floor
+              and _target_scale(_lk140["spread"], pdf_map.FLY_TRIM) < _floor
+              and _target_scale(_lk140["spread"], 0.15) > _floor,
+              f"floor {_floor:.1f}; 90 -> "
+              f"{_target_scale(_lk90['spread'], pdf_map.FLY_TRIM):.1f}, "
+              f"140 -> "
+              f"{_target_scale(_lk140['spread'], pdf_map.FLY_TRIM):.1f}, "
+              f"140 at trim .15 -> "
+              f"{_target_scale(_lk140['spread'], 0.15):.1f}")
 
         _dock._vp = pdf_map.pan_by(_dock._vp, -5000.0, -5000.0)
         check("select() on the bare canvas is the dock's whole "

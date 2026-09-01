@@ -100,21 +100,24 @@ normalized to its outliers. ``fog_shades`` spends the ramp on the
 cloud's own depth histogram instead; the synthetic uniform cube it was
 first tuned on hid that completely.
 
-Motion. The standalone window sways slowly around ``REST_ANGLE`` (not a
-full spin: a spin sweeps through the edge-on pose where the cloud
-collapses to a line, and past ~60 degrees the depth quantization starts
-to show as slabs). The Library's dock renders the SAME scene STILL —
-Pouya's explicit call, so nothing moves in the corner of his eye while he
-works — which is why idle rotation is opt-in per host and the window is
-the only caller. Clicking a PDF flies the camera to its own cluster
-(``fly_to``, a ``QPropertyAnimation`` on OutCubic — md3_switch's shape);
-``select_pdf``, the PDF viewer's seam, keeps its gentler K-138 contract
-and never rearranges your view of a file you just opened. Anki's Reduce
-Motion preference stops the sway and lands the flight in one frame; the
-scene stays 3D, perspective and fog either way. And the rotation timer is
-armed from ``showEvent`` through a child timer, never from the
-constructor: md3_switch documents the SIGSEGV that repainting a widget
-mid-composite causes.
+Motion. The standalone window turns slowly through a FULL revolution
+(K-174 — see below; K-148 shipped a 0.42 rad sway here and both of its
+reasons were checked and found not to hold for this cloud). The
+Library's dock renders the SAME scene STILL — Pouya's explicit call, so
+nothing moves in the corner of his eye while he works — which is why
+idle rotation is opt-in per host and the window is the only caller, and
+why the FIT is per host too: a rotating canvas frames the swept box
+(``sweep_bounds``) so nothing walks out of the card mid-turn, while the
+still dock keeps the tighter single-pose crop. Clicking a PDF flies the
+camera to its own cluster (``fly_to``, a ``QPropertyAnimation`` on
+OutCubic — md3_switch's shape); ``select_pdf``, the PDF viewer's seam,
+keeps its gentler K-138 contract and never rearranges your view of a
+file you just opened. Anki's Reduce Motion preference stops the
+rotation and lands the flight in one frame; the scene stays 3D,
+perspective and fog either way. And the rotation timer is armed from
+``showEvent`` through a child timer, never from the constructor:
+md3_switch documents the SIGSEGV that repainting a widget mid-composite
+causes.
 
 Opening the map no longer freezes Anki (K-144, absorbed here). The window
 appears immediately showing ``BUILDING_TEXT`` and a ``QueryOp`` worker
@@ -142,12 +145,11 @@ So five things changed, and the first two REVERSE K-138 and K-148.
    restores K-138's draw-everything path, because "how many is legible"
    is a tuning question whose answer will move.
 2. **The dots emit light.** Cached radial-gradient sprites, blitted
-   additively, on the DARK palette in both themes — a glow on white is a
-   smudge, and K-148's light-mode render was exactly that. Depth drives
-   brightness AND saturation, so the far face of the cloud sinks into
-   the ground as a cold navy while the near face burns near-white.
-3. **The connections are the point.** A PDF's beams are trails of the
-   same sprites, leaving the node's rim and bowing outward. K-148 drew
+   additively, on the DARK palette in both themes. **K-174 deleted the
+   sprites and kept the dark palette** — see below.
+3. **The connections are the point.** A PDF's beams were trails of the
+   same sprites, leaving the node's rim and bowing outward; K-174
+   replaced them with crisp lines and kept the diagnosis. K-148 drew
    1px lines at 0.25 alpha: measured on the exact frame Pouya
    screenshotted, that whole layer moved 0.59% of the pixels — the gate
    WAS firing (its label, which shares the gate, was drawn in the same
@@ -164,6 +166,73 @@ So five things changed, and the first two REVERSE K-138 and K-148.
    native QToolTip carrying the same name fought it for the same corner.
    ``clamp_label`` has the last word on placement, because a clipped
    name has been reported three times in this module.
+
+**K-174: a constellation, hard-edged, turning.** Pouya, with
+aalampour.com open: "See how there's a constellation type of thing...
+That's what I want for the graph. I don't want these glowy things. I
+also want it to be 3D. I want each node on the graph to be just
+randomly interconnected... I like the shininess of the PDFs. I like
+that. For all the node connections with everything else, I don't like
+the blurry stuff. Just have it rotate slowly in 3D."
+
+The reference was MEASURED off its own canvas rather than described,
+and one number decides the whole look: at the star threshold the
+longest run of lit pixels in a row is FOUR DEVICE px on a 2x surface —
+one to two CSS px — with no skirt of mid-brightness pixels around it. A
+glow sprite cannot produce that, because its falloff IS a long run of
+mid-brightness pixels. Star blobs there are 2 device px in area at the
+median and 23 at the very largest, and lit pixels are 0.006% of the
+canvas at that threshold. Two further findings corrected the brief the
+card was written from: the stars are NOT pure white on the glass (zero
+pixels at the star threshold are 255/255/255; they read 214/222/248 and
+215/215/213, so the palette's own text token is the right family and
+this file still invents no colour), and depth there is carried by ALPHA
+only because a canvas floating over a CSS nebula has no ground of its
+own to mix into.
+
+So, in this file:
+
+- The glow-sprite cache, its tiers and its alphas are GONE. A star is a
+  square-capped, non-antialiased, OPAQUE pen of one to three pixels
+  through ``drawPoints`` — one C++ call per depth band, and the last
+  per-point Python on the cloud's paint path went with the sprites.
+  Depth is ``star_colour`` (brightness) and ``star_size`` (1..3 px) and
+  nothing else. Re-measured rather than inherited, because K-158 chose
+  sprites over dots for a GLOW: at 520 stars over 200 bands, 900x640,
+  the sprite blit is 0.341 ms and the hard drawPoints is 0.28-0.31 ms
+  at every pen width in the range.
+- The particle beams are GONE. Both connection layers —
+  ``_paint_constellation`` and ``_paint_edges`` — are crisp 1px
+  non-antialiased lines in batched ``drawLines``. K-158's 6.35 ms (and
+  39.8 ms for one PDF's full 2,087 edges) was the AA rasterizer, whose
+  price is the stroke's device-space AREA: never the composition mode
+  (Plus 18.08 vs SourceOver 18.74 on the same strokes) and never the
+  call count (per-edge drawLine and batched drawLines measure 0.154 vs
+  0.153 ms at 260 segments). Hard: 0.092 ms for 90 spokes, 2.51 ms for
+  all 2,087.
+- ``constellation_links`` adds the random interconnections, seeded from
+  the drawn cloud (``link_seed``, hand-folded because Python randomizes
+  ``hash()`` per process) so a collection always draws the same figure.
+  Nearest-neighbour, after rendering the alternative: uniformly random
+  chords are a cross-hatch that buries the cloud and the PDF nodes.
+- The sway became a full REVOLUTION (``ROTATE_PERIOD_MS``), and the fit
+  that has to survive it became ``sweep_bounds``.
+- **The PDF nodes still glow, on purpose.** "I like the shininess of
+  the PDFs. I like that." A handful of nodes a frame can afford a real
+  radial gradient; 28,670 notes cannot, and a field where everything
+  shines has nothing special in it.
+- **The map stays a night sky in BOTH themes.** Inverting to dark
+  points on a light ground was the live alternative and it throws away
+  exactly the thing he singled out — a light source on white is a
+  smudge. Only the card's own border follows the app's palette.
+
+Measured on this machine, 28,670 notes, offscreen, at 900x640:
+1.83 ms at rest / 3.26 focused on the 2,087-match PDF / 4.04 focused
+with the camera turned BEFORE this card; 1.32 / 1.82 / 1.79 after. The
+frame is now dominated by ``DEPTH_BANDS`` rather than by the point
+count — at the sampled few hundred, ~250 non-empty bands hold about
+three points each, so the per-band matrix is most of the 1.2 ms the
+star layer costs. That matters only if ``SAMPLE_NOTES`` moves.
 
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (the camera, depth bands and fog ramp included:
@@ -207,6 +276,7 @@ itself: ``set_idle_rotation(want)`` (opt-in, window only) and
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
 
@@ -292,14 +362,32 @@ CAM_W_FLOOR = 0.2
 # explicit call: no idle spin while he works). A dock that never moves
 # has to read as 3D in a single frame, and this is the yaw that does it.
 REST_ANGLE = 0.30
-# Idle rotation: a slow sway around REST_ANGLE, not a full spin. A spin
-# sweeps through the edge-on pose where a flat-ish cloud collapses to a
-# line — and past ~60 degrees the depth quantization below starts to
-# show as slabs. A sway keeps constant parallax, never flattens, and is
-# what "slightly rotate" actually asks for.
-IDLE_SWING = 0.42
-IDLE_PERIOD_MS = 24000.0
-IDLE_TICK_MS = 33  # ~30 fps; the whole frame measures 2.9 ms
+# Idle motion is a FULL TURN since K-174 — Pouya: "just have it rotate
+# slowly in 3D". K-148 shipped a 0.42 rad sway instead, on two worries
+# that were both checked here and are both wrong for this cloud. "A spin
+# sweeps through the edge-on pose where the cloud collapses to a line"
+# is true of a PLANE, and a PCA cloud is not one: at a quarter turn you
+# are looking down the first component at the second and third, which
+# are narrower but not flat, so the field breathes rather than
+# collapsing (rendered at 12 poses). "Past ~60 degrees the depth
+# quantization shows as slabs" was true of 256 bands of GLOW SPRITES,
+# whose overlapping halos made a slab a visible plane of light; a slab
+# of 1-3px hard points is 1-3px of hard points.
+#
+# One full revolution per ROTATE_PERIOD_MS. 72 s is 5 degrees a second
+# and 0.17 degrees a tick: at the reference's calm, and slow enough
+# that the picture never appears to move while you look straight at it.
+ROTATE_PERIOD_MS = 72000.0
+IDLE_TICK_MS = 33  # ~30 fps; the whole frame measures 1.0-1.5 ms (K-174)
+# How many poses the rotating fit has to hold. The graph's screen
+# extent changes with the pose — a [-1,1] box is ~41% wider at the
+# diagonal than face-on — so a fit computed at one angle lets the cloud
+# swing out of the card a quarter turn later. sweep_bounds unions the
+# camera-plane box over a full turn at this resolution — 24 steps is
+# every 15 degrees — and pads for what the sampling still misses; at
+# this count the pad is 1.7% of the frame, and containment was
+# verified over 300 random boxes at 360 poses each.
+SWEEP_STEPS = 24
 # Never repaint into a window that is still being composited — md3_switch
 # documents the SIGSEGV that causes (QBackingStore::flush on a paint
 # device that does not exist yet). The canvas arms its timer from
@@ -361,96 +449,145 @@ SAMPLE_NOTES = 420
 # ...and how many of a PDF's OWN matched notes are drawn on top of that
 # sample. These are the notes its edges land on, so they must be drawn
 # or the connections would end in empty space. 0 means every match.
+#
+# **This constant is COUPLED TO FLY_TRIM and the coupling is silent**
+# (found by raising it on K-174). ``_fly_target`` frames the SAMPLE,
+# trimmed by FLY_TRIM and then padded by FLY_PADDING, and clamps at
+# the whole-graph fit — so for a PDF whose matches are scattered over
+# the collection, drawing MORE of them widens the trimmed box until
+# the padded frame exceeds the graph and the flight clamps to "no
+# zoom at all", which is the exact K-158 bug FLY_TRIM exists to fix.
+# Measured on a 400-match uniform fixture: 90 samples fly at 1.14x,
+# 110 and 140 clamp at 1.00x, and 200 flies again. Raising this
+# without raising FLY_TRIM alongside it silently deletes the flight;
+# tests/test_pdf_map.py pins the pair.
 SAMPLE_PER_PDF = 90
 # The sample is an even STRIDE over the graph's own order, never a
 # random draw: a stride thins a cloud uniformly (so its shape survives),
 # it is deterministic (the map looks the same every time you open it),
 # and it is what projection.py already does to pick its fit rows.
+
+# ── K-174: the constellation ────────────────────────────────────────────
+# THE finding, measured off aalampour.com's own canvas rather than
+# guessed at: at the star threshold the longest run of lit pixels in a
+# row is FOUR DEVICE px on a 2x canvas — one to two CSS px — and there
+# is no skirt of mid-brightness pixels around it. A glow sprite cannot
+# produce that, because its falloff IS a long run of mid-brightness
+# pixels. Star blobs there are 2 device px in area at the median and 23
+# at the very largest; lit pixels are 0.006% of the canvas at the star
+# threshold. So a star here is a HARD POINT of one to three pixels with
+# no halo at all, and depth is carried by SIZE and BRIGHTNESS.
 #
-# Glow. K-148 measured round dots at 16x square and alpha fog at 5x
-# opaque and chose flat square chips — correct at 28,668 notes, and no
-# longer a constraint at a few hundred. Re-measured here at the sampled
-# count (1100x660, antialiased, this machine): square drawPoints
-# 0.27 ms, round drawPoints 0.85 ms, per-point QRadialGradient 2.10 ms,
-# and a CACHED gradient sprite blitted per dot 0.42 ms — cheaper than
-# round dots and 5x cheaper than drawing the gradient per point. So the
-# note layer is sprites: build the radial gradient ONCE per tier into a
-# QPixmap, then drawPixmap it. The tiers quantize the fog ramp; a dot's
-# tier is its depth band's fog shade.
-GLOW_TIERS = 14
-# How opaque a star's core and halo are. Not 1.0: the note layer
-# composites ADDITIVELY, so opaque cores saturate to flat white wherever
-# three dots overlap and the cloud's dense middle loses all hue. These
-# were set by rendering, at both canvas sizes — the Library's 545x185
-# dock packs the whole cloud into a thumbnail and blows out first.
-GLOW_CORE_ALPHA = 0.46
-GLOW_HALO_ALPHA = 0.34
-# Core dot radius (px) at the far and near ends of the ramp, and how
-# much bigger than the core the halo sprite is drawn. The sprite is
-# square, GLOW_RATIO * 2 * radius on a side, so keep the ratio modest —
-# it is what the blit actually costs.
-NOTE_R_FAR = 1.0
-NOTE_R_NEAR = 2.7
-GLOW_RATIO = 3.1
-# ...and how much of that a SMALL canvas gets. fit_margin's K-143
-# lesson, one layer down: a dot sized for a 900x640 window is a blot in
-# the Library's 545x185 dock, where the fit packs the whole cloud into
-# about 110px and every star overlaps its neighbours into one white
-# lump. Rendered at both sizes; the dock is what set the floor.
-# Quantized to tenths so a drag of the dock's splitter cannot thrash
-# the sprite cache.
+# Re-measured rather than inherited (K-158 chose sprites over dots on a
+# measurement that was about GLOWS). At 520 stars over 200 bands,
+# 900x640, offscreen, this machine: the K-158 sprite blit is 0.341 ms a
+# frame, a non-antialiased drawPoints is 0.280 ms at pen width 1,
+# 0.312 at 2 and 0.292 at 3 — the pen width is free, so the whole 1-3px
+# range costs the same as one. Antialiasing a POINT is also free
+# (0.309 vs 0.312) and is off anyway: it is what turns a hard point
+# into a soft one.
+STAR_TIERS = 12
+STAR_SIZE_MIN = 1
+STAR_SIZE_MAX = 3
+# > 1 holds the ramp down, so only the nearest tiers reach 3px. Without
+# it a third of the field is 3px and the card carries four times the
+# ink the reference does. At 2.1: tiers 0-4 draw 1px, 5-9 draw 2px,
+# 10-11 draw 3px.
+STAR_SIZE_GAMMA = 2.1
+# The star colour ramp, as mixes of palette tokens (never invented
+# colour). Every star sits on a cool base — the ground lifted toward
+# the accent — and is mixed from there toward the text token by depth,
+# so the far face of the cloud sinks into the ground as a dim blue and
+# the near face lands ON the text token, a near-white. That is not a
+# compromise with the reference: its bright pixels measure 214/222/248
+# and 215/215/213, NOT 255/255/255, and #E0E0E0 over #191919 is that
+# family. Opaque mixes, no alpha anywhere — K-148 measured alpha fog at
+# 5x an opaque ramp for a picture the eye cannot tell apart, and the
+# reference only uses alpha because a canvas over a CSS nebula has no
+# other way to composite.
+STAR_COOL = 0.30
+STAR_FAR = 0.05
+STAR_NEAR = 1.0
+# When a PDF is active the rest of the cloud recedes: mixed this far
+# back toward the ground so the PDF's own notes stand out instead of
+# drowning in everything else.
+STAR_DIM_KEEP = 0.5
+# The active PDF's own notes are drawn one size up and at the top of
+# the brightness ramp — they are what the flight is for.
+STAR_LINK_BOOST = 1
+# ...and how much of the size ramp a SMALL canvas gets. fit_margin's
+# K-143 lesson, one layer down: a dot sized for a 900x640 window is a
+# blot in the Library's 545x185 dock, where the fit packs the whole
+# cloud into about 110px. Quantized to tenths so dragging the dock's
+# splitter cannot thrash anything.
 DOT_SCALE_FULL = 420.0
 DOT_SCALE_FLOOR = 0.55
-# The tier ramp, as mixes of palette tokens (never invented colour).
-# The halo runs from "barely above the ground" at the back to the full
-# accent at the front, so depth drives BOTH brightness and saturation —
-# a far dot is washed into the ground, a near one is hot. The core is
-# that halo mixed toward the text token, so every dot has a pale centre
-# falling off into a coloured halo, which is what emission looks like.
-HALO_DEEP = 0.62
-HALO_FAR = 0.16
-HALO_NEAR = 1.0
-CORE_FAR = 0.10
-CORE_NEAR = 0.75
-# When a PDF is active the rest of the cloud recedes: its tiers are
-# mixed this far back toward the ground so the PDF's own notes stand
-# out instead of drowning in everything else.
-DIM_KEEP = 0.55
-# The active PDF's own notes are drawn hotter and fatter than the
-# ambient cloud — they are what the flight is for.
-LINK_R_BOOST = 1.5
-# Edges as LIGHT, not ink — and as a TRAIL OF PARTICLES rather than a
-# stroke. K-148 drew a single 1px line at 0.25 alpha and, measured on
-# the frame Pouya screenshotted, the whole edge layer moved 0.59% of the
-# pixels: drawn, and invisible, over 28,670 grey chips.
+
+# The random interconnections. Pouya: "I want each node on the graph to
+# be just randomly interconnected... it looks kind of cool." Decorative,
+# and he has twice said the map's purpose is to look cool — but it has
+# to be STABLE, so the seed is derived from the drawn cloud itself
+# (link_seed) and never from process-random hash().
 #
-# Glowing strokes were the obvious replacement and they blow the budget.
-# Measured here, 90 beams at 1100x660: an antialiased two-pass stroke is
-# 6.35 ms and rises to 10.55 ms once zoom makes the beams long, because
-# Qt's cost is the stroke's device-space AREA. The SAME beams as blitted
-# glow sprites are 0.84 ms and — this is the part that matters — the
-# cost does not move with zoom, because the particle count per beam is
-# capped. Turning antialiasing off would also have been fast (2.34 ms)
-# and would have put staircased 1px lines in a view whose whole job is
-# to look like light. Composition mode is irrelevant either way (Plus
-# 18.08 ms vs SourceOver 18.74 on the same strokes) — it was never the
-# blend that was expensive, it was the rasterizer.
-BEAM_STEP = 13.0
-BEAM_MAX = 20
-# Where along the tier ramp a beam's particles start: they grow and
-# brighten from the node outward, so the light reads as travelling.
-BEAM_MIN_TIER = 0.22
-# Beams leave the node's RIM plus this gap, and bow this share of their
-# own length sideways. Both are about the hub: particles converging on
-# one point pile into a white blot and hide the node they are about,
-# and straight spokes read as a diagram where a curve reads as a
-# connection.
+# Two topologies were built and RENDERED. "knn" joins each star to its
+# nearest neighbours within LINK_MAX_SPAN; "chord" draws uniformly
+# random pairs. The chord render is a cross-hatched mess that hides the
+# cloud it is drawn over — every segment crosses the whole card — while
+# the nearest-neighbour render is a constellation. knn ships; chord
+# stays reachable because it is the thing knn has to be better than.
+LINK_MODE = "knn"
+LINK_NEIGHBOURS = 2
+# World units. The drawn cloud spans about [-1, 1], so this is roughly
+# a tenth of the field: far enough to find a partner in the dense
+# middle, short enough that a lonely star in a sparse corner stays
+# lonely instead of reaching across the card.
+LINK_MAX_SPAN = 0.13
+# The cap IS the frame budget, and it is generous: measured here,
+# batched non-antialiased drawLines costs 0.069 ms at 120 segments,
+# 0.153 at 260 and 0.537 at 1000. A seeded shuffle picks which
+# candidates survive the cap, so the surviving figure is irregular
+# rather than "every link in the first corner of the list".
+LINK_MAX = 300
+# Fold constant for link_seed — an arbitrary odd multiplier, present so
+# two clouds that differ only in point order still differ in seed.
+LINK_SEED = 0x4B4C4155
+# How far the constellation line sits from the ground, toward the star
+# colour. Very low on purpose: on the reference the links only appear
+# at all below 10% opacity, and they are the thing you notice second.
+LINK_MIX = 0.15
+# The focused PDF's own spokes, which ARE the point of the focused view
+# and are drawn much brighter than the ambient constellation. Crisp
+# 1px, non-antialiased, one batched drawLines — measured at 0.092 ms
+# for 90 long segments against the 6.35 ms K-158 measured for the
+# antialiased glowing strokes it rejected, and 2.51 ms for all 2,087 of
+# the biggest PDF's edges against K-158's 39.8 ms. The cost was never
+# the composition mode and never the call count: it was the AA
+# rasterizer, whose price is the stroke's device-space AREA.
+EDGE_MIX = 0.55
+# ...and how it TAPERS. Rendered at a flat brightness first: 140 hard
+# lines all converging on one node is a dandelion, and the long reaches
+# carry as much weight as the hub they are about. Split into this many
+# segments per spoke, each dimmer than the last down to EDGE_TAIL of
+# the hub value, the fan is dense and bright where the PDF is and
+# dissolves into the field at the far end — which is also the honest
+# picture, since a far match is a weaker one. Costs one setPen and one
+# batched drawLines per step (0.09 ms for all 140 spokes at three
+# steps), against 6.35 ms for the antialiased glowing version K-158
+# measured and rejected.
+EDGE_TAPER = 3
+EDGE_TAIL = 0.22
+# Spokes leave the node's RIM plus this gap: lines converging on one
+# point swallow the node they are supposed to be about.
 EDGE_HUB_GAP = 3.0
-EDGE_BOW = 0.085
 # A PDF node is a core + halo + ring, never a filled disc. Fractions of
 # the node radius: the lit core, the ring's stroke, and how far the halo
-# reaches past the rim.
+# reaches past the rim. THE ONE THING THAT STILL GLOWS (K-174) —
+# Pouya, in the same breath as "I don't want these glowy things": "I
+# like the shininess of the PDFs. I like that." A few nodes a frame can
+# afford a real radial gradient; twenty-eight thousand notes cannot,
+# and a field where everything shines has nothing special in it.
 NODE_CORE_F = 0.42
+NODE_CORE_MIX = 0.75
 NODE_RING_W = 1.6
 NODE_HALO_F = 3.4
 NODE_SELECT_GAP = 5.0
@@ -458,7 +595,7 @@ NODE_SELECT_GAP = 5.0
 # flat ground token at the corners. One gradient fill a frame (measured
 # at 0.18 ms for 1100x660) — cheaper than caching a full-size pixmap and
 # re-making it on every resize.
-VIGNETTE_LIFT = 0.16
+VIGNETTE_LIFT = 0.05
 VIGNETTE_SPREAD = 0.78
 # A click that moves the mouse this far (px, from where the button went
 # down) is a DRAG; anything less is a click. K-148 compared each
@@ -995,15 +1132,74 @@ def camera_bounds(box: Sequence[float], cam: Camera) -> tuple:
     return (min(us), min(vs), max(us), max(vs))
 
 
+def sweep_bounds(
+    box: Sequence[float], cam: Camera, steps: int = SWEEP_STEPS
+) -> tuple:
+    """``camera_bounds`` unioned over a FULL TURN — what a canvas that
+    rotates has to frame (K-174).
+
+    A box's screen extent depends on the pose: a [-1, 1] cube is about
+    41% wider seen corner-on than face-on, so a fit computed at the
+    resting angle lets the cloud swing out of the card a quarter turn
+    later. Sampled and then PADDED, rather than solved. Under a yaw a
+    point at radius R traces ``u = R cos(theta - phi)``, so the extent
+    is a sinusoid in the angle and N samples undershoot its true peak
+    by about ``1 / cos(pi / N)``. That is the ORTHOGRAPHIC bound and it
+    is not enough here: the perspective divide and an off-centre box
+    between them need about half as much again (measured over 300
+    random boxes and 180 poses each — 1.053 required at 24 steps
+    against the bound's 1.035, and 74 of 800 box/step pairs overflowed
+    a bare 1/cos pad). Squaring it holds at SWEEP_STEPS on every one of
+    300 random boxes at 360 poses, and costs 1.7% of the frame. The
+    alternative, the analytic swept hull of a box under a perspective
+    divide, is a page of algebra to save twenty-three calls that happen
+    once per fit.
+
+    ``steps <= 1`` degrades to the single-pose box, which is what the
+    Library's dock (still, never rotating) actually wants.
+    """
+    n = int(_num(steps, SWEEP_STEPS))
+    if n <= 1:
+        return camera_bounds(box, cam)
+    us0: list = []
+    vs0: list = []
+    us1: list = []
+    vs1: list = []
+    for i in range(n):
+        pose = Camera(cam.angle + 2.0 * math.pi * i / n, cam.distance)
+        u0, v0, u1, v1 = camera_bounds(box, pose)
+        us0.append(u0)
+        vs0.append(v0)
+        us1.append(u1)
+        vs1.append(v1)
+    u0, v0, u1, v1 = (min(us0), min(vs0), max(us1), max(vs1))
+    pad = 1.0 / max(1e-6, math.cos(math.pi / max(3, n))) ** 2
+    cu = (u0 + u1) / 2.0
+    cv = (v0 + v1) / 2.0
+    return (cu + (u0 - cu) * pad, cv + (v0 - cv) * pad,
+            cu + (u1 - cu) * pad, cv + (v1 - cv) * pad)
+
+
 def frame_bounds(
-    box: Sequence[float], cam: Camera, widget_size: Sequence[float]
+    box: Sequence[float],
+    cam: Camera,
+    widget_size: Sequence[float],
+    sweep: int = 0,
 ) -> Viewport:
     """The viewport that frames a 3D box at this camera pose — the ONE
-    path every fit takes (initial, Fit button, click-to-fly), so the
-    compact-canvas margin cap reaches all of them."""
-    return fit_to_view(
-        camera_bounds(box, cam), widget_size, fit_margin(widget_size)
+    path every fit takes (initial, Fit button, Escape, click-to-fly), so
+    the compact-canvas margin cap reaches all of them.
+
+    ``sweep`` > 1 frames the box over that many poses of a full turn
+    instead of the one it is in (K-174: an idle-rotating canvas has to
+    fit every pose it will show, not the pose it happens to start in).
+    The default 0 is the single-pose fit the still dock wants.
+    """
+    box2 = (
+        sweep_bounds(box, cam, sweep) if int(_num(sweep, 0.0)) > 1
+        else camera_bounds(box, cam)
     )
+    return fit_to_view(box2, widget_size, fit_margin(widget_size))
 
 
 def lerp_viewport(
@@ -1230,58 +1426,225 @@ def caption_text(pdf_count: int, note_total: int, shown: int) -> str:
     return out
 
 
-def tier_index(shade: float, tiers: int = GLOW_TIERS) -> int:
-    """Which glow tier a band's fog shade falls in.
+def tier_index(shade: float, tiers: int = STAR_TIERS) -> int:
+    """Which star tier a band's fog shade falls in.
 
-    The sprite cache is per TIER, not per band: 256 bands would mean 256
-    pixmaps for a ramp the eye reads as a dozen steps. Clamps rather
-    than raises, because this is on the paint path.
+    The colour/size lookup is per TIER, not per band: 256 bands would
+    mean 256 pens for a ramp the eye reads as a dozen steps. Clamps
+    rather than raises, because this is on the paint path.
     """
-    t = int(_num(tiers, GLOW_TIERS))
+    t = int(_num(tiers, STAR_TIERS))
     if t <= 1:
         return 0
     i = int(_clamp(_num(shade), 0.0, 1.0) * t)
     return t - 1 if i >= t else i
 
 
-def tier_position(index: int, tiers: int = GLOW_TIERS) -> float:
+def tier_position(index: int, tiers: int = STAR_TIERS) -> float:
     """Where a tier sits on the far->near ramp, in [0, 1] — its middle,
     so the ends are not forced to exactly 0 and 1 by an off-by-one."""
-    t = int(_num(tiers, GLOW_TIERS))
+    t = int(_num(tiers, STAR_TIERS))
     if t <= 1:
         return 1.0
     return _clamp((int(_num(index)) + 0.5) / t, 0.0, 1.0)
 
 
-def tier_colours(c: dict, pos: float, dim: bool = False) -> tuple:
-    """``(halo, core)`` hex for a tier at ramp position ``pos``.
+def star_colour(c: dict, pos: float, dim: bool = False) -> str:
+    """One OPAQUE hex for a star at ramp position ``pos`` (K-174).
 
-    Both are mixes of palette TOKENS, so the whole star field re-colours
-    with the accent theme and this file still names no colour of its
-    own. The halo runs from a shade barely above the ground at the back
-    to the full accent at the front — depth drives brightness AND
-    saturation, because mixing toward a grey ground desaturates as it
-    darkens. The core is that halo mixed toward the text token: a pale
-    centre falling off into a coloured halo, which is what a light
-    source looks like and what a flat chip never will.
+    A mix of palette TOKENS, so the whole field re-colours with the
+    accent theme and this file still names no colour of its own. Every
+    star sits on a cool base — the ground lifted toward the accent —
+    and travels from there toward the text token, so the far face of
+    the cloud sinks into the ground as a dim blue while the near face
+    lands exactly ON ``text``, the palette's near-white.
 
-    ``dim`` mixes both back toward the ground — the ambient cloud while
-    a PDF is active, so its own notes are not lost in everything else.
+    That last part is a measurement, not a compromise with the house
+    rule. The reference's brightest pixels read 214/222/248 and
+    215/215/213, and NOT ONE of them is 255/255/255 — so the DARK
+    palette's own text token over its own ground is already the right
+    family, and "no invented colour" and the design brief happen to
+    want the same thing.
+
+    Opaque, never alpha: K-148 measured alpha fog at 5x the cost of an
+    opaque mix against the ground, for a picture the eye cannot tell
+    apart. The reference reaches for alpha only because a canvas
+    floating over a CSS nebula has no ground of its own to mix into.
+
+    ``dim`` mixes back toward the ground — the ambient field while a
+    PDF is focused, so its own notes are not lost in everything else.
     """
     t = _clamp(_num(pos), 0.0, 1.0)
     ground = c["bg"]
-    # Navy at the back, accent at the front: the ramp travels through
-    # HUE as well as brightness, so the far face of the cloud sinks into
-    # the ground as a cold deep blue instead of a grey version of the
-    # near face. Three accent-family tokens, no invented colour.
-    deep = blend_hex(ground, c["blue_pressed"], HALO_DEEP)
-    halo = blend_hex(deep, c["blue_bright"],
-                     HALO_FAR + (HALO_NEAR - HALO_FAR) * t)
-    core = blend_hex(halo, c["text"], CORE_FAR + (CORE_NEAR - CORE_FAR) * t)
+    base = blend_hex(ground, c["blue_bright"], STAR_COOL)
+    out = blend_hex(base, c["text"], STAR_FAR + (STAR_NEAR - STAR_FAR) * t)
     if dim:
-        halo = blend_hex(ground, halo, DIM_KEEP)
-        core = blend_hex(ground, core, DIM_KEEP)
-    return (halo, core)
+        out = blend_hex(ground, out, STAR_DIM_KEEP)
+    return out
+
+
+def edge_mix(index: int, steps: int = EDGE_TAPER) -> float:
+    """How far from the ground a focused PDF's spoke is painted, for
+    segment ``index`` of ``steps`` along its length (K-174).
+
+    The taper, as one number, so the ramp is testable without a render
+    and the painter cannot grow a second copy of it. Brightest at the
+    hub and falling to ``EDGE_TAIL`` of that at the tip: 90 hard lines
+    all converging on one node is a dandelion whose far ends carry as
+    much weight as the node they are about — rendered flat first, which
+    is how that was found. It is also the honest picture, since a match
+    at the far end of the cloud is a weaker one.
+    """
+    n = max(1, int(_num(steps, EDGE_TAPER)))
+    i = int(_clamp(_num(index), 0.0, float(n - 1)))
+    fade = 1.0 if n == 1 else 1.0 - i / (n - 1.0)
+    return EDGE_MIX * (EDGE_TAIL + (1.0 - EDGE_TAIL) * fade)
+
+
+def star_size(pos: float, scale: float = 1.0) -> int:
+    """A star's side in WHOLE pixels, 1..3 (K-174) — the hard half of
+    how depth reads now that nothing blurs.
+
+    Integers because the point is drawn with a square-capped pen and no
+    antialiasing: a fractional width is resolved by Qt into a soft
+    edge, which is the exact thing the reference does not have.
+    ``STAR_SIZE_GAMMA`` holds the ramp down so only the nearest tiers
+    reach 3px — the reference's median blob is 2 device pixels on a 2x
+    canvas, so a field of uniformly 3px stars carries four times its
+    ink.
+    """
+    t = _clamp(_num(pos), 0.0, 1.0) ** max(0.05, STAR_SIZE_GAMMA)
+    px = STAR_SIZE_MIN + (STAR_SIZE_MAX - STAR_SIZE_MIN) * t
+    px *= _clamp(_num(scale, 1.0), 0.05, 1.0)
+    return int(_clamp(round(px), STAR_SIZE_MIN, STAR_SIZE_MAX))
+
+
+def link_seed(points: Sequence, salt: int = LINK_SEED) -> int:
+    """A stable seed derived from the DRAWN CLOUD itself (K-174).
+
+    The constellation must be the same figure every time a collection
+    opens — re-rolled per frame the field shimmers, and a shimmering
+    field reads as a bug rather than as a sky — and a different figure
+    for a different collection. ``hash()`` cannot do either: Python
+    randomizes str/bytes hashing per process, so the same library would
+    draw a different constellation every launch. This folds the
+    quantized coordinates by hand instead.
+
+    Quantized to 1e-4 so a float that round-trips through the on-disk
+    JSON cannot change the seed, and masked to 32 bits so the value is
+    the same on every build.
+    """
+    h = int(salt) & 0xFFFFFFFF
+    for pt in points:
+        try:
+            x, y, z = (float(v) for v in pt[:3])
+        except (TypeError, ValueError, IndexError):
+            continue
+        for v in (x, y, z):
+            h = (h * 16777619 + (int(round(v * 10000.0)) & 0xFFFFFFFF))
+            h &= 0xFFFFFFFF
+    return h
+
+
+def constellation_links(
+    points: Sequence,
+    mode: str = LINK_MODE,
+    neighbours: int = LINK_NEIGHBOURS,
+    cap: int = LINK_MAX,
+    max_span: float = LINK_MAX_SPAN,
+) -> list:
+    """The decorative interconnections, as index pairs into ``points``.
+
+    Pouya, K-174: "I want each node on the graph to be just randomly
+    interconnected... it looks kind of cool." Purely decorative — it
+    says nothing about the embedding — and he has twice said the map's
+    job is to look cool, so that IS the requirement.
+
+    Two topologies, both built and both RENDERED before choosing:
+
+    - ``"knn"``: each point joined to its ``neighbours`` nearest
+      partners within ``max_span``. Short segments that trace the local
+      shape of the cloud — this is what reads as a constellation, and
+      it is also the only version of this decoration that tells a small
+      truth about the data underneath it.
+    - ``"chord"``: uniformly random pairs. Every segment crosses the
+      whole card and the cloud disappears behind a cross-hatch. Kept
+      reachable because it is the thing ``knn`` has to be better than,
+      and because "randomly interconnected" could have meant it.
+
+    Deterministic in both modes: the RNG is seeded from the points
+    themselves. The seeded shuffle BEFORE the cap matters — keeping the
+    first ``cap`` candidates in index order piles every surviving
+    segment into whichever corner of the cloud the sample listed first.
+
+    Returns sorted unique ``(i, j)`` pairs with ``i < j``.
+    """
+    n = len(points)
+    limit = int(_num(cap, 0.0))
+    if n < 2 or limit <= 0:
+        return []
+    rng = random.Random(link_seed(points))
+    pairs: set = set()
+    if mode == "chord":
+        # Bounded: a random draw over n^2 pairs is a lottery with
+        # replacement, so ask for a few more than the cap and stop.
+        for _ in range(limit * 3):
+            if len(pairs) >= limit:
+                break
+            i = rng.randrange(n)
+            j = rng.randrange(n)
+            if i != j:
+                pairs.add((i, j) if i < j else (j, i))
+    elif mode == "knn":
+        span = max(0.0, _num(max_span, LINK_MAX_SPAN))
+        k = max(1, int(_num(neighbours, LINK_NEIGHBOURS)))
+        # A uniform grid keyed on the span, so the build is linear in
+        # the cloud rather than quadratic. SAMPLE_NOTES = 0 is still a
+        # supported setting and it hands this every note in the
+        # collection: 28,670 points squared is 400 million distance
+        # evaluations, on the main thread, while the window opens.
+        cell = span if span > 1e-6 else 1.0
+        grid: dict = {}
+        pts: list = []
+        for idx, pt in enumerate(points):
+            try:
+                x, y, z = (float(v) for v in pt[:3])
+            except (TypeError, ValueError, IndexError):
+                pts.append(None)
+                continue
+            pts.append((x, y, z))
+            grid.setdefault(
+                (int(x // cell), int(y // cell), int(z // cell)), []
+            ).append(idx)
+        span2 = span * span
+        for i, a in enumerate(pts):
+            if a is None:
+                continue
+            cx = int(a[0] // cell)
+            cy = int(a[1] // cell)
+            cz = int(a[2] // cell)
+            near: list = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for dz in (-1, 0, 1):
+                        for j in grid.get((cx + dx, cy + dy, cz + dz), ()):
+                            if j == i:
+                                continue
+                            b = pts[j]
+                            d = ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+                                 + (a[2] - b[2]) ** 2)
+                            if d <= span2:
+                                near.append((d, j))
+            near.sort()
+            for _d, j in near[:k]:
+                pairs.add((i, j) if i < j else (j, i))
+    else:
+        return []
+    out = sorted(pairs)
+    if len(out) > limit:
+        rng.shuffle(out)
+        out = sorted(out[:limit])
+    return out
 
 
 def dot_scale(widget_size: Sequence[float]) -> float:
@@ -1292,7 +1655,7 @@ def dot_scale(widget_size: Sequence[float]) -> float:
     size the fit packs the whole cloud into roughly 110px — where a dot
     sized for the standalone window overlaps its neighbours into one
     white lump. Quantized to tenths so dragging the dock's splitter
-    cannot thrash the sprite cache.
+    cannot thrash the pen cache.
     """
     try:
         smaller = min(float(widget_size[0]), float(widget_size[1]))
@@ -1301,15 +1664,6 @@ def dot_scale(widget_size: Sequence[float]) -> float:
     if smaller != smaller or smaller <= 0:  # NaN or no surface yet
         return 1.0
     return _clamp(round(smaller / DOT_SCALE_FULL, 1), DOT_SCALE_FLOOR, 1.0)
-
-
-def tier_radius(pos: float, boost: float = 1.0) -> float:
-    """The core dot radius (px) for a tier — the near face of the cloud
-    is chunkier than the far face, which is the size half of depth."""
-    t = _clamp(_num(pos), 0.0, 1.0)
-    return (NOTE_R_FAR + (NOTE_R_NEAR - NOTE_R_FAR) * t) * max(
-        0.1, _num(boost, 1.0)
-    )
 
 
 def recenter_for(
@@ -1549,10 +1903,10 @@ def _canvas_class():
         from aqt.qt import (
             QColor,
             QEasingCurve,
+            QLineF,
             QPainter,
             QPainterPath,
             QPen,
-            QPixmap,
             QPointF,
             QPolygonF,
             QPropertyAnimation,
@@ -1611,8 +1965,8 @@ def _canvas_class():
                 safe: self._make_bands(pts)
                 for safe, pts in self._link_pts.items()
             }
-            self._sprites: dict = {}
-            self._sprite_key = None
+            self._pens: dict = {}
+            self._pen_key = None
             # ONE fog ramp for both band sets, spent on the COMBINED
             # depth histogram (fog_shades' K-148 lesson: a PCA score is
             # Gaussian-ish, so a ramp keyed on z comes out one flat
@@ -1623,6 +1977,47 @@ def _canvas_class():
                 for idx, _zb, poly in group:
                     hist[idx] += poly.count()
             self._fog = fog_shades(hist)
+            # ---- K-174: the constellation ----
+            # ONE flat draw list over every band of every group, sorted
+            # by depth so band_order still gives painter's order across
+            # the whole cloud rather than only inside one group. Each
+            # entry is (band index, band z, polygon, owning PDF or
+            # None), and its position in this list is the SLOT the
+            # constellation's endpoints refer to.
+            self._draw: list = [
+                (idx, zb, poly, None) for idx, zb, poly in self._bands
+            ]
+            for safe, group in self._link_bands.items():
+                self._draw.extend(
+                    (idx, zb, poly, safe) for idx, zb, poly in group
+                )
+            self._draw.sort(key=lambda t: t[0])
+            # The constellation is built over EVERY drawn point,
+            # ambient and matched alike — a PDF's own notes floating
+            # unconnected inside a linked field would read as a hole.
+            # Endpoints are stored as (slot, index-in-that-polygon)
+            # pairs, resolved once here, so the per-frame cost is two
+            # QPolygonF lookups and one QLineF per segment and the
+            # projection stays in C++ where K-138 put it.
+            self._links: list = []
+            try:
+                flat: list = []
+                addr: list = []
+                for slot, (_idx, _zb, poly, _safe) in enumerate(self._draw):
+                    for k in range(int(poly.count())):
+                        pt = poly.at(k)
+                        flat.append((pt.x(), pt.y(), _zb))
+                        addr.append((slot, k))
+                self._links = [
+                    (addr[i][0], addr[i][1], addr[j][0], addr[j][1])
+                    for i, j in constellation_links(flat, LINK_MODE)
+                ]
+            except Exception as exc:
+                # Decoration, and the only thing here that walks the
+                # polygons point by point. A map with no constellation
+                # is still a map; a canvas that failed to construct is
+                # a hole in the Library.
+                print(f"[klausmate] map constellation unavailable: {exc}")
             # The fit frames what is DRAWN, trimmed of its wildest
             # outliers (K-158). graph_bounds measures all 28,670 raw
             # positions, and projection normalizes each axis to its own
@@ -1807,12 +2202,18 @@ def _canvas_class():
                 if not self.isVisible():
                     self._idle.stop()
                     return
-                self._phase += 2.0 * math.pi * IDLE_TICK_MS / IDLE_PERIOD_MS
+                # A FULL TURN since K-174, not K-148's sway: the phase
+                # IS the yaw, wrapped, so nothing ever eases or
+                # reverses. band_order already flips the painter's
+                # order on the sign of cos(angle), which is what makes
+                # a whole revolution legal at all — without it the far
+                # half of the cloud would paint over the near half
+                # every quarter turn.
+                self._phase += 2.0 * math.pi * IDLE_TICK_MS / ROTATE_PERIOD_MS
                 if self._phase > 2.0 * math.pi:
                     self._phase -= 2.0 * math.pi
                 self._cam = Camera(
-                    REST_ANGLE + IDLE_SWING * math.sin(self._phase),
-                    self._cam.distance,
+                    REST_ANGLE + self._phase, self._cam.distance
                 )
                 self.update()
             except Exception as exc:
@@ -1881,10 +2282,15 @@ def _canvas_class():
                 cy + (box[4] - cy) * pad, cz + (box[5] - cz) * pad,
             )
             size = (float(self.width()), float(self.height()))
-            target = frame_bounds(box, self._cam, size)
-            floor = frame_bounds(self._bounds, self._cam, size).scale
+            # The same swept rule as the whole-graph fit (K-174): the
+            # flight lands on a cluster that then has to survive a full
+            # revolution, and framing it at the pose it happened to be
+            # clicked in walks it out of the card a few seconds later.
+            sweep = self._sweep()
+            target = frame_bounds(box, self._cam, size, sweep)
+            floor = frame_bounds(self._bounds, self._cam, size, sweep).scale
             if target.scale < floor:
-                target = frame_bounds(self._bounds, self._cam, size)
+                target = frame_bounds(self._bounds, self._cam, size, sweep)
             return target
 
         def fly_to(self, safe: str) -> bool:
@@ -1948,8 +2354,22 @@ def _canvas_class():
             # the bare FIT_MARGIN constant (K-143) — 48px a side is
             # breathing room in the window and half the canvas in the
             # Library's dock — so every fit gets the cap.
-            self._vp = frame_bounds(self._bounds, self._cam, (w, h))
+            self._vp = frame_bounds(
+                self._bounds, self._cam, (w, h), self._sweep()
+            )
             self._did_fit = True
+
+        def _sweep(self) -> int:
+            """How many poses this canvas's fits have to hold (K-174).
+
+            A ROTATING canvas frames the swept box, because it will
+            show every pose of a full turn and a box framed at one
+            angle is ~40% too small at the diagonal — the cloud swings
+            out of the card a quarter turn later. A canvas that never
+            moves (the Library's dock, Pouya's explicit call) frames
+            the one pose it has, and keeps K-158's tighter crop.
+            """
+            return SWEEP_STEPS if self._idle_want else 0
 
         def _ensure_fit(self, w: float, h: float) -> None:
             if not self._did_fit and w > 1 and h > 1:
@@ -2029,64 +2449,18 @@ def _canvas_class():
 
         # ---- painting ----
 
-        @staticmethod
-        def _glow_sprite(halo: str, core: str, radius: float):
-            """One star, pre-rendered: a pale core falling off into a
-            coloured halo, on transparent ground.
+        def _ensure_pens(self, c: dict, scale: float = 1.0) -> None:
+            """Build the star pens — one per (tier, dimmed?, matched?) —
+            once per palette (K-174, replacing the glow-sprite cache).
 
-            THE reason the map can glow at all. K-148 measured round
-            dots at 16x square and alpha fog at 5x opaque and chose flat
-            square chips — right at 28,668 notes, and simply not a
-            constraint at the sampled few hundred. Re-measured at 400
-            dots (1100x660, antialiased): a QRadialGradient drawn PER
-            POINT is 2.10 ms a frame, while building it once into a
-            QPixmap and blitting that per point is 0.42 ms — cheaper
-            even than round drawPoints (0.85 ms), because a blit
-            rasterizes no path at all. So the gradient is built here,
-            once per tier per palette, and the paint path only ever
-            blits.
-            """
-            px = max(4, int(round(radius * 2.0 * GLOW_RATIO)))
-            pm = QPixmap(px, px)
-            pm.fill(QColor(0, 0, 0, 0))
-            p = QPainter(pm)
-            try:
-                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                mid = px / 2.0
-                grad = QRadialGradient(mid, mid, mid)
-                # Semi-transparent on purpose: under additive blending
-                # a fully opaque core saturates to flat white wherever
-                # three dots overlap, and the cloud's dense middle —
-                # the most interesting part of it — loses every trace of
-                # hue. Rendered and confirmed at both canvas sizes; the
-                # dock, which packs the whole cloud into 545x185, blew
-                # out to a featureless white blob.
-                hot = QColor(core)
-                hot.setAlphaF(GLOW_CORE_ALPHA)
-                edge = QColor(halo)
-                edge.setAlphaF(GLOW_HALO_ALPHA)
-                fade = QColor(halo)
-                fade.setAlpha(0)
-                soft = QColor(halo)
-                soft.setAlphaF(GLOW_HALO_ALPHA * 0.45)
-                # Core out to the dot's own radius, then the halo
-                # falling to nothing at the sprite's rim.
-                inner = _clamp(1.0 / (2.0 * GLOW_RATIO), 0.02, 0.45)
-                grad.setColorAt(0.0, hot)
-                grad.setColorAt(inner, hot)
-                grad.setColorAt(min(0.99, inner * 1.9), edge)
-                grad.setColorAt(min(0.995, inner * 3.4), soft)
-                grad.setColorAt(1.0, fade)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(grad)
-                p.drawEllipse(QRectF(0.0, 0.0, float(px), float(px)))
-            finally:
-                p.end()  # K-115: never leave a painter live
-            return pm
-
-        def _ensure_sprites(self, c: dict, scale: float = 1.0) -> None:
-            """Build the star sprites — one per (tier, dimmed?) plus one
-            per tier for a PDF's own notes — once per palette.
+            A star is now a square-capped pen of 1, 2 or 3 px drawn by
+            ``drawPoints`` with antialiasing OFF, so there is nothing to
+            pre-render: the cache holds QPens, not QPixmaps. Re-measured
+            rather than inherited from K-158, which chose sprites over
+            dots for a GLOW: at 520 stars over 200 bands, 900x640, the
+            sprite blit is 0.341 ms a frame and the hard drawPoints is
+            0.28-0.31 ms at every pen width in the range. The pen width
+            is free; what it buys is the reference's hard edge.
 
             Keyed on the palette's actual tokens rather than on
             ``night_mode()``: the map draws in the DARK palette whatever
@@ -2095,22 +2469,41 @@ def _canvas_class():
             colour in the ramp and must rebuild.
             """
             key = (c["bg"], c["blue_bright"], c["text"], scale)
-            if self._sprites and self._sprite_key == key:
+            if self._pens and self._pen_key == key:
                 return
             out: dict = {}
-            for i in range(GLOW_TIERS):
+            for i in range(STAR_TIERS):
                 pos = tier_position(i)
                 for dim in (False, True):
-                    halo, core = tier_colours(c, pos, dim)
-                    out[(i, dim, False)] = self._glow_sprite(
-                        halo, core, tier_radius(pos, scale)
+                    out[(i, dim, False)] = self._star_pen(
+                        star_colour(c, pos, dim), star_size(pos, scale)
                     )
-                halo, core = tier_colours(c, pos)
-                out[(i, False, True)] = self._glow_sprite(
-                    halo, core, tier_radius(pos, LINK_R_BOOST * scale)
+                # A focused PDF's own notes: one size up and at the top
+                # of the brightness ramp, because they are what the
+                # flight is for.
+                out[(i, False, True)] = self._star_pen(
+                    star_colour(c, min(1.0, pos + (1.0 - pos) * 0.6)),
+                    min(STAR_SIZE_MAX, star_size(pos, scale)
+                        + STAR_LINK_BOOST),
                 )
-            self._sprites = out
-            self._sprite_key = key
+            self._pens = out
+            self._pen_key = key
+
+        @staticmethod
+        def _star_pen(hexc: str, px: int):
+            """One hard star: an opaque square-capped pen.
+
+            SquareCap, not RoundCap: ``drawPoints`` draws each point as
+            the pen's cap, and a round cap is a circle Qt has to
+            rasterize as a path (K-148 measured that at 16x a square).
+            A square cap with antialiasing off is a literal N-by-N block
+            of one colour — which is the reference's whole look, where
+            the longest run of lit pixels in a row is three.
+            """
+            pen = QPen(QColor(hexc), float(max(1, int(px))))
+            pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+            return pen
+
 
         def paintEvent(self, _event) -> None:  # noqa: N802 — Qt override
             # No surface yet = nothing safe to paint on.
@@ -2130,12 +2523,16 @@ def _canvas_class():
                 painter.end()
 
         def _paint(self, painter) -> None:
-            # THE MAP IS A LIGHTBOX: it draws in the DARK palette in both
-            # themes (K-158). Emission needs a dark ground — a glow on
-            # white is a smudge, and the light-mode render of K-148 was
-            # exactly that, a grey stain on paper. Still every colour a
-            # theme token, so accent themes recolour the whole star field
-            # for free; only the card's own border follows the app's
+            # THE MAP IS A NIGHT SKY IN BOTH THEMES — K-158 made that
+            # call for emission, and K-174 keeps it for the
+            # constellation, which is the same argument arriving from
+            # the other side. A starfield needs a dark ground; the
+            # alternative on the table was inverting to dark points on
+            # a light one, and that throws away the one thing Pouya
+            # singled out ("I like the shininess of the PDFs"), because
+            # a light source on white is a smudge. Still every colour a
+            # theme token, so accent themes recolour the whole field for
+            # free; only the card's own border follows the app's
             # palette, so the panel edge still belongs to the window it
             # sits in.
             c = theme.palette(True)
@@ -2152,29 +2549,24 @@ def _canvas_class():
             cam = self._cam
             active = active_pdf(self._hover, self._selected)
 
-            self._ensure_sprites(c, dot_scale((w, h)))
-            # Additive light for everything that emits: overlapping
-            # halos STACK into a brighter core instead of flatly
-            # occluding each other, which is what makes a cloud of
-            # points read as a nebula rather than as confetti. Measured
-            # free (0.42 ms either way at 400 dots).
-            painter.setCompositionMode(
-                QPainter.CompositionMode.CompositionMode_Plus
-            )
-            # The ambient field first, dimmed while a PDF is active so
-            # its own notes are not lost in everything else (K-158's
-            # sixth critique: "the blob has no structure").
-            self._blit_bands(painter, vp, cam, self._bands,
-                             dim=bool(active), link=False, w=w, h=h)
-            for safe, bands in self._link_bands.items():
-                self._blit_bands(painter, vp, cam, bands,
-                                 dim=bool(active) and safe != active,
-                                 link=safe == active, w=w, h=h)
-            self._paint_edges(painter, vp, cam, active, w, h)
+            self._ensure_pens(c, dot_scale((w, h)))
+            # ANTIALIASING OFF for the stars and every line (K-174).
+            # This is the look, not an optimisation: an antialiased 1px
+            # point is a soft 2x2 smear, and the reference's defining
+            # measurement is that no run of lit pixels there is longer
+            # than three with nothing around it. Measured free either
+            # way on points (0.309 ms AA against 0.312 without), and
+            # worth 40% on lines (0.153 ms against 0.248 at 260
+            # segments) — so the look is free and the lines are a
+            # bonus. No composition mode either: hard opaque points do
+            # not stack, so SourceOver is correct and Plus was only ever
+            # for halos that no longer exist.
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            mapped = self._paint_stars(painter, vp, cam, active, w, h)
+            self._paint_constellation(painter, c, mapped, active)
+            self._paint_edges(painter, c, vp, cam, active, w, h)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             drawn = self._paint_nodes(painter, c, vp, cam, active, w, h)
-            painter.setCompositionMode(
-                QPainter.CompositionMode.CompositionMode_SourceOver
-            )
             # The name LAST, over every node (K-158). It used to be
             # emitted inside the depth-sorted node loop, right after its
             # own circle — so any PDF that sorted nearer painted its
@@ -2205,61 +2597,110 @@ def _canvas_class():
             clip.addRoundedRect(card, 12.0, 12.0)
             painter.setClipPath(clip)
 
-        def _blit_bands(self, painter, vp, cam, bands, dim, link, w, h) -> None:
-            """One band set, farthest slab first, as pre-rendered stars.
+        def _paint_stars(self, painter, vp, cam, active, w, h) -> list:
+            """The whole note cloud as HARD POINTS, farthest slab first.
 
             Each band's projective QTransform does the rotate +
             perspective + world->screen pass for all of its points in
-            C++ (band_matrix derives it), so the Python cost per frame is
-            the number of BANDS plus one blit per visible dot — never a
-            per-point projection. The transform belongs on the POLYGON,
-            never on the painter: K-138 rendered and confirmed that a
-            painter transform degenerates a point draw at deep zoom, and
-            a painter cannot carry a perspective divide at all.
+            C++ (band_matrix derives it), so the Python cost per frame
+            is the number of BANDS — never a per-point projection. The
+            transform belongs on the POLYGON, never on the painter:
+            K-138 rendered and confirmed that a painter transform
+            degenerates a point draw into long horizontal strokes at
+            deep zoom, and a painter cannot carry a perspective divide
+            at all.
+
+            What changed at K-174 is only what is drawn AT each mapped
+            point: one square-capped, non-antialiased, opaque pen of 1
+            to 3 px through ``drawPoints`` — one C++ call per band —
+            instead of K-158's Python loop blitting a glow sprite per
+            dot. That per-dot loop was the last per-point Python on the
+            cloud's paint path and it is gone.
+
+            Returns the mapped polygons by slot, because the
+            constellation's endpoints live in two different bands and
+            re-projecting them would put the per-point loop back.
             """
-            for i in band_order(cam, len(bands)):
-                idx, zb, poly = bands[i]
-                sprite = self._sprites.get(
-                    (tier_index(self._fog[idx]), dim and not link, link)
-                )
-                if sprite is None:
+            mapped: list = [None] * len(self._draw)
+            for i in band_order(cam, len(self._draw)):
+                idx, zb, poly, safe = self._draw[i]
+                pen = self._pens.get((
+                    tier_index(self._fog[idx]),
+                    bool(active) and safe != active,
+                    safe is not None and safe == active,
+                ))
+                if pen is None:
                     continue
-                half = sprite.width() / 2.0
-                mapped = QTransform(*band_matrix(vp, cam, zb)).map(poly)
-                for k in range(mapped.count()):
-                    pt = mapped.at(k)
-                    x = pt.x()
-                    y = pt.y()
-                    if x < -half or x > w + half or y < -half or y > h + half:
-                        continue  # off-card dots cost nothing but a compare
-                    painter.drawPixmap(int(x - half), int(y - half), sprite)
+                m = QTransform(*band_matrix(vp, cam, zb)).map(poly)
+                mapped[i] = m
+                painter.setPen(pen)
+                painter.drawPoints(m)
+            return mapped
 
-        def _paint_edges(self, painter, vp, cam, active, w, h) -> None:
-            """The connections — the POINT of the view since K-158, and
-            drawn as light rather than as ink.
+        def _paint_constellation(self, painter, c, mapped, active) -> None:
+            """The random interconnections — one batched ``drawLines``.
 
-            Only the hovered/selected PDF's, through ``links_for``
-            (every edge at once is a hairball, and 2,087 of them cost
-            39.8 ms a frame). Each beam is a TRAIL OF GLOW SPRITES, not
-            a stroke: measured at 90 beams, an antialiased two-pass
-            stroke is 6.35 ms and grows to 10.55 ms as zoom lengthens
-            the beams, while the same beams as blitted particles are
-            0.84 ms and do not move with zoom at all, because the
-            particle count per beam is capped. The particles also read
-            better — light travelling along a path rather than a wire
-            drawn between two points.
+            Pouya, K-174: "I want each node on the graph to be just
+            randomly interconnected... it looks kind of cool." The
+            topology and the stability live in ``constellation_links``;
+            this is only the draw, and it is deliberately the cheapest
+            thing on the frame: crisp 1px, no antialiasing, opaque, one
+            call. Measured at 0.153 ms for 260 segments — against the
+            6.35 ms K-158 measured for the antialiased glowing strokes
+            it rejected, which is why "crisp instead of blurry" is not
+            the trade it looked like.
 
-            Each beam LEAVES THE RIM, not the centre, and bows on its
-            way out: particles converging on one point pile into a white
-            blot and swallow the node they are supposed to be about, and
-            straight spokes read as a diagram where a curve reads as a
-            connection. Particles grow and brighten outward along the
-            tier ramp, so the light has a direction.
+            Barely there on purpose. On the reference these links only
+            resolve below 10% opacity: they are what you notice second,
+            after the stars, and a constellation whose lines shout is a
+            wireframe.
+            """
+            if not self._links:
+                return
+            ink = QColor(blend_hex(c["bg"], star_colour(c, 1.0), LINK_MIX))
+            pen = QPen(ink, 1.0)
+            painter.setPen(pen)
+            segs = []
+            for sa, ka, sb, kb in self._links:
+                pa = mapped[sa]
+                pb = mapped[sb]
+                if pa is None or pb is None:
+                    continue
+                segs.append(QLineF(pa.at(ka), pb.at(kb)))
+            if segs:
+                painter.drawLines(segs)
 
-            K-148's edges were 1px at 0.25 alpha, and on the exact frame
-            Pouya screenshotted that whole layer moved 0.59% of the
-            pixels. The gate WAS firing — the label, which shares it,
-            was drawn in the same frame. The edges were simply invisible.
+        def _paint_edges(self, painter, c, vp, cam, active, w, h) -> None:
+            """The focused PDF's own spokes — CRISP LINES since K-174.
+
+            Pouya, pointing at the beams K-158 shipped: "for all the
+            node connections with everything else, I don't like the
+            blurry stuff." So the particle trails are gone and these
+            are single non-antialiased 1px segments, batched into ONE
+            ``drawLines``.
+
+            K-158 chose particles over strokes on a measurement that
+            still stands and that this replaces rather than
+            contradicts: what it measured was an ANTIALIASED TWO-PASS
+            GLOWING stroke (6.35 ms for 90, rising to 10.55 as zoom
+            lengthens them, 39.8 ms for one PDF's full 2,087). The cost
+            was the AA rasterizer, whose price is the stroke's
+            device-space area — never the composition mode (Plus 18.08
+            vs SourceOver 18.74 on the same strokes) and never the call
+            count (per-edge drawLine and batched drawLines measure the
+            same, 0.154 vs 0.153 ms at 260). One hard pass with AA off
+            is 0.092 ms for the same 90 spokes, and 2.51 ms for all
+            2,087 — so the budget stopped being the constraint here.
+
+            The subset does not change: ``links_for`` draws to the
+            SAMPLED notes only, and that is a correctness rule rather
+            than a cost one — a spoke ending on a dot nobody drew is a
+            line into empty space.
+
+            They leave the node's RIM, not its centre: lines converging
+            on one point swallow the node they are supposed to be
+            about. Straight, not bowed — a curve was the beams'
+            apology for being blurry.
             """
             if not active or active not in self._pdf_xyz:
                 return
@@ -2271,18 +2712,9 @@ def _canvas_class():
             gap = node_radius(p.get("match_count")) * _clamp(
                 ad, DOT_DEPTH_MIN, DOT_DEPTH_MAX
             ) + EDGE_HUB_GAP
-            # The particle ramp, resolved ONCE a frame: an ordinal in
-            # 0..BEAM_MAX-1 straight to its sprite, so the inner loop
-            # does one index and one blit.
-            ramp = []
-            for i in range(BEAM_MAX):
-                pos = BEAM_MIN_TIER + (1.0 - BEAM_MIN_TIER) * (
-                    (i + 1.0) / BEAM_MAX
-                )
-                spr = self._sprites.get((tier_index(pos), False, True))
-                if spr is None:
-                    return
-                ramp.append((spr, spr.width() / 2.0))
+            hot = star_colour(c, 1.0)
+            steps = max(1, int(EDGE_TAPER))
+            runs: list = [[] for _ in range(steps)]
             for nxyz in beam:
                 bx, by, _bd = project_point(vp, cam, *nxyz)
                 dx = bx - ax
@@ -2290,30 +2722,22 @@ def _canvas_class():
                 span = math.hypot(dx, dy)
                 if span <= gap:
                     continue  # a note inside the node's own rim
-                ux = dx / span
-                uy = dy / span
-                sx = ax + ux * gap
-                sy = ay + uy * gap
-                # Quadratic control point: perpendicular to the beam,
-                # proportional to its length, so long reaches curve and
-                # short ones stay nearly straight.
-                bow = (span - gap) * EDGE_BOW
-                cx = (sx + bx) / 2.0 - uy * bow
-                cy = (sy + by) / 2.0 + ux * bow
-                k = int((span - gap) / BEAM_STEP)
-                k = 2 if k < 2 else BEAM_MAX if k > BEAM_MAX else k
-                step = BEAM_MAX / float(k)
-                for i in range(k):
-                    t = (i + 1.0) / (k + 1.0)
-                    m = 1.0 - t
-                    px = m * m * sx + 2.0 * m * t * cx + t * t * bx
-                    py = m * m * sy + 2.0 * m * t * cy + t * t * by
-                    spr, half = ramp[int(i * step)]
-                    px -= half
-                    py -= half
-                    if px < -half or px > w or py < -half or py > h:
-                        continue
-                    painter.drawPixmap(int(px), int(py), spr)
+                sx = ax + dx / span * gap
+                sy = ay + dy / span * gap
+                rx = bx - sx
+                ry = by - sy
+                for t in range(steps):
+                    t0 = t / steps
+                    t1 = (t + 1.0) / steps
+                    runs[t].append(QLineF(sx + rx * t0, sy + ry * t0,
+                                          sx + rx * t1, sy + ry * t1))
+            for t, segs in enumerate(runs):
+                if not segs:
+                    continue
+                painter.setPen(QPen(QColor(blend_hex(
+                    c["bg"], hot, edge_mix(t, steps))), 1.0))
+                painter.drawLines(segs)
+
 
         def _paint_nodes(self, painter, c, vp, cam, active, w, h) -> list:
             """PDF nodes as light sources: halo, ring, lit core — never
@@ -2388,7 +2812,8 @@ def _canvas_class():
                 painter.drawEllipse(pt, r, r)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(
-                    QColor(blend_hex(c["blue_bright"], c["text"], CORE_NEAR))
+                    QColor(blend_hex(c["blue_bright"], c["text"],
+                                     NODE_CORE_MIX))
                 )
                 painter.drawEllipse(pt, r * NODE_CORE_F, r * NODE_CORE_F)
                 if safe == self._selected:
