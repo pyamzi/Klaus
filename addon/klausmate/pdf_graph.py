@@ -31,15 +31,14 @@ this call expects. Either way that means "unknown" — this module skips
 that PDF entirely (no node, no edges) rather than inventing an empty or
 stale match set for it.
 
-Sampling tradeoff: ``projection.project`` caps how many notes get a 2D
-position (``projection.DEFAULT_MAX_POINTS``, even-stride sampled). A
-PDF's cached matches are computed against the FULL card index, so on a
-large collection most of a PDF's real matches may fall outside the
-sampled/positioned subset; only the intersection is used for that PDF's
-centroid and edges. A PDF left with zero matches inside the sample is
-skipped the same as a genuinely absent cache — there is no positioned
-note to anchor it to. A future revision of the canvas card may widen the
-sample for PDFs specifically, but that is out of scope here.
+No sampling tradeoff any more (K-138): ``projection.project`` fits its
+two components on an even-stride sample (``DEFAULT_FIT_ROWS``) but
+positions EVERY row, so a PDF's centroid and edges are computed over
+all of its cached matches rather than over whichever ones happened to
+land in a sample. The paragraph that used to sit here described the
+opposite — most of a large collection's matches falling outside the
+positioned subset, and PDFs skipped for having none inside it — and was
+the reason Pouya asked for "all of the notes to show up".
 """
 
 from __future__ import annotations
@@ -58,9 +57,9 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
     number here comes from a persisted index or cache. Returns
     ``{"pdfs": [...], "notes": [...], "edges": [...]}``:
 
-    - ``notes``: ``{"nid": int, "xy": [x, y]}`` for every positioned note
-      (a subset of the card index when it exceeds
-      ``projection.DEFAULT_MAX_POINTS``).
+    - ``notes``: ``{"nid": int, "xy": [x, y]}`` for EVERY note in the
+      card index — ``DEFAULT_FIT_ROWS`` bounds what the PCA is fitted
+      on, not what comes back.
     - ``pdfs``: ``{"safe", "display", "folder", "threshold", "retention",
       "xy", "match_count"}`` per PDF that has a valid match cache AND at
       least one matched, positioned note. ``retention`` is always

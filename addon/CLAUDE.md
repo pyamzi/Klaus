@@ -572,7 +572,11 @@ instead. Signed-off history is in
 - `pdf_graph.py` (aqt-free at module top): assembles the embedding-map
   graph dict — PDF nodes at their matched notes' 2D centroid, edges to
   every note at/above threshold. `retention` (which imports aqt) is
-  imported lazily inside `build_graph_data`. No window/canvas yet.
+  imported lazily inside `build_graph_data`. Since K-138 it positions
+  EVERY note: `projection` fits its components on a `DEFAULT_FIT_ROWS`
+  stride sample but projects all rows, so a PDF's centroid is computed
+  over all of its matches rather than whichever ones landed in a
+  sample. The canvas is `pdf_map.py`.
 - `pdf_map.py` (aqt-free above its aqt-glue divider; K-123/K-124): the
   **embedding map window** — Phase D2. Pure viewport model on top
   (world↔screen transform, `fit_to_view`, cursor-anchored `zoom_at`
@@ -584,12 +588,18 @@ instead. Signed-off history is in
   muted dots, PDFs as accent nodes sized by match count, edges drawn
   for the hovered/selected PDF only, QToolTip carrying
   display/folder/match-count/retention-when-live. Labels are
-  COUNT-aware (K-133): at or below `LABEL_MAX_NODES` (12) every node is
-  named at every zoom including fit, above it the `LABEL_ZOOM × fit`
-  gate applies, and an unknown count keeps the gate — the map used to
-  open as anonymous dots, because the fit view is the only view you get
-  on open. `label_anchor` places a name right of its node and mirrors
-  it left at the canvas edge; one muted `HINT_TEXT` line beside the
+  drawn ONLY for the selected or hovered PDF (K-138 — Pouya's call,
+  which reversed K-133's always-on labels the same day). All 28,668
+  notes render at ~4ms a pan frame, FASTER than the old 4,000-note
+  sample: the note layer is one world-space `QPolygonF` mapped per
+  frame by `QTransform.map` in C++ and drawn with a single
+  `drawPoints`. Putting the transform on the PAINTER with a cosmetic
+  pen instead is not merely slower — it degenerates into long
+  horizontal strokes at deep zoom (both shapes pinned).
+  `select_pdf(safe)` is the seam for the Library dock: a known name
+  selects and recentres only if off-view, an unknown or empty name
+  CLEARS, no window is a silent no-op. `label_anchor` places the drawn
+  name right of its node and mirrors it left at the canvas edge; one muted `HINT_TEXT` line beside the
   caption says what the shapes are and what the mouse does (its QLabel
   raises the window's minimum width to ~625, measured). The viewport is
   range-agnostic (`graph_bounds` measures the data) because projection
