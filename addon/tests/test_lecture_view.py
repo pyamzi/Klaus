@@ -4,11 +4,13 @@ Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_view.py
 """
 
 import ast
+import glob
 import importlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from array import array
@@ -749,6 +751,166 @@ try:
 finally:
     (lecture_view.gui_hooks, lecture_view.mw,
      lecture_view._setup_done) = _saved_glue
+
+section("a partial Qt surface degrades the DOCK, not the whole module (K-161)")
+# ``class LectureDock(QDockWidget)`` with ``QDockWidget = None`` in the
+# import fallback is a hard TypeError AT IMPORT TIME — "NoneType takes no
+# arguments" — so an environment whose aqt.qt is partial loses the
+# resolver, the config keys and the hooks too, not just the panel it could
+# not have drawn anyway. The guarded-import-with-None-fallback convention
+# (PDF_VIEWER_AVAILABLE and friends) is correct for names used as VALUES
+# and a trap for names used as BASE CLASSES. Found in
+# index_queue._StatusDock first (K-152, where tests/test_drive.py's
+# explicit aqt.qt stub reported the whole K-152 block as one opaque
+# failure); this is the twin.
+#
+# Run in a SUBPROCESS, deliberately. The pin must swap aqt.qt for a
+# namespace WITHOUT QDockWidget and re-import lecture_view; doing that in
+# process would leave a differently-configured module in sys.modules for
+# every section after it, and the boot-state pins at the top of this file
+# would be reading a different module than they were captured from. A
+# fresh interpreter is also where the defect actually lives: it is an
+# import-time failure, so importing is the test.
+
+_PARTIAL_QT_PROBE = r'''
+import importlib, sys, types
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+import anki_stubs
+anki_stubs.install()
+
+
+class _Any:
+    def __init__(self, *a, **k): pass
+    def __getattr__(self, n): return _Any()
+    def __call__(self, *a, **k): return _Any()
+
+
+# tests/test_drive.py's shape exactly: an EXPLICIT aqt.qt whose hand-listed
+# names do not include QDockWidget. anki_stubs' own aqt.qt is PERMISSIVE
+# (PEP 562 __getattr__ auto-vivifies every name), which is why this whole
+# class of defect is invisible to the default bootstrap and why the pin
+# builds its own stub rather than reusing it.
+shim = types.ModuleType("aqt.qt")
+for _n in ("QLabel", "QStackedWidget", "QTimer", "QVBoxLayout", "QWidget"):
+    setattr(shim, _n, _Any)
+shim.Qt = _Any()
+sys.modules["aqt.qt"] = shim
+sys.modules.pop("klausmate.lecture_view", None)
+
+lv = importlib.import_module("klausmate.lecture_view")
+
+# Importing is most of the point, but on its own it would also pass if the
+# probe simply failed to reproduce a partial surface. So prove the module
+# really did take the fallback, really did degrade the base, and really is
+# still usable above the divider.
+assert lv.QDockWidget is None, "probe did not reproduce a partial aqt.qt"
+assert lv.LectureDock.__bases__ == (object,), lv.LectureDock.__bases__
+assert lv._ensure_dock() is None, "dock build must refuse, not raise"
+assert lv._dock is None, "a refused build must not latch a half-made dock"
+assert callable(lv.LectureResolver), "the resolver must survive"
+assert lv.CARD_INDEX_SUBDIR and lv.NO_LECTURE_TEXT
+print("PROBE-OK")
+'''
+
+_probe = subprocess.run(
+    [sys.executable, "-c", _PARTIAL_QT_PROBE],
+    capture_output=True, text=True, cwd=os.getcwd(),
+    env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+)
+check(
+    "lecture_view IMPORTS under an aqt.qt with no QDockWidget — a partial "
+    "Qt surface must cost the dock, not the resolver, the config keys and "
+    "the hooks as well%s" % (
+        "" if _probe.returncode == 0
+        else "\n      probe stderr: " + _probe.stderr.strip().splitlines()[-1]
+        if _probe.stderr.strip() else ""),
+    _probe.returncode == 0 and "PROBE-OK" in _probe.stdout,
+)
+
+
+section("no OTHER module regrows the shape (K-161 sweep)")
+# K-161 asked for a sweep "because if there are two there are probably
+# three" — there are exactly three, and this is what stops a fourth. A
+# base class is unusable after a failed guarded import when the handler
+# either assigns it None (TypeError at class definition) or never rebinds
+# it at all (NameError). klausmate/md3_switch.py is the pattern done right
+# and must stay clear of this: it falls back to ``QCheckBox = object``.
+
+
+def _guarded_bases(path):
+    """(lineno, class, base, why) for every module-level ``class X(Base)``
+    in `path` whose Base a failed guarded import would leave unusable.
+
+    AST, not grep: the fallback is a chained ``a = b = c = None`` whose
+    last name is the assignment VALUE rather than a target, which no
+    regex over source text gets right.
+    """
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    nulled, imported, rebound = set(), set(), set()
+    for node in tree.body:
+        if not isinstance(node, ast.Try):
+            continue
+        for sub in ast.walk(node):
+            if isinstance(sub, (ast.Import, ast.ImportFrom)):
+                for alias in sub.names:
+                    imported.add(alias.asname or alias.name.split(".")[0])
+        for handler in node.handlers:
+            for sub in ast.walk(handler):
+                if not isinstance(sub, ast.Assign):
+                    continue
+                names = [t.id for t in sub.targets if isinstance(t, ast.Name)]
+                if isinstance(sub.value, ast.Name):
+                    names.append(sub.value.id)  # a = b = c = None
+                rebound.update(names)
+                if isinstance(sub.value, ast.Constant) and sub.value.value is None:
+                    nulled.update(names)
+    unusable = nulled | (imported - rebound)
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for base in node.bases:
+            root = base
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id in unusable:
+                found.append((node.lineno, node.name, ast.unparse(base),
+                              "None" if root.id in nulled else "unbound"))
+    return found
+
+
+# The one known survivor, with the card that owns it. Fixing K-164 means
+# DELETING this entry, not adding a second one beside it — an allowlist
+# that is allowed to grow is not a pin.
+_SWEEP_ALLOWED = {"klausmate/pdfjs_viewer.py": "K-164"}
+
+_swept, _offenders = 0, []
+for _path in sorted(glob.glob("klausmate/**/*.py", recursive=True)):
+    _rel = _path.replace(os.sep, "/")
+    if "/vendor/" in _rel:
+        continue
+    _swept += 1
+    for _lineno, _cls, _base, _why in _guarded_bases(_path):
+        if _rel in _SWEEP_ALLOWED:
+            continue
+        _offenders.append(f"{_rel}:{_lineno} class {_cls}({_base}) [{_why}]")
+
+check("the sweep actually walked the package — an empty glob would make "
+      "every finding below vacuously clean", _swept > 20)
+check("md3_switch is the pattern done right and is swept: its fallback is "
+      "``QCheckBox = object``, so it must NOT be reported",
+      not any(f.startswith("klausmate/md3_switch.py") for f in _offenders))
+check("lecture_view is no longer one of them",
+      not any(f.startswith("klausmate/lecture_view.py") for f in _offenders))
+check("no module outside the allowlist defines a class on a base a failed "
+      "guarded import leaves unusable — found: %s" % (_offenders or "none"),
+      _offenders == [])
+for _bad, _card in sorted(_SWEEP_ALLOWED.items()):
+    check("allowlisted %s still HAS the defect %s was filed for — a stale "
+          "allowlist entry hides the next one" % (_bad, _card),
+          bool(_guarded_bases(_bad)))
+
 
 shutil.rmtree(TMP, ignore_errors=True)
 raise SystemExit(report())

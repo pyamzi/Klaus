@@ -268,6 +268,17 @@ except Exception:  # headless tests / partial environments
     gui_hooks = mw = None  # type: ignore[assignment]
     QDockWidget = QLabel = QStackedWidget = Qt = QTimer = QVBoxLayout = QWidget = None  # type: ignore[assignment]
 
+
+# ``class LectureDock(None)`` is a hard TypeError at IMPORT time, so a
+# partial Qt surface would cost the RESOLVER, the config keys and every
+# hook as well — not just the panel that could not have been drawn. The
+# None fallback is the house convention and is right for names used as
+# values; it is a trap for names used as BASE CLASSES. Only the dock needs
+# Qt, so only the dock degrades: the base falls back to ``object`` and
+# ``_ensure_dock`` keeps the real gate. Same shape as
+# ``index_queue._DockBase`` (K-152), which is where this was found first.
+_DockBase: Any = QDockWidget if QDockWidget is not None else object
+
 _dock: Any = None
 _resolver: LectureResolver | None = None
 _setup_done = False
@@ -362,7 +373,7 @@ def _save_state(**updates: Any) -> None:
         print(f"[klausmate] lecture state save failed: {e}")
 
 
-class LectureDock(QDockWidget):  # type: ignore[misc]
+class LectureDock(_DockBase):  # type: ignore[misc]
     """Right-docked lecture panel on mw. Frameless (empty title bar),
     no drag/float/close chrome — the bottom-bar button, the L shortcut,
     and the reviewer menu are its only toggles."""
@@ -571,6 +582,8 @@ def _ensure_dock() -> Any:
     global _dock, _resolver
     if _dock is not None:
         return _dock
+    if mw is None or QDockWidget is None:
+        return None  # the gate _DockBase's fallback moved down to here
     _dock = LectureDock()
     if _resolver is None:
         _resolver = LectureResolver(_user_files())
@@ -592,6 +605,8 @@ def open_lecture_view() -> None:
     if mw is None or getattr(mw, "state", None) != "review":
         return
     dock = _ensure_dock()
+    if dock is None:
+        return
     try:
         if _resolver is not None:
             _resolver.invalidate()  # fresh stamps on a user-initiated open
