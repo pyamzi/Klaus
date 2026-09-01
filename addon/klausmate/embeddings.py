@@ -31,11 +31,28 @@ VOYAGE_API_BASE = "https://api.voyageai.com/v1"
 
 DEFAULT_MODELS = {
     "ollama": "nomic-embed-text",
-    "openai": "text-embedding-3-small",
+    "openai": "text-embedding-3-large",
     "voyage": "voyage-3-lite",
 }
 
 DEFAULT_PROVIDER = "voyage"
+
+# OpenAI's v3 embedding models are trained with Matryoshka Representation
+# Learning: the most significant components sit at the FRONT of the vector,
+# so asking for fewer dimensions truncates the tail and degrades gracefully
+# rather than catastrophically. text-embedding-3-large shortened to 256 still
+# beats the old ada-002 at 1536.
+#
+# That is why the large model can be the fast one here. Ranking cost is
+# linear in dimensions — card_index.top_k is a sumprod over packed rows — so
+# -large at 1024 is BETTER than -small at 1536 on retrieval quality while
+# being cheaper to rank and smaller on disk. Full 3072 is available by
+# setting the key to 0 (meaning "whatever the model gives").
+#
+# Only the OpenAI v3 models accept the parameter. Sending it to Voyage or
+# Ollama would be an error, so _dimensions_for() gates on provider+model.
+DIMENSION_CAPABLE_MODELS = ("text-embedding-3-small", "text-embedding-3-large")
+DEFAULT_DIMENSIONS = 1024
 
 BATCH_SIZE = 64
 CLOUD_TIMEOUT_S = 60.0
@@ -84,9 +101,54 @@ def embedding_model(cfg: dict) -> str:
     return model or DEFAULT_MODELS[provider_name(cfg)]
 
 
-def index_signature(cfg: dict) -> tuple[str, str]:
-    """(provider, model) — a change in either invalidates the card index."""
-    return provider_name(cfg), embedding_model(cfg)
+def embedding_dimensions(cfg: dict) -> int:
+    """Requested output dimensions, or 0 for the model's own default."""
+    try:
+        value = int(cfg.get("embedding_dimensions") or 0)
+    except (TypeError, ValueError):
+        return DEFAULT_DIMENSIONS
+    return value if value > 0 else 0
+
+
+def _dimensions_for(cfg: dict) -> int:
+    """The `dimensions` value to send, or 0 to omit the parameter entirely.
+
+    Gated on the model, not just the provider: only OpenAI's v3 embedding
+    models accept it, and sending it anywhere else is a 400.
+    """
+    if embedding_model(cfg) not in DIMENSION_CAPABLE_MODELS:
+        return 0
+    return embedding_dimensions(cfg)
+
+
+def index_signature(cfg: dict) -> tuple[str, str, int]:
+    """(provider, model, dims) — a change in ANY of the three invalidates the
+    card index.
+
+    Dims belongs here: the same model at 3072 and at 1024 produces vectors
+    that cannot be compared with each other, and without it in the signature
+    that switch would be caught only later, by card_index's file-size check.
+    """
+    return provider_name(cfg), embedding_model(cfg), _dimensions_for(cfg)
+
+
+def signature_matches(
+    provider: str, model: str, dims: int, signature: tuple
+) -> bool:
+    """True when a PERSISTED (provider, model, dims) satisfies `signature`.
+
+    One helper for every store that caches embeddings — the card index, the
+    per-PDF index, the matches cache. Each of them used to spell this
+    comparison itself as a two-tuple equality, which is precisely why adding
+    a third element to the signature broke three call sites at once.
+
+    dims is compared only when the signature asks for a specific width; 0
+    means "the model's own default" and cannot disagree with a stored width.
+    """
+    if (provider, model) != (signature[0], signature[1]):
+        return False
+    want = int(signature[2]) if len(signature) > 2 else 0
+    return not want or int(dims or 0) == want
 
 
 # --------------------------------------------------------------- providers
@@ -218,9 +280,13 @@ class OpenAIEmbeddings:
                 provider="OpenAI",
                 status=401,
             )
+        body: dict = {"model": embedding_model(cfg), "input": texts}
+        dims = _dimensions_for(cfg)
+        if dims:
+            body["dimensions"] = dims
         resp = _post_json(
             f"{OPENAI_API_BASE}/embeddings",
-            {"model": embedding_model(cfg), "input": texts},
+            body,
             {"Authorization": f"Bearer {key}"},
             provider="OpenAI",
         )

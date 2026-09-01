@@ -78,7 +78,56 @@ check("explicit ollama respected",
       embeddings.provider_name({"embedding_provider": "ollama"}) == "ollama")
 check("voyage default model",
       embeddings.embedding_model({}) == "voyage-3-lite")
-check("signature", embeddings.index_signature({}) == ("voyage", "voyage-3-lite"))
+check("signature carries dims, so a width change invalidates the index",
+      embeddings.index_signature({}) == ("voyage", "voyage-3-lite", 0))
+check("dims are omitted for providers whose API has no such parameter",
+      embeddings.index_signature(
+          {"embedding_provider": "voyage", "embedding_dimensions": 1024}
+      )[2] == 0)
+# An index built at one width cannot be ranked against another, so the
+# width has to reach check_signature — not merely be recorded.
+_ix = card_index.empty_index("openai", "text-embedding-3-large")
+_ix.dims = 1024
+check("an index matches when the requested width is the one it was built at",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 1024)))
+check("a DIFFERENT requested width forces a rebuild",
+      not card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 3072)))
+check("width 0 means 'the model's default' and cannot disagree with an "
+      "index that already has one",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 0)))
+check("a two-tuple signature still works — existing callers are unbroken",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large")))
+check("provider/model mismatch still wins regardless of width",
+      not card_index.check_signature(_ix, ("voyage", "voyage-3-lite", 1024)))
+
+# Widening index_signature from (provider, model) to (provider, model,
+# dims) broke EIGHT call sites at once, and most of them failed silently:
+# a two-tuple compared against a three-tuple is simply never equal, so the
+# caches went permanently stale instead of raising. The fix was one shared
+# comparator; this pin is what stops the next reader spelling it by hand
+# again.
+import os as _os, re as _re
+# Only comparisons against a SIGNATURE. An index-vs-index compatibility
+# check (retention._score_notes) is a different question and rightly keeps
+# its own two-part test, so it can say "spaces differ" and "dimensions
+# differ" as separate errors.
+_SIG_SPELLINGS = _re.compile(
+    r"\(\w+\.provider,\s*\w+\.model\)\s*[!=]=\s*(?:cfg_)?sig(?:nature)?\b|"
+    r'\(st\["provider"\],\s*st\["model"\]\)\s*[!=]='
+)
+for _name in ("card_index.py", "pdf_index.py", "retention.py",
+              "manage_models.py", "curation.py", "tag_sync.py"):
+    _src = open(_os.path.join("klausmate", _name), encoding="utf-8").read()
+    check(f"{_name} compares signatures through embeddings.signature_matches, "
+          "never by hand",
+          _SIG_SPELLINGS.search(_src) is None)
+
+check("...and sent for OpenAI's v3 models, which are MRL-trained",
+      embeddings.index_signature(
+          {"embedding_provider": "openai",
+           "embedding_model": "text-embedding-3-large",
+           "embedding_dimensions": 1024}
+      ) == ("openai", "text-embedding-3-large", 1024))
 
 print("== missing key ==")
 try:

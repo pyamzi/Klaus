@@ -79,6 +79,13 @@ your machine.
   from voyageai.com), `openai` (cloud, needs a key), or `ollama` (local,
   free, private — limited by your machine's RAM). Existing installs keep
   whatever provider they already had configured.
+- **embedding_dimensions**: output width for OpenAI's v3 embedding
+  models, which are MRL-trained so a shorter vector keeps the most
+  significant components. `1024` is the default: better retrieval than
+  `text-embedding-3-small` at 1536, while being cheaper to rank and
+  smaller on disk. `0` means the model's own width (3072 for -large).
+  Ignored by Voyage and Ollama, whose APIs have no such parameter.
+  Changing it forces a full re-index.
 - **embedding_model**: Embedding model ID. Empty means the provider
   default (`voyage-3-lite` / `text-embedding-3-small` /
   `nomic-embed-text`). Changing provider or model rebuilds the index.

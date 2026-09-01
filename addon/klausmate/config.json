@@ -4,6 +4,7 @@
   "runtime_auto_setup": true,
   "browse_highlight_default": true,
   "embedding_provider": "voyage",
+  "embedding_dimensions": 1024,
   "embedding_model": "",
   "embedding_api_key_openai": "",
   "embedding_api_key_voyage": "",

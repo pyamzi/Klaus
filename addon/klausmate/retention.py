@@ -324,7 +324,9 @@ def load_matches(
             m = json.load(f)
         if m.get("version") != MATCHES_VERSION:
             return None
-        if (str(m["provider"]), str(m["model"])) != signature:
+        if not embeddings.signature_matches(
+            str(m["provider"]), str(m["model"]), int(m["dims"]), signature
+        ):
             return None
         if int(m["dims"]) != dims:
             return None
@@ -639,7 +641,9 @@ def ensure_pdf_index(
 
         resumable = (
             idx is not None
-            and (idx.provider, idx.model) == sig
+            and embeddings.signature_matches(
+                idx.provider, idx.model, idx.dims, sig
+            )
             and idx.source_sig == src_sig
             and idx.chunks == keys
             and 0 < idx.embedded_rows < len(keys)
@@ -823,7 +827,9 @@ def priority_rows(col, cfg: dict) -> dict:
         st = pdf_index.stats_from_disk(pdf_index.index_dir(USER_FILES, name))
         indexed = st["exists"] and st["complete"]
         stale = indexed and (
-            (st["provider"], st["model"]) != sig
+            not embeddings.signature_matches(
+                st["provider"], st["model"], st.get("dims", 0), sig
+            )
             or src_sig is None
         )
         matches = None

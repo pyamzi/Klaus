@@ -34,7 +34,7 @@ import time
 from array import array
 from dataclasses import dataclass, field
 
-from . import pdf_handler
+from . import embeddings, pdf_handler
 
 INDEX_VERSION = 1
 SUBDIR = "pdf_index"
@@ -196,7 +196,9 @@ def is_fresh(
         index is not None
         and source_sig is not None
         and index.source_sig == source_sig
-        and (index.provider, index.model) == signature
+        and embeddings.signature_matches(
+            index.provider, index.model, index.dims, signature
+        )
         and index.is_complete()
     )
 
@@ -217,6 +219,7 @@ def stats_from_disk(dir_path: str) -> dict:
             "complete": bool(chunks) and embedded == len(chunks),
             "provider": str(m.get("provider") or ""),
             "model": str(m.get("model") or ""),
+            "dims": int(m.get("dims") or 0),
             "updated_at": float(m.get("updated_at") or 0.0),
         }
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
@@ -227,6 +230,7 @@ def stats_from_disk(dir_path: str) -> dict:
             "complete": False,
             "provider": "",
             "model": "",
+            "dims": 0,
             "updated_at": 0.0,
         }
 

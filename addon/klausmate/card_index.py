@@ -81,8 +81,10 @@ class SyncPlan:
         )
 
 
-def empty_index(provider: str, model: str) -> CardIndex:
-    return CardIndex(provider=provider, model=model)
+def empty_index(provider: str, model: str, dims: int = 0) -> CardIndex:
+    """Callers splat a signature straight in (``empty_index(*signature)``),
+    so this has to accept the width the signature now carries."""
+    return CardIndex(provider=provider, model=model, dims=int(dims or 0))
 
 
 def text_hash(text: str) -> str:
@@ -179,9 +181,26 @@ def save(index: CardIndex, dir_path: str) -> None:
     os.replace(tmp, manifest_path)
 
 
-def check_signature(index: CardIndex | None, signature: tuple[str, str]) -> bool:
-    """True when the on-disk index matches the configured (provider, model)."""
-    return index is not None and (index.provider, index.model) == signature
+def check_signature(index: CardIndex | None, signature: tuple) -> bool:
+    """True when the on-disk index matches the configured signature.
+
+    Takes (provider, model) or (provider, model, dims). Dims is compared
+    only when the config actually asks for a width: 0 means "whatever the
+    model returns", so it cannot disagree with an index built at 3072.
+    A NON-zero request must match exactly — vectors of different widths are
+    not comparable, and a mismatch has to force a rebuild rather than
+    silently rank against truncated neighbours.
+
+    Tolerating the 2-tuple keeps every existing caller and the transcribed
+    copy in test_dialog_logic honest without a flag day.
+    """
+    if index is None:
+        return False
+    from . import embeddings
+
+    return embeddings.signature_matches(
+        index.provider, index.model, index.dims, signature
+    )
 
 
 def stats_from_disk(dir_path: str) -> dict:
@@ -198,6 +217,8 @@ def stats_from_disk(dir_path: str) -> dict:
             "exists": True,
             "provider": str(m.get("provider") or ""),
             "model": str(m.get("model") or ""),
+            "dims": int(m.get("dims") or 0),
+            "dims": int(m.get("dims") or 0),
         }
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return {
@@ -285,7 +306,12 @@ def apply_sync(
     """
     old = index if index is not None else empty_index(*signature)
     new = empty_index(*signature)
-    new.dims = old.dims if (old.provider, old.model) == signature else 0
+    from . import embeddings
+
+    _same = embeddings.signature_matches(
+        old.provider, old.model, old.dims, signature
+    )
+    new.dims = old.dims if _same else 0
 
     deleted = set(plan.to_delete)
     mod_updates = dict(plan.mod_only)
@@ -309,7 +335,7 @@ def apply_sync(
         new.vectors.extend(vec)
 
     # carry forward old rows (unless deleted / re-embedded / now skipped)
-    if (old.provider, old.model) == signature:
+    if _same:
         for i, nid in enumerate(old.nids):
             if nid in deleted or nid in embeds or nid in newly_skipped:
                 continue

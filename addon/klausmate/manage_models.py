@@ -2226,7 +2226,9 @@ def manage_models_dialog(setup: bool = False) -> None:
             txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
-            if (st["provider"], st["model"]) != sig:
+            if not embeddings.signature_matches(
+                st["provider"], st["model"], st.get("dims", 0), sig
+            ):
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
@@ -2494,7 +2496,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        provider, model = sig
+        provider, model = sig[0], sig[1]
         if provider != "ollama" and not str(
             cfg.get(_embed_cfg_key(provider)) or ""
         ).strip():
@@ -2503,7 +2505,9 @@ def manage_models_dialog(setup: bool = False) -> None:
             )
             return
         st = curation.index_stats()
-        if st["exists"] and (st["provider"], st["model"]) != sig:
+        if st["exists"] and not embeddings.signature_matches(
+            st["provider"], st["model"], st.get("dims", 0), sig
+        ):
             # Destructive: the stored vectors don't match the model about
             # to run, so a rebuild-from-scratch is one confirm away rather
             # than one click away. A matching signature (fresh build or
