@@ -407,3 +407,162 @@ labelled as beyond the harness rather than counted as coverage gaps.
 
 It found no second K-135. In these six modules there is no pin that
 cannot fail — only behaviour nobody got round to pinning.
+
+---
+
+# Second lane — `klausmate/index_queue.py` (K-162)
+
+The index runner landed with K-152 and was swept by hand (~100
+mutations) before it shipped, but it was never added to
+`AUDIT_MODULES`, so nothing kept it that way. It is now.
+
+(`AUDIT_MODULES` also carries the five assistant layers and `podcast`.
+Those lanes audited their own modules and *fixed* what they found
+rather than recording it, so the report above is still exactly what its
+title says — the six K-139 modules. This section is the second one with
+findings left standing, per K-162's brief: report, don't fix.)
+
+Run 2026-09-01, 101 mutations, 112 test-file runs, 25s, one pre-skip
+(`tooltip@278`, the no-op fallback stub — its body is already vacuous,
+correctly skipped rather than scored). Run twice back to back: identical
+apart from the timing line and which of another session's files moved
+underneath.
+
+| module | sha256 | test file run |
+|---|---|---|
+| `klausmate/index_queue.py` | `9012ecdb11db` | `test_index_queue.py` (`81037eede0d3`, 122 checks, 0.2s) |
+
+| operator | mutations | caught | crash | source-only | survived |
+|---|---:|---:|---:|---:|---:|
+| `gut` | 58 | 37 | 10 | 2 | 8 (+1 skipped) |
+| `const` | 11 | 1 | – | – | 10 |
+| `const-loud` | 10 | 1 | – | – | 9 |
+| `boolflip` | 23 | 9 | 1 | – | 13 |
+| **total** | **101** | **48** | **11** | **2** | **40** |
+
+**The hand sweep's claim holds exactly.** K-152 predicted that the only
+survivors would be the Qt-widget-only functions, and under `gut` that is
+precisely the list the tool returns: `offer_model_sweep.answered`
+(`:758`), `_StatusDock.__init__` (`:806`), `_on_dock_button` (`:851`),
+`_ensure_dock` (`:860`), `_render_dock` (`:874`), `_hide_dock_later`
+(`:889`) with its inner `go` (`:897`), `_hide_dock` (`:907`), plus
+`_StatusDock.render` (`:846`) and `setup` (`:939`) as
+`source-pinned-only`. Nothing else. Every other function body — the
+four-phase chain, the queue, the gates, the state publishing, the pure
+renderers — is behaviourally pinned, and 47 of 57 applied `gut`
+mutations are caught. There is no second K-135 here either.
+
+The new ground is the two operators the hand sweep did not run. All
+four findings below are `boolflip`, and all four are reachable by this
+headless harness — none of them is a Qt limit.
+
+## Findings worth a card
+
+**1. The `announce` path is never exercised, in a module whose
+docstring says nothing may start silently.** `index_queue.py:45` states
+the invariant — "Nothing is ever started silently: a single add
+tooltips and shows the bar". Yet every one of the ~30 `request` /
+`request_pdf` calls in `test_index_queue.py` passes `announce=False`,
+so flipping **both** defaults to `False` (`request` at `:358`,
+`request_pdf` at `:396`) survives. The production caller that relies on
+the default is the one that matters: `on_pdf_imported` (`:408`) —
+`import_pdf_file`'s funnel for the Library tree drop, the Library's
+Browse…, the deck-screen square and the deck-screen file drop — calls
+`request_pdf(name)` bare. Flip the default and every user-visible
+"indexing started" tooltip on an add disappears with a green suite.
+Genuinely unpinned; the message builders (`queued_message`,
+`add_tooltip`) are well pinned, the firing is not.
+
+**2. `index_queue.py:373` — the once-per-session key warning can be
+disarmed.** `_key_warned = True` flips to `False` undetected, and the
+comment on that very line is the invariant it breaks: "ten drops must
+not stack ten tooltips". Ten PDFs dropped without an API key would
+raise ten tooltips. The flag's *reset* on profile close **is** pinned
+(`test_index_queue.py:552`); its set is not, and neither is its module
+default (`:298`, but that one is trivial — the tests assign it in their
+own reset helper).
+
+**3. Three `except` fallbacks flip with nothing noticing, and each
+one's polarity is a documented decision.** All three are one-line arms
+on functions whose happy paths are well covered:
+
+* `:485` `_pdf_present` — `return True  # never lose a job to a
+  bookkeeping hiccup`. Flipped to `False`, a presence check that raises
+  silently drops every job behind it, which is the exact outcome the
+  comment exists to prevent.
+* `:733` `signature_changed` — `return False`, i.e. fail closed. It
+  gates `offer_model_sweep` (`:748`), and its docstring is entirely
+  about not silently re-embedding a whole collection on a paid API.
+  Flipped to `True`, any exception inside `embeddings.signature_matches`
+  turns every Preferences Save into a whole-library re-index offer. The
+  function's normal answers have six checks on them
+  (`test_index_queue.py:184-201`); the except arm has none.
+* `:471` `_busy_elsewhere` — `return False`, i.e. run rather than
+  stall. Flipped to `True`, a failed deferred import reads as
+  permanently busy: the queue polls `BUSY_WAIT_POLLS` times and gives
+  up, forever.
+
+Each is testable headlessly by making the deferred import or the callee
+raise. Three sites, one shape, one cheap fix.
+
+**4. All three "the runner is idle" publishes are unobserved.**
+`_pump` declares `active=False` on the drained queue (`:497`), on a
+busy-wait retry (`:506`) and on the give-up branch (`:513`). Flipping
+any of the three survives. `status_line` (`:205`) and
+`dock_button_label` (`:221`) both branch on `active` — so a flipped
+flag puts a live progress line and a **Stop** button on the status dock
+while nothing is running, on the one screen that exists to say what is
+running. The neighbouring fields on the same publishes are pinned
+(`finished == "a"` at `test_index_queue.py:368`, `message ==
+BUSY_WAIT_TEXT` at `:611`), which is what makes this an oversight
+rather than a limit: the tests already reach all three branches. A
+probe confirmed the drained branch executes exactly once across the
+suite and nothing looks at what it published. Assert
+`state().active is False` — or better, assert `status_line(state())` —
+on the three paths.
+
+## Survivors judged trivial
+
+Nine constants survived **both** strengths. None is worth a card.
+
+*Internal tags with no external contract:* `JOB_CARDS`, `JOB_PDF`
+(`:72,73`) name nothing outside this module — no other file in
+`klausmate/` mentions either — and the tests reference them
+symbolically, which is correct for an arbitrary tuple tag.
+
+*Counter seeds:* `_seq`, `_hide_gen`, `_waits` (`:293,297,299`) start
+at 0 because they must start somewhere; the tests assign them in their
+own reset helper. Nothing observable rides on the initial value.
+
+*Self-referentially pinned, correctly:* `BUSY_WAIT_POLLS` (`:303`) and
+`BUSY_WAIT_TEXT` (`:304`) — `test_index_queue.py:619` loops
+`range(iq.BUSY_WAIT_POLLS + 2)` and `:611` compares against
+`iq.BUSY_WAIT_TEXT`. The *behaviour* (waiting is bounded; the bar says
+why) is pinned; the bound and the wording are tuning choices, and a
+test that hardcoded 40 would only pin the tuning. This is the K-135
+shape in miniature and harmless here — but it is the fifth module in
+which it appears, so it is worth noting that the reviewer's question
+still applies: nothing would fail if `BUSY_WAIT_TEXT` became `""`.
+
+*Timer durations, invisible headless:* `IDLE_HIDE_MS`,
+`BUSY_RETRY_MS` (`:301,302`).
+
+`_key_warned` (`:298`) survived the quiet strength and was caught by
+the loud one, so by this report's own rule it is not evidence — see
+finding 2 for the part of it that is.
+
+Three `boolflip` survivors are Qt configuration below the glue divider
+and out of this harness's reach: `announce=False` inside
+`offer_model_sweep.answered` (`:766`), that function's closing
+`return True` (`:787`), and `WA_StyledBackground` in
+`_StatusDock.__init__` (`:824`).
+
+## Bottom line for this module
+
+122 checks, and the tool can falsify all but ten of the module's
+function bodies — the ten being exactly the widget layer K-152 said it
+would be. The gaps it found are not in the chain or the queue, which
+are the parts that would lose a user's work; they are in the *edges*:
+what happens when a bookkeeping call raises, and what the status
+surface says when nothing is running. Four cards' worth, none urgent,
+all cheap.
