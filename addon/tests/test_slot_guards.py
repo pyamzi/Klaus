@@ -41,7 +41,7 @@ except Exception:
 
 
 def _run(body: str) -> tuple:
-    """Run a snippet in a subprocess; return (exit code, aborted?)."""
+    """Run a snippet in a subprocess; return (exit code, aborted?, stdout)."""
     src = textwrap.dedent(body)
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     proc = subprocess.run(
@@ -52,26 +52,42 @@ def _run(body: str) -> tuple:
     # SIGABRT); a shell reports the same thing as 128+6=134. Accept both,
     # because getting this wrong reads a crash as a clean exit — which is
     # exactly the mistake that hid this bug for a whole session.
-    return rc, rc < 0 or rc > 128
+    return rc, rc < 0 or rc > 128, proc.stdout.decode(errors="replace")
 
 
 section("the mechanism, measured rather than assumed")
 if not HAVE_QT:
     print("  SKIP: PyQt6 unavailable — behavioural checks skipped")
 else:
-    _rc, _aborted = _run("""
+    # Anki installs sys.excepthook (aqt.errors.ErrorHandler), and PyQt6
+    # honours a non-default hook INSTEAD of qFatal — so in Anki an unguarded
+    # slot exception reaches the error handler; it does not abort Anki. The
+    # controls below mirror that: the hook is the witness. A BARE interpreter
+    # with no hook really does abort (exit 134, measured 2026-09-01), but
+    # that is not proved here any more — proving it by aborting a child
+    # filed a macOS crash report on every test run, which is how Pouya
+    # found out.
+    _rc, _aborted, _out = _run("""
+        import sys
+        def hook(t, v, tb): print("ESCAPED:" + t.__name__, flush=True)
+        sys.excepthook = hook
         from PyQt6 import QtWidgets as W
         app = W.QApplication([]); b = W.QPushButton()
         b.clicked.connect(lambda: (_ for _ in ()).throw(RuntimeError("x")))
         b.click()
+        print("survived", flush=True)
     """)
-    check("an UNGUARDED exception in a slot really does abort the process — "
-          "this is the whole reason the card exists, and it is checked "
-          "rather than quoted",
-          _aborted and abs(_rc) in (6, 134), f"exit={_rc}")
+    check("an UNGUARDED exception ESCAPES the slot — under an Anki-style "
+          "excepthook it reaches the handler and the process survives; this "
+          "is the whole reason the guard exists, checked without aborting "
+          "any interpreter",
+          not _aborted and _rc == 0 and "ESCAPED:RuntimeError" in _out
+          and "survived" in _out, f"exit={_rc} out={_out!r}")
 
-    _rc, _aborted = _run("""
+    _rc, _aborted, _out = _run("""
         import sys
+        def hook(t, v, tb): print("ESCAPED:" + t.__name__, flush=True)
+        sys.excepthook = hook
         sys.path.insert(0, "klausmate")
         from slot_guard import guarded
         from PyQt6 import QtWidgets as W
@@ -83,12 +99,15 @@ else:
 
         b.clicked.connect(boom)
         b.click()
-        print("survived")
+        print("survived", flush=True)
     """)
-    check("the SAME exception through @guarded does not abort",
-          not _aborted and _rc == 0, f"exit={_rc}")
+    check("the SAME exception through @guarded is CONTAINED — logged in the "
+          "slot, never reaches the hook, process survives",
+          not _aborted and _rc == 0 and "ESCAPED" not in _out
+          and "slot boom failed" in _out and "survived" in _out,
+          f"exit={_rc} out={_out!r}")
 
-    _rc, _aborted = _run("""
+    _rc, _aborted, _out = _run("""
         import sys
         sys.path.insert(0, "klausmate")
         from slot_guard import guarded

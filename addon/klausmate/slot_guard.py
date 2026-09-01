@@ -1,15 +1,19 @@
-"""Stop an exception in a Qt slot from killing Anki.
+"""Keep an exception in a Qt slot to one log line — not a dialog, not an abort.
 
-PyQt6 answers an unhandled exception in a slot by printing the traceback and
-then calling ``qFatal``, which SIGABRTs the process. Measured with the real
-toolkit on 2026-09-01: a plain ``RuntimeError`` raised in a ``clicked``
-handler exits **134**. ``SystemExit`` and ``sys.exit`` are clean; a plain
-exception or ``MemoryError`` is not.
+What an unhandled slot exception costs depends on the PROCESS. A bare
+interpreter — a test, a probe, a script — has no ``sys.excepthook`` of its
+own, and PyQt6 answers by printing the traceback and calling ``qFatal``:
+SIGABRT, exit 134 (measured 2026-09-01). ``SystemExit`` and ``sys.exit`` are
+clean; a plain exception or ``MemoryError`` is not.
 
-In a script that costs a test run. In Anki it costs **Anki** — mid-review,
-with unsaved state — and the user sees a crash reporter, not a broken
-button. That is why CLAUDE.md asks for defensive try/except around every Qt
-call: the convention is load-bearing, not tidiness.
+Anki is NOT that process. ``aqt.errors.ErrorHandler`` installs a non-default
+``sys.excepthook``, and PyQt6 honours a non-default hook INSTEAD of qFatal
+(verified 2026-09-01: hook called, exit 0). So in Anki an unguarded slot
+exception reaches Anki's error dialog — modal, mid-review, with the slot's
+work half-applied — rather than aborting. This guard turns that into one
+``[klausmate]`` line and a slot that returns None, and it is also what keeps
+the offscreen test processes alive. CLAUDE.md's "defensive try/except around
+every Qt call" is this convention, as a decorator.
 
 This module is the uniform way to satisfy it. A decorator rather than a
 hand-written try/except in each body, for two reasons:
