@@ -105,7 +105,7 @@ SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-
 _COPY_SKIP_DIRS = {"user_files", "__pycache__", ".git"}
 _COPY_SKIP_NAMES = {"meta.json", "meta.json.bak"}
 
-#: The six modules K-139 scopes the audit to.  Every other klausmate
+#: The modules K-139 scopes the audit to.  Every other klausmate
 #: module and every other test file belongs to another session.
 AUDIT_MODULES = (
     "heatmap",
@@ -122,6 +122,11 @@ AUDIT_MODULES = (
     "entitlement",
     "anki_tools",
     "assistant_session",
+    # The index runner (K-152, added by K-162).  Its chain, queue and
+    # status rendering are all aqt-free above its glue divider, so the
+    # 122 checks in tests/test_index_queue.py reach nearly all of it.
+    "index_queue",
+    "podcast",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

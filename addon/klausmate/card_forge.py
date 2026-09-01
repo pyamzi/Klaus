@@ -172,8 +172,13 @@ def instructions(request: dict) -> str:
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
 
-def _loads(raw: str) -> dict:
-    """Parse a model response that may be wrapped in a code fence."""
+def loads_response(raw: str) -> dict:
+    """Parse a model response that may be wrapped in a code fence.
+
+    Public because podcast.py needs the identical treatment: both ask a
+    model for JSON grounded in slides, and a second copy of fence-stripping
+    is a second thing to drift.
+    """
     text = _FENCE_RE.sub("", str(raw or "")).strip()
     if not text:
         raise ForgeError("empty response")
@@ -186,6 +191,31 @@ def _loads(raw: str) -> dict:
     return data
 
 
+def cited_pages(item: dict, allowed: set) -> tuple:
+    """``(pages, error)`` for one model-authored item.
+
+    THE hallucination guard, shared by every generator that works from
+    slides. An item citing a slide outside the selection was not written
+    from the material supplied, whatever else it is — and since the request
+    only ever carries the selected slides, that is a fabrication rather
+    than a lookup.
+
+    Returns an empty tuple and a reason on failure; never raises, because
+    one bad item should cost that item and not the batch.
+    """
+    pages = item.get("pages")
+    if isinstance(pages, (int, float, str)):
+        pages = [pages]
+    try:
+        cited = {int(p) for p in (pages or ())}
+    except (TypeError, ValueError):
+        return (), "pages were not numbers"
+    stray = sorted(cited - set(allowed))
+    if stray:
+        return (), f"cites unselected slides {stray}"
+    return tuple(sorted(cited)), ""
+
+
 def parse_proposals(raw: str, request: dict) -> tuple[list, list]:
     """``(proposals, rejections)`` from a model response.
 
@@ -193,7 +223,7 @@ def parse_proposals(raw: str, request: dict) -> tuple[list, list]:
     citing slides nobody selected is a prompt problem, and swallowing that
     evidence is how it goes unnoticed for weeks.
     """
-    data = _loads(raw)
+    data = loads_response(raw)
     cards = data.get("cards")
     if not isinstance(cards, list):
         raise ForgeError("response has no `cards` list")
@@ -204,20 +234,9 @@ def parse_proposals(raw: str, request: dict) -> tuple[list, list]:
         if not isinstance(card, dict):
             rejections.append((i, "not an object"))
             continue
-        pages = card.get("pages")
-        if isinstance(pages, (int, float, str)):
-            pages = [pages]
-        try:
-            cited = {int(p) for p in (pages or ())}
-        except (TypeError, ValueError):
-            rejections.append((i, "pages were not numbers"))
-            continue
-        # The hallucination guard. A card citing a slide outside the
-        # selection was not written from the material supplied, whatever
-        # else it may be.
-        stray = sorted(cited - allowed)
-        if stray:
-            rejections.append((i, f"cites unselected slides {stray}"))
+        cited, why = cited_pages(card, allowed)
+        if why:
+            rejections.append((i, why))
             continue
         try:
             proposals.append(
