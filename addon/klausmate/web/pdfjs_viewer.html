@@ -1406,12 +1406,11 @@ function setTool(tool) {
 document.getElementById("abHl").addEventListener("click", () => {
   const arming = state.tool !== "hl";
   setTool("hl");
-  // Preview's move: arming with a live selection highlights it now —
-  // and that consumed the arm, so disarm (see the mouseup handler).
-  if (arming && selectionRectMap()) {
-    addHighlightFromSelection();
-    setTool(null);
-  }
+  // Preview's move: arming with a live selection highlights it now.
+  // The tool STAYS armed afterwards (K-159) — see the mouseup handler
+  // for why that is safe. Clicking this button again disarms, because
+  // setTool toggles.
+  if (arming && selectionRectMap()) addHighlightFromSelection();
 });
 document.getElementById("abText").addEventListener(
   "click", () => setTool("text"));
@@ -1441,10 +1440,7 @@ for (const sw of document.querySelectorAll("#abInks .inkSw")) {
     if (!sw.dataset.ink) return;   /* black is text-only */
     state.ink = sw.dataset.ink;
     syncAnnobarMode();
-    if (selectionRectMap()) {
-      addHighlightFromSelection();
-      setTool(null);
-    }
+    if (selectionRectMap()) addHighlightFromSelection();
   });
 }
 document.getElementById("abZoomOut").addEventListener(
@@ -1455,33 +1451,65 @@ document.getElementById("abZoomFit").addEventListener(
   "click", () => window.klausZoomReset());
 
 /* Highlight tool: releasing a selection highlights it immediately, and
-   then the tool DISARMS — one mark per arm, exactly like the text tool
-   below. It used to stay armed, so every later selection release minted
-   again over whatever was already there ("triple-highlighted", K-149).
+   the tool STAYS ARMED for the next drag (K-159: "I want to stay in
+   that mode"). Only the Highlight button and Escape disarm.
+
+   K-149 made this one-shot as "cause 2" of the double-highlight bug,
+   so reversing it needs a reason, and the reason is that the one-shot
+   was never the load-bearing half. The real cause was
+   Range.getClientRects() returning a fully covered span's border box
+   AND its text quad, so ONE drag minted two coincident rects that
+   composited at the 43% paint alpha. merge_rects fixed that at mint
+   time, and merge_highlight_records makes a SECOND drag over the same
+   text idempotent as well: same-ink rects an existing record already
+   covers are dropped, the rest union into the record they touch, and
+   a mint that changes nothing never even reaches the JSON
+   (_bridge_hl_add returns early on `merged == self._highlights`).
+   Pinned by re-minting the same drag three times in
+   tests/test_pdfjs_viewer.py.
+
    selectionRectMap() gates the call — a bare click while armed must
-   never fire the "select text first" toast. The 0-timeout lets Blink
+   never fire the "select text first" toast — and
+   addHighlightFromSelection collapses the selection, so a stray
+   mouseup afterwards has nothing to re-mint. The 0-timeout lets Blink
    finalize the selection after mouseup. */
 document.addEventListener("mouseup", () => {
   if (state.tool !== "hl") return;
   setTimeout(() => {
     if (state.tool === "hl" && selectionRectMap()) {
       addHighlightFromSelection();
-      setTool(null);
     }
   }, 0);
 });
 
-/* Text tool: one placement per arm — the click opens an editor box ON
-   the page at that point and disarms. Nothing is posted here any more
-   (K-150): the record is minted from text that does not exist yet, so
-   the bridge call happens at COMMIT. */
+/* Text tool: the click opens an editor box ON the page at that point,
+   and the tool STAYS ARMED (K-159) so the next click places the next
+   box — clicking away from an open box commits it (blur) and the same
+   click starts the next one. Only the Add Text button and Escape
+   disarm. Nothing is posted here (K-150): the record is minted from
+   text that does not exist yet, so the bridge call happens at COMMIT.
+
+   Clicks that land INSIDE the open editor are swallowed by the box
+   itself (openTextEdit's click listener) — without that, a sticky
+   tool would treat every caret placement inside your own box as a
+   request to commit it and open another one on top. */
 document.getElementById("scroll").addEventListener("click", (ev) => {
   if (state.tool !== "text" || ev.button !== 0) return;
   const hit = pageAndPoint(ev.clientX, ev.clientY);
   if (!hit) return;
   ev.preventDefault();
   ev.stopPropagation();
-  setTool(null);
+  /* A click ON an existing box re-edits it instead of dropping an
+     empty one over it. The double-click editor below is unreachable
+     while the tool is armed (this handler opens a box on the first of
+     the two clicks, and its `state.textEdit` gate then returns), so a
+     sticky tool has to do that job itself — which is Preview's rule
+     anyway. */
+  const rec = textRecordAt(hit.page0, hit.xPt, hit.yPt);
+  if (rec) {
+    openTextEdit(rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec);
+    return;
+  }
   openTextEdit(hit.page0, hit.xPt, hit.yPt, null);
 });
 
@@ -1639,8 +1667,14 @@ function openTextEdit(page0, xPt, yPt, rec) {
   };
   /* Swallow mousedown so the press belongs to the caret: #scroll's
      handler would otherwise collapse a persisted marquee, and an
-     Alt-press would preventDefault into a rubber band. */
+     Alt-press would preventDefault into a rubber band. CLICK is
+     swallowed for a different reason (K-159): the text tool stays
+     armed now, and #scroll's placement handler would read a click
+     inside this box as "place another box here" — committing what is
+     being typed and reopening an empty one on top of it. Both are
+     needed; stopping mousedown does not stop the click that follows. */
   el.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  el.addEventListener("click", (ev) => ev.stopPropagation());
   grip.addEventListener("mousedown", startTextDrag);
   body.addEventListener("input", sizeTextEdit);
   body.addEventListener("blur", () => {
@@ -1649,8 +1683,10 @@ function openTextEdit(page0, xPt, yPt, rec) {
   body.addEventListener("keydown", (ev) => {
     /* Escape commits, like clicking away — Preview keeps what you
        typed. stopPropagation so the document handler does not also
-       clear a tool or the find bar out from under it. Enter is a
-       newline; the mod chord is the keyboard's "click away". */
+       clear a tool or the find bar out from under it: with the tool
+       sticky (K-159) that makes Escape a two-step — the first commits
+       the box, the second disarms Add Text. Enter is a newline; the
+       mod chord is the keyboard's "click away". */
     if (ev.key === "Escape"
         || ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter")) {
       ev.preventDefault();

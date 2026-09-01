@@ -377,17 +377,19 @@ check("highlight tool: releasing a selection auto-highlights, gated "
       "on selectionRectMap so a bare click can never toast",
       'state.tool === "hl" && selectionRectMap()' in _HTML116)
 check("arming Highlight consumes a selection that already exists",
-      "if (arming && selectionRectMap()) {" in _HTML116
-      and "addHighlightFromSelection();" in _HTML116)
+      "if (arming && selectionRectMap()) addHighlightFromSelection();"
+      in _HTML116)
 # K-150 rewrote this one: the placement click used to post text-add
 # with nothing but coordinates, because a modal dialog collected the
 # body afterwards. It now opens the in-place editor and posts NOTHING
 # — the bridge call moved to commitTextEdit, where there is finally a
-# body to send. The one-shot disarm survives the change.
+# body to send. K-159 then made the tool STICKY; the disarm half of
+# this check moved to that section, SCOPED to the handler (a bare
+# `"setTool(null);" in _HTML116` passed on the Escape handler's copy
+# and could never have caught the change).
 check("text tool: a page click opens the in-place editor at the "
-      "page-point and disarms (one-shot); nothing is posted yet",
+      "page-point; nothing is posted yet",
       "openTextEdit(hit.page0, hit.xPt, hit.yPt, null);" in _HTML116
-      and "setTool(null);" in _HTML116
       and 'postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt })'
       not in _HTML116)
 check("Escape clears an armed tool (menu/findbar behaviour unchanged)",
@@ -826,16 +828,7 @@ check("the swatch row lives inside #annobar, so it inherits the bar's "
       and all(f'data-ink="{n}"' in _ANNOBAR_MARKUP for n in _INK_NAMES))
 check("picking a colour with a live selection highlights it now "
       "(same move as arming Highlight)",
-      "if (selectionRectMap()) {\n      addHighlightFromSelection();"
-      in _HTML116)
-
-section("K-149: highlight mode is one-shot, like the text tool")
-_HL_MOUSEUP = _HTML116.split(
-    'if (state.tool === "hl" && selectionRectMap()) {', 1)[1][:120]
-check("a mint from a selection release disarms the tool — it used to "
-      "stay armed and re-mint over the same text on every later drag",
-      "addHighlightFromSelection();" in _HL_MOUSEUP
-      and "setTool(null);" in _HL_MOUSEUP)
+      "if (selectionRectMap()) addHighlightFromSelection();" in _HTML116)
 
 section("K-149: merging happens at MINT time, never in storage")
 # pdf_handler collapses duplicates ONLY for origin=="external" records
@@ -1386,5 +1379,212 @@ check("an absurd anchor clamps to the PDF spec's 14,400 pt",
       == [pv.MAX_PAGE_PT, 0.0])
 check("the updated record still validates round-trip through storage",
       _ph149._validate_highlight(_out150[1]) == _out150[1])
+
+section("K-159: the annotation tools stay armed")
+# "When you're adding text to a PDF, I don't want it to automatically
+# toggle out of add-text mode. I want to stay in that mode" — and the
+# same for Highlight. Every pin here is SCOPED to its handler: the
+# check this replaces asked for `"setTool(null);" in _HTML116`, which
+# the Escape handler's own copy satisfied, so it could not have failed
+# whatever the tools did (scripts/AUDIT.md's recurring shape).
+_H159 = _src(os.path.join("web", "pdfjs_viewer.html"))
+_HL_MOUSEUP159 = _H159.split(
+    'if (state.tool === "hl" && selectionRectMap()) {', 1)[1].split(
+    "}, 0);", 1)[0]
+_TEXT_CLICK159 = _H159.split(
+    'if (state.tool !== "text" || ev.button !== 0) return;', 1)[1].split(
+    "\n});", 1)[0]
+_ABHL159 = _H159.split('("abHl").addEventListener("click", () => {', 1)[1] \
+    .split("});", 1)[0]
+_SWATCH159 = _H159.split('if (!sw.dataset.ink) return;', 1)[1].split(
+    "\n  });", 1)[0]
+check("a highlight minted from a selection release leaves the tool "
+      "ARMED — the next drag marks again with no second click",
+      "addHighlightFromSelection();" in _HL_MOUSEUP159
+      and "setTool(null)" not in _HL_MOUSEUP159, _HL_MOUSEUP159)
+check("arming Highlight over a live selection marks it and stays "
+      "armed", "addHighlightFromSelection();" in _ABHL159
+      and "setTool(null)" not in _ABHL159, _ABHL159)
+check("so does picking an ink over a live selection",
+      "addHighlightFromSelection();" in _SWATCH159
+      and "setTool(null)" not in _SWATCH159, _SWATCH159)
+check("placing a text box leaves Add Text armed for the next one",
+      "openTextEdit(" in _TEXT_CLICK159
+      and "setTool(null)" not in _TEXT_CLICK159, _TEXT_CLICK159)
+# What DISARMS, now that nothing else does.
+check("Escape disarms whichever tool is armed",
+      "if (state.tool) setTool(null);" in _H159)
+check("...and the toolbar button disarms by toggling — setTool's one "
+      "line is what makes a second click turn the tool off",
+      "state.tool = state.tool === tool ? null : tool;" in _H159)
+# The regression a sticky text tool would otherwise introduce, twice.
+check("the open box swallows CLICK as well as mousedown, or a click "
+      "inside your own box would commit it and open an empty one on "
+      "top (stopping mousedown does not stop the click that follows)",
+      'el.addEventListener("click", (ev) => ev.stopPropagation());'
+      in _H159)
+check("an armed click ON an existing box re-edits it instead of "
+      "dropping an empty one over it — the dblclick editor is "
+      "unreachable while armed, so the armed click has to do that job",
+      "const rec = textRecordAt(hit.page0, hit.xPt, hit.yPt);"
+      in _TEXT_CLICK159
+      and "openTextEdit(rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec)"
+      in _TEXT_CLICK159)
+check("the dblclick editor still bails while a box is open, which is "
+      "why the armed path above is the one that reaches an existing "
+      "record", "if (ev.metaKey || ev.ctrlKey || state.textEdit) return;"
+      in _H159)
+
+section("K-159: sticky highlighting cannot re-stack the paint")
+# K-149 made Highlight one-shot as "cause 2" of the double-highlight
+# bug, so un-doing that needs PROOF, not an argument. The load-bearing
+# half of K-149 was never the one-shot: it was the merge. merge_rects
+# stops ONE drag minting two coincident rects (Blink returns a fully
+# covered span's border box AND its text quad); merge_highlight_records
+# stops the SECOND drag stacking a second record on the first. Sticky
+# mode only adds more mints, so this drags the same sentence three
+# times, through the exact mint path _bridge_hl_add uses, on the RAW
+# six-rect Blink geometry (the page merges too, but JS is never
+# trusted, so the unmerged payload is the stricter case).
+_hl159 = []
+for _pass159 in range(3):
+    _hl159 = pv.merge_highlight_records(
+        _hl159, pv.records_from_rect_map({"0": _BLINK_3_LINES},
+                                         color=_YEL))
+check("three drags over the same sentence leave ONE record with ONE "
+      "rect per line — no second layer of 43% paint to composite with",
+      len(_hl159) == 1 and _hl159[0]["rects"] == _QUADS_3_LINES,
+      repr(_hl159))
+_once159 = pv.merge_highlight_records(
+    [], pv.records_from_rect_map({"0": _BLINK_3_LINES}, color=_YEL))
+check("...and passes two and three changed nothing at all, so "
+      "_bridge_hl_add's `merged == self._highlights` returns before any "
+      "save, bake or push",
+      pv.merge_highlight_records(
+          _once159,
+          pv.records_from_rect_map({"0": _BLINK_3_LINES}, color=_YEL))
+      == _once159)
+check("a drag that only PARTLY overlaps still grows the one record "
+      "rather than adding a second — sticky mode's realistic case, "
+      "since a second drag never lands on the same pixels",
+      len(pv.merge_highlight_records(
+          _once159,
+          pv.records_from_rect_map(
+              {"0": [[21, 19.5, 200, 18.5]]}, color=_YEL))) == 1)
+_cut159 = pv.merge_highlight_records(
+    _once159,
+    pv.records_from_rect_map({"0": [[60, 19.5, 25, 18.5]]}, color=_GRN))
+check("and a DIFFERENT ink still CUTS rather than composites — "
+      "K-149's yellow/green/yellow, unchanged by stickiness: yellow "
+      "keeps a piece either side of the green on line one and both "
+      "lines below untouched, green is one rect, nothing overlaps",
+      len(_cut159) == 2 and _cut159[1]["color"] == _GRN
+      and _cut159[1]["rects"] == [[60.0, 19.5, 25.0, 18.5]]
+      and _cut159[0]["rects"] == [[21.0, 19.5, 39.0, 18.5],
+                                  [85.0, 19.5, 46.28, 18.5],
+                                  [21.0, 43.5, 120.09, 18.5],
+                                  [21.0, 67.5, 104.95, 18.5]],
+      repr(_cut159))
+
+
+# The bridging drag itself — the case the property walk turned up, and
+# the reason step 3 folds EVERY touching record rather than the first.
+# Marked on the live page as three drags of one line (left third, right
+# third, then across the gap): the old rule left two records whose
+# rects overlapped by 26pt, painted twice at 43%.
+_LEFT159 = pv.records_from_rect_map({"0": [[72.97, 61.93, 83.36, 14.02]]},
+                                    color=_YEL)
+_RIGHT159 = pv.records_from_rect_map({"0": [[260.39, 61.93, 70.7, 14.02]]},
+                                     color=_YEL)
+_BRIDGE159 = pv.records_from_rect_map({"0": [[125.65, 61.93, 160.76, 14.02]]},
+                                      color=_YEL)
+_pair159 = pv.merge_highlight_records(
+    pv.merge_highlight_records([], _LEFT159), _RIGHT159)
+check("two separated marks on one line stay two records — they share "
+      "no ink, so there is nothing to fold",
+      len(_pair159) == 2)
+_bridged159 = pv.merge_highlight_records(_pair159, _BRIDGE159)
+check("a drag ACROSS the gap collapses BOTH into one record covering "
+      "the whole span — folding into only the first (pre-K-159) left "
+      "the second overlapping it by 26pt at 43% on 43%",
+      len(_bridged159) == 1 and len(_bridged159[0]["rects"]) == 1
+      and all(abs(a - b) < 0.01 for a, b in zip(
+          _bridged159[0]["rects"][0], [72.97, 61.93, 258.12, 14.02])),
+      repr(_bridged159))
+check("...and the surviving record is the FIRST host, id intact — "
+      "K-149's rule for one host, unchanged for several",
+      _bridged159[0]["id"] == _pair159[0]["id"])
+check("a note on an ABSORBED record is carried onto the survivor, not "
+      "dropped with it (`.get` so a dropped note reports one honest "
+      "failure instead of a KeyError that aborts the file)",
+      pv.merge_highlight_records(
+          [_pair159[0], dict(_pair159[1], note="from the right mark")],
+          _BRIDGE159)[0].get("note") == "from the right mark")
+check("...and the host's own note wins when both carry one",
+      pv.merge_highlight_records(
+          [dict(_pair159[0], note="host"),
+           dict(_pair159[1], note="absorbed")],
+          _BRIDGE159)[0].get("note") == "host")
+
+
+def _same_ink_overlap(records):
+    """Any two SAME-INK rects that overlap anywhere in *records*.
+
+    This is the paint invariant itself, not a proxy: two overlapping
+    rects in one ink are exactly what composites 43% + 43% into the
+    67.5% "double-highlighted" look, whether they sit in one record or
+    in two.
+    """
+    flat = []
+    for rec in records:
+        ink = pv.validate_hex_color(rec.get("color"))
+        for r in rec.get("rects") or []:
+            flat.append((ink, r))
+    for i in range(len(flat)):
+        for j in range(i + 1, len(flat)):
+            (ink1, a), (ink2, b) = flat[i], flat[j]
+            if ink1 != ink2:
+                continue
+            if (a[0] < b[0] + b[2] and b[0] < a[0] + a[2]
+                    and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]):
+                return (a, b)
+    return None
+
+
+# The fixed sequence above proves the reported gesture. This proves the
+# RULE, over 400 random sticky sessions: whatever a user drags, in
+# whatever ink, in whatever order, no two same-ink rects ever end up
+# overlapping. A random walk found nothing; that is the claim.
+import random as _rnd159
+
+_rng159 = _rnd159.Random(159)
+_INKS159 = [v for _n, v in _theme149.HIGHLIGHT_INKS]
+_worst159 = None
+for _trial in range(400):
+    _recs159: list = []
+    for _drag in range(6):
+        _x = _rng159.randrange(0, 160)
+        _y = _rng159.choice([20, 24, 44, 68])
+        _w = _rng159.randrange(10, 120)
+        _rects159 = [[_x, _y, _w, 18.5]]
+        if _rng159.random() < 0.5:      # Blink's doubled border box
+            _rects159.append([_x, _y + 1.5, _w, 16])
+        _recs159 = pv.merge_highlight_records(
+            _recs159,
+            pv.records_from_rect_map(
+                {"0": _rects159}, color=_rng159.choice(_INKS159)))
+        _bad159 = _same_ink_overlap(_recs159)
+        if _bad159 and _worst159 is None:
+            _worst159 = (_trial, _drag, _bad159)
+check("400 random sticky sessions of six drags each: not one pair of "
+      "same-ink rects ever overlaps",
+      _worst159 is None, repr(_worst159))
+# The property check has to be able to FAIL, or it pins nothing: the
+# pre-K-149 behaviour was a blind append, and that is what it caught.
+check("...and that walk really would have caught the old blind "
+      "append (the check is not vacuously true)",
+      _same_ink_overlap(
+          [dict(_base[0]),
+           dict(_base[0], id="z" * 32)]) is not None)
 
 raise SystemExit(report())

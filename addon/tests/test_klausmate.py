@@ -2033,5 +2033,140 @@ check("...and the docstring says what DOES carry the target, so the "
       "next reader does not reinstate it",
       "currentField" in _INIT_K140)
 
+print("== K-159: a baked text box keeps its size and colour ==")
+# THE BUG, live: "the fonts don't render properly on the PDF viewer in
+# Preview... they're always small." Vendored pypdf's FreeText builds
+# /DA only inside `if border_color:` (and even then writes only a
+# colour, never a font), and pdf_handler passes border_color=None
+# deliberately — K-150's reasoning stands, Preview frames a text box
+# only while it is selected. So /DA shipped EMPTY, size and colour
+# lived only in /DS (the rich-text CSS string most readers ignore),
+# and every note fell back to a reader default: small, black.
+#
+# MEASURED IN A RENDERER, not in a hex dump. PDFKit — the framework
+# Preview itself draws with — reported, for a 24pt red record:
+#     before:  font=Helvetica size=12.0  color=white 0   (i.e. black)
+#     after:   font=Helvetica size=24.0  color=RGB 1 0 0
+# and pdf.js (annotationMode ENABLE) agreed: defaultAppearanceData
+# went from {fontSize:10, fontName:"", black} to {fontSize:24,
+# fontName:"Helv", red}. /DR was tried and is NOT needed — PDFKit
+# resolves /Helv with no resource dictionary and no /AcroForm.
+check("the string is the PDF operator form, size then colour",
+      pdf_handler.free_text_da("#ff0000", 24) == "/Helv 24 Tf 1 0 0 rg")
+check("numbers are operands, not reprs — no 12.0, no 17 decimals",
+      pdf_handler.free_text_da("#000000", 12.0) == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("#fadc50", 13.5)
+      == "/Helv 13.5 Tf 0.9804 0.8627 0.3137 rg")
+check("a junk or absent colour falls back to the caller's default, "
+      "never lands in the appearance string verbatim",
+      pdf_handler.free_text_da(None, 12) == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("rgb(1,2,3)", 12)
+      == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("#fff", 12) == "/Helv 12 Tf 0 0 0 rg")
+try:
+    _da_nonhex = pdf_handler.free_text_da("#12345g", 12)
+except Exception as _da_exc:            # noqa: BLE001 - the point is that
+    _da_nonhex = f"raised {_da_exc!r}"  # it must not raise
+check("...including a SIX-character non-hex string — the length is "
+      "not the check, the alphabet is (the shorter cases above all "
+      "pass a length-only guard, so they pinned nothing on their own)",
+      _da_nonhex == "/Helv 12 Tf 0 0 0 rg", repr(_da_nonhex))
+check("a junk, zero, negative or non-finite size falls back to 12 — a "
+      "`0 Tf` means auto-size to some readers and nothing to others",
+      all(pdf_handler.text_point_size(v) == 12.0
+          for v in (None, "big", 0, -3, float("nan"), float("inf"), [])))
+check("a real size survives, ints and floats alike",
+      pdf_handler.text_point_size(24) == 24.0
+      and pdf_handler.text_point_size("18") == 18.0
+      and pdf_handler.text_point_size(13.5) == 13.5)
+check("one size constant feeds both appearance strings, so /DS and "
+      "/DA can never disagree about a note's size",
+      "font_size=f\"{pt}pt\"" in open(
+          os.path.join(ADDON, "pdf_handler.py"), encoding="utf-8").read())
+
+if not pdf_handler.BAKE_AVAILABLE:
+    print("  SKIP pypdf unavailable — /DA bake round-trip unverified")
+else:
+    from pypdf import PdfReader as _DaReader, PdfWriter as _DaWriter
+    from pypdf.annotations import FreeText as _DaFreeText
+
+    # The hazard is REAL and still present in the vendored copy: build
+    # a borderless FreeText pypdf's own way and its /DA is the empty
+    # string. Without this the fix below could be guarding a case that
+    # a pypdf bump had already fixed, and nobody would know.
+    _da_probe = _DaFreeText(text="x", rect=(0, 0, 10, 10),
+                            font_size="24pt", font_color="ff0000",
+                            border_color=None, background_color=None)
+    check("pypdf still writes an EMPTY /DA for a borderless box — the "
+          "bug this fixes has not gone away underneath us",
+          str(_da_probe.get("/DA")) == ""
+          and "24pt" in str(_da_probe.get("/DS")))
+
+    _da_uf = tempfile.mkdtemp(prefix="klaus_k159_")
+    _DA_N = "K159_DA"
+    os.makedirs(os.path.join(_da_uf, "pdfs"))
+    _da_work = os.path.join(_da_uf, "pdfs", _DA_N + ".pdf")
+    _w159 = _DaWriter()
+    _w159.add_blank_page(width=612, height=792)
+    with open(_da_work, "wb") as _fh159:
+        _w159.write(_fh159)
+    # A 24pt red note beside a 12pt black one: the pair Pouya can tell
+    # apart at a glance, and the pair the renderers were checked with.
+    _da_recs = [
+        {"id": "e" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 80.0, 320.0, 40.0]], "text": "BIG RED 24pt",
+         "note": "", "color": "#ff0000", "size": 24},
+        {"id": "f" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 200.0, 220.0, 20.0]], "text": "small black 12pt",
+         "note": "", "color": "#000000", "size": 12},
+        {"id": "0" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 300.0, 220.0, 20.0]], "text": "junk style",
+         "note": "", "color": "not-a-colour", "size": "huge"},
+    ]
+    pdf_handler.save_annotations(_da_uf, _DA_N, _da_recs)
+    check("bake succeeds", pdf_handler.bake_annotations(_da_uf, _DA_N))
+    _da_free = [
+        a.get_object()
+        for a in (_DaReader(_da_work).pages[0].get("/Annots") or [])
+        if str(a.get_object().get("/Subtype")) == "/FreeText"
+    ]
+    _da_by_text = {str(o.get("/Contents")): o for o in _da_free}
+    check("one FreeText per record", len(_da_free) == 3, repr(_da_by_text))
+    check("the big red note carries its own size AND colour in /DA",
+          str(_da_by_text["BIG RED 24pt"].get("/DA"))
+          == "/Helv 24 Tf 1 0 0 rg",
+          repr(str(_da_by_text["BIG RED 24pt"].get("/DA"))))
+    check("the small black one carries its own, different, size",
+          str(_da_by_text["small black 12pt"].get("/DA"))
+          == "/Helv 12 Tf 0 0 0 rg")
+    check("a junk style bakes as the 12pt black fallback rather than "
+          "an unparseable operand a reader would choke on",
+          str(_da_by_text["junk style"].get("/DA"))
+          == "/Helv 12 Tf 0 0 0 rg")
+    check("Klaus reads its OWN baked style back — before /DA existed "
+          "_freetext_style saw (#000000, None) for every box, so an "
+          "adopted copy of a Klaus note lost its size and colour",
+          pdf_handler._freetext_style(_da_by_text["BIG RED 24pt"])
+          == ("#ff0000", 24.0)
+          and pdf_handler._freetext_style(
+              _da_by_text["small black 12pt"]) == ("#000000", 12.0))
+    # `.get("/W", -1)` rather than `["/W"]`: pypdf writes /BS only in
+    # the border_color-is-None branch, so a border creeping back means
+    # the key is ABSENT — and a KeyError here would abort the file
+    # instead of reporting one honest failure.
+    check("the border stays OFF — /DA and the border are separate "
+          "concerns, and conflating them is what caused this (K-150: "
+          "Preview frames a text box only while it is selected)",
+          all(int((o.get("/BS") or {}).get("/W", -1)) == 0
+              for o in _da_free)
+          and all(o.get("/C") is None for o in _da_free),
+          repr([(o.get("/BS"), o.get("/C")) for o in _da_free]))
+    check("no /AcroForm or /DR was invented in the user's PDF — /Helv "
+          "is a base-14 name readers resolve on their own (verified "
+          "in PDFKit with neither present)",
+          _DaReader(_da_work).trailer["/Root"].get("/AcroForm") is None
+          and all(o.get("/DR") is None for o in _da_free))
+    shutil.rmtree(_da_uf, ignore_errors=True)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

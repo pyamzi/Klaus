@@ -498,8 +498,19 @@ def merge_highlight_records(
        new ink wins on exactly the area it covers, so re-marking two
        words inside a yellow sentence in green leaves yellow either
        side and green between, never green over yellow;
-    3. what survives is unioned into a same-ink record it touches, or
-       appended as a new record.
+    3. what survives is unioned into EVERY same-ink record it touches
+       — all of them collapsing into one — or appended as a new record.
+
+    Step 3 folded into only the FIRST touching record until K-159, and
+    that left a same-ink overlap the property walk found: mark two
+    separated spans of a line in one ink, then drag across the gap
+    between them, and the bridging mark unioned into the left record
+    while the right one stayed put, overlapping it. Two 43% layers on
+    that sliver — the "double-highlighted" look K-149 set out to kill,
+    reached by a third route it did not model. NOT a stickiness bug
+    (nothing here can see the tool state; the same three drags produced
+    the same records when Highlight was one-shot), but a sticky tool is
+    how a user reaches three overlapping drags without noticing.
 
     Deliberately at MINT time, never in pdf_handler: storage collapses
     duplicates only for ``origin == "external"`` records (Preview
@@ -550,21 +561,41 @@ def merge_highlight_records(
                     cur = dict(cur, rects=left)
             kept.append(cur)
         out = kept
-        host_at = -1
-        for i, cur in enumerate(out):
-            if not _is_plain_highlight(cur, page):
-                continue
-            if validate_hex_color(cur.get("color")) != ink:
-                continue
-            if _rects_touch(cur.get("rects") or [], rects):
-                host_at = i
-                break
-        if host_at >= 0:
+        # EVERY same-ink record the new mark touches, not just the
+        # first — a mark bridging two of them has to collapse both, or
+        # the two survivors overlap each other (K-159).
+        touched = [
+            i for i, cur in enumerate(out)
+            if _is_plain_highlight(cur, page)
+            and validate_hex_color(cur.get("color")) == ink
+            and _rects_touch(cur.get("rects") or [], rects)
+        ]
+        if touched:
+            host_at = touched[0]
             host = out[host_at]
-            out[host_at] = dict(
-                host,
-                rects=merge_rects(list(host.get("rects") or []) + rects),
-            )
+            pooled = list(rects)
+            # The host keeps its id, and its note if it has one; a note
+            # on an absorbed record is carried over rather than
+            # silently dropped with it (first non-empty wins — two
+            # notes on marks a single drag bridges is not a case worth
+            # inventing a join for).
+            note = host.get("note")
+            note = note if isinstance(note, str) and note.strip() else ""
+            for i in touched:
+                pooled = list(out[i].get("rects") or []) + pooled
+                if not note:
+                    other = out[i].get("note")
+                    if isinstance(other, str) and other.strip():
+                        note = other
+            merged_rec = dict(host, rects=merge_rects(pooled))
+            if note:
+                merged_rec["note"] = note
+            drop = set(touched[1:])
+            out = [
+                merged_rec if i == host_at else cur
+                for i, cur in enumerate(out)
+                if i not in drop
+            ]
         else:
             out.append(dict(rec, color=ink, rects=rects))
     return out

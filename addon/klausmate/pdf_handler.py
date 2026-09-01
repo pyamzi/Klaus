@@ -1337,6 +1337,79 @@ def _bake_color(value, fallback: str) -> str:
     return fallback
 
 
+# The base-14 font name every reader resolves without a resource
+# dictionary. Spelled once so the /DA string and any future /DR entry
+# can never name different fonts.
+_DA_FONT = "Helv"
+
+# The size a text record falls back to when its own is missing or junk
+# — one constant behind both the /DS string pypdf builds and the /DA
+# string we build, so the two halves of one annotation's appearance can
+# never disagree.
+TEXT_SIZE_FALLBACK = 12
+
+
+def _num(value: float) -> str:
+    """A PDF numeric token: ``12`` not ``12.0``, ``0.9804`` not
+    ``0.9803921568627451`` — a content-stream operand, not a repr."""
+    return f"{round(float(value), 4):g}"
+
+
+def free_text_da(color, size, fallback_color: str = "000000") -> str:
+    """The FreeText default-appearance string, ``/Helv 24 Tf 1 0 0 rg``.
+
+    WHY WE BUILD THIS OURSELVES (K-159, and it is the whole bug):
+    vendored pypdf's ``FreeText`` writes ``/DA`` only inside
+    ``if border_color:`` — and it writes only the colour there, never a
+    font. We pass ``border_color=None`` deliberately (K-150: Preview
+    frames a text box only while it is selected, so a permanent border
+    would be wrong), so every baked text box shipped ``/DA ()``. Size
+    and colour went into ``/DS`` alone, the rich-text CSS string, which
+    Preview and most readers ignore — so they fell back to a default
+    appearance and every note rendered small and black. MEASURED, not
+    assumed: PDFKit (the framework Preview itself draws with) reported
+    ``font=Helvetica size=12.0 color=white 0`` for a 24pt red record,
+    and reported ``size=24.0 color=RGB 1 0 0`` once this string was
+    present. The border stays off: the border and the appearance string
+    are separate concerns, and conflating them is what produced the bug.
+
+    ``/DR`` is deliberately NOT written. ``/Helv`` is one of the base-14
+    names readers resolve implicitly, and PDFKit was measured rendering
+    both the size and the colour correctly with no resource dictionary
+    and no ``/AcroForm`` anywhere in the file — inventing an empty form
+    dictionary in a user's lecture PDF to restate a font every reader
+    already knows would be a bigger change than the fix.
+
+    Round-trips: ``_freetext_style`` parses exactly this shape back
+    (``/Helv <n> Tf`` and ``r g b rg``), so a Klaus box re-read from the
+    file carries the style it was baked with instead of black/None.
+    """
+    hexv = _bake_color(color, fallback_color)
+    r, g, b = (int(hexv[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    return (
+        f"/{_DA_FONT} {_num(text_point_size(size))} Tf "
+        f"{_num(r)} {_num(g)} {_num(b)} rg"
+    )
+
+
+def text_point_size(size) -> float:
+    """A text record's font size in points, ``TEXT_SIZE_FALLBACK`` for
+    anything missing, non-numeric, non-positive or non-finite.
+
+    The bake's ``hl.get('size') or 12`` used to say this inline, in one
+    place. It now has two readers — pypdf's ``/DS`` and our own ``/DA``
+    — and a note whose two appearance strings disagreed about its size
+    would be worse than the bug K-159 fixes.
+    """
+    try:
+        pt = float(size)
+    except (TypeError, ValueError):
+        return float(TEXT_SIZE_FALLBACK)
+    if not math.isfinite(pt) or pt <= 0:
+        return float(TEXT_SIZE_FALLBACK)
+    return pt
+
+
 def bake_annotations(
     user_files_dir: str,
     name: str,
@@ -1551,6 +1624,7 @@ def bake_annotations(
                 if not rects:
                     continue
                 x, y, w, h = (float(v) for v in rects[0])
+                pt = text_point_size(hl.get("size"))
                 free = _BakeFreeText(
                     text=str(hl.get("text") or ""),
                     rect=(
@@ -1559,10 +1633,17 @@ def bake_annotations(
                         ox + x + w,
                         oy + ph - y,
                     ),
-                    font_size=f"{hl.get('size') or 12}pt",
+                    font_size=f"{pt}pt",
                     font_color=_bake_color(hl.get("color"), "000000"),
                     border_color=None,
                     background_color=None,
+                )
+                # /DA, which pypdf leaves EMPTY for a borderless box —
+                # see free_text_da. Without it Preview renders every
+                # note at its own default size in black, whatever /DS
+                # says (measured in PDFKit, K-159).
+                free[_BakeName("/DA")] = _BakeString(
+                    free_text_da(hl.get("color"), pt)
                 )
                 _mark_klaus(free, hl)
                 writer.add_annotation(page, free)
