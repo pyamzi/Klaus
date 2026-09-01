@@ -2297,6 +2297,16 @@ def _apply_color_theme() -> None:
         print(f"[klausmate] colour theme failed: {_exc}")
 
 
+# The Library screen must step aside whenever Anki moves to one of its own
+# states, or it sits on top of the deck list forever — Anki changes state
+# without knowing another widget is covering its webviews.
+try:
+    from . import library_tab as _library_tab
+
+    _library_tab.install_hooks()
+except Exception as _e:
+    print(f"[klausmate] library tab hooks not installed: {_e}")
+
 gui_hooks.profile_did_open.append(_apply_color_theme)
 gui_hooks.profile_did_open.append(_migrate_config)
 # One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config

@@ -876,10 +876,14 @@ class DriveWindow(QWidget):
     # Required by the dialog manager for profile-switch teardown.
     silentlyClose = True
 
-    def __init__(self) -> None:
+    def __init__(self, embedded: bool = False) -> None:
         super().__init__()
+        # Embedded = mounted as a screen inside Anki's main window rather
+        # than opened as its own. Read during construction, so it is set
+        # first.
+        self.embedded = bool(embedded)
         self.setWindowTitle("Library — KlausMate")
-        self.setMinimumSize(720, 420)
+        self.setMinimumSize(720 if not embedded else 320, 420)
         # VS Code Explorer language (K-117): window on bg, the tree a
         # flat full-bleed panel on surface with compact rows, an
         # uppercase section caption with quiet flat actions beside it.
@@ -1069,7 +1073,15 @@ class DriveWindow(QWidget):
         # ---- right: the existing viewer ----
         from .pdf_viewer import PdfSidebar
 
-        self.sidebar = PdfSidebar(None, parent=self.splitter)
+        # Library-only mode skips the viewer ENTIRELY rather than hiding
+        # it. Under the pdf.js renderer PdfSidebar is a webview, and a
+        # webview pane inside the main window is exactly what defeated
+        # single_window.py through five rework rounds (deleted 2026-08-25).
+        # Not constructing it is the difference between reusing that
+        # machinery and re-fighting that bug.
+        self.sidebar = None
+        if not self.embedded:
+            self.sidebar = PdfSidebar(None, parent=self.splitter)
         # THE follow-the-viewer seam (K-143/K-137). PdfSidebar already
         # owns one: on_loaded fires from _notify_loaded on EVERY path
         # that puts a document on screen, whichever call site triggered
@@ -1077,10 +1089,12 @@ class DriveWindow(QWidget):
         # showing", and why no new signal was invented for this. The
         # slot is free here: the only other assignment in the addon is
         # _PdfTabContainer's, on its OWN sidebar.
-        self.sidebar.on_loaded = self._on_viewer_loaded
+        if self.sidebar is not None:
+            self.sidebar.on_loaded = self._on_viewer_loaded
         self.splitter.addWidget(left)
-        self.splitter.addWidget(self.sidebar)
-        self.splitter.setStretchFactor(1, 1)
+        if self.sidebar is not None:
+            self.splitter.addWidget(self.sidebar)
+            self.splitter.setStretchFactor(1, 1)
         # ---- right: the assistant ----
         # Guarded like every other optional surface here: a panel that
         # fails to import must cost the assistant, not the Library.
@@ -2503,6 +2517,24 @@ def _create() -> DriveWindow:
     return _instance
 
 
+def open_library() -> None:
+    """What the toolbar's Library link does now: a screen inside Anki's
+    main window rather than a separate one (Pouya, 2026-09-01 — "it's
+    really annoying having a separate window show up each time").
+
+    Falls back to the standalone window if the mount fails for any reason,
+    so a broken tab costs the tab and not the Library.
+    """
+    try:
+        from . import library_tab
+
+        if library_tab.mount():
+            return
+    except Exception as e:
+        print(f"[klausmate] library tab unavailable, using the window: {e}")
+    open_drive()
+
+
 def open_drive() -> None:
     try:
         aqt.dialogs.open(DIALOG_NAME)
@@ -2546,7 +2578,7 @@ def _on_toolbar_links(links: list, toolbar: Any) -> None:
         link = toolbar.create_link(
             "klausDriveOpen",
             "Library",
-            open_drive,
+            open_library,
             tip="Klaus PDF library",
             id="klaus-drive",
         )
