@@ -113,10 +113,12 @@ def library_tags_enabled(cfg: dict) -> bool:
 def strip_pdf_ext(display: str) -> str:
     """Display name minus a trailing ``.pdf`` or ``.txt`` (case-insensitive).
 
-    Mirrors curation.suggest_deck_name's extension list rather than
-    pdf_handler._safe_basename: that helper sanitizes for the FILESYSTEM
-    (a different, more aggressive alphabet) and is the wrong tool for
-    deriving a tag's display-facing leaf.
+    Deliberately NOT pdf_handler._safe_basename: that helper sanitizes
+    for the FILESYSTEM (a different, more aggressive alphabet) and is
+    the wrong tool for deriving a tag's display-facing leaf. The two
+    extensions come from curation.suggest_deck_name, which used the
+    same pair for the deck names it minted — K-146 deleted that
+    function with the curate button; this list outlived it.
     """
     name = display or ""
     lower = name.lower()

@@ -1,14 +1,15 @@
 """Import a lecture PDF from Anki's deck screens — drop square and drop wrap.
 
-**K-146 removed the curate-a-deck ceremony this file was built around.**
-That button never created a deck: it searched, tagged, and opened Browse
-on the per-PDF ``!Library`` tag — the same tag indexing already writes
+**K-146 removed the curate-a-deck ceremony this file was built around;
+K-151 renamed the file and retired the last of its vocabulary.** The
+button never created a deck: it searched, tagged, and opened Browse on
+the per-PDF ``!Library`` tag — the same tag indexing already writes
 (``tag_sync.sync_after_matches``) and the same view the Library's "Show
 Matched Cards in Browse" opens. What it did do, invisibly, was refresh
 the CARD index; that job moved to ``pdf_drive._on_embed``, which is now
 the only user-facing path that reaches ``curation.ensure_index``.
 
-What remains here is the import surface, on two screens:
+What remains is the import surface, on two screens:
 
 - **PDF drop** — ``MainWebView.dropEvent`` consumes OS file drops on the
   deck browser and feeds them to Anki's importer, and ``AnkiWebView``
@@ -26,9 +27,16 @@ Command namespace is ``klausmate_<action>`` (underscore) — deliberately
 NOT the editor bridge's ``klausmate:<action>`` (colon), whose handler
 claims and drops any message from a non-Editor context.
 
-Importing a PDF still "arms" it: session-only state that names the file
-just imported on the deck screens until dismissed with ×. Nothing
-consumes it anymore — it is a confirmation, not a pending action.
+**The square has ONE state.** Importing used to "arm" the PDF: session
+state (``_armed_pdf``/``arm``/``disarm_if``), a ``klausmate_disarm``
+bridge command, and a second rendering of the square that named the
+file and offered a × to dismiss it. That existed to stage a PDF for the
+curate button; with the button gone there was nothing left to arm FOR,
+and a square naming a file with no action attached is a confirmation
+Anki already gives — ``import_pdf_file`` tooltips "Klaus: loaded '<name>'"
+on every import surface. K-151 removed the armed half whole rather than
+leaving a vestige: state, command, handler branch, HTML, the deck/overview
+re-render it needed, and ``pdf_drive``'s ``disarm_if`` call on delete.
 """
 
 from __future__ import annotations
@@ -40,89 +48,29 @@ from aqt import gui_hooks, mw
 from aqt.qt import QTimer
 from aqt.utils import tooltip
 
-DISARM_CMD = "klausmate_disarm"
 BROWSE_CMD = "klausmate_browse"
-_CLAIMED = {DISARM_CMD, BROWSE_CMD}
-
-_armed_pdf: str | None = None
-
-
-def _user_files() -> str:
-    from . import USER_FILES
-
-    return USER_FILES
-
-
-def _display_name(safe: str) -> str:
-    try:
-        from . import drive_store
-
-        return drive_store.display_name(_user_files(), safe)
-    except Exception:
-        return safe
-
-
-# ------------------------------------------------------------ armed state
-
-
-def armed() -> str | None:
-    return _armed_pdf
-
-
-def arm(safe: str | None) -> None:
-    global _armed_pdf
-    _armed_pdf = safe
-    _refresh_current_screen()
-
-
-def disarm_if(safe: str) -> None:
-    """Clear the armed PDF when that PDF is deleted elsewhere.
-
-    Still called by pdf_drive._delete after K-146: the square NAMES the
-    armed PDF, so deleting it must stop that name being advertised.
-    """
-    if _armed_pdf == safe:
-        arm(None)
-
-
-def _refresh_current_screen() -> None:
-    """Re-render whichever deck-scoped screen is currently showing, so the
-    armed/idle drop square updates immediately after arm()/disarm() —
-    needed on the overview now that Browse/disarm can be triggered there
-    too, not just on the deck browser."""
-    try:
-        if mw is None:
-            return
-        state = getattr(mw, "state", "")
-        if state == "deckBrowser":
-            mw.deckBrowser.refresh()
-        elif state == "overview":
-            mw.overview.refresh()
-    except Exception as e:
-        print(f"[klausmate] deck/overview refresh failed: {e}")
 
 
 # --------------------------------------------------------------- import
 
 
-def _import_and_arm(paths: list[str], skipped: int = 0) -> None:
+def _import_pdfs(paths: list[str], skipped: int = 0) -> None:
+    """Feed dropped/picked paths through the shared import.
+
+    No return value and no screen refresh: ``import_pdf_file`` already
+    tooltips each successful load and warns on each failure, and since
+    K-151 the square renders the same either way, so there is nothing
+    here to tell the deck screen about.
+    """
     from . import import_pdf_file
 
-    last: str | None = None
     for path in paths:
         try:
-            name = import_pdf_file(path)
+            import_pdf_file(path)
         except Exception as e:
             print(f"[klausmate] deck-drop import failed for {path}: {e}")
-            continue
-        if name:
-            last = name
     if skipped:
         tooltip(f"Klaus imported the PDF — ignored {skipped} other file(s).")
-    if last:
-        arm(last)
-    else:
-        _refresh_current_screen()
 
 
 def _browse_for_pdfs() -> None:
@@ -133,7 +81,7 @@ def _browse_for_pdfs() -> None:
         mw, "Import lecture PDF", "", "PDF files (*.pdf)"
     )
     if paths:
-        _import_and_arm(list(paths))
+        _import_pdfs(list(paths))
 
 
 def _on_browse_clicked() -> None:
@@ -148,8 +96,14 @@ def _on_browse_clicked() -> None:
 def on_deck_js_message(
     handled: tuple[bool, Any], message: str, context: Any
 ) -> tuple[bool, Any]:
-    """Claim the deck-surface link commands (underscore namespace)."""
-    if message not in _CLAIMED:
+    """Claim the deck-surface link command (underscore namespace).
+
+    One command since K-151 retired ``klausmate_disarm`` with the armed
+    square. The handler stays registered for it: a js-message handler
+    leaving the roster is as deliberate a change as one arriving
+    (tests/test_bridge_reentrancy.py).
+    """
+    if message != BROWSE_CMD:
         return handled
     try:
         from aqt.deckbrowser import DeckBrowser, DeckBrowserBottomBar
@@ -169,18 +123,16 @@ def on_deck_js_message(
             return handled
     except Exception:
         return handled
-    if message == DISARM_CMD:
-        arm(None)
-    elif message == BROWSE_CMD:
-        _on_browse_clicked()
+    _on_browse_clicked()
     return (True, None)
 
 
 def _drop_square_html() -> str:
-    """Render the drop-PDF square: idle body + Browse anchor, or the armed
-    indicator + its × disarm link. Single source for every deck-scoped
-    screen — deck browser, deck overview, and (K-043) the Library window —
-    so they can never drift apart from each other.
+    """Render the drop-PDF square: the invitation plus its Browse anchor.
+
+    Single source for every deck-scoped screen — deck browser and deck
+    overview — so they can never drift apart from each other. ONE state
+    since K-151: there is no armed variant to reflow into.
 
     Fixed to the bottom of the CONTENT webview's own viewport rather than
     flowing in-place: on both the deck browser and the deck overview, the
@@ -201,59 +153,37 @@ def _drop_square_html() -> str:
     try:
         from . import theme as _theme
 
-        _night = _theme.night_mode()
-        _c = _theme.palette(_night)
-        _armed_border = f"1px solid {_theme.accent_rgba(_night, 0.85)}"
+        _c = _theme.palette(_theme.night_mode())
         _idle_border = f"1px dashed {_c['grey_mid']}"
         _btn_border = f"1px solid {_c['grey_mid']}"
     except Exception:
-        _armed_border = "1px solid rgba(58,130,247,0.85)"
         _idle_border = "1px dashed rgba(128,128,128,0.55)"
         _btn_border = "1px solid rgba(128,128,128,0.55)"
-    if _armed_pdf:
-        label = _display_name(_armed_pdf)
-        safe_label = (
-            label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        )
-        # The copy names what actually happened and where to go next.
-        # It used to point at the curate button on the bottom bar —
-        # which K-146 removed, and which never created a deck anyway.
-        body = (
-            f"<span style='flex:1;text-align:left;'>Imported: <b>{safe_label}</b>"
-            " — index it from the <b>Library</b>.</span>"
-            f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;' "
-            "style='flex:0 0 auto;color:inherit;text-decoration:none;'>"
-            "&times;</a>"
-        )
-        border = _armed_border
-    else:
-        body = (
-            "<span style='flex:1;text-align:left;'>"
-            "Drop a lecture PDF to add it to your Library</span>"
-            f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
-            "style='flex:0 0 auto;padding:3px 10px;"
-            f"border:{_btn_border};border-radius:6px;"
-            "font-size:12px;color:inherit;text-decoration:none;'>"
-            "Browse&hellip;</a>"
-        )
-        border = _idle_border
     # One flex row, not a stacked block: the label takes the free space and
-    # the action (Browse… / ×) sits hard right, matching the Qt surfaces in
-    # pdf_drive._LibraryDropZone and __init__._PdfBar. Both states use the
-    # same row so the square does not reflow when a PDF is armed.
+    # Browse… sits hard right, matching the Qt surfaces in
+    # pdf_drive._LibraryDropZone and __init__._PdfBar.
+    body = (
+        "<span style='flex:1;text-align:left;'>"
+        "Drop a lecture PDF to add it to your Library</span>"
+        f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
+        "style='flex:0 0 auto;padding:3px 10px;"
+        f"border:{_btn_border};border-radius:6px;"
+        "font-size:12px;color:inherit;text-decoration:none;'>"
+        "Browse&hellip;</a>"
+    )
     return (
         f"<div style='position:fixed;left:50%;bottom:10px;"
         f"transform:translateX(-50%);z-index:50;"
         f"display:flex;align-items:center;gap:10px;"
         f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
         f"box-sizing:border-box;background:var(--window-bg,transparent);"
-        f"border:{border};border-radius:12px;"
+        f"border:{_idle_border};border-radius:12px;"
         f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
     )
 
 
 def on_deck_browser_content(deck_browser: Any, content: Any) -> None:
-    """Inject the drop square / armed indicator above the deck list."""
+    """Inject the drop square above the deck list."""
     if not hasattr(content, "stats"):
         return
     try:
@@ -311,7 +241,7 @@ def _install_drop_wrap() -> None:
                         # first url, so chaining would double-handle it.
                         evt.accept()
                         QTimer.singleShot(
-                            0, lambda p=list(pdfs), s=others: _import_and_arm(p, s)
+                            0, lambda p=list(pdfs), s=others: _import_pdfs(p, s)
                         )
                         return
         except Exception as e:
@@ -323,17 +253,14 @@ def _install_drop_wrap() -> None:
     cls._klausmate_drop_wrapped = True
 
 
-def _on_profile_will_close() -> None:
-    global _armed_pdf
-    _armed_pdf = None
-
-
 def setup() -> None:
     """Install every deck surface; each failure is isolated and logged.
 
     K-146 dropped two installs with the button they existed for: the
     ``DeckBrowser.drawLinks`` append and the ``overview_will_render_bottom``
-    filter. Klaus adds nothing to either bottom bar now.
+    filter. Klaus adds nothing to either bottom bar now. K-151 dropped a
+    third — the ``profile_will_close`` handler that reset the armed PDF —
+    because there is no session state left in this module to reset.
     """
     try:
         _install_drop_wrap()
@@ -354,7 +281,3 @@ def setup() -> None:
             gui_hooks.overview_will_render_content.append(on_overview_content)
         except Exception as e:
             print(f"[klausmate] overview content hook failed: {e}")
-    try:
-        gui_hooks.profile_will_close.append(_on_profile_will_close)
-    except Exception as e:
-        print(f"[klausmate] deck curate profile hook failed: {e}")

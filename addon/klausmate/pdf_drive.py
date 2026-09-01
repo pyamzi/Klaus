@@ -60,7 +60,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning, tooltip
 
-from . import curation, deck_curate, drive_store, pdf_handler, retention, tag_sync
+from . import curation, drive_store, pdf_handler, retention, tag_sync
 
 # K-117: Retention History ships in parallel via K-118 — the menu entry
 # appears once the module exists, and its absence must never break the
@@ -728,7 +728,7 @@ class _LibraryDropZone(QWidget):
     has one of these; this closes the gap.
 
     Those three squares are two different implementations for two
-    different hosts. deck_curate._drop_square_html() renders one as HTML
+    different hosts. pdf_drop._drop_square_html() renders one as HTML
     with pycmd() onclick handlers for the deck browser/overview, which
     are webviews. This pane is a plain QTreeWidget + QVBoxLayout — no
     webview, no bridge — so that HTML has nothing to attach pycmd() to.
@@ -747,13 +747,14 @@ class _LibraryDropZone(QWidget):
     scope (klausmate/pdf_drive.py only). WA_StyledBackground on QWidget
     paints the same stylesheet border/background QFrame would.
 
-    Unlike either existing square, this one never arms a PDF (armed/×
-    is deck-screen semantics — the Library's job here is only "get the
-    file into the store and show it in the tree").
+    All three squares are now the same single-state invitation: K-151
+    retired the deck square's armed/× half, which this one never had
+    (arming was deck-screen semantics — the Library's job here is only
+    "get the file into the store and show it in the tree").
 
     Style values (idle border/radius, font-size, Browse-button chrome)
     come from theme.drop_zone_qss — the shared drop-square language.
-    deck_curate._drop_square_html renders the same theme tokens as
+    pdf_drop._drop_square_html renders the same theme tokens as
     inline HTML for the deck screens, so the surfaces cannot drift.
     (This discharges the old "three duplicated copies" debt.)
     """
@@ -2008,9 +2009,8 @@ class DriveWindow(QWidget):
         point uses (its own docstring already names "drive window" as a
         caller) so a file lands in the store exactly like it would from
         the deck screen or the editor's PDF bar — the only difference is
-        what happens after: no arm(), just a tree rebuild so the new PDF
-        shows up immediately. Arming is deck-screen semantics; the
-        Library's job here stops at "get it into the store and visible."
+        what happens after: a tree rebuild, so the new PDF shows up
+        immediately in the window the user is already looking at.
 
         ``folder`` is the tree drop's target (None = root — what the
         bottom drop zone always passes): each imported PDF is FILED
@@ -2371,15 +2371,11 @@ class DriveWindow(QWidget):
         except Exception as e:
             showWarning(f"Could not delete that PDF.\n\n{e}")
             return
-        try:
-            # Survives K-146 on purpose. The armed PDF no longer feeds a
-            # curate run, but _import_and_arm still arms and the deck
-            # screens still SHOW the armed name — so deleting the PDF a
-            # square is naming must still clear it, or the square keeps
-            # advertising a file that is gone.
-            deck_curate.disarm_if(safe)
-        except Exception:
-            pass
+        # No disarm call here since K-151: the deck square no longer
+        # names a PDF (arming went with the curate button it staged
+        # for), so there is nothing left for a delete to clear. The
+        # K-146 comment that stood here explained why the call survived
+        # that card; the concept it guarded is now gone entirely.
         self.rows.pop(safe, None)
         self.matches.pop(safe, None)
         self.rebuild_tree()

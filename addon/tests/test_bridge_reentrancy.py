@@ -22,7 +22,7 @@ QBackingStore::flush during a Python QDialog's exec()):
    the same normal window path as open(), minus the modality (dropped
    2026-08-30 so it works as a live control panel beside the main
    window) — pinned below. K-114 then retired every remaining
-   app-modal exec site (deck_curate's scope dialog, __init__'s crop
+   app-modal exec site (the deck square's scope dialog, __init__'s crop
    dialog, setup_flow's five message boxes, pdfjs_viewer's two input
    prompts; pdf_drive's threshold dialog went under K-117) — per-file
    bans pinned at the bottom of this file.
@@ -51,7 +51,7 @@ install()
 _MODULES = {
     "__init__": open("klausmate/__init__.py").read(),
     "top_bar": open("klausmate/top_bar.py").read(),
-    "deck_curate": open("klausmate/deck_curate.py").read(),
+    "pdf_drop": open("klausmate/pdf_drop.py").read(),
     "pdfjs_viewer": open("klausmate/pdfjs_viewer.py").read(),
     "pdf_drive": open("klausmate/pdf_drive.py").read(),
     "heatmap": open("klausmate/heatmap.py").read(),
@@ -97,15 +97,25 @@ for mod in _MODULES:
         ):
             _registered.add(f"{mod}.{node.args[0].id}")
 
-# Still five after K-146: that card removed deck_curate's curate button,
-# but on_deck_js_message stays registered for the drop square's Browse…
-# and × commands. A handler LEAVING must be as deliberate as one arriving.
+# STILL FIVE after K-151, with one member RENAMED. That card retired the
+# armed drop square and its "klausmate_disarm" command, and its board
+# text predicted the roster would fall to four — but what left was a
+# COMMAND, not a handler: on_deck_js_message stays registered for the
+# square's remaining Browse… click, which is the single most important
+# entry on this list (a QFileDialog raised straight out of the
+# webchannel call). The module around it moved deck_curate.py ->
+# pdf_drop.py, so the qualified name changed and this pin failed until
+# someone confirmed the new name is the same audited code.
+#
+# The set is exact in BOTH directions on purpose: a handler arriving
+# needs the deferral audit, and a handler leaving or moving needs the
+# same deliberate look. Never widen this to a count or a subset.
 check("exactly the five known js-message handlers are registered — a "
       "NEW one must be audited against the deferral rule and added here",
       _registered == {
           "__init__.on_js_message",
           "top_bar._on_js_message",
-          "deck_curate.on_deck_js_message",
+          "pdf_drop.on_deck_js_message",
           "heatmap._on_js_message",
           "dashboard._on_js_message",
       }, str(sorted(_registered)))
@@ -136,13 +146,14 @@ check("manage_models_dialog is deferred, not called inline — it ends in "
       "QTimer.singleShot(0, manage_models_dialog)" in _TB
       and "\n            manage_models_dialog()" not in _TB)
 
-section("deck_curate: the drop square's file picker")
+section("pdf_drop: the drop square's file picker")
 # K-146 removed this file's other two bridge branches with the curate
 # button (_on_curate_clicked, which deferred _curate_with's scope dialog
-# and _pick_pdf_menu's nested menu.exec()). The Browse… picker is the
-# only dialog-raising branch left, and it is the one that matters most:
+# and _pick_pdf_menu's nested menu.exec()); K-151 removed the third with
+# the armed square (the × that sent klausmate_disarm). The Browse…
+# picker is the ONLY branch left — and it is the one that matters most:
 # QFileDialog opened straight out of the webchannel call.
-_BROWSE = _func_src("deck_curate", "_on_browse_clicked")
+_BROWSE = _func_src("pdf_drop", "_on_browse_clicked")
 check("the file-picker branch was found in the source", bool(_BROWSE))
 check("the file-picker path still defers (it always did)",
       "QTimer.singleShot(0, _browse_for_pdfs)" in _BROWSE)
@@ -288,18 +299,19 @@ section("K-114: app-modal exec() retired addon-wide (per-file bans)")
 # purpose and menus stay legal.
 _K114 = {mod: _no_prose(src) for mod, src in _MODULES.items()}
 
-# deck_curate's own K-114 conversion was choose_deck_scope, the deck
+# This file's own K-114 conversion was choose_deck_scope, the deck
 # picker the curate button raised; K-146 deleted the button and the
-# dialog with it, so the file now opens no Qt dialog at all (its one
-# picker is a native QFileDialog sheet, deliberately legal here). The
-# per-file ban STAYS as a standing ban: this is the file where a "quick"
-# modal would land next, and the absence pin below keeps the deleted
-# dialog from being reintroduced under its old name.
-check("deck_curate: the file carries no dialog exec at all, and the "
+# dialog with it, so the file (deck_curate.py until K-151 renamed it
+# pdf_drop.py) now opens no Qt dialog at all — its one picker is a
+# native QFileDialog sheet, deliberately legal here. The per-file ban
+# STAYS as a standing ban: this is the file where a "quick" modal would
+# land next, and the absence pin keeps the deleted dialog from being
+# reintroduced under its old name.
+check("pdf_drop: the file carries no dialog exec at all, and the "
       "K-146-deleted scope dialog has not crept back",
-      "dlg.exec()" not in _K114["deck_curate"]
-      and "msg.exec()" not in _K114["deck_curate"]
-      and "choose_deck_scope" not in _MODULES["deck_curate"]
+      "dlg.exec()" not in _K114["pdf_drop"]
+      and "msg.exec()" not in _K114["pdf_drop"]
+      and "choose_deck_scope" not in _MODULES["pdf_drop"]
       and "choose_deck_scope" not in _MODULES["pdf_drive"])
 
 _K114_CROP = _no_prose(_func_src("__init__", "_launch_crop_dialog"))
@@ -326,7 +338,13 @@ check("pdfjs_viewer: note-edit and go-to-page are QInputDialog "
       "app-modal static helpers, no .exec() anywhere in the module",
       "QInputDialog.get" not in _K114["pdfjs_viewer"]
       and ".exec()" not in _K114["pdfjs_viewer"]
-      and _K114["pdfjs_viewer"].count("dlg.open()") == 3
+      # THREE until K-150, which made Add Text an in-place .editLayer box
+      # typed in the page: _bridge_text_add mints from a finished payload
+      # and opens no dialog at all, so the third prompt is gone rather
+      # than converted. Two is the honest number now — a dialog leaving
+      # gets the same look as one arriving, and the count stays exact so
+      # a FOURTH has to be audited here.
+      and _K114["pdfjs_viewer"].count("dlg.open()") == 2
       and "textValueSelected.connect" in _K114["pdfjs_viewer"]
       and "intValueSelected.connect" in _K114["pdfjs_viewer"])
 

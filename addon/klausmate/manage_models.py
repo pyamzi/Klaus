@@ -831,10 +831,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     embed_layout = _page(
         "Semantic Search",
         "Semantic Search",
-        "Finds cards and decks by meaning, not just keywords — powers "
-        "Curate Deck and the Library's retention scores. Needs a Voyage "
-        "or OpenAI key (both have free tiers) or a local Ollama model "
-        "from the Local Models page.",
+        "Finds cards by meaning, not just keywords — powers the "
+        "Library's per-PDF card matching and retention scores. Needs a "
+        "Voyage or OpenAI key (both have free tiers) or a local Ollama "
+        "model from the Local Models page.",
     )
 
     embed_provider_combo = QComboBox()

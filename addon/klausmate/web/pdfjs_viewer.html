@@ -128,8 +128,37 @@ origin, matching the native viewer and the bake pipeline exactly
     border-color: var(--text); box-shadow: 0 0 0 2px var(--surface),
                                            0 0 0 3px var(--text);
   }
+  /* Text inks (K-150). The SAME row, repainted: with the text tool
+     armed (or a box being edited) every swatch shows its opaque text
+     value instead of its highlighter wash, and a black swatch joins
+     at the front. Sharing the row is the point — one marker tray,
+     one selected-swatch cue, one mousedown cancel — but the VALUES
+     cannot be shared: a highlight is read THROUGH at 43% alpha, text
+     is read AS glyphs, and K-149's yellow measures 1.36:1 on white
+     paper as letters — unreadable. (No hex may be spelled anywhere in
+     this block, comments included; a pin enforces it, and it caught
+     this comment's first draft.)
+     pdfjs_viewer.text_inks derives these from the same theme hues.
+     Every rule below outranks its --ink twin (one more class), so the
+     highlight rules stay exactly as K-149 wrote them. */
+  #annobar button.inkSw[data-tink="black"] { display: none; }
+  #abInks.textMode button.inkSw[data-tink="black"] { display: flex; }
+  #abInks.textMode button.inkSw[data-tink="black"]  { background: var(--tink-black); }
+  #abInks.textMode button.inkSw[data-tink="yellow"] { background: var(--tink-yellow); }
+  #abInks.textMode button.inkSw[data-tink="green"]  { background: var(--tink-green); }
+  #abInks.textMode button.inkSw[data-tink="blue"]   { background: var(--tink-blue); }
+  #abInks.textMode button.inkSw[data-tink="pink"]   { background: var(--tink-pink); }
+  #abInks.textMode button.inkSw[data-tink="orange"] { background: var(--tink-orange); }
   #abZoomPct { font-size: 11px; color: var(--text-muted); min-width: 38px;
                text-align: center; font-variant-numeric: tabular-nums; }
+  /* Text size stepper (K-150): only meaningful while the text tool is
+     armed or a box is open, so it is absent from the bar the rest of
+     the time rather than sitting there disabled. */
+  #abTsz, #abTszSep { display: none; }
+  #annobar.textMode #abTsz { display: flex; align-items: center; }
+  #annobar.textMode #abTszSep { display: block; }
+  #abTszVal { font-size: 11px; color: var(--text-muted); min-width: 20px;
+              text-align: center; font-variant-numeric: tabular-nums; }
   /* Text tool armed: the whole page area invites a placement click. */
   #scroll.textTool, #scroll.textTool .textLayer span { cursor: crosshair; }
   #scroll { flex: 1 1 auto; overflow: auto; position: relative; }
@@ -191,6 +220,45 @@ origin, matching the native viewer and the bake pipeline exactly
   .hlLayer .hl { position: absolute; border-radius: 2px; }
   .hlLayer .hltext { position: absolute; white-space: pre-wrap;
                      line-height: 1.15; overflow: hidden; }
+  /* ---- in-place text editor (K-150) ----
+     Preview's shape: click, and a box appears ON the page that you
+     type into. It is a DIRECT CHILD OF .page, deliberately NOT inside
+     .hlLayer — renderAnnotLayers destroys and rebuilds .hlLayer and
+     .noteLayer from scratch on every pass (four call sites, one of
+     them the push that follows this box's own save), and a
+     contenteditable in there would be obliterated mid-keystroke.
+     Nothing removes .editLayer, so the caret survives zoom, scroll
+     re-render and annotation pushes alike. z above every layer,
+     including the marquee, because it is the thing being interacted
+     with.
+
+     Geometry is POINTS + a transform, never px arithmetic: the box's
+     layout size and font-size are page points, and scale() carries it
+     to the current zoom. Laying it out in px * scale instead would
+     re-wrap the text at every zoom step and jitter on the fractional
+     ones. Its content box is exactly the box that gets committed —
+     the frame is an OUTLINE, which takes no layout space, so the
+     glyphs do not shift when the editor closes and the static
+     .hltext twin takes over. */
+  .editLayer {
+    position: absolute; z-index: 7; transform-origin: 0 0;
+    padding: 0; border: none; background: transparent;
+    outline: 1px solid var(--accent); outline-offset: 3px;
+    box-shadow: 0 0 0 6px var(--accent-selection);
+  }
+  .editLayer .editBody {
+    outline: none; white-space: pre-wrap; overflow-wrap: break-word;
+    line-height: 1.15; cursor: text; min-height: 1em;
+    font-family: var(--font); margin: 0; padding: 0;
+  }
+  /* The grip is the move handle: the interior is a text field, so
+     dragging inside it selects text (Preview behaves the same — you
+     move an annotation by its frame, not its words). Offset ABOVE the
+     content box so it costs no layout either. */
+  .editLayer .editGrip {
+    position: absolute; left: 0; right: 0; top: -11px; height: 6px;
+    border-radius: 3px; background: var(--accent); cursor: move;
+  }
   .noteLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
   .noteLayer .noteAnchor {
     position: absolute; pointer-events: auto; cursor: pointer;
@@ -253,16 +321,18 @@ origin, matching the native viewer and the bake pipeline exactly
         </svg>
       </button>
       <span id="abInks">
-        <button class="inkSw active" data-ink="yellow" title="Yellow"
-                aria-pressed="true"></button>
-        <button class="inkSw" data-ink="green" title="Green"
+        <button class="inkSw" data-tink="black" title="Black"
                 aria-pressed="false"></button>
-        <button class="inkSw" data-ink="blue" title="Blue"
-                aria-pressed="false"></button>
-        <button class="inkSw" data-ink="pink" title="Pink"
-                aria-pressed="false"></button>
-        <button class="inkSw" data-ink="orange" title="Orange"
-                aria-pressed="false"></button>
+        <button class="inkSw active" data-ink="yellow" data-tink="yellow"
+                title="Yellow" aria-pressed="true"></button>
+        <button class="inkSw" data-ink="green" data-tink="green"
+                title="Green" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="blue" data-tink="blue"
+                title="Blue" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="pink" data-tink="pink"
+                title="Pink" aria-pressed="false"></button>
+        <button class="inkSw" data-ink="orange" data-tink="orange"
+                title="Orange" aria-pressed="false"></button>
       </span>
       <div class="absep"></div>
       <button id="abText" title="Add Text" aria-pressed="false">
@@ -271,6 +341,12 @@ origin, matching the native viewer and the bake pipeline exactly
           <path d="M2.8 3.4h8.4M7 3.4v7.8"/>
         </svg>
       </button>
+      <div class="absep" id="abTszSep"></div>
+      <span id="abTsz">
+        <button id="abTszDown" title="Smaller Text">A&#8722;</button>
+        <span id="abTszVal">12</span>
+        <button id="abTszUp" title="Larger Text">A+</button>
+      </span>
       <div class="absep"></div>
       <button id="abZoomOut" title="Zoom Out (&#8984;&#8722;)">&#8722;</button>
       <span id="abZoomPct">100%</span>
@@ -318,6 +394,10 @@ const state = {
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
   tool: null,            // "hl" | "text" | null — annobar mode
   ink: "yellow",         // selected highlight ink — a theme --ink-* NAME
+  tink: "black",         // selected TEXT ink — a --tink-* NAME (K-150)
+  tsize: 12,             // selected text size in points (K-150)
+  textEdit: null,        // live in-place editor (K-150), see openTextEdit
+  textDrag: null,        // {x0,y0,ax,ay} while the grip is being dragged
 };
 
 function post(msg) {
@@ -513,6 +593,8 @@ function teardown() {
   state.annots = [];
   state.pageTexts = null;
   state.persistMarquee = null;   // its overlay dies with #pages below
+  state.textEdit = null;         // so does the editor box (K-150)
+  state.textDrag = null;
   state.find = { query: "", matches: [], index: -1 };
   document.getElementById("pages").textContent = "";
   document.getElementById("thumbs").textContent = "";
@@ -578,6 +660,10 @@ function renderAnnotLayers(num, div) {
     if ((rec.page | 0) !== num - 1) continue;   // records are 0-based
     const rects = rec.rects || [];
     if (rec.kind === "text" && rects.length) {
+      /* The record being edited is drawn by its editor, not here: the
+         static twin would ghost underneath the live box, one glyph
+         off, on every pass (K-150). */
+      if (state.textEdit && state.textEdit.id === rec.id) continue;
       const [x, y, w, h] = rects[0];
       const t = document.createElement("div");
       t.className = "hltext";
@@ -623,9 +709,14 @@ function renderAnnotLayers(num, div) {
   div.appendChild(hlLayer);
   div.appendChild(noteLayer);
   /* Every overlay pass (render, refresh, zoom relayout) re-lands the
-     persisted marquee at the new scale (K-100). */
+     persisted marquee at the new scale (K-100). The open text editor
+     rides the same rule — it is never rebuilt, only re-landed, which
+     is what keeps the caret alive across this pass (K-150). */
   if (state.persistMarquee && state.persistMarquee.page0 === num - 1) {
     positionPersistMarquee();
+  }
+  if (state.textEdit && state.textEdit.page0 === num - 1) {
+    positionTextEdit();
   }
 }
 
@@ -877,6 +968,9 @@ document.getElementById("scroll").addEventListener("contextmenu", (ev) => {
   }
   if (rec) {
     if (rec.kind === "text") {
+      /* The menu's twin of double-clicking the box (K-150). */
+      items.push(["Edit Text…", () => openTextEdit(
+        rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec)]);
       items.push(["Remove Text", () => postB64("hl-remove", { id: rec.id })]);
     } else {
       const hasNote = String(rec.note || "").trim().length > 0;
@@ -1178,8 +1272,12 @@ async function softRelayout() {
     }
   }
   /* The marquee's page may be outside the rendered set — its div was
-     just resized above regardless, so re-land the overlay (K-100). */
+     just resized above regardless, so re-land the overlay (K-100).
+     The text editor rides the same unconditional pass (K-150): this
+     is the zoom settle, and the box has to land at the new scale
+     whether or not its page happened to be rendered. */
   positionPersistMarquee();
+  positionTextEdit();
 }
 
 /* Crisp replacement render for one already-rendered page, swapped in
@@ -1302,6 +1400,7 @@ function setTool(tool) {
   }
   document.getElementById("scroll").classList.toggle(
     "textTool", state.tool === "text");
+  syncAnnobarMode();   /* K-150: the ink row follows the armed tool */
 }
 
 document.getElementById("abHl").addEventListener("click", () => {
@@ -1325,12 +1424,23 @@ document.getElementById("abText").addEventListener(
    live INSIDE #annobar precisely so they inherit that cancel. */
 for (const sw of document.querySelectorAll("#abInks .inkSw")) {
   sw.addEventListener("click", () => {
-    state.ink = sw.dataset.ink;
-    for (const other of document.querySelectorAll("#abInks .inkSw")) {
-      const on = other === sw;
-      other.classList.toggle("active", on);
-      other.setAttribute("aria-pressed", String(on));
+    if (textMode()) {
+      /* Same row, text values (K-150). Picking while a box is open
+         recolours it live and the caret never moves — that is exactly
+         what the bar's mousedown cancel above buys. */
+      if (!sw.dataset.tink) return;
+      state.tink = sw.dataset.tink;
+      const te = state.textEdit;
+      if (te) {
+        te.color = tinkHex(state.tink) || te.color;
+        te.body.style.color = te.color;
+      }
+      syncAnnobarMode();
+      return;
     }
+    if (!sw.dataset.ink) return;   /* black is text-only */
+    state.ink = sw.dataset.ink;
+    syncAnnobarMode();
     if (selectionRectMap()) {
       addHighlightFromSelection();
       setTool(null);
@@ -1361,9 +1471,10 @@ document.addEventListener("mouseup", () => {
   }, 0);
 });
 
-/* Text tool: one placement per arm — the click posts the page-point
-   over the bridge (Python clamps and owns the record) and the tool
-   disarms so the non-modal dialog flow cannot stack. */
+/* Text tool: one placement per arm — the click opens an editor box ON
+   the page at that point and disarms. Nothing is posted here any more
+   (K-150): the record is minted from text that does not exist yet, so
+   the bridge call happens at COMMIT. */
 document.getElementById("scroll").addEventListener("click", (ev) => {
   if (state.tool !== "text" || ev.button !== 0) return;
   const hit = pageAndPoint(ev.clientX, ev.clientY);
@@ -1371,8 +1482,343 @@ document.getElementById("scroll").addEventListener("click", (ev) => {
   ev.preventDefault();
   ev.stopPropagation();
   setTool(null);
-  postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt });
+  openTextEdit(hit.page0, hit.xPt, hit.yPt, null);
 });
+
+/* ==== in-place text editor (K-150) ================================= */
+/* "The text adding system is so ugly … make it look the way Preview
+   has it on macOS" — it used to be a modal QInputDialog over a PDF you
+   could no longer see. Preview instead puts the box on the page: click,
+   type where you clicked, drag it by its frame, pick colour and size
+   from the toolbar, click away to commit.
+
+   WHAT MAKES THIS HARD is that renderAnnotLayers DESTROYS .hlLayer and
+   .noteLayer and rebuilds them from scratch, from four call sites —
+   renderPage, klausSetAnnotations, the zoom settle's softRelayout, and
+   refreshPage's crisp swap — plus teardownPage when a page leaves the
+   observer window. A contenteditable living in .hlLayer is obliterated
+   mid-keystroke by any of them, and worst of all by the push that
+   follows its OWN save. So the editor is a DIRECT CHILD OF .page that
+   renderAnnotLayers does not own, re-landed (never rebuilt) on every
+   overlay pass — exactly the contract positionPersistMarquee has kept
+   for the persisted marquee since K-100. Nothing removes it, so the
+   caret and the selection survive zoom, scroll and pushes.
+
+   The other rule is that its LAYOUT is in page points and only its
+   transform is scaled. Sizing it in px = pt * scale would re-wrap the
+   text on every zoom step and jitter on the fractional ones; this way
+   the wrap points are the same at 25% and at 400%, and they are the
+   ones that get committed. */
+const TEXT_SIZES = [8, 10, 12, 14, 18, 24, 36, 48];
+const MAX_TEXT_CHARS = 4000;
+
+/* Mirror of pdfjs_viewer.sanitize_text — same normalization, so the
+   text this box MEASURES itself against is the text Python stores.
+   Python re-runs its own copy on arrival; JS is never trusted. */
+function sanitizeEditText(value) {
+  return String(value == null ? "" : value)
+    .replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "")
+    .slice(0, MAX_TEXT_CHARS).trim();
+}
+
+/* Mirror of pdfjs_viewer.text_box_size (mergeRects' arrangement: two
+   implementations, pinned against each other). The editor has to size
+   itself to the box that will be committed, or the text jumps and
+   re-wraps the moment the static .hltext twin takes over. */
+function textBoxSize(text, size, rows) {
+  const lines = String(text || "").split("\n");
+  let longest = 0;
+  for (const line of lines) longest = Math.max(longest, line.length);
+  const w = Math.min(Math.max(longest * size * 0.6 + 8, 60), 480);
+  const perRow = Math.max(w - 8, size * 0.6);
+  let wrapped = 0;
+  for (const line of lines) {
+    wrapped += Math.max(1, Math.ceil(line.length * size * 0.6 / perRow));
+  }
+  wrapped = Math.max(wrapped, rows || 0);
+  return [w, Math.min(Math.max(wrapped * size * 1.35 + 6, size * 1.5), 720)];
+}
+
+/* currentInk()'s sibling for the text row: the swatch's own theme
+   custom property, so the colour seen is the colour recorded and this
+   file still spells no hex. Kept separate rather than folded into one
+   helper because the two prefixes name genuinely different palettes —
+   a highlight is read THROUGH at 43% alpha, text is read AS glyphs. */
+function tinkHex(name) {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--tink-" + name).trim();
+    return v || null;
+  } catch (e) { return null; }
+}
+
+function currentTextInk() { return tinkHex(state.tink); }
+
+function tinkNameFor(hex) {
+  const want = String(hex || "").trim().toLowerCase();
+  if (!want) return null;
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = sw.dataset.tink;
+    if (name && String(tinkHex(name) || "").toLowerCase() === want) {
+      return name;
+    }
+  }
+  return null;   // an adopted box in some colour the row does not offer
+}
+
+/* The annobar is in text mode while the tool is armed OR a box is
+   open: the swatch row repaints to the text inks, a black swatch
+   joins it, and the size stepper appears. */
+function textMode() {
+  return state.tool === "text" || state.textEdit !== null;
+}
+
+function syncAnnobarMode() {
+  const on = textMode();
+  const te = state.textEdit;
+  document.getElementById("annobar").classList.toggle("textMode", on);
+  document.getElementById("abInks").classList.toggle("textMode", on);
+  const selected = on
+    ? (te ? tinkNameFor(te.color) : state.tink)
+    : state.ink;
+  for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+    const name = on ? sw.dataset.tink : sw.dataset.ink;
+    const active = !!name && name === selected;
+    sw.classList.toggle("active", active);
+    sw.setAttribute("aria-pressed", String(active));
+  }
+  document.getElementById("abTszVal").textContent =
+    String(te ? te.size : state.tsize);
+}
+
+function textRecordAt(page0, xPt, yPt) {
+  for (let i = state.annots.length - 1; i >= 0; i--) {
+    const rec = state.annots[i];
+    if ((rec.page | 0) !== page0 || rec.kind !== "text") continue;
+    const r = (rec.rects || [])[0];
+    if (!r) continue;
+    if (r[0] <= xPt && xPt <= r[0] + r[2] &&
+        r[1] <= yPt && yPt <= r[1] + r[3]) return rec;
+  }
+  return null;
+}
+
+/* Open the editor at (xPt, yPt) page points. rec === null places a NEW
+   box; passing a record re-edits it in place (its static twin is
+   skipped in renderAnnotLayers meanwhile, so nothing ghosts under the
+   live one). Committing an already-open box first means the "one at a
+   time" rule needs no singleton bookkeeping. */
+function openTextEdit(page0, xPt, yPt, rec) {
+  if (state.textEdit) commitTextEdit();
+  const div = state.pageDivs[page0];
+  if (!div) return;
+  const el = document.createElement("div");
+  el.id = "textEdit";
+  el.className = "editLayer";
+  const grip = document.createElement("div");
+  grip.className = "editGrip";
+  grip.title = "Drag to move";
+  const body = document.createElement("div");
+  body.className = "editBody";
+  try { body.contentEditable = "plaintext-only"; } catch (e) {}
+  if (!body.isContentEditable) body.contentEditable = "true";
+  body.spellcheck = false;
+  body.textContent = rec ? String(rec.text || "") : "";
+  el.appendChild(grip);
+  el.appendChild(body);
+  const color = (rec && rec.color)
+    ? String(rec.color) : (currentTextInk() || "");
+  const size = rec ? (parseFloat(rec.size) || state.tsize) : state.tsize;
+  body.style.color = color;
+  body.style.fontSize = size + "px";   // POINTS — scale() carries it
+  state.textEdit = {
+    id: rec ? String(rec.id || "") : null,
+    page0: page0, x: xPt, y: yPt, color: color, size: size,
+    el: el, body: body,
+  };
+  /* Swallow mousedown so the press belongs to the caret: #scroll's
+     handler would otherwise collapse a persisted marquee, and an
+     Alt-press would preventDefault into a rubber band. */
+  el.addEventListener("mousedown", (ev) => ev.stopPropagation());
+  grip.addEventListener("mousedown", startTextDrag);
+  body.addEventListener("input", sizeTextEdit);
+  body.addEventListener("blur", () => {
+    if (state.textEdit && state.textEdit.body === body) commitTextEdit();
+  });
+  body.addEventListener("keydown", (ev) => {
+    /* Escape commits, like clicking away — Preview keeps what you
+       typed. stopPropagation so the document handler does not also
+       clear a tool or the find bar out from under it. Enter is a
+       newline; the mod chord is the keyboard's "click away". */
+    if (ev.key === "Escape"
+        || ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter")) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      commitTextEdit();
+    }
+  });
+  div.appendChild(el);
+  sizeTextEdit();
+  positionTextEdit();
+  repaintAnnotPage(page0);   /* drop the static twin, if this edits one */
+  syncAnnobarMode();
+  try {
+    body.focus();
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    range.collapse(false);              // caret at the end, like Preview
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch (e) { post("log:text editor focus failed: " + e.message); }
+}
+
+/* Repaint ONE page's annotation layers so renderAnnotLayers' hltext
+   skip takes effect NOW. Opening the editor on an existing record
+   does not otherwise re-run that function, and its static twin went
+   on sitting under the live box, a glyph offset apart — caught in an
+   offscreen render, invisible to every source pin. Closing is the
+   mirror: the twin has to come back, and on the paths where no push
+   will bring it back this is what does. */
+function repaintAnnotPage(page0) {
+  const div = state.pageDivs[page0];
+  const r = state.rendered.get(page0 + 1);
+  if (div && r && r.canvas) renderAnnotLayers(page0 + 1, div);
+}
+
+function sizeTextEdit() {
+  const te = state.textEdit;
+  if (!te) return;
+  /* RAW text, not the sanitized form: a trailing newline you have just
+     typed must grow the box, not shrink it back a line. */
+  const box = textBoxSize(te.body.innerText || "", te.size, 0);
+  te.el.style.width = box[0] + "px";
+  te.el.style.minHeight = box[1] + "px";
+}
+
+/* positionPersistMarquee's contract, for the editor: page-point
+   geometry re-landed at the CURRENT scale, on every overlay pass and
+   every zoom settle. The element itself is never rebuilt — that is the
+   whole reason the caret survives. */
+function positionTextEdit() {
+  const te = state.textEdit;
+  if (!te || !te.el) return;
+  const div = state.pageDivs[te.page0];
+  if (!div) return;
+  if (te.el.parentNode !== div) div.appendChild(te.el);
+  const s = state.scale;
+  te.el.style.left = te.x * s + "px";
+  te.el.style.top = te.y * s + "px";
+  te.el.style.transform = "scale(" + s + ")";
+}
+
+/* repaint === false only when a bridge call is already on its way for
+   this record: the canonical push that answers it repaints anyway, and
+   repainting HERE would flash the pre-edit text for one round trip.
+   Everywhere else it restores the twin immediately. */
+function closeTextEdit(repaint) {
+  const te = state.textEdit;
+  state.textEdit = null;
+  state.textDrag = null;
+  if (te && te.el && te.el.parentNode) {
+    try { te.el.parentNode.removeChild(te.el); } catch (e) {}
+  }
+  if (te && repaint !== false) repaintAnnotPage(te.page0);
+  syncAnnobarMode();
+}
+
+/* Commit: the ONLY place a text record crosses the bridge. Closing
+   first means the canonical records that come back are rendered by
+   renderAnnotLayers with nothing to skip. An empty new box mints
+   nothing; emptying an EXISTING one deletes it through hl-remove,
+   which already tombstones an adopted record (K-081) — that path is
+   not worth forking into the update handler. */
+function commitTextEdit() {
+  const te = state.textEdit;
+  if (!te) return;
+  const text = sanitizeEditText(te.body.innerText || "");
+  let rows = 0;
+  try {
+    rows = Math.max(1, Math.round(te.body.scrollHeight / (te.size * 1.15)));
+  } catch (e) { rows = 0; }
+  closeTextEdit(!te.id);   /* an existing record: let the push repaint */
+  if (!te.id) {
+    if (!text) return;
+    postB64("text-add", {
+      page: te.page0, x: te.x, y: te.y,
+      text: text, color: te.color, size: te.size, rows: rows,
+    });
+    return;
+  }
+  if (!text) { postB64("hl-remove", { id: te.id }); return; }
+  postB64("text-update", {
+    id: te.id, x: te.x, y: te.y,
+    text: text, color: te.color, size: te.size, rows: rows,
+  });
+}
+
+/* Drag by the grip only: the interior is a text field, so a press
+   there places the caret (Preview moves an annotation by its frame
+   too). preventDefault keeps focus — and therefore the caret and the
+   un-committed text — exactly where it was. */
+function startTextDrag(ev) {
+  const te = state.textEdit;
+  if (!te || ev.button !== 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  state.textDrag = { x0: ev.clientX, y0: ev.clientY, ax: te.x, ay: te.y };
+}
+
+document.addEventListener("mousemove", (ev) => {
+  const d = state.textDrag, te = state.textEdit;
+  if (!d || !te) return;
+  const s = state.scale || 1;
+  const div = state.pageDivs[te.page0];
+  const maxX = div ? Math.max(0, div.offsetWidth / s - 8) : 0;
+  const maxY = div ? Math.max(0, div.offsetHeight / s - 8) : 0;
+  te.x = Math.min(Math.max(d.ax + (ev.clientX - d.x0) / s, 0), maxX);
+  te.y = Math.min(Math.max(d.ay + (ev.clientY - d.y0) / s, 0), maxY);
+  positionTextEdit();
+});
+document.addEventListener("mouseup", () => { state.textDrag = null; });
+
+/* Double-click an existing text box to edit it in place. Registered
+   AFTER the Cmd/Ctrl slide-copy handler and gated on the absence of
+   that modifier, so the two double-click gestures never overlap. */
+document.getElementById("scroll").addEventListener("dblclick", (ev) => {
+  if (ev.metaKey || ev.ctrlKey || state.textEdit) return;
+  const hit = pageAndPoint(ev.clientX, ev.clientY);
+  if (!hit) return;
+  const rec = textRecordAt(hit.page0, hit.xPt, hit.yPt);
+  if (!rec) return;
+  ev.preventDefault();
+  const sel = window.getSelection();
+  if (sel) { try { sel.removeAllRanges(); } catch (e) {} }
+  openTextEdit(rec.page | 0, rec.rects[0][0], rec.rects[0][1], rec);
+});
+
+function stepTextSize(dir) {
+  const cur = state.textEdit ? state.textEdit.size : state.tsize;
+  let idx = 0;
+  for (let i = 0; i < TEXT_SIZES.length; i++) {
+    if (TEXT_SIZES[i] <= cur) idx = i;
+  }
+  const size = TEXT_SIZES[
+    Math.min(Math.max(idx + dir, 0), TEXT_SIZES.length - 1)];
+  state.tsize = size;
+  const te = state.textEdit;
+  if (te) {
+    te.size = size;
+    te.body.style.fontSize = size + "px";
+    sizeTextEdit();
+  }
+  syncAnnobarMode();
+}
+document.getElementById("abTszDown").addEventListener(
+  "click", () => stepTextSize(-1));
+document.getElementById("abTszUp").addEventListener(
+  "click", () => stepTextSize(1));
 
 /* ==== find ========================================================= */
 async function ensurePageTexts() {
@@ -1675,6 +2121,10 @@ async function relayout() {
     d.style.height = Math.floor(base.height * state.scale) + "px";
   }
   state.rendered.clear();
+  /* teardownPage never touches the editor (it is not one of the four
+     layers it removes), so a panel resize mid-sentence leaves the box
+     alive — at the OLD scale until this lands it again (K-150). */
+  positionTextEdit();
 }
 
 window.klausScrollTo = function (y) {

@@ -379,10 +379,17 @@ check("highlight tool: releasing a selection auto-highlights, gated "
 check("arming Highlight consumes a selection that already exists",
       "if (arming && selectionRectMap()) {" in _HTML116
       and "addHighlightFromSelection();" in _HTML116)
-check("text tool: a page click posts text-add with page-point coords "
-      "and disarms (one-shot; the dialog flow owns the rest)",
-      'postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt })'
-      in _HTML116 and "setTool(null);" in _HTML116)
+# K-150 rewrote this one: the placement click used to post text-add
+# with nothing but coordinates, because a modal dialog collected the
+# body afterwards. It now opens the in-place editor and posts NOTHING
+# — the bridge call moved to commitTextEdit, where there is finally a
+# body to send. The one-shot disarm survives the change.
+check("text tool: a page click opens the in-place editor at the "
+      "page-point and disarms (one-shot); nothing is posted yet",
+      "openTextEdit(hit.page0, hit.xPt, hit.yPt, null);" in _HTML116
+      and "setTool(null);" in _HTML116
+      and 'postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt })'
+      not in _HTML116)
 check("Escape clears an armed tool (menu/findbar behaviour unchanged)",
       "if (state.tool) setTool(null);" in _HTML116)
 check("the zoom readout is fed from the applyScaleFactor choke point",
@@ -455,7 +462,15 @@ check("bounds hold for degenerate and absurd input",
       and pv.text_box_size("x" * 10000)[0] == 480.0
       and pv.text_box_size("\n".join("x" * 999))[1] == 720.0)
 
-section("K-116: the new dialog obeys K-114 (open(), never exec)")
+section("K-150: the text flow has no dialog left to crash (was K-114)")
+# K-116 shipped Add Text as a window-modal QInputDialog and these pins
+# guarded HOW it opened: open() + signal callbacks, never exec(),
+# clamp-before-defer, one prompt at a time. K-150 deleted the dialog
+# instead — the box is typed on the page — so the pins were REWRITTEN
+# rather than dropped. The crash class they guarded is real and
+# undiminished; what changed is that this flow no longer touches it,
+# and these checks now say exactly that, in a way that fails the day
+# a dialog comes back.
 import ast as _ast116
 _SRC116 = _src("pdfjs_viewer.py")
 _TREE116 = _ast116.parse(_SRC116)
@@ -468,27 +483,56 @@ def _fn116(name):
     return ""
 
 
-_TA = _fn116("_bridge_text_add")
-check("_bridge_text_add clamps THEN defers past the webchannel tick",
-      "clamp_text_add" in _TA and "QTimer.singleShot" in _TA
-      and -1 < _TA.find("clamp_text_add") < _TA.find("QTimer.singleShot"))
-_OD = _fn116("_open_text_dialog")
-check("the prompt opens window-modal via open() + signal callbacks",
-      "dlg.open()" in _OD and "textValueSelected.connect" in _OD)
-check("no exec()-shaped modal anywhere in the new flow",
-      ".exec(" not in _OD and "QInputDialog.get" not in _OD)
 from anki_stubs import code_only as _code_only116
+_TA = _fn116("_bridge_text_add")
+_TU = _fn116("_bridge_text_update")
+# Both handlers DESCRIBE the validators they call, so every substance
+# check below reads the strings-and-comments-stripped source. Dropping
+# sanitize_text from the body and leaving the docstring alone kept the
+# first draft of this pin green — caught in the falsification sweep,
+# which is the fourth time prose has faked a pin in this repo.
+_TAC, _TUC = _code_only116(_TA), _code_only116(_TU)
+check("both text handlers were found in the source", bool(_TA) and bool(_TU))
+check("the dialog and its whole singleton apparatus are GONE — no "
+      "prompt, so nothing to defer, front, or tear down",
+      not _fn116("_open_text_dialog") and not _fn116("_on_text_dialog_closed")
+      and not _fn116("_on_text_added")
+      and "_text_dialog" not in _code_only116(_SRC116))
+check("neither text handler builds a QInputDialog (that is what the "
+      "deferral and never-exec rules exist to protect)",
+      "QInputDialog" not in _TAC and "QInputDialog" not in _TUC)
+check("...nor defers, because there is nothing to defer past: they "
+      "mint synchronously on _bridge_hl_add's proven path",
+      "QTimer" not in _TAC and "QTimer" not in _TUC)
 check("the whole module still contains zero .exec( calls in CODE "
       "(the crash-history comments may spell it)",
       ".exec(" not in _code_only116(_SRC116))
-check("a live prompt is a singleton (front, don't stack)",
-      "raise_()" in _OD and "activateWindow()" in _OD)
-_OA = _fn116("_on_text_added")
-check("accepting persists through the SAME save + debounced-bake path "
+check("the OTHER prompts this module still owns keep the K-114 shape "
+      "— an instance, open(), signal callbacks, never a static helper",
+      "dlg.open()" in _code_only116(_fn116("_do_note_edit"))
+      and "dlg.open()" in _code_only116(_fn116("_goto_dialog"))
+      and "QInputDialog.get" not in _code_only116(_SRC116))
+check("text-add still clamps the untrusted coordinates FIRST",
+      "clamp_text_add" in _TAC
+      and -1 < _TAC.find("clamp_text_add") < _TAC.find("make_text_record"))
+check("...and now validates the BODY too, which used to arrive from a "
+      "Qt dialog and now arrives over the bridge",
+      "sanitize_text" in _TAC and "validate_hex_color" in _TAC
+      and "validate_text_size" in _TAC)
+check("minting persists through the SAME save + debounced-bake path "
       "and pushes canonical records back",
-      "_save_annotations()" in _OA and "_push_annotations()" in _OA
-      and "make_text_record" in _OA)
-check("empty text mints nothing", "if not body:" in _OA)
+      "_save_annotations()" in _TAC and "_push_annotations()" in _TAC
+      and "make_text_record" in _TAC)
+check("empty text mints nothing (the dialog-era rule, kept)",
+      "if not body:" in _TAC)
+check("a no-op commit costs no save and no bake — but the push is "
+      "UNCONDITIONAL, because the page dropped this record's static "
+      "twin while its editor was open and is waiting for canonical "
+      "records to draw it again",
+      "if changed:" in _TU
+      and "\n            self._save_annotations()" in _TU
+      and "\n        self._push_annotations()" in _TU
+      and "\n            self._push_annotations()" not in _TU)
 
 section("K-100: Cmd/Ctrl double-click copies the slide (native gesture)")
 _H100 = _src(os.path.join("web", "pdfjs_viewer.html"))
@@ -1016,5 +1060,331 @@ else:
           repr(len(_hl149b[0]["/QuadPoints"]) if _hl149b else None))
 import shutil as _sh149
 _sh149.rmtree(_uf149, ignore_errors=True)
+
+# ── K-150: Preview-style in-place text boxes ─────────────────────────
+_H150 = _src(os.path.join("web", "pdfjs_viewer.html"))
+
+section("K-150: text ink and highlight ink are different problems")
+# The orchestrator's question, answered by measurement rather than
+# taste: SHARE THE ROW, FORK THE VALUES. A highlight is read THROUGH
+# at 43% alpha over paper; text is read AS opaque glyphs on it. K-149's
+# yellow #FADC50 is a fine wash and a 1.36:1 catastrophe as letters.
+# So the two rows share their names, their hues, their swatch chrome
+# and their mousedown cancel — and nothing else.
+_TINKS = pv.text_inks()
+_TNAMES = [n for n, _v in _TINKS]
+check("the row is black plus every highlight ink, by NAME",
+      _TNAMES == ["black"] + _INK_NAMES, repr(_TNAMES))
+check("black leads and IS the legacy default, so the default swatch "
+      "mints a record byte-identical to a pre-K-150 one (K-149's "
+      "yellow-first rule, same reason)",
+      _TINKS[0] == ("black", pv.TEXT_COLOR_DEFAULT))
+check("not one text ink equals its highlight twin",
+      all(dict(_TINKS)[n] != v for n, v in _theme149.HIGHLIGHT_INKS))
+check("...because as glyphs the highlight inks are unreadable — every "
+      "one of them is under 2.5:1 on white paper",
+      all(pv._contrast_on_white(pv._hex_to_rgb(v)) < 2.5
+          for _n, v in _theme149.HIGHLIGHT_INKS),
+      repr([round(pv._contrast_on_white(pv._hex_to_rgb(v)), 2)
+            for _n, v in _theme149.HIGHLIGHT_INKS]))
+check("...and every text ink clears WCAG AA on the same paper",
+      all(pv._contrast_on_white(pv._hex_to_rgb(v))
+          >= pv.TEXT_INK_MIN_CONTRAST for _n, v in _TINKS),
+      repr([(n, round(pv._contrast_on_white(pv._hex_to_rgb(v)), 2))
+            for n, v in _TINKS]))
+_hls150 = __import__("colorsys").rgb_to_hls
+def _hue150(hexv):
+    r, g, b = pv._hex_to_rgb(hexv)
+    return _hls150(r / 255.0, g / 255.0, b / 255.0)[0]
+check("the hue is preserved, so the yellow text ink still reads as "
+      "the yellow highlighter's sibling rather than a new colour",
+      all(abs(_hue150(dict(_TINKS)[n]) - _hue150(v)) < 0.01
+          for n, v in _theme149.HIGHLIGHT_INKS),
+      repr([(n, round(_hue150(v), 3), round(_hue150(dict(_TINKS)[n]), 3))
+            for n, v in _theme149.HIGHLIGHT_INKS]))
+check("DERIVED from theme.HIGHLIGHT_INKS, never a second hand-kept "
+      "table — retune a hue there and the text ink follows it, still "
+      "legible by construction",
+      all(dict(_TINKS)[n] == pv.ink_for_text(v)
+          for n, v in _theme149.HIGHLIGHT_INKS))
+check("a malformed source colour degrades to black, never to a "
+      "broken CSS value", pv.ink_for_text("nope") == pv.TEXT_COLOR_DEFAULT
+      and pv.ink_for_text("") == pv.TEXT_COLOR_DEFAULT)
+check("they reach the page as --tink-* beside K-149's --ink-*, "
+      "IDENTICALLY in both modes — the value bakes into the PDF's /C "
+      "and that file opens in Preview, where night mode does not exist",
+      pv.text_ink_vars() in html and pv.text_ink_vars() in dark
+      and all(f"--tink-{n}: {v};" in html for n, v in _TINKS))
+check("so the template still spells no hex of its own",
+      all(f"var(--tink-{n})" in _H150 for n, v in _TINKS)
+      and not _re100.search(r"--tink-[a-z]+:", _H150))
+
+section("K-150: one swatch row, two palettes")
+_AB150 = _H150.split('<div id="annobar">', 1)[1].split(
+    "</div>\n    </div>", 1)[0]
+check("the row is the same swatches with a black one in front",
+      _re100.findall(r'data-tink="([a-z]+)"', _AB150) == _TNAMES,
+      repr(_re100.findall(r'data-tink="([a-z]+)"', _AB150)))
+check("K-149's data-ink list is untouched — black carries no ink "
+      "name, because there is no black highlighter",
+      _re100.findall(r'data-ink="([a-z]+)"', _AB150) == _INK_NAMES
+      and 'data-tink="black"' in _AB150 and 'data-ink="black"' not in _AB150)
+check("text values are one rule per swatch, OUTRANKING the --ink rule "
+      "(one more class) instead of replacing it, so K-149's block "
+      "stays exactly as it was written",
+      all(f'#abInks.textMode button.inkSw[data-tink="{n}"]' in _H150
+          for n in _TNAMES)
+      and all(f'#annobar button.inkSw[data-ink="{n}"]' in _H150
+              for n in _INK_NAMES))
+check("black shows only in text mode",
+      '#annobar button.inkSw[data-tink="black"] { display: none; }' in _H150
+      and '#abInks.textMode button.inkSw[data-tink="black"] { display: flex; }'
+      in _H150)
+check("the chosen text ink is read BACK out of its custom property, "
+      "exactly as currentInk does for highlights",
+      'getPropertyValue("--tink-" + name)' in _H150
+      and "function currentTextInk()" in _H150)
+check("the swatches live INSIDE #annobar in both modes, so picking a "
+      "text colour inherits the bar's mousedown cancel and the caret "
+      "never moves", 'id="abInks"' in _AB150)
+check("the size stepper exists only while text mode is on — absent, "
+      "not disabled",
+      "#annobar.textMode #abTsz { display: flex" in _H150
+      and 'id="abTszDown"' in _AB150 and 'id="abTszUp"' in _AB150)
+check("arming the text tool OR opening a box is what turns the row "
+      "over", 'state.tool === "text" || state.textEdit !== null' in _H150
+      and "syncAnnobarMode();   /* K-150: the ink row follows the "
+          "armed tool */" in _H150)
+
+section("K-150: the editor outlives every layer rebuild")
+# THE hazard: renderAnnotLayers destroys .hlLayer and .noteLayer and
+# rebuilds them from scratch, from four call sites — renderPage,
+# klausSetAnnotations, softRelayout's zoom settle and refreshPage's
+# crisp swap — plus teardownPage on scroll-out. A contenteditable in
+# either layer dies mid-keystroke, most cruelly on the push that
+# follows its own save. So the box is a direct child of .page, and
+# these pins hold that arrangement in place.
+_RAL150 = _H150.split("function renderAnnotLayers(", 1)[1].split("\n}\n", 1)[0]
+_TDP150 = _H150.split("function teardownPage(", 1)[1].split("\n}\n", 1)[0]
+check("renderAnnotLayers still destroys exactly .hlLayer/.noteLayer "
+      "on every pass — the reason the editor cannot live in either",
+      'for (const cls of [".hlLayer", ".noteLayer"]) {' in _RAL150
+      and "div.removeChild(old)" in _RAL150)
+check("...and it is still reached from all four sites plus the "
+      "teardown, so this is not a hazard that quietly went away",
+      _H150.count("renderAnnotLayers(num, div)") == 3
+      and "renderAnnotLayers(num, state.pageDivs[num - 1])" in _H150)
+check("neither destroyer names the editor",
+      "editLayer" not in _RAL150 and "editLayer" not in _TDP150
+      and "textEdit" not in _TDP150)
+check("the editor is appended to the PAGE div, beside the layers "
+      "rather than inside one",
+      "el.className = \"editLayer\";" in _H150
+      and "div.appendChild(el);" in _H150)
+check("the static twin is skipped while its own record is being "
+      "edited, so nothing ghosts a glyph off under the live box",
+      "if (state.textEdit && state.textEdit.id === rec.id) continue;"
+      in _RAL150)
+# FOUND IN AN OFFSCREEN RENDER, not by any source pin: the skip alone
+# was not enough. Opening the editor on an existing record does not
+# re-run renderAnnotLayers, so the twin drawn by the LAST pass went on
+# sitting under the live box — the double-click screenshot showed the
+# sentence twice, a glyph apart. Opening and closing must each force
+# that page's layers through the skip.
+_OTE150 = _H150.split("function openTextEdit(", 1)[1].split("\n}\n", 1)[0]
+_CTE150 = _H150.split("function closeTextEdit(", 1)[1].split("\n}\n", 1)[0]
+check("opening forces the skip to take effect NOW, or the twin the "
+      "last pass drew stays under the live box",
+      "repaintAnnotPage(page0);" in _OTE150)
+check("closing puts it back — and passes on that only when a bridge "
+      "call is already on its way, whose canonical push repaints "
+      "anyway (repainting here would flash the pre-edit text)",
+      "if (te && repaint !== false) repaintAnnotPage(te.page0);" in _CTE150
+      and "closeTextEdit(!te.id);" in _H150)
+check("every overlay pass RE-LANDS it (never rebuilds it), the "
+      "contract positionPersistMarquee has kept since K-100",
+      "if (state.textEdit && state.textEdit.page0 === num - 1) {"
+      in _RAL150 and "positionTextEdit();" in _RAL150)
+_SR150 = _H150.split("async function softRelayout(", 1)[1].split("\n}\n", 1)[0]
+check("the zoom settle re-lands it unconditionally, beside the "
+      "marquee — its page need not be in the rendered set",
+      "positionPersistMarquee();" in _SR150 and "positionTextEdit();" in _SR150)
+_RL150 = _H150.split("async function relayout(", 1)[1].split("\n}\n", 1)[0]
+check("so does the panel-resize relayout, which tears every page down",
+      "positionTextEdit();" in _RL150)
+_TD150 = _H150.split("function teardown() {", 1)[1].split("\n}\n", 1)[0]
+check("a new document drops the reference with the DOM it lived in",
+      "state.textEdit = null;" in _TD150)
+check("positionTextEdit only ever re-parents when something else took "
+      "the box away — moving a focused node blurs it in Blink",
+      "if (te.el.parentNode !== div) div.appendChild(te.el);" in _H150)
+
+section("K-150: points and a transform, never px arithmetic")
+check("the box is placed at page-point * scale and SCALED, so its "
+      "wrap points are identical at 25% and at 400%",
+      'te.el.style.left = te.x * s + "px";' in _H150
+      and 'te.el.style.transform = "scale(" + s + ")";' in _H150)
+check("its layout width and font size are POINTS — the transform "
+      "carries them to the current zoom",
+      'te.el.style.width = box[0] + "px";' in _H150
+      and 'body.style.fontSize = size + "px";   // POINTS' in _H150)
+check("the frame takes NO layout space (an outline, and a grip offset "
+      "above it), so the glyphs sit exactly where the committed "
+      "record draws them and nothing shifts on commit",
+      "outline: 1px solid var(--accent); outline-offset: 3px;" in _H150
+      and "padding: 0; border: none; background: transparent;" in _H150
+      and "top: -11px;" in _H150)
+check("the page carries textBoxSize with the SAME constants as "
+      "text_box_size, so the box you type in is the box you get "
+      "(mergeRects' two-implementations arrangement)",
+      "function textBoxSize(text, size, rows)" in _H150
+      and "* 0.6 + 8, 60), 480)" in _H150
+      and "* 1.35 + 6, size * 1.5), 720)" in _H150)
+check("and sanitizeEditText mirroring sanitize_text, on the same cap",
+      "function sanitizeEditText(value)" in _H150
+      and "MAX_TEXT_CHARS = 4000" in _H150 and pv.MAX_TEXT_CHARS == 4000)
+
+section("K-150: the commit is the only bridge call")
+check("placement opens the editor and posts nothing; the record is "
+      "minted at COMMIT, from text that did not exist at click time",
+      "function commitTextEdit()" in _H150
+      and 'postB64("text-add", {' in _H150
+      and _H150.find("openTextEdit(hit.page0")
+      < _H150.find("function commitTextEdit()"))
+check("an existing box re-commits through text-update",
+      'postB64("text-update", {' in _H150)
+check("emptying a box routes to hl-remove rather than forking a "
+      "delete into the update handler — that path already tombstones "
+      "an adopted record (K-081)",
+      'if (!text) { postB64("hl-remove", { id: te.id }); return; }' in _H150)
+check("an empty NEW box mints nothing at all",
+      "if (!te.id) {\n    if (!text) return;" in _H150)
+check("blur commits (clicking away, Preview's gesture) and so does "
+      "Escape, which stops propagating so it cannot also clear a tool",
+      'body.addEventListener("blur"' in _H150
+      and 'if (ev.key === "Escape"' in _H150
+      and "ev.stopPropagation();\n      commitTextEdit();" in _H150)
+check("dragging is by the GRIP only and preventDefaults, so the caret "
+      "and the un-committed text survive the move",
+      "function startTextDrag(ev)" in _H150
+      and "grip.addEventListener(\"mousedown\", startTextDrag);" in _H150
+      and "ev.preventDefault();\n  ev.stopPropagation();\n  state.textDrag ="
+      in _H150)
+check("double-clicking an existing box re-opens it, gated OFF the "
+      "Cmd/Ctrl slide-copy gesture so the two never overlap",
+      "if (ev.metaKey || ev.ctrlKey || state.textEdit) return;" in _H150
+      and _H150.find("if (!(ev.metaKey || ev.ctrlKey)) return;")
+      < _H150.find("if (ev.metaKey || ev.ctrlKey || state.textEdit) return;"))
+check("parse_bridge routes text-update",
+      pv.parse_bridge("klausmate_pdfjs:text-update:e30=")
+      == ("text-update", "e30="))
+
+section("K-150: the body is untrusted input now")
+check("newlines survive, a tab becomes one space, control characters "
+      "go", pv.sanitize_text("a\r\nb\tc\x00d\x1f") == "a\nb cd",
+      repr(pv.sanitize_text("a\r\nb\tc\x00d\x1f")))
+check("bounded, stripped, and non-strings are empty",
+      len(pv.sanitize_text("x" * 99_999)) == pv.MAX_TEXT_CHARS
+      and pv.sanitize_text("  hi  ") == "hi"
+      and pv.sanitize_text(None) == "" and pv.sanitize_text(12) == "")
+check("size clamps into a sane range; junk falls back to 12pt",
+      pv.validate_text_size(18) == 18.0
+      and pv.validate_text_size(1) == pv.TEXT_SIZE_MIN
+      and pv.validate_text_size(1e9) == pv.TEXT_SIZE_MAX
+      and pv.validate_text_size(True) == pv.TEXT_SIZE_DEFAULT
+      and pv.validate_text_size("18") == pv.TEXT_SIZE_DEFAULT
+      and pv.validate_text_size(float("nan")) == pv.TEXT_SIZE_DEFAULT)
+check("the ink goes through K-149's validator, defaulting to BLACK "
+      "here rather than to highlight yellow",
+      pv.validate_hex_color("#137BBB", pv.TEXT_COLOR_DEFAULT) == "#137bbb"
+      and pv.validate_hex_color("javascript:x", pv.TEXT_COLOR_DEFAULT)
+      == pv.TEXT_COLOR_DEFAULT)
+
+section("K-150: a box is sized to hold what was typed in it")
+check("a long single line WRAPS into rows — it used to get a one-line "
+      "box, and both .hltext and the baked FreeText CLIP to it",
+      pv.text_box_size("x" * 400)[1] > pv.text_box_size("x" * 40)[1])
+check("the page's measured row count raises the estimate and never "
+      "lowers it (the browser knows its own font metrics; this "
+      "formula only approximates them)",
+      pv.text_box_size("hi", 12.0, 9)[1] > pv.text_box_size("hi", 12.0)[1]
+      and pv.text_box_size("hi", 12.0, 1) == pv.text_box_size("hi", 12.0))
+check("an untrusted row count degrades to the formula alone",
+      pv.text_box_size("hi", 12.0, -5) == pv.text_box_size("hi", 12.0)
+      and pv.text_box_size("hi", 12.0, 10 ** 9)[1] == 720.0)
+check("the commit sends its measured rows",
+      "rows: rows," in _H150 and "te.body.scrollHeight" in _H150)
+_KEYS150 = {"id", "kind", "page", "rects", "text", "note", "color", "size"}
+check("a picked ink and size are written EXPLICITLY, and the KEY SET "
+      "is still closed: the editor's frame is chrome, not record "
+      "state (Preview shows a frame only while a box is selected), so "
+      "there is no border flag to keep in step with the bake",
+      set(pv.make_text_record(0, 0, 0, "x", color="#137bbb", size=18.0))
+      == _KEYS150)
+_PH150 = _src("pdf_handler.py")
+check("...and the bake still passes None for border and background, "
+      "so the box on screen and the baked PDF agree by construction",
+      "border_color=None," in _PH150 and "background_color=None," in _PH150)
+
+section("K-150: re-editing an existing box")
+_base150 = pv.make_text_record(1, 10.0, 20.0, "hello")
+_other150 = {"id": "other", "page": 1, "rects": [[0.0, 0.0, 1.0, 1.0]],
+             "color": "#fadc50", "note": ""}
+_recs150 = [_other150, _base150]
+_out150, _ch150 = pv.apply_text_update(
+    _recs150, {"id": _base150["id"], "text": "hello there",
+               "color": "#137BBB", "size": 18, "x": 30, "y": 40})
+check("one edit moves text, ink, size and anchor together",
+      _ch150 and _out150[1]["text"] == "hello there"
+      and _out150[1]["color"] == "#137bbb" and _out150[1]["size"] == 18.0
+      and _out150[1]["rects"][0][:2] == [30.0, 40.0], repr(_out150[1]))
+check("the box is re-measured for the new text AND the new size",
+      _out150[1]["rects"][0][2:]
+      == list(pv.text_box_size("hello there", 18.0)))
+check("every other record is untouched and the input list is never "
+      "mutated in place",
+      _out150[0] is _other150 and _recs150[1] == _base150
+      and _out150 is not _recs150)
+check("an unknown id, a non-text record, an empty body and junk all "
+      "change nothing",
+      pv.apply_text_update(_recs150, {"id": "nope", "text": "x"})[1] is False
+      and pv.apply_text_update(_recs150, {"id": "other", "text": "x"})[1]
+      is False
+      and pv.apply_text_update(_recs150,
+                               {"id": _base150["id"], "text": "  "})[1]
+      is False
+      and pv.apply_text_update(_recs150, "nope")[1] is False
+      and pv.apply_text_update(_recs150, {"text": "x"})[1] is False
+      and pv.apply_text_update(None, {"id": "x", "text": "y"})[1] is False)
+check("re-committing an untouched box reports NO change, so clicking "
+      "away costs no save, no bake and no push",
+      pv.apply_text_update(
+          _recs150, {"id": _base150["id"], "text": "hello",
+                     "color": _base150["color"],
+                     "size": _base150["size"]})[1] is False)
+check("origin survives an edit — an adopted box must stay adopted or "
+      "K-081 tombstoning stops working on it",
+      pv.apply_text_update([dict(_base150, origin="external")],
+                           {"id": _base150["id"], "text": "edited"})[0][0]
+      .get("origin") == "external")
+check("a junk colour/size falls back instead of landing in the JSON",
+      pv.apply_text_update(
+          _recs150, {"id": _base150["id"], "text": "hi",
+                     "color": "rgb(1,2,3)", "size": "huge"})[0][1]
+      == dict(_base150, text="hi",
+              rects=[[10.0, 20.0]
+                     + list(pv.text_box_size("hi", pv.TEXT_SIZE_DEFAULT))]))
+check("a junk or absent anchor keeps the record's own",
+      pv.apply_text_update(
+          _recs150, {"id": _base150["id"], "text": "hi",
+                     "x": float("inf"), "y": "nope"})[0][1]["rects"][0][:2]
+      == [10.0, 20.0])
+check("an absurd anchor clamps to the PDF spec's 14,400 pt",
+      pv.apply_text_update(
+          _recs150, {"id": _base150["id"], "text": "hi",
+                     "x": 1e9, "y": -5})[0][1]["rects"][0][:2]
+      == [pv.MAX_PAGE_PT, 0.0])
+check("the updated record still validates round-trip through storage",
+      _ph149._validate_highlight(_out150[1]) == _out150[1])
 
 raise SystemExit(report())

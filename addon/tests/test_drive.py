@@ -1,4 +1,4 @@
-"""Headless tests for drive_store + deck_curate/pdf_drive importability.
+"""Headless tests for drive_store + pdf_drop/pdf_drive importability.
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_drive.py
 """
@@ -297,27 +297,53 @@ stub("aqt.editor", Editor=_Any)
 stub("anki")
 stub("anki.collection", AddNoteRequest=_Any)
 
-for mod in ("klausmate.deck_curate", "klausmate.pdf_drive"):
+for mod in ("klausmate.pdf_drop", "klausmate.pdf_drive"):
     try:
         importlib.import_module(mod)
         check(f"{mod.split('.')[-1]} imports", True)
     except Exception as e:
         check(f"{mod.split('.')[-1]} imports", False, f"{type(e).__name__}: {e}")
 
-# deck_curate pure surface
+# pdf_drop pure surface
 try:
-    dc = sys.modules["klausmate.deck_curate"]
-    check("armed starts empty", dc.armed() is None)
-    check("the surviving commands are underscore-namespaced (a colon "
+    dp = sys.modules["klausmate.pdf_drop"]
+    check("the ONE surviving command is underscore-namespaced (a colon "
           "name is swallowed by the editor bridge's non-Editor guard)",
-          {dc.BROWSE_CMD, dc.DISARM_CMD}
-          == {"klausmate_browse", "klausmate_disarm"}
-          and not any(c.startswith("klausmate:")
-                      for c in (dc.BROWSE_CMD, dc.DISARM_CMD)))
-    check("js handler ignores foreign messages",
-          dc.on_deck_js_message((False, None), "something:else", None) == (False, None))
+          dp.BROWSE_CMD == "klausmate_browse"
+          and not dp.BROWSE_CMD.startswith("klausmate:"))
+    # Every message check below passes a VALID deck context (DeckBrowser
+    # is stubbed as _Any above, so an _Any() instance satisfies the
+    # handler's own isinstance gate). That is load-bearing: with
+    # context=None the CONTEXT gate turns everything away, and a handler
+    # that had stopped filtering by message name at all would still look
+    # correct — this pin passed that way until the K-151 falsification
+    # pass caught it. QTimer is stubbed as the _Any CLASS, whose catch-all
+    # __getattr__ is instance-level, so a real QTimer.singleShot lookup
+    # raises: lend it a recorder for these calls and take it away again,
+    # rather than leaving every other section's deferrals silently
+    # succeeding where they used to raise.
+    _fired = []
+    _Any.singleShot = staticmethod(lambda ms, fn: _fired.append(fn))
+    try:
+        check("a Browse… click on a deck-screen context is claimed, and "
+              "defers its file dialog instead of raising it inline",
+              dp.on_deck_js_message((False, None), dp.BROWSE_CMD, _Any())
+              == (True, None)
+              and _fired == [dp._browse_for_pdfs], repr(_fired))
+        check("js handler ignores a foreign message on that SAME "
+              "context — the message gate is what turns it away, not "
+              "the context gate",
+              dp.on_deck_js_message((False, None), "something:else",
+                                    _Any()) == (False, None))
+        check("and the K-151-retired disarm command falls through it "
+              "too; a handler that claimed-and-ignored the name would "
+              "silently eat an identical message from anyone else",
+              dp.on_deck_js_message((False, None), "klausmate_disarm",
+                                    _Any()) == (False, None))
+    finally:
+        del _Any.singleShot
 except Exception as e:
-    check("deck_curate surface", False, str(e))
+    check("pdf_drop surface", False, str(e))
 
 print("== K-146: the curate-a-deck ceremony is gone, by absence ==")
 # Pouya: "remove the fucking option to curate a fucking deck." The button
@@ -326,19 +352,31 @@ print("== K-146: the curate-a-deck ceremony is gone, by absence ==")
 # "Show Matched Cards in Browse" already opens. These are ABSENCE pins
 # (the reviewer-sheet idiom): the board card's verify grepped for the
 # same strings, but a card's gate dies at sign-off and this does not.
-_DC_SRC = open("klausmate/deck_curate.py", encoding="utf-8").read()
-_CU_SRC = open("klausmate/curation.py", encoding="utf-8").read()
-_PD_SRC = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+# code_only (comments AND string literals stripped) is the house pin
+# tool, hoisted here because the K-151 pins below are ABOUT prose: the
+# module docstring names every symbol that card removed, to say why it
+# is gone, so a raw-source absence grep could never pass.
+_SKILL_SCRIPTS = os.path.join(
+    os.path.dirname(ADDON), ".claude", "skills", "klaus-test", "scripts"
+)
+sys.path.insert(0, _SKILL_SCRIPTS)
+from anki_stubs import code_only  # noqa: E402
+
+_DP_SRC = open(os.path.join(ADDON, "pdf_drop.py"), encoding="utf-8").read()
+_DP_CODE = code_only(_DP_SRC)
+_CU_SRC = open(os.path.join(ADDON, "curation.py"), encoding="utf-8").read()
+_PD_SRC = open(os.path.join(ADDON, "pdf_drive.py"), encoding="utf-8").read()
+_PD_CODE = code_only(_PD_SRC)
 for _sym in ("choose_deck_scope", "run_curation_flow", "_curate_with",
              "_on_curate_clicked", "_pick_pdf_menu", "CURATE_CMD",
              "on_overview_bottom", "_install_deck_browser_button"):
-    check(f"deck_curate no longer defines or names {_sym}",
-          _sym not in _DC_SRC)
+    check(f"pdf_drop no longer defines or names {_sym}",
+          _sym not in _DP_SRC)
 for _sym in ("def run_curation(", "def _preview_in_browse(",
              "def suggest_deck_name(", "def _escape_search("):
     check(f"curation no longer defines {_sym[4:-1]}", _sym not in _CU_SRC)
 check("no bottom-bar button label survives on either deck screen",
-      "Curate Deck" not in _DC_SRC and "Curate Deck" not in _PD_SRC)
+      "Curate Deck" not in _DP_SRC and "Curate Deck" not in _PD_SRC)
 check("nor the Library's context-menu entry",
       "Curate Deck from This PDF" not in _PD_SRC)
 
@@ -368,10 +406,10 @@ check("last_run is gone with the search that wrote it — a module global "
 
 # ...but the drop machinery it was tangled with SURVIVES: this wrapper is
 # the only thing stopping Anki's own importer choking on a dropped PDF.
-for _sym in ("_install_drop_wrap", "_import_and_arm", "_browse_for_pdfs",
-             "BROWSE_CMD", "_drop_square_html", "def disarm_if("):
-    check(f"deck_curate keeps {_sym} (the import surface, not the "
-          f"ceremony)", _sym in _DC_SRC)
+for _sym in ("_install_drop_wrap", "_import_pdfs", "_browse_for_pdfs",
+             "BROWSE_CMD", "_drop_square_html"):
+    check(f"pdf_drop keeps {_sym} (the import surface, not the "
+          f"ceremony)", _sym in _DP_SRC)
 
 def _calls_in_func(src, func, callee):
     """Is `callee` actually CALLED by `func` itself?
@@ -399,10 +437,7 @@ def _calls_in_func(src, func, callee):
 
 check("the drop wrap is still INSTALLED by setup() — the one thing "
       "standing between a dropped PDF and Anki's own importer",
-      _calls_in_func(_DC_SRC, "setup", "_install_drop_wrap"))
-check("and the armed square no longer points at a button that is gone",
-      "press <b>Curate Deck</b> below" not in _DC_SRC
-      and "Imported:" in _DC_SRC)
+      _calls_in_func(_DP_SRC, "setup", "_install_drop_wrap"))
 check("curation keeps the manual Browse deck copier (no PDF, no scope)",
       "def prompt_and_create(" in _CU_SRC
       and "def create_curated_deck(" in _CU_SRC
@@ -412,8 +447,93 @@ check("an empty Browse selection now says so instead of silently "
       "browser.selected_notes()" in _CU_SRC
       and "Select the notes to copy first." in _CU_SRC)
 
+print("== K-151: the armed square is gone WHOLE, not vestigially ==")
+# The armed half existed to STAGE a PDF for the curate button. K-146
+# deleted the button, so K-151 deleted the staging: a square naming a
+# file with no action attached is a confirmation Anki already gives
+# (import_pdf_file tooltips "Klaus: loaded '<name>'" on every import
+# surface). Removing a concept means every limb — state, bridge
+# command, handler branch, HTML, the deck/overview re-render it needed,
+# and pdf_drive's disarm_if call on delete.
+check("deck_curate.py is gone — the module curated nothing and the "
+      "file name went on saying it did",
+      not os.path.exists(os.path.join(ADDON, "deck_curate.py")))
+
+
+def _code_idents(src):
+    """Every identifier that exists in real CODE: defs, assignments,
+    globals, attributes, args and plain references.
+
+    AST, not a grep, and for a sharper reason than usual here: pdf_drop's
+    module docstring NAMES every symbol this card removed, to record what
+    went and why. A raw-source absence grep would read that prose as the
+    symbol still being present and fail on a correct file; code_only
+    would strip the docstring but also every string literal, so it
+    cannot see identifiers either way. This sees code and only code.
+    """
+    out = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Name):
+            out.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.ClassDef)):
+            out.add(node.name)
+        elif isinstance(node, ast.Global):
+            out.update(node.names)
+        elif isinstance(node, ast.Attribute):
+            out.add(node.attr)
+        elif isinstance(node, ast.arg):
+            out.add(node.arg)
+    return out
+
+
+_DP_IDENTS = _code_idents(_DP_SRC)
+for _sym in ("_armed_pdf", "arm", "armed", "disarm_if", "DISARM_CMD",
+             "_CLAIMED", "_refresh_current_screen", "_import_and_arm",
+             "_on_profile_will_close", "profile_will_close",
+             "_display_name", "_user_files"):
+    check(f"pdf_drop carries no {_sym} in real code", _sym not in _DP_IDENTS)
+
+_DP_TREE = ast.parse(_DP_SRC)
+_DP_GLOBALS = sorted(
+    t.id
+    for node in _DP_TREE.body
+    if isinstance(node, (ast.Assign, ast.AnnAssign))
+    for t in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
+    if isinstance(t, ast.Name)
+)
+check("the module holds exactly ONE module-level name, BROWSE_CMD — the "
+      "armed PDF was session state, and with it gone there is nothing "
+      "left for setup() to reset on profile_will_close",
+      _DP_GLOBALS == ["BROWSE_CMD"], repr(_DP_GLOBALS))
+check("and no function rebinds a module global (the `global` statement "
+      "went with the state it wrote)",
+      not [n for n in ast.walk(_DP_TREE) if isinstance(n, ast.Global)])
+
+try:
+    _SQUARE = sys.modules["klausmate.pdf_drop"]._drop_square_html()
+    check("the square renders ONE state — the invitation and its "
+          "Browse… anchor; no armed variant, no × dismiss link, and no "
+          "copy naming an imported file",
+          "Drop a lecture PDF" in _SQUARE
+          and "Browse&hellip;" in _SQUARE
+          and "&times;" not in _SQUARE
+          and "Imported:" not in _SQUARE
+          and "Armed:" not in _SQUARE, repr(_SQUARE[-260:]))
+    check("with exactly one pycmd in it, the Browse command",
+          _SQUARE.count("pycmd(") == 1
+          and 'pycmd("klausmate_browse")' in _SQUARE)
+except Exception as e:
+    check("K-151 drop-square render", False, f"{type(e).__name__}: {e}")
+
+check("pdf_drive's delete path no longer reaches into the armed state — "
+      "it held the last disarm_if caller, and the module import went "
+      "with it (code_only: the comment recording the removal must not "
+      "satisfy the pin)",
+      "disarm_if" not in _PD_CODE and "deck_curate" not in _PD_CODE)
+
 print("== pdf_handler.list_by_recency (last_used missing for some pdfs) ==")
-# This used to be driven THROUGH deck_curate._pick_pdf_menu with fake
+# This used to be driven THROUGH the deck square's _pick_pdf_menu with fake
 # QMenu/QAction/QCursor objects, reading the ordering back off the fake
 # menu's item texts. K-146 deleted that menu; the ordering rule it was
 # really testing lives in pdf_handler and is still live (the editor PDF
@@ -755,15 +875,9 @@ except Exception as e:
 print("== K-117 source pins: labels, guarded import, exec ban ==")
 # code_only (comments AND strings stripped) is the house pin tool — a
 # docstring merely *mentioning* dlg.exec() must not fail the ban, and a
-# comment mentioning an old label must not satisfy a rename pin.
-_SKILL_SCRIPTS = os.path.join(
-    os.path.dirname(ADDON), ".claude", "skills", "klaus-test", "scripts"
-)
-sys.path.insert(0, _SKILL_SCRIPTS)
-from anki_stubs import code_only  # noqa: E402
-
-_PD_SRC = open(os.path.join(ADDON, "pdf_drive.py")).read()
-_PD_CODE = code_only(_PD_SRC)
+# comment mentioning an old label must not satisfy a rename pin. It and
+# _PD_SRC/_PD_CODE are hoisted to the K-146/K-151 block above, whose
+# absence pins need the same tool.
 _PD_FLAT = _PD_CODE.replace(" ", "")
 
 check("four headers: PDF / Retention / Cards / Notes",

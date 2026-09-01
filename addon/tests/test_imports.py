@@ -5,7 +5,7 @@ Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 Why this exists (K-008): the human reported the PDF drive window does not
 open at all in live Anki. `klausmate/__init__.py` wraps both
 `from . import pdf_drive as _pdf_drive; _pdf_drive.setup()` and the
-equivalent for `deck_curate` in a `try/except Exception` that only prints —
+equivalent for `pdf_drop` in a `try/except Exception` that only prints —
 so an ImportError or NameError anywhere in pdf_drive.py's own module-level
 code would be swallowed silently and the window would just never register,
 with no trace beyond a buried `print()` in Anki's console.
@@ -14,7 +14,7 @@ Nothing caught this before now: the old `aqt.qt` stub in
 `.claude/skills/klaus-test/scripts/anki_stubs.py` only defined QAction,
 QInputDialog, QMessageBox, QTimer and qconnect, so `from aqt.qt import
 QWidget` (or any of the ~55 other Qt names klausmate actually imports)
-raised before either pdf_drive.py's or deck_curate.py's own code ever ran —
+raised before either pdf_drive.py's or pdf_drop.py's own code ever ran —
 meaning those modules had literally never been import-tested. anki_stubs.py
 now stubs aqt/anki permissively (see its module docstring); this test uses
 that to import every klausmate module directly, bypassing __init__.py's
@@ -82,7 +82,7 @@ def main() -> int:
     # anything — for exactly the file where the human's bug report points.
     # Load the real __init__.py from disk and execute it under the
     # "klausmate" name instead, so its own module-level code (including
-    # the try/except around pdf_drive/deck_curate setup()) actually runs.
+    # the try/except around pdf_drive/pdf_drop setup()) actually runs.
     section("klausmate package bootstrap (__init__.py)")
     init_path = os.path.join(ADDON, "__init__.py")
     spec = importlib.util.spec_from_file_location(

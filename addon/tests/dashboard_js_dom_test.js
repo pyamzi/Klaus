@@ -140,7 +140,7 @@ function build(opts) {
     center.insertBefore(banner, table);
     foreign = center.appendChild(el("div", "ankihub-thing"));
     foreignBr = foreign.appendChild(el("br")); // a br the wrap must NOT take
-    center.appendChild(el("div", "klaus-curate-drop")); // deck_curate's square
+    center.appendChild(el("div", "klaus-curate-drop")); // pdf_drop's square
   }
   let hm = null;
   if (opts.heatmap !== false) hm = center.appendChild(el("div", "klaus-hm"));

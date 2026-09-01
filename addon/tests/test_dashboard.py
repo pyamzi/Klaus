@@ -191,7 +191,7 @@ check("the wrapper's ONLY width is fit-content — hugs a narrow deck "
       and "max-width: 100%" in _wrapper_rule
       and _wrapper_rule.count("width") == 2
       and not re.search(r"(?<!max-)width: 100%", _css))
-check("edit chrome floats ABOVE deck_curate's armed-PDF drop square "
+check("edit chrome floats ABOVE pdf_drop's PDF drop square "
       "(fixed, z-index 50): bar 60, menus 70",
       "z-index: 60" in _css and "z-index: 70" in _css)
 check("the shield outranks page content but sits under the badge",

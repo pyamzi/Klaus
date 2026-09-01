@@ -682,15 +682,23 @@ instead. Signed-off history is in
     `last_run`, `suggest_deck_name`, `_escape_search` (and long before
     them, the `!Library::Curating` temp tag K-064 retired — CLAUDE.md
     and config.md both went on documenting it until K-146).
-  - `deck_curate.py`: the deck-screen **PDF import** surface — the
+  - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
+    curated nothing): the deck-screen **PDF import** surface — the
     `MainWebView.dropEvent` wrap (the only thing stopping Anki's own
-    importer choking on a dropped PDF), the drop square on the deck list
-    and overview with its Browse… picker, and the session-only "armed"
-    indicator naming the last import (`disarm_if` still clears it when
-    the Library deletes that PDF). K-146 removed everything else here:
-    the two bottom-bar buttons, `CURATE_CMD`, `choose_deck_scope`,
-    `run_curation_flow`, `_pick_pdf_menu`. The file name is now a
-    misnomer — it curates nothing.
+    importer choking on a dropped PDF) and the drop square on the deck
+    list and overview with its Browse… picker. K-146 removed the two
+    bottom-bar buttons, `CURATE_CMD`, `choose_deck_scope`,
+    `run_curation_flow` and `_pick_pdf_menu`; **K-151 removed the ARMED
+    half whole** — `_armed_pdf`/`arm`/`disarm_if`, `DISARM_CMD` and its
+    handler branch, the armed HTML, the deck/overview re-render it
+    needed, the `profile_will_close` reset, and `pdf_drive`'s
+    `disarm_if` call on delete. Arming staged a PDF for the curate
+    button; with the button gone there was nothing to arm FOR, and
+    `import_pdf_file` already tooltips every load. The square now has
+    ONE state and the module ONE module-level name (`BROWSE_CMD`) —
+    both pinned in `tests/test_drive.py`. The js-message handler stays
+    registered for that one command, so the roster in
+    `tests/test_bridge_reentrancy.py` is still five, one member renamed.
   - `tag_migrate.py`: one-time `klaus::*` → `!Library::*` collection tag
     rename on `profile_did_open`, guarded idempotent (only proposes a rename
     when the old tag still exists), returns `col.merge_undo_entries(pos)`

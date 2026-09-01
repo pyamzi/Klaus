@@ -290,8 +290,8 @@ def dashboard_css() -> str:
         " }"
         # RTL mirrors the badge to the leading corner, like iOS does.
         " [dir=rtl] .klaus-w-remove { left: auto; right: -8px; }"
-        # Top-right, the corner opposite deck_curate's armed-PDF drop
-        # square (fixed, bottom-left family, z 50) — and above it.
+        # Top-right, the corner opposite pdf_drop's PDF drop square
+        # (fixed, bottom-left family, z 50) — and above it.
         " .klaus-dash-bar {"
         " position: fixed; top: 12px; right: 14px; z-index: 60;"
         " display: flex; gap: 8px;"

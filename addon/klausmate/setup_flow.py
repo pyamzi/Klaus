@@ -113,8 +113,8 @@ def first_run_check() -> None:
         "",
         "• The PDF sidebar lets you read a lecture PDF, highlight it, and "
         "keep it open next to your cards.",
-        "• Semantic search finds cards by meaning, not just keywords, and "
-        "can curate a deck for you — open it from the Browse screen.",
+        "• Semantic search finds the cards each lecture PDF covers, tags "
+        "them, and scores how well you still recall them.",
         "",
     ]
     if ready and not is_ollama:

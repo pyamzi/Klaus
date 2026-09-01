@@ -28,9 +28,9 @@ machines that aren't this one are product concerns, not nice-to-haves.
 KlausMate ("Klaus") turns Anki into a lecture-PDF study cockpit. All
 four jobs are confirmed as genuinely central, not ranked:
 
-1. **Exam prep from lectures** — turn a lecture PDF into a curated deck
-   fast (semantic curation: embed the PDF, match the collection, copy
-   matches into a new deck).
+1. **Exam prep from lectures** — find the cards a lecture covers fast
+   (embed the PDF, match the collection, tag the matches), and copy a
+   chosen set of them into a new deck from Browse.
 2. **Daily review companion** — per-PDF retention scores tell the user
    what to study today (FSRS retrievability aggregated over each PDF's
    matched cards).
@@ -51,8 +51,9 @@ default; Ollama fully local as the private option; OpenAI as a second
 cloud option). No chat, no generation, no autocomplete — those were
 built and deliberately deleted (2026-08). A neighboring addon could not
 truthfully claim: per-PDF retention scoring joined to FSRS, semantic
-curation from the user's own lecture PDFs, and a native annotation
-viewer, in one addon with no mandatory cloud dependency.
+matching of the collection against the user's own lecture PDFs, and a
+native annotation viewer, in one addon with no mandatory cloud
+dependency.
 
 ## Operating Context
 
@@ -61,9 +62,9 @@ viewer, in one addon with no mandatory cloud dependency.
   addon deliberately does NOT embed Anki's windows (two attempts
   removed — a durable decision).
 - Study ritual: import lecture PDFs into the Library (a user-chosen
-  on-disk folder mirrored two-way), index them, curate decks per
-  lecture, review daily guided by retention scores, annotate while
-  reviewing.
+  on-disk folder mirrored two-way), index them so each lecture's cards
+  carry its tag, review daily guided by retention scores, annotate
+  while reviewing.
 - Coordination for development: multi-agent kanban board
   (`board/BOARD.md` via `board/board.py`), archived history in
   `board/ARCHIVE.md`.
@@ -126,7 +127,7 @@ Volunteered and binding from the owner:
 
 ## Product Principles
 
-1. **The collection is sacred.** Curation copies, never moves; every
+1. **The collection is sacred.** The deck copier copies, never moves; every
    mutation is undoable; tags are owned and reconciled, not sprayed.
 2. **Local-first privacy is a feature.** Cloud embeddings are the
    convenient default, but a fully-local path (Ollama) must always

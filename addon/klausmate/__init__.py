@@ -752,8 +752,9 @@ def _on_library_button(editor: Editor) -> None:
 def _pdf_display_name(safe: str) -> str:
     """Human label for a stored PDF, falling back to its safe basename.
 
-    Mirrors deck_curate._display_name's defensive pattern (drive_store
-    lookup, safe on any failure) without importing deck_curate for it.
+    A drive_store lookup that is safe on any failure: display names are
+    bookkeeping, and a missing or corrupt drive.json must cost a label,
+    never a menu.
     """
     try:
         from . import drive_store
@@ -2116,10 +2117,10 @@ class _PdfTabContainer(QWidget):
                 stored.append(base)
         # No cap. This menu is the only way to open a stored PDF in the
         # editor's viewer, so truncating it would strand every PDF past
-        # the cut with no route in. (deck_curate used to carry a top-20
-        # curate-from-recent menu, the shortcut this was contrasted
-        # against; K-146 removed it and the Library is the full path
-        # now.) QMenu scrolls natively when it overflows.
+        # the cut with no route in. (The deck screen used to carry a
+        # top-20 curate-from-recent menu, the shortcut this was
+        # contrasted against; K-146 removed it and the Library is the
+        # full path now.) QMenu scrolls natively when it overflows.
         for base in stored:
             act = menu.addAction(_pdf_display_name(base))
             act.triggered.connect(
@@ -2324,15 +2325,15 @@ if hasattr(gui_hooks, "browser_will_show"):
 
 # The deck-screen PDF import surface and the Library install
 # independently — a failure in one must not cost the user the other (or
-# the editor features above). deck_curate is import-only since K-146:
-# the drop wrap, the drop square, and its file picker. Nothing it
-# installs touches a deck anymore.
+# the editor features above). The module is import-only since K-146 (the
+# drop wrap, the drop square, and its file picker; nothing it installs
+# touches a deck), and named pdf_drop for it since K-151.
 try:
-    from . import deck_curate as _deck_curate
+    from . import pdf_drop as _pdf_drop
 
-    _deck_curate.setup()
+    _pdf_drop.setup()
 except Exception as _e:
-    print(f"[klausmate] deck curate setup failed: {type(_e).__name__}: {_e}")
+    print(f"[klausmate] pdf drop setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import pdf_drive as _pdf_drive

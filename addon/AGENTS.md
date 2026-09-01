@@ -2,9 +2,11 @@
 
 Klausmate ("Klaus") is an **Anki 2.1 add-on**. It has one AI-powered
 capability — semantic search over your notes and lecture PDFs — which
-powers two user-facing features: **Curate Deck** (find cards matching a
-lecture PDF and copy them into a new deck) and the **Library** (a window
-over your imported PDFs with a per-PDF retention/study-priority score). A
+powers the **Library**: a window over your imported lecture PDFs where each
+one is indexed, the cards it covers are tagged with its own `!Library` tag,
+and a per-PDF retention/study-priority score says how well you still recall
+them. Copying a set of those cards into a new deck is a separate, manual
+Browse action. A
 native PDF viewer (selection, highlights, sticky notes baked in as real
 annotations) and an image-crop dialog round out the add-on. There is no
 autocomplete, no chat panel, and no Claude/Anthropic integration — all three
@@ -34,8 +36,8 @@ Addons/                       # Git repo root
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
     ├── embeddings.py           # Embedding provider abstraction: Voyage (default) / OpenAI / Ollama, aqt-free
     ├── card_index.py           # Persistent embedding index over the user's notes (aqt-free)
-    ├── curation.py             # Curate Deck pipeline: sync index, embed query, rank, tag preview, undoable deck copy
-    ├── deck_curate.py          # "Curate Deck" button + PDF drop on the deck list / overview screens
+    ├── curation.py             # Card index build (ensure_index) + the undoable Browse deck copier
+    ├── pdf_drop.py             # PDF drop square + MainWebView.dropEvent wrap on the deck list / overview screens
     ├── pdf_index.py            # Persistent embedding index over one PDF's text chunks (aqt-free)
     ├── retention.py            # Per-PDF retention/study-priority scoring for the Library
     ├── pdf_handler.py          # PDF import/storage, text extraction, per-tab state, annotation baking
@@ -76,18 +78,19 @@ Addons/                       # Git repo root
 
 ## Architecture
 
-### Semantic deck curation (Curate Deck)
+### Semantic card matching (indexing a PDF)
 
 ```
-Deck list / deck overview — drop a PDF, or pick one from the "Curate Deck" menu
+Library row → right-click → "Add to Search Index" / "Update Search Index"
         │
         ▼
-deck_curate.py :: run_curation_flow(pdf_name, deck_scope)
-        │
+pdf_drive.py :: _on_embed(safe) — FOUR phases, one cancel token threaded
+        │        through all of them (K-146)
         ▼
-curation.py :: run_curation() — sync the card index (only new/edited notes
-        │        re-embed; text-hash diffed), embed the PDF's text, rank
-        │        every card by cosine similarity
+curation.py :: ensure_index() — sync the card index (only new/edited notes
+        │        re-embed; text-hash diffed). This is the only user-facing
+        │        path that refreshes it; the Curate button used to do it
+        │        invisibly, which is why K-146 had to add it here.
         ▼
 embeddings.py — Voyage / OpenAI / Ollama, unit-normalized vectors
         │
@@ -95,15 +98,22 @@ embeddings.py — Voyage / OpenAI / Ollama, unit-normalized vectors
 card_index.py — user_files/card_index/: packed float32 vectors + manifest,
         │        top-K via math.sumprod over memoryviews (no numpy)
         ▼
-Best matches tagged "!Library::Curating" → Browse opens on that tag → prune →
-"Create curated deck" copies the selection into a new deck (one undo step,
-tagged "!Library::Curated", originals untouched)
+retention.py :: ensure_pdf_index() → ensure_matches() — embed the PDF's
+        │        chunks, score every indexed note (max cosine, cached in
+        │        matches.json)
+        ▼
+tag_sync.py :: sync_after_matches() — the notes at/above this PDF's
+          sensitivity threshold become the members of its one
+          "!Library::<folder>::<leaf>" tag
 ```
 
-There is no free-text search box anymore — curation is always driven by a
-lecture PDF (`curation.run_curation`'s `prompt` parameter exists but nothing
-in the current UI passes one; the panel that used to type into it,
-`chat_dock.py`, is gone).
+Copying matches into a deck is a SEPARATE, manual action with no PDF and no
+deck scope: **Browse → Notes → "KlausMate: Create Curated Deck from
+Selection…"** (`curation.prompt_and_create` / `create_curated_deck`), one
+undo step, tagged `!Library::Curated`, originals untouched. There is no
+free-text search box and no Curate Deck button — K-146 removed the button
+(it never created a deck; it tagged and opened Browse on the tag indexing
+already writes) and K-151 removed the last of its vocabulary.
 
 ### The Library and retention scoring
 
@@ -117,9 +127,10 @@ retention.py — per PDF: embed its chunks (pdf_index.py) → score every
         │       matches.json) → pull FSRS retrievability for matched cards
         │       → aggregate into a study-priority score
         ▼
-Library row shows the score; right-click can re-embed, adjust match
-sensitivity, show matches in Browse ("!Library::Matching" tag), or hand off
-to deck_curate.py's curation flow
+Library row shows the score; right-click can index/re-index, adjust match
+sensitivity, show matches in Browse (it hops to the PDF's own !Library tag —
+the "!Library::Matching" preview tag was retired in K-055), suspend or
+unsuspend its cards, or chart its retention history
 ```
 
 ### PDF viewer (`pdf_viewer.py`)
@@ -152,7 +163,7 @@ mw.addonManager.setConfigAction(__name__, open_config)              # -> manage_
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)      # pycmd routing ("klausmate:" prefix)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)  # right-click crop
-gui_hooks.main_window_did_init.append(install_menu)                 # Tools → Klaus
+gui_hooks.main_window_did_init.append(install_menu)                 # Tools → KlausMate Preferences…
 gui_hooks.profile_did_open.append(_migrate_config)                  # legacy chat_*/claude_* key cleanup
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
 gui_hooks.profile_did_open.append(first_run_check)                  # embeddings-provider onboarding
@@ -160,7 +171,7 @@ gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel + tab container
 gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse toolbar toggles (◧ / ◨)
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
-deck_curate.setup()                                                 # "Curate Deck" on deck screens (independent try/except)
+pdf_drop.setup()                                                    # PDF drop square + drop wrap on deck screens (independent try/except)
 pdf_drive.setup()                                                   # Library window + top-toolbar link (independent try/except)
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
@@ -175,7 +186,7 @@ window_chrome.setup()                                               # KlausBook 
 `webview_did_receive_js_message` (a clicked day) and `browser_will_search`
 (resolving the `klausday:` token those clicks produce).
 
-`deck_curate.setup()` and `pdf_drive.setup()` are each wrapped in their own
+`pdf_drop.setup()` and `pdf_drive.setup()` are each wrapped in their own
 `try/except` at import time — a failure in one must not cost the user the
 other, or the editor/menu features above. `tests/test_imports.py` imports
 every module directly (bypassing that swallowing try/except) so a genuine
@@ -209,8 +220,8 @@ Attributes on `editor` (all `editor._klausmate_*`, guarded with
 `_klausmate_sidebar`, `_klausmate_active_pdf`, `_klausmate_vsplit`,
 `_klausmate_target_field_index` / `_target_field_name`, `_klausmate_crop_open`.
 Browse-window toggles carry their own: `_klausmate_sidebar_toggle_btn` /
-`_klausmate_editor_toggle_btn`. Deck-screen state:
-`_klausmate_curate_link`, `_klausmate_drop_wrapped` / `_drop_orig`.
+`_klausmate_editor_toggle_btn`. Deck-screen state is down to the drop
+wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
 
 ---
 
@@ -218,12 +229,12 @@ Browse-window toggles carry their own: `_klausmate_sidebar_toggle_btn` /
 
 - Defaults: `klausmate/config.json`
 - User overrides: stored in `meta.json` by Anki's add-on manager
-- UI: **Tools → Klaus → Manage models…** (`manage_models_dialog`, also reached via **Tools → Add-ons → Klausmate → Config**)
+- UI: **Tools → KlausMate Preferences…** (`manage_models_dialog`; the top bar's star opens it too, and raw JSON is still at **Tools → Add-ons → Klausmate → Config**)
 - Key docs: `klausmate/config.md`
 
 Notable keys: `embedding_provider` (`voyage` default | `openai` | `ollama`),
 `embedding_model`, `embedding_api_key_voyage` / `embedding_api_key_openai`,
-`curate_top_k`, `curate_min_score`, `pdf_match_threshold`, `pdf_match_agg`,
+`pdf_match_threshold`, `pdf_match_agg`,
 `pdf_index_max_chunks`, `endpoint` (Ollama server URL), `runtime_auto_setup`
 (Klaus manages its own local Ollama install when needed), `image_crop_enabled`,
 `klausbook_design` (default false — master switch for the design
@@ -314,7 +325,8 @@ a separate chat panel for semantic search. That product surface is gone:
 `settings_ui.py`, and `chat_dock.py` (the "Klaus panel") were all deleted,
 along with the `autocomplete_model` / `ask_model` / `klaus_engine` /
 `claude_*` config keys and the Browse natural-language search. What
-remains — Curate Deck, the Library, the PDF viewer, and image cropping — is
+remains — the Library, semantic card matching, the PDF viewer, and image
+cropping — is
 everything above. Don't resurrect autocomplete/Ask/chat-panel language in
 docs or comments; if you find some, it's stale, not a spec.
 

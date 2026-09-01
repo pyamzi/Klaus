@@ -741,8 +741,8 @@ def ensure_matches(
         cidx = card_index.load(INDEX_DIR)
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
-                "The card index needs a rebuild — run a search or re-index "
-                "from Manage models first."
+                "The card index needs a rebuild — press Index Now in "
+                "Klaus Preferences → Semantic Search first."
             )
         digest = card_index_digest(cidx)
         cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg)

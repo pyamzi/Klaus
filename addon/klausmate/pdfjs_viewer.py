@@ -13,8 +13,8 @@ K-101 cutover). ``PdfSidebar`` branches on :func:`renderer_from_config`.
 
 Division of labour (K-097..K-099): the page owns rendering and gestures;
 THIS MODULE OWNS THE ANNOTATIONS JSON. JS sends mutations over the bridge
-(``hl-add``/``hl-remove``/``note-edit``/``text-add``), Python mutates
-``_highlights``,
+(``hl-add``/``hl-remove``/``note-edit``/``text-add``/``text-update``),
+Python mutates ``_highlights``,
 persists via ``pdf_handler.save_annotations`` + the same debounced bake
 the native viewer uses, then pushes the canonical records back through
 ``window.klausSetAnnotations``. Record schema is identical to the native
@@ -32,6 +32,7 @@ window globals in chunks, then trigger the load. Pure helpers
 from __future__ import annotations
 
 import base64
+import colorsys
 import json
 import math
 import threading
@@ -86,6 +87,20 @@ HIGHLIGHT_COLOR = "#fadc50"  # native viewer's default highlight yellow
 TEXT_COLOR_DEFAULT = "#000000"
 TEXT_SIZE_DEFAULT = 12.0
 
+# Typed text is bounded before it becomes a record (K-150: the body now
+# arrives over the bridge instead of out of a Qt dialog, so it is
+# untrusted input like every other payload field).
+MAX_TEXT_CHARS = 4000
+TEXT_SIZE_MIN = 6.0
+TEXT_SIZE_MAX = 96.0
+# A measured row count the page may send with a commit; see
+# :func:`text_box_size`.
+MAX_TEXT_ROWS = 400
+
+# WCAG AA for body text. Text ink is OPAQUE glyphs on white paper, so
+# legibility is a hard floor, not a preference — see :func:`ink_for_text`.
+TEXT_INK_MIN_CONTRAST = 4.5
+
 # The PDF spec caps a page dimension at 14,400 pt (200 in) — any
 # coordinate beyond that is garbage whatever the document says.
 MAX_PAGE_PT = 14400.0
@@ -111,6 +126,88 @@ def chunk_b64(data: bytes, chunk_chars: int = CHUNK_CHARS) -> list[str]:
     return [b64[i : i + chunk_chars] for i in range(0, len(b64), chunk_chars)]
 
 
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    v = value.lstrip("#")
+    return int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+
+
+def _contrast_on_white(rgb: tuple[int, int, int]) -> float:
+    """WCAG contrast ratio of *rgb* against white paper."""
+
+    def channel(c: int) -> float:
+        f = c / 255.0
+        return f / 12.92 if f <= 0.03928 else ((f + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in rgb)
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return 1.05 / (lum + 0.05)
+
+
+def ink_for_text(hex_color: str) -> str:
+    """One HIGHLIGHT ink, re-mixed as OPAQUE text ink of the same hue.
+
+    K-149's five inks are tuned to be read THROUGH — 43% alpha over
+    white paper — so at full strength they are pastel wash: yellow
+    #FADC50 measures 1.36:1 against white, which as glyphs is
+    unreadable. Text is the opposite problem: opaque marks on the same
+    paper, where legibility is the whole job. So the two rows share
+    their NAMES and their hues and nothing else, and the text value is
+    DERIVED rather than hand-picked: keep the hue, floor the saturation
+    (a darkened pastel goes muddy otherwise), then walk the lightness
+    down until the colour clears :data:`TEXT_INK_MIN_CONTRAST` on white.
+
+    Derivation, not a second table, so the two rows can never drift:
+    edit ``theme.HIGHLIGHT_INKS`` and the text row follows, still
+    legible by construction. Independent of night mode for exactly
+    K-149's reason — the value bakes into the PDF's ``/C`` and that
+    file opens in Preview, where night mode does not exist.
+    """
+    try:
+        r, g, b = _hex_to_rgb(hex_color)
+    except (ValueError, IndexError):
+        return TEXT_COLOR_DEFAULT
+    h, lightness, sat = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+    sat = max(sat, 0.75)
+    steps = int(lightness / 0.01) + 1
+    out = (0, 0, 0)
+    for i in range(steps + 1):
+        lit = max(lightness - i * 0.01, 0.05)
+        fr, fg, fb = colorsys.hls_to_rgb(h, lit, sat)
+        out = (round(fr * 255), round(fg * 255), round(fb * 255))
+        if _contrast_on_white(out) >= TEXT_INK_MIN_CONTRAST:
+            break
+    return "#%02x%02x%02x" % out
+
+
+def text_inks() -> tuple[tuple[str, str], ...]:
+    """The Add Text swatch row: ``(name, #rrggbb)``, black first.
+
+    Black leads for K-149's yellow-first reason — it IS
+    :data:`TEXT_COLOR_DEFAULT`, the colour every outside-text record
+    already on disk carries, so the default swatch mints a record
+    byte-identical to one minted before the row existed. The rest are
+    :data:`theme.HIGHLIGHT_INKS` through :func:`ink_for_text`.
+    """
+    from . import theme
+
+    out = [("black", TEXT_COLOR_DEFAULT)]
+    for name, value in theme.HIGHLIGHT_INKS:
+        out.append((name, ink_for_text(value)))
+    return tuple(out)
+
+
+def text_ink_vars() -> str:
+    """``--tink-*`` custom properties for the page's text swatches.
+
+    theme.css_vars owns ``--ink-*`` (the highlight row); this is its
+    text-side sibling, appended to the same substitution so the page
+    still spells no hex of its own. It lives HERE rather than in
+    theme.py because it is derived from a theme table rather than being
+    one — theme.py stays the source of the hues.
+    """
+    return "".join(f" --tink-{name}: {value};" for name, value in text_inks())
+
+
 def build_page_html(addon_name: str, night: bool) -> str:
     """The viewer page with ``__ADDON__``/``__THEME_VARS__`` filled in.
 
@@ -128,7 +225,9 @@ def build_page_html(addon_name: str, night: bool) -> str:
     with open(path, encoding="utf-8") as f:
         html = f.read()
     html = html.replace("__ADDON__", addon_name)
-    html = html.replace("__THEME_VARS__", theme.css_vars(night))
+    html = html.replace(
+        "__THEME_VARS__", theme.css_vars(night) + text_ink_vars()
+    )
     return html
 
 
@@ -501,8 +600,57 @@ def clamp_text_add(
     return page, coords[0], coords[1]
 
 
+def sanitize_text(value: Any, limit: int = MAX_TEXT_CHARS) -> str:
+    """A trusted body out of an untrusted ``text`` payload field.
+
+    Since K-150 the typed text arrives over the bridge (the editor is
+    in the page), where before it came out of a Qt dialog — so it gets
+    the same treatment as every other bridge value. Newlines
+    normalize to ``\\n`` and survive (an outside-text box is
+    multi-line); tabs become one space, because the box geometry is
+    measured per character and a tab is one character that draws eight
+    wide; every other control character is dropped; the result is
+    capped and stripped. Non-strings are "".
+    """
+    if not isinstance(value, str):
+        return ""
+    text = value.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    kept = [
+        ch for ch in text if ch == "\n" or (ch >= " " and ch != "\x7f")
+    ]
+    return "".join(kept)[:limit].strip()
+
+
+def validate_text_size(
+    value: Any, default: float = TEXT_SIZE_DEFAULT
+) -> float:
+    """A trusted font size in points out of a bridge value.
+
+    Junk (and bools, which are ints in Python) falls back to *default*;
+    a real number is clamped into [:data:`TEXT_SIZE_MIN`,
+    :data:`TEXT_SIZE_MAX`] rather than rejected, so a size the page
+    offers that this side has since tightened still places text.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    size = float(value)
+    if not math.isfinite(size):
+        return default
+    return min(max(size, TEXT_SIZE_MIN), TEXT_SIZE_MAX)
+
+
+def _validate_rows(value: Any) -> int:
+    """A trusted rendered-row count, or 0 for "not measured"."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    rows = float(value)
+    if not math.isfinite(rows) or rows < 1:
+        return 0
+    return int(min(rows, MAX_TEXT_ROWS))
+
+
 def text_box_size(
-    text: str, size: float = TEXT_SIZE_DEFAULT
+    text: str, size: float = TEXT_SIZE_DEFAULT, rows: int = 0
 ) -> tuple[float, float]:
     """A FreeText box sized for freshly typed *text*, in page points.
 
@@ -510,15 +658,43 @@ def text_box_size(
     average; the renderers clip/shrink gracefully either side), height
     fits every line at 1.35 leading — both clamped to sane page-scale
     bounds so pathological input cannot mint an absurd box.
+
+    Lines that exceed the width cap WRAP, and the height counts the
+    wrapped rows (K-150). It used to count source lines only, so one
+    long paragraph got a one-line box — and ``.hltext`` and the baked
+    FreeText both clip to their box, which silently ate most of the
+    text. That was invisible while the only way in was a modal dialog
+    you could not see the page behind; with the box now edited in
+    place, the box you type in has to be the box you get.
+
+    *rows*, when the page sends its MEASURED row count with a commit,
+    raises the estimate (never lowers it): the browser knows its own
+    font metrics and this formula only approximates them, so the box
+    is sized by whichever of the two is more generous. 0 means "not
+    measured" — the formula alone, which is also what an untrusted or
+    absurd value degrades to.
     """
     lines = (text or "").splitlines() or [""]
     longest = max(len(line) for line in lines)
     w = min(max(longest * size * 0.6 + 8.0, 60.0), 480.0)
-    h = min(max(len(lines) * size * 1.35 + 6.0, size * 1.5), 720.0)
+    per_row = max(w - 8.0, size * 0.6)
+    wrapped = 0
+    for line in lines:
+        wrapped += max(1, math.ceil(len(line) * size * 0.6 / per_row))
+    wrapped = max(wrapped, _validate_rows(rows))
+    h = min(max(wrapped * size * 1.35 + 6.0, size * 1.5), 720.0)
     return w, h
 
 
-def make_text_record(page: int, x: float, y: float, text: str) -> dict:
+def make_text_record(
+    page: int,
+    x: float,
+    y: float,
+    text: str,
+    color: str = TEXT_COLOR_DEFAULT,
+    size: float = TEXT_SIZE_DEFAULT,
+    rows: int = 0,
+) -> dict:
     """A Klaus-native outside-text record at (*x*, *y*) page points.
 
     EXACTLY the K-077/K-083 ``kind: "text"`` shape the whole pipeline
@@ -527,8 +703,16 @@ def make_text_record(page: int, x: float, y: float, text: str) -> dict:
     regenerates it as a Klaus-marked FreeText. Deliberately NO
     ``origin`` key: this is native markup, so K-081 tombstones and the
     K-082 foreign mirror ignore it.
+
+    The KEY SET is closed on purpose and K-150 did not widen it: the
+    editor's frame, grip and focus ring are EDITING chrome, not record
+    state — Preview draws a frame around a text annotation only while
+    it is selected, and a committed one is bare glyphs. So the bake
+    keeps passing ``border_color=None``/``background_color=None`` and
+    the on-screen twin keeps matching the baked PDF exactly, with no
+    border flag to keep in step between them.
     """
-    w, h = text_box_size(text)
+    w, h = text_box_size(text, size, rows)
     return {
         "id": uuid.uuid4().hex,
         "kind": "text",
@@ -536,9 +720,79 @@ def make_text_record(page: int, x: float, y: float, text: str) -> dict:
         "rects": [[float(x), float(y), w, h]],
         "text": str(text),
         "note": "",
-        "color": TEXT_COLOR_DEFAULT,
-        "size": TEXT_SIZE_DEFAULT,
+        "color": str(color),
+        "size": float(size),
     }
+
+
+def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
+    """One outside-text record re-committed from the page's editor.
+
+    Returns ``(records, changed)`` — a NEW list when something moved,
+    the input list untouched when nothing did, so the caller can skip
+    the save/push round trip on a no-op commit (clicking away from a
+    box you did not edit).
+
+    Every field is re-validated here, not trusted: the id must name an
+    existing ``kind: "text"`` record, the body goes through
+    :func:`sanitize_text`, the colour through :func:`validate_hex_color`
+    and the size through :func:`validate_text_size`. ``x``/``y`` are
+    optional and, when valid, move the box (the editor's drag); the
+    record's own anchor stands otherwise. The box is re-measured from
+    the new text and size, and every OTHER key — ``origin`` above all,
+    which decides K-081 tombstoning — is carried through unchanged.
+
+    An empty body is NOT a delete here: the page routes that to
+    ``hl-remove``, which already owns tombstoning an adopted record.
+    """
+    out = list(records or [])
+    if not isinstance(data, dict):
+        return out, False
+    rec_id = data.get("id")
+    if not isinstance(rec_id, str) or not rec_id:
+        return out, False
+    index = -1
+    for i, rec in enumerate(out):
+        if isinstance(rec, dict) and rec.get("id") == rec_id \
+                and rec.get("kind") == "text":
+            index = i
+            break
+    if index < 0:
+        return out, False
+    body = sanitize_text(data.get("text"))
+    if not body:
+        return out, False
+    old = out[index]
+    color = validate_hex_color(data.get("color"), TEXT_COLOR_DEFAULT)
+    size = validate_text_size(data.get("size"))
+    rects = old.get("rects") or [[0.0, 0.0, 0.0, 0.0]]
+    try:
+        x, y = float(rects[0][0]), float(rects[0][1])
+    except (TypeError, ValueError, IndexError):
+        x = y = 0.0
+    for key, cur in (("x", x), ("y", y)):
+        v = data.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        f = float(v)
+        if not math.isfinite(f):
+            continue
+        if key == "x":
+            x = min(max(f, 0.0), MAX_PAGE_PT)
+        else:
+            y = min(max(f, 0.0), MAX_PAGE_PT)
+    w, h = text_box_size(body, size, _validate_rows(data.get("rows")))
+    updated = dict(
+        old,
+        text=body,
+        color=color,
+        size=size,
+        rects=[[x, y, w, h]],
+    )
+    if updated == old:
+        return out, False
+    out[index] = updated
+    return out, True
 
 
 class PdfJsViewer(QWidget):  # type: ignore[misc]
@@ -564,7 +818,8 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         self._page_count = 0
         self._scroll_pos = 0
         self.on_count: Optional[Callable[[int], None]] = None
-        self._text_dialog: Any = None  # live Add Text prompt (singleton)
+        # No Add Text prompt lives here any more (K-150): text is typed
+        # in the page, so there is no dialog to keep a singleton of.
         self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
         self._goto_dlg: Any = None  # live Go to Page prompt (singleton)
 
@@ -782,87 +1037,70 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         self._push_annotations()
 
     def _bridge_text_add(self, payload: str) -> None:
+        """A finished text box, committed by the page's own editor.
+
+        NO DIALOG (K-150). The box is typed in place in the page — an
+        ``.editLayer`` over the PDF, Preview's shape — so this handler
+        receives a complete record's worth of payload and mints from
+        it, synchronously, on exactly the path ``_bridge_hl_add`` has
+        used since K-097.
+
+        That deletes the K-114 crash class from this action rather
+        than defending against it: the segfault needed a dialog on the
+        webchannel stack, and there is no longer a dialog anywhere in
+        the flow, so neither the deferral rule nor the never-exec rule
+        has anything to bind to here. What it costs is that the TEXT
+        is now untrusted input like the coordinates always were —
+        hence sanitize_text/validate_hex_color/validate_text_size
+        below, all before anything reaches the JSON.
+        """
         data = decode_b64_json(payload) or {}
         hit = clamp_text_add(data, self._page_count)
         if hit is None:
             return
         page, x, y = hit
-        # Deferred to the next tick for the same webchannel re-entrancy
-        # reason as _bridge_note_edit below (see its comment). The
-        # dialog it reaches is window-modal via open() + signal
-        # callbacks — the K-114 rule: app-modal nested loops segfault
-        # on this stack. Coordinates are frozen into the lambda.
-        QTimer.singleShot(
-            0, lambda: self._open_text_dialog(page, x, y)
-        )
-
-    def _open_text_dialog(self, page: int, x: float, y: float) -> None:
-        """Window-modal multiline prompt for a new outside-text record.
-
-        Built as an INSTANCE wired to signal callbacks and shown with
-        open() — the sanctioned non-nested path (test_bridge_reentrancy
-        pins the why; the static input-dialog helpers run an app-modal
-        nested loop under the hood, the exact crash class K-114 bans).
-        """
-        if QInputDialog is None:
-            return
-        if self._text_dialog is not None:
-            # One placement at a time: front the open prompt instead of
-            # stacking a second (the page disarms its tool per click,
-            # but the bridge is still not to be trusted).
-            try:
-                self._text_dialog.raise_()
-                self._text_dialog.activateWindow()
-            except Exception:
-                pass
-            return
-        try:
-            dlg = QInputDialog(self)
-            dlg.setWindowTitle("Add Text")
-            dlg.setLabelText("Text:")
-            try:
-                dlg.setOption(
-                    QInputDialog.InputDialogOption
-                    .UsePlainTextEditForTextInput,
-                    True,
-                )
-            except Exception:
-                pass
-            try:
-                from . import theme
-
-                dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
-            except Exception:
-                pass
-            dlg.textValueSelected.connect(
-                lambda text: self._on_text_added(page, x, y, text)
-            )
-            dlg.finished.connect(lambda _r: self._on_text_dialog_closed())
-            self._text_dialog = dlg
-            dlg.open()
-        except Exception as exc:
-            self._text_dialog = None
-            print(f"[klausmate] pdfjs text dialog failed: {exc}")
-
-    def _on_text_dialog_closed(self) -> None:
-        dlg, self._text_dialog = self._text_dialog, None
-        if dlg is not None:
-            try:
-                dlg.deleteLater()
-            except Exception:
-                pass
-
-    def _on_text_added(
-        self, page: int, x: float, y: float, text: Any
-    ) -> None:
-        body = str(text).strip()
+        body = sanitize_text(data.get("text"))
         if not body:
-            return  # OK on an empty box mints nothing
-        self._highlights.append(make_text_record(page, x, y, body))
+            return  # an empty box mints nothing (dialog-era rule, kept)
+        self._highlights.append(
+            make_text_record(
+                page,
+                x,
+                y,
+                body,
+                color=validate_hex_color(
+                    data.get("color"), TEXT_COLOR_DEFAULT
+                ),
+                size=validate_text_size(data.get("size")),
+                rows=_validate_rows(data.get("rows")),
+            )
+        )
         self._save_annotations()
         self._push_annotations()
         if tooltip is not None:
             tooltip("Klaus: text added")
+
+    def _bridge_text_update(self, payload: str) -> None:
+        """An existing text box re-committed after an in-place edit.
+
+        Same no-dialog path as ``text-add``; :func:`apply_text_update`
+        does every check and reports whether anything actually moved,
+        so clicking away from an untouched box costs no save, no bake
+        and no push. Emptying a box is NOT routed here — the page
+        posts ``hl-remove`` for that, which already tombstones an
+        adopted record (K-081).
+        """
+        data = decode_b64_json(payload) or {}
+        updated, changed = apply_text_update(self._highlights, data)
+        if changed:
+            self._highlights = updated
+            self._save_annotations()
+        # The push is UNCONDITIONAL, and that is load-bearing: the page
+        # dropped this record's static twin while its editor was open
+        # and is waiting for canonical records to draw it again. Only
+        # the save (and the bake it debounces) is skipped when nothing
+        # actually moved.
+        self._push_annotations()
 
     def _bridge_note_edit(self, payload: str) -> None:
         data = decode_b64_json(payload) or {}
@@ -887,7 +1125,9 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         """Window-modal note prompt for an existing highlight (K-114).
 
         A QInputDialog INSTANCE wired to signal callbacks and shown with
-        open() — _open_text_dialog's pattern above; the
+        open() — the sanctioned non-nested path (the Add Text prompt
+        that used to share it retired with K-150, which moved text
+        editing into the page); the
         getMultiLineText/getText statics this replaces ran an app-modal
         nested loop under the hood, the exact crash class K-114 bans
         (test_bridge_reentrancy pins the why). The guarded multiline
