@@ -121,6 +121,7 @@ AUDIT_MODULES = (
     "llm_client",
     "entitlement",
     "anki_tools",
+    "assistant_session",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest
