@@ -622,21 +622,38 @@ instead. Signed-off history is in
   **embedding map window** — Phase D2. Pure viewport model on top
   (world↔screen transform, `fit_to_view`, cursor-anchored `zoom_at`
   whose fixed-point derivation is in its docstring, `hit_test`,
-  `node_radius`, `edges_for_selection`, LOD `labels_visible`); glue is a
+  `node_radius`, `pdf_note_ids`/`links_for`, `focus_order`, LOD
+  `labels_visible`); glue is a
   singleton top-level window (show() never exec, raise_ never
   activateWindow, WA_DeleteOnClose clearing the singleton) painting
-  `pdf_graph.build_graph_data` with K-115-guarded QPainter: notes as
-  muted dots, PDFs as accent nodes sized by match count, edges drawn
-  for the hovered/selected PDF only, QToolTip carrying
-  display/folder/match-count/retention-when-live. Labels are
-  drawn ONLY for the selected or hovered PDF (K-138 — Pouya's call,
-  which reversed K-133's always-on labels the same day). All 28,668
-  notes render at ~4ms a pan frame, FASTER than the old 4,000-note
-  sample: the note layer is one world-space `QPolygonF` mapped per
-  frame by `QTransform.map` in C++ and drawn with a single
-  `drawPoints`. Putting the transform on the PAINTER with a cosmetic
-  pen instead is not merely slower — it degenerates into long
-  horizontal strokes at deep zoom (both shapes pinned).
+  `pdf_graph.build_graph_data` with K-115-guarded QPainter.
+  **It is a VIBE, not a census (K-158, Pouya: "make it look like I'm
+  accessing the matrix" and "it needs to be immediate")**: the note
+  layer is SAMPLED — `SAMPLE_NOTES` across the collection plus a
+  `SAMPLE_PER_PDF` stride over each PDF's own matches, so no PDF can
+  be sampled out of its own cloud — and ONE PDF is lit at a time,
+  every other a `GHOST_ALPHA` ghost. Focus is what makes the K-058
+  centroid rule survivable: a PDF sits at the MEAN of its matched
+  notes, so PDFs with overlapping note sets land in one knot, and
+  ghosting is why that no longer reads as a defect. Arrow keys are
+  the picker and the only thing that can separate two stacked
+  centroids. Notes are cached glow SPRITES blitted per dot —
+  measured cheaper than round `drawPoints` and 5× cheaper than a
+  `QRadialGradient` per point at these counts, where K-148's
+  opposite finding (square 15× cheaper than round) was true only at
+  28,668. Edges are a capped particle trail of those same sprites,
+  0.84ms and flat in zoom: glowing antialiased STROKES were measured
+  and rejected at 6.35ms fit / 39.8ms for one PDF's full set, and the
+  culprit was the AA rasterizer, not the composition mode
+  (Plus 18.08 vs SourceOver 18.74). The pre-K-158 edges were not
+  missing, they were INVISIBLE — 1px at 0.25 alpha over 28,670 grey
+  chips moved 0.59% of the pixels. Names are their own pass AFTER
+  every node (`clamp_label` last): drawn inside the depth-sorted node
+  loop, a nearer PDF painted its disc straight across the label, which
+  is what three rounds of "label clipping" actually were — paint
+  order, never the offset. Tooltips are one canvas-drawn plate, not
+  QToolTip. Labels show for the focused or hovered PDF only (K-138 —
+  Pouya's call, which reversed K-133's always-on labels the same day).
   `select_pdf(safe)` is the seam for the Library dock: a known name
   selects and recentres only if off-view, an unknown or empty name
   CLEARS, no window is a silent no-op. `label_anchor` places the drawn

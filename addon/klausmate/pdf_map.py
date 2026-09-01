@@ -1131,7 +1131,7 @@ def sample_indices(total: object, cap: object) -> list:
 def pdf_note_ids(edges: Iterable[dict], safe: object) -> list:
     """The note ids one PDF's edges reach, in graph order, deduplicated.
 
-    Separate from ``edges_for_selection`` because the sample wants the
+    Separate from ``links_for`` because the sample wants the
     NOTES (each once, so a stride over them is a stride over distinct
     points), while the painter wants the edges."""
     key = str(safe) if safe is not None else None
