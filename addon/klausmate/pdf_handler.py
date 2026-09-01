@@ -2401,6 +2401,15 @@ def delete_context(user_files_dir: str, name: str) -> None:
         retention.forget_prefs(base)
     except Exception as exc:
         print(f"[klausmate] prefs cleanup failed for {base}: {exc}")
+    # retention_history.json is a sibling too, with the same blind spot:
+    # a re-import under this safe basename would otherwise inherit the
+    # deleted PDF's whole retention curve.
+    try:
+        from . import retention_history
+
+        retention_history.forget_history(user_files_dir, base)
+    except Exception as exc:
+        print(f"[klausmate] retention history cleanup failed for {base}: {exc}")
     if get_active_pdf(user_files_dir) == base:
         clear_active_pdf(user_files_dir)
 

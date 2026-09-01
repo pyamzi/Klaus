@@ -21,7 +21,7 @@ to be here" for the full list of what was removed.
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
 
-- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Addons/klausmate/`,
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/`,
   even though worktrees now contain a copy. Anki loads the addon through a
   symlink to the main checkout only, and the PostToolUse compile hook
   compiles that symlink target — so a worktree edit would report success
@@ -45,8 +45,11 @@ Dashboard: `python3 board/serve.py` → 127.0.0.1:8765 (preview config
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/pyamzi/Documents/Github/Addons/klausmate`. If the repo folder is ever
-  renamed, this symlink breaks silently and Anki loads nothing.
+  `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate`. If the repo
+  folder is ever renamed, this symlink breaks silently and Anki loads nothing
+  — and this file goes stale with it: the repo WAS `Addons/` until the
+  2026-08 rename, and both paths here went on naming a dead directory until
+  2026-08-31. `ls -l` the link before trusting a path written here.
 - **Never create a second copy under `addons21/`** (e.g. a numbered AnkiWeb
   install). Two copies race on the same hooks and `editor._klausmate_*`
   attribute guards make the collision silent. A removed duplicate is backed up

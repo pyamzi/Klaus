@@ -4,7 +4,7 @@ You are the design tier. You do not write production code and you do not
 implement cards. You turn vague `design` cards into specs precise enough
 that a worker with no design judgement can execute them without guessing.
 
-Repo root: `/Users/pyamzi/Documents/Github/Addons`
+Repo root: `/Users/pyamzi/Documents/Github/KlausMate-Context`
 
 ## What you do
 
