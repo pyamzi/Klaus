@@ -146,6 +146,35 @@ DARK: dict = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Highlight inks (K-149) — the marker colours the pdf.js annobar offers.
+#
+# These live OUTSIDE the light/dark palettes on purpose: a highlight is
+# INK ON THE PAGE, not chrome. The value is written into the record, the
+# record bakes into the PDF as the annotation's /C, and that file opens
+# in Preview and Acrobat where Klaus's night mode does not exist — so a
+# per-mode fork here would mean the same mark rendering two different
+# colours depending on where you look at it. They do not follow the
+# accent theme either, for the same reason (and because five marker
+# inks derived from one accent would be five near-identical hues).
+#
+# Chosen to read at the viewer's 43% paint alpha over white paper AND
+# to stay distinguishable from each other when two abut. YELLOW MUST
+# STAY FIRST: it is pdfjs_viewer.HIGHLIGHT_COLOR, the native viewer's
+# default, and every pre-K-149 record on disk already carries it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+HIGHLIGHT_INKS: tuple[tuple[str, str], ...] = (
+    ("yellow", "#FADC50"),
+    ("green",  "#8AE08C"),
+    ("blue",   "#7FC6F2"),
+    ("pink",   "#F79AC8"),
+    ("orange", "#F7B267"),
+)
+
+HIGHLIGHT_INK_DEFAULT: str = HIGHLIGHT_INKS[0][1]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Colour themes — SynapsePro's accent presets, verbatim. Only the six
 # blue-family tokens differ per theme; backgrounds, text and greys always
 # come from the base palettes so every theme works in light AND dark.
@@ -1303,8 +1332,18 @@ def css_vars(night: bool) -> str:
     exactly as their Qt siblings do, so the token, not a hand-mixed
     neutral, is what keeps the two halves of that family in step.
     pdfjs_viewer.html keeps a fallback for it, ordered so this
-    definition wins — a safety net, not a second source of truth."""
+    definition wins — a safety net, not a second source of truth.
+
+    ``--ink-*`` (K-149) is the highlight swatch palette: one var per
+    :data:`HIGHLIGHT_INKS` entry, so the annobar's colour buttons carry
+    no hex of their own (CLAUDE.md: UI files must not hardcode colours)
+    and the page reads the chosen value straight back out of the
+    custom property. Emitted IDENTICALLY in both modes — see the
+    HIGHLIGHT_INKS comment: this is ink on the page, not chrome."""
     c = palette(night)
+    inks = "".join(
+        f" --ink-{name}: {value};" for name, value in HIGHLIGHT_INKS
+    )
     return (
         f"--bg: {c['bg']};"
         f" --surface: {c['surface']};"
@@ -1316,6 +1355,7 @@ def css_vars(night: bool) -> str:
         f" --accent: {c['blue_bright']};"
         f" --accent-selection: {accent_rgba(night, 0.35)};"
         f" --font: {FONT_FAMILY};"
+        + inks
     )
 
 

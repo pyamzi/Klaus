@@ -377,8 +377,8 @@ check("highlight tool: releasing a selection auto-highlights, gated "
       "on selectionRectMap so a bare click can never toast",
       'state.tool === "hl" && selectionRectMap()' in _HTML116)
 check("arming Highlight consumes a selection that already exists",
-      "if (arming && selectionRectMap()) addHighlightFromSelection()"
-      in _HTML116)
+      "if (arming && selectionRectMap()) {" in _HTML116
+      and "addHighlightFromSelection();" in _HTML116)
 check("text tool: a page click posts text-add with page-point coords "
       "and disarms (one-shot; the dialog flow owns the rest)",
       'postB64("text-add", { page: hit.page0, x: hit.xPt, y: hit.yPt })'
@@ -636,5 +636,385 @@ elif _seg_src is not None:
     )
     check("the page's inline script parses clean under node --check",
           _chk.returncode == 0, _chk.stderr[:300])
+
+section("K-149: one drag, one layer of paint")
+# THE MEASUREMENT behind merge_rects, taken in Blink (Chromium, the same
+# engine QtWebEngine runs) against a DOM built to pdf.js's text-layer
+# contract — absolutely positioned, shrink-wrapped, line-height 1 spans:
+#
+#   range over ONE fully covered span -> TWO rects
+#     [21, 21,   110.28, 16  ]   the span's border box
+#     [21, 19.5, 110.28, 18.5]   its text node's quad (taller, nests it)
+#
+# Per the DOM spec Range.getClientRects() yields an element's border box
+# AND its text quads when the range covers that element completely, so a
+# three-line drag returns SIX rects. Every one of them cleared the old
+# sub-pixel guard, became its own .hl div, and two layers of the
+# 43%-alpha paint composite to 67.5% — the reported "double- and
+# triple-highlighted" look, from a single drag with no user error.
+_BLINK_3_LINES = [
+    [21, 21, 110.28, 16], [21, 19.5, 110.28, 18.5],
+    [21, 45, 120.09, 16], [21, 43.5, 120.09, 18.5],
+    [21, 69, 104.95, 16], [21, 67.5, 104.95, 18.5],
+]
+_QUADS_3_LINES = [
+    [21.0, 19.5, 110.28, 18.5],
+    [21.0, 43.5, 120.09, 18.5],
+    [21.0, 67.5, 104.95, 18.5],
+]
+check("the six rects Blink returns for a three-line drag merge to three",
+      pv.merge_rects(_BLINK_3_LINES) == _QUADS_3_LINES,
+      repr(pv.merge_rects(_BLINK_3_LINES)))
+check("the survivor is the OUTER box — the taller text quad, which "
+      "covers the glyphs instead of clipping their descenders",
+      all(r[3] == 18.5 for r in pv.merge_rects(_BLINK_3_LINES)))
+# Measured for the same drag started/ended mid-word: the end spans give
+# one (partial) rect each, the fully covered middle span still gives two.
+_BLINK_PARTIAL = [
+    [41.45, 19.5, 89.83, 18.5],
+    [21, 45, 120.09, 16], [21, 43.5, 120.09, 18.5],
+    [21, 67.5, 36.45, 18.5],
+]
+check("a partial drag keeps its clipped ends and de-doubles only the "
+      "fully covered span in the middle",
+      pv.merge_rects(_BLINK_PARTIAL) == [
+          [41.45, 19.5, 89.83, 18.5],
+          [21.0, 43.5, 120.09, 18.5],
+          [21.0, 67.5, 36.45, 18.5]],
+      repr(pv.merge_rects(_BLINK_PARTIAL)))
+check("exact duplicates collapse", pv.merge_rects(
+    [[10, 20, 100, 12], [10, 20, 100, 12]]) == [[10.0, 20.0, 100.0, 12.0]])
+check("containment collapses either way round",
+      pv.merge_rects([[10, 20, 100, 12], [20, 22, 40, 8]])
+      == [[10.0, 20.0, 100.0, 12.0]]
+      and pv.merge_rects([[20, 22, 40, 8], [10, 20, 100, 12]])
+      == [[10.0, 20.0, 100.0, 12.0]])
+check("the several spans of one line stitch into one box across a "
+      "hairline gap (cleaner quad_points for the bake too)",
+      pv.merge_rects([[10, 20, 50, 12], [60.5, 20, 40, 12]])
+      == [[10.0, 20.0, 90.5, 12.0]])
+# The two rules that keep the merge from eating real layout.
+check("a two-column gutter is NOT stitched (gap >> the hairline)",
+      len(pv.merge_rects([[10, 20, 50, 12], [300, 20, 50, 12]])) == 2)
+check("consecutive lines that share a few points of leading stay "
+      "separate (>50% of the shorter rect is what makes a line)",
+      len(pv.merge_rects([[10, 20, 100, 12], [10, 30, 100, 12]])) == 2)
+check("merging is idempotent",
+      pv.merge_rects(pv.merge_rects(_BLINK_3_LINES)) == _QUADS_3_LINES)
+check("input order cannot change the result",
+      pv.merge_rects(list(reversed(_BLINK_3_LINES))) == _QUADS_3_LINES)
+check("malformed and degenerate rects are dropped, never raised on",
+      pv.merge_rects(None) == [] and pv.merge_rects([[1, 2, 0, 5]]) == []
+      and pv.merge_rects([["a", 2, 3, 4], [1, 2, 3, 4]])
+      == [[1.0, 2.0, 3.0, 4.0]]
+      and pv.merge_rects([[float("inf"), 2, 3, 4]]) == [])
+check("records_from_rect_map runs the merge at the mint choke point "
+      "(the page dedupes too, but JS is never trusted)",
+      pv.records_from_rect_map({"0": _BLINK_3_LINES})[0]["rects"]
+      == _QUADS_3_LINES)
+# This is the half that keeps the PAYLOAD honest, not the paint: the
+# page never renders a highlight optimistically (state.annots arrives
+# only through klausSetAnnotations), so what is drawn is always the
+# canonical record Python merged. What the page's own pass buys is a
+# wire format of one rect per line instead of two — a forty-line
+# selection ships forty rects, not eighty.
+check("selectionRectMap folds each page's rects before they leave the "
+      "page",
+      "for (const page of Object.keys(map)) map[page] = mergeRects(map[page]);"
+      in _HTML116)
+
+section("K-149: the ink is picked in the page, validated in Python")
+check("validate_hex_color normalizes to the lowercase #rrggbb every "
+      "pre-K-149 record on disk already uses",
+      pv.validate_hex_color("#8AE08C") == "#8ae08c"
+      and pv.validate_hex_color("8AE08C") == "#8ae08c"
+      and pv.validate_hex_color("#ABC") == "#aabbcc")
+check("anything that is not a hex colour falls back, never lands in "
+      "the JSON verbatim",
+      pv.validate_hex_color("red") == pv.HIGHLIGHT_COLOR
+      and pv.validate_hex_color("#12345") == pv.HIGHLIGHT_COLOR
+      and pv.validate_hex_color("#gggggg") == pv.HIGHLIGHT_COLOR
+      and pv.validate_hex_color(None) == pv.HIGHLIGHT_COLOR
+      and pv.validate_hex_color({"x": 1}) == pv.HIGHLIGHT_COLOR
+      and pv.validate_hex_color("") == pv.HIGHLIGHT_COLOR)
+check("a chosen ink reaches the record",
+      pv.records_from_rect_map(
+          {"0": [[1, 2, 3, 4]]}, color="#8ae08c")[0]["color"] == "#8ae08c")
+_theme149 = importlib.import_module("klausmate.theme")
+check("the swatch palette lives in theme.py, not in the page",
+      len(_theme149.HIGHLIGHT_INKS) == 5)
+check("yellow stays first and IS the native default — the two "
+      "constants cannot drift apart",
+      _theme149.HIGHLIGHT_INK_DEFAULT.lower() == pv.HIGHLIGHT_COLOR)
+check("every ink is a hex the validator accepts unchanged",
+      all(pv.validate_hex_color(v) == v.lower()
+          for _n, v in _theme149.HIGHLIGHT_INKS))
+_INK_NAMES = [n for n, _v in _theme149.HIGHLIGHT_INKS]
+# The trap the K-116 annobar documented: a trusted mousedown over
+# non-editable UI collapses the selection before click fires. The
+# swatches are INSIDE #annobar precisely so the bar's cancel covers
+# them — a popover hung off <body> would eat the selection it was
+# aimed at.
+_ANNOBAR_MARKUP = _HTML116.split('<div id="annobar">', 1)[1].split(
+    "</div>\n    </div>", 1)[0]
+check("the page's swatches name exactly the theme's inks, in order",
+      _re100.findall(r'data-ink="([a-z]+)"', _ANNOBAR_MARKUP) == _INK_NAMES,
+      repr(_re100.findall(r'data-ink="([a-z]+)"', _ANNOBAR_MARKUP)))
+_INK_CSS = _HTML116.split("#abInks {", 1)[1].split("#abZoomPct", 1)[0]
+_INK_CSS_FLAT = " ".join(_INK_CSS.split())
+check("each swatch is painted from its theme var — no hex in the page "
+      "(CLAUDE.md: UI files must not hardcode colours)",
+      all(f'button.inkSw[data-ink="{n}"] {{ background: var(--ink-{n}); }}'
+          in _INK_CSS_FLAT for n in _INK_NAMES), _INK_CSS_FLAT[:300])
+check("...including the selected-swatch cue and the whole ink block",
+      not _re100.search(r"#[0-9a-fA-F]{3,8}\b", _INK_CSS), _INK_CSS[:200])
+check("the chosen ink is read BACK out of that custom property, so "
+      "the colour seen is the colour recorded",
+      'getPropertyValue("--ink-" + state.ink)' in _HTML116)
+check("the hl-add payload carries it",
+      'postB64("hl-add", { pages: map, color: currentInk() })' in _HTML116)
+check("an unresolvable var sends nothing rather than a bad string — "
+      "Python's default takes over",
+      "return v || null;" in _HTML116)
+check("the swatch row lives inside #annobar, so it inherits the bar's "
+      "mousedown cancel and the selection survives the click",
+      'id="abInks"' in _ANNOBAR_MARKUP
+      and all(f'data-ink="{n}"' in _ANNOBAR_MARKUP for n in _INK_NAMES))
+check("picking a colour with a live selection highlights it now "
+      "(same move as arming Highlight)",
+      "if (selectionRectMap()) {\n      addHighlightFromSelection();"
+      in _HTML116)
+
+section("K-149: highlight mode is one-shot, like the text tool")
+_HL_MOUSEUP = _HTML116.split(
+    'if (state.tool === "hl" && selectionRectMap()) {', 1)[1][:120]
+check("a mint from a selection release disarms the tool — it used to "
+      "stay armed and re-mint over the same text on every later drag",
+      "addHighlightFromSelection();" in _HL_MOUSEUP
+      and "setTool(null);" in _HL_MOUSEUP)
+
+section("K-149: merging happens at MINT time, never in storage")
+# pdf_handler collapses duplicates ONLY for origin=="external" records
+# (Preview autosaves the same box repeatedly while you type), and
+# test_klausmate pins that overlapping NATIVE highlights are never
+# collapsed there — K-081's architecture. So the second-drag merge
+# lives here, in the mint path.
+_YEL, _GRN = "#fadc50", "#8ae08c"
+_base = [{"id": "a" * 32, "page": 0, "rects": [[10, 20, 100, 12]],
+          "color": _YEL, "note": ""}]
+_again = pv.records_from_rect_map({"0": [[10, 20, 100, 12]]}, color=_YEL)
+check("re-highlighting the same text in the same ink changes nothing "
+      "(no second record, so no 67.5% composite)",
+      pv.merge_highlight_records(_base, _again) == _base)
+_wider = pv.records_from_rect_map({"0": [[10, 20, 140, 12]]}, color=_YEL)
+_grown = pv.merge_highlight_records(_base, _wider)
+check("an overlapping drag in the same ink extends the record it "
+      "touches instead of stacking a second one",
+      len(_grown) == 1 and _grown[0]["id"] == "a" * 32
+      and _grown[0]["rects"] == [[10.0, 20.0, 140.0, 12.0]],
+      repr(_grown))
+_recol = pv.merge_highlight_records(
+    _base, pv.records_from_rect_map({"0": [[10, 20, 100, 12]]}, color=_GRN))
+check("dragging over a mark in a DIFFERENT ink recolours it — one "
+      "record, the new colour, never two inks compositing",
+      len(_recol) == 1 and _recol[0]["color"] == _GRN, repr(_recol))
+_partial = pv.merge_highlight_records(
+    [{"id": "b" * 32, "page": 0,
+      "rects": [[10, 20, 100, 12], [10, 40, 100, 12]],
+      "color": _YEL, "note": ""}],
+    pv.records_from_rect_map({"0": [[10, 40, 100, 12]]}, color=_GRN))
+check("a partial recolour keeps the untouched line yellow and splits "
+      "off the new green one",
+      len(_partial) == 2
+      and _partial[0]["rects"] == [[10.0, 20.0, 100.0, 12.0]]
+      and _partial[1]["color"] == _GRN, repr(_partial))
+_mid = pv.merge_highlight_records(
+    _base, pv.records_from_rect_map({"0": [[40, 20, 25, 12]]}, color=_GRN))
+check("re-marking words INSIDE an existing mark cuts the old ink out "
+      "of exactly that span — yellow either side, green between, never "
+      "one ink composited over the other",
+      len(_mid) == 2
+      and _mid[0]["rects"] == [[10.0, 20.0, 30.0, 12.0],
+                               [65.0, 20.0, 45.0, 12.0]]
+      and _mid[1]["rects"] == [[40.0, 20.0, 25.0, 12.0]], repr(_mid))
+check("a different-ink mark that shares no ink with the old one — "
+      "further along the same line, or on the line below — leaves it "
+      "untouched (the cut is same-line and x-bounded, not a bounding "
+      "box)",
+      pv.merge_highlight_records(
+          _base, pv.records_from_rect_map(
+              {"0": [[200, 20, 25, 12]]}, color=_GRN))[0] == _base[0]
+      and pv.merge_highlight_records(
+          _base, pv.records_from_rect_map(
+              {"0": [[40, 40, 25, 12]]}, color=_GRN))[0] == _base[0])
+check("a highlight on another page is never touched",
+      len(pv.merge_highlight_records(
+          [dict(_base[0], page=3)],
+          pv.records_from_rect_map({"0": [[10, 20, 100, 12]]}))) == 2)
+_ext = [{"id": "c" * 32, "page": 0, "rects": [[10, 20, 100, 12]],
+         "color": _YEL, "note": "", "origin": "external"}]
+_over_ext = pv.merge_highlight_records(
+    _ext, pv.records_from_rect_map({"0": [[10, 20, 100, 12]]}, color=_GRN))
+check("an ADOPTED external mark is never rewritten or dropped here — "
+      "it may only leave through _bridge_hl_remove, which tombstones "
+      "it (K-081), or the next foreign scan resurrects it",
+      _over_ext[0] == _ext[0] and len(_over_ext) == 2, repr(_over_ext))
+_txt = [{"id": "d" * 32, "page": 0, "rects": [[10, 20, 100, 12]],
+         "color": "#000000", "note": "", "kind": "text", "text": "hi"}]
+check("an outside-text box is not a highlight and is left alone",
+      pv.merge_highlight_records(
+          _txt, pv.records_from_rect_map({"0": [[10, 20, 100, 12]]}))[0]
+      == _txt[0])
+_src149 = _code_only116(_src("pdfjs_viewer.py"))
+check("_bridge_hl_add mints through the merge, not a blind extend",
+      "merge_highlight_records(self._highlights, records)" in _src149
+      and "self._highlights.extend(records)" not in _src149)
+check("...and validates the page's colour before it becomes a record",
+      "validate_hex_color(data.get(" in _src149)
+check("a mint that changes nothing saves nothing and toasts nothing",
+      "if merged == self._highlights:" in _src149)
+check("pdf_handler is NOT where any of this happens (K-081's "
+      "self-healing stays scoped to external records)",
+      "merge_rects" not in _src("pdf_handler.py")
+      and "merge_highlight_records" not in _src("pdf_handler.py"))
+
+section("K-149: JS and Python merge the same rects the same way")
+_js_merge = _re100.search(r"function mergeRects\(rects\) \{[\s\S]*?\n\}\n",
+                          _HTML116)
+check("mergeRects extracted from the page source", _js_merge is not None)
+if _node is None:
+    print("  SKIP node not installed — JS/Python merge agreement "
+          "unverified on this machine")
+elif _js_merge is not None:
+    # The last four cases straddle the two constants — a gap just
+    # inside vs just outside the hairline, and a vertical overlap just
+    # over vs just under half the shorter rect. Without those, a page
+    # that merged with GAP=60 still agreed with Python on every case
+    # and the check pinned nothing (caught by falsifying it).
+    _CASES = [
+        _BLINK_3_LINES, _BLINK_PARTIAL,
+        [[10, 20, 50, 12], [60.5, 20, 40, 12]],
+        [[10, 20, 50, 12], [62, 20, 40, 12]],
+        [[10, 20, 50, 12], [300, 20, 50, 12]],
+        [[10, 20, 100, 12], [10, 25, 100, 12]],
+        [[10, 20, 100, 12], [10, 27, 100, 12]],
+    ]
+    _h = ('"use strict";\n' + _js_merge.group(0) + "\n"
+          "console.log(JSON.stringify([\n"
+          + "".join(f"  mergeRects({_json100.dumps(c)}),\n" for c in _CASES)
+          + "]));\n")
+    with _tmp100.NamedTemporaryFile(
+        "w", suffix=".js", delete=False, encoding="utf-8"
+    ) as _f3:
+        _f3.write(_h)
+        _mpath = _f3.name
+    try:
+        _mout = _sub100.run([_node, _mpath], capture_output=True,
+                            text=True, timeout=30)
+        _mgot = _json100.loads(_mout.stdout.strip() or "null")
+    except Exception as _e:
+        _mgot = f"node run failed: {_e}"
+    _want = [pv.merge_rects(c) for c in _CASES]
+    check("the page's mergeRects agrees with pdfjs_viewer.merge_rects on "
+          "the measured Blink rects and on both sides of both merge "
+          "constants — two implementations of one rule, so neither can "
+          "drift silently",
+          _mgot == _want, f"js={_mgot!r} py={_want!r}")
+
+section("K-149: pdf.js markedContent parity")
+# Tagged PDFs make renderTextLayer wrap glyph spans in
+# <span class="markedContent"> groups. Upstream viewer.css zeroes them;
+# this page shipped without that rule, leaving auto-sized wrappers on
+# the selection-geometry path. Measured in Blink they lay out 0x0 (and
+# selectionRectMap's sub-pixel guard drops them either way), so this is
+# parity, not a bug fix — but a wrapper that ever did get a box would
+# hand a phantom rect straight into a highlight.
+check("the wrapper-zeroing rule is present",
+      ".textLayer span.markedContent { top: 0; height: 0; }" in _HTML116)
+check("pdf.js really does build those wrappers (the rule is not "
+      "guarding a case that cannot happen)",
+      'classList.add("markedContent")'
+      in open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "klausmate", "web", "pdfjs",
+                           "pdf.min.js"), encoding="utf-8").read())
+
+section("K-149: a non-yellow ink survives the bake (end to end)")
+# The step that would otherwise silently fall back to #fadc50: mint ->
+# annotations JSON -> bake -> the PDF's own /C array -> back to hex.
+#
+# Vendored pypdf needs typing_extensions, which this machine's python3.9
+# does not ship — shim it BEFORE pdf_handler's guarded import so
+# BAKE_AVAILABLE matches the Anki runtime (py3.13 has it) instead of
+# silently SKIPPING the one check that proves the ink reaches the file.
+# Same shim as test_klausmate.py's, deliberately local: it has to run
+# before this file's first pdf_handler import, and pdfjs_viewer only
+# ever imports pdf_handler lazily, inside functions.
+try:
+    import typing_extensions  # noqa: F401
+except ImportError:
+    import types as _ty149
+    import typing as _typing149
+
+    class _TESub149:
+        def __getitem__(self, _i):
+            return _typing149.Any
+
+        def __call__(self, *a, **k):
+            return _typing149.Any
+
+    class _TEModule149(_ty149.ModuleType):
+        def __getattr__(self, n):
+            return getattr(_typing149, n, _TESub149())
+
+    sys.modules["typing_extensions"] = _TEModule149("typing_extensions")
+
+_ph149 = importlib.import_module("klausmate.pdf_handler")
+import tempfile as _tf149
+_uf149 = _tf149.mkdtemp(prefix="klaus_k149_")
+if not _ph149.BAKE_AVAILABLE:
+    print("  SKIP pypdf unavailable — bake round-trip unverified")
+else:
+    from pypdf import PdfReader as _R149, PdfWriter as _W149
+
+    _N149 = "K149_Lecture"
+    os.makedirs(os.path.join(_uf149, "pdfs"))
+    _work149 = os.path.join(_uf149, "pdfs", _N149 + ".pdf")
+    _w149 = _W149()
+    _w149.add_blank_page(width=612, height=792)
+    with open(_work149, "wb") as _fh149:
+        _w149.write(_fh149)
+    # Minted exactly as the bridge does: the page's chosen ink through
+    # the validator, through records_from_rect_map.
+    _green = pv.validate_hex_color(
+        dict(_theme149.HIGHLIGHT_INKS)["green"])
+    _recs149 = pv.records_from_rect_map(
+        {"0": [[100, 172, 100, 20]]}, color=_green)
+    _ph149.save_annotations(_uf149, _N149, _recs149)
+    check("stored record carries the picked ink, not the default",
+          _ph149.load_annotations(_uf149, _N149)[0]["color"] == _green
+          and _green != pv.HIGHLIGHT_COLOR)
+    check("bake succeeds", _ph149.bake_annotations(_uf149, _N149))
+    _annots149 = [a.get_object()
+                  for a in (_R149(_work149).pages[0].get("/Annots") or [])]
+    _hl149 = [o for o in _annots149 if str(o.get("/Subtype")) == "/Highlight"]
+    check("one baked highlight, not one per duplicated rect",
+          len(_hl149) == 1, repr([str(o.get("/Subtype")) for o in _annots149]))
+    check("the PDF's own /C reads back as the ink that was picked",
+          _hl149 and _ph149._annot_color(_hl149[0]) == _green,
+          repr(_hl149 and _hl149[0].get("/C")))
+    # And a six-rect Blink selection bakes as three quads, not six.
+    _ph149.save_annotations(
+        _uf149, _N149,
+        pv.records_from_rect_map({"0": _BLINK_3_LINES}, color=_green))
+    check("re-bake succeeds", _ph149.bake_annotations(_uf149, _N149))
+    _hl149b = [a.get_object()
+               for a in (_R149(_work149).pages[0].get("/Annots") or [])
+               if str(a.get_object().get("/Subtype")) == "/Highlight"]
+    check("the doubled rects never reach the PDF: 3 quads (8 floats "
+          "each), not 6",
+          len(_hl149b) == 1 and len(_hl149b[0]["/QuadPoints"]) == 24,
+          repr(len(_hl149b[0]["/QuadPoints"]) if _hl149b else None))
+import shutil as _sh149
+_sh149.rmtree(_uf149, ignore_errors=True)
 
 raise SystemExit(report())

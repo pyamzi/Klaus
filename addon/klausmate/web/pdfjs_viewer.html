@@ -105,6 +105,29 @@ origin, matching the native viewer and the bake pipeline exactly
   #annobar button svg { display: block; }
   #annobar .absep { width: 1px; height: 16px; background: var(--grey-light);
                     margin: 0 4px; flex: 0 0 auto; }
+  /* Highlight inks (K-149). The colour comes from theme.py through the
+     --ink-* custom properties — never a hex here — and the button IS
+     its swatch, so the row reads as a marker tray. Only the ring says
+     "selected"; the fills never dim, because they are the ink you get. */
+  #abInks { display: flex; align-items: center; gap: 4px; margin-left: 2px; }
+  #annobar button.inkSw {
+    width: 14px; height: 14px; padding: 0; border-radius: 7px;
+    border: 1px solid var(--grey-mid); flex: 0 0 auto;
+  }
+  /* The generic #annobar button:hover fill would repaint a swatch in
+     the hover neutral and hide the ink; every rule below outranks it
+     (an attribute selector on top of the same id + class), so hover
+     has to speak through the BORDER instead. */
+  #annobar button.inkSw:hover { border-color: var(--text-muted); }
+  #annobar button.inkSw[data-ink="yellow"] { background: var(--ink-yellow); }
+  #annobar button.inkSw[data-ink="green"]  { background: var(--ink-green); }
+  #annobar button.inkSw[data-ink="blue"]   { background: var(--ink-blue); }
+  #annobar button.inkSw[data-ink="pink"]   { background: var(--ink-pink); }
+  #annobar button.inkSw[data-ink="orange"] { background: var(--ink-orange); }
+  #annobar button.inkSw.active {
+    border-color: var(--text); box-shadow: 0 0 0 2px var(--surface),
+                                           0 0 0 3px var(--text);
+  }
   #abZoomPct { font-size: 11px; color: var(--text-muted); min-width: 38px;
                text-align: center; font-variant-numeric: tabular-nums; }
   /* Text tool armed: the whole page area invites a placement click. */
@@ -138,6 +161,15 @@ origin, matching the native viewer and the bake pipeline exactly
     color: transparent; position: absolute; white-space: pre;
     cursor: text; transform-origin: 0% 0%; margin: 0; padding: 0;
   }
+  /* Tagged PDFs make pdf.js wrap glyph spans in <span class=
+     "markedContent"> groups (renderTextLayer's beginMarkedContent
+     branch). Upstream viewer.css zeroes them; we shipped without that
+     rule, leaving auto-sized wrappers directly on the selection
+     geometry path. Measured harmless in Blink today (they lay out
+     0x0, and selectionRectMap's sub-pixel guard drops them anyway) —
+     this is upstream parity, so a wrapper that ever DOES get a box
+     cannot contribute a phantom rect to a highlight. */
+  .textLayer span.markedContent { top: 0; height: 0; }
   .textLayer ::selection { background: var(--accent-selection); }
   /* Fallback ring only — when the CSS Custom Highlight API is missing,
      the whole owning span is ringed as before K-100. */
@@ -220,6 +252,19 @@ origin, matching the native viewer and the bake pipeline exactly
           <path d="M2.2 13h9.6" stroke-linecap="round"/>
         </svg>
       </button>
+      <span id="abInks">
+        <button class="inkSw active" data-ink="yellow" title="Yellow"
+                aria-pressed="true"></button>
+        <button class="inkSw" data-ink="green" title="Green"
+                aria-pressed="false"></button>
+        <button class="inkSw" data-ink="blue" title="Blue"
+                aria-pressed="false"></button>
+        <button class="inkSw" data-ink="pink" title="Pink"
+                aria-pressed="false"></button>
+        <button class="inkSw" data-ink="orange" title="Orange"
+                aria-pressed="false"></button>
+      </span>
+      <div class="absep"></div>
       <button id="abText" title="Add Text" aria-pressed="false">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
              stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
@@ -272,6 +317,7 @@ const state = {
   persistMarquee: null,  // {page0,x,y,w,h,dataUrl} kept after release (K-100)
   zoom: null,            // live zoom session — pinch or stepped (zoomTo)
   tool: null,            // "hl" | "text" | null — annobar mode
+  ink: "yellow",         // selected highlight ink — a theme --ink-* NAME
 };
 
 function post(msg) {
@@ -583,10 +629,70 @@ function renderAnnotLayers(num, div) {
   }
 }
 
+/* Rects on one line, folded into one rect per run (K-149).
+
+   Range.getClientRects() returns BOTH a span's border box AND its text
+   node's quad whenever the range covers that span completely — and
+   pdf.js's text layer is exactly one shrink-wrapped span per text
+   item, so an ordinary three-line drag returns SIX rects. Both clear
+   the sub-pixel guard below, both used to become .hl divs, and two
+   layers of the 43%-alpha paint composite to 67.5%: that was the
+   "double-highlighted" look, from one drag. Measured in Blink: the
+   border box [21,21,110.28,16] nested inside the quad
+   [21,19.5,110.28,18.5].
+
+   Same-line rects that overlap horizontally (or sit within GAP of each
+   other, stitching a line's several spans into one box) union into
+   their outer box; duplicates and containment fall out of that.
+
+   Where the fix actually BITES is pdfjs_viewer.merge_rects, running the
+   same rule on the Python side: the page never paints a highlight
+   optimistically — state.annots only ever arrives through
+   klausSetAnnotations — so what you see is always the canonical record.
+   This half keeps the PAYLOAD honest (one rect per line instead of two
+   on the wire, for selections that can run to dozens of lines) and
+   gives that rule a second implementation the tests pin against the
+   first, so neither can drift. JS is never trusted; Python re-merges
+   whatever arrives. */
+function mergeRects(rects) {
+  const GAP = 0.75;
+  const sameLine = (a, b) => {
+    const top = Math.max(a[1], b[1]);
+    const bottom = Math.min(a[1] + a[3], b[1] + b[3]);
+    const shorter = Math.min(a[3], b[3]);
+    return shorter > 0 && (bottom - top) > shorter * 0.5;
+  };
+  let cur = rects.slice(), merged = true;
+  while (merged) {
+    merged = false;
+    cur.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+    const out = [];
+    for (const r of cur) {
+      let host = null;
+      for (const c of out) {
+        if (sameLine(c, r) &&
+            r[0] <= c[0] + c[2] + GAP && c[0] <= r[0] + r[2] + GAP) {
+          host = c; break;
+        }
+      }
+      if (!host) { out.push(r); continue; }
+      const x0 = Math.min(host[0], r[0]), y0 = Math.min(host[1], r[1]);
+      const x1 = Math.max(host[0] + host[2], r[0] + r[2]);
+      const y1 = Math.max(host[1] + host[3], r[1] + r[3]);
+      host[0] = x0; host[1] = y0; host[2] = x1 - x0; host[3] = y1 - y0;
+      merged = true;
+    }
+    cur = out;
+  }
+  cur.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+  return cur;
+}
+
 /* Selection -> {pageIndex0: [[x,y,w,h] page pts]}. A rect belongs to
    the page containing its CENTER (full containment was too strict —
    sub-pixel span overhang silently dropped rects), then gets clamped
-   into that page's box. */
+   into that page's box. Each page's rects are then merged (above) so
+   one drag mints one layer of paint. */
 function selectionRectMap() {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -613,13 +719,27 @@ function selectionRectMap() {
       }
     }
   }
+  for (const page of Object.keys(map)) map[page] = mergeRects(map[page]);
   return Object.keys(map).length ? map : null;
+}
+
+/* The selected ink's hex, read back out of the theme custom property
+   that painted its swatch (theme.css_vars emits --ink-<name>) — so the
+   colour the user sees IS the colour that reaches the record, and no
+   hex is spelled in this file. An unresolvable var sends nothing and
+   Python falls back to its default yellow. */
+function currentInk() {
+  try {
+    const v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--ink-" + state.ink).trim();
+    return v || null;
+  } catch (e) { return null; }
 }
 
 function addHighlightFromSelection() {
   const map = selectionRectMap();
   if (!map) { post("toast:" + btoa("Klaus: select text first, then highlight")); return; }
-  postB64("hl-add", { pages: map });
+  postB64("hl-add", { pages: map, color: currentInk() });
   window.getSelection().removeAllRanges();
 }
 
@@ -1187,11 +1307,36 @@ function setTool(tool) {
 document.getElementById("abHl").addEventListener("click", () => {
   const arming = state.tool !== "hl";
   setTool("hl");
-  // Preview's move: arming with a live selection highlights it now.
-  if (arming && selectionRectMap()) addHighlightFromSelection();
+  // Preview's move: arming with a live selection highlights it now —
+  // and that consumed the arm, so disarm (see the mouseup handler).
+  if (arming && selectionRectMap()) {
+    addHighlightFromSelection();
+    setTool(null);
+  }
 });
 document.getElementById("abText").addEventListener(
   "click", () => setTool("text"));
+
+/* Ink swatches: pick the colour the next highlight is minted in. The
+   pressed swatch is the only "selected" cue — the fills stay at full
+   strength because each one IS its ink. Like arming Highlight, picking
+   a colour with a live selection highlights it immediately (the bar
+   cancels mousedown above, so that selection is still there). These
+   live INSIDE #annobar precisely so they inherit that cancel. */
+for (const sw of document.querySelectorAll("#abInks .inkSw")) {
+  sw.addEventListener("click", () => {
+    state.ink = sw.dataset.ink;
+    for (const other of document.querySelectorAll("#abInks .inkSw")) {
+      const on = other === sw;
+      other.classList.toggle("active", on);
+      other.setAttribute("aria-pressed", String(on));
+    }
+    if (selectionRectMap()) {
+      addHighlightFromSelection();
+      setTool(null);
+    }
+  });
+}
 document.getElementById("abZoomOut").addEventListener(
   "click", () => window.klausSetZoom(1 / 1.2));
 document.getElementById("abZoomIn").addEventListener(
@@ -1199,7 +1344,10 @@ document.getElementById("abZoomIn").addEventListener(
 document.getElementById("abZoomFit").addEventListener(
   "click", () => window.klausZoomReset());
 
-/* Highlight tool: releasing a selection highlights it immediately.
+/* Highlight tool: releasing a selection highlights it immediately, and
+   then the tool DISARMS — one mark per arm, exactly like the text tool
+   below. It used to stay armed, so every later selection release minted
+   again over whatever was already there ("triple-highlighted", K-149).
    selectionRectMap() gates the call — a bare click while armed must
    never fire the "select text first" toast. The 0-timeout lets Blink
    finalize the selection after mouseup. */
@@ -1208,6 +1356,7 @@ document.addEventListener("mouseup", () => {
   setTimeout(() => {
     if (state.tool === "hl" && selectionRectMap()) {
       addHighlightFromSelection();
+      setTool(null);
     }
   }, 0);
 });

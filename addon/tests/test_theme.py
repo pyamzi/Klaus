@@ -453,7 +453,7 @@ section("webview vars (css_vars): the palette mirrored into :root")
 # compute to nothing.
 WEB_VARS = ("bg", "surface", "text", "text-muted", "grey-light",
             "grey-mid", "hover-subtle", "accent", "accent-selection",
-            "font")
+            "font") + tuple(f"ink-{n}" for n, _v in theme.HIGHLIGHT_INKS)
 for night in (False, True):
     cv = theme.css_vars(night)
     c = theme.palette(night)
@@ -479,6 +479,38 @@ for night in (False, True):
 check("light and dark hover fills actually differ (a single baked "
       "neutral would pass every check above)",
       theme.LIGHT["hover_subtle"] != theme.DARK["hover_subtle"])
+
+# Highlight inks (K-149). The pdf.js annobar's swatch row paints itself
+# from these vars and reads the chosen value back out of them, so the
+# page carries no hex of its own. They are the ONE part of css_vars that
+# must NOT follow the mode or the accent: the value is written into the
+# annotation record, bakes into the PDF as the mark's /C, and that file
+# gets opened in Preview and Acrobat where Klaus's night mode does not
+# exist. A per-mode fork here would mean one mark rendering two colours
+# depending on where you looked at it.
+_INK_VARS = [f"--ink-{n}: {v};" for n, v in theme.HIGHLIGHT_INKS]
+check("every ink var is emitted, identically in light and dark",
+      all(v in theme.css_vars(False) and v in theme.css_vars(True)
+          for v in _INK_VARS), repr(_INK_VARS))
+check("inks are five distinct #rrggbb values",
+      len({v.lower() for _n, v in theme.HIGHLIGHT_INKS}) == 5
+      and all(re.fullmatch(r"#[0-9A-Fa-f]{6}", v)
+              for _n, v in theme.HIGHLIGHT_INKS))
+check("yellow leads the row — it is pdfjs_viewer.HIGHLIGHT_COLOR, the "
+      "colour every pre-K-149 record on disk already carries",
+      theme.HIGHLIGHT_INKS[0][0] == "yellow"
+      and theme.HIGHLIGHT_INK_DEFAULT.lower() == "#fadc50")
+_ink_accent_probe = []
+for _name in ("ocean", "claude"):
+    theme.set_active_theme(_name)
+    _ink_accent_probe.append(theme.css_vars(False))
+theme.set_active_theme("ocean")
+check("inks do NOT follow the accent theme (a highlight is content, "
+      "not chrome — five inks derived from one accent would be five "
+      "near-identical hues)",
+      all(v in _ink_accent_probe[0] and v in _ink_accent_probe[1]
+          for v in _INK_VARS)
+      and _ink_accent_probe[0] != _ink_accent_probe[1])
 
 section("design scale (K-110): every builder stays on-scale")
 # Sanctioned sets — must match the "Design scale" comment block above

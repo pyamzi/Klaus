@@ -157,6 +157,113 @@ def decode_b64_json(payload: str) -> Any:
         return None
 
 
+def validate_hex_color(value: Any, default: str = HIGHLIGHT_COLOR) -> str:
+    """A trusted ``#rrggbb`` out of an untrusted bridge value.
+
+    JS is never trusted (house rule) and ``records_from_rect_map``'s
+    ``color`` lands in the annotations JSON verbatim, from where the
+    bake resolves it into the PDF's ``/C`` — so the page's chosen ink
+    has to be shape-checked before it becomes a record. Accepts
+    ``#rgb`` and ``#rrggbb`` in either case (with or without the hash),
+    normalizes to LOWERCASE ``#rrggbb``: that is exactly the form of
+    :data:`HIGHLIGHT_COLOR` and of every pre-K-149 record on disk, so a
+    yellow minted through the swatch row is byte-identical to a yellow
+    minted before it existed. Anything else returns *default*.
+    """
+    if not isinstance(value, str):
+        return default
+    v = value.strip().lstrip("#").lower()
+    if len(v) == 3:
+        v = "".join(ch * 2 for ch in v)
+    if len(v) != 6 or any(ch not in "0123456789abcdef" for ch in v):
+        return default
+    return "#" + v
+
+
+def _same_line(a: list[float], b: list[float]) -> bool:
+    """True when two rects sit on the same text line.
+
+    Vertical overlap of more than half the SHORTER rect — the border
+    box and the text quad of one span differ in height (see
+    :func:`merge_rects`), so equality of y/h is far too strict, while a
+    bare "overlaps at all" would fuse the descenders of one line into
+    the ascenders of the next.
+    """
+    top = max(a[1], b[1])
+    bottom = min(a[1] + a[3], b[1] + b[3])
+    shorter = min(a[3], b[3])
+    return shorter > 0 and (bottom - top) > shorter * 0.5
+
+
+def merge_rects(rects: Any, gap: float = 0.75) -> list[list[float]]:
+    """Selection rects folded into one rect per run of text (K-149).
+
+    THE BUG THIS FIXES, measured in Blink: ``Range.getClientRects()``
+    returns, for a text-layer span the range covers COMPLETELY, both
+    the span's border box AND its text node's quad. pdf.js's text layer
+    is one shrink-wrapped absolutely-positioned span per text item, so
+    an ordinary three-line drag yields six rects, not three — same x,
+    same width, the border box nested inside the taller quad (measured:
+    ``[21, 21, 110.28, 16]`` inside ``[21, 19.5, 110.28, 18.5]``). Each
+    became its own ``.hl`` div, and two layers of the 43%-alpha paint
+    composite to 67.5% — which is precisely the "double- and
+    triple-highlighted" look, from ONE drag with no user error.
+
+    So: rects that share a line and overlap horizontally (or sit within
+    *gap* points of each other, which stitches the per-span pieces of a
+    line into one box) are unioned. Exact duplicates and containment
+    fall out of the same rule. The union is deliberately the OUTER box
+    — the taller text quad wins, covering the glyphs rather than
+    clipping their descenders.
+
+    Pure and order-independent by construction (sorted, then run to a
+    fixpoint), and it also hands the bake clean quad_points: one quad
+    per line instead of two stacked ones.
+    """
+    clean: list[list[float]] = []
+    for r in rects or []:
+        try:
+            x, y, w, h = (float(v) for v in r)
+        except (TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in (x, y, w, h)):
+            continue
+        if w <= 0 or h <= 0:
+            continue
+        clean.append([x, y, w, h])
+    merged = True
+    while merged:
+        merged = False
+        clean.sort(key=lambda r: (r[1], r[0]))
+        out: list[list[float]] = []
+        for r in clean:
+            host = None
+            for cand in out:
+                if not _same_line(cand, r):
+                    continue
+                # Horizontal overlap, or a hairline gap between the
+                # pieces of one line. A real column gutter is far wider
+                # than *gap*, so two columns never fuse.
+                if (
+                    r[0] <= cand[0] + cand[2] + gap
+                    and cand[0] <= r[0] + r[2] + gap
+                ):
+                    host = cand
+                    break
+            if host is None:
+                out.append(r)
+                continue
+            x0 = min(host[0], r[0])
+            y0 = min(host[1], r[1])
+            x1 = max(host[0] + host[2], r[0] + r[2])
+            y1 = max(host[1] + host[3], r[1] + r[3])
+            host[:] = [x0, y0, x1 - x0, y1 - y0]
+            merged = True
+        clean = out
+    clean.sort(key=lambda r: (r[1], r[0]))
+    return clean
+
+
 def records_from_rect_map(
     pages: Any, color: str = HIGHLIGHT_COLOR
 ) -> list[dict]:
@@ -164,7 +271,14 @@ def records_from_rect_map(
     ``{page0: [[x, y, w, h] page points, ...]}`` — same shape the native
     viewer's ``_add_highlight_from_selection`` mints (uuid id, 0-based
     int page, float rects, default yellow). Malformed pages/rects are
-    skipped, never raised on."""
+    skipped, never raised on.
+
+    Every page's rects go through :func:`merge_rects` first. The page
+    dedupes too, but this is the mint choke point and JS is never
+    trusted — a stale webview, a future caller, or a hand-crafted
+    payload must not be able to stack two coincident rects into one
+    record and paint it twice.
+    """
     out: list[dict] = []
     if not isinstance(pages, dict):
         return out
@@ -175,15 +289,7 @@ def records_from_rect_map(
         except (TypeError, ValueError):
             continue
     for page, page_key in sorted(keyed):
-        rects: list[list[float]] = []
-        for r in pages[page_key] or []:
-            try:
-                x, y, w, h = (float(v) for v in r)
-            except (TypeError, ValueError):
-                continue
-            if w <= 0 or h <= 0:
-                continue
-            rects.append([x, y, w, h])
+        rects = merge_rects(pages[page_key])
         if rects:
             out.append(
                 {
@@ -193,6 +299,175 @@ def records_from_rect_map(
                     "color": color,
                 }
             )
+    return out
+
+
+def _is_plain_highlight(rec: Any, page: Any) -> bool:
+    """A NATIVE highlight record of ours on *page* — the only kind
+    :func:`merge_highlight_records` is allowed to rewrite.
+
+    Excluded on purpose: ``kind`` records (outside text boxes are not
+    highlights) and ``origin`` records (K-081 — an adopted external
+    mark may only leave the list through ``_bridge_hl_remove``, which
+    tombstones it; dropping one here would resurrect it on the next
+    foreign scan).
+    """
+    return (
+        isinstance(rec, dict)
+        and rec.get("page") == page
+        and not rec.get("kind")
+        and not rec.get("origin")
+    )
+
+
+def _rect_covers(outer: Any, inner: Any, tol: float = 0.5) -> bool:
+    """True when *inner* lies inside *outer* (page points, *tol* slack)."""
+    try:
+        ox, oy, ow, oh = (float(v) for v in outer)
+        ix, iy, iw, ih = (float(v) for v in inner)
+    except (TypeError, ValueError):
+        return False
+    return (
+        ix >= ox - tol
+        and iy >= oy - tol
+        and ix + iw <= ox + ow + tol
+        and iy + ih <= oy + oh + tol
+    )
+
+
+def _subtract_x(rect: Any, cutter: Any) -> list[list[float]]:
+    """*rect* with *cutter*'s horizontal span cut out of it (0–2 pieces).
+
+    Only rects on the SAME LINE cut each other — a mark two lines down
+    shares no ink with this one however its x range lines up. Slivers
+    thinner than half a point are dropped rather than kept as hairlines.
+    Anything malformed comes back untouched: this trims records, and a
+    parse failure must never silently delete one.
+    """
+    try:
+        x, y, w, h = (float(v) for v in rect)
+        cx0 = float(cutter[0])
+        cx1 = cx0 + float(cutter[2])
+    except (TypeError, ValueError, IndexError):
+        return [list(rect)]
+    if not _same_line(rect, cutter):
+        return [[x, y, w, h]]
+    out: list[list[float]] = []
+    if cx0 - x > 0.5:
+        out.append([x, y, min(cx0, x + w) - x, h])
+    if (x + w) - cx1 > 0.5:
+        left = max(cx1, x)
+        out.append([left, y, x + w - left, h])
+    return out
+
+
+def _rects_touch(a: Any, b: Any) -> bool:
+    """True when any rect of *a* overlaps any rect of *b*."""
+    for r1 in a or []:
+        for r2 in b or []:
+            try:
+                x1, y1, w1, h1 = (float(v) for v in r1)
+                x2, y2, w2, h2 = (float(v) for v in r2)
+            except (TypeError, ValueError):
+                continue
+            if (
+                x1 < x2 + w2
+                and x2 < x1 + w1
+                and y1 < y2 + h2
+                and y2 < y1 + h1
+            ):
+                return True
+    return False
+
+
+def merge_highlight_records(
+    existing: list[dict], records: list[dict]
+) -> list[dict]:
+    """Fold freshly minted highlight *records* into *existing*.
+
+    :func:`merge_rects` stops ONE drag painting itself twice; this
+    stops TWO drags doing it. Re-highlighting a sentence used to
+    blind-append a second record over the first, and two 43% layers
+    composite to 67.5% — the same visible darkening, reached the other
+    way. Per incoming record, against native highlights on its page:
+
+    1. rects an existing SAME-ink highlight already covers are dropped
+       (that text is already highlighted in that colour — there is
+       nothing to add);
+    2. a DIFFERENT-ink highlight has the new mark's span CUT out of it
+       (:func:`_subtract_x`), and a record left with nothing goes: the
+       new ink wins on exactly the area it covers, so re-marking two
+       words inside a yellow sentence in green leaves yellow either
+       side and green between, never green over yellow;
+    3. what survives is unioned into a same-ink record it touches, or
+       appended as a new record.
+
+    Deliberately at MINT time, never in pdf_handler: storage collapses
+    duplicates only for ``origin == "external"`` records (Preview
+    autosaves the same box repeatedly), and overlapping NATIVE
+    highlights staying distinct there is a pinned K-081 invariant.
+    """
+    out: list[dict] = list(existing or [])
+    for rec in records or []:
+        page = rec.get("page")
+        ink = validate_hex_color(rec.get("color"))
+        rects = merge_rects(rec.get("rects"))
+        for cur in out:
+            if not rects:
+                break
+            if not _is_plain_highlight(cur, page):
+                continue
+            if validate_hex_color(cur.get("color")) != ink:
+                continue
+            covered = cur.get("rects") or []
+            rects = [
+                r for r in rects
+                if not any(_rect_covers(o, r) for o in covered)
+            ]
+        if not rects:
+            continue
+        kept: list[dict] = []
+        for cur in out:
+            if (
+                _is_plain_highlight(cur, page)
+                and validate_hex_color(cur.get("color")) != ink
+            ):
+                left: list[list[float]] = []
+                changed = False
+                for o in cur.get("rects") or []:
+                    pieces = [o]
+                    for r in rects:
+                        cut: list[list[float]] = []
+                        for p in pieces:
+                            cut.extend(_subtract_x(p, r))
+                        pieces = cut
+                    if pieces != [o]:
+                        changed = True
+                    left.extend(pieces)
+                if changed:
+                    left = merge_rects(left)
+                    if not left:
+                        continue  # fully recoloured by the new mark
+                    cur = dict(cur, rects=left)
+            kept.append(cur)
+        out = kept
+        host_at = -1
+        for i, cur in enumerate(out):
+            if not _is_plain_highlight(cur, page):
+                continue
+            if validate_hex_color(cur.get("color")) != ink:
+                continue
+            if _rects_touch(cur.get("rects") or [], rects):
+                host_at = i
+                break
+        if host_at >= 0:
+            host = out[host_at]
+            out[host_at] = dict(
+                host,
+                rects=merge_rects(list(host.get("rects") or []) + rects),
+            )
+        else:
+            out.append(dict(rec, color=ink, rects=rects))
     return out
 
 
@@ -461,10 +736,19 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
 
     def _bridge_hl_add(self, payload: str) -> None:
         data = decode_b64_json(payload) or {}
-        records = records_from_rect_map(data.get("pages"))
+        # The page sends the swatch row's chosen ink; anything that is
+        # not a hex colour falls back to the native yellow rather than
+        # landing in the JSON verbatim (JS is never trusted).
+        color = validate_hex_color(data.get("color"))
+        records = records_from_rect_map(data.get("pages"), color=color)
         if not records:
             return
-        self._highlights.extend(records)
+        merged = merge_highlight_records(self._highlights, records)
+        if merged == self._highlights:
+            # Every rect was already highlighted in this ink — say
+            # nothing rather than toast a highlight that did not happen.
+            return
+        self._highlights = merged
         self._save_annotations()
         self._push_annotations()
         if tooltip is not None:
