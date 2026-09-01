@@ -14,6 +14,19 @@ Threading contract is lifted from chat_dock: long work runs on QueryOp
 workers, a seq token discards callbacks from a cancelled or replaced run,
 and the retrievability/match maps are cached so threshold changes
 re-aggregate instantly without touching the collection.
+
+Bottom-left of that tree since K-143 sits the MAP box — Pouya's
+"separate little box in the bottom left, sort of like how Obsidian does
+it". The tree and the box share the pane through a vertical splitter
+whose height AND collapsed state persist (``map_split``, guarded by
+``_sane_map_sizes``), and the canvas itself is pdf_map's — reached
+through ``pdf_map.map_canvas``, never re-implemented here, so the box
+and the standalone Map window are literally the same renderer. The
+box's graph is built on a QueryOp worker rather than inline: 16.9 s on
+Pouya's collection, which inline would be 17 s of frozen Library on
+every open. And ``PdfSidebar.on_loaded`` — the viewer's own existing
+"a document went on screen" callback — points both maps at whatever
+the viewer is showing.
 """
 
 from __future__ import annotations
@@ -73,6 +86,22 @@ _UNKNOWN_SORT = -1.0
 # as nothing at all. Paired with DriveWindow's setMinimumWidth below —
 # the constant alone is inert.
 _NAME_COL_FLOOR = 160
+
+# The K-143 map box, bottom-left. Every number here is a DELIBERATE
+# floor, not sizeHint fallout: pdf_map's canvas declares no size of its
+# own precisely so its host decides, and "whatever the canvas asks for"
+# was 480x360 — which in this pane would have shoved the left pane 60px
+# wider than K-136's floor and made the box taller than half the window.
+#
+# _MAP_MIN_W is deliberately WELL BELOW the tree's own minimum (the live
+# numeric columns + _NAME_COL_FLOOR, 420 today): the map must never be
+# the widest thing in the pane, or it would silently become the binding
+# constraint on the horizontal splitter and quietly move K-136's floor.
+# _MAP_MIN_H is the height at which the box still reads as a map rather
+# than a strip — measured offscreen against the real canvas.
+_MAP_MIN_W = 240
+_MAP_MIN_H = 150
+_MAP_DEFAULT_H = 220
 
 
 def _user_files() -> str:
@@ -861,6 +890,18 @@ class DriveWindow(QWidget):
         self.card_r: dict = {}
         self.matches: dict = {}
         self.rows: dict[str, dict] = {}
+        # ---- the K-143 map dock's state, before anything builds it ----
+        # The canvas exists only after its (slow) graph lands, so every
+        # reader of it is written for None; _map_started makes the build
+        # once-per-window; _map_collapsed is the tracked intent that
+        # _ensure_map consults instead of trusting pre-layout geometry;
+        # _map_last remembers what the viewer is showing so a canvas
+        # arriving late still opens on the right node.
+        self.map_canvas = None
+        self.map_box = None
+        self._map_started = False
+        self._map_collapsed = False
+        self._map_last: str | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -960,7 +1001,40 @@ class DriveWindow(QWidget):
             self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
         except Exception:
             pass
-        lay.addWidget(self.tree, 1)
+        # The tree and the K-143 map box share the pane vertically, in
+        # their own splitter — Obsidian's shape, which is what Pouya
+        # asked for ("a separate little box in the bottom left").
+        # Everything under it (status, Cancel, drop zone) is thin
+        # chrome that stays put; only these two negotiate for height.
+        self.left_split = QSplitter(Qt.Orientation.Vertical, left)
+        self.left_split.addWidget(self.tree)
+        self.map_box = self._build_map_box(self.left_split)
+        self.left_split.addWidget(self.map_box)
+        try:
+            # The tree can never be collapsed away — it IS the Library.
+            # The map can: collapsed is a state Obsidian offers and the
+            # one _sane_map_sizes deliberately admits (a 0 that means
+            # "shut", not a 0 that means "never laid out").
+            self.left_split.setCollapsible(0, False)
+            self.left_split.setCollapsible(1, True)
+            self.left_split.setStretchFactor(0, 1)
+            self.left_split.setStretchFactor(1, 0)
+            # A collapsed box leaves ONLY this handle behind, so it has
+            # to be a real target and say what it is (offscreen render:
+            # at the stock width it is a hairline in the same token as
+            # the chrome around it, and a box dragged shut looks gone
+            # rather than closed). The standalone Map button is the
+            # other way back, so nobody is ever stranded.
+            self.left_split.setHandleWidth(6)
+            handle = self.left_split.handle(1)
+            if handle is not None:
+                handle.setToolTip("Drag to resize the map — or shut it")
+            # Dragging the box open is what starts its build, so the
+            # collapsed box costs nothing until it is wanted.
+            self.left_split.splitterMoved.connect(self._on_map_split_moved)
+        except Exception as e:
+            print(f"[klausmate] map splitter setup failed: {e}")
+        lay.addWidget(self.left_split, 1)
 
         self.status = QLabel("", left)
         self.status.setWordWrap(True)
@@ -986,6 +1060,14 @@ class DriveWindow(QWidget):
         from .pdf_viewer import PdfSidebar
 
         self.sidebar = PdfSidebar(None, parent=self.splitter)
+        # THE follow-the-viewer seam (K-143/K-137). PdfSidebar already
+        # owns one: on_loaded fires from _notify_loaded on EVERY path
+        # that puts a document on screen, whichever call site triggered
+        # it — which is exactly "the Library knows which PDF is
+        # showing", and why no new signal was invented for this. The
+        # slot is free here: the only other assignment in the addon is
+        # _PdfTabContainer's, on its OWN sidebar.
+        self.sidebar.on_loaded = self._on_viewer_loaded
         self.splitter.addWidget(left)
         self.splitter.addWidget(self.sidebar)
         self.splitter.setStretchFactor(1, 1)
@@ -1001,6 +1083,10 @@ class DriveWindow(QWidget):
         except Exception as e:
             print(f"[klausmate] drive show failed: {e}")
 
+        # After show(), so the box's real height decides whether the
+        # (expensive) graph build is worth starting at all.
+        self._ensure_map()
+
     # -------------------------------------------------------- geometry
 
     _MIN_PANE = 120
@@ -1015,6 +1101,32 @@ class DriveWindow(QWidget):
         except (TypeError, ValueError):
             return None
         if any(s < self._MIN_PANE for s in ints):
+            return None
+        return ints
+
+    def _sane_map_sizes(self, sizes: object) -> list[int] | None:
+        """The same guard for the left pane's VERTICAL splitter (K-143).
+
+        Mirrors ``_sane_splitter_sizes`` — a two-int list or nothing,
+        the tree half held above the same 120px "that isn't a pane"
+        floor — with ONE deliberate difference: the map half may be
+        exactly 0. Zero here is a real state, the box collapsed shut,
+        and it is the whole reason the collapsed state persists without
+        a second config key. Any OTHER value below ``_MAP_MIN_H`` is
+        the degenerate kind (a never-laid-out window's sizes()) and is
+        rejected exactly as the horizontal guard rejects them, so a
+        window that was built but never shown cannot poison the next
+        restore.
+        """
+        if not isinstance(sizes, list) or len(sizes) != 2:
+            return None
+        try:
+            ints = [int(s) for s in sizes]
+        except (TypeError, ValueError):
+            return None
+        if ints[0] < self._MIN_PANE:
+            return None
+        if ints[1] != 0 and ints[1] < _MAP_MIN_H:
             return None
         return ints
 
@@ -1037,6 +1149,23 @@ class DriveWindow(QWidget):
             # 284. tests/test_drive.py pins that arithmetic so a future
             # width change cannot silently re-break it.
             self.splitter.setSizes(sane if sane is not None else [560, 480])
+            # The map box's height + collapsed state, same shape and
+            # same defensiveness. The default pair SUMS to roughly the
+            # left pane's height at the default 1040x680 window (the
+            # chrome under the splitter costs ~100px), because setSizes
+            # distributes proportionally when the total doesn't match —
+            # so a pair summing to 560 lands the box near its intended
+            # _MAP_DEFAULT_H rather than somewhere arbitrary.
+            sane_map = self._sane_map_sizes(state.get("map_split"))
+            if sane_map is None:
+                sane_map = [560 - _MAP_DEFAULT_H, _MAP_DEFAULT_H]
+            self.left_split.setSizes(sane_map)
+            # Tracked, not measured: _ensure_map runs before Qt has
+            # necessarily laid the splitter out, and sizes() before the
+            # first layout pass is exactly the bogus value the guards
+            # above exist to reject. _on_map_split_moved re-reads the
+            # real geometry once the user touches the handle.
+            self._map_collapsed = sane_map[1] == 0
         except Exception as e:
             print(f"[klausmate] drive geometry restore failed: {e}")
             self.resize(1040, 680)
@@ -1059,9 +1188,189 @@ class DriveWindow(QWidget):
             }
             if self._sane_splitter_sizes(sizes) is not None:
                 state["splitter"] = sizes
+            map_sizes = list(self.left_split.sizes())
+            if self._sane_map_sizes(map_sizes) is not None:
+                state["map_split"] = map_sizes
             drive_store.save_window_state(_user_files(), state)
         except Exception as e:
             print(f"[klausmate] drive geometry save failed: {e}")
+
+    # --------------------------------------------------------- map dock
+
+    def _build_map_box(self, parent):
+        """The bottom-left map box: a MAP section over the canvas slot.
+
+        Section header + one body, the same two-part shape as the
+        LIBRARY section above it (uppercase caption left, quiet flat
+        action right) — so the pane reads as two stacked VS Code
+        sections, which is also exactly what Obsidian's sidebar is. The
+        canvas is NOT built here: it costs a 17 s graph build (see
+        _ensure_map), so the body starts as a muted line and the canvas
+        is swapped in underneath it when the worker lands.
+        """
+        box = QWidget(parent)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.setSpacing(2)
+        caption = QLabel("MAP", box)
+        caption.setObjectName("LibrarySectionHeader")
+        row.addWidget(caption)
+        row.addStretch(1)
+        self.map_fit_btn = QPushButton("Fit", box)
+        self.map_fit_btn.setToolTip("Reset the map's zoom to show everything")
+        self.map_fit_btn.setEnabled(False)
+        self.map_fit_btn.clicked.connect(self._map_fit)
+        row.addWidget(self.map_fit_btn)
+        lay.addLayout(row)
+
+        self.map_status = QLabel("", box)
+        self.map_status.setWordWrap(True)
+        try:
+            from . import theme as _theme
+
+            self.map_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.map_status.setStyleSheet(
+                _theme.muted_label_qss(_theme.night_mode(), 12)
+            )
+        except Exception:
+            pass
+        lay.addWidget(self.map_status, 1)
+
+        try:
+            box.setMinimumHeight(_MAP_MIN_H)
+        except Exception:
+            pass
+        return box
+
+    def _map_fit(self) -> None:
+        cv = self.map_canvas
+        if cv is None:
+            return
+        try:
+            cv.fit()
+        except Exception as e:
+            print(f"[klausmate] map fit failed: {e}")
+
+    def _on_map_split_moved(self, *_args) -> None:
+        """Handle drag: re-read the collapsed state from real geometry
+        (unlike restore time, the splitter has been laid out by now) and
+        start the build if the box was just dragged open."""
+        try:
+            self._map_collapsed = list(self.left_split.sizes())[1] <= 0
+        except Exception:
+            return
+        self._ensure_map()
+
+    def _ensure_map(self) -> None:
+        """Build the dock's graph ONCE, off the main thread, and only
+        for a box the user can actually see.
+
+        ``pdf_map.graph_data`` is 16.9 s on Pouya's 28,668-note
+        collection (measured K-143 — the PCA over the whole card index).
+        Calling it inline would freeze the Library for that long on
+        EVERY open, so it runs on a QueryOp worker: _refresh_rows'
+        contract exactly, parented to mw rather than self (a QueryOp
+        whose parent dies takes its callback with it) with _alive()
+        guarding the callback instead. A collapsed box pays nothing at
+        all, and dragging one open starts the build then.
+
+        Once per window, whatever the outcome: a retry on every handle
+        drag would be a 17 s CPU burn per twitch.
+        """
+        if self._map_started or self._map_collapsed:
+            return
+        if mw is None or mw.col is None:
+            return
+        try:
+            from . import pdf_map
+        except Exception as e:
+            print(f"[klausmate] map unavailable: {e}")
+            return
+        self._map_started = True
+        self.map_status.setText(pdf_map.BUILDING_TEXT)
+
+        def done(graph: dict) -> None:
+            if not self._alive():
+                return
+            self._install_map(graph)
+
+        def fail(exc: Exception) -> None:
+            if not self._alive():
+                return
+            print(f"[klausmate] map graph build failed: {exc}")
+            self.map_status.setText(pdf_map.BUILD_FAIL_TEXT)
+
+        op = QueryOp(parent=mw, op=lambda _col: pdf_map.graph_data(), success=done)
+        op.failure(fail)
+        op.run_in_background()
+
+    def _install_map(self, graph: dict) -> None:
+        """Put the finished graph on screen — main thread only.
+
+        An empty graph gets pdf_map's own empty-state line rather than a
+        blank card: same policy as the standalone window, decided in one
+        place each so neither surface invents its own wording.
+        """
+        try:
+            from . import pdf_map
+        except Exception as e:
+            print(f"[klausmate] map import failed: {e}")
+            return
+        try:
+            if not (graph or {}).get("pdfs"):
+                self.map_status.setText(pdf_map.EMPTY_TEXT)
+                return
+            canvas = pdf_map.map_canvas(self.map_box, graph)
+            if canvas is None:
+                self.map_status.setText(pdf_map.CANVAS_FAIL_TEXT)
+                return
+            # The canvas declares no size of its own (K-143) — this is
+            # where the dock's deliberate floor is applied.
+            canvas.setMinimumSize(_MAP_MIN_W, _MAP_MIN_H)
+            self.map_box.layout().addWidget(canvas, 1)
+            self.map_canvas = canvas
+            self.map_status.setVisible(False)
+            self.map_fit_btn.setEnabled(True)
+            # The build takes seconds; the reader may well have opened a
+            # PDF while it ran, and that load's on_loaded fired into a
+            # canvas that did not exist yet.
+            if self._map_last:
+                self._on_viewer_loaded(self._map_last)
+        except Exception as e:
+            print(f"[klausmate] map install failed: {e}")
+
+    def _on_viewer_loaded(self, safe) -> None:
+        """The Library's viewer just put ``safe`` on screen (or cleared,
+        for None) — point every open map at it.
+
+        Wired to ``PdfSidebar.on_loaded``, which fires from the viewer's
+        own _notify_loaded on every load path there is, so this covers
+        the tree double-click and anything later that loads a PDF
+        without going through it.
+
+        Both maps follow: the dock's canvas directly, and the standalone
+        window through pdf_map.select_pdf — the seam K-138 built and
+        deliberately left unwired for this card. Its contract already
+        covers everything awkward here (unknown or None CLEARS, no
+        window is a silent no-op, an already-visible node is not chased)
+        and canvas.select IS that contract, so nothing is re-derived.
+        """
+        self._map_last = str(safe) if safe else None
+        cv = self.map_canvas
+        if cv is not None:
+            try:
+                cv.select(safe)
+            except Exception as e:
+                print(f"[klausmate] map dock select failed: {e}")
+        try:
+            from . import pdf_map
+
+            pdf_map.select_pdf(safe)
+        except Exception as e:
+            print(f"[klausmate] map select failed: {e}")
 
     # ------------------------------------------------------------ tree
 
@@ -2009,6 +2318,10 @@ class DriveWindow(QWidget):
         try:
             if self.sidebar.is_loaded(safe):
                 self.sidebar.clear()
+                # clear() is the one load-path that does NOT fire
+                # on_loaded, so the map would keep a ring on the PDF the
+                # viewer just stopped showing (K-143).
+                self._on_viewer_loaded(None)
         except Exception:
             pass
         # Must run BEFORE delete_context: that call chains into

@@ -39,6 +39,22 @@ for "the PDF viewer opened this file" — it selects that node, recentres
 when it is off-view, and repaints. It is deliberately NOT wired to the
 viewer here; the Library dock card does that.
 
+K-143 made the canvas EMBEDDABLE without letting a second renderer
+exist. The class body was hoisted out of ``open_map_window`` into
+``_canvas_class()`` and is reached through ``map_canvas(parent,
+graph=None)``; the window now instantiates that factory like any other
+host, and the Library's bottom-left dock instantiates the same one. It
+is still built inside a function (``QWidget`` must be a real base class
+and this module must import with no Qt), and deliberately not memoized —
+a cached class would freeze onto whichever ``aqt.qt`` was imported
+first, which the tests swap underneath it on purpose. The canvas also
+stopped declaring a minimum size: how small the map may get is the
+HOST's decision (the window wants 480x360; the dock is a compact box,
+and inheriting 480 would have widened the Library's whole left pane).
+``graph_data()`` is public for the same card: building the graph is
+16.9 s on a 28,668-note collection, so the dock builds it off the main
+thread and passes it in rather than letting the factory load it.
+
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (world<->screen transform, fit-to-view, zoom-at-cursor,
 hit-test, node sizing, edge-subset policy, off-node label placement, and
@@ -68,9 +84,11 @@ window is a module singleton with ``WA_DeleteOnClose`` whose
 (the reviewer's answer keys must stay where they are; lecture_view's
 rule).
 
-Entry points: ``open_map_window(parent=None)`` and ``select_pdf(safe)``.
-Nothing registers either yet — the Library toolbar button arrives as
-K-124 on pdf_drive.py.
+Entry points: ``open_map_window(parent=None)`` (the Library's Map
+button), ``map_canvas(parent, graph=None)`` + ``graph_data()`` (the
+Library's dock), and ``select_pdf(safe)`` (the standalone window's
+follow-the-viewer seam; the dock calls ``canvas.select`` on its own
+canvas, which is where that contract actually lives).
 """
 
 from __future__ import annotations
@@ -83,8 +101,12 @@ from typing import Iterable, Optional, Sequence
 
 # Empty-graph fallback bounds — projection normalizes each axis to [-1, 1].
 DEFAULT_BOUNDS = (-1.0, -1.0, 1.0, 1.0)
-# Pixels of breathing room fit_to_view leaves around the content bounds.
+# Pixels of breathing room fit_to_view leaves around the content bounds,
+# and the share of the smaller viewport axis that caps it on a compact
+# canvas (see fit_margin — 0.12 keeps 48px intact above ~400px, which is
+# every surface that existed before the Library dock).
 FIT_MARGIN = 48.0
+FIT_MARGIN_SHARE = 0.12
 # Sanity clamps on the zoom scale (pixels per world unit). Wide on
 # purpose: they exist so a runaway wheel loop can't drive the transform
 # into degeneracy, not to constrain normal use.
@@ -114,6 +136,15 @@ WHEEL_ZOOM_DIVISOR = 240.0
 RECENTER_MARGIN = 24.0
 
 EMPTY_TEXT = "No indexed PDFs to map yet."
+# Shown where the canvas would go when map_canvas() comes back None —
+# Qt or theme unreachable. Rare, but a bar with a dead hole under it
+# reads as a bug in the map rather than as the map being unavailable.
+CANVAS_FAIL_TEXT = "The map canvas could not be created."
+# What the Library's dock shows while graph_data() runs on its worker,
+# and if that worker comes back empty-handed. The copy lives here with
+# the other two map states so no host invents its own wording.
+BUILDING_TEXT = "Building the map…"
+BUILD_FAIL_TEXT = "The map could not be built."
 # The header's one-line affordance (K-133): the offscreen-render audit
 # found a view that named nothing and explained nothing — no hint that
 # dots are notes, circles PDFs, or that the canvas pans and zooms.
@@ -166,6 +197,34 @@ def _num(value: object, default: float = 0.0) -> float:
     except (TypeError, ValueError):
         return default
     return default if f != f else f
+
+
+def fit_margin(widget_size: Sequence[float]) -> float:
+    """``FIT_MARGIN``, capped at a share of the SMALLER viewport axis.
+
+    K-143, found by rendering the Library dock rather than by reading
+    the code: FIT_MARGIN is 48 absolute pixels, sized for a 900x640
+    window where it is comfortable breathing room. In the dock's compact
+    box — 545x185 in the default Library — 48px a side eats 96 of 185
+    and the whole graph fits into the 89px left over, a stamp adrift in
+    a wide empty card. The margin has to be a fraction of the surface it
+    is edging, not a constant.
+
+    A share of ``min(w, h)`` rather than of each axis on purpose:
+    ``fit_to_view`` picks ONE scale from whichever axis constrains, so
+    two different margins would only ever matter through the smaller one
+    anyway, and a per-axis version would silently re-centre the other.
+    Below about 400px the cap bites and the margin scales down with the
+    box; above it, nothing changes and every existing surface fits
+    exactly as it did.
+    """
+    try:
+        smaller = min(float(widget_size[0]), float(widget_size[1]))
+    except (TypeError, ValueError, IndexError):
+        return FIT_MARGIN
+    if smaller != smaller or smaller <= 0:  # NaN or no surface yet
+        return FIT_MARGIN
+    return min(FIT_MARGIN, FIT_MARGIN_SHARE * smaller)
 
 
 def fit_to_view(
@@ -497,92 +556,57 @@ def _fill_retention(graph: dict) -> None:
         print(f"[klausmate] map retention fill failed: {exc}")
 
 
-def select_pdf(safe) -> bool:
-    """Point the open map at the PDF named ``safe``; True when it took.
+def graph_data() -> dict:
+    """The map's data: the on-disk graph plus the live retention fill.
 
-    The seam Pouya asked for in K-137 — "when I am viewing a PDF on the
-    PDF viewer, it chooses that item" — deliberately left UNWIRED here.
-    Whoever owns the viewer calls this; the map never reaches back into
-    the viewer, so the dependency runs one way and this module stays
-    openable, testable and closable on its own.
-
-    Contract:
-
-    - No map window open, or an empty-graph window with no canvas: a
-      silent no-op returning False. The viewer must be free to call
-      this on every file it opens without first asking whether the map
-      exists.
-    - Known ``safe`` name: that node becomes the selection (ring +
-      edges + its name, since K-138 draws exactly the active node's),
-      the view recentres ONLY if the node was off-screen
-      (``recenter_for``), the zoom is left alone, and the canvas
-      repaints. Returns True.
-    - Unknown name, empty, or None: clears the selection and returns
-      False — a highlight left on the PDF you just closed would be a
-      lie about what you are looking at.
-    - Anything at all going wrong (a C++-deleted window, a stale
-      singleton) is caught and reported as False. A map that cannot
-      follow along must never break the viewer that called it.
+    Public because building it is EXPENSIVE — 16.9 s on Pouya's 28,668
+    note collection (measured K-143; the PCA over the whole card index
+    dominates). The standalone window has always paid that inline, but
+    the Library's dock cannot: it would freeze the Library for 17 s on
+    every open. So pdf_drive runs THIS off the main thread and hands the
+    result to ``map_canvas(parent, graph)`` — which is exactly why that
+    factory takes a graph at all.
     """
-    win = _instance
-    if win is None:
-        return False
-    try:
-        canvas = getattr(win, "canvas", None)
-        if canvas is None:
-            return False
-        return bool(canvas.select(safe))
-    except Exception as exc:
-        print(f"[klausmate] map select_pdf failed: {exc}")
-        return False
+    graph = _load_graph()
+    _fill_retention(graph)
+    return graph
 
 
-def open_map_window(parent=None):
-    """Open (or front) the Embedding Map window; returns it or None.
+def _canvas_class():
+    """Build and return the canvas class, or None if Qt is unreachable.
 
-    Module singleton: a second call fronts the existing window with
-    ``show()`` + ``raise_()`` (explicit user action — pdf_drive's
-    precedent, minus its focus steal). The window deletes on close and
-    ``closeEvent`` clears the singleton, so a reopened map is always
-    freshly built from the current graph.
+    The class body lives inside a function for the same reason it always
+    did: ``QWidget`` has to be a real base class, and this module must
+    stay importable with no Qt at all (the pure viewport model above the
+    divider is tested headless). Hoisting it out of ``open_map_window``
+    into its own builder is the whole K-143 change — the window and the
+    Library's dock now instantiate the SAME definition instead of the
+    dock growing a second renderer to drift away from this one.
+
+    Deliberately NOT memoized. Rebuilding costs microseconds, while a
+    cached class would be frozen onto whichever ``aqt.qt`` was imported
+    first — and the tests swap that module underneath us on purpose
+    (stub harness first, real PyQt6 after).
     """
-    global _instance
-    if _instance is not None:
-        try:
-            _instance.show()
-            _instance.raise_()
-            return _instance
-        except Exception as exc:
-            # Stale after a C++-side delete (RuntimeError) — rebuild.
-            print(f"[klausmate] map re-front failed, rebuilding: {exc}")
-            _instance = None
-
     try:
         from aqt.qt import (
             QColor,
-            QHBoxLayout,
-            QLabel,
             QPainter,
             QPainterPath,
             QPen,
             QPointF,
             QPolygonF,
-            QPushButton,
             QRectF,
             Qt,
             QToolTip,
             QTransform,
-            QVBoxLayout,
             QWidget,
         )
 
         from . import theme
     except Exception as exc:
-        print(f"[klausmate] embedding map unavailable: {exc}")
+        print(f"[klausmate] embedding map canvas unavailable: {exc}")
         return None
-
-    graph = _load_graph()
-    _fill_retention(graph)
 
     class _MapCanvas(QWidget):
         """The QPainter canvas: the whole renderer, hand-painted (no
@@ -647,9 +671,14 @@ def open_map_window(parent=None):
             self._drag_last = None
             try:
                 self.setMouseTracking(True)
-                self.setMinimumSize(480, 360)
             except Exception as exc:
                 print(f"[klausmate] map canvas setup failed: {exc}")
+            # NO setMinimumSize here (K-143). How small the map may get
+            # belongs to whatever is hosting it: the standalone window
+            # wants 480x360, the Library's dock is a compact box that
+            # would otherwise inherit a 480px floor and shove the whole
+            # left pane wider. Each host sets its own, right where it
+            # adds the canvas.
 
         # ---- viewport ----
 
@@ -657,12 +686,47 @@ def open_map_window(parent=None):
             # The fit SCALE used to be kept for the label zoom gate;
             # K-138 deleted that gate, and keeping a field named for it
             # would only mislead the next reader.
-            self._vp = fit_to_view(self._bounds, (w, h), FIT_MARGIN)
+            # fit_margin, not the bare FIT_MARGIN constant (K-143): 48px
+            # a side is breathing room in the window and half the canvas
+            # in the Library's dock.
+            self._vp = fit_to_view(self._bounds, (w, h), fit_margin((w, h)))
             self._did_fit = True
 
         def _ensure_fit(self, w: float, h: float) -> None:
             if not self._did_fit and w > 1 and h > 1:
                 self._apply_fit(w, h)
+
+        def resizeEvent(self, event) -> None:  # noqa: N802 — Qt override
+            """Keep the centre world-point centred as the surface changes.
+
+            K-143, caught by rendering the dock at its floor: the fit
+            runs ONCE and nothing touched the viewport afterwards, so
+            shrinking the surface left the graph anchored where it was —
+            in the dock, where dragging the splitter IS the everyday
+            interaction, the picture slid out of the bottom of the box
+            and took the selected node's name with it.
+
+            Half the size delta, not a re-fit: a resize must not throw
+            away the pan and zoom the reader chose (that is what the Fit
+            button is for, and the standalone window resizes too). The
+            first resize arrives before any fit — oldSize() is invalid
+            then — and is left alone so the first paint still fits at
+            the final size.
+            """
+            try:
+                old = event.oldSize()
+                if self._did_fit and old.width() > 0 and old.height() > 0:
+                    self._vp = pan_by(
+                        self._vp,
+                        (float(self.width()) - float(old.width())) / 2.0,
+                        (float(self.height()) - float(old.height())) / 2.0,
+                    )
+            except Exception as exc:
+                print(f"[klausmate] map resize failed: {exc}")
+            try:
+                super().resizeEvent(event)
+            except Exception:
+                pass
 
         def fit(self) -> None:
             """The Fit button / reset: re-center the whole graph."""
@@ -923,6 +987,113 @@ def open_map_window(parent=None):
             except Exception:
                 pass
 
+    return _MapCanvas
+
+
+def map_canvas(parent=None, graph=None):
+    """The map canvas as a plain widget — the ONE renderer, embeddable.
+
+    ``parent`` is the host widget (None for a free-standing canvas).
+    ``graph`` is a ``pdf_graph.build_graph_data``-shaped dict; passing
+    None loads one with :func:`graph_data`, which BLOCKS for as long as
+    that takes (see its docstring) — every caller on the GUI thread
+    should build the graph off-thread and pass it in.
+
+    Returns the canvas, or None if Qt is unreachable or construction
+    failed. Callers must handle None: the map is an optional surface and
+    must never take its host down with it.
+
+    The canvas declares no minimum size of its own — how small the map
+    may get is a decision of the surface hosting it (the window wants
+    480x360, the Library's dock is a compact box), not of the renderer.
+    """
+    try:
+        cls = _canvas_class()
+        if cls is None:
+            return None
+        return cls(graph_data() if graph is None else graph, parent)
+    except Exception as exc:
+        print(f"[klausmate] map canvas build failed: {exc}")
+        return None
+
+
+def select_pdf(safe) -> bool:
+    """Point the open map at the PDF named ``safe``; True when it took.
+
+    The seam Pouya asked for in K-137 — "when I am viewing a PDF on the
+    PDF viewer, it chooses that item" — deliberately left UNWIRED here.
+    Whoever owns the viewer calls this; the map never reaches back into
+    the viewer, so the dependency runs one way and this module stays
+    openable, testable and closable on its own.
+
+    Contract:
+
+    - No map window open, or an empty-graph window with no canvas: a
+      silent no-op returning False. The viewer must be free to call
+      this on every file it opens without first asking whether the map
+      exists.
+    - Known ``safe`` name: that node becomes the selection (ring +
+      edges + its name, since K-138 draws exactly the active node's),
+      the view recentres ONLY if the node was off-screen
+      (``recenter_for``), the zoom is left alone, and the canvas
+      repaints. Returns True.
+    - Unknown name, empty, or None: clears the selection and returns
+      False — a highlight left on the PDF you just closed would be a
+      lie about what you are looking at.
+    - Anything at all going wrong (a C++-deleted window, a stale
+      singleton) is caught and reported as False. A map that cannot
+      follow along must never break the viewer that called it.
+    """
+    win = _instance
+    if win is None:
+        return False
+    try:
+        canvas = getattr(win, "canvas", None)
+        if canvas is None:
+            return False
+        return bool(canvas.select(safe))
+    except Exception as exc:
+        print(f"[klausmate] map select_pdf failed: {exc}")
+        return False
+
+
+def open_map_window(parent=None):
+    """Open (or front) the Embedding Map window; returns it or None.
+
+    Module singleton: a second call fronts the existing window with
+    ``show()`` + ``raise_()`` (explicit user action — pdf_drive's
+    precedent, minus its focus steal). The window deletes on close and
+    ``closeEvent`` clears the singleton, so a reopened map is always
+    freshly built from the current graph.
+    """
+    global _instance
+    if _instance is not None:
+        try:
+            _instance.show()
+            _instance.raise_()
+            return _instance
+        except Exception as exc:
+            # Stale after a C++-side delete (RuntimeError) — rebuild.
+            print(f"[klausmate] map re-front failed, rebuilding: {exc}")
+            _instance = None
+
+    try:
+        from aqt.qt import (
+            QHBoxLayout,
+            QLabel,
+            QPushButton,
+            Qt,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        from . import theme
+    except Exception as exc:
+        print(f"[klausmate] embedding map unavailable: {exc}")
+        return None
+
+    graph = graph_data()
+
     class _MapWindow(QWidget):
         """Standalone top-level map window (DriveWindow's shape: a plain
         QWidget window, module-singleton lifecycle)."""
@@ -1004,12 +1175,31 @@ def open_map_window(parent=None):
                     pass
                 bar.addWidget(fit_btn)
                 outer.addLayout(bar)
-                self.canvas = _MapCanvas(graph_dict, self)
-                outer.addWidget(self.canvas, 1)
-                try:
-                    fit_btn.clicked.connect(self.canvas.fit)
-                except Exception as exc:
-                    print(f"[klausmate] map fit wire failed: {exc}")
+                # The SHARED renderer (K-143) — the same factory the
+                # Library's dock calls. The graph is already built, so
+                # nothing here loads it a second time.
+                self.canvas = map_canvas(self, graph_dict)
+                if self.canvas is None:
+                    broken = QLabel(CANVAS_FAIL_TEXT, self)
+                    try:
+                        broken.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        broken.setStyleSheet(theme.muted_label_qss(night, 13))
+                    except Exception:
+                        pass
+                    outer.addWidget(broken, 1)
+                    fit_btn.setEnabled(False)
+                else:
+                    # The canvas has no size of its own; this window is
+                    # what decides how small the map may get here.
+                    try:
+                        self.canvas.setMinimumSize(480, 360)
+                    except Exception:
+                        pass
+                    outer.addWidget(self.canvas, 1)
+                    try:
+                        fit_btn.clicked.connect(self.canvas.fit)
+                    except Exception as exc:
+                        print(f"[klausmate] map fit wire failed: {exc}")
 
             self.resize(900, 640)
 

@@ -160,6 +160,35 @@ vp_t = pdf_map.fit_to_view(pdf_map.DEFAULT_BOUNDS, (10.0, 10.0), 48.0)
 check("a widget smaller than the margins still yields a positive scale",
       vp_t.scale > 0)
 
+# ---- K-143: the margin has to scale with a compact canvas ----
+# Found by rendering the Library dock, not by reading the code: 48px a
+# side is breathing room in a 900x640 window and half the box in a
+# 545x185 dock, which fit the whole graph into the 89px left over.
+_M = pdf_map.FIT_MARGIN
+check("a roomy canvas keeps the full FIT_MARGIN — every surface that "
+      "existed before the dock fits EXACTLY as it did",
+      pdf_map.fit_margin((860.0, 560.0)) == _M
+      and pdf_map.fit_margin((400.0, 400.0)) == _M)
+_dock = pdf_map.fit_margin((545.0, 185.0))
+check("the dock's compact box caps it at a share of the SMALLER axis "
+      "instead — the constraining axis is the only one fit_to_view's "
+      "single scale can ever consult",
+      _dock == pdf_map.FIT_MARGIN_SHARE * 185.0 and _dock < _M / 2.0,
+      f"margin {_dock} in a 545x185 box")
+_s_capped = pdf_map.fit_to_view(
+    pdf_map.DEFAULT_BOUNDS, (545.0, 185.0), _dock).scale
+_s_full = pdf_map.fit_to_view(
+    pdf_map.DEFAULT_BOUNDS, (545.0, 185.0), _M).scale
+check("...and that is worth doing: the dock fits half again as large "
+      "with the capped margin (70.3 px/unit vs 44.5)",
+      _s_capped > 1.5 * _s_full, f"{_s_capped:.1f} vs {_s_full:.1f}")
+check("a canvas with no surface yet, or junk for a size, falls back to "
+      "the constant rather than to a zero margin",
+      pdf_map.fit_margin((0.0, 0.0)) == _M
+      and pdf_map.fit_margin((float("nan"), 300.0)) == _M
+      and pdf_map.fit_margin(("x", None)) == _M
+      and pdf_map.fit_margin(()) == _M)
+
 # -------------------------------------------------------------- zoom_at
 
 section("zoom_at — the anchor world-point stays fixed (1e-9)")
@@ -545,6 +574,112 @@ check("empty-state copy is pinned",
       pdf_map.EMPTY_TEXT == "No indexed PDFs to map yet."
       and "EMPTY_TEXT" in _CODE)
 
+# ---- K-143: ONE renderer, hoisted out of the window, still Qt-free ----
+section("K-143 — the embeddable canvas factory")
+
+check("map_canvas(parent, graph=None) is the public factory the Library "
+      "dock instantiates",
+      list(inspect.signature(pdf_map.map_canvas).parameters)
+      == ["parent", "graph"]
+      and all(p.default is None
+              for p in inspect.signature(pdf_map.map_canvas)
+              .parameters.values()))
+check("graph_data() is public too — the dock builds it OFF the main "
+      "thread (16.9 s on a 28,668-note collection) and passes it in",
+      list(inspect.signature(pdf_map.graph_data).parameters) == []
+      and "_load_graph()" in _func_seg("graph_data")
+      and "_fill_retention(" in _func_seg("graph_data"))
+
+_canvas_defs = [n for n in ast.walk(_TREE)
+                if isinstance(n, ast.ClassDef) and n.name == "_MapCanvas"]
+check("there is exactly ONE canvas class in the file — the dock does "
+      "not get a copy to drift away from the window's",
+      len(_canvas_defs) == 1)
+
+
+def _enclosing_func(target: ast.ClassDef):
+    """The FunctionDef whose body (at any depth) holds ``target``."""
+    for node in ast.walk(_TREE):
+        if isinstance(node, ast.FunctionDef) and any(
+            sub is target for sub in ast.walk(node)
+        ):
+            return node
+    return None
+
+
+_canvas_home = _enclosing_func(_canvas_defs[0]) if _canvas_defs else None
+check("it still lives INSIDE a function — the hoist moved the class, it "
+      "did not free it to module level",
+      _canvas_home is not None and _canvas_home.name == "_canvas_class")
+
+
+class _NoAqt:
+    """Import hook that makes every ``aqt`` import fail outright."""
+
+    def find_module(self, name, path=None):  # py<3.12 compat, harmless
+        return self.find_spec(name, path)
+
+    def find_spec(self, name, path=None, target=None):
+        if name == "aqt" or name.startswith("aqt."):
+            raise ImportError(f"aqt is not available ({name})")
+        return None
+
+
+_saved_aqt = {k: v for k, v in sys.modules.items()
+              if k == "aqt" or k.startswith("aqt.")}
+_saved_map = sys.modules.pop("klausmate.pdf_map")
+for _k in _saved_aqt:
+    del sys.modules[_k]
+sys.meta_path.insert(0, _NoAqt())
+try:
+    importlib.import_module("klausmate.pdf_map")
+    _qtfree = (True, "")
+except Exception as _e:  # noqa: BLE001
+    _qtfree = (False, f"{type(_e).__name__}: {_e}")
+finally:
+    sys.meta_path.pop(0)
+    sys.modules.update(_saved_aqt)
+    sys.modules["klausmate.pdf_map"] = _saved_map
+check("...which is the actual guarantee, checked the only honest way: "
+      "with every aqt import made to FAIL, this module still imports — "
+      "the pure viewport model is tested headless and the divider pin "
+      "cannot see below itself",
+      _qtfree[0], _qtfree[1])
+check("the window reaches it through the SAME factory as the dock, "
+      "never by naming the class",
+      "map_canvas(self, graph_dict)" in _func_seg("open_map_window")
+      and "_MapCanvas(" not in _func_seg("open_map_window"))
+check("open_map_window stopped loading the graph itself — one loader, "
+      "used by both callers",
+      "graph_data()" in _func_seg("open_map_window")
+      and "_load_graph()" not in _func_seg("open_map_window"))
+
+check("the canvas class is NOT memoized: a module-level cache would "
+      "freeze it onto whichever aqt.qt was imported first, and the "
+      "tests swap that underneath it on purpose",
+      pdf_map._canvas_class() is not pdf_map._canvas_class())
+
+check("the canvas declares NO minimum size of its own — how small the "
+      "map may get belongs to the surface hosting it (the window wants "
+      "480x360, the dock is a compact box that would otherwise inherit "
+      "a 480px floor and widen the whole Library pane)",
+      "setMinimumSize" not in _method_seg("_MapCanvas", "__init__")
+      and "setMinimumSize(480, 360)" in _func_seg("open_map_window"))
+check("both fallback lines the hosts can need are pinned copy here, so "
+      "no host invents its own wording",
+      _CODE.count("CANVAS_FAIL_TEXT") == 2
+      and "BUILDING_TEXT" in _CODE
+      and "BUILD_FAIL_TEXT" in _CODE)
+check("_apply_fit goes through fit_margin, not the bare constant — the "
+      "compact-canvas cap must reach EVERY fit, not just the dock's",
+      "fit_margin((w, h))" in _method_seg("_MapCanvas", "_apply_fit")
+      and "FIT_MARGIN)" not in _method_seg("_MapCanvas", "_apply_fit"))
+check("a resize RE-ANCHORS the view (half the delta) and never re-fits "
+      "— dragging the dock's handle must not throw away the pan and "
+      "zoom the reader chose; that is what the Fit button is for",
+      "pan_by(" in _method_seg("_MapCanvas", "resizeEvent")
+      and "_apply_fit" not in _method_seg("_MapCanvas", "resizeEvent"))
+
 # ----------------------------------------------------- stub-harness smoke
 
 section("glue smoke under the stub harness")
@@ -604,6 +739,32 @@ try:
           pdf_map.select_pdf(None) is False
           and win3.canvas._selected is None
           and pdf_map.select_pdf("") is False)
+
+    # ---- K-143: the factory, with no window anywhere near it ----
+    _before_inst = pdf_map._instance
+    _solo = pdf_map.map_canvas(None, FAKE)
+    check("map_canvas builds a canvas with NO window: the dock hosts one "
+          "in the Library's left pane and there is nothing to front, "
+          "close, or keep as a singleton",
+          _solo is not None
+          and set(_solo._pdf_xy) == {"lec1", "lec2"}
+          and pdf_map._instance is _before_inst)
+    # The CLEAR half needs no geometry; selecting a known node recentres
+    # and so belongs in the offscreen section, same split as the window's.
+    _solo._selected = "lec1"
+    check("the same select() contract rides on it — select_pdf's rules "
+          "live in the canvas, so the dock re-derives nothing",
+          _solo.select("nope") is False and _solo._selected is None)
+    _passed = {"pdfs": [], "notes": [], "edges": []}
+    _loads = []
+    _real_gd, pdf_map.graph_data = pdf_map.graph_data, lambda: _loads.append(1)
+    try:
+        pdf_map.map_canvas(None, _passed)
+        check("a graph handed in is NEVER re-loaded — that is the whole "
+              "point of the parameter, since loading blocks for seconds",
+              _loads == [])
+    finally:
+        pdf_map.graph_data = _real_gd
 finally:
     pdf_map._load_graph = _orig_load
     pdf_map._fill_retention = _orig_fill
@@ -764,6 +925,65 @@ if _HAVE_QT:
                       and abs(_now[1] - _ch / 2.0) < 1e-6,
                       f"node at {_now} in a {_cw}x{_ch} canvas")
             pdf_map._instance = None
+
+        # ---- K-143: the SAME renderer, hosted by nothing at all ----
+        # The dock puts this widget in the Library's left pane, so the
+        # claim that has to hold on real Qt is that a parentless canvas
+        # sizes, paints and follows the viewer with no window in sight.
+        theme.night_mode = lambda: False
+        _dock = pdf_map.map_canvas(None, CLOUD)
+        # shown, because Qt delivers no resizeEvent to a hidden widget
+        # and the resize behaviour below is the point (offscreen, so
+        # nothing appears anywhere)
+        _dock.show()
+        _dock.resize(545, 185)  # the Library's box at the default size
+        _app.processEvents()
+        check("a windowless canvas takes the host's size — it declares "
+              "no minimum of its own, so a compact box stays compact",
+              _dock.minimumWidth() == 0 and _dock.minimumHeight() == 0
+              and (_dock.width(), _dock.height()) == (545, 185))
+        _di = _QtG.QImage(545, 185, _QtG.QImage.Format.Format_ARGB32)
+        _di.fill(0)
+        _dock.render(_di)
+        _dink = {_di.pixelColor(x, y).name()
+                 for y in range(0, 185, 3) for x in range(0, 545, 3)}
+        check("...and it paints the whole graph there (several inks, "
+              "nothing raised, no window involved)", len(_dink) > 3,
+              str(len(_dink)))
+        _dock._apply_fit(545.0, 185.0)
+        _spread = _dock._vp.scale * 2.0  # the [-1,1] graph's width in px
+        check("the K-143 margin cap earns its place on the real box: the "
+              "graph spans most of the 185px height instead of half of "
+              "it (48px a side would have left 89)",
+              _spread > 0.7 * 185.0, f"graph spans {_spread:.0f}px of 185")
+        # Dragging the dock's splitter handle IS a resize, so this is the
+        # everyday interaction, not an edge case. Rendered at the box's
+        # 150px floor before the fix: the picture slid out of the bottom
+        # of the card and took the selected node's name with it.
+        _mid_before = pdf_map.screen_to_world(_dock._vp, 545 / 2.0, 185 / 2.0)
+        _scale_before = _dock._vp.scale
+        _dock.resize(545, 120)
+        _app.processEvents()
+        _mid_after = pdf_map.screen_to_world(_dock._vp, 545 / 2.0, 120 / 2.0)
+        check("shrinking the box keeps the CENTRE world-point centred — "
+              "the graph stays where the reader was looking instead of "
+              "sliding out of the bottom",
+              abs(_mid_after[0] - _mid_before[0]) < 1e-9
+              and abs(_mid_after[1] - _mid_before[1]) < 1e-9,
+              f"{_mid_before} -> {_mid_after}")
+        check("...and it is a re-anchor, NOT a re-fit: a resize must "
+              "never discard the zoom the reader chose",
+              _dock._vp.scale == _scale_before)
+        _dock.resize(545, 185)
+        _app.processEvents()
+
+        _dock._vp = pdf_map.pan_by(_dock._vp, -5000.0, -5000.0)
+        check("select() on the bare canvas is the dock's whole "
+              "follow-the-viewer path, recentre included",
+              _dock.select("lec1") is True
+              and _dock._selected == "lec1"
+              and abs(pdf_map.world_to_screen(_dock._vp, -0.5, -0.2)[0]
+                      - 545 / 2.0) < 1e-6)
     finally:
         pdf_map._instance = None
         pdf_map._load_graph = _orig_load

@@ -1410,6 +1410,313 @@ if _HAVE_QT:
 else:
     print("  SKIP: PyQt6 unavailable — K-136 source pins above still ran")
 
+print("== K-143: the Obsidian map box, bottom-left ==")
+# Pouya (K-137): "I want the graph to be on the bottom left, sort of like
+# how Obsidian does it, as a separate little box in the bottom left with
+# a column of that sidebar thing", and "when I am viewing a PDF on the
+# PDF viewer, it chooses that item".
+_D143 = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+_D143_CODE = "".join(
+    _t.string for _t in tokenize.generate_tokens(io.StringIO(_D143).readline)
+    if _t.type != tokenize.COMMENT
+)
+check("the tree and the map share the pane through a VERTICAL splitter",
+      "QSplitter(Qt.Orientation.Vertical" in _D143
+      and "self.left_split" in _D143)
+check("the box renders through pdf_map's factory — the ONE renderer the "
+      "standalone Map window uses, never a second canvas class grown "
+      "here to drift away from it (comments stripped: prose about the "
+      "renderer is fine, a renderer is not)",
+      "pdf_map.map_canvas(" in _D143
+      and "QPainter" not in _D143_CODE
+      and "paintEvent" not in _D143_CODE)
+check("its height AND collapsed state persist, guarded like the main "
+      "splitter's rather than trusted",
+      '"map_split"' in _D143
+      and "_sane_map_sizes" in _D143
+      and _D143.count("def _sane_map_sizes") == 1)
+check("the box's floor is a DELIBERATE named constant, not whatever the "
+      "canvas's sizeHint happened to be",
+      "_MAP_MIN_H" in _D143 and "_MAP_MIN_W" in _D143
+      and "setMinimumHeight(_MAP_MIN_H)" in _D143
+      and "setMinimumSize(_MAP_MIN_W, _MAP_MIN_H)" in _D143)
+check("...and the box can never become the pane's binding WIDTH — that "
+      "floor is K-136's, summed from the tree's own columns",
+      pdf_drive._MAP_MIN_W
+      < sum((84, 88, 88)) + pdf_drive._NAME_COL_FLOOR,
+      f"map min width {pdf_drive._MAP_MIN_W}")
+check("follow-the-viewer rides PdfSidebar's EXISTING on_loaded callback "
+      "— the viewer already fires it on every load path, so no new "
+      "signal was invented and no parameter threaded",
+      "self.sidebar.on_loaded = self._on_viewer_loaded" in _D143
+      and "def _on_viewer_loaded" in _D143)
+check("both maps follow: the dock's canvas directly, the standalone "
+      "window through K-138's select_pdf seam",
+      "pdf_map.select_pdf(safe)" in _D143 and "cv.select(safe)" in _D143)
+check("a shut box leaves ONLY the splitter handle behind, so the handle "
+      "is widened to a real target and says what it does (offscreen "
+      "render: at the stock width it is a hairline in the same token as "
+      "the chrome around it, and a shut box looks gone, not closed)",
+      "setHandleWidth" in _D143 and "handle.setToolTip(" in _D143)
+check("the 17 s graph build NEVER runs inline — it is a QueryOp op, "
+      "mw-parented like _refresh_rows', or the Library would freeze on "
+      "every open",
+      re.search(r"QueryOp\(\s*parent=mw,\s*op=lambda _col: "
+                r"pdf_map\.graph_data\(\)", _D143) is not None
+      and _D143.count("graph_data()") == 1)
+
+if _HAVE_QT:
+    try:
+        _uf143 = tempfile.mkdtemp(prefix="klaus_k143_uf_")
+        os.makedirs(os.path.join(_uf143, "contexts"), exist_ok=True)
+        _prev143 = pkg.USER_FILES
+        pkg.USER_FILES = _uf143
+        pdf_map = importlib.import_module("klausmate.pdf_map")
+        _w = pdf_drive.DriveWindow()
+        _w.resize(1040, 680)
+        app.processEvents()
+
+        check("the splitter holds the tree over the map box, in that "
+              "order — bottom-left is the whole ask",
+              _w.left_split.count() == 2
+              and _w.left_split.widget(0) is _w.tree
+              and _w.left_split.widget(1) is _w.map_box)
+        check("the tree can never be collapsed away; the box can (that "
+              "0 is the collapsed state _sane_map_sizes admits)",
+              not _w.left_split.isCollapsible(0)
+              and _w.left_split.isCollapsible(1))
+        check("the box declares the deliberate floor, and it is a floor "
+              "Qt enforces",
+              _w.map_box.minimumHeight() == pdf_drive._MAP_MIN_H)
+        _open_h = _w.left_split.sizes()[1]
+        check("it OPENS at its default height, not at some leftover of "
+              "the layout — and not merely at the floor, which Qt would "
+              "clamp any bad default up to and hide",
+              abs(_open_h - pdf_drive._MAP_DEFAULT_H) <= 30,
+              f"opened at {_open_h}px, default "
+              f"{pdf_drive._MAP_DEFAULT_H}")
+
+        check("on_loaded is wired to the Library's own handler",
+              _w.sidebar.on_loaded == _w._on_viewer_loaded)
+
+        _G143 = {
+            "pdfs": [{"safe": "lec1", "display": "Lecture One",
+                      "folder": None, "threshold": .4, "retention": None,
+                      "xy": [-0.5, -0.2], "match_count": 12},
+                     {"safe": "lec2", "display": "Lecture Two",
+                      "folder": "F", "threshold": .4, "retention": None,
+                      "xy": [0.6, 0.4], "match_count": 4}],
+            "notes": [{"nid": i, "xy": [i / 50.0 - 1.0, 0.1]}
+                      for i in range(100)],
+            "edges": [{"pdf": "lec1", "nid": i, "score": .9}
+                      for i in range(12)],
+        }
+        _w._install_map(_G143)
+        app.processEvents()
+        check("the finished graph installs a real canvas in the box, "
+              "swapping out the placeholder line",
+              _w.map_canvas is not None
+              and not _w.map_status.isVisible()
+              and _w.map_fit_btn.isEnabled())
+        check("the dock applies its own minimum to the shared canvas "
+              "(the canvas brings none)",
+              (_w.map_canvas.minimumWidth(),
+               _w.map_canvas.minimumHeight())
+              == (pdf_drive._MAP_MIN_W, pdf_drive._MAP_MIN_H))
+
+        # The K-136 constraint this dock could most easily have broken,
+        # and only once a canvas is IN the layout: pdf_map's canvas used
+        # to declare a 480px minimum width of its own. The failure that
+        # would cause is NOT a narrow name column (a wider pane widens
+        # that too) — it is that the pane's minimum stops being the
+        # tree's derived 420 and silently becomes the map's, so a
+        # numeric-column change no longer moves the floor and the
+        # Library refuses to narrow for a reason nothing on screen
+        # explains. So measure exactly that.
+        _floor143 = pdf_drive._NAME_COL_FLOOR
+        _w.splitter.setSizes([150, 890])
+        app.processEvents()
+        check("the name column still clears K-136's floor with a canvas "
+              "in the box",
+              _w.tree.columnWidth(0) >= _floor143,
+              f"col0 = {_w.tree.columnWidth(0)}px, floor {_floor143}")
+        check("...and the TREE is still what sets the pane's minimum "
+              "width — the map is never the widest thing in the pane, "
+              "so K-136's derived floor keeps deriving",
+              _w.map_box.minimumSizeHint().width()
+              <= _w.tree.minimumWidth(),
+              f"box needs {_w.map_box.minimumSizeHint().width()}px, "
+              f"tree {_w.tree.minimumWidth()}px")
+        _w._on_viewer_loaded("lec2")
+        check("opening a PDF in the viewer SELECTS it on the map — "
+              "K-137's other half",
+              _w.map_canvas._selected == "lec2"
+              and _w._map_last == "lec2")
+        _w._on_viewer_loaded("gone-from-the-map")
+        check("...and a PDF the map does not know CLEARS the ring "
+              "rather than leaving a lie on screen",
+              _w.map_canvas._selected is None)
+
+        # A canvas that arrives AFTER the reader opened something: the
+        # build takes seconds, so this is the common case, not the edge.
+        _w2 = pdf_drive.DriveWindow()
+        app.processEvents()
+        _w2._on_viewer_loaded("lec1")
+        check("a load during the build is not lost — the canvas opens on "
+              "the node the viewer is already showing",
+              _w2.map_canvas is None and _w2._map_last == "lec1")
+        _w2._install_map(_G143)
+        app.processEvents()
+        check("(that is what _map_last is for)",
+              _w2.map_canvas is not None
+              and _w2.map_canvas._selected == "lec1")
+        _w2.close()
+
+        _w3 = pdf_drive.DriveWindow()
+        app.processEvents()
+        _w3._install_map({"pdfs": [], "notes": [], "edges": []})
+        check("an empty graph gets pdf_map's own empty-state line, not a "
+              "blank card — one wording, decided in one place",
+              _w3.map_canvas is None
+              and _w3.map_status.text() == pdf_map.EMPTY_TEXT)
+        _w3.close()
+
+        # ---- the guard, on the real window ----
+        _sane = _w._sane_map_sizes
+        check("_sane_map_sizes takes a healthy pair",
+              _sane([400, 200]) == [400, 200])
+        check("...admits an EXACT 0 for the map, because collapsed is a "
+              "state the user chose",
+              _sane([600, 0]) == [600, 0])
+        check("...rejects the degenerate middle (a never-laid-out "
+              "window's sizes), junk, and a crushed tree",
+              _sane([600, 12]) is None
+              and _sane([46, 46]) is None
+              and _sane([400, "x"]) is None
+              and _sane([400]) is None
+              and _sane("nope") is None)
+
+        # ---- the round trip the user actually performs ----
+        _uf_rt = tempfile.mkdtemp(prefix="klaus_k143_rt_")
+        os.makedirs(os.path.join(_uf_rt, "contexts"), exist_ok=True)
+        pkg.USER_FILES = _uf_rt
+        _rt = pdf_drive.DriveWindow()
+        app.processEvents()
+        _rt.left_split.setSizes([_rt.left_split.sizes()[0] - 60,
+                                 _rt.left_split.sizes()[1] + 60])
+        _want = _rt.left_split.sizes()[1]
+        _rt.close()
+        app.processEvents()
+        _rt2 = pdf_drive.DriveWindow()
+        app.processEvents()
+        check("a resized box comes back the height it was left at",
+              abs(_rt2.left_split.sizes()[1] - _want) <= 2,
+              f"left {_want}, reopened {_rt2.left_split.sizes()[1]}")
+        _rt2.left_split.setSizes([600, 0])
+        app.processEvents()
+        _rt2.close()
+        app.processEvents()
+        _rt3 = pdf_drive.DriveWindow()
+        app.processEvents()
+        check("a box dragged SHUT stays shut — collapsed persists "
+              "through the same sizes the height does, no second key",
+              _rt3.left_split.sizes()[1] == 0
+              and _rt3._map_collapsed is True,
+              repr(_rt3.left_split.sizes()))
+        _rt3.close()
+        pkg.USER_FILES = _uf143
+
+        # ---- the build really is deferred, not just described as such
+        _seen = []
+
+        class _RecordQueryOp:
+            def __init__(self, parent=None, op=None, success=None):
+                _seen.append(op)
+
+            def failure(self, cb):
+                return self
+
+            def run_in_background(self):
+                pass
+
+        _oldq, _oldmw = pdf_drive.QueryOp, pdf_drive.mw
+        _boom = []
+        _oldgd = pdf_map.graph_data
+        pdf_map.graph_data = lambda: _boom.append(1)
+        try:
+            pdf_drive.QueryOp = _RecordQueryOp
+            pdf_drive.mw = types.SimpleNamespace(col=object())
+            _w4 = pdf_drive.DriveWindow()
+            app.processEvents()
+            _inline = list(_boom)  # must be empty: nothing ran on the GUI
+
+            def _hits_graph_data(op):
+                """_refresh_rows queues a QueryOp too — the map's op is
+                the one that reaches graph_data when you run it."""
+                n = len(_boom)
+                try:
+                    op(object())
+                except Exception:
+                    pass
+                return len(_boom) > n
+
+            def _map_ops():
+                return sum(1 for o in _seen if _hits_graph_data(o))
+
+            check("opening the Library hands graph_data to a QueryOp and "
+                  "never calls it on the GUI thread — 16.9 s inline "
+                  "would be 17 s of frozen Library per open",
+                  _inline == [] and _map_ops() == 1,
+                  f"ops={len(_seen)} map_ops={_map_ops()} "
+                  f"inline={len(_inline)}")
+            check("...and the box says so while it waits",
+                  _w4.map_status.text() == pdf_map.BUILDING_TEXT)
+            _n_before = _map_ops()
+            _w4._ensure_map()
+            _w4._on_map_split_moved()
+            check("the build is once per window, whatever happens — a "
+                  "retry per handle drag would burn 17 s of CPU a twitch",
+                  _map_ops() == _n_before, f"{_map_ops()} vs {_n_before}")
+            _w4.close()
+
+            # A COLLAPSED box has to cost nothing, and this is the only
+            # place that claim can be made: without a live mw there is
+            # no build to skip, so asserting it anywhere else passes
+            # vacuously (it did, until falsification caught it).
+            pkg.USER_FILES = _uf_rt  # the profile left with a shut box
+            _n_before = _map_ops()
+            _w5 = pdf_drive.DriveWindow()
+            app.processEvents()
+            check("a collapsed box never starts the 17 s build — it pays "
+                  "for itself only when it is open",
+                  _w5._map_collapsed is True
+                  and _w5._map_started is False
+                  and _map_ops() == _n_before,
+                  f"collapsed={_w5._map_collapsed} "
+                  f"started={_w5._map_started} "
+                  f"new map ops={_map_ops() - _n_before}")
+            _w5.left_split.setSizes([400, 200])
+            _w5._on_map_split_moved()
+            check("...and dragging it open is what starts it",
+                  _w5._map_started is True
+                  and _map_ops() == _n_before + 1,
+                  f"started={_w5._map_started} "
+                  f"new map ops={_map_ops() - _n_before}")
+            _w5.close()
+            pkg.USER_FILES = _uf143
+        finally:
+            pdf_drive.QueryOp, pdf_drive.mw = _oldq, _oldmw
+            pdf_map.graph_data = _oldgd
+
+        _w.close()
+        pkg.USER_FILES = _prev143
+        shutil.rmtree(_uf143, ignore_errors=True)
+        shutil.rmtree(_uf_rt, ignore_errors=True)
+    except Exception as _e143:  # noqa: BLE001
+        check(f"K-143 offscreen dock checks ran ({_e143})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — K-143 source pins above still ran")
+
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
