@@ -446,9 +446,7 @@ try:
     _host.resize(1200, 700)
     _host.show()
     _tab.show()
-    for _ in range(8):
-        app.processEvents()
-        _QtC.QThread.msleep(10)
+    app.processEvents()  # both settle timers are singleShot(0): one pass fires them
     _fw = app.focusWidget()
     check("after a library_tab-shaped mount the TREE has keyboard focus — "
           "not the first glyph in the tab chain, and not nothing",

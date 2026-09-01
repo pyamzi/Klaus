@@ -64,6 +64,7 @@ from aqt.utils import showWarning, tooltip
 # No `curation` import since K-152: the only thing this window used it
 # for was ensure_index, phase one of the chain that moved to index_queue.
 from . import drive_store, pdf_handler, retention, tag_sync
+from .slot_guard import guarded
 
 # K-117: Retention History ships in parallel via K-118 — the menu entry
 # appears once the module exists, and its absence must never break the
@@ -203,23 +204,11 @@ _fs_debounce: Any = None
 
 def _on_fs_tick() -> None:
     """Debounced watcher target: something under the library root changed
-    on disk. Any live Library (window or embedded screen, shown or hidden)
-    -> the full refresh path repaints it (``_refresh_rows`` rescans first,
-    then rebuilds); none -> a bare rescan still keeps mapping/tree/tags
-    in step, so the sync is live all the time, not only while showing.
-
-    Walks ``_live_libraries`` like ``refresh_open_library`` does: reading
-    ``_instance`` alone here left the embedded screen — the shape the
-    toolbar link prefers — never repainting on a disk change (K-076
-    regressed for the tab)."""
-    refreshed = False
-    for win in _live_libraries():
-        try:
-            win._refresh_rows()
-            refreshed = True
-        except Exception as e:  # noqa: BLE001
-            print(f"[klausmate] library watcher tick failed: {e}")
-    if not refreshed:
+    on disk. A VISIBLE Library repaints via the full refresh path
+    (``_refresh_rows`` rescans first, then rebuilds); otherwise a bare
+    rescan keeps mapping/tree/tags in step while nothing is showing, and
+    any hidden screen is marked to refresh on its next show."""
+    if not _refresh_live_libraries("on watcher tick"):
         try:
             rescan_library_root()
         except Exception as e:  # noqa: BLE001
@@ -932,7 +921,10 @@ def _viewer_needs_rebuild(sidebar: Any) -> bool:
 
 # Every embedded Library alive in this session. A WeakSet because
 # library_tab owns the tab's lifetime, not this module — see
-# _release_embedded_viewers for what it is for.
+# _release_embedded_viewers for what it is for. DriveWindow must stay
+# HASHABLE by identity: an __eq__ without __hash__ makes WeakSet.add raise
+# TypeError, and the guarded add in __init__ would swallow that into a log
+# line, silently dropping the screen from refresh AND viewer release.
 _embedded_windows: "weakref.WeakSet[DriveWindow]" = weakref.WeakSet()
 
 
@@ -1209,15 +1201,6 @@ class DriveWindow(QWidget):
         self._restore_geometry()
         self.rebuild_tree()
         self._refresh_rows()
-        # K-175: initial focus on the tree. Qt hands it to the first
-        # widget in the tab chain, which is now the New Folder glyph —
-        # a window that opens with a focus ring on an icon button looks
-        # broken (offscreen render), and the list is what arrow keys
-        # should drive anyway.
-        try:
-            self.tree.setFocus()
-        except Exception:
-            pass
 
         # K-152: the Library is a VIEW of the shared index runner, not
         # its owner. Seed from the live snapshot immediately — a job
@@ -1350,65 +1333,86 @@ class DriveWindow(QWidget):
             super().showEvent(evt)
         except Exception as e:
             print(f"[klausmate] drive showEvent failed: {e}")
+        # Every mount-time duty runs one tick later, in ONE slot, in a
+        # stated order — see _on_shown. Three separate timers here once
+        # made that order an accident of registration.
         try:
-            if (
-                self.embedded
-                and self.sidebar is None
-                and not self._sidebar_arming
-            ):
-                self._sidebar_arming = 1
-                QTimer.singleShot(0, self._arm_sidebar)
+            QTimer.singleShot(0, self._on_shown)
         except Exception as e:
-            print(f"[klausmate] viewer arm scheduling failed: {e}")
-        # K-179: keyboard focus on the tree AFTER the screen is in its
-        # final window. The setFocus() in __init__ is made while the
-        # embedded screen is still a parentless, hidden top-level;
-        # library_tab then reparents it into mw.mainLayout and shows it,
-        # and that pre-mount focus does not survive the move — Qt hands
-        # focus to the first widget in the tab chain of the newly shown
-        # screen, the New Folder glyph (K-175's sign-off render at scale
-        # 2 showed the ring; a live probe found the tree unfocused). One
-        # tick deferred, like the viewer arm above, so it runs once the
-        # show has settled; every show, so returning to the screen puts
-        # the arrow keys back on the list.
-        try:
-            QTimer.singleShot(0, self._focus_tree)
-        except Exception as e:
-            print(f"[klausmate] tree focus scheduling failed: {e}")
-        try:
-            if self._refresh_pending:
-                self._refresh_pending = False
-                # Deferred like the sidebar arm: never heavy work inside
-                # a Qt event handler; _refresh_rows rescans, rebuilds the
-                # tree and queues the retention QueryOp.
-                QTimer.singleShot(0, self._refresh_rows)
-        except Exception as e:
-            print(f"[klausmate] deferred refresh scheduling failed: {e}")
+            print(f"[klausmate] settle scheduling failed: {e}")
 
-    def _focus_tree(self) -> None:
-        """Deferred from showEvent (K-179). A timer slot: never raises."""
-        try:
-            if self._alive() and self.isVisible():
-                self.tree.setFocus()
-        except Exception as e:
-            print(f"[klausmate] tree focus failed: {e}")
+    @guarded
+    def _on_shown(self) -> None:
+        """The screen has been shown and has settled in its final window.
 
+        Order is the point of having one method: build the viewer (only
+        the embedded screen, only once — the arm has its own 50ms retry
+        ladder for a mount that has not landed yet), then refresh rows
+        marked stale by a collection close, then the map, then FOCUS LAST
+        so nothing built after it can take it. Every show: returning to
+        the screen puts the arrow keys back on the list (K-179 — a
+        setFocus() made before library_tab's reparent did not survive the
+        move, and the first widget in the tab chain, an icon button, wore
+        the ring instead).
+        """
+        if not self._alive() or not self.isVisible():
+            return
+        if self.embedded and self.sidebar is None and not self._sidebar_arming:
+            self._sidebar_arming = 1
+            self._arm_sidebar()
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self._refresh_rows()
+        self._ensure_map()
+        self.tree.setFocus()
+
+    @guarded
     def _arm_sidebar(self) -> None:
-        """Deferred half of showEvent. A timer slot: never raises."""
+        """Build the embedded screen's viewer once the mount has landed
+        (called from _on_shown; reschedules itself while parentless)."""
+        if not self._alive() or not self.embedded:
+            return
+        if (self.window() is self
+                and self._sidebar_arming < self._ARM_RETRIES):
+            # Still parentless: the mount has not landed yet. Wait
+            # rather than build a webview in a window that is about
+            # to be thrown away (see showEvent).
+            self._sidebar_arming += 1
+            QTimer.singleShot(50, self._arm_sidebar)
+            return
+        self._ensure_sidebar()
+
+    def collection_will_close(self) -> None:
+        """Everything this screen computed against the closing collection
+        (profile switch, quit) — owned HERE, not enumerated by the hook.
+
+        The viewer is released K-095-correctly. The retention rows and the
+        map were built against a collection that is going away: ``seq`` is
+        bumped so an in-flight priority_rows result cannot land on the new
+        profile, ``_refresh_pending`` makes the next _on_shown refresh the
+        rows, and the map canvas is dropped so _ensure_map rebuilds it
+        (its layout digest changes with the collection). Lazy on purpose:
+        a screen nobody looks at again pays nothing, and the map rebuild
+        is a worker job of tens of seconds on a cold cache.
+        """
         try:
-            if not self._alive() or not self.embedded:
-                return
-            if (self.window() is self
-                    and self._sidebar_arming < self._ARM_RETRIES):
-                # Still parentless: the mount has not landed yet. Wait
-                # rather than build a webview in a window that is about
-                # to be thrown away (see showEvent).
-                self._sidebar_arming += 1
-                QTimer.singleShot(50, self._arm_sidebar)
-                return
-            self._ensure_sidebar()
+            self.release_viewer()
         except Exception as e:
-            print(f"[klausmate] library viewer arm failed: {e}")
+            print(f"[klausmate] embedded viewer release failed: {e}")
+        self.seq += 1
+        self._refresh_pending = True
+        try:
+            canvas, self.map_canvas = self.map_canvas, None
+            self._map_started = False
+            if canvas is not None:
+                canvas.setParent(None)
+                canvas.deleteLater()
+            status = getattr(self, "map_status", None)
+            if status is not None:
+                status.setText("")
+                status.setVisible(True)
+        except Exception as e:
+            print(f"[klausmate] map reset on collection close failed: {e}")
 
     def release_viewer(self) -> None:
         """Hand the viewer back, K-095-correctly, without tearing down
@@ -2890,28 +2894,42 @@ _instance: DriveWindow | None = None
 def _live_libraries():
     """Every live Library, whichever shape it is wearing.
 
-    Two rosters, DISJOINT by construction: ``_instance`` is written only
-    by ``_create()`` (the standalone window, embedded=False), and
-    ``_embedded_windows`` is joined only by an embedded ``__init__``
-    (K-173). Everything that means "all open Libraries" walks THIS and
-    nothing else — ``refresh_open_library`` and ``_on_fs_tick`` both
-    lost the embedded screen by reading ``_instance`` alone.
-
-    Hidden windows are yielded on purpose: hidden is the embedded tab's
-    RESTING state (library_tab.unmount only hides), and nothing refreshes
-    it on re-show, so a consumer that skipped hidden windows silently
-    dropped every change made while the user was elsewhere in Anki.
-
-    No dedupe, and never "identity, not ==" games: the WeakSet already
-    hashes by identity, and a ``DriveWindow`` that grew an ``__eq__``
-    without ``__hash__`` would be UNHASHABLE — ``WeakSet.add`` raises
-    TypeError, the guarded add in ``__init__`` would swallow it into a
-    log line, and the screen would vanish from refresh AND viewer release
-    at once. Do not define one.
+    Two rosters, disjoint by construction — ``_instance`` is written only
+    by ``_create()`` (the standalone window), ``_embedded_windows`` only
+    by an embedded ``__init__`` — so nothing here dedupes. Hidden windows
+    are yielded on purpose: hidden is the embedded tab's RESTING state,
+    and a consumer must MARK it (see _refresh_live_libraries), not skip
+    it — skipping is how a settings save made elsewhere in Anki was lost.
     """
     for win in (_instance, *_embedded_windows):
         if win is not None and win._alive():
             yield win
+
+
+def _refresh_live_libraries(why: str) -> int:
+    """Refresh every VISIBLE live Library now; mark hidden ones pending.
+
+    A hidden screen is refreshed exactly once, by _on_shown when it is
+    next looked at — not once per event while nobody sees it. Measured
+    (2026-09-01): one refresh holds the collection worker ~130ms (an 88MB
+    index load, four match caches, retrievability over 35k cards), and
+    save_threshold fires on every slider release, so five releases on the
+    deck screen were five refreshes of an unseen screen for an identical
+    end state. Per-window guard: one screen's exception must neither
+    escape into the caller nor skip the others. Returns how many were
+    refreshed NOW, so the watcher can fall back to a bare rescan.
+    """
+    refreshed = 0
+    for win in _live_libraries():
+        try:
+            if not win.isVisible():
+                win._refresh_pending = True
+                continue
+            win._refresh_rows()
+            refreshed += 1
+        except Exception as e:
+            print(f"[klausmate] library refresh {why} failed: {e}")
+    return refreshed
 
 
 def refresh_open_library() -> None:
@@ -2926,18 +2944,8 @@ def refresh_open_library() -> None:
     'currently it does not update the library sensitivity like I had
     imagined'). No-op when none is open; per-PDF overrides are
     unaffected either way since they never read the default.
-
-    Walks ``_live_libraries`` — both rosters, hidden screens included —
-    with a per-window guard, because this runs inside Preferences'
-    config-save path. The cost of a refresh is a card-index vector load,
-    two SQL batches and a main-thread rescan; ``priority_rows`` never
-    embeds, so there is no API bill to dedupe against.
     """
-    for win in _live_libraries():
-        try:
-            win._refresh_rows()
-        except Exception as e:
-            print(f"[klausmate] library refresh after settings change failed: {e}")
+    _refresh_live_libraries("after settings change")
 
 
 def _create() -> DriveWindow:
@@ -2993,14 +3001,9 @@ def _release_embedded_viewers() -> None:
     itself, and it also drops the husk so the next open builds a live
     viewer instead of finding a cleaned-up one.
     """
-    for win in list(_embedded_windows):
-        try:
-            win.release_viewer()
-            # The rows/card_r/matches it holds were computed against the
-            # collection that is closing; the next show refreshes them.
-            win._refresh_pending = True
-        except Exception as e:
-            print(f"[klausmate] embedded viewer release failed: {e}")
+    for win in _live_libraries():
+        if win.embedded:
+            win.collection_will_close()
 
 
 def _close_drive() -> None:

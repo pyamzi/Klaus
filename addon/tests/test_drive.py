@@ -3,6 +3,7 @@
 Run: env QT_QPA_PLATFORM=offscreen python3 test_drive.py
 """
 import ast
+import contextlib
 import io
 import json
 import os
@@ -717,14 +718,14 @@ check("open+visible Library gets exactly one refresh", w.refreshes == 1)
 w2 = _FakeWin(alive=True, visible=False)
 pdf_drive._instance = w2
 pdf_drive.refresh_open_library()
-# Inverted with the review fix: ALIVE means walked, for both shapes, the
-# way _on_index_state already behaves. A properly closed standalone
-# window leaves _instance through shutdown() and is never walked; a
-# hidden-but-registered one is a transient (close() before deleteLater)
-# or a never-shown window, and refreshing it is harmless.
-check("a hidden but still-registered Library IS refreshed — the isVisible() "
-      "gate is gone for every shape",
-      w2.refreshes == 1, f"{w2.refreshes} refreshes")
+# ALIVE means walked, for both shapes; HIDDEN means marked pending, not
+# refreshed — one refresh on the next show coalesces every event that
+# happened while nobody was looking. A properly closed standalone window
+# leaves _instance through shutdown() and is never walked at all.
+check("a hidden but still-registered Library is marked pending, not "
+      "refreshed — the same policy as the embedded screen",
+      w2.refreshes == 0 and getattr(w2, "_refresh_pending", False) is True,
+      f"{w2.refreshes} refreshes, pending={getattr(w2, '_refresh_pending', None)!r}")
 
 w3 = _FakeWin(alive=False, visible=True)
 pdf_drive._instance = w3
@@ -740,127 +741,146 @@ pdf_drive._instance = None
 # has open — K-052's exact complaint, regressed for the screen. The
 # WeakSet K-173 added for viewer release is the roster of embedded
 # screens; this hook has to walk it too.
-_prev_emb = list(pdf_drive._embedded_windows)
-pdf_drive._embedded_windows.clear()
-
-e1 = _FakeWin(alive=True, visible=True)
-pdf_drive._embedded_windows.add(e1)
-pdf_drive.refresh_open_library()
-check("the EMBEDDED Library screen gets refreshed too — the whole card",
-      e1.refreshes == 1, f"{e1.refreshes} refreshes")
-
-e1.refreshes = 0
-e2 = _FakeWin(alive=True, visible=False)
-e3 = _FakeWin(alive=False, visible=True)
-pdf_drive._embedded_windows.add(e2)
-pdf_drive._embedded_windows.add(e3)
-pdf_drive.refresh_open_library()
-check("a HIDDEN embedded screen IS refreshed — hidden is the tab's RESTING "
-      "state (unmount only hides), mount() re-shows it with no refresh of "
-      "its own, and _on_index_state already refreshes hidden screens; the "
-      "old isVisible() skip is how a sensitivity save made from any other "
-      "Anki screen was silently lost (K-052, third time)",
-      e2.refreshes == 1, f"{e2.refreshes} refreshes")
-check("a DEAD embedded screen is not refreshed — the WeakSet outlives "
-      "the C++ object, so _alive() is load-bearing here, not hygiene",
-      e3.refreshes == 0, f"{e3.refreshes} refreshes")
-check("...and the live one beside them still got its one refresh",
-      e1.refreshes == 1, f"{e1.refreshes} refreshes")
-
-
-class _AngryWin(_FakeWin):
-    def _refresh_rows(self):
-        self.refreshes += 1
-        raise RuntimeError("boom")
-
-
-# The RAISING window must be the one walked FIRST, or this pin is decided
-# by WeakSet iteration order: with bad and good both in the set, a broken
-# single-outer-try implementation passed 63% of 2000 replays — every run
-# where good happened to be iterated before bad. _instance is always the
-# first element of the walk, so it is the deterministic seat for bad.
-pdf_drive._embedded_windows.clear()
-bad = _AngryWin(alive=True, visible=True)
-good = _FakeWin(alive=True, visible=True)
-pdf_drive._instance = bad
-pdf_drive._embedded_windows.add(good)
-_raised = None
-try:
-    pdf_drive.refresh_open_library()
-except Exception as _e:  # noqa: BLE001
-    _raised = _e
-check("one screen that throws does not eat the refresh of the others — "
-      "the guard is PER WINDOW, because this runs inside Preferences' "
-      "config-save path where an escaping exception is far worse than a "
-      "stale column (the raiser is walked first, so order cannot save a "
-      "whole-loop try)",
-      _raised is None and bad.refreshes == 1 and good.refreshes == 1,
-      f"raised={_raised!r}, bad={bad.refreshes}, good={good.refreshes}")
-
-# No "reachable both ways" pin: the two rosters are DISJOINT by construction
-# (_instance is written only by _create(), which builds embedded=False;
-# _embedded_windows is joined only by an embedded __init__), so a window in
-# both is a state production cannot produce, and a dedupe would guard
-# nothing. Note for whoever cites a cost here: _refresh_rows never embeds
-# (retention.priority_rows reads cached artifacts only); a double refresh
-# costs a vector load, SQL and a main-thread rescan, not API money.
-
-# ONE walker for "every live Library", used by both consumers. The two
-# rosters are disjoint by construction, so it dedupes nothing; it skips
-# None and dead C++ handles and yields the rest, visible or not.
-pdf_drive._embedded_windows.clear()
-_lw_win = _FakeWin(alive=True, visible=True)
-_lw_hid = _FakeWin(alive=True, visible=False)
-_lw_dead = _FakeWin(alive=False, visible=True)
-pdf_drive._instance = _lw_win
-pdf_drive._embedded_windows.add(_lw_hid)
-pdf_drive._embedded_windows.add(_lw_dead)
-_lw_fn = getattr(pdf_drive, "_live_libraries", None)
-check("pdf_drive has ONE walker for 'every live Library', _live_libraries",
-      callable(_lw_fn))
-_lw_out = list(_lw_fn()) if callable(_lw_fn) else []
-check("_live_libraries yields the window and the hidden screen, and skips the "
-      "dead handle — one roster walk both consumers share",
-      len(_lw_out) == 2 and _lw_win in _lw_out and _lw_hid in _lw_out
-      and _lw_dead not in _lw_out, f"{len(_lw_out)} yielded")
-pdf_drive._instance = None
-_lw_out2 = list(_lw_fn()) if callable(_lw_fn) else []
-check("...and with no standalone window it still yields the screens",
-      _lw_out2 == [_lw_hid], repr(_lw_out2))
-
-# THE WATCHER TICK HAD THE SAME BLIND SPOT and no test at all. With only
-# the embedded screen open (_instance is None — only _create() writes
-# it), a disk change under the library root used to fall to the bare
-# rescan and never repaint the tree the user was looking at.
-_rescans = []
-_prev_rescan = pdf_drive.rescan_library_root
-pdf_drive.rescan_library_root = lambda *a, **k: _rescans.append(1)
-try:
-    pdf_drive._embedded_windows.clear()
-    _fs_scr = _FakeWin(alive=True, visible=True)
-    pdf_drive._embedded_windows.add(_fs_scr)
+@contextlib.contextmanager
+def _scratch_rosters():
+    """Both Library rosters emptied for the block, restored in finally —
+    the file's try/finally idiom (cf. USER_FILES at K-136), so a raise
+    inside cannot leave every later section with an emptied roster."""
+    _prev_inst = pdf_drive._instance
+    _prev_set = list(pdf_drive._embedded_windows)
     pdf_drive._instance = None
-    pdf_drive._on_fs_tick()
-    check("_on_fs_tick refreshes the EMBEDDED Library on a disk change — it "
-          "walked _instance alone, so the visible tree never repainted "
-          "(K-076 regressed for the tab)",
-          _fs_scr.refreshes == 1, f"{_fs_scr.refreshes} refreshes")
-    check("...and does not ALSO run the bare rescan when a Library took the "
-          "refresh (_refresh_rows rescans itself)",
-          not _rescans, f"{len(_rescans)} bare rescans")
     pdf_drive._embedded_windows.clear()
-    del _rescans[:]
-    pdf_drive._on_fs_tick()
-    check("...and with no Library open at all it still runs the bare rescan, "
-          "so folder->tag sync stays live while nothing is showing",
-          len(_rescans) == 1, f"{len(_rescans)} bare rescans")
-finally:
-    pdf_drive.rescan_library_root = _prev_rescan
+    try:
+        yield
+    finally:
+        pdf_drive._instance = _prev_inst
+        pdf_drive._embedded_windows.clear()
+        for _w in _prev_set:
+            pdf_drive._embedded_windows.add(_w)
 
-pdf_drive._instance = None
-pdf_drive._embedded_windows.clear()
-for _w in _prev_emb:
-    pdf_drive._embedded_windows.add(_w)
+
+with _scratch_rosters():
+
+    e1 = _FakeWin(alive=True, visible=True)
+    pdf_drive._embedded_windows.add(e1)
+    pdf_drive.refresh_open_library()
+    check("the EMBEDDED Library screen gets refreshed too — the whole card",
+          e1.refreshes == 1, f"{e1.refreshes} refreshes")
+
+    e1.refreshes = 0
+    e2 = _FakeWin(alive=True, visible=False)
+    e3 = _FakeWin(alive=False, visible=True)
+    pdf_drive._embedded_windows.add(e2)
+    pdf_drive._embedded_windows.add(e3)
+    pdf_drive.refresh_open_library()
+    check("a HIDDEN embedded screen is NOT refreshed now but is MARKED pending "
+          "— hidden is the tab's resting state, one refresh on its next show "
+          "coalesces every save made while it was unseen (measured: ~130ms of "
+          "collection-held worker per refresh, five slider releases were five)",
+          e2.refreshes == 0 and getattr(e2, "_refresh_pending", False) is True,
+          f"{e2.refreshes} refreshes, pending={getattr(e2, '_refresh_pending', None)!r}")
+    check("a DEAD embedded screen is not refreshed — the WeakSet outlives "
+          "the C++ object, so _alive() is load-bearing here, not hygiene",
+          e3.refreshes == 0, f"{e3.refreshes} refreshes")
+    check("...and the live one beside them still got its one refresh",
+          e1.refreshes == 1, f"{e1.refreshes} refreshes")
+
+
+    class _AngryWin(_FakeWin):
+        def _refresh_rows(self):
+            self.refreshes += 1
+            raise RuntimeError("boom")
+
+
+    # The RAISING window must be the one walked FIRST, or this pin is decided
+    # by WeakSet iteration order: with bad and good both in the set, a broken
+    # single-outer-try implementation passed 63% of 2000 replays — every run
+    # where good happened to be iterated before bad. _instance is always the
+    # first element of the walk, so it is the deterministic seat for bad.
+    pdf_drive._embedded_windows.clear()
+    bad = _AngryWin(alive=True, visible=True)
+    good = _FakeWin(alive=True, visible=True)
+    pdf_drive._instance = bad
+    pdf_drive._embedded_windows.add(good)
+    _raised = None
+    try:
+        pdf_drive.refresh_open_library()
+    except Exception as _e:  # noqa: BLE001
+        _raised = _e
+    check("one screen that throws does not eat the refresh of the others — "
+          "the guard is PER WINDOW, because this runs inside Preferences' "
+          "config-save path where an escaping exception is far worse than a "
+          "stale column (the raiser is walked first, so order cannot save a "
+          "whole-loop try)",
+          _raised is None and bad.refreshes == 1 and good.refreshes == 1,
+          f"raised={_raised!r}, bad={bad.refreshes}, good={good.refreshes}")
+
+    # No "reachable both ways" pin: the two rosters are DISJOINT by construction
+    # (_instance is written only by _create(), which builds embedded=False;
+    # _embedded_windows is joined only by an embedded __init__), so a window in
+    # both is a state production cannot produce, and a dedupe would guard
+    # nothing. Note for whoever cites a cost here: _refresh_rows never embeds
+    # (retention.priority_rows reads cached artifacts only); a double refresh
+    # costs a vector load, SQL and a main-thread rescan, not API money.
+
+    # ONE walker for "every live Library", used by both consumers. The two
+    # rosters are disjoint by construction, so it dedupes nothing; it skips
+    # None and dead C++ handles and yields the rest, visible or not.
+    pdf_drive._embedded_windows.clear()
+    _lw_win = _FakeWin(alive=True, visible=True)
+    _lw_hid = _FakeWin(alive=True, visible=False)
+    _lw_dead = _FakeWin(alive=False, visible=True)
+    pdf_drive._instance = _lw_win
+    pdf_drive._embedded_windows.add(_lw_hid)
+    pdf_drive._embedded_windows.add(_lw_dead)
+    _lw_out = list(pdf_drive._live_libraries())
+    check("_live_libraries yields the window and the hidden screen, and skips the "
+          "dead handle — one roster walk both consumers share",
+          len(_lw_out) == 2 and _lw_win in _lw_out and _lw_hid in _lw_out
+          and _lw_dead not in _lw_out, f"{len(_lw_out)} yielded")
+    pdf_drive._instance = None
+    _lw_out2 = list(pdf_drive._live_libraries())
+    check("...and with no standalone window it still yields the screens",
+          _lw_out2 == [_lw_hid], repr(_lw_out2))
+
+    # THE WATCHER TICK HAD THE SAME BLIND SPOT and no test at all. With only
+    # the embedded screen open (_instance is None — only _create() writes
+    # it), a disk change under the library root used to fall to the bare
+    # rescan and never repaint the tree the user was looking at.
+    _rescans = []
+    _prev_rescan = pdf_drive.rescan_library_root
+    pdf_drive.rescan_library_root = lambda *a, **k: _rescans.append(1)
+    try:
+        pdf_drive._embedded_windows.clear()
+        _fs_scr = _FakeWin(alive=True, visible=True)
+        pdf_drive._embedded_windows.add(_fs_scr)
+        pdf_drive._instance = None
+        pdf_drive._on_fs_tick()
+        check("_on_fs_tick refreshes the EMBEDDED Library on a disk change — it "
+              "walked _instance alone, so the visible tree never repainted "
+              "(K-076 regressed for the tab)",
+              _fs_scr.refreshes == 1, f"{_fs_scr.refreshes} refreshes")
+        check("...and does not ALSO run the bare rescan when a Library took the "
+              "refresh (_refresh_rows rescans itself)",
+              not _rescans, f"{len(_rescans)} bare rescans")
+        pdf_drive._embedded_windows.clear()
+        del _rescans[:]
+        pdf_drive._on_fs_tick()
+        check("...and with no Library open at all it still runs the bare rescan, "
+              "so folder->tag sync stays live while nothing is showing",
+              len(_rescans) == 1, f"{len(_rescans)} bare rescans")
+        _fs_hid = _FakeWin(alive=True, visible=False)
+        pdf_drive._embedded_windows.add(_fs_hid)
+        del _rescans[:]
+        pdf_drive._on_fs_tick()
+        check("...and a HIDDEN screen is marked pending while the bare rescan still "
+              "keeps mapping/tags live — the watcher never refreshes an unseen tab",
+              _fs_hid.refreshes == 0 and getattr(_fs_hid, "_refresh_pending", False)
+              and len(_rescans) == 1,
+              f"{_fs_hid.refreshes} refreshes, {len(_rescans)} rescans")
+    finally:
+        pdf_drive.rescan_library_root = _prev_rescan
+
 
 
 
@@ -2782,6 +2802,9 @@ if _HAVE_QT:
         pdf_drive._instance = None
 
         _embw = pdf_drive.DriveWindow(embedded=True)
+        # This block never opens a PDF: pre-mark the viewer arm as done so
+        # the settle does not build a real PdfSidebar the block never uses.
+        _embw._sidebar_arming = 1
         check("a real embedded Library enrols itself in the roster the "
               "hook walks — nothing else adds it, so a dropped add() "
               "silently un-wires the whole card",
@@ -2789,9 +2812,7 @@ if _HAVE_QT:
 
         # library_tab mounts the parentless screen into mw's layout and
         # shows it there. isVisible() is synchronous after show(), so no
-        # event turn is needed — and none is spun: a processEvents() here
-        # fired the 0ms _arm_sidebar timer and built a real PdfSidebar this
-        # block never used.
+        # event turn is needed here.
         _hoste = _QtW.QWidget()
         _laye = _QtW.QVBoxLayout(_hoste)
         _laye.setContentsMargins(0, 0, 0, 0)
@@ -2819,21 +2840,35 @@ if _HAVE_QT:
         _embw.hide()
         del _hits[:]
         pdf_drive.refresh_open_library()
-        check("...and a screen the user has navigated away from is refreshed "
-              "TOO, on the real widget as on the fakes — mount() re-shows it "
-              "with no refresh of its own, so skipping it here lost the save",
-              len(_hits) == 1, f"{len(_hits)} refreshes")
+        check("...and a screen the user has navigated away from is marked "
+              "pending, not refreshed, on the real widget as on the fakes",
+              not _hits and _embw._refresh_pending is True,
+              f"{len(_hits)} refreshes, pending={_embw._refresh_pending!r}")
+        _embw.show()
+        app.processEvents()
+        check("...and its next show() runs exactly one refresh for however many "
+              "saves happened while it was hidden",
+              len(_hits) == 1 and _embw._refresh_pending is False,
+              f"{len(_hits)} refreshes, pending={_embw._refresh_pending!r}")
 
         # PROFILE SWITCH: shutdown()'s only caller is closeEvent, which the
         # tab never gets; release_viewer strips only the sidebar. Without a
         # pending-refresh flag the next mount() showed the OLD collection's
         # rows. The release marks the window stale and the next show
         # schedules one refresh (deferred a tick, like the sidebar arm).
+        _embw.hide()                        # unmounted, as at a real profile close
         del _hits[:]
+        _embw._map_started = True          # as if a map had been built
+        _seq_before = _embw.seq
         pdf_drive._release_embedded_viewers()
-        check("releasing the embedded viewers on profile close marks the "
-              "screen as needing a refresh",
-              getattr(_embw, "_refresh_pending", False) is True)
+        check("collection close marks the screen stale: rows pending, seq bumped "
+              "so an in-flight priority_rows cannot land on the new profile, and "
+              "the MAP dropped so _ensure_map rebuilds it (the map was never "
+              "reset before — the previous collection's constellation stayed)",
+              _embw._refresh_pending is True and _embw.seq == _seq_before + 1
+              and _embw._map_started is False and _embw.map_canvas is None,
+              f"pending={_embw._refresh_pending!r} seq={_embw.seq}/{_seq_before} "
+              f"map_started={_embw._map_started!r}")
         _embw.show()
         app.processEvents()
         check("...and the next show() schedules exactly one refresh, so a "

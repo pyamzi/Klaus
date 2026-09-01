@@ -203,10 +203,34 @@ def check_signature(index: CardIndex | None, signature: tuple) -> bool:
     )
 
 
-# Every key stats_from_disk answers, spelled ONCE. The failure exit returns
-# a copy and the success exit spreads it, so a key can never again be
-# present on one exit and missing on the other — which is exactly how
-# "dims" was duplicated on success and absent on failure until 2026-09-01.
+def read_manifest(
+    dir_path: str,
+    version: int = INDEX_VERSION,
+    manifest_file: str = MANIFEST_FILE,
+) -> dict | None:
+    """The manifest as a dict, or None for every way it can fail to be
+    one: missing, unreadable, corrupt JSON, valid JSON that is not an
+    object (a truncated write can leave ``null``), or the wrong version.
+
+    One preamble for the six manifest readers across card_index,
+    pdf_index and retention (the other four still inline it — see the
+    board). The not-an-object gate is ``isinstance``, the house idiom
+    (drive_store.py), never a caught AttributeError: that would also
+    hide an attribute typo inside the caller as "no index yet".
+    """
+    try:
+        with open(os.path.join(dir_path, manifest_file), encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(m, dict) or m.get("version") != version:
+        return None
+    return m
+
+
+# The failure exit's answer. tests/test_klausmate.py pins that the success
+# exit answers the same key set — that pin, not a spread, is what stops
+# the two exits drifting apart the way "dims" once did.
 _EMPTY_STATS: dict = {
     "count": 0,
     "skipped": 0,
@@ -220,13 +244,11 @@ _EMPTY_STATS: dict = {
 
 def stats_from_disk(dir_path: str) -> dict:
     """Status-line stats from the manifest alone — never loads the vectors."""
+    m = read_manifest(dir_path)
+    if m is None:
+        return dict(_EMPTY_STATS)
     try:
-        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            raise ValueError("version mismatch")
         return {
-            **_EMPTY_STATS,
             "count": len(m["nids"]),
             "skipped": len(m.get("skipped") or {}),
             "updated_at": float(m.get("updated_at") or 0.0),
@@ -235,12 +257,7 @@ def stats_from_disk(dir_path: str) -> dict:
             "model": str(m.get("model") or ""),
             "dims": int(m.get("dims") or 0),
         }
-    # AttributeError: a manifest that is valid JSON but not an object
-    # ("null", "[]", a bare string) has no .get — it must take this exit
-    # too, or Preferences' unguarded stats["exists"] reads raise instead
-    # of reporting "no index yet".
-    except (OSError, ValueError, KeyError, TypeError, AttributeError,
-            json.JSONDecodeError):
+    except (KeyError, TypeError, ValueError):  # a dict, but not a manifest
         return dict(_EMPTY_STATS)
 
 

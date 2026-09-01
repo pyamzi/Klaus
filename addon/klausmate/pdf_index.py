@@ -34,7 +34,7 @@ import time
 from array import array
 from dataclasses import dataclass, field
 
-from . import embeddings, pdf_handler
+from . import card_index, embeddings, pdf_handler
 
 INDEX_VERSION = 1
 SUBDIR = "pdf_index"
@@ -203,9 +203,8 @@ def is_fresh(
     )
 
 
-# Every key stats_from_disk answers, spelled ONCE — returned as a copy on
-# failure and spread into the success dict, so the two exits cannot drift
-# apart (card_index.stats_from_disk shipped that exact drift; same fix).
+# The failure exit's answer; test_klausmate pins that the success exit
+# answers the same key set (card_index.stats_from_disk shipped that drift).
 _EMPTY_STATS: dict = {
     "exists": False,
     "chunks": 0,
@@ -220,15 +219,13 @@ _EMPTY_STATS: dict = {
 
 def stats_from_disk(dir_path: str) -> dict:
     """Manifest-only stats for the panel — never loads the vectors."""
+    m = card_index.read_manifest(dir_path, INDEX_VERSION, MANIFEST_FILE)
+    if m is None:
+        return dict(_EMPTY_STATS)
     try:
-        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            raise ValueError("version mismatch")
         chunks = m["chunks"]
         embedded = int(m.get("embedded_rows") or 0)
         return {
-            **_EMPTY_STATS,
             "exists": True,
             "chunks": len(chunks),
             "embedded": embedded,
@@ -238,10 +235,7 @@ def stats_from_disk(dir_path: str) -> dict:
             "dims": int(m.get("dims") or 0),
             "updated_at": float(m.get("updated_at") or 0.0),
         }
-    # AttributeError: valid JSON that is not an object has no .get and
-    # must take the failure exit, not escape (see card_index.stats_from_disk).
-    except (OSError, ValueError, KeyError, TypeError, AttributeError,
-            json.JSONDecodeError):
+    except (KeyError, TypeError, ValueError):  # a dict, but not a manifest
         return dict(_EMPTY_STATS)
 
 
