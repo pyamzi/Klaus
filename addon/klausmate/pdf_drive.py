@@ -75,6 +75,17 @@ try:
 except Exception:  # noqa: BLE001
     retention_history = None
 
+# K-175: the Explorer delegate (icons, indent guides, the column-0
+# band) and the glyph caption actions. Guarded the same way, for the
+# same reason: tests/test_drive.py's fixed aqt.qt stub has no
+# QToolButton or QStyledItemDelegate, and a missing module must cost
+# the look, never the Library — the K-117 text buttons and plain
+# cells are the fallback, built below wherever this is None.
+try:
+    from . import library_explorer
+except Exception:  # noqa: BLE001
+    library_explorer = None
+
 DIALOG_NAME = "KlausDrive"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
 _ROLE_FOLDER = Qt.ItemDataRole.UserRole + 1
@@ -982,17 +993,28 @@ class DriveWindow(QWidget):
         section.setObjectName("LibrarySectionHeader")
         header_row.addWidget(section)
         header_row.addStretch(1)
-        new_folder = QPushButton("New Folder…", left)
+        # K-175: VS Code's section actions are 16px glyphs in 22px hit
+        # boxes with tooltips, not words. Each is a GlyphButton when the
+        # Explorer module loaded and the K-117 text button when it did
+        # not; both expose the same clicked/setEnabled/setToolTip.
+        new_folder = self._glyph_action("new-folder", "New Folder…", left)
+        if new_folder is None:
+            new_folder = QPushButton("New Folder…", left)
         new_folder.clicked.connect(lambda: self._new_folder())
         header_row.addWidget(new_folder)
-        refresh = QPushButton("Refresh", left)
+        refresh = self._glyph_action("refresh", "Refresh", left)
+        if refresh is None:
+            refresh = QPushButton("Refresh", left)
         refresh.clicked.connect(self._refresh_rows)
         header_row.addWidget(refresh)
-        map_btn = QPushButton("Map", left)
-        map_btn.setToolTip(
+        map_tip = (
             "Embedding map — every indexed note as a point, "
             "your PDFs where their matches cluster"
         )
+        map_btn = self._glyph_action("map", map_tip, left)
+        if map_btn is None:
+            map_btn = QPushButton("Map", left)
+            map_btn.setToolTip(map_tip)
         map_btn.clicked.connect(self._open_map)
         header_row.addWidget(map_btn)
         lay.addLayout(header_row)
@@ -1060,6 +1082,25 @@ class DriveWindow(QWidget):
             self.tree.sortByColumn(1, Qt.SortOrder.AscendingOrder)
         except Exception:
             pass
+        # K-175: the Explorer delegate — icons, indent guides and the
+        # full-cell band in column 0; columns 1-3 stay the style's.
+        # Folder-ness is injected because the role is this module's,
+        # and library_explorer must not import its own importer. The
+        # main sash takes VS Code's width here (the hairline itself is
+        # in theme.library_qss); the map dock's keeps its 6px, which is
+        # a tooltip target when the box is dragged shut.
+        if library_explorer is not None:
+            try:
+                from . import theme as _theme
+
+                library_explorer.install(
+                    self.tree,
+                    _theme.night_mode(),
+                    lambda idx: bool(idx.data(_ROLE_FOLDER)),
+                )
+                self.splitter.setHandleWidth(library_explorer.SASH_W)
+            except Exception as e:
+                print(f"[klausmate] explorer delegate install failed: {e}")
         # The tree and the K-143 map box share the pane vertically, in
         # their own splitter — Obsidian's shape, which is what Pouya
         # asked for ("a separate little box in the bottom left").
@@ -1154,6 +1195,15 @@ class DriveWindow(QWidget):
         self._restore_geometry()
         self.rebuild_tree()
         self._refresh_rows()
+        # K-175: initial focus on the tree. Qt hands it to the first
+        # widget in the tab chain, which is now the New Folder glyph —
+        # a window that opens with a focus ring on an icon button looks
+        # broken (offscreen render), and the list is what arrow keys
+        # should drive anyway.
+        try:
+            self.tree.setFocus()
+        except Exception:
+            pass
 
         # K-152: the Library is a VIEW of the shared index runner, not
         # its owner. Seed from the live snapshot immediately — a job
@@ -1523,6 +1573,25 @@ class DriveWindow(QWidget):
         except Exception as e:
             print(f"[klausmate] drive geometry save failed: {e}")
 
+    # ---------------------------------------------------- caption actions
+
+    def _glyph_action(self, kind: str, tooltip: str, parent):
+        """A K-175 glyph action for a section caption row, or None when
+        the Explorer module is unavailable — the caller then builds the
+        K-117 text button in its place. Never raises: a glyph that
+        fails to construct costs an icon, not the Library."""
+        if library_explorer is None:
+            return None
+        try:
+            from . import theme as _theme
+
+            return library_explorer.GlyphButton(
+                kind, tooltip, _theme.night_mode(), parent
+            )
+        except Exception as e:
+            print(f"[klausmate] glyph action {kind} failed: {e}")
+            return None
+
     # --------------------------------------------------------- map dock
 
     def _build_map_box(self, parent):
@@ -1547,8 +1616,11 @@ class DriveWindow(QWidget):
         caption.setObjectName("LibrarySectionHeader")
         row.addWidget(caption)
         row.addStretch(1)
-        self.map_fit_btn = QPushButton("Fit", box)
-        self.map_fit_btn.setToolTip("Reset the map's zoom to show everything")
+        fit_tip = "Fit — reset the map's zoom to show everything"
+        self.map_fit_btn = self._glyph_action("fit", fit_tip, box)
+        if self.map_fit_btn is None:
+            self.map_fit_btn = QPushButton("Fit", box)
+            self.map_fit_btn.setToolTip(fit_tip)
         self.map_fit_btn.setEnabled(False)
         self.map_fit_btn.clicked.connect(self._map_fit)
         row.addWidget(self.map_fit_btn)

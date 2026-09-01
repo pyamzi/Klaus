@@ -942,6 +942,14 @@ def library_qss(night: bool) -> str:
     the band span the indent column too, so hover/selection read as
     ONE flat full-width bar — the VS Code treatment, and exactly what
     the no-radius rule below already demanded.
+
+    K-175 (the Explorer redesign, library_explorer.py) moves the tree
+    and its header onto ``bg`` — VS Code's sidebar is the grey ground,
+    its editor the white one, and the tree pane IS the sidebar here —
+    mixes the accent band over that ground, draws a hairline along
+    each sash, and styles the ``QToolButton#LibraryGlyph`` caption
+    actions. Icons, indent guides and the column-0 band are painted by
+    the delegate, which reads the SAME tokens as this sheet.
     """
     c = palette(night)
     return f"""
@@ -958,8 +966,13 @@ def library_qss(night: bool) -> str:
         background: transparent;
     }}
     QWidget#KlausLibraryWindow QTreeWidget {{
-        background-color: {c['surface']};
-        alternate-background-color: {c['surface']};
+        /* bg, not surface (K-175): VS Code's SIDEBAR is the grey ground
+           and its editor the white one. The tree pane is the sidebar
+           here — the viewer beside it is the paper — so on surface it
+           read as a white card floating on a grey window, which is the
+           opposite of the Explorer. */
+        background-color: {c['bg']};
+        alternate-background-color: {c['bg']};
         color: {c['text']};
         border: none;
         padding: 0px;
@@ -980,9 +993,12 @@ def library_qss(night: bool) -> str:
            A rounded FULL-ROW pill is not expressible in Qt QSS at all —
            there is no first-/last-column selector — so it would take a
            QStyledItemDelegate painting one rect across the viewport.
-           min-height 22px is the VS Code Explorer row. */
+           min-height 22px is the VS Code Explorer row — and the
+           vertical padding is 0 because it ADDS to that: with 1px top
+           and bottom the measured row was 24px (offscreen, K-175),
+           so "22px rows" had been the sheet's word, not the pixels. */
         min-height: 22px;
-        padding: 1px 4px;
+        padding: 0px 4px;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:hover {{
         background: {c['hover_subtle']};
@@ -995,7 +1011,7 @@ def library_qss(night: bool) -> str:
            different greys, offscreen 2026-08-31); one opaque ink is
            identical in both by construction. Full-strength text on
            top; recolours with every colour theme either way. */
-        background: {accent_mix(night, 0.16)};
+        background: {accent_mix(night, 0.16, 'bg')};
         color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch {{
@@ -1005,7 +1021,7 @@ def library_qss(night: bool) -> str:
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
-        background: {accent_mix(night, 0.16)};
+        background: {accent_mix(night, 0.16, 'bg')};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
         image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
@@ -1018,11 +1034,11 @@ def library_qss(night: bool) -> str:
            last column is bare QHeaderView, and unstyled it painted the
            palette base — a bright block in night mode (offscreen
            render, 2026-08-31). */
-        background: {c['surface']};
+        background: {c['bg']};
         border: none;
     }}
     QWidget#KlausLibraryWindow QHeaderView::section {{
-        background: {c['surface']};
+        background: {c['bg']};
         color: {c['text_muted']};
         border: none;
         border-bottom: 1px solid {c['grey_light']};
@@ -1106,6 +1122,93 @@ def library_qss(night: bool) -> str:
        purpose — a handle is a seam in the page ground wherever it is. */
     QWidget#KlausLibraryWindow QSplitter::handle {{
         background: {c['bg']};
+    }}
+    /* K-175: VS Code draws a 1px sideBar.border along its sash and
+       keeps the grab itself invisible. :horizontal is the SPLITTER's
+       orientation (a vertical bar between side-by-side panes), so the
+       hairline sits on the bar's left edge, flush against the pane it
+       closes; the map dock's vertical splitter gets the same line on
+       its top edge. Width is geometry and lives in library_explorer
+       (SASH_W), set from pdf_drive. */
+    QWidget#KlausLibraryWindow QSplitter::handle:horizontal {{
+        border-left: 1px solid {c['grey_light']};
+    }}
+    QWidget#KlausLibraryWindow QSplitter::handle:vertical {{
+        border-top: 1px solid {c['grey_light']};
+    }}
+    /* K-175: the section-caption glyph actions (library_explorer.
+       GlyphButton). Same quiet-at-rest / hover / pressed / focus
+       ladder as the caption QPushButtons above, on a QToolButton that
+       paints its own 16px glyph. Zero padding: the glyph is centred
+       by the widget in a fixed 24x22 box. The id is repeated on
+       :disabled so it outranks the resting rule (CLAUDE.md: an id
+       outranks a pseudo-state). */
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 0px;
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:pressed {{
+        background: {c['grey_dark'] if night else c['grey_mid']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:disabled {{
+        background: transparent;
+    }}
+    /* K-175: the assistant pane (assistant_panel.AssistantPanel) is
+       the window's third column and had no look of its own — its own
+       sheet is dialog_qss, which styles inputs and buttons but knows
+       nothing of tabs or a transcript, so those fell to the platform
+       palette: native tab chrome and a bordered white box, in night
+       mode too (offscreen render, 2026-09-01). Styled HERE, from the
+       window's sheet, because the pane is part of THIS surface: VS
+       Code's panel-title tabs (quiet, the active one underlined in the
+       accent) over a transcript on surface. Rules the pane's own sheet
+       does define (QLineEdit, QPushButton, QLabel) win there, as Qt's
+       cascade says they should — these fill only the gaps. */
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel {{
+        background: {c['bg']};
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QTabWidget::pane {{
+        border: none;
+        background: transparent;
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QTabBar {{
+        background: transparent;
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QTabBar::tab {{
+        background: transparent;
+        color: {c['text_muted']};
+        border: none;
+        border-bottom: 2px solid transparent;
+        padding: 4px 8px;
+        margin-right: 8px;
+        font-size: 12px;
+        font-weight: 600;
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QTabBar::tab:hover {{
+        color: {c['text']};
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QTabBar::tab:selected {{
+        color: {c['text']};
+        border-bottom: 2px solid {c['blue_bright']};
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QPlainTextEdit {{
+        background: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 6px;
+        padding: 4px;
+        font-size: 13px;
+    }}
+    QWidget#KlausLibraryWindow QWidget#KlausAssistantPanel QPlainTextEdit:focus {{
+        border: 1px solid {c['blue_bright']};
     }}
     """
 
@@ -1194,15 +1297,18 @@ def accent_rgba(night: bool, alpha: float) -> str:
     return f"rgba({r}, {g}, {b}, {alpha:g})"
 
 
-def accent_mix(night: bool, alpha: float) -> str:
-    """``blue_bright`` pre-composited over ``surface`` at *alpha*, as
-    OPAQUE hex. For selection bands that span two QSS paint regions
-    (tree item + branch): an rgba fill composites over whatever base
-    each region happens to have — measured different greys per region
-    on the Library tree (offscreen, 2026-08-31) — while one opaque ink
-    is identical everywhere by construction."""
+def accent_mix(night: bool, alpha: float, base: str = "surface") -> str:
+    """``blue_bright`` pre-composited over the ``base`` token (default
+    ``surface``) at *alpha*, as OPAQUE hex. For selection bands that
+    span two QSS paint regions (tree item + branch): an rgba fill
+    composites over whatever base each region happens to have —
+    measured different greys per region on the Library tree
+    (offscreen, 2026-08-31) — while one opaque ink is identical
+    everywhere by construction. ``base`` exists because the Library
+    tree moved onto ``bg`` (K-175): a band mixed over ``surface`` on a
+    ``bg`` ground is a tint of the wrong paper."""
     c = palette(night)
-    ah, sh = c["blue_bright"].lstrip("#"), c["surface"].lstrip("#")
+    ah, sh = c["blue_bright"].lstrip("#"), c[base].lstrip("#")
     mixed = (
         round(int(ah[i:i + 2], 16) * alpha + int(sh[i:i + 2], 16) * (1 - alpha))
         for i in (0, 2, 4)

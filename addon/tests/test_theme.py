@@ -72,7 +72,7 @@ for night in (False, True):
     # this rgba string is emitted by the selection rules alone.
     # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
     # composited differently over each paint region's own base.
-    _sel_fill = theme.accent_mix(night, 0.16)
+    _sel_fill = theme.accent_mix(night, 0.16, base="bg")
     check(f"library_qss(night={night}): a selected row's branch "
           "(indentation/disclosure) cell is recoloured in step with "
           "the item — every row reserves that cell whether or not "
@@ -146,11 +146,12 @@ for night in (False, True):
           "QTreeWidget::branch:has-children:open" in lq and _open in lq)
     _hdr_blk = re.search(r"QHeaderView::section \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): column headers are 11px muted "
-          "captions on the tree's own surface",
+          "captions on the tree's own ground — bg, the sidebar token, "
+          "since K-175",
           _hdr_blk is not None
           and "font-size: 11px" in _hdr_blk.group(1)
           and c["text_muted"] in _hdr_blk.group(1)
-          and c["surface"] in _hdr_blk.group(1))
+          and c["bg"] in _hdr_blk.group(1))
     _btn_blk = re.search(r"QPushButton \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): toolbar buttons are quiet flat — "
           "transparent at rest, hover fill only",
@@ -207,12 +208,12 @@ for night in (False, True):
     # alpha in BOTH paint regions, same fill, full-strength text.
     # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
     # composited differently over each paint region's own base.
-    _sel_fill = theme.accent_mix(night, 0.16)
+    _sel_fill = theme.accent_mix(night, 0.16, base="bg")
     _item_sel = re.search(
         r"QTreeWidget::item:selected \{(.*?)\}", _no_c, re.S)
     _br_sel = re.search(
         r"QTreeWidget::branch:selected \{(.*?)\}", _no_c, re.S)
-    _mix_fill = theme.accent_mix(night, 0.16)
+    _mix_fill = theme.accent_mix(night, 0.16, base="bg")
     check(f"library_qss(night={night}): the selection band is the "
           "accent PRE-COMPOSITED OPAQUE (accent_mix), the same ink in "
           "BOTH paint regions, full-strength text on the item — an "
@@ -250,6 +251,100 @@ for night in (False, True):
           and c["blue_bright"] in lq.split("QPushButton:focus", 1)[1][:120]
           and _btn_blk2 is not None
           and "border: 1px solid transparent" in _btn_blk2.group(1))
+
+section("library Explorer ground, sash and glyph actions (K-175)")
+# Pouya: "make the library panel look like VS Code ... full redesign"
+# (2026-09-01) + a PyQt6 design brief (tokens, both palettes, every
+# state). VS Code's SIDEBAR is the grey ground and its editor the white
+# one; the tree pane is the sidebar here, so it leaves surface for bg.
+for night in (False, True):
+    lq = theme.library_qss(night)
+    c = theme.palette(night)
+    _no_c = re.sub(r"/\*.*?\*/", "", lq, flags=re.S)
+    _tree_blk = re.search(r"QTreeWidget \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the tree sits on bg — the "
+          "sidebar ground — not on surface (a white card on a grey "
+          "window is the Explorer inverted)",
+          _tree_blk is not None
+          and f"background-color: {c['bg']}" in _tree_blk.group(1)
+          and c["surface"] not in _tree_blk.group(1))
+    _hv = re.search(r"QHeaderView \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the header widget shares that "
+          "ground (an unstyled QHeaderView painted the palette base — "
+          "a bright block in night mode, K-117)",
+          _hv is not None and c["bg"] in _hv.group(1))
+    _mix = theme.accent_mix(night, 0.16, base="bg")
+    check(f"library_qss(night={night}): the selection band is mixed over "
+          "bg, the paper it actually sits on — and the delegate reads "
+          "the same call, so column 0 cannot drift from the sheet",
+          lq.count(_mix) >= 2
+          and theme.accent_mix(night, 0.16, base="surface") not in lq)
+    _h = re.search(r"QSplitter::handle:horizontal \{(.*?)\}", _no_c, re.S)
+    _v = re.search(r"QSplitter::handle:vertical \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): each sash carries VS Code's "
+          "1px border on the edge flush to the pane it closes — left "
+          "for side-by-side panes, top for the map dock — in grey_light",
+          _h is not None and f"border-left: 1px solid {c['grey_light']}" in _h.group(1)
+          and _v is not None and f"border-top: 1px solid {c['grey_light']}" in _v.group(1))
+    _glyph = {}
+    for _st in ("", ":hover", ":pressed", ":focus", ":disabled"):
+        _glyph[_st] = re.search(
+            r"QToolButton#LibraryGlyph" + re.escape(_st) + r" \{(.*?)\}",
+            _no_c, re.S)
+    check(f"library_qss(night={night}): the glyph action has every state "
+          "— rest, hover, pressed, focus, disabled (the brief: never "
+          "leave a state undefined)", all(_glyph.values()))
+    check(f"library_qss(night={night}): ...rest is transparent on a "
+          "pre-reserved transparent border with the 6px small-control "
+          "radius", _glyph[""] is not None
+          and "background: transparent" in _glyph[""].group(1)
+          and "border: 1px solid transparent" in _glyph[""].group(1)
+          and "border-radius: 6px" in _glyph[""].group(1))
+    check(f"library_qss(night={night}): ...hover is hover_subtle, pressed "
+          "one visible step past it in THIS palette (dark hover_subtle "
+          "== dark grey_mid, so dark steps to grey_dark)",
+          _glyph[":hover"] is not None
+          and c["hover_subtle"] in _glyph[":hover"].group(1)
+          and _glyph[":pressed"] is not None
+          and (c["grey_dark"] if night else c["grey_mid"]) in _glyph[":pressed"].group(1)
+          and c["hover_subtle"] not in _glyph[":pressed"].group(1))
+    check(f"library_qss(night={night}): ...focus is the blue_bright ring",
+          _glyph[":focus"] is not None
+          and c["blue_bright"] in _glyph[":focus"].group(1))
+    # The assistant pane, from the window's sheet: its own (dialog_qss)
+    # styles inputs and buttons; tabs and the transcript fell to the
+    # platform palette — native tab chrome and a white box in night
+    # (offscreen render, 2026-09-01).
+    _pane_sel = "QWidget#KlausAssistantPanel"
+    _root = re.search(re.escape(_pane_sel) + r" \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the assistant pane's root is on "
+          "bg — its own sheet never paints it, so it showed the platform "
+          "palette (a light strip in night)",
+          _root is not None and c["bg"] in _root.group(1))
+    _tab = re.search(re.escape(_pane_sel) + r" QTabBar::tab \{(.*?)\}", _no_c, re.S)
+    _tab_sel = re.search(re.escape(_pane_sel) + r" QTabBar::tab:selected \{(.*?)\}",
+                         _no_c, re.S)
+    _tab_hov = re.search(re.escape(_pane_sel) + r" QTabBar::tab:hover \{(.*?)\}",
+                         _no_c, re.S)
+    check(f"library_qss(night={night}): assistant tabs are VS Code panel "
+          "titles — quiet muted text at rest, the active one underlined "
+          "in the accent, hover lifts to text (every state defined)",
+          _tab is not None and "background: transparent" in _tab.group(1)
+          and c["text_muted"] in _tab.group(1)
+          and _tab_sel is not None
+          and f"2px solid {c['blue_bright']}" in _tab_sel.group(1)
+          and c["text"] in _tab_sel.group(1)
+          and _tab_hov is not None and c["text"] in _tab_hov.group(1))
+    _tx = re.search(re.escape(_pane_sel) + r" QPlainTextEdit \{(.*?)\}", _no_c, re.S)
+    _txf = re.search(re.escape(_pane_sel) + r" QPlainTextEdit:focus \{(.*?)\}",
+                     _no_c, re.S)
+    check(f"library_qss(night={night}): the transcript is a surface box "
+          "with a grey_light hairline that turns accent on focus",
+          _tx is not None and c["surface"] in _tx.group(1)
+          and c["grey_light"] in _tx.group(1) and c["text"] in _tx.group(1)
+          and _txf is not None and c["blue_bright"] in _txf.group(1))
+check("accent_mix's default base is still surface — no other caller moved",
+      theme.accent_mix(False, 0.16) == theme.accent_mix(False, 0.16, base="surface"))
 
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.
