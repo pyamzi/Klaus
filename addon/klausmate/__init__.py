@@ -2363,6 +2363,13 @@ except Exception as _e:
     print(f"[klausmate] browse highlight setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    from . import browse_retention as _browse_retention
+
+    _browse_retention.setup()
+except Exception as _e:
+    print(f"[klausmate] browse retention setup failed: {type(_e).__name__}: {_e}")
+
+try:
     from . import heatmap as _heatmap
 
     _heatmap.setup()
