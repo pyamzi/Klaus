@@ -79,6 +79,15 @@ your machine.
   from voyageai.com), `openai` (cloud, needs a key), or `ollama` (local,
   free, private — limited by your machine's RAM). Existing installs keep
   whatever provider they already had configured.
+- **assistant_backend**: `direct` (your own API key) or `hosted`
+  (KlausMate's service holds the keys). Hosted is only used when
+  `assistant_token` is set — an empty token would otherwise fail every
+  call on a machine with a working key beside it.
+- **assistant_api_key**: your own provider key, used by the `direct`
+  backend. Never sent to KlausMate's service.
+- **assistant_token**: your KlausMate sign-in token, used by the
+  `hosted` backend. The subscription is checked by the service; the
+  add-on ships as readable Python and cannot enforce it locally.
 - **embedding_dimensions**: output width for OpenAI's v3 embedding
   models, which are MRL-trained so a shorter vector keeps the most
   significant components. `1024` is the default: better retrieval than
