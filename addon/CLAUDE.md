@@ -57,6 +57,23 @@ preview served that server's "you need a WebSocket client" page
 instead. Signed-off history is in
 `board/ARCHIVE.md` — search it (K-0xx) before re-debugging anything.
 
+**Parking another session's uncommitted hunk (Pouya, 2026-09-01).**
+Three sessions routinely work this checkout at once, so you WILL claim
+a file that carries someone else's uncommitted change. Never park it
+with a checkout to HEAD: that is byte-for-byte indistinguishable from a
+revert to every other session, and on 2026-09-01 it was reported as one
+("reverted, no stash, no card") for an hour. Park with all three of:
+(1) a tagged stash scoped to the file — `git stash push -m "parked:
+<your card> <what the hunk is>" -- <file>`; (2) a patch copy in YOUR
+scratchpad (`git diff HEAD -- <file> > .../parked-<file>.patch`),
+because the stash stack is shared across the main checkout and every
+worktree and another session may pop it; (3) a `board.py comment` on
+your claiming card naming both the stash message and the patch path.
+Re-apply exactly as found when your commit lands, before moving your
+card to Review, and say so in a comment. Bare `git stash`/`stash pop`
+without `-m` and without the file scope are off-limits here for the
+same reason.
+
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
@@ -84,6 +101,30 @@ instead. Signed-off history is in
   README) with the bootstrap documented in the `klaus-test` skill — use
   that skill when adding or changing klausmate modules. Run everything:
   `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+- **Offscreen PyQt6 can verify far more than "does it construct"
+  (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
+  `DriveWindow`/`PdfSidebar`/`MapCanvas` renders to a `grab()` you can
+  pixel-read, and every one of these is reachable headless — do not
+  claim they need a live screen: **Retina** (`QT_SCALE_FACTOR=2` before
+  `QApplication`, then `devicePixelRatioF()` is 2.0 and strokes render
+  at device density); **hover** (`WA_UnderMouse` + a `QtGui.QEnterEvent`
+  and `QHoverEvent` — they live in QtGui, not QtCore — then
+  `unpolish/polish` so QSS re-evaluates); **pressed** (`setDown(True)`);
+  **focus** (`QApplication.focusWidget()` after the same parentless-
+  construct → `addWidget` → `show()` sequence `library_tab.mount()`
+  uses — that exact mount is what caught K-179's misplaced focus ring,
+  which a live accessibility probe had missed). Prove a state took by
+  diffing pixels inside the widget's rect against the rest frame; zero
+  changed pixels means the QSS state never applied. What offscreen
+  genuinely CANNOT do: screencapture the live window, or drive the real
+  event loop (timers fire only through `processEvents()`, so a
+  `singleShot(0)` needs one explicit turn). One live-check limit that is
+  not technical: **never drive the user's running Anki as a test
+  fixture.** If its process id changes to one you did not launch, Pouya
+  is at the machine — stop sending clicks and keystrokes and ask him
+  for the glance instead. `PyQt6-WebEngine` is NOT installed for system
+  python3, so pdf.js pixels cannot be produced headless; say so rather
+  than claim them.
 - Verify syntax **through the symlink**:
   `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
   (the PostToolUse hook `.claude/hooks/klausmate-compile.sh` does this
