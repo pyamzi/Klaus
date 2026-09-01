@@ -7,8 +7,10 @@
    (seconds), then embed and flush incrementally without it (possibly
    minutes). Everything that matches cards against a PDF reads this
    index, so whatever refreshes it decides how current matching is.
-   ``pdf_drive._on_embed`` is the ONLY user-facing caller — see the note
-   on ``ensure_index`` itself before adding or moving one.
+   ``index_queue._run`` (K-152) is the caller for every automatic and
+   Library-driven index; Preferences' **Index Now** is the one other,
+   with its own progress bar. See the note on ``ensure_index`` itself
+   before adding a third.
 2. ``prompt_and_create`` / ``create_curated_deck`` copy a set of notes
    into a new deck as one undoable step, driven by the Browse Notes-menu
    action ``setup_hooks`` registers. Deck-scope free, PDF-free: you
@@ -20,7 +22,9 @@ retention's PDF index + matching and then opened Browse on the per-PDF
 the tag (``tag_sync.sync_after_matches``), the Library opens it ("Show
 Matched Cards in Browse") — so the chain was ceremony. Its one
 irreplaceable side effect was calling ``ensure_index``, which moved to
-``pdf_drive._on_embed`` rather than disappearing with it.
+``pdf_drive._on_embed`` rather than disappearing with it — and moved
+again in K-152, into ``index_queue``, when that chain had to serve a PDF
+added from the deck screen with no Library window in sight.
 
 The module is NOT dead weight even beyond those two: retention.py imports
 it at module top for USER_FILES/INDEX_DIR/_cfg/_fail and, above all, for
@@ -66,9 +70,12 @@ _FIELD_SEP = "\x1f"  # anki notes.flds separator
 #
 # The ``_reentrant`` kwarg those functions carry let ONE caller hold the
 # token across several phases; K-146 removed that caller (run_curation).
-# pdf_drive._on_embed composes the same three phases but lets each take
-# the token in turn, because its cancellation branches return without a
-# release and a held token would leak — see its docstring.
+# index_queue._run composes the same phases but lets each take the token
+# in turn, because its cancellation branches return without a release
+# and a held token would leak, bricking indexing for the session — see
+# that module's docstring. Serialisation across JOBS is the queue there,
+# never this flag: this flag REFUSES, and refusing ten dropped PDFs is
+# the wrong answer to a legitimate batch.
 _busy = False
 
 ProgressFn = Callable[[str, int, int], None]  # (label, done, total)
@@ -164,10 +171,18 @@ def ensure_index(
     !Library tag that under-covers. Until K-146 the only user-facing
     caller was ``run_curation`` behind the curate button; removing that
     button without moving this call was the one way to turn that card
-    into a regression. ``pdf_drive._on_embed`` (Update/Add to Search
-    Index) carries it now, and is the only user-facing caller left —
-    anything new that matches cards against a PDF needs to run this
-    first too.
+    into a regression. Since K-152 it is phase one of ``index_queue``'s
+    chain, which every index request — an added PDF, the Library's
+    Update/Add to Search Index, a model-change sweep — runs through.
+    Anything new that matches cards against a PDF belongs in that chain
+    rather than calling this directly.
+
+    Preferences' **Index Now** is the one deliberate exception: it wants
+    the card index alone, with its own progress bar and cancel button.
+    That is why ``index_queue`` WAITS on ``_busy`` (``_busy_elsewhere``)
+    instead of racing it — a PDF dropped mid-Index-Now would otherwise
+    be refused here and take a whole queued batch down as a "failure"
+    the user never caused.
 
     ``_reentrant``: for a caller that already holds ``_busy`` across a
     larger composed pipeline this is one phase of — skips the

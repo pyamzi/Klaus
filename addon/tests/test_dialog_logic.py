@@ -1144,5 +1144,66 @@ check("...and that applier really is a top-level name in __init__, or "
 check("the background paint seam honours the preview",
       "background.resolve(background.effective_cfg(_config()))" in _tb_src)
 
+print("== changing the model re-indexes everything (K-152) ==")
+# save_embed is the ONE writer of the embedding keys, so it is also the
+# only place that can see the settings move under the stored vectors.
+# AST, not text: what matters is the ORDER of statements inside that
+# function — capturing the signature after the mutations would compare
+# the new settings with themselves and never sweep, silently, forever.
+import ast  # noqa: E402
+
+_mm_tree = ast.parse(_mm_src)
+_save_embed = next(
+    (n for n in ast.walk(_mm_tree)
+     if isinstance(n, ast.FunctionDef) and n.name == "save_embed"),
+    None,
+)
+check("save_embed is still the function to pin", _save_embed is not None)
+
+
+def _stmt_index(fn, needle):
+    """Position of the first TOP-LEVEL statement of `fn` whose unparsed
+    source contains `needle`. Body order, not ast.walk's breadth-first
+    traversal — the whole point of these three pins is the order the
+    statements run in."""
+    if fn is None:
+        return None
+    for i, node in enumerate(fn.body):
+        try:
+            if needle in ast.unparse(node):
+                return i
+        except Exception:
+            pass
+    return None
+
+
+_sig_line = _stmt_index(_save_embed, "index_signature(cfg)")
+_mut_line = _stmt_index(_save_embed, "cfg['embedding_provider'] =")
+_write_line = _stmt_index(_save_embed, "write_config(cfg)")
+_offer_line = _stmt_index(_save_embed, "offer_model_sweep")
+check("the previous signature is captured off STORED config",
+      _sig_line is not None)
+check("...BEFORE the widgets overwrite it — capturing it after would "
+      "compare the new settings against themselves and never sweep",
+      _sig_line is not None and _mut_line is not None and _sig_line < _mut_line)
+check("...and the sweep is offered AFTER the write, so a decline still "
+      "leaves the new settings saved",
+      _offer_line is not None and _write_line is not None
+      and _write_line < _offer_line)
+check("save_embed hands the comparison to index_queue rather than "
+      "spelling a signature == of its own",
+      "index_queue.offer_model_sweep(" in code_only(_mm_src)
+      and code_only(_mm_src).count("prev_sig") == 2)
+_iq_code = code_only(open("klausmate/index_queue.py").read())
+check("the sweep offer is raised window-modal — open() and a finished "
+      "callback, never exec() (K-114: exec's nested app-modal loop "
+      "segfaults on Qt 6.11 + macOS 26, and the Preferences window this "
+      "is raised from is itself non-modal)",
+      "box.open()" in _iq_code and ".exec()" not in _iq_code)
+check("Preferences' own Index Now still calls curation directly — it "
+      "has its own progress bar and cancel, and the runner WAITS for "
+      "the shared token rather than racing it",
+      "curation.ensure_index(" in code_only(_mm_src))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

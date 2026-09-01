@@ -590,9 +590,15 @@ def ensure_pdf_index(
     Cancellation persists ``embedded_rows``; the next run resumes there.
 
     Guards ``curation._busy`` — the ONE re-entrancy token shared with the
-    card-index sync and ensure_matches below, so a caller composing several
-    phases (curation.run_curation) can hold it once across all of them.
-    Pass ``_reentrant=True`` when the caller already holds it.
+    card-index sync and ensure_matches below, so a caller composing
+    several phases could hold it once across all of them. Pass
+    ``_reentrant=True`` when the caller already holds it.
+
+    No caller does. ``index_queue._run`` composes this with the two
+    around it and lets each phase take the token in TURN, because its
+    cancellation branches return without a release and a held token
+    would leak (K-146's finding; the caller this parenthetical used to
+    name, ``curation.run_curation``, was deleted by that same card).
     """
     if not _reentrant:
         if curation._busy:

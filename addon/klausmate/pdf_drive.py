@@ -60,7 +60,9 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning, tooltip
 
-from . import curation, drive_store, pdf_handler, retention, tag_sync
+# No `curation` import since K-152: the only thing this window used it
+# for was ensure_index, phase one of the chain that moved to index_queue.
+from . import drive_store, pdf_handler, retention, tag_sync
 
 # K-117: Retention History ships in parallel via K-118 — the menu entry
 # appears once the module exists, and its absence must never break the
@@ -885,9 +887,11 @@ class DriveWindow(QWidget):
         except Exception as exc:
             print(f"[klausmate] library theme failed: {exc}")
 
-        self.busy = False
+        # `seq` is the RETENTION-refresh staleness token only. The
+        # indexing run's busy flag and cancel event left with the chain
+        # in K-152 — a job outlives this window now, so a per-window
+        # token could only ever describe half of it.
         self.seq = 0
-        self.cancel_event = None
         self.card_r: dict = {}
         self.matches: dict = {}
         self.rows: dict[str, dict] = {}
@@ -1076,6 +1080,19 @@ class DriveWindow(QWidget):
         self._restore_geometry()
         self.rebuild_tree()
         self._refresh_rows()
+
+        # K-152: the Library is a VIEW of the shared index runner, not
+        # its owner. Seed from the live snapshot immediately — a job
+        # started from the deck screen may already be running, and a
+        # window that opened blank while indexing was in flight would be
+        # lying about the state of the very thing it manages.
+        try:
+            from . import index_queue
+
+            index_queue.add_listener(self._on_index_state)
+            self._on_index_state(index_queue.state())
+        except Exception as e:
+            print(f"[klausmate] index status wiring failed: {e}")
 
         try:
             self.show()
@@ -1657,38 +1674,32 @@ class DriveWindow(QWidget):
 
     # ------------------------------------------------------- run plumbing
 
-    def _begin(self):
-        if self.busy:
-            tooltip("Klaus is already working — wait for it to finish.")
-            return None
-        import threading
+    def _on_index_state(self, snapshot) -> None:
+        """Render the shared runner's snapshot into this window.
 
-        self.busy = True
-        self.seq += 1
-        self.cancel_event = threading.Event()
-        self.cancel_btn.setVisible(True)
-        return self.seq, self.cancel_event
-
-    def _finish(self, seq: int) -> bool:
-        if seq != self.seq:
-            return False
-        self.busy = False
-        self.cancel_btn.setVisible(False)
-        return True
-
-    def _on_progress(self, seq: int, label: str, done: int, total: int) -> None:
-        if seq != self.seq:
+        The status line and the Cancel button used to be driven by
+        ``_begin``/``_finish``/``_on_progress``, private plumbing around
+        a chain this window owned. It owns neither now: ONE pure
+        ``index_queue.status_line`` writes both this label and the
+        bottom-of-main-window bar, so the two surfaces cannot describe
+        the same job differently, and Cancel stops the whole queue
+        rather than this window's private run.
+        """
+        if not self._alive():
             return
-        pct = f" {round(done * 100 / total)}%" if total else ""
-        self.status.setText(f"{label}{pct}")
+        from . import index_queue
+
+        self.status.setText(index_queue.status_line(snapshot))
+        self.cancel_btn.setVisible(bool(snapshot.active))
+        if snapshot.finished:
+            # A PDF's matches just landed — its retention, card counts
+            # and freshness flag are all stale in this tree.
+            self._refresh_rows()
 
     def _on_cancel(self) -> None:
-        if self.cancel_event is not None:
-            self.cancel_event.set()
-        self.seq += 1
-        self.busy = False
-        self.cancel_btn.setVisible(False)
-        self.status.setText("Cancelled.")
+        from . import index_queue
+
+        index_queue.cancel_all()
 
     # -------------------------------------------------------- retention
 
@@ -1733,7 +1744,17 @@ class DriveWindow(QWidget):
                 )
             if out.get("approx"):
                 notes.append("Retention is approximate — enable FSRS for exact numbers.")
-            self.status.setText("  ".join(notes))
+            # One status line, two writers, and the running job wins
+            # (K-152). This callback lands asynchronously — on window
+            # open, and again after every finished job — so without the
+            # guard it would blank the progress of the job that is
+            # running RIGHT NOW, which is the one thing on this line the
+            # user might be waiting on. The notes are advisory and
+            # reappear on the next refresh.
+            from . import index_queue
+
+            if not index_queue.state().active:
+                self.status.setText("  ".join(notes))
 
         def fail(exc: Exception) -> None:
             if self._alive():
@@ -1758,92 +1779,30 @@ class DriveWindow(QWidget):
             return False
 
     def _on_embed(self, safe: str) -> None:
-        """Index this PDF and recompute which cards match it.
+        """Ask the shared runner to index this PDF.
 
-        THREE phases, and the first one is why K-146 could not just
-        delete the curate button: ``curation.ensure_index`` (the CARD index —
-        an embedding per note) used to be refreshed only by
-        ``curation.run_curation``, which the curate button was the only
-        way to reach. Indexing a PDF never touched it. With that button
-        gone this is the sole user-facing path left, so it runs here
-        FIRST — otherwise every note written since the last card-index
-        pass is invisible to ``ensure_matches``, and the PDF's !Library
-        tag silently under-covers (no error, just missing cards).
+        **The four-phase chain that used to BE this method now lives in
+        ``index_queue``** (K-152): ``curation.ensure_index`` (the CARD
+        index — an embedding per note, and the reason K-146 could not
+        just delete the curate button: nothing else refreshes it, so
+        skipping it leaves every note written since the last pass
+        invisible to matching and the PDF's !Library tag silently
+        under-covering) → ``ensure_pdf_index`` → ``ensure_matches`` →
+        ``tag_sync``, cancel token threaded through, each phase taking
+        ``curation._busy`` in its own turn.
 
-        Each phase takes ``curation._busy`` on its own rather than one
-        caller-held token: ``after_index``'s cancellation branch (and
-        ``after_card_index``'s below) returns without a release, so a
-        manually held token would leak and brick indexing for the rest
-        of the session. Serialisation on this surface is ``self.busy``
-        via ``_begin``/``_finish``.
+        It moved because a PDF added from the deck screen has no Library
+        window and so could reach none of it. This window is now one
+        CALLER of that runner among several, and there is exactly one
+        copy of the sequence in the addon — a second would drift
+        (K-143's two-renderer lesson).
+
+        ``announce=False``: the runner's tooltip is for surfaces with
+        nowhere to show state. This window has ``_on_index_state``.
         """
-        handle = self._begin()
-        if handle is None:
-            return
-        seq, cancel = handle
+        from . import index_queue
 
-        def on_error(exc: Exception) -> None:
-            if not self._finish(seq):
-                return
-            from . import embeddings
-
-            msg = (
-                exc.user_message()
-                if isinstance(exc, embeddings.EmbeddingError)
-                else str(exc)
-            )
-            self.status.setText(msg)
-
-        def after_matches(matches) -> None:
-            if not self._finish(seq):
-                return
-            tag_sync.sync_after_matches(mw, safe, matches)
-            self.status.setText("Embedded — refreshing retention…")
-            self._refresh_rows()
-
-        def after_index(idx) -> None:
-            if seq != self.seq:
-                return
-            if not idx.is_complete():
-                if self._finish(seq):
-                    self.status.setText(
-                        "Embedding cancelled — it resumes where it stopped."
-                    )
-                return
-            retention.ensure_matches(
-                mw,
-                safe,
-                on_progress=lambda l, d, t: self._on_progress(seq, l, d, t),
-                on_done=after_matches,
-                on_error=on_error,
-                cancel=cancel,
-            )
-
-        def after_card_index(_index, completed: bool) -> None:
-            if seq != self.seq:
-                return
-            if not completed:
-                if self._finish(seq):
-                    self.status.setText(
-                        "Indexing cancelled — it resumes where it stopped."
-                    )
-                return
-            retention.ensure_pdf_index(
-                mw,
-                safe,
-                on_progress=lambda l, d, t: self._on_progress(seq, l, d, t),
-                on_done=after_index,
-                on_error=on_error,
-                cancel=cancel,
-            )
-
-        curation.ensure_index(
-            mw,
-            on_progress=lambda l, d, t: self._on_progress(seq, l, d, t),
-            on_done=after_card_index,
-            on_error=on_error,
-            cancel=cancel,
-        )
+        index_queue.request_pdf(safe, announce=False)
 
     def _on_threshold(self, safe: str) -> None:
         cfg = retention._cfg()
@@ -2376,6 +2335,16 @@ class DriveWindow(QWidget):
         # for), so there is nothing left for a delete to clear. The
         # K-146 comment that stood here explained why the call survived
         # that card; the concept it guarded is now gone entirely.
+        # Drop it from the index queue too (K-152). The runner re-checks
+        # presence before it starts each job, so this is not what makes
+        # a deleted PDF safe — it is what stops the bar advertising work
+        # on a file the user just removed.
+        try:
+            from . import index_queue
+
+            index_queue.forget(safe)
+        except Exception as e:
+            print(f"[klausmate] index queue forget failed: {e}")
         self.rows.pop(safe, None)
         self.matches.pop(safe, None)
         self.rebuild_tree()
@@ -2404,11 +2373,27 @@ class DriveWindow(QWidget):
             print(f"[klausmate] drive reopen show failed: {e}")
 
     def shutdown(self) -> None:
-        """Teardown extracted from closeEvent (cancel jobs, persist
-        geometry, clear the viewer, reset the singleton)."""
+        """Teardown extracted from closeEvent (unsubscribe, persist
+        geometry, clear the viewer, reset the singleton).
+
+        **Closing this window no longer cancels indexing** (K-152). It
+        used to call ``_on_cancel``, which was right while the run was
+        this window's private property; now the run belongs to the
+        addon, may have been started from the deck screen, and has its
+        own always-visible bar with its own Stop button. Killing minutes
+        of paid embedding because a window was tidied away would be the
+        opposite of what this card is for. Bumping ``seq`` still drops
+        any in-flight retention refresh, which is what it was ever for.
+        """
         global _instance
         try:
-            self._on_cancel()
+            from . import index_queue
+
+            index_queue.remove_listener(self._on_index_state)
+        except Exception as e:
+            print(f"[klausmate] index listener detach failed: {e}")
+        try:
+            self.seq += 1
             self._save_geometry()
             self.sidebar.clear()
             # Unregister the renderer's webview from Anki's global hooks

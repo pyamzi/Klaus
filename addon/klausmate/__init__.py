@@ -695,6 +695,19 @@ def import_pdf_file(path: str) -> str | None:
     except Exception as e:
         print(f"[klausmate] drive display-name record failed: {e}")
     tooltip(f"Klaus: loaded '{info['name']}'")
+    # K-152: adding a PDF indexes it. This funnel is the ONE place every
+    # import surface returns through, so hooking it here (rather than at
+    # each drop site) is what makes the deck-screen drop, the deck-screen
+    # square, the Library tree drop and the Library's Browse… all behave
+    # the same. index_queue owns every gate — auto-index off, no profile,
+    # no API key — and its own status bar; a failure to queue must never
+    # cost the user an otherwise-good import.
+    try:
+        from . import index_queue
+
+        index_queue.on_pdf_imported(str(info["name"]))
+    except Exception as e:
+        print(f"[klausmate] auto-index on import failed: {e}")
     return str(info["name"])
 
 
@@ -2341,6 +2354,16 @@ try:
     _pdf_drive.setup()
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
+
+# The index runner: profile teardown only. Everything else about it is
+# demand-driven (an import, the Library's button, a model change), so
+# there is no hook to register until a job exists.
+try:
+    from . import index_queue as _index_queue
+
+    _index_queue.setup()
+except Exception as _e:
+    print(f"[klausmate] index queue setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import lecture_view as _lecture_view

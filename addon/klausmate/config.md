@@ -58,6 +58,32 @@ matches and opened Browse on that same `!Library` tag, so it has been
 removed. An earlier version of this file also described a temporary
 `!Library::Curating` tag, which was retired two releases before that.)*
 
+**Indexing starts by itself**: adding a PDF — dropped on the deck
+screen, dropped on the Library tree, or picked through either Browse…
+button — queues it for indexing straight away; you never have to press
+anything. Ten PDFs at once queue ten jobs and run them one at a time, in
+the order you added them. Whatever the job was started from, a thin bar
+appears at the bottom of the main window with what is running, how far
+along it is, and a **Stop** button; the Library shows the same line in
+its own status area. Nothing starts before a profile is open, or while a
+cloud provider has no API key (the bar says so). Stopping or failing
+mid-way is always safe: partial work is saved as partial and the next
+run resumes from it, and a PDF's `!Library` tag is only ever written by
+a run that finished.
+
+- **auto_index_on_add**: Default `true`. Set `false` to go back to
+  indexing by hand from the Library (right-click a PDF → **Add to
+  Search Index**). Only the automatic start is affected — the Library's
+  button, the queue, the status bar and the model-change sweep all work
+  the same either way.
+
+**Changing the embedding model re-indexes everything.** Vectors made by
+one model cannot be compared with another's, so when you change
+provider, model or `embedding_dimensions` in KlausMate Preferences,
+saving offers to re-embed your notes and every indexed PDF from scratch.
+It tells you how many of each first, and you can decline and keep
+working on stale vectors, or stop the sweep part-way from the same bar.
+
 - **pdf_match_threshold**: The single sensitivity control — how closely a
   card must match a PDF to count, for the priorities score and the
   `!Library` tags alike. Default `0.75`. Each PDF also has its own

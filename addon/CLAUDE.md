@@ -492,6 +492,15 @@ instead. Signed-off history is in
   sensitivity, show matches in Browse, delete. (K-146 removed "Curate
   Deck from This PDF…" — it only tagged and opened Browse on the tag
   indexing already writes, which the show-matches action opens.)
+  Since K-152 the window **drives** `index_queue` rather than owning
+  the index chain: `_on_embed` is one `request_pdf` call, `_on_cancel`
+  stops the whole queue, and `_on_index_state` renders the runner's own
+  `status_line` into the status label (so this window and the bottom
+  status dock cannot word one job two ways) and re-aggregates the tree
+  only on a `finished` snapshot. `busy`/`cancel_event`/`_begin`/
+  `_finish`/`_on_progress` went with the chain; `seq` stays as the
+  RETENTION-refresh staleness token, and `shutdown` unsubscribes
+  instead of cancelling.
   Since K-117 the Library wears the VS Code Explorer vernacular
   (theme.library_qss: flat 22px rows on `surface`, one full-width
   hover/selection band, chevron twisties via
@@ -684,8 +693,10 @@ instead. Signed-off history is in
     card index and nothing else refreshes it** — K-146 deleted
     `run_curation`, the composed search that used to be its only
     user-facing caller, and moved that call into `pdf_drive._on_embed`;
-    a new PDF-matching surface that skips it silently matches against a
-    stale index (missing cards, no error). **Never delete this module**:
+    K-152 moved it again, into `index_queue`, where it is phase one of
+    the one chain every index request runs. A new PDF-matching surface
+    that skips it silently matches against a stale index (missing
+    cards, no error). **Never delete this module**:
     `retention.py` imports it at module top for `USER_FILES`/`INDEX_DIR`/
     `_cfg`/`_fail` and for `_busy`, the ONE re-entrancy token every
     embedding phase holds; manage_models, tag_sync and pdf_map read it
@@ -693,6 +704,47 @@ instead. Signed-off history is in
     `last_run`, `suggest_deck_name`, `_escape_search` (and long before
     them, the `!Library::Curating` temp tag K-064 retired — CLAUDE.md
     and config.md both went on documenting it until K-146).
+  - `index_queue.py` (aqt-free above its "aqt glue" divider; K-152): the
+    **index runner** — the ONE copy of the four-phase chain
+    (`curation.ensure_index` → `retention.ensure_pdf_index` →
+    `ensure_matches` → `tag_sync.sync_after_matches`, cancel token
+    threaded through, each phase taking `curation._busy` in its own
+    turn per K-146) plus a serialising queue in front of it. It exists
+    because that chain was a METHOD on the Library window
+    (`DriveWindow._on_embed`) and a PDF added from the deck screen has
+    no Library window: `_on_embed` now just calls `request_pdf`, and
+    `__init__.import_pdf_file` — the one funnel every import surface
+    returns through — calls `on_pdf_imported`, so every add indexes
+    itself (config `auto_index_on_add`, default ON; a corrupt value
+    reads ON, opposite of `background.design_enabled`'s rule, because
+    the failure here is a silently deleted feature rather than an
+    unasked-for restyle). **`curation._busy` REFUSES concurrent runs** —
+    right for a double-clicked button, wrong for ten dropped PDFs — so
+    jobs queue here (dupes collapse, FIFO) and the runner WAITS on that
+    token (`_busy_elsewhere`, bounded poll) rather than racing
+    Preferences' Index Now, which still calls `ensure_index` directly
+    for its own progress bar. Feedback is the shippable part: ONE
+    `RunnerState` snapshot is published to every listener and rendered
+    by ONE pure `status_line`, so the Library's status line and
+    `_StatusDock` — a thin bottom dock on `mw` (a QDockWidget, the
+    `lecture_view` pattern; an overlay child over the central webview
+    is a z-order gamble) carrying the same text and a Stop button,
+    visible on the deck screen, the overview and mid-review — cannot
+    describe one job differently. Gates: no profile, no cloud API key,
+    no run (the refusal is a MESSAGE, not a shrug). A PDF deleted
+    before OR during its turn is skipped silently, and a deletion error
+    never fails the batch behind it. Cancel bumps `_seq`, which is what
+    stops `after_matches` tagging on the PARTIAL ranking
+    `ensure_matches` hands back. **Closing the Library no longer
+    cancels indexing** (the job may have been started from the deck
+    screen). `offer_model_sweep(parent, prev_sig)`, called from
+    `manage_models.save_embed` with the signature captured BEFORE the
+    widgets overwrite config, re-indexes the card index plus every PDF
+    with an index on disk — announced first, counted in notes and PDFs.
+    Signature comparison is ALWAYS `embeddings.signature_matches`,
+    never a tuple `==`: a hand-spelled one reads every cache as stale
+    and re-embeds the collection on a paid API, silently (the exact bug
+    eight call sites shipped when the signature grew a third element).
   - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
     curated nothing): the deck-screen **PDF import** surface — the
     `MainWebView.dropEvent` wrap (the only thing stopping Anki's own

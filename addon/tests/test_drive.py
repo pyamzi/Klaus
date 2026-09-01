@@ -572,15 +572,20 @@ shutil.rmtree(tmp, ignore_errors=True)
 
 pdf_drive = importlib.import_module("klausmate.pdf_drive")
 
-print("== K-146: _on_embed refreshes the CARD index first ==")
-# THE regression this card could have shipped. curation.ensure_index —
-# one embedding per note — was reachable only through run_curation,
-# behind the curate button. Indexing a PDF never touched it. Delete the
-# button without moving that call and every note written since the last
-# card-index pass is invisible to ensure_matches: no error, no warning,
-# the per-PDF !Library tag just quietly under-covers. So the order here
-# is load-bearing, and ensure_index must come FIRST — matching against a
-# stale card index is exactly the silent failure.
+print("== K-152: the Library DRIVES the shared runner, it is not the runner ==")
+# K-146 pinned the phase ORDER here, because _on_embed *was* the chain:
+# curation.ensure_index (one embedding per note) had to run first or
+# every note written since the last card-index pass stayed invisible to
+# ensure_matches and the per-PDF !Library tag quietly under-covered.
+#
+# K-152 lifted that chain into klausmate/index_queue.py so a PDF added
+# from the deck screen — which has no Library window, and so could reach
+# none of this window's busy flag, status label, progress callback or
+# Cancel button — runs exactly the same four phases. The order pin moved
+# with it, to tests/test_index_queue.py ("the chain"), where it is now
+# checked against the ONE copy that exists. What belongs here is the
+# other half of that split: that this window delegates rather than
+# keeping a second copy, and that it renders the runner's own state.
 
 
 class _EmbedStatus:
@@ -591,94 +596,98 @@ class _EmbedStatus:
         self.texts.append(t)
 
 
-class _EmbedHost:
+class _CancelBtn:
     def __init__(self):
+        self.visible = None
+
+    def setVisible(self, v):
+        self.visible = v
+
+
+class _EmbedHost:
+    def __init__(self, alive=True):
         self.seq, self.status, self.refreshes = 7, _EmbedStatus(), 0
+        self.cancel_btn = _CancelBtn()
+        self._is_alive = alive
 
-    def _begin(self):
-        return self.seq, "cancel-token"
-
-    def _finish(self, seq):
-        return seq == self.seq
+    def _alive(self):
+        return self._is_alive
 
     def _refresh_rows(self):
         self.refreshes += 1
 
-    def _on_progress(self, seq, label, done, total):
-        pass
-
-
-def _run_embed(*, card_index_completed=True, pdf_index_complete=True):
-    """Drive _on_embed with every phase answering synchronously."""
-    calls = []
-
-    class _Idx:
-        def is_complete(self):
-            return pdf_index_complete
-
-    def _ensure_index(parent, *, on_progress=None, on_done=None,
-                      on_error=None, cancel=None):
-        calls.append(("ensure_index", cancel))
-        on_done(_Idx(), card_index_completed)
-
-    def _ensure_pdf_index(parent, safe, *, on_progress=None, on_done=None,
-                          on_error=None, cancel=None):
-        calls.append(("ensure_pdf_index", safe))
-        on_done(_Idx())
-
-    def _ensure_matches(parent, safe, *, on_progress=None, on_done=None,
-                        on_error=None, cancel=None):
-        calls.append(("ensure_matches", safe))
-        on_done([(1, 0.9)])
-
-    host = _EmbedHost()
-    _o = (pdf_drive.curation, pdf_drive.retention, pdf_drive.tag_sync,
-          pdf_drive.mw)
-    pdf_drive.curation = types.SimpleNamespace(ensure_index=_ensure_index)
-    pdf_drive.retention = types.SimpleNamespace(
-        ensure_pdf_index=_ensure_pdf_index, ensure_matches=_ensure_matches)
-    pdf_drive.tag_sync = types.SimpleNamespace(
-        sync_after_matches=lambda *a: calls.append(("sync_after_matches",)))
-    pdf_drive.mw = types.SimpleNamespace(col=object())
-    try:
-        pdf_drive.DriveWindow._on_embed(host, "Renal_Phys")
-    finally:
-        (pdf_drive.curation, pdf_drive.retention, pdf_drive.tag_sync,
-         pdf_drive.mw) = _o
-    return host, calls
-
 
 try:
-    _h, _calls = _run_embed()
-    _names = [c[0] for c in _calls]
-    check("the card index is refreshed BEFORE the PDF is matched — "
-          "run_curation was the only path that used to do this",
-          _names == ["ensure_index", "ensure_pdf_index", "ensure_matches",
-                     "sync_after_matches"], repr(_names))
-    check("the run's cancel token reaches ensure_index too (Cancel must "
-          "stop the longest phase, not just the two after it)",
-          _calls[0][1] == "cancel-token", repr(_calls[0]))
-    check("a completed run still ends in the tag sync and a row refresh",
-          _h.refreshes == 1 and _h.status.texts
-          and "refreshing retention" in _h.status.texts[-1],
-          repr(_h.status.texts))
+    _iq = importlib.import_module("klausmate.index_queue")
+    _seen = []
+    _o = (_iq.request_pdf, _iq.cancel_all)
+    _iq.request_pdf = lambda safe, **kw: _seen.append(("request", safe, kw))
+    _iq.cancel_all = lambda: _seen.append(("cancel",))
+    try:
+        _host = _EmbedHost()
+        pdf_drive.DriveWindow._on_embed(_host, "Renal_Phys")
+        pdf_drive.DriveWindow._on_cancel(_host)
+    finally:
+        _iq.request_pdf, _iq.cancel_all = _o
+    check("the button asks the shared runner to index THIS PDF, rather "
+          "than starting a private copy of the chain",
+          _seen[0][0] == "request" and _seen[0][1] == "Renal_Phys",
+          repr(_seen))
+    check("...silently: the runner's tooltip is for surfaces with "
+          "nowhere to show state, and this window has a status line",
+          _seen[0][2].get("announce") is False, repr(_seen[0]))
+    check("Cancel stops the whole queue, not one window's private run — "
+          "the job it stops may have been started from the deck screen",
+          _seen[1] == ("cancel",), repr(_seen))
 
-    _h2, _calls2 = _run_embed(card_index_completed=False)
-    check("a CANCELLED card-index pass stops the chain there — matching "
-          "on a half-built index is the silent under-cover this whole "
-          "pin exists for",
-          [c[0] for c in _calls2] == ["ensure_index"], repr(_calls2))
-    check("...and says so, rather than reporting success",
-          _h2.status.texts and "cancelled" in _h2.status.texts[-1].lower()
-          and _h2.refreshes == 0, repr(_h2.status.texts))
+    # -- rendering the runner's snapshot -----------------------------
+    _host = _EmbedHost()
+    _busy = _iq.RunnerState(active=True, name="Renal_Phys",
+                            label="Embedding PDF…", done=1, total=4,
+                            pending=3)
+    pdf_drive.DriveWindow._on_index_state(_host, _busy)
+    check("the status line is the runner's OWN status_line, so this "
+          "window and the bottom bar cannot describe one job differently",
+          _host.status.texts[-1] == _iq.status_line(_busy),
+          repr(_host.status.texts))
+    check("...and it really says something (a pin against two empty "
+          "strings agreeing)",
+          "Renal_Phys" in _host.status.texts[-1] and "25%" in _host.status.texts[-1],
+          repr(_host.status.texts))
+    check("Cancel is offered exactly while a job is running",
+          _host.cancel_btn.visible is True)
+    check("a running job does not re-aggregate the tree on every "
+          "progress tick", _host.refreshes == 0)
 
-    _h3, _calls3 = _run_embed(pdf_index_complete=False)
-    check("the pre-existing cancelled-PDF-index branch still short-"
-          "circuits (the new phase did not swallow it)",
-          [c[0] for c in _calls3] == ["ensure_index", "ensure_pdf_index"],
-          repr(_calls3))
+    pdf_drive.DriveWindow._on_index_state(
+        _host, _iq.RunnerState(message="Indexed “Renal_Phys”.",
+                               finished="Renal_Phys"))
+    check("a FINISHED PDF re-aggregates the tree — its retention, card "
+          "counts and freshness flag are all stale now",
+          _host.refreshes == 1)
+    check("...and Cancel goes away with the job", _host.cancel_btn.visible is False)
+
+    pdf_drive.DriveWindow._on_index_state(
+        _host, _iq.RunnerState(message="Indexing cancelled."))
+    check("an idle snapshot with nothing finished refreshes nothing",
+          _host.refreshes == 1)
+
+    _dead = _EmbedHost(alive=False)
+    pdf_drive.DriveWindow._on_index_state(_dead, _busy)
+    check("a closed window's listener touches no deleted C++ widget",
+          _dead.status.texts == [] and _dead.refreshes == 0)
+
+    # One line, two writers. _refresh_rows' completion lands
+    # asynchronously — on window open and after every finished job — and
+    # must not blank the progress of the job running right now.
+    _rr = _PD_CODE.split("def _refresh_rows", 1)[1].split("\n    def ", 1)[0]
+    check("the retention refresh yields the status line to a running "
+          "job instead of blanking it",
+          "if not index_queue.state().active:" in _rr
+          and _rr.index("if not index_queue.state().active:")
+          < _rr.index(".join(notes)"))
 except Exception as e:
-    check("_on_embed phase order", False, f"{type(e).__name__}: {e}")
+    check("Library delegates to the runner", False, f"{type(e).__name__}: {e}")
 
 print("== refresh_open_library glue (K-052 rework) ==")
 # With no Library window open, the hook must be a silent no-op — it is

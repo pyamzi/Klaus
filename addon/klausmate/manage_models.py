@@ -2265,6 +2265,11 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg = _pkg().get_config()
         provider = str(embed_provider_combo.currentData() or "ollama")
         prev = embeddings.provider_name(cfg)
+        # Captured BEFORE the mutations below, off STORED config: this is
+        # what every vector on disk was made with, and comparing it with
+        # what config holds after the write is the only honest way to ask
+        # "did the model move under the index?" (K-152).
+        prev_sig = embeddings.index_signature(cfg)
         cfg["embedding_provider"] = provider
         # The widgets were repopulated for `provider` the moment it was
         # picked (on_provider_changed), so by Save time their contents
@@ -2284,6 +2289,19 @@ def manage_models_dialog(setup: bool = False) -> None:
         else:
             update_embed_status()
         rebuild_library_list()  # the "used by: search" badge may have moved
+        # K-152: a changed provider/model/width invalidates EVERY stored
+        # vector, and PDF indexes rebuild only lazily — one at a time,
+        # whenever you next happen to touch that PDF — so without this
+        # the whole Library goes quietly stale until each is opened by
+        # hand. offer_model_sweep does the comparison (via
+        # embeddings.signature_matches, never a tuple ==), counts the
+        # work, and asks before spending anything.
+        try:
+            from . import index_queue
+
+            index_queue.offer_model_sweep(dlg, prev_sig)
+        except Exception as exc:
+            print(f"[klausmate] model-change sweep offer failed: {exc}")
 
     def _update_threshold_label(value: int) -> None:
         threshold_value_lbl.setText(f"{value / 100:.2f}")
