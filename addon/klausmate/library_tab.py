@@ -12,8 +12,26 @@ and a webview pane inside the main window is precisely what defeated
 (2026-08-25, "Embedding Anki's windows stays deleted"). ``DriveWindow`` is
 constructed with ``embedded=True``, which does not build the viewer at all
 rather than building and hiding one — the difference between reusing that
-machinery and re-fighting that bug. Opening a lecture routes to the docked
-PDF panel, which is a window Anki already knows how to host.
+machinery and re-fighting that bug.
+
+**That left the tab with no way to open a PDF at all, which was a
+regression** (K-173). The original note here claimed activation "routes to
+the docked PDF panel" — it does not and cannot: that panel hangs off an
+EDITOR (``editor._klausmate_pdf_tabs``, set on Add and Browse windows), and
+the main window has no editor. There was no destination. The claim was
+written before it was checked.
+
+**If the viewer has to come back, prefer the DOCK shape over this one.**
+``lecture_view.py`` already hosts a standalone ``PdfSidebar`` inside Anki's
+main window under either renderer — but as a ``QDockWidget`` added with
+``mw.addDockWidget(RightDockWidgetArea, ...)`` (lecture_view.py:591), NOT as
+a widget in ``mw.mainLayout``. That distinction is the whole precedent:
+single_window.py's failure was webview PANES in one window, so the working
+example licenses the dock and says nothing in favour of the splitter. If a
+viewer added to this splitter comes up black under pdf.js, that is the
+2026-08-25 bug rather than a new one, and the dock is the other door rather
+than something to fight toward. (Verified 2026-09-01; the distinction is
+worker-AC's, via the other session.)
 
 Everything here is guarded and reversible: if the mount fails, the webviews
 come back and the standalone window still works.

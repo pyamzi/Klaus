@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .slot_guard import guarded
 from aqt.qt import (
     QColor,
     QEvent,
@@ -185,6 +186,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         self._sync_copy()
         self.toggled.connect(self._sync_copy)
 
+    @guarded
     def _sync_copy(self, *_args) -> None:
         """Re-label on every state change, including programmatic ones —
         the dock's visibilityChanged drives setChecked, so the tooltip has
