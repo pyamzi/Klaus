@@ -49,6 +49,17 @@ except cf.ForgeError:
 check("pages are deduplicated and sorted, so provenance has one spelling",
       _p(pages=(4, 3, 3)).pages == (3, 4))
 
+# Found by scripts/mutation_audit.py: flipping these dataclass defaults
+# changed nothing any test noticed. A fresh proposal claiming it had been
+# edited, or carrying a stale duplicate verdict it never had, would mislead
+# the review surface about work the user never did.
+_fresh = _p()
+check("a fresh proposal is PENDING", _fresh.state == cf.PENDING)
+check("...not marked edited", _fresh.edited is False)
+check("...and carries no duplicate verdict, stale or otherwise",
+      _fresh.duplicate_of is None and _fresh.stale_duplicate is False
+      and not _fresh.is_duplicate)
+
 section("the request only ever carries the selected slides")
 check("allowed pages are exactly the selection", REQ["allowed_pages"] == [3, 4])
 check("only the selected slides' text is sent — shipping the whole PDF and "
@@ -56,8 +67,13 @@ check("only the selected slides' text is sent — shipping the whole PDF and "
       "chose", set(REQ["pages"]) == {3, 4})
 check("the cap scales with the material rather than being a fixed number",
       REQ["max_cards"] == 2 * cf.CARDS_PER_PAGE)
+# Concrete, not computed from the constant: a pin written as
+# `2 * CARDS_PER_PAGE` moves with the constant and can never fail.
+check("two slides ask for at most four cards", REQ["max_cards"] == 4)
 check("a big selection is still capped", cf.build_request(
     {i: "x" for i in range(500)})["max_cards"] == cf.MAX_CARDS)
+check("...at forty, not five hundred", cf.build_request(
+    {i: "x" for i in range(500)})["max_cards"] == 40)
 check("an explicit cap wins",
       cf.build_request(PAGES, max_cards=3)["max_cards"] == 3)
 try:
@@ -116,8 +132,12 @@ section("duplicates are found before the user sees anything")
 _a, _b = _p(front="What is incidence?"), _p(front="Something else entirely")
 
 
+_ranker_calls: list = []
+
+
 def _fake_ranker(index, vecs, k, allowed, min_score):
     """Stands in for card_index.top_k: only the first proposal matches."""
+    _ranker_calls.append({"vecs": list(vecs), "k": k, "min_score": min_score})
     return [(4242, 0.97)] if vecs[0] == "dup" else []
 
 
@@ -130,6 +150,21 @@ check("a genuinely new card is not flagged",
       _b.duplicate_of is None and not _b.is_duplicate)
 check("the threshold is high on purpose — a false 'you already have this' "
       "hides a card the user wanted", cf.DUPLICATE_THRESHOLD >= 0.9)
+# The audit caught this: nothing checked the threshold REACHED the ranker,
+# so it could have been any number at all.
+# Concrete, NOT `== cf.DUPLICATE_THRESHOLD`: a pin that reads the constant
+# it is checking moves with it and can never fail. The audit caught this
+# exact shape twice in one sitting.
+check("the threshold passed to the ranker is the documented 0.92",
+      all(c["min_score"] == 0.92 for c in _ranker_calls)
+      and cf.DUPLICATE_THRESHOLD == 0.92)
+check("an explicit threshold overrides it",
+      cf.mark_duplicates([_p()], ["dup"], None, threshold=0.5,
+                         ranker=_fake_ranker) == 1
+      and _ranker_calls[-1]["min_score"] == 0.5)
+check("one query per proposal, k=1 — top_k maxes over ALL query vectors, so "
+      "batching them would answer a different question",
+      all(len(c["vecs"]) == 1 and c["k"] == 1 for c in _ranker_calls))
 check("both sides of the card are embedded: a matching front that answers "
       "something else is not a duplicate",
       cf.dedup_text(_p(front="F", back="B")) == "F\nB")

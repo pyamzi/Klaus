@@ -82,7 +82,7 @@ class Col:
         # kwargs, so the notes are inspected where they were minted, and
         # the two add paths are counted apart so "used add_notes" is a real
         # assertion rather than a vacuous one.
-        self.minted, self.single_adds = [], 0
+        self.minted, self.single_adds, self.updated = [], 0, []
         self.notes = {1: Note()}
 
     def find_notes(self, q):
@@ -113,6 +113,9 @@ class Col:
 
     def merge_undo_entries(self, pos):
         return {"merged": pos}
+
+    def update_note(self, note):
+        self.updated.append(note)
 
 
 def ctx(confirm=True, search=None):
@@ -191,6 +194,43 @@ for _bad, _why in (
         check(f"an unknown {_why} is refused", False)
     except at.ToolError:
         check(f"an unknown {_why} is refused BEFORE the dialog", True)
+
+# update_note is a WRITE tool and had no test at all until the mutation
+# audit made that obvious. Its confirmation gate is the only thing between
+# a model and somebody's existing cards.
+section("update_note is gated too, not just create")
+_c = Col()
+_upd = {"note_id": 1, "fields": {"Front": "rewritten"}}
+try:
+    at._h_update_note(_c, _upd, ctx(confirm=False))
+    check("a declined update changes nothing", False)
+except at.ToolError as e:
+    check("a declined update is refused", "declined" in str(e))
+check("...and the note is untouched",
+      _c.updated == [] and _c.notes[1]["Front"] == "What is incidence?")
+_c = Col()
+_out = at._h_update_note(_c, _upd, ctx(confirm=True))
+check("an approved update writes", len(_c.updated) == 1)
+check("...only the changed field", _c.notes[1]["Front"] == "rewritten"
+      and _c.notes[1]["Back"] == "New cases.")
+check("the tool reports what it changed", "Front" in _out["updated_fields"])
+_c = Col()
+_out = at._h_update_note(
+    _c, {"note_id": 1, "fields": {"Front": "What is incidence?"}},
+    ctx(confirm=False))
+check("a no-op update never even asks — nothing changed, so there is "
+      "nothing to approve", _out["updated_fields"] == [] and _c.updated == [])
+try:
+    at._h_update_note(Col(), {"note_id": 1, "fields": {"Nope": "x"}}, ctx())
+    check("an unknown field is refused", False)
+except at.ToolError:
+    check("an unknown field is refused before the dialog", True)
+try:
+    at._h_update_note(Col(), {"note_id": 999, "fields": {"Front": "x"}}, ctx())
+    check("a missing note is refused", False)
+except at.ToolError:
+    check("a missing note is a ToolError, not a crash", True)
+check("update_note is a write tool", "update_note" in at.WRITE_TOOLS)
 
 section("the reviewed batch is one undo entry")
 

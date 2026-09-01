@@ -114,6 +114,13 @@ AUDIT_MODULES = (
     "pdf_notes",
     "lecture_view",
     "projection",
+    # The assistant layers (2026-09-01). All four are aqt-light by
+    # construction, so nearly every function is reachable from its own
+    # test file — which is exactly the condition this audit needs.
+    "card_forge",
+    "llm_client",
+    "entitlement",
+    "anki_tools",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

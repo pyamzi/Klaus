@@ -293,6 +293,7 @@ class DirectBackend:
                 "No API key set — add one under KlausMate Preferences, or "
                 "sign in to use the hosted assistant.",
                 status=401,
+                hosted=self.hosted,
             )
         body = dict(payload)
         body["stream"] = True
@@ -305,7 +306,7 @@ class DirectBackend:
                 "anthropic-version": API_VERSION,
             },
             float(kw.pop("timeout", DEFAULT_TIMEOUT_S)),
-            hosted=False,
+            hosted=self.hosted,
         )
         return consume_sse(resp, **kw)
 
@@ -334,7 +335,7 @@ class HostedBackend:
                 "Not signed in — sign in under KlausMate Preferences to use "
                 "the hosted assistant.",
                 status=401,
-                hosted=True,
+                hosted=self.hosted,
             )
         body = dict(payload)
         body["stream"] = True
@@ -346,7 +347,7 @@ class HostedBackend:
                 "Authorization": f"Bearer {token}",
             },
             float(kw.pop("timeout", DEFAULT_TIMEOUT_S)),
-            hosted=True,
+            hosted=self.hosted,
         )
         return consume_sse(resp, **kw)
 
