@@ -43,6 +43,17 @@ land in a sample. The paragraph that used to sit here described the
 opposite — most of a large collection's matches falling outside the
 positioned subset, and PDFs skipped for having none inside it — and was
 the reason Pouya asked for "all of the notes to show up".
+
+**K-158 samples for DISPLAY, and deliberately not here.** The map now
+draws a few hundred dots instead of 28,668, but that sample is taken by
+``pdf_map.split_cloud`` at paint time, off a graph that still holds
+every note. Thinning the graph instead would be wrong twice over: a
+PDF's centroid and its edge set are statistics over the whole match
+set, so computing them from a sample would move the nodes and change
+which notes a PDF is said to reach; and ``map_canvas(parent, graph)``
+is a public seam whose sampling policy belongs to the renderer, not to
+the data. This function stays the complete, honest answer — the caption
+can only say "28,670 notes, showing 643" because that is true.
 """
 
 from __future__ import annotations

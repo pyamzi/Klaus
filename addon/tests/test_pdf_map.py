@@ -278,14 +278,25 @@ _EDGES = [
     {"pdf": "a", "nid": 3, "score": 0.7},
     "not-a-dict",
 ]
-sub = pdf_map.edges_for_selection(_EDGES, "a")
-check("selection 'a' -> exactly its two edges",
-      len(sub) == 2 and all(e["pdf"] == "a" for e in sub)
-      and {e["nid"] for e in sub} == {1, 3})
-check("no selection / empty / unknown pdf -> no edges drawn",
-      pdf_map.edges_for_selection(_EDGES, None) == []
-      and pdf_map.edges_for_selection(_EDGES, "") == []
-      and pdf_map.edges_for_selection(_EDGES, "zzz") == [])
+check("pdf_note_ids: selection 'a' -> exactly its two notes, in graph "
+      "order, junk rows skipped",
+      pdf_map.pdf_note_ids(_EDGES, "a") == [1, 3])
+check("...and a repeated nid is listed ONCE, so a stride over it is a "
+      "stride over distinct points",
+      pdf_map.pdf_note_ids(
+          _EDGES + [{"pdf": "a", "nid": 1, "score": .9}], "a") == [1, 3])
+_LINKED = {"a": [(0.0, 0.0, 0.0), (0.5, 0.1, -0.2)], "b": [(1.0, 1.0, 1.0)]}
+check("links_for: the active PDF's own sampled notes are what draws",
+      pdf_map.links_for(_LINKED, "a") == _LINKED["a"])
+check("no selection / empty / unknown pdf -> no connections drawn",
+      pdf_map.links_for(_LINKED, None) == []
+      and pdf_map.links_for(_LINKED, "") == []
+      and pdf_map.links_for(_LINKED, "zzz") == [])
+check("K-158 retired edges_for_selection — the paint path draws to the "
+      "SAMPLED notes now (2,087 glowing edges was 39.8 ms a frame, and "
+      "an edge ending on a dot nobody drew is a line into nothing); a "
+      "stale caller must fail loud rather than silently draw nothing",
+      not hasattr(pdf_map, "edges_for_selection"))
 check("hover previews over the sticky selection; falls back; both-None",
       pdf_map.active_pdf("h", "s") == "h"
       and pdf_map.active_pdf(None, "s") == "s"
@@ -365,24 +376,34 @@ check("a malformed world point leaves the viewport exactly as it was, "
       and pdf_map.recenter_for(_VPFAR, (float("nan"), 0.0), _SIZE) is _VPFAR
       and pdf_map.recenter_for(_VPFAR, (0.0,), _SIZE) is _VPFAR)
 
-tip = pdf_map.tooltip_text({
+tip = pdf_map.node_lines({
     "display": "Lecture 1", "safe": "Lecture_1", "folder": "Anatomy/Week 2",
     "match_count": 37, "retention": 0.834,
 })
-check("tooltip carries display, folder, match count and known retention",
-      tip.splitlines() == [
+check("the focused node's plate carries display, folder, matched NOTE "
+      "count and known retention",
+      tip == [
           "Lecture 1", "Folder: Anatomy/Week 2",
           "Matched notes: 37", "Retention: 83%",
       ])
 check("unknown retention (headless None) is simply omitted",
-      "Retention" not in pdf_map.tooltip_text(
-          {"display": "x", "match_count": 1, "retention": None}))
+      not any("Retention" in t for t in pdf_map.node_lines(
+          {"display": "x", "match_count": 1, "retention": None})))
 check("a bool can't cosplay as a retention score",
-      "Retention" not in pdf_map.tooltip_text(
-          {"display": "x", "match_count": 1, "retention": True}))
+      not any("Retention" in t for t in pdf_map.node_lines(
+          {"display": "x", "match_count": 1, "retention": True})))
 check("no folder -> no Folder line; missing display falls back to safe",
-      "Folder" not in pdf_map.tooltip_text({"display": "x", "match_count": 0})
-      and pdf_map.tooltip_text({"safe": "S_1"}).splitlines()[0] == "S_1")
+      not any("Folder" in t for t in
+              pdf_map.node_lines({"display": "x", "match_count": 0}))
+      and pdf_map.node_lines({"safe": "S_1"})[0] == "S_1")
+check("K-158: NOTHING in this view mentions cards — Pouya, 'forget about "
+      "cards' — and the native QToolTip that fought the on-canvas plate "
+      "for the same corner is gone with the name it carried",
+      not any("card" in t.lower() for t in tip)
+      and "card" not in pdf_map.HINT_TEXT.lower()
+      and "card" not in pdf_map.caption_text(4, 28670, 640).lower()
+      and not hasattr(pdf_map, "tooltip_text")
+      and "QToolTip" not in _CODE)
 
 # ----------------------------------------------------- bounds / parsing
 
@@ -477,8 +498,7 @@ check("frame_bounds frames the whole 3D cloud AT THIS POSE — every "
       all(0 <= x <= 640 and 0 <= y <= 480 for x, y in _us),
       str([(round(x), round(y)) for x, y in _us]))
 check("its edge subset is exactly nid 3",
-      [e["nid"] for e in pdf_map.edges_for_selection(FAKE["edges"], "lec2")]
-      == [3])
+      pdf_map.pdf_note_ids(FAKE["edges"], "lec2") == [3])
 
 # --------------------------------------------------- K-148: the camera
 
@@ -610,6 +630,154 @@ check("t outside [0, 1] cannot throw the camera past its endpoints",
       pdf_map.lerp_viewport(_a, _bv, -5.0, _size) == _a
       and pdf_map.lerp_viewport(_a, _bv, 9.0, _size) == _bv)
 
+# --------------------------------------- K-158: the sample and the focus
+
+section("K-158 — the sample, the caption, the focus, the clamp")
+
+# Sampling. Pouya, after seeing all 28,668 drawn: "it doesn't have to
+# show all the notes... it just has to give an idea, a mental conception
+# of what the embedding is."
+check("an even STRIDE, not a head or a random draw — the whole point is "
+      "that a thinned cloud still has the shape of the real one",
+      pdf_map.sample_indices(10, 3) == [0, 3, 6]
+      and pdf_map.sample_indices(100, 4) == [0, 25, 50, 75])
+check("the stride SPANS the sequence: the last index sits in the final "
+      "stride, so the far end of the cloud is represented too",
+      pdf_map.sample_indices(1000, 10)[-1] >= 900
+      and pdf_map.sample_indices(28670, 420)[-1] >= 28600)
+check("indices are strictly increasing and never repeat, at every cap "
+      "from 1 to the sequence length",
+      all(pdf_map.sample_indices(97, k)
+          == sorted(set(pdf_map.sample_indices(97, k)))
+          and len(pdf_map.sample_indices(97, k)) == k
+          for k in range(1, 98)))
+check("cap 0 (and any cap past the end) is EVERY index — K-138's "
+      "draw-everything path stays reachable behind the constant, "
+      "because 'how many is legible' is a tuning question",
+      pdf_map.sample_indices(7, 0) == list(range(7))
+      and pdf_map.sample_indices(7, 99) == list(range(7))
+      and pdf_map.sample_indices(0, 5) == []
+      and pdf_map.sample_indices("junk", 5) == [])
+
+_SG = {
+    "pdfs": [{"safe": "a", "match_count": 6}, {"safe": "b", "match_count": 2}],
+    "notes": [{"nid": i, "xyz": [i / 50.0, 0.0, 0.0]} for i in range(100)]
+             + [{"nid": 900, "xyz": "junk"}],
+    # nid 50 and 51 are matched by BOTH, which is what makes "shown"
+    # a question about distinct notes rather than a sum of link sets.
+    "edges": [{"pdf": "a", "nid": i, "score": .9} for i in range(0, 12)]
+             + [{"pdf": "a", "nid": i, "score": .9} for i in range(50, 52)]
+             + [{"pdf": "b", "nid": i, "score": .9} for i in range(50, 52)],
+}
+_amb, _link, _pos, _tot, _shown = pdf_map.split_cloud(_SG, cap=20, per_pdf=4)
+check("split_cloud: the ambient field is capped, each PDF's own notes "
+      "are sampled separately, and the two never overlap — a PDF's "
+      "connections have to land on dots that are actually drawn",
+      len(_amb) == 20 and len(_link["a"]) == 4 and len(_link["b"]) == 2
+      and not (set(_amb) & (set(_link["a"]) | set(_link["b"]))))
+check("...while POSITIONS keep every note the graph positioned, sample "
+      "or no sample: an edge endpoint and the flight's framing are "
+      "about the real match set, not about what was drawn",
+      len(_pos) == 100 and _tot == 100 and 900 not in _pos)
+_amb2, _link2, _pos2, _tot2, _shown2 = pdf_map.split_cloud(
+    _SG, cap=20, per_pdf=0)
+check("...and 'shown' counts DISTINCT notes, so a note two PDFs both "
+      "matched is one note in the caption even though it is blitted "
+      "twice (per_pdf 0 here, so both PDFs keep the two they share)",
+      set(_link2["a"]) & set(_link2["b"])
+      and _shown2 == len(_amb2) + len({*_link2["a"], *_link2["b"]})
+      and _shown2 < len(_amb2) + len(_link2["a"]) + len(_link2["b"]))
+check("an unpositioned row is dropped rather than crashing the sample",
+      pdf_map.row_nid({"nid": "7"}) == 7
+      and pdf_map.row_nid({"nid": "x"}) is None
+      and pdf_map.row_nid("junk") is None)
+
+check("the caption says the REAL total and what is showing — a view "
+      "that quietly drew a fraction while naming the whole would be "
+      "lying about the data",
+      pdf_map.caption_text(4, 28670, 643)
+      == "4 PDFs · 28670 notes · showing 643")
+check("...and drops the clause when nothing was left out, rather than "
+      "saying 'showing 50' of 50",
+      pdf_map.caption_text(1, 50, 50) == "1 PDF · 50 notes"
+      and pdf_map.caption_text(1, 50, 0) == "1 PDF · 50 notes")
+
+# The flight's frame. Trimming exists because semantic matches are not
+# a tidy blob: measured on the real library, framing every match zoomed
+# the biggest PDF by exactly 1.00x.
+_TP = [(0.0, 0.0, 0.0)] * 8 + [(9.0, 9.0, 9.0), (-9.0, -9.0, -9.0)]
+check("trimmed_bounds ignores the extreme share per axis per end, so a "
+      "couple of far-flung matches cannot defeat the zoom",
+      pdf_map.trimmed_bounds(_TP, 0.0) == (-9.0, -9.0, -9.0, 9.0, 9.0, 9.0)
+      and pdf_map.trimmed_bounds(_TP, 0.1) == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+check("...per AXIS, not per point: a note wild on x but ordinary on y "
+      "must not shrink the frame twice",
+      pdf_map.trimmed_bounds(
+          [(-9.0, 5.0, 0.0), (0.0, 1.0, 0.0), (0.0, 2.0, 0.0),
+           (0.0, 3.0, 0.0), (0.5, 4.0, 0.0)], 0.2)
+      == (0.0, 2.0, 0.0, 0.0, 4.0, 0.0))
+check("it never trims itself empty: a trim that would meet in the "
+      "middle is dropped, so three points still return their real box "
+      "rather than one collapsed to the median",
+      pdf_map.trimmed_bounds(
+          [(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (2.0, 2.0, 2.0)], 0.4)
+      == (0.0, 0.0, 0.0, 2.0, 2.0, 2.0)
+      and pdf_map.trimmed_bounds([(0.0, 0.0, 0.0), (1.0, 1.0, 1.0)], 0.45)
+      == (0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+      and pdf_map.trimmed_bounds([], 0.2) == pdf_map.DEFAULT_BOUNDS)
+
+# The label clamp. label_anchor mirrors only when the mirrored side
+# FITS; a clipped name has been reported three times in this module.
+check("clamp_label pulls a plate back inside the canvas whatever the "
+      "anchor chose — the last word on placement is a clamp, not "
+      "another offset",
+      pdf_map.clamp_label(1000.0, 200.0, 1100.0)
+      == 1100.0 - 200.0 - pdf_map.LABEL_EDGE_PAD
+      and pdf_map.clamp_label(-30.0, 200.0, 1100.0) == pdf_map.LABEL_EDGE_PAD
+      and pdf_map.clamp_label(300.0, 200.0, 1100.0) == 300.0)
+check("...and a plate wider than the whole canvas starts at the left "
+      "edge rather than at a negative coordinate",
+      pdf_map.clamp_label(500.0, 9000.0, 1100.0) == pdf_map.LABEL_EDGE_PAD
+      and pdf_map.clamp_label(500.0, 100.0, 0.0) == 500.0)
+
+# The focus. Pouya: "only one PDF shows at a time, potentially, and then
+# it just zooms in on that section of the cloud that hosts that PDF."
+_FP = [{"safe": "b", "match_count": 5}, {"safe": "a", "match_count": 40},
+       {"safe": "c", "match_count": 5}, "junk", {"match_count": 9}]
+check("focus_order is stable and most-matched first — 'next' has to "
+      "mean the same thing every time you press it",
+      pdf_map.focus_order(_FP) == ["a", "b", "c"]
+      and pdf_map.focus_order([]) == [])
+check("next_focus cycles both ways and wraps",
+      pdf_map.next_focus(["a", "b", "c"], "a", 1) == "b"
+      and pdf_map.next_focus(["a", "b", "c"], "c", 1) == "a"
+      and pdf_map.next_focus(["a", "b", "c"], "a", -1) == "c")
+check("...and entering from the whole-cloud view lands on a real PDF "
+      "either way: forward at the front, back at the back",
+      pdf_map.next_focus(["a", "b", "c"], None, 1) == "a"
+      and pdf_map.next_focus(["a", "b", "c"], None, -1) == "c"
+      and pdf_map.next_focus(["a", "b", "c"], "gone", 1) == "a"
+      and pdf_map.next_focus([], "a", 1) is None)
+
+# The tier ramp's own arithmetic (the colours are pinned on real Qt).
+check("tier_index quantizes the fog ramp into GLOW_TIERS steps and "
+      "clamps rather than raising on the paint path",
+      pdf_map.tier_index(0.0) == 0
+      and pdf_map.tier_index(1.0) == pdf_map.GLOW_TIERS - 1
+      and pdf_map.tier_index(-5.0) == 0
+      and pdf_map.tier_index(5.0) == pdf_map.GLOW_TIERS - 1
+      and pdf_map.tier_index("junk") == 0)
+check("tier_position is each tier's MIDDLE, so neither end of the ramp "
+      "is forced flat by an off-by-one",
+      0.0 < pdf_map.tier_position(0) < pdf_map.tier_position(
+          pdf_map.GLOW_TIERS - 1) < 1.0)
+check("dot_scale is 1.0 on any surface at or above DOT_SCALE_FULL and "
+      "floors on a tiny one, never zero",
+      pdf_map.dot_scale((900.0, 640.0)) == 1.0
+      and pdf_map.dot_scale((545.0, 185.0)) == pdf_map.DOT_SCALE_FLOOR
+      and pdf_map.dot_scale((0.0, 0.0)) == 1.0
+      and pdf_map.dot_scale("junk") == 1.0)
+
 # ------------------------------------------------------------ glue pins
 
 section("glue pins on the source — divider, K-114, K-115, tokens")
@@ -677,21 +845,24 @@ check("open_map_window(parent=None) is the public surface",
       is None)
 check("wheel zoom funnels through the anchored zoom_at math",
       "zoom_at(" in _func_seg("wheelEvent"))
-check("the canvas draws edges through edges_for_selection only",
-      "edges_for_selection(" in _func_seg("_paint"))
+check("the canvas draws connections through links_for only",
+      "links_for(" in _method_seg("_MapCanvas", "_paint_edges"))
 check("labels are placed by label_anchor, never inline arithmetic",
-      len(_calls_in("_paint", "label_anchor")) == 1)
+      len(_calls_in("_paint_label", "label_anchor")) == 1)
 
-# ---- K-138: the note layer, and the name that follows the selection ----
-_paint_seg = _func_seg("_paint")
-check("K-138: the notes are drawn in ONE drawPoints call — no per-dot "
-      "loop survives in the paint path (28k drawEllipse calls was 36 ms "
-      "a frame; the Python transform loop alone was 9 ms of it)",
-      _paint_seg.count("drawPoints(") == 1
-      and "drawEllipse(QPointF(sx, sy), NOTE_DOT_R" not in _paint_seg
+# ---- the note layer, and the name that follows the selection ----
+_paint_seg = _method_seg("_MapCanvas", "_blit_bands")
+check("K-158: the stars are BLITTED, never drawn as a gradient per "
+      "point — a QRadialGradient per dot is 2.10 ms a frame at 400 "
+      "dots against 0.42 for the cached sprite, and the sprite also "
+      "beats the round drawPoints (0.85 ms) K-148 could not afford at "
+      "28,668",
+      _paint_seg.count("drawPixmap(") == 1
+      and "QRadialGradient(" not in _paint_seg
+      and "QRadialGradient(" in _method_seg("_MapCanvas", "_glow_sprite")
       and "for wx, wy in self._notes" not in _CODE)
 check("the world->screen pass is QTransform.map on the POLYGON, and the "
-      "PAINTER is never given a transform — drawPoints under a scaled "
+      "PAINTER is never given a transform — a point draw under a scaled "
       "painter with a cosmetic pen degenerates into long horizontal "
       "strokes at zoom, and K-148's projective form makes that rule "
       "MORE load-bearing: a painter cannot carry a perspective divide "
@@ -700,13 +871,23 @@ check("the world->screen pass is QTransform.map on the POLYGON, and the "
       and "painter.scale(" not in _CODE
       and "setTransform" not in _CODE
       and "setWorldTransform" not in _CODE)
-check("the note polygons are built ONCE, in the CANVAS constructor, in "
-      "world space — the cloud does not change, the camera does",
-      "QPolygonF(" in _method_seg("_MapCanvas", "__init__")
-      and _CODE.count("QPolygonF(") == 1)
+check("the note polygons are built ONCE, by the canvas's own band "
+      "builder, in world space — the cloud does not change, the camera "
+      "does",
+      "QPolygonF(" in _method_seg("_MapCanvas", "_make_bands")
+      and _CODE.count("QPolygonF(") == 1
+      and _CODE.count("_make_bands(") == 3)
+check("K-158: the beams are a capped TRAIL of the same cached sprites, "
+      "never a stroked path — 90 antialiased two-pass strokes are "
+      "6.35 ms and grow with zoom to 10.55, the particles are 0.84 ms "
+      "and do not grow at all",
+      "drawPixmap(" in _method_seg("_MapCanvas", "_paint_edges")
+      and "drawPath(" not in _CODE
+      and "drawLine(" not in _CODE
+      and "BEAM_MAX" in _method_seg("_MapCanvas", "_paint_edges"))
 check("K-138 reverses K-133: the painter names exactly the ACTIVE node, "
       "with no count or zoom gate left to consult",
-      "if safe == active:" in _paint_seg
+      "if safe != active:" in _method_seg("_MapCanvas", "_paint_label")
       and "labels_visible" not in _CODE
       and "show_labels" not in _CODE)
 check("the header hint is ONE line naming both the legend and the "
@@ -728,7 +909,13 @@ check("select_pdf reaches the canvas through the singleton and the one "
       "canvas.select(" in _func_seg("select_pdf")
       and "recenter_for(" in _method_seg("_MapCanvas", "select")
       and len(_calls_in("select", "recenter_for")) == 1)
-check("hover tooltip rides QToolTip", "QToolTip.showText" in _CODE)
+check("K-158: the hovered/focused node's name is drawn BY THE CANVAS, "
+      "on its own plate — a native QToolTip at the global cursor and a "
+      "label beside the node were two boxes fighting for one corner, "
+      "and the plate is the one that can be themed, positioned and "
+      "clamped into view",
+      "QToolTip" not in _CODE
+      and "node_lines(p)" in _method_seg("_MapCanvas", "_paint_label"))
 check("house logging prefix present", '"[klausmate] ' in _SRC.replace("f\"", "\""))
 check("empty-state copy is pinned",
       pdf_map.EMPTY_TEXT == "No indexed PDFs to map yet."
@@ -876,17 +1063,23 @@ check("a resize RE-ANCHORS the view (half the delta) and never re-fits "
 
 # ---- K-148: motion, and who is allowed to have it ----
 
-_pens_seg = _method_seg("_MapCanvas", "_ensure_pens")
-check("depth fog is OPAQUE colour, never alpha: the same 28,668 dots "
-      "cost 13.8 ms a frame through a semi-transparent pen and 2.9 ms "
-      "through an opaque one, so an innocent-looking setAlphaF here "
-      "would make the 3D map 5x dearer than the 2D one",
-      "blend_hex(" in _pens_seg
-      and "setAlpha" not in _pens_seg
-      and "setAlphaF" not in _pens_seg)
-check("...and both ends of the ramp are palette TOKENS, so it "
-      "re-colours with the theme and invents no colour of its own",
-      'c["grey_mid"]' in _pens_seg and 'c["text"]' in _pens_seg)
+_ramp_seg = _func_seg("tier_colours")
+check("the depth ramp is a MIX of palette tokens, not alpha over the "
+      "ground — the alpha version of this ramp cost 13.8 ms a frame "
+      "against 2.9 at 28,668 dots, and mixing is also what lets depth "
+      "drive saturation as well as brightness",
+      _ramp_seg.count("blend_hex(") == 5
+      and "setAlpha" not in _ramp_seg
+      and "setAlphaF" not in _ramp_seg)
+check("...and every end of it is a palette TOKEN, so the whole star "
+      "field re-colours with the accent theme and invents no colour",
+      all(t in _ramp_seg for t in
+          ('c["bg"]', 'c["blue_pressed"]', 'c["blue_bright"]', 'c["text"]')))
+check("the sprite cache is keyed on the palette's own tokens, not on "
+      "night_mode — the map draws in the dark palette either way, so a "
+      "night flip must not rebuild while an ACCENT change must",
+      'key = (c["bg"], c["blue_bright"], c["text"], scale)'
+      in _method_seg("_MapCanvas", "_ensure_sprites"))
 
 _arm = _method_seg("_MapCanvas", "_arm_idle")
 _show = _method_seg("_MapCanvas", "showEvent")
@@ -927,10 +1120,13 @@ check("the flight is a QPropertyAnimation on an OutCubic curve — "
       "QPropertyAnimation(" in _CODE
       and "QEasingCurve.Type.OutCubic" in _CODE
       and "pyqtProperty(" in _CODE)
-check("what it flies TO is the PDF's node AND every note it matched — "
-      "Pouya asked to see 'all the connections and the cards' — and "
-      "never wider than the whole graph",
-      "edges_for_selection(" in _method_seg("_MapCanvas", "_fly_target")
+check("what it flies TO is the PDF's node and the BULK of the notes it "
+      "will actually show connected — trimmed, because framing every "
+      "match left the flight zooming by 1.00x on the real library — "
+      "and never wider than the whole graph",
+      "links_for(" in _method_seg("_MapCanvas", "_fly_target")
+      and "trimmed_bounds(pts, FLY_TRIM)" in _method_seg("_MapCanvas",
+                                                         "_fly_target")
       and "frame_bounds(self._bounds" in _method_seg("_MapCanvas",
                                                      "_fly_target"))
 
@@ -1076,21 +1272,32 @@ if _HAVE_QT:
     _orig_night = theme.night_mode
     _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
 
-    def _dark_pixels(widget, w, h):
-        """Count near-black pixels in a rendered widget.
-
-        With a light palette, no notes and one accent circle, the ONLY
-        near-black ink on the canvas is text — which makes "is this PDF
-        named right now?" a countable question rather than an opinion.
-        """
+    def _render(widget, w, h):
         img = _QtG.QImage(w, h, _QtG.QImage.Format.Format_ARGB32)
         img.fill(0)
         widget.render(img)
+        return img
+
+    def _name_pixels(widget, w, h):
+        """Count NEUTRAL bright pixels — the plate's text, and nothing
+        else on this canvas.
+
+        K-148 counted near-BLACK ink, which worked because the map drew
+        on a light ground. K-158 draws in the dark palette in both
+        themes, so black is now the background and the question has to
+        be asked the other way round: the text token is a neutral grey
+        (r == g == b), while every other lit thing here — stars, node
+        core, rings, beams — is mixed from the blue accent and keeps a
+        visible blue lean. The card's own 1px border is neutral too, so
+        the scan insets past it.
+        """
+        img = _render(widget, w, h)
         n = 0
-        for y in range(0, h, 2):
-            for x in range(0, w, 2):
+        for y in range(4, h - 4, 2):
+            for x in range(4, w - 4, 2):
                 c = img.pixelColor(x, y)
-                if c.alpha() > 200 and c.red() + c.green() + c.blue() < 200:
+                if (c.alpha() > 200 and min(c.red(), c.green(), c.blue()) > 150
+                        and abs(c.red() - c.blue()) <= 12):
                     n += 1
         return n
 
@@ -1131,18 +1338,21 @@ if _HAVE_QT:
         cv = w4.canvas
         cv.resize(660, 420)
         _app.processEvents()
-        quiet = _dark_pixels(cv, 660, 420)
+        cv._selected = None
+        cv._hover = None
+        quiet = _name_pixels(cv, 660, 420)
         cv._hover = "solo"
-        named = _dark_pixels(cv, 660, 420)
-        check("K-138 reverses K-133 ON THE PIXELS: at rest the map draws "
-              "no PDF name at all, and hovering the circle draws one",
+        named = _name_pixels(cv, 660, 420)
+        check("K-138 reverses K-133 ON THE PIXELS: with nothing focused "
+              "the map draws no PDF name at all, and hovering the circle "
+              "draws one",
               quiet == 0 and named > 0,
               f"quiet={quiet} hovered={named}")
         cv._hover = None
         cv._selected = "solo"
         check("selecting names it too — that is what the viewer seam "
               "gets, since it selects rather than hovers",
-              _dark_pixels(cv, 660, 420) > 0)
+              _name_pixels(cv, 660, 420) > 0)
     finally:
         pdf_map._instance = None
         theme.night_mode = _orig_night
@@ -1176,13 +1386,30 @@ if _HAVE_QT:
             cv.resize(860, 560)
             _app.processEvents()
             if not _night:
-                _in_bands = sum(poly.count() for _z, poly in cv._bands)
-                check("every positioned note reaches the note layer — no "
-                      "cap, no sample, no level-of-detail; the depth "
-                      "bands PARTITION the cloud, they do not thin it",
-                      _in_bands == len(_notes) == 1500,
-                      f"{_in_bands} of {len(_notes)} across "
-                      f"{len(cv._bands)} bands")
+                _in_bands = sum(poly.count() for _i, _z, poly in cv._bands)
+                _in_links = sum(
+                    poly.count() for _b in cv._link_bands.values()
+                    for _i, _z, poly in _b)
+                check("K-158 reverses K-138: the cloud is SAMPLED, and "
+                      "the caption's 'showing N' is a fact about the "
+                      "picture — every dot the canvas put in a polygon "
+                      "is counted, by a route that has nothing to do "
+                      "with the number split_cloud returned",
+                      _in_bands + _in_links == cv.shown_notes()
+                      and cv.shown_notes() < len(_notes)
+                      and cv.note_total() == len(_notes) == 1500,
+                      f"{_in_bands} ambient + {_in_links} linked vs "
+                      f"shown_notes()={cv.shown_notes()} of "
+                      f"{cv.note_total()}")
+                check("...and the ambient sample honours SAMPLE_NOTES "
+                      "while every drawn connection lands on a drawn "
+                      "dot — an edge into empty space is worse than no "
+                      "edge",
+                      _in_bands <= pdf_map.SAMPLE_NOTES
+                      and _in_links == sum(
+                          len(v) for v in cv._link_pts.values())
+                      and len(cv._link_pts["lec1"])
+                      == min(pdf_map.SAMPLE_PER_PDF, 40))
             _img = _QtG.QImage(860, 560, _QtG.QImage.Format.Format_ARGB32)
             _img.fill(0)
             cv.render(_img)
@@ -1353,26 +1580,63 @@ if _HAVE_QT:
               _moved > 200, f"{_moved} sampled pixels changed")
         _spin._cam = pdf_map.Camera()
 
-        # Depth has to be VISIBLE, not merely computed: the near band's
-        # dots are both darker and fatter than the far band's.
-        _spin._band_pens = []
-        _spin._ensure_pens(theme.palette(False))
-        _first, _last = _spin._band_pens[0], _spin._band_pens[-1]
+        # Depth has to be VISIBLE, not merely computed: the near tier's
+        # stars are both brighter and fatter than the far tier's, and
+        # while a PDF is focused the rest of the field steps back.
+        _spin._sprites = {}
+        _spin._ensure_sprites(theme.palette(True))
+        _pal = theme.palette(True)
+        _far_h, _far_c = pdf_map.tier_colours(_pal, pdf_map.tier_position(0))
+        _near_h, _near_c = pdf_map.tier_colours(
+            _pal, pdf_map.tier_position(pdf_map.GLOW_TIERS - 1))
 
-        def _lum(pen):
-            _c = pen.color()
+        def _lum(hexc):
+            _c = _QtG.QColor(hexc)
             return _c.red() + _c.green() + _c.blue()
 
-        check("the far band is paler AND smaller than the near one — "
+        check("the far tier is dimmer AND smaller than the near one — "
               "the fog and the size ramp are what turn a rotation into "
               "a sense of depth",
-              _lum(_first) > _lum(_last) + 120
-              and _last.widthF() > _first.widthF() * 1.5,
-              f"far {_first.color().name()} @{_first.widthF():.1f}px, "
-              f"near {_last.color().name()} @{_last.widthF():.1f}px")
-        check("...and every band pen is fully OPAQUE (alpha blending "
-              "28,668 dots is the 13.8 ms trap)",
-              all(p.color().alpha() == 255 for p in _spin._band_pens))
+              _lum(_near_h) > _lum(_far_h) + 120
+              and _lum(_near_c) > _lum(_far_c) + 120
+              and pdf_map.tier_radius(1.0) > pdf_map.tier_radius(0.0) * 1.5,
+              f"far {_far_h}/{_far_c}, near {_near_h}/{_near_c}")
+        check("...and the ramp travels through HUE, not only through "
+              "grey — K-158's third critique was 'the cloud is grey on "
+              "grey, no hue at all', which K-148's grey_mid->text ramp "
+              "was by construction. BOTH ends now carry real colour, "
+              "and the depth between them is carried by value",
+              _QtG.QColor(_far_h).saturation() > 60
+              and _QtG.QColor(_near_h).saturation() > 60
+              and _QtG.QColor(_near_h).value()
+              > _QtG.QColor(_far_h).value() + 60,
+              f"far sat {_QtG.QColor(_far_h).saturation()} val "
+              f"{_QtG.QColor(_far_h).value()}, near sat "
+              f"{_QtG.QColor(_near_h).saturation()} val "
+              f"{_QtG.QColor(_near_h).value()}")
+        _dim_h, _dim_c = pdf_map.tier_colours(
+            _pal, pdf_map.tier_position(pdf_map.GLOW_TIERS - 1), dim=True)
+        check("a focused PDF pushes the rest of the field BACK — the "
+              "dimmed ramp is strictly darker than the lit one, which "
+              "is what stops its own notes drowning in everything else",
+              _lum(_dim_h) < _lum(_near_h) and _lum(_dim_c) < _lum(_near_c))
+        check("the star sprites are real pixmaps, one per tier per "
+              "state, built once — the whole reason a glow is "
+              "affordable at all (2.10 ms a frame drawing the gradient "
+              "per point against 0.42 blitting it)",
+              len(_spin._sprites) == pdf_map.GLOW_TIERS * 3
+              and all(not pm.isNull() and pm.width() >= 4
+                      for pm in _spin._sprites.values()))
+        _spin._sprites = {}
+        _spin._ensure_sprites(_pal, 0.6)
+        check("...and a SMALL canvas gets smaller stars (fit_margin's "
+              "K-143 rule one layer down: the dock packs the whole "
+              "cloud into ~110px, where a window-sized dot is a blot)",
+              pdf_map.dot_scale((545.0, 185.0)) < 1.0
+              and pdf_map.dot_scale((1100.0, 660.0)) == 1.0
+              and _spin._sprites[(pdf_map.GLOW_TIERS - 1, False, False)].width()
+              < pdf_map.GLOW_RATIO * 2.0 * pdf_map.NOTE_R_NEAR)
+        _spin._sprites = {}
 
         # ---- the timer, on a real widget ----
         _spin._reduce_motion = lambda: False
@@ -1448,16 +1712,31 @@ if _HAVE_QT:
         _app.processEvents()
         _fly._ensure_fit(700.0, 460.0)
         _wide = _fly._vp.scale
+
+        def _fly_no_trim(_safe):
+            _t = pdf_map.FLY_TRIM
+            pdf_map.FLY_TRIM = 0.0
+            try:
+                return _fly._fly_target(_safe)
+            finally:
+                pdf_map.FLY_TRIM = _t
         _target = _fly._fly_target("tight")
         check("the flight's destination frames the clicked PDF's own "
               "cluster, so it lands much CLOSER than the whole-graph fit",
               _target is not None and _target.scale > 3.0 * _wide,
               f"{_wide:.1f} -> {_target.scale if _target else None}")
-        check("...but a PDF matching notes all over the collection "
-              "clamps at the whole-graph fit: pressing a thing must "
-              "never zoom you OUT past everything",
-              abs(_fly._fly_target("spread").scale - _wide) < 1e-9,
-              f"{_fly._fly_target('spread').scale:.1f} vs {_wide:.1f}")
+        _spread = _fly._fly_target("spread")
+        check("...and a PDF matching notes all over the collection "
+              "still gets a real flight, because the frame TRIMS its "
+              "wildest matches (K-158: framing every match zoomed by "
+              "exactly 1.00x on the real library, which is why the "
+              "screenshot Pouya sent had no structure in it)",
+              _spread.scale > _wide, f"{_spread.scale:.1f} vs {_wide:.1f}")
+        check("...but never zooms you OUT past everything: with the "
+              "trim switched off, a PDF whose matches ARE the whole "
+              "collection clamps at the whole-graph fit",
+              abs(_fly_no_trim("spread").scale - _wide) < 1e-9,
+              f"{_fly_no_trim('spread').scale:.1f} vs {_wide:.1f}")
         _fly.fly_to("tight")
         check("the flight starts where the camera was...",
               abs(_fly._vp.scale - _wide) < 1e-6)
@@ -1481,9 +1760,235 @@ if _HAVE_QT:
         _app.processEvents()
         check("a graph in the OLD two-number shape still renders — flat, "
               "on the z=0 plane, rather than as an empty card",
-              sum(poly.count() for _z, poly in _flat._bands) == 60
+              sum(poly.count() for _i, _z, poly in _flat._bands) == 60
               and set(_flat._pdf_xyz) == {"old"}
               and len(_flat._bands) == 1)
+
+        # ---- K-158: the two bugs the screenshot showed ----
+
+        # BUG 5, and the diagnosis that matters: the gate WAS firing.
+        # The label and the edges share active_pdf, and Pouya's frame
+        # had the label in it — so the edges were drawn and invisible.
+        # Measured on that exact frame, the whole edge layer moved 0.59%
+        # of the pixels: 1px lines at 0.25 alpha over 28,670 grey chips.
+        _lit = pdf_map.map_canvas(None, CLOUD)
+        _lit.show()
+        _lit.resize(700, 460)
+        _app.processEvents()
+        _lit._ensure_fit(700.0, 460.0)
+        _lit._selected = None
+        _off = _render(_lit, 700, 460)
+        _lit._selected = "lec1"
+        _on = _render(_lit, 700, 460)
+        _moved_edges = sum(
+            1 for y in range(0, 460, 2) for x in range(0, 700, 2)
+            if _off.pixelColor(x, y) != _on.pixelColor(x, y))
+        _sampled = len(range(0, 460, 2)) * len(range(0, 700, 2))
+        check("focusing a PDF has to CHANGE THE PICTURE — its "
+              "connections are the point of the view now, and K-148's "
+              "edge layer moved 0.59% of the pixels on the frame that "
+              "was supposed to be all edges",
+              _moved_edges > _sampled * 0.05,
+              f"{100.0 * _moved_edges / _sampled:.1f}% of sampled pixels")
+        _real_links = pdf_map.links_for
+        pdf_map.links_for = lambda linked, active: []
+        try:
+            _none = _render(_lit, 700, 460)
+        finally:
+            pdf_map.links_for = _real_links
+        _beam_only = sum(
+            1 for y in range(0, 460, 2) for x in range(0, 700, 2)
+            if _on.pixelColor(x, y) != _none.pixelColor(x, y))
+        check("...and the CONNECTION LAYER alone is a real part of it — "
+              "isolated by drawing the same focused frame with the "
+              "beams removed. This is the number K-148 failed: on the "
+              "frame Pouya screenshotted its edges moved 0.59% of the "
+              "pixels, drawn and invisible over 28,670 grey chips",
+              _beam_only > _sampled * 0.02,
+              f"{100.0 * _beam_only / _sampled:.1f}% of sampled pixels")
+
+        # BUG 4. The offset was never the problem: label_anchor cleared
+        # the node's drawn radius by 9px, and the drawn radius does not
+        # move with zoom at all. The name was emitted INSIDE the
+        # depth-sorted node loop, so a PDF that sorted nearer painted
+        # its disc over it. On the real graph four centroids sit within
+        # ~50px of each other and that is exactly what happened.
+        _nodes_seg = _method_seg("_MapCanvas", "_paint_nodes")
+        check("no node painter draws text — the name is a pass of its "
+              "own, run after EVERY circle is down, so a nearer node "
+              "can never land on top of it",
+              "drawText" not in _nodes_seg
+              and "drawText" in _method_seg("_MapCanvas", "_paint_label")
+              and _CODE.count("drawText(") == 2)
+        _paint_body = _method_seg("_MapCanvas", "_paint")
+        check("...and the call order says so too: nodes, then the plate",
+              _paint_body.index("_paint_nodes(")
+              < _paint_body.index("_paint_label("))
+
+        # ...and the clipping half of the same defect, checked with real
+        # font metrics at every position a node can take on screen.
+        _clipc = pdf_map.map_canvas(None, {
+            "pdfs": [{"safe": "long", "folder": "Anatomy/Week 2",
+                      "display": "Measures of Disease Frequency ELO",
+                      "threshold": .4, "retention": 0.83,
+                      "xyz": [0.0, 0.0, 0.0], "match_count": 40}],
+            "notes": [{"nid": 1, "xyz": [0.0, 0.0, 0.0]}], "edges": [],
+        })
+        _clipc.show()
+        _clipc.resize(700, 460)
+        _app.processEvents()
+        _fnt = _QtG.QFont()
+        _fnt.setPixelSize(11)
+        _fm = _QtG.QFontMetricsF(_fnt)
+        _lines = pdf_map.node_lines(_clipc._pdfs[0])
+        _tw = max(_fm.horizontalAdvance(t) for t in _lines)
+        _bad = []
+        for _px in range(-40, 741, 20):
+            _lx, _ly = pdf_map.label_anchor(float(_px), 230.0, 22.0, _tw, 700.0)
+            _lx = pdf_map.clamp_label(_lx, _tw, 700.0)
+            if _lx < 0 or _lx + _tw > 700.0:
+                _bad.append(_px)
+        check("a real four-line plate stays inside the canvas at EVERY "
+              "node position, off-screen ones included — label_anchor "
+              "mirrors only when the mirrored side fits, and a name "
+              "clipped at the edge has now been reported three times "
+              "in this module",
+              not _bad, f"clipped at node x = {_bad}")
+        check("...and the painter actually goes through that clamp — "
+              "the check above validates the math, this is what stops "
+              "the paint path quietly skipping it",
+              "clamp_label(lx, tw, w)" in _method_seg("_MapCanvas",
+                                                      "_paint_label"))
+
+        # BUG 5's other half: a click that never lands. K-148 compared
+        # each individual move delta against 2.0, so a couple of pixels
+        # of trackpad finger drift promoted a click to a pan — nothing
+        # selected, nothing flown to, no connections drawn.
+        def _mouse(kind, x, y, btn, btns):
+            return _QtG.QMouseEvent(
+                kind, _QtC.QPointF(x, y), _QtC.QPointF(x, y), btn, btns,
+                _QtC.Qt.KeyboardModifier.NoModifier)
+
+        _clk = pdf_map.map_canvas(None, CLOUD)
+        _clk.show()
+        _clk.resize(700, 460)
+        _clk._reduce_motion = lambda: True
+        _app.processEvents()
+        _clk._ensure_fit(700.0, 460.0)
+        _nx, _ny, _ = pdf_map.project_point(
+            _clk._vp, _clk._cam, *_clk._pdf_xyz["lec1"])
+        _clk.mousePressEvent(_mouse(
+            _QtC.QEvent.Type.MouseButtonPress, _nx, _ny,
+            _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.LeftButton))
+        _clk.mouseMoveEvent(_mouse(
+            _QtC.QEvent.Type.MouseMove, _nx + 2, _ny + 1,
+            _QtC.Qt.MouseButton.NoButton, _QtC.Qt.MouseButton.LeftButton))
+        _clk.mouseReleaseEvent(_mouse(
+            _QtC.QEvent.Type.MouseButtonRelease, _nx + 2, _ny + 1,
+            _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.NoButton))
+        check("a click with two pixels of trackpad drift still SELECTS "
+              "— the drag threshold is measured from where the button "
+              "went down, not per move event",
+              _clk._selected == "lec1")
+        # The click above FLEW the camera, so the node has moved: ask
+        # again where it is, or the drag below would "select nothing"
+        # by missing rather than by being a drag.
+        _clk._selected = None
+        _clk._did_fit = False
+        _clk._ensure_fit(700.0, 460.0)
+        _nx, _ny, _ = pdf_map.project_point(
+            _clk._vp, _clk._cam, *_clk._pdf_xyz["lec1"])
+        check("(the node is where the drag below starts, so a failure "
+              "there is about the threshold and not about a miss)",
+              _clk._hit_at(_nx, _ny) == "lec1"
+              and _clk._hit_at(_nx + 7, _ny) == "lec1")
+        _clk.mousePressEvent(_mouse(
+            _QtC.QEvent.Type.MouseButtonPress, _nx, _ny,
+            _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.LeftButton))
+        for _step in range(1, 8):
+            _clk.mouseMoveEvent(_mouse(
+                _QtC.QEvent.Type.MouseMove, _nx + _step, _ny,
+                _QtC.Qt.MouseButton.NoButton, _QtC.Qt.MouseButton.LeftButton))
+        _clk.mouseReleaseEvent(_mouse(
+            _QtC.QEvent.Type.MouseButtonRelease, _nx + 7, _ny,
+            _QtC.Qt.MouseButton.LeftButton, _QtC.Qt.MouseButton.NoButton))
+        check("...while a real drag past CLICK_SLOP is still a pan, and "
+              "selects nothing",
+              _clk._selected is None)
+
+        # ---- K-158: one PDF in focus ----
+        _foc = pdf_map.map_canvas(None, CLOUD)
+        _foc.show()
+        _foc.resize(700, 460)
+        _foc._reduce_motion = lambda: True
+        _app.processEvents()
+        check("a canvas nobody asked to opens on the bare cloud — the "
+              "Library's dock is told which PDF to show by the viewer "
+              "and must not pick a different one behind the reader",
+              _foc._selected is None and _foc._auto_focus is False)
+        _foc.set_initial_focus(True)
+        _foc._did_fit = False
+        _foc._ensure_fit(700.0, 460.0)
+        check("...and a host that asks LANDS on one, at the first fit — "
+              "most-matched first, framed on its own region of the "
+              "cloud rather than on the whole ball of dots",
+              _foc._selected == "lec1"
+              and _foc._vp.scale > pdf_map.frame_bounds(
+                  _foc._bounds, _foc._cam, (700.0, 460.0)).scale)
+        check("arrow keys step the focus and fly there — the picker for "
+              "a window with no viewer to follow, and the only one that "
+              "works when centroids stack PDFs on top of each other",
+              _foc.step_focus(1) is True and _foc._selected == "lec2"
+              and _foc.step_focus(1) is True and _foc._selected == "lec1")
+        _foc.keyPressEvent(_QtG.QKeyEvent(
+            _QtC.QEvent.Type.KeyPress, _QtC.Qt.Key.Key_Right.value,
+            _QtC.Qt.KeyboardModifier.NoModifier))
+        check("...wired to Right/Left, with Escape back to the whole "
+              "cloud",
+              _foc._selected == "lec2")
+        _foc.keyPressEvent(_QtG.QKeyEvent(
+            _QtC.QEvent.Type.KeyPress, _QtC.Qt.Key.Key_Escape.value,
+            _QtC.Qt.KeyboardModifier.NoModifier))
+        check("...and Escape clears it, refitting the whole graph",
+              _foc._selected is None
+              and abs(_foc._vp.scale - pdf_map.frame_bounds(
+                  _foc._bounds, _foc._cam, (700.0, 460.0)).scale) < 1e-6)
+        _foc._selected = "lec1"
+        _one = _render(_foc, 700, 460)
+        _foc._selected = "lec2"
+        _two = _render(_foc, 700, 460)
+        check("the two focuses are genuinely different pictures — one "
+              "PDF lit and the rest ghosts, not the same frame with a "
+              "different caption",
+              sum(1 for y in range(0, 460, 3) for x in range(0, 700, 3)
+                  if _one.pixelColor(x, y) != _two.pixelColor(x, y)) > 200)
+
+        def _bright_box(img, cx, cy, r=12):
+            """Pixels brighter than any star in a small box round a node
+            — a lit node has a solid pale core, a ghost has a 1px ring
+            and nothing else, and the ambient field never gets there."""
+            _n = 0
+            for _y in range(max(0, int(cy - r)), min(460, int(cy + r))):
+                for _x in range(max(0, int(cx - r)), min(700, int(cx + r))):
+                    _c = img.pixelColor(_x, _y)
+                    if _c.red() + _c.green() + _c.blue() > 450:
+                        _n += 1
+            return _n
+
+        _foc._selected = "lec1"
+        _foc._did_fit = False
+        _foc._ensure_fit(700.0, 460.0)
+        _l2x, _l2y, _ = pdf_map.project_point(
+            _foc._vp, _foc._cam, *_foc._pdf_xyz["lec2"])
+        _ghosted = _bright_box(_render(_foc, 700, 460), _l2x, _l2y)
+        _foc._selected = "lec2"
+        _lit_ink = _bright_box(_render(_foc, 700, 460), _l2x, _l2y)
+        check("an UNFOCUSED PDF is a ghost, not a second lit node — "
+              "PDFs sit at their matched notes' centroid (K-058), so "
+              "files with overlapping matches land on top of each "
+              "other and four lit rings become one unreadable knot",
+              _lit_ink > 40 and _ghosted <= 5,
+              f"ghosted {_ghosted} bright px, lit {_lit_ink}")
 
         _dock._vp = pdf_map.pan_by(_dock._vp, -5000.0, -5000.0)
         check("select() on the bare canvas is the dock's whole "

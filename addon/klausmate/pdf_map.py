@@ -11,21 +11,20 @@ zoom anchored at the cursor, and a Fit reset.
 
 K-138, Pouya's own ask, reshaped three things.
 
-**Every note, not a seventh of them.** ``projection`` now fits its
+**Every note, not a seventh of them.** ``projection`` fits its
 components on a stride sample and projects every row, so the graph
 arrives holding the whole collection — 28,668 notes on the collection
-this was measured against. Drawing that many with the old
-``drawEllipse``-per-dot loop cost 36 ms a frame (28 fps mid-drag); the
-loop itself, just transforming and culling in Python, was 9 ms of it.
-So the note layer is now built ONCE as a world-space ``QPolygonF`` and
-per frame handed to ``QTransform.map`` — the whole 28k transformed in
-C++ — then drawn with a single ``drawPoints``. Same 28,668 dots, 3 ms.
-No sampling, no cap, no level-of-detail: the honest thing was to make
-the draw cheap, not to draw less. **The transform must stay on the
-polygon, never on the painter**: ``drawPoints`` under a scaled painter
-with a cosmetic pen degenerates into long horizontal strokes once the
-zoom is deep (rendered and confirmed), while mapping to screen space
-first is exact at every zoom AND slightly faster.
+this was measured against. **K-158 reversed the DRAWING half of that**
+(see below): the graph still carries every note, but the canvas draws a
+sample of them. What survives unchanged is the mechanism: the note
+layer is built ONCE as world-space ``QPolygonF``s and per frame handed
+to ``QTransform.map``, so the transform runs in C++ and the Python cost
+per frame is the number of BANDS, not the number of dots. **The
+transform must stay on the polygon, never on the painter**: a point
+draw under a scaled painter with a cosmetic pen degenerates into long
+horizontal strokes once the zoom is deep (rendered and confirmed),
+while mapping to screen space first is exact at every zoom AND
+slightly faster.
 
 **Names only when you ask.** K-133 shipped always-on labels below a
 12-node cap because the map opened anonymous; Pouya looked at it and
@@ -86,17 +85,20 @@ a scaled painter degenerates ``drawPoints`` into horizontal strokes at
 deep zoom — and a painter cannot carry a perspective divide to a cosmetic
 pen at all.
 
-Two traps found by measuring, both of which look free and are not.
-Depth fog as ALPHA costs 13.8 ms a frame against 2.9 for the same ramp
-mixed OPAQUE (5x, for a picture the eye cannot tell apart), so the fog
-blends two palette tokens instead. And round dots: the identical draw
-with ``RoundCap`` is 54.6 ms a frame against 3.4 — Qt strokes every cap
-as a real path — so the dots stay square, and small enough not to read
-as blocks. One trap found by RENDERING: fog keyed on z came out one flat
-mid-grey on the real 28,668-note index, because a PCA score is
-Gaussian-ish and the axis is normalized to its outliers. ``fog_shades``
-spends the ramp on the cloud's own depth histogram instead; the synthetic
-uniform cube it was first tuned on hid that completely.
+Two traps K-148 found by measuring AT 28,668 NOTES — both real there,
+and both gone at K-158's sampled few hundred, which is why every number
+in this file is stated with the count it was measured at. Depth fog as
+ALPHA cost 13.8 ms a frame against 2.9 opaque; round dots cost 54.6 ms
+against 3.4, because Qt strokes every cap as a real path. At 400 dots
+the same measurements are 0.85 ms round against 0.27 square, and a
+cached gradient sprite blitted per dot is 0.42 — cheaper than round
+dots. So the constraint that made K-148's map a field of flat square
+chips is simply not a constraint any more. One trap found by RENDERING
+and still live: fog keyed on z came out one flat mid-grey on the real
+28,668-note index, because a PCA score is Gaussian-ish and the axis is
+normalized to its outliers. ``fog_shades`` spends the ramp on the
+cloud's own depth histogram instead; the synthetic uniform cube it was
+first tuned on hid that completely.
 
 Motion. The standalone window sways slowly around ``REST_ANGLE`` (not a
 full spin: a spin sweeps through the edge-on pose where the cloud
@@ -119,6 +121,49 @@ appears immediately showing ``BUILDING_TEXT`` and a ``QueryOp`` worker
 fills it in — the same shape the dock already uses — because the graph build,
 26.6 s on the live collection with three components (17 s with two),
 used to run inline.
+
+**K-158: a vibe, not a census — and one PDF at a time.** Pouya, having
+looked at all 28,668 notes: "It doesn't have to show all of the nodes...
+just make it simple, have a simple graph, have it zoom in onto the node
+of the PDFs, and show some way of connecting how it's connected to all
+of its notes. Forget about cards. Make it look like I'm accessing the
+matrix." Then, on the first pass of this card: "only one PDF shows at a
+time, potentially, and then it just zooms in on that section of the
+cloud that hosts that PDF."
+
+So five things changed, and the first two REVERSE K-138 and K-148.
+
+1. **The cloud is a SAMPLE.** ``split_cloud`` takes an even stride over
+   the whole collection (``SAMPLE_NOTES``) plus a stride over each PDF's
+   own matched notes (``SAMPLE_PER_PDF``), and the caption says the real
+   total out loud — "4 PDFs · 28,670 notes · showing 643". 28k points at
+   any real zoom is a solid mass that hides the structure it is supposed
+   to convey, and nothing can glow inside it. ``SAMPLE_NOTES = 0``
+   restores K-138's draw-everything path, because "how many is legible"
+   is a tuning question whose answer will move.
+2. **The dots emit light.** Cached radial-gradient sprites, blitted
+   additively, on the DARK palette in both themes — a glow on white is a
+   smudge, and K-148's light-mode render was exactly that. Depth drives
+   brightness AND saturation, so the far face of the cloud sinks into
+   the ground as a cold navy while the near face burns near-white.
+3. **The connections are the point.** A PDF's beams are trails of the
+   same sprites, leaving the node's rim and bowing outward. K-148 drew
+   1px lines at 0.25 alpha: measured on the exact frame Pouya
+   screenshotted, that whole layer moved 0.59% of the pixels — the gate
+   WAS firing (its label, which shares the gate, was drawn in the same
+   frame), the edges were simply invisible.
+4. **One PDF is in focus and the rest are ghosts.** PDF nodes sit at
+   their matched notes' CENTROID (K-058), so files whose match sets
+   overlap land on top of one another — four lit rings in a knot. The
+   window opens on one (``set_initial_focus``), arrow keys step through
+   them, Escape goes back to the whole cloud, and the Library's dock
+   keeps being told which one by the viewer.
+5. **The name is drawn by the canvas**, on its own plate, in a pass
+   AFTER every node. It used to be emitted inside the depth-sorted node
+   loop, so a PDF that sorted nearer painted its disc over it; and a
+   native QToolTip carrying the same name fought it for the same corner.
+   ``clamp_label`` has the last word on placement, because a clipped
+   name has been reported three times in this module.
 
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (the camera, depth bands and fog ramp included:
@@ -178,6 +223,11 @@ DEFAULT_BOUNDS = (-1.0, -1.0, -1.0, 1.0, 1.0, 1.0)
 # every surface that existed before the Library dock).
 FIT_MARGIN = 48.0
 FIT_MARGIN_SHARE = 0.12
+# Share of the most extreme DRAWN points, per axis per end, that the fit
+# ignores (K-158). projection normalizes each axis to its own extremes,
+# so a handful of PCA outliers stretched the box until the cloud anyone
+# actually looks at occupied a quarter of the card.
+FIT_TRIM = 0.03
 # Sanity clamps on the zoom scale (pixels per world unit). Wide on
 # purpose: they exist so a runaway wheel loop can't drive the transform
 # into degeneracy, not to constrain normal use.
@@ -189,7 +239,6 @@ MAX_SCALE = 1_000_000.0
 NODE_R_MIN = 5.0
 NODE_R_MAX = 22.0
 NODE_R_SPREAD = 1.2
-NOTE_DOT_R = 1.6
 # Hover/click hit tolerance added on top of the largest node radius.
 HIT_SLOP = 4.0
 # Gap in px between a node's edge and its label box. Sized to clear the
@@ -198,7 +247,29 @@ HIT_SLOP = 4.0
 LABEL_GAP = 9.0
 # Baseline nudge that sits an 11px label on the node's centre line.
 LABEL_BASELINE_DY = 4.0
-EDGE_ALPHA = 0.25
+# Padding around the label's plate — the name is drawn over a live star
+# field now, so it carries a dark rounded backing or it is unreadable.
+LABEL_PAD_X = 7.0
+LABEL_PAD_Y = 5.0
+LABEL_PLATE_ALPHA = 0.82
+LABEL_LINE_H = 14.0
+# How close the plate may come to the canvas edge. label_anchor mirrors
+# only when the mirrored side FITS; when neither does it keeps the
+# right-hand placement and the text runs off. clamp_label has the last
+# word instead — three reports of a clipped name in this module is
+# enough offset-nudging.
+LABEL_EDGE_PAD = 6.0
+# The unfocused PDFs: a ring at this alpha and nothing else — no core,
+# no name, a fifth of the halo. Pouya, K-158: "only one PDF shows at a
+# time, potentially, and then it just zooms in on that section of the
+# cloud that hosts that PDF." A GHOST rather than nothing at all,
+# because the collection being bigger than what you are looking at is
+# the mental conception the map exists to give; deleting the others
+# would read as data loss. It also makes K-058's centroid pile-up stop
+# mattering: four PDFs whose matched notes overlap have nearly the same
+# mean position, so four lit rings land on top of one another.
+GHOST_ALPHA = 0.22
+GHOST_HALO_F = 0.7
 # One standard wheel notch (angleDelta 120) zooms by 2**(120/240) ≈ 1.41.
 WHEEL_ZOOM_DIVISOR = 240.0
 # select_pdf recentres only when the node is outside the viewport inset
@@ -267,6 +338,135 @@ DOT_DEPTH_MAX = 1.45
 # how much air is left around its matched notes when it lands.
 FLY_MS = 620
 FLY_PADDING = 1.25
+# ...and the share of the most extreme matches, per axis per end, the
+# flight's frame ignores. Semantic matches are not a tidy blob: on the
+# real library one PDF's matches span nearly the whole cloud, so the
+# full bounding box IS the whole graph and the flight — floored at the
+# fit scale — went nowhere. Measured before this existed: clicking the
+# 2,087-match PDF zoomed by exactly 1.00x.
+FLY_TRIM = 0.10
+
+# ── K-158: the sample, and the light ────────────────────────────────────
+# How many notes of the ambient cloud are actually DRAWN. K-138 drew
+# every one of 28,668 and K-148 made that cheap; Pouya looked at the
+# result and asked for the opposite — "it doesn't have to show all the
+# notes... it just has to give an idea, a mental conception of what the
+# embedding is". At 28k the cloud is a solid mass that hides the very
+# structure it is supposed to convey, and nothing can glow inside it.
+# 0 means EVERY note: the K-138 path is still reachable, because "how
+# many is legible" is a tuning question whose answer will move. Raising
+# it costs frame time close to linearly (measured: 400 dots 0.4 ms,
+# 1,600 dots 1.2 ms, 28,668 dots 17 ms for the same glow layer).
+SAMPLE_NOTES = 420
+# ...and how many of a PDF's OWN matched notes are drawn on top of that
+# sample. These are the notes its edges land on, so they must be drawn
+# or the connections would end in empty space. 0 means every match.
+SAMPLE_PER_PDF = 90
+# The sample is an even STRIDE over the graph's own order, never a
+# random draw: a stride thins a cloud uniformly (so its shape survives),
+# it is deterministic (the map looks the same every time you open it),
+# and it is what projection.py already does to pick its fit rows.
+#
+# Glow. K-148 measured round dots at 16x square and alpha fog at 5x
+# opaque and chose flat square chips — correct at 28,668 notes, and no
+# longer a constraint at a few hundred. Re-measured here at the sampled
+# count (1100x660, antialiased, this machine): square drawPoints
+# 0.27 ms, round drawPoints 0.85 ms, per-point QRadialGradient 2.10 ms,
+# and a CACHED gradient sprite blitted per dot 0.42 ms — cheaper than
+# round dots and 5x cheaper than drawing the gradient per point. So the
+# note layer is sprites: build the radial gradient ONCE per tier into a
+# QPixmap, then drawPixmap it. The tiers quantize the fog ramp; a dot's
+# tier is its depth band's fog shade.
+GLOW_TIERS = 14
+# How opaque a star's core and halo are. Not 1.0: the note layer
+# composites ADDITIVELY, so opaque cores saturate to flat white wherever
+# three dots overlap and the cloud's dense middle loses all hue. These
+# were set by rendering, at both canvas sizes — the Library's 545x185
+# dock packs the whole cloud into a thumbnail and blows out first.
+GLOW_CORE_ALPHA = 0.46
+GLOW_HALO_ALPHA = 0.34
+# Core dot radius (px) at the far and near ends of the ramp, and how
+# much bigger than the core the halo sprite is drawn. The sprite is
+# square, GLOW_RATIO * 2 * radius on a side, so keep the ratio modest —
+# it is what the blit actually costs.
+NOTE_R_FAR = 1.0
+NOTE_R_NEAR = 2.7
+GLOW_RATIO = 3.1
+# ...and how much of that a SMALL canvas gets. fit_margin's K-143
+# lesson, one layer down: a dot sized for a 900x640 window is a blot in
+# the Library's 545x185 dock, where the fit packs the whole cloud into
+# about 110px and every star overlaps its neighbours into one white
+# lump. Rendered at both sizes; the dock is what set the floor.
+# Quantized to tenths so a drag of the dock's splitter cannot thrash
+# the sprite cache.
+DOT_SCALE_FULL = 420.0
+DOT_SCALE_FLOOR = 0.55
+# The tier ramp, as mixes of palette tokens (never invented colour).
+# The halo runs from "barely above the ground" at the back to the full
+# accent at the front, so depth drives BOTH brightness and saturation —
+# a far dot is washed into the ground, a near one is hot. The core is
+# that halo mixed toward the text token, so every dot has a pale centre
+# falling off into a coloured halo, which is what emission looks like.
+HALO_DEEP = 0.62
+HALO_FAR = 0.16
+HALO_NEAR = 1.0
+CORE_FAR = 0.10
+CORE_NEAR = 0.75
+# When a PDF is active the rest of the cloud recedes: its tiers are
+# mixed this far back toward the ground so the PDF's own notes stand
+# out instead of drowning in everything else.
+DIM_KEEP = 0.55
+# The active PDF's own notes are drawn hotter and fatter than the
+# ambient cloud — they are what the flight is for.
+LINK_R_BOOST = 1.5
+# Edges as LIGHT, not ink — and as a TRAIL OF PARTICLES rather than a
+# stroke. K-148 drew a single 1px line at 0.25 alpha and, measured on
+# the frame Pouya screenshotted, the whole edge layer moved 0.59% of the
+# pixels: drawn, and invisible, over 28,670 grey chips.
+#
+# Glowing strokes were the obvious replacement and they blow the budget.
+# Measured here, 90 beams at 1100x660: an antialiased two-pass stroke is
+# 6.35 ms and rises to 10.55 ms once zoom makes the beams long, because
+# Qt's cost is the stroke's device-space AREA. The SAME beams as blitted
+# glow sprites are 0.84 ms and — this is the part that matters — the
+# cost does not move with zoom, because the particle count per beam is
+# capped. Turning antialiasing off would also have been fast (2.34 ms)
+# and would have put staircased 1px lines in a view whose whole job is
+# to look like light. Composition mode is irrelevant either way (Plus
+# 18.08 ms vs SourceOver 18.74 on the same strokes) — it was never the
+# blend that was expensive, it was the rasterizer.
+BEAM_STEP = 13.0
+BEAM_MAX = 20
+# Where along the tier ramp a beam's particles start: they grow and
+# brighten from the node outward, so the light reads as travelling.
+BEAM_MIN_TIER = 0.22
+# Beams leave the node's RIM plus this gap, and bow this share of their
+# own length sideways. Both are about the hub: particles converging on
+# one point pile into a white blot and hide the node they are about,
+# and straight spokes read as a diagram where a curve reads as a
+# connection.
+EDGE_HUB_GAP = 3.0
+EDGE_BOW = 0.085
+# A PDF node is a core + halo + ring, never a filled disc. Fractions of
+# the node radius: the lit core, the ring's stroke, and how far the halo
+# reaches past the rim.
+NODE_CORE_F = 0.42
+NODE_RING_W = 1.6
+NODE_HALO_F = 3.4
+NODE_SELECT_GAP = 5.0
+# The ground: a radial lift at the centre of the card falling to the
+# flat ground token at the corners. One gradient fill a frame (measured
+# at 0.18 ms for 1100x660) — cheaper than caching a full-size pixmap and
+# re-making it on every resize.
+VIGNETTE_LIFT = 0.16
+VIGNETTE_SPREAD = 0.78
+# A click that moves the mouse this far (px, from where the button went
+# down) is a DRAG; anything less is a click. K-148 compared each
+# individual move delta against 2.0, so two pixels of trackpad finger
+# drift turned a click into a pan — the PDF was never selected, nothing
+# flew, and no edges drew. Measured on the real graph: a press, a
+# (2, 1) jitter and a release selects nothing.
+CLICK_SLOP = 4.0
 
 EMPTY_TEXT = "No indexed PDFs to map yet."
 # Shown where the canvas would go when map_canvas() comes back None —
@@ -285,7 +485,7 @@ BUILD_FAIL_TEXT = "The map could not be built."
 # NAME, not just a trace — and kept it a hair shorter than K-133's, since
 # a plain QLabel's layout minimum is its text width (see the window).
 HINT_TEXT = (
-    "Circles are PDFs, dots are notes — hover to name, "
+    "Circles are PDFs, dots are notes — hover or ←→ to focus one, "
     "drag to pan, scroll to zoom"
 )
 
@@ -713,6 +913,51 @@ def bounds_of(
     return (min(xs), min(ys), min(zs), max(xs), max(ys), max(zs))
 
 
+def trimmed_bounds(
+    points: Iterable[Sequence], trim: float = 0.0,
+    fallback: Sequence[float] = DEFAULT_BOUNDS
+) -> tuple:
+    """``bounds_of``, ignoring the most extreme ``trim`` share of the
+    points on each axis at each end.
+
+    What the flight frames (K-158). Semantic matches are not a tidy
+    blob: on the real library one PDF's matched notes span nearly the
+    whole cloud, so the full bounding box of "this PDF and everything it
+    reaches" is the whole graph — and the flight, floored at the fit
+    scale, then went nowhere at all. Measured before this existed:
+    clicking the 2,087-match PDF zoomed by exactly 1.00x.
+
+    Trimming a fixed share per axis rather than dropping outlier POINTS:
+    a note far out on x may be perfectly ordinary on y, and throwing the
+    whole note away would shrink the frame twice. ``trim <= 0`` is the
+    plain bounding box.
+    """
+    xs: list = []
+    ys: list = []
+    zs: list = []
+    for p in points:
+        xyz = parse_xyz(p)
+        if xyz is not None:
+            xs.append(xyz[0])
+            ys.append(xyz[1])
+            zs.append(xyz[2])
+    if not xs:
+        return tuple(float(v) for v in fallback)
+    t = _clamp(_num(trim), 0.0, 0.45)
+    out: list = []
+    for axis in (xs, ys, zs):
+        axis.sort()
+        k = int(len(axis) * t)
+        # Never trim a span away: fewer than two survivors is not a
+        # box any more, it is a point, and a flight framed on a point
+        # zooms to the scale clamp.
+        if len(axis) - 2 * k < 2:
+            k = 0
+        out.append((axis[k], axis[len(axis) - 1 - k]))
+    return (out[0][0], out[1][0], out[2][0],
+            out[0][1], out[1][1], out[2][1])
+
+
 def graph_bounds(graph: dict) -> tuple:
     """Bounding box over every positioned note AND pdf node in a
     ``build_graph_data`` dict (pdf centroids always lie inside the note
@@ -795,13 +1040,276 @@ def active_pdf(hover: Optional[str], selected: Optional[str]) -> Optional[str]:
     return hover if hover is not None else selected
 
 
-def edges_for_selection(edges: Iterable[dict], selected: Optional[str]) -> list:
-    """The subset of ``edges`` to draw: ONLY the hovered/selected PDF's
-    (readability + perf — all edges at once is hairball noise), empty
-    when nothing is active."""
-    if not selected:
+def focus_order(pdfs: Iterable[dict]) -> list:
+    """The PDFs' safe names in a stable focus order — most-matched
+    first, ties broken by name.
+
+    The order arrow keys step through, and the one ``focus_initial``
+    picks its first from. Most-matched first because that is the file
+    with the most to say about the collection, and a stable order
+    because "next" has to mean the same thing every time.
+    """
+    rows = []
+    for p in pdfs:
+        if not isinstance(p, dict):
+            continue
+        safe = p.get("safe")
+        if not safe:
+            continue
+        try:
+            n = int(p.get("match_count") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        rows.append((-n, str(safe)))
+    rows.sort()
+    return [s for _n, s in rows]
+
+
+def next_focus(order: Sequence, current: Optional[str], step: int = 1):
+    """The next PDF to focus, cycling; ``None`` for an empty order.
+
+    An unknown or absent ``current`` enters at the FRONT going forward
+    and at the BACK going back, so the first arrow press from the
+    whole-cloud view lands on a real PDF either way.
+    """
+    names = [str(s) for s in order]
+    if not names:
+        return None
+    try:
+        i = names.index(str(current))
+    except ValueError:
+        return names[0] if step >= 0 else names[-1]
+    return names[(i + int(step)) % len(names)]
+
+
+def links_for(linked: dict, active: Optional[str]) -> list:
+    """The connections to DRAW: the active PDF's own sampled notes,
+    empty when nothing is active.
+
+    The edge-subset policy, and since K-158 it is also the cost
+    ceiling. K-148 drew every edge of the active PDF — 2,087 of them for
+    the biggest file in Pouya's library, measured here at 39.8 ms a
+    frame once the lines became glowing two-pass strokes, ten times over
+    the budget. Drawing to the SAMPLED notes instead is both the cheap
+    answer and the honest one: an edge that ends on a dot nobody drew is
+    a line into empty space.
+    """
+    if not active:
         return []
-    return [e for e in edges if isinstance(e, dict) and e.get("pdf") == selected]
+    return list(linked.get(str(active)) or [])
+
+
+def sample_indices(total: object, cap: object) -> list:
+    """Up to ``cap`` indices into a sequence of ``total`` items, spread
+    by an even STRIDE — ``[i * total // cap for i in range(cap)]``.
+
+    ``cap <= 0`` (or a cap at least as large as the sequence) returns
+    every index, which is how ``SAMPLE_NOTES = 0`` keeps K-138's
+    draw-everything path reachable behind a constant.
+
+    Stride rather than a random draw for three reasons. It thins a cloud
+    UNIFORMLY, so the shape survives the thinning — the whole point of
+    sampling here is that the picture still says what the embedding
+    looks like. It is deterministic, so the map is the same picture
+    every time it opens rather than a different one each session. And it
+    is what ``projection.py`` already does to choose its fit rows, so
+    the two samples are drawn the same way.
+
+    Indices are strictly increasing and never repeat: ``i * total //
+    cap`` is monotonic and, with ``cap <= total``, gains at least one
+    per step.
+    """
+    n = int(_num(total, 0.0))
+    k = int(_num(cap, 0.0))
+    if n <= 0:
+        return []
+    if k <= 0 or k >= n:
+        return list(range(n))
+    return [i * n // k for i in range(k)]
+
+
+def pdf_note_ids(edges: Iterable[dict], safe: object) -> list:
+    """The note ids one PDF's edges reach, in graph order, deduplicated.
+
+    Separate from ``edges_for_selection`` because the sample wants the
+    NOTES (each once, so a stride over them is a stride over distinct
+    points), while the painter wants the edges."""
+    key = str(safe) if safe is not None else None
+    out: list = []
+    seen: set = set()
+    for e in edges:
+        if not isinstance(e, dict) or str(e.get("pdf")) != key:
+            continue
+        try:
+            nid = int(e["nid"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if nid not in seen:
+            seen.add(nid)
+            out.append(nid)
+    return out
+
+
+def row_nid(row: object) -> Optional[int]:
+    """A note row's nid as an int, or None — the ONE place a graph row's
+    id is parsed, so the sample and the edge lookup agree on what
+    counts as the same note."""
+    if not isinstance(row, dict):
+        return None
+    try:
+        return int(row["nid"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def split_cloud(
+    graph: dict, cap: int = SAMPLE_NOTES, per_pdf: int = SAMPLE_PER_PDF
+) -> tuple:
+    """The drawn cloud: ``(ambient, linked, positions, total, shown)``.
+
+    - ``ambient``: ``[(x, y, z), ...]`` — the stride sample of the whole
+      collection. This is the shape of the embedding, thinned until you
+      can see through it.
+    - ``linked``: ``{safe: [(x, y, z), ...]}`` — a stride sample of each
+      PDF's OWN matched notes, drawn hot when that PDF is active. These
+      are separate from ``ambient`` (never both) because a PDF's edges
+      have to land on dots that are actually on screen: an edge ending
+      in empty space is worse than no edge.
+    - ``positions``: ``{nid: (x, y, z)}`` for EVERY positioned note, not
+      just the drawn ones — an edge's endpoint is a real position
+      whether or not its dot was sampled, and ``_fly_target`` frames the
+      PDF's true match set rather than the sample's bounding box.
+    - ``total``: how many notes the graph really held, which is what the
+      caption says out loud.
+    - ``shown``: how many DISTINCT notes are drawn. A note two PDFs both
+      matched sits in both link sets and is blitted twice (same place,
+      one slightly brighter dot); it is one note, and the caption counts
+      it once.
+
+    One function so the canvas and the caption cannot disagree about
+    what "showing 780" means; the test still has an independent route to
+    the same number, by counting the points the canvas actually put in
+    its polygons.
+    """
+    rows = [n for n in (graph.get("notes") or []) if row_xyz(n) is not None]
+    positions: dict = {}
+    for n in rows:
+        nid = row_nid(n)
+        if nid is not None:
+            positions[nid] = row_xyz(n)
+    edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+    linked: dict = {}
+    taken: set = set()
+    for p in graph.get("pdfs") or []:
+        if not isinstance(p, dict):
+            continue
+        nids = [n for n in pdf_note_ids(edges, p.get("safe")) if n in positions]
+        picked = [nids[i] for i in sample_indices(len(nids), per_pdf)]
+        linked[str(p.get("safe"))] = [positions[n] for n in picked]
+        taken.update(picked)
+    rest = [row_xyz(n) for n in rows if row_nid(n) not in taken]
+    ambient = [rest[i] for i in sample_indices(len(rest), cap)]
+    return (ambient, linked, positions, len(rows), len(ambient) + len(taken))
+
+
+def caption_text(pdf_count: int, note_total: int, shown: int) -> str:
+    """The window's caption — "4 PDFs · 28,670 notes · showing 780".
+
+    The "showing" clause is the point: the map draws a SAMPLE now, and a
+    view that quietly showed a fraction while naming the whole would be
+    lying about the data. It is omitted only when nothing was left out.
+    Nothing here says "cards" — K-158, Pouya: "forget about cards".
+    """
+    p = max(0, int(_num(pdf_count, 0.0)))
+    n = max(0, int(_num(note_total, 0.0)))
+    s = max(0, int(_num(shown, 0.0)))
+    out = (f"{p} PDF{'s' if p != 1 else ''} · "
+           f"{n} note{'s' if n != 1 else ''}")
+    if 0 < s < n:
+        out += f" · showing {s}"
+    return out
+
+
+def tier_index(shade: float, tiers: int = GLOW_TIERS) -> int:
+    """Which glow tier a band's fog shade falls in.
+
+    The sprite cache is per TIER, not per band: 256 bands would mean 256
+    pixmaps for a ramp the eye reads as a dozen steps. Clamps rather
+    than raises, because this is on the paint path.
+    """
+    t = int(_num(tiers, GLOW_TIERS))
+    if t <= 1:
+        return 0
+    i = int(_clamp(_num(shade), 0.0, 1.0) * t)
+    return t - 1 if i >= t else i
+
+
+def tier_position(index: int, tiers: int = GLOW_TIERS) -> float:
+    """Where a tier sits on the far->near ramp, in [0, 1] — its middle,
+    so the ends are not forced to exactly 0 and 1 by an off-by-one."""
+    t = int(_num(tiers, GLOW_TIERS))
+    if t <= 1:
+        return 1.0
+    return _clamp((int(_num(index)) + 0.5) / t, 0.0, 1.0)
+
+
+def tier_colours(c: dict, pos: float, dim: bool = False) -> tuple:
+    """``(halo, core)`` hex for a tier at ramp position ``pos``.
+
+    Both are mixes of palette TOKENS, so the whole star field re-colours
+    with the accent theme and this file still names no colour of its
+    own. The halo runs from a shade barely above the ground at the back
+    to the full accent at the front — depth drives brightness AND
+    saturation, because mixing toward a grey ground desaturates as it
+    darkens. The core is that halo mixed toward the text token: a pale
+    centre falling off into a coloured halo, which is what a light
+    source looks like and what a flat chip never will.
+
+    ``dim`` mixes both back toward the ground — the ambient cloud while
+    a PDF is active, so its own notes are not lost in everything else.
+    """
+    t = _clamp(_num(pos), 0.0, 1.0)
+    ground = c["bg"]
+    # Navy at the back, accent at the front: the ramp travels through
+    # HUE as well as brightness, so the far face of the cloud sinks into
+    # the ground as a cold deep blue instead of a grey version of the
+    # near face. Three accent-family tokens, no invented colour.
+    deep = blend_hex(ground, c["blue_pressed"], HALO_DEEP)
+    halo = blend_hex(deep, c["blue_bright"],
+                     HALO_FAR + (HALO_NEAR - HALO_FAR) * t)
+    core = blend_hex(halo, c["text"], CORE_FAR + (CORE_NEAR - CORE_FAR) * t)
+    if dim:
+        halo = blend_hex(ground, halo, DIM_KEEP)
+        core = blend_hex(ground, core, DIM_KEEP)
+    return (halo, core)
+
+
+def dot_scale(widget_size: Sequence[float]) -> float:
+    """How big this canvas's stars are, as a fraction of full size.
+
+    ``fit_margin``'s rule applied to the dots themselves (K-158): the
+    Library's dock is a 545x185 thumbnail of the SAME scene, and at that
+    size the fit packs the whole cloud into roughly 110px — where a dot
+    sized for the standalone window overlaps its neighbours into one
+    white lump. Quantized to tenths so dragging the dock's splitter
+    cannot thrash the sprite cache.
+    """
+    try:
+        smaller = min(float(widget_size[0]), float(widget_size[1]))
+    except (TypeError, ValueError, IndexError):
+        return 1.0
+    if smaller != smaller or smaller <= 0:  # NaN or no surface yet
+        return 1.0
+    return _clamp(round(smaller / DOT_SCALE_FULL, 1), DOT_SCALE_FLOOR, 1.0)
+
+
+def tier_radius(pos: float, boost: float = 1.0) -> float:
+    """The core dot radius (px) for a tier — the near face of the cloud
+    is chunkier than the far face, which is the size half of depth."""
+    t = _clamp(_num(pos), 0.0, 1.0)
+    return (NOTE_R_FAR + (NOTE_R_NEAR - NOTE_R_FAR) * t) * max(
+        0.1, _num(boost, 1.0)
+    )
 
 
 def recenter_for(
@@ -873,9 +1381,19 @@ def label_anchor(
     return (right, baseline)
 
 
-def tooltip_text(pdf: dict) -> str:
-    """Hover tooltip body: display name, folder when filed, match count,
-    retention only when actually known (headless graphs carry None)."""
+def node_lines(pdf: dict) -> list:
+    """The focused PDF's plate: display name, folder when filed, matched
+    NOTE count, retention only when actually known (headless graphs
+    carry None). Never a card count — K-158, Pouya: "forget about
+    cards".
+
+    This used to be ``tooltip_text``, fed to ``QToolTip.showText``.
+    K-158 replaced the native tooltip with a plate the canvas draws
+    itself, because the two were fighting: a popup positioned at the
+    global cursor and a label positioned beside the node stacked on top
+    of each other in the same corner, twice, in two different type
+    styles. One name, drawn once, by whoever owns the surface.
+    """
     lines = [str(pdf.get("display") or pdf.get("safe") or "PDF")]
     folder = pdf.get("folder")
     if folder:
@@ -888,7 +1406,29 @@ def tooltip_text(pdf: dict) -> str:
     r = pdf.get("retention")
     if isinstance(r, (int, float)) and not isinstance(r, bool):
         lines.append(f"Retention: {round(float(r) * 100.0)}%")
-    return "\n".join(lines)
+    return lines
+
+
+def clamp_label(x: float, text_width: float, view_width: float,
+                pad: float = LABEL_EDGE_PAD) -> float:
+    """``x`` pulled back inside the canvas, whatever ``label_anchor``
+    chose.
+
+    ``label_anchor`` mirrors a label to the left when the right-hand
+    placement would overrun — but only when the left placement FITS.
+    When neither side fits (a wide plate, a node near an edge, a node
+    projected off-canvas entirely) it keeps the right-hand one and the
+    text runs off the edge. That has now been reported three times in
+    this module, so the last word belongs to a clamp rather than to
+    another offset: the plate is placed by preference and then made to
+    be on screen.
+    """
+    tw = max(0.0, _num(text_width))
+    vw = _num(view_width)
+    p = max(0.0, _num(pad, LABEL_EDGE_PAD))
+    if vw <= 0.0:
+        return _num(x)
+    return _clamp(_num(x), p, max(p, vw - tw - p))
 
 
 # ── aqt glue ─────────────────────────────────────────────────────────────
@@ -1012,13 +1552,14 @@ def _canvas_class():
             QPainter,
             QPainterPath,
             QPen,
+            QPixmap,
             QPointF,
             QPolygonF,
             QPropertyAnimation,
+            QRadialGradient,
             QRectF,
             Qt,
             QTimer,
-            QToolTip,
             QTransform,
             QWidget,
             pyqtProperty,
@@ -1037,21 +1578,16 @@ def _canvas_class():
 
         def __init__(self, graph_dict: dict, parent_widget=None) -> None:
             super().__init__(parent_widget)
-            self._notes: list = []
-            self._note_xyz: dict = {}
+            # K-158: the cloud is a SAMPLE now. ``_note_xyz`` still holds
+            # every positioned note (edges and the flight's framing work
+            # off the real match set, not off the sample), while
+            # ``_notes`` is only what gets drawn.
+            (ambient, self._link_pts, self._note_xyz,
+             self._note_total, self._shown) = split_cloud(graph_dict)
+            self._notes: list = list(ambient)
             self._pdfs: list = []
             self._pdf_xyz: dict = {}
             self._pdf_by_safe: dict = {}
-            self._edges: list = []
-            for n in graph_dict.get("notes") or []:
-                xyz = row_xyz(n)
-                if xyz is None:
-                    continue
-                self._notes.append(xyz)
-                try:
-                    self._note_xyz[int(n.get("nid"))] = xyz
-                except (TypeError, ValueError):
-                    continue
             for p in graph_dict.get("pdfs") or []:
                 xyz = row_xyz(p)
                 safe = p.get("safe") if isinstance(p, dict) else None
@@ -1060,26 +1596,45 @@ def _canvas_class():
                 self._pdfs.append(p)
                 self._pdf_xyz[str(safe)] = xyz
                 self._pdf_by_safe[str(safe)] = p
-            self._edges = [
-                e for e in graph_dict.get("edges") or [] if isinstance(e, dict)
-            ]
-            # The note layer, built ONCE in WORLD space (K-138), now as
-            # one polygon PER DEPTH BAND (K-148). Every frame hands each
-            # band to QTransform.map, which transforms its points in
-            # C++; the Python per-dot loop this replaces is 11.6 ms a
-            # frame in 3D against 2.9 for the whole banded draw. World
-            # space, not screen: it is the camera and viewport that
-            # change per frame, not the cloud.
-            buckets: dict = {}
-            for x, y, z in self._notes:
-                buckets.setdefault(band_index(z), []).append(QPointF(x, y))
-            self._bands = [
-                (band_z(i), QPolygonF(pts))
-                for i, pts in sorted(buckets.items())
-            ]
-            self._band_pens: list = []
-            self._pens_night = None
-            self._bounds = graph_bounds(graph_dict)
+            # The note layer, built ONCE in WORLD space (K-138), as one
+            # polygon PER DEPTH BAND (K-148). Every frame hands each band
+            # to QTransform.map, which transforms its points in C++;
+            # the Python per-dot loop this replaces is 11.6 ms a frame in
+            # 3D against 2.9 for the whole banded draw. World space, not
+            # screen: it is the camera and viewport that change per
+            # frame, not the cloud. K-158 adds a SECOND set of bands per
+            # PDF — its own matched notes, so they can be lit separately
+            # from the ambient field without a per-point test in the
+            # paint loop.
+            self._bands = self._make_bands(self._notes)
+            self._link_bands: dict = {
+                safe: self._make_bands(pts)
+                for safe, pts in self._link_pts.items()
+            }
+            self._sprites: dict = {}
+            self._sprite_key = None
+            # ONE fog ramp for both band sets, spent on the COMBINED
+            # depth histogram (fog_shades' K-148 lesson: a PCA score is
+            # Gaussian-ish, so a ramp keyed on z comes out one flat
+            # grey). Indexed by band index, so a linked note and the
+            # ambient note beside it read at the same depth.
+            hist = [0] * DEPTH_BANDS
+            for group in [self._bands] + list(self._link_bands.values()):
+                for idx, _zb, poly in group:
+                    hist[idx] += poly.count()
+            self._fog = fog_shades(hist)
+            # The fit frames what is DRAWN, trimmed of its wildest
+            # outliers (K-158). graph_bounds measures all 28,670 raw
+            # positions, and projection normalizes each axis to its own
+            # extremes — so a handful of PCA outliers stretched the box
+            # until the cloud everyone actually looks at sat in a
+            # quarter of the card with empty space all round it.
+            self._bounds = trimmed_bounds(
+                self._notes
+                + [pt for pts in self._link_pts.values() for pt in pts]
+                + list(self._pdf_xyz.values()),
+                FIT_TRIM,
+            )
             # DOT_DEPTH_MAX, because a node at the front of the cloud
             # DRAWS that much bigger than node_radius says (K-148).
             # Without it the nearest — biggest, most clickable-looking —
@@ -1098,12 +1653,20 @@ def _canvas_class():
             self._dragging = False
             self._drag_moved = False
             self._drag_last = None
+            self._drag_origin = None
             # Idle rotation is OPT-IN per host: the standalone window
             # asks for it, the Library's dock renders the same scene
             # STILL (Pouya's explicit call — nothing should be moving in
             # the corner of his eye while he works). Nothing starts here
             # either way; the timer is armed from showEvent.
             self._idle_want = False
+            # Which PDF the map opens ON. Opt-in per host, like the
+            # sway: the standalone window lands on one so the map is
+            # never a nameless ball of dots, while the Library's dock is
+            # told by ``select`` which file the viewer has open and must
+            # not pick a different one behind the reader's back.
+            self._focus_order = focus_order(self._pdfs)
+            self._auto_focus = False
             self._phase = 0.0
             self._idle = QTimer(self)
             self._idle.setInterval(IDLE_TICK_MS)
@@ -1122,6 +1685,9 @@ def _canvas_class():
             self._fly_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             try:
                 self.setMouseTracking(True)
+                # Arrow keys step the focus (see step_focus), so the
+                # canvas has to be able to hold focus at all.
+                self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             except Exception as exc:
                 print(f"[klausmate] map canvas setup failed: {exc}")
             # NO setMinimumSize here (K-143). How small the map may get
@@ -1130,6 +1696,30 @@ def _canvas_class():
             # would otherwise inherit a 480px floor and shove the whole
             # left pane wider. Each host sets its own, right where it
             # adds the canvas.
+
+        @staticmethod
+        def _make_bands(points) -> list:
+            """Quantize a set of world points into depth slabs —
+            ``[(band index, band z, QPolygonF), ...]`` ascending, empty
+            slabs omitted. The band INDEX is kept (K-158) because two
+            band sets now share one fog ramp and have to look it up."""
+            buckets: dict = {}
+            for x, y, z in points:
+                buckets.setdefault(band_index(z), []).append(QPointF(x, y))
+            return [
+                (i, band_z(i), QPolygonF(pts))
+                for i, pts in sorted(buckets.items())
+            ]
+
+        def shown_notes(self) -> int:
+            """How many distinct notes this canvas actually draws — what
+            the window's caption reports, so "showing N" is a fact about
+            the picture rather than a guess about it."""
+            return int(self._shown)
+
+        def note_total(self) -> int:
+            """How many notes the graph held, sample or no sample."""
+            return int(self._note_total)
 
         # ---- motion (K-148: the first per-frame animation in Klaus) ----
 
@@ -1145,6 +1735,31 @@ def _canvas_class():
                 return bool(mw.pm.reduce_motion())
             except Exception:
                 return False
+
+        def set_initial_focus(self, want: bool) -> None:
+            """Ask the map to open ON a PDF rather than on the bare
+            cloud (Pouya, K-158: "only one PDF shows at a time... and it
+            zooms in on that section of the cloud that hosts that PDF").
+
+            Applied at the FIRST fit, not here and not from a timer: the
+            landing needs the canvas's real size, and the first fit is
+            exactly the moment that size is known. No animation either —
+            it is where the map opens, not somewhere it flies to.
+            """
+            self._auto_focus = bool(want)
+
+        def focus_initial(self) -> bool:
+            """Land on the most-matched PDF, instantly. True if there
+            was one to land on."""
+            if not self._focus_order:
+                return False
+            safe = self._focus_order[0]
+            target = self._fly_target(safe)
+            if target is None:
+                return False
+            self._selected = safe
+            self._vp = target
+            return True
 
         def set_idle_rotation(self, want: bool) -> None:
             """Ask for (or cancel) the slow sway. The HOST decides:
@@ -1225,9 +1840,15 @@ def _canvas_class():
         fly = pyqtProperty(float, _get_fly, _set_fly)
 
         def _fly_target(self, safe: str) -> Optional[Viewport]:
-            """Where the camera should land to show ``safe`` "and all the
-            connections and the cards" — the box holding that PDF's node
-            AND every note it matched, framed at the current pose.
+            """Where the camera should land to show ``safe`` and how it
+            reaches its notes — the box holding that PDF's node and the
+            bulk of its matches, framed at the current pose.
+
+            The BULK, not all of them (K-158, ``trimmed_bounds``): a
+            PDF's matches spray across the whole cloud, and framing
+            their full extent left the flight zooming by 1.00x on the
+            real library — arriving exactly where it started, which is
+            why the view Pouya screenshotted had no structure in it.
 
             Never wider than the whole graph: clicking a PDF whose
             matches are scattered would otherwise zoom OUT past the fit,
@@ -1236,15 +1857,20 @@ def _canvas_class():
             node = self._pdf_xyz.get(safe)
             if node is None:
                 return None
-            pts = [node]
-            for e in edges_for_selection(self._edges, safe):
-                try:
-                    p = self._note_xyz.get(int(e.get("nid")))
-                except (TypeError, ValueError):
-                    continue
-                if p is not None:
-                    pts.append(p)
-            box = bounds_of(pts)
+            # The SAMPLED notes, which are exactly the ones the flight
+            # will show connected — framing matches nobody draws would
+            # be framing an invisible set.
+            pts = links_for(self._link_pts, safe)
+            # The node itself is never trimmed away — it is the thing
+            # you clicked, and a frame that loses it is not a flight to
+            # it. So it is unioned in AFTER the trim.
+            hub = bounds_of([node])
+            box = trimmed_bounds(pts, FLY_TRIM) if pts else hub
+            box = (
+                min(box[0], hub[0]), min(box[1], hub[1]),
+                min(box[2], hub[2]), max(box[3], hub[3]),
+                max(box[4], hub[4]), max(box[5], hub[5]),
+            )
             cx = (box[0] + box[3]) / 2.0
             cy = (box[1] + box[4]) / 2.0
             cz = (box[2] + box[5]) / 2.0
@@ -1328,6 +1954,13 @@ def _canvas_class():
         def _ensure_fit(self, w: float, h: float) -> None:
             if not self._did_fit and w > 1 and h > 1:
                 self._apply_fit(w, h)
+                # The opening focus rides the first fit (see
+                # set_initial_focus): the only moment the canvas both
+                # has its real size and has not yet been posed by
+                # anyone. Guarded on _selected so a host that already
+                # called select() keeps its own choice.
+                if self._auto_focus and self._selected is None:
+                    self.focus_initial()
 
         def resizeEvent(self, event) -> None:  # noqa: N802 — Qt override
             """Keep the centre world-point centred as the surface changes.
@@ -1396,42 +2029,88 @@ def _canvas_class():
 
         # ---- painting ----
 
-        def _ensure_pens(self, c: dict) -> None:
-            """One pen per depth band, built once per palette.
+        @staticmethod
+        def _glow_sprite(halo: str, core: str, radius: float):
+            """One star, pre-rendered: a pale core falling off into a
+            coloured halo, on transparent ground.
 
-            Colour AND width carry the depth: the far bands are mixed
-            most of the way into the card's own ground so they dissolve
-            into it, the near ones go to full text ink, and the dot grows
-            with the band's perspective factor. Both ends are theme
-            tokens, so this ramp re-colours with the palette (and with
-            every accent theme) without knowing any of them exist.
-
-            The mix is OPAQUE, never alpha: measured on this machine,
-            28,668 dots cost 13.8 ms a frame through a semi-transparent
-            pen and 2.9 ms through an opaque one. Depth fog by alpha
-            would have made the 3D map 5x dearer than the 2D one it
-            replaces, for a picture the eye cannot tell apart.
+            THE reason the map can glow at all. K-148 measured round
+            dots at 16x square and alpha fog at 5x opaque and chose flat
+            square chips — right at 28,668 notes, and simply not a
+            constraint at the sampled few hundred. Re-measured at 400
+            dots (1100x660, antialiased): a QRadialGradient drawn PER
+            POINT is 2.10 ms a frame, while building it once into a
+            QPixmap and blitting that per point is 0.42 ms — cheaper
+            even than round drawPoints (0.85 ms), because a blit
+            rasterizes no path at all. So the gradient is built here,
+            once per tier per palette, and the paint path only ever
+            blits.
             """
-            night = theme.night_mode()
-            if self._band_pens and self._pens_night == night:
+            px = max(4, int(round(radius * 2.0 * GLOW_RATIO)))
+            pm = QPixmap(px, px)
+            pm.fill(QColor(0, 0, 0, 0))
+            p = QPainter(pm)
+            try:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                mid = px / 2.0
+                grad = QRadialGradient(mid, mid, mid)
+                # Semi-transparent on purpose: under additive blending
+                # a fully opaque core saturates to flat white wherever
+                # three dots overlap, and the cloud's dense middle —
+                # the most interesting part of it — loses every trace of
+                # hue. Rendered and confirmed at both canvas sizes; the
+                # dock, which packs the whole cloud into 545x185, blew
+                # out to a featureless white blob.
+                hot = QColor(core)
+                hot.setAlphaF(GLOW_CORE_ALPHA)
+                edge = QColor(halo)
+                edge.setAlphaF(GLOW_HALO_ALPHA)
+                fade = QColor(halo)
+                fade.setAlpha(0)
+                soft = QColor(halo)
+                soft.setAlphaF(GLOW_HALO_ALPHA * 0.45)
+                # Core out to the dot's own radius, then the halo
+                # falling to nothing at the sprite's rim.
+                inner = _clamp(1.0 / (2.0 * GLOW_RATIO), 0.02, 0.45)
+                grad.setColorAt(0.0, hot)
+                grad.setColorAt(inner, hot)
+                grad.setColorAt(min(0.99, inner * 1.9), edge)
+                grad.setColorAt(min(0.995, inner * 3.4), soft)
+                grad.setColorAt(1.0, fade)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(grad)
+                p.drawEllipse(QRectF(0.0, 0.0, float(px), float(px)))
+            finally:
+                p.end()  # K-115: never leave a painter live
+            return pm
+
+        def _ensure_sprites(self, c: dict, scale: float = 1.0) -> None:
+            """Build the star sprites — one per (tier, dimmed?) plus one
+            per tier for a PDF's own notes — once per palette.
+
+            Keyed on the palette's actual tokens rather than on
+            ``night_mode()``: the map draws in the DARK palette whatever
+            the app's theme is (see ``_paint``), so a night flip changes
+            nothing here, while switching ACCENT theme changes every
+            colour in the ramp and must rebuild.
+            """
+            key = (c["bg"], c["blue_bright"], c["text"], scale)
+            if self._sprites and self._sprite_key == key:
                 return
-            pens = []
-            shades = fog_shades([poly.count() for _z, poly in self._bands])
-            for (zb, _poly), shade in zip(self._bands, shades):
-                _u, _v, dep = camera_point(Camera(0.0), 0.0, 0.0, zb)
-                pen = QPen(
-                    QColor(blend_hex(c["grey_mid"], c["text"], shade)),
-                    NOTE_DOT_R * 2.0 * _clamp(dep, DOT_DEPTH_MIN, DOT_DEPTH_MAX),
+            out: dict = {}
+            for i in range(GLOW_TIERS):
+                pos = tier_position(i)
+                for dim in (False, True):
+                    halo, core = tier_colours(c, pos, dim)
+                    out[(i, dim, False)] = self._glow_sprite(
+                        halo, core, tier_radius(pos, scale)
+                    )
+                halo, core = tier_colours(c, pos)
+                out[(i, False, True)] = self._glow_sprite(
+                    halo, core, tier_radius(pos, LINK_R_BOOST * scale)
                 )
-                # SQUARE, and that is a measurement rather than a taste:
-                # the identical draw with RoundCap costs 54.6 ms a frame
-                # against 3.4 (28,668 dots, 256 bands, this machine) —
-                # Qt strokes every round cap as a real path. Keeping the
-                # dots small is what stops squares reading as blocks.
-                pen.setCapStyle(Qt.PenCapStyle.SquareCap)
-                pens.append(pen)
-            self._band_pens = pens
-            self._pens_night = night
+            self._sprites = out
+            self._sprite_key = key
 
         def paintEvent(self, _event) -> None:  # noqa: N802 — Qt override
             # No surface yet = nothing safe to paint on.
@@ -1451,123 +2130,328 @@ def _canvas_class():
                 painter.end()
 
         def _paint(self, painter) -> None:
-            c = theme.palette(theme.night_mode())
+            # THE MAP IS A LIGHTBOX: it draws in the DARK palette in both
+            # themes (K-158). Emission needs a dark ground — a glow on
+            # white is a smudge, and the light-mode render of K-148 was
+            # exactly that, a grey stain on paper. Still every colour a
+            # theme token, so accent themes recolour the whole star field
+            # for free; only the card's own border follows the app's
+            # palette, so the panel edge still belongs to the window it
+            # sits in.
+            c = theme.palette(True)
+            host = theme.palette(theme.night_mode())
             w = float(self.width())
             h = float(self.height())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-            # The house dialog card (retention_history's language):
-            # surface fill, hairline border, 12px radius; content clipped
-            # to the card so panned nodes never spill past the corners.
             card = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
-            painter.setPen(QPen(QColor(c["grey_light"]), 1.0))
-            painter.setBrush(QColor(c["surface"]))
+            self._paint_ground(painter, c, host, card, w, h)
+
+            self._ensure_fit(w, h)
+            vp = self._vp
+            cam = self._cam
+            active = active_pdf(self._hover, self._selected)
+
+            self._ensure_sprites(c, dot_scale((w, h)))
+            # Additive light for everything that emits: overlapping
+            # halos STACK into a brighter core instead of flatly
+            # occluding each other, which is what makes a cloud of
+            # points read as a nebula rather than as confetti. Measured
+            # free (0.42 ms either way at 400 dots).
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_Plus
+            )
+            # The ambient field first, dimmed while a PDF is active so
+            # its own notes are not lost in everything else (K-158's
+            # sixth critique: "the blob has no structure").
+            self._blit_bands(painter, vp, cam, self._bands,
+                             dim=bool(active), link=False, w=w, h=h)
+            for safe, bands in self._link_bands.items():
+                self._blit_bands(painter, vp, cam, bands,
+                                 dim=bool(active) and safe != active,
+                                 link=safe == active, w=w, h=h)
+            self._paint_edges(painter, vp, cam, active, w, h)
+            drawn = self._paint_nodes(painter, c, vp, cam, active, w, h)
+            painter.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver
+            )
+            # The name LAST, over every node (K-158). It used to be
+            # emitted inside the depth-sorted node loop, right after its
+            # own circle — so any PDF that sorted nearer painted its
+            # disc straight over the label. On the real graph the four
+            # centroids sit within ~50px of each other and that is
+            # exactly what happened: label_anchor had cleared its own
+            # node's rim by 9px, and a neighbour swallowed the first
+            # third of the name anyway.
+            self._paint_label(painter, c, drawn, active, w, h)
+
+        def _paint_ground(self, painter, c, host, card, w, h) -> None:
+            """The card and the space inside it — a radial lift at the
+            centre falling to the flat ground token at the corners, so
+            the field has somewhere to recede INTO. One gradient fill a
+            frame; content is clipped to the card so panned nodes never
+            spill past the rounded corners."""
+            painter.setPen(QPen(QColor(host["grey_light"]), 1.0))
+            lift = QRadialGradient(
+                w / 2.0, h / 2.0, max(w, h) * VIGNETTE_SPREAD
+            )
+            lift.setColorAt(
+                0.0, QColor(blend_hex(c["bg"], c["blue_bright"], VIGNETTE_LIFT))
+            )
+            lift.setColorAt(1.0, QColor(c["bg"]))
+            painter.setBrush(lift)
             painter.drawRoundedRect(card, 12.0, 12.0)
             clip = QPainterPath()
             clip.addRoundedRect(card, 12.0, 12.0)
             painter.setClipPath(clip)
 
-            self._ensure_fit(w, h)
-            vp = self._vp
-            cam = self._cam
+        def _blit_bands(self, painter, vp, cam, bands, dim, link, w, h) -> None:
+            """One band set, farthest slab first, as pre-rendered stars.
 
-            # Notes: EVERY note, one drawPoints per DEPTH BAND, farthest
-            # band first. Each band's projective QTransform does the
-            # rotate + perspective + world->screen pass for all of its
-            # points in C++ (band_matrix derives it), so the Python cost
-            # per frame is the number of BANDS, not the number of notes.
-            # The transform belongs on the POLYGON, never on the painter
-            # — drawPoints with a cosmetic pen under a scaled painter
-            # degenerates into long horizontal strokes at deep zoom, and
-            # a painter cannot carry a projective transform to a
-            # cosmetic pen at all.
-            if self._bands:
-                self._ensure_pens(c)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                for i in band_order(cam, len(self._bands)):
-                    zb, poly = self._bands[i]
-                    painter.setPen(self._band_pens[i])
-                    painter.drawPoints(
-                        QTransform(*band_matrix(vp, cam, zb)).map(poly)
-                    )
+            Each band's projective QTransform does the rotate +
+            perspective + world->screen pass for all of its points in
+            C++ (band_matrix derives it), so the Python cost per frame is
+            the number of BANDS plus one blit per visible dot — never a
+            per-point projection. The transform belongs on the POLYGON,
+            never on the painter: K-138 rendered and confirmed that a
+            painter transform degenerates a point draw at deep zoom, and
+            a painter cannot carry a perspective divide at all.
+            """
+            for i in band_order(cam, len(bands)):
+                idx, zb, poly = bands[i]
+                sprite = self._sprites.get(
+                    (tier_index(self._fog[idx]), dim and not link, link)
+                )
+                if sprite is None:
+                    continue
+                half = sprite.width() / 2.0
+                mapped = QTransform(*band_matrix(vp, cam, zb)).map(poly)
+                for k in range(mapped.count()):
+                    pt = mapped.at(k)
+                    x = pt.x()
+                    y = pt.y()
+                    if x < -half or x > w + half or y < -half or y > h + half:
+                        continue  # off-card dots cost nothing but a compare
+                    painter.drawPixmap(int(x - half), int(y - half), sprite)
 
-            # Edges: ONLY the hovered/selected PDF's (the whole point of
-            # edges_for_selection — every edge at once is a hairball).
-            # This one IS still a Python per-item loop, deliberately:
-            # measured at ~3.15 us per drawn edge, it costs nothing until
-            # a node is active and then scales with exactly what the
-            # reader asked to see — ~5 ms for the biggest PDF in Pouya's
-            # library (~1,570 matches once every note is positioned), and
-            # 23 ms in a synthetic worst case where one PDF matches a
-            # fifth of the whole collection. Still interactive there, so
-            # it did not earn the note layer's C++ treatment.
-            active = active_pdf(self._hover, self._selected)
-            if active and active in self._pdf_xyz:
-                edge_col = QColor(c["blue_accent"])
-                edge_col.setAlphaF(EDGE_ALPHA)
-                painter.setPen(QPen(edge_col, 1.0))
-                ax, ay, _ad = project_point(vp, cam, *self._pdf_xyz[active])
-                for e in edges_for_selection(self._edges, active):
-                    try:
-                        nxyz = self._note_xyz.get(int(e.get("nid")))
-                    except (TypeError, ValueError):
+        def _paint_edges(self, painter, vp, cam, active, w, h) -> None:
+            """The connections — the POINT of the view since K-158, and
+            drawn as light rather than as ink.
+
+            Only the hovered/selected PDF's, through ``links_for``
+            (every edge at once is a hairball, and 2,087 of them cost
+            39.8 ms a frame). Each beam is a TRAIL OF GLOW SPRITES, not
+            a stroke: measured at 90 beams, an antialiased two-pass
+            stroke is 6.35 ms and grows to 10.55 ms as zoom lengthens
+            the beams, while the same beams as blitted particles are
+            0.84 ms and do not move with zoom at all, because the
+            particle count per beam is capped. The particles also read
+            better — light travelling along a path rather than a wire
+            drawn between two points.
+
+            Each beam LEAVES THE RIM, not the centre, and bows on its
+            way out: particles converging on one point pile into a white
+            blot and swallow the node they are supposed to be about, and
+            straight spokes read as a diagram where a curve reads as a
+            connection. Particles grow and brighten outward along the
+            tier ramp, so the light has a direction.
+
+            K-148's edges were 1px at 0.25 alpha, and on the exact frame
+            Pouya screenshotted that whole layer moved 0.59% of the
+            pixels. The gate WAS firing — the label, which shares it,
+            was drawn in the same frame. The edges were simply invisible.
+            """
+            if not active or active not in self._pdf_xyz:
+                return
+            beam = links_for(self._link_pts, active)
+            if not beam:
+                return
+            p = self._pdf_by_safe.get(active) or {}
+            ax, ay, ad = project_point(vp, cam, *self._pdf_xyz[active])
+            gap = node_radius(p.get("match_count")) * _clamp(
+                ad, DOT_DEPTH_MIN, DOT_DEPTH_MAX
+            ) + EDGE_HUB_GAP
+            # The particle ramp, resolved ONCE a frame: an ordinal in
+            # 0..BEAM_MAX-1 straight to its sprite, so the inner loop
+            # does one index and one blit.
+            ramp = []
+            for i in range(BEAM_MAX):
+                pos = BEAM_MIN_TIER + (1.0 - BEAM_MIN_TIER) * (
+                    (i + 1.0) / BEAM_MAX
+                )
+                spr = self._sprites.get((tier_index(pos), False, True))
+                if spr is None:
+                    return
+                ramp.append((spr, spr.width() / 2.0))
+            for nxyz in beam:
+                bx, by, _bd = project_point(vp, cam, *nxyz)
+                dx = bx - ax
+                dy = by - ay
+                span = math.hypot(dx, dy)
+                if span <= gap:
+                    continue  # a note inside the node's own rim
+                ux = dx / span
+                uy = dy / span
+                sx = ax + ux * gap
+                sy = ay + uy * gap
+                # Quadratic control point: perpendicular to the beam,
+                # proportional to its length, so long reaches curve and
+                # short ones stay nearly straight.
+                bow = (span - gap) * EDGE_BOW
+                cx = (sx + bx) / 2.0 - uy * bow
+                cy = (sy + by) / 2.0 + ux * bow
+                k = int((span - gap) / BEAM_STEP)
+                k = 2 if k < 2 else BEAM_MAX if k > BEAM_MAX else k
+                step = BEAM_MAX / float(k)
+                for i in range(k):
+                    t = (i + 1.0) / (k + 1.0)
+                    m = 1.0 - t
+                    px = m * m * sx + 2.0 * m * t * cx + t * t * bx
+                    py = m * m * sy + 2.0 * m * t * cy + t * t * by
+                    spr, half = ramp[int(i * step)]
+                    px -= half
+                    py -= half
+                    if px < -half or px > w or py < -half or py > h:
                         continue
-                    if nxyz is None:
-                        continue
-                    bx, by, _bd = project_point(vp, cam, *nxyz)
-                    painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
+                    painter.drawPixmap(int(px), int(py), spr)
 
-            # PDF nodes: accent circles sized by match_count. Exactly
-            # ONE name is ever drawn — the hovered or selected node's
-            # (K-138, Pouya's call, reversing K-133's always-on labels).
-            label_font = painter.font()
-            label_font.setPixelSize(11)
-            painter.setFont(label_font)
-            try:
-                metrics = painter.fontMetrics()
-            except Exception:
-                metrics = None  # widths degrade to 0 -> plain right-hand side
-            # Farthest node first, for the same reason the bands are
-            # ordered: a near node has to occlude a far one, or the
-            # depth the fog just established comes apart.
+        def _paint_nodes(self, painter, c, vp, cam, active, w, h) -> list:
+            """PDF nodes as light sources: halo, ring, lit core — never
+            the flat filled disc K-148 drew. Farthest first, for the
+            same reason the bands are ordered: a near node has to occlude
+            a far one or the depth the fog established comes apart.
+
+            ONE of them is lit. The rest are GHOSTS — a faint ring and
+            nothing else (K-158, Pouya: "only one PDF shows at a time,
+            potentially"). That is not only taste: PDF nodes sit at the
+            CENTROID of their matched notes (K-058), so files whose
+            matches overlap have nearly the same position, and four lit
+            rings land in a heap. Focusing one makes the pile-up stop
+            mattering instead of asking the layout to solve it.
+
+            Returns the drawn nodes (near-last) so the plate pass can
+            place exactly one name AFTER every circle is down.
+            """
             drawn = []
             for p in self._pdfs:
                 safe = str(p.get("safe"))
                 sx, sy, dep = project_point(vp, cam, *self._pdf_xyz[safe])
                 drawn.append((dep, safe, p, sx, sy))
             drawn.sort(key=lambda t: t[0])
+            out = []
             for dep, safe, p, sx, sy in drawn:
-                # Perspective sizes the node too — a PDF sitting at the
-                # back of the cloud reads as smaller, not just dimmer.
+                # Perspective sizes the node too — a PDF at the back of
+                # the cloud reads as smaller, not just dimmer.
                 r = node_radius(p.get("match_count")) * _clamp(
                     dep, DOT_DEPTH_MIN, DOT_DEPTH_MAX
                 )
+                out.append((safe, p, sx, sy, r))
                 if (
-                    sx < -2 * r
-                    or sx > w + 2 * r
-                    or sy < -2 * r
-                    or sy > h + 2 * r
+                    sx < -NODE_HALO_F * r
+                    or sx > w + NODE_HALO_F * r
+                    or sy < -NODE_HALO_F * r
+                    or sy > h + NODE_HALO_F * r
                 ):
                     continue
+                pt = QPointF(sx, sy)
+                # EVERY node but the focused one is a ghost — including
+                # all of them when nothing is focused, which is what
+                # keeps the whole-cloud view from being four overlapping
+                # lit rings arguing about which is which.
+                if safe != active:
+                    gr = r * GHOST_HALO_F
+                    ring = QColor(c["blue_bright"])
+                    ring.setAlphaF(GHOST_ALPHA)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.setPen(QPen(ring, 1.0))
+                    painter.drawEllipse(pt, gr, gr)
+                    dot = QColor(c["blue_bright"])
+                    dot.setAlphaF(min(1.0, GHOST_ALPHA * 1.8))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(dot)
+                    painter.drawEllipse(pt, gr * NODE_CORE_F, gr * NODE_CORE_F)
+                    continue
+                halo_r = r * NODE_HALO_F
+                halo = QRadialGradient(sx, sy, halo_r)
+                edge = QColor(c["blue_bright"])
+                edge.setAlphaF(0.55)
+                fade = QColor(c["blue_bright"])
+                fade.setAlpha(0)
+                halo.setColorAt(0.0, edge)
+                halo.setColorAt(1.0 / NODE_HALO_F, edge)
+                halo.setColorAt(1.0, fade)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(halo)
+                painter.drawEllipse(pt, halo_r, halo_r)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor(c["blue_bright"]), NODE_RING_W))
+                painter.drawEllipse(pt, r, r)
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(
-                    QColor(c["blue_bright" if safe == self._hover else "blue_accent"])
+                    QColor(blend_hex(c["blue_bright"], c["text"], CORE_NEAR))
                 )
-                painter.drawEllipse(QPointF(sx, sy), r, r)
+                painter.drawEllipse(pt, r * NODE_CORE_F, r * NODE_CORE_F)
                 if safe == self._selected:
-                    painter.setPen(QPen(QColor(c["blue_bright"]), 2.0))
+                    ring = QColor(c["blue_bright"])
+                    ring.setAlphaF(0.7)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.drawEllipse(QPointF(sx, sy), r + 3.0, r + 3.0)
-                if safe == active:
-                    name = str(p.get("display") or "")
-                    if name:
-                        try:
-                            tw = float(metrics.horizontalAdvance(name))
-                        except Exception:
-                            tw = 0.0
-                        lx, ly = label_anchor(sx, sy, r, tw, w)
-                        painter.setPen(QColor(c["text"]))
-                        painter.drawText(QPointF(lx, ly), name)
+                    painter.setPen(QPen(ring, 1.0))
+                    painter.drawEllipse(pt, r + NODE_SELECT_GAP,
+                                        r + NODE_SELECT_GAP)
+            return out
+
+        def _paint_label(self, painter, c, drawn, active, w, h) -> None:
+            """Exactly ONE plate, the focused node's (K-138), drawn by
+            the canvas itself.
+
+            It carries what the hover tooltip used to: name, folder,
+            matched notes, retention when known. The native QToolTip is
+            gone — a popup positioned at the global cursor and a label
+            positioned beside the node stacked in the same corner, two
+            text boxes in two type styles saying the same name.
+
+            Placed by ``label_anchor`` and then CLAMPED into the canvas
+            by ``clamp_label``: the anchor mirrors only when the mirrored
+            side fits, and a name clipped at the right edge has now been
+            reported three times here.
+            """
+            if not active:
+                return
+            for safe, p, sx, sy, r in drawn:
+                if safe != active:
+                    continue
+                lines = node_lines(p)
+                if not lines:
+                    return
+                font = painter.font()
+                font.setPixelSize(11)
+                painter.setFont(font)
+                try:
+                    fm = painter.fontMetrics()
+                    tw = max(float(fm.horizontalAdvance(t)) for t in lines)
+                except Exception:
+                    tw = 0.0  # widths degrade to the plain right-hand side
+                lx, ly = label_anchor(sx, sy, r, tw, w)
+                bh = LABEL_LINE_H * (len(lines) - 1)
+                lx = clamp_label(lx, tw, w)
+                ly = _clamp(ly, LABEL_LINE_H + LABEL_EDGE_PAD,
+                            max(LABEL_LINE_H, h - bh - LABEL_EDGE_PAD))
+                plate = QColor(c["bg"])
+                plate.setAlphaF(LABEL_PLATE_ALPHA)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(plate)
+                painter.drawRoundedRect(
+                    QRectF(lx - LABEL_PAD_X, ly - 11.0 - LABEL_PAD_Y,
+                           tw + 2.0 * LABEL_PAD_X,
+                           bh + 14.0 + 2.0 * LABEL_PAD_Y),
+                    5.0, 5.0,
+                )
+                painter.setPen(QColor(c["text"]))
+                painter.drawText(QPointF(lx, ly), lines[0])
+                painter.setPen(QColor(c["text_muted"]))
+                for i, line in enumerate(lines[1:], start=1):
+                    painter.drawText(QPointF(lx, ly + LABEL_LINE_H * i), line)
+                return
 
         # ---- mouse ----
 
@@ -1584,24 +2468,16 @@ def _canvas_class():
             return hit_test(self._screen_nodes(), (px, py), self._hit_radius)
 
         def _update_hover(self, px: float, py: float, event) -> None:
+            """Hovering a node FOCUSES it for the frame — the plate the
+            canvas draws is the whole affordance now. No QToolTip: a
+            native popup at the global cursor and an on-canvas plate
+            beside the node were two boxes fighting for one corner.
+            """
             hit = self._hit_at(px, py)
             if hit == self._hover:
                 return
             self._hover = hit
             self.update()
-            try:
-                if hit is None:
-                    QToolTip.hideText()
-                else:
-                    p = self._pdf_by_safe.get(hit)
-                    if p is not None:
-                        QToolTip.showText(
-                            event.globalPosition().toPoint(),
-                            tooltip_text(p),
-                            self,
-                        )
-            except Exception:
-                pass  # tooltips are best-effort chrome
 
         def mousePressEvent(self, event) -> None:  # noqa: N802
             try:
@@ -1610,6 +2486,7 @@ def _canvas_class():
                     self._dragging = True
                     self._drag_moved = False
                     self._drag_last = (float(pos.x()), float(pos.y()))
+                    self._drag_origin = self._drag_last
             except Exception as exc:
                 print(f"[klausmate] map press failed: {exc}")
 
@@ -1621,7 +2498,15 @@ def _canvas_class():
                     dx = px - self._drag_last[0]
                     dy = py - self._drag_last[1]
                     if dx or dy:
-                        if abs(dx) + abs(dy) >= 2.0:
+                        # Measured from where the button went DOWN, not
+                        # per move event (K-158). K-148 compared each
+                        # individual delta against 2.0, so two pixels of
+                        # trackpad finger drift promoted a click to a
+                        # drag: the PDF was never selected, nothing flew,
+                        # and the connections — the whole point of the
+                        # view — never drew.
+                        ox, oy = self._drag_origin or self._drag_last
+                        if math.hypot(px - ox, py - oy) >= CLICK_SLOP:
                             self._drag_moved = True
                         self._vp = pan_by(self._vp, dx, dy)
                         self._drag_last = (px, py)
@@ -1638,6 +2523,7 @@ def _canvas_class():
                 was_click = self._dragging and not self._drag_moved
                 self._dragging = False
                 self._drag_last = None
+                self._drag_origin = None
                 if was_click:
                     pos = event.position()
                     hit = self._hit_at(float(pos.x()), float(pos.y()))
@@ -1674,11 +2560,67 @@ def _canvas_class():
                 if self._hover is not None:
                     self._hover = None
                     self.update()
-                    QToolTip.hideText()
             except Exception:
                 pass
             try:
                 super().leaveEvent(event)
+            except Exception:
+                pass
+
+        # ---- keyboard: stepping the focus ----
+
+        def step_focus(self, direction: int) -> bool:
+            """Focus the next (or previous) PDF and fly there.
+
+            The standalone window's picker, and deliberately NOT a new
+            signal: the Library's dock is already told which PDF to
+            focus by ``select``, driven by whichever file the viewer has
+            open. A window with no viewer needs its own answer, and
+            arrow keys are the one that also solves the clicking
+            problem — PDF nodes sit at their matches' centroid (K-058),
+            so files with overlapping match sets stack into one knot of
+            rings that cannot be picked apart with a mouse at all.
+            """
+            try:
+                nxt = next_focus(self._focus_order, self._selected, direction)
+                if nxt is None:
+                    return False
+                self._selected = nxt
+                self._hover = None
+                self.fly_to(nxt)
+                return True
+            except Exception as exc:
+                print(f"[klausmate] map focus step failed: {exc}")
+                return False
+
+        def clear_focus(self) -> None:
+            """Back to the whole cloud: no PDF lit, no plate, the graph
+            framed as it opens. Escape's binding."""
+            try:
+                self._selected = None
+                self._hover = None
+                self._fly_anim.stop()
+                self._fly_from = self._fly_to = None
+                self.fit()
+            except Exception as exc:
+                print(f"[klausmate] map focus clear failed: {exc}")
+
+        def keyPressEvent(self, event) -> None:  # noqa: N802 — Qt override
+            try:
+                key = event.key()
+                if key in (Qt.Key.Key_Right, Qt.Key.Key_Down):
+                    if self.step_focus(1):
+                        return
+                elif key in (Qt.Key.Key_Left, Qt.Key.Key_Up):
+                    if self.step_focus(-1):
+                        return
+                elif key == Qt.Key.Key_Escape:
+                    self.clear_focus()
+                    return
+            except Exception as exc:
+                print(f"[klausmate] map key failed: {exc}")
+            try:
+                super().keyPressEvent(event)
             except Exception:
                 pass
 
@@ -1869,13 +2811,22 @@ def open_map_window(parent=None):
                 self.status.setText(EMPTY_TEXT)
                 return
 
+            # The SHARED renderer (K-143) — the same factory the
+            # Library's dock calls. The graph is already built, so
+            # nothing here loads it a second time. Built BEFORE the bar
+            # since K-158, because the caption's "showing N" is a fact
+            # about the picture and the canvas is what knows it.
+            self.canvas = map_canvas(self, graph_dict)
+            shown = len(notes)
+            try:
+                if self.canvas is not None:
+                    shown = self.canvas.shown_notes()
+            except Exception:
+                pass
+
             bar = QHBoxLayout()
             bar.setSpacing(8)
-            caption = QLabel(
-                f"{len(pdfs)} PDF{'s' if len(pdfs) != 1 else ''} · "
-                f"{len(notes)} note{'s' if len(notes) != 1 else ''}",
-                self,
-            )
+            caption = QLabel(caption_text(len(pdfs), len(notes), shown), self)
             try:
                 caption.setStyleSheet(theme.muted_label_qss(night))
             except Exception:
@@ -1905,10 +2856,6 @@ def open_map_window(parent=None):
                 pass
             bar.addWidget(fit_btn)
             outer.insertLayout(0, bar)
-            # The SHARED renderer (K-143) — the same factory the
-            # Library's dock calls. The graph is already built, so
-            # nothing here loads it a second time.
-            self.canvas = map_canvas(self, graph_dict)
             if self.canvas is None:
                 self.status.setText(CANVAS_FAIL_TEXT)
                 fit_btn.setEnabled(False)
@@ -1935,6 +2882,14 @@ def open_map_window(parent=None):
                 self.canvas.set_idle_rotation(True)
             except Exception as exc:
                 print(f"[klausmate] map idle rotation wire failed: {exc}")
+            # ...and it opens ON a PDF (K-158). The Library's dock does
+            # not: the file its viewer has open is the focus there, and
+            # picking a different one behind the reader would be the map
+            # contradicting the thing it is meant to follow.
+            try:
+                self.canvas.set_initial_focus(True)
+            except Exception as exc:
+                print(f"[klausmate] map initial focus wire failed: {exc}")
 
         def _build_failed(self, exc: object) -> None:
             print(f"[klausmate] map graph build failed: {exc}")
