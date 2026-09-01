@@ -33,27 +33,34 @@
   the engine's disk space use **Remove Klaus-managed runtime** in Klaus
   settings.
 
-## Semantic library (curation + retention)
+## Semantic library (matching + retention)
 
-One embed per imported PDF now serves two jobs, both driven by the same
-match cache: **curating a deck** and **PDF study priorities**. There is no
-separate curation embed — indexing a PDF (from the PDF drive's **Add to
-index** / **Re-index**, or automatically the first time you curate from an
-unindexed PDF) scores every card in your collection against it once, and
-that same ranked list is what curation tags and what the priorities view
-aggregates into a retention score.
+One embed per imported PDF serves two jobs, both driven by the same match
+cache: **which cards a PDF covers** and **PDF study priorities**. Indexing
+a PDF — the Library's **Add to Search Index** / **Update Search Index** —
+refreshes the card index, then scores every card in your collection
+against that PDF once. The same ranked list fills the PDF's `!Library`
+tag and aggregates into its retention score.
 
-**Curating a deck**: the deck-browser/overview **Curate Deck** button, or
-the PDF drive's **Curate deck from this PDF…** action, tags the matches at
-or above that PDF's sensitivity with `!Library::Curating` and opens them
-in Browse. Prune the list there, then **Notes → Klaus: Create curated deck
-from selection…** copies them into a new deck — originals are never
-moved, and the whole copy is one undo step. Copies get the
-`!Library::Curated` tag.
+**Seeing a PDF's cards**: the Library's **Show Matched Cards in Browse**
+opens the PDF's own `!Library` tag, which holds exactly its matches at or
+above that PDF's sensitivity. Indexing writes that tag; nothing extra is
+needed to produce it.
+
+**Copying cards into a new deck**: select notes in Browse — the tag above
+is one good way to find them — then **Notes → KlausMate: Create Curated
+Deck from Selection…**. Originals are never moved and the whole copy is
+one undo step; copies get the `!Library::Curated` tag.
+
+*(A "Curate Deck" button used to sit on the deck screens and in the
+Library's right-click menu. It never created a deck: it tagged the
+matches and opened Browse on that same `!Library` tag, so it has been
+removed. An earlier version of this file also described a temporary
+`!Library::Curating` tag, which was retired two releases before that.)*
 
 - **pdf_match_threshold**: The single sensitivity control — how closely a
-  card must match a PDF to count, for curation, the priorities score, and
-  the `!Library` tags alike. Default `0.75`. Each PDF also has its own
+  card must match a PDF to count, for the priorities score and the
+  `!Library` tags alike. Default `0.75`. Each PDF also has its own
   slider (PDF drive → right-click a PDF → **Match sensitivity…**), which
   overrides this for that PDF only.
 
@@ -81,11 +88,11 @@ your machine.
 
 ### PDF study priorities
 
-The PDF drive shows a per-PDF retention score — the share of that PDF's
+The Library shows a per-PDF retention score — the share of that PDF's
 matched cards (at or above its sensitivity, see `pdf_match_threshold`
 above) you'd currently recall — so you know what to study first. It reads
-the same match cache curation does; nothing here embeds anything curation
-wouldn't already need.
+the same match cache the `!Library` tags do; nothing here embeds anything
+indexing wouldn't already need.
 
 - **pdf_match_agg**: How a card's score against a PDF's chunks is
   aggregated — `max` (default) or `top3_mean` (mean of the 3 best chunk
@@ -123,9 +130,9 @@ wouldn't already need.
   matched at or above its sensitivity — see `pdf_match_threshold` above)
   created, renamed, and pruned automatically as you index, re-sensitize,
   rename, or delete PDFs. Turn off and Klaus stops creating or updating
-  those tags entirely; since that same tag is also **Curate Deck**'s
-  preview vehicle in Browse, the curation Browse-preview step is skipped
-  while this is off (the final deck copy is unaffected).
+  those tags entirely; **Show Matched Cards in Browse** then has no tag
+  to open, so it is the one feature this switch costs you. Retention
+  scores and the deck copier are unaffected.
 
 - **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
   viewer panel and Library. `"native"` is Qt's built-in QPdfView;

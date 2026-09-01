@@ -1,8 +1,9 @@
-"""KlausMate — semantic PDF library and deck curation for Anki.
+"""KlausMate — semantic lecture-PDF library for Anki.
 
 Bootstrap and Qt glue for the add-on: the PDF viewer panel and its tabs,
 the editor's PDF bar, image cropping, and the Browse toolbar toggles.
-Embeddings power the rest — see curation.py, retention.py, and pdf_drive.py.
+Embeddings power the rest — see curation.py (the card index),
+retention.py, and pdf_drive.py (the Library).
 """
 
 from __future__ import annotations
@@ -2107,17 +2108,18 @@ class _PdfTabContainer(QWidget):
         # Most recently used first (pdf_handler.list_by_recency ranks by
         # last_used, falling back to contexts/<safe>.txt mtime — ingest
         # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
-        # preserves from the source file). Same source deck_curate uses.
+        # preserves from the source file).
         for base in pdf_handler.list_by_recency(USER_FILES):
             if base in open_names:
                 continue
             if pdf_handler.pdf_path_for(USER_FILES, base):
                 stored.append(base)
-        # No cap, unlike deck_curate's curate-from-recent menu (top 20).
-        # That one is a shortcut with the Library as the full path; THIS
-        # menu is the only way to open a stored PDF in the editor's
-        # viewer, so truncating it would strand every PDF past the top 20
-        # with no route in. QMenu scrolls natively when it overflows.
+        # No cap. This menu is the only way to open a stored PDF in the
+        # editor's viewer, so truncating it would strand every PDF past
+        # the cut with no route in. (deck_curate used to carry a top-20
+        # curate-from-recent menu, the shortcut this was contrasted
+        # against; K-146 removed it and the Library is the full path
+        # now.) QMenu scrolls natively when it overflows.
         for base in stored:
             act = menu.addAction(_pdf_display_name(base))
             act.triggered.connect(
@@ -2320,8 +2322,11 @@ gui_hooks.editor_did_init.append(on_editor_did_init)
 if hasattr(gui_hooks, "browser_will_show"):
     gui_hooks.browser_will_show.append(on_browser_will_show)
 
-# Deck-screen curation and the PDF drive install independently — a failure
-# in one must not cost the user the other (or the editor features above).
+# The deck-screen PDF import surface and the Library install
+# independently — a failure in one must not cost the user the other (or
+# the editor features above). deck_curate is import-only since K-146:
+# the drop wrap, the drop square, and its file picker. Nothing it
+# installs touches a deck anymore.
 try:
     from . import deck_curate as _deck_curate
 

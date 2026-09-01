@@ -97,6 +97,9 @@ for mod in _MODULES:
         ):
             _registered.add(f"{mod}.{node.args[0].id}")
 
+# Still five after K-146: that card removed deck_curate's curate button,
+# but on_deck_js_message stays registered for the drop square's Browse…
+# and × commands. A handler LEAVING must be as deliberate as one arriving.
 check("exactly the five known js-message handlers are registered — a "
       "NEW one must be audited against the deferral rule and added here",
       _registered == {
@@ -133,19 +136,18 @@ check("manage_models_dialog is deferred, not called inline — it ends in "
       "QTimer.singleShot(0, manage_models_dialog)" in _TB
       and "\n            manage_models_dialog()" not in _TB)
 
-section("deck_curate: Curate Deck on the deck surfaces")
-_CURATE = _func_src("deck_curate", "_on_curate_clicked")
+section("deck_curate: the drop square's file picker")
+# K-146 removed this file's other two bridge branches with the curate
+# button (_on_curate_clicked, which deferred _curate_with's scope dialog
+# and _pick_pdf_menu's nested menu.exec()). The Browse… picker is the
+# only dialog-raising branch left, and it is the one that matters most:
+# QFileDialog opened straight out of the webchannel call.
 _BROWSE = _func_src("deck_curate", "_on_browse_clicked")
-check("both curate branches defer — _curate_with reaches "
-      "choose_deck_scope's dlg.exec(), _pick_pdf_menu ends in menu.exec()",
-      _CURATE.count("QTimer.singleShot(0") == 2
-      and "_curate_with(_armed_pdf)\n" not in _CURATE
-      and "        _pick_pdf_menu()" not in _CURATE)
-check("the armed PDF is frozen into the deferred callback, not re-read "
-      "a tick later",
-      "lambda safe=_armed_pdf" in _CURATE)
-check("the file-picker path still defers (it already did)",
+check("the file-picker branch was found in the source", bool(_BROWSE))
+check("the file-picker path still defers (it always did)",
       "QTimer.singleShot(0, _browse_for_pdfs)" in _BROWSE)
+check("nothing raises a picker inline beside it",
+      "        _browse_for_pdfs()" not in _BROWSE)
 
 section("__init__: editor bridge actions (already correct)")
 _INIT = _func_src("__init__", "on_js_message")
@@ -286,20 +288,19 @@ section("K-114: app-modal exec() retired addon-wide (per-file bans)")
 # purpose and menus stay legal.
 _K114 = {mod: _no_prose(src) for mod, src in _MODULES.items()}
 
-check("deck_curate: choose_deck_scope opens window-modal; the result "
-      "rides an accepted callback (CPS — cancel never calls on_done)",
-      "dlg.open()" in _no_prose(_func_src("deck_curate",
-                                          "choose_deck_scope"))
-      and "def choose_deck_scope(parent, on_done)"
-      in _MODULES["deck_curate"]
-      and "dlg.exec()" not in _K114["deck_curate"]
-      and "msg.exec()" not in _K114["deck_curate"])
-check("both scope-dialog callers ride the callback — _curate_with here "
-      "and pdf_drive._curate (the old tuple return is gone)",
-      "choose_deck_scope(mw, lambda deck: run_curation_flow(safe, deck))"
-      in _MODULES["deck_curate"]
-      and "deck_curate.choose_deck_scope(" in _MODULES["pdf_drive"]
-      and "accepted, deck = " not in _MODULES["pdf_drive"])
+# deck_curate's own K-114 conversion was choose_deck_scope, the deck
+# picker the curate button raised; K-146 deleted the button and the
+# dialog with it, so the file now opens no Qt dialog at all (its one
+# picker is a native QFileDialog sheet, deliberately legal here). The
+# per-file ban STAYS as a standing ban: this is the file where a "quick"
+# modal would land next, and the absence pin below keeps the deleted
+# dialog from being reintroduced under its old name.
+check("deck_curate: the file carries no dialog exec at all, and the "
+      "K-146-deleted scope dialog has not crept back",
+      "dlg.exec()" not in _K114["deck_curate"]
+      and "msg.exec()" not in _K114["deck_curate"]
+      and "choose_deck_scope" not in _MODULES["deck_curate"]
+      and "choose_deck_scope" not in _MODULES["pdf_drive"])
 
 _K114_CROP = _no_prose(_func_src("__init__", "_launch_crop_dialog"))
 check("__init__: the crop dialog opens window-modal — crop work rides "

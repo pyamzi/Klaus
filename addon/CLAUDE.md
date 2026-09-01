@@ -1,8 +1,8 @@
 # CLAUDE.md — Addons repo / Klaus (klausmate)
 
-The real project here is **`klausmate/`** — "Klaus", an Anki addon for
-semantic deck curation (find cards matching a lecture PDF, copy them into a
-new deck), a lecture-PDF library with per-PDF retention scoring, a native
+The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
+lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
+matching (indexing a PDF tags every card it covers), a native
 PDF viewer with highlights/sticky notes, and image cropping. Around it:
 `tests/` (headless logic tests), `board/` + `context/` (the multi-agent
 kanban board — see below), `References/` and `scripts/` (vendored
@@ -478,7 +478,9 @@ instead. Signed-off history is in
   join; the disk sync lives here and in `pdf_handler`. Top-toolbar link
   labeled "Library" (`gui_hooks.top_toolbar_did_init_links`). Right-click
   per row: open, rename, move to folder, re-embed, adjust match
-  sensitivity, show matches in Browse, curate deck from this PDF, delete.
+  sensitivity, show matches in Browse, delete. (K-146 removed "Curate
+  Deck from This PDF…" — it only tagged and opened Browse on the tag
+  indexing already writes, which the show-matches action opens.)
   Since K-117 the Library wears the VS Code Explorer vernacular
   (theme.library_qss: flat 22px rows on `surface`, one full-width
   hover/selection band, chevron twisties via
@@ -645,8 +647,8 @@ instead. Signed-off history is in
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick
   trigger.
-- **Semantic curation stack** (Curate Deck + the Library's retention score;
-  this is the only AI-powered feature left):
+- **Semantic matching stack** (the per-PDF `!Library` tags + the Library's
+  retention score; this is the only AI-powered feature left):
   - `embeddings.py` (aqt-free): provider abstraction — Voyage
     (default, `voyage-3-lite`), with Ollama `/api/embed` (`nomic-embed-text`)
     and OpenAI (`text-embedding-3-small`) as alternatives. `OPENAI_API_BASE`/
@@ -664,16 +666,31 @@ instead. Signed-off history is in
     lookups never pay the full vector load.
   - `curation.py` (aqt glue): two-phase `ensure_index` (snapshot with col
     via `select id, mod, flds from notes` + `flds.split("\x1f")`; embed
-    without col, partial save every ~1k vectors), `run_curation`, preview
-    via temp tag `!Library::Curating` (+ `Browser.search_for`; `nid:` lists
-    break at thousands of ids), undoable deck copy (`add_custom_undo_entry`
-    → `col.add_notes` → `merge_undo_entries`) tagged `!Library::Curated`.
-    Curation is always PDF-driven now — `run_curation`'s free-text `prompt`
-    param has no caller since the chat panel that used to fill it in was
-    deleted.
-  - `deck_curate.py`: "Curate Deck" button + PDF drop/arm on the deck list
-    and deck overview screens; calls into `curation.py` via
-    `run_curation_flow(pdf_name, deck_scope)`.
+    without col, partial save every ~1k vectors) + the undoable deck copy
+    (`prompt_and_create` → `add_custom_undo_entry` → `col.add_notes` →
+    `merge_undo_entries`, tagged `!Library::Curated`) behind the Browse
+    Notes-menu action `setup_hooks` registers. **`ensure_index` is the
+    card index and nothing else refreshes it** — K-146 deleted
+    `run_curation`, the composed search that used to be its only
+    user-facing caller, and moved that call into `pdf_drive._on_embed`;
+    a new PDF-matching surface that skips it silently matches against a
+    stale index (missing cards, no error). **Never delete this module**:
+    `retention.py` imports it at module top for `USER_FILES`/`INDEX_DIR`/
+    `_cfg`/`_fail` and for `_busy`, the ONE re-entrancy token every
+    embedding phase holds; manage_models, tag_sync and pdf_map read it
+    too. Gone with K-146: `run_curation`, `_preview_in_browse`,
+    `last_run`, `suggest_deck_name`, `_escape_search` (and long before
+    them, the `!Library::Curating` temp tag K-064 retired — CLAUDE.md
+    and config.md both went on documenting it until K-146).
+  - `deck_curate.py`: the deck-screen **PDF import** surface — the
+    `MainWebView.dropEvent` wrap (the only thing stopping Anki's own
+    importer choking on a dropped PDF), the drop square on the deck list
+    and overview with its Browse… picker, and the session-only "armed"
+    indicator naming the last import (`disarm_if` still clears it when
+    the Library deletes that PDF). K-146 removed everything else here:
+    the two bottom-bar buttons, `CURATE_CMD`, `choose_deck_scope`,
+    `run_curation_flow`, `_pick_pdf_menu`. The file name is now a
+    misnomer — it curates nothing.
   - `tag_migrate.py`: one-time `klaus::*` → `!Library::*` collection tag
     rename on `profile_did_open`, guarded idempotent (only proposes a rename
     when the old tag still exists), returns `col.merge_undo_entries(pos)`

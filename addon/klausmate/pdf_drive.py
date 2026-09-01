@@ -60,7 +60,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning, tooltip
 
-from . import deck_curate, drive_store, pdf_handler, retention, tag_sync
+from . import curation, deck_curate, drive_store, pdf_handler, retention, tag_sync
 
 # K-117: Retention History ships in parallel via K-118 — the menu entry
 # appears once the module exists, and its absence must never break the
@@ -747,9 +747,9 @@ class _LibraryDropZone(QWidget):
     scope (klausmate/pdf_drive.py only). WA_StyledBackground on QWidget
     paints the same stylesheet border/background QFrame would.
 
-    Unlike either existing square, this one never arms a PDF for
-    curation (armed/× is deck-screen semantics — the Library's job here
-    is only "get the file into the store and show it in the tree").
+    Unlike either existing square, this one never arms a PDF (armed/×
+    is deck-screen semantics — the Library's job here is only "get the
+    file into the store and show it in the tree").
 
     Style values (idle border/radius, font-size, Browse-button chrome)
     come from theme.drop_zone_qss — the shared drop-square language.
@@ -1757,6 +1757,25 @@ class DriveWindow(QWidget):
             return False
 
     def _on_embed(self, safe: str) -> None:
+        """Index this PDF and recompute which cards match it.
+
+        THREE phases, and the first one is why K-146 could not just
+        delete the curate button: ``curation.ensure_index`` (the CARD index —
+        an embedding per note) used to be refreshed only by
+        ``curation.run_curation``, which the curate button was the only
+        way to reach. Indexing a PDF never touched it. With that button
+        gone this is the sole user-facing path left, so it runs here
+        FIRST — otherwise every note written since the last card-index
+        pass is invisible to ``ensure_matches``, and the PDF's !Library
+        tag silently under-covers (no error, just missing cards).
+
+        Each phase takes ``curation._busy`` on its own rather than one
+        caller-held token: ``after_index``'s cancellation branch (and
+        ``after_card_index``'s below) returns without a release, so a
+        manually held token would leak and brick indexing for the rest
+        of the session. Serialisation on this surface is ``self.busy``
+        via ``_begin``/``_finish``.
+        """
         handle = self._begin()
         if handle is None:
             return
@@ -1799,11 +1818,28 @@ class DriveWindow(QWidget):
                 cancel=cancel,
             )
 
-        retention.ensure_pdf_index(
+        def after_card_index(_index, completed: bool) -> None:
+            if seq != self.seq:
+                return
+            if not completed:
+                if self._finish(seq):
+                    self.status.setText(
+                        "Indexing cancelled — it resumes where it stopped."
+                    )
+                return
+            retention.ensure_pdf_index(
+                mw,
+                safe,
+                on_progress=lambda l, d, t: self._on_progress(seq, l, d, t),
+                on_done=after_index,
+                on_error=on_error,
+                cancel=cancel,
+            )
+
+        curation.ensure_index(
             mw,
-            safe,
             on_progress=lambda l, d, t: self._on_progress(seq, l, d, t),
-            on_done=after_index,
+            on_done=after_card_index,
             on_error=on_error,
             cancel=cancel,
         )
@@ -2046,8 +2082,8 @@ class DriveWindow(QWidget):
         item = self.tree.itemAt(pos)
         menu = QMenu(self)
         try:
-            # K-117 menu clarity: the index/curate actions carry
-            # explanatory tooltips — invisible unless the menu opts in.
+            # K-117 menu clarity: the index action carries an
+            # explanatory tooltip — invisible unless the menu opts in.
             menu.setToolTipsVisible(True)
         except Exception:
             pass
@@ -2084,8 +2120,12 @@ class DriveWindow(QWidget):
         menu.addSeparator()
         # K-117 menu clarity ("I don't understand what reindex and
         # curate deck difference is"): the index action says what it
-        # indexes, and both it and Curate carry tooltips spelling out
-        # what each one touches (visible via setToolTipsVisible above).
+        # indexes and carries a tooltip spelling out what it touches
+        # (visible via setToolTipsVisible above). K-146 answered the
+        # same confusion the other way — the curate action is GONE,
+        # because it only ever tagged and opened Browse on the tag
+        # indexing already writes, which "Show Matched Cards in Browse"
+        # two lines below opens directly.
         embed_label = (
             "Update Search Index" if row.get("indexed") else "Add to Search Index"
         )
@@ -2108,9 +2148,6 @@ class DriveWindow(QWidget):
                     self, safe, row.get("label") or safe
                 )
             )
-        curate_action = menu.addAction("Curate Deck from This PDF…")
-        curate_action.setToolTip("Copies the matching cards into a new deck.")
-        curate_action.triggered.connect(lambda: self._curate(safe))
         menu.addSeparator()
         # Per-PDF suspend/unsuspend (K-117). Offer by current state when
         # the K-118 count keys are present; with counts unknown offer
@@ -2335,6 +2372,11 @@ class DriveWindow(QWidget):
             showWarning(f"Could not delete that PDF.\n\n{e}")
             return
         try:
+            # Survives K-146 on purpose. The armed PDF no longer feeds a
+            # curate run, but _import_and_arm still arms and the deck
+            # screens still SHOW the armed name — so deleting the PDF a
+            # square is naming must still clear it, or the square keeps
+            # advertising a file that is gone.
             deck_curate.disarm_if(safe)
         except Exception:
             pass
@@ -2352,17 +2394,6 @@ class DriveWindow(QWidget):
             pdf_map.open_map_window(self)
         except Exception as exc:
             print(f"[klausmate] map open failed: {exc}")
-
-    def _curate(self, safe: str) -> None:
-        if mw is None or mw.col is None:
-            return
-        # K-114: the scope arrives via choose_deck_scope's accepted
-        # callback (window-modal open, never app-modal exec) — cancel
-        # simply never runs the flow.
-        deck_curate.choose_deck_scope(
-            self,
-            lambda deck: deck_curate.run_curation_flow(safe, deck, parent=mw),
-        )
 
     # --------------------------------------------------------- lifecycle
 

@@ -2,6 +2,7 @@
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_drive.py
 """
+import ast
 import io
 import json
 import os
@@ -307,16 +308,119 @@ for mod in ("klausmate.deck_curate", "klausmate.pdf_drive"):
 try:
     dc = sys.modules["klausmate.deck_curate"]
     check("armed starts empty", dc.armed() is None)
-    check("CURATE_CMD is underscore-namespaced (not swallowed by editor bridge)",
-          dc.CURATE_CMD == "klausmate_curate"
-          and not dc.CURATE_CMD.startswith("klausmate:"))
+    check("the surviving commands are underscore-namespaced (a colon "
+          "name is swallowed by the editor bridge's non-Editor guard)",
+          {dc.BROWSE_CMD, dc.DISARM_CMD}
+          == {"klausmate_browse", "klausmate_disarm"}
+          and not any(c.startswith("klausmate:")
+                      for c in (dc.BROWSE_CMD, dc.DISARM_CMD)))
     check("js handler ignores foreign messages",
           dc.on_deck_js_message((False, None), "something:else", None) == (False, None))
 except Exception as e:
     check("deck_curate surface", False, str(e))
 
-print("== deck_curate recency ordering (last_used missing for some pdfs) ==")
+print("== K-146: the curate-a-deck ceremony is gone, by absence ==")
+# Pouya: "remove the fucking option to curate a fucking deck." The button
+# never created a deck — it searched, tagged, and opened Browse on the
+# per-PDF !Library tag that indexing already writes and the Library's
+# "Show Matched Cards in Browse" already opens. These are ABSENCE pins
+# (the reviewer-sheet idiom): the board card's verify grepped for the
+# same strings, but a card's gate dies at sign-off and this does not.
+_DC_SRC = open("klausmate/deck_curate.py", encoding="utf-8").read()
+_CU_SRC = open("klausmate/curation.py", encoding="utf-8").read()
+_PD_SRC = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+for _sym in ("choose_deck_scope", "run_curation_flow", "_curate_with",
+             "_on_curate_clicked", "_pick_pdf_menu", "CURATE_CMD",
+             "on_overview_bottom", "_install_deck_browser_button"):
+    check(f"deck_curate no longer defines or names {_sym}",
+          _sym not in _DC_SRC)
+for _sym in ("def run_curation(", "def _preview_in_browse(",
+             "def suggest_deck_name(", "def _escape_search("):
+    check(f"curation no longer defines {_sym[4:-1]}", _sym not in _CU_SRC)
+check("no bottom-bar button label survives on either deck screen",
+      "Curate Deck" not in _DC_SRC and "Curate Deck" not in _PD_SRC)
+check("nor the Library's context-menu entry",
+      "Curate Deck from This PDF" not in _PD_SRC)
+
+def _names_in(src, wanted):
+    """Every ast.Name/global occurrence of `wanted` in real CODE.
+
+    A substring grep cannot express this: both these pins are ABOUT
+    prose that names the removed symbol (the module docstrings explain
+    what K-146 took out and why), so a grep over the raw source can
+    never fail, and a grep over a prose-stripped copy is one split()
+    away from scanning almost nothing. The AST reads code only.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Name) and node.id == wanted:
+            hits.append(node.lineno)
+        elif isinstance(node, ast.Global) and wanted in node.names:
+            hits.append(node.lineno)
+    return hits
+
+
+check("last_run is gone with the search that wrote it — a module global "
+      "nothing writes reads as an always-empty fallback (AST, so this "
+      "file's own prose about it cannot satisfy or trip the pin)",
+      _names_in(_CU_SRC, "last_run") == [],
+      repr(_names_in(_CU_SRC, "last_run")))
+
+# ...but the drop machinery it was tangled with SURVIVES: this wrapper is
+# the only thing stopping Anki's own importer choking on a dropped PDF.
+for _sym in ("_install_drop_wrap", "_import_and_arm", "_browse_for_pdfs",
+             "BROWSE_CMD", "_drop_square_html", "def disarm_if("):
+    check(f"deck_curate keeps {_sym} (the import surface, not the "
+          f"ceremony)", _sym in _DC_SRC)
+
+def _calls_in_func(src, func, callee):
+    """Is `callee` actually CALLED by `func` itself?
+
+    AST, not a grep: the string "_install_drop_wrap()" appears in its own
+    def line, so a substring check passes even with the call deleted.
+    Nested defs and lambdas are NOT descended into — a call parked inside
+    a helper `func` never runs is not `func` calling it.
+    """
+    _NESTED = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+
+    def own_nodes(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, _NESTED):
+                continue
+            yield child
+            yield from own_nodes(child)
+
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == func:
+            return any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                       and c.func.id == callee for c in own_nodes(node))
+    return False
+
+
+check("the drop wrap is still INSTALLED by setup() — the one thing "
+      "standing between a dropped PDF and Anki's own importer",
+      _calls_in_func(_DC_SRC, "setup", "_install_drop_wrap"))
+check("and the armed square no longer points at a button that is gone",
+      "press <b>Curate Deck</b> below" not in _DC_SRC
+      and "Imported:" in _DC_SRC)
+check("curation keeps the manual Browse deck copier (no PDF, no scope)",
+      "def prompt_and_create(" in _CU_SRC
+      and "def create_curated_deck(" in _CU_SRC
+      and "def on_browser_menus_did_init(" in _CU_SRC)
+check("an empty Browse selection now says so instead of silently "
+      "copying a stale result set",
+      "browser.selected_notes()" in _CU_SRC
+      and "Select the notes to copy first." in _CU_SRC)
+
+print("== pdf_handler.list_by_recency (last_used missing for some pdfs) ==")
+# This used to be driven THROUGH deck_curate._pick_pdf_menu with fake
+# QMenu/QAction/QCursor objects, reading the ordering back off the fake
+# menu's item texts. K-146 deleted that menu; the ordering rule it was
+# really testing lives in pdf_handler and is still live (the editor PDF
+# bar's ＋ menu reads it), so the coverage moved down to the function
+# instead of leaving with the caller.
 try:
+    _ph_rec = importlib.import_module("klausmate.pdf_handler")
     tmp_dc = tempfile.mkdtemp(prefix="klaus_drive_")
     ctx_dir = os.path.join(tmp_dc, "contexts")
     os.makedirs(ctx_dir, exist_ok=True)
@@ -328,65 +432,135 @@ try:
     with open(os.path.join(tmp_dc, "pdf_tabs.json"), "w") as f:
         json.dump({"last_used": {"alpha": 1000.0, "gamma": 5000.0}}, f)
 
-    pkg.USER_FILES = tmp_dc  # deck_curate._user_files() reads this attr
-
-    _created_menus = []
-
-    class _FakeSignal:
-        def connect(self, fn):
-            pass
-
-    class _FakeAction:
-        def __init__(self, text, parent=None):
-            self.text = text
-            self.enabled = True
-
-        def setEnabled(self, v):
-            self.enabled = v
-
-        @property
-        def triggered(self):
-            return _FakeSignal()
-
-    class _FakeMenu:
-        def __init__(self, parent=None):
-            self.items = []
-            _created_menus.append(self)
-
-        def addAction(self, action):
-            self.items.append(action)
-
-        def addSeparator(self):
-            self.items.append("sep")
-
-        def exec(self, pos=None):
-            pass
-
-    class _FakeCursor:
-        @staticmethod
-        def pos():
-            return None
-
-    orig_menu, orig_action, orig_cursor = dc.QMenu, dc.QAction, dc.QCursor
-    dc.QMenu, dc.QAction, dc.QCursor = _FakeMenu, _FakeAction, _FakeCursor
-    try:
-        dc._pick_pdf_menu()
-    finally:
-        dc.QMenu, dc.QAction, dc.QCursor = orig_menu, orig_action, orig_cursor
-
-    menu = _created_menus[-1]
-    order = [it.text for it in menu.items
-             if isinstance(it, _FakeAction) and it.enabled]
+    _order = _ph_rec.list_by_recency(tmp_dc)
     check("recency order interleaves explicit last_used and mtime fallback",
-          order == ["gamma", "beta", "alpha"], order)
+          _order == ["gamma", "beta", "alpha"], repr(_order))
+    check("names come back as safe basenames, .txt stripped",
+          not any(n.endswith(".txt") for n in _order), repr(_order))
+    check("limit truncates from the recent end, not the stale one",
+          _ph_rec.list_by_recency(tmp_dc, 2) == ["gamma", "beta"],
+          repr(_ph_rec.list_by_recency(tmp_dc, 2)))
+    # An unreadable/absent contexts dir is the empty answer, not a raise:
+    # every caller renders a menu straight off this.
+    check("a user_files with no contexts dir yields []",
+          _ph_rec.list_by_recency(os.path.join(tmp_dc, "nope")) == [])
     shutil.rmtree(tmp_dc, ignore_errors=True)
 except Exception as e:
-    check("deck_curate recency ordering", False, f"{type(e).__name__}: {e}")
+    check("list_by_recency ordering", False, f"{type(e).__name__}: {e}")
 
 shutil.rmtree(tmp, ignore_errors=True)
 
-print("== refresh_open_library glue (K-052 rework) ==")
 pdf_drive = importlib.import_module("klausmate.pdf_drive")
+
+print("== K-146: _on_embed refreshes the CARD index first ==")
+# THE regression this card could have shipped. curation.ensure_index —
+# one embedding per note — was reachable only through run_curation,
+# behind the curate button. Indexing a PDF never touched it. Delete the
+# button without moving that call and every note written since the last
+# card-index pass is invisible to ensure_matches: no error, no warning,
+# the per-PDF !Library tag just quietly under-covers. So the order here
+# is load-bearing, and ensure_index must come FIRST — matching against a
+# stale card index is exactly the silent failure.
+
+
+class _EmbedStatus:
+    def __init__(self):
+        self.texts = []
+
+    def setText(self, t):
+        self.texts.append(t)
+
+
+class _EmbedHost:
+    def __init__(self):
+        self.seq, self.status, self.refreshes = 7, _EmbedStatus(), 0
+
+    def _begin(self):
+        return self.seq, "cancel-token"
+
+    def _finish(self, seq):
+        return seq == self.seq
+
+    def _refresh_rows(self):
+        self.refreshes += 1
+
+    def _on_progress(self, seq, label, done, total):
+        pass
+
+
+def _run_embed(*, card_index_completed=True, pdf_index_complete=True):
+    """Drive _on_embed with every phase answering synchronously."""
+    calls = []
+
+    class _Idx:
+        def is_complete(self):
+            return pdf_index_complete
+
+    def _ensure_index(parent, *, on_progress=None, on_done=None,
+                      on_error=None, cancel=None):
+        calls.append(("ensure_index", cancel))
+        on_done(_Idx(), card_index_completed)
+
+    def _ensure_pdf_index(parent, safe, *, on_progress=None, on_done=None,
+                          on_error=None, cancel=None):
+        calls.append(("ensure_pdf_index", safe))
+        on_done(_Idx())
+
+    def _ensure_matches(parent, safe, *, on_progress=None, on_done=None,
+                        on_error=None, cancel=None):
+        calls.append(("ensure_matches", safe))
+        on_done([(1, 0.9)])
+
+    host = _EmbedHost()
+    _o = (pdf_drive.curation, pdf_drive.retention, pdf_drive.tag_sync,
+          pdf_drive.mw)
+    pdf_drive.curation = types.SimpleNamespace(ensure_index=_ensure_index)
+    pdf_drive.retention = types.SimpleNamespace(
+        ensure_pdf_index=_ensure_pdf_index, ensure_matches=_ensure_matches)
+    pdf_drive.tag_sync = types.SimpleNamespace(
+        sync_after_matches=lambda *a: calls.append(("sync_after_matches",)))
+    pdf_drive.mw = types.SimpleNamespace(col=object())
+    try:
+        pdf_drive.DriveWindow._on_embed(host, "Renal_Phys")
+    finally:
+        (pdf_drive.curation, pdf_drive.retention, pdf_drive.tag_sync,
+         pdf_drive.mw) = _o
+    return host, calls
+
+
+try:
+    _h, _calls = _run_embed()
+    _names = [c[0] for c in _calls]
+    check("the card index is refreshed BEFORE the PDF is matched — "
+          "run_curation was the only path that used to do this",
+          _names == ["ensure_index", "ensure_pdf_index", "ensure_matches",
+                     "sync_after_matches"], repr(_names))
+    check("the run's cancel token reaches ensure_index too (Cancel must "
+          "stop the longest phase, not just the two after it)",
+          _calls[0][1] == "cancel-token", repr(_calls[0]))
+    check("a completed run still ends in the tag sync and a row refresh",
+          _h.refreshes == 1 and _h.status.texts
+          and "refreshing retention" in _h.status.texts[-1],
+          repr(_h.status.texts))
+
+    _h2, _calls2 = _run_embed(card_index_completed=False)
+    check("a CANCELLED card-index pass stops the chain there — matching "
+          "on a half-built index is the silent under-cover this whole "
+          "pin exists for",
+          [c[0] for c in _calls2] == ["ensure_index"], repr(_calls2))
+    check("...and says so, rather than reporting success",
+          _h2.status.texts and "cancelled" in _h2.status.texts[-1].lower()
+          and _h2.refreshes == 0, repr(_h2.status.texts))
+
+    _h3, _calls3 = _run_embed(pdf_index_complete=False)
+    check("the pre-existing cancelled-PDF-index branch still short-"
+          "circuits (the new phase did not swallow it)",
+          [c[0] for c in _calls3] == ["ensure_index", "ensure_pdf_index"],
+          repr(_calls3))
+except Exception as e:
+    check("_on_embed phase order", False, f"{type(e).__name__}: {e}")
+
+print("== refresh_open_library glue (K-052 rework) ==")
 # With no Library window open, the hook must be a silent no-op — it is
 # called from a config-save path in Preferences, where an exception or a
 # stray dialog would be a much worse bug than a stale column.
@@ -1260,9 +1434,10 @@ if _HAVE_QT:
           and _tips.get("Update Search Index")
           == "Re-reads the PDF and recomputes which cards match it. "
              "Does not touch your decks.")
-    check("curate carries the copies-into-a-new-deck tooltip",
-          _tips.get("Curate Deck from This PDF…")
-          == "Copies the matching cards into a new deck.")
+    check("K-146: no curate entry survives on the real menu (the source "
+          "pin above says the string is gone; this says the built menu "
+          "is)",
+          not any("Curate" in t for t in _labels), repr(_labels))
     check("both suspend actions offered while both counts are positive",
           "Suspend Cards" in _labels and "Unsuspend Cards" in _labels)
     _, _m2 = _build_menu(dict(_menu_row_full, card_count=0,

@@ -1,27 +1,34 @@
-"""Curate Deck on Anki's deck screens — button, PDF drop, deck scoping.
+"""Import a lecture PDF from Anki's deck screens — drop square and drop wrap.
 
-Three surfaces, each installed independently so one failure never takes
-down the others:
+**K-146 removed the curate-a-deck ceremony this file was built around.**
+That button never created a deck: it searched, tagged, and opened Browse
+on the per-PDF ``!Library`` tag — the same tag indexing already writes
+(``tag_sync.sync_after_matches``) and the same view the Library's "Show
+Matched Cards in Browse" opens. What it did do, invisibly, was refresh
+the CARD index; that job moved to ``pdf_drive._on_embed``, which is now
+the only user-facing path that reaches ``curation.ensure_index``.
 
-- **Deck browser bottom bar** — no hook exists, so the button is appended
-  to the ``DeckBrowser.drawLinks`` class attribute (``_drawButtons``
-  deepcopies it per render). Unknown link commands fall through Anki's
-  ``_linkHandler`` silently, so the click arrives via
-  ``webview_did_receive_js_message``, gated on the bottom bar's context.
-- **Deck overview bottom bar** — a real filter hook,
-  ``overview_will_render_bottom``.
+What remains here is the import surface, on two screens:
+
 - **PDF drop** — ``MainWebView.dropEvent`` consumes OS file drops on the
   deck browser and feeds them to Anki's importer, and ``AnkiWebView``
   disables HTML5 drops on every render, so a JS drop zone can never see
   the file. The only robust route is wrapping that method: peel off the
-  PDFs, delegate everything else to the original.
+  PDFs, delegate everything else to the original. **This wrapper is the
+  only thing standing between a dropped PDF and Anki's own importer
+  choking on it** — it outlives the button by a wide margin.
+- **The drop square** — rendered into the deck browser's and the
+  overview's content webviews, with a Browse… file picker for people who
+  would rather not drag. Its ``pycmd`` clicks arrive over
+  ``webview_did_receive_js_message`` gated on those screens' contexts.
 
 Command namespace is ``klausmate_<action>`` (underscore) — deliberately
 NOT the editor bridge's ``klausmate:<action>`` (colon), whose handler
 claims and drops any message from a non-Editor context.
 
-Dropping a PDF "arms" it: session-only state, shown on the deck browser,
-consumed by the next Curate click and cleared afterwards.
+Importing a PDF still "arms" it: session-only state that names the file
+just imported on the deck screens until dismissed with ×. Nothing
+consumes it anymore — it is a confirmation, not a pending action.
 """
 
 from __future__ import annotations
@@ -30,25 +37,12 @@ import os
 from typing import Any
 
 from aqt import gui_hooks, mw
-from aqt.qt import (
-    QAction,
-    QComboBox,
-    QCursor,
-    QDialog,
-    QDialogButtonBox,
-    QLabel,
-    QMenu,
-    QTimer,
-    QVBoxLayout,
-)
-from aqt.utils import showWarning, tooltip
+from aqt.qt import QTimer
+from aqt.utils import tooltip
 
-from . import curation, pdf_handler
-
-CURATE_CMD = "klausmate_curate"
 DISARM_CMD = "klausmate_disarm"
 BROWSE_CMD = "klausmate_browse"
-_CLAIMED = {CURATE_CMD, DISARM_CMD, BROWSE_CMD}
+_CLAIMED = {DISARM_CMD, BROWSE_CMD}
 
 _armed_pdf: str | None = None
 
@@ -82,7 +76,11 @@ def arm(safe: str | None) -> None:
 
 
 def disarm_if(safe: str) -> None:
-    """Clear the armed PDF when that PDF is deleted elsewhere."""
+    """Clear the armed PDF when that PDF is deleted elsewhere.
+
+    Still called by pdf_drive._delete after K-146: the square NAMES the
+    armed PDF, so deleting it must stop that name being advertised.
+    """
     if _armed_pdf == safe:
         arm(None)
 
@@ -127,172 +125,6 @@ def _import_and_arm(paths: list[str], skipped: int = 0) -> None:
         _refresh_current_screen()
 
 
-# ------------------------------------------------------------ deck scope
-
-
-def choose_deck_scope(parent, on_done) -> None:
-    """Ask which deck to curate against, window-modal (K-114).
-
-    ``on_done(deck_name)`` fires only when the user accepts (``None``
-    deck = All Decks); cancelling simply never calls it —
-    pdf_drive._on_threshold's accepted-callback pattern. Window-modal
-    open(), never app-modal exec(): that path segfaulted seven times
-    on Qt 6.11 + macOS 26 (test_bridge_reentrancy pins the why).
-    """
-    dlg = QDialog(parent)
-    dlg.setWindowTitle("Curate Deck")
-    try:
-        from . import theme as _theme
-
-        dlg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
-    except Exception as _exc:
-        print(f"[klausmate] curate dialog theme failed: {_exc}")
-    layout = QVBoxLayout(dlg)
-    layout.addWidget(QLabel("Search for matching cards in:"))
-    combo = QComboBox()
-    combo.addItem("All Decks", None)
-    try:
-        if mw.col is not None:
-            for entry in mw.col.decks.all_names_and_ids():
-                combo.addItem(entry.name, entry.name)
-    except Exception as e:
-        print(f"[klausmate] deck list failed: {e}")
-    layout.addWidget(combo)
-    buttons = QDialogButtonBox(
-        QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-    )
-    buttons.accepted.connect(dlg.accept)
-    buttons.rejected.connect(dlg.reject)
-    layout.addWidget(buttons)
-    # finished fires before accepted, but deleteLater only lands once
-    # control returns to the event loop — the accepted lambda still
-    # reads a live combo.
-    dlg.accepted.connect(lambda: on_done(combo.currentData()))
-    dlg.finished.connect(lambda _r: dlg.deleteLater())
-    dlg.open()
-
-
-# ------------------------------------------------------------- curation
-
-
-def run_curation_flow(pdf_name: str, deck_scope: str | None, parent=None) -> None:
-    """Run the shared curation pipeline with main-window progress."""
-    parent = parent or mw
-    started = False
-
-    def on_progress(label: str, done: int, total: int) -> None:
-        nonlocal started
-        try:
-            if not started:
-                mw.progress.start(label=label, immediate=True)
-                started = True
-            if total > 0:
-                mw.progress.update(label=f"{label} {done}/{total}")
-            else:
-                mw.progress.update(label=label)
-        except Exception:
-            pass
-
-    def finish() -> None:
-        nonlocal started
-        if started:
-            try:
-                mw.progress.finish()
-            except Exception:
-                pass
-            started = False
-
-    def on_done(result: dict) -> None:
-        finish()
-        arm(None)
-        count = len(result.get("nids") or [])
-        if not count:
-            tooltip("No matching cards — try a wider deck scope.")
-        elif result.get("previewed"):
-            tooltip(f"{count:,} matches tagged and opened in Browse.")
-        else:
-            tooltip(f"{count:,} matches found.")
-
-    def on_error(exc: Exception) -> None:
-        finish()
-        from . import embeddings
-
-        if isinstance(exc, embeddings.EmbeddingError):
-            showWarning("Klaus curation failed.\n\n" + exc.user_message())
-        else:
-            showWarning(f"Klaus curation failed.\n\n{exc}")
-
-    try:
-        curation.run_curation(
-            parent,
-            pdf_name=pdf_name,
-            deck_scope=deck_scope,
-            on_progress=on_progress,
-            on_done=on_done,
-            on_error=on_error,
-        )
-    except Exception as e:
-        finish()
-        showWarning(f"Klaus could not start curation.\n\n{e}")
-
-
-def _pick_pdf_menu() -> None:
-    """No PDF armed: offer the library, most recently used first."""
-    user_files = _user_files()
-    try:
-        names = pdf_handler.list_by_recency(user_files)
-    except Exception:
-        names = [
-            f[:-4] if f.endswith(".txt") else f
-            for f in pdf_handler.list_contexts(user_files)
-        ]
-    if not names:
-        tooltip("No PDFs imported yet — drop one on the deck list first.")
-        return
-    menu = QMenu(mw)
-    # addAction(QAction) returns None in PyQt6 — build, configure, then add.
-    header = QAction("Curate a Deck From…", menu)
-    header.setEnabled(False)
-    menu.addAction(header)
-    menu.addSeparator()
-    for safe in names[:20]:
-        act = QAction(_display_name(safe), menu)
-        act.triggered.connect(lambda _c=False, s=safe: _curate_with(s))
-        menu.addAction(act)
-    menu.exec(QCursor.pos())
-
-
-def _curate_with(safe: str) -> None:
-    """A PDF is chosen — resolve the deck scope for the current screen."""
-    scope_state = getattr(mw, "state", "")
-    if scope_state == "overview":
-        try:
-            deck = mw.col.decks.current()["name"]
-        except Exception as e:
-            print(f"[klausmate] current deck lookup failed: {e}")
-            deck = None
-        if deck:
-            run_curation_flow(safe, deck)
-            return
-    choose_deck_scope(mw, lambda deck: run_curation_flow(safe, deck))
-
-
-def _on_curate_clicked() -> None:
-    if mw is None or mw.col is None:
-        return
-    # Deferred for the same reason _on_browse_clicked above is: this runs
-    # from the deck surfaces' JS-message/link handlers (a QWebChannel
-    # dispatch). _pick_pdf_menu still ends in menu.exec()'s nested loop;
-    # choose_deck_scope is window-modal open() since K-114, but raising
-    # any dialog from inside the webchannel call stack stays deferred as
-    # hygiene. The armed PDF is frozen into the callback rather than
-    # re-read a tick later.
-    if _armed_pdf:
-        QTimer.singleShot(0, lambda safe=_armed_pdf: _curate_with(safe))
-    else:
-        QTimer.singleShot(0, _pick_pdf_menu)
-
-
 def _browse_for_pdfs() -> None:
     """Open the file dialog and feed picks through the same path as a drop."""
     from aqt.qt import QFileDialog
@@ -311,18 +143,6 @@ def _on_browse_clicked() -> None:
 
 
 # ------------------------------------------------------------- installs
-
-
-def _install_deck_browser_button() -> None:
-    from aqt.deckbrowser import DeckBrowser
-
-    if not hasattr(DeckBrowser, "drawLinks"):
-        print("[klausmate] DeckBrowser.drawLinks missing — button skipped")
-        return
-    if getattr(DeckBrowser, "_klausmate_curate_link", False):
-        return
-    DeckBrowser.drawLinks.append(["", CURATE_CMD, "Curate Deck"])
-    DeckBrowser._klausmate_curate_link = True
 
 
 def on_deck_js_message(
@@ -353,26 +173,7 @@ def on_deck_js_message(
         arm(None)
     elif message == BROWSE_CMD:
         _on_browse_clicked()
-    else:
-        _on_curate_clicked()
     return (True, None)
-
-
-def on_overview_bottom(link_handler, links):
-    """Filter hook: add the button and intercept its command."""
-    try:
-        links.append(["", CURATE_CMD, "Curate Deck"])
-    except Exception as e:
-        print(f"[klausmate] overview button failed: {e}")
-        return link_handler
-
-    def wrapped(url: str = "", **kwargs):
-        if url == CURATE_CMD:
-            _on_curate_clicked()
-            return None
-        return link_handler(url=url, **kwargs)
-
-    return wrapped
 
 
 def _drop_square_html() -> str:
@@ -384,7 +185,8 @@ def _drop_square_html() -> str:
     Fixed to the bottom of the CONTENT webview's own viewport rather than
     flowing in-place: on both the deck browser and the deck overview, the
     stats/table HTML this gets appended to renders in the main content
-    webview (mw.web), while the button row (Get Shared / Curate Deck / …)
+    webview (mw.web), while Anki's own button row (Get Shared / Create
+    Deck / Import File — K-146 took Klaus's button out of it)
     lives in a SEPARATE webview (mw.bottomWeb, via aqt.toolbar.BottomBar)
     pinned below it — same split on both screens (both construct
     ``self.bottom = BottomBar(mw, mw.bottomWeb)`` in the real Anki source).
@@ -413,9 +215,12 @@ def _drop_square_html() -> str:
         safe_label = (
             label.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
+        # The copy names what actually happened and where to go next.
+        # It used to point at the curate button on the bottom bar —
+        # which K-146 removed, and which never created a deck anyway.
         body = (
-            f"<span style='flex:1;text-align:left;'>Armed: <b>{safe_label}</b>"
-            " — press <b>Curate Deck</b> below.</span>"
+            f"<span style='flex:1;text-align:left;'>Imported: <b>{safe_label}</b>"
+            " — index it from the <b>Library</b>.</span>"
             f"<a href=# onclick='pycmd(\"{DISARM_CMD}\"); return false;' "
             "style='flex:0 0 auto;color:inherit;text-decoration:none;'>"
             "&times;</a>"
@@ -423,7 +228,8 @@ def _drop_square_html() -> str:
         border = _armed_border
     else:
         body = (
-            "<span style='flex:1;text-align:left;'>Drop a PDF to curate</span>"
+            "<span style='flex:1;text-align:left;'>"
+            "Drop a lecture PDF to add it to your Library</span>"
             f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
             "style='flex:0 0 auto;padding:3px 10px;"
             f"border:{_btn_border};border-radius:6px;"
@@ -523,25 +329,21 @@ def _on_profile_will_close() -> None:
 
 
 def setup() -> None:
-    """Install every deck surface; each failure is isolated and logged."""
-    for label, install in (
-        ("deck browser button", _install_deck_browser_button),
-        ("drop wrap", _install_drop_wrap),
-    ):
-        try:
-            install()
-        except Exception as e:
-            print(f"[klausmate] {label} setup failed: {type(e).__name__}: {e}")
+    """Install every deck surface; each failure is isolated and logged.
+
+    K-146 dropped two installs with the button they existed for: the
+    ``DeckBrowser.drawLinks`` append and the ``overview_will_render_bottom``
+    filter. Klaus adds nothing to either bottom bar now.
+    """
+    try:
+        _install_drop_wrap()
+    except Exception as e:
+        print(f"[klausmate] drop wrap setup failed: {type(e).__name__}: {e}")
 
     try:
         gui_hooks.webview_did_receive_js_message.append(on_deck_js_message)
     except Exception as e:
         print(f"[klausmate] deck js hook failed: {e}")
-    if hasattr(gui_hooks, "overview_will_render_bottom"):
-        try:
-            gui_hooks.overview_will_render_bottom.append(on_overview_bottom)
-        except Exception as e:
-            print(f"[klausmate] overview hook failed: {e}")
     if hasattr(gui_hooks, "deck_browser_will_render_content"):
         try:
             gui_hooks.deck_browser_will_render_content.append(on_deck_browser_content)
