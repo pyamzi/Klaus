@@ -9,13 +9,24 @@ kanban board — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 
-Klaus is **embeddings-only**: its one AI capability is semantic search,
-which defaults to the **Voyage** cloud embedding API (Ollama is an optional
-local alternative, OpenAI a second cloud option). Autocomplete, ⌘K Ask, the
-Klaus chat panel, the Settings dialog, and the Claude/Anthropic integration
-were all deleted in 2026-08 — if you find docs, comments, or instincts that
-assume any of those still exist, they're stale. See AGENTS.md's "What used
-to be here" for the full list of what was removed.
+Klaus was **embeddings-only** from 2026-08: its one AI capability was
+semantic search, which defaults to the **Voyage** cloud embedding API
+(Ollama is an optional local alternative, OpenAI a second cloud option).
+Autocomplete, ⌘K Ask, the Klaus chat panel, the Settings dialog, and the
+Claude/Anthropic integration were all deleted then — if you find docs,
+comments, or instincts that assume THOSE surfaces still exist, they're
+stale. See AGENTS.md's "What used to be here".
+
+**That is being deliberately reversed as of 2026-09-01** (Pouya's call): two
+assistants are under construction — one to query notes and the lecture-PDF
+index, one to draft cards from lecture material — with a free
+bring-your-own-key path and a premium hosted one. Four aqt-light layers have
+landed and are NOT yet wired to any surface: `card_forge.py` (drafting +
+review), `llm_client.py` (streaming transport, descended from the deleted
+`claude_api.py`), `entitlement.py` (tier, advisory only), and `anki_tools.py`
+(the collection tool layer, restored from `30847b9^`). **The UI surface is
+deliberately undecided** — do not invent one. Do not delete these modules on
+the strength of the 2026-08 paragraph above.
 
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
@@ -789,8 +800,9 @@ instead. Signed-off history is in
     Klaus-managed install; reclaiming that disk space is a manual delete of
     `user_files/runtime/` (after switching off "Manage Ollama automatically"
     in Manage models → General so it doesn't just come back).
-- Deleted (2026-08, do not resurrect the language): `claude_api.py`,
-  `anki_tools.py`, `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
+- Deleted (2026-08, do not resurrect the language): `claude_api.py`
+  (its streaming client lives on, reshaped, as `llm_client.py`),
+  `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
   `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
   panes-in-one-window mode from K-059..K-062 was removed as too buggy:
   dark webview panes survived five rework rounds, K-090..K-094. Anki is

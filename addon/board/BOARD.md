@@ -145,6 +145,22 @@ Same shape as K-140s _klausmate_target_field_* removal (commit: dead editor stat
 
 Also in scope, same file family: __init__.py:1998 hand-rolls btn.setStyleSheet("font-size: 10px; border: none;") on the per-tab close button, where panel_header_qss should own the glyph. No colour, so it clears the letter of the no-hardcoded-colour rule, but it is a hand-rolled sheet in a themed surface. Note the hardcoded-hex lint (tests/test_setup_crop_theme.py:105,139) covers only setup_flow.py and crop_dialog.py — pdf_viewer.py, __init__.py and pdf_drive.py are unaudited for colour literals, which is worth fixing on its own.
 
+### K-157: Assistant UI surface: wire card_forge/llm_client/entitlement/anki_tools to something the user can touch
+owner: -
+priority: P2
+tags: assistant,design
+files: klausmate/__init__.py,klausmate/manage_models.py
+verify: env QT_QPA_PLATFORM=offscreen python3 tests/test_card_forge.py
+created: 2026-09-01
+
+The four engine layers landed 2026-09-01 (f74a09e, 120293f, a494f2d, f1b330b, e1c023c) and are wired to NOTHING — importable, tested, unreachable by a user. Remaining work is the surface plus its registration.
+
+BLOCKED ON A DECISION, not on code: Pouya deliberately deferred the UI. His words were that he is 'thinking something along the lines of when you have the PDF viewer showing up like that panel, you can have AI show up at the bottom of the PDF viewer, but I'm not sure yet. I don't want to jump to anything yet in terms of UI.' Do NOT pick a surface on his behalf.
+
+Files listed are what the surface will need when it exists (hook + menu registration in __init__.py, settings rows for assistant_backend/assistant_token in manage_models.py). NOT claimed now — the other lane is editing both and should not be blocked for work that is waiting on a human.
+
+Quality bar, from the same conversation: the failure mode to avoid is 'creating a bunch of shitty cards that you're not sure if it's good or not'. card_forge already enforces mandatory slide provenance, drops cards citing unselected slides, dedups against the existing collection before display, and writes nothing without a per-card accept. The surface must not route around any of that.
+
 ## Ready
 
 ### K-156: Baked text annotations render black in other readers: /DA is empty
