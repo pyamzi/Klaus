@@ -498,9 +498,21 @@ instead. Signed-off history is in
   overriding ONLY `--canvas/--canvas-elevated/--border/--border-subtle`.
   The editor is dual-path: legacy stdHtml gets `editor_css` via
   web_content.head; the flag-gated Svelte editor degrades to stock.
-- `pdf_drive.py`: the **Library** window (renamed from "PDF drive" in the
-  UI; file/class names still say drive) — folder tree (`drive_store.py`,
-  `user_files/drive.json`) next to a standalone `PdfSidebar`. Since K-073
+- `pdf_drive.py`: the **Library** (renamed from "PDF drive" in the UI;
+  file/class names still say drive) — folder tree (`drive_store.py`,
+  `user_files/drive.json`) next to a standalone `PdfSidebar`. **It has
+  TWO shapes since 2026-09-01**: the toolbar link's `open_library` first
+  tries `library_tab.mount()`, which builds ONE `DriveWindow(embedded=True)`
+  as a screen inside `mw.mainLayout` and keeps it for the session (unmount
+  only HIDES it — hidden is its resting state, not "closed"); the
+  standalone window is the fallback when the mount fails. The two live in
+  DISJOINT rosters: `_instance` is written only by `_create()` (the window
+  path, embedded=False), `_embedded_windows` is a WeakSet joined only by an
+  embedded `__init__` (K-173). Any "every open Library" consumer must walk
+  BOTH — `refresh_open_library` (settings save) and `_on_fs_tick` (disk
+  watcher) are the two that need it, and a consumer that reads only
+  `_instance` silently misses the screen the user is actually looking at.
+  Since K-073
   the tree is **mirrored two-way with real folders under the library
   root** (single-copy invariant: one file per PDF, living in the root;
   `rescan_library_root` + a debounced filesystem watcher pick up outside

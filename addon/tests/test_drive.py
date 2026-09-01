@@ -717,13 +717,150 @@ check("open+visible Library gets exactly one refresh", w.refreshes == 1)
 w2 = _FakeWin(alive=True, visible=False)
 pdf_drive._instance = w2
 pdf_drive.refresh_open_library()
-check("hidden Library is not refreshed", w2.refreshes == 0)
+# Inverted with the review fix: ALIVE means walked, for both shapes, the
+# way _on_index_state already behaves. A properly closed standalone
+# window leaves _instance through shutdown() and is never walked; a
+# hidden-but-registered one is a transient (close() before deleteLater)
+# or a never-shown window, and refreshing it is harmless.
+check("a hidden but still-registered Library IS refreshed — the isVisible() "
+      "gate is gone for every shape",
+      w2.refreshes == 1, f"{w2.refreshes} refreshes")
 
 w3 = _FakeWin(alive=False, visible=True)
 pdf_drive._instance = w3
 pdf_drive.refresh_open_library()
 check("dead C++ handle is not refreshed", w3.refreshes == 0)
 pdf_drive._instance = None
+
+# THE EMBEDDED LIBRARY IS THE ONE THE USER IS LOOKING AT. `_instance` is
+# set by _create(), the standalone-window path only; the SCREEN is a
+# DriveWindow(embedded=True) that library_tab constructs directly, so it
+# never lands there. Since open_library() prefers the tab, walking only
+# `_instance` meant the sensitivity save reached the shape almost nobody
+# has open — K-052's exact complaint, regressed for the screen. The
+# WeakSet K-173 added for viewer release is the roster of embedded
+# screens; this hook has to walk it too.
+_prev_emb = list(pdf_drive._embedded_windows)
+pdf_drive._embedded_windows.clear()
+
+e1 = _FakeWin(alive=True, visible=True)
+pdf_drive._embedded_windows.add(e1)
+pdf_drive.refresh_open_library()
+check("the EMBEDDED Library screen gets refreshed too — the whole card",
+      e1.refreshes == 1, f"{e1.refreshes} refreshes")
+
+e1.refreshes = 0
+e2 = _FakeWin(alive=True, visible=False)
+e3 = _FakeWin(alive=False, visible=True)
+pdf_drive._embedded_windows.add(e2)
+pdf_drive._embedded_windows.add(e3)
+pdf_drive.refresh_open_library()
+check("a HIDDEN embedded screen IS refreshed — hidden is the tab's RESTING "
+      "state (unmount only hides), mount() re-shows it with no refresh of "
+      "its own, and _on_index_state already refreshes hidden screens; the "
+      "old isVisible() skip is how a sensitivity save made from any other "
+      "Anki screen was silently lost (K-052, third time)",
+      e2.refreshes == 1, f"{e2.refreshes} refreshes")
+check("a DEAD embedded screen is not refreshed — the WeakSet outlives "
+      "the C++ object, so _alive() is load-bearing here, not hygiene",
+      e3.refreshes == 0, f"{e3.refreshes} refreshes")
+check("...and the live one beside them still got its one refresh",
+      e1.refreshes == 1, f"{e1.refreshes} refreshes")
+
+
+class _AngryWin(_FakeWin):
+    def _refresh_rows(self):
+        self.refreshes += 1
+        raise RuntimeError("boom")
+
+
+# The RAISING window must be the one walked FIRST, or this pin is decided
+# by WeakSet iteration order: with bad and good both in the set, a broken
+# single-outer-try implementation passed 63% of 2000 replays — every run
+# where good happened to be iterated before bad. _instance is always the
+# first element of the walk, so it is the deterministic seat for bad.
+pdf_drive._embedded_windows.clear()
+bad = _AngryWin(alive=True, visible=True)
+good = _FakeWin(alive=True, visible=True)
+pdf_drive._instance = bad
+pdf_drive._embedded_windows.add(good)
+_raised = None
+try:
+    pdf_drive.refresh_open_library()
+except Exception as _e:  # noqa: BLE001
+    _raised = _e
+check("one screen that throws does not eat the refresh of the others — "
+      "the guard is PER WINDOW, because this runs inside Preferences' "
+      "config-save path where an escaping exception is far worse than a "
+      "stale column (the raiser is walked first, so order cannot save a "
+      "whole-loop try)",
+      _raised is None and bad.refreshes == 1 and good.refreshes == 1,
+      f"raised={_raised!r}, bad={bad.refreshes}, good={good.refreshes}")
+
+# No "reachable both ways" pin: the two rosters are DISJOINT by construction
+# (_instance is written only by _create(), which builds embedded=False;
+# _embedded_windows is joined only by an embedded __init__), so a window in
+# both is a state production cannot produce, and a dedupe would guard
+# nothing. Note for whoever cites a cost here: _refresh_rows never embeds
+# (retention.priority_rows reads cached artifacts only); a double refresh
+# costs a vector load, SQL and a main-thread rescan, not API money.
+
+# ONE walker for "every live Library", used by both consumers. The two
+# rosters are disjoint by construction, so it dedupes nothing; it skips
+# None and dead C++ handles and yields the rest, visible or not.
+pdf_drive._embedded_windows.clear()
+_lw_win = _FakeWin(alive=True, visible=True)
+_lw_hid = _FakeWin(alive=True, visible=False)
+_lw_dead = _FakeWin(alive=False, visible=True)
+pdf_drive._instance = _lw_win
+pdf_drive._embedded_windows.add(_lw_hid)
+pdf_drive._embedded_windows.add(_lw_dead)
+_lw_fn = getattr(pdf_drive, "_live_libraries", None)
+check("pdf_drive has ONE walker for 'every live Library', _live_libraries",
+      callable(_lw_fn))
+_lw_out = list(_lw_fn()) if callable(_lw_fn) else []
+check("_live_libraries yields the window and the hidden screen, and skips the "
+      "dead handle — one roster walk both consumers share",
+      len(_lw_out) == 2 and _lw_win in _lw_out and _lw_hid in _lw_out
+      and _lw_dead not in _lw_out, f"{len(_lw_out)} yielded")
+pdf_drive._instance = None
+_lw_out2 = list(_lw_fn()) if callable(_lw_fn) else []
+check("...and with no standalone window it still yields the screens",
+      _lw_out2 == [_lw_hid], repr(_lw_out2))
+
+# THE WATCHER TICK HAD THE SAME BLIND SPOT and no test at all. With only
+# the embedded screen open (_instance is None — only _create() writes
+# it), a disk change under the library root used to fall to the bare
+# rescan and never repaint the tree the user was looking at.
+_rescans = []
+_prev_rescan = pdf_drive.rescan_library_root
+pdf_drive.rescan_library_root = lambda *a, **k: _rescans.append(1)
+try:
+    pdf_drive._embedded_windows.clear()
+    _fs_scr = _FakeWin(alive=True, visible=True)
+    pdf_drive._embedded_windows.add(_fs_scr)
+    pdf_drive._instance = None
+    pdf_drive._on_fs_tick()
+    check("_on_fs_tick refreshes the EMBEDDED Library on a disk change — it "
+          "walked _instance alone, so the visible tree never repainted "
+          "(K-076 regressed for the tab)",
+          _fs_scr.refreshes == 1, f"{_fs_scr.refreshes} refreshes")
+    check("...and does not ALSO run the bare rescan when a Library took the "
+          "refresh (_refresh_rows rescans itself)",
+          not _rescans, f"{len(_rescans)} bare rescans")
+    pdf_drive._embedded_windows.clear()
+    del _rescans[:]
+    pdf_drive._on_fs_tick()
+    check("...and with no Library open at all it still runs the bare rescan, "
+          "so folder->tag sync stays live while nothing is showing",
+          len(_rescans) == 1, f"{len(_rescans)} bare rescans")
+finally:
+    pdf_drive.rescan_library_root = _prev_rescan
+
+pdf_drive._instance = None
+pdf_drive._embedded_windows.clear()
+for _w in _prev_emb:
+    pdf_drive._embedded_windows.add(_w)
 
 
 
@@ -2623,6 +2760,113 @@ if _HAVE_QT:
         check(f"K-173 pdf.js checks ran ({_ejs})", False)
 else:
     print("  SKIP: PyQt6 unavailable — the pdf.js checks need real widgets")
+
+
+print("== the sensitivity save reaches a REAL embedded Library ==")
+# The fake-window pins above stipulate the roster; this proves the two
+# halves actually meet. A DriveWindow(embedded=True) built the way
+# library_tab builds one must (a) put ITSELF in _embedded_windows and
+# (b) be reached by refresh_open_library with _instance empty — which is
+# exactly the state the Library SCREEN runs in, since _create() is the
+# only writer of _instance and the tab never calls it.
+if _HAVE_QT:
+    _prev_ufe = pkg.USER_FILES
+    _prev_set = list(pdf_drive._embedded_windows)
+    _ufe = tempfile.mkdtemp(prefix="klaus_emb_refresh_uf_")
+    _embw = None
+    _hoste = None
+    try:
+        os.makedirs(os.path.join(_ufe, "contexts"), exist_ok=True)
+        pkg.USER_FILES = _ufe
+        pdf_drive._embedded_windows.clear()
+        pdf_drive._instance = None
+
+        _embw = pdf_drive.DriveWindow(embedded=True)
+        check("a real embedded Library enrols itself in the roster the "
+              "hook walks — nothing else adds it, so a dropped add() "
+              "silently un-wires the whole card",
+              _embw in pdf_drive._embedded_windows)
+
+        # library_tab mounts the parentless screen into mw's layout and
+        # shows it there. isVisible() is synchronous after show(), so no
+        # event turn is needed — and none is spun: a processEvents() here
+        # fired the 0ms _arm_sidebar timer and built a real PdfSidebar this
+        # block never used.
+        _hoste = _QtW.QWidget()
+        _laye = _QtW.QVBoxLayout(_hoste)
+        _laye.setContentsMargins(0, 0, 0, 0)
+        _laye.addWidget(_embw)
+        _hoste.resize(1200, 700)
+        _hoste.show()
+        _embw.show()
+
+        _hits = []
+        _embw._refresh_rows = lambda *a, **k: _hits.append(1)
+        pdf_drive.refresh_open_library()
+        # Honest title: _refresh_rows is stubbed and the harness has mw=None
+        # (the real method would return on its first line), so this proves
+        # the hook REACHES a real embedded window — roster + walk — and
+        # nothing about what _refresh_rows then does.
+        check("saving the default match sensitivity reaches a REAL embedded "
+              "Library's refresh hook — the screen Pouya is looking at, "
+              "which _instance has never pointed at (K-052, regressed by "
+              "the move into a tab)",
+              len(_hits) == 1, f"{len(_hits)} refreshes, "
+              f"_instance={pdf_drive._instance!r}")
+
+        # Hidden is the state library_tab leaves the screen in whenever
+        # the user is anywhere else in Anki, and it is kept in the set.
+        _embw.hide()
+        del _hits[:]
+        pdf_drive.refresh_open_library()
+        check("...and a screen the user has navigated away from is refreshed "
+              "TOO, on the real widget as on the fakes — mount() re-shows it "
+              "with no refresh of its own, so skipping it here lost the save",
+              len(_hits) == 1, f"{len(_hits)} refreshes")
+
+        # PROFILE SWITCH: shutdown()'s only caller is closeEvent, which the
+        # tab never gets; release_viewer strips only the sidebar. Without a
+        # pending-refresh flag the next mount() showed the OLD collection's
+        # rows. The release marks the window stale and the next show
+        # schedules one refresh (deferred a tick, like the sidebar arm).
+        del _hits[:]
+        pdf_drive._release_embedded_viewers()
+        check("releasing the embedded viewers on profile close marks the "
+              "screen as needing a refresh",
+              getattr(_embw, "_refresh_pending", False) is True)
+        _embw.show()
+        app.processEvents()
+        check("...and the next show() schedules exactly one refresh, so a "
+              "remounted Library never shows the previous profile's rows",
+              len(_hits) == 1 and _embw._refresh_pending is False,
+              f"{len(_hits)} refreshes, pending={_embw._refresh_pending!r}")
+    except Exception as _e_emb:  # noqa: BLE001
+        check(f"embedded-refresh offscreen checks ran ({_e_emb})", False)
+    finally:
+        # Restoration is unconditional (the file's own idiom, cf. the
+        # try/finally around USER_FILES at K-136): a raise anywhere above
+        # must not leave USER_FILES on a temp dir, the roster emptied, or
+        # this widget alive — shutdown() is what detaches the
+        # index_queue listener whose bound method would otherwise keep
+        # the DriveWindow (and its sidebar) alive to process exit.
+        try:
+            if _embw is not None:
+                _embw.shutdown()
+        except Exception as _e_sd:  # noqa: BLE001
+            print(f"  (embedded window shutdown raised: {_e_sd})")
+        try:
+            if _hoste is not None:
+                _hoste.close()
+        except Exception:
+            pass
+        pdf_drive._embedded_windows.clear()
+        for _w in _prev_set:
+            pdf_drive._embedded_windows.add(_w)
+        pdf_drive._instance = None
+        pkg.USER_FILES = _prev_ufe
+        shutil.rmtree(_ufe, ignore_errors=True)
+else:
+    print("  SKIP: PyQt6 unavailable — the fake-window pins above still ran")
 
 
 print(f"\n{PASS} passed, {FAIL} failed")

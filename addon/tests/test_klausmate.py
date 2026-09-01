@@ -100,6 +100,67 @@ check("a two-tuple signature still works — existing callers are unbroken",
 check("provider/model mismatch still wins regardless of width",
       not card_index.check_signature(_ix, ("voyage", "voyage-3-lite", 1024)))
 
+# stats_from_disk has TWO exits and its callers cannot see which one they
+# got. A missing or corrupt index is exactly when a caller is most likely
+# to be probing, so the failure dict has to answer every key the success
+# dict does — or stats["dims"] raises KeyError on the one path that needed
+# an answer most. The success branch once listed "dims" TWICE and the
+# failure branch not at all. pdf_index.stats_from_disk is the model: same
+# keys out of both exits.
+_sfd_tmp = tempfile.mkdtemp()
+_sfd_dir = os.path.join(_sfd_tmp, "card_index")
+_sfd_ix = card_index.empty_index("voyage", "voyage-3-lite", 1024)
+card_index.save(_sfd_ix, _sfd_dir)
+_sfd_ok = card_index.stats_from_disk(_sfd_dir)
+_sfd_missing = card_index.stats_from_disk(os.path.join(_sfd_tmp, "no-such-dir"))
+check("stats_from_disk: a real manifest reports exists + its width",
+      _sfd_ok["exists"] and _sfd_ok["dims"] == 1024, repr(_sfd_ok))
+# set-equality first, so the subscripts that follow short-circuit on a
+# missing key instead of aborting the run: one check, no try/except.
+check("stats_from_disk: a MISSING index returns the same key set as a "
+      "present one, and stats['dims'] answers 0 rather than raising",
+      set(_sfd_missing) == set(_sfd_ok)
+      and _sfd_missing["dims"] == 0 and not _sfd_missing["exists"],
+      f"success={sorted(_sfd_ok)} failure={sorted(_sfd_missing)}")
+# A manifest from an older INDEX_VERSION is valid JSON that still has to
+# take the failure exit — the realistic upgrade path, not just a corrupt file.
+with open(os.path.join(_sfd_dir, card_index.MANIFEST_FILE), encoding="utf-8") as f:
+    _sfd_m = json.load(f)
+_sfd_m["version"] = card_index.INDEX_VERSION + 1
+with open(os.path.join(_sfd_dir, card_index.MANIFEST_FILE), "w", encoding="utf-8") as f:
+    json.dump(_sfd_m, f)
+_sfd_stale = card_index.stats_from_disk(_sfd_dir)
+check("stats_from_disk: a version-mismatched manifest takes the failure "
+      "exit with every key intact",
+      set(_sfd_stale) == set(_sfd_ok) and _sfd_stale["dims"] == 0
+      and not _sfd_stale["exists"], repr(_sfd_stale))
+with open(os.path.join(_sfd_dir, card_index.MANIFEST_FILE), "w", encoding="utf-8") as f:
+    f.write("{not json")
+_sfd_corrupt = card_index.stats_from_disk(_sfd_dir)
+check("stats_from_disk: a CORRUPT manifest does too",
+      set(_sfd_corrupt) == set(_sfd_ok) and _sfd_corrupt["dims"] == 0,
+      repr(_sfd_corrupt))
+# Valid JSON that is NOT an object — a truncated write can leave "null".
+# m.get() then raises AttributeError, which the except tuple did not name,
+# so this escaped straight into Preferences' unguarded stats["exists"].
+for _payload in ("null", "[]", '"str"'):
+    with open(os.path.join(_sfd_dir, card_index.MANIFEST_FILE), "w",
+              encoding="utf-8") as f:
+        f.write(_payload)
+    # Caught so a regression records three FAILs instead of aborting the
+    # ~170 checks below it: the defect under test IS an escaping exception.
+    try:
+        _sfd_nonobj = card_index.stats_from_disk(_sfd_dir)
+        _sfd_nonobj_ok = (set(_sfd_nonobj) == set(_sfd_ok)
+                          and not _sfd_nonobj["exists"])
+        _sfd_nonobj_why = repr(_sfd_nonobj)
+    except Exception as _exc:  # noqa: BLE001
+        _sfd_nonobj_ok, _sfd_nonobj_why = False, f"RAISED {_exc!r}"
+    check(f"stats_from_disk: a manifest of {_payload} (JSON, not an object) "
+          "takes the failure exit with every key intact",
+          _sfd_nonobj_ok, _sfd_nonobj_why)
+shutil.rmtree(_sfd_tmp, ignore_errors=True)
+
 # Widening index_signature from (provider, model) to (provider, model,
 # dims) broke EIGHT call sites at once, and most of them failed silently:
 # a two-tuple compared against a three-tuple is simply never equal, so the
@@ -278,6 +339,25 @@ check("truncated/oversized vectors -> rebuild", pdf_index.load(d) is None)
 
 st = pdf_index.stats_from_disk(d)
 check("stats_from_disk reads manifest", st["exists"] and st["chunks"] == len(chunks))
+# Both exits must answer the same keys (card_index's twin drifted); and a
+# JSON-non-object manifest must take the failure exit, not raise.
+_pi_missing = pdf_index.stats_from_disk(os.path.join(tmp, "no-such-index"))
+check("pdf_index.stats_from_disk: a missing index returns the same key set "
+      "as a present one",
+      set(_pi_missing) == set(st) and not _pi_missing["exists"],
+      f"success={sorted(st)} failure={sorted(_pi_missing)}")
+_pi_nulldir = os.path.join(tmp, "null-manifest"); os.makedirs(_pi_nulldir)
+with open(os.path.join(_pi_nulldir, pdf_index.MANIFEST_FILE), "w",
+          encoding="utf-8") as f:
+    f.write("null")
+try:
+    _pi_null = pdf_index.stats_from_disk(_pi_nulldir)
+    _pi_null_ok = set(_pi_null) == set(st) and not _pi_null["exists"]
+    _pi_null_why = repr(_pi_null)
+except Exception as _exc:  # noqa: BLE001
+    _pi_null_ok, _pi_null_why = False, f"RAISED {_exc!r}"
+check("pdf_index.stats_from_disk: a null manifest takes the failure exit",
+      _pi_null_ok, _pi_null_why)
 
 pdf_index.delete(tmp, "Lecture 1")
 check("delete removes dir", not os.path.isdir(d))

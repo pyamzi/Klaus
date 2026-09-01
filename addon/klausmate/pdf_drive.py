@@ -203,17 +203,27 @@ _fs_debounce: Any = None
 
 def _on_fs_tick() -> None:
     """Debounced watcher target: something under the library root changed
-    on disk. Window open -> the full refresh path repaints it (rescan +
-    rebuild); closed -> a bare rescan still keeps mapping/tree/tags in
-    step, so the sync is live all the time, not only while showing."""
-    try:
-        win = _instance
-        if win is not None and win._alive() and win.isVisible():
+    on disk. Any live Library (window or embedded screen, shown or hidden)
+    -> the full refresh path repaints it (``_refresh_rows`` rescans first,
+    then rebuilds); none -> a bare rescan still keeps mapping/tree/tags
+    in step, so the sync is live all the time, not only while showing.
+
+    Walks ``_live_libraries`` like ``refresh_open_library`` does: reading
+    ``_instance`` alone here left the embedded screen — the shape the
+    toolbar link prefers — never repainting on a disk change (K-076
+    regressed for the tab)."""
+    refreshed = False
+    for win in _live_libraries():
+        try:
             win._refresh_rows()
-        else:
+            refreshed = True
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] library watcher tick failed: {e}")
+    if not refreshed:
+        try:
             rescan_library_root()
-    except Exception as e:  # noqa: BLE001
-        print(f"[klausmate] library watcher tick failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] library watcher rescan failed: {e}")
     # After the rescan settled the mapping: any open viewer showing a
     # file that changed on disk reloads it (K-078 — Preview saves swap
     # the inode, so the open QPdfDocument goes stale otherwise).
@@ -1171,6 +1181,10 @@ class DriveWindow(QWidget):
         self.sidebar = None
         self.assistant = None
         self._sidebar_arming = 0
+        # Set by _release_embedded_viewers on profile close: the tab is
+        # never shut down (unmount only hides), so the next showEvent
+        # must refresh or it shows the PREVIOUS collection's rows.
+        self._refresh_pending = False
         self.splitter.addWidget(left)
         if not self.embedded:
             self._ensure_sidebar()
@@ -1346,6 +1360,15 @@ class DriveWindow(QWidget):
                 QTimer.singleShot(0, self._arm_sidebar)
         except Exception as e:
             print(f"[klausmate] viewer arm scheduling failed: {e}")
+        try:
+            if self._refresh_pending:
+                self._refresh_pending = False
+                # Deferred like the sidebar arm: never heavy work inside
+                # a Qt event handler; _refresh_rows rescans, rebuilds the
+                # tree and queues the retention QueryOp.
+                QTimer.singleShot(0, self._refresh_rows)
+        except Exception as e:
+            print(f"[klausmate] deferred refresh scheduling failed: {e}")
 
     def _arm_sidebar(self) -> None:
         """Deferred half of showEvent. A timer slot: never raises."""
@@ -2841,25 +2864,57 @@ class DriveWindow(QWidget):
 _instance: DriveWindow | None = None
 
 
+def _live_libraries():
+    """Every live Library, whichever shape it is wearing.
+
+    Two rosters, DISJOINT by construction: ``_instance`` is written only
+    by ``_create()`` (the standalone window, embedded=False), and
+    ``_embedded_windows`` is joined only by an embedded ``__init__``
+    (K-173). Everything that means "all open Libraries" walks THIS and
+    nothing else — ``refresh_open_library`` and ``_on_fs_tick`` both
+    lost the embedded screen by reading ``_instance`` alone.
+
+    Hidden windows are yielded on purpose: hidden is the embedded tab's
+    RESTING state (library_tab.unmount only hides), and nothing refreshes
+    it on re-show, so a consumer that skipped hidden windows silently
+    dropped every change made while the user was elsewhere in Anki.
+
+    No dedupe, and never "identity, not ==" games: the WeakSet already
+    hashes by identity, and a ``DriveWindow`` that grew an ``__eq__``
+    without ``__hash__`` would be UNHASHABLE — ``WeakSet.add`` raises
+    TypeError, the guarded add in ``__init__`` would swallow it into a
+    log line, and the screen would vanish from refresh AND viewer release
+    at once. Do not define one.
+    """
+    for win in (_instance, *_embedded_windows):
+        if win is not None and win._alive():
+            yield win
+
+
 def refresh_open_library() -> None:
-    """Re-aggregate the open Library window, if there is one.
+    """Re-aggregate every live Library — the screen and the window.
 
     Called from KlausMate Preferences when the DEFAULT sensitivity is
     saved (manage_models.save_threshold): every PDF without a per-PDF
     override reads that default through retention.get_threshold, so the
-    retention/cards columns an open Library is showing go stale the
-    moment it changes. Without this hook the window only caught up on
-    reopen — which read as the setting not working at all (Pouya, K-052:
+    retention/cards columns a Library is showing go stale the moment it
+    changes. Without this hook the Library only caught up on reopen —
+    which read as the setting not working at all (Pouya, K-052:
     'currently it does not update the library sensitivity like I had
-    imagined'). No-op when the Library is closed; per-PDF overrides are
+    imagined'). No-op when none is open; per-PDF overrides are
     unaffected either way since they never read the default.
+
+    Walks ``_live_libraries`` — both rosters, hidden screens included —
+    with a per-window guard, because this runs inside Preferences'
+    config-save path. The cost of a refresh is a card-index vector load,
+    two SQL batches and a main-thread rescan; ``priority_rows`` never
+    embeds, so there is no API bill to dedupe against.
     """
-    try:
-        win = _instance
-        if win is not None and win._alive() and win.isVisible():
+    for win in _live_libraries():
+        try:
             win._refresh_rows()
-    except Exception as e:
-        print(f"[klausmate] library refresh after settings change failed: {e}")
+        except Exception as e:
+            print(f"[klausmate] library refresh after settings change failed: {e}")
 
 
 def _create() -> DriveWindow:
@@ -2918,6 +2973,9 @@ def _release_embedded_viewers() -> None:
     for win in list(_embedded_windows):
         try:
             win.release_viewer()
+            # The rows/card_r/matches it holds were computed against the
+            # collection that is closing; the next show refreshes them.
+            win._refresh_pending = True
         except Exception as e:
             print(f"[klausmate] embedded viewer release failed: {e}")
 

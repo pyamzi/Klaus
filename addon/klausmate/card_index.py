@@ -203,6 +203,21 @@ def check_signature(index: CardIndex | None, signature: tuple) -> bool:
     )
 
 
+# Every key stats_from_disk answers, spelled ONCE. The failure exit returns
+# a copy and the success exit spreads it, so a key can never again be
+# present on one exit and missing on the other — which is exactly how
+# "dims" was duplicated on success and absent on failure until 2026-09-01.
+_EMPTY_STATS: dict = {
+    "count": 0,
+    "skipped": 0,
+    "updated_at": 0.0,
+    "exists": False,
+    "provider": "",
+    "model": "",
+    "dims": 0,
+}
+
+
 def stats_from_disk(dir_path: str) -> dict:
     """Status-line stats from the manifest alone — never loads the vectors."""
     try:
@@ -211,6 +226,7 @@ def stats_from_disk(dir_path: str) -> dict:
         if m.get("version") != INDEX_VERSION:
             raise ValueError("version mismatch")
         return {
+            **_EMPTY_STATS,
             "count": len(m["nids"]),
             "skipped": len(m.get("skipped") or {}),
             "updated_at": float(m.get("updated_at") or 0.0),
@@ -218,17 +234,14 @@ def stats_from_disk(dir_path: str) -> dict:
             "provider": str(m.get("provider") or ""),
             "model": str(m.get("model") or ""),
             "dims": int(m.get("dims") or 0),
-            "dims": int(m.get("dims") or 0),
         }
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {
-            "count": 0,
-            "skipped": 0,
-            "updated_at": 0.0,
-            "exists": False,
-            "provider": "",
-            "model": "",
-        }
+    # AttributeError: a manifest that is valid JSON but not an object
+    # ("null", "[]", a bare string) has no .get — it must take this exit
+    # too, or Preferences' unguarded stats["exists"] reads raise instead
+    # of reporting "no index yet".
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            json.JSONDecodeError):
+        return dict(_EMPTY_STATS)
 
 
 # ------------------------------------------------------------------- sync

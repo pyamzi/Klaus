@@ -203,6 +203,21 @@ def is_fresh(
     )
 
 
+# Every key stats_from_disk answers, spelled ONCE — returned as a copy on
+# failure and spread into the success dict, so the two exits cannot drift
+# apart (card_index.stats_from_disk shipped that exact drift; same fix).
+_EMPTY_STATS: dict = {
+    "exists": False,
+    "chunks": 0,
+    "embedded": 0,
+    "complete": False,
+    "provider": "",
+    "model": "",
+    "dims": 0,
+    "updated_at": 0.0,
+}
+
+
 def stats_from_disk(dir_path: str) -> dict:
     """Manifest-only stats for the panel — never loads the vectors."""
     try:
@@ -213,6 +228,7 @@ def stats_from_disk(dir_path: str) -> dict:
         chunks = m["chunks"]
         embedded = int(m.get("embedded_rows") or 0)
         return {
+            **_EMPTY_STATS,
             "exists": True,
             "chunks": len(chunks),
             "embedded": embedded,
@@ -222,17 +238,11 @@ def stats_from_disk(dir_path: str) -> dict:
             "dims": int(m.get("dims") or 0),
             "updated_at": float(m.get("updated_at") or 0.0),
         }
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {
-            "exists": False,
-            "chunks": 0,
-            "embedded": 0,
-            "complete": False,
-            "provider": "",
-            "model": "",
-            "dims": 0,
-            "updated_at": 0.0,
-        }
+    # AttributeError: valid JSON that is not an object has no .get and
+    # must take the failure exit, not escape (see card_index.stats_from_disk).
+    except (OSError, ValueError, KeyError, TypeError, AttributeError,
+            json.JSONDecodeError):
+        return dict(_EMPTY_STATS)
 
 
 def delete(user_files_dir: str, name: str) -> None:
