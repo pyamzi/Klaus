@@ -5,17 +5,46 @@ Phase D1 shipped the data: ``projection.py`` (top-2 PCA, pure stdlib) and
 ``pdf_graph.build_graph_data(user_files, cfg)`` assembling ``{"pdfs",
 "notes", "edges"}`` from on-disk caches only. This module is the window:
 notes as faint dots, PDFs as accent circles sized by match_count, edges
-drawn ONLY for the hovered/selected PDF (readability + perf at ~4000
-notes), hover tooltips, left-drag pan, wheel zoom anchored at the cursor,
-and a Fit reset.
+drawn ONLY for the hovered/selected PDF (readability), hover tooltips,
+left-drag pan, wheel zoom anchored at the cursor, and a Fit reset.
+
+K-138, Pouya's own ask, reshaped three things.
+
+**Every note, not a seventh of them.** ``projection`` now fits its
+components on a stride sample and projects every row, so the graph
+arrives holding the whole collection — 28,668 notes on the collection
+this was measured against. Drawing that many with the old
+``drawEllipse``-per-dot loop cost 36 ms a frame (28 fps mid-drag); the
+loop itself, just transforming and culling in Python, was 9 ms of it.
+So the note layer is now built ONCE as a world-space ``QPolygonF`` and
+per frame handed to ``QTransform.map`` — the whole 28k transformed in
+C++ — then drawn with a single ``drawPoints``. Same 28,668 dots, 3 ms.
+No sampling, no cap, no level-of-detail: the honest thing was to make
+the draw cheap, not to draw less. **The transform must stay on the
+polygon, never on the painter**: ``drawPoints`` under a scaled painter
+with a cosmetic pen degenerates into long horizontal strokes once the
+zoom is deep (rendered and confirmed), while mapping to screen space
+first is exact at every zoom AND slightly faster.
+
+**Names only when you ask.** K-133 shipped always-on labels below a
+12-node cap because the map opened anonymous; Pouya looked at it and
+asked for the opposite — a name only when its circle is hovered or
+selected. So ``labels_visible``, ``LABEL_ZOOM`` and ``LABEL_MAX_NODES``
+are gone and the painter names exactly ``active_pdf(hover, selected)``.
+``label_anchor`` stays: that one name still has to sit beside its node
+and mirror at the view edge.
+
+**The map follows the viewer.** ``select_pdf(safe)`` is the public seam
+for "the PDF viewer opened this file" — it selects that node, recentres
+when it is off-view, and repaints. It is deliberately NOT wired to the
+viewer here; the Library dock card does that.
 
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (world<->screen transform, fit-to-view, zoom-at-cursor,
-hit-test, node sizing, edge-subset policy, and the count-aware label
-level-of-detail + off-node label placement) —
-for ``tests/test_pdf_map.py``. The glue imports aqt lazily inside its
-functions (retention_history's pattern), so importing this module never
-needs Qt at all.
+hit-test, node sizing, edge-subset policy, off-node label placement, and
+the off-view recentre rule) — for ``tests/test_pdf_map.py``. The glue
+imports aqt lazily inside its functions (retention_history's pattern),
+so importing this module never needs Qt at all.
 
 Coordinate note: the K-058 cards describe node positions as normalized to
 the unit square, but ``projection._normalize_axis`` actually emits each
@@ -39,8 +68,9 @@ window is a module singleton with ``WA_DeleteOnClose`` whose
 (the reviewer's answer keys must stay where they are; lecture_view's
 rule).
 
-Entry point: ``open_map_window(parent=None)``. Nothing registers it yet —
-the Library toolbar button arrives as K-124 on pdf_drive.py.
+Entry points: ``open_map_window(parent=None)`` and ``select_pdf(safe)``.
+Nothing registers either yet — the Library toolbar button arrives as
+K-124 on pdf_drive.py.
 """
 
 from __future__ import annotations
@@ -69,11 +99,6 @@ NODE_R_SPREAD = 1.2
 NOTE_DOT_R = 1.6
 # Hover/click hit tolerance added on top of the largest node radius.
 HIT_SLOP = 4.0
-# Above LABEL_MAX_NODES PDFs, labels appear once zoomed in past
-# LABEL_ZOOM x the fit scale. At or below it every node is named at
-# EVERY zoom, fit included (K-133) — see labels_visible.
-LABEL_ZOOM = 1.4
-LABEL_MAX_NODES = 12
 # Gap in px between a node's edge and its label box. Sized to clear the
 # selected node's ring (drawn at r + 3 with a 2px pen, so outer edge
 # r + 4) with daylight left over.
@@ -83,13 +108,20 @@ LABEL_BASELINE_DY = 4.0
 EDGE_ALPHA = 0.25
 # One standard wheel notch (angleDelta 120) zooms by 2**(120/240) ≈ 1.41.
 WHEEL_ZOOM_DIVISOR = 240.0
+# select_pdf recentres only when the node is outside the viewport inset
+# by this much — a node already comfortably on screen must not make the
+# map jump under the reader every time the PDF viewer changes file.
+RECENTER_MARGIN = 24.0
 
 EMPTY_TEXT = "No indexed PDFs to map yet."
 # The header's one-line affordance (K-133): the offscreen-render audit
 # found a view that named nothing and explained nothing — no hint that
 # dots are notes, circles PDFs, or that the canvas pans and zooms.
+# K-138 rewrote the middle clause, because hovering is now how you get a
+# NAME, not just a trace — and kept it a hair shorter than K-133's, since
+# a plain QLabel's layout minimum is its text width (see the window).
 HINT_TEXT = (
-    "Circles are PDFs, dots are notes — hover to trace, "
+    "Circles are PDFs, dots are notes — hover to name, "
     "drag to pan, scroll to zoom"
 )
 
@@ -301,35 +333,34 @@ def edges_for_selection(edges: Iterable[dict], selected: Optional[str]) -> list:
     return [e for e in edges if isinstance(e, dict) and e.get("pdf") == selected]
 
 
-def labels_visible(
-    scale: float, fit_scale: float, pdf_count: Optional[int] = None
-) -> bool:
-    """Level-of-detail for PDF display names — COUNT-aware, not zoom-only.
+def recenter_for(
+    vp: Viewport,
+    world_pt: Sequence[float],
+    widget_size: Sequence[float],
+    margin: float = RECENTER_MARGIN,
+) -> Viewport:
+    """The viewport ``select_pdf`` should adopt to reveal ``world_pt``.
 
-    K-133: the zoom-only rule (names past ``LABEL_ZOOM`` x the fit
-    scale) meant the map opened as anonymous dots, because fit is the
-    only view you get on open — a map whose whole job is "which PDF
-    sits where" that named nothing at the one view it shows. So a graph
-    of at most ``LABEL_MAX_NODES`` PDFs is named at EVERY zoom, fit
-    included: a dozen names over the cloud is a legend, not clutter.
-    Above that count the zoom gate stands, and the active
-    (hovered/selected) node is labelled unconditionally by the painter
-    either way.
-
-    ``pdf_count`` None means "count unknown" and keeps the pure zoom
-    gate; a degenerate fit scale shows labels rather than hiding them
-    forever.
+    Returns ``vp`` UNCHANGED when the point already sits inside the
+    widget inset by ``margin`` — following the PDF viewer must not yank
+    the map out from under someone who can already see the node. When it
+    is outside (or the widget has no usable size yet), the point is
+    centred. The ZOOM is never touched: the reader's chosen scale is
+    theirs, and a jump plus a zoom change at once loses all sense of
+    where the view went.
     """
-    if pdf_count is not None:
-        try:
-            n = int(pdf_count)
-        except (TypeError, ValueError):
-            n = -1
-        if 0 <= n <= LABEL_MAX_NODES:
-            return True
-    if fit_scale <= 0:
-        return True
-    return scale >= fit_scale * LABEL_ZOOM
+    pt = parse_xy(world_pt)
+    if pt is None:
+        return vp
+    w = _num(widget_size[0]) if len(widget_size) > 0 else 0.0
+    h = _num(widget_size[1]) if len(widget_size) > 1 else 0.0
+    sx, sy = world_to_screen(vp, pt[0], pt[1])
+    m = max(0.0, _num(margin, RECENTER_MARGIN))
+    if w > 2.0 * m and h > 2.0 * m:
+        if m <= sx <= w - m and m <= sy <= h - m:
+            return vp
+    return Viewport(vp.scale, w / 2.0 - pt[0] * vp.scale,
+                    h / 2.0 - pt[1] * vp.scale)
 
 
 def label_anchor(
@@ -466,6 +497,46 @@ def _fill_retention(graph: dict) -> None:
         print(f"[klausmate] map retention fill failed: {exc}")
 
 
+def select_pdf(safe) -> bool:
+    """Point the open map at the PDF named ``safe``; True when it took.
+
+    The seam Pouya asked for in K-137 — "when I am viewing a PDF on the
+    PDF viewer, it chooses that item" — deliberately left UNWIRED here.
+    Whoever owns the viewer calls this; the map never reaches back into
+    the viewer, so the dependency runs one way and this module stays
+    openable, testable and closable on its own.
+
+    Contract:
+
+    - No map window open, or an empty-graph window with no canvas: a
+      silent no-op returning False. The viewer must be free to call
+      this on every file it opens without first asking whether the map
+      exists.
+    - Known ``safe`` name: that node becomes the selection (ring +
+      edges + its name, since K-138 draws exactly the active node's),
+      the view recentres ONLY if the node was off-screen
+      (``recenter_for``), the zoom is left alone, and the canvas
+      repaints. Returns True.
+    - Unknown name, empty, or None: clears the selection and returns
+      False — a highlight left on the PDF you just closed would be a
+      lie about what you are looking at.
+    - Anything at all going wrong (a C++-deleted window, a stale
+      singleton) is caught and reported as False. A map that cannot
+      follow along must never break the viewer that called it.
+    """
+    win = _instance
+    if win is None:
+        return False
+    try:
+        canvas = getattr(win, "canvas", None)
+        if canvas is None:
+            return False
+        return bool(canvas.select(safe))
+    except Exception as exc:
+        print(f"[klausmate] map select_pdf failed: {exc}")
+        return False
+
+
 def open_map_window(parent=None):
     """Open (or front) the Embedding Map window; returns it or None.
 
@@ -495,10 +566,12 @@ def open_map_window(parent=None):
             QPainterPath,
             QPen,
             QPointF,
+            QPolygonF,
             QPushButton,
             QRectF,
             Qt,
             QToolTip,
+            QTransform,
             QVBoxLayout,
             QWidget,
         )
@@ -549,6 +622,15 @@ def open_map_window(parent=None):
             self._edges = [
                 e for e in graph_dict.get("edges") or [] if isinstance(e, dict)
             ]
+            # The note layer, built ONCE in WORLD space (K-138). Every
+            # frame hands this to QTransform.map, which transforms all
+            # 28k points in C++; the Python per-dot loop it replaces was
+            # 9 ms of the old 36 ms frame all by itself. World space,
+            # not screen: it is the viewport that changes per frame, not
+            # the cloud.
+            self._note_poly = QPolygonF(
+                [QPointF(x, y) for x, y in self._notes]
+            )
             self._bounds = graph_bounds(graph_dict)
             self._hit_radius = (
                 max(node_radius(p.get("match_count")) for p in self._pdfs)
@@ -557,7 +639,6 @@ def open_map_window(parent=None):
             ) + HIT_SLOP
 
             self._vp = Viewport()
-            self._fit_scale = 1.0
             self._did_fit = False
             self._hover = None
             self._selected = None
@@ -573,9 +654,10 @@ def open_map_window(parent=None):
         # ---- viewport ----
 
         def _apply_fit(self, w: float, h: float) -> None:
-            vp = fit_to_view(self._bounds, (w, h), FIT_MARGIN)
-            self._vp = vp
-            self._fit_scale = vp.scale
+            # The fit SCALE used to be kept for the label zoom gate;
+            # K-138 deleted that gate, and keeping a field named for it
+            # would only mislead the next reader.
+            self._vp = fit_to_view(self._bounds, (w, h), FIT_MARGIN)
             self._did_fit = True
 
         def _ensure_fit(self, w: float, h: float) -> None:
@@ -589,6 +671,30 @@ def open_map_window(parent=None):
                 self.update()
             except Exception as exc:
                 print(f"[klausmate] map fit failed: {exc}")
+
+        def select(self, safe) -> bool:
+            """Select the node named ``safe``; True when one matched.
+
+            An unknown name (or None) CLEARS the selection rather than
+            leaving the previous node ringed: the seam's whole purpose
+            is "the map shows what the viewer is showing", and a stale
+            highlight over a PDF you closed is a lie, not a courtesy.
+            """
+            try:
+                key = str(safe) if safe else None
+                if key is not None and key not in self._pdf_xy:
+                    key = None
+                self._selected = key
+                if key is not None:
+                    w = float(self.width())
+                    h = float(self.height())
+                    self._ensure_fit(w, h)
+                    self._vp = recenter_for(self._vp, self._pdf_xy[key], (w, h))
+                self.update()
+                return key is not None
+            except Exception as exc:
+                print(f"[klausmate] map select failed: {exc}")
+                return False
 
         # ---- painting ----
 
@@ -629,17 +735,33 @@ def open_map_window(parent=None):
             self._ensure_fit(w, h)
             vp = self._vp
 
-            # Notes: small dots in a muted token, viewport-culled.
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(c["grey_mid"]))
-            pad = NOTE_DOT_R * 2.0
-            for wx, wy in self._notes:
-                sx, sy = world_to_screen(vp, wx, wy)
-                if -pad <= sx <= w + pad and -pad <= sy <= h + pad:
-                    painter.drawEllipse(QPointF(sx, sy), NOTE_DOT_R, NOTE_DOT_R)
+            # Notes: EVERY note, one drawPoints over the whole cloud.
+            # QTransform.map does the world->screen pass in C++ and Qt
+            # clips what falls off-canvas, so there is no Python loop
+            # and no cull here at all. The transform belongs on the
+            # POLYGON, never on the painter: drawPoints with a cosmetic
+            # pen under a scaled painter degenerates into long
+            # horizontal strokes at deep zoom.
+            if not self._note_poly.isEmpty():
+                dot = QPen(QColor(c["grey_mid"]), NOTE_DOT_R * 2.0)
+                dot.setCapStyle(Qt.PenCapStyle.SquareCap)
+                painter.setPen(dot)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                xf = QTransform()
+                xf.translate(vp.ox, vp.oy)
+                xf.scale(vp.scale, vp.scale)
+                painter.drawPoints(xf.map(self._note_poly))
 
             # Edges: ONLY the hovered/selected PDF's (the whole point of
             # edges_for_selection — every edge at once is a hairball).
+            # This one IS still a Python per-item loop, deliberately:
+            # measured at ~3.15 us per drawn edge, it costs nothing until
+            # a node is active and then scales with exactly what the
+            # reader asked to see — ~5 ms for the biggest PDF in Pouya's
+            # library (~1,570 matches once every note is positioned), and
+            # 23 ms in a synthetic worst case where one PDF matches a
+            # fifth of the whole collection. Still interactive there, so
+            # it did not earn the note layer's C++ treatment.
             active = active_pdf(self._hover, self._selected)
             if active and active in self._pdf_xy:
                 edge_col = QColor(c["blue_accent"])
@@ -656,11 +778,9 @@ def open_map_window(parent=None):
                     bx, by = world_to_screen(vp, nxy[0], nxy[1])
                     painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
 
-            # PDF nodes: accent circles sized by match_count; labels are
-            # level-of-detail (always for the active node).
-            show_labels = labels_visible(
-                vp.scale, self._fit_scale, len(self._pdfs)
-            )
+            # PDF nodes: accent circles sized by match_count. Exactly
+            # ONE name is ever drawn — the hovered or selected node's
+            # (K-138, Pouya's call, reversing K-133's always-on labels).
             label_font = painter.font()
             label_font.setPixelSize(11)
             painter.setFont(label_font)
@@ -688,7 +808,7 @@ def open_map_window(parent=None):
                     painter.setPen(QPen(QColor(c["blue_bright"]), 2.0))
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawEllipse(QPointF(sx, sy), r + 3.0, r + 3.0)
-                if show_labels or safe == active:
+                if safe == active:
                     name = str(p.get("display") or "")
                     if name:
                         try:

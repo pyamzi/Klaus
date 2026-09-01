@@ -2,14 +2,23 @@
 
 Pure viewport model first (transform round-trips, fit-to-view centering,
 the zoom-at-cursor fixed-point invariant, hit-testing, node sizing, the
-edge-subset and label level-of-detail policy, tooltip text), then the
-glue pins on the SOURCE: the "aqt glue" divider with nothing aqt above
-it, the K-114 exec() ban (and the no-focus-steal rule), the K-115
-paintEvent try/finally painter.end() guard, no literal hex colours,
-WA_DeleteOnClose + the closeEvent singleton clear, and the
-open_map_window(parent=None) public surface. Ends with stub-harness
-smoke: the empty-graph window, the singleton fronting, and the
-fake-graph canvas path.
+edge-subset policy, label placement, the off-view recentre rule, tooltip
+text), then the glue pins on the SOURCE: the "aqt glue" divider with
+nothing aqt above it, the K-114 exec() ban (and the no-focus-steal
+rule), the K-115 paintEvent try/finally painter.end() guard, no literal
+hex colours, WA_DeleteOnClose + the closeEvent singleton clear, and the
+open_map_window / select_pdf public surface. Then stub-harness smoke
+(empty-graph window, singleton fronting, the fake-graph canvas path),
+and finally a REAL offscreen-PyQt6 section.
+
+Why the last section exists: the permissive _Dummy stubs have no
+geometry and paint no pixels, so the two things K-138 is actually about
+— that every note reaches the note layer, and that a PDF's name appears
+only while its circle is active — cannot be asserted under them. Real Qt
+can, by counting ink. Because open_map_window imports aqt.qt lazily
+inside itself, swapping sys.modules["aqt.qt"] is the entire bootstrap
+(test_drive.py's precedent), and the section SKIPs honestly if PyQt6 is
+missing.
 
 Run: python3 tests/test_pdf_map.py
 """
@@ -20,11 +29,13 @@ import importlib
 import inspect
 import io
 import os
+import random
 import re
 import shutil
 import sys
 import tempfile
 import tokenize
+import types
 
 sys.path.insert(
     0,
@@ -64,6 +75,19 @@ def _func_seg(name: str) -> str:
     for node in ast.walk(_TREE):
         if isinstance(node, ast.FunctionDef) and node.name == name:
             return ast.get_source_segment(_SRC, node) or ""
+    return ""
+
+
+def _method_seg(cls_name: str, name: str) -> str:
+    """Source of ``cls_name.name`` — needed because the canvas and the
+    window both define ``__init__`` inside ``open_map_window``, and a
+    bare name lookup would silently pick whichever ast.walk reaches
+    first."""
+    for node in ast.walk(_TREE):
+        if isinstance(node, ast.ClassDef) and node.name == cls_name:
+            for sub in node.body:
+                if isinstance(sub, ast.FunctionDef) and sub.name == name:
+                    return ast.get_source_segment(_SRC, sub) or ""
     return ""
 
 
@@ -236,32 +260,22 @@ check("hover previews over the sticky selection; falls back; both-None",
       and pdf_map.active_pdf(None, "s") == "s"
       and pdf_map.active_pdf("h", None) == "h"
       and pdf_map.active_pdf(None, None) is None)
-check("labels are level-of-detail: on past LABEL_ZOOM x fit, off below, "
-      "shown when fit is degenerate",
-      pdf_map.labels_visible(365.0, 260.0)
-      and not pdf_map.labels_visible(363.0, 260.0)
-      and pdf_map.labels_visible(500.0, 0.0)
-      and pdf_map.labels_visible(1.0, -2.0))
-check("K-133: a map of LABEL_MAX_NODES or fewer PDFs is named at the FIT "
-      "view — the only view you get on open",
-      pdf_map.labels_visible(260.0, 260.0, 4)
-      and pdf_map.labels_visible(260.0, 260.0, pdf_map.LABEL_MAX_NODES)
-      and pdf_map.labels_visible(260.0, 260.0, 0))
-check("above LABEL_MAX_NODES the zoom gate still rules: crowded maps stay "
-      "anonymous at fit and name themselves once zoomed in",
-      not pdf_map.labels_visible(260.0, 260.0, pdf_map.LABEL_MAX_NODES + 1)
-      and not pdf_map.labels_visible(363.0, 260.0, 400)
-      and pdf_map.labels_visible(365.0, 260.0, 400))
-check("an unknown, junk or negative count falls back to the zoom gate — "
-      "it never turns labels on by accident",
-      not pdf_map.labels_visible(260.0, 260.0)
-      and not pdf_map.labels_visible(260.0, 260.0, None)
-      and not pdf_map.labels_visible(260.0, 260.0, "lots")
-      and not pdf_map.labels_visible(260.0, 260.0, -3))
-check("LABEL_MAX_NODES is a dozen-ish, not a disabled gate",
-      4 <= pdf_map.LABEL_MAX_NODES <= 24)
+# K-138 retired the whole label level-of-detail policy. K-133 had made
+# names always-on below a 12-node cap because the map opened anonymous;
+# Pouya looked at that and asked for the opposite — a name only when its
+# circle is hovered or selected. So labels_visible, LABEL_ZOOM and
+# LABEL_MAX_NODES are gone, and with them K-133's four pins on their
+# behaviour plus K-123's zoom-gate pin. What replaces them is a single
+# rule with no dial to get wrong: active_pdf decides, above.
+check("the label level-of-detail gate is GONE, not just bypassed — "
+      "names follow the selection now, and a stale caller must fail loud",
+      not hasattr(pdf_map, "labels_visible")
+      and not hasattr(pdf_map, "LABEL_ZOOM")
+      and not hasattr(pdf_map, "LABEL_MAX_NODES"))
 
-# label placement: beside the node, never on it (K-133)
+# label placement: beside the node, never on it (K-133 — this half of
+# K-133 survives, because the one name that IS drawn still has to clear
+# its own node and mirror at the view edge)
 check("a label clears its own node by radius + LABEL_GAP and rides the "
       "node's centre line",
       pdf_map.label_anchor(100.0, 50.0, 12.0)
@@ -285,6 +299,40 @@ check("junk coordinates degrade instead of raising mid-paint",
       == (pdf_map.LABEL_GAP, pdf_map.LABEL_BASELINE_DY)
       and pdf_map.label_anchor(10.0, 0.0, float("nan"))[0]
       == 10.0 + pdf_map.LABEL_GAP)
+
+# ---- recenter_for: the pure half of the select_pdf seam (K-138) ----
+
+section("recenter_for — reveal an off-view node, leave an on-view one alone")
+
+_VP = pdf_map.Viewport(200.0, 300.0, 240.0)  # world 0,0 at screen 300,240
+_SIZE = (600.0, 480.0)
+check("a node already comfortably on screen does not move the map at all",
+      pdf_map.recenter_for(_VP, (0.0, 0.0), _SIZE) is _VP
+      and pdf_map.recenter_for(_VP, (0.5, 0.5), _SIZE) is _VP)
+_off = pdf_map.recenter_for(_VP, (5.0, -3.0), _SIZE)
+check("an off-view node is centred exactly, and the ZOOM is untouched — "
+      "a jump plus a scale change loses all sense of where the view went",
+      _off.scale == _VP.scale
+      and pdf_map.world_to_screen(_off, 5.0, -3.0) == (300.0, 240.0))
+# 5px in from the left edge: inside the widget, but inside the margin.
+_edge = pdf_map.screen_to_world(_VP, 5.0, 240.0)
+check("the margin is a real inset: a node inside the view but within "
+      "RECENTER_MARGIN of its edge still gets centred",
+      pdf_map.recenter_for(_VP, _edge, _SIZE) is not _VP
+      and 0.0 < pdf_map.RECENTER_MARGIN < 200.0)
+check("a widget with no usable size yet centres rather than guessing",
+      pdf_map.world_to_screen(
+          pdf_map.recenter_for(_VP, (0.0, 0.0), (0.0, 0.0)), 0.0, 0.0)
+      == (0.0, 0.0))
+# Judged from a viewport where the ORIGIN is far off-view, so "returned
+# unchanged" cannot be an accident of a junk point falling back to (0, 0)
+# and happening to land on screen.
+_VPFAR = pdf_map.Viewport(200.0, -5000.0, -5000.0)
+check("a malformed world point leaves the viewport exactly as it was, "
+      "rather than steering the map at some fallback coordinate",
+      pdf_map.recenter_for(_VPFAR, "junk", _SIZE) is _VPFAR
+      and pdf_map.recenter_for(_VPFAR, (float("nan"), 0.0), _SIZE) is _VPFAR
+      and pdf_map.recenter_for(_VPFAR, (0.0,), _SIZE) is _VPFAR)
 
 tip = pdf_map.tooltip_text({
     "display": "Lecture 1", "safe": "Lecture_1", "folder": "Anatomy/Week 2",
@@ -446,12 +494,32 @@ check("wheel zoom funnels through the anchored zoom_at math",
       "zoom_at(" in _func_seg("wheelEvent"))
 check("the canvas draws edges through edges_for_selection only",
       "edges_for_selection(" in _func_seg("_paint"))
-_lod_calls = _calls_in("_paint", "labels_visible")
-check("K-133: the canvas gates labels COUNT-first — its one "
-      "labels_visible call passes the node count as a third argument",
-      len(_lod_calls) == 1 and len(_lod_calls[0].args) == 3)
 check("labels are placed by label_anchor, never inline arithmetic",
       len(_calls_in("_paint", "label_anchor")) == 1)
+
+# ---- K-138: the note layer, and the name that follows the selection ----
+_paint_seg = _func_seg("_paint")
+check("K-138: the notes are drawn in ONE drawPoints call — no per-dot "
+      "loop survives in the paint path (28k drawEllipse calls was 36 ms "
+      "a frame; the Python transform loop alone was 9 ms of it)",
+      _paint_seg.count("drawPoints(") == 1
+      and "drawEllipse(QPointF(sx, sy), NOTE_DOT_R" not in _paint_seg
+      and "for wx, wy in self._notes" not in _CODE)
+check("the world->screen pass is QTransform.map on the POLYGON, and the "
+      "PAINTER is never scaled — drawPoints under a scaled painter with "
+      "a cosmetic pen degenerates into long horizontal strokes at zoom",
+      "QTransform(" in _paint_seg
+      and ".map(self._note_poly)" in _paint_seg
+      and "painter.scale(" not in _CODE)
+check("the note polygon is built ONCE, in the CANVAS constructor, in "
+      "world space — the cloud does not change, the viewport does",
+      "QPolygonF(" in _method_seg("_MapCanvas", "__init__")
+      and _CODE.count("QPolygonF(") == 1)
+check("K-138 reverses K-133: the painter names exactly the ACTIVE node, "
+      "with no count or zoom gate left to consult",
+      "if safe == active:" in _paint_seg
+      and "labels_visible" not in _CODE
+      and "show_labels" not in _CODE)
 check("the header hint is ONE line naming both the legend and the "
       "gestures",
       "\n" not in pdf_map.HINT_TEXT
@@ -464,6 +532,13 @@ check("it is drawn exactly once, from the pinned copy, in the muted token",
       _CODE.count("HINT_TEXT") == 2
       and "QLabel(HINT_TEXT" in _CODE
       and "muted_label_qss" in _hint_seg)
+check("select_pdf(safe) is the public follow-the-viewer seam",
+      list(inspect.signature(pdf_map.select_pdf).parameters) == ["safe"])
+check("select_pdf reaches the canvas through the singleton and the one "
+      "recenter_for rule — it never re-derives placement itself",
+      "canvas.select(" in _func_seg("select_pdf")
+      and "recenter_for(" in _method_seg("_MapCanvas", "select")
+      and len(_calls_in("select", "recenter_for")) == 1)
 check("hover tooltip rides QToolTip", "QToolTip.showText" in _CODE)
 check("house logging prefix present", '"[klausmate] ' in _SRC.replace("f\"", "\""))
 check("empty-state copy is pinned",
@@ -473,6 +548,10 @@ check("empty-state copy is pinned",
 # ----------------------------------------------------- stub-harness smoke
 
 section("glue smoke under the stub harness")
+
+check("select_pdf with NO map open is a silent no-op — the viewer must "
+      "be free to call it on every file without asking first",
+      pdf_map._instance is None and pdf_map.select_pdf("anything") is False)
 
 curation = importlib.import_module("klausmate.curation")
 tmp = tempfile.mkdtemp(prefix="klaus_map_")
@@ -487,6 +566,15 @@ try:
           getattr(win, "canvas", "sentinel") is None)
     win2 = pdf_map.open_map_window(None)
     check("a second call fronts the SAME window", win2 is win)
+    _cap, sys.stdout = sys.stdout, io.StringIO()
+    try:
+        _quiet = (pdf_map.select_pdf("lec1"), sys.stdout.getvalue())
+    finally:
+        sys.stdout = _cap
+    check("an empty-graph window has no canvas, so select_pdf no-ops "
+          "SILENTLY — not by raising into the blanket except and "
+          "printing an error the reader can do nothing about",
+          _quiet == (False, ""), repr(_quiet))
 finally:
     curation.USER_FILES = _orig_uf
     pdf_map._instance = None
@@ -503,9 +591,183 @@ try:
     check("the canvas indexed both pdf nodes and every positioned note",
           set(win3.canvas._pdf_xy) == {"lec1", "lec2"}
           and set(win3.canvas._note_xy) == {1, 2, 3})
+    # The geometry half of select_pdf needs real widget sizes, so it
+    # lives in the offscreen-Qt section below. Clearing needs none —
+    # but it needs something to clear, or it passes vacuously.
+    win3.canvas._selected = "lec1"
+    check("an unknown name CLEARS the selection rather than leaving a "
+          "stale ring over a PDF you are no longer looking at",
+          pdf_map.select_pdf("not-on-this-map") is False
+          and win3.canvas._selected is None)
+    win3.canvas._selected = "lec1"
+    check("None and the empty string clear it the same way",
+          pdf_map.select_pdf(None) is False
+          and win3.canvas._selected is None
+          and pdf_map.select_pdf("") is False)
 finally:
     pdf_map._load_graph = _orig_load
     pdf_map._fill_retention = _orig_fill
     pdf_map._instance = None
+
+# ------------------------------------------------- real offscreen Qt
+
+section("real offscreen Qt — the note layer, the name, the viewer seam")
+# PyQt6 is installed for THIS interpreter (Anki's bundled one is 3.13
+# bytecode; ours is not) — test_drive.py's precedent. open_map_window
+# imports aqt.qt lazily inside itself, so swapping the module in
+# sys.modules is the whole bootstrap: nothing needs re-importing.
+# Everything here is a claim the _Any stubs above physically cannot
+# make, because _Dummy has no geometry and paints no pixels.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+try:
+    from PyQt6 import QtCore as _QtC  # noqa: E402
+    from PyQt6 import QtGui as _QtG  # noqa: E402
+    from PyQt6 import QtWidgets as _QtW  # noqa: E402
+
+    _HAVE_QT = True
+except Exception as _qt_e:  # noqa: BLE001
+    _HAVE_QT = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — "
+          "the pure model and source pins above still ran")
+
+if _HAVE_QT:
+    _qt_shim = types.ModuleType("aqt.qt")
+
+    def _qt_getattr(name, _mods=(_QtW, _QtC, _QtG)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
+
+    _qt_shim.__getattr__ = _qt_getattr
+    sys.modules["aqt.qt"] = _qt_shim
+
+    theme = importlib.import_module("klausmate.theme")
+    _orig_night = theme.night_mode
+    _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
+
+    def _dark_pixels(widget, w, h):
+        """Count near-black pixels in a rendered widget.
+
+        With a light palette, no notes and one accent circle, the ONLY
+        near-black ink on the canvas is text — which makes "is this PDF
+        named right now?" a countable question rather than an opinion.
+        """
+        img = _QtG.QImage(w, h, _QtG.QImage.Format.Format_ARGB32)
+        img.fill(0)
+        widget.render(img)
+        n = 0
+        for y in range(0, h, 2):
+            for x in range(0, w, 2):
+                c = img.pixelColor(x, y)
+                if c.alpha() > 200 and c.red() + c.green() + c.blue() < 200:
+                    n += 1
+        return n
+
+    # One PDF, NO notes: the only ink that can be dark is its name.
+    NAMED = {
+        "pdfs": [{"safe": "solo", "display": "Renal Physiology", "folder": None,
+                  "threshold": 0.4, "retention": None, "xy": [0.0, 0.0],
+                  "match_count": 9}],
+        "notes": [], "edges": [],
+    }
+    pdf_map._fill_retention = lambda g: None
+    try:
+        theme.night_mode = lambda: False
+        pdf_map._load_graph = lambda: NAMED
+        w4 = pdf_map.open_map_window(None)
+        w4.resize(700, 500)
+        cv = w4.canvas
+        cv.resize(660, 420)
+        _app.processEvents()
+        quiet = _dark_pixels(cv, 660, 420)
+        cv._hover = "solo"
+        named = _dark_pixels(cv, 660, 420)
+        check("K-138 reverses K-133 ON THE PIXELS: at rest the map draws "
+              "no PDF name at all, and hovering the circle draws one",
+              quiet == 0 and named > 0,
+              f"quiet={quiet} hovered={named}")
+        cv._hover = None
+        cv._selected = "solo"
+        check("selecting names it too — that is what the viewer seam "
+              "gets, since it selects rather than hovers",
+              _dark_pixels(cv, 660, 420) > 0)
+    finally:
+        pdf_map._instance = None
+        theme.night_mode = _orig_night
+
+    # A real cloud: every note reaches the polygon, and both palettes
+    # paint it without raising.
+    _rng = random.Random(4)
+    _notes = [{"nid": i, "xy": [_rng.gauss(0, .3), _rng.gauss(0, .3)]}
+              for i in range(1500)]
+    CLOUD = {
+        "pdfs": [
+            {"safe": "lec1", "display": "Lecture One", "folder": None,
+             "threshold": .4, "retention": None, "xy": [-0.5, -0.2],
+             "match_count": 40},
+            {"safe": "lec2", "display": "Lecture Two", "folder": "F",
+             "threshold": .4, "retention": None, "xy": [0.6, 0.4],
+             "match_count": 12},
+        ],
+        "notes": _notes,
+        "edges": [{"pdf": "lec1", "nid": i, "score": .9} for i in range(40)],
+    }
+    try:
+        for _night in (False, True):
+            theme.night_mode = lambda n=_night: n
+            pdf_map._load_graph = lambda: CLOUD
+            w5 = pdf_map.open_map_window(None)
+            w5.resize(900, 640)
+            cv = w5.canvas
+            cv.resize(860, 560)
+            _app.processEvents()
+            if not _night:
+                check("every positioned note reaches the note polygon — "
+                      "no cap, no sample, no level-of-detail",
+                      cv._note_poly.count() == len(_notes) == 1500,
+                      f"{cv._note_poly.count()} of {len(_notes)}")
+            _img = _QtG.QImage(860, 560, _QtG.QImage.Format.Format_ARGB32)
+            _img.fill(0)
+            cv.render(_img)
+            _seen = {_img.pixelColor(x, y).name()
+                     for y in range(0, 560, 3) for x in range(0, 860, 3)}
+            check(f"the cloud paints in the {'night' if _night else 'day'} "
+                  "palette (several distinct inks, nothing raised)",
+                  len(_seen) > 3, str(len(_seen)))
+
+            # ---- select_pdf's geometry half, on real widget sizes ----
+            if not _night:
+                cv._apply_fit(860.0, 560.0)
+                _before = cv._vp
+                check("select_pdf(known) selects that node and reports True",
+                      pdf_map.select_pdf("lec2") is True
+                      and cv._selected == "lec2")
+                check("a node already in view is not chased — the map must "
+                      "not jump under the reader on every file change",
+                      cv._vp is _before)
+                cv._vp = pdf_map.pan_by(cv._vp, -5000.0, -5000.0)
+                _cw, _ch = float(cv.width()), float(cv.height())
+                _sx, _sy = pdf_map.world_to_screen(cv._vp, -0.5, -0.2)
+                check("(that node really was off-view first)",
+                      not (0 <= _sx <= _cw and 0 <= _sy <= _ch))
+                _took = pdf_map.select_pdf("lec1")
+                _now = pdf_map.world_to_screen(cv._vp, -0.5, -0.2)
+                check("select_pdf recentres an off-view node and keeps the "
+                      "zoom the reader chose",
+                      _took is True
+                      and cv._selected == "lec1"
+                      and cv._vp.scale == _before.scale
+                      and abs(_now[0] - _cw / 2.0) < 1e-6
+                      and abs(_now[1] - _ch / 2.0) < 1e-6,
+                      f"node at {_now} in a {_cw}x{_ch} canvas")
+            pdf_map._instance = None
+    finally:
+        pdf_map._instance = None
+        pdf_map._load_graph = _orig_load
+        pdf_map._fill_retention = _orig_fill
+        theme.night_mode = _orig_night
 
 raise SystemExit(report())

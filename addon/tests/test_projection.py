@@ -1,7 +1,14 @@
 """Headless tests for K-071: klausmate/projection.py (2D PCA-ish projection
 of embedding vectors) and klausmate/pdf_graph.py (map node/edge assembly
-built on top of it). Both are the headless data-layer foundation for the
-future Obsidian-like embedding map (K-058 Phase D) — no window/canvas here.
+built on top of it). Both are the headless data layer under the embedding
+map window (klausmate/pdf_map.py, tested separately) — no window/canvas
+here.
+
+K-138 split the sample cap: ``fit_rows`` now bounds only the rows the two
+component directions are FITTED from, and every row passed in gets a
+point. The section named for it pins that split from both sides — the
+output is complete, and the out-of-sample rows are really projected
+rather than parked somewhere.
 
 Style matches the other suites: standalone check()/report/sys.exit runner,
 synthetic package stub so the addon's relative imports resolve (see
@@ -77,12 +84,12 @@ cluster_rows = [_rand_unit(base_a, 0.03, D, rng) for _ in range(N_PER)] + [
     _rand_unit(base_b, 0.03, D, rng) for _ in range(N_PER)
 ]
 
-points1, idx1 = projection.project(cluster_rows, max_points=4000, seed=7)
-points2, idx2 = projection.project(cluster_rows, max_points=4000, seed=7)
+points1, idx1 = projection.project(cluster_rows, fit_rows=4000, seed=7)
+points2, idx2 = projection.project(cluster_rows, fit_rows=4000, seed=7)
 check("same seed -> identical points", points1 == points2)
 check("same seed -> identical indices", idx1 == idx2)
 
-points3, _idx3 = projection.project(cluster_rows, max_points=4000, seed=1)
+points3, _idx3 = projection.project(cluster_rows, fit_rows=4000, seed=1)
 check(
     "different seed does not (trivially) reuse the same start vector",
     points3 != points1,
@@ -114,28 +121,89 @@ check(
     f"inter={inter:.3f} intra_a={intra_a:.3f} intra_b={intra_b:.3f}",
 )
 
-print("== projection: max_points sampling ==")
+print("== projection: fit_rows caps the FIT, never the output (K-138) ==")
+# Pouya asked for every note on the map. The sample cap moved off the
+# output and onto the component fit: rows outside the stride sample are
+# still projected onto the directions it found. These pins are what stop
+# a future "perf fix" from quietly reintroducing a sampled map.
 small_rows = [array("f", [float(k), float(k + 1), float(k + 2)]) for k in range(100)]
-pts, idxs = projection.project(small_rows, max_points=10, seed=0)
-check("sampling respects max_points count", len(pts) == 10 and len(idxs) == 10)
+pts, idxs = projection.project(small_rows, fit_rows=10, seed=0)
 check(
-    "sampling indices are a strictly increasing stride within range",
-    idxs == sorted(set(idxs)) and len(set(idxs)) == 10 and idxs[0] == 0 and idxs[-1] < 100,
-    str(idxs),
+    "a fit sample a tenth the size still returns EVERY row as a point",
+    len(pts) == 100 and len(idxs) == 100,
+    f"{len(pts)} points from 100 rows",
+)
+check(
+    "indices name every row in order — nothing is dropped or reordered",
+    idxs == list(range(100)),
 )
 
-pts_all, idxs_all = projection.project(small_rows, max_points=1000, seed=0)
+pts_all, idxs_all = projection.project(small_rows, fit_rows=1000, seed=0)
 check(
-    "no sampling when the input is under the cap",
+    "a cap wider than the input changes nothing",
     len(pts_all) == 100 and idxs_all == list(range(100)),
+)
+check(
+    "the old output cap is gone by NAME too, so a stale caller fails loudly",
+    hasattr(projection, "DEFAULT_FIT_ROWS")
+    and not hasattr(projection, "DEFAULT_MAX_POINTS"),
+)
+
+# Out-of-sample rows must land where the fit says, not at some fallback.
+# Two clusters, fit from 8 evenly-strided rows out of 120: if scoring
+# only worked for sampled rows the cluster split would collapse.
+_orng = random.Random(5)
+_ocl = [_rand_unit(base_a, 0.03, D, _orng) for _ in range(60)] + [
+    _rand_unit(base_b, 0.03, D, _orng) for _ in range(60)
+]
+_opts, _oidx = projection.project(_ocl, fit_rows=8, seed=0)
+_sampled = set(projection._stride_indices(120, 8))
+_oa = _centroid([p for k, p in enumerate(_opts) if k < 60 and k not in _sampled])
+_ob = _centroid([p for k, p in enumerate(_opts) if k >= 60 and k not in _sampled])
+check(
+    "rows OUTSIDE the fit sample still separate by cluster — they are "
+    "projected onto the fitted axes, not parked at a default",
+    len(_opts) == 120 and math.dist(_oa, _ob) > 0.5,
+    f"dist={math.dist(_oa, _ob):.3f}",
+)
+
+# Axis normalization has to span every point, or an out-of-sample
+# extreme would render outside the [-1, 1] box the canvas fits to.
+_ext = [array("f", [float(k), 0.0, 0.0]) for k in range(21)]
+_ext.append(array("f", [500.0, 0.0, 0.0]))  # index 21: never in a 4-row stride
+_epts, _ = projection.project(_ext, fit_rows=4, seed=0)
+_ex = [p[0] for p in _epts]
+check(
+    "both axes normalize over ALL points, so an out-of-sample extreme "
+    "still lands on the [-1, 1] edge rather than off the map",
+    len(_epts) == 22
+    and abs(min(_ex) - (-1.0)) < 1e-12
+    and abs(max(_ex) - 1.0) < 1e-12
+    and abs(_ex[21]) == 1.0,
+    f"min={min(_ex)} max={max(_ex)} last={_ex[21]}",
+)
+
+# The zip-based pre-3.12 _sumprod fallback truncates silently, so a short
+# row must be caught by an explicit length check on EVERY row now that
+# every row is scored — not just on the ones inside the fit sample.
+_ragged = [array("f", [1.0, 0.0, 0.0])] * 4 + [array("f", [1.0, 0.0])]
+try:
+    projection.project(_ragged, fit_rows=2, seed=0)
+    _raised = False
+except ValueError:
+    _raised = True
+check(
+    "a ragged row OUTSIDE the fit sample raises instead of scoring "
+    "against a truncated component",
+    _raised,
 )
 
 print("== projection: degenerate inputs ==")
-empty_pts, empty_idx = projection.project([], max_points=10, seed=0)
+empty_pts, empty_idx = projection.project([], fit_rows=10, seed=0)
 check("0 rows -> empty output, no crash", empty_pts == [] and empty_idx == [])
 
 one_pts, one_idx = projection.project(
-    [array("f", [1.0, 2.0, 3.0])], max_points=10, seed=0
+    [array("f", [1.0, 2.0, 3.0])], fit_rows=10, seed=0
 )
 check(
     "1 row -> single point at the origin, no div-by-zero",
@@ -143,7 +211,7 @@ check(
 )
 
 identical = [array("f", [1.0, 2.0, 3.0]) for _ in range(6)]
-ident_pts, ident_idx = projection.project(identical, max_points=10, seed=0)
+ident_pts, ident_idx = projection.project(identical, fit_rows=10, seed=0)
 check(
     "identical rows -> every point collapses to the origin, no div-by-zero",
     ident_pts == [(0.0, 0.0)] * 6 and ident_idx == list(range(6)),
@@ -160,7 +228,7 @@ big_rows = [
 ] + [_rand_unit(big_base_b, 0.05, D_BIG, big_rng) for _ in range(N_BIG // 2)]
 
 t0 = time.time()
-big_points, big_idx = projection.project(big_rows, max_points=4000, seed=0)
+big_points, big_idx = projection.project(big_rows, fit_rows=4000, seed=0)
 elapsed = time.time() - t0
 check(
     "4000x768 input projects to 4000 points without crashing",
@@ -388,7 +456,7 @@ for _sx in (-1.0, 1.0):
             _row[0] += 3.0 * _sx   # wide split  -> PC1
             _row[1] += 1.0 * _sy   # narrow split -> PC2
             _quad_rows.append(array("f", _row))
-_qpts, _ = projection.project(_quad_rows, max_points=1000, seed=0)
+_qpts, _ = projection.project(_quad_rows, fit_rows=1000, seed=0)
 _qx = [p[0] for p in _qpts]
 _qy = [p[1] for p in _qpts]
 
@@ -422,6 +490,23 @@ check(
     "axis 2 separates the orthogonal narrow split",
     _gap > 1.5 * _spread,
     f"gap={_gap:.4f} spread={_spread:.4f}",
+)
+
+# K-138: the same guarantee for rows the fit never saw. Scoring every row
+# outside the sample is new code, and the cheapest way to get it wrong is
+# to hand axis 2 the FIRST component (a copy-paste away) — which reads as
+# a perfectly diagonal map, i.e. |corr| -> 1, exactly the 1-D-disguised-as-2-D
+# failure the test above was added to catch inside the sample.
+_qpts_s, _ = projection.project(_quad_rows, fit_rows=12, seed=0)
+_out = [k for k in range(len(_quad_rows))
+        if k not in set(projection._stride_indices(len(_quad_rows), 12))]
+_sx2 = [_qpts_s[k][0] for k in _out]
+_sy2 = [_qpts_s[k][1] for k in _out]
+check(
+    "a 12-row fit still gives the ~88 out-of-sample rows two independent "
+    "axes (|corr| < 0.2) — axis 2 is not axis 1 wearing a hat",
+    len(_qpts_s) == len(_quad_rows) and abs(_corr(_sx2, _sy2)) < 0.2,
+    f"corr={_corr(_sx2, _sy2):.4f}",
 )
 
 print(f"\n{PASS} passed, {FAIL} failed")

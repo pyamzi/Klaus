@@ -2,9 +2,9 @@
 
 Pure stdlib, aqt-free — importable with no Anki/Qt present at all (proven
 by ``tests/test_projection.py``, which imports this module standalone).
-This is the numeric foundation for the future Obsidian-like embedding map
-(K-058 Phase D); this card builds only the math + graph-assembly layer,
-no window/canvas.
+This is the numeric foundation under the Obsidian-like embedding map
+(K-058 Phase D): ``pdf_graph`` turns these points into the map's nodes
+and edges, and ``pdf_map`` draws them.
 
 Method: top-2 principal components by power iteration with deflation,
 computed directly on the (mean-centered) n x d data matrix — never
@@ -22,14 +22,33 @@ so this needs no separate transposed copy of the data.
 
 Determinism: each component's power-iteration start vector is drawn from
 ``random.Random(seed)`` (never a non-deterministic source), and both the
-point cap and the iteration count are fixed parameters — same input +
-same seed = bit-identical output.
+fit-sample size and the iteration count are fixed parameters — same input
++ same seed = bit-identical output.
 
-Point cap: real note/PDF-chunk indexes can hold tens of thousands of
-rows; ``max_points`` evenly stride-samples down to a size that stays
-interactive in a future canvas. The stride is deterministic (same idea as
-``pdf_index.stride_sample``, reimplemented locally so this module has no
-project-specific imports at all).
+FIT on a sample, PROJECT everything (K-138). ``fit_rows`` caps how many
+rows the two component DIRECTIONS are computed from, not how many points
+come out: every row in ``rows`` gets a position. The split is what makes
+"show every note" affordable. Finding a direction costs
+``MAX_ITERATIONS`` passes over the fit rows (two O(n*d) products each);
+*using* one costs a single dot product per row. So on Pouya's 28,668-note
+collection the old whole-pipeline-on-everything shape would have been
+~7x the fit bill, while fitting on 4,000 evenly-strided rows and then
+scoring all 28,668 adds only the two scoring passes — measured at ~9% on
+top of today's cost, for 7x the notes. And a stride sample of 4,000
+768-d embeddings pins the same principal axes as the full set would: the
+directions are a property of the cloud's shape, which an even sample of
+that size already carries.
+
+That also keeps the memory flat. Only the fit sample is ever packed into
+the ``array('d')`` working buffer (4,000 x 768 x 8B = 24 MB); packing all
+28,668 rows would have been 176 MB. Scoring reads the caller's own rows
+in place and subtracts the sample mean's contribution analytically —
+``dot(x - mean, v) == dot(x, v) - dot(mean, v)`` — so no centered copy of
+the full data is ever built.
+
+The stride is deterministic (same idea as ``pdf_index.stride_sample``,
+reimplemented locally so this module has no project-specific imports at
+all).
 
 Degenerate inputs (0 rows, 1 row, or every sampled row identical after
 mean-centering) never divide by zero: the power iteration detects a
@@ -50,7 +69,9 @@ except ImportError:  # pre-3.12 fallback (Anki bundles 3.13; this repo's
     def _sumprod(a, b):  # type: ignore[misc]
         return sum(x * y for x, y in zip(a, b))
 
-DEFAULT_MAX_POINTS = 4000
+# How many rows the component DIRECTIONS are fitted from. NOT an output
+# cap — every row passed to project() gets a point regardless (K-138).
+DEFAULT_FIT_ROWS = 4000
 MAX_ITERATIONS = 40
 _CONVERGENCE_EPS = 1e-9
 
@@ -130,10 +151,10 @@ def _normalize_axis(values: Sequence[float]) -> list[float]:
 def project(
     rows: Sequence,
     *,
-    max_points: int = DEFAULT_MAX_POINTS,
+    fit_rows: int = DEFAULT_FIT_ROWS,
     seed: int = 0,
 ) -> tuple[list[tuple[float, float]], list[int]]:
-    """Project ``rows`` to 2D via the top-2 principal components.
+    """Project EVERY row to 2D via the top-2 principal components.
 
     ``rows`` is any sequence of equal-length, equal-dimension sequences of
     floats — typically ``memoryview`` slices of a packed ``array('f')``
@@ -142,32 +163,42 @@ def project(
 
     Returns ``(points, indices)``: ``points[k]`` is the 2D position of
     ``rows[indices[k]]``, both axes independently normalized into
-    [-1, 1]. When ``len(rows) > max_points``, an even stride sample of
-    that many rows is used and ``indices`` reports exactly which —
-    callers need this to map projected points back to the original row's
-    identity (e.g. a note id).
+    [-1, 1]. ``indices`` is ``range(len(rows))`` — it stays in the return
+    signature because callers (``pdf_graph``) zip it against ``points``
+    to recover each row's identity, and because it was a strict subset
+    before K-138 made every row a point.
+
+    ``fit_rows`` bounds only the even stride sample the two component
+    directions are COMPUTED from; rows outside it are still projected
+    onto those directions. See the module docstring for why that split
+    is what makes "every note on the map" affordable.
     """
     n_total = len(rows)
     if n_total == 0:
         return [], []
-    indices = _stride_indices(n_total, max_points)
-    n = len(indices)
-    d = len(rows[indices[0]])
+    indices = list(range(n_total))
+    fit_idx = _stride_indices(n_total, fit_rows)
+    n = len(fit_idx)
+    d = len(rows[fit_idx[0]])
     if d <= 0:
         return [(0.0, 0.0) for _ in indices], indices
 
     flat = array("d")
-    for i in indices:
+    for i in fit_idx:
         row = rows[i]
         if len(row) != d:
             raise ValueError("all rows must share the same dimensionality")
         flat.extend(float(x) for x in row)
     row_mv = memoryview(flat)
 
-    # Mean-center, one column (strided slice) at a time.
+    # Mean-center, one column (strided slice) at a time. The mean is the
+    # FIT sample's; it is kept, because every row outside the sample has
+    # to be centered against the same origin to land on the same map.
+    mean = array("d", (0.0 for _ in range(d)))
     for j in range(d):
         col = row_mv[j:n * d:d]
         m = sum(col) / n
+        mean[j] = m
         flat[j:n * d:d] = array("d", (x - m for x in col))
     row_mv = memoryview(flat)
 
@@ -188,8 +219,40 @@ def project(
     row_mv = memoryview(flat)
 
     start2 = array("d", (rng.uniform(-1.0, 1.0) for _ in range(d)))
-    _v2, s2 = _power_iterate(row_mv, n, d, start2)
+    v2, _s2 = _power_iterate(row_mv, n, d, start2)
 
-    xs = _normalize_axis(s1)
-    ys = _normalize_axis(s2)
-    return list(zip(xs, ys)), indices
+    return _score_all(rows, d, mean, v1, v2), indices
+
+
+def _score_all(rows: Sequence, d: int, mean: array, v1: array, v2: array):
+    """Every row's ``(x, y)``, both axes normalized into [-1, 1].
+
+    Two dot products per row and no centered copy of the data: the
+    sample mean's contribution is a constant per component, so
+    ``dot(x - mean, v) == dot(x, v) - dot(mean, v)``.
+
+    The second score subtracts the first component's leakage
+    (``- a * v1v2``), which is exactly what projecting onto the DEFLATED
+    data did before every row got a point — with a perfectly orthogonal
+    pair it is a no-op, and with the power iteration's small residual
+    error it keeps axis 2 from quietly re-carrying axis 1.
+
+    A row of the wrong length is a caller bug, not a shrug: the pre-3.12
+    ``_sumprod`` fallback is ``zip``-based and would silently score a
+    short row against a truncated component instead.
+    """
+    mv1 = _sumprod(mean, v1)
+    mv2 = _sumprod(mean, v2)
+    v1v2 = _sumprod(v1, v2)
+    s1_all = array("d")
+    s2_all = array("d")
+    for row in rows:
+        if len(row) != d:
+            raise ValueError("all rows must share the same dimensionality")
+        a = _sumprod(row, v1) - mv1
+        s1_all.append(a)
+        s2_all.append(_sumprod(row, v2) - mv2 - a * v1v2)
+
+    xs = _normalize_axis(s1_all)
+    ys = _normalize_axis(s2_all)
+    return list(zip(xs, ys))
