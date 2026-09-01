@@ -319,6 +319,52 @@ patches an armed Preferences preview so a dashboard edit survives the
 next preview tick — a hard-won behaviour whose only guard is a text
 search for the code that implements it.
 
+## The shape this keeps finding: one source of truth, read twice
+
+Across two independent lanes the tool has now surfaced the same defect
+family more than any other, and it is worth naming because it is
+**invisible to a reader and obvious to the mutator**.
+
+A pin cannot fail when the test and the code read the SAME source of
+truth. Concretely:
+
+```python
+# the code
+max_cards = 2 * CARDS_PER_PAGE
+# the "test"
+check("max_cards is two pages", forge.max_cards == 2 * CARDS_PER_PAGE)
+```
+
+Change `CARDS_PER_PAGE` and both sides move together, forever. The
+check reads like coverage and asserts nothing. Same for
+`min_score == DUPLICATE_THRESHOLD`, and same for a test fixture built
+FROM the constant it is meant to verify — `tests/test_lecture_view.py`
+built its card-index directory out of `lecture_view.CARD_INDEX_SUBDIR`,
+so the constant defined both the code and its own test (K-142 replaced
+it with a three-way agreement check against the two OTHER modules that
+spell the same path).
+
+The same root cause wearing different clothes:
+
+* **Prose satisfying a pin.** `"validates the body" in SRC` passes on
+  the docstring that says so. Strip comments and docstrings first, or
+  read the AST.
+* **A helper that removes what it hunts.** The hex-colour check split
+  each line at its first `#` to skip comments — and a hex literal *is*
+  a `#` inside a string, so it deleted exactly what it was looking for
+  and returned nothing, forever (K-135).
+* **A stray substring elsewhere in a big file.** `"_page_bar" in src`
+  passes on an unrelated line 3,000 lines away (K-153).
+* **The wrong gate doing the work.** A handler called with a `None`
+  context returned "rejected" because of the *context* check, so
+  gutting the *message* check changed nothing (K-151).
+
+**The test to apply when writing a pin: what single edit would make
+this fail? If the honest answer is "an edit that also changes the
+test", the pin is decoration.** Assume every new pin has one until you
+have watched it fail — five separate lanes in one day each found one in
+their own work, after writing it carefully.
+
 ## Known limitations of the tool
 
 Stated plainly so nobody over-reads the numbers.
