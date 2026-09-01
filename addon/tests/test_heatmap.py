@@ -189,16 +189,6 @@ check("forecast_days=0 stops the grid at today",
 
 _labels = heatmap.month_labels(_cols)
 check("one label slot per column", len(_labels) == len(_cols))
-check("the leading block is NAMED when the month owning it is the "
-      "month its visible days are in — dropping it leaves the first "
-      "weeks of the grid anonymous",
-      heatmap.month_labels(
-          heatmap.build_columns({}, {}, 20000, 365, 28))[0] != "")
-check("...and left blank when it is not: a window opening on a Friday "
-      "sits in a week the PREVIOUS month owns, and naming that block "
-      "after days that are off-screen is worse than not naming it",
-      heatmap.month_labels(
-          heatmap.build_columns({}, {}, 20000, 308, 28))[0] == "")
 _year = heatmap.month_labels(
     heatmap.build_columns({}, {}, _today, 365, 28))
 check("a year of columns names about twelve months",
@@ -208,38 +198,54 @@ check("month names are the real ones, in order",
       all(m in heatmap._MONTHS for m in _year if m))
 
 
-# K-122. A label is also a BLOCK boundary now (MONTH_GAP opens there), so
-# "which month does this week belong to" stopped being cosmetic. A week
-# spans at most two months; the one holding 4+ of its 7 days owns it.
-def _majority_month(column):
-    """The month holding most of *column*'s seven days."""
-    months = [heatmap.day_to_date(column["start"] + r).month
-              for r in range(7)]
-    return max(set(months), key=months.count)
+# K-141 (Pouya, 2026-09-01): "I just want the days to align with the
+# months perfectly, like the day that fits August is under August, and
+# if it's in September, it's under September." Columns are grouped by
+# month now, so this is exact rather than a best effort — a week that
+# straddles a boundary is SPLIT between the two runs. The cost he
+# explicitly accepted ("You don't have to have perfect squares") is
+# partial columns at each end of a month.
+def _label_month_at(labels, index):
+    """The month whose label governs column *index*."""
+    for j in range(index, -1, -1):
+        if labels[j]:
+            return heatmap._MONTHS.index(labels[j]) + 1
+    return None
 
 
 def _misfiled(columns):
-    """Columns sitting under a label that is not their majority month."""
+    """Every (date, governing label) pair that disagrees."""
     labels = heatmap.month_labels(columns)
-    governing = _majority_month(columns[0])
     bad = []
     for index, column in enumerate(columns):
-        if labels[index]:
-            governing = heatmap._MONTHS.index(labels[index]) + 1
-        if _majority_month(column) != governing:
-            bad.append((index, heatmap.day_to_date(column["start"]),
-                        labels[index] or "-"))
+        governing = _label_month_at(labels, index)
+        for cell in column["cells"]:
+            if cell is None:
+                continue
+            if heatmap.day_to_date(cell[0]).month != governing:
+                bad.append((heatmap.day_to_date(cell[0]), governing))
     return bad
 
 
 _wins = [heatmap.build_columns({}, {}, _today + off, 365, 28)
          for off in range(0, 371, 37)]
-check("every week sits under the month that owns most of its days — "
-      "the label is a BLOCK boundary now, so a week filed under the "
-      "wrong side of it puts real days in the wrong month",
+check("EVERY day sits under its own month's label — not most of them, "
+      "all of them; a week spanning a boundary is split between the "
+      "two month runs instead of being assigned to one",
       all(not _misfiled(w) for w in _wins),
-      "; ".join(f"{d} labelled {lab}" for w in _wins
-                for _i, d, lab in _misfiled(w)[:3]))
+      "; ".join(f"{d} under {m}" for w in _wins for d, m in _misfiled(w)[:3]))
+check("...and no day is lost or duplicated in the splitting — the "
+      "window still holds exactly history + forecast days",
+      all(len({c[0] for col in w for c in col["cells"] if c}) == 365 + 28
+          for w in _wins))
+check("a month's first column is where its label goes, including the "
+      "very first — its days really are that month's days",
+      heatmap.month_labels(
+          heatmap.build_columns({}, {}, 20000, 365, 28))[0] != "")
+check("every column belongs to exactly one month, so labelling can "
+      "no longer be a guess",
+      all("month" in col for w in _wins for col in w))
+
 check("...including the months that begin ON a Sunday, which the old "
       "week-start rule got right by luck",
       not _misfiled(heatmap.build_columns({}, {}, _today, 365, 28)))
@@ -723,8 +729,13 @@ else:
           and _stats_real["streak_cur"] <= _stats_real["streak_max"]
           and _stats_real["days_learned"] == len(_real_rows))
     _grid = heatmap.build_columns(dict(_real_rows), {}, _today_real, 365, 28)
-    check("a year of real data lays out as whole weeks",
-          all(len(c["cells"]) == 7 for c in _grid) and 55 <= len(_grid) <= 58,
+    # Every column is still seven ROWS tall (that is what keeps a
+    # cell's weekday readable off its row), but a year is no longer
+    # ~56 columns: grouping by month splits each boundary week, which
+    # costs 10-13 extra columns across a 13-month window. Measured
+    # across 400 window positions: 66-69.
+    check("a year of real data lays out as full-height month runs",
+          all(len(c["cells"]) == 7 for c in _grid) and 64 <= len(_grid) <= 71,
           f"{len(_grid)} columns")
     _real_html = heatmap.heatmap_html(
         dict(_real_rows), {}, _today_real, _stats_real)

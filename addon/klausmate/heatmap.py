@@ -100,6 +100,11 @@ def day_to_date(day: int) -> datetime.date:
     return _EPOCH + datetime.timedelta(days=int(day))
 
 
+def _day_of(date: datetime.date) -> int:
+    """Day number of *date* — :func:`day_to_date` backwards."""
+    return (date - _EPOCH).days
+
+
 def _row(day: int) -> int:
     """Grid row for *day*, Sunday-first (0 = Sunday ... 6 = Saturday)."""
     return (day_to_date(day).weekday() + 1) % 7
@@ -271,11 +276,27 @@ def build_columns(
 ) -> list:
     """Week columns for the grid, oldest first.
 
-    Each column is ``{"start": <day of its Sunday>, "cells": [...]}``
-    with exactly seven cells, Sunday-first. A cell is ``None`` where the
-    week runs past either end of the window — the placeholder is what
-    keeps every column a full seven rows tall, so the weekday a cell
-    sits on is always readable off its row.
+    Columns are grouped BY MONTH: a month gets its own run of week
+    columns, and a week that straddles a month boundary is split
+    between the two runs rather than assigned to one of them. That is
+    what makes every day sit under its own month's label — the whole
+    point of the strip (Pouya, 2026-09-01: "the day that fits August is
+    under August, and if it's in September, it's under September").
+
+    The cost is deliberate and was explicitly accepted: the first and
+    last column of each month are PARTIAL, so the grid is no longer an
+    unbroken 7-row ribbon ("You don't have to have perfect squares").
+    Two earlier attempts tried to keep the ribbon and move the label
+    instead — the label on the first week that STARTS in the month, then
+    on the week owning MOST of its days — and both leave real days
+    under the wrong name, because a week simply does not belong to one
+    month.
+
+    Each column is ``{"start": <day of its Sunday>, "cells": [...],
+    "month": <1-12>}`` with exactly seven cells, Sunday-first. A cell is
+    ``None`` where the week runs outside this month or past either end
+    of the window — the placeholder keeps every column seven rows tall,
+    so the weekday a cell sits on is always readable off its row.
 
     Today belongs to history even though it also has cards due: what
     you have already done outranks what is still scheduled.
@@ -286,55 +307,53 @@ def build_columns(
     last = today + forecast_days
 
     columns: list = []
-    start = first - _row(first)          # rewind to that week's Sunday
-    while start <= last:
-        cells: list = []
-        for row in range(7):
-            day = start + row
-            if day < first or day > last:
-                cells.append(None)
-            elif day <= today:
-                cells.append((day, int(history.get(day, 0)), False))
-            else:
-                cells.append((day, int(forecast.get(day, 0)), True))
-        columns.append({"start": start, "cells": cells})
-        start += 7
+    cur = day_to_date(first).replace(day=1)
+    stop = day_to_date(last).replace(day=1)
+    while cur <= stop:
+        nxt = (
+            datetime.date(cur.year + 1, 1, 1) if cur.month == 12
+            else datetime.date(cur.year, cur.month + 1, 1)
+        )
+        # This month, clipped to the drawn window.
+        lo = max(first, _day_of(cur))
+        hi = min(last, _day_of(nxt - datetime.timedelta(days=1)))
+        if lo <= hi:
+            start = lo - _row(lo)        # rewind to that week's Sunday
+            while start <= hi:
+                cells: list = []
+                for row in range(7):
+                    day = start + row
+                    if day < lo or day > hi:
+                        cells.append(None)
+                    elif day <= today:
+                        cells.append((day, int(history.get(day, 0)), False))
+                    else:
+                        cells.append((day, int(forecast.get(day, 0)), True))
+                columns.append(
+                    {"start": start, "cells": cells, "month": cur.month}
+                )
+                start += 7
+        cur = nxt
     return columns
 
 
 def month_labels(columns: list) -> list:
-    """One label per column: the month name where a new month starts,
-    otherwise empty. The first column never gets one — its month began
-    off-screen, so labelling it would point at a partial week.
+    """One label per column: the month's name on the first column of its
+    run, empty elsewhere.
 
-    A week belongs to the month holding MOST of its seven days, which is
-    the month of its middle day: a week spans at most two months, so the
-    day at index 3 is in the majority side by construction. Reading the
-    month off the week's SUNDAY instead — which this did until
-    2026-08-31 — labels the first week that *starts* in the new month,
-    up to six days late; on a 2026-08-31 year that put 11 of 13 labels a
-    full week right of their month, the two exceptions being the months
-    that happened to begin on a Sunday. Cosmetic while the grid was one
-    continuous ribbon; not once MONTH_GAP made the label a visible BLOCK
-    boundary, because then the first days of October really do sit
-    inside the September block.
+    No heuristic left. Columns are grouped by month
+    (:func:`build_columns`), so a column belongs to exactly one month
+    and the label is simply where a new run begins — including the very
+    first column, whose days really are its month's days even when the
+    window opens mid-month. The two rules this replaced (month of the
+    week's Sunday; month owning most of the week's days) both had to
+    guess, because they were labelling weeks that spanned two months.
     """
     labels: list = []
     previous = None
-    for index, column in enumerate(columns):
-        month = day_to_date(column["start"] + 3).month
-        if index:
-            show = month != previous
-        else:
-            # The leading column is always a partial week — the window
-            # starts mid-week — so name it only when the month owning
-            # the week is the month its VISIBLE days are actually in.
-            # A window opening on Friday 2 October sits in a week Sep
-            # owns 4 days of; labelling that block "Sep" would name it
-            # after days that are not on screen.
-            visible = [cell for cell in column["cells"] if cell is not None]
-            show = bool(visible) and day_to_date(visible[0][0]).month == month
-        labels.append(_MONTHS[month - 1] if show else "")
+    for column in columns:
+        month = column["month"]
+        labels.append(_MONTHS[month - 1] if month != previous else "")
         previous = month
     return labels
 
