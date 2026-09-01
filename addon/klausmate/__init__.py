@@ -177,7 +177,18 @@ def _strip_html(s: str) -> str:
 
 
 def _set_target_field(editor: Editor, field_name: str) -> None:
-    """Remember the last field the user clicked for PDF page insert."""
+    """Point Anki's own ``editor.currentField`` at the field the user last
+    clicked, for PDF page insert.
+
+    That assignment is the WHOLE mechanism: Anki's own attribute is what
+    carries the target from here on. Klaus used to shadow it with two
+    private per-editor attributes (the field's index and its name, plus a
+    default-init at editor setup); every one of them was write-only once
+    autocomplete/Ask were removed, and K-140 deleted all four sites. Don't
+    re-add a Klaus-side copy — nothing downstream wants one: image crop
+    rewrites by scanning every entry of ``note.fields``, and PDF page
+    insert travels through the system clipboard.
+    """
     if not field_name:
         return
     idx: int | None = None
@@ -193,8 +204,6 @@ def _set_target_field(editor: Editor, field_name: str) -> None:
         pass
     if idx is not None:
         try:
-            editor._klausmate_target_field_index = idx  # type: ignore[attr-defined]
-            editor._klausmate_target_field_name = field_name  # type: ignore[attr-defined]
             editor.currentField = idx
         except Exception:
             pass
@@ -2143,9 +2152,6 @@ def on_editor_did_init(editor: Editor) -> None:
             return
         pdf_handler.ensure_active_pdf(USER_FILES)
 
-
-        if not hasattr(editor, "_klausmate_target_field_index"):
-            editor._klausmate_target_field_index = None  # type: ignore[attr-defined]
         # Default state for the page-aware retrieval helper.
         if not hasattr(editor, "_klausmate_active_pdf"):
             editor._klausmate_active_pdf = None  # type: ignore[attr-defined]

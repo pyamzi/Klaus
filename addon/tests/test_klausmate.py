@@ -1968,5 +1968,21 @@ except Exception as e:
 finally:
     shutil.rmtree(pv_uf, ignore_errors=True)
 
+print("== K-140: the dead editor state stays dead ==")
+# _klausmate_target_field_index/_name were written at three sites and
+# read at none — vestiges of autocomplete/Ask, removed in 2026-08.
+# Anki's own editor.currentField is the whole mechanism; image crop
+# rewrites by scanning note.fields and PDF page insert travels through
+# the clipboard, so nothing downstream wants a Klaus-side copy.
+_INIT_K140 = open("klausmate/__init__.py", encoding="utf-8").read()
+check("no _klausmate_target_field_* ATTRIBUTE is written or read — a "
+      "helpful re-add would be write-only state all over again. The "
+      "_set_target_field FUNCTION is alive and is not what this pins.",
+      "_klausmate_target_field" not in _INIT_K140
+      and "def _set_target_field" in _INIT_K140)
+check("...and the docstring says what DOES carry the target, so the "
+      "next reader does not reinstate it",
+      "currentField" in _INIT_K140)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
