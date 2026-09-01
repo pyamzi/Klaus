@@ -4,7 +4,7 @@ You are a worker on the klausmate board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
 
-Repo root: `/Users/pyamzi/Documents/Github/Addons`
+Repo root: `/Users/pyamzi/Documents/Github/KlausMate-Context`
 
 ## Success predicate
 
@@ -31,7 +31,7 @@ should not return claiming success on any of them:
 **1. Claim.**
 
 ```bash
-cd /Users/pyamzi/Documents/Github/Addons
+cd /Users/pyamzi/Documents/Github/KlausMate-Context
 python3 board/board.py claim <CARD-ID> --owner <your-name>
 ```
 
