@@ -805,6 +805,73 @@ def panel_header_qss(night: bool) -> str:
     """
 
 
+def pdf_panel_qss(night: bool) -> str:
+    """The PDF viewer's own panel, objectName ``KlausPdfPanel`` (K-153).
+
+    Pouya: "I want it to be the same throughout the entire Anki app,
+    because it should be consistent no matter what." The viewer lives
+    in three hosts — the editor panel, the Library window and the
+    review-time lecture dock — and only the parts that SELF-STYLE
+    (``find_bar_qss``'s ``#KlausFindBar``, ``thumb_strip_qss``'s
+    ``#KlausThumbStrip``, and pdf.js's ``css_vars``) already looked
+    identical in all three. Everything that drifted, drifted because
+    it relied on ancestry: ``PdfSidebar`` was a plain QWidget with no
+    sheet and no ``WA_StyledBackground``, so it painted NOTHING and
+    whatever was behind it showed through every gap — the find bar's
+    margins, the strip gutter, the QPdfView frame. In the Library that
+    ambient was ``library_qss``; in the lecture dock, ``mw``'s stock
+    palette; in the editor panel, whatever the host happened to be.
+    And ``klausbook_design`` defaults FALSE, so two of the three hosts
+    inherited nothing at all in a default profile while the Library —
+    Klaus's own window — was styled unconditionally. That asymmetry is
+    the whole reason the Library's viewer looked best.
+
+    So ``PdfSidebar`` applies this TO ITSELF, the way the find bar and
+    the strip already do: no host can forget it, and a fourth host
+    gets the look for free. ONE id selector, deliberately — the sheet
+    must not grow rules that duplicate the find bar's or the strip's
+    territory. It cannot outrank them in any case: a widget's own
+    stylesheet beats an inherited one irrespective of specificity
+    (measured, K-153), and both of those carry their own.
+
+    Contents, and why each is here:
+
+    * the panel background — one deterministic base instead of bleed.
+    * ``QSplitter::handle`` — the ONE rule of ``library_qss``'s ~20
+      that ever reached inside the viewer (its thumb-strip splitter).
+      Scoped as a descendant of the panel so it CANNOT touch the
+      Library window's own two splitters, which still take theirs from
+      the window-scoped copy that stays put in :func:`library_qss`.
+    * ``QLabel`` — the viewer's labels are all secondary readouts (the
+      page indicator, the find-bar match counter, the two
+      viewer-unavailable fallbacks). The two readouts carry
+      ``muted_label_qss`` on themselves and were never at risk; the
+      FALLBACKS carry nothing, so they took their colour from whatever
+      window they were in — ``utility_window_qss``'s bare
+      ``QLabel { color: text }`` in Add Cards. This makes muted the
+      panel's default for any label that does not ask otherwise,
+      including ones added later.
+
+    Scrollbars are deliberately NOT styled: nothing styles QScrollBar
+    in any host today, which makes them the one part of the viewer
+    that is already identical everywhere. Styling them here would
+    create drift, not remove it.
+    """
+    c = palette(night)
+    return f"""
+    QWidget#KlausPdfPanel {{
+        background-color: {c['bg']};
+    }}
+    QWidget#KlausPdfPanel QSplitter::handle {{
+        background: {c['bg']};
+    }}
+    QWidget#KlausPdfPanel QLabel {{
+        color: {c['text_muted']};
+        background: transparent;
+    }}
+    """
+
+
 def find_bar_qss(night: bool) -> str:
     """The viewer's find bar, objectName ``KlausFindBar`` — surface strip,
     rounded input with an accent focus ring, borderless nav glyphs."""
@@ -1030,6 +1097,13 @@ def library_qss(night: bool) -> str:
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton:hover {{
         background-color: {c['blue_hover']};
     }}
+    /* The window's own two splitters — the main horizontal one and the
+       map dock's vertical one — still take their handle colour from
+       here. K-153 COPIED this rule into pdf_panel_qss rather than
+       moving it: that copy is scoped under #KlausPdfPanel so it reaches
+       only the viewer's internal thumb-strip splitter (in every host,
+       not just this window), and these two keep theirs. Same value on
+       purpose — a handle is a seam in the page ground wherever it is. */
     QWidget#KlausLibraryWindow QSplitter::handle {{
         background: {c['bg']};
     }}

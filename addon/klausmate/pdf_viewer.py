@@ -765,6 +765,11 @@ class PdfViewer(QWidget):
         self._find_debounce: Any = None
         self._search_jump_pending = False
         self._current_search_index = -1
+        # Fallback footer for the page indicator (K-153) — declared here
+        # as None, like the find bar and the strip above, so every other
+        # code path guards on None instead of hasattr. Built at the end
+        # of __init__, once the view it sits under exists.
+        self._page_bar: QWidget | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -955,6 +960,63 @@ class PdfViewer(QWidget):
             self._pdf_view = None
             outer.addWidget(QLabel("(PDF view unavailable)"), 1)
 
+        # Fallback slot for the page indicator (K-153). The label above
+        # is normally ADOPTED into a host's header bar — but only the
+        # editor panel's tab container does that, so in the Library and
+        # the lecture dock the page number was built, hidden, and never
+        # shown: no readout, and click-to-go-to-page unreachable (only
+        # Cmd+Opt+G still worked). This slim right-aligned footer row is
+        # where the label goes when nothing claims it. It stays EMPTY
+        # and hidden at construction — the label is only moved in from
+        # showEvent, by which time an adopting host has already taken
+        # it — so we never race a host for the widget, and the viewer
+        # stays chrome-free wherever a host does provide a header.
+        try:
+            bar = QWidget(self)
+            row = QHBoxLayout(bar)
+            row.setContentsMargins(8, 2, 8, 3)
+            row.setSpacing(0)
+            row.addStretch(1)
+            bar.setVisible(False)
+            outer.addWidget(bar)
+            self._page_bar = bar
+        except Exception as exc:
+            print(f"[klausmate] in-place page bar unavailable: {exc}")
+
+    def _show_page_label_in_place(self) -> None:
+        """Put the page indicator in the viewer's own footer when no
+        host adopted it (K-153).
+
+        Adoption IS a reparent — ``_PdfTabContainer`` calls
+        ``header.addWidget(self._page_label)``, which makes the header
+        the label's parent — so "is it still parented to us" is the
+        entire test, and it needs no cooperation from any host. Re-run
+        on every show, so a host that adopts later simply takes the
+        label back out of our row and the row goes away.
+        """
+        bar = getattr(self, "_page_bar", None)
+        if bar is None or getattr(self, "_page_label", None) is None:
+            return
+        try:
+            parent = self._page_label.parentWidget()
+            if parent is not self and parent is not bar:
+                # A host owns the label; keep our footer out of the way.
+                bar.setVisible(False)
+                return
+            if parent is not bar:
+                # Free-floating child of the viewer, in no layout yet —
+                # so this reparent is silent (a widget already IN a
+                # layout would make Qt warn and steal it).
+                bar.layout().addWidget(self._page_label)
+            self._update_page_label(self._current_page())
+            has_pages = self._page_count > 0
+            self._page_label.setVisible(has_pages)
+            bar.setVisible(has_pages)
+        except RuntimeError:
+            pass  # adopted label died with its host header (see below)
+        except Exception as exc:
+            print(f"[klausmate] in-place page label failed: {exc}")
+
     def set_page_texts(self, texts: list[str]) -> None:
         self._page_texts = texts or []
 
@@ -985,6 +1047,9 @@ class PdfViewer(QWidget):
             self._page_count = 0
         self._sync_overlay_geometry()
         self._update_page_label(self._current_page())
+        # A tab switch / first load while already on screen is the other
+        # moment the in-place footer's answer can change (0 pages -> n).
+        self._show_page_label_in_place()
         try:
             self._thumb_cache.clear()
         except Exception:
@@ -4025,6 +4090,10 @@ class PdfViewer(QWidget):
                 self._update_marquee_overlay()
         except Exception:
             pass
+        # Adoption (or not) is settled by now — every host that wants the
+        # page indicator has taken it during its own construction, which
+        # runs before the panel is ever shown.
+        self._show_page_label_in_place()
         self._arm_thumb_render()
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
@@ -4127,6 +4196,24 @@ class PdfSidebar(QWidget):
 
     def __init__(self, editor: Editor, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        # The panel styles ITSELF (K-153), exactly as the find bar and
+        # the thumb strip already do — those two are the only parts of
+        # the viewer that looked identical in all three hosts, and that
+        # is precisely because they never depended on which window they
+        # landed in. This widget used to carry no sheet and no styled
+        # background, so it painted nothing and the host showed through
+        # every gap. Applied here, on the one widget every host wraps,
+        # rather than in any host: no host can forget it, both renderers
+        # (QPdfView and pdf.js) sit inside it, and a fourth host gets
+        # the look for free. See theme.pdf_panel_qss for each rule.
+        try:
+            from . import theme as _theme
+
+            self.setObjectName("KlausPdfPanel")
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setStyleSheet(_theme.pdf_panel_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] pdf panel theme failed: {exc}")
         self._editor = editor
         self._name: Optional[str] = None
         # External-change fingerprint of the loaded working PDF (K-078).

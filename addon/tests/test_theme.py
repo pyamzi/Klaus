@@ -32,6 +32,7 @@ builders = [
     ("dialog_qss", theme.dialog_qss),
     ("panel_header_qss", theme.panel_header_qss),
     ("find_bar_qss", theme.find_bar_qss),
+    ("pdf_panel_qss", theme.pdf_panel_qss),
     ("library_qss", theme.library_qss),
     ("thumb_strip_qss", theme.thumb_strip_qss),
     # The Anki-window builders (window_chrome consumers) join here so
@@ -511,6 +512,150 @@ check("inks do NOT follow the accent theme (a highlight is content, "
       all(v in _ink_accent_probe[0] and v in _ink_accent_probe[1]
           for v in _INK_VARS)
       and _ink_accent_probe[0] != _ink_accent_probe[1])
+
+section("one PDF viewer everywhere (K-153): pdf_panel_qss, self-applied")
+# Pouya: "I want it to be the same throughout the entire Anki app,
+# because it should be consistent no matter what." The viewer has three
+# hosts — the editor panel, the Library window, the review-time lecture
+# dock — and before this card the only parts of it that looked identical
+# in all three were the ones that SELF-STYLE (#KlausFindBar,
+# #KlausThumbStrip, and pdf.js's css_vars). Everything else drifted
+# because it relied on ancestry: PdfSidebar carried no sheet and no
+# styled background, so it painted nothing and the host showed through
+# every gap. Measured offscreen, the worst of it was a ~4px NEAR-WHITE
+# vertical seam (rgb 239) where the thumb-strip splitter handle sat on
+# the #191919 dark panel, in every host but the Library.
+_pdf_panel_src = open("klausmate/pdf_viewer.py").read()
+
+for night in (False, True):
+    c = theme.palette(night)
+    pq = theme.pdf_panel_qss(night)
+    _no_c = re.sub(r"/\*.*?\*/", "", pq, flags=re.S)
+    _selectors = [s.strip() for s in re.findall(r"([^{}]+)\{", _no_c)]
+    # Scope is the whole safety argument. An unscoped rule in a sheet
+    # that is set on a widget INSIDE someone else's window still only
+    # reaches that widget's subtree — but the reverse matters: this
+    # sheet must never be the thing that styles a host's own widgets,
+    # and every rule reading as a descendant of the one id is what
+    # makes that inspectable rather than argued.
+    check(f"pdf_panel_qss(night={night}) scopes EVERY rule under the one "
+          f"#KlausPdfPanel id (got: {_selectors})",
+          bool(_selectors)
+          and all(s.startswith("QWidget#KlausPdfPanel") for s in _selectors))
+    _panel_blk = re.search(
+        r"QWidget#KlausPdfPanel \{(.*?)\}", _no_c, re.S
+    )
+    check(f"pdf_panel_qss(night={night}): the panel paints ONE "
+          "deterministic ground instead of letting the host bleed through",
+          _panel_blk is not None
+          and f"background-color: {c['bg']}" in _panel_blk.group(1))
+    _handle_blk = re.search(
+        r"QWidget#KlausPdfPanel QSplitter::handle \{(.*?)\}", _no_c, re.S
+    )
+    check(f"pdf_panel_qss(night={night}): the splitter handle is the "
+          "panel ground — this is the seam that was near-white on dark",
+          _handle_blk is not None and c["bg"] in _handle_blk.group(1))
+    _label_blk = re.search(
+        r"QWidget#KlausPdfPanel QLabel \{(.*?)\}", _no_c, re.S
+    )
+    check(f"pdf_panel_qss(night={night}): labels default to text_muted — "
+          "the viewer's labels are all secondary readouts, and the two "
+          "fallback labels carry no sheet of their own, so without this "
+          "they took utility_window_qss's bare QLabel colour in Add Cards",
+          _label_blk is not None
+          and f"color: {c['text_muted']}" in _label_blk.group(1))
+    # find_bar_qss and thumb_strip_qss live INSIDE this panel and must
+    # keep winning. They do so by construction — a widget's own
+    # stylesheet beats an inherited one irrespective of specificity
+    # (measured on PyQt6 6.10.2 / Qt 6.10.0: a selector-less widget
+    # sheet held against an ancestor's `QWidget#X QLabel#Y` rule) — but
+    # only as long as this sheet never grows rules in their territory.
+    check(f"pdf_panel_qss(night={night}) never names the find bar or the "
+          "thumb strip — their sheets own those surfaces",
+          "KlausFindBar" not in pq and "KlausThumbStrip" not in pq)
+    # The hover family is find_bar_qss's and thumb_strip_qss's, keyed on
+    # the hover_subtle token that css_vars mirrors for the pdf.js half
+    # (pinned above). A hover rule here would be a fourth definition of
+    # the same interaction, on a surface that has no hover state.
+    check(f"pdf_panel_qss(night={night}) declares no hover state — the "
+          "hover_subtle family stays with the two sheets that own it",
+          ":hover" not in pq)
+    # Scrollbars are the one part of the viewer already identical in
+    # every host, precisely because NOTHING styles them. Styling them
+    # here would create drift rather than remove it.
+    check(f"pdf_panel_qss(night={night}) leaves QScrollBar alone",
+          "QScrollBar" not in pq)
+
+# The splitter rule was COPIED out of library_qss, not moved: the
+# Library's own two splitters (the window's main horizontal one and the
+# map dock's vertical one) are NOT descendants of the panel, so the
+# scoped copy cannot reach them and they still need the window-scoped
+# original. Verified offscreen: both handles render byte-identical
+# before and after (#F5F5F7 light / #191919 dark).
+for night in (False, True):
+    check(f"library_qss(night={night}) KEEPS its window-scoped splitter "
+          "handle rule — the Library's own two splitters depend on it",
+          "QWidget#KlausLibraryWindow QSplitter::handle {"
+          in theme.library_qss(night))
+
+# The consumer half of the contract. A design token nobody applies is
+# not a design; these pin that PdfSidebar — the ONE widget every host
+# wraps, and the parent of BOTH renderers — wears the sheet itself, the
+# way the find bar and the strip already do.
+check("PdfSidebar names itself KlausPdfPanel",
+      'self.setObjectName("KlausPdfPanel")' in _pdf_panel_src)
+check("PdfSidebar applies pdf_panel_qss to ITSELF, so no host can "
+      "forget it and a fourth host gets it free",
+      "self.setStyleSheet(_theme.pdf_panel_qss(" in _pdf_panel_src)
+check("PdfSidebar sets WA_StyledBackground — a plain QWidget paints "
+      "NOTHING however styled, which is what let the host bleed through",
+      "self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)"
+      in _pdf_panel_src)
+
+# K-153's other half: the `n / m` page indicator is built in every host
+# but stays hidden unless a host ADOPTS it into its own header, and only
+# the editor panel's tab container does. So the Library — the host Pouya
+# singled out as the good one — showed no page number at all, which also
+# made click-to-go-to-page unreachable there (Cmd+Opt+G still worked, so
+# this was affordance, not capability).
+# Read through the AST, not the raw text: `"_page_bar" in src` passes on
+# a comment, and on any ONE surviving mention elsewhere in a 4,500-line
+# file — both of which it did when these pins were falsified.
+import ast as _ast  # noqa: E402
+
+_pv_tree = _ast.parse(_pdf_panel_src)
+
+
+def _method_src(cls_name: str, fn_name: str) -> str:
+    """That method's own source, comments stripped by unparse()."""
+    for node in _ast.walk(_pv_tree):
+        if isinstance(node, _ast.ClassDef) and node.name == cls_name:
+            for sub in node.body:
+                if (isinstance(sub, _ast.FunctionDef)
+                        and sub.name == fn_name):
+                    return _ast.unparse(sub)
+    return ""
+
+
+_pv_init = _method_src("PdfViewer", "__init__")
+_pv_show = _method_src("PdfViewer", "showEvent")
+_pv_place = _method_src("PdfViewer", "_show_page_label_in_place")
+
+check("the viewer builds a fallback slot for the page indicator into "
+      "its OWN layout — a footer, so it duplicates no host's header",
+      "self._page_bar = bar" in _pv_init
+      and "outer.addWidget(bar)" in _pv_init)
+check("the slot starts empty and hidden — the label is only moved in "
+      "later, so an adopting host never has to fight us for the widget",
+      "bar.setVisible(False)" in _pv_init
+      and "self._page_label" not in _pv_init.split("bar = QWidget(self)")[-1])
+check("PdfViewer.showEvent fills the slot, by which time every host "
+      "that wants the label has taken it during its own construction",
+      "self._show_page_label_in_place()" in _pv_show)
+check("adoption is detected by PARENTAGE inside that method, needing no "
+      "cooperation from any host (adopting IS a reparent into a header)",
+      "self._page_label.parentWidget()" in _pv_place
+      and "bar.setVisible(False)" in _pv_place)
 
 section("design scale (K-110): every builder stays on-scale")
 # Sanctioned sets — must match the "Design scale" comment block above
