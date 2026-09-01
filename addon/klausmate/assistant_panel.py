@@ -220,7 +220,24 @@ class AssistantPanel(QWidget):  # type: ignore[misc]
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def _guard(self, what: str, fn) -> None:
+        """Run a SLOT body, swallowing anything that escapes.
+
+        Not defensive style — load-bearing. PyQt6 answers an unhandled
+        exception in a slot by printing the traceback and then calling
+        qFatal, which SIGABRTs the process. In Anki that is not a broken
+        panel, it is Anki gone, mid-review, with unsaved state. Measured:
+        a plain RuntimeError raised in a clicked handler exits 134.
+        """
+        try:
+            fn()
+        except Exception as exc:
+            print(f"[klausmate] assistant panel {what} failed: {exc}")
+
     def send(self) -> None:
+        self._guard("send", self._send)
+
+    def _send(self) -> None:
         question = self.input.text().strip()
         if not question or self.busy or not self._pdf_name:
             return
@@ -249,8 +266,11 @@ class AssistantPanel(QWidget):  # type: ignore[misc]
         self._thread.start()
 
     def stop(self) -> None:
-        if self._cancel is not None:
-            self._cancel.set()
+        def go() -> None:
+            if self._cancel is not None:
+                self._cancel.set()
+
+        self._guard("stop", go)
 
     def _set_running(self, running: bool) -> None:
         self.send_btn.setEnabled(not running and bool(self._pdf_name))
@@ -264,24 +284,37 @@ class AssistantPanel(QWidget):  # type: ignore[misc]
 
     def _on_delta(self, text: str) -> None:
         """Stream into the open Klaus block rather than appending lines —
-        appendPlainText would put every token on its own row."""
+        appendPlainText would put every token on its own row.
+
+        Guarded like every slot here: this one is QUEUED from a worker
+        thread, so it can arrive after the widget it writes into is gone.
+        """
+        self._guard("delta", lambda: self._insert(text))
+
+    def _insert(self, text: str) -> None:
         cursor = self.transcript.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.insertText(text)
         self.transcript.setTextCursor(cursor)
 
     def _on_tool(self, name: str) -> None:
-        pretty = name.replace("_", " ")
-        self.status.setText(f"Looking through the slides ({pretty})…")
+        self._guard("tool notice", lambda: self.status.setText(
+            f"Looking through the slides ({name.replace('_', ' ')})…"))
 
     def _on_done(self, answer: str, stop_reason: str) -> None:
-        self.status.setText(status_line(stop_reason, self._pdf_name))
-        self._set_running(False)
+        def go() -> None:
+            self.status.setText(status_line(stop_reason, self._pdf_name))
+            self._set_running(False)
+
+        self._guard("completion", go)
 
     def _on_failed(self, message: str) -> None:
-        self._append(f"\n[error] {message}")
-        self.status.setText("That did not go through.")
-        self._set_running(False)
+        def go() -> None:
+            self._append(f"\n[error] {message}")
+            self.status.setText("That did not go through.")
+            self._set_running(False)
+
+        self._guard("error report", go)
 
 
 def _default_session(pdf_name: str):

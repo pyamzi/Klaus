@@ -51,6 +51,17 @@ check("no colour is named here; styling comes from theme tokens",
 check("a failing worker reports rather than dying silently — a panel stuck "
       "on 'thinking' is indistinguishable from a hang",
       "signals.failed.emit" in _CODE)
+# MEASURED, not assumed: a plain RuntimeError raised in a clicked handler
+# exits 134 (SIGABRT). PyQt6 prints the traceback and then calls qFatal. In
+# Anki that is not a broken panel, it is Anki gone mid-review.
+import re as _re2
+_slots = _re2.findall(r"\.connect\(self\.(\w+)\)", _CODE)
+check("every connected slot is accounted for", len(_slots) >= 6)
+for _slot in sorted(set(_slots)):
+    _body = _CODE.split(f"def {_slot}(", 1)[1].split("\n    def ", 1)[0]
+    check(f"{_slot} cannot let an exception escape into Qt — an unhandled "
+          "one in a slot SIGABRTs the whole process",
+          "_guard(" in _body or "try:" in _body)
 
 section("copy that carries a state the user cannot otherwise see")
 ap = __import__("importlib").import_module("klausmate.assistant_panel")
