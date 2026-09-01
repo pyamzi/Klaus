@@ -223,59 +223,42 @@ CONSTRAINTS:
 #### Comments
 - [2026-09-01 orchestrator] Body correction: the last line says 'BLOCKED ON K-170 releasing klausmate/__init__.py'. It should read K-169 — this card IS K-170. K-169 is the PDF-panel placement card that holds __init__.py. Everything else in the body stands.
 
+### K-171: The map reshuffles on every re-index: PC2 and PC3 are not separated by the data
+owner: -
+priority: P2
+tags: phase-d,correctness,perf
+files: klausmate/projection.py,klausmate/pdf_graph.py,tests/test_projection.py
+verify: python3 tests/test_projection.py
+created: 2026-09-01
+
+Surfaced by K-167's fit-stability experiment, which was asked for as an experiment precisely because I did not believe it either way. It is not caused by the cache; the cache slightly REDUCES it. It has been true since K-058.
+
+THE MEASUREMENT (K-167, sign-aligned, normalized units where 0.003 is about one pixel at 700px):
+
+    50 of 28,670 notes deleted   median note moves  24 px, worst  70 px
+    50 notes added               median note moves  80 px, worst 197 px
+    same 28,670 vectors, only a different even-stride 4,000 sample:
+                                 median note moves 150 px, worst 391 px
+
+The last line is the one that matters: the DATA did not change at all, only which 4,000 rows the fit sampled, and the picture moved 150 px in the median.
+
+WHY, and this is the part that makes the fix obvious. The three component standard deviations are 0.1332 / 0.1236 / 0.1190. There is no eigengap. PC2 and PC3 are not separated by the data, so a different sample simply SWAPS them (|<v2,v3'>| = 0.86, against 0.45 for a diagonal). Only the 3-D SUBSPACE is stable — principal angles 5.9 / 9.6 / 17.9 degrees. The cloud is in the same place; the axes spin inside it.
+
+SO FITTING HARDER DOES NOT FIX IT. Fitting on all 28,670 rows instead of 4,000 is now affordable (it is a one-time cost behind K-167's cache) but near-degenerate axes stay near-degenerate: add fifty notes and PC2/PC3 can still swap. Do not spend the card on that unless the numbers say otherwise.
+
+THE FIX THAT MATCHES THE DIAGNOSIS is to make the picture CONTINUOUS rather than the axes canonical: align each new layout to the previous one. Orthogonal Procrustes over the notes present in both layouts — given old positions P_old and new P_new (n x 3), find the orthogonal R minimising ||P_new R - P_old||, which is the SVD of P_new^T P_old. That matrix is 3x3, so this is a tiny pure-Python computation, not a linear-algebra project, and K-167's cache already persists exactly the artifact you need to align against. Decide deliberately whether to allow reflections (det = -1): forbidding them keeps handedness, allowing them gives a closer fit. Argue it.
+
+VERIFY IT THE WAY THE DEFECT WAS FOUND: re-run K-167's three perturbations and report the same table after alignment. The number to beat is 150 px median on a pure resample; if alignment does not take that to a few pixels, it has not worked and you should say so rather than shipping it.
+
+CONSTRAINTS:
+- The alignment must not change WHAT is shown, only its orientation. A note's neighbours are the meaning; a rotation of the whole cloud is free. Pin that the pairwise distances are preserved to floating-point tolerance — an alignment that distorts is a bug, not a nicety.
+- No numpy. A 3x3 SVD (or an equivalent, e.g. eigendecomposition of a 3x3 symmetric matrix, or Kabsch via quaternions) in pure stdlib. projection.py's own power-iteration idiom is the house precedent for "small linear algebra, by hand, tested".
+- Degrade to unaligned rather than raising when there is no previous layout, when the overlap is too small to be meaningful (pick and justify a floor), or when the solve is degenerate.
+- Reading klausmate/user_files read-only for measurement is allowed; writing is not. Tests use tempfile.mkdtemp.
+
 ## Ready
 
 ## Doing
-
-### K-167: The map's 29.5s is a PCA it recomputes from scratch on every open
-owner: worker-Y
-priority: P0
-tags: perf,phase-d,library
-files: klausmate/pdf_graph.py,klausmate/projection.py,tests/test_projection.py
-verify: python3 tests/test_projection.py
-created: 2026-09-01
-claimed: 2026-09-01
-
-MEASURED, on Pouya's real 28,670-note index, today. The Library is not slow; the MAP is, and nothing else is:
-
-    Library rows (priority_rows' cached half: card_index.load,
-      digest, load_matches for all 4 PDFs) .......... 0.03 s
-    card_index.load alone (88 MB off disk) .......... 0.04 s
-    pdf_graph.build_graph_data ...................... 29.5 s
-      of which projection.project ................... 29.47 s
-        of which the FIT (mean + power iteration) ... 29.29 s
-        of which _score_all over ALL 28,670 rows ..... 2.06 s
-
-So the tree is instant and the whole wait is one thing: the PCA fit. Two facts about it, both measured, both surprising:
-
-1. THE FIT ALREADY RUNS ON A SAMPLE and is still the whole cost. DEFAULT_FIT_ROWS is 4,000. Projecting every one of the 28,670 rows is the CHEAP half at 2 s. The docstring's "16.9 s" is stale — K-148's third component took it to 29.5 s.
-
-2. FEWER ITERATIONS IS NOT THE ANSWER — I checked before assuming. All three components run the full MAX_ITERATIONS=40 every time; the convergence test at _CONVERGENCE_EPS=1e-9 never fires. Truncating does not degrade gracefully, it degrades WRONGLY: max positional error vs the 40-iteration answer, in normalized [-1,1] units where 0.003 is about a pixel on a 700px canvas --
-
-       25 iters  18.3 s  max err 0.605  (~212 px)
-       15 iters  12.0 s  max err 1.276  (~447 px)
-       10 iters   9.2 s  max err 1.528  (~535 px)
-        6 iters   6.6 s  max err 1.753  (~613 px)
-
-   Not monotone, i.e. noise: the third component has not converged at 40 either. Do not "tune" this. If you want to change iteration counts you must first show the picture is stable, and the evidence says it is not.
-
-THE FIX IS TO STOP RECOMPUTING IT. The layout is a pure function of the card index — projection.project is seeded and deterministic by contract (its own docstring: "same rows + same seed = bit-identical output"). retention.card_index_digest already exists as the invalidation key for matches.json; this is the same shape of cache, one directory over.
-
-CACHE THE FIT, NOT ONLY THE POSITIONS. This is the design judgement of the card and I want it argued, not assumed. Storing just the positions gives an all-or-nothing cache: add fifty notes, the digest moves, and you pay 29.5 s again. But the expensive artifact is the FIT — a mean vector and three component vectors, 4 x 768 doubles, about 25 KB — and it is statistically stable: PCA axes over 28,000 medical flashcards do not swing because a lecture added 50 cards. So:
-
-    digest matches            -> load positions, ~0.04 s, instant
-    digest moved, fit present -> REUSE the fit, re-score all rows, ~2 s
-    no cache at all           -> full fit, 29.5 s, then write both
-
-That is a 15x floor even in the miss case. Whether the fit is reusable across an index change is an empirical question you can settle: refit on the current index, then score the current rows with a fit taken from a deliberately perturbed index, and report the positional error the way the table above does. If the error is visible, say so and fall back to positions-only caching — a wrong answer instantly is worse than a right one slowly, and Pouya will be looking at a picture of his own collection.
-
-CORRECTNESS BOUNDARIES, all of which have bitten this repo before:
-- The cache must be invalidated by provider AND model as well as digest — embeddings.signature_matches is the ONLY sanctioned comparison, never a tuple ==. A hand-spelled comparison here reads every cache as stale, and eight call sites once shipped that exact bug.
-- A corrupt or truncated cache must read as ABSENT, not raise, and never as a silently wrong picture. Atomic tmp+os.replace on write, like retention_history.
-- Never write into user_files from a test; use tempfile.mkdtemp. .claude/settings.json denies writes under user_files/ and that denial is correct.
-- pdf_graph.build_graph_data is tested from tests/test_projection.py, not a file of its own.
-
-verify must fail before and pass after. Do not touch klausmate/pdf_map.py, klausmate/index_queue.py or klausmate/pdf_drive.py -- other lanes and other cards own them; the cache belongs behind build_graph_data so every caller inherits it with no change. Warming the cache at index time is a deliberate FOLLOW-UP, not this card.
 
 ### K-168: Semantic duplicate finder: the engine Anki's exact-match version cannot be
 owner: worker-Z
@@ -524,3 +507,57 @@ tests/test_lecture_view.py carries an AST sweep (section "no OTHER module regrow
 - [2026-09-01 orchestrator] File list corrected before claiming: tests/test_lecture_view.py added. The card body already says the fix means DELETING the allowlist entry from that file's AST sweep, so the card always edited it — it just did not declare it, which would have let a second lane claim the same file. K-161 (which owns that file) is in Review with its work committed at 094003c, so the file is free. pdfjs_viewer.py and test_pdfjs_viewer.py came free at a97561e (K-159 signed off).
 - [2026-09-01 worker-X] Done, uncommitted (orchestrator integrates). REPRODUCED FIRST, in a subprocess under an EXPLICIT aqt.qt stub with every name but QWidget: klausmate/pdfjs_viewer.py line 829, in module, class PdfJsViewer(QWidget) -> TypeError: NoneType takes no arguments. Exactly as filed. THE CARD WAS WRONG ABOUT ONE THING, AND IT MATTERS: THE VERIFY GATE PASSED BEFORE THE WORK. Both halves were green at 297+110. That is by construction - the AST sweep pin asserts the allowlisted file STILL HAS the defect, so it is green precisely while the bug lives. So I fixed the gate first, then the code. New pins (test_pdfjs_viewer.py: the partial-Qt probe; test_lecture_view.py: pdfjs_viewer is no longer an offender + the allowlist is empty) took it to 1 red and 2 red respectively against unfixed code; the fix took it to 301 and 111. FIX - K-161 shape, not a fourth one: _WidgetBase: Any = QWidget if QWidget is not None else object, class PdfJsViewer(_WidgetBase), same comment discipline as index_queue._DockBase and lecture_view._DockBase, naming all three instances. Plus K-161 other half: a named refusal at the top of __init__ when PDFJS_AVAILABLE is False. lecture_view._ensure_dock returns None there; a constructor cannot, so it raises RuntimeError rather than dying four frames down inside object.__init__ on a husk. SECOND THING THE CARD DID NOT MODEL: THE CONSTRUCTION SITE WAS ALREADY CORRECT, JUST UNPINNED AND IN ANOTHER FILE. There is exactly one build site, pdf_viewer.py:4259, and it is unreachable unless PDFJS_AVAILABLE - self._renderer starts "native" and is only reassigned inside if _pdfjs.PDFJS_AVAILABLE. So nothing needed changing there (which is lucky: pdf_viewer.py is not in my file list). But note what that gate was doing BEFORE the fix: the import inside its try raised the TypeError, the except swallowed it and printed "renderer flag read failed", and the sidebar silently degraded to native. It worked by accident, through the wrong exception, with a misleading message. Now that PDFJS_AVAILABLE can actually BE False, and the class exists under a partial surface as a plain-object husk, that gate is load-bearing for the first time - so I pinned it read-only from test_pdfjs_viewer.py: exactly one module builds a PdfJsViewer (AST call sweep), and nothing assigns self._renderer anything but "native" outside an if ... PDFJS_AVAILABLE. THIRD, AND THE BEST ARGUMENT FOR VACUITY GUARDS: my own AST walker for that gate pin was broken. It recursed into a node children without checking the node itself, so the one interesting assignment - the one sitting directly in the if body - was invisible and the check was vacuously green. The len >= 2 guard I had written beside it caught it on the first run. Fixed, and F12 below re-mutates the walker back to the broken version to keep that guard honest. ALLOWLIST: DELETED, not grown. _SWEEP_ALLOWED is now the empty dict, the comment says why an allowlist that may grow is not a pin, and the mechanism (entry names its card, stale entry fails loudly) is kept for any future one. Added two checks beside it: pdfjs_viewer is no longer an offender, and the allowlist is EMPTY so the sweep holds repo-wide with nothing excused. The K-161 stale-entry loop is now vacuous by design, which is what the emptiness check replaces. FALSIFICATION - sandbox copy (klausmate minus user_files and meta.json, tests, klaus-test scripts), PYTHONDONTWRITEBYTECODE=1, local __pycache__ AND this Mac sys.pycache_prefix mirror at ~/Library/Caches/com.apple.python purged before every single run, sandbox sha256-hashed before and after and restored byte-identical both rounds. 13 mutations, 11 caught: F1 base reverted to bare QWidget ................... 3 red F2 _WidgetBase drops the object fallback ........... 1 red F3 __init__ backstop removed ....................... 1 red F4 fallback base is a fabricated class, not object . 1 red F5 probe drops its __bases__ == (object,) assert ... SURVIVED F6 sweep glob narrowed to nothing .................. 1 red (vacuity guard) F7 QWidget added back to the probe stub ............ 1 red F8 allowlist entry grows back ...................... 2 red (incl. the stale-entry pin, which fires because the defect is now FIXED) F9 pdf_viewer renderer read escapes the gate ....... 1 red F10 a SECOND module builds a PdfJsViewer ........... 1 red F11 PDFJS_AVAILABLE stays True in the fallback ..... 1 red F12 renderer walker reverted to the broken version . 1 red F13 = F4 AND F5 together ........................... SURVIVED F13 is the decisive one and I ran it on purpose: with the assert deleted, a fabricated non-object fallback base is caught by NOTHING. So F5 surviving alone is not a hole - deleting that assert changes nothing by itself because F2/F3 already cover their own ground - and F4 going red is the assert doing its one job. Same F8/F9 pair K-161 reported, reproduced here independently from both sides. FULL SWEEP: 32 test files, 0 failures (the brief said 31 - another lane has added tests/test_assistant_panel.py since). py_compile clean through the addons21 symlink, which I checked resolves to the main checkout. Files touched: only the three on the card; pdf_graph.py, pdf_map.py and test_pdf_map.py are moving under another live lane and I left them alone. No git writes. NOT DONE, deliberately, same reasoning as K-161: no live-Anki check. The changed path only executes when aqt.qt is partial, which never happens inside Anki - in a real profile _WidgetBase IS QWidget and PDFJS_AVAILABLE is True, so behaviour is byte-for-byte what it was and the new RuntimeError is unreachable. The sweep now holds repo-wide with an empty allowlist: no fourth instance exists.
 - [2026-09-01 orchestrator] Signed off, commit 16bfb80. Falsified independently: reverting the base to bare QWidget goes red 1 in test_pdfjs_viewer and 2 in test_lecture_view. _SWEEP_ALLOWED confirmed {} at tests/test_lecture_view.py:889 and pinned empty at :914, so the invariant now holds repo-wide with nothing excused. Two findings worth keeping: the card's gate passed before the work by construction (the stale-entry pin is green exactly while the bug lives) and was rewritten rather than trusted; and the one build site worked by ACCIDENT — the import inside its try raised the TypeError, the except swallowed it, and the sidebar degraded through the wrong exception with a misleading message.
+
+### K-167: The map's 29.5s is a PCA it recomputes from scratch on every open
+owner: worker-Y
+priority: P0
+tags: perf,phase-d,library
+files: klausmate/pdf_graph.py,klausmate/projection.py,tests/test_projection.py
+verify: python3 tests/test_projection.py
+created: 2026-09-01
+claimed: 2026-09-01
+
+MEASURED, on Pouya's real 28,670-note index, today. The Library is not slow; the MAP is, and nothing else is:
+
+    Library rows (priority_rows' cached half: card_index.load,
+      digest, load_matches for all 4 PDFs) .......... 0.03 s
+    card_index.load alone (88 MB off disk) .......... 0.04 s
+    pdf_graph.build_graph_data ...................... 29.5 s
+      of which projection.project ................... 29.47 s
+        of which the FIT (mean + power iteration) ... 29.29 s
+        of which _score_all over ALL 28,670 rows ..... 2.06 s
+
+So the tree is instant and the whole wait is one thing: the PCA fit. Two facts about it, both measured, both surprising:
+
+1. THE FIT ALREADY RUNS ON A SAMPLE and is still the whole cost. DEFAULT_FIT_ROWS is 4,000. Projecting every one of the 28,670 rows is the CHEAP half at 2 s. The docstring's "16.9 s" is stale — K-148's third component took it to 29.5 s.
+
+2. FEWER ITERATIONS IS NOT THE ANSWER — I checked before assuming. All three components run the full MAX_ITERATIONS=40 every time; the convergence test at _CONVERGENCE_EPS=1e-9 never fires. Truncating does not degrade gracefully, it degrades WRONGLY: max positional error vs the 40-iteration answer, in normalized [-1,1] units where 0.003 is about a pixel on a 700px canvas --
+
+       25 iters  18.3 s  max err 0.605  (~212 px)
+       15 iters  12.0 s  max err 1.276  (~447 px)
+       10 iters   9.2 s  max err 1.528  (~535 px)
+        6 iters   6.6 s  max err 1.753  (~613 px)
+
+   Not monotone, i.e. noise: the third component has not converged at 40 either. Do not "tune" this. If you want to change iteration counts you must first show the picture is stable, and the evidence says it is not.
+
+THE FIX IS TO STOP RECOMPUTING IT. The layout is a pure function of the card index — projection.project is seeded and deterministic by contract (its own docstring: "same rows + same seed = bit-identical output"). retention.card_index_digest already exists as the invalidation key for matches.json; this is the same shape of cache, one directory over.
+
+CACHE THE FIT, NOT ONLY THE POSITIONS. This is the design judgement of the card and I want it argued, not assumed. Storing just the positions gives an all-or-nothing cache: add fifty notes, the digest moves, and you pay 29.5 s again. But the expensive artifact is the FIT — a mean vector and three component vectors, 4 x 768 doubles, about 25 KB — and it is statistically stable: PCA axes over 28,000 medical flashcards do not swing because a lecture added 50 cards. So:
+
+    digest matches            -> load positions, ~0.04 s, instant
+    digest moved, fit present -> REUSE the fit, re-score all rows, ~2 s
+    no cache at all           -> full fit, 29.5 s, then write both
+
+That is a 15x floor even in the miss case. Whether the fit is reusable across an index change is an empirical question you can settle: refit on the current index, then score the current rows with a fit taken from a deliberately perturbed index, and report the positional error the way the table above does. If the error is visible, say so and fall back to positions-only caching — a wrong answer instantly is worse than a right one slowly, and Pouya will be looking at a picture of his own collection.
+
+CORRECTNESS BOUNDARIES, all of which have bitten this repo before:
+- The cache must be invalidated by provider AND model as well as digest — embeddings.signature_matches is the ONLY sanctioned comparison, never a tuple ==. A hand-spelled comparison here reads every cache as stale, and eight call sites once shipped that exact bug.
+- A corrupt or truncated cache must read as ABSENT, not raise, and never as a silently wrong picture. Atomic tmp+os.replace on write, like retention_history.
+- Never write into user_files from a test; use tempfile.mkdtemp. .claude/settings.json denies writes under user_files/ and that denial is correct.
+- pdf_graph.build_graph_data is tested from tests/test_projection.py, not a file of its own.
+
+verify must fail before and pass after. Do not touch klausmate/pdf_map.py, klausmate/index_queue.py or klausmate/pdf_drive.py -- other lanes and other cards own them; the cache belongs behind build_graph_data so every caller inherits it with no change. Warming the cache at index time is a deliberate FOLLOW-UP, not this card.
+
+#### Comments
+- [2026-09-01 worker-Y] Shipped POSITIONS-ONLY caching. The card's fit-reuse proposal is falsified — measured, not reasoned. NUMBERS (real 28,670-note index, scratch copy, read-only): cold build_graph_data 27.8-29.4 s (unchanged; writes a 688 KB layout.bin) WARM OPEN 0.083 s <- the headline, 320x fit alone 26.2 s = 93% of project(); scoring all rows 1.9 s Warm breakdown: load_matches 34.6 ms, card_index.load (88 MB) 12-18 ms, notes list 8.8 ms, digest 3.0 ms, _read_layout (688 KB) 1.5 ms. NOT the 0.04 s the card implied — that figure was the Library's cached-rows path, a different measurement. 0.083 s is honest and the projection is no longer any of it. FIT REUSE: NO. Reused fit vs refit, positions in the card's own [-1,1] units (0.003 ~ 1 px @700 px), sign-aligned where signs flipped: 50 of 28,670 notes deleted median 0.073 (24 px) max 0.208 (70 px) 50 notes added median 0.241 (80 px) max 0.593 (197 px) same data, resampled median 0.449 (150 px) max 1.173 (391 px) Visible. Two identical fits are bit-identical, so this is all perturbation, not noise in my harness. WHY, and this is the part worth keeping. The last row uses the SAME 28,670 vectors, only a different even-stride 4,000 — and PC2/PC3 SWAP (|<v2,v3'>| = 0.86 vs a diagonal of 0.45). Their standard deviations are 0.1332 / 0.1236 / 0.1190: no eigengap, so the individual axes are not determined by a 4,000-row sample at all. Only the 3-D SUBSPACE is stable (principal angles 5.9/9.6/17.9 deg). That also retro-explains K-148's non-monotone truncation table: power iteration separates two components at their variance ratio per pass and 0.93^40 = 0.05, so PC3 was never going to converge in 40 iterations however many it got. CONSEQUENCE THE CARD DID NOT MODEL: the map is unstable under index growth TODAY, cache or no cache. Deleting 50 of 28,670 notes already moves the median note 24 px on a refit. The cache does not cause that and slightly reduces it (the picture now holds still until the index actually changes). Worth its own card; the fix is fitting from more rows or a sample-independent basis, not caching harder. Do not "tune" MAX_ITERATIONS at it. WHAT LANDED: user_files/map_layout/layout.bin, one self-describing artifact (JSON header line + packed float64), atomic tmp+os.replace. Header and body share ONE file deliberately — split in two, a concurrent writer (both map hosts build off the UI thread) could pair a fresh header with a stale body, both the right size, no length check able to see it. Keys: version, provider/model/dims via embeddings.signature_matches ONLY, card_index_digest, and a params dict naming components/iterations/fit_rows/seed. float64 because the existing "deterministic across repeated calls" pin compares cold against warm exactly. Cache holds POSITIONS, never the graph, so thresholds/matches/drive still land on the next open. Anything wrong with the file reads as absent; an unwritable directory costs a refit, never the map. FALSIFICATION: 15 mutations, each watched failing. 14 caught first pass; ONE SURVIVOR — deleting the params key entirely, because a component-count change is also a point WIDTH and the size check caught it for free, so iterations/fit_rows/seed were unpinned. Added two pins that move points without moving any byte count (MAX_ITERATIONS=8, DEFAULT_FIT_ROWS=12); M7 now fails 2 checks. Also found by falsification: the digest check alone was unpinned (an ADDED note is caught by the row count too), so there is now an EDITED-note case, same nids, same count, new hashes. And a corruption case only the row-count check can catch: header and body both internally consistent at 7 of 40 rows. Verify failed before (AttributeError: no LAYOUT_SUBDIR), passes after: 76 passed, 0 failed. Full sweep 32/32 green, py_compile through the symlink OK. projection.py is docs only — golden bit-identity harness says IDENTICAL across 8 cases including the COMPONENTS=2 path — but its claim that "a stride sample of 4,000 pins the same principal axes as the full set would" was flatly false and is now corrected with the measurement. Anki was running against the symlink and wrote a real layout.bin into user_files during this work; it validates against the shipped code read-only (28,670 points, ollama/nomic-embed-text:latest/768). Untouched. Nothing was written into user_files by any test.
+- [2026-09-01 orchestrator] Signed off, commit c186ef8. Re-measured at integration on a scratch copy of the real index rather than trusting the report: cold 25.60s, warm 0.060s (420x), cached positions bit-identical to the cold build, and BOTH a truncated cache and a 64-byte garbage cache rebuild silently instead of raising or serving a wrong picture. Re-falsified two invalidation pins: ignoring the digest goes red 1, ignoring the signature red 2. THE VALUABLE PART IS THE NEGATIVE RESULT. I asked for the fit-reuse idea to be tested rather than assumed and it is false — no eigengap (0.1332/0.1236/0.1190), so PC2 and PC3 are not determined by a 4,000-row sample and simply swap between samples of the SAME data. Positions-only was the right call. It also retro-explains K-148's non-monotone truncation table via 0.93^40 = 0.05. The instability that finding exposes is real, predates this card, and is filed separately.

@@ -617,7 +617,25 @@ instead. Signed-off history is in
   EVERY note: `projection` fits its components on a `DEFAULT_FIT_ROWS`
   stride sample but projects all rows, so a PDF's centroid is computed
   over all of its matches rather than whichever ones landed in a
-  sample. The canvas is `pdf_map.py`.
+  sample. **The layout is CACHED since K-167** — `user_files/map_layout/
+  layout.bin`, keyed on `retention.card_index_digest` plus the
+  embedding signature (compared through `embeddings.signature_matches`,
+  never a tuple `==`), atomic tmp+os.replace, corrupt or truncated
+  reads as ABSENT so a bad cache rebuilds rather than serving a wrong
+  picture. That is the whole reason opening the Library is instant:
+  cold 25.6s, warm 0.060s, positions bit-identical. The PCA is 99% of
+  a cold build, and its FIT — on a 4,000-row sample — is 29 of those
+  seconds while scoring all 28,670 rows is 2. **Do not "tune"
+  `MAX_ITERATIONS`**: all three components run the full 40, the
+  convergence test at 1e-9 never fires, and truncating moves points
+  hundreds of pixels NON-MONOTONICALLY. The reason is that there is no
+  eigengap — component stddevs 0.1332/0.1236/0.1190 — so PC3 separates
+  at 0.93 per pass (0.93^40 = 0.05) and never converges, and PC2/PC3
+  SWAP between samples of the same data. Only the 3-D subspace is
+  stable. Two consequences: the fit is NOT reusable across an index
+  change (measured: 150px median movement on a pure resample, which is
+  why K-167 caches positions and not the fit), and the map reshuffles
+  on every re-index (K-171). The canvas is `pdf_map.py`.
 - `pdf_map.py` (aqt-free above its aqt-glue divider; K-123/K-124): the
   **embedding map window** — Phase D2. Pure viewport model on top
   (world↔screen transform, `fit_to_view`, cursor-anchored `zoom_at`
