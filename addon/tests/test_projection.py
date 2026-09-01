@@ -101,9 +101,10 @@ cluster_b_pts = points1[N_PER:]
 
 
 def _centroid(pts):
-    xs = [p[0] for p in pts]
-    ys = [p[1] for p in pts]
-    return sum(xs) / len(xs), sum(ys) / len(ys)
+    """Mean position, over however many axes a point has (two before
+    K-148, three after)."""
+    cols = list(zip(*pts))
+    return tuple(sum(c) / len(c) for c in cols)
 
 
 def _avg_dist(pts, c):
@@ -116,7 +117,7 @@ inter = math.dist(ca, cb)
 intra_a = _avg_dist(cluster_a_pts, ca)
 intra_b = _avg_dist(cluster_b_pts, cb)
 check(
-    "two well-separated 768-... err 96-d clusters land well-separated in 2D",
+    "two well-separated 768-... err 96-d clusters land well-separated in 3D",
     inter > 3 * max(intra_a, intra_b),
     f"inter={inter:.3f} intra_a={intra_a:.3f} intra_b={intra_b:.3f}",
 )
@@ -207,14 +208,14 @@ one_pts, one_idx = projection.project(
 )
 check(
     "1 row -> single point at the origin, no div-by-zero",
-    one_pts == [(0.0, 0.0)] and one_idx == [0],
+    one_pts == [(0.0, 0.0, 0.0)] and one_idx == [0],
 )
 
 identical = [array("f", [1.0, 2.0, 3.0]) for _ in range(6)]
 ident_pts, ident_idx = projection.project(identical, fit_rows=10, seed=0)
 check(
     "identical rows -> every point collapses to the origin, no div-by-zero",
-    ident_pts == [(0.0, 0.0)] * 6 and ident_idx == list(range(6)),
+    ident_pts == [(0.0, 0.0, 0.0)] * 6 and ident_idx == list(range(6)),
 )
 
 print("== projection: rough timing on a synthetic 4000x768 input ==")
@@ -405,14 +406,21 @@ try:
     check("edge/node counts agree", len(data["edges"]) == 4 and len(data["pdfs"]) == 2)
 
     print("== pdf_graph: centroid consistency ==")
-    note_xy = {n["nid"]: tuple(n["xy"]) for n in data["notes"]}
-    exp_x = (note_xy[1][0] + note_xy[2][0]) / 2
-    exp_y = (note_xy[1][1] + note_xy[2][1]) / 2
-    got_x, got_y = pdf_by_safe["PdfA"]["xy"]
+    note_xyz = {n["nid"]: tuple(n["xyz"]) for n in data["notes"]}
+    exp = tuple(
+        (note_xyz[1][k] + note_xyz[2][k]) / 2 for k in range(3)
+    )
+    got = tuple(pdf_by_safe["PdfA"]["xyz"])
     check(
-        "PdfA's node sits at the centroid of its (thresholded) matched notes",
-        abs(got_x - exp_x) < 1e-9 and abs(got_y - exp_y) < 1e-9,
-        f"got=({got_x},{got_y}) exp=({exp_x},{exp_y})",
+        "PdfA's node sits at the centroid of its (thresholded) matched "
+        "notes — on the DEPTH axis too, or the node would float on the "
+        "z=0 plane while its own notes sat in front of and behind it",
+        len(got) == 3 and all(abs(got[k] - exp[k]) < 1e-9 for k in range(3)),
+        f"got={got} exp={exp}",
+    )
+    check(
+        "every note row carries three numbers under the key xyz",
+        all(len(n["xyz"]) == 3 and "xy" not in n for n in data["notes"]),
     )
 
     print("== pdf_graph: repeat call is stable ==")
@@ -507,6 +515,139 @@ check(
     "axes (|corr| < 0.2) — axis 2 is not axis 1 wearing a hat",
     len(_qpts_s) == len(_quad_rows) and abs(_corr(_sx2, _sy2)) < 0.2,
     f"corr={_corr(_sx2, _sy2):.4f}",
+)
+
+print("== projection: the THIRD component is pinned (K-148) ==")
+# The map went 3D, so the depth axis needs exactly the guarantee K-071
+# added for the second one: with the extra deflation round or the extra
+# leakage correction dropped, every test above stays green while z comes
+# back as a copy of x (or of y) — which renders as a cloud that rotates
+# like a flat sheet, the 3D version of the 1-D-disguised-as-2-D bug.
+# Three orthogonal splits of decreasing width: PC1 must take the widest,
+# PC2 the middle, PC3 the narrowest.
+check(
+    "three components, named as a constant rather than a magic 3",
+    projection.COMPONENTS == 3,
+)
+_rngo = random.Random(11)
+_oct_rows = []
+for _sx in (-1.0, 1.0):
+    for _sy in (-1.0, 1.0):
+        for _sz in (-1.0, 1.0):
+            for _ in range(25):
+                _row = [_rngo.gauss(0.0, 0.02) for _ in range(_D)]
+                _row[0] += 3.0 * _sx    # widest  -> PC1
+                _row[1] += 1.2 * _sy    # middle  -> PC2
+                _row[2] += 0.5 * _sz    # narrow  -> PC3
+                _oct_rows.append(array("f", _row))
+_opts3, _ = projection.project(_oct_rows, fit_rows=1000, seed=0)
+check(
+    "every row comes back as an (x, y, z) triple",
+    len(_opts3) == 200 and all(len(p) == 3 for p in _opts3),
+)
+_ox = [p[0] for p in _opts3]
+_oy = [p[1] for p in _opts3]
+_oz = [p[2] for p in _opts3]
+check(
+    "the depth axis has real spread — a placeholder z of 0.0 would pass "
+    "the triple check above and render as a flat sheet",
+    max(_oz) - min(_oz) > 1.9,
+    f"z spans [{min(_oz):.3f}, {max(_oz):.3f}]",
+)
+check(
+    "axis 3 is independent of BOTH earlier axes (|corr| < 0.2 each) — "
+    "the leakage corrections are what keep it from re-carrying them",
+    abs(_corr(_ox, _oz)) < 0.2 and abs(_corr(_oy, _oz)) < 0.2,
+    f"corr(x,z)={_corr(_ox, _oz):.4f} corr(y,z)={_corr(_oy, _oz):.4f}",
+)
+# Group k has _sz = -1 for even k, +1 for odd k (innermost loop).
+_z_neg = [v for k, v in enumerate(_oz) if (k // 25) % 2 == 0]
+_z_pos = [v for k, v in enumerate(_oz) if (k // 25) % 2 == 1]
+_zgap = abs(sum(_z_pos) / len(_z_pos) - sum(_z_neg) / len(_z_neg))
+_zspread = max(
+    1e-9,
+    (sum((v - sum(_z_neg) / len(_z_neg)) ** 2 for v in _z_neg) / len(_z_neg)) ** 0.5
+    + (sum((v - sum(_z_pos) / len(_z_pos)) ** 2 for v in _z_pos) / len(_z_pos)) ** 0.5,
+)
+check(
+    "axis 3 separates the narrowest orthogonal split — it found the "
+    "third direction, not noise",
+    _zgap > 1.5 * _zspread,
+    f"gap={_zgap:.4f} spread={_zspread:.4f}",
+)
+_opts3s, _ = projection.project(_oct_rows, fit_rows=16, seed=0)
+_out3 = [k for k in range(len(_oct_rows))
+         if k not in set(projection._stride_indices(len(_oct_rows), 16))]
+check(
+    "and rows the fit never saw get the same three independent axes — "
+    "_score_all's corrections apply to every row, not to the sample",
+    abs(_corr([_opts3s[k][0] for k in _out3],
+              [_opts3s[k][2] for k in _out3])) < 0.2
+    and abs(_corr([_opts3s[k][1] for k in _out3],
+                  [_opts3s[k][2] for k in _out3])) < 0.2,
+)
+# The directions themselves have to be three DIFFERENT directions.
+# Found by falsification: skipping the second deflation round makes the
+# third power iteration return v2 again — and the output still looks
+# right, because _score_all's analytic correction cancels v2 out and
+# _normalize_axis then stretches the power iteration's ~1e-8 convergence
+# residual (which happens to point along the true third direction) back
+# to [-1, 1]. A correct-looking map resting on a rounding tail is not a
+# map anyone should ship, and no test on the OUTPUT can see it. So pin
+# the directions.
+_seen_comps = []
+_orig_score = projection._score_all
+
+
+def _spy_score(rows, d, mean, comps):
+    _seen_comps.append(list(comps))
+    return _orig_score(rows, d, mean, comps)
+
+
+try:
+    projection._score_all = _spy_score
+    projection.project(_oct_rows, fit_rows=1000, seed=0)
+finally:
+    projection._score_all = _orig_score
+_v = _seen_comps[-1] if _seen_comps else []
+_dots = [abs(projection._sumprod(_v[i], _v[j]))
+         for i in range(len(_v)) for j in range(i)]
+check(
+    "the three component DIRECTIONS are mutually orthogonal — deflation "
+    "actually searched fresh data each round rather than handing back a "
+    "direction it had already found",
+    len(_v) == 3 and _dots and max(_dots) < 1e-6,
+    f"worst |v_i . v_j| = {max(_dots) if _dots else 'n/a'}",
+)
+
+# Adding depth must not MOVE the map: x and y have to come back exactly
+# as the two-component version produced them, or every reader's mental
+# picture of where their PDFs sit is silently rearranged by an upgrade.
+_saved_k = projection.COMPONENTS
+try:
+    projection.COMPONENTS = 2
+    _two, _ = projection.project(_oct_rows, fit_rows=1000, seed=0)
+finally:
+    projection.COMPONENTS = _saved_k
+check(
+    "the third component leaves the first two BIT-IDENTICAL — the depth "
+    "axis is added in front of the existing map, it does not redraw it",
+    all(p3[0] == p2[0] and p3[1] == p2[1]
+        for p3, p2 in zip(_opts3, _two)),
+    f"max dx={max(abs(a[0]-b[0]) for a, b in zip(_opts3, _two)):.3e}",
+)
+
+# A 2-row cloud has no third direction to find. It must come back flat,
+# not carrying noise dressed up as depth.
+_flat_pts, _ = projection.project(
+    [array("f", [1.0, 0.0, 0.0]), array("f", [-1.0, 0.0, 0.0])],
+    fit_rows=10, seed=0,
+)
+check(
+    "a cloud with no third dimension left lands flat (z = 0) rather "
+    "than inventing depth out of the power iteration's residue",
+    all(abs(p[2]) < 1e-12 for p in _flat_pts),
+    str(_flat_pts),
 )
 
 print(f"\n{PASS} passed, {FAIL} failed")

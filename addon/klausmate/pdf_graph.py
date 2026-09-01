@@ -2,10 +2,14 @@
 assembly only, no window/canvas. That comes in the next card; this one
 just produces the JSON-shaped dict a canvas will eventually render.
 
-Layout: PDF nodes at the centroid of their matched notes' 2D positions,
-note nodes at their own 2D position, edges PDF->nid for every match
+Layout: PDF nodes at the centroid of their matched notes' 3D positions,
+note nodes at their own 3D position, edges PDF->nid for every match
 at-or-above that PDF's sensitivity threshold. All positions come from
-``projection.project`` over the card index's embedding vectors.
+``projection.project`` over the card index's embedding vectors — three
+principal components since K-148, so the map has a real depth axis to
+rotate around rather than a decorative one. The key is ``xyz``; it held
+two numbers under the key ``xy`` until then, and ``pdf_map`` still reads
+a two-component row as a point on the z=0 plane.
 
 No Qt import anywhere at module top — ``card_index``, ``pdf_index``,
 ``pdf_handler``, ``drive_store`` and ``projection`` are all aqt-free, so
@@ -32,7 +36,7 @@ that PDF entirely (no node, no edges) rather than inventing an empty or
 stale match set for it.
 
 No sampling tradeoff any more (K-138): ``projection.project`` fits its
-two components on an even-stride sample (``DEFAULT_FIT_ROWS``) but
+components on an even-stride sample (``DEFAULT_FIT_ROWS``) but
 positions EVERY row, so a PDF's centroid and edges are computed over
 all of its cached matches rather than over whichever ones happened to
 land in a sample. The paragraph that used to sit here described the
@@ -57,11 +61,11 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
     number here comes from a persisted index or cache. Returns
     ``{"pdfs": [...], "notes": [...], "edges": [...]}``:
 
-    - ``notes``: ``{"nid": int, "xy": [x, y]}`` for EVERY note in the
-      card index — ``DEFAULT_FIT_ROWS`` bounds what the PCA is fitted
-      on, not what comes back.
+    - ``notes``: ``{"nid": int, "xyz": [x, y, z]}`` for EVERY note in
+      the card index — ``DEFAULT_FIT_ROWS`` bounds what the PCA is
+      fitted on, not what comes back.
     - ``pdfs``: ``{"safe", "display", "folder", "threshold", "retention",
-      "xy", "match_count"}`` per PDF that has a valid match cache AND at
+      "xyz", "match_count"}`` per PDF that has a valid match cache AND at
       least one matched, positioned note. ``retention`` is always
       ``None`` here — the FSRS-based score needs a live collection
       (``retention.card_retrievability``), which this headless function
@@ -79,10 +83,10 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
     mv = memoryview(cidx.vectors)
     row_views = [mv[i * d:(i + 1) * d] for i in range(len(cidx.nids))]
     points, sampled = projection.project(row_views)
-    note_xy: dict[int, tuple[float, float]] = {
+    note_xyz: dict[int, tuple[float, float, float]] = {
         cidx.nids[row_idx]: pt for row_idx, pt in zip(sampled, points)
     }
-    notes = [{"nid": nid, "xy": [xy[0], xy[1]]} for nid, xy in note_xy.items()]
+    notes = [{"nid": nid, "xyz": list(p)} for nid, p in note_xyz.items()]
 
     # Deferred: retention.py imports aqt at module top (see module
     # docstring above); importing it here keeps this module's own top
@@ -117,14 +121,16 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
         hits = [
             (nid, score)
             for nid, score in matches
-            if score >= threshold and nid in note_xy
+            if score >= threshold and nid in note_xyz
         ]
         if not hits:
             continue
 
-        xs = [note_xy[nid][0] for nid, _ in hits]
-        ys = [note_xy[nid][1] for nid, _ in hits]
-        centroid = (sum(xs) / len(xs), sum(ys) / len(ys))
+        # Centroid on every axis, depth included — a PDF node that kept
+        # a 2D centroid would float on the z=0 plane while its own notes
+        # sat in front of and behind it.
+        cols = list(zip(*(note_xyz[nid] for nid, _ in hits)))
+        centroid = [sum(c) / len(hits) for c in cols]
         entry = drive["pdfs"].get(safe) or {}
         pdfs.append(
             {
@@ -133,7 +139,7 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
                 "folder": entry.get("folder"),
                 "threshold": threshold,
                 "retention": None,
-                "xy": [centroid[0], centroid[1]],
+                "xyz": centroid,
                 "match_count": len(hits),
             }
         )
