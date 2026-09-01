@@ -11,7 +11,7 @@ The workaround: register a synthetic `klausmate` package plus stub
 aqt/anki modules in sys.modules *before* importing the module under test.
 Anything aqt-free (embeddings, card_index, pdf_index, drive_store) needs
 only the package stub; anything importing aqt (retention, curation,
-pdf_drive, deck_curate, ...) needs install_aqt_stubs() as well.
+pdf_drive, pdf_drop, ...) needs install_aqt_stubs() as well.
 
 Usage:
     from anki_stubs import install, check, report
@@ -28,7 +28,7 @@ enum class it touches), plus a handful of names out of `aqt.editor`,
 `aqt.webview`, `aqt.deckbrowser`, `aqt.preferences`, `anki.hooks` and
 `anki.utils`. Hand-enumerating all of those (and keeping the list in sync
 as the addon grows) is exactly the kind of stub drift that let
-`klausmate.pdf_drive` and `klausmate.deck_curate` go completely
+`klausmate.pdf_drive` and `klausmate.pdf_drop` go completely
 import-untested — the old stub only defined QAction, QInputDialog,
 QMessageBox, QTimer and qconnect.
 

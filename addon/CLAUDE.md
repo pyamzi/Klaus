@@ -265,13 +265,32 @@ instead. Signed-off history is in
   zoom never blanks a page; the document-wide non-passive
   preventDefault on ctrl-wheel is what stops QtWebEngine frame-zoom
   fighting the pinned zoomFactor. A floating `#annobar` pill (findbar
-  family) carries Highlight (mode: selection release
-  auto-highlights), Add Text, and −/%/+/fit; `text-add` joins
-  `hl-add`/`hl-remove`/`note-edit` on the bridge — Python clamps
-  `{page,x,y}` (`clamp_text_add`, 14,400pt spec cap) and mints the
-  K-077 `kind:"text"` record (`make_text_record`, explicit
-  #000000/12pt — the validator would backfill highlight YELLOW) after
-  a window-modal `QInputDialog.open()` prompt (K-114: never exec).
+  family) carries Highlight, Add Text, an ink-swatch row
+  (`theme.HIGHLIGHT_INKS` → `--ink-*` CSS vars — deliberately outside
+  LIGHT/DARK and COLOR_THEMES, because the value BAKES INTO THE PDF:
+  ink on the page, not chrome), and −/%/+/fit. **Both tools are
+  STICKY** (K-159, Pouya: "I want to stay in that mode") — a mark or a
+  placed box does not disarm; only the toolbar button (`setTool`
+  toggles) and Escape do, and with a text box open Escape is a
+  two-step, since the box commits on the first and stops propagation.
+  K-149 had made them one-shot and that half was never load-bearing:
+  what makes sticky safe is `merge_highlight_records` at MINT time —
+  same-ink rects an existing record already covers are dropped, the
+  rest union into EVERY same-ink record they touch (all collapsing
+  into one; folding into just the FIRST left a bridging drag
+  overlapping its right neighbour at two 43% layers, the exact
+  double-highlight look, K-159), a different ink CUTS rather than
+  composites, and a mint that changes nothing never reaches the JSON.
+  Text is edited ON the page since K-150 — a `contenteditable` box
+  riding the same page transform, committed on blur/Escape, NOT a
+  dialog; the open box swallows CLICK as well as mousedown, or a
+  sticky tool reads a caret click inside it as "place another box
+  here". `text-add` joins `hl-add`/`hl-remove`/`note-edit` on the
+  bridge — Python clamps `{page,x,y}` (`clamp_text_add`, 14,400pt spec
+  cap) and mints the K-077 `kind:"text"` record (`make_text_record`,
+  explicit #000000/12pt — the validator would backfill highlight
+  YELLOW). A window-modal `QInputDialog.open()` (K-114: never exec)
+  remains for the note prompt on a highlight and for go-to-page.
   `#pages` is `width:max-content; min-width:100%` so beyond-fit zoom
   stays scrollable (the old fixed-width flex centred overflow off the
   left edge, unreachable). **The page owns rendering and
@@ -907,6 +926,22 @@ instead. Signed-off history is in
   switch (added in `Browser.setup_table`), not empty as the form suggests.
 - Generated `_qt6.py` forms show the `setupUi` state only — Anki mutates
   layouts afterwards; grep `aqt/` before trusting a form.
+- **pypdf writes `/DA` only `if border_color:`** — and a FreeText's font
+  size and colour live in `/DA`, the default-appearance string, NOT in
+  `/DS`, the rich-text one Preview and most readers ignore. Klaus passes
+  `border_color=None` deliberately (K-150: Preview frames a text box only
+  while it is selected), so every baked note shipped `/DA ()` and drew at
+  the reader's own default — small and black — for two releases.
+  `pdf_handler.free_text_da` emits it now (`/Helv <size> Tf <r> <g> <b>
+  rg`), and `text_point_size` feeds both it and pypdf's `/DS` so one
+  annotation's two appearance strings can never disagree. No `/DR`, no
+  `/AcroForm`: `/Helv` is base-14 and both engines resolved it with
+  neither present. Highlights were never affected — they carry `/C`.
+  **Check annotation appearance in a RENDERER, never a hex dump**:
+  `qlmanage -t` draws no annotations at all on this machine, so its blank
+  page reads as "broken file" when it is the proxy that is broken;
+  PDFKit — the framework Preview.app itself draws with — is the honest
+  check, pdf.js with `annotationMode: ENABLE` the second.
 - **pdfium renders annotations only WITH `RenderFlag.Annotations`** — the
   viewer and image copies render without it, so baked-in highlights never
   double-draw under the screen overlay. The coordinate flip is

@@ -98,6 +98,6 @@ silently flipped the configured engine.
 ## Existing suites
 
 `tests/test_klausmate.py` (embeddings, pdf_index, retention math),
-`tests/test_drive.py` (drive_store, deck_curate helpers),
+`tests/test_drive.py` (drive_store, pdf_drop helpers),
 `tests/test_dialog_logic.py` (Manage-models dialog state machine).
 Run all three after any change to the modules they cover.
