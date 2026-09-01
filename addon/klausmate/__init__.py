@@ -59,6 +59,7 @@ from .ollama_runtime import (
     server_manager,
 )
 from .manage_models import manage_models_dialog
+from .slot_guard import guarded as _guarded
 from .browse_toggles import on_browser_will_show
 from .setup_flow import first_run_check, setup_readiness_check
 
@@ -574,6 +575,7 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
                 print(f"[klausmate] crop failed: {type(e).__name__}: {e}")
                 traceback.print_exc()
 
+        @_guarded
         def on_finished(_r: int) -> None:
             # The open-guard spans the DIALOG'S lifetime now, not this
             # call's — reset here, where exec()'s finally used to.
@@ -2302,6 +2304,7 @@ class _PdfTabContainer(QWidget):
         self._persist()
         self._set_active_pointer(name)
 
+    @_guarded
     def _on_tab_changed(self, idx: int) -> None:
         if self._syncing or idx < 0:
             return
@@ -2350,6 +2353,7 @@ class _PdfTabContainer(QWidget):
 
     # ---- ＋ menu / placement ----
 
+    @_guarded
     def _show_add_menu(self) -> None:
         menu = QMenu(self)
         open_names = set(self._tab_names())
@@ -2637,6 +2641,13 @@ try:
     _browse_retention.setup()
 except Exception as _e:
     print(f"[klausmate] browse retention setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import browse_toolkit as _browse_toolkit
+
+    _browse_toolkit.setup_hooks()
+except Exception as _e:
+    print(f"[klausmate] browse toolkit setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import heatmap as _heatmap
