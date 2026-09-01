@@ -792,13 +792,30 @@ check("no-hit pages dim + lose clickability instead of vanishing",
       "Qt.ItemFlag.ItemIsEnabled" in _src2
       and "ForegroundRole" in _src2)
 check("every section is a page with a sidebar pill and a big title",
-      _src2.count("= _page(") == 4
+      _src2.count("= _page(") == 5
       and 'setObjectName("SettingsNav")' in _src2
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
-      '_finish_nav("General", "Appearance", "Semantic Search", '
-      '"Local Models")' in _src2)
+      '_finish_nav("General", "Appearance", "Assistant", "Semantic '
+      'Search",' in _src2)
+# The assistant panel shipped telling users to "add one under KlausMate
+# Preferences" for a key that had nowhere to be typed. This is that surface.
+check("the Assistant page exists, so the panel's own error message points "
+      "somewhere real", '"Assistant",\n        "Assistant",' in _src2)
+check("both credentials can be entered, and both are masked",
+      "assistant_key_edit" in _src2 and "assistant_token_edit" in _src2
+      and _src2.count("EchoMode.Password") >= 3)
+check("save_all writes them — a preference with no line in a save_* is "
+      "exactly how pdf_renderer shipped broken", "save_assistant()" in _src2)
+check("each widget marks dirty, or Save would silently skip it",
+      "assistant_key_edit.textEdited.connect" in _src2
+      and "assistant_token_edit.textEdited.connect" in _src2)
+check("only the credential the chosen backend uses is shown, hidden "
+      "structurally so a search hit cannot reveal the wrong one",
+      "assistant_key_row, not hosted" in _src2
+      and "klaus_hidden" in _src2)
+
 check("settings are SynapsePro rows — name + desc left, control right, "
       "hairline separated",
       'setObjectName("SettingName")' in _src2

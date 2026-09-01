@@ -1649,7 +1649,97 @@ def manage_models_dialog(setup: bool = False) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    _finish_nav("General", "Appearance", "Semantic Search", "Local Models")
+    # ---- Assistant --------------------------------------------------
+    # The panel shipped pointing at "KlausMate Preferences" for a key that
+    # had nowhere to be typed, so it could only ever report "No API key
+    # set". This is that missing surface.
+    assistant_layout = _page(
+        "Assistant",
+        "Assistant",
+        "The Library's right-hand panel: ask questions about the open "
+        "lecture, and (soon) practise and generate a podcast from it. Use "
+        "your own provider key, or sign in to let KlausMate hold the keys.",
+    )
+
+    assistant_backend_combo = QComboBox()
+    assistant_backend_combo.addItem("Use my own API key", "direct")
+    assistant_backend_combo.addItem("KlausMate hosted (sign in)", "hosted")
+    assistant_backend_combo.setMinimumWidth(220)
+    _row(
+        assistant_layout,
+        "Where requests go",
+        "Your own key talks to the provider directly and nothing leaves "
+        "this machine except the request. Hosted sends a token instead, "
+        "and KlausMate supplies the key.",
+        assistant_backend_combo,
+    )
+
+    assistant_key_edit = QLineEdit()
+    assistant_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    assistant_key_edit.setMinimumWidth(260)
+    assistant_key_edit.setPlaceholderText("sk-ant-…")
+    assistant_key_row = _row(
+        assistant_layout,
+        "API key",
+        "Stored in this profile's add-on config, never sent to KlausMate.",
+        assistant_key_edit,
+    )
+
+    assistant_token_edit = QLineEdit()
+    assistant_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    assistant_token_edit.setMinimumWidth(260)
+    assistant_token_edit.setPlaceholderText("Paste your sign-in token")
+    assistant_token_row = _row(
+        assistant_layout,
+        "KlausMate token",
+        "Identifies your subscription. The service checks it on every "
+        "request — this add-on cannot grant access by itself.",
+        assistant_token_edit,
+    )
+
+    def _sync_assistant_rows() -> None:
+        """Show only the credential the chosen backend actually uses.
+
+        Structural hiding via klaus_hidden, which beats a search hit —
+        the same mechanism that hides the API-key row for Ollama."""
+        hosted = assistant_backend_combo.currentData() == "hosted"
+        for row, wanted in (
+            (assistant_key_row, not hosted),
+            (assistant_token_row, hosted),
+        ):
+            try:
+                row.klaus_hidden = not wanted
+                row.setVisible(wanted)
+                if getattr(row, "klaus_sep", None) is not None:
+                    row.klaus_sep.setVisible(wanted)
+            except Exception as exc:
+                print(f"[klausmate] assistant row sync failed: {exc}")
+
+    def load_assistant() -> None:
+        cfg = _pkg().get_config()
+        want = str(cfg.get("assistant_backend") or "direct")
+        idx = assistant_backend_combo.findData(want)
+        assistant_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        assistant_key_edit.setText(str(cfg.get("assistant_api_key") or ""))
+        assistant_token_edit.setText(str(cfg.get("assistant_token") or ""))
+        _sync_assistant_rows()
+
+    def save_assistant() -> None:
+        cfg = _pkg().get_config()
+        cfg["assistant_backend"] = assistant_backend_combo.currentData() or "direct"
+        cfg["assistant_api_key"] = assistant_key_edit.text().strip()
+        cfg["assistant_token"] = assistant_token_edit.text().strip()
+        _pkg().write_config(cfg)
+
+    assistant_backend_combo.currentIndexChanged.connect(
+        lambda _i: (mark_dirty(), _sync_assistant_rows())
+    )
+    assistant_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    assistant_token_edit.textEdited.connect(lambda _t: mark_dirty())
+    load_assistant()
+
+    _finish_nav("General", "Appearance", "Assistant", "Semantic Search",
+                "Local Models")
 
     stack.addWidget(models_page)
 
@@ -2853,6 +2943,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         save_embed()
         save_threshold()
         save_general()
+        save_assistant()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
