@@ -388,6 +388,23 @@ check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "injected this, so baking one palette would freeze the heatmap "
       "on whichever theme was live at draw time",
       ":root {" in _css and ":root.night-mode {" in _css)
+# K-142 (found by scripts/mutation_audit.py, confirmed by hand): the
+# check above only proves the two SELECTORS exist. Swapping the palette
+# blocks — light mode painting the DARK palette — left the whole suite
+# green, and so did making night identical to day. The invariant is
+# that each block carries ITS OWN palette, so pin the values.
+_day_blk = re.search(r":root \{(.*?)\}", _css, re.S)
+_night_blk = re.search(r":root\.night-mode \{(.*?)\}", _css, re.S)
+check("the two palette blocks are not identical — a night mode that "
+      "merely repeats day mode is the bug this pin exists to prevent",
+      _day_blk is not None and _night_blk is not None
+      and _day_blk.group(1) != _night_blk.group(1))
+check("...and each block carries its OWN palette's ink, so the two "
+      "cannot be swapped and still pass",
+      theme.palette(False)["text"].lower() in _day_blk.group(1).lower()
+      and theme.palette(True)["text"].lower() in _night_blk.group(1).lower()
+      and theme.palette(True)["text"].lower()
+      not in _day_blk.group(1).lower())
 check("heatmap_css takes no `night` argument, for that same reason",
       heatmap.heatmap_css.__code__.co_argcount == 0)
 
