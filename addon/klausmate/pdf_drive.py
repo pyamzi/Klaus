@@ -865,6 +865,11 @@ class _LibraryDropZone(QWidget):
         e.acceptProposedAction()
 
 
+# Wide enough for a readable answer with citations; narrow enough that the
+# viewer keeps the room. Collapsible to 0 by dragging.
+_ASSISTANT_DEFAULT_W = 360
+
+
 class DriveWindow(QWidget):
     """Standalone library window. Managed by aqt.dialogs."""
 
@@ -1076,6 +1081,19 @@ class DriveWindow(QWidget):
         self.splitter.addWidget(left)
         self.splitter.addWidget(self.sidebar)
         self.splitter.setStretchFactor(1, 1)
+        # ---- right: the assistant ----
+        # Guarded like every other optional surface here: a panel that
+        # fails to import must cost the assistant, not the Library.
+        self.assistant = None
+        try:
+            from .assistant_panel import AssistantPanel
+
+            self.assistant = AssistantPanel(self.splitter)
+            self.splitter.addWidget(self.assistant)
+            self.splitter.setStretchFactor(2, 0)
+            self.tree.currentItemChanged.connect(self._on_assistant_target)
+        except Exception as e:
+            print(f"[klausmate] assistant panel unavailable: {e}")
 
         self._restore_geometry()
         self.rebuild_tree()
@@ -1109,17 +1127,51 @@ class DriveWindow(QWidget):
 
     _MIN_PANE = 120
 
+    def _on_assistant_target(self, item=None, _prev=None) -> None:
+        """Point the assistant at whatever the tree has selected.
+
+        Folders and the empty selection both yield "", which the panel
+        renders as "select a PDF" rather than answering about nothing.
+        """
+        if self.assistant is None:
+            return
+        try:
+            safe = self._selected_safe() or ""
+            self.assistant.set_pdf(safe)
+        except Exception as e:
+            print(f"[klausmate] assistant target failed: {e}")
+
     def _sane_splitter_sizes(self, sizes: object) -> list[int] | None:
         """Reject degenerate splitter sizes (e.g. saved from a never-shown
-        window, where sizes() returns something like [46, 46])."""
-        if not isinstance(sizes, list) or len(sizes) != 2:
+        window, where sizes() returns something like [46, 46]).
+
+        Accepts a pane count matching the splitter rather than a hardcoded
+        two: the assistant made it three. A PAIR saved before the assistant
+        existed is migrated rather than discarded — dropping it would reset
+        a layout every user had already arranged, on upgrade, for nothing.
+
+        The assistant pane alone may be exactly 0. Zero is a real state
+        there — the panel dragged shut — and is what lets "closed" persist
+        without a second config key, exactly as _sane_map_sizes allows it
+        for the map box. Any other pane at 0 is the degenerate kind.
+        """
+        want = self.splitter.count() or 2
+        if not isinstance(sizes, list) or not sizes:
             return None
         try:
             ints = [int(s) for s in sizes]
         except (TypeError, ValueError):
             return None
-        if any(s < self._MIN_PANE for s in ints):
+        if len(ints) == 2 and want == 3:
+            ints = ints + [_ASSISTANT_DEFAULT_W]
+        if len(ints) != want:
             return None
+        for i, size in enumerate(ints):
+            collapsible = want == 3 and i == 2
+            if size < (0 if collapsible else self._MIN_PANE):
+                return None
+            if not collapsible and size < self._MIN_PANE:
+                return None
         return ints
 
     def _sane_map_sizes(self, sizes: object) -> list[int] | None:
@@ -1166,7 +1218,10 @@ class DriveWindow(QWidget):
             # wide enough to hold them plus a readable name. 560 leaves
             # 284. tests/test_drive.py pins that arithmetic so a future
             # width change cannot silently re-break it.
-            self.splitter.setSizes(sane if sane is not None else [560, 480])
+            default = [560, 480]
+            if self.splitter.count() == 3:
+                default = [560, 480, _ASSISTANT_DEFAULT_W]
+            self.splitter.setSizes(sane if sane is not None else default)
             # The map box's height + collapsed state, same shape and
             # same defensiveness. The default pair SUMS to roughly the
             # left pane's height at the default 1040x680 window (the

@@ -1597,8 +1597,9 @@ print("== K-135: the Library opens wide enough to show a name ==")
 # render). Fixed widths do not yield, so the PANE has to fit them.
 import re as _re135
 _DRIVE = open("klausmate/pdf_drive.py", encoding="utf-8").read()
-_m135 = _re135.search(
-    r"setSizes\(sane if sane is not None else \[(\d+), (\d+)\]\)", _DRIVE)
+# The default moved into a variable when the assistant made the splitter
+# three panes; the arithmetic this pin checks is unchanged.
+_m135 = _re135.search(r"default = \[(\d+), (\d+)\]", _DRIVE)
 _numeric135 = sum(
     int(w) for w in _re135.findall(r"setColumnWidth\([123], (\d+)\)", _DRIVE))
 _INDENT135 = 16
@@ -1612,6 +1613,26 @@ check("the default splitter leaves a READABLE PDF-name column — the "
 check("...and the arithmetic is pinned against the REAL column widths, "
       "so widening a numeric column re-runs this check",
       _numeric135 == 84 + 88 + 88, f"numeric total {_numeric135}")
+
+print("== the assistant pane: a third splitter child ==")
+# Adding a pane broke a guard that accepted only PAIRS: every saved layout
+# would have been silently discarded on upgrade.
+check("the assistant is added as a third pane, guarded like the map so a "
+      "broken panel costs the assistant and not the Library",
+      "assistant_panel import AssistantPanel" in _DRIVE
+      and "assistant panel unavailable" in _DRIVE)
+check("the size guard sizes itself off the splitter rather than a hardcoded "
+      "two", "self.splitter.count()" in _DRIVE)
+check("a PAIR saved before the assistant existed is migrated, not thrown "
+      "away — discarding it would reset a layout every user had already "
+      "arranged", "len(ints) == 2 and want == 3" in _DRIVE)
+check("the assistant pane alone may be 0, so 'dragged shut' persists "
+      "without a second config key, exactly as the map box does",
+      "collapsible" in _DRIVE)
+check("selecting a row points the assistant at that PDF",
+      "currentItemChanged.connect(self._on_assistant_target)" in _DRIVE)
+check("a folder or an empty selection yields no PDF rather than answering "
+      "about nothing", "self._selected_safe() or \"\"" in _DRIVE)
 
 print("== K-136: the name column has a FLOOR, not just a good default ==")
 # K-135 widened the DEFAULT splitter (300 -> 560). That fixed first run,

@@ -21,7 +21,11 @@ imported normally. This skill provides the workaround and the conventions.
   for visual checks). Prefer logic tests; reach for real Qt when the
   behavior lives in widget mechanics (drag/drop, sorting, menus).
   Final look still needs a restarted Anki.
-- Therefore: test *logic*, never *widgets*.
+- So: prefer logic, and reach for real Qt when the behaviour IS widget
+  mechanics — state, threading, signals. (This line used to read "never
+  *widgets*", which contradicted the paragraph above it and is the version
+  a reader remembers: it cost a whole session of "appearance cannot be
+  tested" hedging before anyone noticed test_drive already did it.)
 
 ## Writing a test
 
