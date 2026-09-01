@@ -880,10 +880,13 @@ def _guarded_bases(path):
     return found
 
 
-# The one known survivor, with the card that owns it. Fixing K-164 means
-# DELETING this entry, not adding a second one beside it — an allowlist
-# that is allowed to grow is not a pin.
-_SWEEP_ALLOWED = {"klausmate/pdfjs_viewer.py": "K-164"}
+# EMPTY as of K-164, which fixed the one known survivor
+# (klausmate/pdfjs_viewer.py, PdfJsViewer(QWidget)) — the entry was
+# DELETED rather than joined by a second, because an allowlist that is
+# allowed to grow is not a pin. The mechanism stays: an entry added here
+# must name the card that owns it, and the stale-entry check below then
+# makes that entry fail loudly the moment the defect is fixed.
+_SWEEP_ALLOWED: dict = {}
 
 _swept, _offenders = 0, []
 for _path in sorted(glob.glob("klausmate/**/*.py", recursive=True)):
@@ -903,6 +906,12 @@ check("md3_switch is the pattern done right and is swept: its fallback is "
       not any(f.startswith("klausmate/md3_switch.py") for f in _offenders))
 check("lecture_view is no longer one of them",
       not any(f.startswith("klausmate/lecture_view.py") for f in _offenders))
+check("pdfjs_viewer is no longer one of them either (K-164) — the third "
+      "and last instance",
+      not any(f.startswith("klausmate/pdfjs_viewer.py") for f in _offenders))
+check("the allowlist is EMPTY, so the sweep below holds repo-wide with "
+      "nothing excused from it (K-164 closed the last entry)",
+      _SWEEP_ALLOWED == {})
 check("no module outside the allowlist defines a class on a base a failed "
       "guarded import leaves unusable — found: %s" % (_offenders or "none"),
       _offenders == [])

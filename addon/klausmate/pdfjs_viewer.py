@@ -68,6 +68,25 @@ except Exception:  # pragma: no cover — only in stripped test stubs
     PDFJS_AVAILABLE = False
 
 
+# ``class PdfJsViewer(None)`` is a hard TypeError AT IMPORT TIME —
+# "NoneType takes no arguments" — so a partial Qt surface would not cost
+# the viewer, it would cost the WHOLE MODULE: every aqt-free helper below
+# (renderer_from_config, chunk_b64, build_page_html, parse_bridge,
+# decode_b64_json, records_from_rect_map) and PDFJS_AVAILABLE itself,
+# which never got to be False because the module never finished importing
+# to set it. The handler above says "only in stripped test stubs", which
+# is precisely where the fallback is load-bearing and precisely where it
+# did not work. The None fallback is the house convention and is right for
+# names used as VALUES; it is a trap for names used as BASE CLASSES. Only
+# the widget needs Qt, so only the widget degrades: the base falls back to
+# ``object`` and PDFJS_AVAILABLE keeps the real gate — at PdfSidebar's
+# renderer branch (pdf_viewer.py), which is the only place one is built,
+# and again in __init__ below for any caller that skips it. Same shape as
+# ``index_queue._DockBase`` (K-152) and ``lecture_view._DockBase``
+# (K-161); this is the third and last instance (K-164).
+_WidgetBase: Any = QWidget if QWidget is not None else object
+
+
 # ~6 MB of base64 per eval call: large enough that a lecture PDF loads in
 # a handful of calls, small enough that no single eval string is huge.
 CHUNK_CHARS = 6 * 1024 * 1024
@@ -826,7 +845,7 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
     return out, True
 
 
-class PdfJsViewer(QWidget):  # type: ignore[misc]
+class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     """Drop-in for ``PdfViewer`` behind the ``pdf_renderer`` flag.
 
     Matches the surface PdfSidebar and the tab container actually use:
@@ -841,6 +860,17 @@ class PdfJsViewer(QWidget):  # type: ignore[misc]
         on_page_changed: Callable[[int], None],
         parent: Optional[QWidget] = None,  # type: ignore[valid-type]
     ) -> None:
+        if not PDFJS_AVAILABLE:
+            # _WidgetBase fell back to ``object``, so this is a husk, not
+            # a widget. The gate is PdfSidebar's renderer branch — it can
+            # only choose "pdfjs" when PDFJS_AVAILABLE — and this is the
+            # backstop for a caller that skips it: a named refusal beats
+            # ``object.__init__() takes exactly one argument`` raised four
+            # frames down (K-164). lecture_view._ensure_dock returns None
+            # for the same reason; a constructor cannot, so it raises.
+            raise RuntimeError(
+                "pdf.js viewer unavailable: Qt imports failed at load"
+            )
         super().__init__(parent)
         self._on_page_changed = on_page_changed
         self._name: str | None = None

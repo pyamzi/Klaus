@@ -7,6 +7,7 @@ itself can only be verified live — see the K-095 umbrella card.
 import base64
 import importlib
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -1586,5 +1587,172 @@ check("...and that walk really would have caught the old blind "
       _same_ink_overlap(
           [dict(_base[0]),
            dict(_base[0], id="z" * 32)]) is not None)
+
+
+section("a partial Qt surface degrades the WIDGET, not the whole module (K-164)")
+# ``class PdfJsViewer(QWidget)`` with ``QWidget = None`` in the import
+# fallback is a hard TypeError AT IMPORT TIME — "NoneType takes no
+# arguments" — so a partial Qt surface does not cost the viewer, it costs
+# the WHOLE MODULE: the six aqt-free helpers this file spends 1500 lines
+# on go down with it, and ``PDFJS_AVAILABLE`` never gets to be False
+# because the module never finishes importing to set it. The handler is
+# commented "only in stripped test stubs", which is precisely the
+# environment where the fallback is load-bearing and precisely where it
+# did not work. Third instance of one defect: index_queue._StatusDock
+# (K-152), lecture_view.LectureDock (K-161), this one.
+#
+# Run in a SUBPROCESS, deliberately. The pin swaps aqt.qt for a namespace
+# WITHOUT QWidget and re-imports; in process that would leave a
+# differently-configured pdfjs_viewer in sys.modules for every section
+# above it (they all read the module-level ``pv``). A fresh interpreter is
+# also where the defect actually lives: it is an import-time failure, so
+# importing IS the test.
+
+_PARTIAL_QT_PROBE = r'''
+import importlib, sys, types
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+import anki_stubs
+anki_stubs.install()
+
+
+class _Any:
+    def __init__(self, *a, **k): pass
+    def __getattr__(self, n): return _Any()
+    def __call__(self, *a, **k): return _Any()
+
+
+# An EXPLICIT aqt.qt whose hand-listed names do not include QWidget
+# (test_lecture_view.py's shape, itself tests/test_drive.py's). anki_stubs'
+# own aqt.qt is PERMISSIVE — a PEP 562 __getattr__ auto-vivifies every
+# name — which is why this whole class of defect is invisible to the
+# default bootstrap and why this pin builds its own stub instead.
+shim = types.ModuleType("aqt.qt")
+for _n in ("QApplication", "QImage", "QInputDialog", "QLabel",
+           "QSizePolicy", "QTimer", "QVBoxLayout"):
+    setattr(shim, _n, _Any)
+shim.Qt = _Any()
+sys.modules["aqt.qt"] = shim
+sys.modules.pop("klausmate.pdfjs_viewer", None)
+
+pv = importlib.import_module("klausmate.pdfjs_viewer")
+
+# Importing is most of the point, but on its own it would also pass if the
+# probe simply failed to reproduce a partial surface. So prove the module
+# really did take the fallback, really did degrade the base, and really is
+# still the module the rest of Klaus imports it for.
+assert pv.QWidget is None, "probe did not reproduce a partial aqt.qt"
+assert pv.PDFJS_AVAILABLE is False, pv.PDFJS_AVAILABLE
+assert pv.PdfJsViewer.__bases__ == (object,), pv.PdfJsViewer.__bases__
+
+# The six aqt-free helpers the card names, each actually exercised.
+assert pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs"
+assert pv.chunk_b64(b"klaus") == ["a2xhdXM="]
+assert "__ADDON__" not in pv.build_page_html("klausmate", night=False)
+assert pv.parse_bridge("klausmate_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
+assert pv.decode_b64_json("eyJhIjogMX0=") == {"a": 1}
+assert pv.records_from_rect_map({"0": [[1, 2, 3, 4]]})[0]["page"] == 0
+
+# ...and the degraded class refuses to build rather than half-making
+# itself on ``object`` (lecture_view._ensure_dock returning None is the
+# same gate; a constructor cannot return None, so it raises by name).
+try:
+    pv.PdfJsViewer(lambda _p: None)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("a degraded PdfJsViewer must refuse to build")
+print("PROBE-OK")
+'''
+
+_probe164 = subprocess.run(
+    [sys.executable, "-c", _PARTIAL_QT_PROBE],
+    capture_output=True, text=True, cwd=os.getcwd(),
+    env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+)
+check(
+    "pdfjs_viewer IMPORTS under an aqt.qt with no QWidget — a partial Qt "
+    "surface must cost the viewer widget, not the helpers and not "
+    "PDFJS_AVAILABLE itself%s" % (
+        "" if _probe164.returncode == 0
+        else "\n      probe stderr: " + _probe164.stderr.strip().splitlines()[-1]
+        if _probe164.stderr.strip() else ""),
+    _probe164.returncode == 0 and "PROBE-OK" in _probe164.stdout,
+)
+
+
+section("PDFJS_AVAILABLE is the gate, and it guards the one build site")
+# Now that PDFJS_AVAILABLE can actually BE False, the flag has to be worth
+# something: the class exists under a partial Qt surface as a plain-object
+# husk, so anything that builds it without consulting the flag gets a husk.
+# There is exactly one build site and it lives in another module — K-161's
+# other half (its caller had to learn to expect the refusal), which here is
+# already right and is pinned so it stays that way.
+import ast as _ast164
+import glob as _glob164
+
+
+def _ctor_sites164():
+    out = []
+    for path in sorted(_glob164.glob("klausmate/**/*.py", recursive=True)):
+        rel = path.replace(os.sep, "/")
+        if "/vendor/" in rel:
+            continue
+        with open(path, encoding="utf-8") as fh:
+            tree = _ast164.parse(fh.read())
+        for node in _ast164.walk(tree):
+            if (isinstance(node, _ast164.Call)
+                    and _ast164.unparse(node.func).split(".")[-1]
+                    == "PdfJsViewer"):
+                out.append(f"{rel}:{node.lineno}")
+    return out
+
+
+_sites164 = _ctor_sites164()
+check("exactly one module builds a PdfJsViewer — a second one would need "
+      "its own copy of the gate: %s" % (_sites164,),
+      len(_sites164) == 1 and _sites164[0].startswith("klausmate/pdf_viewer.py:"))
+
+_PV164 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "..", "klausmate", "pdf_viewer.py")
+with open(_PV164, encoding="utf-8") as _fh164:
+    _pvtree164 = _ast164.parse(_fh164.read())
+
+
+def _renderer_assigns164(node, guarded=False, out=None):
+    """(lineno, source of the value, guarded-by-PDFJS_AVAILABLE?) for every
+    ``self._renderer = ...`` in pdf_viewer.py.
+
+    Checks the node itself BEFORE recursing: an earlier draft only walked
+    children, so an assignment sitting directly in an ``if`` body — which
+    is the only interesting one here — was never looked at, and the whole
+    check went quietly vacuous. The ``len(...) >= 2`` guard below is what
+    caught that.
+    """
+    out = [] if out is None else out
+    if isinstance(node, _ast164.If):
+        inner = "PDFJS_AVAILABLE" in _ast164.unparse(node.test) or guarded
+        for sub in node.body:
+            _renderer_assigns164(sub, inner, out)
+        for sub in node.orelse:           # the else leg is NOT guarded
+            _renderer_assigns164(sub, guarded, out)
+        return out
+    if isinstance(node, _ast164.Assign):
+        for tgt in node.targets:
+            if isinstance(tgt, _ast164.Attribute) and tgt.attr == "_renderer":
+                out.append((node.lineno,
+                            _ast164.unparse(node.value), guarded))
+    for child in _ast164.iter_child_nodes(node):
+        _renderer_assigns164(child, guarded, out)
+    return out
+
+
+_assigns164 = _renderer_assigns164(_pvtree164)
+check("the renderer flag's assignments were actually found — none would "
+      "make the gate check below vacuous", len(_assigns164) >= 2)
+check("nothing sets the renderer to anything but 'native' outside an "
+      "``if ... PDFJS_AVAILABLE`` — that is the whole gate, and the "
+      "build site downstream tests only the flag it sets: %s"
+      % ([(ln, v) for ln, v, g in _assigns164 if v != "'native'" and not g],),
+      not [1 for _ln, _v, _g in _assigns164 if _v != "'native'" and not _g])
 
 raise SystemExit(report())
