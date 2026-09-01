@@ -36,7 +36,8 @@ because an exception escaped before ``end()`` corrupts the backing
 store and Qt segfaults on the next flush (K-115), so ``paintEvent``
 ends its painter in a ``finally``. And an exception escaping ANY Qt
 virtual (a delegate's ``paint`` included) makes PyQt6 print it and call
-``qFatal`` (K-172), so ``paint`` never lets one out.
+``qFatal`` in a bare interpreter, or hand it to Anki's excepthook as a
+modal error dialog (K-183) — so ``paint`` never lets one out.
 """
 
 from __future__ import annotations

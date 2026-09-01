@@ -164,8 +164,8 @@ def _ends_painter_in_finally(fn) -> bool:
 check("GlyphButton.paintEvent ends its QPainter in a finally (K-115: a "
       "painter left live after an exception segfaults the next flush)",
       "paintEvent" in _fns and _ends_painter_in_finally(_fns["paintEvent"]))
-check("ExplorerDelegate.paint cannot let an exception reach C++ (K-172: "
-      "an unhandled one in a virtual is qFatal)",
+check("ExplorerDelegate.paint cannot let an exception reach C++ (an "
+      "unhandled one in a virtual is qFatal in a bare interpreter, K-183)",
       "paint" in _fns and isinstance(_fns["paint"].body[0], ast.Try)
       and any(isinstance(h.type, ast.Name) and h.type.id == "Exception"
               for h in _fns["paint"].body[0].handlers))

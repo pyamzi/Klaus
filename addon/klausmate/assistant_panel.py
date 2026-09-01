@@ -224,10 +224,11 @@ class AssistantPanel(QWidget):  # type: ignore[misc]
         """Run a SLOT body, swallowing anything that escapes.
 
         Not defensive style — load-bearing. PyQt6 answers an unhandled
-        exception in a slot by printing the traceback and then calling
-        qFatal, which SIGABRTs the process. In Anki that is not a broken
-        panel, it is Anki gone, mid-review, with unsaved state. Measured:
-        a plain RuntimeError raised in a clicked handler exits 134.
+        exception in a slot by printing the traceback and calling qFatal —
+        in a BARE interpreter (tests, probes): exit 134, measured. Anki
+        installs sys.excepthook, which PyQt6 honours instead of qFatal, so
+        there the same exception is Anki's modal error dialog mid-review
+        with the panel's work half-applied (K-183). Either way: one line.
         """
         try:
             fn()

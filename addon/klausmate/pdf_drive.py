@@ -1313,8 +1313,8 @@ class DriveWindow(QWidget):
         """Build the embedded screen's viewer once it is really on screen.
 
         A Qt event handler, so it may not raise: an unhandled exception
-        crossing back into C++ makes PyQt6 print the traceback and call
-        ``qFatal()`` — the process aborts (exit 134, SIGABRT).
+        crossing back into C++ is ``qFatal()`` in a bare interpreter (exit
+        134) and Anki's modal error dialog under aqt's excepthook (K-183).
 
         WHY NOT IN ``__init__``: an embedded DriveWindow is constructed
         PARENTLESS and only then added to ``mw.mainLayout``. A viewer
@@ -2384,9 +2384,9 @@ class DriveWindow(QWidget):
 
         A Qt SLOT, so the whole body is wrapped — ``item.data()``
         included. An unhandled exception here does not print and carry
-        on: PyQt6 prints the traceback and calls ``qFatal()``, and Anki
-        dies with SIGABRT (exit 134), mid-review if that is where the
-        user was.
+        on: in a bare interpreter PyQt6 calls ``qFatal()`` (exit 134); in
+        Anki, whose excepthook PyQt6 honours instead, it is the modal
+        error dialog mid-review (K-183). Neither is a broken row.
 
         The viewer comes from ``_ensure_sidebar``, never off the
         attribute: fc8591c left this line calling ``self.sidebar

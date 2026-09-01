@@ -2286,8 +2286,8 @@ if (_body173 and isinstance(_body173[0], ast.Expr)
         and isinstance(_body173[0].value, ast.Constant)):
     _body173 = _body173[1:]  # docstring
 check("_on_item_activated is a SLOT and its body cannot raise — an "
-      "unhandled exception in a Qt slot makes PyQt6 call qFatal() and "
-      "abort Anki (real crash report, 2026-09-01). item.data() included",
+      "unhandled exception in a Qt slot is qFatal in a bare interpreter and "
+      "Anki's error dialog in Anki (K-183). item.data() included",
       len(_body173) == 1 and isinstance(_body173[0], ast.Try),
       f"{len(_body173)} top-level statements")
 check("...and it no longer answers a failed double-click with a modal: "

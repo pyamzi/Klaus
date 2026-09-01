@@ -446,10 +446,11 @@ check("the scan is cancellable and the engine's cancel Event is threaded "
 section("every Qt slot is guarded — an unguarded one ABORTS Anki")
 
 # PyQt6 turns an unhandled Python exception inside a slot into
-# qFatal() -> abort(): not a traceback, not a caught error, a SIGABRT
-# that kills Anki with no dialog and no log line. This file caused one
-# on 2026-09-01 (QAbstractButton::click -> PyQtSlotProxy::unislot ->
-# pyqt6_err_print -> QMessageLogger::fatal), which is why the rule is
+# qFatal() -> abort() in a bare interpreter: a SIGABRT with no log line.
+# This file's TEST PROCESS caused one on 2026-09-01 (QAbstractButton::
+# click -> PyQtSlotProxy::unislot -> pyqt6_err_print -> fatal). In Anki,
+# whose excepthook PyQt6 honours instead, the same slot is a modal error
+# dialog (K-183) — either way the rule is
 # CLAUDE.md's: "defensive try/except around every Qt call".
 #
 # DERIVED, never hand-listed: the set is read out of this module's own
