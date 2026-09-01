@@ -418,8 +418,47 @@ try:
     check("nothing about the Explorer failed while building the window",
           "explorer" not in _log.getvalue() and "glyph" not in _log.getvalue(),
           _log.getvalue()[-400:])
+    check("the standalone window's tree holds keyboard focus after show — "
+          "the list is what arrow keys drive, and a window that opens with "
+          "a focus ring on an icon button looks broken",
+          _win.tree.hasFocus() or app.focusWidget() is _win.tree,
+          f"focus on {type(app.focusWidget()).__name__}")
     _win.close()
 except Exception as _e:  # noqa: BLE001
     check(f"offscreen DriveWindow checks ran ({_e})", False)
+
+section("the EMBEDDED screen: focus lands on the tree AFTER the mount (K-179)")
+# K-175's sign-off render (scale 2, both palettes) showed the focus ring
+# on the New Folder glyph at rest in the embedded screen, and a live
+# accessibility probe in a restarted Anki found the tree unfocused after
+# clicking Library. The screen is built PARENTLESS, then reparented into
+# mw.mainLayout and shown (library_tab.mount) — so a setFocus() made in
+# __init__ happens in a throwaway top-level and does not survive the
+# move. This mirrors that mount shape exactly.
+try:
+    _uf2 = tempfile.mkdtemp(prefix="klaus_k179_uf_")
+    os.makedirs(os.path.join(_uf2, "contexts"), exist_ok=True)
+    pkg.USER_FILES = _uf2
+    _tab = pdf_drive.DriveWindow(embedded=True)      # parentless, hidden
+    _host = _QtW.QWidget()
+    _hlay = _QtW.QVBoxLayout(_host)
+    _hlay.addWidget(_tab)                            # reparented into the host
+    _host.resize(1200, 700)
+    _host.show()
+    _tab.show()
+    for _ in range(8):
+        app.processEvents()
+        _QtC.QThread.msleep(10)
+    _fw = app.focusWidget()
+    check("after a library_tab-shaped mount the TREE has keyboard focus — "
+          "not the first glyph in the tab chain, and not nothing",
+          _fw is _tab.tree,
+          f"focus on {type(_fw).__name__ if _fw is not None else None}"
+          + (f" ({_fw.accessibleName()!r})" if isinstance(_fw, le.GlyphButton) else ""))
+    check("...and no glyph carries focus, so no ring at rest",
+          not any(g.hasFocus() for g in _tab.findChildren(le.GlyphButton)))
+    _host.close()
+except Exception as _e:  # noqa: BLE001
+    check(f"embedded-mount focus checks ran ({_e})", False)
 
 raise SystemExit(report())

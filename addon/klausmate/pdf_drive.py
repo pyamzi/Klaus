@@ -1360,6 +1360,21 @@ class DriveWindow(QWidget):
                 QTimer.singleShot(0, self._arm_sidebar)
         except Exception as e:
             print(f"[klausmate] viewer arm scheduling failed: {e}")
+        # K-179: keyboard focus on the tree AFTER the screen is in its
+        # final window. The setFocus() in __init__ is made while the
+        # embedded screen is still a parentless, hidden top-level;
+        # library_tab then reparents it into mw.mainLayout and shows it,
+        # and that pre-mount focus does not survive the move — Qt hands
+        # focus to the first widget in the tab chain of the newly shown
+        # screen, the New Folder glyph (K-175's sign-off render at scale
+        # 2 showed the ring; a live probe found the tree unfocused). One
+        # tick deferred, like the viewer arm above, so it runs once the
+        # show has settled; every show, so returning to the screen puts
+        # the arrow keys back on the list.
+        try:
+            QTimer.singleShot(0, self._focus_tree)
+        except Exception as e:
+            print(f"[klausmate] tree focus scheduling failed: {e}")
         try:
             if self._refresh_pending:
                 self._refresh_pending = False
@@ -1369,6 +1384,14 @@ class DriveWindow(QWidget):
                 QTimer.singleShot(0, self._refresh_rows)
         except Exception as e:
             print(f"[klausmate] deferred refresh scheduling failed: {e}")
+
+    def _focus_tree(self) -> None:
+        """Deferred from showEvent (K-179). A timer slot: never raises."""
+        try:
+            if self._alive() and self.isVisible():
+                self.tree.setFocus()
+        except Exception as e:
+            print(f"[klausmate] tree focus failed: {e}")
 
     def _arm_sidebar(self) -> None:
         """Deferred half of showEvent. A timer slot: never raises."""
