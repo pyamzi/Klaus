@@ -34,10 +34,28 @@ come out: every row in ``rows`` gets a position. The split is what makes
 collection the old whole-pipeline-on-everything shape would have been
 ~7x the fit bill, while fitting on 4,000 evenly-strided rows and then
 scoring all 28,668 adds only the scoring passes — measured at ~9% on
-top of today's cost, for 7x the notes. And a stride sample of 4,000
-768-d embeddings pins the same principal axes as the full set would: the
-directions are a property of the cloud's shape, which an even sample of
-that size already carries.
+top of today's cost, for 7x the notes.
+
+THE SAMPLE DOES NOT PIN THE AXES, and this docstring claimed it did
+until K-167 measured it. Refitting from a DIFFERENT even 4,000 of the
+same 28,670 vectors moves the median note 0.449 in these [-1, 1] units,
+about 150 px on a 700 px canvas, and swaps components 2 and 3 outright
+(|<v2, v2'>| = 0.45 while |<v2, v3'>| = 0.86). The reason is that the
+cloud is nearly isotropic — the three axes' standard deviations on
+Pouya's index are 0.1332, 0.1236 and 0.1190, so there is no eigengap to
+separate them by. Only the three-dimensional SUBSPACE is stable (6-18
+degrees under a resample); which orthogonal frame of it comes back is
+sampling noise. Consequences worth knowing before touching anything
+here: the layout is a stable picture only for an unchanged index (which
+is exactly what pdf_graph's cache keys on); a cached FIT is not reusable
+across an index change and pdf_graph says why at length; and K-148's
+non-monotone iteration table below is this same fact seen from the
+other side — power iteration separates two components at their variance
+ratio per pass, and 0.93^40 is 0.05, so the third axis was never going
+to converge in 40 iterations however many it was given. Making the
+picture stable under a growing collection means fitting from more rows
+(or from a basis that does not depend on the sample), not from a
+cleverer 4,000.
 
 That also keeps the memory flat. Only the fit sample is ever packed into
 the ``array('d')`` working buffer (4,000 x 768 x 8B = 24 MB); packing all
@@ -58,6 +76,14 @@ iteration and the extra dot product per row, as predicted) — and the
 whole ``build_graph_data`` around it 26.6 s. That is why BOTH of the
 map's hosts build this off the UI thread now (K-143 for the Library's
 dock, K-144 for the standalone window).
+
+Re-measured K-167, same index, same machine: ``project`` 29.47 s, of
+which the FIT is 29.29 s and scoring all 28,670 rows 2.06 s. So the fit
+is 99.4% of this module's cost and 99.9% of the map's, which is why
+``pdf_graph`` caches the answer rather than tuning the arithmetic. Do
+not spend iterations to buy speed: K-167's own table shows truncating
+to 25 moves points by up to 0.605 (~212 px) and does not improve
+monotonically as the count rises, because of the isotropy above.
 
 The stride is deterministic (same idea as ``pdf_index.stride_sample``,
 reimplemented locally so this module has no project-specific imports at
