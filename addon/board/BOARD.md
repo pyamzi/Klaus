@@ -143,6 +143,9 @@ klausmate/lecture_view.py has the identical shape: LectureDock subclasses QDockW
 
 Fix: build the class inside a factory, or fall back to , or guard the definition. Whichever — then sweep for other 'class X(SomeGuardedName)' shapes across klausmate/ and say what you found, because if there are two there are probably three.
 
+#### Comments
+- [2026-09-01 orchestrator] Body correction — one word was eaten by shell expansion when the card was filed. The sentence should read: "Fix: build the class inside a factory, or fall back to the builtin object as the base, or guard the definition." Everything else in the body stands.
+
 ### K-162: Point the vacuity audit at index_queue
 owner: -
 priority: P3
