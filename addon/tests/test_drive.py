@@ -1767,7 +1767,12 @@ check("...and the box can never become the pane's binding WIDTH — that "
 check("follow-the-viewer rides PdfSidebar's EXISTING on_loaded callback "
       "— the viewer already fires it on every load path, so no new "
       "signal was invented and no parameter threaded",
-      "self.sidebar.on_loaded = self._on_viewer_loaded" in _D143
+      # Was pinned as the literal "self.sidebar.on_loaded = ..."; K-173
+      # forbids dereferencing self.sidebar at all (a None sidebar is a
+      # real state), so the wiring now happens on the local the viewer
+      # is built into. The CLAIM is unchanged and still falsifiable —
+      # this fails the moment nothing assigns on_loaded.
+      "on_loaded = self._on_viewer_loaded" in _D143
       and "def _on_viewer_loaded" in _D143)
 check("both maps follow: the dock's canvas directly, the standalone "
       "window through K-138's select_pdf seam",
@@ -2035,6 +2040,589 @@ if _HAVE_QT:
         check(f"K-143 offscreen dock checks ran ({_e143})", False)
 else:
     print("  SKIP: PyQt6 unavailable — K-143 source pins above still ran")
+
+
+print("== K-173: the embedded Library opens a PDF — the viewer came back ==")
+# fc8591c made the Library a screen inside Anki's main window and, in
+# that mode, did not construct PdfSidebar AT ALL. Construction and
+# teardown were guarded for that; the OPEN path was not —
+# _on_item_activated still called self.sidebar.load_pdf(safe), so every
+# double-click raised AttributeError on None and the handler's own
+# except dressed it up as a modal "Could not open that PDF."
+# (Pouya, 2026-09-01: "The library's PDF viewer doesn't work anymore for
+# some reason.")
+_D173 = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+_T173 = ast.parse(_D173)
+
+
+def _self_sidebar(node):
+    """True for the expression ``self.sidebar`` itself."""
+    return (isinstance(node, ast.Attribute) and node.attr == "sidebar"
+            and isinstance(node.value, ast.Name) and node.value.id == "self")
+
+
+def _from_sidebar(node):
+    """True for a value that IS the sidebar: ``self.sidebar`` or a
+    ``self._ensure_sidebar()`` call."""
+    if _self_sidebar(node):
+        return True
+    return (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_ensure_sidebar")
+
+
+# A SWEEP, not a hand-listed set: the whole point is that a seventh use
+# added later is caught. Two ways to use the sidebar safely — never
+# dereference the attribute directly, and None-test the local you bind
+# it to in the same function.
+_direct173, _unchecked173 = [], []
+for _fn173 in ast.walk(_T173):
+    if not isinstance(_fn173, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        continue
+    _bound, _used, _checked = set(), set(), set()
+    for _n in ast.walk(_fn173):
+        if isinstance(_n, ast.Attribute) and _self_sidebar(_n.value):
+            _direct173.append(f"{_fn173.name}: self.sidebar.{_n.attr}")
+        if isinstance(_n, ast.Assign) and _from_sidebar(_n.value):
+            for _t in _n.targets:
+                if isinstance(_t, ast.Name):
+                    _bound.add(_t.id)
+        if (isinstance(_n, ast.Attribute) and isinstance(_n.value, ast.Name)):
+            _used.add(_n.value.id)
+        if (isinstance(_n, ast.Compare) and isinstance(_n.left, ast.Name)
+                and len(_n.ops) == 1
+                and isinstance(_n.ops[0], (ast.Is, ast.IsNot))
+                and len(_n.comparators) == 1
+                and isinstance(_n.comparators[0], ast.Constant)
+                and _n.comparators[0].value is None):
+            _checked.add(_n.left.id)
+    for _name in sorted(_bound & _used):
+        if _name not in _checked:
+            _unchecked173.append(f"{_fn173.name}: {_name}")
+
+check("self.sidebar is never dereferenced directly — a None sidebar is "
+      "the state the embedded screen ships in, so every use binds it to "
+      "a local first (AST sweep, so a seventh use is caught too)",
+      not _direct173, repr(_direct173))
+check("...and every local bound from it is None-tested in the same "
+      "function", not _unchecked173, repr(_unchecked173))
+
+_ctors173 = [n for n in ast.walk(_T173)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "PdfSidebar"]
+_ensure_fn = next((f for f in ast.walk(_T173)
+                   if isinstance(f, ast.FunctionDef)
+                   and f.name == "_ensure_sidebar"), None)
+check("there is a single choke point that builds the viewer",
+      _ensure_fn is not None)
+check("...and it is the ONLY place a PdfSidebar is constructed, so a "
+      "viewer can never exist that the revive path does not know about",
+      len(_ctors173) == 1
+      and _ensure_fn is not None
+      and any(c is n for n in ast.walk(_ensure_fn) for c in _ctors173),
+      f"{len(_ctors173)} constructions")
+
+_act173 = next((f for f in ast.walk(_T173) if isinstance(f, ast.FunctionDef)
+                and f.name == "_on_item_activated"), None)
+_body173 = list(_act173.body) if _act173 else []
+if (_body173 and isinstance(_body173[0], ast.Expr)
+        and isinstance(_body173[0].value, ast.Constant)):
+    _body173 = _body173[1:]  # docstring
+check("_on_item_activated is a SLOT and its body cannot raise — an "
+      "unhandled exception in a Qt slot makes PyQt6 call qFatal() and "
+      "abort Anki (real crash report, 2026-09-01). item.data() included",
+      len(_body173) == 1 and isinstance(_body173[0], ast.Try),
+      f"{len(_body173)} top-level statements")
+check("...and it no longer answers a failed double-click with a modal: "
+      "showWarning execs internally (K-114/K-125) and a modal raised "
+      "from inside a slot re-enters the event loop",
+      _act173 is not None
+      and not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == "showWarning"
+                  for n in ast.walk(_act173)))
+
+if _HAVE_QT:
+    try:
+        def _proof_pdf(path):
+            """One page, a fat black bar, real text. Ink you can count."""
+            objs = [
+                b"<< /Type /Catalog /Pages 2 0 R >>",
+                b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            ]
+            stream = (b"0 0 0 rg 72 400 468 300 re f\n"
+                      b"BT /F1 36 Tf 72 200 Td (KLAUS RENDER PROOF) Tj ET\n")
+            objs.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream
+                        + b"endstream")
+            objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont "
+                        b"/Helvetica >>")
+            out, offs = bytearray(b"%PDF-1.4\n"), []
+            for i, body in enumerate(objs, start=1):
+                offs.append(len(out))
+                out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+            xref = len(out)
+            out += b"xref\n0 %d\n" % (len(objs) + 1)
+            out += b"0000000000 65535 f \n"
+            for off in offs:
+                out += b"%010d 00000 n \n" % off
+            out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n"
+                    b"%%%%EOF\n" % (len(objs) + 1, xref))
+            with open(path, "wb") as fh:
+                fh.write(bytes(out))
+
+        def _wait_ink(widget, want=200, tries=200):
+            """Ink in a grab of ``widget``, waiting for it to arrive.
+
+            pdfium renders pages on its own thread: a grab taken before
+            the first page lands reads blank, and a fixed number of
+            processEvents() turns that race into a flaky gate (measured:
+            one run in six read 0 with the code correct). Bounded, so a
+            pane that never renders still fails.
+            """
+            got = 0
+            for _ in range(tries):
+                got = _ink(widget)
+                if got >= want:
+                    return got
+                app.processEvents()
+                _QtC.QThread.msleep(10)
+            return got
+
+        def _ink(widget):
+            """Count near-black pixels in a grab of ``widget`` — the
+            page's own bar, which nothing in Klaus's chrome draws."""
+            img = widget.grab().toImage()
+            n = 0
+            for y in range(0, img.height(), 3):
+                for x in range(0, img.width(), 3):
+                    px = img.pixel(x, y)
+                    if (px & 0xFF) < 40 and ((px >> 8) & 0xFF) < 40 \
+                            and ((px >> 16) & 0xFF) < 40:
+                        n += 1
+            return n
+
+        _uf173 = tempfile.mkdtemp(prefix="klaus_k173_uf_")
+        os.makedirs(os.path.join(_uf173, "contexts"), exist_ok=True)
+        os.makedirs(os.path.join(_uf173, "pdfs"), exist_ok=True)
+        _proof_pdf(os.path.join(_uf173, "pdfs", "Renal.pdf"))
+        with open(os.path.join(_uf173, "contexts", "Renal.txt"), "w",
+                  encoding="utf-8") as _fh:
+            _fh.write("renal physiology page one\n")
+        with open(os.path.join(_uf173, "contexts", "Renal.json"), "w",
+                  encoding="utf-8") as _fh:
+            json.dump({"pages": ["renal physiology page one"]}, _fh)
+        pdf_drive.drive_store.record_import(_uf173, "Renal",
+                                            "Renal Physiology.pdf")
+        _prev173 = pkg.USER_FILES
+        pkg.USER_FILES = _uf173
+
+        def _mount(win):
+            """What library_tab.mount() does: the screen is built
+            PARENTLESS, added to mw.mainLayout, then shown."""
+            host = _QtW.QWidget()
+            host.resize(1600, 820)
+            lay = _QtW.QVBoxLayout(host)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.addWidget(win)
+            host.show()
+            win.show()
+            for _ in range(12):
+                app.processEvents()
+            return host
+
+        def _row(win, safe="Renal"):
+            it = win.tree.topLevelItem(0)
+            for i in range(win.tree.topLevelItemCount()):
+                cand = win.tree.topLevelItem(i)
+                if cand.data(0, pdf_drive._ROLE_SAFE) == safe:
+                    return cand
+            return it
+
+        # A layout the user arranged, stored before this screen opens.
+        # It is deliberately far from the [560, 480, 360] default so the
+        # two are distinguishable: the viewer pane lands at ~411px if
+        # the default wins and ~250 if the stored layout does.
+        pdf_drive.drive_store.save_window_state(
+            _uf173, {"x": 0, "y": 0, "w": 1040, "h": 680,
+                     "splitter": [850, 250, 100]})
+
+        # Capture the log while the screen opens: the host step is
+        # wrapped whole, so a mistake in it (reading an attribute that
+        # does not exist yet, say) is a LINE in the log and a green test
+        # run. That is how the assistant-ordering bug got in.
+        _logbuf = io.StringIO()
+        _stdout = sys.stdout
+        sys.stdout = _logbuf
+        try:
+            _emb = pdf_drive.DriveWindow(embedded=True)
+            _host = _mount(_emb)
+            # BOTH shapes: the standalone window builds its viewer
+            # mid-__init__ and the screen builds it a tick after show,
+            # so a step that reads something not constructed yet shows
+            # up in only one of them.
+            _standalone173 = pdf_drive.DriveWindow()
+            app.processEvents()
+            _standalone173.close()
+        finally:
+            sys.stdout = _stdout
+        _log173 = _logbuf.getvalue()
+        print(_log173, end="")
+        check("opening the Library logs no viewer error — the build and "
+              "host steps are wrapped, so a failure there is silent "
+              "except for this line",
+              "library viewer host failed" not in _log173
+              and "library viewer unavailable" not in _log173,
+              repr([l for l in _log173.splitlines() if "viewer" in l]))
+        _item = _row(_emb)
+        check("the embedded Library lists the PDF (the tree is intact — "
+              "this card is about the viewer only)",
+              _item is not None
+              and _item.data(0, pdf_drive._ROLE_SAFE) == "Renal")
+
+        # THE ACCEPTANCE TEST, driven through the real signal the tree
+        # emits on a double-click — not by calling the handler.
+        _emb.tree.itemDoubleClicked.emit(_item, 0)
+        for _ in range(25):
+            app.processEvents()
+        _sb173 = _emb.sidebar
+        check("double-clicking a PDF in the EMBEDDED Library builds a "
+              "viewer and loads that PDF — the whole reported symptom",
+              _sb173 is not None and _sb173.is_loaded("Renal"),
+              f"sidebar={_sb173!r}")
+        check("...and the status line was NOT turned into a failure "
+              "message (fc8591c's AttributeError path)",
+              "Could not open" not in _emb.status.text(),
+              repr(_emb.status.text()))
+        _pix173 = _wait_ink(_sb173) if _sb173 is not None else 0
+        check("...and the page is actually ON SCREEN: the proof PDF's "
+              "black bar is in a grab of the viewer pane, which no part "
+              "of Klaus's own chrome draws (a render, not an assertion)",
+              _pix173 > 200, f"{_pix173} near-black pixels")
+        check("the viewer pane sits between the tree and the assistant, "
+              "the same three-pane shape the window has",
+              _emb.splitter.indexOf(_sb173) == 1,
+              f"index {_emb.splitter.indexOf(_sb173)}")
+        _sizes173 = list(_emb.splitter.sizes())
+        check("a stored three-pane layout survives the viewer pane "
+              "ARRIVING LATE: at restore time the splitter still had two "
+              "panes, so the saved triple was rejected as the wrong "
+              "shape and the default applied — re-applying it once the "
+              "pane lands is the only reason the user's own widths come "
+              "back",
+              len(_sizes173) == 3 and _sizes173[0] >= 800
+              and _sizes173[1] >= 250,
+              f"splitter = {_sizes173}")
+        check("the tree still has a readable name column beside it "
+              "(K-135's arithmetic survives the third pane arriving "
+              "late)",
+              _emb.tree.columnWidth(0) >= pdf_drive._NAME_COL_FLOOR,
+              f"col0 = {_emb.tree.columnWidth(0)}px")
+
+        # library_tab.unmount() HIDES the screen and keeps the tab for
+        # the session; leaving and coming back must not cost the viewer.
+        _emb.hide()
+        app.processEvents()
+        _emb.show()
+        for _ in range(10):
+            app.processEvents()
+        _emb.tree.itemDoubleClicked.emit(_item, 0)
+        for _ in range(20):
+            app.processEvents()
+        check("leaving the Library screen and coming back still opens a "
+              "PDF — state_will_change only HIDES the tab, and a cleanup "
+              "there would kill the viewer for every later visit",
+              _emb.sidebar is not None and _emb.sidebar.is_loaded("Renal"))
+
+        # A None sidebar must be survivable from every handler, not just
+        # the ones someone remembered.
+        _emb.sidebar = None
+        _emb._delete_pdf_confirmed  # noqa: B018 — exists
+        _survived = True
+        try:
+            _emb._on_viewer_loaded(None)
+            _emb._save_geometry()
+            _emb.shutdown()
+        except Exception as _e_none:  # noqa: BLE001
+            _survived = False
+        check("every teardown/notify path survives self.sidebar is None",
+              _survived)
+        check("the viewer's window IS the host it was mounted into — it "
+              "is never built in one top-level window and moved to "
+              "another (K-090's black pane), which is the property that "
+              "makes the splitter safe, not the widget it sits in",
+              _sb173 is not None and _sb173.window() is _host,
+              f"{_sb173.window()!r} vs {_host!r}")
+        _host.close()
+
+        pkg.USER_FILES = _prev173
+        shutil.rmtree(_uf173, ignore_errors=True)
+    except Exception as _e173:  # noqa: BLE001
+        check(f"K-173 offscreen render ran ({_e173})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — K-173 source pins above still ran")
+
+
+print("== K-173: ...on the pdf.js renderer, which is the one Pouya runs ==")
+# config.json defaults pdf_renderer to "native", but the live value is in
+# meta.json (unreadable by policy) and Pouya is on pdf.js — so the render
+# above, real as it is, exercises a QPdfView he never sees. Under pdf.js
+# PdfSidebar holds an AnkiWebView, which is the whole reason fc8591c gave
+# for dropping the viewer.
+#
+# WHAT THIS CANNOT DO: PyQt6-WebEngine is not installed for this
+# interpreter (verified: `from PyQt6 import QtWebEngineWidgets` raises
+# ImportError), so no Chromium runs here and no pdf.js pixels exist to
+# count. What IS checkable headlessly is everything Python owns — that
+# the pdf.js renderer is the one selected, that the exact bytes of the
+# PDF reach the page and the page is told to render them — plus the two
+# properties the black-pane failure was actually about: the webview is
+# never reparented across top-level windows, and it is unregistered from
+# Anki's global hooks before it dies.
+if _HAVE_QT:
+    try:
+        import base64 as _b64_173
+
+        _theme_hook173: list = []
+
+        class _FakeWeb173(_QtW.QWidget):
+            """A real widget standing in for AnkiWebView.
+
+            Mirrors the lifecycle that matters: AnkiWebView.__init__
+            registers on_theme_did_change with Anki's global hook and
+            ONLY cleanup() unregisters it, so a webview destroyed
+            without cleanup leaves a dead bound method there and the
+            user's next theme change crashes inside Anki's own iteration
+            (live traceback 2026-08-25).
+            """
+
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.evals, self.html = [], []
+                self.alive = True
+                self.birth_window = self.window()
+                _theme_hook173.append(self.on_theme_did_change)
+                _webs173.append(self)
+
+            def on_theme_did_change(self):
+                if not self.alive:
+                    raise RuntimeError(
+                        "wrapped C/C++ object of type AnkiWebView has "
+                        "been deleted")
+
+            def set_bridge_command(self, *_a, **_k):
+                pass
+
+            def stdHtml(self, html, **_k):  # noqa: N802 — Anki's name
+                self.html.append(html)
+
+            def eval(self, js):
+                self.evals.append(js)
+
+            def setZoomFactor(self, _f):  # noqa: N802 — Qt naming
+                pass
+
+            def cleanup(self):
+                try:
+                    _theme_hook173.remove(self.on_theme_did_change)
+                except ValueError:
+                    pass
+
+            def destroy_cpp(self):
+                self.alive = False
+
+        _webs173: list = []
+        _fired173 = []
+
+        def _fire_theme173():
+            """True when Anki's hook iteration survives intact."""
+            try:
+                for fn in list(_theme_hook173):
+                    fn()
+                return True
+            except RuntimeError:
+                return False
+
+        _prev_web = sys.modules["aqt.webview"].AnkiWebView
+        _prev_mwattr = aqt_mod.mw
+        sys.modules["aqt.webview"].AnkiWebView = _FakeWeb173
+        aqt_mod.mw = types.SimpleNamespace(
+            addonManager=types.SimpleNamespace(
+                getConfig=lambda *_a, **_k: {"pdf_renderer": "pdfjs"},
+                addonFromModule=lambda *_a, **_k: "klausmate"),
+            taskman=types.SimpleNamespace(
+                run_in_background=lambda *_a, **_k: None),
+            col=None)
+        # Purging sys.modules is NOT enough to re-import a submodule:
+        # `from . import pdfjs_viewer` reads the ATTRIBUTE off the
+        # package first, so the stale module object comes back with the
+        # old stubs still bound (that is exactly how this section first
+        # ran against _Any instead of the fake webview, and read a None
+        # mw). Drop both.
+        for _name in [m for m in list(sys.modules)
+                      if m.startswith("klausmate.")]:
+            del sys.modules[_name]
+            try:
+                delattr(pkg, _name.split(".", 1)[1])
+            except AttributeError:
+                pass
+        sys.modules["klausmate"] = pkg
+        pdf_drive = importlib.import_module("klausmate.pdf_drive")
+        pdf_viewer173 = importlib.import_module("klausmate.pdf_viewer")
+
+        _ufjs = tempfile.mkdtemp(prefix="klaus_k173_js_")
+        os.makedirs(os.path.join(_ufjs, "contexts"), exist_ok=True)
+        os.makedirs(os.path.join(_ufjs, "pdfs"), exist_ok=True)
+        _pdf_js_path = os.path.join(_ufjs, "pdfs", "Renal.pdf")
+        _proof_pdf(_pdf_js_path)
+        with open(os.path.join(_ufjs, "contexts", "Renal.txt"), "w",
+                  encoding="utf-8") as _fh:
+            _fh.write("renal physiology page one\n")
+        # Under pdf.js the page count comes from the stored page text
+        # until the webview's bridge reports the real one — which needs
+        # a Chromium that does not exist here.
+        with open(os.path.join(_ufjs, "contexts", "Renal.json"), "w",
+                  encoding="utf-8") as _fh:
+            json.dump({"pages": ["renal physiology page one"]}, _fh)
+        pdf_drive.drive_store.record_import(_ufjs, "Renal",
+                                            "Renal Physiology.pdf")
+        pkg.USER_FILES = _ufjs
+
+        _embjs = pdf_drive.DriveWindow(embedded=True)
+        _hostjs = _mount(_embjs)
+        _itemjs = _row(_embjs)
+        _embjs.tree.itemDoubleClicked.emit(_itemjs, 0)
+        for _ in range(25):
+            app.processEvents()
+        _sbjs = _embjs.sidebar
+
+        check("the embedded Library is on the pdf.js renderer here — the "
+              "one Pouya runs, and the one fc8591c dropped the viewer to "
+              "avoid",
+              _sbjs is not None and getattr(_sbjs, "_renderer", None)
+              == "pdfjs", f"renderer={getattr(_sbjs, '_renderer', None)!r}")
+        check("...and a double-click still opens the PDF there",
+              _sbjs is not None and _sbjs.is_loaded("Renal"))
+
+        _web173 = _webs173[-1] if _webs173 else None
+        check("the pdf.js page itself was installed in the webview",
+              _web173 is not None and len(_web173.html) == 1
+              and "pdf" in _web173.html[0].lower())
+
+        def _fed_bytes(web):
+            """Reassemble what the page was handed: every klausPdfChunk
+            payload, base64-decoded."""
+            out = []
+            for js in web.evals:
+                if "klausPdfChunk(" not in js:
+                    continue
+                arg = js.split("klausPdfChunk(", 1)[1].rsplit(");", 1)[0]
+                out.append(json.loads(arg))
+            return _b64_173.b64decode("".join(out)) if out else b""
+
+        with open(_pdf_js_path, "rb") as _fh:
+            _want173 = _fh.read()
+        check("the EXACT bytes of that PDF reached the page — chunked "
+              "base64, reassembled and compared with the file on disk",
+              _web173 is not None and _fed_bytes(_web173) == _want173,
+              f"{len(_fed_bytes(_web173)) if _web173 else 0} of "
+              f"{len(_want173)} bytes")
+        check("...and the page was then told to render them (this is as "
+              "far as headless can see: no Chromium, so no pixels)",
+              _web173 is not None
+              and any("klausPdfLoad" in js for js in _web173.evals))
+
+        # THE property the 2026-08-25 black pane was about. K-090's
+        # diagnosis: "a view reparented BEFORE first show can miss its
+        # visibility transition and never attach a surface". An embedded
+        # DriveWindow is built parentless and only then added to
+        # mw.mainLayout, so a viewer built in its constructor WOULD cross
+        # that boundary; built after the mount, it never does. This is
+        # also lecture_view's property — its dock is parented to mw from
+        # construction — so it is what makes the two shapes equivalent.
+        check("the webview is BORN inside the main window and never "
+              "moves: its window() at construction is the host, not the "
+              "Library widget that was still parentless a tick earlier",
+              _web173 is not None and _web173.birth_window is _hostjs,
+              f"born in {_web173.birth_window!r}" if _web173 else "no web")
+        check("...and it is still there after the mount",
+              _sbjs is not None and _sbjs.window() is _hostjs)
+
+        check("Anki's theme hook is intact while the Library is up",
+              _fire_theme173())
+
+        # K-095 for the screen, which has no close: library_tab.unmount
+        # only HIDES the tab and keeps it for the session, so profile
+        # switch and quit are where the webview must be handed back.
+        _n_webs = len(_webs173)
+        pdf_drive._release_embedded_viewers()
+        for _ in range(5):
+            app.processEvents()
+        _web173.destroy_cpp()
+        check("profile switch / quit unregisters the embedded Library's "
+              "webview from Anki's global hooks BEFORE its C++ object "
+              "dies — without it the next theme change crashes inside "
+              "Anki's own iteration (K-095)",
+              _fire_theme173())
+        check("...and the husk is dropped, not kept as a dead pane",
+              _embjs.sidebar is None
+              and _embjs.splitter.indexOf(_sbjs) == -1)
+
+        _embjs.tree.itemDoubleClicked.emit(_itemjs, 0)
+        for _ in range(25):
+            app.processEvents()
+        check("a Library REUSED after that sweep builds a fresh viewer "
+              "and opens the PDF again — library_tab keeps its tab for "
+              "the session, so without the rebuild the screen would come "
+              "back from a profile switch permanently unable to open "
+              "anything",
+              _embjs.sidebar is not None
+              and _embjs.sidebar.is_loaded("Renal")
+              and len(_webs173) == _n_webs + 1,
+              f"{len(_webs173) - _n_webs} new webviews")
+        check("...and the rebuilt pane goes back between the tree and "
+              "the assistant", _embjs.splitter.indexOf(_embjs.sidebar) == 1)
+
+        # The BLANKET sweep is the harder case, and the one that
+        # actually happens: pdf_viewer.cleanup_all_sidebars runs on
+        # profile_will_close over every live sidebar (PdfSidebar
+        # self-registers in _open_sidebars), and it leaves self.sidebar
+        # SET — a viewer that is still a widget, still in the splitter,
+        # and can never show a PDF again because its webview is gone.
+        # Nothing else can notice that; _viewer_needs_rebuild is what
+        # does.
+        _n_webs2 = len(_webs173)
+        pdf_viewer173.cleanup_all_sidebars()
+        _husk = _embjs.sidebar
+        _embjs.tree.itemDoubleClicked.emit(_itemjs, 0)
+        for _ in range(25):
+            app.processEvents()
+        check("a sidebar the blanket sweep emptied is REPLACED, not "
+              "reused — self.sidebar still points at a widget there, so "
+              "'is it None' cannot tell you the viewer is dead",
+              _embjs.sidebar is not None and _embjs.sidebar is not _husk
+              and _embjs.sidebar.is_loaded("Renal")
+              and len(_webs173) == _n_webs2 + 1,
+              f"{len(_webs173) - _n_webs2} new webviews, "
+              f"replaced={_embjs.sidebar is not _husk}")
+
+        pdf_viewer173.cleanup_all_sidebars()
+        for _w in _webs173:
+            _w.destroy_cpp()
+        check("...and with both teardown paths run over it, Anki's theme "
+              "hook is still clean (cleanup is idempotent — belt and "
+              "braces must not double-fault)",
+              _fire_theme173())
+
+        _hostjs.close()
+        pkg.USER_FILES = _prev173
+        shutil.rmtree(_ufjs, ignore_errors=True)
+        sys.modules["aqt.webview"].AnkiWebView = _prev_web
+        aqt_mod.mw = _prev_mwattr
+    except Exception as _ejs:  # noqa: BLE001
+        check(f"K-173 pdf.js checks ran ({_ejs})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — the pdf.js checks need real widgets")
 
 
 print(f"\n{PASS} passed, {FAIL} failed")

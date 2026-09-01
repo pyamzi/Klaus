@@ -32,6 +32,7 @@ the viewer is showing.
 from __future__ import annotations
 
 import os
+import weakref
 from typing import Any, Callable
 
 import aqt
@@ -869,6 +870,50 @@ class _LibraryDropZone(QWidget):
 # viewer keeps the room. Collapsible to 0 by dragging.
 _ASSISTANT_DEFAULT_W = 360
 
+# What the status line says when there is no viewer to open a PDF in. A
+# LINE, not a modal: this is reached from a double-click slot, and
+# aqt.utils.showWarning execs internally (K-114/K-125) — a modal opened
+# from inside a slot re-enters the event loop under the click that
+# triggered it.
+NO_VIEWER_TEXT = "The PDF viewer could not start — see the log for why."
+
+
+def _viewer_needs_rebuild(sidebar: Any) -> bool:
+    """True when ``sidebar`` is a husk that can no longer show a PDF.
+
+    Two ways that happens. The C++ side went away (any touch raises
+    RuntimeError), or K-095 cleanup ran: ``pdf_viewer.cleanup_all_sidebars``
+    sweeps EVERY live sidebar on profile switch and on quit, and the
+    pdf.js renderer's cleanup drops its AnkiWebView (``_web = None``)
+    because a webview must be unregistered from Anki's global hooks
+    while its C++ object is still alive.
+
+    The standalone window never noticed either case — it is destroyed and
+    rebuilt around them. The EMBEDDED screen is not: ``library_tab`` keeps
+    its tab in module state for the whole session and only hides it, so
+    without this check the Library would come back from a profile switch
+    unable to open anything, with no error to explain it. The native
+    renderer has no cleanup at all (QPdfView holds nothing to release) and
+    is never dead.
+    """
+    try:
+        viewer = getattr(sidebar, "_viewer", None)
+        if viewer is None:
+            return False  # the no-viewer fallback label; nothing to revive
+        if not hasattr(viewer, "cleanup"):
+            return False  # QPdfView path
+        return getattr(viewer, "_web", False) is None
+    except RuntimeError:
+        return True  # C++ side deleted
+    except Exception:
+        return False
+
+
+# Every embedded Library alive in this session. A WeakSet because
+# library_tab owns the tab's lifetime, not this module — see
+# _release_embedded_viewers for what it is for.
+_embedded_windows: "weakref.WeakSet[DriveWindow]" = weakref.WeakSet()
+
 
 class DriveWindow(QWidget):
     """Standalone library window. Managed by aqt.dialogs."""
@@ -1070,41 +1115,38 @@ class DriveWindow(QWidget):
         self.drop_zone = _LibraryDropZone(self._on_dropped_paths, left)
         lay.addWidget(self.drop_zone)
 
-        # ---- right: the existing viewer ----
-        from .pdf_viewer import PdfSidebar
-
-        # Library-only mode skips the viewer ENTIRELY rather than hiding
-        # it. Under the pdf.js renderer PdfSidebar is a webview, and a
-        # webview pane inside the main window is exactly what defeated
-        # single_window.py through five rework rounds (deleted 2026-08-25).
-        # Not constructing it is the difference between reusing that
-        # machinery and re-fighting that bug.
+        # ---- right: the viewer ----
+        # Built by _ensure_sidebar, which is the ONLY place one is
+        # constructed and the only place this attribute is read. The
+        # embedded screen does not build it here: see showEvent.
+        #
+        # `assistant` is declared HERE rather than with its own block
+        # below because _ensure_sidebar re-asserts that pane's stretch
+        # factor and would otherwise read an attribute that does not
+        # exist yet — silently, since the whole host step is wrapped
+        # (caught in an offscreen run's LOG, not by a failing check:
+        # "library viewer host failed: 'DriveWindow' object has no
+        # attribute 'assistant'").
         self.sidebar = None
-        if not self.embedded:
-            self.sidebar = PdfSidebar(None, parent=self.splitter)
-        # THE follow-the-viewer seam (K-143/K-137). PdfSidebar already
-        # owns one: on_loaded fires from _notify_loaded on EVERY path
-        # that puts a document on screen, whichever call site triggered
-        # it — which is exactly "the Library knows which PDF is
-        # showing", and why no new signal was invented for this. The
-        # slot is free here: the only other assignment in the addon is
-        # _PdfTabContainer's, on its OWN sidebar.
-        if self.sidebar is not None:
-            self.sidebar.on_loaded = self._on_viewer_loaded
+        self.assistant = None
+        self._sidebar_arming = 0
         self.splitter.addWidget(left)
-        if self.sidebar is not None:
-            self.splitter.addWidget(self.sidebar)
-            self.splitter.setStretchFactor(1, 1)
+        if not self.embedded:
+            self._ensure_sidebar()
         # ---- right: the assistant ----
         # Guarded like every other optional surface here: a panel that
         # fails to import must cost the assistant, not the Library.
-        self.assistant = None
         try:
             from .assistant_panel import AssistantPanel
 
             self.assistant = AssistantPanel(self.splitter)
             self.splitter.addWidget(self.assistant)
-            self.splitter.setStretchFactor(2, 0)
+            # By WIDGET, not by the literal 2: the viewer pane can arrive
+            # after this runs (the embedded screen builds it on first
+            # show, K-173), and until it does the assistant is at index 1.
+            self.splitter.setStretchFactor(
+                self.splitter.indexOf(self.assistant), 0
+            )
             self.tree.currentItemChanged.connect(self._on_assistant_target)
         except Exception as e:
             print(f"[klausmate] assistant panel unavailable: {e}")
@@ -1126,16 +1168,180 @@ class DriveWindow(QWidget):
         except Exception as e:
             print(f"[klausmate] index status wiring failed: {e}")
 
-        try:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-        except Exception as e:
-            print(f"[klausmate] drive show failed: {e}")
+        if self.embedded:
+            # NOT shown here. An embedded screen is built parentless and
+            # only then added to mw.mainLayout by library_tab, which
+            # shows it itself — self.show() would make this a real
+            # top-level window for those few milliseconds (a visible
+            # flash that also steals focus), and every widget in it
+            # would then be reparented across a native-window boundary.
+            # That crossing is exactly what turned single_window.py's
+            # panes black (K-090: "a view reparented BEFORE first show
+            # can miss its visibility transition and never attach a
+            # surface"), and the viewer is the one widget here that
+            # cannot survive it.
+            try:
+                _embedded_windows.add(self)
+            except Exception as e:
+                print(f"[klausmate] embedded registry failed: {e}")
+        else:
+            try:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            except Exception as e:
+                print(f"[klausmate] drive show failed: {e}")
 
         # After show(), so the box's real height decides whether the
         # (expensive) graph build is worth starting at all.
         self._ensure_map()
+
+    # --------------------------------------------------------- viewer
+
+    # Ticks to wait for library_tab to finish mounting before giving up
+    # and building the viewer wherever we are. Only reached if the mount
+    # order ever changes (today: addWidget, then show).
+    _ARM_RETRIES = 10
+
+    def _ensure_sidebar(self):
+        """Return this Library's live PDF viewer, building it if needed.
+
+        THE choke point: the only place a ``PdfSidebar`` is constructed
+        here, and the only place ``self.sidebar`` is read. Everything
+        else takes what this returns — or the attribute plus an ``is
+        None`` test — because the answer is legitimately None (a viewer
+        that failed to import, or one not built yet).
+
+        K-173: fc8591c gave the embedded screen ``self.sidebar = None``
+        and guarded construction and teardown, but not the OPEN path, so
+        every double-click raised AttributeError on None and the
+        handler's except turned it into "Could not open that PDF."
+        """
+        self._sidebar_arming = 0
+        sidebar = self.sidebar
+        if sidebar is not None and not _viewer_needs_rebuild(sidebar):
+            return sidebar
+        if sidebar is not None:
+            # A husk (see _viewer_needs_rebuild). Drop it before building
+            # its replacement, or the splitter keeps a dead pane.
+            self.sidebar = None
+            try:
+                sidebar.setParent(None)
+                sidebar.deleteLater()
+            except Exception as e:
+                print(f"[klausmate] stale viewer drop failed: {e}")
+        try:
+            from .pdf_viewer import PdfSidebar
+
+            sidebar = PdfSidebar(None, parent=self.splitter)
+        except Exception as e:
+            print(f"[klausmate] library viewer unavailable: {e}")
+            return None
+        self.sidebar = sidebar
+        try:
+            # THE follow-the-viewer seam (K-143/K-137). PdfSidebar
+            # already owns one: on_loaded fires from _notify_loaded on
+            # EVERY path that puts a document on screen, whichever call
+            # site triggered it — which is exactly "the Library knows
+            # which PDF is showing", and why no new signal was invented
+            # for this. The slot is free here: the only other assignment
+            # in the addon is _PdfTabContainer's, on its OWN sidebar.
+            sidebar.on_loaded = self._on_viewer_loaded
+            # Between the tree and the assistant, in both modes — the
+            # window's three-pane shape, which is also what keeps ONE
+            # stored splitter layout meaningful for both.
+            self.splitter.insertWidget(1, sidebar)
+            self.splitter.setStretchFactor(self.splitter.indexOf(sidebar), 1)
+            assistant = self.assistant
+            if assistant is not None:
+                self.splitter.setStretchFactor(
+                    self.splitter.indexOf(assistant), 0
+                )
+            self._apply_splitter_sizes()
+        except Exception as e:
+            print(f"[klausmate] library viewer host failed: {e}")
+        return sidebar
+
+    def showEvent(self, evt) -> None:  # noqa: N802 — Qt naming
+        """Build the embedded screen's viewer once it is really on screen.
+
+        A Qt event handler, so it may not raise: an unhandled exception
+        crossing back into C++ makes PyQt6 print the traceback and call
+        ``qFatal()`` — the process aborts (exit 134, SIGABRT).
+
+        WHY NOT IN ``__init__``: an embedded DriveWindow is constructed
+        PARENTLESS and only then added to ``mw.mainLayout``. A viewer
+        built in the constructor would therefore be created inside a
+        throwaway top-level window and reparented into the main window
+        before its first show — the precise shape that turned
+        single_window.py's panes black (K-090) and outlived five rework
+        rounds before that module was deleted. Built here instead, one
+        tick after the screen is shown in its final home, the webview's
+        ``window()`` is Anki's main window from birth and never changes.
+        That — not "dock versus layout" — is the property lecture_view's
+        shipped in-main-window PdfSidebar has too: its dock is parented
+        to ``mw`` from construction.
+        """
+        try:
+            super().showEvent(evt)
+        except Exception as e:
+            print(f"[klausmate] drive showEvent failed: {e}")
+        try:
+            if (
+                self.embedded
+                and self.sidebar is None
+                and not self._sidebar_arming
+            ):
+                self._sidebar_arming = 1
+                QTimer.singleShot(0, self._arm_sidebar)
+        except Exception as e:
+            print(f"[klausmate] viewer arm scheduling failed: {e}")
+
+    def _arm_sidebar(self) -> None:
+        """Deferred half of showEvent. A timer slot: never raises."""
+        try:
+            if not self._alive() or not self.embedded:
+                return
+            if (self.window() is self
+                    and self._sidebar_arming < self._ARM_RETRIES):
+                # Still parentless: the mount has not landed yet. Wait
+                # rather than build a webview in a window that is about
+                # to be thrown away (see showEvent).
+                self._sidebar_arming += 1
+                QTimer.singleShot(50, self._arm_sidebar)
+                return
+            self._ensure_sidebar()
+        except Exception as e:
+            print(f"[klausmate] library viewer arm failed: {e}")
+
+    def release_viewer(self) -> None:
+        """Hand the viewer back, K-095-correctly, without tearing down
+        the rest of the Library.
+
+        The webview must be unregistered from Anki's global hooks while
+        its C++ object is alive (see ``PdfSidebar.cleanup``) or the next
+        theme change crashes inside Anki's own hook iteration on a
+        dangling AnkiWebView. The standalone window does this in
+        ``shutdown``; the embedded screen has no close to hang it on —
+        ``library_tab.unmount`` only HIDES the tab and keeps it for the
+        session — so ``_release_embedded_viewers`` calls this on profile
+        switch and on quit instead, and ``_ensure_sidebar`` builds a
+        fresh viewer the next time one is wanted.
+        """
+        sidebar = self.sidebar
+        self.sidebar = None
+        if sidebar is None:
+            return
+        try:
+            sidebar.clear()
+            sidebar.cleanup()
+        except Exception as e:
+            print(f"[klausmate] viewer release failed: {e}")
+        try:
+            sidebar.setParent(None)
+            sidebar.deleteLater()
+        except Exception as e:
+            print(f"[klausmate] viewer disposal failed: {e}")
 
     # -------------------------------------------------------- geometry
 
@@ -1214,15 +1420,22 @@ class DriveWindow(QWidget):
             return None
         return ints
 
-    def _restore_geometry(self) -> None:
+    def _apply_splitter_sizes(self) -> None:
+        """Size the horizontal splitter from the stored layout, for
+        however many panes exist RIGHT NOW.
+
+        Its own method because the viewer pane can arrive after the
+        window is built (K-173: the embedded screen builds it on first
+        show), and a pane inserted into an already-sized splitter takes
+        whatever width Qt's redistribution gives it rather than the one
+        the user chose.
+        """
         try:
             state = drive_store.get_window_state(_user_files())
-            if state.get("w") and state.get("h"):
-                self.resize(int(state["w"]), int(state["h"]))
-                if state.get("x") is not None and state.get("y") is not None:
-                    self.move(int(state["x"]), int(state["y"]))
-            else:
-                self.resize(1040, 680)
+        except Exception as e:
+            print(f"[klausmate] splitter state read failed: {e}")
+            state = {}
+        try:
             sane = self._sane_splitter_sizes(state.get("splitter"))
             # [560, 480], not [300, 740]: the numeric columns are Fixed
             # (K-127) at 84+88+88 = 260px and the tree indents 16, so a
@@ -1236,6 +1449,25 @@ class DriveWindow(QWidget):
             if self.splitter.count() == 3:
                 default = [560, 480, _ASSISTANT_DEFAULT_W]
             self.splitter.setSizes(sane if sane is not None else default)
+        except Exception as e:
+            print(f"[klausmate] splitter sizing failed: {e}")
+
+    def _restore_geometry(self) -> None:
+        try:
+            state = drive_store.get_window_state(_user_files())
+            if self.embedded:
+                # A screen has no geometry of its own — it fills whatever
+                # mw.mainLayout gives it. Applying a stored WINDOW rect
+                # here would move a child widget around inside the main
+                # window for one layout pass and prove nothing.
+                pass
+            elif state.get("w") and state.get("h"):
+                self.resize(int(state["w"]), int(state["h"]))
+                if state.get("x") is not None and state.get("y") is not None:
+                    self.move(int(state["x"]), int(state["y"]))
+            else:
+                self.resize(1040, 680)
+            self._apply_splitter_sizes()
             # The map box's height + collapsed state, same shape and
             # same defensiveness. The default pair SUMS to roughly the
             # left pane's height at the default 1040x680 window (the
@@ -1255,7 +1487,8 @@ class DriveWindow(QWidget):
             self._map_collapsed = sane_map[1] == 0
         except Exception as e:
             print(f"[klausmate] drive geometry restore failed: {e}")
-            self.resize(1040, 680)
+            if not self.embedded:
+                self.resize(1040, 680)
 
     def _save_geometry(self) -> None:
         try:
@@ -1266,13 +1499,21 @@ class DriveWindow(QWidget):
                 # next restore. Nothing to save in that case.
                 return
             sizes = list(self.splitter.sizes())
-            geo = self.geometry()
-            state = {
-                "x": geo.x(),
-                "y": geo.y(),
-                "w": geo.width(),
-                "h": geo.height(),
-            }
+            if self.embedded:
+                # A screen's rect is the main window's, not a Library
+                # window's — saving it would poison the standalone
+                # window's next restore, and save_window_state REPLACES
+                # the stored dict rather than merging, so what is
+                # already there has to be carried through by hand.
+                state = dict(drive_store.get_window_state(_user_files()))
+            else:
+                geo = self.geometry()
+                state = {
+                    "x": geo.x(),
+                    "y": geo.y(),
+                    "w": geo.width(),
+                    "h": geo.height(),
+                }
             if self._sane_splitter_sizes(sizes) is not None:
                 state["splitter"] = sizes
             map_sizes = list(self.left_split.sizes())
@@ -2017,16 +2258,41 @@ class DriveWindow(QWidget):
     # ----------------------------------------------------------- actions
 
     def _on_item_activated(self, item: QTreeWidgetItem, _col: int = 0) -> None:
-        safe = item.data(0, _ROLE_SAFE)
-        if not safe:
-            item.setExpanded(not item.isExpanded())
-            return
+        """Double-click a row: expand a folder, or show a PDF.
+
+        A Qt SLOT, so the whole body is wrapped — ``item.data()``
+        included. An unhandled exception here does not print and carry
+        on: PyQt6 prints the traceback and calls ``qFatal()``, and Anki
+        dies with SIGABRT (exit 134), mid-review if that is where the
+        user was.
+
+        The viewer comes from ``_ensure_sidebar``, never off the
+        attribute: fc8591c left this line calling ``self.sidebar
+        .load_pdf`` on a None the embedded screen never builds, and the
+        except below dressed the AttributeError up as a modal "Could not
+        open that PDF" — the whole of K-173's reported symptom.
+        """
         try:
-            self.sidebar.load_pdf(safe)
-            pdf_handler.touch_last_used(_user_files(), safe)
+            safe = item.data(0, _ROLE_SAFE)
+            if not safe:
+                item.setExpanded(not item.isExpanded())
+                return
+            try:
+                sidebar = self._ensure_sidebar()
+                if sidebar is None:
+                    self.status.setText(NO_VIEWER_TEXT)
+                    print("[klausmate] library: no viewer to open a PDF in")
+                    return
+                sidebar.load_pdf(safe)
+                pdf_handler.touch_last_used(_user_files(), safe)
+            except Exception as e:
+                # A line, not a modal (see NO_VIEWER_TEXT).
+                print(f"[klausmate] drive open failed for {safe}: {e}")
+                self.status.setText(f"Could not open that PDF: {e}")
         except Exception as e:
-            print(f"[klausmate] drive open failed for {safe}: {e}")
-            showWarning(f"Could not open that PDF.\n\n{e}")
+            # The outer net: everything above, the status write included,
+            # touches C++ objects that may be gone.
+            print(f"[klausmate] drive activate failed: {e}")
 
     def _on_dropped_paths(
         self, paths: list[str], folder: str | None = None
@@ -2380,15 +2646,19 @@ class DriveWindow(QWidget):
 
     def _delete_pdf_confirmed(self, safe: str, display: str) -> None:
         """The destructive back half, run only from the confirm's Yes."""
-        try:
-            if self.sidebar.is_loaded(safe):
-                self.sidebar.clear()
-                # clear() is the one load-path that does NOT fire
-                # on_loaded, so the map would keep a ring on the PDF the
-                # viewer just stopped showing (K-143).
-                self._on_viewer_loaded(None)
-        except Exception:
-            pass
+        # The ATTRIBUTE, not _ensure_sidebar: deleting a PDF must never
+        # build a viewer that was not wanted.
+        sidebar = self.sidebar
+        if sidebar is not None:
+            try:
+                if sidebar.is_loaded(safe):
+                    sidebar.clear()
+                    # clear() is the one load-path that does NOT fire
+                    # on_loaded, so the map would keep a ring on the PDF
+                    # the viewer just stopped showing (K-143).
+                    self._on_viewer_loaded(None)
+            except Exception as e:
+                print(f"[klausmate] viewer clear on delete failed: {e}")
         # Must run BEFORE delete_context: that call chains into
         # retention.forget_prefs, which wipes this PDF's whole prefs.json
         # entry (including the stored tag name) — after that, there is no
@@ -2464,23 +2734,32 @@ class DriveWindow(QWidget):
         try:
             self.seq += 1
             self._save_geometry()
-            self.sidebar.clear()
-            # Unregister the renderer's webview from Anki's global hooks
-            # while its C++ object is still alive (see
-            # PdfSidebar.cleanup) — otherwise the next theme change
-            # crashes on a dangling AnkiWebView.
-            self.sidebar.cleanup()
         except Exception as e:
             print(f"[klausmate] drive close cleanup failed: {e}")
+        # SEPARATE from the try above, deliberately: these two shared one
+        # block, so a geometry-save failure skipped the cleanup and left
+        # exactly the dangling AnkiWebView that cleanup exists to
+        # prevent. Unregistering the renderer's webview from Anki's
+        # global hooks while its C++ object is still alive (see
+        # PdfSidebar.cleanup) is the part that must not be conditional
+        # on anything.
+        self.release_viewer()
         if _instance is self:
             _instance = None
 
     def closeEvent(self, evt) -> None:  # noqa: N802 — Qt naming
-        self.shutdown()
         try:
-            aqt.dialogs.markClosed(DIALOG_NAME)
-        except Exception:
-            pass
+            self.shutdown()
+        except Exception as e:
+            print(f"[klausmate] drive shutdown failed: {e}")
+        # Only the standalone window is a dialog-manager instance; an
+        # embedded screen was never opened through aqt.dialogs, so
+        # reporting it closed would mark a window that may still be open.
+        if not self.embedded:
+            try:
+                aqt.dialogs.markClosed(DIALOG_NAME)
+            except Exception:
+                pass
         super().closeEvent(evt)
 
 
@@ -2551,6 +2830,26 @@ def open_drive() -> None:
         )
 
 
+def _release_embedded_viewers() -> None:
+    """K-095 for the Library SCREEN, which has no close to hang it on.
+
+    ``library_tab`` keeps its tab in module state for the whole session
+    and unmount only HIDES it, so the standalone window's closeEvent
+    teardown never runs for it. Profile switch and quit are the two
+    points where the viewer's webview must be handed back — a webview
+    still registered in Anki's global hooks when its C++ object dies
+    crashes the next theme change. ``pdf_viewer.cleanup_all_sidebars``
+    is the blanket sweep behind this; this is the owner doing it for
+    itself, and it also drops the husk so the next open builds a live
+    viewer instead of finding a cleaned-up one.
+    """
+    for win in list(_embedded_windows):
+        try:
+            win.release_viewer()
+        except Exception as e:
+            print(f"[klausmate] embedded viewer release failed: {e}")
+
+
 def _close_drive() -> None:
     """Close the window if open — geometry is persisted by closeEvent."""
     global _instance
@@ -2607,9 +2906,11 @@ def setup() -> None:
         print(f"[klausmate] drive toolbar hook failed: {e}")
     try:
         gui_hooks.profile_will_close.append(_close_drive)
+        gui_hooks.profile_will_close.append(_release_embedded_viewers)
     except Exception as e:
         print(f"[klausmate] drive profile hook failed: {e}")
     try:
         mw.app.aboutToQuit.connect(_close_drive)
+        mw.app.aboutToQuit.connect(_release_embedded_viewers)
     except Exception as e:
         print(f"[klausmate] drive quit hook failed: {e}")
