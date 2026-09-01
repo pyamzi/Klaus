@@ -255,8 +255,19 @@ check("the reviewer's colour mode takes the same gradient from its "
       and "--klaus-panel" not in _rev_grad)
 
 section("on-screen gradient editor (drag on the actual screen)")
+# Nothing above this line has touched the arming flag, so this reads the
+# module's BOOT state. K-142/audit finding 2: `_GRAD_EDIT = False` could
+# be flipped to True with nothing noticing — the disarm below is pinned,
+# the default never was. Armed by default means every user's deck screen
+# grows drag handles in a normal session, with a green suite.
+check("the editor is DISARMED at import — it is armed only by the OPEN "
+      "Preferences dialog, never by config and never by default",
+      bg.grad_edit_active() is False and bg._GRAD_EDIT is False)
 _events: list = []
 bg.set_grad_edit(True, lambda t, op, d: _events.append((t, op, d)))
+check("arming is what turns it on (so the boot check above is reading a "
+      "flag that CAN be True, not one that is structurally False)",
+      bg.grad_edit_active() is True)
 bg.grad_edit_event({"target": "reviewer", "op": "geom", "i": 99,
                     "x": 105, "y": -5, "size": 999})
 bg.grad_edit_event({"target": "weird", "op": "pick", "i": 1.9})

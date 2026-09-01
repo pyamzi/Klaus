@@ -3,6 +3,7 @@
 Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_view.py
 """
 
+import ast
 import importlib
 import json
 import os
@@ -19,10 +20,17 @@ install()
 
 card_index = importlib.import_module("klausmate.card_index")
 pdf_index = importlib.import_module("klausmate.pdf_index")
+pdf_handler = importlib.import_module("klausmate.pdf_handler")
 lecture_view = importlib.import_module("klausmate.lecture_view")
 
 LectureMatch = lecture_view.LectureMatch
 NoLecture = lecture_view.NoLecture
+
+# Boot state, captured before anything in this file can touch it. The
+# setup-idempotency section far below asserts on this rather than on a
+# live read, so reordering the file can never turn that pin vacuous.
+_BOOT_SETUP_DONE = lecture_view._setup_done
+_BOOT_DOCK = lecture_view._dock
 
 
 def unit(vals):
@@ -357,6 +365,168 @@ try:
 finally:
     pdf_index.load = orig_load
 
+
+section("invalidate(): the only way past a stamp-blind edit")
+# CLAUDE.md: results are "revalidated by file stamps" — and a stamp is
+# (int(mtime), size), so an edit that changes neither is invisible to
+# every cache in the resolver. invalidate() is what the user-initiated
+# open calls to be sure it is looking at the disk; gutting it changed
+# nothing any check could see (K-139 mutation audit, finding 8).
+#
+# The scenario below is built so the pin CANNOT pass for the wrong
+# reason: the rewrite is asserted to be the same size, its mtime is put
+# back, and the pre-invalidate resolve is asserted to still return the
+# stale answer. Only then does invalidate() have anything to prove.
+_iv = fresh_ufd()
+write_prefs(_iv, {"PDF_A": {"tag": "!Library::Z"}})
+write_ctx_json(_iv, "PDF_A", ["a"])
+write_ctx_json(_iv, "PDF_B", ["b"])
+make_pdf_index(_iv, "PDF_A", chunks=[(1, 0, 1)], rows=[unit([1, 0, 0, 0])])
+make_pdf_index(_iv, "PDF_B", chunks=[(9, 0, 1)], rows=[unit([1, 0, 0, 0])])
+make_card_index(_iv, nids=[1], rows=[unit([1, 0, 0, 0])])
+r_iv = lecture_view.LectureResolver(_iv)
+_iv_first = r_iv.resolve(1, ["!Library::Z"])
+check("fixture: the tag resolves to PDF_A page 1",
+      isinstance(_iv_first, LectureMatch)
+      and _iv_first.safe == "PDF_A" and _iv_first.page == 1)
+
+_iv_prefs = lecture_view.prefs_path(_iv)
+_iv_stat = os.stat(_iv_prefs)
+write_prefs(_iv, {"PDF_B": {"tag": "!Library::Z"}})  # same key length
+check("fixture: the rewrite is stamp-INVISIBLE (identical size, mtime "
+      "restored) — without this the pin below would pass on the stamp "
+      "check alone and prove nothing about invalidate()",
+      os.stat(_iv_prefs).st_size == _iv_stat.st_size)
+os.utime(_iv_prefs, (_iv_stat.st_atime, _iv_stat.st_mtime))
+_iv_stale = r_iv.resolve(1, ["!Library::Z"])
+check("a stamp-blind edit really does go unnoticed by the caches",
+      isinstance(_iv_stale, LectureMatch) and _iv_stale.safe == "PDF_A")
+
+r_iv.invalidate()
+check("invalidate() drops EVERY sub-cache, not just the results one "
+      "(prefs inverse, row map, index LRU and results all reset)",
+      r_iv._idx_cache == {} and r_iv._results == {}
+      and r_iv._rowmap is None and r_iv._prefs_stamp == ()
+      and r_iv._rowmap_stamp == ())
+_iv_fresh = r_iv.resolve(1, ["!Library::Z"])
+check("so the next resolve reads disk again and follows the moved tag "
+      "to PDF_B page 9 — this is the guarantee the user-initiated open "
+      "relies on",
+      isinstance(_iv_fresh, LectureMatch)
+      and _iv_fresh.safe == "PDF_B" and _iv_fresh.page == 9)
+
+
+section("dock open/width persistence (pdf_tabs.json's lecture_view key)")
+# lecture_view_reopen is a user-visible feature whose entire storage
+# layer was unwatched: both _saved_state and _save_state survived being
+# gutted (K-139 finding 6). It is pure JSON over pdf_handler's merging
+# tabs file, so it is fully testable here — against a temp user_files,
+# never the real one.
+_st_ufd = fresh_ufd()
+_st_file = os.path.join(_st_ufd, pdf_handler._OPEN_TABS_FILE)
+_orig_user_files = lecture_view._user_files
+lecture_view._user_files = lambda: _st_ufd
+try:
+    check("no saved state yet reads as an empty dict, never None — the "
+          "callers do state.update() on whatever comes back",
+          lecture_view._saved_state() == {})
+
+    lecture_view._save_state(open=True)
+    check("open=True round-trips", lecture_view._saved_state() == {"open": True})
+    with open(_st_file, encoding="utf-8") as _f:
+        _raw = json.load(_f)
+    check("it lands on disk under pdf_tabs.json's own lecture_view key, "
+          "not at the top level",
+          _raw["lecture_view"] == {"open": True})
+
+    lecture_view._save_state(width=420)
+    check("a second write MERGES rather than replaces — width and open "
+          "are saved by different code paths and must coexist",
+          lecture_view._saved_state() == {"open": True, "width": 420})
+    lecture_view._save_state(open=False)
+    check("closing rewrites only its own field",
+          lecture_view._saved_state() == {"open": False, "width": 420})
+
+    pdf_handler._save_tabs_file(_st_ufd, {"open": ["Lecture 1"]})
+    lecture_view._save_state(open=True)
+    check("the shared tabs file's OTHER keys survive our writes (every "
+          "writer merges), and the top-level 'open' tab list is not the "
+          "same key as the dock's own 'open' flag",
+          pdf_handler._load_tabs_file(_st_ufd)["open"] == ["Lecture 1"]
+          and lecture_view._saved_state() == {"open": True, "width": 420})
+
+    pdf_handler._save_tabs_file(_st_ufd, {"lecture_view": "not a dict"})
+    check("a corrupt lecture_view entry reads as no state, never a crash "
+          "on the reviewer's hot path",
+          lecture_view._saved_state() == {})
+    with open(_st_file, "w", encoding="utf-8") as _f:
+        _f.write("{ not json")
+    check("an unreadable tabs file reads as no state either",
+          lecture_view._saved_state() == {})
+
+    # The toggle's own call site: closing the panel must persist open=False,
+    # or lecture_view_reopen brings it back next session.
+    class _FakeDock:
+        def __init__(self):
+            self.hidden = False
+            self.saved_widths = 0
+
+        def isVisible(self):
+            return not self.hidden
+
+        def save_width(self):
+            self.saved_widths += 1
+
+        def hide(self):
+            self.hidden = True
+
+    lecture_view._save_state(open=True)
+    _fd = _FakeDock()
+    lecture_view._dock = _fd
+    lecture_view.toggle_lecture_view()
+    check("toggling a visible panel closed hides it, banks its width, and "
+          "persists open=False (the reopen feature's whole contract)",
+          _fd.hidden is True and _fd.saved_widths == 1
+          and lecture_view._saved_state().get("open") is False)
+finally:
+    lecture_view._user_files = _orig_user_files
+    lecture_view._dock = _BOOT_DOCK
+
+
+section("bridge contract (klausmate:lecture)")
+
+
+class _RecTimer:
+    """Records QTimer.singleShot instead of running it."""
+
+    calls: list = []
+
+    @staticmethod
+    def singleShot(ms, fn):  # noqa: N802 — Qt naming
+        _RecTimer.calls.append((ms, getattr(fn, "__name__", str(fn))))
+
+
+_orig_qtimer = lecture_view.QTimer
+lecture_view.QTimer = _RecTimer
+try:
+    check("a foreign message travels on UNCHANGED — the hook is a chain "
+          "and __init__'s handler (and AnkiHub's) still get their turn",
+          lecture_view._on_js_message(("sentinel", 1), "klausmate:settings",
+                                      None)
+          == ("sentinel", 1))
+    check("the exact message reports HANDLED — returning False re-opens "
+          "the pycmd to the rest of Anki's hook chain, which has no idea "
+          "what it is",
+          lecture_view._on_js_message((False, None), "klausmate:lecture",
+                                      None)
+          == (True, None))
+    check("...and the toggle is DEFERRED off the bridge, never run inside "
+          "the webchannel dispatch",
+          _RecTimer.calls == [(0, "toggle_lecture_view")])
+finally:
+    lecture_view.QTimer = _orig_qtimer
+
+
 # ------------------------------------------------------------- glue pins
 
 section("glue pins (source)")
@@ -460,6 +630,125 @@ check("module has aqt-free/glue divider", "aqt glue" in SRC)
 check("public toggle exists", callable(lecture_view.toggle_lecture_view))
 check("public open exists", callable(lecture_view.open_lecture_view))
 check("setup exists", callable(lecture_view.setup))
+
+
+section("the card-index directory is spelled three times — they must agree")
+# CARD_INDEX_SUBDIR is one of three INDEPENDENT copies of the same on-disk
+# path (curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR,
+# pdf_graph.CARD_INDEX_SUBDIR). Every fixture in this file builds its
+# directory FROM the constant, so the constant defines both the code and
+# the test and the two can never disagree — a self-referential pin, the
+# K-135 shape (K-139 mutation audit, finding 7: even collapsing it to
+# "MUT" survived). What is actually at risk is DRIFT between the copies:
+# if one moves, the Lecture panel reads an empty directory and says "No
+# lecture page available" forever, with a green suite. So compare the
+# imported constant against the OTHER two modules' own literals.
+
+
+def _module_str_const(path, name):
+    """The last string literal in module-level `name = ...` of `path`.
+
+    Parsed, not grepped: curation spells it inside an os.path.join(), and
+    a regex over source text would also match the word in a comment.
+    """
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == name
+                   for t in node.targets):
+            continue
+        strings = [n.value for n in ast.walk(node.value)
+                   if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        return strings[-1] if strings else None
+    return None
+
+
+_cur_dir = _module_str_const("klausmate/curation.py", "INDEX_DIR")
+_graph_dir = _module_str_const("klausmate/pdf_graph.py", "CARD_INDEX_SUBDIR")
+check("all three copies are still there to be compared — a copy that "
+      "vanishes must fail loudly, not quietly compare nothing",
+      isinstance(_cur_dir, str) and _cur_dir
+      and isinstance(_graph_dir, str) and _graph_dir
+      and isinstance(lecture_view.CARD_INDEX_SUBDIR, str))
+check("curation.INDEX_DIR, lecture_view.CARD_INDEX_SUBDIR and "
+      "pdf_graph.CARD_INDEX_SUBDIR name the SAME directory — the writer, "
+      "the reviewer's reader and the map's reader must not drift apart",
+      lecture_view.CARD_INDEX_SUBDIR == _cur_dir == _graph_dir)
+
+
+section("setup(): registers every hook, exactly once")
+# The idempotency guard was unpinned in BOTH directions (K-139 finding 5):
+# True at the top means setup() returns immediately and the whole Lecture
+# panel silently does not exist; False at the end means every call
+# re-registers the hooks and a card fires them N times over.
+check("the guard boots OFF — a module that boots 'already set up' "
+      "registers nothing and the panel silently never exists",
+      _BOOT_SETUP_DONE is False)
+
+
+class _FakeHookList:
+    def __init__(self, log, name):
+        self._log = log
+        self._name = name
+
+    def append(self, fn):
+        self._log.append(self._name)
+
+
+class _FakeHooks:
+    def __init__(self, log):
+        self._log = log
+
+    def __getattr__(self, name):
+        return _FakeHookList(self.__dict__["_log"], name)
+
+
+class _FakeSignal:
+    def __init__(self, log):
+        self._log = log
+
+    def connect(self, fn):
+        self._log.append("aboutToQuit")
+
+
+class _FakeMw:
+    def __init__(self, log):
+        self.app = type("_App", (), {"aboutToQuit": _FakeSignal(log)})()
+
+
+_hook_log: list = []
+_saved_glue = (lecture_view.gui_hooks, lecture_view.mw,
+               lecture_view._setup_done)
+try:
+    lecture_view.gui_hooks = _FakeHooks(_hook_log)
+    lecture_view.mw = _FakeMw(_hook_log)
+    # Deliberately NOT reset: if the module booted with the guard already
+    # latched, this first call must be seen to register nothing.
+    lecture_view.setup()
+    _first = list(_hook_log)
+    check("one setup() registers all eight hooks the panel needs, in "
+          "order",
+          _first == [
+              "webview_will_set_content",
+              "webview_did_receive_js_message",
+              "reviewer_did_show_question",
+              "state_did_change",
+              "state_shortcuts_will_change",
+              "reviewer_will_show_context_menu",
+              "profile_will_close",
+              "aboutToQuit",
+          ])
+    check("the guard latches on the way out", lecture_view._setup_done is True)
+    lecture_view.setup()
+    check("a second setup() registers NOTHING more — Anki calls addon "
+          "setup once per load, but a re-entrant one would double every "
+          "hook for the rest of the session",
+          _hook_log == _first)
+finally:
+    (lecture_view.gui_hooks, lecture_view.mw,
+     lecture_view._setup_done) = _saved_glue
 
 shutil.rmtree(TMP, ignore_errors=True)
 raise SystemExit(report())

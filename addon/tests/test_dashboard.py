@@ -66,6 +66,16 @@ check("a removable widget follows its own bool",
 check("a corrupt value reads as SHOWN (heatmap.enabled's rule — bad "
       "config must not silently hide a feature)",
       dash.widget_shown({"heatmap_enabled": "no"}, "heatmap") is True)
+# The corrupt-VALUE branch above was pinned; the corrupt-CONFIG branch
+# beside it was not, and inverting it survived the K-139 mutation audit
+# (finding 4). Same documented rule, one step earlier: config that is not
+# a dict at all is still not permission to hide a feature.
+check("a config that is not a dict at all reads as SHOWN too — the same "
+      "rule one step earlier, and the branch a whole unreadable config "
+      "falls into",
+      dash.widget_shown(None, "heatmap") is True
+      and dash.widget_shown("garbage", "heatmap") is True
+      and dash.widget_shown([("heatmap_enabled", False)], "heatmap") is True)
 check("an unknown id is not shown", dash.widget_shown({}, "evil") is False)
 
 
@@ -102,6 +112,15 @@ check("garbage decodes to None, never an exception into Anki",
 
 # ------------------------------------------------------------ boot state
 section("boot state and boot html")
+
+# Read BEFORE the bridge section below flips it: this is the module's boot
+# value, and the audit (finding 3) flipped `_EDIT: bool = False` to True
+# with nothing noticing — every deck browser would boot into jiggle mode.
+# The flag's RESET paths are source-pinned; its default was not pinned at
+# all, and "never persisted, reopening Anki always starts calm" is only
+# true if the module-level default is False.
+check("edit mode boots OFF — a fresh session must never open jiggling",
+      dash._EDIT is False)
 
 _state = dash.boot_state({"heatmap_enabled": False,
                           "dashboard_order": ["heatmap", "decks"]}, True)
@@ -235,21 +254,40 @@ check("a foreign message passes through untouched",
       == ("sentinel",))
 _b = lambda obj: "klausmate:dash:" + base64.b64encode(
     json.dumps(obj).encode()).decode()
-dash._on_js_message((False, None), _b({"action": "edit-on"}), None)
+_r_on = dash._on_js_message((False, None), _b({"action": "edit-on"}), None)
 check("edit-on arms the session flag", dash._EDIT is True)
-dash._on_js_message((False, None), _b({"action": "edit-off"}), None)
+_r_off = dash._on_js_message((False, None), _b({"action": "edit-off"}), None)
 check("edit-off clears it", dash._EDIT is False)
-dash._on_js_message((False, None), _b({"action": "remove", "id": "heatmap"}),
-                    None)
+_r_rm = dash._on_js_message(
+    (False, None), _b({"action": "remove", "id": "heatmap"}), None)
 check("remove writes the widget's bool through the policy gate",
       _calls == [{"heatmap_enabled": False}])
-dash._on_js_message((False, None), _b({"action": "remove", "id": "decks"}),
-                    None)
+_r_mand = dash._on_js_message(
+    (False, None), _b({"action": "remove", "id": "decks"}), None)
 check("removing the mandatory widget writes NOTHING",
       _calls == [{"heatmap_enabled": False}])
 check("malformed payloads are swallowed",
       dash._on_js_message((False, None), "klausmate:dash:!!!", None)
       == (True, None))
+
+# The "we handled this" half of the bridge contract. Every RETURN out of a
+# dash: message must be (True, None): returning False re-opens the message
+# to the rest of Anki's hook chain, which then sees an unknown pycmd. The
+# K-139 audit flipped five of this handler's six such returns to False with
+# nothing noticing (only the malformed-payload one above was pinned). Four
+# of those five are reachable and are pinned here; the fifth guards an
+# IndexError on message.split(":", 2)[2], which the startswith() check
+# above it makes impossible — that one is dead defensive code, and stays a
+# survivor by construction rather than by omission.
+check("EVERY dash: outcome reports the message handled — armed, cleared, "
+      "refused by the policy gate, and written — so a klausmate: pycmd "
+      "never falls through to the rest of Anki's hook chain",
+      _r_on == (True, None) and _r_off == (True, None)
+      and _r_mand == (True, None) and _r_rm == (True, None))
+check("a foreign message is the ONE case that keeps travelling, and it "
+      "travels unchanged",
+      dash._on_js_message(("passing", "through"), "klausmate:lecture", None)
+      == ("passing", "through"))
 
 
 # ----------------------------------------------- the DOM half, for real

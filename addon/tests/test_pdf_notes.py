@@ -93,6 +93,59 @@ check("undecodable bytes cost characters, never the whole note",
       pn.load_notes(tmp, "Mangled").startswith("good "))
 
 
+# ------------------------------------------------------ save_notes failure
+
+section("save_notes reports FAILURE when the disk says no")
+# Every success path returned True and was pinned; both error branches
+# returned False and were pinned by nothing (K-139 mutation audit, finding
+# 9 — flipping either `return False` to `return True` survived the whole
+# suite). The return value is not decoration: the notes pane autosaves on a
+# debounce and a lie here is a silently lost note, or — on the delete side —
+# a stale notes page left baked into the PDF after the user cleared it.
+#
+# Exercised against a genuinely unwritable directory (0o500: stat and read
+# still work, create and unlink do not). The mode is restored in a finally
+# so this never leaves an unremovable scratch directory behind.
+_ro_root = tempfile.mkdtemp(prefix="klaus_notes_ro_")
+_ro_dir = os.path.dirname(pn.notes_path(_ro_root, "Locked"))
+os.makedirs(_ro_dir, exist_ok=True)
+check("fixture: a sidecar exists before the directory is locked",
+      pn.save_notes(_ro_root, "Locked", "text that must not vanish") is True)
+try:
+    os.chmod(_ro_dir, 0o500)
+    try:  # prove the lock actually locks — root ignores these bits
+        _probe = os.path.join(_ro_dir, ".probe")
+        with open(_probe, "w"):
+            pass
+        os.remove(_probe)
+        _denied = False
+    except OSError:
+        _denied = True
+
+    if not _denied:
+        print("  SKIP  save_notes failure branches (this user/filesystem "
+              "ignores 0o500) — NOT counted as a pass")
+    else:
+        check("a write that cannot happen reports False, never True — the "
+              "atomic tmp+replace has nowhere to put its temp file",
+              pn.save_notes(_ro_root, "Locked", "a replacement note")
+              is False)
+        check("the sidecar already on disk is untouched by the failed "
+              "write (atomic means all or nothing, both ways)",
+              pn.load_notes(_ro_root, "Locked")
+              == "text that must not vanish")
+        check("a DELETE that cannot happen reports False too — empty text "
+              "is the un-bake half of the round trip, so a false success "
+              "leaves a notes page baked into a PDF the user just cleared",
+              pn.save_notes(_ro_root, "Locked", "") is False)
+        check("...and the sidecar survives that failed delete",
+              os.path.isfile(pn.notes_path(_ro_root, "Locked")))
+        check("no half-written temp file is left in the locked directory",
+              [f for f in os.listdir(_ro_dir) if f.endswith(".tmp")] == [])
+finally:
+    os.chmod(_ro_dir, 0o700)
+
+
 # ------------------------------------------------------------------ metrics
 
 section("Helvetica base-14 WinAnsi metrics")
@@ -440,4 +493,5 @@ else:
 
 
 shutil.rmtree(tmp, ignore_errors=True)
+shutil.rmtree(_ro_root, ignore_errors=True)
 raise SystemExit(report())
