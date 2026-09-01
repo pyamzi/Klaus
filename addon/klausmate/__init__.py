@@ -777,25 +777,70 @@ def _pdf_display_name(safe: str) -> str:
         return safe
 
 
+# Placements anchored on Browse's NOTE-TABLE column instead of the editor
+# pane (K-169). They exist only in a window that HAS a note table, which is
+# why they are kept out of the shared placement key — see
+# _load_browse_placement below.
+NOTES_PLACEMENTS = ("notes-left", "notes-right")
+
+# Where a notes-* placement is remembered inside pdf_tabs.json. Its own key,
+# never the shared "placement" one: EVERY host window reads that one, and
+# Add Cards has no note table to anchor on. (pdf_handler.load_panel_state
+# also whitelists the five editor-anchored values, so a notes-* placement
+# written there would be silently dropped on the next read — the panel would
+# come back "above" and the Browse choice would be lost either way.)
+_BROWSE_PLACEMENT_KEY = "browse_placement"
+
+
+def _load_browse_placement() -> str | None:
+    """Browse's own remembered placement, or None. Anything that is not a
+    live notes-* value reads as None, so a hand-edited or stale file can
+    only cost the preference, never the panel."""
+    try:
+        val = pdf_handler._load_tabs_file(USER_FILES).get(
+            _BROWSE_PLACEMENT_KEY
+        )
+    except Exception:
+        return None
+    return val if val in NOTES_PLACEMENTS else None
+
+
+def _save_browse_placement(value: str | None) -> None:
+    """Remember (or, with None, forget) Browse's notes-anchored placement.
+    Goes through pdf_handler._save_tabs_file so it MERGES into
+    pdf_tabs.json like every other writer of that file — lecture_view.py's
+    precedent for a key pdf_handler has no accessor for."""
+    try:
+        pdf_handler._save_tabs_file(USER_FILES, {_BROWSE_PLACEMENT_KEY: value})
+    except Exception:
+        pass
+
+
 class _PdfTabContainer(QWidget):
     """The PDF viewer panel, with native-feeling window management.
 
-    One bar of chrome: ``[tabs ✕] [page n/m] [＋]``. The panel lives in
-    one of three places — docked ABOVE the note-editor pane, docked BELOW
-    it, or FLOATING as a normal macOS window. Docking wraps
-    ``editor.widget`` in a vertical splitter (created once, kept for the
-    window's lifetime), so "above" means above *that pane*, never the
-    whole window.
+    One bar of chrome: ``[tabs ✕] [page n/m] [＋]``. The panel docks
+    beside one of the host window's panes, or FLOATS as a normal macOS
+    window. Docking wraps the anchor pane in a private splitter (created
+    once, kept for the window's lifetime), so "above" means above *that
+    pane*, never the whole window.
+
+    There are TWO anchors. above/below/left/right wrap ``editor.widget``;
+    in Browse, notes-left/notes-right wrap the NOTE-TABLE column instead
+    (K-169), which is the only way to sit beside the note list — the
+    editor pane there IS the right-hand column. See the placement engine
+    below.
 
     Window management mirrors macOS conventions:
 
     - **drag a tab out of the tab-bar band** (or drag any empty bar
       space) → the REAL panel floats instantly and macOS moves it live
       under the cursor (``QWindow.startSystemMove``); wide bands over
-      the editor pane preview exactly where it would dock (arrow +
-      caption, sized like the real 45% split). Release on a band to
-      dock there, anywhere else to stay floating. Dragging an already-
-      floating panel by its bar is the same native move. Drags that
+      the editor pane — and, in Browse, over the note table — preview
+      exactly where it would dock (arrow + caption, sized like the real
+      45% split). Release on a band to dock there, anywhere else to
+      stay floating. Dragging an already-floating panel by its bar is
+      the same native move. Drags that
       stay inside the tab bar just reorder tabs, in any direction. A
       translucent-ghost fallback covers the rare case where the OS
       refuses/drops the native move (see the drag state machine in
@@ -834,6 +879,13 @@ class _PdfTabContainer(QWidget):
         g = state.get("geom")
         self._float_geom: QRect | None = QRect(*g) if g else None
         self._placed = False
+        # Browse remembers its own side of the note table, in its own key.
+        # Read only in a window that has a note table, so an Add Cards
+        # panel can never inherit a placement its window cannot anchor.
+        if self._browse_form() is not None:
+            browse_placement = _load_browse_placement()
+            if browse_placement is not None:
+                self._placement = browse_placement
 
         # Drag state machine. A bar/tab drag instantly floats the REAL
         # panel and hands the move to macOS via
@@ -1052,6 +1104,68 @@ class _PdfTabContainer(QWidget):
             pass
 
     # ---- placement engine ----
+    #
+    # TWO ANCHORS, ONE ENGINE (K-169). Every docked placement wraps some
+    # PANE of the host window in a private QSplitter and inserts the panel
+    # beside it:
+    #
+    #   above / below / left / right  → the EDITOR pane   (_ensure_vsplit)
+    #   notes-left / notes-right      → Browse's NOTE-TABLE column
+    #                                                  (_ensure_notes_split)
+    #
+    # The editor anchor is the original one, and its docstring's warning
+    # still holds for it: "above" means above *that pane*, never the whole
+    # window. In Browse the editor pane is the right-hand column, so it can
+    # never reach the note list — which is why the second anchor exists.
+    #
+    # Both anchors share _wrap_pane (the wrap) and _dock_into (the insert +
+    # sizing), so there is exactly one copy of the reparent sequence and of
+    # the size-policy re-assert that QSplitter.setOrientation makes
+    # necessary. A third anchor is a third _ensure_* cache in front of the
+    # same two helpers.
+
+    def _wrap_pane(self, pane: QWidget, vertical: bool) -> QSplitter | None:
+        """Put ``pane`` inside a fresh QSplitter, in its own place in the
+        host layout. Returns the wrapper, or None if the pane has nowhere
+        to be replaced.
+
+        Called once per anchor per window; the _ensure_* methods below
+        cache the result.
+        """
+        parent = pane.parentWidget()
+        if parent is None:
+            return None
+        split = QSplitter(
+            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
+        )
+        split.setChildrenCollapsible(False)
+        try:
+            # Inherit the pane's size policy. AddCards' fieldsArea carries
+            # verticalStretch=10 — the only hint giving it ALL surplus
+            # window height. QSplitter's default policy is orientation-
+            # dependent (vertically Preferred when horizontal), so without
+            # this the Type/Deck row balloons into blank space whenever
+            # the panel docks left/right.
+            split.setSizePolicy(pane.sizePolicy())
+        except Exception:
+            pass
+        if isinstance(parent, QSplitter):
+            idx = parent.indexOf(pane)
+            sizes = parent.sizes()
+            parent.insertWidget(idx, split)
+            split.addWidget(pane)  # reparents pane out of parent
+            try:
+                parent.setSizes(sizes)
+            except Exception:
+                pass
+        else:
+            lay = parent.layout()
+            if lay is None:
+                return None
+            lay.replaceWidget(pane, split)
+            split.addWidget(pane)
+        pane.setVisible(True)
+        return split
 
     def _ensure_vsplit(self) -> QSplitter | None:
         """Wrap the editor pane in a vertical splitter (once per window)."""
@@ -1061,65 +1175,113 @@ class _PdfTabContainer(QWidget):
         ed_w = getattr(self._editor, "widget", None)
         if ed_w is None:
             return None
-        parent = ed_w.parentWidget()
-        if parent is None:
+        vsplit = self._wrap_pane(ed_w, True)
+        if vsplit is None:
             return None
-        vsplit = QSplitter(Qt.Orientation.Vertical)
-        vsplit.setChildrenCollapsible(False)
-        try:
-            # Inherit the pane's size policy. AddCards' fieldsArea carries
-            # verticalStretch=10 — the only hint giving it ALL surplus
-            # window height. QSplitter's default policy is orientation-
-            # dependent (vertically Preferred when horizontal), so without
-            # this the Type/Deck row balloons into blank space whenever
-            # the panel docks left/right.
-            vsplit.setSizePolicy(ed_w.sizePolicy())
-        except Exception:
-            pass
-        if isinstance(parent, QSplitter):
-            idx = parent.indexOf(ed_w)
-            sizes = parent.sizes()
-            parent.insertWidget(idx, vsplit)
-            vsplit.addWidget(ed_w)  # reparents ed_w out of parent
-            try:
-                parent.setSizes(sizes)
-            except Exception:
-                pass
-        else:
-            lay = parent.layout()
-            if lay is None:
-                return None
-            lay.replaceWidget(ed_w, vsplit)
-            vsplit.addWidget(ed_w)
-        ed_w.setVisible(True)
         self._editor._klausmate_vsplit = vsplit  # type: ignore[attr-defined]
         return vsplit
 
-    def _embed(self, mode: str) -> None:
-        """Dock the panel on one side of the editor pane. The wrapper
-        splitter's orientation follows the side: above/below → vertical,
-        left/right → horizontal."""
-        vsplit = self._ensure_vsplit()
-        if vsplit is None:
-            self._make_floating(self._float_geom)
-            return
-        vertical = mode in ("above", "below")
-        vsplit.setOrientation(
+    # ---- the Browse note-table anchor (K-169) ----
+
+    def _browse_form(self) -> Any:
+        """Browse's generated form, or None in every other host.
+
+        Identified by the widgets this anchor actually uses rather than by
+        class name: the Browser's standalone edit-current window hosts an
+        Editor too, and AddCards has a form of its own — neither carries a
+        ``splitter`` + ``tableView`` pair.
+        """
+        form = getattr(self._win, "form", None)
+        if form is None:
+            return None
+        if not isinstance(getattr(form, "splitter", None), QSplitter):
+            return None
+        if getattr(form, "tableView", None) is None:
+            return None
+        return form
+
+    def _browse_note_pane(self) -> QWidget | None:
+        """Browse's note-table COLUMN — the pane this anchor docks beside.
+
+        Found by walking UP from ``form.tableView`` to the direct child of
+        whatever currently owns that column, which is browse_toggles'
+        method for the editor column and for the same reason: naming the
+        generated attribute (``form.widget``) would break silently on an
+        Anki rename, and Anki mutates this layout after setupUi anyway.
+
+        The walk stops at the Browse splitter, or at OUR wrapper once the
+        panel is docked here — so it keeps returning the note column
+        itself in both states, never the wrapper that contains it.
+        """
+        form = self._browse_form()
+        if form is None:
+            return None
+        splitter = form.splitter
+        wrap = getattr(self._win, "_klausmate_notes_split", None)
+        w: QWidget | None = form.tableView
+        while w is not None:
+            p = w.parentWidget()
+            if p is splitter or (wrap is not None and p is wrap):
+                return w
+            w = p
+        return None
+
+    def _ensure_notes_split(self) -> QSplitter | None:
+        """Wrap Browse's note-table column in a horizontal splitter (once
+        per window). None in any window without a note table.
+
+        The wrapper is remembered on the HOST WINDOW, not on the editor:
+        it wraps a widget the window owns, and Browse's editor is
+        re-initialised more often than its layout is.
+
+        Deliberately a WRAPPER rather than a third child of
+        ``form.splitter``: Anki persists that splitter with
+        saveState()/restoreState() (aqt.utils.saveSplitter, profile key
+        "editor3Splitter") and restore applies the saved sizes positionally
+        against however many children exist. Docking into it directly would
+        write a three-size state that, read back into the two-child
+        splitter of a session where the panel is never opened, hands the
+        editor column the PDF's width. Wrapping keeps ``form.splitter`` at
+        exactly two children and one handle, so Anki's own Browse layout
+        round-trips untouched.
+        """
+        existing = getattr(self._win, "_klausmate_notes_split", None)
+        if existing is not None:
+            return existing
+        pane = self._browse_note_pane()
+        if pane is None:
+            return None
+        split = self._wrap_pane(pane, False)
+        if split is None:
+            return None
+        self._win._klausmate_notes_split = split  # type: ignore[attr-defined]
+        return split
+
+    def _dock_into(
+        self,
+        split: QSplitter,
+        pane: QWidget | None,
+        vertical: bool,
+        first: bool,
+        mode: str,
+    ) -> None:
+        """Insert the panel into an anchor's wrapper and size it. The one
+        implementation both anchors run — a new anchor must not grow a
+        second copy."""
+        split.setOrientation(
             Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
         )
         # setOrientation transposes QSplitter's size policy — re-assert the
         # inherited pane policy so the wrapper keeps absorbing the window's
         # surplus height in every orientation.
         try:
-            ed_w = getattr(self._editor, "widget", None)
-            if ed_w is not None:
-                vsplit.setSizePolicy(ed_w.sizePolicy())
+            if pane is not None:
+                split.setSizePolicy(pane.sizePolicy())
         except Exception:
             pass
-        first = mode in ("above", "left")
-        vsplit.insertWidget(0 if first else vsplit.count(), self)
+        split.insertWidget(0 if first else split.count(), self)
         self.setVisible(True)
-        total = max(1, vsplit.height() if vertical else vsplit.width())
+        total = max(1, split.height() if vertical else split.width())
         pdf_share = int(total * 0.45)
         sizes = (
             [pdf_share, total - pdf_share]
@@ -1127,12 +1289,47 @@ class _PdfTabContainer(QWidget):
             else [total - pdf_share, pdf_share]
         )
         try:
-            vsplit.setSizes(sizes)
+            split.setSizes(sizes)
         except Exception:
             pass
         self._placement = mode
         self._placed = True
         self._persist_state()
+
+    def _embed(self, mode: str) -> None:
+        """Dock the panel beside one of the host window's panes.
+
+        notes-left / notes-right anchor on Browse's note table; every
+        other mode anchors on the editor pane, where the wrapper
+        splitter's orientation follows the side: above/below → vertical,
+        left/right → horizontal.
+        """
+        if mode in NOTES_PLACEMENTS:
+            notes_split = self._ensure_notes_split()
+            if notes_split is not None:
+                self._dock_into(
+                    notes_split,
+                    self._browse_note_pane(),
+                    False,
+                    mode == "notes-left",
+                    mode,
+                )
+                return
+            # No note table in this window — the anchor does not exist
+            # here. Fall through to the editor anchor on the same side
+            # rather than stranding the panel in a float.
+            mode = "left" if mode == "notes-left" else "right"
+        vsplit = self._ensure_vsplit()
+        if vsplit is None:
+            self._make_floating(self._float_geom)
+            return
+        self._dock_into(
+            vsplit,
+            getattr(self._editor, "widget", None),
+            mode in ("above", "below"),
+            mode in ("above", "left"),
+            mode,
+        )
 
     def _make_floating(self, geom: QRect | None) -> None:
         """Turn the panel into a real, PARENTLESS macOS window: it shows
@@ -1189,9 +1386,22 @@ class _PdfTabContainer(QWidget):
         if self._float_geom is not None:
             g = self._float_geom
             geom = [g.x(), g.y(), g.width(), g.height()]
+        notes = self._placement in NOTES_PLACEMENTS
+        if self._browse_form() is not None:
+            # Written on EVERY Browse placement change, None included:
+            # dragging the panel back onto the editor pane (or floating
+            # it) has to CLEAR the notes choice, or the next Browse open
+            # would silently overrule the move that just happened.
+            _save_browse_placement(self._placement if notes else None)
         try:
             pdf_handler.save_panel_state(
-                USER_FILES, placement=self._placement, geom=geom
+                USER_FILES,
+                # A notes-* placement never reaches the SHARED key — Add
+                # Cards reads it too and has no note table. Passing None
+                # leaves the last editor-anchored choice standing there,
+                # which is exactly what Add Cards should still get.
+                placement=None if notes else self._placement,
+                geom=geom,
             )
         except Exception:
             pass
@@ -1891,6 +2101,8 @@ class _PdfTabContainer(QWidget):
         "below": "⬇  Dock below",
         "left": "⬅  Dock left",
         "right": "➡  Dock right",
+        "notes-left": "⬅  Dock left of the notes",
+        "notes-right": "➡  Dock right of the notes",
     }
 
     def _update_zone(self, gp: QPoint) -> None:
@@ -1899,11 +2111,17 @@ class _PdfTabContainer(QWidget):
         pane; the central 20%×20% — and anywhere outside the pane — is
         an easy "stay floating". In a corner the proportionally nearer
         edge wins. The preview shows the TRUE post-drop layout: the 45%
-        band _embed() will actually allocate."""
+        band _embed() will actually allocate.
+
+        In Browse the note-table column carries the SAME grammar over its
+        own rect, minus the vertical pair: 40% bands left and right for
+        the two notes-* placements, a neutral 20% middle. The two panes
+        are siblings and never overlap, and this test runs only after the
+        editor pane declined, so the original bands are untouched."""
         zone: str | None = None
-        ed_w = getattr(self._editor, "widget", None)
-        if ed_w is not None and ed_w.isVisible():
-            r = QRect(ed_w.mapToGlobal(QPoint(0, 0)), ed_w.size())
+        pane = getattr(self._editor, "widget", None)
+        if pane is not None and pane.isVisible():
+            r = QRect(pane.mapToGlobal(QPoint(0, 0)), pane.size())
             if r.contains(gp):
                 w, h = max(1, r.width()), max(1, r.height())
                 rel_x = gp.x() - r.left()
@@ -1918,6 +2136,21 @@ class _PdfTabContainer(QWidget):
                     zone = "above" if rel_y <= h * 0.4 else "below"
                 elif in_h:
                     zone = "left" if rel_x <= w * 0.4 else "right"
+        if zone is None:
+            notes_pane = self._browse_note_pane()
+            if notes_pane is not None and notes_pane.isVisible():
+                r = QRect(
+                    notes_pane.mapToGlobal(QPoint(0, 0)), notes_pane.size()
+                )
+                if r.contains(gp):
+                    w = max(1, r.width())
+                    rel_x = gp.x() - r.left()
+                    if rel_x <= w * 0.4:
+                        zone = "notes-left"
+                    elif rel_x >= w * 0.6:
+                        zone = "notes-right"
+                    if zone is not None:
+                        pane = notes_pane
         if zone == self._active_zone:
             return
         self._active_zone = zone
@@ -1926,15 +2159,16 @@ class _PdfTabContainer(QWidget):
                 self._zone_overlay.hide()
             return
         try:
-            self._show_zone_overlay(zone, ed_w)
+            self._show_zone_overlay(zone, pane)
         except Exception:
             pass
 
-    def _show_zone_overlay(self, zone: str, ed_w: QWidget) -> None:
-        """Place the drop-zone preview. The overlay is ONE reusable
-        TOP-LEVEL window, not a child of the editor pane — during a
-        native drag the panel itself is a window floating over the
-        editor, and a child overlay would be covered by it."""
+    def _show_zone_overlay(self, zone: str, pane: QWidget) -> None:
+        """Place the drop-zone preview over ``pane``, the pane the zone
+        belongs to (the editor pane, or Browse's note column for a
+        notes-* zone). The overlay is ONE reusable TOP-LEVEL window, not
+        a child of that pane — during a native drag the panel itself is a
+        window floating over it, and a child overlay would be covered."""
         ov = self._zone_overlay
         if ov is None:
             ov = QWidget(None)
@@ -1975,8 +2209,8 @@ class _PdfTabContainer(QWidget):
             )
         except Exception:
             pass
-        origin = ed_w.mapToGlobal(QPoint(0, 0))
-        ew, eh = ed_w.width(), ed_w.height()
+        origin = pane.mapToGlobal(QPoint(0, 0))
+        ew, eh = pane.width(), pane.height()
         if zone in ("above", "below"):
             band = max(60, int(eh * 0.45))
             geo = QRect(
@@ -1987,8 +2221,9 @@ class _PdfTabContainer(QWidget):
             )
         else:
             band = max(60, int(ew * 0.45))
+            left_side = zone in ("left", "notes-left")
             geo = QRect(
-                origin.x() if zone == "left" else origin.x() + ew - band,
+                origin.x() if left_side else origin.x() + ew - band,
                 origin.y(),
                 band,
                 eh,
