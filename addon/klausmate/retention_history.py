@@ -13,8 +13,9 @@ LOCAL time, each list chronological, capped at ``MAX_ENTRIES`` (two years of
 daily snapshots) with the oldest dropped first. Corrupt or missing files
 read as empty; writes are atomic (tmp + ``os.replace``) because recording
 runs on the Library's background collection-held thread and a torn write
-would poison every later read. There is exactly one writer: the
-priority_rows pass.
+would poison every later read. Only two writers exist: the priority_rows
+pass (``record_rows``) and the PDF delete path (``forget_history``, reached
+from pdf_handler.delete_context).
 
 Everything above the "aqt glue" divider is aqt-free and pure — storage,
 recording, and all chart math (point mapping, axis ticks, date thinning) —
@@ -169,6 +170,32 @@ def record_rows(
             changed = True
     if changed:
         _atomic_write_json(_history_path(user_files_dir), hist)
+
+
+def forget_history(user_files_dir: str, safe: str) -> None:
+    """Drop one PDF's whole series — called when that PDF is deleted.
+
+    retention_history.json is a SIBLING of the per-PDF ``contexts``/
+    ``pdfs``/``annotations`` files, so nothing ``pdf_handler.delete_context``
+    unlinks can reach it (``retention.forget_prefs`` exists for exactly the
+    same blind spot). Without this, re-importing a PDF under the same safe
+    basename silently inherits the deleted one's curve — a chart of two
+    unrelated documents stitched together.
+
+    Every miss is a quiet no-op: a blank key, a key that isn't there, an
+    absent file, and an unparseable one all return without writing. A
+    corrupt file is deliberately LEFT ALONE rather than truncated here —
+    record_rows recovers it on the next Library refresh, and a delete must
+    never be the operation that destroys a readable-tomorrow file.
+    """
+    key = str(safe or "").strip()
+    if not key:
+        return
+    hist = load_history(user_files_dir)
+    if key not in hist:
+        return
+    del hist[key]
+    _atomic_write_json(_history_path(user_files_dir), hist)
 
 
 # ------------------------------------------------------------ chart math
