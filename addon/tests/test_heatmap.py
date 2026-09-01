@@ -699,6 +699,32 @@ check("a foreign message is passed straight through untouched",
 check("a malformed day is swallowed rather than raising into Anki",
       heatmap._on_js_message((False, None), "klausmate:heatmap:xyz", None)
       == (True, None))
+# The two bridge sites worker-K could not reach from its own claim
+# (K-142). Returning (False, None) re-opens the message to the rest of
+# Anki's hook chain; both flips survived the mutation audit.
+check("a rejected setting is still ANSWERED — a False here hands the "
+      "payload back to Anki's hook chain instead of ending it",
+      heatmap._apply_setting("history:9999") == (True, None)
+      and heatmap._apply_setting("nonsense") == (True, None))
+_timer_calls = []
+
+
+class _RecordingTimer:
+    @staticmethod
+    def singleShot(ms, fn):
+        _timer_calls.append((ms, fn))
+
+
+import types as _types  # noqa: E402
+_fake_qt = _types.ModuleType("aqt.qt")
+_fake_qt.QTimer = _RecordingTimer
+sys.modules["aqt.qt"] = _fake_qt
+check("a day click is answered as handled AND deferred off the bridge "
+      "— running Browse inside the webchannel call is the reentrancy "
+      "hazard tests/test_bridge_reentrancy.py exists for",
+      heatmap._on_js_message((False, None), "klausmate:heatmap:20000", None)
+      == (True, None)
+      and len(_timer_calls) == 1 and _timer_calls[0][0] == 0)
 
 
 # --------------------------------------------------- the real collection
