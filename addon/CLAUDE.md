@@ -301,7 +301,21 @@ same reason.
   pseudo-state, which is why disabled controls once looked live). Also
   per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
   `library_qss`, `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
-  `accent_rgba`). **UI files must not hardcode colours** — import theme and
+  `accent_rgba`). Since 2026-09-01 `library_qss` grounds the Library
+  window, its tree, its header and the window-scoped
+  `QSplitter::handle` all on `chrome` — the top bar's own token;
+  `pdf_panel_qss`'s own scoped copy of that same handle rule stays on
+  `bg` on purpose, because the pane it grabs (the PDF viewer's own
+  internal splitter) is `bg` too. `accent_mix(night, alpha,
+  base="surface")` takes a `base` at all because a tinted band has to
+  mix over whatever paper it actually sits on — `"chrome"` for the
+  Library's own selection band now. A documentless native `QPdfView`
+  paints `bg` the same way — through palette roles rather than a
+  stylesheet (Window/Base/Dark/Mid, set once at construction on both
+  the view and its viewport in `pdf_viewer.py`, K-178, closed by
+  K-208) — since a `QPdfView` answers to Qt's palette, not QSS;
+  pdf.js needs no equivalent, since its own `css_vars` already hands
+  the page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
   reference tokens; styles are computed at widget creation (a night-mode
   flip catches up on next open). Dialog buttons are blue-primary by
   default with `SecondaryButton`/`DangerButton` objectName opt-outs; the
@@ -608,7 +622,21 @@ same reason.
   `web/chevron-right-{day,night}.svg`, uppercase LIBRARY caption with
   New Folder/Refresh/Map beside it (Map opens `pdf_map.open_map_window`
   through a guarded import — K-124), quiet flat buttons — PrimaryButton
-  opt-in kept); columns are PDF/Retention/Cards/Notes (Cards =
+  opt-in kept). Since 2026-09-01 those rows sit on `chrome` instead —
+  the tree's own ground had been `bg` since K-175, and Pouya asked for
+  it back: "I want the panels, like the left panel, to be the same
+  color as the top bar." The window-scoped `QSplitter::handle` grab
+  follows onto `chrome` too, with only a 1px `grey_light` hairline
+  marking the seam — a `bg` grab between two now-chrome panes had
+  measured as a 7px stripe belonging to neither, fixed in the same
+  round (K-206). The map box shares that same chrome surface (its
+  canvas already painted chrome, K-185); the documentless viewer pane
+  alone is `bg`, a step darker (K-178, closed by K-208).
+  `library_explorer.BAND_BASE` moved to `"chrome"` with it, so the
+  tree delegate's column-0 selection band and the sheet's own
+  `accent_mix(..., 'chrome')` rules composite over the same real
+  ground instead of drifting apart (K-130). Columns are
+  PDF/Retention/Cards/Notes (Cards =
   VIEWABLE cards only, counts from priority_rows' K-118 keys via
   .get; a fully suspended PDF renders dimmed with "suspended" in its
   Cards cell); the context menu gains Suspend/Unsuspend Cards
@@ -737,22 +765,31 @@ same reason.
   notes, so PDFs with overlapping note sets land in one knot, and
   ghosting is why that no longer reads as a defect. Arrow keys are
   the picker and the only thing that can separate two stacked
-  centroids. Notes are cached glow SPRITES blitted per dot —
-  measured cheaper than round `drawPoints` and 5× cheaper than a
-  `QRadialGradient` per point at these counts, where K-148's
-  opposite finding (square 15× cheaper than round) was true only at
-  28,668. Edges are a capped particle trail of those same sprites,
-  0.84ms and flat in zoom: glowing antialiased STROKES were measured
-  and rejected at 6.35ms fit / 39.8ms for one PDF's full set, and the
-  culprit was the AA rasterizer, not the composition mode
-  (Plus 18.08 vs SourceOver 18.74). The pre-K-158 edges were not
-  missing, they were INVISIBLE — 1px at 0.25 alpha over 28,670 grey
-  chips moved 0.59% of the pixels. Names are their own pass AFTER
-  every node (`clamp_label` last): drawn inside the depth-sorted node
-  loop, a nearer PDF painted its disc straight across the label, which
-  is what three rounds of "label clipping" actually were — paint
-  order, never the offset. Tooltips are one canvas-drawn plate, not
-  QToolTip. Labels show for the focused or hovered PDF only (K-138 —
+  centroids. Since K-174, stars are hard, square-capped `drawPoints`
+  — one C++ call per depth band, antialiasing off — and a focused
+  PDF's spokes are crisp, batched 1px lines. The constellation itself
+  is `constellation_links` in mode `"constellation"`: a Prim
+  spanning-tree backbone (connected by construction, exempt from
+  `LINK_MAX`) unioned with kNN density, computed ONCE per canvas and
+  deterministic (`link_seed`) — O(n²) on the sampled cloud, ~25 ms at
+  520 points and quadratic from there, so the real ceiling today is
+  `SAMPLE_NOTES + SAMPLE_PER_PDF × PDFs` until K-199 lands a linear
+  replacement. **Since 2026-09-01 the map is a DIM constellation on
+  the panel's own ground**: it reads the HOST palette — no
+  always-dark special case, no card, no vignette, no border
+  (`c = dict(host, bg=host["chrome"])`) — rests at `DIM_LIT` and
+  ramps to 1.0 under the pointer (`lit` pyqtProperty, `LIT_MS`,
+  quantised into the pen-cache key), lights only the SELECTED PDF's
+  ring, core and spokes plus its bare name — no plate, no halo
+  (`node_lines` is the display name alone; the hover-only preview is
+  `text_muted` and dims with the rest of the field) — and SWAYS
+  `±SWAY_AMP` (0.28 rad) over `SWAY_PERIOD_MS` at `CAM_DISTANCE` 2.0
+  instead of turning, never crossing ±90° so `band_order`'s flip
+  never fires (`sweep_bounds` frames the swept arc, and K-201's pins
+  in `scripts/k201_gate.py` make that framing load-bearing). Frame
+  time: 1.1–1.4 ms median at 1100×660, floor 4 ms. The light palette
+  is now an inverted, faint field on white, not a forced night sky.
+  Labels show for the focused or hovered PDF only (K-138 —
   Pouya's call, which reversed K-133's always-on labels the same day).
   `select_pdf(safe)` is the seam for the Library dock: a known name
   selects and recentres only if off-view, an unknown or empty name
