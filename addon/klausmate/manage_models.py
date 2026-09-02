@@ -85,6 +85,61 @@ _EMBED_PRESETS = [
     ("embeddinggemma", "Google, newest · ~620 MB"),
 ]
 
+# OCR-model presets offered in the Assistant page's Pull dropdown — the
+# vision-capable counterpart to _EMBED_PRESETS above. Klaus's own OCR
+# path (page_ocr.py) calls Ollama's /api/generate with images; these are
+# just the two starter models worth surfacing, not an exhaustive list.
+_OCR_PRESETS = [
+    ("glm-ocr", "GLM-OCR — multimodal OCR for complex documents · ~2.5 GB"),
+    ("deepseek-ocr", "DeepSeek-OCR — token-efficient OCR · ~3 GB"),
+]
+
+# Display labels for the Local Models list's Type column (rebuild_library_list).
+_MODEL_TYPE_LABELS = {"embedding": "Embedding", "ocr": "OCR", "chat": "Chat"}
+
+
+def classify_model(show: dict) -> str:
+    """Pure: which of "embedding" / "ocr" / "chat" a /api/show payload
+    describes, by Ollama's own reported capabilities list.
+
+    "embedding" if "embedding" is among them; "ocr" if "vision" is
+    (Klaus reads a scanned/no-text-layer PDF page through such a model);
+    otherwise, or on anything malformed (missing key, non-dict input, a
+    capabilities value that isn't even a list), "chat" — called once per
+    installed model, so one odd response must never raise and blank the
+    whole Local Models list.
+    """
+    caps = show.get("capabilities") if isinstance(show, dict) else None
+    if not isinstance(caps, (list, tuple, set)):
+        return "chat"
+    if "embedding" in caps:
+        return "embedding"
+    if "vision" in caps:
+        return "ocr"
+    return "chat"
+
+
+def embedding_candidates(models: list, model_types: dict) -> list:
+    """Pure: the subset of `models` classified "embedding" by
+    `model_types` (classify_model's cache shape, name -> "embedding" /
+    "ocr" / "chat").
+
+    Review K-194 Critical #1: sync_embed_widgets used to filter the
+    DISPLAYED dropdown list this way inline, but still handed the
+    UNFILTERED inventory to _resolve_ollama_model and to the
+    write-to-disk guard right below it — so with exactly one installed
+    model that happened to be OCR-typed, the resolver's "the one model
+    installed" branch returned it, and it got silently persisted as
+    embedding_model. Both call sites now build this list ONCE and use
+    it in both places, so a non-embedding model can never reach either
+    the dropdown OR the auto-heal / write path. A name absent from
+    model_types (e.g. mid-classification, see _classify_models_async)
+    is excluded, not assumed embedding — the same conservative default
+    classify_model itself falls back to for a failed /api/show.
+    """
+    return [n for n in models if model_types.get(n) == "embedding"]
+
+
 _EMBED_KEY_URLS = {
     "voyage": "https://dash.voyageai.com/api-keys",
     "openai": "https://platform.openai.com/api-keys",
@@ -1650,92 +1705,278 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     _refresh_library_label()
     # ---- Assistant --------------------------------------------------
-    # The panel shipped pointing at "KlausMate Preferences" for a key that
-    # had nowhere to be typed, so it could only ever report "No API key
-    # set". This is that missing surface.
+    # Klaus is not itself the assistant: Claude Code is. This page
+    # points at the local `claude` binary agent_host.py (Task 2)
+    # discovers, and at the local OCR model that reads a lecture page's
+    # slide text and images when the PDF has no extractable text layer.
+    # The old Assistant panel — its promised future features and its own
+    # provider-key / hosted-token picker — is gone; see AGENTS.md's
+    # "What used to be here".
     assistant_layout = _page(
         "Assistant",
         "Assistant",
-        "The Library's right-hand panel: ask questions about the open "
-        "lecture, and (soon) practise and generate a podcast from it. Use "
-        "your own provider key, or sign in to let KlausMate hold the keys.",
+        "Claude Code is the engine: install it, run `claude` once to "
+        "log in, and Klaus finds it. The page you are viewing reaches "
+        "it as OCR text and image.",
     )
 
-    assistant_backend_combo = QComboBox()
-    assistant_backend_combo.addItem("Use my own API key", "direct")
-    assistant_backend_combo.addItem("KlausMate hosted (sign in)", "hosted")
-    assistant_backend_combo.setMinimumWidth(220)
+    ocr_enabled_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
     _row(
         assistant_layout,
-        "Where requests go",
-        "Your own key talks to the provider directly and nothing leaves "
-        "this machine except the request. Hosted sends a token instead, "
-        "and KlausMate supplies the key.",
-        assistant_backend_combo,
+        "OCR",
+        "Read a lecture page's slide text and images through a local "
+        "vision model when the PDF has no extractable text layer "
+        "(scanned slides, screenshots).",
+        ocr_enabled_cb,
     )
 
-    assistant_key_edit = QLineEdit()
-    assistant_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    assistant_key_edit.setMinimumWidth(260)
-    assistant_key_edit.setPlaceholderText("sk-ant-…")
-    assistant_key_row = _row(
+    ocr_model_combo = QComboBox()
+    ocr_pull_btn = QPushButton("Pull")
+    ocr_model_ctl = QHBoxLayout()
+    ocr_model_ctl.setContentsMargins(0, 0, 0, 0)
+    ocr_model_ctl.addWidget(ocr_model_combo, 1)
+    ocr_model_ctl.addWidget(ocr_pull_btn)
+    _row(
         assistant_layout,
-        "API key",
-        "Stored in this profile's add-on config, never sent to KlausMate.",
-        assistant_key_edit,
+        "OCR model",
+        "Which local vision model reads the page. Pull downloads the "
+        "selected one through Ollama, the same way the embedding "
+        "models on the Semantic Search page do.",
+        ocr_model_ctl,
     )
 
-    assistant_token_edit = QLineEdit()
-    assistant_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    assistant_token_edit.setMinimumWidth(260)
-    assistant_token_edit.setPlaceholderText("Paste your sign-in token")
-    assistant_token_row = _row(
+    def _fill_ocr_model_combo() -> None:
+        """Installed OCR-typed models (from _classify_models_async's
+        off-thread /api/show pass) plus the presets, so an unpulled one
+        can still be picked and then downloaded with the Pull button
+        beside it. Same never-clobber-an-unsaved-pick guard as
+        sync_threshold_widget / sync_embed_widgets — a Refresh click
+        elsewhere must not silently discard a pick made on this page
+        before Save.
+
+        Intersected against ui_state["models"] (the current inventory),
+        not just filtered by cached type: model_types can briefly lag
+        behind models (classification is async and/or a model was just
+        deleted), and a stale "ocr" entry for a name no longer installed
+        must not resurrect it in the picker."""
+        if ui_state["dirty"]:
+            return
+        ui_state["syncing"] = True
+        try:
+            cfg = _pkg().get_config()
+            want = str(cfg.get("ocr_model") or "glm-ocr")
+            current = set(ui_state["models"])
+            installed = sorted(
+                name for name, kind in ui_state["model_types"].items()
+                if kind == "ocr" and name in current
+            )
+            ocr_model_combo.clear()
+            for name in installed:
+                ocr_model_combo.addItem(name, name)
+            installed_set = set(installed)
+            for name, desc in _OCR_PRESETS:
+                if name not in installed_set:
+                    ocr_model_combo.addItem(f"{name}   ({desc})", name)
+            idx = ocr_model_combo.findData(want)
+            if idx < 0:
+                # Stored choice is neither installed nor a known preset —
+                # keep it rather than silently swapping in glm-ocr.
+                ocr_model_combo.addItem(want, want)
+                idx = ocr_model_combo.count() - 1
+            ocr_model_combo.setCurrentIndex(idx)
+        finally:
+            ui_state["syncing"] = False
+
+    def _pull_ocr_selected() -> None:
+        """Reuses start_pull()'s existing progress bar / refresh() cycle
+        instead of a second pull implementation — same technique as the
+        embed row's own pull_missing(name) fix-it button."""
+        if op_state["active"]:
+            return
+        idx = ocr_model_combo.currentIndex()
+        name = str(ocr_model_combo.itemData(idx) or "") if idx >= 0 else ""
+        if not name:
+            return
+        edit = pull_input.lineEdit()
+        if edit is not None:
+            edit.setText(name)
+        start_pull()
+
+    claude_binary_lbl = QLabel()
+    claude_binary_lbl.setWordWrap(True)
+    claude_override_btn = QPushButton("Override…")
+    claude_override_btn.setObjectName("SecondaryButton")
+    _row(
+        assistant_layout, "Claude Code binary", claude_binary_lbl, claude_override_btn
+    )
+
+    # Pending (possibly unsaved) claude_binary value. Empty means
+    # "auto-detect" — the same override-or-search contract
+    # agent_host.find_claude itself takes.
+    _assistant_state: dict[str, str] = {"claude_binary": ""}
+
+    def _resolve_claude_binary(explicit: str) -> str:
+        """Read-only detection via Task 2's agent_host — imported lazily
+        because this dialog can open before that module exists (a fresh
+        checkout mid-build) or on a machine missing it entirely.
+        Degrades to "" (rendered as "not found"), never raises."""
+        try:
+            from . import agent_host
+        except Exception as exc:
+            print(f"[klausmate] agent_host unavailable: {exc}")
+            return ""
+        try:
+            return agent_host.find_claude(explicit) or ""
+        except Exception as exc:
+            print(f"[klausmate] agent_host.find_claude failed: {exc}")
+            return ""
+
+    def _refresh_claude_binary_label() -> None:
+        found = _resolve_claude_binary(_assistant_state["claude_binary"])
+        claude_binary_lbl.setText(found or "not found")
+
+    def _pick_claude_binary() -> None:
+        from aqt.qt import QFileDialog
+
+        # An INSTANCE + open() (K-125), never the static
+        # getOpenFileName()/getExistingDirectory() convenience helpers —
+        # those exec() their own nested loop.
+        dialog = QFileDialog(dlg, "Locate the claude binary")
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+
+        def _on_selected(path: str) -> None:
+            if not path:
+                return
+            _assistant_state["claude_binary"] = path
+            _refresh_claude_binary_label()
+            mark_dirty()
+
+        dialog.fileSelected.connect(_on_selected)
+        dialog.finished.connect(dialog.deleteLater)
+        dialog.open()
+
+    assistant_model_edit = QLineEdit()
+    assistant_model_edit.setMinimumWidth(220)
+    assistant_model_edit.setPlaceholderText("default")
+    _row(
         assistant_layout,
-        "KlausMate token",
-        "Identifies your subscription. The service checks it on every "
-        "request — this add-on cannot grant access by itself.",
-        assistant_token_edit,
+        "Model",
+        "Which Claude model the assistant runs. Leave blank for Claude "
+        "Code's own default.",
+        assistant_model_edit,
     )
 
-    def _sync_assistant_rows() -> None:
-        """Show only the credential the chosen backend actually uses.
+    assistant_reopen_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
+    _row(
+        assistant_layout,
+        "Reopen on start",
+        "Reopen the Assistant dock where you left it the next time Anki "
+        "starts.",
+        assistant_reopen_cb,
+    )
 
-        Structural hiding via klaus_hidden, which beats a search hit —
-        the same mechanism that hides the API-key row for Ollama."""
-        hosted = assistant_backend_combo.currentData() == "hosted"
-        for row, wanted in (
-            (assistant_key_row, not hosted),
-            (assistant_token_row, hosted),
-        ):
-            try:
-                row.klaus_hidden = not wanted
-                row.setVisible(wanted)
-                if getattr(row, "klaus_sep", None) is not None:
-                    row.klaus_sep.setVisible(wanted)
-            except Exception as exc:
-                print(f"[klausmate] assistant row sync failed: {exc}")
+    def _clear_sessions_confirmed() -> None:
+        """The destructive back half, run only from the confirm's Yes.
+        assistant_sessions is Task 7's module, imported lazily for the
+        same reason agent_host is above."""
+        try:
+            from . import USER_FILES, assistant_sessions
+        except Exception as exc:
+            print(f"[klausmate] assistant_sessions unavailable: {exc}")
+            return
+        try:
+            assistant_sessions.clear_all(USER_FILES)
+        except Exception as exc:
+            print(f"[klausmate] assistant_sessions.clear_all failed: {exc}")
+            return
+        tooltip("Klaus: assistant sessions cleared", parent=dlg)
+
+    def clear_assistant_sessions() -> None:
+        # Hand-built QMessageBox + open() + finished (K-125), same
+        # pattern as pdf_drive._delete_pdf — never the blocking
+        # QMessageBox.question() static (its internal exec() is the
+        # K-114 segfault class).
+        msg = QMessageBox(dlg)
+        msg.setWindowTitle("Clear Sessions")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(
+            "Clear every saved Assistant conversation?\n\n"
+            "This removes the session history Claude Code keeps per "
+            "PDF. Notes, PDFs, and highlights are never touched."
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = msg.button(QMessageBox.StandardButton.Yes)
+        if yes_btn is not None:
+            yes_btn.setObjectName("DangerButton")
+        no_btn = msg.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setObjectName("SecondaryButton")
+        try:
+            from . import theme as _theme
+
+            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] clear-sessions dialog theme failed: {exc}")
+
+        def _on_answered(_r: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = (
+                clicked is not None
+                and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+            )
+            msg.deleteLater()
+            if confirmed:
+                _clear_sessions_confirmed()
+
+        msg.finished.connect(_on_answered)
+        msg.open()
+
+    clear_sessions_btn = QPushButton("Clear Sessions")
+    clear_sessions_btn.setObjectName("SecondaryButton")
+    _row(
+        assistant_layout,
+        "Sessions",
+        "Deletes the saved Assistant conversation history for every "
+        "PDF. Notes, PDFs, and highlights are never touched.",
+        clear_sessions_btn,
+    )
 
     def load_assistant() -> None:
         cfg = _pkg().get_config()
-        want = str(cfg.get("assistant_backend") or "direct")
-        idx = assistant_backend_combo.findData(want)
-        assistant_backend_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        assistant_key_edit.setText(str(cfg.get("assistant_api_key") or ""))
-        assistant_token_edit.setText(str(cfg.get("assistant_token") or ""))
-        _sync_assistant_rows()
+        ocr_enabled_cb.setChecked(bool(cfg.get("ocr_enabled", True)))
+        _assistant_state["claude_binary"] = str(cfg.get("claude_binary") or "")
+        _refresh_claude_binary_label()
+        assistant_model_edit.setText(str(cfg.get("assistant_model") or ""))
+        assistant_reopen_cb.setChecked(bool(cfg.get("assistant_reopen", False)))
+        # ocr_model_combo itself is (re)populated by refresh() /
+        # _fill_ocr_model_combo — no models are known yet this early in
+        # dialog construction, exactly like embed_model_combo/lib_lst.
 
     def save_assistant() -> None:
         cfg = _pkg().get_config()
-        cfg["assistant_backend"] = assistant_backend_combo.currentData() or "direct"
-        cfg["assistant_api_key"] = assistant_key_edit.text().strip()
-        cfg["assistant_token"] = assistant_token_edit.text().strip()
+        cfg["ocr_enabled"] = bool(ocr_enabled_cb.isChecked())
+        idx = ocr_model_combo.currentIndex()
+        picked = str(ocr_model_combo.itemData(idx) or "") if idx >= 0 else ""
+        cfg["ocr_model"] = picked or "glm-ocr"
+        cfg["claude_binary"] = _assistant_state["claude_binary"]
+        cfg["assistant_model"] = assistant_model_edit.text().strip()
+        cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
+        # No Preferences row for this one — it's dock state, set by
+        # dragging the Assistant dock itself. Round-tripped so this
+        # save never wipes it back to the default.
+        cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
         _pkg().write_config(cfg)
 
-    assistant_backend_combo.currentIndexChanged.connect(
-        lambda _i: (mark_dirty(), _sync_assistant_rows())
-    )
-    assistant_key_edit.textEdited.connect(lambda _t: mark_dirty())
-    assistant_token_edit.textEdited.connect(lambda _t: mark_dirty())
+    ocr_enabled_cb.toggled.connect(lambda _c: mark_dirty())
+    ocr_model_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
+    ocr_pull_btn.clicked.connect(_pull_ocr_selected)
+    claude_override_btn.clicked.connect(_pick_claude_binary)
+    assistant_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
+    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
     load_assistant()
 
     _finish_nav("General", "Appearance", "Assistant", "Semantic Search",
@@ -1799,6 +2040,15 @@ def manage_models_dialog(setup: bool = False) -> None:
     # DISPLAYING, which runs ahead of the stored config while unsaved.
     ui_state: dict[str, Any] = {
         "models": [],
+        # name -> "embedding"/"ocr"/"chat", from _classify_models_async's
+        # off-thread /api/show pass — classify_model over each installed
+        # model, fetched once per refresh and cached here for the
+        # dialog's life.
+        "model_types": {},
+        # Bumped by every refresh() call; a completed classification
+        # whose generation no longer matches is a stale result from a
+        # superseded refresh and is dropped rather than applied.
+        "classify_gen": 0,
         "syncing": False,
         "dirty": False,
         "shown_provider": "",
@@ -1811,6 +2061,7 @@ def manage_models_dialog(setup: bool = False) -> None:
             auto_setup_btn, download_btn, check_conn_btn,
             embed_provider_combo, embed_model_combo, embed_key_edit,
             embed_fix_btn, index_btn, test_conn_btn,
+            ocr_model_combo, ocr_pull_btn,
             threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
@@ -1887,13 +2138,77 @@ def manage_models_dialog(setup: bool = False) -> None:
             if reached
             else "Local library needs Ollama — not required for your current provider."
         )
+        # model_types is intentionally left as-is here (not reset) — the
+        # widgets below read whatever classification is already cached,
+        # so a model this dialog already knows about doesn't flash to
+        # "Chat" every refresh; _classify_models_async re-syncs them
+        # again once it lands a fresh pass for the CURRENT models list.
         sync_embed_widgets()
         sync_threshold_widget()
         rebuild_library_list()
+        _fill_ocr_model_combo()
+        _classify_models_async(models)
+
+    def _classify_models_async(models: list[str]) -> None:
+        """Off-main-thread /api/show pass (K-194 review, Important #1).
+
+        Classifying N installed models is 1..N sequential HTTP calls,
+        each carrying OllamaClient's own 30s timeout if one hangs —
+        running that inline in refresh() could freeze the whole
+        Preferences window for minutes against a large local library.
+        This runs in a QueryOp exactly like every other network op in
+        this dialog (start_pull, delete_selected, start_install);
+        model_types is written and the three widgets that read it are
+        re-synced back on the MAIN thread in on_done, never from the
+        worker. A failed /api/show for one model still tolerates to
+        "chat" — same contract refresh() used to enforce inline, just no
+        longer holding up the caller.
+
+        ui_state["classify_gen"] guards against a stale result: if
+        Refresh is clicked again (or a pull/delete completes) before
+        this pass returns, that newer refresh() bumps the generation,
+        and this pass's own on_done sees the mismatch and drops its
+        result instead of overwriting fresher data with stale data.
+        """
+        if not models:
+            # Nothing to classify (no models, or Ollama unreachable) —
+            # and nothing stale should survive either, so a session that
+            # goes from "some models" to "none" doesn't leave phantom
+            # types behind for names that no longer exist.
+            ui_state["model_types"] = {}
+            return
+        gen = ui_state["classify_gen"] = ui_state["classify_gen"] + 1
+
+        def do() -> dict[str, str]:
+            types: dict[str, str] = {}
+            for name in models:
+                try:
+                    show = _pkg().client()._post("/api/show", {"model": name})
+                except Exception:
+                    show = {}
+                types[name] = classify_model(show)
+            return types
+
+        def on_done(types: dict[str, str]) -> None:
+            if gen != ui_state["classify_gen"]:
+                return  # superseded by a later refresh() — drop it
+            ui_state["model_types"] = types
+            sync_embed_widgets()
+            rebuild_library_list()
+            _fill_ocr_model_combo()
+
+        def on_fail(exc: Exception) -> None:
+            print(f"[klausmate] model classification failed: {exc}")
+
+        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
+        op.failure(on_fail)
+        op.without_collection().run_in_background()
 
     def rebuild_library_list() -> None:
-        """Inventory with a 'used by' badge — pure inventory, doesn't
-        assign anything (the embed row above does that)."""
+        """Inventory with a 'used by' badge and a Type column (Embedding /
+        OCR / Chat, from the cached classify_model pass) — pure
+        inventory, doesn't assign anything (the embed row above does
+        that)."""
         from . import embeddings
 
         cfg = _pkg().get_config()
@@ -1913,8 +2228,10 @@ def manage_models_dialog(setup: bool = False) -> None:
             lib_lst.addItem(placeholder)
             return
         for name in models:
+            kind = ui_state["model_types"].get(name, "chat")
+            type_label = _MODEL_TYPE_LABELS.get(kind, "Chat")
             suffix = "   ·  used by: search" if name == embed_active else ""
-            item = QListWidgetItem(name + suffix)
+            item = QListWidgetItem(f"{name}   ·  {type_label}{suffix}")
             item.setData(Qt.ItemDataRole.UserRole, name)
             lib_lst.addItem(item)
             if name == selected:
@@ -2217,12 +2534,25 @@ def manage_models_dialog(setup: bool = False) -> None:
             ui_state["shown_provider"] = provider
             idx = max(0, embed_provider_combo.findData(provider))
             embed_provider_combo.setCurrentIndex(idx)
-            # Local provider → offer every installed model (the library is
-            # one flat list, nothing else pulls a non-embedding model into
-            # it); cloud → free text.
+            # Local provider → offer every installed EMBEDDING-typed model
+            # (the library can now also hold OCR/chat models, classified
+            # by the /api/show pass — those don't belong in this
+            # dropdown); cloud → free text. Built ONCE and used at every
+            # site below — review K-194 Critical #1 was exactly this list
+            # being filtered here but NOT at the resolver call or the
+            # write guard, so a lone installed OCR model could get
+            # silently resolved and persisted as embedding_model.
+            # Filtering never blocks a stored/healed choice from being
+            # DISPLAYED: the combo stays editable, so _resolve_ollama_model
+            # below can still surface a configured model classification
+            # missed — it just can no longer get WRITTEN from a
+            # non-embedding candidate list.
+            embedding_models = embedding_candidates(
+                ui_state["models"], ui_state["model_types"]
+            )
             embed_model_combo.clear()
             if provider == "ollama":
-                for name in ui_state["models"]:
+                for name in embedding_models:
                     embed_model_combo.addItem(name, name)
             configured_model = str(cfg.get("embedding_model") or "")
             if provider_override is not None:
@@ -2234,13 +2564,13 @@ def manage_models_dialog(setup: bool = False) -> None:
                 indexed_model = st["model"] if st["exists"] else ""
                 resolved = _resolve_ollama_model(
                     configured_model,
-                    ui_state["models"],
+                    embedding_models,
                     indexed_model,
                     embeddings.DEFAULT_MODELS["ollama"],
                 )
                 if (
                     resolved != configured_model
-                    and ui_state["models"]
+                    and embedding_models
                     and provider_override is None
                 ):
                     # Heal the config now, not just the widget — an empty
@@ -2248,15 +2578,19 @@ def manage_models_dialog(setup: bool = False) -> None:
                     # everywhere else this config is read (index_signature,
                     # the real indexing pipeline in curation.py).
                     #
-                    # Only persist when we actually enumerated the installed
-                    # models. An empty list means we could not ask Ollama
-                    # (server down, or the user just switched the provider
-                    # combo back to ollama while it is down), and the
-                    # resolver then falls through to the hardcoded default.
-                    # Writing THAT to disk would permanently orphan an index
-                    # built with another model — the exact failure this
-                    # resolver exists to prevent, made durable. Display it,
-                    # never store it.
+                    # Only persist when embedding_models is non-empty. It
+                    # reads empty for three reasons — Ollama unreachable
+                    # (server down, or the provider combo was just
+                    # switched back to ollama while it's down), Ollama
+                    # reachable but nothing installed classifies as
+                    # "embedding" yet, or classification simply hasn't
+                    # finished (_classify_models_async runs off-thread and
+                    # re-syncs this widget when it lands) — and in every
+                    # case the resolver falls through to the hardcoded
+                    # default. Writing THAT to disk would permanently
+                    # orphan an index built with another model — the
+                    # exact failure this resolver exists to prevent, made
+                    # durable. Display it, never store it.
                     cfg["embedding_model"] = resolved
                     _pkg().write_config(cfg)
                 embed_model_combo.setEditText(resolved)

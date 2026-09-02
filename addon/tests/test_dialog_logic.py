@@ -803,18 +803,34 @@ check("display order is decoupled from build order via _finish_nav",
 # Preferences" for a key that had nowhere to be typed. This is that surface.
 check("the Assistant page exists, so the panel's own error message points "
       "somewhere real", '"Assistant",\n        "Assistant",' in _src2)
-check("both credentials can be entered, and both are masked",
-      "assistant_key_edit" in _src2 and "assistant_token_edit" in _src2
-      and _src2.count("EchoMode.Password") >= 3)
+# K-194 (Task 8 of the Klaus-assistant-on-Claude-Code plan) rewrote this
+# page: Klaus is not itself the assistant, Claude Code is, so the old
+# provider-key/hosted-token picker (assistant_key_edit, assistant_token_edit,
+# assistant_backend_combo, the klaus_hidden row-sync between them) is gone.
+# The four checks that used to pin those fields are replaced below with
+# their equivalents on the new fields; every other assertion in this
+# section (the sidebar/search/row-shape ones around it) is untouched.
+check("the old provider-key / hosted-token credential fields are gone — "
+      "Claude Code is the engine now, not a provider key",
+      "assistant_key_edit" not in _src2
+      and "assistant_token_edit" not in _src2
+      and "assistant_backend_combo" not in _src2
+      and "_sync_assistant_rows" not in _src2)
+check("the page offers OCR, the Claude binary, a model override, "
+      "reopen-on-start, and Clear Sessions",
+      "ocr_enabled_cb" in _src2 and "ocr_model_combo" in _src2
+      and "claude_binary_lbl" in _src2 and "assistant_model_edit" in _src2
+      and "assistant_reopen_cb" in _src2 and "clear_sessions_btn" in _src2)
 check("save_all writes them — a preference with no line in a save_* is "
       "exactly how pdf_renderer shipped broken", "save_assistant()" in _src2)
-check("each widget marks dirty, or Save would silently skip it",
-      "assistant_key_edit.textEdited.connect" in _src2
-      and "assistant_token_edit.textEdited.connect" in _src2)
-check("only the credential the chosen backend uses is shown, hidden "
-      "structurally so a search hit cannot reveal the wrong one",
-      "assistant_key_row, not hosted" in _src2
-      and "klaus_hidden" in _src2)
+check("every new control marks dirty, or Save would silently skip it",
+      "ocr_enabled_cb.toggled.connect" in _src2
+      and "ocr_model_combo.currentIndexChanged.connect" in _src2
+      and "assistant_model_edit.textEdited.connect" in _src2
+      and "assistant_reopen_cb.toggled.connect" in _src2)
+check("Clear Sessions confirms window-modal — a hand-built QMessageBox, "
+      "open() + finished (K-125) — never the blocking QMessageBox.question()",
+      "msg.open()" in _src2 and "msg.finished.connect(_on_answered)" in _src2)
 
 check("settings are SynapsePro rows — name + desc left, control right, "
       "hairline separated",

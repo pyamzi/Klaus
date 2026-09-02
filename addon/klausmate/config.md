@@ -105,15 +105,6 @@ your machine.
   from voyageai.com), `openai` (cloud, needs a key), or `ollama` (local,
   free, private — limited by your machine's RAM). Existing installs keep
   whatever provider they already had configured.
-- **assistant_backend**: `direct` (your own API key) or `hosted`
-  (KlausMate's service holds the keys). Hosted is only used when
-  `assistant_token` is set — an empty token would otherwise fail every
-  call on a machine with a working key beside it.
-- **assistant_api_key**: your own provider key, used by the `direct`
-  backend. Never sent to KlausMate's service.
-- **assistant_token**: your KlausMate sign-in token, used by the
-  `hosted` backend. The subscription is checked by the service; the
-  add-on ships as readable Python and cannot enforce it locally.
 - **embedding_dimensions**: output width for OpenAI's v3 embedding
   models, which are MRL-trained so a shorter vector keeps the most
   significant components. `1024` is the default: better retrieval than
@@ -155,6 +146,41 @@ indexing wouldn't already need.
   when a card has no matching lecture it says "No lecture page
   available for this card." Panel width and open-state live in
   `pdf_tabs.json` (`lecture_view` key) — state, not preferences.
+
+## Assistant
+
+Klaus is not itself the assistant: Claude Code is. Install it, run
+`claude` once from a terminal to log in, and Klaus finds it — there is
+no API key to paste into Klaus itself. The Assistant reaches a lecture
+page as OCR'd text and image, so it can read a scanned or image-only
+slide the same as one with a normal text layer. Configure it in
+**KlausMate Preferences → Assistant**.
+
+- **ocr_enabled**: Default `true`. Whether Klaus reads a lecture page's
+  slide text and images through a local vision model when the PDF has
+  no extractable text layer (a scanned slide, a screenshot). Off means
+  such a page reaches the Assistant with no page context at all.
+- **ocr_model**: Which local Ollama vision model performs it. Default
+  `"glm-ocr"`. Pull it — or `deepseek-ocr`, or any other installed
+  vision-capable model — from **KlausMate Preferences → Assistant**.
+- **claude_binary**: Path override for the `claude` executable. Default
+  `""` (empty) — Klaus auto-detects it. Set this only if more than one
+  copy is installed and a specific one is needed;
+  **Assistant → Claude Code binary → Override…** sets it from a file
+  picker.
+- **assistant_model**: Which Claude model the assistant runs. Default
+  `""` (empty), meaning Claude Code's own default model. Only needed to
+  pin a specific one.
+- **assistant_reopen**: Default `false`. Reopen the Assistant dock
+  where you left it the next time Anki starts — the same idea as
+  `lecture_view_reopen` above.
+- **assistant_dock_width**: Default `420`. The Assistant dock's last
+  width in pixels, written by dragging the dock itself rather than a
+  Preferences row.
+
+**Clear Sessions** (KlausMate Preferences → Assistant) deletes the
+saved per-PDF conversation history the Assistant keeps. It never
+touches your notes, PDFs, or highlights.
 
 ## Feature toggles
 
