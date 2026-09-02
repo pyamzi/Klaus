@@ -617,15 +617,15 @@ same reason.
   RETENTION-refresh staleness token, and `shutdown` unsubscribes
   instead of cancelling.
   Since K-117 the Library wears the VS Code Explorer vernacular
-  (theme.library_qss: flat 22px rows on `surface`, one full-width
+  (theme.library_qss: flat 22px rows on `chrome` — K-117 put them on
+  `surface`, K-175 on `bg` — one full-width
   hover/selection band, chevron twisties via
   `web/chevron-right-{day,night}.svg`, uppercase LIBRARY caption with
   New Folder/Refresh/Map beside it (Map opens `pdf_map.open_map_window`
   through a guarded import — K-124), quiet flat buttons — PrimaryButton
-  opt-in kept). Since 2026-09-01 those rows sit on `chrome` instead —
-  the tree's own ground had been `bg` since K-175, and Pouya asked for
-  it back: "I want the panels, like the left panel, to be the same
-  color as the top bar." The window-scoped `QSplitter::handle` grab
+  opt-in kept). The move to `chrome` is 2026-09-01, Pouya's ask: "I
+  want the panels, like the left panel, to be the same color as the top
+  bar." The window-scoped `QSplitter::handle` grab
   follows onto `chrome` too, with only a 1px `grey_light` hairline
   marking the seam — a `bg` grab between two now-chrome panes had
   measured as a 7px stripe belonging to neither, fixed in the same
