@@ -175,9 +175,7 @@ _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 def loads_response(raw: str) -> dict:
     """Parse a model response that may be wrapped in a code fence.
 
-    Public because podcast.py needs the identical treatment: both ask a
-    model for JSON grounded in slides, and a second copy of fence-stripping
-    is a second thing to drift.
+    Public so any grounded-JSON caller shares one fence-stripping.
     """
     text = _FENCE_RE.sub("", str(raw or "")).strip()
     if not text:

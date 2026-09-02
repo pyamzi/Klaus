@@ -2244,5 +2244,51 @@ else:
           and all(o.get("/DR") is None for o in _da_free))
     shutil.rmtree(_da_uf, ignore_errors=True)
 
+print("== Task 11: the dead in-house assistant-loop modules are gone ==")
+# D6 (docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
+# section 2/11): llm_client, entitlement, assistant_session, podcast and
+# assistant_panel were the whole in-house chat/practice/podcast loop the
+# Claude Code assistant (agent_host + anki_endpoint + assistant_dock)
+# replaces. Both the modules and their tests must be gone, and — the part
+# a plain `rm` cannot verify by itself — no SURVIVING test's own bootstrap
+# may still try to import one, or that test would fail at collection time
+# with an ImportError instead of a clean, honest "file not found" here.
+_DEL_MODS = ("llm_client", "entitlement", "assistant_session", "podcast",
+             "assistant_panel")
+for _dm in _DEL_MODS:
+    check(f"klausmate/{_dm}.py no longer exists",
+          not os.path.exists(os.path.join(ADDON, _dm + ".py")))
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEL_TESTS = tuple("test_" + m + ".py" for m in _DEL_MODS)
+for _dt in _DEL_TESTS:
+    check(f"tests/{_dt} no longer exists",
+          not os.path.exists(os.path.join(_TESTS_DIR, _dt)))
+
+# Real import shapes only — never a bare substring — so this cannot
+# misfire on unrelated prose that merely mentions the word: a raw-source
+# check for the retired "podcast" copy in manage_models.py (present-day,
+# in test_manage_models_assistant.py), or the SURVIVING assistant_sessions
+# (plural — Task 7's per-PDF session store), whose name is a superstring
+# of the deleted assistant_session.py (singular) and must never trip a
+# bare `in` test. \b word boundaries are what keep the two apart.
+_IMPORT_SHAPES = {
+    _dm: _re.compile(
+        r'import_module\(\s*["\']klausmate\.' + _re.escape(_dm) + r'["\']\s*\)'
+        r'|from\s+klausmate\s+import\s+' + _re.escape(_dm) + r'\b'
+        r'|from\s+klausmate\.' + _re.escape(_dm) + r'\s+import'
+        r'|import\s+klausmate\.' + _re.escape(_dm) + r'\b'
+    )
+    for _dm in _DEL_MODS
+}
+for _tf in sorted(os.listdir(_TESTS_DIR)):
+    if not _tf.endswith(".py") or _tf in _DEL_TESTS:
+        continue
+    with open(os.path.join(_TESTS_DIR, _tf), encoding="utf-8") as _fh:
+        _tsrc = _fh.read()
+    _hits = [_dm for _dm, _pat in _IMPORT_SHAPES.items() if _pat.search(_tsrc)]
+    check(f"tests/{_tf} does not import a deleted module in its bootstrap",
+          not _hits, str(_hits))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

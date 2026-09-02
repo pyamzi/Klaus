@@ -876,10 +876,6 @@ class _LibraryDropZone(QWidget):
         e.acceptProposedAction()
 
 
-# Wide enough for a readable answer with citations; narrow enough that the
-# viewer keeps the room. Collapsible to 0 by dragging.
-_ASSISTANT_DEFAULT_W = 360
-
 # What the status line says when there is no viewer to open a PDF in. A
 # LINE, not a modal: this is reached from a double-click slot, and
 # aqt.utils.showWarning execs internally (K-114/K-125) — a modal opened
@@ -1019,6 +1015,21 @@ class DriveWindow(QWidget):
             map_btn.setToolTip(map_tip)
         map_btn.clicked.connect(self._open_map)
         header_row.addWidget(map_btn)
+        assistant_tip = "Klaus Assistant (Ctrl+Shift+K)"
+        # No "assistant" entry in library_explorer.KINDS today (that module
+        # belongs to another plan) — _glyph_action would only ever log a
+        # failure and fall back, so the check below skips straight to the
+        # K-117 text button rather than calling a path known to always
+        # fail. Written as a live capability check, not a version note, so
+        # this picks up a real glyph automatically the day one lands there.
+        assistant_btn = None
+        if library_explorer is not None and "assistant" in library_explorer.KINDS:
+            assistant_btn = self._glyph_action("assistant", assistant_tip, left)
+        if assistant_btn is None:
+            assistant_btn = QPushButton("Assistant", left)
+            assistant_btn.setToolTip(assistant_tip)
+        assistant_btn.clicked.connect(self._open_assistant)
+        header_row.addWidget(assistant_btn)
         lay.addLayout(header_row)
 
         self.tree = _LibraryTree(self, left)
@@ -1162,16 +1173,7 @@ class DriveWindow(QWidget):
         # Built by _ensure_sidebar, which is the ONLY place one is
         # constructed and the only place this attribute is read. The
         # embedded screen does not build it here: see showEvent.
-        #
-        # `assistant` is declared HERE rather than with its own block
-        # below because _ensure_sidebar re-asserts that pane's stretch
-        # factor and would otherwise read an attribute that does not
-        # exist yet — silently, since the whole host step is wrapped
-        # (caught in an offscreen run's LOG, not by a failing check:
-        # "library viewer host failed: 'DriveWindow' object has no
-        # attribute 'assistant'").
         self.sidebar = None
-        self.assistant = None
         self._sidebar_arming = 0
         # Set by _release_embedded_viewers on profile close: the tab is
         # never shut down (unmount only hides), so the next showEvent
@@ -1180,23 +1182,6 @@ class DriveWindow(QWidget):
         self.splitter.addWidget(left)
         if not self.embedded:
             self._ensure_sidebar()
-        # ---- right: the assistant ----
-        # Guarded like every other optional surface here: a panel that
-        # fails to import must cost the assistant, not the Library.
-        try:
-            from .assistant_panel import AssistantPanel
-
-            self.assistant = AssistantPanel(self.splitter)
-            self.splitter.addWidget(self.assistant)
-            # By WIDGET, not by the literal 2: the viewer pane can arrive
-            # after this runs (the embedded screen builds it on first
-            # show, K-173), and until it does the assistant is at index 1.
-            self.splitter.setStretchFactor(
-                self.splitter.indexOf(self.assistant), 0
-            )
-            self.tree.currentItemChanged.connect(self._on_assistant_target)
-        except Exception as e:
-            print(f"[klausmate] assistant panel unavailable: {e}")
 
         self._restore_geometry()
         self.rebuild_tree()
@@ -1294,16 +1279,12 @@ class DriveWindow(QWidget):
             # for this. The slot is free here: the only other assignment
             # in the addon is _PdfTabContainer's, on its OWN sidebar.
             sidebar.on_loaded = self._on_viewer_loaded
-            # Between the tree and the assistant, in both modes — the
-            # window's three-pane shape, which is also what keeps ONE
-            # stored splitter layout meaningful for both.
+            # After the tree, in both modes (Task 11 retired the third,
+            # assistant pane) — the window's two-pane shape, which is
+            # also what keeps ONE stored splitter layout meaningful for
+            # both the standalone window and the embedded screen.
             self.splitter.insertWidget(1, sidebar)
             self.splitter.setStretchFactor(self.splitter.indexOf(sidebar), 1)
-            assistant = self.assistant
-            if assistant is not None:
-                self.splitter.setStretchFactor(
-                    self.splitter.indexOf(assistant), 0
-                )
             self._apply_splitter_sizes()
         except Exception as e:
             print(f"[klausmate] library viewer host failed: {e}")
@@ -1447,33 +1428,16 @@ class DriveWindow(QWidget):
 
     _MIN_PANE = 120
 
-    def _on_assistant_target(self, item=None, _prev=None) -> None:
-        """Point the assistant at whatever the tree has selected.
-
-        Folders and the empty selection both yield "", which the panel
-        renders as "select a PDF" rather than answering about nothing.
-        """
-        if self.assistant is None:
-            return
-        try:
-            safe = self._selected_safe() or ""
-            self.assistant.set_pdf(safe)
-        except Exception as e:
-            print(f"[klausmate] assistant target failed: {e}")
-
     def _sane_splitter_sizes(self, sizes: object) -> list[int] | None:
         """Reject degenerate splitter sizes (e.g. saved from a never-shown
         window, where sizes() returns something like [46, 46]).
 
         Accepts a pane count matching the splitter rather than a hardcoded
-        two: the assistant made it three. A PAIR saved before the assistant
-        existed is migrated rather than discarded — dropping it would reset
-        a layout every user had already arranged, on upgrade, for nothing.
-
-        The assistant pane alone may be exactly 0. Zero is a real state
-        there — the panel dragged shut — and is what lets "closed" persist
-        without a second config key, exactly as _sane_map_sizes allows it
-        for the map box. Any other pane at 0 is the degenerate kind.
+        two, so a stale layout saved while the (since-Task-11-retired)
+        third, assistant pane existed is rejected as the wrong shape —
+        exactly like any other degenerate value — rather than partially
+        applied to a splitter that no longer has that pane; the default
+        two-pane layout takes over instead of guessing.
         """
         want = self.splitter.count() or 2
         if not isinstance(sizes, list) or not sizes:
@@ -1482,15 +1446,10 @@ class DriveWindow(QWidget):
             ints = [int(s) for s in sizes]
         except (TypeError, ValueError):
             return None
-        if len(ints) == 2 and want == 3:
-            ints = ints + [_ASSISTANT_DEFAULT_W]
         if len(ints) != want:
             return None
-        for i, size in enumerate(ints):
-            collapsible = want == 3 and i == 2
-            if size < (0 if collapsible else self._MIN_PANE):
-                return None
-            if not collapsible and size < self._MIN_PANE:
+        for size in ints:
+            if size < self._MIN_PANE:
                 return None
         return ints
 
@@ -1546,8 +1505,6 @@ class DriveWindow(QWidget):
             # 284. tests/test_drive.py pins that arithmetic so a future
             # width change cannot silently re-break it.
             default = [560, 480]
-            if self.splitter.count() == 3:
-                default = [560, 480, _ASSISTANT_DEFAULT_W]
             self.splitter.setSizes(sane if sane is not None else default)
         except Exception as e:
             print(f"[klausmate] splitter sizing failed: {e}")
@@ -2820,6 +2777,19 @@ class DriveWindow(QWidget):
             pdf_map.open_map_window(self)
         except Exception as exc:
             print(f"[klausmate] map open failed: {exc}")
+
+    def _open_assistant(self) -> None:
+        """Task 11: toggle the Claude Code assistant dock, same guarded-
+        import shape as _open_map above — a broken/missing assistant
+        module costs a log line, never the Library. The dock lives on
+        mw, not here, so this never builds or owns a widget; it only
+        asks assistant_dock to show or hide the one it manages."""
+        try:
+            from . import assistant_dock
+
+            assistant_dock.toggle_assistant()
+        except Exception as exc:
+            print(f"[klausmate] assistant open failed: {exc}")
 
     # --------------------------------------------------------- lifecycle
 

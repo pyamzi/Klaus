@@ -1755,8 +1755,10 @@ print("== K-135: the Library opens wide enough to show a name ==")
 # render). Fixed widths do not yield, so the PANE has to fit them.
 import re as _re135
 _DRIVE = open("klausmate/pdf_drive.py", encoding="utf-8").read()
-# The default moved into a variable when the assistant made the splitter
-# three panes; the arithmetic this pin checks is unchanged.
+# The default lives in a variable (it was briefly conditional on pane
+# count while the third, assistant pane existed; Task 11 removed that
+# pane and the conditional with it) — the arithmetic this pin checks is
+# unchanged.
 _m135 = _re135.search(r"default = \[(\d+), (\d+)\]", _DRIVE)
 _numeric135 = sum(
     int(w) for w in _re135.findall(r"setColumnWidth\([123], (\d+)\)", _DRIVE))
@@ -1772,25 +1774,42 @@ check("...and the arithmetic is pinned against the REAL column widths, "
       "so widening a numeric column re-runs this check",
       _numeric135 == 84 + 88 + 88, f"numeric total {_numeric135}")
 
-print("== the assistant pane: a third splitter child ==")
-# Adding a pane broke a guard that accepted only PAIRS: every saved layout
-# would have been silently discarded on upgrade.
-check("the assistant is added as a third pane, guarded like the map so a "
-      "broken panel costs the assistant and not the Library",
-      "assistant_panel import AssistantPanel" in _DRIVE
-      and "assistant panel unavailable" in _DRIVE)
-check("the size guard sizes itself off the splitter rather than a hardcoded "
-      "two", "self.splitter.count()" in _DRIVE)
-check("a PAIR saved before the assistant existed is migrated, not thrown "
-      "away — discarding it would reset a layout every user had already "
-      "arranged", "len(ints) == 2 and want == 3" in _DRIVE)
-check("the assistant pane alone may be 0, so 'dragged shut' persists "
-      "without a second config key, exactly as the map box does",
-      "collapsible" in _DRIVE)
-check("selecting a row points the assistant at that PDF",
-      "currentItemChanged.connect(self._on_assistant_target)" in _DRIVE)
-check("a folder or an empty selection yields no PDF rather than answering "
-      "about nothing", "self._selected_safe() or \"\"" in _DRIVE)
+print("== Task 11: the third-pane assistant is gone; a toolbar button "
+      "replaces it ==")
+# K-198/K-202 landed the real assistant (assistant_dock.py, anki_endpoint.py)
+# as a QDockWidget on mw, not a Library splitter pane — this section pins
+# the third pane's removal and the caption-row button that opens the dock
+# instead, where the old "assistant pane: a third splitter child" section
+# used to pin the pane itself.
+check("the third-pane AssistantPanel mount is gone — no import, no "
+      "guard-log string for it, and self.assistant does not exist",
+      "assistant_panel" not in _DRIVE
+      and "assistant panel unavailable" not in _DRIVE
+      and "self.assistant" not in _DRIVE)
+check("_on_assistant_target is gone with the panel it targeted",
+      "_on_assistant_target" not in _DRIVE)
+check("the splitter default returns to a plain two-pane [560, 480] — no "
+      "pane-count branch and no assistant-width constant survive",
+      "default = [560, 480]" in _DRIVE
+      and "_ASSISTANT_DEFAULT_W" not in _DRIVE
+      and "self.splitter.count() == 3" not in _DRIVE)
+check("the size guard still sizes itself off the splitter rather than a "
+      "hardcoded two — that part of the K-198 guard survives the pane's "
+      "removal", "self.splitter.count()" in _DRIVE)
+check("caption row carries an assistant action beside Map, labelled with "
+      "its shortcut for the QPushButton fallback",
+      'QPushButton("Assistant", left)' in _DRIVE
+      and "Klaus Assistant (Ctrl+Shift+K)" in _DRIVE)
+check("the glyph path is a live capability check against "
+      "library_explorer.KINDS, not a call known to always fail today — "
+      "library_explorer has no \"assistant\" entry (another plan owns "
+      "that module), and _glyph_action logs on every failure, so calling "
+      "it unconditionally would spam the console on every Library open",
+      '"assistant" in library_explorer.KINDS' in _DRIVE)
+check("it toggles the dock through a guarded import, exactly like "
+      "_open_map does for the map window",
+      "assistant_dock.toggle_assistant()" in _DRIVE
+      and "assistant open failed" in _DRIVE)
 
 print("== K-136: the name column has a FLOOR, not just a good default ==")
 # K-135 widened the DEFAULT splitter (300 -> 560). That fixed first run,
@@ -1886,6 +1905,49 @@ if _HAVE_QT:
         check(f"K-136 offscreen DriveWindow checks ran ({_e136})", False)
 else:
     print("  SKIP: PyQt6 unavailable — K-136 source pins above still ran")
+
+print("== Task 11: a stale pre-removal three-pane splitter state is "
+      "rejected, not partially applied ==")
+# _sane_splitter_sizes requires the stored pane count to match the
+# splitter's CURRENT one. Without that length check, a stored three-pane
+# state (saved before Task 11 removed the assistant pane) would fall
+# through to Qt's own setSizes() tolerance for a too-long list — its
+# extra value silently dropped, the first two (the user's OLD tree/
+# viewer split) applied as-is. That is "still works" by accident, not by
+# design: this pins the documented behaviour instead — the mismatch is
+# rejected as the wrong shape and the clean two-pane default takes over.
+if _HAVE_QT:
+    try:
+        _uf_stale = tempfile.mkdtemp(prefix="klaus_t11_stale_")
+        os.makedirs(os.path.join(_uf_stale, "contexts"), exist_ok=True)
+        # All three values clear _MIN_PANE (120) deliberately — this
+        # fixture isolates the PANE-COUNT mismatch specifically, so a
+        # regression that drops just the length check (but keeps the
+        # per-pane floor) cannot hide behind a coincidentally-narrow
+        # third value tripping that other guard instead.
+        pdf_drive.drive_store.save_window_state(
+            _uf_stale, {"x": 0, "y": 0, "w": 1040, "h": 680,
+                        "splitter": [850, 250, 150]})
+        _prev_uf_stale = pkg.USER_FILES
+        try:
+            pkg.USER_FILES = _uf_stale
+            _w_stale = pdf_drive.DriveWindow()
+            app.processEvents()
+            _sizes_stale = list(_w_stale.splitter.sizes())
+            check("a legacy three-pane splitter state is REJECTED for "
+                  "today's two-pane window — the default applies rather "
+                  "than the stale 850/250 surviving by accident",
+                  len(_sizes_stale) == 2 and abs(_sizes_stale[0] - 850) > 50,
+                  f"splitter = {_sizes_stale}")
+            _w_stale.close()
+        finally:
+            pkg.USER_FILES = _prev_uf_stale
+        shutil.rmtree(_uf_stale, ignore_errors=True)
+    except Exception as _e_stale:  # noqa: BLE001
+        check(f"Task 11 stale-splitter checks ran ({_e_stale})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — Task 11 stale-splitter check needs "
+          "a real splitter")
 
 print("== K-143: the Obsidian map box, bottom-left ==")
 # Pouya (K-137): "I want the graph to be on the bottom left, sort of like
@@ -2406,12 +2468,13 @@ if _HAVE_QT:
             return it
 
         # A layout the user arranged, stored before this screen opens.
-        # It is deliberately far from the [560, 480, 360] default so the
-        # two are distinguishable: the viewer pane lands at ~411px if
-        # the default wins and ~250 if the stored layout does.
+        # It is deliberately far from the [560, 480] default so the two
+        # are distinguishable regardless of exactly how Qt's proportional
+        # redistribution lands: the viewer pane should stay close to the
+        # STORED 250 below, not drift toward the default's 480.
         pdf_drive.drive_store.save_window_state(
             _uf173, {"x": 0, "y": 0, "w": 1040, "h": 680,
-                     "splitter": [850, 250, 100]})
+                     "splitter": [850, 250]})
 
         # Capture the log while the screen opens: the host step is
         # wrapped whole, so a mistake in it (reading an attribute that
@@ -2576,22 +2639,23 @@ if _HAVE_QT:
               "the sidebar's own page_count is untouched",
               _sb173._page_count == 1, _sb173._page_count)
 
-        check("the viewer pane sits between the tree and the assistant, "
-              "the same three-pane shape the window has",
+        check("the viewer pane sits right after the tree, the same "
+              "two-pane shape the window has (Task 11 retired the "
+              "third, assistant pane)",
               _emb.splitter.indexOf(_sb173) == 1,
               f"index {_emb.splitter.indexOf(_sb173)}")
         _sizes173 = list(_emb.splitter.sizes())
-        check("a stored three-pane layout survives the viewer pane "
-              "ARRIVING LATE: at restore time the splitter still had two "
-              "panes, so the saved triple was rejected as the wrong "
-              "shape and the default applied — re-applying it once the "
-              "pane lands is the only reason the user's own widths come "
-              "back",
-              len(_sizes173) == 3 and _sizes173[0] >= 800
+        check("a stored two-pane layout survives the viewer pane "
+              "ARRIVING LATE: at restore time the splitter still had "
+              "only the tree, so the saved pair was rejected as the "
+              "wrong shape and the default applied — re-applying it "
+              "once the pane lands is the only reason the user's own "
+              "widths come back",
+              len(_sizes173) == 2 and _sizes173[0] >= 800
               and _sizes173[1] >= 250,
               f"splitter = {_sizes173}")
         check("the tree still has a readable name column beside it "
-              "(K-135's arithmetic survives the third pane arriving "
+              "(K-135's arithmetic survives the viewer pane arriving "
               "late)",
               _emb.tree.columnWidth(0) >= pdf_drive._NAME_COL_FLOOR,
               f"col0 = {_emb.tree.columnWidth(0)}px")
@@ -2857,8 +2921,10 @@ if _HAVE_QT:
               and _embjs.sidebar.is_loaded("Renal")
               and len(_webs173) == _n_webs + 1,
               f"{len(_webs173) - _n_webs} new webviews")
-        check("...and the rebuilt pane goes back between the tree and "
-              "the assistant", _embjs.splitter.indexOf(_embjs.sidebar) == 1)
+        check("...and the rebuilt pane goes back right after the tree, "
+              "the splitter's whole shape now that the assistant pane "
+              "is gone",
+              _embjs.splitter.indexOf(_embjs.sidebar) == 1)
 
         # The BLANKET sweep is the harder case, and the one that
         # actually happens: pdf_viewer.cleanup_all_sidebars runs on
