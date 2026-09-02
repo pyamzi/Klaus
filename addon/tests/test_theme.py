@@ -72,8 +72,10 @@ for night in (False, True):
     # (it equals hover_subtle there, so hover fills padded the count);
     # this rgba string is emitted by the selection rules alone.
     # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
-    # composited differently over each paint region's own base.
-    _sel_fill = theme.accent_mix(night, 0.16, base="bg")
+    # composited differently over each paint region's own base. The
+    # base is chrome, not bg, since 2026-09-01 (Task 7) — the tree's
+    # ground moved onto the top bar's own token.
+    _sel_fill = theme.accent_mix(night, 0.16, base="chrome")
     check(f"library_qss(night={night}): a selected row's branch "
           "(indentation/disclosure) cell is recoloured in step with "
           "the item — every row reserves that cell whether or not "
@@ -147,12 +149,12 @@ for night in (False, True):
           "QTreeWidget::branch:has-children:open" in lq and _open in lq)
     _hdr_blk = re.search(r"QHeaderView::section \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): column headers are 11px muted "
-          "captions on the tree's own ground — bg, the sidebar token, "
-          "since K-175",
+          "captions on the tree's own ground — chrome, the top bar's "
+          "token, since 2026-09-01 (Task 7; was bg, K-175)",
           _hdr_blk is not None
           and "font-size: 11px" in _hdr_blk.group(1)
           and c["text_muted"] in _hdr_blk.group(1)
-          and c["bg"] in _hdr_blk.group(1))
+          and c["chrome"] in _hdr_blk.group(1))
     _btn_blk = re.search(r"QPushButton \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): toolbar buttons are quiet flat — "
           "transparent at rest, hover fill only",
@@ -208,13 +210,14 @@ for night in (False, True):
     # Selection band (K-130): the ACTIVE accent at the SettingsNav
     # alpha in BOTH paint regions, same fill, full-strength text.
     # PRE-COMPOSITED OPAQUE since the offscreen-render pass: rgba
-    # composited differently over each paint region's own base.
-    _sel_fill = theme.accent_mix(night, 0.16, base="bg")
+    # composited differently over each paint region's own base — chrome
+    # since 2026-09-01 (Task 7), not bg.
+    _sel_fill = theme.accent_mix(night, 0.16, base="chrome")
     _item_sel = re.search(
         r"QTreeWidget::item:selected \{(.*?)\}", _no_c, re.S)
     _br_sel = re.search(
         r"QTreeWidget::branch:selected \{(.*?)\}", _no_c, re.S)
-    _mix_fill = theme.accent_mix(night, 0.16, base="bg")
+    _mix_fill = theme.accent_mix(night, 0.16, base="chrome")
     check(f"library_qss(night={night}): the selection band is the "
           "accent PRE-COMPOSITED OPAQUE (accent_mix), the same ink in "
           "BOTH paint regions, full-strength text on the item — an "
@@ -257,29 +260,44 @@ section("library Explorer ground, sash and glyph actions (K-175)")
 # Pouya: "make the library panel look like VS Code ... full redesign"
 # (2026-09-01) + a PyQt6 design brief (tokens, both palettes, every
 # state). VS Code's SIDEBAR is the grey ground and its editor the white
-# one; the tree pane is the sidebar here, so it leaves surface for bg.
+# one; the tree pane is the sidebar here, so it leaves surface for bg —
+# and since 2026-09-01 (Task 7, Pouya: "the panels the same color as
+# the top bar") one token further, off bg onto chrome.
 for night in (False, True):
     lq = theme.library_qss(night)
     c = theme.palette(night)
     _no_c = re.sub(r"/\*.*?\*/", "", lq, flags=re.S)
     _tree_blk = re.search(r"QTreeWidget \{(.*?)\}", _no_c, re.S)
-    check(f"library_qss(night={night}): the tree sits on bg — the "
-          "sidebar ground — not on surface (a white card on a grey "
-          "window is the Explorer inverted)",
+    # Checked against bg, not surface: LIGHT["surface"] and
+    # LIGHT["chrome"] are BOTH #FFFFFF by design (surface is "cards,
+    # inputs, header bars, trees"; chrome is the top bar — the two
+    # tokens legitimately coincide in this one palette), so a hex-text
+    # "not surface" check would be unsatisfiable in light mode even
+    # when the tree is correctly on chrome. bg stays distinct from
+    # chrome in BOTH palettes, so it is the check that can actually
+    # fail on a regression.
+    check(f"library_qss(night={night}): the tree sits on chrome — the "
+          "top bar's own token — not on bg (K-175's retired ground)",
           _tree_blk is not None
-          and f"background-color: {c['bg']}" in _tree_blk.group(1)
-          and c["surface"] not in _tree_blk.group(1))
+          and f"background-color: {c['chrome']}" in _tree_blk.group(1)
+          and c["bg"] not in _tree_blk.group(1))
     _hv = re.search(r"QHeaderView \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): the header widget shares that "
           "ground (an unstyled QHeaderView painted the palette base — "
           "a bright block in night mode, K-117)",
-          _hv is not None and c["bg"] in _hv.group(1))
-    _mix = theme.accent_mix(night, 0.16, base="bg")
+          _hv is not None and c["chrome"] in _hv.group(1))
+    _mix = theme.accent_mix(night, 0.16, base="chrome")
+    # Excluded base is bg, not surface, for the same reason as the tree
+    # ground check above: base="surface" and base="chrome" mix to the
+    # SAME opaque hex in light mode (the tokens coincide there), so
+    # "not mixed over surface" cannot fail even on a real regression in
+    # that palette. base="bg" stays a distinct mix in both palettes.
     check(f"library_qss(night={night}): the selection band is mixed over "
-          "bg, the paper it actually sits on — and the delegate reads "
-          "the same call, so column 0 cannot drift from the sheet",
+          "chrome, the paper it actually sits on since Task 7 — and the "
+          "delegate reads the same call, so column 0 cannot drift from "
+          "the sheet",
           lq.count(_mix) >= 2
-          and theme.accent_mix(night, 0.16, base="surface") not in lq)
+          and theme.accent_mix(night, 0.16, base="bg") not in lq)
     _h = re.search(r"QSplitter::handle:horizontal \{(.*?)\}", _no_c, re.S)
     _v = re.search(r"QSplitter::handle:vertical \{(.*?)\}", _no_c, re.S)
     check(f"library_qss(night={night}): each sash carries VS Code's "
@@ -326,6 +344,18 @@ for night in (False, True):
           "KlausAssistantPanel" not in lq)
 check("accent_mix's default base is still surface — no other caller moved",
       theme.accent_mix(False, 0.16) == theme.accent_mix(False, 0.16, base="surface"))
+
+section("Task 7: the Library ground is the top bar's token")
+for _night in (True, False):
+    _c = theme.palette(_night); _qss = theme.library_qss(_night)
+    _win = re.search(r"QWidget#KlausLibraryWindow\s*\{[^}]*background-color:\s*(#[0-9A-Fa-f]{6})", _qss)
+    check(f"night={_night}: #KlausLibraryWindow's ground is the chrome token — the same "
+          "colour the top bar wears",
+          _win is not None and _win.group(1).upper() == _c["chrome"].upper(),
+          f"got {_win.group(1) if _win else None} chrome={_c['chrome']}")
+    _tree = re.search(r"QWidget#KlausLibraryWindow QTreeWidget\s*\{[^}]*background(?:-color)?:\s*(#[0-9A-Fa-f]{6})", _qss)
+    check(f"night={_night}: ...and so is the tree's",
+          _tree is not None and _tree.group(1).upper() == _c["chrome"].upper())
 
 section("settings shell (K-106)")
 # The SynapsePro 1.5.x settings language: sidebar + nav pills + row ids.

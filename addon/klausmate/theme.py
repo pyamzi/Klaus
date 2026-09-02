@@ -950,11 +950,24 @@ def library_qss(night: bool) -> str:
     each sash, and styles the ``QToolButton#LibraryGlyph`` caption
     actions. Icons, indent guides and the column-0 band are painted by
     the delegate, which reads the SAME tokens as this sheet.
+
+    Since 2026-09-01 (Pouya: "I want the panels, like the left panel,
+    to be the same color as the top bar") the tree and its header move
+    again, one token further: off ``bg`` onto ``chrome`` — the top
+    bar's own token, and the same one Task 1 of the constellation-and-
+    panel-integration plan already painted the embedding map on, which
+    is what makes the map read as part of this panel rather than a
+    card dropped onto it. ``BAND_BASE`` (library_explorer.py) and the
+    two ``accent_mix`` calls in the selection rules below move with
+    it, so the band keeps compositing over the tree's REAL ground
+    instead of a retired one. The window's own splitter handles stay
+    on ``bg`` on purpose — a sash is drawn to read as a seam between
+    panes, not as part of the ground it divides.
     """
     c = palette(night)
     return f"""
     QWidget#KlausLibraryWindow {{
-        background-color: {c['bg']};
+        background-color: {c['chrome']};
         color: {c['text']};
         font-size: 13px;
     }}
@@ -966,13 +979,11 @@ def library_qss(night: bool) -> str:
         background: transparent;
     }}
     QWidget#KlausLibraryWindow QTreeWidget {{
-        /* bg, not surface (K-175): VS Code's SIDEBAR is the grey ground
-           and its editor the white one. The tree pane is the sidebar
-           here — the viewer beside it is the paper — so on surface it
-           read as a white card floating on a grey window, which is the
-           opposite of the Explorer. */
-        background-color: {c['bg']};
-        alternate-background-color: {c['bg']};
+        /* chrome, not bg (2026-09-01, Pouya: "the panels the same
+           colour as the top bar"): the sidebar and the bar are one
+           surface; the PDF pane, on bg, is the step darker. */
+        background-color: {c['chrome']};
+        alternate-background-color: {c['chrome']};
         color: {c['text']};
         border: none;
         padding: 0px;
@@ -1010,8 +1021,10 @@ def library_qss(night: bool) -> str:
            fill composites over each region's own base (measured
            different greys, offscreen 2026-08-31); one opaque ink is
            identical in both by construction. Full-strength text on
-           top; recolours with every colour theme either way. */
-        background: {accent_mix(night, 0.16, 'bg')};
+           top; recolours with every colour theme either way. The base
+           is chrome, not bg, since 2026-09-01 — it must always be the
+           tree's REAL ground or the band tints the wrong paper. */
+        background: {accent_mix(night, 0.16, 'chrome')};
         color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch {{
@@ -1021,7 +1034,7 @@ def library_qss(night: bool) -> str:
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
-        background: {accent_mix(night, 0.16, 'bg')};
+        background: {accent_mix(night, 0.16, 'chrome')};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
         image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
@@ -1033,12 +1046,14 @@ def library_qss(night: bool) -> str:
         /* The header WIDGET, not just its sections: the area beyond the
            last column is bare QHeaderView, and unstyled it painted the
            palette base — a bright block in night mode (offscreen
-           render, 2026-08-31). */
-        background: {c['bg']};
+           render, 2026-08-31). Shares the tree's ground below — chrome,
+           since 2026-09-01 — or the column captions sit in a stripe of
+           the tree's OLD colour, sandwiched between two chrome bands. */
+        background: {c['chrome']};
         border: none;
     }}
     QWidget#KlausLibraryWindow QHeaderView::section {{
-        background: {c['bg']};
+        background: {c['chrome']};
         color: {c['text_muted']};
         border: none;
         border-bottom: 1px solid {c['grey_light']};

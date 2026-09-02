@@ -121,9 +121,9 @@ section("colours are tokens, never invented")
 for night in (False, True):
     c = theme.palette(night)
     check(f"night={night}: the selected band is the accent pre-composited "
-          "over the TREE's ground (bg), the exact ink the sheet uses",
+          "over the TREE's ground (chrome), the exact ink the sheet uses",
           le.band_colour(True, False, night)
-          == theme.accent_mix(night, 0.16, base="bg"))
+          == theme.accent_mix(night, 0.16, base="chrome"))
     check(f"night={night}: the hover band is the hover_subtle token",
           le.band_colour(False, True, night) == c["hover_subtle"])
     check(f"night={night}: selected beats hover",
@@ -146,6 +146,11 @@ check("accent_mix still defaults to surface — every other caller is "
       "unchanged by the new base parameter",
       theme.accent_mix(False, 0.16) == theme.accent_mix(False, 0.16, base="surface")
       and theme.accent_mix(False, 0.16) != theme.accent_mix(False, 0.16, base="bg"))
+
+section("Task 7: the band's base follows the tree onto chrome")
+check("the selection band pre-composites over CHROME, the tree's real ground now",
+      le.BAND_BASE == "chrome" and
+      le.band_colour(True, False, True) == theme.accent_mix(True, le.BAND_ALPHA, base="chrome"))
 
 section("the two paint guards")
 _tree = ast.parse(_SRC)
@@ -280,7 +285,7 @@ _c2 = _t.visualRect(_t.indexFromItem(_child, 2))
 _mid = _c0.center().y()
 check("rows are exactly 22px under the sheet + delegate", _c0.height() == 22,
       f"{_c0.height()}px")
-_band = theme.accent_mix(False, 0.16, base="bg")
+_band = theme.accent_mix(False, 0.16, base="chrome")
 check("the selected row's name cell carries the accent band from its very "
       "first pixel (the delegate paints the WHOLE cell, not the stepped "
       "text rect)", _hex(_img, _c0.x() + 1, _mid) == _band,
@@ -296,8 +301,11 @@ check("the branch cell to the left is that ink too (show-decoration-"
 _g0 = _t.visualRect(_t.indexFromItem(_grand, 0))
 _gmid = _g0.center().y()
 _origin = _g0.x() - 3 * le.INDENT
-check("the depth-2 row's ground is the tree's bg (the sidebar token, not "
-      "a white card)", _hex(_img, _g0.x() + 1, _gmid) == theme.palette(False)["bg"],
+check("the depth-2 row's ground is the tree's chrome — the top bar's "
+      "own token (pure white here, like the bar itself; light chrome "
+      "and light surface legitimately coincide, so 'not a white card' "
+      "is the OTHER pin's job — theme.library_qss's 'not on bg' check)",
+      _hex(_img, _g0.x() + 1, _gmid) == theme.palette(False)["chrome"],
       _hex(_img, _g0.x() + 1, _gmid))
 for _gx in le.guide_xs(2):
     check(f"an indent guide at x={_gx} of the depth-2 row, in grey_mid",
@@ -318,7 +326,7 @@ check("...in text_muted, the default icon ink (a fully covered stroke "
       theme.palette(False)["text_muted"] in _child_box.values())
 _f0 = _t.visualRect(_t.indexFromItem(_folder, 0))
 _folder_box = _box_pixels(_img, le.icon_rect(_f0.x(), _f0.y(), _f0.height()))
-_fold_px = {p for p, col in _folder_box.items() if col != theme.palette(False)["bg"]}
+_fold_px = {p for p, col in _folder_box.items() if col != theme.palette(False)["chrome"]}
 # Compared as POSITIONS relative to each row's own icon box: the same
 # glyph on two grounds marks the same positions, so equal sets mean the
 # same icon. (The first cut translated one set the wrong way and could

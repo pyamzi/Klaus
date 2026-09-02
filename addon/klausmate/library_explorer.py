@@ -59,7 +59,7 @@ ACTION_W = 24          # glyph action hit box
 ACTION_H = 22
 SASH_W = 5             # 1px hairline + a 4px grab, VS Code's sash
 BAND_ALPHA = 0.16      # accent band alpha, K-130's SettingsNav value
-BAND_BASE = "bg"       # the band is pre-composited over the TREE's ground
+BAND_BASE = "chrome"   # the band is pre-composited over the TREE's ground, which is the top bar's token
 
 KINDS = ("new-folder", "refresh", "map", "fit")
 
