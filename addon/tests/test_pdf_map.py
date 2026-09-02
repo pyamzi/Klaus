@@ -381,12 +381,11 @@ tip = pdf_map.node_lines({
     "display": "Lecture 1", "safe": "Lecture_1", "folder": "Anatomy/Week 2",
     "match_count": 37, "retention": 0.834,
 })
-check("the focused node's plate carries display, folder, matched NOTE "
-      "count and known retention",
-      tip == [
-          "Lecture 1", "Folder: Anatomy/Week 2",
-          "Matched notes: 37", "Retention: 83%",
-      ])
+# K-187 inverted this pin: the plate that carried display, folder,
+# matched NOTE count and known retention is gone (Pouya: "remove the
+# little box around it") — the focused node's label is the name alone.
+check("the focused node's label is the name alone",
+      tip == ["Lecture 1"])
 check("unknown retention (headless None) is simply omitted",
       not any("Retention" in t for t in pdf_map.node_lines(
           {"display": "x", "match_count": 1, "retention": None})))
@@ -729,14 +728,14 @@ check("it never trims itself empty: a trim that would meet in the "
 
 # The label clamp. label_anchor mirrors only when the mirrored side
 # FITS; a clipped name has been reported three times in this module.
-check("clamp_label pulls a plate back inside the canvas whatever the "
+check("clamp_label pulls a label back inside the canvas whatever the "
       "anchor chose — the last word on placement is a clamp, not "
       "another offset",
       pdf_map.clamp_label(1000.0, 200.0, 1100.0)
       == 1100.0 - 200.0 - pdf_map.LABEL_EDGE_PAD
       and pdf_map.clamp_label(-30.0, 200.0, 1100.0) == pdf_map.LABEL_EDGE_PAD
       and pdf_map.clamp_label(300.0, 200.0, 1100.0) == 300.0)
-check("...and a plate wider than the whole canvas starts at the left "
+check("...and a name wider than the whole canvas starts at the left "
       "edge rather than at a negative coordinate",
       pdf_map.clamp_label(500.0, 9000.0, 1100.0) == pdf_map.LABEL_EDGE_PAD
       and pdf_map.clamp_label(500.0, 100.0, 0.0) == 500.0)
@@ -1172,11 +1171,11 @@ check("select_pdf reaches the canvas through the singleton and the one "
       "canvas.select(" in _func_seg("select_pdf")
       and "recenter_for(" in _method_seg("_MapCanvas", "select")
       and len(_calls_in("select", "recenter_for")) == 1)
-check("K-158: the hovered/focused node's name is drawn BY THE CANVAS, "
-      "on its own plate — a native QToolTip at the global cursor and a "
-      "label beside the node were two boxes fighting for one corner, "
-      "and the plate is the one that can be themed, positioned and "
-      "clamped into view",
+check("K-158: the hovered/focused node's name is drawn BY THE CANVAS — "
+      "a native QToolTip at the global cursor and an on-canvas label "
+      "beside the node were two boxes fighting for one corner, and the "
+      "label is the one that can be themed, positioned and clamped "
+      "into view",
       "QToolTip" not in _CODE
       and "node_lines(p)" in _method_seg("_MapCanvas", "_paint_label"))
 check("house logging prefix present", '"[klausmate] ' in _SRC.replace("f\"", "\""))
@@ -2201,14 +2200,18 @@ if _HAVE_QT:
         # its disc over it. On the real graph four centroids sit within
         # ~50px of each other and that is exactly what happened.
         _nodes_seg = _method_seg("_MapCanvas", "_paint_nodes")
+        # K-187 deleted the loop over lines[1:] (the plate's folder/
+        # matched/retention lines), so _paint_label's own source now
+        # has exactly ONE drawText( call site instead of two — the
+        # module-wide count drops with it.
         check("no node painter draws text — the name is a pass of its "
               "own, run after EVERY circle is down, so a nearer node "
               "can never land on top of it",
               "drawText" not in _nodes_seg
               and "drawText" in _method_seg("_MapCanvas", "_paint_label")
-              and _CODE.count("drawText(") == 2)
+              and _CODE.count("drawText(") == 1)
         _paint_body = _method_seg("_MapCanvas", "_paint")
-        check("...and the call order says so too: nodes, then the plate",
+        check("...and the call order says so too: nodes, then the name",
               _paint_body.index("_paint_nodes(")
               < _paint_body.index("_paint_label("))
 
@@ -2235,8 +2238,8 @@ if _HAVE_QT:
             _lx = pdf_map.clamp_label(_lx, _tw, 700.0)
             if _lx < 0 or _lx + _tw > 700.0:
                 _bad.append(_px)
-        check("a real four-line plate stays inside the canvas at EVERY "
-              "node position, off-screen ones included — label_anchor "
+        check("a real long name stays inside the canvas at EVERY node "
+              "position, off-screen ones included — label_anchor "
               "mirrors only when the mirrored side fits, and a name "
               "clipped at the edge has now been reported three times "
               "in this module",
@@ -2721,6 +2724,74 @@ if _HAVE_QT:
               f"centre={_luma(_img, _sx, _sy):.0f} ground={_ground:.0f}")
         check("NODE_HALO_F is gone by name",
               not hasattr(pdf_map, "NODE_HALO_F"))
+        _cv.close()
+    finally:
+        theme.night_mode = _orig_night
+
+    # ---- K-187: the chosen PDF's name lights up, bare, no plate ----
+    try:
+        check("node_lines is the NAME and nothing else — no folder, "
+              "matched or retention lines",
+              pdf_map.node_lines(FAKE["pdfs"][0])
+              == [FAKE["pdfs"][0]["display"]],
+              repr(pdf_map.node_lines(FAKE["pdfs"][0])))
+        _label_seg = _func_seg("_paint_label")
+        check("_paint_label draws NO plate: no rounded rect, no brush "
+              "fill, no LABEL_PLATE_ALPHA",
+              "drawRoundedRect" not in _label_seg
+              and "setBrush" not in _label_seg
+              and "LABEL_PLATE_ALPHA" not in _label_seg)
+        check("the plate constants are gone by name",
+              not any(hasattr(pdf_map, n) for n in
+                      ("LABEL_PLATE_ALPHA", "LABEL_PAD_X", "LABEL_PAD_Y")))
+
+        _cv = pdf_map.map_canvas(None, FAKE)
+        _grab(_cv, night=True)
+        _cv.select("lec1")
+        for _ in range(3):
+            _app.processEvents()
+        _img = _cv.grab().toImage()
+        _c = dict(theme.palette(True), bg=theme.palette(True)["chrome"])
+        _sx, _sy, _ = pdf_map.project_point(
+            _cv._vp, _cv._cam, *_cv._pdf_xyz["lec1"])
+        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"])
+        # A fresh QFont at the exact pixel size _paint_label sets, not
+        # the widget's own default font — this is what fixes the label
+        # box to where the real render actually puts the text.
+        _fnt = G.QFont()
+        _fnt.setPixelSize(11)
+        _fm = G.QFontMetricsF(_fnt)
+        _tw = _fm.horizontalAdvance(FAKE["pdfs"][0]["display"])
+        _lx, _ly = pdf_map.label_anchor(_sx, _sy, _r, _tw, _img.width())
+        # The label box: from the anchor, one line high. Count text-ink
+        # pixels vs the SAME box grabbed with nothing selected (so
+        # stars under it cancel out).
+        _cv.select("")
+        for _ in range(3):
+            _app.processEvents()
+        _blank = _cv.grab().toImage()
+        _ink = sum(1 for y in range(int(_ly - 11), int(_ly + 4))
+                   for x in range(int(_lx), int(_lx + _tw))
+                   if _img.pixel(x, y) != _blank.pixel(x, y))
+        check("selecting a PDF paints its NAME: the label box differs "
+              "from the unselected frame",
+              _ink > 40, f"{_ink} changed px")
+        _text = G.QColor(_c["text"])
+        _hit = 0
+        for y in range(int(_ly - 11), int(_ly + 4)):
+            for x in range(int(_lx), int(_lx + _tw)):
+                _p = G.QColor(_img.pixel(x, y))
+                if (abs(_p.red() - _text.red()) <= 3
+                        and abs(_p.green() - _text.green()) <= 3):
+                    _hit += 1
+        # 11px text is mostly antialiased edge, not solid fill, so a
+        # <=3 tolerance around the exact ink only ever catches a
+        # handful of fully-covered pixels — measured here at 16 for
+        # the true c["text"] render and 0 for the same glyph drawn in
+        # c["text_muted"] (a swap this crisp needs no closer margin).
+        check("...in the FULL text ink — the chosen name lights up, it "
+              "is not the muted preview colour",
+              _hit > 10, f"{_hit} px in c['text']")
         _cv.close()
     finally:
         theme.night_mode = _orig_night

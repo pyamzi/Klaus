@@ -160,12 +160,18 @@ So five things changed, and the first two REVERSE K-138 and K-148.
    window opens on one (``set_initial_focus``), arrow keys step through
    them, Escape goes back to the whole cloud, and the Library's dock
    keeps being told which one by the viewer.
-5. **The name is drawn by the canvas**, on its own plate, in a pass
-   AFTER every node. It used to be emitted inside the depth-sorted node
-   loop, so a PDF that sorted nearer painted its disc over it; and a
-   native QToolTip carrying the same name fought it for the same corner.
-   ``clamp_label`` has the last word on placement, because a clipped
-   name has been reported three times in this module.
+5. **The name is drawn by the canvas**, in a pass AFTER every node. It
+   used to be emitted inside the depth-sorted node loop, so a PDF that
+   sorted nearer painted its disc over it; and a native QToolTip
+   carrying the same name fought it for the same corner. ``clamp_label``
+   has the last word on placement, because a clipped name has been
+   reported three times in this module. **Retired at K-187**: the
+   rounded, alpha-blended plate it used to sit on is gone — Pouya:
+   "Can you remove the little box around it." The name now draws bare,
+   ink ``c["text"]`` for the SELECTED PDF and ``c["text_muted"]`` for a
+   hover-only preview, and ``node_lines`` carries only the display
+   name — the folder/matched-count/retention lines the plate used to
+   show live in the Library tree instead.
 
 **K-174: a constellation, hard-edged, turning.** Pouya, with
 aalampour.com open: "See how there's a constellation type of thing...
@@ -326,13 +332,8 @@ HIT_SLOP = 4.0
 LABEL_GAP = 9.0
 # Baseline nudge that sits an 11px label on the node's centre line.
 LABEL_BASELINE_DY = 4.0
-# Padding around the label's plate — the name is drawn over a live star
-# field now, so it carries a dark rounded backing or it is unreadable.
-LABEL_PAD_X = 7.0
-LABEL_PAD_Y = 5.0
-LABEL_PLATE_ALPHA = 0.82
 LABEL_LINE_H = 14.0
-# How close the plate may come to the canvas edge. label_anchor mirrors
+# How close the label may come to the canvas edge. label_anchor mirrors
 # only when the mirrored side FITS; when neither does it keeps the
 # right-hand placement and the text runs off. clamp_label has the last
 # word instead — three reports of a clipped name in this module is
@@ -1742,31 +1743,10 @@ def label_anchor(
 
 
 def node_lines(pdf: dict) -> list:
-    """The focused PDF's plate: display name, folder when filed, matched
-    NOTE count, retention only when actually known (headless graphs
-    carry None). Never a card count — K-158, Pouya: "forget about
-    cards".
-
-    This used to be ``tooltip_text``, fed to ``QToolTip.showText``.
-    K-158 replaced the native tooltip with a plate the canvas draws
-    itself, because the two were fighting: a popup positioned at the
-    global cursor and a label positioned beside the node stacked on top
-    of each other in the same corner, twice, in two different type
-    styles. One name, drawn once, by whoever owns the surface.
-    """
-    lines = [str(pdf.get("display") or pdf.get("safe") or "PDF")]
-    folder = pdf.get("folder")
-    if folder:
-        lines.append(f"Folder: {folder}")
-    try:
-        count = int(pdf.get("match_count") or 0)
-    except (TypeError, ValueError):
-        count = 0
-    lines.append(f"Matched notes: {count}")
-    r = pdf.get("retention")
-    if isinstance(r, (int, float)) and not isinstance(r, bool):
-        lines.append(f"Retention: {round(float(r) * 100.0)}%")
-    return lines
+    """What the canvas writes beside the focused node: the NAME, alone.
+    Folder, matched count and retention left with the plate (Pouya:
+    'remove the little box around it'); they live in the Library tree."""
+    return [str(pdf.get("display") or pdf.get("safe") or "")]
 
 
 def clamp_label(x: float, text_width: float, view_width: float,
@@ -1776,11 +1756,11 @@ def clamp_label(x: float, text_width: float, view_width: float,
 
     ``label_anchor`` mirrors a label to the left when the right-hand
     placement would overrun — but only when the left placement FITS.
-    When neither side fits (a wide plate, a node near an edge, a node
+    When neither side fits (a wide name, a node near an edge, a node
     projected off-canvas entirely) it keeps the right-hand one and the
     text runs off the edge. That has now been reported three times in
     this module, so the last word belongs to a clamp rather than to
-    another offset: the plate is placed by preference and then made to
+    another offset: the label is placed by preference and then made to
     be on screen.
     """
     tw = max(0.0, _num(text_width))
@@ -2738,7 +2718,7 @@ def _canvas_class():
             rings land in a heap. Focusing one makes the pile-up stop
             mattering instead of asking the layout to solve it.
 
-            Returns the drawn nodes (near-last) so the plate pass can
+            Returns the drawn nodes (near-last) so the label pass can
             place exactly one name AFTER every circle is down.
             """
             drawn = []
@@ -2804,19 +2784,8 @@ def _canvas_class():
             return out
 
         def _paint_label(self, painter, c, drawn, active, w, h) -> None:
-            """Exactly ONE plate, the focused node's (K-138), drawn by
-            the canvas itself.
-
-            It carries what the hover tooltip used to: name, folder,
-            matched notes, retention when known. The native QToolTip is
-            gone — a popup positioned at the global cursor and a label
-            positioned beside the node stacked in the same corner, two
-            text boxes in two type styles saying the same name.
-
-            Placed by ``label_anchor`` and then CLAMPED into the canvas
-            by ``clamp_label``: the anchor mirrors only when the mirrored
-            side fits, and a name clipped at the right edge has now been
-            reported three times here.
+            """Exactly ONE name, the focused node's, drawn bare: bright
+            when chosen, muted while only hovered.
             """
             if not active:
                 return
@@ -2839,21 +2808,9 @@ def _canvas_class():
                 lx = clamp_label(lx, tw, w)
                 ly = _clamp(ly, LABEL_LINE_H + LABEL_EDGE_PAD,
                             max(LABEL_LINE_H, h - bh - LABEL_EDGE_PAD))
-                plate = QColor(c["bg"])
-                plate.setAlphaF(LABEL_PLATE_ALPHA)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(plate)
-                painter.drawRoundedRect(
-                    QRectF(lx - LABEL_PAD_X, ly - 11.0 - LABEL_PAD_Y,
-                           tw + 2.0 * LABEL_PAD_X,
-                           bh + 14.0 + 2.0 * LABEL_PAD_Y),
-                    5.0, 5.0,
-                )
-                painter.setPen(QColor(c["text"]))
+                lit_name = active is not None and active == self._selected
+                painter.setPen(QColor(c["text"] if lit_name else c["text_muted"]))
                 painter.drawText(QPointF(lx, ly), lines[0])
-                painter.setPen(QColor(c["text_muted"]))
-                for i, line in enumerate(lines[1:], start=1):
-                    painter.drawText(QPointF(lx, ly + LABEL_LINE_H * i), line)
                 return
 
         # ---- mouse ----
@@ -2871,10 +2828,11 @@ def _canvas_class():
             return hit_test(self._screen_nodes(), (px, py), self._hit_radius)
 
         def _update_hover(self, px: float, py: float, event) -> None:
-            """Hovering a node FOCUSES it for the frame — the plate the
-            canvas draws is the whole affordance now. No QToolTip: a
-            native popup at the global cursor and an on-canvas plate
-            beside the node were two boxes fighting for one corner.
+            """Hovering a node FOCUSES it for the frame — the name the
+            canvas draws beside it is the whole affordance now. No
+            QToolTip: a native popup at the global cursor and an
+            on-canvas label beside the node were two boxes fighting for
+            one corner.
             """
             hit = self._hit_at(px, py)
             if hit == self._hover:
@@ -2997,8 +2955,8 @@ def _canvas_class():
                 return False
 
         def clear_focus(self) -> None:
-            """Back to the whole cloud: no PDF lit, no plate, the graph
-            framed as it opens. Escape's binding."""
+            """Back to the whole cloud: no PDF lit, no name drawn, the
+            graph framed as it opens. Escape's binding."""
             try:
                 self._selected = None
                 self._hover = None
