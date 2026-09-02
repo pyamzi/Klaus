@@ -53,7 +53,8 @@ for name, fn in builders:
               "{c[" not in qss and "{{" not in qss and "}}" not in qss)
         c = theme.palette(night)
         check(f"{name}(night={night}) carries a {['light','dark'][night]} "
-              "background token", c["surface"] in qss or c["bg"] in qss)
+              "background token",
+              c["surface"] in qss or c["bg"] in qss or c["chrome"] in qss)
 
 section("dialog button roles")
 d = theme.dialog_qss(False)
@@ -305,6 +306,13 @@ for night in (False, True):
           "for side-by-side panes, top for the map dock — in grey_light",
           _h is not None and f"border-left: 1px solid {c['grey_light']}" in _h.group(1)
           and _v is not None and f"border-top: 1px solid {c['grey_light']}" in _v.group(1))
+    _sash = re.search(r"QSplitter::handle \{(.*?)\}", _no_c, re.S)
+    check(f"library_qss(night={night}): the sash GRAB is the panel "
+          "ground — chrome, since 2026-09-01 (Task 7 fix round 1: the "
+          "map-dock sash sat between two chrome panes and the bg grab "
+          "read as a 7px stripe of neither) — only the grey_light "
+          "hairline above marks the seam",
+          _sash is not None and f"background: {c['chrome']}" in _sash.group(1))
     _glyph = {}
     for _st in ("", ":hover", ":pressed", ":focus", ":disabled"):
         _glyph[_st] = re.search(
@@ -353,7 +361,19 @@ for _night in (True, False):
           "colour the top bar wears",
           _win is not None and _win.group(1).upper() == _c["chrome"].upper(),
           f"got {_win.group(1) if _win else None} chrome={_c['chrome']}")
-    _tree = re.search(r"QWidget#KlausLibraryWindow QTreeWidget\s*\{[^}]*background(?:-color)?:\s*(#[0-9A-Fa-f]{6})", _qss)
+    # Anchored (fix round 1, M2): unanchored, `background(?:-color)?:`
+    # also matches the TAIL of `alternate-background-color:` — greedy
+    # `[^}]*` skips past the real `background-color:` declaration and
+    # the capture lands on whichever one is LAST in the block. Both are
+    # `chrome` today, so that went unnoticed; mutating ONLY
+    # `background-color` back to bg left `alternate-background-color`
+    # on chrome and this pin green in both palettes (found live under
+    # review). The negative lookbehind refuses a match whose preceding
+    # character is a hyphen or word character, which is exactly what
+    # sits before "background-color:" inside "alternate-...".
+    _tree = re.search(
+        r"QWidget#KlausLibraryWindow QTreeWidget\s*\{[^}]*"
+        r"(?<![-\w])background-color:\s*(#[0-9A-Fa-f]{6})", _qss)
     check(f"night={_night}: ...and so is the tree's",
           _tree is not None and _tree.group(1).upper() == _c["chrome"].upper())
 
@@ -696,8 +716,12 @@ for night in (False, True):
 # Library's own two splitters (the window's main horizontal one and the
 # map dock's vertical one) are NOT descendants of the panel, so the
 # scoped copy cannot reach them and they still need the window-scoped
-# original. Verified offscreen: both handles render byte-identical
-# before and after (#F5F5F7 light / #191919 dark).
+# original. At K-153 the two rules shared one value (bg) and rendered
+# byte-identical; since the 2026-09-02 sash fix (Task 7 fix round 1)
+# they diverge ON PURPOSE — library_qss's copy follows the panel onto
+# chrome, pdf_panel_qss's stays on bg for the viewer pane it grabs
+# (Task 8) — so "KEEPS its rule" below is checked by PRESENCE, not by
+# matching the copy's colour.
 for night in (False, True):
     check(f"library_qss(night={night}) KEEPS its window-scoped splitter "
           "handle rule — the Library's own two splitters depend on it",

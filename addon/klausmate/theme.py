@@ -960,9 +960,21 @@ def library_qss(night: bool) -> str:
     card dropped onto it. ``BAND_BASE`` (library_explorer.py) and the
     two ``accent_mix`` calls in the selection rules below move with
     it, so the band keeps compositing over the tree's REAL ground
-    instead of a retired one. The window's own splitter handles stay
-    on ``bg`` on purpose — a sash is drawn to read as a seam between
-    panes, not as part of the ground it divides.
+    instead of a retired one.
+
+    A 2026-09-02 review found the window's own splitter handles could
+    not stay on ``bg`` as first shipped: on the map-dock sash, where
+    both neighbouring panes are NOW chrome, a ``bg`` grab measured as a
+    7-of-7px stripe belonging to neither pane — a visible regression on
+    exactly the seam Step 6 asks to read as "one flat surface". Each
+    handle's grab now matches the pane its hairline is flush to
+    (chrome) instead of carrying a third colour of its own: on the map
+    dock that puts the sash back to a 1px hairline with an invisible
+    grab (VS Code's own treatment, restored); on the main sash it still
+    reads as a real seam, since the PDF pane on the other side is
+    ``bg`` (Task 8) — a step darker. ``pdf_panel_qss``'s own scoped
+    copy of this rule, for the viewer's internal thumb-strip splitter,
+    stays on ``bg`` — that splitter's neighbours are still ``bg``.
     """
     c = palette(night)
     return f"""
@@ -1133,18 +1145,29 @@ def library_qss(night: bool) -> str:
        here. K-153 COPIED this rule into pdf_panel_qss rather than
        moving it: that copy is scoped under #KlausPdfPanel so it reaches
        only the viewer's internal thumb-strip splitter (in every host,
-       not just this window), and these two keep theirs. Same value on
-       purpose — a handle is a seam in the page ground wherever it is. */
+       not just this window), and these two keep theirs. The two RULES
+       diverge on purpose since the 2026-09-02 fix round: this one
+       follows the panel onto chrome, pdf_panel_qss's copy stays on bg
+       — the viewer pane it grabs is bg too (Task 8), so that handle
+       still reads as a seam in ITS OWN pane's ground. */
     QWidget#KlausLibraryWindow QSplitter::handle {{
-        background: {c['bg']};
+        background: {c['chrome']};
     }}
     /* K-175: VS Code draws a 1px sideBar.border along its sash and
-       keeps the grab itself invisible. :horizontal is the SPLITTER's
-       orientation (a vertical bar between side-by-side panes), so the
-       hairline sits on the bar's left edge, flush against the pane it
-       closes; the map dock's vertical splitter gets the same line on
-       its top edge. Width is geometry and lives in library_explorer
-       (SASH_W), set from pdf_drive. */
+       leaves the GRAB itself the colour of the pane it closes — never
+       a third colour of its own (fixed 2026-09-02: a bg grab between
+       two now-chrome panes measured as a 7px stripe belonging to
+       neither, not the invisible grab this comment used to claim).
+       :horizontal is the SPLITTER's orientation (a vertical bar
+       between side-by-side panes), so the hairline sits on the bar's
+       left edge, flush against the pane it closes; the map dock's
+       vertical splitter gets the same line on its top edge — and on
+       THAT splitter, both panes are chrome, so the rule above puts the
+       grab back to invisible, hairline only. On the main sash the grab
+       is chrome too, reading as part of the tree side; the PDF pane
+       past the hairline is bg (Task 8), a step darker, so the seam
+       still shows there. Width is geometry and lives in
+       library_explorer (SASH_W), set from pdf_drive. */
     QWidget#KlausLibraryWindow QSplitter::handle:horizontal {{
         border-left: 1px solid {c['grey_light']};
     }}
