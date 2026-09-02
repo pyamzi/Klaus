@@ -21,7 +21,7 @@
 - **Test bootstrap:** every test file starts `sys.path.insert(0, ".claude/skills/klaus-test/scripts"); from anki_stubs import check, code_only, install, report, section; install()` and ends with `report()`. System `python3` is 3.9.6 (no `math.sumprod`, no `int.bit_count`, no `match`). `PyQt6` and `PyQt6.QtPdf` import under it; `QT_QPA_PLATFORM=offscreen`.
 - **Never drive Pouya's running Anki as a test fixture.** The spike (Task 1) runs the `claude` binary, never Anki. The live check (Task 13) is `needs-human`.
 - **Spec values (verbatim):** endpoint bound to `127.0.0.1:0`; token header `X-Klaus-Token`; agent marker header `X-Klaus-Agent: 1`; `Origin` present → 403; body cap 4 MB; read timeout 30 s; approval timeout 120 s; OCR timeout 60 s; stop grace 2 s; login-shell discovery 3 s; page render long edge 1400 px; OCR debounce 400 ms; prefetch page±1; cache `user_files/ocr/<pdf_safe>/<digest12>/<page:04d>.md|.png`; sessions `user_files/assistant/sessions.json`; prompts `user_files/assistant/prompts/<name>.md`; system prompt `user_files/assistant/system_prompt.md`; stderr log `user_files/assistant/claude.log` (1 MB cap); config keys `ocr_enabled` (true), `ocr_model` ("glm-ocr"), `claude_binary` (""), `assistant_model` (""), `assistant_reopen` (false), `assistant_dock_width` (420); dropped keys `assistant_api_key`, `assistant_backend`, `assistant_token`; shortcut `Ctrl+Shift+A`; MCP server name `klaus`; tools `mcp__klaus__<name>`.
-- **Allowed Claude Code tools:** `Read Grep Glob mcp__klaus__*`; **disallowed:** `Bash Edit Write MultiEdit NotebookEdit WebFetch WebSearch Task`.
+- **Allowed Claude Code tools:** `Read Grep Glob ToolSearch mcp__klaus__*` (ToolSearch: this build defers MCP schemas behind it — spike finding); **disallowed:** `Bash Edit Write MultiEdit NotebookEdit WebFetch WebSearch Task`.
 
 ## Rulings (spec refinements the facts forced)
 
@@ -303,7 +303,7 @@ check("print mode with stream-json both ways and partials",
 check("mcp config names klaus over http with the token header",
       "--mcp-config" in cmd and '"klaus"' in s and "/mcp" in s and "X-Klaus-Token" in s and "tok" in s and "--strict-mcp-config" in cmd)
 check("library root is the add-dir", cmd[cmd.index("--add-dir") + 1] == "/lib")
-check("allowlist and denylist exactly", "Read Grep Glob mcp__klaus__*" in s and "Bash Edit Write MultiEdit NotebookEdit WebFetch WebSearch Task" in s)
+check("allowlist and denylist exactly", "Read Grep Glob ToolSearch mcp__klaus__*" in s and "Bash Edit Write MultiEdit NotebookEdit WebFetch WebSearch Task" in s)
 check("new session by id", cmd[cmd.index("--session-id") + 1] == "sid-1" and "--resume" not in cmd)
 cmd2 = ah.command_line("/bin/claude", port=1, token="t", library_root=None, system_prompt_path="/sp.md", resume="old", model="opus")
 check("resume instead of session-id; model passed; no add-dir without a root",
@@ -360,7 +360,7 @@ check("unknown → other", ah.classify({"type": "zzz"}) == ("other", None))
 
 section("permissions")
 check("klaus tools allowed", ah.decide_permission("mcp__klaus__add_note", {})[0] == "allow")
-check("Read/Grep/Glob allowed", all(ah.decide_permission(t, {})[0] == "allow" for t in ("Read", "Grep", "Glob")))
+check("Read/Grep/Glob/ToolSearch allowed", all(ah.decide_permission(t, {})[0] == "allow" for t in ("Read", "Grep", "Glob", "ToolSearch")))
 d = ah.decide_permission("Bash", {"command": "rm"})
 check("everything else denied with the fixed message", d == ("deny", ah.DENY_MESSAGE))
 cr = json.loads(ah.control_response("R1", "deny", "no"))
@@ -449,7 +449,7 @@ KNOWN_PATHS = (
     "~/.local/bin/claude",
 )
 WINDOWS_PATH = "%LOCALAPPDATA%\\Programs\\claude\\claude.exe"
-ALLOWED_TOOLS = ("Read", "Grep", "Glob", "mcp__klaus__*")
+ALLOWED_TOOLS = ("Read", "Grep", "Glob", "ToolSearch", "mcp__klaus__*")
 DISALLOWED_TOOLS = ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task")
 MCP_SERVER = "klaus"
 STOP_GRACE_S = 2.0
@@ -577,7 +577,7 @@ def classify(event: dict) -> tuple[str, Any]:
 
 
 def decide_permission(tool_name: str, input: dict) -> tuple[str, str]:
-    if tool_name.startswith(f"mcp__{MCP_SERVER}__") or tool_name in ("Read", "Grep", "Glob"):
+    if tool_name.startswith(f"mcp__{MCP_SERVER}__") or tool_name in ("Read", "Grep", "Glob", "ToolSearch"):
         return "allow", ""
     return "deny", DENY_MESSAGE
 

@@ -74,7 +74,7 @@ The result is cached in memory for the profile session and shown (not written) i
   --mcp-config '{"mcpServers":{"klaus":{"type":"http","url":"http://127.0.0.1:<port>/mcp","headers":{"X-Klaus-Token":"<token>"}}}}'
   --strict-mcp-config
   --add-dir <library_root>
-  --allowedTools Read Grep Glob "mcp__klaus__*"
+  --allowedTools Read Grep Glob ToolSearch "mcp__klaus__*"
   --disallowedTools Bash Edit Write MultiEdit NotebookEdit WebFetch WebSearch Task
   --append-system-prompt-file <user_files/assistant/system_prompt.md>
   (--session-id <uuid4> | --resume <session_id>)
@@ -125,7 +125,7 @@ The exact field paths are pinned by the recorded fixtures from the spike (§12),
 
 ### 4.5 Approvals
 
-`decide_permission(tool_name, input) -> ("allow" | "deny", message)`: names beginning `mcp__klaus__` are allowed (the endpoint holds the real gate); `Read`/`Grep`/`Glob` are allowed; everything else is denied with "Klaus allows only reading the library and its own Anki tools." The answer is written as a `control_response` for the request id. The dock shows a denied request as one muted line.
+`decide_permission(tool_name, input) -> ("allow" | "deny", message)`: names beginning `mcp__klaus__` are allowed (the endpoint holds the real gate); `Read`/`Grep`/`Glob`/`ToolSearch` are allowed (`ToolSearch` because this build defers MCP tool schemas behind it — denying it cuts off every Klaus tool, found by the spike); everything else is denied with "Klaus allows only reading the library and its own Anki tools." The answer is written as a `control_response` for the request id. The dock shows a denied request as one muted line.
 
 ### 4.6 Stop and lifecycle
 
@@ -137,6 +137,8 @@ The exact field paths are pinned by the recorded fixtures from the spike (§12),
 ### 4.7 System prompt
 
 `user_files/assistant/system_prompt.md` is written by Klaus on first use (and rewritten when its embedded version marker is older than the shipped one). It states: what Klaus is; that every user turn ends with a `[Klaus context]` block describing the page in view; to answer from the page and the library, citing pages as `(p. N)`; that `mcp__klaus__*` tools reach the user's Anki collection; that making a card means one `add_note` per card with a `source_page`, proposed in prose first, and that the user approves each in a dialog; never to claim a card was added unless the tool result says so.
+
+**Spike finding (2026-09-02):** under `--permission-mode default` the control request never fired and a non-disallowed Bash ran unprompted, so the PRIMARY guard is the `--disallowedTools` list; §4.5 stays as belt-and-braces, and the mode is re-probed with `manual` in Task 13's live check.
 
 ## 5. `anki_endpoint.py`
 
