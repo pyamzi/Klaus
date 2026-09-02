@@ -2560,16 +2560,33 @@ if _HAVE_QT:
               2300 * pdf_map.IDLE_TICK_MS / 1000.0 > 60.0)
         _rot.hide()
 
-        # The idle fit has to hold every pose it will show — the SWAY's
-        # arc since K-200, sampled here over a full circle anyway
-        # (stricter than the sway ever visits, so this stays a valid,
-        # if conservative, safety-margin check rather than a tight
-        # regression pin: on this note-cloud fixture FIT_MARGIN alone
-        # already absorbs the sway's modest swing, verified by hand —
-        # forcing _sweep() to 0 still shows zero escapes here — so a
-        # broken sweep gate would NOT be caught by this specific
-        # fixture; a tighter, fixture-independent version of this check
-        # is flagged separately rather than folded into this task).
+        # The idle fit has to hold every pose the SWAY visits. K-201
+        # replaced the pin that stood here — 200 notes at 24 poses of a
+        # full circle, asked only whether any left the CARD — because
+        # its verdict was an accident, measured twice over. The fit
+        # frames the TRIMMED box, so the outliers it deliberately drops
+        # (34 of this fixture's first 200 notes) are the only points
+        # that can ever leave the card at all — with the REAL fit, 73
+        # of all 1500 do over the sway's own arc — and the pin was green
+        # only because its particular 200 stayed in at its particular
+        # poses. With the sweep gate genuinely off (_sweep() -> 0 set
+        # BEFORE the first paint: after show()/processEvents() the
+        # canvas has already fitted, _did_fit is set, and a later patch
+        # changes nothing — which is how a by-hand check once read
+        # "zero escapes") it went red by two outliers, 2px past the
+        # bottom edge, at full-circle poses the sway never visits; over
+        # the arc, zero. So the check is now the contract the fit
+        # actually makes. frame_bounds frames the SWEPT, padded box to
+        # the margin rectangle [m, w-m] x [m, h-m], and every per-pose
+        # box sits inside it (sweep_bounds' own pins above), so at every
+        # pose the sway visits the trimmed bounds box's projected
+        # corners — the exact extremes of a box under camera_point, see
+        # camera_bounds — must land inside that rectangle: the real fit
+        # keeps 3px of the pad's slack here, a single-pose fit eats
+        # 10.9px of the breathing room at the sway's extreme. The poses
+        # are sway_angle over one period at IDLE_TICK_MS — the yaws
+        # _idle_tick itself produces — plus the exact ±SWAY_AMP
+        # extremes.
         _spin2 = pdf_map.map_canvas(None, CLOUD)
         _spin2.set_idle_rotation(True)
         _spin2.show()
@@ -2577,19 +2594,75 @@ if _HAVE_QT:
         _app.processEvents()
         _spin2._reduce_motion = lambda: True
         _spin2._ensure_fit(700.0, 460.0)
-        _escaped = []
-        for _k in range(24):
-            _spin2._cam = pdf_map.Camera(2.0 * math.pi * _k / 24.0)
-            for _p in list(_spin2._pdf_xyz.values()) + _spin2._notes[:200]:
-                _px, _py, _ = pdf_map.project_point(
-                    _spin2._vp, _spin2._cam, *_p)
-                if not (0 <= _px <= 700 and 0 <= _py <= 460):
-                    _escaped.append((_k, round(_px), round(_py)))
-        check("the idle fit holds — no node and no star walks out of "
-              "the card at any of the sampled poses — the failure this "
-              "guards against is the cloud sliding off the side while "
-              "the map sways",
-              not _escaped, f"{len(_escaped)} escapes, first {_escaped[:3]}")
+        _SWAY_POSES = [
+            pdf_map.sway_angle(_t)
+            for _t in range(0, int(pdf_map.SWAY_PERIOD_MS) + 1,
+                            pdf_map.IDLE_TICK_MS)
+        ] + [pdf_map.REST_ANGLE + pdf_map.SWAY_AMP,
+             pdf_map.REST_ANGLE - pdf_map.SWAY_AMP]
+
+        def _sway_overshoot(cv, w, h, inset):
+            """Worst signed distance, in px, that any corner of
+            ``cv._bounds`` lands OUTSIDE the rectangle inset by ``inset``
+            from the canvas edge, over every pose of the sway. Negative
+            means contained; the pose it happens at rides along."""
+            worst = (-1e9, 0.0)
+            for _a in _SWAY_POSES:
+                _u0, _v0, _u1, _v1 = pdf_map.camera_bounds(
+                    cv._bounds, pdf_map.Camera(_a, cv._cam.distance))
+                _x0, _y0 = pdf_map.world_to_screen(cv._vp, _u0, _v0)
+                _x1, _y1 = pdf_map.world_to_screen(cv._vp, _u1, _v1)
+                _over = max(inset - _x0, _x1 - (w - inset),
+                            inset - _y0, _y1 - (h - inset))
+                if _over > worst[0]:
+                    worst = (_over, _a)
+            return worst
+
+        _m2 = pdf_map.fit_margin((700.0, 460.0))
+        _over_m, _at_m = _sway_overshoot(_spin2, 700.0, 460.0, _m2)
+        check("the idle fit holds the SWAY: at every pose the sway "
+              "visits, the trimmed bounds box stays inside the fit's own "
+              "margin rectangle — the contract frame_bounds + "
+              "sweep_bounds make, and one a single-pose fit breaks by "
+              "10.9px at the sway's extreme on this very fixture (K-201)",
+              _over_m <= 1e-6,
+              f"worst {_over_m:+.2f}px beyond the {_m2:.0f}px margin at "
+              f"pose {_at_m:.3f} rad")
+        # ...and the failure a reader can SEE. The real cloud is
+        # normalized to [-1, 1] per axis (projection's contract), and a
+        # maximized window is where FIT_MARGIN's 48px is the smallest
+        # share of the surface — the place a broken gate has the least
+        # room to hide. A lattice filling that cube on a 1400x920
+        # canvas: the swept fit keeps its nearest corner 55px inside the
+        # card, a single-pose fit walks it 41px OUT at the sway's
+        # extreme (both measured). The bounds are asserted too, so a
+        # trim that shrank the box could not quietly soften this.
+        _LATTICE = {"pdfs": [], "edges": [],
+                    "notes": [{"nid": _n, "xyz": [_i / 4.0 - 1.0,
+                                                  _j / 4.0 - 1.0,
+                                                  _k / 4.0 - 1.0]}
+                              for _n, (_i, _j, _k) in enumerate(
+                                  (_i, _j, _k) for _i in range(9)
+                                  for _j in range(9) for _k in range(9))]}
+        _wide = pdf_map.map_canvas(None, _LATTICE)
+        _wide.set_idle_rotation(True)
+        _wide.show()
+        _wide.resize(1400, 920)
+        _app.processEvents()
+        _wide._reduce_motion = lambda: True
+        _wide._ensure_fit(1400.0, 920.0)
+        _over_c, _at_c = _sway_overshoot(_wide, 1400.0, 920.0, 0.0)
+        check("...and on a cloud that fills the [-1, 1] cube, at a "
+              "maximized window's size, no corner of the cloud walks out "
+              "of the CARD at any pose of the sway — the failure this pin "
+              "exists to catch, which a gaussian fixture at 700x460 could "
+              "never show (K-201)",
+              _over_c <= 1e-6
+              and tuple(round(_v, 6) for _v in _wide._bounds)
+              == (-1.0, -1.0, -1.0, 1.0, 1.0, 1.0),
+              f"worst {_over_c:+.2f}px beyond the card at pose "
+              f"{_at_c:.3f} rad; bounds {_wide._bounds}")
+        _wide.hide()
         _still = pdf_map.map_canvas(None, CLOUD)
         _still.show()
         _still.resize(700, 460)
