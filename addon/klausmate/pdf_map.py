@@ -100,24 +100,25 @@ normalized to its outliers. ``fog_shades`` spends the ramp on the
 cloud's own depth histogram instead; the synthetic uniform cube it was
 first tuned on hid that completely.
 
-Motion. The standalone window turns slowly through a FULL revolution
-(K-174 — see below; K-148 shipped a 0.42 rad sway here and both of its
-reasons were checked and found not to hold for this cloud). The
-Library's dock renders the SAME scene STILL — Pouya's explicit call, so
-nothing moves in the corner of his eye while he works — which is why
-idle rotation is opt-in per host and the window is the only caller, and
-why the FIT is per host too: a rotating canvas frames the swept box
-(``sweep_bounds``) so nothing walks out of the card mid-turn, while the
-still dock keeps the tighter single-pose crop. Clicking a PDF flies the
-camera to its own cluster (``fly_to``, a ``QPropertyAnimation`` on
-OutCubic — md3_switch's shape); ``select_pdf``, the PDF viewer's seam,
-keeps its gentler K-138 contract and never rearranges your view of a
-file you just opened. Anki's Reduce Motion preference stops the
-rotation and lands the flight in one frame; the scene stays 3D,
-perspective and fog either way. And the rotation timer is armed from
-``showEvent`` through a child timer, never from the constructor:
-md3_switch documents the SIGSEGV that repainting a widget mid-composite
-causes.
+Motion. The standalone window sways slowly in 3D (K-200, ``sway_angle``
+— a FULL revolution from K-174 to K-200, see below; K-148 shipped a
+0.42 rad sway before that, on two reasons that were checked and found
+not to hold for this cloud, which is exactly why K-200 could bring a
+smaller sway back with confidence). The Library's dock renders the SAME
+scene STILL — Pouya's explicit call, so nothing moves in the corner of
+his eye while he works — which is why idle motion is opt-in per host
+and the window is the only caller, and why the FIT is per host too: a
+swaying canvas frames the swept box (``sweep_bounds``) so nothing walks
+out of the card at the sway's extreme, while the still dock keeps the
+tighter single-pose crop. Clicking a PDF flies the camera to its own
+cluster (``fly_to``, a ``QPropertyAnimation`` on OutCubic — md3_switch's
+shape); ``select_pdf``, the PDF viewer's seam, keeps its gentler K-138
+contract and never rearranges your view of a file you just opened.
+Anki's Reduce Motion preference stops the sway and lands the flight in
+one frame; the scene stays 3D, perspective and fog either way. And the
+idle timer is armed from ``showEvent`` through a child timer, never
+from the constructor: md3_switch documents the SIGSEGV that repainting
+a widget mid-composite causes.
 
 Opening the map no longer freezes Anki (K-144, absorbed here). The window
 appears immediately showing ``BUILDING_TEXT`` and a ``QueryOp`` worker
@@ -222,7 +223,13 @@ So, in this file:
   Nearest-neighbour, after rendering the alternative: uniformly random
   chords are a cross-hatch that buries the cloud and the PDF nodes.
 - The sway became a full REVOLUTION (``ROTATE_PERIOD_MS``), and the fit
-  that has to survive it became ``sweep_bounds``.
+  that has to survive it became ``sweep_bounds``. **Retired at K-200**:
+  a full turn at 72s/5 degrees a second turned out to be too gradual to
+  read as motion in any one glance — the opposite of "very apparent" —
+  so the revolution is a SWAY again, smaller than even K-148's own, with
+  a nearer camera standing in for the parallax a wider swing used to
+  supply. ``sweep_bounds`` keeps its name and its job; it just frames a
+  narrower arc now.
 - **The PDF nodes glowed, on purpose, until K-186.** "I like the
   shininess of the PDFs. I like that." A handful of nodes a frame
   could afford a real radial gradient; 28,670 notes could not, and a
@@ -289,6 +296,33 @@ cloud's own point count minus one, 863 total segments here against the
 old cap of 300, and the whole frame still medians 1.1 ms — comfortably
 inside the 4.0 ms floor, and in the same range as K-174 through K-188
 (1.38-1.95, then 0.80-1.18).
+
+**K-200: a sway, not a turn.** Pouya, having watched the full turn:
+"have the constellation do a slight rotation in 3D so that 3D-ness is
+very apparent" (and, earlier, "just have it rotate slowly in 3D" — the
+ask never changed; the full turn just never delivered on it. 5 degrees
+a second is too little drift to notice in any one glance, and every
+quarter turn flips the far half of the cloud in front of the near
+half). ``sway_angle`` replaces the wrapping phase with ``REST_ANGLE +
+SWAY_AMP * sin(2*pi*t/SWAY_PERIOD_MS)`` — a there-and-back motion that
+keeps a visible drift going at every instant and never approaches the
+±90° pose where ``band_order`` would have to flip the paint order.
+``CAM_DISTANCE`` drops from 2.6 to 2.0 alongside it — a nearer eye is a
+stronger perspective, which is what makes the parallax between a near
+star and a far one unmistakable across such a small arc (the near/far
+size ratio goes from ~3.4x to ~5.8x for the same cloud). ``sweep_bounds``
+gained an ``amplitude`` parameter (default ``SWAY_AMP``) so it frames
+the sway's arc instead of a full circle — a much tighter box, since the
+camera no longer visits the poses a full turn used to.
+
+Measured on the same four-PDF, 2,800-note fixture the map tasks share
+for frame timing (1100x660, reduce-motion forced so the sway's own
+timer never fires mid-measurement): the frame still medians 1.12-1.17
+ms across repeated runs, max 1.34-1.60 ms — comfortably inside the 4.0
+ms floor and in the same range as K-174 through K-197 (1.38-1.95, then
+0.80-1.41). The sway costs nothing extra per frame: one call to
+``sway_angle`` and one ``Camera`` construction on the idle timer's own
+tick, never inside ``paintEvent`` itself.
 
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (the camera, depth bands and fog ramp included:
@@ -412,43 +446,58 @@ RECENTER_MARGIN = 24.0
 # ── the camera (K-148) ───────────────────────────────────────────────────
 # Eye distance from the z=0 plane, in world units. The cloud is a
 # [-1, 1] cube, so the nearest possible point sits at d - sqrt(2) and the
-# farthest at d + sqrt(2): at 2.6 that is a 1.19..4.01 depth range, i.e.
-# the nearest dots draw ~3.4x larger than the farthest. Lower is more
+# farthest at d + sqrt(2): at 2.0 that is a 0.59..3.41 depth range, i.e.
+# the nearest dots draw ~5.8x larger than the farthest. Lower is more
 # vertiginous and starts to fish-eye; higher flattens back toward the 2D
 # map. Never let it approach sqrt(2), where w reaches zero and the
 # projection blows up (CAM_W_FLOOR is the seatbelt, not the plan).
-CAM_DISTANCE = 2.6
+# Dropped from 2.6 at K-200: a nearer eye is a stronger perspective, and
+# a stronger perspective is what makes the K-200 sway's much smaller arc
+# (±16 degrees, against K-174's full turn) carry visible parallax —
+# the near/far size ratio goes from ~3.4x to ~5.8x for the same cloud.
+CAM_DISTANCE = 2.0
 CAM_W_FLOOR = 0.2
 # The pose the scene RESTS in — not zero, because zero is exactly the old
 # flat map and the Library's dock renders this scene STILL (Pouya's
 # explicit call: no idle spin while he works). A dock that never moves
 # has to read as 3D in a single frame, and this is the yaw that does it.
 REST_ANGLE = 0.30
-# Idle motion is a FULL TURN since K-174 — Pouya: "just have it rotate
-# slowly in 3D". K-148 shipped a 0.42 rad sway instead, on two worries
-# that were both checked here and are both wrong for this cloud. "A spin
-# sweeps through the edge-on pose where the cloud collapses to a line"
-# is true of a PLANE, and a PCA cloud is not one: at a quarter turn you
-# are looking down the first component at the second and third, which
-# are narrower but not flat, so the field breathes rather than
-# collapsing (rendered at 12 poses). "Past ~60 degrees the depth
-# quantization shows as slabs" was true of 256 bands of GLOW SPRITES,
-# whose overlapping halos made a slab a visible plane of light; a slab
-# of 1-3px hard points is 1-3px of hard points.
+# Idle motion WAS a FULL TURN from K-174 to K-200 — Pouya: "just have it
+# rotate slowly in 3D". K-148 shipped a 0.42 rad sway instead, on two
+# worries that were both checked here and are both wrong for this
+# cloud. "A spin sweeps through the edge-on pose where the cloud
+# collapses to a line" is true of a PLANE, and a PCA cloud is not one:
+# at a quarter turn you are looking down the first component at the
+# second and third, which are narrower but not flat, so the field
+# breathes rather than collapsing (rendered at 12 poses). "Past ~60
+# degrees the depth quantization shows as slabs" was true of 256 bands
+# of GLOW SPRITES, whose overlapping halos made a slab a visible plane
+# of light; a slab of 1-3px hard points is 1-3px of hard points. Both
+# findings carry over to K-200's SWAY without re-checking: ±SWAY_AMP is
+# smaller than K-148's own 0.42 rad sway, so if a full turn never came
+# near either failure mode, a sway well inside it certainly does not.
 #
-# One full revolution per ROTATE_PERIOD_MS. 72 s is 5 degrees a second
-# and 0.17 degrees a tick: at the reference's calm, and slow enough
-# that the picture never appears to move while you look straight at it.
-ROTATE_PERIOD_MS = 72000.0
+# K-200 replaced the full turn with a SWAY: Pouya, having watched it for
+# a day, asked for "a slight rotation in 3D so that 3D-ness is very
+# apparent" — 72s/5 degrees a second was too gradual to read as motion
+# in any one glance, and every quarter turn flipped the far half of the
+# cloud in front of the near half. A sinusoidal there-and-back around
+# REST_ANGLE keeps a visible drift going at every instant and never
+# leaves the ±90 degree band that keeps band_order from ever flipping.
+SWAY_AMP = 0.28            # radians, ±16 degrees
+SWAY_PERIOD_MS = 14000.0   # one there-and-back
 IDLE_TICK_MS = 33  # ~30 fps; the whole frame measures 1.0-1.5 ms (K-174)
-# How many poses the rotating fit has to hold. The graph's screen
-# extent changes with the pose — a [-1,1] box is ~41% wider at the
-# diagonal than face-on — so a fit computed at one angle lets the cloud
-# swing out of the card a quarter turn later. sweep_bounds unions the
-# camera-plane box over a full turn at this resolution — 24 steps is
-# every 15 degrees — and pads for what the sampling still misses; at
-# this count the pad is 1.7% of the frame, and containment was
-# verified over 300 random boxes at 360 poses each.
+# How many poses the sway's fit has to hold. The graph's screen extent
+# changes with the pose — a [-1,1] box is ~41% wider at the diagonal
+# corner-on than face-on — so a fit computed at one angle can still let
+# the cloud step outside the card at the sway's own extreme. sweep_bounds
+# unions the camera-plane box over the sway's arc at this resolution and
+# pads for what the sampling still misses. The pad's own derivation
+# (K-174) was measured for a FULL TURN at this same step count — 1.7% of
+# the frame, verified over 300 random boxes at 360 poses each — and is
+# carried over unchanged (K-200: "the pad stays, the arc is still a
+# sinusoid in the sample index"); the sway's arc is far narrower than a
+# full circle, so the same pad is, if anything, more conservative here.
 SWEEP_STEPS = 24
 # Never repaint into a window that is still being composited — md3_switch
 # documents the SIGSEGV that causes (QBackingStore::flush on a paint
@@ -775,6 +824,23 @@ def camera_point(cam: Camera, x: float, y: float, z: float) -> tuple:
         w = CAM_W_FLOOR  # never divide by ~0 on a junk coordinate
     depth = d / w
     return ((x * ct + z * st) * depth, y * depth, depth)
+
+
+def sway_angle(t_ms: float, rest: float = REST_ANGLE, amp: float = SWAY_AMP,
+               period_ms: float = SWAY_PERIOD_MS) -> float:
+    """The camera yaw at time ``t_ms`` into the sway (K-200).
+
+    ``rest + amp * sin(2*pi*t/period)`` — a there-and-back motion that
+    keeps a visible drift going at every instant (unlike a full turn,
+    which crawls at any single moment) and never reaches an angle where
+    ``band_order`` would need to flip the paint order. ``_idle_tick``
+    drives ``t_ms`` from ``self._phase``, an elapsed-milliseconds
+    counter wrapped at ``period_ms`` — not an angle, since K-174's
+    revolution.
+    """
+    return rest + amp * math.sin(
+        2.0 * math.pi * float(t_ms) / max(1.0, float(period_ms))
+    )
 
 
 def project_point(vp: Viewport, cam: Camera, x: float, y: float, z: float):
@@ -1196,40 +1262,47 @@ def camera_bounds(box: Sequence[float], cam: Camera) -> tuple:
 
 
 def sweep_bounds(
-    box: Sequence[float], cam: Camera, steps: int = SWEEP_STEPS
+    box: Sequence[float], cam: Camera, steps: int = SWEEP_STEPS,
+    amplitude: float = SWAY_AMP,
 ) -> tuple:
-    """``camera_bounds`` unioned over a FULL TURN — what a canvas that
-    rotates has to frame (K-174).
+    """``camera_bounds`` unioned over THE SWAY'S ARC — what a canvas
+    that sways has to frame (K-174, arc narrowed at K-200).
 
     A box's screen extent depends on the pose: a [-1, 1] cube is about
     41% wider seen corner-on than face-on, so a fit computed at the
-    resting angle lets the cloud swing out of the card a quarter turn
-    later. Sampled and then PADDED, rather than solved. Under a yaw a
-    point at radius R traces ``u = R cos(theta - phi)``, so the extent
-    is a sinusoid in the angle and N samples undershoot its true peak
-    by about ``1 / cos(pi / N)``. That is the ORTHOGRAPHIC bound and it
-    is not enough here: the perspective divide and an off-centre box
-    between them need about half as much again (measured over 300
-    random boxes and 180 poses each — 1.053 required at 24 steps
-    against the bound's 1.035, and 74 of 800 box/step pairs overflowed
-    a bare 1/cos pad). Squaring it holds at SWEEP_STEPS on every one of
-    300 random boxes at 360 poses, and costs 1.7% of the frame. The
-    alternative, the analytic swept hull of a box under a perspective
-    divide, is a page of algebra to save twenty-three calls that happen
-    once per fit.
+    resting angle alone can still let the cloud step outside the card
+    at the sway's own extreme. Sampled and then PADDED, rather than
+    solved. Under a yaw a point at radius R traces ``u = R cos(theta -
+    phi)``, so the extent is a sinusoid in the angle and N samples
+    undershoot its true peak by about ``1 / cos(pi / N)``. That is the
+    ORTHOGRAPHIC bound and it is not enough here: the perspective divide
+    and an off-centre box between them need about half as much again
+    (measured over 300 random boxes and 180 poses each, for a FULL TURN
+    at K-174 — 1.053 required at 24 steps against the bound's 1.035, and
+    74 of 800 box/step pairs overflowed a bare 1/cos pad). Squaring it
+    held at SWEEP_STEPS on every one of 300 random boxes at 360 poses of
+    a full turn, and cost 1.7% of the frame; K-200 carries the same pad
+    over UNCHANGED for the sway's much narrower arc — ``amplitude *
+    sin(2*pi*i/n)`` is still a sinusoid in the sample index ``i``, and a
+    narrower arc is, if anything, an easier bound to hold than the full
+    turn this pad was proven against. The alternative, the analytic
+    swept hull of a box under a perspective divide, is a page of algebra
+    to save twenty-three calls that happen once per fit.
 
     ``steps <= 1`` degrades to the single-pose box, which is what the
-    Library's dock (still, never rotating) actually wants.
+    Library's dock (still, never swaying) actually wants.
     """
     n = int(_num(steps, SWEEP_STEPS))
     if n <= 1:
         return camera_bounds(box, cam)
+    amp = _num(amplitude, SWAY_AMP)
     us0: list = []
     vs0: list = []
     us1: list = []
     vs1: list = []
     for i in range(n):
-        pose = Camera(cam.angle + 2.0 * math.pi * i / n, cam.distance)
+        pose = Camera(cam.angle + amp * math.sin(2.0 * math.pi * i / n),
+                       cam.distance)
         u0, v0, u1, v1 = camera_bounds(box, pose)
         us0.append(u0)
         vs0.append(v0)
@@ -1253,10 +1326,11 @@ def frame_bounds(
     path every fit takes (initial, Fit button, Escape, click-to-fly), so
     the compact-canvas margin cap reaches all of them.
 
-    ``sweep`` > 1 frames the box over that many poses of a full turn
-    instead of the one it is in (K-174: an idle-rotating canvas has to
-    fit every pose it will show, not the pose it happens to start in).
-    The default 0 is the single-pose fit the still dock wants.
+    ``sweep`` > 1 frames the box over that many poses of the sway's arc
+    instead of the one it is in (K-174, arc narrowed at K-200: a
+    swaying canvas has to fit every pose it will show, not the pose it
+    happens to start in). The default 0 is the single-pose fit the
+    still dock wants.
     """
     box2 = (
         sweep_bounds(box, cam, sweep) if int(_num(sweep, 0.0)) > 1
@@ -2325,18 +2399,16 @@ def _canvas_class():
                 if not self.isVisible():
                     self._idle.stop()
                     return
-                # A FULL TURN since K-174, not K-148's sway: the phase
-                # IS the yaw, wrapped, so nothing ever eases or
-                # reverses. band_order already flips the painter's
-                # order on the sign of cos(angle), which is what makes
-                # a whole revolution legal at all — without it the far
-                # half of the cloud would paint over the near half
-                # every quarter turn.
-                self._phase += 2.0 * math.pi * IDLE_TICK_MS / ROTATE_PERIOD_MS
-                if self._phase > 2.0 * math.pi:
-                    self._phase -= 2.0 * math.pi
+                # A SWAY since K-200, not K-174's full turn: self._phase
+                # is now ELAPSED MILLISECONDS into the sway, wrapped at
+                # SWAY_PERIOD_MS, and sway_angle turns that into the
+                # yaw. The sway never crosses +-90 degrees, so
+                # band_order's flip on the sign of cos(angle) — which
+                # made a whole revolution legal — never fires; nothing
+                # here relies on it firing either.
+                self._phase = (self._phase + IDLE_TICK_MS) % SWAY_PERIOD_MS
                 self._cam = Camera(
-                    REST_ANGLE + self._phase, self._cam.distance
+                    sway_angle(self._phase), self._cam.distance
                 )
                 self.update()
             except Exception as exc:
@@ -2513,14 +2585,15 @@ def _canvas_class():
             self._did_fit = True
 
         def _sweep(self) -> int:
-            """How many poses this canvas's fits have to hold (K-174).
+            """How many poses this canvas's fits have to hold (K-174,
+            arc narrowed at K-200).
 
-            A ROTATING canvas frames the swept box, because it will
-            show every pose of a full turn and a box framed at one
-            angle is ~40% too small at the diagonal — the cloud swings
-            out of the card a quarter turn later. A canvas that never
-            moves (the Library's dock, Pouya's explicit call) frames
-            the one pose it has, and keeps K-158's tighter crop.
+            A SWAYING canvas frames the swept box, because it will show
+            every pose of the sway's arc and a box framed at the
+            resting angle alone can still leave the cloud stepping
+            outside the card at the sway's own extreme. A canvas that
+            never moves (the Library's dock, Pouya's explicit call)
+            frames the one pose it has, and keeps K-158's tighter crop.
             """
             return SWEEP_STEPS if self._idle_want else 0
 
@@ -3438,7 +3511,7 @@ def open_map_window(parent=None):
                 fit_btn.clicked.connect(self.canvas.fit)
             except Exception as exc:
                 print(f"[klausmate] map fit wire failed: {exc}")
-            # THIS window is where the scene rotates. The Library's dock
+            # THIS window is where the scene sways. The Library's dock
             # hosts the same canvas and never asks — Pouya's call: the
             # map is a vibe when you go looking at it, and a distraction
             # moving in the corner of the Library while he works. The

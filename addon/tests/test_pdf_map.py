@@ -956,29 +956,38 @@ check("...and the ramp degrades rather than dividing by zero at one "
       and pdf_map.edge_mix(-5) == _RAMP[0]
       and pdf_map.edge_mix("junk") == _RAMP[0])
 
-# Rotation. "Just have it rotate slowly in 3D."
-check("the 0.42 rad sway is gone and the scene TURNS — a full "
-      "revolution, which is what 'rotate' means",
+# Rotation retired at Task 6/K-200: "have the constellation do a slight
+# rotation in 3D so that 3D-ness is very apparent" — the full turn never
+# delivered on that (5 degrees a second is too little to notice in any
+# one glance), so idle motion is a SWAY of +-SWAY_AMP around REST_ANGLE.
+check("the full turn is gone and the scene SWAYS +-SWAY_AMP around "
+      "REST_ANGLE, which is what a slight, unmistakable 3D drift needs "
+      "instead of a full revolution",
       not hasattr(pdf_map, "IDLE_SWING")
-      and pdf_map.ROTATE_PERIOD_MS >= 30000.0)
-check("...slowly: under 15 degrees a second, and under half a degree "
-      "per tick so no frame jumps",
-      math.degrees(2.0 * math.pi) / (pdf_map.ROTATE_PERIOD_MS / 1000.0) < 15.0
-      and math.degrees(2.0 * math.pi * pdf_map.IDLE_TICK_MS
-                       / pdf_map.ROTATE_PERIOD_MS) < 0.5)
+      and not hasattr(pdf_map, "ROTATE_PERIOD_MS")
+      and hasattr(pdf_map, "SWAY_AMP") and hasattr(pdf_map, "SWAY_PERIOD_MS"))
+check("...slowly: the sway's peak angular speed stays under 15 degrees "
+      "a second, and a single tick moves the camera well under half a "
+      "degree — nothing about the sway should look like a jump-cut",
+      math.degrees(pdf_map.SWAY_AMP * 2.0 * math.pi * 1000.0
+                   / pdf_map.SWAY_PERIOD_MS) < 15.0
+      and abs(math.degrees(pdf_map.sway_angle(pdf_map.IDLE_TICK_MS)
+                           - pdf_map.sway_angle(0.0))) < 0.5)
 
-# A fit that has to survive every pose, not just the resting one.
+# A fit that has to survive every pose of the SWAY, not just the resting
+# one (narrowed from a full turn at Task 6/K-200).
 _SBOX = (-0.8, -0.5, -0.6, 0.9, 0.4, 0.7)
 _SWEPT = pdf_map.sweep_bounds(_SBOX, pdf_map.Camera(0.0))
-check("a rotating canvas frames the SWEPT box: at every pose of a full "
-      "turn the graph still fits inside what the fit framed. A box "
-      "framed at rest is 40% too small at the diagonal and the cloud "
-      "swings out of the card every quarter turn",
+check("a swaying canvas frames the SWEPT box: at every pose of the sway "
+      "the graph still fits inside what the fit framed. A box framed at "
+      "rest alone can still let the cloud step outside the card at the "
+      "sway's own extreme",
       all(pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[0] >= _SWEPT[0] - 1e-9
           and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[1] >= _SWEPT[1] - 1e-9
           and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[2] <= _SWEPT[2] + 1e-9
           and pdf_map.camera_bounds(_SBOX, pdf_map.Camera(a))[3] <= _SWEPT[3] + 1e-9
-          for a in [i * math.pi / 32.0 for i in range(64)]))
+          for a in [-pdf_map.SWAY_AMP + 2.0 * pdf_map.SWAY_AMP * i / 63.0
+                    for i in range(64)]))
 _CUBE = (-1.0, -1.0, -1.0, 1.0, 1.0, 1.0)
 check("...and it really is BIGGER than the resting pose, so the sweep "
       "is doing something rather than agreeing by accident. On the "
@@ -994,14 +1003,16 @@ check("...and it really is BIGGER than the resting pose, so the sweep "
                                pdf_map.SWEEP_STEPS).scale
       < pdf_map.frame_bounds(_CUBE, pdf_map.Camera(0.0),
                              (900.0, 640.0)).scale * 0.8)
-check("...and the sweep holds for a LOPSIDED box too, where the "
-      "orthographic 1/cos bound alone does not: 300 random boxes, 360 "
-      "poses each, none escaping",
+check("...and the sweep holds for a LOPSIDED box too, over the sway's "
+      "own arc, where the orthographic 1/cos bound alone does not (3 "
+      "boxes drawn from K-174's offline 300-random-box/360-pose search, "
+      "64 poses each within +-SWAY_AMP, none escaping)",
       not [1 for _b in [
           (-0.973, -0.032, -0.982, 0.638, 0.569, 0.42),
           (-0.2, -0.9, -0.05, 0.95, 0.1, 0.99),
           (-1.0, -0.01, -1.0, 0.02, 0.01, 0.03)]
-          for _a in [i * math.pi / 36.0 for i in range(72)]
+          for _a in [-pdf_map.SWAY_AMP + 2.0 * pdf_map.SWAY_AMP * i / 63.0
+                     for i in range(64)]
           if not (
               pdf_map.camera_bounds(_b, pdf_map.Camera(_a))[0]
               >= pdf_map.sweep_bounds(_b, pdf_map.Camera(0.0))[0] - 1e-9
@@ -1876,11 +1887,19 @@ if _HAVE_QT:
               "rotation reaches the pixels rather than recomputing a "
               "matrix that changes nothing",
               _moved > 200, f"{_moved} sampled pixels changed")
-        # K-174: a FULL TURN, which K-148 refused on two worries. The
-        # honest test of both is to render every pose and look at the
-        # numbers: nothing may raise, the cloud may not collapse to a
-        # line at the quarter turns, and the far half may not paint
-        # over the near half when cos(angle) changes sign.
+        # K-174 forced a FULL TURN through this render pipeline to
+        # settle two worries K-148 raised about a full rotation; K-200
+        # retired the full turn for a +-SWAY_AMP sway that never comes
+        # anywhere near either worry (see pdf_map.py's REST_ANGLE
+        # comment), so this pin no longer describes anything the idle
+        # timer itself does. Kept anyway, RE-AIMED at the render
+        # pipeline's own robustness rather than at the idle feature: the
+        # camera is set directly (never through _idle_tick/sway_angle),
+        # so it still exercises band_order's sign-flip and the star
+        # layer's tier interpolation across a pose range wider than the
+        # sway ever visits — nothing may raise, the cloud may not
+        # collapse to a line at the quarter turns, and the far half may
+        # not paint over the near half when cos(angle) changes sign.
         _spread = []
         for _k in range(16):
             _spin._cam = pdf_map.Camera(2.0 * math.pi * _k / 16.0)
@@ -1890,8 +1909,9 @@ if _HAVE_QT:
                      + _pi.pixelColor(x, y).green()
                      + _pi.pixelColor(x, y).blue() > 260]
             _spread.append((max(_cols) - min(_cols)) if _cols else 0)
-        check("a FULL revolution renders at every pose and the cloud "
-              "never collapses: K-148 kept a 0.42 rad sway because a "
+        check("the render pipeline holds at every pose, whatever range "
+              "the camera actually visits, and the cloud never "
+              "collapses: K-148 kept a 0.42 rad sway because a "
               "spin 'sweeps through the edge-on pose where the cloud "
               "collapses to a line'. That is true of a PLANE; a PCA "
               "cloud has three components, so the narrowest pose is "
@@ -2511,7 +2531,7 @@ if _HAVE_QT:
                   for _sa, _ka, _sb, _kb in _sky._links))
         _sky.hide()
 
-        # ---- the rotation is a TURN, on a real timer path ----
+        # ---- the idle motion is a SWAY, on a real timer path (Task 6) ----
         _rot = pdf_map.map_canvas(None, CLOUD)
         _rot.show()
         _rot.resize(700, 460)
@@ -2523,20 +2543,33 @@ if _HAVE_QT:
             _rot._idle_tick()
             _seen.append(_rot._cam.angle)
         _swept = max(_seen) - min(_seen)
-        check("the idle motion is a full REVOLUTION, not K-148's sway: "
-              "2300 ticks carry the camera through more than a whole "
-              "turn, and the phase only ever advances",
-              _swept > 2.0 * math.pi * 0.95
-              and all(_seen[i] <= _seen[i + 1] + 1e-9
-                      or _seen[i + 1] < 1.0
+        check("the idle motion is a SWAY around REST_ANGLE, not K-174's "
+              "full revolution: 2300 real _idle_tick() calls (~5.4 sway "
+              "periods) never leave the ±SWAY_AMP band, and the angle "
+              "both rises and falls rather than only ever advancing",
+              _swept < 2.2 * pdf_map.SWAY_AMP
+              and any(_seen[i + 1] > _seen[i] + 1e-9
+                      for i in range(len(_seen) - 1))
+              and any(_seen[i + 1] < _seen[i] - 1e-9
                       for i in range(len(_seen) - 1)),
-              f"swept {_swept:.2f} rad over 2300 ticks")
-        check("...and it stays SLOW — those 2300 ticks are 76 seconds "
-              "of wall clock, so a full turn takes more than a minute",
+              f"swept {_swept:.2f} rad over 2300 ticks "
+              f"(±SWAY_AMP band is {2.0 * pdf_map.SWAY_AMP:.2f} rad wide)")
+        check("...and it stays SLOW — those 2300 ticks are 76 seconds of "
+              "wall clock, comfortably more than one SWAY_PERIOD_MS "
+              "(14s), so many full sway cycles are exercised here",
               2300 * pdf_map.IDLE_TICK_MS / 1000.0 > 60.0)
         _rot.hide()
 
-        # The rotating fit has to hold every pose it will show.
+        # The idle fit has to hold every pose it will show — the SWAY's
+        # arc since K-200, sampled here over a full circle anyway
+        # (stricter than the sway ever visits, so this stays a valid,
+        # if conservative, safety-margin check rather than a tight
+        # regression pin: on this note-cloud fixture FIT_MARGIN alone
+        # already absorbs the sway's modest swing, verified by hand —
+        # forcing _sweep() to 0 still shows zero escapes here — so a
+        # broken sweep gate would NOT be caught by this specific
+        # fixture; a tighter, fixture-independent version of this check
+        # is flagged separately rather than folded into this task).
         _spin2 = pdf_map.map_canvas(None, CLOUD)
         _spin2.set_idle_rotation(True)
         _spin2.show()
@@ -2552,10 +2585,10 @@ if _HAVE_QT:
                     _spin2._vp, _spin2._cam, *_p)
                 if not (0 <= _px <= 700 and 0 <= _py <= 460):
                     _escaped.append((_k, round(_px), round(_py)))
-        check("a canvas that ROTATES frames the swept box, so no node "
-              "and no star walks out of the card at any pose of the "
-              "turn — the failure this prevents is the cloud sliding "
-              "off the side thirty seconds after the window opens",
+        check("the idle fit holds — no node and no star walks out of "
+              "the card at any of the sampled poses — the failure this "
+              "guards against is the cloud sliding off the side while "
+              "the map sways",
               not _escaped, f"{len(_escaped)} escapes, first {_escaped[:3]}")
         _still = pdf_map.map_canvas(None, CLOUD)
         _still.show()
@@ -2566,7 +2599,7 @@ if _HAVE_QT:
               "explicit call) keeps K-158's tighter crop, because it "
               "only ever shows the one pose",
               _still._vp.scale > _spin2._vp.scale * 1.05,
-              f"still {_still._vp.scale:.1f} vs rotating "
+              f"still {_still._vp.scale:.1f} vs swaying "
               f"{_spin2._vp.scale:.1f}")
         _still.hide()
         _spin2.hide()
@@ -3030,5 +3063,91 @@ check("...and is deterministic",
       _all == pdf_map.constellation_links(_pts, "constellation"))
 check("LINK_MODE defaults to the connected mode",
       pdf_map.LINK_MODE == "constellation")
+
+section("Task 6: a slight sway, not a turn — with visible depth")
+# Pouya: "have the constellation do a slight rotation in 3D so that
+# 3D-ness is very apparent" and, earlier, "just have it rotate slowly in
+# 3D". K-174's full turn at 72s (5 degrees a second) never gave enough
+# parallax in any one glance, and the far half flipped through the near
+# half every quarter turn. sway_angle/SWAY_AMP/SWAY_PERIOD_MS do not
+# exist until the implementation lands; guarded like Task 5's
+# spanning_tree pins above so a missing attribute FAILS these checks
+# instead of crashing every check below them in this file.
+try:
+    _angles = [pdf_map.sway_angle(t)
+               for t in range(0, int(pdf_map.SWAY_PERIOD_MS) + 1, 100)]
+    _sway_exc = None
+except AttributeError as _exc:
+    _angles = []
+    _sway_exc = _exc
+check("the sway stays within ±SWAY_AMP of REST_ANGLE over a whole "
+      "period and comes back",
+      _sway_exc is None
+      and all(abs(a - pdf_map.REST_ANGLE) <= pdf_map.SWAY_AMP + 1e-9
+              for a in _angles)
+      and abs(_angles[-1] - _angles[0]) < 1e-6,
+      "" if _sway_exc is None else f"no sway_angle yet ({_sway_exc})")
+try:
+    check("...and it is SLIGHT: SWAY_AMP is under a fifth of a turn",
+          0.1 < pdf_map.SWAY_AMP < 0.4)
+except AttributeError as _exc:
+    check("...and it is SLIGHT: SWAY_AMP is under a fifth of a turn",
+          False, f"no SWAY_AMP yet ({_exc})")
+check("the full-turn period is gone by name",
+      not hasattr(pdf_map, "ROTATE_PERIOD_MS"))
+check("the perspective is stronger: CAM_DISTANCE dropped from 2.6",
+      pdf_map.CAM_DISTANCE <= 2.0)
+# 3D-ness: two points at the SAME screen x at rest, one near and one
+# far, move by DIFFERENT screen dx at the sway's extreme — that
+# difference is the parallax. fit_to_view takes a 2D (min_x, min_y,
+# max_x, max_y) box, not the 3D 6-tuple camera_bounds/sweep_bounds use —
+# the [-1, 1] square matches the graph's own normalized X/Y range.
+_vp = pdf_map.fit_to_view((-1.0, -1.0, 1.0, 1.0), (900, 560))
+_rest = pdf_map.Camera(pdf_map.REST_ANGLE, pdf_map.CAM_DISTANCE)
+try:
+    _peak = pdf_map.Camera(pdf_map.REST_ANGLE + pdf_map.SWAY_AMP,
+                            pdf_map.CAM_DISTANCE)
+    _near = pdf_map.project_point(_vp, _rest, 0.3, 0.0, 0.8)[0]
+    _far = pdf_map.project_point(_vp, _rest, 0.3, 0.0, -0.8)[0]
+    _near2 = pdf_map.project_point(_vp, _peak, 0.3, 0.0, 0.8)[0]
+    _far2 = pdf_map.project_point(_vp, _peak, 0.3, 0.0, -0.8)[0]
+    check("parallax is visible: a near and a far point drift apart by "
+          "more than 12 px across the sway",
+          abs((_near2 - _near) - (_far2 - _far)) > 12,
+          f"near dx={_near2 - _near:.1f} far dx={_far2 - _far:.1f}")
+except AttributeError as _exc:
+    check("parallax is visible: a near and a far point drift apart by "
+          "more than 12 px across the sway", False,
+          f"no SWAY_AMP yet ({_exc})")
+_box = (-1, -1, -1, 1, 1, 1)
+# A genuine full-turn reference, computed the way sweep_bounds itself did
+# before K-200 narrowed its default arc: literal even angle-stepping
+# around the whole circle, NOT sweep_bounds(..., amplitude=math.pi) —
+# that reparametrizes through the same sin(2*pi*i/n) used for the sway,
+# which for a huge amplitude clusters samples near its own extremes and
+# under-samples near REST_ANGLE (empirically it can even score LOWER
+# than the sway's own tight arc on this box, the opposite of what a
+# "full turn" reference should show). Compared on the VERTICAL extent,
+# per the module docstring's own finding for this cube: turning a yaw
+# grows the box in V (the near/far corners come forward), not in U.
+_full_us, _full_vs = [], []
+for _i in range(24):
+    _pose = pdf_map.Camera(_rest.angle + 2.0 * math.pi * _i / 24,
+                            _rest.distance)
+    _u0, _v0, _u1, _v1 = pdf_map.camera_bounds(_box, _pose)
+    _full_us += [_u0, _u1]
+    _full_vs += [_v0, _v1]
+_full_v_width = max(_full_vs) - min(_full_vs)
+try:
+    _sw = pdf_map.sweep_bounds(_box, _rest, 24)
+    check("sweep_bounds frames the sway's ARC, which is tighter than a "
+          "full turn's box (the growth a rotation adds is vertical)",
+          (_sw[3] - _sw[1]) < _full_v_width,
+          f"sway V-width {_sw[3] - _sw[1]:.2f} vs "
+          f"full-turn V-width {_full_v_width:.2f}")
+except AttributeError as _exc:
+    check("sweep_bounds frames the sway's ARC, which is tighter than a "
+          "full turn's box (the growth a rotation adds is vertical)",
+          False, f"no SWAY_AMP yet ({_exc})")
 
 raise SystemExit(report())
