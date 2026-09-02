@@ -225,6 +225,10 @@ So, in this file:
   points on a light ground was the live alternative and it throws away
   exactly the thing he singled out — a light source on white is a
   smudge. Only the card's own border follows the app's palette.
+  **Retired at K-185**: the card, its border and this special case all
+  go together — the map paints flat on the HOST palette's chrome
+  token now, so each theme gets its own night-sky-flavoured ramp
+  instead of the canvas forcing the dark one underneath a light panel.
 
 Measured on this machine, 28,670 notes, offscreen, at 900x640:
 1.83 ms at rest / 3.26 focused on the 2,087-match PDF / 4.04 focused
@@ -591,12 +595,6 @@ NODE_CORE_MIX = 0.75
 NODE_RING_W = 1.6
 NODE_HALO_F = 3.4
 NODE_SELECT_GAP = 5.0
-# The ground: a radial lift at the centre of the card falling to the
-# flat ground token at the corners. One gradient fill a frame (measured
-# at 0.18 ms for 1100x660) — cheaper than caching a full-size pixmap and
-# re-making it on every resize.
-VIGNETTE_LIFT = 0.05
-VIGNETTE_SPREAD = 0.78
 # A click that moves the mouse this far (px, from where the button went
 # down) is a DRAG; anything less is a click. K-148 compared each
 # individual move delta against 2.0, so two pixels of trackpad finger
@@ -1905,7 +1903,6 @@ def _canvas_class():
             QEasingCurve,
             QLineF,
             QPainter,
-            QPainterPath,
             QPen,
             QPointF,
             QPolygonF,
@@ -2463,10 +2460,11 @@ def _canvas_class():
             is free; what it buys is the reference's hard edge.
 
             Keyed on the palette's actual tokens rather than on
-            ``night_mode()``: the map draws in the DARK palette whatever
-            the app's theme is (see ``_paint``), so a night flip changes
-            nothing here, while switching ACCENT theme changes every
-            colour in the ramp and must rebuild.
+            ``night_mode()``: ``c`` is the HOST palette since K-185 (see
+            ``_paint``), so a night flip changes these tokens same as an
+            ACCENT theme switch does, and keying on the tokens directly
+            catches both with the one cache — no separate
+            ``night_mode()`` flag to keep in step with it.
             """
             key = (c["bg"], c["blue_bright"], c["text"], scale)
             if self._pens and self._pen_key == key:
@@ -2523,26 +2521,19 @@ def _canvas_class():
                 painter.end()
 
         def _paint(self, painter) -> None:
-            # THE MAP IS A NIGHT SKY IN BOTH THEMES — K-158 made that
-            # call for emission, and K-174 keeps it for the
-            # constellation, which is the same argument arriving from
-            # the other side. A starfield needs a dark ground; the
-            # alternative on the table was inverting to dark points on
-            # a light one, and that throws away the one thing Pouya
-            # singled out ("I like the shininess of the PDFs"), because
-            # a light source on white is a smudge. Still every colour a
-            # theme token, so accent themes recolour the whole field for
-            # free; only the card's own border follows the app's
-            # palette, so the panel edge still belongs to the window it
-            # sits in.
-            c = theme.palette(True)
+            # The map is drawn ON the panel it lives in: its colour maths
+            # (star_colour, links, nodes) all blend outward from c["bg"], so
+            # pointing c["bg"] at the host's chrome token makes every layer
+            # composite over the real ground in BOTH palettes. The
+            # always-dark palette(True) of K-174 made the map a dark card on
+            # a light panel — the exact "separate box" Pouya asked to lose.
             host = theme.palette(theme.night_mode())
+            c = dict(host, bg=host["chrome"])
             w = float(self.width())
             h = float(self.height())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-            card = QRectF(0.5, 0.5, w - 1.0, h - 1.0)
-            self._paint_ground(painter, c, host, card, w, h)
+            self._paint_ground(painter, c, w, h)
 
             self._ensure_fit(w, h)
             vp = self._vp
@@ -2577,25 +2568,11 @@ def _canvas_class():
             # third of the name anyway.
             self._paint_label(painter, c, drawn, active, w, h)
 
-        def _paint_ground(self, painter, c, host, card, w, h) -> None:
-            """The card and the space inside it — a radial lift at the
-            centre falling to the flat ground token at the corners, so
-            the field has somewhere to recede INTO. One gradient fill a
-            frame; content is clipped to the card so panned nodes never
-            spill past the rounded corners."""
-            painter.setPen(QPen(QColor(host["grey_light"]), 1.0))
-            lift = QRadialGradient(
-                w / 2.0, h / 2.0, max(w, h) * VIGNETTE_SPREAD
-            )
-            lift.setColorAt(
-                0.0, QColor(blend_hex(c["bg"], c["blue_bright"], VIGNETTE_LIFT))
-            )
-            lift.setColorAt(1.0, QColor(c["bg"]))
-            painter.setBrush(lift)
-            painter.drawRoundedRect(card, 12.0, 12.0)
-            clip = QPainterPath()
-            clip.addRoundedRect(card, 12.0, 12.0)
-            painter.setClipPath(clip)
+        def _paint_ground(self, painter, c, w, h) -> None:
+            """Flat. The panel's own ground, edge to edge — no card, no
+            border, no vignette. The field recedes by depth (size and
+            brightness), not by a lift under it."""
+            painter.fillRect(QRectF(0.0, 0.0, float(w), float(h)), QColor(c["bg"]))
 
         def _paint_stars(self, painter, vp, cam, active, w, h) -> list:
             """The whole note cloud as HARD POINTS, farthest slab first.

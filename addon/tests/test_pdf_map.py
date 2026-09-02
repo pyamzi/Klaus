@@ -1015,13 +1015,15 @@ check("frame_bounds carries the sweep, so every fit path — first fit, "
       == pdf_map.frame_bounds(_SBOX, pdf_map.Camera(0.0),
                               (900.0, 640.0)).scale)
 
-# The palette call, made deliberately (K-174 asked for it out loud).
-check("K-174's palette decision: the map is a NIGHT SKY IN BOTH "
-      "THEMES. Inverting to dark points on a light ground was the "
-      "live alternative and it throws away the one thing Pouya "
-      "singled out — 'I like the shininess of the PDFs' has no "
-      "analogue on white, where a light source is a smudge",
-      "theme.palette(True)" in _CODE)
+# K-185 INVERTS this pin: the map used to force theme.palette(True) so
+# it stayed a night sky regardless of the app's theme — the rounded
+# card floating on the panel is gone, so the panel IS the ground now,
+# and the always-dark special case goes with it (both palettes get
+# their own night-sky-flavoured ramp via c["bg"] = host chrome).
+check("K-185 retires K-174's forced-dark palette: the map no longer "
+      "hard-codes theme.palette(True) anywhere — it blends outward "
+      "from the HOST palette's chrome token instead, in both themes",
+      "theme.palette(True)" not in _CODE)
 
 # ------------------------------------------------------------ glue pins
 
@@ -1575,7 +1577,13 @@ if _HAVE_QT:
     }
     pdf_map._fill_retention = lambda g: None
     try:
-        theme.night_mode = lambda: False
+        # True, not False: K-185 retired the always-dark ground, so the
+        # canvas now paints on WHICHEVER theme is forced. _name_pixels'
+        # bright-neutral-pixel heuristic still assumes a dark ground
+        # (that is what it is measuring against); forcing night mode
+        # here keeps that assumption true rather than rewriting the
+        # heuristic for a scenario this test was never about.
+        theme.night_mode = lambda: True
         pdf_map._load_graph = lambda: NAMED
         w4 = pdf_map.open_map_window(None)
         check("on real Qt the window opens saying so, in words, before "
@@ -1717,7 +1725,13 @@ if _HAVE_QT:
         # The dock puts this widget in the Library's left pane, so the
         # claim that has to hold on real Qt is that a parentless canvas
         # sizes, paints and follows the viewer with no window in sight.
-        theme.night_mode = lambda: False
+        # True, not False (K-185): everything below this point through
+        # the end of this try — the ghost-ratio ratio check, the hard
+        # star-run measurement, the sparse-field density check — reads
+        # ABSOLUTE pixel brightness against a dark ground. K-185 retired
+        # the always-dark canvas, so this suite forces the dark palette
+        # itself now rather than getting it for free.
+        theme.night_mode = lambda: True
         _dock = pdf_map.map_canvas(None, CLOUD)
         # shown, because Qt delivers no resizeEvent to a hidden widget
         # and the resize behaviour below is the point (offscreen, so
@@ -2607,6 +2621,50 @@ if _HAVE_QT:
         pdf_map._instance = None
         pdf_map._load_graph = _orig_load
         pdf_map._fill_retention = _orig_fill
+        theme.night_mode = _orig_night
+
+    # ---- K-185: the map paints on the panel's ground ----
+    # `_QtG`/`_render` are this section's existing aliases; `G`/`_grab`
+    # below just spell them the way these pins read most naturally.
+    # `_grab` forces night mode per call so the SAME canvas construction
+    # is checked against both palettes' "chrome" token.
+    G = _QtG
+
+    def _grab(canvas, night):
+        cw, ch = 200, 150
+        theme.night_mode = lambda: night
+        canvas.resize(cw, ch)
+        canvas.show()
+        _app.processEvents()
+        return _render(canvas, cw, ch)
+
+    try:
+        for _night in (True, False):
+            _host = theme.palette(_night)
+            _cv = pdf_map.map_canvas(None, FAKE)
+            _img = _grab(_cv, night=_night)
+            _ground = G.QColor(_host["chrome"])
+            _corner = G.QColor(_img.pixel(1, 1))
+            _centre_edge = G.QColor(_img.pixel(3, _img.height() // 2))
+            check(f"night={_night}: the canvas corner IS the host chrome token — no rounded "
+                  "card, no border pixel, no clip: the map sits on the panel",
+                  (abs(_corner.red() - _ground.red()) <= 2
+                   and abs(_corner.green() - _ground.green()) <= 2
+                   and abs(_corner.blue() - _ground.blue()) <= 2),
+                  f"corner={_corner.name()} chrome={_ground.name()}")
+            check(f"night={_night}: the ground is FLAT — an edge-middle pixel equals the "
+                  "corner, so the radial vignette lift is gone",
+                  _corner.rgb() == _centre_edge.rgb(),
+                  f"corner={_corner.name()} edge={_centre_edge.name()}")
+            _cv.close()
+        check("VIGNETTE_LIFT and VIGNETTE_SPREAD are gone by name — the lift was the "
+              "'general glow' under the whole field",
+              not hasattr(pdf_map, "VIGNETTE_LIFT") and not hasattr(pdf_map, "VIGNETTE_SPREAD"))
+        check("the canvas no longer forces the dark palette: _paint reads the HOST palette "
+              "(the always-dark special case of K-174 is retired)",
+              "theme.palette(True)" not in _func_seg("_paint"),
+              "found a hard-coded palette(True)")
+    finally:
         theme.night_mode = _orig_night
 
 raise SystemExit(report())
