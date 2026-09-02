@@ -583,17 +583,17 @@ EDGE_TAIL = 0.22
 # Spokes leave the node's RIM plus this gap: lines converging on one
 # point swallow the node they are supposed to be about.
 EDGE_HUB_GAP = 3.0
-# A PDF node is a core + halo + ring, never a filled disc. Fractions of
-# the node radius: the lit core, the ring's stroke, and how far the halo
-# reaches past the rim. THE ONE THING THAT STILL GLOWS (K-174) —
-# Pouya, in the same breath as "I don't want these glowy things": "I
-# like the shininess of the PDFs. I like that." A few nodes a frame can
-# afford a real radial gradient; twenty-eight thousand notes cannot,
-# and a field where everything shines has nothing special in it.
+# A PDF node is a core + ring, never a filled disc. Fractions of the
+# node radius: the lit core and the ring's stroke. K-174 kept a real
+# radial-gradient halo here too, as "the one thing that still
+# glows" — Pouya, in the same breath as "I don't want these glowy
+# things": "I like the shininess of the PDFs. I like that." K-186
+# retired the halo itself (Pouya: "remove the general glow... I don't
+# like the general glow that comes with it") — the shininess he meant
+# lives on in the ring and core that remain.
 NODE_CORE_F = 0.42
 NODE_CORE_MIX = 0.75
 NODE_RING_W = 1.6
-NODE_HALO_F = 3.4
 NODE_SELECT_GAP = 5.0
 # A click that moves the mouse this far (px, from where the button went
 # down) is a DRAG; anything less is a click. K-148 compared each
@@ -1907,7 +1907,6 @@ def _canvas_class():
             QPointF,
             QPolygonF,
             QPropertyAnimation,
-            QRadialGradient,
             QRectF,
             Qt,
             QTimer,
@@ -2717,10 +2716,11 @@ def _canvas_class():
 
 
         def _paint_nodes(self, painter, c, vp, cam, active, w, h) -> list:
-            """PDF nodes as light sources: halo, ring, lit core — never
-            the flat filled disc K-148 drew. Farthest first, for the
-            same reason the bands are ordered: a near node has to occlude
-            a far one or the depth the fog established comes apart.
+            """PDF nodes: ring and lit core — crisp, no halo (Pouya: "I
+            don't like the general glow") — never the flat filled disc
+            K-148 drew. Farthest first, for the same reason the bands
+            are ordered: a near node has to occlude a far one or the
+            depth the fog established comes apart.
 
             ONE of them is lit. The rest are GHOSTS — a faint ring and
             nothing else (K-158, Pouya: "only one PDF shows at a time,
@@ -2747,11 +2747,16 @@ def _canvas_class():
                     dep, DOT_DEPTH_MIN, DOT_DEPTH_MAX
                 )
                 out.append((safe, p, sx, sy, r))
+                # Off-screen cull margin: with the halo gone, the widest
+                # thing ever painted from centre is the SELECTED node's
+                # ring at r + NODE_SELECT_GAP (a ghost's outer ring, at
+                # r * GHOST_HALO_F < r, is always inside that).
+                margin = r + NODE_SELECT_GAP
                 if (
-                    sx < -NODE_HALO_F * r
-                    or sx > w + NODE_HALO_F * r
-                    or sy < -NODE_HALO_F * r
-                    or sy > h + NODE_HALO_F * r
+                    sx < -margin
+                    or sx > w + margin
+                    or sy < -margin
+                    or sy > h + margin
                 ):
                     continue
                 pt = QPointF(sx, sy)
@@ -2772,18 +2777,6 @@ def _canvas_class():
                     painter.setBrush(dot)
                     painter.drawEllipse(pt, gr * NODE_CORE_F, gr * NODE_CORE_F)
                     continue
-                halo_r = r * NODE_HALO_F
-                halo = QRadialGradient(sx, sy, halo_r)
-                edge = QColor(c["blue_bright"])
-                edge.setAlphaF(0.55)
-                fade = QColor(c["blue_bright"])
-                fade.setAlpha(0)
-                halo.setColorAt(0.0, edge)
-                halo.setColorAt(1.0 / NODE_HALO_F, edge)
-                halo.setColorAt(1.0, fade)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(halo)
-                painter.drawEllipse(pt, halo_r, halo_r)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QPen(QColor(c["blue_bright"]), NODE_RING_W))
                 painter.drawEllipse(pt, r, r)

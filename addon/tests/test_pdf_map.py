@@ -1107,8 +1107,7 @@ check("K-174: a star is ONE C++ call per band — a square-capped "
       "drawPoints(" in _paint_seg
       and "drawPixmap(" not in _paint_seg
       and "QRadialGradient(" not in _paint_seg
-      and "for wx, wy in self._notes" not in _CODE
-      and "QRadialGradient(" in _method_seg("_MapCanvas", "_paint_nodes"))
+      and "for wx, wy in self._notes" not in _CODE)
 check("the world->screen pass is QTransform.map on the POLYGON, and the "
       "PAINTER is never given a transform — a point draw under a scaled "
       "painter with a cosmetic pen degenerates into long horizontal "
@@ -2109,12 +2108,23 @@ if _HAVE_QT:
                     _moved_edges += 1
                     if _d > 40:
                         _hard_focus += 1
+        # K-186 retired the node's own halo, which is what most of this
+        # combined delta used to be (a 3.4r gradient popping in over a
+        # 0.7r ghost ring dwarfs everything else in the frame). On this
+        # fixture that leaves TWO comparable contributions where the
+        # halo used to swamp both: the node's ghost->lit transition
+        # alone (no edges) is 0.91%, and the edges alone (isolated by
+        # the next check) are 1.28% — together the 2.04%/1.01% below.
+        # The edge layer's OWN visibility is what the isolated check
+        # right after this one actually gates, unaffected by the halo
+        # either way; these thresholds are rebased with headroom under
+        # the new combined measurement rather than the old one.
         check("focusing a PDF has to CHANGE THE PICTURE, and change it "
               "HARD — its connections are the point of the view, and "
               "K-148's edge layer moved 0.59% of the pixels on the "
               "frame that was supposed to be all edges",
-              _moved_edges > _sampled * 0.04
-              and _hard_focus > _sampled * 0.01,
+              _moved_edges > _sampled * 0.012
+              and _hard_focus > _sampled * 0.006,
               f"{100.0 * _moved_edges / _sampled:.2f}% moved, "
               f"{100.0 * _hard_focus / _sampled:.2f}% by more than 40 levels")
         _real_links = pdf_map.links_for
@@ -2664,6 +2674,54 @@ if _HAVE_QT:
               "(the always-dark special case of K-174 is retired)",
               "theme.palette(True)" not in _func_seg("_paint"),
               "found a hard-coded palette(True)")
+    finally:
+        theme.night_mode = _orig_night
+
+    # ---- K-186: the lit node loses its halo; ring and core stay ----
+    def _luma(img, x, y):
+        c = img.pixelColor(int(round(x)), int(round(y)))
+        return (c.red() + c.green() + c.blue()) / 3.0
+
+    try:
+        _cv = pdf_map.map_canvas(None, FAKE)
+        _grab(_cv, night=True)
+        _cv.select("lec1")
+        for _ in range(3):
+            _app.processEvents()
+        _img = _cv.grab().toImage()
+        _vp, _cam = _cv._vp, _cv._cam
+        _sx, _sy, _ = pdf_map.project_point(_vp, _cam, *_cv._pdf_xyz["lec1"])
+        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"])
+        _ground = _luma(_img, 2, 2)
+        # Sample an annulus well outside the ring (1.6r .. 3.0r) on 16
+        # spokes: with a halo there, most samples are lifted off the
+        # ground; without it, almost none.
+        _lifted = 0
+        _samples = 0
+        for _k in range(16):
+            _a = 2 * math.pi * _k / 16
+            for _rr in (1.6 * _r, 2.2 * _r, 3.0 * _r):
+                _x = _sx + _rr * math.cos(_a)
+                _y = _sy + _rr * math.sin(_a)
+                if 0 <= _x < _img.width() and 0 <= _y < _img.height():
+                    _samples += 1
+                    if abs(_luma(_img, _x, _y) - _ground) > 6:
+                        _lifted += 1
+        check("the lit node has NO halo: the annulus between 1.6r and "
+              "3.0r is ground (stars and links may cross it, so 'almost "
+              "none', not none)",
+              _samples >= 30 and _lifted / _samples < 0.12,
+              f"{_lifted}/{_samples} lifted")
+        check("...but the ring is still there: pixels ON the radius "
+              "differ from ground",
+              abs(_luma(_img, _sx + _r, _sy) - _ground) > 20
+              or abs(_luma(_img, _sx, _sy + _r) - _ground) > 20)
+        check("...and the core is still lit: the centre pixel is bright",
+              _luma(_img, _sx, _sy) > _ground + 60,
+              f"centre={_luma(_img, _sx, _sy):.0f} ground={_ground:.0f}")
+        check("NODE_HALO_F is gone by name",
+              not hasattr(pdf_map, "NODE_HALO_F"))
+        _cv.close()
     finally:
         theme.night_mode = _orig_night
 
