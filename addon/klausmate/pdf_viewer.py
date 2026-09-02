@@ -818,6 +818,25 @@ class PdfViewer(QWidget):
             except Exception:
                 self._pdf_view.setPageMode(QPdfView.PageMode.SinglePage)
             self._pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            # A documentless QPdfView paints its viewport in the palette's
+            # Dark/Base roles — Qt's mid-grey, a slab between two dark panes
+            # (K-178). Point every role it might read at the bg token, a
+            # step darker than the chrome the panels wear (Pouya: "the middle
+            # area for the PDF to be darker"). Roles, not a stylesheet: the
+            # view paints the gap between pages itself, from its palette.
+            try:
+                from . import theme as _theme
+
+                ground = QColor(_theme.palette(_theme.night_mode())["bg"])
+                pal = self._pdf_view.palette()
+                for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base,
+                             QPalette.ColorRole.Dark, QPalette.ColorRole.Mid):
+                    pal.setColor(role, ground)
+                self._pdf_view.setPalette(pal)
+                self._pdf_view.viewport().setPalette(pal)
+                self._pdf_view.viewport().setAutoFillBackground(True)
+            except Exception as exc:
+                print(f"[klausmate] viewer ground failed: {exc}")
             try:
                 nav = self._pdf_view.pageNavigator()
                 if hasattr(nav, "currentPageChanged"):

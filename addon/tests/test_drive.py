@@ -2696,6 +2696,49 @@ if _HAVE_QT:
               f"{_sb173.window()!r} vs {_host!r}")
         _host.close()
 
+        # Task 8 (K-178): a documentless QPdfView must paint the
+        # Library's own ground -- theme.palette(night)["bg"], one step
+        # darker than the panels' "chrome" (K-206) -- never QPdfView's
+        # raw mid-grey slab. The pane's ground does not depend on being
+        # hosted inside a DriveWindow, so a fresh, unmounted PdfSidebar
+        # per palette is enough on its own; this reuses the aqt.mw/QtPdf
+        # state this section has already proven works for a real native
+        # PdfSidebar (untouched by the pdf.js renderer switch below,
+        # which purges and rebuilds klausmate.* fresh).
+        print("== Task 8: the empty viewer pane is bg, not Qt's grey ==")
+        pdf_viewer = importlib.import_module("klausmate.pdf_viewer")
+        theme = importlib.import_module("klausmate.theme")
+        _orig_night_mode8 = theme.night_mode
+        try:
+            for _night8 in (True, False):
+                theme.night_mode = lambda n=_night8: n
+                _sb8 = pdf_viewer.PdfSidebar(None, parent=None)
+                _sb8.resize(600, 400)
+                _sb8.show()
+                for _ in range(3):
+                    app.processEvents()
+                # PdfSidebar wraps the native QPdfView inside its own
+                # ._viewer (a PdfViewer), which is where ._pdf_view
+                # actually lives -- not on the sidebar itself.
+                _v8 = _sb8._viewer._pdf_view.viewport()
+                _img8 = _v8.grab().toImage()
+                _px8 = _QtG.QColor(_img8.pixel(_img8.width() // 2,
+                                                _img8.height() // 2))
+                _bg8 = _QtG.QColor(theme.palette(_night8)["bg"])
+                check(f"night={_night8}: with no document the viewer's "
+                      "centre is the bg token, not QPdfView's raw grey "
+                      "(K-178)",
+                      max(abs(_px8.red() - _bg8.red()),
+                          abs(_px8.green() - _bg8.green()),
+                          abs(_px8.blue() - _bg8.blue())) <= 8,
+                      f"centre={_px8.name()} bg={_bg8.name()}")
+                _sb8.cleanup()
+                _sb8.close()
+        finally:
+            # Later sections (and later pins in this file) must see the
+            # real theme.night_mode, not this loop's last lambda.
+            theme.night_mode = _orig_night_mode8
+
         pkg.USER_FILES = _prev173
         shutil.rmtree(_uf173, ignore_errors=True)
     except Exception as _e173:  # noqa: BLE001
