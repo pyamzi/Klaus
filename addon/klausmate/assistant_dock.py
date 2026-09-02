@@ -187,7 +187,7 @@ class _Bridge(_ObjBase):  # type: ignore[misc]
 
     init = _signal(dict)
     delta = _signal(str)
-    tool_use = _signal(str, dict)
+    tool_use = _signal(str, str, dict)  # (tool_use id, name, input) — M4: one per BLOCK
     tool_result = _signal(str, bool)
     result = _signal(dict)
     denied = _signal(str)
@@ -223,10 +223,44 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         self._host: Any = None
         self._running = False
         self._current_pdf_safe: Any = _UNSET
+        # The PDF the LIVE child belongs to. _UNSET whenever there is no
+        # live child for the followed PDF — which is the whole of the
+        # lazy-start rule (final review I1): a viewer switch records a
+        # target and spawns nothing; _ensure_child() spawns on the next
+        # Send. The two are separate because the followed PDF can change
+        # many times between two sends.
+        self._host_pdf_safe: Any = _UNSET
+        # The PDF the IN-FLIGHT turn was sent for, captured at send time.
+        # `init`/`result` arrive ~1 s later through _Bridge, by which
+        # point _current_pdf_safe may already name a different PDF —
+        # remembering the session id under THAT one made B resume A's
+        # conversation forever (final review I2).
+        self._sending_pdf_safe: Any = _UNSET
+        # (pdf, session_id) of a --resume still unproven by a completed
+        # turn; cleared on the first clean result, dropped from the
+        # store when Claude Code says it has no such conversation.
+        self._resume_attempt: Any = None
+        # Has the child spawned for _resume_attempt ever reached `init`?
+        # A resume Claude Code accepted emits one; a resume of a session
+        # it does not have exits before that. Without this, ANY hard
+        # kill during an unproven resume — stop()'s own kill after the
+        # 2 s grace, say — was read as "the conversation is gone" and
+        # silently dropped a perfectly good mapping (re-review NEW-2).
+        self._init_seen = False
+        self._stop_deadline: float = 0.0
+        # Generation token for the _poll_stop QTimer chain. Every chain
+        # captures the value current when it started and stops dead once
+        # it no longer matches, so a chain left over from a viewer
+        # switch can never reach its grace expiry and force-kill a child
+        # spawned AFTER it (re-review NEW-1, reproduced). `_ensure_child`
+        # bumps it on every successful start, which is what invalidates
+        # the pending chain — zeroing `_stop_deadline` instead would
+        # leave `expired` permanently false and poll forever.
+        self._stop_gen = 0
         self._assistant_block_open = False
         self._assistant_raw_text = ""
         self._assistant_raw_start = 0
-        self._last_tool_block: Any = None
+        self._tool_blocks: dict = {}
         self._mcp_tooltip = ""
         self._scheduler: Any = None
 
@@ -393,7 +427,10 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         from . import agent_host
 
         cfg = self._config()
-        binary = agent_host.find_claude(str(cfg.get("claude_binary") or ""))
+        # Cached for the profile session (spec §4.1): the lookup's third
+        # step spawns the user's login shell with a 3 s timeout, and this
+        # runs on the main thread. Re-check clears the cache first.
+        binary = agent_host.find_claude_cached(str(cfg.get("claude_binary") or ""))
         if not binary:
             raise FileNotFoundError("claude binary not found on PATH or in config")
         port, token = 0, ""
@@ -401,7 +438,7 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         if info:
             port, token = info
         sp_path = self._sessions.ensure_system_prompt(self._user_files)
-        log_path = os.path.join(self._user_files, "assistant", "agent.log")
+        log_path = os.path.join(self._user_files, "assistant", "claude.log")
         return agent_host.AgentHost(
             binary,
             port=int(port or 0),
@@ -420,8 +457,8 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         callbacks = {
             "init": lambda payload: self._bridge.init.emit(payload if isinstance(payload, dict) else {}),
             "delta": lambda text: self._bridge.delta.emit(str(text or "")),
-            "tool_use": lambda name, inp: self._bridge.tool_use.emit(
-                str(name or ""), inp if isinstance(inp, dict) else {}
+            "tool_use": lambda tid, name, inp: self._bridge.tool_use.emit(
+                str(tid or ""), str(name or ""), inp if isinstance(inp, dict) else {}
             ),
             "tool_result": lambda tid, err: self._bridge.tool_result.emit(str(tid or ""), bool(err)),
             "result": lambda payload: self._bridge.result.emit(payload if isinstance(payload, dict) else {}),
@@ -463,7 +500,16 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             self.transcript.clear()
         except Exception:
             pass
+        try:
+            from . import agent_host
+
+            # The whole point of Re-check is to look again, so the
+            # profile-session cache (M12) must not answer for it.
+            agent_host.clear_binary_cache()
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: binary cache clear failed: {exc}")
         self._current_pdf_safe = _UNSET
+        self._host_pdf_safe = _UNSET
         self._start_host()
         if self._host is not None:
             self._switch_session(self._current_view())
@@ -490,7 +536,23 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception:
             pass
 
+    def _pdf_key(self) -> Any:
+        """The followed PDF as the sessions store spells it: ``None`` is
+        the global (no-PDF) slot, and the ``_UNSET`` sentinel — "nothing
+        looked at yet" — collapses to it."""
+        return self._current_pdf_safe if self._current_pdf_safe is not _UNSET else None
+
     def _switch_session(self, view: Any) -> None:
+        """Follow a new PDF: stop any running turn (without blocking),
+        record the target, announce it. NO process is spawned here.
+
+        Spawning eagerly on every switch cost a kill (a blocking
+        ``proc.wait`` on the main thread) plus a fresh Node process for
+        a PDF the user might never ask about — during review, once per
+        card that changed lecture (final review I1). Claude Code emits
+        nothing until the first message arrives, so an idle child does
+        no work worth paying for; ``_ensure_child`` spawns on Send.
+        """
         pdf_safe = getattr(view, "pdf_safe", "") or None
         if pdf_safe == self._current_pdf_safe:
             self._sync_header(view)
@@ -499,26 +561,15 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         if self._host is None:
             self._sync_header(view)
             return
-        try:
-            if self._host.running:
-                self._host.stop()
-        except Exception as exc:
-            print(f"[klausmate] assistant dock: stop before switch failed: {exc}")
+        # Whatever child exists belongs to the OUTGOING PDF: end it and
+        # forget it, so the next Send starts the incoming PDF's own.
+        self._begin_async_stop()
+        self._host_pdf_safe = _UNSET
         resumed = None
         try:
             resumed = self._sessions.session_for(self._user_files, pdf_safe)
         except Exception as exc:
             print(f"[klausmate] assistant dock: session_for failed: {exc}")
-        try:
-            if resumed:
-                self._host.start(resume=resumed)
-            else:
-                self._host.start()
-        except Exception as exc:
-            print(f"[klausmate] assistant dock: host start failed: {exc}")
-            self._append_muted_line(f"could not start Claude Code: {exc}")
-            self._sync_header(view)
-            return
         try:
             self.transcript.clear()
         except Exception:
@@ -529,6 +580,140 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         )
         self._set_running(False)
         self._sync_header(view)
+
+    # -- child lifecycle: non-blocking stop, lazy start ------------------------
+
+    def _host_alive(self) -> bool:
+        try:
+            return bool(getattr(self._host, "alive", False))
+        except Exception:
+            return False
+
+    def _begin_async_stop(self) -> None:
+        """SIGINT the child, then watch it die on a QTimer.
+
+        ``AgentHost.stop()`` blocks up to STOP_GRACE_S on ``proc.wait``;
+        this path runs inside viewer_context's notifier on the main
+        thread, where that is a visible hitch (final review I1). Signal,
+        return, and let ``_poll_stop`` do the reaping.
+        """
+        host = self._host
+        if host is None:
+            return
+        try:
+            if not getattr(host, "alive", False):
+                return
+        except Exception:
+            return
+        try:
+            host.interrupt()
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: interrupt failed: {exc}")
+        self._set_running(False)
+        self._stop_gen += 1
+        gen = self._stop_gen
+        try:
+            import time as _time
+
+            from . import agent_host
+
+            self._stop_deadline = _time.monotonic() + agent_host.STOP_GRACE_S
+        except Exception:
+            self._stop_deadline = 0.0
+        self._poll_stop(gen)
+
+    def _poll_stop(self, gen: int) -> None:
+        """One tick of the reap chain started by ``_begin_async_stop``.
+
+        ``gen`` binds this chain to the child it was started for. A
+        chain whose generation has been superseded — `_ensure_child`
+        spawned a new child while the old one was still exiting, which
+        happens whenever the user switches PDF and asks a question
+        inside the outgoing child's ~0.6 s death window — stops here.
+        Without the check, the stale chain reached its own grace expiry
+        and called ``reap(force=True)`` on whatever `self._host._proc`
+        had become by then, killing the NEW child about two seconds into
+        its first turn (re-review NEW-1).
+        """
+        if gen != self._stop_gen:
+            return
+        host = self._host
+        if host is None:
+            return
+        try:
+            import time as _time
+
+            expired = self._stop_deadline and _time.monotonic() >= self._stop_deadline
+            if host.reap(force=bool(expired)):
+                return
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: reap failed: {exc}")
+            return
+        try:
+            QTimer.singleShot(100, lambda: self._poll_stop(gen))
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: stop poll timer failed: {exc}")
+
+    def _ensure_child(self) -> bool:
+        """A live child for the CURRENTLY followed PDF, spawning one if
+        there isn't one — the whole of C1's fix.
+
+        Called before every send. ``stop()``, a crash, a profile switch
+        and a PDF switch all leave no usable child; each of them used to
+        leave the dock permanently unable to send ("stdin write failed:
+        Broken pipe") until New Session. Returns False when the spawn
+        failed, with a line already in the transcript.
+        """
+        host = self._host
+        if host is None:
+            return False
+        pdf = self._pdf_key()
+        if self._host_alive() and self._host_pdf_safe == pdf:
+            return True
+        resumed = None
+        try:
+            resumed = self._sessions.session_for(self._user_files, pdf)
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: session_for failed: {exc}")
+        try:
+            if resumed:
+                host.start(resume=resumed)
+            else:
+                host.start()
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: host start failed: {exc}")
+            self._append_muted_line(f"could not start Claude Code: {exc}")
+            self._set_running(False)  # M14: never strand the button on Stop
+            self._host_pdf_safe = _UNSET
+            return False
+        # This child is NOT the one any pending reap chain was started
+        # for. Bumping the generation is what stops that chain from
+        # force-killing it at its own grace expiry (re-review NEW-1).
+        self._stop_gen += 1
+        self._stop_deadline = 0.0
+        self._host_pdf_safe = pdf
+        # Unproven until a turn completes: a session Claude Code no
+        # longer has fails the moment it is resumed (probe: rc=1, "No
+        # conversation found with session ID"), and a message-less
+        # session is never persisted in the first place.
+        self._resume_attempt = (pdf, resumed) if resumed else None
+        self._init_seen = False
+        return True
+
+    def _forget_stale_resume(self) -> None:
+        attempt, self._resume_attempt = self._resume_attempt, None
+        if not attempt:
+            return
+        pdf, _sid = attempt
+        try:
+            self._sessions.forget(self._user_files, pdf)
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: forget stale session failed: {exc}")
+        self._host_pdf_safe = _UNSET
+        self._append_muted_line(
+            "That saved conversation is gone from Claude Code; "
+            "the next message starts a new one."
+        )
 
     def _sync_header(self, view: Any) -> None:
         try:
@@ -644,14 +829,25 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             print(f"[klausmate] assistant dock: build_turn failed: {exc}")
             self._append_muted_line(f"could not build the turn: {exc}")
             return
+        # Spawn BEFORE the input is cleared: a failed start leaves the
+        # user's words where they typed them (M18's other half).
+        if not self._ensure_child():
+            return
         self._append_user_line(raw)
         self.input.clear()
+        self._sending_pdf_safe = self._pdf_key()  # I2: remembered under THIS pdf
         try:
             self._host.send(turn)
             self._set_running(True)
         except Exception as exc:
             print(f"[klausmate] assistant dock: send failed: {exc}")
             self._append_muted_line(f"send failed: {exc}")
+            self._set_running(False)
+            self._host_pdf_safe = _UNSET  # whatever went wrong, respawn next time
+            try:
+                self.input.setPlainText(raw)  # M18: never eat the question
+            except Exception:
+                pass
 
     def _do_stop(self) -> None:
         if self._host is None:
@@ -660,27 +856,31 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             self._host.stop()
         except Exception as exc:
             print(f"[klausmate] assistant dock: stop failed: {exc}")
+        # stop() leaves the child DEAD (SIGINT, 2 s grace, kill), so the
+        # next Send must spawn a new one — that is C1, whose whole
+        # user-visible symptom was "error: stdin write failed" forever
+        # after the first Stop.
+        self._host_pdf_safe = _UNSET
         self._set_running(False)
 
     def _on_new_session_clicked(self) -> None:
         if self._host is None:
             return
-        pdf_safe = self._current_pdf_safe if self._current_pdf_safe is not _UNSET else None
-        try:
-            if self._host.running:
-                self._host.stop()
-        except Exception:
-            pass
+        pdf_safe = self._pdf_key()
+        self._begin_async_stop()
+        self._host_pdf_safe = _UNSET
+        self._resume_attempt = None
+        # Also forget the IN-FLIGHT turn (re-review NEW-3). New Session
+        # mid-turn interrupts the child, but a `result` already on its
+        # way would otherwise re-remember, under this very PDF, the
+        # exact session id the user just asked to forget — and the next
+        # Send would resume it. `_do_stop` deliberately does NOT do
+        # this: remembering a stopped turn's session is the point there.
+        self._sending_pdf_safe = _UNSET
         try:
             self._sessions.forget(self._user_files, pdf_safe)
         except Exception as exc:
             print(f"[klausmate] assistant dock: forget session failed: {exc}")
-        try:
-            self._host.start()
-        except Exception as exc:
-            print(f"[klausmate] assistant dock: host start failed: {exc}")
-            self._append_muted_line(f"could not start Claude Code: {exc}")
-            return
         try:
             self.transcript.clear()
         except Exception:
@@ -710,21 +910,44 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
     # -- bridge slots (main thread only) ---------------------------------------
 
     def _on_init(self, payload: dict) -> None:
-        try:
-            sid = payload.get("session_id") if isinstance(payload, dict) else ""
-            if sid:
-                pdf_safe = self._current_pdf_safe if self._current_pdf_safe is not _UNSET else None
-                self._sessions.remember(self._user_files, pdf_safe, sid)
-        except Exception as exc:
-            print(f"[klausmate] assistant dock: remember session failed: {exc}")
+        # Deliberately does NOT remember the session id (final review
+        # I2): `init` is delivered ~1 s after the send, through _Bridge,
+        # so _current_pdf_safe may already name a different PDF by then
+        # — and a session with no completed turn is never persisted by
+        # Claude Code anyway, so an id remembered here is a stale id
+        # waiting to fail. _on_result does it, keyed by the PDF the turn
+        # was actually sent for. It IS the proof that a --resume was
+        # accepted, though: a resume of a conversation Claude Code does
+        # not have never gets this far, so _on_exited uses the flag to
+        # tell a failed resume from an ordinary kill (NEW-2).
+        self._init_seen = True
         mcp_ok = bool(payload.get("mcp_ok")) if isinstance(payload, dict) else False
         self._mcp_tooltip = "Anki tools: connected" if mcp_ok else "Anki tools unavailable"
         if not mcp_ok:
             self._append_muted_line("Anki tools are unavailable right now; chat still works.")
         self._set_status_dot("idle", self._mcp_tooltip)
 
+    def _is_stale_turn(self) -> bool:
+        """Does the in-flight turn belong to a PDF we no longer follow?
+
+        The switch no longer blocks until the child is dead — that is
+        the whole of I1 — so the reader thread keeps delivering the
+        outgoing PDF's deltas and tool lines for the ~0.6 s after
+        `transcript.clear()` and the "New session for <B>" line, and
+        they rendered under B's header (re-review NEW-4). `_UNSET` means
+        no turn is in flight, so a plain switch with nothing running is
+        unaffected; a page change inside the same PDF does not move
+        `_pdf_key()`, so an ordinary turn never trips this.
+
+        Only the DISPLAY paths consult it. `result` must never be
+        dropped: it carries the session bookkeeping, and I2 already
+        keys that by `_sending_pdf_safe` rather than the current PDF.
+        """
+        return (self._sending_pdf_safe is not _UNSET
+                and self._sending_pdf_safe != self._pdf_key())
+
     def _on_delta(self, text: str) -> None:
-        if not text:
+        if not text or self._is_stale_turn():
             return
         try:
             cur = self.transcript.textCursor()
@@ -761,17 +984,31 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] assistant dock: markdown finalize failed: {exc}")
 
-    def _on_tool_use(self, name: str, tool_input: dict) -> None:
+    def _on_tool_use(self, tool_use_id: str, name: str, tool_input: dict) -> None:
+        if self._is_stale_turn():
+            return
         try:
             fn = TOOL_LABELS.get(name)
             label = fn(tool_input or {}) if fn else f"used {name}"
         except Exception as exc:
             print(f"[klausmate] assistant dock: tool label failed: {exc}")
             label = name
-        self._last_tool_block = self._append_muted_line(f"▸ {label}")
+        block = self._append_muted_line(f"▸ {label}")
+        # Keyed by the tool_use id, never "the last line" (M4): Claude
+        # Code batches parallel Read/Grep calls, and a batch's results
+        # come back in whatever order they finish, so a positional
+        # correlation decorates the wrong line.
+        if tool_use_id:
+            if len(self._tool_blocks) > 64:
+                self._tool_blocks.clear()
+            self._tool_blocks[tool_use_id] = block
 
     def _on_tool_result(self, tool_use_id: str, is_error: bool) -> None:
-        block, self._last_tool_block = self._last_tool_block, None
+        # Popped either way, stale or not, so the id table cannot grow a
+        # permanent entry for a line that was never rendered.
+        block = self._tool_blocks.pop(tool_use_id, None) if tool_use_id else None
+        if self._is_stale_turn():
+            return
         if not is_error or block is None:
             return
         try:
@@ -789,9 +1026,33 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception:
             pass
         self._set_running(False)
+        self._tool_blocks.clear()
+        stale = False
+        try:
+            from . import agent_host
+
+            stale = agent_host.resume_failed(payload if isinstance(payload, dict) else {})
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: resume check failed: {exc}")
+        if stale and self._resume_attempt:
+            self._forget_stale_resume()
+            self._sending_pdf_safe = _UNSET
+            return
+        # A COMPLETED turn is what makes a session id real (Claude Code
+        # writes no transcript for a message-less session), and the PDF
+        # it belongs to is the one the turn was SENT for — I2.
+        try:
+            sid = payload.get("session_id") if isinstance(payload, dict) else ""
+            if sid and self._sending_pdf_safe is not _UNSET:
+                self._sessions.remember(self._user_files, self._sending_pdf_safe, sid)
+        except Exception as exc:
+            print(f"[klausmate] assistant dock: remember session failed: {exc}")
+        self._sending_pdf_safe = _UNSET
         try:
             if isinstance(payload, dict) and payload.get("is_error"):
                 self._append_muted_line("The assistant turn ended with an error.")
+            else:
+                self._resume_attempt = None  # a clean turn proves the resume
         except Exception:
             pass
 
@@ -805,13 +1066,32 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
 
     def _on_exited(self, rc: Any) -> None:
         self._set_running(False)
+        # There is no child any more, whatever the code: the next Send
+        # spawns one (_ensure_child). Without this the dock stayed
+        # wedged on "stdin write failed" until New Session — C1.
+        self._host_pdf_safe = _UNSET
+        self._sending_pdf_safe = _UNSET
         if rc not in (0, None):
-            self._append_muted_line(
-                f"Claude Code exited (code {rc}); a new turn will start a fresh process."
-            )
+            if self._resume_attempt and not self._init_seen:
+                # A --resume that never got off the ground: it died
+                # before Claude Code ever announced a session, which is
+                # what a resume of a conversation it does not have does.
+                # Drop the stale mapping so the next Send starts clean.
+                self._forget_stale_resume()
+            else:
+                # `init` DID arrive, so Claude Code accepted the resume
+                # and this is an ordinary death — a hard kill after
+                # stop()'s grace, say. Forgetting here dropped a
+                # perfectly good conversation and told the user it was
+                # gone from Claude Code, which was simply untrue
+                # (re-review NEW-2).
+                self._append_muted_line(
+                    f"Claude Code exited (code {rc}); the next message starts a fresh process."
+                )
             self._set_status_dot("error")
         else:
             self._set_status_dot("idle")
+        self._init_seen = False
 
     # -- transcript rendering helpers -------------------------------------------
 
@@ -956,6 +1236,24 @@ def _ensure_dock() -> Any:
     return _dock_instance
 
 
+def _write_open_flag(is_open: bool) -> None:
+    """Remember whether the dock was open, so ``assistant_reopen`` has
+    something to reopen (final review I7: the preference was written by
+    Preferences and read by nobody). Written on the user's own open/
+    close only — never by profile teardown, which is not a decision the
+    user made about next time."""
+    try:
+        cfg = mw.addonManager.getConfig(__package__)
+        if not isinstance(cfg, dict):
+            return
+        if bool(cfg.get("assistant_dock_open")) == bool(is_open):
+            return
+        cfg["assistant_dock_open"] = bool(is_open)
+        mw.addonManager.writeConfig(__package__, cfg)
+    except Exception as exc:
+        print(f"[klausmate] assistant open-state save failed: {exc}")
+
+
 def open_assistant() -> None:
     dock = _ensure_dock()
     if dock is None:
@@ -965,6 +1263,7 @@ def open_assistant() -> None:
         dock.raise_()  # never activateWindow(): the viewer keeps keyboard focus
     except Exception as exc:
         print(f"[klausmate] assistant open failed: {exc}")
+    _write_open_flag(True)
 
 
 def close_assistant() -> None:
@@ -975,6 +1274,28 @@ def close_assistant() -> None:
         _dock_instance.hide()
     except Exception as exc:
         print(f"[klausmate] assistant close failed: {exc}")
+    _write_open_flag(False)
+
+
+def reopen_if_configured() -> None:
+    """``assistant_reopen`` honoured on profile open (spec §8/§9).
+
+    Deferred one tick: profile_did_open also starts the endpoint the
+    dock's child talks to (``__init__._start_assistant_endpoint``), and
+    a dock built before that bind would construct its host with port 0
+    and report "Anki tools unavailable" for the whole session.
+    """
+    try:
+        cfg = mw.addonManager.getConfig(__package__) or {}
+    except Exception as exc:
+        print(f"[klausmate] assistant reopen: config read failed: {exc}")
+        return
+    if not cfg.get("assistant_reopen") or not cfg.get("assistant_dock_open"):
+        return
+    try:
+        QTimer.singleShot(0, open_assistant)
+    except Exception as exc:
+        print(f"[klausmate] assistant reopen failed: {exc}")
 
 
 def toggle_assistant() -> None:
@@ -1067,3 +1388,7 @@ def setup() -> None:
         gui_hooks.profile_will_close.append(_teardown)
     except Exception as exc:
         print(f"[klausmate] assistant hook failed: {type(exc).__name__}: {exc}")
+    try:
+        gui_hooks.profile_did_open.append(reopen_if_configured)
+    except Exception as exc:
+        print(f"[klausmate] assistant reopen hook failed: {type(exc).__name__}: {exc}")

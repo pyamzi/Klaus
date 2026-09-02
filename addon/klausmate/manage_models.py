@@ -1708,10 +1708,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     # Klaus is not itself the assistant: Claude Code is. This page
     # points at the local `claude` binary agent_host.py (Task 2)
     # discovers, and at the local OCR model that reads a lecture page's
-    # slide text and images when the PDF has no extractable text layer.
-    # The old Assistant panel — its promised future features and its own
-    # provider-key / hosted-token picker — is gone; see AGENTS.md's
-    # "What used to be here".
+    # slide text and images. The old Assistant panel — its promised
+    # future features and its own provider-key / hosted-token picker —
+    # is gone; see AGENTS.md's "What used to be here".
     assistant_layout = _page(
         "Assistant",
         "Assistant",
@@ -1724,9 +1723,10 @@ def manage_models_dialog(setup: bool = False) -> None:
     _row(
         assistant_layout,
         "OCR",
-        "Read a lecture page's slide text and images through a local "
-        "vision model when the PDF has no extractable text layer "
-        "(scanned slides, screenshots).",
+        "Read every lecture page you view through a local vision model, "
+        "so a scanned slide or a diagram reaches the Assistant as text. "
+        "Off, it still gets the PDF's own text layer — which is empty "
+        "for a scanned page.",
         ocr_enabled_cb,
     )
 
@@ -1826,7 +1826,11 @@ def manage_models_dialog(setup: bool = False) -> None:
             print(f"[klausmate] agent_host unavailable: {exc}")
             return ""
         try:
-            return agent_host.find_claude(explicit) or ""
+            # Cached for the profile session (spec §4.1): step 3 of the
+            # search spawns the user's login shell with a 3 s timeout,
+            # and this runs on the main thread every time Preferences
+            # opens or the label refreshes.
+            return agent_host.find_claude_cached(explicit) or ""
         except Exception as exc:
             print(f"[klausmate] agent_host.find_claude failed: {exc}")
             return ""
@@ -1848,6 +1852,18 @@ def manage_models_dialog(setup: bool = False) -> None:
             if not path:
                 return
             _assistant_state["claude_binary"] = path
+            try:
+                from . import agent_host
+
+                # The profile-session cache is keyed on the override, so
+                # a new pick resolves fresh on the key alone. Clearing
+                # it as well is what lets a user who INSTALLED claude
+                # since the dialog opened get a real answer without
+                # restarting Anki: a miss is cached now, so the empty
+                # override's stored "not found" would otherwise stand.
+                agent_host.clear_binary_cache()
+            except Exception as exc:
+                print(f"[klausmate] agent_host cache clear failed: {exc}")
             _refresh_claude_binary_label()
             mark_dirty()
 
@@ -1964,10 +1980,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["claude_binary"] = _assistant_state["claude_binary"]
         cfg["assistant_model"] = assistant_model_edit.text().strip()
         cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
-        # No Preferences row for this one — it's dock state, set by
-        # dragging the Assistant dock itself. Round-tripped so this
-        # save never wipes it back to the default.
-        cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
+        # No Preferences row for these two — they're dock state, set by
+        # dragging the Assistant dock and by opening/closing it.
+        # Round-tripped so this save never wipes them back to defaults.
+        # int() is guarded because meta.json is hand-editable and a
+        # non-numeric width must not break the Save button for every
+        # other setting on the page (parked T8 finding).
+        try:
+            cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
+        except (TypeError, ValueError):
+            cfg["assistant_dock_width"] = 420
+        cfg["assistant_dock_open"] = bool(cfg.get("assistant_dock_open", False))
         _pkg().write_config(cfg)
 
     ocr_enabled_cb.toggled.connect(lambda _c: mark_dirty())

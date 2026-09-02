@@ -26,6 +26,7 @@
   "assistant_model": "",
   "assistant_reopen": false,
   "assistant_dock_width": 420,
+  "assistant_dock_open": false,
   "background_blur": 22,
   "background_wash": 0,
   "background_grad_x": 50,

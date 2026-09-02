@@ -16,6 +16,7 @@ action run against a duck-typed collection and an injected approver.
 
 from __future__ import annotations
 
+import hmac
 import html
 import json
 import re
@@ -29,6 +30,10 @@ API_VERSION = 6
 BODY_CAP = 4 * 1024 * 1024
 READ_TIMEOUT_S = 30.0
 APPROVAL_TIMEOUT_S = 120.0
+#: One MCP `initialize` per child, and the child is spawned lazily per
+#: PDF — but a long profile session can still accumulate them, and
+#: nothing ever removes one. Bounded rather than unbounded (M10).
+MAX_SESSIONS = 64
 TOKEN_HEADER = "X-Klaus-Token"
 AGENT_HEADER = "X-Klaus-Agent"
 AGENT_TAGS = ("klaus::assistant",)
@@ -148,6 +153,15 @@ def _create_one(col, note: dict, ctx: dict, agent: bool) -> int:
         tags += list(AGENT_TAGS)
         if ctx.get("pdf_safe"):
             tags.append(f"klaus::from::{ctx['pdf_safe']}")
+        # The source page is shown in the approval dialog and was then
+        # thrown away, so provenance died with the dialog (M11). Same
+        # tag shape anki_tools.add_reviewed_cards already uses.
+        try:
+            n = int(page)
+            if n >= 1:
+                tags.append(f"klaus::page::{n}")
+        except (TypeError, ValueError):
+            pass
     args = _tool_args("create_note", {
         ("deck", "deck_name"): note.get("deckName"),
         ("notetype", "note_type", "model", "model_name"): note.get("modelName"),
@@ -253,7 +267,18 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
     Action("addTags", "add_tags", "Add tags to notes; approved.", _obj({"note_ids": {"type": "array"}, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_add_tags),
     Action("removeTags", "remove_tags", "Remove tags from notes; approved.", _obj({"note_ids": {"type": "array"}, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_remove_tags),
     Action("guiBrowse", "open_in_browse", "Open Anki's Browse on a search.", _obj({"query": {"type": "string"}}, ("query",)), False, _a_gui_browse),
-    Action("klausSearchNotes", "search_notes", "Semantic search over the user's notes.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes),
+    # NOT semantic (final review I3): the handler behind this is
+    # anki_tools._h_search_notes, which is col.find_notes(query) — Anki's
+    # own lexical search. Advertising it as semantic told the model to
+    # send natural-language questions to a tool that ANDs every word as
+    # a substring match, so it got nothing back and concluded the user
+    # had no notes on the topic. search_lecture_pdfs is the semantic
+    # one. (A semantic note search over card_index.top_k is K-207.)
+    Action("klausSearchNotes", "search_notes",
+           "Search the user's notes with ANKI SEARCH SYNTAX (matches text, and supports deck:, tag:, "
+           "\"quoted phrases\" — every term must match). NOT semantic: use search_lecture_pdfs for "
+           "meaning-based search over the lecture material.",
+           _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes),
     Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_pdfs),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
 )}
@@ -306,10 +331,18 @@ def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, 
         # spec-shaped error the caller can parse the same way as any other
         # JSON-RPC failure.
         return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "invalid params: expected an object"}}, {}
-    if method == "notifications/initialized":
+    if method.startswith("notifications/"):
+        # EVERY notification, not just "notifications/initialized" (M9):
+        # JSON-RPC forbids replying to a notification at all, and
+        # `notifications/cancelled` — precisely what an MCP client sends
+        # when it abandons a slow tools/call, e.g. one blocked on the
+        # approval dialog — used to get a -32601 REPLY it never asked
+        # for.
         return 202, None, {}
     if method == "initialize":
         sid = secrets.token_hex(8)
+        if len(end.sessions) >= MAX_SESSIONS:
+            end.sessions.clear()  # bounded, never unbounded (M10)
         end.sessions.add(sid)
         res = {"protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                "capabilities": {"tools": {}}, "serverInfo": {"name": "klaus", "version": end.version}}
@@ -360,9 +393,18 @@ def _note_sections(note: dict, similar: str | None, agent: bool, pdf_safe: str |
     tags = list(note.get("tags") or []) + (list(AGENT_TAGS) if agent else [])
     if agent and pdf_safe:
         tags.append(f"klaus::from::{pdf_safe}")
+    page = (note.get("options") or {}).get("sourcePage")
+    if agent:
+        # Mirrors _create_one's own page tag exactly — the preview and
+        # the write must never disagree about what gets written (M11).
+        try:
+            n = int(page)
+            if n >= 1:
+                tags.append(f"klaus::page::{n}")
+        except (TypeError, ValueError):
+            pass
     if tags:
         secs.append(("Tags", " ".join(tags)))
-    page = (note.get("options") or {}).get("sourcePage")
     if page:
         secs.append(("Source page", str(page)))
     if similar:
@@ -449,11 +491,22 @@ class Endpoint:
                 # all. Preview and the actual write must agree on which PDF
                 # a card came from, so this has to happen once, up front.
                 if action in ("addNote", "addNotes"):
+                    # Read on the MAIN thread (M19), not this HTTP one:
+                    # viewer_context's dict/list are mutated by the main
+                    # thread with no lock, and the worst case of a torn
+                    # read here is a card tagged klaus::from:: the wrong
+                    # PDF. Same hop similar_existing already takes.
+                    def _viewed():
+                        try:
+                            from . import viewer_context
+                            v = viewer_context.current()
+                            return v.pdf_safe if v is not None else None
+                        except Exception:
+                            return None
                     try:
-                        from . import viewer_context
-                        v = viewer_context.current()
-                        if v is not None:
-                            ctx["pdf_safe"] = v.pdf_safe
+                        seen = self._main(_viewed, self._read_timeout)
+                        if seen:
+                            ctx["pdf_safe"] = seen
                     except Exception:
                         pass
                 similar = None
@@ -491,8 +544,14 @@ class Endpoint:
             # otherwise-clean message with "ToolError: ".
             return {"result": None, "error": str(exc)}
         except TimeoutError:
+            print(f"[klausmate] endpoint {action}: timed out")
             return {"result": None, "error": "timed out"}
         except Exception as exc:
+            # Logged, not only returned (parked T3 finding, fix now): the
+            # error text goes back over HTTP to the child, so an
+            # unexpected failure inside a tool call otherwise left no
+            # trace at all on Anki's side.
+            print(f"[klausmate] endpoint {action}: {type(exc).__name__}: {exc}")
             return {"result": None, "error": f"{type(exc).__name__}: {exc}"}
 
     def _ask(self, title: str, sections: list) -> bool | None:
@@ -597,7 +656,18 @@ def _handler_for(end: Endpoint):
                 # closes without reading anything at all.
                 self.close_connection = True
                 return self._send(403, {"error": "browser origins are refused"})
-            if self.headers.get(TOKEN_HEADER, "") != end.token:
+            # Both sides ENCODED (re-review NEW-5): compare_digest raises
+            # TypeError on a str carrying non-ASCII, and a malformed
+            # X-Klaus-Token header then fell out of _route_post into
+            # do_POST's catch-all and answered 500 instead of this
+            # branch's 403. No bypass either way — the request was still
+            # refused and the connection still closed — but a bad token
+            # must read as a bad token. "replace" also makes a lone
+            # surrogate encodable rather than a second TypeError.
+            if not hmac.compare_digest(
+                (self.headers.get(TOKEN_HEADER, "") or "").encode("utf-8", "replace"),
+                (end.token or "").encode("utf-8", "replace"),
+            ):
                 # Same reasoning as the Origin branch above — no drain,
                 # just close.
                 self.close_connection = True
@@ -703,6 +773,21 @@ def _run_on_main_sync(fn: Callable, timeout: float):
     return box.get("r")
 
 
+#: Every approval dialog currently on screen, so Endpoint.stop() (profile
+#: close, profile switch) can reject them rather than leave a dialog
+#: outliving the endpoint whose answer it is (M8).
+_OPEN_APPROVALS: set = set()
+
+
+def reject_open_approvals() -> None:
+    for dlg in list(_OPEN_APPROVALS):
+        try:
+            dlg.reject()
+        except Exception as exc:
+            print(f"[klausmate] endpoint: closing a stale approval failed: {exc}")
+    _OPEN_APPROVALS.clear()
+
+
 def qt_approver(title: str, sections: list) -> bool:
     """Window-modal open() on the main thread; the calling thread waits on an Event."""
     from aqt import mw
@@ -714,6 +799,11 @@ def qt_approver(title: str, sections: list) -> bool:
             dlg = QDialog(mw)
             dlg.setWindowTitle(title)
             dlg.setWindowModality(__import__("aqt.qt", fromlist=["Qt"]).Qt.WindowModality.WindowModal)
+            try:
+                from . import theme
+                dlg.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+            except Exception as exc:  # M8: styled like every other Klaus dialog
+                print(f"[klausmate] endpoint dialog theme failed: {exc}")
             lay = QVBoxLayout(dlg)
             lay.addWidget(QLabel(title))
             text = QPlainTextEdit(dlg)
@@ -721,16 +811,31 @@ def qt_approver(title: str, sections: list) -> bool:
             text.setPlainText("\n".join(f"{k}: {v}" if k else v for k, v in sections))
             lay.addWidget(text)
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, dlg)
-            buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Approve")
+            approve = buttons.button(QDialogButtonBox.StandardButton.Ok)
+            approve.setText("Approve")
+            # CANCEL is the default button, never Approve (final review
+            # I6). QDialogButtonBox makes Ok the default, and this dialog
+            # takes keyboard focus the moment it opens — so a user typing
+            # in the assistant input who pressed Enter as a card proposal
+            # landed had just approved a write they never read.
+            # anki_tools._confirm_write_dialog got this right; its
+            # replacement (R1) must not lose it.
+            approve.setAutoDefault(False)
+            approve.setDefault(False)
+            cancel = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+            cancel.setAutoDefault(True)
+            cancel.setDefault(True)
             buttons.accepted.connect(dlg.accept)
             buttons.rejected.connect(dlg.reject)
             lay.addWidget(buttons)
             def finished(code):
                 box["a"] = code == QDialog.DialogCode.Accepted
+                _OPEN_APPROVALS.discard(dlg)
                 done.set()
                 dlg.deleteLater()
             dlg.finished.connect(finished)
             box["dlg"] = dlg
+            _OPEN_APPROVALS.add(dlg)
             dlg.open()
         except Exception as exc:
             print(f"[klausmate] endpoint dialog: {exc}")
@@ -771,6 +876,11 @@ def start_for_profile() -> Endpoint | None:
 
 def stop_for_profile() -> None:
     global _LIVE
+    # No approval dialog may outlive the endpoint whose answer it is
+    # (M8): by profile close the captured collection is already gone, so
+    # a late Approve fails harmlessly — but a live dialog for a dead
+    # server is still a lie on screen.
+    reject_open_approvals()
     if _LIVE is not None:
         _LIVE.stop()
         _LIVE = None

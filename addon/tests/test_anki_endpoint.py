@@ -354,6 +354,17 @@ check("ephemeral localhost port", host == "127.0.0.1" and 1024 < port < 65536 an
 check("missing token → 403", post("/", {"action": "version", "version": 6}, headers={"X-Klaus-Token": ""})[0] == 403)
 check("wrong token → 403", post("/", {"action": "version", "version": 6}, headers={"X-Klaus-Token": "x" * 64})[0] == 403)
 check("Origin header → 403 even with the token", post("/", {"action": "version", "version": 6}, headers={"Origin": "http://evil"})[0] == 403)
+# Re-review NEW-5: hmac.compare_digest raises TypeError on a str carrying
+# non-ASCII, so a malformed token header fell out of _route_post into
+# do_POST's catch-all and answered 500 + close instead of this branch's
+# 403 + close. Never an auth bypass — but a bad token must read as a bad
+# token, not as a server bug. (latin-1 is what http.client puts on the
+# wire for a header value, and what http.server decodes back, so a
+# non-ASCII str really does reach the comparison as one.)
+check("a NON-ASCII token header → 403, not a 500 from the catch-all",
+      post("/", {"action": "version", "version": 6}, headers={"X-Klaus-Token": "tökén-ünicøde"})[0] == 403)
+check("...and a still-healthy server right after it",
+      ac("version") == {"result": 6, "error": None})
 check("oversize body → 413", post("/", None, raw=b"x" * (4 * 1024 * 1024 + 1))[0] == 413)
 # Fix round 1, Critical #1: a non-numeric Content-Length used to crash the
 # request thread with an uncaught ValueError (`int(header)`, no guard),
@@ -499,6 +510,17 @@ check("agent path with source page → approval names the page and tags klaus::a
       and any("klaus::from::lec1" in s for _, s in approvals[-1][1]))
 check("...and the written note itself carries klaus::from::lec1, not just the preview text",
       "klaus::from::lec1" in col.minted[-1].tags)
+# M11: the source page was computed, shown in the dialog, and then
+# dropped — so once the dialog closed the card's provenance was gone.
+# Same tag shape anki_tools.add_reviewed_cards already uses.
+check("...and klaus::page::4, so the source slide survives the dialog",
+      "klaus::page::4" in col.minted[-1].tags)
+check("the preview names that tag too — preview and write must agree",
+      any("klaus::page::4" in s for _, s in approvals[-1][1]))
+_no_page = ep.preview_sections("addNote", {"note": {"deckName": "D", "modelName": "M", "fields": {"F": "x"}}},
+                               similar=None, agent=True, pdf_safe="lec1")
+check("a note with no source page grows no page tag (and does not raise)",
+      not any("klaus::page::" in s for _, s in _no_page))
 r = ac("addNotes", notes=[{"deckName": "Default", "modelName": "Basic", "fields": {"Front": "B1", "Back": "x"}}, {"deckName": "Default", "modelName": "Basic", "fields": {"Front": "B2", "Back": "y"}}])
 check("addNotes: ONE dialog for both, two ids", len(approvals) == 4 and r["error"] is None and len(r["result"]) == 2)
 r = ac("updateNoteFields", note={"id": 1, "fields": {"Front": "changed"}})
@@ -569,6 +591,34 @@ check("exact supported set",
                           "findCards", "cardsInfo", "addNote", "addNotes", "updateNoteFields", "addTags", "removeTags",
                           "guiBrowse", "klausSearchNotes", "klausSearchLecturePdfs", "klausCurrentView"}, str(sorted(ep.ACTIONS)))
 
+# --- I3: klausSearchNotes is LEXICAL, and its description must say so.
+# anki_tools._h_search_notes is col.find_notes(query) — Anki's own
+# search. Calling it semantic told the model to send natural-language
+# questions to a tool that ANDs every word as a substring match, so it
+# got nothing back and concluded the user had no notes on the topic:
+# exactly the answer this assistant exists to avoid. (The semantic note
+# search is K-207; this is the relabel, per the orchestrator's ruling.)
+_notes_desc = ep.ACTIONS["klausSearchNotes"].description
+check("klausSearchNotes is NOT advertised as semantic",
+      "semantic" not in _notes_desc.lower().replace("not semantic", "")
+      and "Semantic search over the user's notes" not in _notes_desc)
+check("...it names Anki search syntax instead",
+      "ANKI SEARCH SYNTAX" in _notes_desc and "deck:" in _notes_desc and "tag:" in _notes_desc)
+check("...and points at search_lecture_pdfs as the meaning-based one",
+      "search_lecture_pdfs" in _notes_desc)
+check("klausSearchLecturePdfs IS still the semantic one",
+      "emantic" in ep.ACTIONS["klausSearchLecturePdfs"].description)
+check("the description the MODEL sees over /mcp is that same text (one registry, no drift)",
+      [t for t in ep.mcp_tools() if t["name"] == "search_notes"][0]["description"] == _notes_desc)
+
+section("MAX_SESSIONS — the session set is bounded (M10)")
+_bounded = ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main, approver=lambda t, s: True,
+                       ctx_factory=ctx_factory, version="x")
+for _i in range(ep.MAX_SESSIONS + 5):
+    ep.mcp_dispatch(_bounded, {"jsonrpc": "2.0", "id": _i, "method": "initialize", "params": {}}, None)
+check("one `initialize` per child, forever, never grows past MAX_SESSIONS",
+      len(_bounded.sessions) <= ep.MAX_SESSIONS and ep.MAX_SESSIONS == 64)
+
 section("approval timeout")
 slow_end = ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main, approver=lambda t, s: (threading.Event().wait(0.2), False)[1],
                        ctx_factory=ctx_factory, version="x", approval_timeout=0.05)
@@ -587,6 +637,18 @@ check("initialize echoes protocol, names klaus, sets a session header",
 sid = [v for k, v in h.items() if k.lower() == "mcp-session-id"][0]
 st, r, _ = post("/mcp", {"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Mcp-Session-Id": sid})
 check("initialized → 202 no body", st == 202 and r is None)
+# M9: EVERY notifications/* is a notification. JSON-RPC forbids replying
+# to one at all, and notifications/cancelled is precisely what an MCP
+# client sends when it abandons a slow tools/call — e.g. one blocked on
+# Klaus's approval dialog — so a -32601 REPLY went back for a message
+# that asked for none.
+st, r, _ = post("/mcp", {"jsonrpc": "2.0", "method": "notifications/cancelled",
+                         "params": {"requestId": 6, "reason": "timed out"}},
+                headers={"Mcp-Session-Id": sid})
+check("notifications/cancelled → 202 no body, never a -32601 reply", st == 202 and r is None)
+st, r, _ = post("/mcp", {"jsonrpc": "2.0", "method": "notifications/anything_else"},
+                headers={"Mcp-Session-Id": sid})
+check("...and so is any other notifications/* method", st == 202 and r is None)
 st, r, _ = rpc("ping", rid=2)
 check("ping → empty result", r["result"] == {})
 st, r, _ = rpc("tools/list", rid=3)
@@ -659,5 +721,38 @@ check("stop() logs rather than swallowing an exception",
       "[klausmate] endpoint stop" in _SRC)
 check("do_POST's own safety net logs rather than dropping the connection silently",
       "[klausmate] endpoint:" in _SRC)
+# Parked T3 finding, fix now: handle()'s generic except returned the
+# error over HTTP to the child and left NO trace on Anki's side, so a
+# failing tool call was invisible to the user and to a later debug pass.
+check("handle()'s generic except LOGS the failure, not only returns it",
+      '[klausmate] endpoint {action}: {type(exc).__name__}: {exc}' in _SRC)
+
+# --- I6: DENY is the default button. QDialogButtonBox makes Ok the
+# default, and this dialog is window-modal on mw, so it takes keyboard
+# focus the instant it opens: a user typing in the assistant input who
+# hit Enter as a card proposal landed had just approved a write they
+# never read. anki_tools._confirm_write_dialog deliberately did the
+# opposite; its replacement (R1) had lost that.
+check("the Cancel button is made the default",
+      "cancel.setDefault(True)" in _CODE and "cancel.setAutoDefault(True)" in _CODE)
+check("...and Approve is explicitly NOT the default and not auto-default",
+      "approve.setDefault(False)" in _CODE and "approve.setAutoDefault(False)" in _CODE)
+check("the Ok button is still the one relabelled Approve",
+      'setText("Approve")' in _SRC)
+# M8: styled like every other Klaus dialog, and never outliving the
+# endpoint whose answer it is.
+check("the approval dialog applies theme.dialog_qss",
+      "theme.dialog_qss" in _CODE)
+check("stop_for_profile rejects any approval dialog still on screen",
+      "reject_open_approvals" in _CODE
+      and _SRC.index("def stop_for_profile") < _SRC.index("reject_open_approvals()\n    if _LIVE"))
+# M19: viewer_context is mutated by the MAIN thread with no lock; the
+# HTTP thread must not read it directly. Both the pdf_safe lookup and
+# similar_existing now hop through run_on_main.
+check("the viewer_context read happens inside a run_on_main hop, not on the HTTP thread",
+      "def _viewed()" in _CODE and "self._main(_viewed" in _CODE)
+# M10: a constant-time comparison for the token.
+check("the token is compared with hmac.compare_digest, not ==",
+      "hmac.compare_digest" in _CODE and "import hmac" in _CODE)
 
 raise SystemExit(report())

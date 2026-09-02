@@ -299,33 +299,60 @@ if _HAVE_QT:
         directly from the test's own thread — exactly like a real
         AgentHost's reader thread would, except synchronous, so Qt's
         auto-connection resolves the bridge signals as DIRECT calls and
-        no processEvents() pump is needed to observe the result."""
+        no processEvents() pump is needed to observe the result.
+
+        It MODELS THE PROCESS DYING, which the pre-fix version did not:
+        its stop() only flipped running=False, so "Stop calls
+        host.stop()" passed while the real next-send wrote into a dead
+        pipe and the dock was stuck on "error: stdin write failed" until
+        New Session (final review C1). Here stop()/interrupt()/close()
+        end the child (``alive`` False) and send() to a dead one raises,
+        exactly as AgentHost does — so C1 cannot come back unnoticed.
+        """
 
         def __init__(self, callbacks):
             self.callbacks = callbacks
             self.running = False
+            self.alive = False
             self.session_id = None
             self.sent = []
             self.started = []
             self.stopped = 0
+            self.interrupts = 0
+            self.reaps = 0
             self.closed = 0
 
         def start(self, session_id=None, resume=None):
             self.started.append({"session_id": session_id, "resume": resume})
             self.session_id = resume or session_id or "fake-sid"
             self.running = False
+            self.alive = True
             return self.session_id
 
         def send(self, turn_line):
+            if not self.alive:
+                raise RuntimeError("the Claude Code process has exited (code 0)")
             self.sent.append(turn_line)
             self.running = True
 
         def stop(self):
             self.stopped += 1
             self.running = False
+            self.alive = False  # SIGINT -> 2 s grace -> kill: the child is GONE
+
+        def interrupt(self):
+            self.interrupts += 1
+            self.running = False
+            self.alive = False
+
+        def reap(self, force=False):
+            self.reaps += 1
+            self.alive = False
+            return True
 
         def close(self):
             self.closed += 1
+            self.alive = False
 
     def _fake_host_factory(callbacks):
         return _FakeHost(callbacks)
@@ -400,8 +427,14 @@ if _HAVE_QT:
           _d1 is not None and isinstance(_d1._host, _FakeHost))
     check("a fresh dock with no PDF in view says so in the header",
           _d1.header.text() == "No PDF in view")
-    check("construction starts the host exactly once (the initial session switch)",
-          len(_d1._host.started) == 1 and _d1._host.started[0]["resume"] is None)
+    # LAZY START (final review I1): constructing the dock — and every
+    # later viewer switch — spawns NO `claude` child. Eager spawning cost
+    # a blocking kill on the main thread plus a fresh Node process for a
+    # PDF the user may never ask about, once per card that changed
+    # lecture during review; Claude Code emits nothing until the first
+    # message arrives anyway.
+    check("construction spawns NO child — the first Send does",
+          _d1._host.started == [])
     check("Send is the button's resting text", _d1.send_button.text() == "Send")
 
     # -- header follows viewer_context -----------------------------------
@@ -436,6 +469,8 @@ if _HAVE_QT:
     _d3.input.setPlainText("What is this slide about?")
     _d3._do_send()
     check("sending calls host.send exactly once", len(_d3._host.sent) == 1)
+    check("...and THAT is when the child is spawned (lazy start, I1)",
+          len(_d3._host.started) == 1)
     _turn = json.loads(_d3._host.sent[0])
     _content = _turn["message"]["content"]
     check("the turn is a user message with text, context and image blocks",
@@ -504,7 +539,7 @@ if _HAVE_QT:
     app.processEvents()
     check("deltas append to the transcript IN ORDER",
           "Hello, world!" in _d4.transcript.toPlainText())
-    _host4.callbacks["tool_use"]("mcp__klaus__search_notes", {"query": "renal"})
+    _host4.callbacks["tool_use"]("tid-1", "mcp__klaus__search_notes", {"query": "renal"})
     app.processEvents()
     _lines4 = [ln.strip() for ln in _d4.transcript.toPlainText().splitlines()]
     check("a tool_use renders one line starting with ▸ and the TOOL_LABELS text",
@@ -512,8 +547,26 @@ if _HAVE_QT:
     _host4.callbacks["tool_result"]("tid-1", True)
     app.processEvents()
     _lines4b = [ln.strip() for ln in _d4.transcript.toPlainText().splitlines()]
-    check("a tool_result with is_error appends ' — failed' to the LAST tool line",
+    check("a tool_result with is_error appends ' — failed' to the line for ITS OWN tool_use id",
           "▸ searched notes: renal — failed" in _lines4b)
+
+    # M4: a batch of parallel tool calls, whose results come back in the
+    # OPPOSITE order. Correlating by "the last tool line" decorated the
+    # wrong one; correlating by tool_use id cannot.
+    _host4.callbacks["tool_use"]("bat-A", "Read", {"file_path": "/lib/a.md"})
+    _host4.callbacks["tool_use"]("bat-B", "Grep", {"pattern": "sodium"})
+    app.processEvents()
+    _host4.callbacks["tool_result"]("bat-A", True)   # the FIRST one failed
+    app.processEvents()
+    _lines4c = [ln.strip() for ln in _d4.transcript.toPlainText().splitlines()]
+    check("both calls in a batch render their own line",
+          "▸ read a.md" in " ".join(_lines4c) and "▸ searched files for sodium" in _lines4c)
+    check("the failure decorates the line for bat-A, not the last line rendered",
+          "▸ read a.md — failed" in _lines4c and "▸ searched files for sodium — failed" not in _lines4c)
+    _host4.callbacks["tool_result"]("bat-B", False)
+    app.processEvents()
+    check("a successful result decorates nothing",
+          "▸ searched files for sodium" in [ln.strip() for ln in _d4.transcript.toPlainText().splitlines()])
     _host4.callbacks["permission_denied"]("Bash")
     app.processEvents()
     check("permission_denied renders a line naming the refused tool",
@@ -525,13 +578,49 @@ if _HAVE_QT:
     app.processEvents()
     check("a result event flips Send back", _d4.send_button.text() == "Send")
 
-    # -- init stores the session id via sessions.remember -------------------
+    # -- the session id is remembered on RESULT, under the SENDING pdf ------
+    # (final review I2). `init` arrives ~1 s after the send through
+    # _Bridge; remembering there, keyed by whatever PDF happened to be
+    # current at DELIVERY time, stored A's session id under B and made B
+    # resume A's conversation forever. And an id remembered before a turn
+    # completed is stale by construction: Claude Code writes no
+    # transcript for a message-less session, so `--resume` of it fails.
 
     viewer_context.reset()
     _d5 = _make_dock()
+    _d5.input.setPlainText("ask")
+    _d5._do_send()
     _d5._host.callbacks["init"]({"session_id": "real-sid-1", "mcp_ok": True})
-    check("an init event remembers the session id for the currently-followed PDF (None: global)",
+    check("an init event alone remembers NOTHING — a session with no completed turn is not real",
+          _d5._sessions.stored == {})
+    _d5._host.callbacks["result"]({"session_id": "real-sid-1", "is_error": False,
+                                   "duration_ms": 1, "total_cost_usd": 0.0, "text": "ok", "errors": []})
+    check("the completed turn is what stores the id (None: the global slot)",
           _d5._sessions.stored.get(None) == "real-sid-1")
+
+    # The exact I2 race: send for A, switch to B, THEN the events land.
+    viewer_context.reset()
+    _sessions_i2 = _FakeSessions()
+    _d5r = _make_dock(sessions=_sessions_i2)
+    viewer_context.report_document(20, "pdfA", "PDF A.pdf", "/x/A.pdf", 10)
+    viewer_context.activate(20)
+    app.processEvents()
+    _d5r.input.setPlainText("about A")
+    _d5r._do_send()
+    viewer_context.report_document(21, "pdfB", "PDF B.pdf", "/x/B.pdf", 10)
+    viewer_context.activate(21)
+    app.processEvents()
+    check("the switch really did land (the dock now follows B)",
+          _d5r._current_pdf_safe == "pdfB")
+    _d5r._host.callbacks["init"]({"session_id": "sid-of-A", "mcp_ok": True})
+    _d5r._host.callbacks["result"]({"session_id": "sid-of-A", "is_error": False,
+                                    "duration_ms": 1, "total_cost_usd": 0.0, "text": "ok", "errors": []})
+    app.processEvents()
+    check("A's session id lands under A — the PDF the turn was SENT for, not the one now in view",
+          _sessions_i2.stored.get("pdfA") == "sid-of-A")
+    check("...and nothing at all is written under B",
+          "pdfB" not in _sessions_i2.stored)
+
     _d5b = _make_dock()
     _d5b._host.callbacks["init"]({"session_id": "sid-2", "mcp_ok": False})
     app.processEvents()
@@ -539,7 +628,7 @@ if _HAVE_QT:
           "unavailable" in _d5b.transcript.toPlainText().lower()
           and _d5b.input.isEnabled())
 
-    # -- Stop calls host.stop() ---------------------------------------------
+    # -- Stop, then send again: the child RESPAWNS (final review C1) --------
 
     viewer_context.reset()
     _d6 = _make_dock()
@@ -548,8 +637,85 @@ if _HAVE_QT:
     _d6._on_send_button()  # button now reads Stop; clicking it must stop, not send
     check("clicking Stop calls host.stop() exactly once", _d6._host.stopped == 1)
     check("stopping flips the button back to Send", _d6.send_button.text() == "Send")
+    check("...and the child is really dead afterwards (SIGINT, grace, kill)",
+          _d6._host.alive is False)
+    _starts_after_stop = len(_d6._host.started)
+    _d6.input.setPlainText("ask again after Stop")
+    _d6._do_send()
+    check("the NEXT send spawns a new child rather than writing into the dead pipe",
+          len(_d6._host.started) == _starts_after_stop + 1)
+    check("...and the question actually goes out", len(_d6._host.sent) == 2)
+    check("no 'stdin write failed' line anywhere in the transcript",
+          "stdin write failed" not in _d6.transcript.toPlainText())
 
-    # -- New Session: forget + fresh start -----------------------------------
+    # A remembered session is what the respawn resumes.
+    viewer_context.reset()
+    _sessions_c1 = _FakeSessions()
+    _sessions_c1.stored[None] = "sid-to-resume"
+    _d6b = _make_dock(sessions=_sessions_c1)
+    _d6b.input.setPlainText("first")
+    _d6b._do_send()
+    _d6b._do_stop()
+    _d6b.input.setPlainText("second")
+    _d6b._do_send()
+    check("the respawn after Stop resumes the remembered session id",
+          _d6b._host.started[-1]["resume"] == "sid-to-resume")
+
+    # An exited child (a crash, not a Stop) is the same story.
+    viewer_context.reset()
+    _d6c = _make_dock()
+    _d6c.input.setPlainText("first")
+    _d6c._do_send()
+    _d6c._host.alive = False
+    _d6c._host.callbacks["exited"](1)
+    app.processEvents()
+    _starts_after_exit = len(_d6c._host.started)
+    _d6c.input.setPlainText("after the crash")
+    _d6c._do_send()
+    check("after an unexpected exit the next send spawns too",
+          len(_d6c._host.started) == _starts_after_exit + 1 and len(_d6c._host.sent) == 2)
+
+    # A stale --resume self-heals rather than wedging that PDF forever.
+    viewer_context.reset()
+    _sessions_stale = _FakeSessions()
+    _sessions_stale.stored[None] = "sid-claude-forgot"
+    _d6d = _make_dock(sessions=_sessions_stale)
+    _d6d.input.setPlainText("hello")
+    _d6d._do_send()
+    check("the send resumed the stored id", _d6d._host.started[-1]["resume"] == "sid-claude-forgot")
+    _d6d._host.callbacks["result"]({"session_id": "", "is_error": True, "duration_ms": 1,
+                                    "total_cost_usd": 0.0, "text": "",
+                                    "errors": [{"message": "No conversation found with session ID sid-claude-forgot"}]})
+    app.processEvents()
+    check("a 'No conversation found' result drops the stale mapping",
+          _sessions_stale.forgotten and _sessions_stale.forgotten[-1] is None
+          and None not in _sessions_stale.stored)
+    check("...and says so in the transcript rather than failing silently",
+          "gone from Claude Code" in _d6d.transcript.toPlainText())
+    _d6d._host.alive = False
+    _d6d.input.setPlainText("try again")
+    _d6d._do_send()
+    check("the next send starts FRESH, with no resume at all",
+          _d6d._host.started[-1]["resume"] is None and len(_d6d._host.sent) == 2)
+
+    # A send that fails must not eat the user's words (M18).
+    viewer_context.reset()
+    _d6e = _make_dock()
+
+    def _explode(_turn):
+        raise RuntimeError("pipe went away mid-write")
+
+    _d6e.input.setPlainText("a question worth keeping")
+    _d6e._host.start()          # a live child…
+    _d6e._host_pdf_safe = None  # …that _ensure_child will accept
+    _d6e._host.send = _explode
+    _d6e._do_send()
+    check("a failed send restores the typed text instead of losing it",
+          _d6e.input.toPlainText() == "a question worth keeping")
+    check("...and the button is not left stranded on Stop",
+          _d6e.send_button.text() == "Send")
+
+    # -- New Session: forget, spawn nothing until the next Send --------------
 
     viewer_context.reset()
     _d7 = _make_dock()
@@ -557,13 +723,17 @@ if _HAVE_QT:
     _d7._on_new_session_clicked()
     check("New Session calls sessions.forget for the currently-followed PDF (None: global)",
           _d7._sessions.forgotten and _d7._sessions.forgotten[-1] is None)
-    check("New Session calls host.start() completely fresh (no resume)",
-          len(_d7._host.started) == _starts_before + 1
-          and _d7._host.started[-1]["resume"] is None)
+    check("New Session spawns nothing on its own (lazy start)",
+          len(_d7._host.started) == _starts_before)
     check("New Session announces itself in the (now-cleared) transcript",
           "New session" in _d7.transcript.toPlainText())
+    _d7.input.setPlainText("first question of the new session")
+    _d7._do_send()
+    check("the next Send starts fresh — the mapping was forgotten, so no resume",
+          len(_d7._host.started) == _starts_before + 1
+          and _d7._host.started[-1]["resume"] is None)
 
-    # -- switching the followed PDF resumes a stored session -----------------
+    # -- switching the followed PDF resumes that PDF's stored session --------
 
     viewer_context.reset()
     _sessions8 = _FakeSessions()
@@ -572,22 +742,27 @@ if _HAVE_QT:
     viewer_context.report_document(8, "pdfA", "PDF A.pdf", "/x/A.pdf", 10)
     viewer_context.activate(8)
     app.processEvents()
-    check("switching to a PDF with a STORED session resumes it via host.start(resume=...)",
-          any(s["resume"] == "resume-sid-A" for s in _d8._host.started))
+    check("the switch itself spawns nothing (I1)", _d8._host.started == [])
     check("the transcript announces the resume by the PDF's display name",
           "Resumed session for PDF A.pdf" in _d8.transcript.toPlainText())
-    _stopped_before = _d8._host.stopped
+    _d8.input.setPlainText("about A")
+    _d8._do_send()
+    check("the first Send after the switch resumes THAT PDF's stored session",
+          _d8._host.started[-1]["resume"] == "resume-sid-A")
     viewer_context.report_document(9, "pdfB", "PDF B.pdf", "/x/B.pdf", 5)
     viewer_context.activate(9)
     app.processEvents()
-    check("switching to a PDF with NO stored session starts fresh, not resumed",
-          _d8._host.started[-1]["resume"] is None)
     check("the transcript announces a fresh session for the new PDF",
           "New session for PDF B.pdf" in _d8.transcript.toPlainText())
-    check("switching PDFs stops the outgoing session's host first (it was left running below)",
-          _d8._host.stopped >= _stopped_before)  # sanity: never fewer stops than before
+    _d8.input.setPlainText("about B")
+    _d8._do_send()
+    check("switching to a PDF with NO stored session starts fresh, not resumed",
+          _d8._host.started[-1]["resume"] is None)
 
-    # A running turn on PDF A must actually be stopped before B's start.
+    # A running turn on PDF A must be ended before B's — WITHOUT a
+    # blocking wait on the main thread (final review I1): stop() blocks
+    # up to 2 s on proc.wait, and this path runs inside viewer_context's
+    # own notifier.
     viewer_context.reset()
     _d8b = _make_dock()
     viewer_context.report_document(10, "pdfC", "PDF C.pdf", "/x/C.pdf", 3)
@@ -596,12 +771,245 @@ if _HAVE_QT:
     _d8b.input.setPlainText("mid-turn")
     _d8b._do_send()
     _d8b._host.running = True
+    _interrupts_before = _d8b._host.interrupts
     _stopped_before2 = _d8b._host.stopped
     viewer_context.report_document(11, "pdfD", "PDF D.pdf", "/x/D.pdf", 3)
     viewer_context.activate(11)
     app.processEvents()
-    check("a RUNNING turn is stopped before the dock switches to a different PDF's session",
-          _d8b._host.stopped == _stopped_before2 + 1)
+    check("a RUNNING turn is INTERRUPTED (signal + poll) when the dock switches PDF",
+          _d8b._host.interrupts == _interrupts_before + 1)
+    check("...and never through the blocking stop() path",
+          _d8b._host.stopped == _stopped_before2)
+    check("the interrupted child is reaped without blocking", _d8b._host.reaps >= 1)
+    check("the button is back to Send after the switch", _d8b.send_button.text() == "Send")
+
+    # -- NEW-1: the reap chain is bound to the child it was started for --
+    # `_begin_async_stop` starts a QTimer chain that force-kills at its
+    # 2 s grace expiry. Nothing cancelled it when `_ensure_child` spawned
+    # a NEW child in the meantime — so a Send inside the outgoing child's
+    # death window (~0.6 s for a real claude on SIGINT, the full 2 s if
+    # it is mid-tool-call) handed the stale chain a fresh child to kill,
+    # and the new turn died about two seconds in with "exited (code -9)".
+    # `_FakeHost.reap()` returns True on the first call, so no round-1
+    # pin ever had two generations of child alive across one chain; this
+    # host reports "still exiting" the way a real one does.
+
+    class _SlowReapHost(_FakeHost):
+        def __init__(self, callbacks):
+            super().__init__(callbacks)
+            self.gen = 0
+            self.reap_log = []      # (generation reaped, force?)
+            self.killed = []        # generations actually force-killed
+            self._exiting = False
+
+        def start(self, session_id=None, resume=None):
+            self.gen += 1
+            self._exiting = False
+            return super().start(session_id, resume)
+
+        def interrupt(self):
+            self.interrupts += 1
+            self.running = False
+            self._exiting = True    # signalled, NOT yet dead — alive stays True
+
+        def reap(self, force=False):
+            self.reap_log.append((self.gen, bool(force)))
+            if force:
+                self.killed.append(self.gen)
+                self.alive = False
+                self._exiting = False
+                return True
+            return not self._exiting
+
+    viewer_context.reset()
+    _d_race = _make_dock(host_factory=_SlowReapHost)
+    viewer_context.report_document(40, "pdfG", "PDF G.pdf", "/x/G.pdf", 3)
+    viewer_context.activate(40)
+    app.processEvents()
+    _d_race.input.setPlainText("about G")
+    _d_race._do_send()
+    _host_race = _d_race._host
+    check("the first send spawned generation 1", _host_race.gen == 1 and _host_race.alive)
+
+    viewer_context.report_document(41, "pdfH", "PDF H.pdf", "/x/H.pdf", 3)
+    viewer_context.activate(41)
+    app.processEvents()
+    _stale_gen = _d_race._stop_gen
+    check("the switch interrupted gen 1 and its reap says 'still exiting'",
+          _host_race.interrupts == 1 and _host_race.reap_log == [(1, False)])
+
+    _d_race.input.setPlainText("about H")
+    _d_race._do_send()
+    check("the Send inside that death window spawned generation 2, and it is alive",
+          _host_race.gen == 2 and _host_race.alive and len(_host_race.sent) == 2)
+
+    # Now let the STALE chain fire with its own grace period already
+    # expired — the exact moment that used to kill generation 2. A past
+    # deadline is set deliberately so the pin cannot pass merely because
+    # `_ensure_child` zeroed it: the generation guard has to be what
+    # stops this.
+    _d_race._stop_deadline = 1.0  # monotonic() is far past this
+    _reaps_before = len(_host_race.reap_log)
+    _d_race._poll_stop(_stale_gen)
+    check("a stale poll chain is a no-op — it never even reaps",
+          len(_host_race.reap_log) == _reaps_before)
+    check("...so the newly spawned child is untouched: no force-kill, still alive",
+          _host_race.killed == [] and _host_race.alive is True)
+    check("...and its turn is intact (2 sent, nothing exited)",
+          len(_host_race.sent) == 2 and _d_race._host_pdf_safe == "pdfH")
+    # The CURRENT generation's chain must still work, or the guard would
+    # just be a way of never reaping anything.
+    _d_race._poll_stop(_d_race._stop_gen)
+    check("the current generation's chain still reaps normally",
+          len(_host_race.reap_log) == _reaps_before + 1)
+
+    # The same race, through the RESCHEDULE path rather than a direct
+    # call: a real chain only ever fires again via QTimer.singleShot, and
+    # that closure must carry the generation it was CREATED with. Reading
+    # `self._stop_gen` at fire time instead would make every rescheduled
+    # tick match by construction and the guard would be worthless. The
+    # timer is faked so the callback can be held and fired after a new
+    # child exists, instead of racing a real 100 ms.
+
+    class _CapturingTimer:
+        pending = []
+
+        @staticmethod
+        def singleShot(_ms, fn):
+            _CapturingTimer.pending.append(fn)
+
+    viewer_context.reset()
+    _d_resched = _make_dock(host_factory=_SlowReapHost)
+    # The OCR scheduler arms its own QTimer.singleShot on every view
+    # change; silence it so `pending` holds the reap chain and nothing else.
+    _d_resched._scheduler = None
+    viewer_context.report_document(42, "pdfI", "PDF I.pdf", "/x/I.pdf", 3)
+    viewer_context.activate(42)
+    app.processEvents()
+    _d_resched.input.setPlainText("about I")
+    _d_resched._do_send()
+    _host_resched = _d_resched._host
+    _real_qtimer = assistant_dock.QTimer
+    assistant_dock.QTimer = _CapturingTimer
+    try:
+        _CapturingTimer.pending.clear()
+        viewer_context.report_document(43, "pdfJ", "PDF J.pdf", "/x/J.pdf", 3)
+        viewer_context.activate(43)
+        app.processEvents()
+        check("the switch's chain scheduled itself once (reap said 'still exiting')",
+              len(_CapturingTimer.pending) == 1)
+        _d_resched.input.setPlainText("about J")
+        _d_resched._do_send()
+        check("that Send spawned generation 2", _host_resched.gen == 2 and _host_resched.alive)
+        _d_resched._stop_deadline = 1.0  # the stale chain's grace has expired
+        _reaps_before2 = len(_host_resched.reap_log)
+        _CapturingTimer.pending.pop(0)()  # the rescheduled tick fires
+        check("the rescheduled tick carries the generation it was CREATED with, so it is a no-op",
+              len(_host_resched.reap_log) == _reaps_before2)
+        check("...and generation 2 is neither force-killed nor rescheduled against",
+              _host_resched.killed == [] and _host_resched.alive is True
+              and not _CapturingTimer.pending)
+    finally:
+        assistant_dock.QTimer = _real_qtimer
+
+    # -- NEW-2: a hard kill after a resume Claude Code ACCEPTED --------------
+    # `_on_exited` treated any rc != 0 during an unproven resume as a
+    # failed resume, dropped that PDF's mapping and printed "That saved
+    # conversation is gone from Claude Code" — untrue for a kill after
+    # stop()'s grace, or for NEW-1's own force-kill. `init` is the proof
+    # the resume was accepted: a resume of a session Claude Code does not
+    # have never reaches it.
+
+    viewer_context.reset()
+    _sessions_n2 = _FakeSessions()
+    _sessions_n2.stored[None] = "good-sid"
+    _d_n2 = _make_dock(sessions=_sessions_n2)
+    _d_n2.input.setPlainText("q")
+    _d_n2._do_send()
+    check("the send resumed the stored id", _d_n2._host.started[-1]["resume"] == "good-sid")
+    _d_n2._host.callbacks["init"]({"session_id": "good-sid", "mcp_ok": True})
+    _d_n2._host.alive = False
+    _d_n2._host.callbacks["exited"](-9)  # SIGKILL, not a rejected resume
+    app.processEvents()
+    check("a hard kill AFTER init keeps the session — the resume had been accepted",
+          _sessions_n2.forgotten == [] and _sessions_n2.stored.get(None) == "good-sid")
+    check("...and never claims the conversation is gone from Claude Code",
+          "gone from Claude Code" not in _d_n2.transcript.toPlainText())
+    check("...it reports the exit instead", "exited (code -9)" in _d_n2.transcript.toPlainText())
+
+    # The genuine failure — an exit BEFORE init — must still self-heal.
+    viewer_context.reset()
+    _sessions_n2b = _FakeSessions()
+    _sessions_n2b.stored[None] = "sid-claude-rejects"
+    _d_n2b = _make_dock(sessions=_sessions_n2b)
+    _d_n2b.input.setPlainText("q")
+    _d_n2b._do_send()
+    _d_n2b._host.alive = False
+    _d_n2b._host.callbacks["exited"](1)  # died before any init
+    app.processEvents()
+    check("an exit BEFORE init during a resume still forgets — that IS the real failure",
+          _sessions_n2b.forgotten and _sessions_n2b.forgotten[-1] is None
+          and "gone from Claude Code" in _d_n2b.transcript.toPlainText())
+
+    # -- NEW-3: New Session mid-turn is not undone by a late result ---------
+
+    viewer_context.reset()
+    _sessions_n3 = _FakeSessions()
+    _d_n3 = _make_dock(sessions=_sessions_n3)
+    _d_n3.input.setPlainText("q")
+    _d_n3._do_send()
+    _d_n3._on_new_session_clicked()
+    check("New Session forgot the mapping", _d_n3._sessions.forgotten == [None])
+    _d_n3._host.callbacks["result"]({"session_id": "sid-user-just-forgot", "is_error": False,
+                                     "duration_ms": 1, "total_cost_usd": 0.0, "text": "", "errors": []})
+    app.processEvents()
+    check("a result still in flight from the interrupted child never re-remembers "
+          "the id the user just asked to forget", _sessions_n3.stored == {})
+    # _do_stop deliberately does NOT clear _sending_pdf_safe: remembering
+    # a stopped turn's session is exactly what you want there.
+    viewer_context.reset()
+    _sessions_n3b = _FakeSessions()
+    _d_n3b = _make_dock(sessions=_sessions_n3b)
+    _d_n3b.input.setPlainText("q")
+    _d_n3b._do_send()
+    _d_n3b._do_stop()
+    _d_n3b._host.callbacks["result"]({"session_id": "sid-after-stop", "is_error": False,
+                                      "duration_ms": 1, "total_cost_usd": 0.0, "text": "", "errors": []})
+    app.processEvents()
+    check("a result after STOP still remembers — Stop keeps the conversation",
+          _sessions_n3b.stored.get(None) == "sid-after-stop")
+
+    # -- NEW-4: the outgoing PDF's trailing output stays out of the new one --
+
+    viewer_context.reset()
+    _d_n4 = _make_dock()
+    viewer_context.report_document(50, "pdfE", "PDF E.pdf", "/x/E.pdf", 3)
+    viewer_context.activate(50)
+    app.processEvents()
+    _d_n4.input.setPlainText("about E")
+    _d_n4._do_send()
+    viewer_context.report_document(51, "pdfF", "PDF F.pdf", "/x/F.pdf", 3)
+    viewer_context.activate(51)
+    app.processEvents()
+    _d_n4._host.callbacks["delta"]("trailing words from E")
+    _d_n4._host.callbacks["tool_use"]("late-1", "Read", {"file_path": "/x/lecture-e.md"})
+    _d_n4._host.callbacks["tool_result"]("late-1", True)
+    app.processEvents()
+    _txt_n4 = _d_n4.transcript.toPlainText()
+    check("the outgoing PDF's trailing deltas never render under the incoming PDF's header",
+          "trailing words from E" not in _txt_n4)
+    check("...nor its trailing tool line", "lecture-e.md" not in _txt_n4)
+    check("the incoming PDF's own announcement is untouched",
+          "New session for PDF F.pdf" in _txt_n4)
+    # An ordinary turn must be completely unaffected by that guard.
+    _d_n4.input.setPlainText("about F")
+    _d_n4._do_send()
+    _d_n4._host.callbacks["delta"]("F answer")
+    _d_n4._host.callbacks["tool_use"]("ok-1", "Read", {"file_path": "/x/lecture-f.md"})
+    app.processEvents()
+    _txt_n4b = _d_n4.transcript.toPlainText()
+    check("an ordinary turn's deltas still render",
+          "F answer" in _txt_n4b and "lecture-f.md" in _txt_n4b)
 
     # -- empty state: no claude binary ---------------------------------------
 
@@ -713,6 +1121,57 @@ if _HAVE_QT:
               not _fake_addon_mgr.writes)
     finally:
         sys.modules["aqt"].mw = _orig_aqt_mw
+
+    # -- assistant_reopen: a preference that is finally READ (I7) ------------
+    # It was written by Preferences and consumed by nobody — a visible,
+    # documented setting that did nothing. The dock now records whether
+    # it was open (assistant_dock_open) and honours the pair on
+    # profile_did_open.
+
+    _fake_mw_reopen = _QtW.QMainWindow()
+    _reopen_mgr = _FakeAddonManager()
+    _fake_mw_reopen.addonManager = _reopen_mgr
+    _orig_dock_mw_reopen = assistant_dock.mw
+    _orig_open_assistant = assistant_dock.open_assistant
+    _reopened = []
+    assistant_dock.mw = _fake_mw_reopen
+    assistant_dock.open_assistant = lambda: _reopened.append(True)
+    try:
+        _reopen_mgr.store = {"assistant_dock_open": False}
+        assistant_dock._write_open_flag(True)
+        check("opening the dock records assistant_dock_open True",
+              _reopen_mgr.store.get("assistant_dock_open") is True and len(_reopen_mgr.writes) == 1)
+        assistant_dock._write_open_flag(True)
+        check("...and writing the same value again is a no-op, not a second config write",
+              len(_reopen_mgr.writes) == 1)
+        assistant_dock._write_open_flag(False)
+        check("closing it records False", _reopen_mgr.store.get("assistant_dock_open") is False)
+
+        _reopen_mgr.store = {"assistant_reopen": False, "assistant_dock_open": True}
+        assistant_dock.reopen_if_configured()
+        app.processEvents()
+        check("reopen OFF: the dock is not reopened even though it was open last time",
+              _reopened == [])
+        _reopen_mgr.store = {"assistant_reopen": True, "assistant_dock_open": False}
+        assistant_dock.reopen_if_configured()
+        app.processEvents()
+        check("reopen ON but it was CLOSED last time: still not reopened", _reopened == [])
+        _reopen_mgr.store = {"assistant_reopen": True, "assistant_dock_open": True}
+        assistant_dock.reopen_if_configured()
+        app.processEvents()
+        check("reopen ON and it was open last time: the dock reopens", _reopened == [True])
+    finally:
+        assistant_dock.mw = _orig_dock_mw_reopen
+        assistant_dock.open_assistant = _orig_open_assistant
+
+    check("setup() registers the reopen consumer on profile_did_open — without this the "
+          "preference is unread (the shape of I7's defect)",
+          "gui_hooks.profile_did_open.append(reopen_if_configured)" in _CODE)
+
+    # -- the stderr log file is the name the spec gives it (M1) --------------
+    check("the child's stderr log is user_files/assistant/claude.log, as spec section 4.2 says "
+          "(the code shipped agent.log, so the two disagreed)",
+          '"assistant", "claude.log"' in _SRC and '"agent.log"' not in _SRC)
 
     # -- shortcut mechanism: one window-scoped QAction, menu_action(), scan --
 

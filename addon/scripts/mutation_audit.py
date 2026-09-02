@@ -114,19 +114,22 @@ AUDIT_MODULES = (
     "pdf_notes",
     "lecture_view",
     "projection",
-    # The assistant layers (2026-09-01). All four are aqt-light by
-    # construction, so nearly every function is reachable from its own
-    # test file — which is exactly the condition this audit needs.
+    # The assistant layers. All aqt-light by construction, so nearly
+    # every function is reachable from its own test file — which is
+    # exactly the condition this audit needs. The 2026-09-01 list also
+    # named llm_client, entitlement, assistant_session and podcast; all
+    # four were DELETED on 2026-09-02 when the plan converged on the
+    # Claude Code dock, and leaving them here made ALLOWED_TESTS name
+    # four test files that no longer exist, so `--modules all` failed on
+    # them (final review M2).
     "card_forge",
-    "llm_client",
-    "entitlement",
     "anki_tools",
-    "assistant_session",
+    "agent_host",
+    "assistant_sessions",
     # The index runner (K-152, added by K-162).  Its chain, queue and
     # status rendering are all aqt-free above its glue divider, so the
     # 122 checks in tests/test_index_queue.py reach nearly all of it.
     "index_queue",
-    "podcast",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

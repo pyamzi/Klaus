@@ -127,6 +127,13 @@ check("re.S lets a multi-line rest survive whole, embedded newline included",
 check("an unknown command passes the whole line through unchanged",
       asess.expand("/nope-such-command do a thing", tmp, {})
       == "/nope-such-command do a thing")
+# The negative case above (an unknown HYPHENATED name passes through)
+# would pass just as happily if _COMMAND_RE rejected hyphens outright —
+# so it proves nothing about them. This is the positive half: a
+# hyphenated file the test already wrote IS expanded (final review,
+# parked T7 finding).
+check("a HYPHENATED command name expands from its file, rest appended",
+      asess.expand("/aaa-first go on", tmp, {}) == "a prompt\n\ngo on")
 
 section("expand — $SELECTION/$PAGE/$PDF placeholders")
 _write(os.path.join(pdir, "tmpl.md"), "Sel=$SELECTION Page=$PAGE Pdf=$PDF")
@@ -234,7 +241,13 @@ check("clear_all is safe against an already-empty store (idempotent)",
 # ------------------------------------------------------------- system prompt
 
 section("ensure_system_prompt — first write")
-check("SYSTEM_PROMPT_VERSION is 1", asess.SYSTEM_PROMPT_VERSION == 1)
+# v2 since 2026-09-02 (final review I3): v1's prompt called search_notes
+# "semantic" when the handler behind it is Anki's own lexical
+# col.find_notes, so the model sent natural-language questions to a
+# substring-AND search and read the empty result as "no notes on this".
+# The BUMP is the delivery mechanism — without it a profile that already
+# has the v1 file on disk never sees the correction.
+check("SYSTEM_PROMPT_VERSION is 2", asess.SYSTEM_PROMPT_VERSION == 2)
 check("no system prompt file exists yet",
       not os.path.isfile(asess.system_prompt_path(tmp)))
 
@@ -245,8 +258,8 @@ check("the file now exists on disk", os.path.isfile(sp_path))
 
 with open(sp_path, encoding="utf-8") as f:
     sp_text = f.read()
-check("starts with the v1 version marker on its own first line",
-      sp_text.startswith("<!-- klaus-system-prompt v1 -->\n"), repr(sp_text[:60]))
+check("starts with the v2 version marker on its own first line",
+      sp_text.startswith("<!-- klaus-system-prompt v2 -->\n"), repr(sp_text[:60]))
 check("names the [Klaus context] block", "[Klaus context]" in sp_text)
 check("tells the model to cite pages as (p. N)", "(p. N)" in sp_text)
 check("tells the model about source_page when adding a card",
@@ -255,6 +268,15 @@ check("mentions the mcp__klaus__ tool namespace",
       "mcp__klaus__" in sp_text)
 check("warns that a declined/errored tool result means no card was added",
       "NOT added" in sp_text)
+# --- I3: the note tools are Anki's own LEXICAL search; only the lecture
+# search is semantic. The old prompt said "search_notes (semantic)",
+# which is what sent natural-language questions to col.find_notes.
+check("the prompt never advertises search_notes as semantic",
+      "search_notes (semantic)" not in sp_text)
+check("it names Anki's own search syntax for the note tools instead",
+      "Anki's own search syntax" in sp_text)
+check("it points the model at search_lecture_pdfs as THE semantic tool",
+      "search_lecture_pdfs (the SEMANTIC one" in sp_text)
 
 section("ensure_system_prompt — leaves an already-current file alone")
 _write(sp_path, sp_text + "CUSTOM_SENTINEL_TAIL")
@@ -270,7 +292,7 @@ asess.ensure_system_prompt(tmp)
 with open(sp_path, encoding="utf-8") as f:
     rewritten = f.read()
 check("a v0 marker triggers a rewrite up to the current version",
-      rewritten.startswith("<!-- klaus-system-prompt v1 -->\n")
+      rewritten.startswith("<!-- klaus-system-prompt v2 -->\n")
       and "old stale prompt body" not in rewritten, repr(rewritten[:80]))
 
 _write(sp_path, "no marker at all, just some text a hand edit left behind")
@@ -278,7 +300,7 @@ asess.ensure_system_prompt(tmp)
 with open(sp_path, encoding="utf-8") as f:
     rewritten2 = f.read()
 check("a missing marker also triggers a rewrite",
-      rewritten2.startswith("<!-- klaus-system-prompt v1 -->\n"), repr(rewritten2[:60]))
+      rewritten2.startswith("<!-- klaus-system-prompt v2 -->\n"), repr(rewritten2[:60]))
 
 shutil.rmtree(tmp, ignore_errors=True)
 raise SystemExit(report())

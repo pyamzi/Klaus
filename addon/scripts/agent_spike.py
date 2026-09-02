@@ -15,6 +15,22 @@ TOKEN = secrets.token_hex(16)
 CALLS = []  # every tools/call the minimal MCP responder received
 
 
+def _agent_host():
+    """klausmate.agent_host loaded STANDALONE (by path, not through the
+    package, whose __init__ imports aqt). It has no addon imports of its
+    own, so this works — and it is what lets this script probe the exact
+    argv production spawns rather than a hand-copied approximation."""
+    import importlib.util
+    path = os.path.join(ROOT, "klausmate", "agent_host.py")
+    spec = importlib.util.spec_from_file_location("_spike_agent_host", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+AH = _agent_host()
+
+
 class Mcp(BaseHTTPRequestHandler):
     """The smallest MCP-over-HTTP responder that can pass initialize/tools."""
 
@@ -77,30 +93,69 @@ def turn(text: str, png: bytes | None) -> str:
     return json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n"
 
 
-def run_case(name: str, port: int, turns: list[str], cwd: str) -> list[str]:
+def _system_prompt(cwd: str) -> str:
+    path = os.path.join(cwd, "system_prompt.md")
+    if not os.path.isfile(path):
+        with open(path, "w") as f:
+            f.write("You are Klaus, a study assistant. Answer briefly.\n")
+    return path
+
+
+def production_cmd(port: int, cwd: str, resume: str = "") -> list[str]:
+    """EXACTLY what AgentHost.start() builds — same function, no copy.
+
+    The 2026-09-01 spike hand-copied a nearly-but-not-identical argv (no
+    --append-system-prompt-file, no --model, no ToolSearch), so nothing
+    had ever spawned the binary with the real command line; a CLI rename
+    of a flag only production uses would have taken the feature down
+    silently (final review M17). smoke_argv() below is the zero-cost
+    check that keeps it that way.
+    """
     binary = shutil.which("claude") or "/opt/homebrew/bin/claude"
-    mcp = json.dumps({"mcpServers": {"klaus": {"type": "http", "url": f"http://127.0.0.1:{port}/mcp",
-                                                "headers": {"X-Klaus-Token": TOKEN}}}})
-    cmd = [binary, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-           "--include-partial-messages", "--verbose", "--permission-mode", "default",
-           "--mcp-config", mcp, "--strict-mcp-config", "--add-dir", cwd,
-           "--allowedTools", "Read", "Grep", "Glob", "mcp__klaus__*",
-           "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task",
-           "--session-id", str(uuid.uuid4())]
-    # This agent itself runs inside a nested Claude Code Desktop session
-    # (CLAUDECODE=1, a messaging socket, etc.) and subprocess.Popen inherits
-    # the parent's environment by default. Left alone, the spawned `claude`
-    # detects that host session and behaves like another orchestrated
-    # sub-agent (huge inherited tool/skill/plugin roster, permission
-    # decisions possibly deferred to the host) instead of the plain
-    # standalone process Klaus will actually spawn from inside Anki. Strip
-    # the nesting markers so the recorded stream reflects that real target
-    # environment — finding recorded in the README.
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith("CLAUDE_CODE_")
-           and k not in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "AI_AGENT", "CLAUDE_AGENT_SDK_VERSION", "BAGGAGE")}
+    return AH.command_line(binary, port=port, library_root=cwd,
+                           system_prompt_path=_system_prompt(cwd),
+                           session_id=None if resume else str(uuid.uuid4()),
+                           resume=resume or None)
+
+
+def production_env() -> dict:
+    """AgentHost's own environment policy — which is also what strips the
+    nesting markers this script used to strip by hand. A spike run from
+    inside a Claude Code session (CLAUDECODE=1, a messaging socket, …)
+    would otherwise have the child detect that host session and behave
+    like another orchestrated sub-agent, instead of the plain standalone
+    process Klaus spawns from inside Anki. The endpoint token rides in
+    KLAUS_TOKEN here too, never argv."""
+    binary = shutil.which("claude") or "/opt/homebrew/bin/claude"
+    return AH.child_env(os.environ, binary, TOKEN)
+
+
+def smoke_argv() -> bool:
+    """Zero-API-cost check that the real binary PARSES production's argv.
+
+    Spawns with empty stdin: the CLI answers "Input must be provided",
+    never "unknown option", unless a flag has been renamed out from
+    under us. No turn is sent, so no tokens are billed.
+    """
+    cwd = tempfile.mkdtemp(prefix="klaus-argv-smoke-")
+    cmd = production_cmd(1, cwd)
     proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
+                            stderr=subprocess.PIPE, text=True, env=production_env())
+    out, err = proc.communicate(input="", timeout=60)
+    blob = (out or "") + (err or "")
+    bad = [w for w in ("unknown option", "unknown argument", "unknown command",
+                       "too many arguments") if w in blob.lower()]
+    ok = not bad
+    print(f"  [argv smoke] {'OK — every flag parses' if ok else 'FAILED: ' + str(bad)}")
+    if not ok:
+        print(f"  [argv smoke] {blob[-600:]}")
+    return ok
+
+
+def run_case(name: str, port: int, turns: list[str], cwd: str) -> list[str]:
+    cmd = production_cmd(port, cwd)
+    proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, bufsize=1, env=production_env())
     lines: list[str] = []
 
     def reader():
@@ -150,7 +205,7 @@ def main() -> int:
     cwd = tempfile.mkdtemp(prefix="klaus-spike-")
     with open(os.path.join(cwd, "notes.txt"), "w") as f:
         f.write("The library root the agent may read.\n")
-    ok = True
+    ok = smoke_argv()
     l1 = run_case("turn_with_image", port,
                   ["In one sentence, what is written on this slide? Then call the current_view tool and tell me the page number."], cwd)
     ok &= any('"subtype": "init"' in x or '"subtype":"init"' in x for x in l1)

@@ -226,6 +226,10 @@ _NEW_DEFAULTS = {
     "assistant_model": "",
     "assistant_reopen": False,
     "assistant_dock_width": 420,
+    # assistant_dock_open (final review I7): assistant_reopen was
+    # written by Preferences and read by nobody. The dock now records
+    # whether it was open here, and honours the pair on profile open.
+    "assistant_dock_open": False,
 }
 for key, want in _NEW_DEFAULTS.items():
     check(f"config.json[{key!r}] == {want!r}",
@@ -269,9 +273,15 @@ _save_assistant_src = _func_seg("save_assistant")
 check("save_assistant was found in the source", bool(_save_assistant_src))
 _save_body = _strip_comments_keep_strings(_save_assistant_src)
 for key in ("ocr_enabled", "ocr_model", "claude_binary", "assistant_model",
-            "assistant_reopen", "assistant_dock_width"):
+            "assistant_reopen", "assistant_dock_width", "assistant_dock_open"):
     check(f'"{key}" present in save_assistant\'s body',
           f'"{key}"' in _save_body)
+# Parked T8 finding, fix now: meta.json is hand-editable, and a
+# non-numeric stored width made int() raise INSIDE save_all — breaking
+# the Save button for every other setting on the page, not just this one.
+check("the round-tripped width int() is guarded, falling back to 420",
+      "except (TypeError, ValueError)" in _save_assistant_src
+      and "= 420" in _save_assistant_src)
 check("save_assistant still writes through write_config, like every "
       "other save_* in this dialog",
       "write_config(cfg)" in code_only(_save_assistant_src))
@@ -515,11 +525,77 @@ with open(_CONFIG_MD_PATH) as f:
     _md = f.read()
 check("an Assistant heading exists", "## Assistant" in _md)
 for key in ("ocr_enabled", "ocr_model", "claude_binary", "assistant_model",
-            "assistant_reopen", "assistant_dock_width"):
+            "assistant_reopen", "assistant_dock_width", "assistant_dock_open"):
     check(f"config.md documents {key}", f"**{key}**" in _md)
 for dropped in ("assistant_backend", "assistant_api_key", "assistant_token"):
     check(f"config.md no longer documents {dropped}",
           f"**{dropped}**" not in _md)
+
+
+# =====================================================================
+section("AGENTS.md's privacy paragraph names the assistant (I9)")
+# =====================================================================
+# "the only network calls Klaus makes are for embeddings … No telemetry"
+# became false the moment the assistant shipped: every turn sends the
+# page's text, its image, the selection and the user's prompt to
+# Anthropic through the user's own claude login. That paragraph is the
+# first thing a privacy-conscious user reads.
+_AGENTS_MD = os.path.join(os.path.dirname(_CONFIG_MD_PATH), "..", "AGENTS.md")
+_AGENTS_MD = os.path.normpath(_AGENTS_MD)
+with open(_AGENTS_MD) as f:
+    _agents = f.read()
+_privacy = _agents.split("---", 1)[0]
+check("the privacy section no longer claims embeddings are the ONLY network calls",
+      "the only network calls Klaus makes are for embeddings" not in _privacy)
+check("it names Anthropic as a destination, and says it is the assistant's",
+      "Anthropic" in _privacy and "assistant" in _privacy.lower())
+check("it says what a turn actually carries (the page and the selection)",
+      "select" in _privacy.lower() and "image" in _privacy.lower())
+check("it still names the embedding providers",
+      "Voyage" in _privacy and "ollama" in _privacy.lower())
+check("it says OCR is local",
+      "OCR" in _privacy and "local" in _privacy.lower() and "Ollama" in _privacy)
+check("no telemetry is still stated", "telemetry" in _privacy.lower())
+
+
+# =====================================================================
+section("the OCR copy describes what the code actually does (M5)")
+# =====================================================================
+# page_ocr OCRs the viewed page AND its two neighbours regardless of any
+# text layer, and the text layer still goes when OCR is off — so both
+# "when the PDF has no extractable text layer" and "off means no page
+# context at all" were false. Raw source/markdown, never code_only: these
+# are string literals.
+_ocr_row = _func_seg("manage_models_dialog") or _SRC
+check("the Preferences OCR row no longer claims OCR is text-layer-gated",
+      "no extractable text layer" not in _SRC)
+check("config.md no longer claims that either",
+      "no extractable text layer" not in _md)
+check("config.md no longer claims OCR-off means no page context at all",
+      "no page context at all" not in _md)
+check("config.md says what OCR-off actually leaves: the PDF's own text layer",
+      "text layer" in _md)
+# page_ocr.PREFETCH is (1, -1): one neighbour ahead, one BEHIND. The
+# round-1 copy said "its two neighbours, ahead of you" (re-review
+# addendum). Whitespace-normalised, because markdown rewraps.
+_md_flat = " ".join(_md.split())
+check("config.md does not claim both OCR neighbours are ahead of you",
+      "two neighbours, ahead of you" not in _md_flat)
+check("...it names the next page AND the previous one",
+      "the next page and the previous one" in _md_flat)
+
+
+# =====================================================================
+section("the claude binary lookup is cached for the profile (M12)")
+# =====================================================================
+# Step 3 of find_claude spawns the user's LOGIN SHELL with a 3 s timeout,
+# and the resolver runs on the main thread every time Preferences opens
+# or the label refreshes. Spec 4.1 always said "cached in memory for the
+# profile session"; nothing implemented it.
+check("the resolver goes through find_claude_cached, not the uncached find_claude",
+      "find_claude_cached" in _claude_label_refresh_src)
+check("picking an Override… clears that cache so the new path resolves for real",
+      "clear_binary_cache" in (_func_seg("_pick_claude_binary") or ""))
 
 
 raise SystemExit(report())

@@ -416,7 +416,10 @@ The index runner landed with K-152 and was swept by hand (~100
 mutations) before it shipped, but it was never added to
 `AUDIT_MODULES`, so nothing kept it that way. It is now.
 
-(`AUDIT_MODULES` also carries the five assistant layers and `podcast`.
+(`AUDIT_MODULES` also carries the assistant layers that survived the
+2026-09-02 convergence — `card_forge`, `anki_tools`, `agent_host`,
+`assistant_sessions`; `llm_client`, `entitlement`, `assistant_session`
+and `podcast` were deleted that day and dropped from the list.
 Those lanes audited their own modules and *fixed* what they found
 rather than recording it, so the report above is still exactly what its
 title says — the six K-139 modules. This section is the second one with

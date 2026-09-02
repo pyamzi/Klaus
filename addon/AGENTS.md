@@ -15,11 +15,21 @@ here" below if you're archaeology-diving through git history) — though
 Claude is back since 2026-09-02, in a different shape, as the Claude Code
 CLI behind the assistant dock (see "The assistant" below).
 
-**Privacy:** the only network calls Klaus makes are for embeddings. The
-default provider is **Voyage**, a cloud API — card text is sent to Voyage's
-servers to build the search index unless you switch `embedding_provider` to
-`ollama` in config, which keeps everything local. `openai` is a second cloud
-option. No telemetry.
+**Privacy:** Klaus makes network calls for three things, and nothing else
+— no telemetry, ever.
+
+- **Embeddings** (the search index): the default provider is **Voyage**,
+  a cloud API, so card text and lecture-PDF text are sent to Voyage's
+  servers unless you switch `embedding_provider` to `ollama` in config,
+  which keeps everything local. `openai` is a second cloud option.
+- **The assistant**, and only while you use it: each turn you send goes
+  to **Anthropic**, through the `claude` binary running under your own
+  Claude Code login — Klaus stores no API key of its own. A turn carries
+  your message plus the page you are viewing: its text, its image, and
+  any text you have selected. Nothing is sent when the Assistant dock is
+  closed or unused.
+- **OCR** of a lecture page (`ocr_enabled`, on by default): local only —
+  the page image goes to **your own Ollama**, never off the machine.
 
 ---
 
@@ -222,6 +232,7 @@ gui_hooks.profile_did_open.append(_migrate_config)                  # legacy cha
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
 gui_hooks.profile_did_open.append(first_run_check)                  # embeddings-provider onboarding
 gui_hooks.profile_did_open.append(setup_readiness_check)
+gui_hooks.profile_did_open.append(_start_assistant_endpoint)        # anki_endpoint bind (mw.col must exist)
 gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel + tab container
 gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse toolbar toggles (◧ / ◨)
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
@@ -232,7 +243,18 @@ browse_highlight.setup()                                            # Browse sea
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
 dashboard.setup()                                                   # Control-Center widget editing (independent try/except; MUST stay after heatmap — body order)
 window_chrome.setup()                                               # KlausBook chrome for Add/Browse/Stats/reviewer-bar (independent try/except)
+assistant_dock.setup()                                              # Ctrl+Shift+K QAction on mw; registers _teardown + reopen_if_configured
+gui_hooks.profile_will_close.append(_stop_assistant_on_profile_close)  # MUST stay after assistant_dock.setup() — see below
 ```
+
+`assistant_dock.setup()` adds two of its own:
+`profile_will_close` (`_teardown` — closes the child `claude` process)
+and `profile_did_open` (`reopen_if_configured` — honours
+`assistant_reopen`). The append ORDER of
+`_stop_assistant_on_profile_close` matters: `gui_hooks` fires
+`profile_will_close` listeners in append order, and that function stops
+the endpoint the child talks to, so `setup()`'s own `_teardown` has to be
+registered first or a turn still in flight could hit a refused socket.
 
 `heatmap.setup()` adds four of its own:
 `deck_browser_will_render_content` (the panel HTML into `content.stats`),
@@ -289,8 +311,12 @@ Two routes share ONE registry (`ACTIONS`) so they can't drift apart:
   `deckNamesAndIds`, `modelNames`, `modelFieldNames`, `findNotes`,
   `notesInfo`, `findCards`, `cardsInfo`, `addNote`, `addNotes`,
   `updateNoteFields`, `addTags`, `removeTags`, `guiBrowse`, plus three
-  Klaus-only ones — `klausSearchNotes` (semantic), `klausSearchLecturePdfs`
-  (semantic, over the indexed lecture PDFs), and `klausCurrentView` (what
+  Klaus-only ones — `klausSearchNotes` (**lexical**: `anki_tools`'
+  handler behind it is `col.find_notes`, i.e. Anki's own search syntax,
+  and the tool description and system prompt both say so; the semantic
+  note search is a separate future card, K-207),
+  `klausSearchLecturePdfs` (the **semantic** one, over the indexed
+  lecture PDFs), and `klausCurrentView` (what
   `viewer_context` says the user is looking at). Anything else answers
   `"unsupported action"`. A request carrying `X-Klaus-Agent: 1` (the
   `/mcp` route sets this) additionally requires `addNote`'s
@@ -309,7 +335,14 @@ Two routes share ONE registry (`ACTIONS`) so they can't drift apart:
   can recover instead of aborting the turn.
 
 The endpoint reuses `anki_tools`'s existing handlers for note
-create/update and semantic search rather than a second implementation.
+create/update and for both searches rather than a second implementation.
+The child never sees the token on its command line — `--mcp-config`
+carries the literal `${KLAUS_TOKEN}`, which Claude Code expands from the
+child's own environment (verified live against build 2.1.228) — because
+`ps` is readable by every local process. Its read tools are confined to
+the library root: `agent_host.decide_permission` denies any
+`file_path`/`path`/`pattern` that resolves outside it, which matters
+because a lecture page's OCR text is untrusted content on every turn.
 See CLAUDE.md's module map for the approval-dialog and card-tagging
 rules.
 

@@ -156,10 +156,13 @@ page as OCR'd text and image, so it can read a scanned or image-only
 slide the same as one with a normal text layer. Configure it in
 **KlausMate Preferences → Assistant**.
 
-- **ocr_enabled**: Default `true`. Whether Klaus reads a lecture page's
-  slide text and images through a local vision model when the PDF has
-  no extractable text layer (a scanned slide, a screenshot). Off means
-  such a page reaches the Assistant with no page context at all.
+- **ocr_enabled**: Default `true`. Whether Klaus reads every lecture
+  page you view (and both its neighbours, the next page and the
+  previous one) through a local
+  vision model, so a scanned slide, a screenshot or a diagram reaches
+  the Assistant as text. Off, a page still reaches the Assistant as its
+  own image plus whatever text layer the PDF carries — which is empty
+  for a scanned page.
 - **ocr_model**: Which local Ollama vision model performs it. Default
   `"glm-ocr"`. Pull it — or `deepseek-ocr`, or any other installed
   vision-capable model — from **KlausMate Preferences → Assistant**.
@@ -173,10 +176,15 @@ slide the same as one with a normal text layer. Configure it in
   pin a specific one.
 - **assistant_reopen**: Default `false`. Reopen the Assistant dock
   where you left it the next time Anki starts — the same idea as
-  `lecture_view_reopen` above.
+  `lecture_view_reopen` above. Only reopens it if it was open when you
+  last closed the profile (see `assistant_dock_open`).
 - **assistant_dock_width**: Default `420`. The Assistant dock's last
   width in pixels, written by dragging the dock itself rather than a
   Preferences row.
+- **assistant_dock_open**: Default `false`. Whether the Assistant dock
+  was open the last time you opened or closed it. Written by the dock
+  itself, never by a Preferences row; `assistant_reopen` is what decides
+  whether it is acted on.
 
 **Clear Sessions** (KlausMate Preferences → Assistant) deletes the
 saved per-PDF conversation history the Assistant keeps. It never

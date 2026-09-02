@@ -1,8 +1,8 @@
 """Per-PDF/global assistant sessions, slash-command prompts, and the
 versioned system prompt file — the small persistent bits the Claude Code
-assistant dock (``assistant_dock.py``, not yet wired to a surface) needs
-across restarts. Design: docs/superpowers/specs/2026-09-01-klaus-assistant-
-claude-code-design.md §10.
+assistant dock (``assistant_dock.py``) needs across restarts. Design:
+docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
+§10.
 
 Three independent stores live under ``user_files/assistant/``:
 
@@ -61,7 +61,13 @@ SESSIONS_FILE = "sessions.json"
 PROMPTS_DIRNAME = "prompts"
 SYSTEM_PROMPT_FILE = "system_prompt.md"
 
-SYSTEM_PROMPT_VERSION = 1
+# v2 (2026-09-02): search_notes is Anki's own LEXICAL search, not a
+# semantic one — v1 told the model the opposite, so it sent
+# natural-language questions to a tool that ANDs every word as a
+# substring match and read the empty result as "the user has no notes on
+# this". The bump is what carries the corrected prompt to a profile that
+# already has the v1 file on disk.
+SYSTEM_PROMPT_VERSION = 2
 
 DEFAULT_PROMPTS = {
     "explain": (
@@ -97,7 +103,7 @@ _SYSTEM_PROMPT_BODY = (
     "\n"
     "Answer from the page and the library first. Cite pages as (p. N). If the material does not contain the answer, say so.\n"
     "\n"
-    "Your mcp__klaus__* tools reach the user's Anki collection: search_notes (semantic), find_notes/get_notes (Anki search), search_lecture_pdfs, list_decks, list_models, model_fields, add_note, update_note_fields, add_tags, remove_tags, open_in_browse, current_view.\n"
+    "Your mcp__klaus__* tools reach the user's Anki collection: search_notes/find_notes/get_notes (Anki's own search syntax — plain terms are matched as text and ANDed, so use short keywords, not sentences; deck:, tag: and \"quoted phrases\" work), search_lecture_pdfs (the SEMANTIC one — send it a natural-language question), list_decks, list_models, model_fields, add_note, update_note_fields, add_tags, remove_tags, open_in_browse, current_view.\n"
     "\n"
     "Making cards: propose them in prose first; on the user's go-ahead call add_note ONCE PER CARD with deck, model, fields and source_page (the slide it came from). The user approves each card in a dialog; a tool result that says declined or errored means the card was NOT added — never claim otherwise.\n"
 )
