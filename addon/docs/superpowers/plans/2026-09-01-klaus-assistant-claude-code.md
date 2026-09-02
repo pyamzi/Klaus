@@ -1755,7 +1755,7 @@ def text_layer(user_files: str, pdf_safe: str, page_index: int, load_pages=pdf_h
 def context_for(view, user_files: str, render=render_page_png) -> PageContext
 def render_page_png(path: str, page_index: int, long_edge: int = LONG_EDGE) -> bytes   # aqt/QtPdf glue
 class OcrScheduler(user_files, cfg_getter, client_factory, render=render_page_png, clock=time.monotonic, start_thread=…)
-    .on_view(view | None); .flush() (tests); .pending: list[int]
+    .on_view(view | None); .tick() (the debounce check; the dock's QTimer calls it); ._run(view, model) on the worker
 ```
 - `OllamaClient.generate(self, model: str, prompt: str, images: list[str], timeout: float | None = None) -> str` posting `{"model","prompt","images","stream": False}` to `/api/generate` and returning `resp["response"]`.
 
