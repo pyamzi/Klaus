@@ -1330,8 +1330,10 @@ check("the depth ramp is a MIX of palette tokens, not alpha over the "
       "ground — the alpha version of this ramp cost 13.8 ms a frame "
       "against 2.9 at 28,668 dots, and K-174 keeps that call: the "
       "reference reaches for alpha only because a canvas floating over "
-      "a CSS nebula has no ground of its own to mix into",
-      _ramp_seg.count("blend_hex(") == 3
+      "a CSS nebula has no ground of its own to mix into. FOUR now, not "
+      "three (K-188): the pointer-ramp keep-blend is a fourth mix, still "
+      "no alpha compositing",
+      _ramp_seg.count("blend_hex(") == 4
       and "setAlpha" not in _ramp_seg
       and "setAlphaF" not in _ramp_seg)
 check("...and every end of it is a palette TOKEN, so the whole star "
@@ -1342,8 +1344,10 @@ check("...and every end of it is a palette TOKEN, so the whole star "
           ('c["bg"]', 'c["blue_bright"]', 'c["text"]')))
 check("the pen cache is keyed on the palette's own tokens, not on "
       "night_mode — the map draws in the dark palette either way, so a "
-      "night flip must not rebuild while an ACCENT change must",
-      'key = (c["bg"], c["blue_bright"], c["text"], scale)'
+      "night flip must not rebuild while an ACCENT change must "
+      "(K-188 adds the quantised lit ramp to the same key, so a night "
+      "flip still isn't what invalidates it)",
+      'key = (c["bg"], c["blue_bright"], c["text"], scale, q)'
       in _method_seg("_MapCanvas", "_ensure_pens"))
 
 _arm = _method_seg("_MapCanvas", "_arm_idle")
@@ -1612,6 +1616,15 @@ if _HAVE_QT:
         cv._selected = None
         cv._hover = None
         quiet = _name_pixels(cv, 660, 420)
+        # K-188: a hover preview's label now dims with the rest of the
+        # field, and this canvas was never entered by a pointer — its
+        # _lit sits at the constructed DIM_LIT, which blends the muted
+        # ink too far toward the (dark) ground for _name_pixels' bright-
+        # neutral heuristic to see at all. This pin predates K-188 and is
+        # about whether hovering draws a name, not about the new dimming,
+        # so it forces the pointer-lit state directly rather than either
+        # loosening the pixel threshold or losing the coverage.
+        cv._lit = 1.0
         cv._hover = "solo"
         named = _name_pixels(cv, 660, 420)
         check("K-138 reverses K-133 ON THE PIXELS: with nothing focused "
@@ -2792,6 +2805,147 @@ if _HAVE_QT:
         check("...in the FULL text ink — the chosen name lights up, it "
               "is not the muted preview colour",
               _hit > 10, f"{_hit} px in c['text']")
+        _cv.close()
+    finally:
+        theme.night_mode = _orig_night
+
+    # ---- K-188: dim by default, lit under the pointer, the chosen PDF exempt ----
+    def _mean_luma(img, x0, y0, x1, y1):
+        """Average luma over the box (x0,y0)-(x1,y1), stepping 2px: the
+        pointer ramp lifts the WHOLE field, so these pins read the
+        picture's overall brightness rather than one pixel the way the
+        K-186 ring/core pins do."""
+        total = 0.0
+        n = 0
+        for y in range(int(y0), int(y1), 2):
+            for x in range(int(x0), int(x1), 2):
+                total += _luma(img, x, y)
+                n += 1
+        return total / n if n else 0.0
+
+    try:
+        _c4 = dict(theme.palette(True), bg=theme.palette(True)["chrome"])
+        # The first two checks pass a 4th (lit) argument / read DIM_LIT,
+        # neither of which exists before Step 4 — evaluating them raises
+        # (TypeError for the extra positional arg, AttributeError for the
+        # missing module constant) at argument-evaluation time, before
+        # check() ever sees a bool. Recorded rather than left to abort
+        # the file, same as every other RED-run guard below: DIM_LIT and
+        # the canvas's own `lit` property are equally absent pre-Step-4,
+        # so the guard widens past the brief's literal "first two" to
+        # every new pin that reads one of those names.
+        try:
+            check("star_colour takes a lit factor and 1.0 is the old colour",
+                  pdf_map.star_colour(_c4, 0.8, False, 1.0)
+                  == pdf_map.star_colour(_c4, 0.8, False))
+        except (AttributeError, TypeError) as _exc:
+            check("star_colour takes a lit factor and 1.0 is the old colour",
+                  False, f"no lit parameter yet ({_exc})")
+        try:
+            _dimmed4 = G.QColor(pdf_map.star_colour(_c4, 0.8, False, pdf_map.DIM_LIT))
+            _full4 = G.QColor(pdf_map.star_colour(_c4, 0.8, False, 1.0))
+            _ground4 = G.QColor(_c4["bg"])
+            check("...and DIM_LIT pulls a star toward the ground without "
+                  "reaching it",
+                  _ground4.lightness() < _dimmed4.lightness() < _full4.lightness(),
+                  f"ground={_ground4.lightness()} dim={_dimmed4.lightness()} "
+                  f"full={_full4.lightness()}")
+        except (AttributeError, TypeError) as _exc:
+            check("...and DIM_LIT pulls a star toward the ground without "
+                  "reaching it", False, f"no DIM_LIT yet ({_exc})")
+
+        # CLOUD (1500 notes), not FAKE (3): a mean-luminance-over-a-box
+        # measurement needs enough drawn stars in the sampled area to
+        # move the average at all — measured on FAKE's 3 notes, the
+        # shift was 0.1 of 35 (0.3%), buried by how much of the box is
+        # bare ground; CLOUD's ~470 sampled dots (SAMPLE_NOTES plus the
+        # per-PDF matches) make the ramp's effect on the whole field
+        # actually visible to an averaging read.
+        _cv = pdf_map.map_canvas(None, CLOUD)
+        # Checked BEFORE show()/_grab(): offscreen Qt's virtual cursor
+        # sits at (10, 10), inside any freshly-shown top-level widget's
+        # frame, so show() + processEvents alone already delivers a real
+        # Enter event (measured: lit reads 1.0 right after _grab, not
+        # DIM_LIT) — a leaveEvent then correctly re-snaps it back to
+        # DIM_LIT, which would silently absorb a construction-only bug
+        # if this were checked any later than right here.
+        try:
+            check("the canvas RESTS dim: lit == DIM_LIT before any pointer",
+                  _cv.lit == pdf_map.DIM_LIT)
+        except AttributeError as _exc:
+            check("the canvas RESTS dim: lit == DIM_LIT before any pointer",
+                  False, f"no lit property yet ({_exc})")
+        _grab(_cv, True)
+        # Offscreen Qt's spurious Enter (above) has to be undone before
+        # the REST baseline for the "lights the field" measurement below
+        # — force a definite UNHOVERED state, the same transition a real
+        # leaveEvent drives.
+        _QtW.QApplication.sendEvent(_cv, _QtC.QEvent(_QtC.QEvent.Type.Leave))
+        _cv.setAttribute(_QtC.Qt.WidgetAttribute.WA_UnderMouse, False)
+        for _ in range(3):
+            _app.processEvents()
+        _rest4 = _cv.grab().toImage()
+        _w4, _h4 = _rest4.width(), _rest4.height()
+        _rest_l = _mean_luma(_rest4, _w4 * 0.2, _h4 * 0.2, _w4 * 0.8, _h4 * 0.8)
+        # Enter: the permissive aqt.mw stub (anki_stubs._Dummy.__bool__ is
+        # always True) makes _reduce_motion() True everywhere in this
+        # file, so the ramp snaps and one paint suffices.
+        _cv.setAttribute(_QtC.Qt.WidgetAttribute.WA_UnderMouse, True)
+        _QtW.QApplication.sendEvent(_cv, G.QEnterEvent(
+            _QtC.QPointF(5, 5), _QtC.QPointF(5, 5), _QtC.QPointF(5, 5)))
+        for _ in range(3):
+            _app.processEvents()
+        _lit_img = _cv.grab().toImage()
+        _lit_l = _mean_luma(_lit_img, _w4 * 0.2, _h4 * 0.2, _w4 * 0.8, _h4 * 0.8)
+        try:
+            # K-174 designed the field to be SPARSE on purpose (under 1%
+            # of the card lit, its own docstring says so), so a mean over
+            # a whole box — mostly bare ground — moves by single-digit
+            # percent, not the brief's guessed 15%: measured 38.8 -> 40.4
+            # (4.1%) on this fixture, stable across repeated runs (fixed
+            # RNG seed, no real timers in play). 1.02 is comfortably
+            # under that real number while still well above the ~1.00 a
+            # DIM_LIT=1.0 or a no-op enterEvent mutation produces.
+            check("the pointer entering lights the field: lit == 1.0 and "
+                  "the mean luminance rises",
+                  _cv.lit == 1.0 and _lit_l > _rest_l * 1.02,
+                  f"rest={_rest_l:.1f} lit={_lit_l:.1f}")
+        except AttributeError as _exc:
+            check("the pointer entering lights the field: lit == 1.0 and "
+                  "the mean luminance rises",
+                  False, f"no lit property yet ({_exc})")
+        _QtW.QApplication.sendEvent(_cv, _QtC.QEvent(_QtC.QEvent.Type.Leave))
+        for _ in range(3):
+            _app.processEvents()
+        _back4 = _mean_luma(_cv.grab().toImage(), _w4 * 0.2, _h4 * 0.2,
+                             _w4 * 0.8, _h4 * 0.8)
+        try:
+            check("...and leaving dims it again",
+                  _cv.lit == pdf_map.DIM_LIT and abs(_back4 - _rest_l) < 1.0,
+                  f"rest={_rest_l:.1f} back={_back4:.1f}")
+        except AttributeError as _exc:
+            check("...and leaving dims it again", False,
+                  f"no lit property yet ({_exc})")
+        # The chosen PDF is exempt: its core is as bright dim as lit.
+        _cv.select("lec1")
+        for _ in range(3):
+            _app.processEvents()
+        _sx4, _sy4, _ = pdf_map.project_point(
+            _cv._vp, _cv._cam, *_cv._pdf_xyz["lec1"])
+        _core_dim = _luma(_cv.grab().toImage(), _sx4, _sy4)
+        _QtW.QApplication.sendEvent(_cv, G.QEnterEvent(
+            _QtC.QPointF(5, 5), _QtC.QPointF(5, 5), _QtC.QPointF(5, 5)))
+        for _ in range(3):
+            _app.processEvents()
+        _core_lit = _luma(_cv.grab().toImage(), _sx4, _sy4)
+        check("the CHOSEN PDF is exempt from dimming: its core is equally "
+              "bright dim or lit",
+              abs(_core_dim - _core_lit) < 3,
+              f"dim={_core_dim:.0f} lit={_core_lit:.0f}")
+        check("the ramp is a property animation of LIT_MS with an easing "
+              "curve, like fly",
+              isinstance(getattr(_cv, "_lit_anim", None), _QtC.QPropertyAnimation)
+              and _cv._lit_anim.duration() == pdf_map.LIT_MS)
         _cv.close()
     finally:
         theme.night_mode = _orig_night

@@ -241,6 +241,18 @@ So, in this file:
   token now, so each theme gets its own night-sky-flavoured ramp
   instead of the canvas forcing the dark one underneath a light panel.
 
+**K-188: dim by default, lit under the pointer.** Pouya: "I want it to
+be dim, but then, as I put the mouse over it, it lights up to normal
+values... I want everything to be dim otherwise." The canvas now rests
+at ``DIM_LIT`` and ramps every layer — stars, the constellation, ghost
+rings — to full brightness while the cursor is over it (``enterEvent``/
+``leaveEvent`` driving the animated ``lit`` property, eased like
+``fly``). The chosen PDF's ring, core and lit name are exempt, always
+full ("just for that one, to light up"): the same chosen/preview split
+K-187 already drew for the name. ``star_colour`` gained the ``lit``
+parameter as ONE mechanism for this — the same ground-ward blend
+``dim`` already does, gated by a different question.
+
 Measured on this machine, 28,670 notes, offscreen, at 900x640:
 1.83 ms at rest / 3.26 focused on the 2,087-match PDF / 4.04 focused
 with the camera turned BEFORE this card; 1.32 / 1.82 / 1.79 after. The
@@ -339,11 +351,12 @@ LABEL_LINE_H = 14.0
 # word instead — three reports of a clipped name in this module is
 # enough offset-nudging.
 LABEL_EDGE_PAD = 6.0
-# The unfocused PDFs: a ring at this alpha and nothing else — no core,
-# no name, and a smaller ring than the lit node's own (K-186: this
-# factor used to be a fifth of the node's halo; the halo is gone, but
-# the constant — and the ghost's size relative to the ring — was not
-# retuned). Pouya, K-158: "only one PDF shows at a
+# The unfocused PDFs: a ring at this alpha (scaled further by the K-188
+# pointer ramp, self._lit) and nothing else — no core, no name, and a
+# smaller ring than the lit node's own (K-186: this factor used to be a
+# fifth of the node's halo; the halo is gone, but the constant — and the
+# ghost's size relative to the ring — was not retuned). Pouya, K-158:
+# "only one PDF shows at a
 # time, potentially, and then it just zooms in on that section of the
 # cloud that hosts that PDF." A GHOST rather than nothing at all,
 # because the collection being bigger than what you are looking at is
@@ -353,6 +366,13 @@ LABEL_EDGE_PAD = 6.0
 # mean position, so four lit rings land on top of one another.
 GHOST_ALPHA = 0.22
 GHOST_HALO_F = 0.7
+# Pouya, 2026-09-01: "I want it to be dim, but then, as I put the mouse
+# over it, it lights up to normal values." The canvas rests at DIM_LIT
+# and ramps the whole field to 1.0 under the pointer; LIT_MS is the
+# ramp, eased like fly. The chosen PDF and its name are exempt — "just
+# for that one, to light up".
+DIM_LIT = 0.45
+LIT_MS = 180
 # One standard wheel notch (angleDelta 120) zooms by 2**(120/240) ≈ 1.41.
 WHEEL_ZOOM_DIVISOR = 240.0
 # select_pdf recentres only when the node is outside the viewport inset
@@ -1456,7 +1476,7 @@ def tier_position(index: int, tiers: int = STAR_TIERS) -> float:
     return _clamp((int(_num(index)) + 0.5) / t, 0.0, 1.0)
 
 
-def star_colour(c: dict, pos: float, dim: bool = False) -> str:
+def star_colour(c: dict, pos: float, dim: bool = False, lit: float = 1.0) -> str:
     """One OPAQUE hex for a star at ramp position ``pos`` (K-174).
 
     A mix of palette TOKENS, so the whole field re-colours with the
@@ -1480,6 +1500,15 @@ def star_colour(c: dict, pos: float, dim: bool = False) -> str:
 
     ``dim`` mixes back toward the ground — the ambient field while a
     PDF is focused, so its own notes are not lost in everything else.
+
+    ``lit`` (K-188) is the whole-field pointer ramp, in [0, 1]: 1.0 (the
+    default, and where the pointer rests over the canvas) leaves the
+    result exactly as above, and DIM_LIT blends it back toward the
+    ground the SAME way ``dim`` does — applied AFTER ``dim`` so a
+    focused PDF's own notes dim from their own boosted colour, not from
+    the ambient one. One mechanism, two independent callers: which
+    stars are "someone's own notes" (``dim``) and whether the pointer is
+    over the field at all (``lit``) are orthogonal questions.
     """
     t = _clamp(_num(pos), 0.0, 1.0)
     ground = c["bg"]
@@ -1487,6 +1516,9 @@ def star_colour(c: dict, pos: float, dim: bool = False) -> str:
     out = blend_hex(base, c["text"], STAR_FAR + (STAR_NEAR - STAR_FAR) * t)
     if dim:
         out = blend_hex(ground, out, STAR_DIM_KEEP)
+    keep = STAR_DIM_KEEP + (1.0 - STAR_DIM_KEEP) * _clamp(float(lit), 0.0, 1.0)
+    if keep < 1.0:
+        out = blend_hex(ground, out, keep)
     return out
 
 
@@ -2062,6 +2094,13 @@ def _canvas_class():
             self._fly_anim = QPropertyAnimation(self, b"fly", self)
             self._fly_anim.setDuration(FLY_MS)
             self._fly_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            # K-188: dim at rest, full under the pointer. Starts at
+            # DIM_LIT — the FIRST paint is already dim, never a flash of
+            # full brightness before the first leaveEvent ever fires.
+            self._lit = DIM_LIT
+            self._lit_anim = QPropertyAnimation(self, b"lit", self)
+            self._lit_anim.setDuration(LIT_MS)
+            self._lit_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
             try:
                 self.setMouseTracking(True)
                 # Arrow keys step the focus (see step_focus), so the
@@ -2223,6 +2262,36 @@ def _canvas_class():
                 self.update()
 
         fly = pyqtProperty(float, _get_fly, _set_fly)
+
+        # The pointer ramp's animated property (K-188). Unlike ``fly`` it
+        # never re-derives the viewport — repainting is enough, since
+        # every colour that reads ``self._lit`` is computed fresh inside
+        # ``_paint``.
+        def _get_lit(self) -> float:
+            return float(self._lit)
+
+        def _set_lit(self, value: float) -> None:
+            v = _clamp(float(value), 0.0, 1.0)
+            if v != self._lit:
+                self._lit = v
+                self.update()
+
+        lit = pyqtProperty(float, _get_lit, _set_lit)
+
+        def set_lit_target(self, value: float) -> None:
+            """Ramp the whole field to ``value`` — snap under reduce-motion,
+            the same rule ``fly_to`` follows."""
+            try:
+                self._lit_anim.stop()
+                if self._reduce_motion() or not self.isVisible():
+                    self._set_lit(value)
+                    return
+                self._lit_anim.setStartValue(self._lit)
+                self._lit_anim.setEndValue(float(value))
+                self._lit_anim.start()
+            except Exception as exc:
+                print(f"[klausmate] map lit ramp failed: {exc}")
+                self._set_lit(value)
 
         def _fly_target(self, safe: str) -> Optional[Viewport]:
             """Where the camera should land to show ``safe`` and how it
@@ -2452,8 +2521,14 @@ def _canvas_class():
             ACCENT theme switch does, and keying on the tokens directly
             catches both with the one cache — no separate
             ``night_mode()`` flag to keep in step with it.
+
+            K-188 folds the pointer ramp into the same cache: ``self._lit``
+            is quantised to sixteenths (``q``) before joining the key, so
+            an animated ramp rebuilds these pens at most 17 times over
+            its whole 0->1 sweep rather than every single frame.
             """
-            key = (c["bg"], c["blue_bright"], c["text"], scale)
+            q = round(self._lit * 16) / 16.0
+            key = (c["bg"], c["blue_bright"], c["text"], scale, q)
             if self._pens and self._pen_key == key:
                 return
             out: dict = {}
@@ -2461,13 +2536,13 @@ def _canvas_class():
                 pos = tier_position(i)
                 for dim in (False, True):
                     out[(i, dim, False)] = self._star_pen(
-                        star_colour(c, pos, dim), star_size(pos, scale)
+                        star_colour(c, pos, dim, lit=q), star_size(pos, scale)
                     )
                 # A focused PDF's own notes: one size up and at the top
                 # of the brightness ramp, because they are what the
                 # flight is for.
                 out[(i, False, True)] = self._star_pen(
-                    star_colour(c, min(1.0, pos + (1.0 - pos) * 0.6)),
+                    star_colour(c, min(1.0, pos + (1.0 - pos) * 0.6), lit=q),
                     min(STAR_SIZE_MAX, star_size(pos, scale)
                         + STAR_LINK_BOOST),
                 )
@@ -2621,7 +2696,8 @@ def _canvas_class():
             """
             if not self._links:
                 return
-            ink = QColor(blend_hex(c["bg"], star_colour(c, 1.0), LINK_MIX))
+            ink = QColor(blend_hex(
+                c["bg"], star_colour(c, 1.0, lit=self._lit), LINK_MIX))
             pen = QPen(ink, 1.0)
             painter.setPen(pen)
             segs = []
@@ -2753,32 +2829,42 @@ def _canvas_class():
                 # keeps the whole-cloud view from being four overlapping
                 # lit rings arguing about which is which.
                 if safe != active:
+                    # Ghosts dim and light with the whole field (K-188) —
+                    # only the SELECTED node below is exempt.
                     gr = r * GHOST_HALO_F
                     ring = QColor(c["blue_bright"])
-                    ring.setAlphaF(GHOST_ALPHA)
+                    ring.setAlphaF(GHOST_ALPHA * self._lit)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.setPen(QPen(ring, 1.0))
                     painter.drawEllipse(pt, gr, gr)
                     dot = QColor(c["blue_bright"])
-                    dot.setAlphaF(min(1.0, GHOST_ALPHA * 1.8))
+                    dot.setAlphaF(min(1.0, GHOST_ALPHA * 1.8 * self._lit))
                     painter.setPen(Qt.PenStyle.NoPen)
                     painter.setBrush(dot)
                     painter.drawEllipse(pt, gr * NODE_CORE_F, gr * NODE_CORE_F)
                     continue
+                # The active (hovered-or-selected) node's ring/core dim
+                # with the field too — UNLESS it is the sticky selection,
+                # which is exempt (K-188, Pouya: "just for that one, to
+                # light up"): the same chosen/preview split as the name
+                # in _paint_label below.
+                node_lit = 1.0 if safe == self._selected else self._lit
+                ring = QColor(c["blue_bright"])
+                ring.setAlphaF(node_lit)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(QColor(c["blue_bright"]), NODE_RING_W))
+                painter.setPen(QPen(ring, NODE_RING_W))
                 painter.drawEllipse(pt, r, r)
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(
-                    QColor(blend_hex(c["blue_bright"], c["text"],
-                                     NODE_CORE_MIX))
-                )
+                core = QColor(blend_hex(c["blue_bright"], c["text"],
+                                        NODE_CORE_MIX))
+                core.setAlphaF(node_lit)
+                painter.setBrush(core)
                 painter.drawEllipse(pt, r * NODE_CORE_F, r * NODE_CORE_F)
                 if safe == self._selected:
-                    ring = QColor(c["blue_bright"])
-                    ring.setAlphaF(0.7)
+                    sel_ring = QColor(c["blue_bright"])
+                    sel_ring.setAlphaF(0.7)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.setPen(QPen(ring, 1.0))
+                    painter.setPen(QPen(sel_ring, 1.0))
                     painter.drawEllipse(pt, r + NODE_SELECT_GAP,
                                         r + NODE_SELECT_GAP)
             return out
@@ -2808,8 +2894,16 @@ def _canvas_class():
                 lx = clamp_label(lx, tw, w)
                 ly = _clamp(ly, LABEL_LINE_H + LABEL_EDGE_PAD,
                             max(LABEL_LINE_H, h - bh - LABEL_EDGE_PAD))
+                # The chosen PDF's name is exempt from dimming (K-188),
+                # exactly like its ring/core above; a hover-only preview
+                # dims and lights with the rest of the field.
                 lit_name = active is not None and active == self._selected
-                painter.setPen(QColor(c["text"] if lit_name else c["text_muted"]))
+                if lit_name:
+                    painter.setPen(QColor(c["text"]))
+                else:
+                    muted = QColor(c["text_muted"])
+                    muted.setAlphaF(self._lit)
+                    painter.setPen(muted)
                 painter.drawText(QPointF(lx, ly), lines[0])
                 return
 
@@ -2916,11 +3010,22 @@ def _canvas_class():
             except Exception as exc:
                 print(f"[klausmate] map wheel failed: {exc}")
 
+        def enterEvent(self, event) -> None:  # noqa: N802
+            try:
+                self.set_lit_target(1.0)
+            except Exception:
+                pass
+            try:
+                super().enterEvent(event)
+            except Exception:
+                pass
+
         def leaveEvent(self, event) -> None:  # noqa: N802
             try:
                 if self._hover is not None:
                     self._hover = None
                     self.update()
+                self.set_lit_target(DIM_LIT)
             except Exception:
                 pass
             try:
