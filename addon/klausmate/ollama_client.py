@@ -127,6 +127,25 @@ class OllamaClient:
             )
         return embeddings
 
+    def generate(self, model: str, prompt: str, images: list[str], timeout: float | None = None) -> str:
+        """One non-streaming completion with images (the OCR path).
+
+        ``images`` are base64 strings, as Ollama's /api/generate takes them.
+        A per-call timeout because OCR of a dense slide takes longer than the
+        client's default; the caller passes page_ocr.OCR_TIMEOUT_S.
+        """
+        old = self.timeout
+        if timeout is not None:
+            self.timeout = timeout
+        try:
+            resp = self._post("/api/generate", {"model": model, "prompt": prompt, "images": list(images), "stream": False})
+        finally:
+            self.timeout = old
+        text = resp.get("response")
+        if not isinstance(text, str):
+            raise OllamaError("generate response had no text")
+        return text
+
     # ---- model management ----
 
     def pull(
