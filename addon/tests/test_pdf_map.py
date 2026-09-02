@@ -3093,6 +3093,11 @@ try:
 except AttributeError as _exc:
     check("...and it is SLIGHT: SWAY_AMP is under a fifth of a turn",
           False, f"no SWAY_AMP yet ({_exc})")
+check("...and it never crosses ±90°, so band_order's far/near paint "
+      "order — which flips on the sign of cos(angle) — never flips "
+      "mid-sway",
+      _sway_exc is None and all(math.cos(a) > 0 for a in _angles),
+      "" if _sway_exc is None else f"no sway_angle yet ({_sway_exc})")
 check("the full-turn period is gone by name",
       not hasattr(pdf_map, "ROTATE_PERIOD_MS"))
 check("the perspective is stronger: CAM_DISTANCE dropped from 2.6",
