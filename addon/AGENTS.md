@@ -9,9 +9,11 @@ them. Copying a set of those cards into a new deck is a separate, manual
 Browse action. A
 native PDF viewer (selection, highlights, sticky notes baked in as real
 annotations) and an image-crop dialog round out the add-on. There is no
-autocomplete, no chat panel, and no Claude/Anthropic integration — all three
-were removed; see "What used to be here" below if you're archaeology-diving
-through git history.
+autocomplete and no chat panel — both were removed in 2026-08, along with
+the Claude/Anthropic integration that powered them (see "What used to be
+here" below if you're archaeology-diving through git history) — though
+Claude is back since 2026-09-02, in a different shape, as the Claude Code
+CLI behind the assistant dock (see "The assistant" below).
 
 **Privacy:** the only network calls Klaus makes are for embeddings. The
 default provider is **Voyage**, a cloud API — card text is sent to Voyage's
@@ -155,6 +157,58 @@ never overwrite wholesale). `web/copilot.js` only tracks field focus (for
 PDF-page-insert targeting) and the image-crop double-click trigger now —
 the ghost-text/Ask bridge it used to carry is gone.
 
+### The assistant
+
+```
+assistant_dock.py — the QDockWidget on Anki's main window (Ctrl+Shift+K,
+        │  Tools → Klaus Assistant, or a Library toolbar button)
+        ▼
+viewer_context.py :: current() — the LAST ACTIVATED PdfSidebar (Library,
+        │  Browse's editor pane, or the Lecture dock) that still has a
+        │  document open, plus its page and selection
+        ▼
+page_ocr.py :: context_for() — that page as OCR'd text (cached) or the
+        │  PDF's own text layer, plus a rendered PNG
+        ▼
+agent_host.py :: build_turn() — one stream-json user message (text +
+        │  a "[Klaus context]" block + image) written to the `claude`
+        │  child's stdin; a reader thread parses its stdout stream back
+        ▼
+anki_endpoint.py — mcp__klaus__* tool calls from the child arrive here
+           over HTTP (see "Localhost endpoint" below); reads run right
+           away, writes wait on an approval dialog
+```
+
+One assistant, one engine: Klaus hosts the **Claude Code CLI** as a
+child process (`agent_host.py`) rather than running a chat loop of its
+own — no API keys stored in Klaus, the user's own `claude` login and
+subscription pay for it. Six modules, one concern each:
+`agent_host.py` (finds, spawns, and streams with the `claude` binary —
+binary discovery falls back to the user's login shell before known
+install paths, since a GUI-launched Anki has a minimal `PATH`),
+`anki_endpoint.py` (the localhost server both the wider AnkiConnect
+ecosystem and the child's own MCP tools reach), `viewer_context.py` (a
+registry of every live `PdfSidebar`; the assistant follows whichever one
+was activated last), `page_ocr.py` (the followed page as text — OCR
+through a local Ollama vision model, or the PDF's text layer — plus
+image, cached per PDF digest and page under `user_files/ocr/`),
+`assistant_sessions.py` (one Claude Code session id per PDF, plus slash-
+command prompt files, under `user_files/assistant/`), and
+`assistant_dock.py` itself (header, transcript, input, Send/Stop, New
+Session, slash completion).
+
+Every write the assistant makes — adding a note, editing fields, tagging
+— goes through the SAME kind of plain-text approval dialog Klaus shows
+for any other write (deck, every field, tags, the source page); a
+declined or timed-out approval comes back to the model as an error, not
+a silent no-op. Cards the assistant adds carry `klaus::assistant` and
+`klaus::from::<pdf_safe>` — never the PDF's own `!Library` tag, which is
+`tag_sync`'s membership invariant and would be wrong to set by hand; the
+next index pass tags the card for real if it actually matches.
+
+Design: `docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`.
+Per-module non-obvious rules are in CLAUDE.md's module map.
+
 ### Hooks registered at import (`__init__.py`, approximate)
 
 ```python
@@ -212,6 +266,53 @@ validated by `dashboard.apply_action`, the only gate to config).
 The old `"klaus:"`-prefixed bridge belonged to the deleted chat panel
 (`chat_dock.py` / `web/search.js`) and no longer exists.
 
+### Localhost endpoint
+
+`anki_endpoint.py` serves the assistant's Anki reach — and, incidentally,
+anything else that speaks AnkiConnect's wire protocol — from a
+`ThreadingHTTPServer` bound to `127.0.0.1:0` (an OS-assigned ephemeral
+port; AnkiConnect's usual 8765 is never assumed free). Started on
+`profile_did_open`, stopped on `profile_will_close`. A fresh 32-byte hex
+token is generated per start; every request must carry it as
+`X-Klaus-Token`, and any request carrying an `Origin` header is refused
+outright (a browser page must never drive the collection) — both
+checked before the body is even read. Bodies over 4 MB are rejected.
+Writes never touch the collection without the user approving a
+plain-text preview in a window-modal dialog (`open()`, never `exec()` —
+K-114) while the HTTP thread waits on a `threading.Event`.
+
+Two routes share ONE registry (`ACTIONS`) so they can't drift apart:
+
+- **`/`** — AnkiConnect's own `{"action", "version", "params"}` protocol;
+  HTTP 200 always, `{"result", "error"}` in the body (AnkiConnect's own
+  convention). Supported actions: `version`, `deckNames`,
+  `deckNamesAndIds`, `modelNames`, `modelFieldNames`, `findNotes`,
+  `notesInfo`, `findCards`, `cardsInfo`, `addNote`, `addNotes`,
+  `updateNoteFields`, `addTags`, `removeTags`, `guiBrowse`, plus three
+  Klaus-only ones — `klausSearchNotes` (semantic), `klausSearchLecturePdfs`
+  (semantic, over the indexed lecture PDFs), and `klausCurrentView` (what
+  `viewer_context` says the user is looking at). Anything else answers
+  `"unsupported action"`. A request carrying `X-Klaus-Agent: 1` (the
+  `/mcp` route sets this) additionally requires `addNote`'s
+  `params.note.options.sourcePage` — a card proposed with no source page
+  is an error, never a silent add.
+- **`/mcp`** — the same actions as MCP tools, JSON-RPC 2.0 over POST (no
+  SSE stream), for the `claude` child's `--mcp-config`: `initialize`,
+  `notifications/initialized`, `ping`, `tools/list`, `tools/call`. Tools
+  are named `mcp__klaus__<name>` — `current_view`, `search_notes`,
+  `find_notes`, `get_notes`, `search_lecture_pdfs`, `list_decks`,
+  `list_models`, `model_fields`, `add_note`, `update_note_fields`,
+  `add_tags`, `remove_tags`, `open_in_browse` — each mapped onto one `/`
+  action (`mcp_args_to_params` reshapes the flat, snake_case MCP
+  arguments into that action's params). A tool error comes back as
+  `isError: true` with the message, never a JSON-RPC error, so the model
+  can recover instead of aborting the turn.
+
+The endpoint reuses `anki_tools`'s existing handlers for note
+create/update and semantic search rather than a second implementation.
+See CLAUDE.md's module map for the approval-dialog and card-tagging
+rules.
+
 ### Editor-attached state
 
 Attributes on `editor` (all `editor._klausmate_*`, guarded with
@@ -243,11 +344,22 @@ dashboard editing; tools always work),
 `heatmap_enabled` (the review heatmap under the deck list),
 `dashboard_order` (deck-screen widget order; written by the dashboard's
 right-click → Edit Widgets mode — drag to reorder, ⊖/＋ toggle the
-per-widget bools).
+per-widget bools). The assistant's own keys: `ocr_enabled` (default
+true — OCR a lecture page through a local vision model when it has no
+text layer), `ocr_model` (default `"glm-ocr"`), `claude_binary` (path
+override for the `claude` executable; default `""` auto-detects),
+`assistant_model` (which Claude model the assistant runs; default `""`
+= Claude Code's own default), `assistant_reopen` (default false —
+reopen the Assistant dock on the next Anki start), and
+`assistant_dock_width` (default `420` — the dock's last width, written
+by dragging it, not a Preferences row).
 
 `_migrate_config()` (on `profile_did_open`) cleans up legacy `chat_*` /
-`claude_*` config keys left over from the deleted Ask-on-Claude feature —
-keep it until users have upgraded past it.
+`claude_*` config keys left over from the deleted Ask-on-Claude feature,
+plus (retired 2026-09-01) `assistant_api_key` / `assistant_backend` /
+`assistant_token` — the hosted/bring-your-own-key split those keys were
+for was cut back to Claude Code's own login before it ever shipped —
+keep both cleanups until users have upgraded past them.
 
 ---
 
@@ -321,14 +433,34 @@ mypy klausmate
 
 Klaus was originally a Copilot-style inline-autocomplete + ⌘K-Ask tool with
 a separate chat panel for semantic search. That product surface is gone:
-`copilot.js`'s ghost-text/Ask bridge, `claude_api.py`, `anki_tools.py`,
-`settings_ui.py`, and `chat_dock.py` (the "Klaus panel") were all deleted,
-along with the `autocomplete_model` / `ask_model` / `klaus_engine` /
-`claude_*` config keys and the Browse natural-language search. What
-remains — the Library, semantic card matching, the PDF viewer, and image
-cropping — is
-everything above. Don't resurrect autocomplete/Ask/chat-panel language in
-docs or comments; if you find some, it's stale, not a spec.
+`copilot.js`'s ghost-text/Ask bridge, `claude_api.py`, `settings_ui.py`,
+and `chat_dock.py` (the "Klaus panel") were all deleted, along with the
+`autocomplete_model` / `ask_model` / `klaus_engine` / `claude_*` config
+keys and the Browse natural-language search. (`anki_tools.py` was
+deleted in that same pass — it is no longer gone: it came back on
+2026-09-01 as the collection tool layer the new assistant calls; see
+"The assistant" above.) What remains from that era — the Library,
+semantic card matching, the PDF viewer, and image cropping — plus the
+assistant added 2026-09-02, is everything above. Don't resurrect
+autocomplete/Ask/chat-panel language in docs or comments; if you find
+some, it's stale, not a spec.
+
+A second, much shorter-lived surface came and went the same week. Pouya's
+2026-09-01 plan for an AI assistant first took the shape of a chat panel
+in the Library (`assistant_panel.py`, its own session store
+`assistant_session.py`) fed by a direct-API streaming client
+(`llm_client.py`) and an advisory tier check (`entitlement.py`), with a
+companion podcast-script generator (`podcast.py`) — all deleted
+2026-09-02 when Pouya converged the design onto hosting the Claude Code
+CLI instead (`assistant_dock.py`: one dock, one engine). Config keys
+`assistant_api_key` / `assistant_backend` / `assistant_token` were
+dropped with them — there is no separate assistant credential; the
+user's own `claude` login is it. `card_forge.py` and `anki_tools.py` are
+the two pieces of that plan that DID survive, now wired into the
+endpoint rather than dormant. See CLAUDE.md's header and module map for
+the exact commits. Don't resurrect a hosted/bring-your-own-key split, a
+separate podcast feature, or a Library-panel assistant — the assistant
+is `assistant_dock.py`.
 
 ---
 

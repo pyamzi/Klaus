@@ -9,24 +9,53 @@ kanban board — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 
-Klaus was **embeddings-only** from 2026-08: its one AI capability was
-semantic search, which defaults to the **Voyage** cloud embedding API
-(Ollama is an optional local alternative, OpenAI a second cloud option).
-Autocomplete, ⌘K Ask, the Klaus chat panel, the Settings dialog, and the
-Claude/Anthropic integration were all deleted then — if you find docs,
-comments, or instincts that assume THOSE surfaces still exist, they're
-stale. See AGENTS.md's "What used to be here".
+Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
+capability was semantic search, which defaults to the **Voyage** cloud
+embedding API (Ollama is an optional local alternative, OpenAI a second
+cloud option). Autocomplete, ⌘K Ask, the Klaus chat panel, the Settings
+dialog, and the original Claude/Anthropic integration were all deleted
+then — if you find docs, comments, or instincts that assume THOSE
+surfaces still exist, they're stale. See AGENTS.md's "What used to be
+here".
 
-**That is being deliberately reversed as of 2026-09-01** (Pouya's call): two
-assistants are under construction — one to query notes and the lecture-PDF
-index, one to draft cards from lecture material — with a free
-bring-your-own-key path and a premium hosted one. Four aqt-light layers have
-landed and are NOT yet wired to any surface: `card_forge.py` (drafting +
-review), `llm_client.py` (streaming transport, descended from the deleted
-`claude_api.py`), `entitlement.py` (tier, advisory only), and `anki_tools.py`
-(the collection tool layer, restored from `30847b9^`). **The UI surface is
-deliberately undecided** — do not invent one. Do not delete these modules on
-the strength of the 2026-08 paragraph above.
+**Klaus grew a second AI capability starting 2026-09-01** (Pouya, that
+evening: "Wrap the Claude Code CLI, exactly like Claudian"), landing as
+six new modules overnight into 2026-09-02. One assistant, docked on
+Anki's main window (`assistant_dock.py`, shortcut `Ctrl+Shift+K`), whose
+engine is the **Claude Code CLI** running as a child process
+(`agent_host.py`) — no loop of Klaus's own, no API keys stored in Klaus,
+the user's own `claude` login and subscription pay for it. Its context
+is whatever the user is viewing in a Klaus PDF viewer — the current page
+as OCR text (`page_ocr.py`) plus image, and any selected text, tracked
+by `viewer_context.py` — attached to every turn. It reads the lecture
+library, searches and reads the user's notes, and can draft cards, every
+write behind Klaus's own approval dialog, all reached through Klaus's
+own localhost AnkiConnect-and-MCP server (`anki_endpoint.py`) rather
+than a dependency on the separate AnkiConnect add-on. Sessions persist
+per PDF (`assistant_sessions.py`). Design:
+`docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`;
+each module's one non-obvious rule is in the module map below.
+
+Pouya's original 2026-09-01 shape for that reversal — two assistants
+(one to query notes and the lecture-PDF index, one to draft cards from
+lecture material) behind a free/hosted split, four aqt-light layers, and
+**a deliberately undecided UI surface** — didn't ship: that same evening
+he converged it (Pouya: "remove the podcast multiple choice, just have
+the assistant, and make it work like Claudian, and it is basically
+viewing whatever we're viewing on the PDF viewer"). Deleted in the
+convergence, 2026-09-02: `llm_client.py` (`a494f2d`, the streaming
+transport), `entitlement.py` (`f1b330b`, the advisory tier check),
+`podcast.py` (`026eb36`, built and cut inside the same window), the
+Library's short-lived third-pane assistant-panel module this reversal's
+dock replaces (`fed3a33`, slot-guard patch `451a753`) — and its session
+store `assistant_session.py` (`1fcdba2`). Two of the original four
+layers survive, now WIRED rather than dormant:
+`card_forge.py` (`120293f`) stays available for batch card drafting
+outside the dock, and `anki_tools.py` (`e1c023c`, the collection tool
+layer, restored from `30847b9^`) is what `anki_endpoint.py` calls
+straight into for every read and write — its handlers untouched, only
+reused. Don't resurrect the two-assistant/hosted-tier language, and
+don't invent a second UI surface — this dock is the decided one.
 
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
@@ -775,7 +804,9 @@ same reason.
   field focus (for PDF page-insert targeting) and the image-crop dblclick
   trigger.
 - **Semantic matching stack** (the per-PDF `!Library` tags + the Library's
-  retention score; this is the only AI-powered feature left):
+  retention score — the embedding side of Klaus's AI; the assistant,
+  Claude Code hosted as a child process, is the other one — see
+  "The assistant (Claude Code)" below):
   - `embeddings.py` (aqt-free): provider abstraction — Voyage
     (default, `voyage-3-lite`), with Ollama `/api/embed` (`nomic-embed-text`)
     and OpenAI (`text-embedding-3-small`) as alternatives. `OPENAI_API_BASE`/
@@ -930,9 +961,23 @@ same reason.
     Pages: **Semantic Search** (embedding
     provider/key/model — `_resolve_ollama_model()` guards against silently
     orphaning an existing index when the ollama model config is empty),
-    **Local model library (Ollama)** (pull/delete embedding models only —
+    **Local model library (Ollama)** (pull/delete embedding models —
     `_EMBED_PRESETS`: nomic-embed-text, snowflake-arctic-embed,
-    mxbai-embed-large, embeddinggemma), **General**/**Appearance** (`image_crop_enabled`,
+    mxbai-embed-large, embeddinggemma; since K-194 also a Type column —
+    Embedding/OCR/Chat — over EVERY installed model, from one off-thread
+    `/api/show` pass per model (`classify_model`, pure: "embedding" if
+    `"embedding"` is in the reported capabilities, "ocr" if `"vision"`
+    is, else "chat"; a stale or missing classification never blanks the
+    list), cached in `ui_state["model_types"]` and re-synced after every
+    pull/delete/refresh), **Assistant** (K-194: an OCR on/off switch and
+    a model combo — installed vision-typed models plus `_OCR_PRESETS`
+    (`glm-ocr`, `deepseek-ocr`) — sharing this dialog's own `start_pull()`
+    rather than a second pull path; the auto-detected `claude_binary`
+    with an Override… file picker; free-text `assistant_model`;
+    `assistant_reopen`; a Clear Sessions button that wipes
+    `assistant_sessions.json` behind a window-modal confirm — notes,
+    PDFs, and highlights are never touched by it),
+    **General**/**Appearance** (`image_crop_enabled`,
     `runtime_auto_setup`, and `pdf_renderer` toggles — no other UI
     touches these keys; the pdf.js checkbox maps "native"/"pdfjs" and
     needs a restart). **Preferences are deferred-save**: widgets only
@@ -950,16 +995,164 @@ same reason.
   - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
     readiness checks, gated on `embeddings.provider_name(cfg)` — a
     Voyage/OpenAI profile never sees Ollama-flavored copy or probes.
-  - `ollama_client.py`: stdlib HTTP client — `/api/embed`, pull, delete.
-    **No text-generation method** (stripped when autocomplete/Ask were
-    removed).
+  - `ollama_client.py`: stdlib HTTP client — `/api/embed`, pull, delete,
+    and (K-192) `generate(model, prompt, images, timeout)`: one
+    non-streaming `/api/generate` call (`stream: false`) carrying base64
+    images, for the assistant's OCR path only (`page_ocr.ocr_page`).
+    **This is not the old text-generation surface come back** — no
+    message history, no streaming, no chat/completion use — don't wire
+    it into anything else without a fresh design call; `page_ocr.py`
+    passes its own 60s timeout since OCR of a dense slide runs longer
+    than the client's own default.
   - `ollama_runtime.py`/`ollama_setup.py`: managed Ollama provisioning.
     **Never kill a user-owned Ollama** — only servers Klaus spawned
     (pidfile + process-identity verify). No UI control removes a
     Klaus-managed install; reclaiming that disk space is a manual delete of
     `user_files/runtime/` (after switching off "Manage Ollama automatically"
     in Manage models → General so it doesn't just come back).
-- Deleted (2026-08, do not resurrect the language): `claude_api.py`
+- **The assistant (Claude Code)** — Klaus hosts the `claude` binary as a
+  child process rather than running a loop of its own (D1: no API keys
+  in Klaus, the user's own login and subscription). Design:
+  `docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`.
+  Six modules:
+  - `agent_host.py` (aqt-free): finds, spawns, and feeds the `claude`
+    child. `find_claude` tries, in order, a config override, then
+    `shutil.which`, then **the login shell's own PATH**
+    (`[$SHELL, "-lc", "command -v claude"]`, 3 s timeout), then known
+    install locations — GUI-launched Anki inherits launchd's minimal
+    PATH and never sources the user's shell rc files, so `shutil.which`
+    alone reports "not installed" on a machine where `claude` works fine
+    from a terminal; this is Claudian's own documented trap.
+    `command_line` builds the exact flags, including
+    `--allowedTools Read Grep Glob ToolSearch mcp__klaus__*` —
+    `ToolSearch` is there deliberately: this Claude Code build defers
+    MCP tool schemas behind it, so denying it would silently cut off
+    every `mcp__klaus__*` tool the model could otherwise reach (found by
+    the spike, design doc §4.5/§4.7) — and
+    `--disallowedTools Bash Edit Write MultiEdit NotebookEdit WebFetch
+    WebSearch Task`. **`decide_permission` mirrors that same allow set
+    and is belt-and-braces, not the front line**: the spike found
+    `--permission-mode default` never sends a `control_request` at all
+    (a non-disallowed tool just ran, unprompted, under a mode this
+    build's own `--help` doesn't even list) — so the actual gate is the
+    static `--disallowedTools` list on the command line, and
+    `decide_permission`/`control_response` only answer whatever
+    `control_request` traffic a future build or mode does send. One
+    child per dock, one reader thread; `stop()` is SIGINT → 2 s grace →
+    kill, and the session id survives for the next `--resume`.
+  - `anki_endpoint.py` (aqt-free above its "aqt glue" divider): Klaus's
+    own localhost AnkiConnect-compatible server (`/`) plus MCP-over-HTTP
+    (`/mcp`), from ONE shared `ACTIONS` registry so the two routes
+    cannot drift — no dependency on the separate AnkiConnect add-on.
+    Bound to `127.0.0.1:0` (ephemeral port), a fresh 32-byte hex token
+    required on every request (`X-Klaus-Token`), any `Origin` header
+    refused outright (a browser page must never drive the collection),
+    bodies capped at 4 MB — all checked before the body is even read.
+    **Every early return in the request handler closes the connection**
+    (`close_connection = True`) rather than trusting HTTP/1.1 keep-alive
+    to reuse a socket whose unread bytes are still sitting in the pipe:
+    two review rounds found this the hard way — draining an unbounded,
+    caller-declared `Content-Length` before any auth check is its own
+    DoS (a ~50 MB claim with 2 bytes actually sent never returned), so
+    the two UNAUTHENTICATED branches (bad token, browser `Origin`) close
+    without draining anything at all, while the one branch that still
+    drains (413, body too large) may, because it already required a
+    valid token, and caps the drain at `BODY_CAP`; the socket's own read
+    is separately bounded (`settimeout(READ_TIMEOUT_S)` in `setup()`) so
+    a caller that declares a huge length and then stalls cannot hang the
+    thread forever either way. Writes never touch the collection without
+    a plain-text approval preview: the dialog is **window-modal `open()`,
+    never `exec()`** (K-114), built and shown on the main thread while
+    the HTTP thread blocks on a `threading.Event` (Rulings R1 — the
+    endpoint owns approval, not `anki_tools._confirm_write_dialog`,
+    whose own `exec()` cannot be called off the main thread anyway).
+    `addNotes` tries each note independently so one bad note (unknown
+    deck/model/field) can't sink the notes on either side of it,
+    returning `list[noteId or null]` exactly as AnkiConnect's own
+    contract does. The duplicate check in that preview is Anki's own
+    text search over the front's first eight words (R2) — not the
+    embedding ranker `card_forge` uses, which would be a paid network
+    call inside a modal dialog. Agent writes (`X-Klaus-Agent: 1`) tag
+    added notes `klaus::assistant` + `klaus::from::<pdf_safe>` — **never**
+    the PDF's `!Library` tag (R3): that tag is `tag_sync`'s own
+    membership invariant, and a hand-applied one would violate it; the
+    next index pass tags it for real if the card actually matches.
+    `addNote` on the agent path also requires
+    `params.note.options.sourcePage` — a missing source page is a clean
+    error, never a silent add. Reuses `anki_tools`'s existing
+    `_HANDLERS`/`TOOL_SPECS` UNMODIFIED for `create_note`/`update_note`/
+    `search_notes`/`search_lecture_pdfs` rather than a second
+    implementation.
+  - `viewer_context.py` (aqt-free): a pure dict registry of every live
+    `PdfSidebar` (the Library's, Browse's editor pane, the Lecture
+    dock) — `report_document`/`report_page`/`report_selection` update
+    state, `activate`/`forget` track focus. **`current()` is the LAST
+    ACTIVATED viewer that still holds a document**, not the most
+    recently opened one or the one under the mouse — an activation-order
+    list, most recent last, filtered to viewers that still have a
+    document — so a background PDF window that never regained focus
+    can't steal the assistant's attention from the one the user is
+    actually looking at. `subscribe` callbacks run synchronously on the
+    caller's thread; a raising subscriber is logged, never left to break
+    the reporter.
+  - `page_ocr.py` (aqt-free above its "aqt glue" divider): the page in
+    view as text and image for the assistant's context block.
+    `context_for` prefers a cached OCR transcript, falls back to the
+    PDF's own text layer (`text_source` says which), and always tries
+    for a PNG (`QPdfDocument`, 1400px long edge, cached alongside).
+    **OCR never blocks a send**: `OcrScheduler` debounces 400ms after a
+    `viewer_context` change, then runs the vision model on ONE daemon
+    worker (prefetching page±1 when idle) — a turn always goes out
+    immediately on the text layer (or on nothing), never waiting on the
+    network. Cache key is **the PDF's digest plus the page number** —
+    `user_files/ocr/<pdf_safe>/<digest12>/<page:04d>.md|.png`,
+    `digest12` = 12 hex chars of a SHA-256 over the file's path, size,
+    and mtime — so a page is OCR'd once, and a replaced file (different
+    size or mtime) gets a fresh cache directory rather than silently
+    serving another PDF's stale transcript. No OCR model configured, or
+    Ollama unreachable, degrades to the text-layer fallback with one log
+    line, never a dialog.
+  - `assistant_sessions.py` (aqt-free, stdlib-only): three stores under
+    `user_files/assistant/` — `sessions.json` (**one Claude Code session
+    id per PDF**, plus one "global" slot for no-PDF chats, so switching
+    the followed PDF resumes THAT PDF's own conversation instead of
+    dragging an unrelated one along), `prompts/<name>.md` (the slash
+    commands, seeded with `explain`/`cards`/`quiz` only the FIRST time
+    the folder is looked at — never re-seeded once a user has edited or
+    deleted one), and `system_prompt.md` (versioned by a leading
+    `<!-- klaus-system-prompt vN -->` comment so a later Klaus release
+    can ship a revised prompt to an already-set-up profile). All three
+    are atomic-written (tmp + `os.replace`); a missing file reads back
+    as the ordinary empty case, a corrupt one is logged and STILL reads
+    back empty — a torn store must never take session resume down with
+    it.
+  - `assistant_dock.py` (Qt): the `QDockWidget` UI — header, transcript,
+    input, Send/Stop, New Session, a `/`-triggered `QCompleter` over the
+    slash commands. Opens via a Library toolbar button, Tools → "Klaus
+    Assistant", or **`Ctrl+Shift+K`** — deliberately not `Ctrl+Shift+A`,
+    the spec's original binding: an offscreen repro found the native PDF
+    viewer's OWN `Ctrl+Shift+A` (`pdf_viewer.py`, "highlight the current
+    selection", a `WidgetWithChildrenShortcut`) claims that chord first
+    via `ShortcutOverride` whenever a PDF pane has focus — exactly the
+    two places (the Lecture dock, the embedded Library) this assistant
+    is meant to be used from, so `Ctrl+Shift+A` would never have reached
+    the dock at all. The shortcut is ONE window-scoped `QAction` added
+    to `mw` at import time (`assistant_dock.setup()`), not the
+    `state_shortcuts_will_change` mechanism `lecture_view.py` uses for
+    its own "l" key — that hook fires only from `Overview.show`/
+    `Reviewer.show`, never the deck browser and never
+    `library_tab.mount()`'s embedded screen; `install_menu`'s Tools
+    entry reuses this SAME `QAction` (`menu_action()`) rather than
+    registering a second one on the same chord. **`AgentHost`'s
+    callbacks reach Qt only through `_Bridge`, a `QObject` of
+    `pyqtSignal`s** — the reader thread only ever calls `.emit()`, and
+    Qt's auto-connection queues that onto the main thread when the
+    emitting thread differs from the slot's (a real `AgentHost`) and
+    calls directly when it doesn't (a synchronous fake host in tests),
+    so no widget is ever touched off the main thread either way. The
+    dock follows `viewer_context` (session switches, OCR scheduling) and
+    resumes the right `assistant_sessions` entry on every switch.
+- Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`
   (its streaming client lives on, reshaped, as `llm_client.py`),
   `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
   `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
@@ -974,6 +1167,19 @@ same reason.
   Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.
+  Deleted again, 2026-09-02, for the same "converged, then reversed"
+  reason described above: `llm_client.py` (`a494f2d` — the
+  `claude_api.py`-derived streaming client mentioned above didn't
+  survive its own reshaping), `entitlement.py` (`f1b330b`), `podcast.py`
+  (`026eb36`), `assistant_session.py` (`1fcdba2`), and the Library's
+  short-lived third-pane assistant-panel module (`fed3a33`, guarded
+  `451a753`) that `assistant_dock.py` replaces.
+  `card_forge.py` (`120293f`) and `anki_tools.py` (`e1c023c`) survive
+  from the same plan, now wired rather than dormant — see "The
+  assistant" above. `_LEGACY_KEYS_DROPPED` in `__init__.py` scrubs
+  `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
+  2026-09-01): there was never a separate assistant credential to keep;
+  the user's own `claude` login is it.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1039,6 +1245,26 @@ same reason.
   `_alltext_bounds_cache` keyed (generation, page); `_probe_selection_at`
   has a `fast=True` mode for per-mouse-move callers. Rewiring selection
   code must respect these or drag/scroll jank returns.
+- **A GUI-launched app inherits a minimal PATH — check the login shell,
+  not just `PATH`**: `shutil.which("claude")` reports "not found" on a
+  machine where `claude` works fine from a terminal, because Anki
+  launched from the Dock/Finder never sources `~/.zshrc` and friends.
+  `agent_host.find_claude` falls back to
+  `[$SHELL, "-lc", "command -v claude"]` (3 s timeout) before trying
+  known install paths — Claudian's own documented trap, and worth
+  remembering for any future external-binary discovery in this add-on,
+  not just this one.
+- **Claude Code defers MCP tool schemas behind its own `ToolSearch`
+  tool — never drop it from `--allowedTools`**: with `mcp__klaus__*`
+  allowed but `ToolSearch` denied, the model can see the tools exist but
+  can never fetch their schemas, so every `mcp__klaus__*` call becomes
+  unreachable — found by the assistant's spike when a real run went
+  silent on Klaus's own tools. The same spike found
+  `--permission-mode default` never sends a `control_request` at all (a
+  non-disallowed tool just ran, unprompted): the actual gate is the
+  static `--allowedTools`/`--disallowedTools` list on the command line,
+  not `agent_host.decide_permission`, which only answers whatever
+  `control_request` traffic a future build or mode does send.
 
 ## Conventions
 
