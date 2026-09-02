@@ -112,6 +112,42 @@ payload = _b64.b64encode(b'{"id": "abc"}').decode()
 check("b64 json round-trip", pv.decode_b64_json(payload) == {"id": "abc"})
 check("bad b64 json degrades to None", pv.decode_b64_json("!!") is None)
 
+section("live selection reported over the bridge (K-196 task 10)")
+_sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
+check("parse_bridge routes sel",
+      pv.parse_bridge("klausmate_pdfjs:sel:" + _sel_payload)
+      == ("sel", _sel_payload))
+check("decode_b64_json decodes the selection payload",
+      pv.decode_b64_json(_sel_payload) == {"text": "abc"})
+check("the page listens for selectionchange",
+      'addEventListener("selectionchange"' in html)
+check("...and posts it as a debounced sel: bridge message",
+      'postB64("sel"' in html)
+
+
+class _SelStand:
+    """A stand-in for PdfJsViewer: _bridge_sel only reads/calls
+    self.on_selection, so the unbound method runs on anything that has
+    one — no Qt construction needed."""
+
+
+_sel_seen = []
+_sel_stand = _SelStand()
+_sel_stand.on_selection = _sel_seen.append
+pv.PdfJsViewer._bridge_sel(_sel_stand, _sel_payload)
+check("_bridge_sel decodes the payload and forwards the text to "
+      "on_selection", _sel_seen == ["abc"])
+
+_sel_stand_unset = _SelStand()
+_sel_stand_unset.on_selection = None
+try:
+    pv.PdfJsViewer._bridge_sel(_sel_stand_unset, _sel_payload)
+    _sel_unset_survived = True
+except Exception:
+    _sel_unset_survived = False
+check("_bridge_sel is a no-op with nothing wired (on_selection is None)",
+      _sel_unset_survived)
+
 section("highlight record minting")
 recs = pv.records_from_rect_map(
     {"1": [[10.0, 20.0, 100.0, 12.0], [10.0, 34.0, 80.0, 12.0]],

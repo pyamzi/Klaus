@@ -678,6 +678,11 @@ class PdfViewer(QWidget):
         self._select_start: tuple[int, QPointF] | None = None
         self._select_end: tuple[int, QPointF] | None = None
         self._selection_text = ""
+        # Task 10 (K-196): plain callback attribute, same shape as
+        # on_page_changed — set by PdfSidebar after construction (never
+        # passed into __init__, since only the native renderer has one),
+        # so it must default to None and every call site guard it.
+        self.on_selection_changed: Callable[[str], None] | None = None
         self._pdf_selection: Any = None
         self._overlay: _SelectionOverlay | None = None
         self._viewport: QWidget | None = None
@@ -1410,6 +1415,11 @@ class PdfViewer(QWidget):
         self._drag_selecting = False
         if self._overlay is not None:
             self._overlay.set_rects([])
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
 
     def _update_selection(self) -> None:
         if (
@@ -1461,6 +1471,11 @@ class PdfViewer(QWidget):
         self._selection_page_rects = page_rects
         if self._overlay is not None:
             self._overlay.set_rects(rects)
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
 
     # ------------------------------------------------------------------
     # Marquee copy-as-image (Option/Alt+drag, plan A2)
@@ -2314,6 +2329,11 @@ class PdfViewer(QWidget):
         self._selection_page_rects = page_rects
         if self._overlay is not None:
             self._overlay.set_rects(vp_rects)
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
         return True
 
     def _nearest_page_at(self, vp_pos: QPoint) -> int | None:
@@ -4225,6 +4245,13 @@ class PdfSidebar(QWidget):
         self._doc: Optional[QPdfDocument] = None
         self._page_count = 0
         self._current_page = 0
+        # Task 10 (K-196) fix round 1: which document _on_pdfjs_count's
+        # eventual callback belongs to. Set in load_pdf's pdf.js branch
+        # at the same moment as self._name; _on_pdfjs_count compares the
+        # two by IDENTITY (not just "is self._name truthy") before
+        # touching viewer_context, so a late count for a document this
+        # sidebar has since left cannot resurrect it.
+        self._pending_count_name: Optional[str] = None
         # Set by the tab container so every load — regardless of which
         # call site triggered it — is reflected in the tab bar.
         self.on_loaded: Optional[Callable[[str], None]] = None
@@ -4260,6 +4287,7 @@ class PdfSidebar(QWidget):
                 on_page_changed=self.notify_page_changed,
                 parent=self,
             )
+            self._viewer.on_selection = self._report_selection
             outer.addWidget(self._viewer, 1)
             self._fallback_label = None
         elif PDF_VIEWER_AVAILABLE and QPdfDocument is not None:
@@ -4268,6 +4296,7 @@ class PdfSidebar(QWidget):
                 on_page_changed=self.notify_page_changed,
                 parent=self,
             )
+            self._viewer.on_selection_changed = self._report_selection
             outer.addWidget(self._viewer, 1)
             self._fallback_label = None
         else:
@@ -4284,6 +4313,21 @@ class PdfSidebar(QWidget):
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
+
+    def _report_selection(self, text: str) -> None:
+        """Task 10 (K-196): forward a live selection into viewer_context.
+
+        One method wired as BOTH renderers' selection hook (native
+        ``on_selection_changed``, pdf.js ``on_selection``) — same
+        payload shape (plain text), same registry call, so there is
+        only one guarded viewer_context call site to keep in sync.
+        """
+        try:
+            from . import viewer_context
+
+            viewer_context.report_selection(id(self), text)
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def is_loaded(self, name: str | None = None) -> bool:
         if self._name is None or self._page_count <= 0:
@@ -4314,6 +4358,10 @@ class PdfSidebar(QWidget):
             # arrives async over the bridge (on_count refines the
             # text-pages approximation used until then).
             self._name = name
+            # Task 10 (K-196) fix round 1: the name THIS load belongs to,
+            # captured now so the eventual async count callback can tell
+            # a late count for an abandoned load apart from a fresh one.
+            self._pending_count_name = name
             pages_text = pdf_handler.load_pages(USER_FILES, name) or []
             self._page_count = len(pages_text)
             self._viewer.set_page_texts(pages_text)
@@ -4368,10 +4416,52 @@ class PdfSidebar(QWidget):
         self._notify_loaded(name)
 
     def _on_pdfjs_count(self, count: int) -> None:
-        if count > 0:
+        """Task 10 (K-196) fix round 1: the async pdf.js count refines
+        the text-layer estimate report_document (already fired from
+        _notify_loaded) used — but this callback is registered once per
+        load and can still arrive AFTER the sidebar has moved on to a
+        different document (a fast reload-before-count race). Guarded on
+        IDENTITY, not presence: self._name == self._pending_count_name
+        is "this count still belongs to the document that is actually
+        showing", not just "some document happens to be loaded". A
+        stale count is a complete no-op — it must not touch
+        self._page_count (that would be reporting a foreign page count
+        as this sidebar's own) and, critically, must not call
+        viewer_context.activate() or reset page/selection the way a
+        full _report_document() re-call would: it goes through the
+        narrower report_page_count instead, which touches only
+        page_count in place."""
+        if count > 0 and self._name and self._name == self._pending_count_name:
             self._page_count = count
+            try:
+                from . import viewer_context
+
+                viewer_context.report_page_count(id(self), self._page_count)
+            except Exception as exc:
+                print(f"[klausmate] viewer_context: {exc}")
+
+    def _report_document(self) -> None:
+        """Task 10 (K-196): tell viewer_context which document this
+        sidebar shows and mark it the active one. Called once a
+        document is actually on screen (every load_pdf success path
+        funnels through _notify_loaded). _on_pdfjs_count's later,
+        narrower catch-up goes through report_page_count instead — see
+        its own docstring for why re-calling this one would be wrong."""
+        try:
+            from . import drive_store, pdf_handler, viewer_context
+            from . import USER_FILES  # type: ignore
+
+            display = drive_store.display_name(USER_FILES, self._name) or self._name
+            path = pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
+            viewer_context.report_document(
+                id(self), self._name, display, path, self._page_count
+            )
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _notify_loaded(self, name: str) -> None:
+        self._report_document()
         cb = self.on_loaded
         if cb is None:
             return
@@ -4499,12 +4589,17 @@ class PdfSidebar(QWidget):
         to release. Call from every path that tears a sidebar down."""
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
-        if fn is None:
-            return
+        if fn is not None:
+            try:
+                fn()
+            except Exception as exc:
+                print(f"[klausmate] viewer cleanup failed: {exc}")
         try:
-            fn()
+            from . import viewer_context
+
+            viewer_context.forget(id(self))
         except Exception as exc:
-            print(f"[klausmate] viewer cleanup failed: {exc}")
+            print(f"[klausmate] viewer_context: {exc}")
 
     def clear(self) -> None:
         self._name = None
@@ -4518,6 +4613,12 @@ class PdfSidebar(QWidget):
             except Exception:
                 pass
         self._set_active(None)
+        try:
+            from . import viewer_context
+
+            viewer_context.forget(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _on_page_changed(self, page: int) -> None:
         if self._name is None or self._page_count <= 0:
@@ -4531,6 +4632,12 @@ class PdfSidebar(QWidget):
         end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
         self._set_active((self._name, (start, end)))
+        try:
+            from . import viewer_context
+
+            viewer_context.report_page(id(self), self._current_page)
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _set_active(self, value) -> None:
         if self._editor is None:
@@ -4539,3 +4646,29 @@ class PdfSidebar(QWidget):
             setattr(self._editor, "_klausmate_active_pdf", value)
         except Exception:
             pass
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        # Task 10 (K-196): the assistant dock follows viewer_context's
+        # last-ACTIVATED viewer — the Library's, Browse's editor pane and
+        # the Lecture dock all reuse this one widget, so becoming visible
+        # (a tab switch, an unhide) is "the user is looking at this one"
+        # regardless of which host it lives in.
+        super().showEvent(ev)
+        try:
+            from . import viewer_context
+
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        # Same seam as showEvent: a click into an already-visible sidebar
+        # (e.g. the user switches focus between two open panes without
+        # either one being re-shown) still moves it to "current".
+        super().mousePressEvent(ev)
+        try:
+            from . import viewer_context
+
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")

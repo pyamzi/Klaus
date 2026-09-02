@@ -879,6 +879,10 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._page_count = 0
         self._scroll_pos = 0
         self.on_count: Optional[Callable[[int], None]] = None
+        # Task 10 (K-196): set by PdfSidebar, same shape as on_count —
+        # fired from _bridge_sel whenever the page's own debounced
+        # selectionchange listener posts the live selection text.
+        self.on_selection: Optional[Callable[[str], None]] = None
         # No Add Text prompt lives here any more (K-150): text is typed
         # in the page, so there is no dialog to keep a singleton of.
         self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
@@ -1025,6 +1029,16 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._page_count = int(payload)
         if self.on_count is not None:
             self.on_count(self._page_count)
+
+    def _bridge_sel(self, payload: str) -> None:
+        """Task 10 (K-196): the page's debounced ``selectionchange``
+        listener posts ``{"text": ...}`` — forward it to whatever
+        PdfSidebar wired up (viewer_context.report_selection). No-op
+        with nothing wired, same guard as _bridge_count's on_count."""
+        if self.on_selection is None:
+            return
+        data = decode_b64_json(payload) or {}
+        self.on_selection(str(data.get("text") or ""))
 
     def _bridge_ready(self, _payload: str) -> None:
         # openDocument's teardown() wiped page state — (re)push whatever

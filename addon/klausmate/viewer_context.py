@@ -56,6 +56,25 @@ def report_page(viewer_id: int, page_index: int) -> None:
     _notify()
 
 
+def report_page_count(viewer_id: int, page_count: int) -> None:
+    """Narrow catch-up for a page count learned AFTER report_document.
+
+    pdf.js reports a provisional count from the text layer at document-
+    report time and refines it once the real document object parses
+    (klausmate/pdf_viewer.py's ``_on_pdfjs_count``). Unlike calling
+    report_document again, this touches ONLY page_count: it does not
+    reset page_index/selection to 0/"" and does not activate — a late
+    count is a data correction, not new activity, and the caller must
+    already have confirmed (by identity, not just presence) that this
+    viewer_id's CURRENT document is still the one the count belongs to.
+    A no-op, like report_page, when the viewer isn't registered."""
+    v = _views.get(viewer_id)
+    if v is None:
+        return
+    _views[viewer_id] = replace(v, page_count=max(0, int(page_count)))
+    _notify()
+
+
 def report_selection(viewer_id: int, text: str) -> None:
     v = _views.get(viewer_id)
     if v is None:

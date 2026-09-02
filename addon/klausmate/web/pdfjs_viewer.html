@@ -834,6 +834,17 @@ function addHighlightFromSelection() {
   window.getSelection().removeAllRanges();
 }
 
+/* Task 10 (K-196): report the live text selection to Python so
+   viewer_context (and the assistant dock reading it) knows what the
+   user has highlighted with the mouse, not just what they've inked.
+   Debounced — the DOM event this listens for below fires on every
+   caret move during a drag. */
+let _selT = null;
+document.addEventListener("selectionchange", () => {
+  clearTimeout(_selT);
+  _selT = setTimeout(() => postB64("sel", { text: String(window.getSelection() || "") }), 150);
+});
+
 /* Topmost highlight record under (page0, xPt, yPt), like _highlight_at. */
 function highlightAt(page0, xPt, yPt, tol) {
   tol = tol || 3;

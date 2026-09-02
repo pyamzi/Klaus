@@ -26,6 +26,7 @@ sys.modules["klausmate"] = pkg
 import importlib
 
 drive_store = importlib.import_module("klausmate.drive_store")
+viewer_context = importlib.import_module("klausmate.viewer_context")
 
 PASS = FAIL = 0
 
@@ -2300,6 +2301,14 @@ check("...and it no longer answers a failed double-click with a modal: "
 
 if _HAVE_QT:
     try:
+        # Task 10 (K-196): a clean slate for the viewer_context pins
+        # further down this block — earlier sections above construct
+        # plain DriveWindow()s that may have shown (and so activated) a
+        # sidebar with no document loaded; reset() drops that residue
+        # so "Renal" below is unambiguously the one report_document/
+        # activate name.
+        viewer_context.reset()
+
         def _proof_pdf(path):
             """One page, a fat black bar, real text. Ink you can count."""
             objs = [
@@ -2456,6 +2465,117 @@ if _HAVE_QT:
               "black bar is in a grab of the viewer pane, which no part "
               "of Klaus's own chrome draws (a render, not an assertion)",
               _pix173 > 200, f"{_pix173} near-black pixels")
+
+        # Task 10 (K-196): this real, on-screen, just-loaded sidebar is
+        # exactly the fixture viewer_context reporting needs — reused
+        # rather than building a second one. Reset and reload DIRECTLY
+        # (not via the double-click) first: _sb173 is already visible,
+        # so this does not raise a fresh showEvent — isolating
+        # load_pdf's own report_document/activate from the showEvent
+        # that already fired once above (both are real call sites and
+        # either alone would make this pass, which is exactly why this
+        # step is needed to pin load_pdf's specifically).
+        viewer_context.reset()
+        _sb173.load_pdf("Renal")
+        check("load_pdf reported the document into viewer_context and "
+              "activated it as current()",
+              viewer_context.current() is not None
+              and viewer_context.current().pdf_safe == "Renal",
+              repr(viewer_context.current()))
+        # The proof PDF is one page; poke the count so page 3 is not
+        # clamped back to 0 — _on_page_changed's own clamping is
+        # pre-existing behaviour this pin has no interest in.
+        _sb173._page_count = 10
+        _sb173._on_page_changed(3)
+        check("_on_page_changed reports the new page index into "
+              "viewer_context",
+              viewer_context.current() is not None
+              and viewer_context.current().page_index == 3,
+              repr(viewer_context.current()))
+        _sb173._viewer.on_selection_changed("abc")
+        check("the native viewer's selection-changed hook reports live "
+              "selection text into viewer_context",
+              viewer_context.current() is not None
+              and viewer_context.current().selection == "abc",
+              repr(viewer_context.current()))
+        _sb173.cleanup()
+        check("cleanup() forgets the viewer — current() is None once the "
+              "sidebar is torn down",
+              viewer_context.current() is None,
+              repr(viewer_context.current()))
+
+        # Task 10 (K-196) fix round 1 (review Important #2): _sb173 is
+        # the NATIVE renderer (this whole block renders real QPdfView
+        # pixels), so load_pdf above never touches _pending_count_name —
+        # that only happens in the pdf.js branch. A source pin is the
+        # proportionate way to cover that one line without standing up
+        # a second, pdf.js-renderer fixture just for it.
+        _PV_SRC_R1 = open("klausmate/pdf_viewer.py", encoding="utf-8").read()
+        check("load_pdf's pdf.js branch captures the pending count's "
+              "name at the same moment it sets self._name",
+              "self._pending_count_name = name" in _PV_SRC_R1)
+
+        # A late pdf.js count for a document this sidebar has since left
+        # must not resurrect it as ACTIVITY — no activate(), no page/
+        # selection reset. _pending_count_name is a single shared
+        # attribute (the bridge carries no per-load token), so it
+        # cannot by itself tell two DIFFERENT real documents' in-flight
+        # counts apart — see the report's fix-round notes. What it
+        # closes unconditionally, because report_page_count structurally
+        # cannot do either, is exactly what the review called out: no
+        # re-activation, no page/selection reset, no matter which
+        # document the late count nominally lands on.
+        viewer_context.reset()
+        _sb173._name = "DocA"
+        _sb173._pending_count_name = "DocA"
+        _sb173._page_count = 5
+        _sb173._report_document()
+        _sb173._name = "DocB"
+        _sb173._pending_count_name = "DocB"
+        _sb173._page_count = 20
+        _sb173._report_document()
+        _sb173._on_page_changed(2)
+        _sb173._viewer.on_selection_changed("bee")
+        # A sentinel viewer activated after B is the only reliable way
+        # to prove "no activate()": if the count catch-up called
+        # activate(id(self)) it would steal current() back from this one.
+        viewer_context.report_document(-1, "Sentinel", "Sentinel", "", 1)
+        viewer_context.activate(-1)
+        _sb173._on_pdfjs_count(999)  # A's late count, arriving after B loaded
+        check("a late pdf.js count does not call activate() — a "
+              "sentinel viewer activated after B stays current()",
+              viewer_context.current() is not None
+              and viewer_context.current().pdf_safe == "Sentinel",
+              repr(viewer_context.current()))
+        viewer_context.activate(id(_sb173))
+        check("...and once B is current again, its page and selection "
+              "are exactly as B left them — the late count reset "
+              "neither (the pre-fix _report_document() re-call would "
+              "have zeroed both)",
+              viewer_context.current() is not None
+              and viewer_context.current().pdf_safe == "DocB"
+              and viewer_context.current().page_index == 2
+              and viewer_context.current().selection == "bee",
+              repr(viewer_context.current()))
+        # The identity comparison's OWN logic, isolated: today's one
+        # call site always sets _name and _pending_count_name together,
+        # so a live sequence can never actually diverge them (a mutation
+        # weakening the guard to bare "if self._name:" proved this —
+        # neither pin above noticed, because report_page_count's own
+        # contract already keeps them passing regardless). This pin
+        # injects a synthetic mismatch directly to pin the comparison
+        # itself, independent of whether a real call sequence reaches it
+        # yet — a future second call site (or a reload of a DIFFERENT
+        # document under the SAME renderer path) could.
+        _sb173._name = "DocX"
+        _sb173._pending_count_name = "DocY"
+        _sb173._page_count = 1
+        _sb173._on_pdfjs_count(555)
+        check("_on_pdfjs_count is a strict no-op when the pending "
+              "count's name does not match the CURRENT document name — "
+              "the sidebar's own page_count is untouched",
+              _sb173._page_count == 1, _sb173._page_count)
+
         check("the viewer pane sits between the tree and the assistant, "
               "the same three-pane shape the window has",
               _emb.splitter.indexOf(_sb173) == 1,
