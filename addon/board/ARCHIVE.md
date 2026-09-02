@@ -4412,3 +4412,200 @@ WATCH: aqt is bytecode-only on this machine and system python3 is 3.9 (no math.s
 - [2026-09-01 orchestrator] The walker that produced the 32/60 split, for reproduction: parse each klausmate/*.py, collect every NAME from a Call whose func.attr == 'connect' and whose arg is an Attribute (that is the '.connect(self.NAME)' shape), then report every FunctionDef whose name is in that set and whose body — docstring stripped — contains no ast.Try. It is deliberately crude and WILL over-report: it does not follow a handler into a helper that guards internally, and it counts handlers that cannot raise. Triage before fixing. It also under-reports: a lambda passed to connect is invisible to it, and so is a handler connected by string name. Worth widening once the real list is known.
 - [2026-09-01 orchestrator] Two updates from the peer session (cranky-taussig), 2026-09-01. FIRST, the mechanism is confirmed independently and precisely: a plain exception in a Qt slot exits 134, SIGABRT — PyQt6 prints the traceback and then calls qFatal. SystemExit and sys.exit are CLEAN; a plain exception and MemoryError are not. That distinction matters for the behavioural check this card asks for: a test that raises SystemExit will pass while proving nothing. SECOND, six of the 32 are already fixed — commit 451a753 guards every slot in klausmate/assistant_panel.py. Re-run the walker before triaging; the count is now 26 of 60, not 32. The peer has the mechanism fresher than anyone and is welcome to claim this card.
 - [2026-09-01 orchestrator] Moving to Done: the work is committed as 885f942 ('An exception in a Qt slot aborts Anki: the guard, and the check that proves it'). The card was left in Review when this session's process exited before it could be signed off — reconciled during the board rebuild, not re-reviewed.
+
+### K-176: Apply the code-review findings outside pdf_drive.py
+owner: orchestrator
+priority: P1
+tags: review,robustness,test-integrity
+files: klausmate/card_index.py,klausmate/pdf_index.py,tests/test_klausmate.py,tests/test_drive.py,CLAUDE.md
+verify: python3 tests/test_klausmate.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Apply the /code-review findings that live in files no live lane holds. Eight sibling findings in klausmate/pdf_drive.py are BLOCKED behind K-175, which claims that file; they are briefed to K-175's owner to land in that lane and are not part of this card.
+
+Findings applied here (numbers from the review report):
+ 2. card_index.stats_from_disk + pdf_index.stats_from_disk: add AttributeError to the except tuple so a manifest that is valid JSON but not an object ("null", "[]", a string) takes the failure exit instead of raising through three unguarded index_stats() subscripts in Preferences. Extend the corrupt-manifest pin to a JSON-non-object payload.
+ 9. Both stats_from_disk functions: ONE _EMPTY_STATS constant per module, returned as dict(_EMPTY_STATS) on failure and spread into the success exit, so the two exits cannot drift again. Add the same-key-set pin for pdf_index (only card_index had it).
+ 6. tests/test_drive.py _AngryWin pin: make the raising window the _instance (always walked first) and the good one the WeakSet member, and assert bad.refreshes == 1 — replayed 2000x, the old shape passed a one-outer-try regression 63% of the time.
+10. tests/test_drive.py real-widget block: restores in finally, not the try body; call _embw.shutdown() so the index_queue listener stops keeping the widget alive; drop the processEvents loop that only built an unused sidebar.
+11. tests/test_drive.py: retitle the real-widget pin to what it proves (reachability of the refresh hook), since it stubs _refresh_rows under mw=None.
+13. tests/test_klausmate.py: fold the _sfd_direct try/except into the set-equality check above it.
+15. CLAUDE.md pdf_drive.py entry: describe both Library shapes (window and embedded screen), the two rosters, and open_library's tab-first preference.
+
+NOTE ON THE RED SUITE: test_drive.py fails 4 pins today because the refresh_open_library roster rewrite those pins target was reverted from pdf_drive.py (no stash, no card) while its tests were left in place. Fixing pins 6/10/11 does not turn them green; the source half is the K-175-blocked work.
+
+#### Comments
+- [2026-09-01 orchestrator] Done and verified. LANDED (uncommitted, awaiting the pdf_drive.py half): card_index.stats_from_disk and pdf_index.stats_from_disk both gain a single _EMPTY_STATS constant (failure returns a copy, success spreads it) and AttributeError in the except tuple — reproduced first: null / [] / a bare string all raised straight through into Preferences' three unguarded index_stats() subscripts. test_klausmate 289 -> 293: three JSON-non-object payloads, pdf_index key-set parity and a pdf_index null case, all hardened to RECORD a regression rather than abort the file (first mutation pass aborted with a raw traceback — fixed, re-mutated: 3 FAILs, exit 1). The _sfd_direct try/except folded into the set-equality check. test_drive: the _AngryWin pin now seats the raiser as _instance so WeakSet order cannot decide it (replayed: the old shape passed a one-outer-try regression 63% of 2000 runs); the impossible both-ways pin is replaced by the disjointness invariant and its fictional paid-API cost corrected; the real-widget block restores in finally, calls _embw.shutdown(), drops the processEvents loops that built an unused sidebar, and its title now claims only what it proves. CLAUDE.md pdf_drive entry describes both shapes and both rosters. Compile green through the symlink. Mutations: AttributeError dropped -> 3 red; pdf_index failure exit drops a key -> 2 red. STATE: test_drive.py is 318/4 — the four red pins are the reverted refresh_open_library roster walk's, i.e. the source half that lives in pdf_drive.py, which K-175 claims. Those eight findings are briefed to K-175's owner; nothing here touched that file, and the diffstat confirms the +75 in it is K-175's own tree work.
+
+### K-177: Apply the eight code-review findings in pdf_drive.py once K-175 frees the file
+owner: orchestrator
+priority: P1
+tags: review,correctness,library,blocked
+files: klausmate/pdf_drive.py,tests/test_drive.py
+verify: python3 tests/test_drive.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+The eight /code-review findings that live in klausmate/pdf_drive.py, held back from K-176 because K-175 (fable-ui) claimed the file. BLOCKED until K-175 leaves Doing; fable-ui will re-apply the parked refresh_open_library patch (the offline session's 41-line roster walk, parked at their scratchpad as parked-pdf_drive-refresh_open_library.patch, git apply --check clean against HEAD) and message when the file is free. Do not claim before that message.
+
+STARTING STATE once the patch is back: refresh_open_library walks (_instance, *_embedded_windows) with an isVisible() gate and a done-list identity dedupe; test_drive.py is expected 322/0 (K-176 already removed the impossible "both ways" pin and seated the _AngryWin raiser as _instance).
+
+THE EDITS (verified with quoted lines in the review; reproduced where stated):
+
+1. [correctness, TOP] The isVisible() gate skips the hidden embedded tab, and nothing refreshes it on re-show — mount() only show()s, showEvent only arms the sidebar. _on_index_state in the same class refreshes hidden screens unconditionally; match it. THIS CONTRADICTS the parked pin "a HIDDEN embedded screen is not refreshed" (and its real-widget twin), so those pins INVERT: write the inverted pins FIRST so the verify fails before the code change, then drop the gate. That is the card's fail-before/pass-after.
+
+2. [correctness] _on_fs_tick (line ~199) still walks _instance alone -> a disk change never repaints the embedded tree. Same walker as refresh_open_library. Pin it: there is currently NO test of _on_fs_tick at all (grep tests/ for fs_tick is empty).
+
+3. [correctness] Profile switch: shutdown()'s only caller is closeEvent, which the tab never gets; release_viewer strips only the sidebar; library_tab has no profile hook -> rows/card_r/matches from the OLD collection shown on next mount. Minimal: _release_embedded_viewers sets win._refresh_pending = True after release_viewer(); __init__ inits it False; showEvent schedules QTimer.singleShot(0, self._refresh_rows) when set. Keep the index_queue listener (one listener, one persistent widget). Pin: release -> mount -> refresh fired.
+
+4. [altitude + simplification] ONE module-level walker, _live_libraries(), yielding each alive window from (_instance, *_embedded_windows), used by BOTH refresh_open_library and _on_fs_tick. No dedupe and no "Identity, not ==" comment: the rosters are disjoint by construction (_instance only via _create() -> embedded=False; the WeakSet only via an embedded __init__), and the comment invites an __eq__ that makes DriveWindow unhashable — reproduced: weakref.WeakSet().add() raises TypeError on such an object, which the guarded add() at line 1184 swallows, silently dropping the screen from BOTH refresh and viewer release. Say THAT in the docstring instead (fable-ui agrees it is worth keeping). The inner list() in *list(_embedded_windows) is noise; star-unpacking already snapshots.
+
+5. [simplification] Docstring: keep paragraph 1 and one sentence naming the two rosters and their disjointness; cut paragraph 3. Where a cost is cited, name the real one — priority_rows never embeds; a double refresh costs a vector load, SQL, JSON reads and a main-thread rescan, not API money.
+
+6. [efficiency, PLAUSIBLE, N=1] With two visible Libraries the whole _refresh_rows runs twice. Design note only — do NOT hoist it under this card unless it falls out for free.
+
+RULES: every paintEvent/slot guarded (a raising slot SIGABRTs Anki — happened today); falsify every new pin (PYTHONDONTWRITEBYTECODE=1, purge __pycache__ and ~/Library/Caches/com.apple.python); full sweep; py_compile through the symlink. Then re-call ReportFindings for these eight with outcome fixed.
+
+#### Comments
+- [2026-09-01 orchestrator] Done, commit fbec2f3 (carries K-176's six-file change too; one coherent commit rather than two split by test colour). Fail-before observed against the parked hunk: the inverted hidden pin red, the walker pin aborting on a missing function (then hardened to record, not abort). Pass-after 322 -> 330. Four mutations of the four source edits all caught (5/2/2/1 red); with K-176's two that is six of six. Full sweep 36/36, compile green through the symlink. Design calls recorded in _live_libraries' docstring: alive means walked for BOTH shapes (the old standalone 'hidden is not refreshed' pin was inverted too — a closed window leaves _instance through shutdown() and is never walked; a hidden-but-registered one is a transient and refreshing it is harmless), and the __eq__/WeakSet trap fable-ui asked to keep. Finding 12 (hoist _refresh_rows) deliberately NOT applied: N is 1 in practice and it is a refactor, not a fix.
+- [2026-09-01 orchestrator] CORRECTION: this card's body says 'a raising slot SIGABRTs Anki — happened for real today'. It happened in a bare TEST process. In Anki an unguarded slot exception reaches Anki's error dialog (aqt installs sys.excepthook, which PyQt6 honours instead of qFatal). See K-183 / 320445c and the note under K-172 in ARCHIVE.md.
+
+### K-175: Library Explorer redesign: delegate-painted rows, icons, guides, sidebar ground, glyph actions
+owner: fable-ui
+priority: P1
+tags: ui,design,library
+files: klausmate/library_explorer.py,klausmate/pdf_drive.py,klausmate/theme.py,tests/test_library_explorer.py,tests/test_theme.py
+verify: bash -c "test -f klausmate/library_explorer.py && python3 tests/test_library_explorer.py && python3 tests/test_theme.py"
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Pouya: "make the library panel look like VS Code ... do a full redesign of it" (2026-09-01), then handed over a PyQt6 UI-design skill: 4px grid, token-first colours, both palettes, complete widget states, no magic numbers. What K-117/K-130 left un-VS-Code: rows have no icons and no indent guides; the tree is a white card on a grey window (VS Code inverts that: the SIDEBAR is the grey ground, the editor the white one); the caption actions are 600-weight text buttons where VS Code uses 16px glyphs in 22px hit boxes; the sash between panes is invisible where VS Code draws a hairline. Ship: new klausmate/library_explorer.py (pure geometry above an aqt divider; ExplorerDelegate painting a full-cell band + indent guides + hand-drawn folder/page icons + the item text via the style, columns 1-3 untouched so sorting, tabular figures and K-127 retention ink all survive; GlyphButton QToolButton for New Folder / Refresh / Map / Fit with tooltips, K-115 try/finally paint guard). theme.library_qss: tree + header on bg, accent band pre-composited over bg, hairline sash, QToolButton#LibraryGlyph states. pdf_drive wires the delegate and the glyph buttons behind a guarded import (the fixed aqt.qt stub in test_drive lacks these names; a missing module must cost the look, never the Library). Density stays 22px/13px (K-130: do not inflate). Offscreen day+night renders before Review.
+
+#### Comments
+- [2026-09-01 fable-ui] DONE, committed 5b45d7b. New klausmate/library_explorer.py (pure geometry above the aqt divider: 4px grid constants, guide_xs, icon_rect, folder/page icon points, four action glyphs, band/ink/guide colour = tokens; ExplorerDelegate + GlyphButton below). theme.library_qss: tree + header on bg (VS Code sidebar ground; the viewer is the paper), accent band mixed over bg (accent_mix grew base=, default unchanged), 1px sash border, QToolButton#LibraryGlyph rest/hover/pressed/focus/disabled, assistant pane styled from this sheet (its own dialog_qss knew nothing of tabs or a transcript - native chrome + white box in night, offscreen render), item padding 1px->0px because rows measured 24 not the claimed 22. pdf_drive: guarded import (test_drive fixed stub lacks the names), glyph caption actions with the K-117 text buttons as the explicit fallback (test_drive pins the QPushButton("Map", left) literal), delegate install + SASH_W, Fit glyph, tree takes initial focus. Verify: exit 1 before, 0 after. 79 new checks incl. pixel reads off a real offscreen tree and DriveWindow; test_theme 337; full sweep green; 11 mutations each caught (one pin was found vacuous by its mutation - wrong-direction pixel translation - and fixed). Day+night renders eyeballed. Process note: pdf_drive.py carried an uncommitted hunk from the offline "embedded refresh" session; parked it as a patch, committed clean, re-applied it exactly as found (test_drive 322/0 with it). File is free for K-177. Live checks owed: glyphs at 2x on a real Retina display, hover/pressed on the real macOS palette, the empty viewer pane ground (documentless QPdfView paints mid-grey in both modes - not this card).
+- [2026-09-01 orchestrator] Signed off. Gate re-run here: 79/0 and test_theme 337/0; full sweep 36/36 post-5b45d7b (run during K-177's integration, which sat on top of this commit). Two mutations of my own, both caught: INDENT 16->20 goes red 3 (guides off the twisty), and band_colour returning the tree's own ground for selected+hover goes red 4 (the pixel pins read the real band). A first, blunter mutation — band_colour returning None — crashed ExplorerDelegate.__init__ at QColor(None) rather than failing a pin; not a finding (install() is under pdf_drive's guard, so the Library keeps the stock look), but the constructor trusts a contract the signature says is nullable. THE TWO OWED CHECKS, rendered offscreen at QT_SCALE_FACTOR=2 (devicePixelRatio 2.0 confirmed) in both palettes: (1) glyphs at Retina density — the 1.2px strokes render at 2.4 device px, crisp, no fuzz; (2) hover and pressed on the real palette — forced via QEnterEvent/QHoverEvent and setDown, each state repainted ~466 device px inside its button (0 would have meant a dead QSS state); refresh-hovered shows the hover_subtle fill, map-pressed the stronger pressed fill, fit-at-rest bare. Also verified: a NESTED selected row paints one continuous band across the branch cell — the K-117 two-paint-region trap did not bite — and the depth-1 indent guide is present under it in both palettes, faint by design. TWO NOTES. (a) Both offscreen frames show the FOCUS RING on the New Folder glyph at rest, where the card says the tree takes initial focus. Offscreen show() does not activate a window the way a live one does, so this may be an artefact — verify live in one glance; if real, the tree's setFocus() needs to run after the screen is shown (singleShot(0) from showEvent). (b) The documentless viewer paints a raw grey slab between two dark panes — correctly declared out of scope here; filed as K-178.
+
+### K-179: Embedded Library: the tree takes focus AFTER the mount, not before it
+owner: fable-ui
+priority: P2
+tags: ui,library,follow-up
+files: klausmate/pdf_drive.py,tests/test_library_explorer.py
+verify: python3 tests/test_library_explorer.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+K-175 sign-off (orchestrator, offscreen at scale 2): the focus ring sits on the New Folder glyph at rest in the EMBEDDED screen. Live probe in a restarted Anki (accessibility tree): after clicking Library the tree is NOT focused either - focus stays on the toolbar webview that was clicked - so the arrow-key path K-175 claimed does not exist in the tab. Cause: DriveWindow.__init__ calls tree.setFocus() while the embedded screen is still a parentless hidden top-level; library_tab then reparents it into mw.mainLayout and shows it, and the pre-mount focus bookkeeping does not survive the reparent - Qt hands focus to the first widget in the tab chain of the newly shown screen (the New Folder glyph) or leaves it where it was. Fix: from showEvent, QTimer.singleShot(0, tree.setFocus) - after the screen is in its final window, every time it is shown. Pin: a real offscreen mount shaped like library_tab.mount() (parentless construct, addWidget into a host layout, show) ends with QApplication.focusWidget() is tab.tree; fail-before observed.
+
+#### Comments
+- [2026-09-01 fable-ui] DONE, committed 6b220fb. Confirmed real: a library_tab-shaped offscreen mount (parentless construct, addWidget into a host layout, show) put keyboard focus on the New Folder GlyphButton (fail-before observed verbatim), and a live accessibility probe in Anki found the tree unfocused after clicking Library. Fix: showEvent schedules QTimer.singleShot(0, self._focus_tree) - same shape as the viewer arm - on every show; _focus_tree is a guarded timer slot (alive + visible). The __init__ setFocus stays for the standalone window. Pins: focusWidget() is the tree after the mount and no glyph holds focus; mutation (deferred call removed) caught; test_library_explorer 82/0, test_drive 330/0, symlink compile OK. LIVE CHECK OWED: the running Anki (pid 13815) predates this commit; a graceful quit was requested twice and did not complete, and with the Library open and a PDF loaded in it I did not force it. The next restart loads the fix. Observation, not chased: macOS accessibility walks over the Library tree emit "Cell requested for row 2 is out of bounds for table with 0 rows" Qt warnings (654 during my probes) - AX-client only, invisible to the user.
+- [2026-09-01 orchestrator] Signed off. Verified independently rather than accepted: HEAD 6b220fb, tree clean; gate 82/0; full sweep 36/36; the diff is 23 lines of pdf_drive.py — showEvent schedules QTimer.singleShot(0, self._focus_tree) inside a try, and _focus_tree is a guarded timer slot (_alive() and isVisible(), try/except-print), so the raising-slot SIGABRT class is handled. My own mutation — the deferred call replaced with pass — goes red 2 in test_library_explorer (test_drive unaffected at 330/0, as its pins do not cover focus). THE REPRODUCING FRAME NOW PASSES: the same offscreen mount that showed the ring (parentless construct, addWidget into a host layout, show — library_tab.mount()'s exact shape, QT_SCALE_FACTOR=2) reports focusWidget is _LibraryTree in BOTH palettes, the New Folder glyph is bare at rest like the fit glyph, the forced hover and pressed fills are unchanged, and the newly focused tree draws NO stray focus rectangle — focus reads only through the selection band, which is the VS Code grammar. One note for the restart, which I cannot do: the live probe found focus left on the toolbar WEBVIEW after clicking Library; _focus_tree runs on every show so that path should now land on the tree too — confirm with one arrow-key press after the next restart. The running Anki predates both fbec2f3 and this commit and ignored two graceful quit requests with a PDF open; correctly not forced.
+
+### K-182: /simplify pass over the review-fix commits: one settle, one close, one refresh helper
+owner: orchestrator
+priority: P2
+tags: cleanup,library
+files: klausmate/pdf_drive.py,klausmate/card_index.py,klausmate/pdf_index.py,tests/test_drive.py,tests/test_klausmate.py,tests/test_library_explorer.py
+verify: bash -c 'python3 tests/test_drive.py && python3 tests/test_library_explorer.py && python3 tests/test_klausmate.py'
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Four cleanup angles over fbec2f3+6b220fb, deduped. Manifest half already landed (read_manifest, no spread, symmetric failure-exit pins). This card is the pdf_drive/test_drive half: collection_will_close() owning rows+seq+viewer+MAP staleness (the map was never reset on profile switch); _on_shown replacing three singleShot(0) blocks with one stated order (arm, refresh, map, focus last) under @guarded; __init__ setFocus deleted (dead for the screen, redundant for the window); _refresh_live_libraries(why) shared by settings-save and watcher, hidden screens marked pending not refreshed eagerly (measured 130ms worker per refresh; five slider releases = five refreshes of an unseen screen); docstrings cut; _scratch_rosters() contextmanager gives the fake-window test block the finally it lacked; getattr guard dropped; one processEvents() instead of an 8x10ms sleep loop; the real-widget block stops building an unused sidebar it claimed to avoid. Skipped: dropping the flag for an eager profile_did_open refresh (the map rebuild is a cold worker job; lazy is right).
+
+#### Comments
+- [2026-09-01 orchestrator] Done, commit 7746538. Both suites and the full sweep green; five mutations caught; compile green. See the commit for the per-finding record. Skipped on purpose: S4's eager profile_did_open refresh (lazy is right: the map rebuild is a cold worker job).
+
+### K-183: test_slot_guards aborts a child interpreter every run, filing a macOS crash report; and its premise is false in Anki
+owner: orchestrator
+priority: P1
+tags: test-integrity,robustness
+files: tests/test_slot_guards.py,klausmate/slot_guard.py
+verify: python3 tests/test_slot_guards.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Pouya pasted the second Python SIGABRT crash report of the day (17:31:46, PyRun_SimpleStringFlags = a python -c child, parent Python). Source, reproduced: tests/test_slot_guards.py's first behavioural control deliberately clicks an UNGUARDED raising slot in a bare subprocess and asserts exit 134 — so every full sweep aborts a child interpreter and macOS files (or refreshes) a crash report, and the user sees a dialog. PREMISE, checked: with a non-default sys.excepthook installed, PyQt6 calls the hook INSTEAD of qFatal (verified: hook called, exit 0). aqt.errors.ErrorHandler installs one and aqt.main instantiates it — so in live Anki an unguarded slot exception reaches Anki's error dialog, it does NOT abort Anki. K-172's 'aborts Anki' was measured in a bare interpreter. The guard is still right (one log line instead of a modal dialog mid-review; survival in test processes) but its docstring says the wrong thing. FIX: the control installs a recording excepthook (what Anki does) and proves the exception ESCAPES an unguarded slot and is CONTAINED by a guarded one, with every child exiting 0 — no abort, no crash report; slot_guard.py's docstring corrected.
+
+#### Comments
+- [2026-09-01 orchestrator] Done, commit 320445c. Reproduced, premise-checked (PyQt6 honours a non-default excepthook instead of qFatal; Anki installs one), fixed, and verified under a crash-report watch: count and newest mtime unchanged across the test run, every child exits 0. Full sweep 36/36.
+
+### K-184: The slot-exception premise, corrected at every site that repeated it
+owner: orchestrator
+priority: P3
+tags: docs,test-integrity
+files: klausmate/assistant_panel.py,klausmate/library_explorer.py,klausmate/pdf_drive.py,tests/test_assistant_panel.py,tests/test_browse_toolkit.py,tests/test_drive.py,tests/test_library_explorer.py,board/ARCHIVE.md
+verify: bash -c 'python3 tests/test_assistant_panel.py && python3 tests/test_drive.py'
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Follow-up to K-183 (320445c). Five comments/check titles said an unguarded slot exception aborts ANKI; two more implied it. False: PyQt6 honours a non-default sys.excepthook instead of qFatal, and aqt installs one, so in Anki it is the modal error dialog. The bare-interpreter abort (exit 134) stays where it is true. Comment-only in source; check TITLES only in tests (assertions untouched). Plus a CORRECTION note under K-172's ARCHIVE.md entry, which CLAUDE.md tells sessions to search before re-debugging.
+
+### K-185: Map: paint on the panel's ground — no card, vignette or border
+owner: claude-task1
+priority: P1
+tags: ui,phase-d,vibe
+files: klausmate/pdf_map.py,tests/test_pdf_map.py
+verify: python3 tests/test_pdf_map.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Task 1 of docs/superpowers/plans/2026-09-01-constellation-and-panel-integration.md. The canvas paints its OWN always-dark palette inside a rounded 12px card with a radial vignette and a grey_light border — that card is what makes it read as a widget dropped onto the panel. It paints flat on the HOST palette's chrome token now, no card, no clip, no lift; the always-dark special case (K-174) is retired because the panel it lives on is the ground.
+
+#### Comments
+- [2026-09-01 claude-task1] Commit 127c9ae. TDD: RED run (before impl) showed 6 FAIL for the new Task 1 pins (corner=#efefef vs chrome, both palettes; flat-ground mismatch; VIGNETTE_LIFT/SPREAD present; hard-coded palette(True) present) with 262 pre-existing pins still green. GREEN run after impl: 268 passed, 0 failed. Full addon loop (36 test_*.py files) green throughout. Mutation evidence per new pin, each shown failing then restored: (1) bg=host["chrome"]->bg=host["bg"] broke both corner-is-chrome pins (2 FAIL); (2) a 10x10 off-flat corner patch broke both flat-ground pins; (3) reintroducing VIGNETTE_LIFT broke exactly its name-gone pin (1 FAIL, isolated); (4) reintroducing theme.palette(True) inside _paint broke the no-hardcoded-palette pin plus the inverted K-174 source pin (2 FAIL). File restored byte-identical after every mutation (diff confirmed). Frame time (python3.14 + PyQt6, offscreen, 1100x660, 40 grabs, 3 runs): median 1.03-1.14ms, max 1.43-1.68ms -- well under the 4.0ms floor and at/below the K-174 baseline (1.38-1.95ms), since a flat fillRect is strictly cheaper than the old radial-gradient+roundedRect+clip. One old pin inverted (K-174's forced-dark palette(True) source check, now asserts absence) and two forced theme.night_mode=False sites changed to True in the pixel-heavy K-158/K-174 real-Qt section, since their absolute-brightness heuristics assume a dark ground that K-185 no longer provides for free -- forcing True restores that assumption without touching any assertion text. Full report: .superpowers/sdd/2026-09-01-constellation-and-panel-integration/task-1-report.md
+- [2026-09-01 controller] Task review (sonnet, read-only): spec compliant, quality Approved, no Critical/Important findings. Two Minor deferred to the final whole-branch review: stale docstrings in test_pdf_map's _name_pixels/_runs helpers; PyQt6 user-site install for python3.14 disclosed. Verified against theme.py tokens, mutation evidence per pin, fixture night_mode flips judged a mechanical fix not a weakening.
+
+### K-186: Map: the lit PDF node loses its halo; ring and core stay
+owner: claude-task2
+priority: P1
+tags: ui,phase-d,vibe
+files: klausmate/pdf_map.py,tests/test_pdf_map.py
+verify: python3 tests/test_pdf_map.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Task 2 of docs/superpowers/plans/2026-09-01-constellation-and-panel-integration.md. The lit PDF node currently paints core + ring + a QRadialGradient halo reaching to 3.4x its radius -- that halo is the 'general glow' Pouya wants gone ("remove the general glow. I don't like the general glow that comes with it") while keeping "the shininess of the PDFs" in the ring and core. Delete the halo block (_paint_nodes) and the NODE_HALO_F constant; ring and core are untouched. Depends on K-185 (Task 1, Done) for the host-palette c dict.
+
+#### Comments
+- [2026-09-01 claude-task2] Commit 666028c. TDD: RED run (before impl) showed 2 FAIL for the new Task 2 pins (NO-halo annulus 44/48 lifted; NODE_HALO_F is-gone) with 270 pre-existing pins still green -- matching the brief's Step 3 prediction exactly. GREEN run after impl: 272 passed, 0 failed. Full addon loop (36 test_*.py files) green throughout, twice. Mutation evidence per new pin, each shown failing then restored byte-identical (diff-confirmed): (1) the brief's own mutation -- a 0.3-alpha painter.drawEllipse(pt, r*2.4, r*2.4) reinserted before the ring -- broke exactly the NO-halo pin (36/48 lifted), nothing else; (2) painting the ring in c["bg"] instead of c["blue_bright"] broke the ring-still-there pin (plus one collateral pre-existing ghost-vs-lit ratio pin, expected from a destructive mutation); (3) filling the core with c["bg"] broke the core-still-lit pin (centre=35 ground=35, i.e. invisible); (4) reinserting NODE_HALO_F = 3.4 (unwired) broke exactly the is-gone-by-name pin. Two pre-existing pins needed adjusting as a DIRECT, necessary consequence of the halo's removal (not bugs in the change -- verified by an old-vs-new A/B render comparison before touching either): (a) tests/test_pdf_map.py:1111 asserted _paint_nodes still contains a QRadialGradient (that assertion's sole subject was the halo itself, and the check's own description text never mentions nodes at all, only the star layer) -- deleted that clause; the halo's absence is now covered far more precisely by the new pixel pins. (b) the 'focusing a PDF changes the picture' thresholds (test_pdf_map.py ~2112) measured the FULL off-vs-on frame delta, which on this fixture used to be dominated by the halo popping in (node-only transition alone: 3.24% with halo, 0.91% without; edges alone, isolated by the very next unchanged pin, are a constant 1.28% throughout) -- rebased 0.04/0.01 to 0.012/0.006, comfortably under the new real 2.04%/1.01% and independently verified to still catch a real regression (neutering _paint_edges as a probe correctly drove 'moved' down to 0.91%, below the new 1.2% floor, and restored byte-identical after). Frame time (python3.14 + PyQt6, offscreen, 1100x660, 40 grabs, 3 runs, CLOUD fixture with lec1 selected): NEW median 0.898-0.918ms / max 0.916-1.314ms, vs an OLD-code A/B on the same machine/scene at median 0.943-0.946ms / max 0.981-1.119ms -- both far under the 4.0ms floor, NEW a hair faster (expected: one fewer QRadialGradient fill). Full report: .superpowers/sdd/2026-09-01-constellation-and-panel-integration/task-2-report.md
+- [2026-09-01 claude-task2] Fix round 1 (Important 1: stale halo/glow prose): commit 48b22ee. Reworded pdf_map.py:220-223's K-174 docstring bullet (matched the file's own 'Retired at K-1XX' pattern) and tests/test_pdf_map.py's 'spokes TAPER' check description, both of which still described the deleted node halo; also found and fixed one more instance via the requested re-grep (pdf_map.py's GHOST_HALO_F comment, which derived its value from the now-gone NODE_HALO_F). Textual only. Covering test: python3 tests/test_pdf_map.py -> 272 passed, 0 failed, same count as before. Fix report appended to task-2-report.md under '## Fix round 1'.
+- [2026-09-01 controller] Task review (sonnet): spec compliant; one Important (stale halo prose in the module docstring + a test description) fixed in 48b22ee and re-reviewed clean. Two Minor deferred to the final whole-branch review: the four new pins use node_radius() unscaled by the depth factor; the annulus comment misattributes its one tolerated lifted sample (it is the selection ring).
+
+### K-187: Map: the chosen PDF's name lights up — bare, no plate, name only
+owner: claude-task3
+priority: P1
+tags: ui,phase-d,vibe
+files: klausmate/pdf_map.py,tests/test_pdf_map.py
+verify: python3 tests/test_pdf_map.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+Task 3 of docs/superpowers/plans/2026-09-01-constellation-and-panel-integration.md. The focused node currently draws a rounded plate (background + padding) behind up to four lines: display, folder, matched note count, retention. Pouya asked for the name alone to light up, no box around it. node_lines(pdf) returns exactly [display]; _paint_label draws that one line with no background shape, ink c["text"] when the active node is the selected one, c["text_muted"] for a hover preview. LABEL_PLATE_ALPHA/LABEL_PAD_X/LABEL_PAD_Y are deleted. Depends on K-185/K-186 (Tasks 1-2, Done) for the host-palette c dict and the halo-free node paint.
+
+#### Comments
+- [2026-09-01 claude-task3] Commit 1eea110. TDD: RED run (test pins added/inverted before impl, pdf_map.py reverted via git stash to prove it) showed 5 FAIL — 'the focused node's label is the name alone' (old node_lines still returned 4 lines), 'no node painter draws text...' (drawText count still 2, pin already updated to expect 1), 'node_lines is the NAME and nothing else', '_paint_label draws NO plate', 'the plate constants are gone by name' — with 272 pre-existing pins green throughout. GREEN run after impl: 277 passed, 0 failed. Full addon loop (36 test_*.py files) green throughout, both before and after. Mutation evidence, each shown failing then restored byte-identical (md5 verified): (1) node_lines returning an extra line broke both the inverted 384 pin and the new 'NAME and nothing else' pin; (2) a comment-only 'drawRoundedRect'/'setBrush' mention inside _paint_label's source broke the plate-source pin; (3) reintroducing LABEL_PAD_X broke the constants-gone pin; (4) a stray dead-code drawText( elsewhere broke the drawText-count clause specifically; (5) short-circuiting _paint_label to draw nothing broke 'selecting a PDF paints its NAME' (plus two other pre-existing pins, expected collateral); (6) the brief's own Step 6 mutation, lit_name=False, isolated exactly 'the FULL text ink' pin (16 px in c[text] at rest -> 0 under mutation). One new pin's threshold was recalibrated from the brief's literal >20 to >10: real offscreen 11px text renders mostly antialiased edge, not solid fill, so a <=3 tolerance around pure c['text'] only ever catches ~16 fully-covered px for this 9-char string in this box, measured 16 (bright/correct) vs 0 (muted/wrong) -- a clean, wide margin, just not the guessed number. Frame time (python3.14+PyQt6, offscreen, 1100x660, 40 grabs, 3 runs): median 1.09-1.15ms, max 1.38-1.99ms -- well under the 4.0ms floor, in line with Task 1 (1.03-1.14ms) and Task 2 (~0.90ms). Full report: .superpowers/sdd/2026-09-01-constellation-and-panel-integration/task-3-report.md
+- [2026-09-01 controller] Task review (sonnet): spec compliant, Approved, no Critical/Important. Five Minor deferred to the final whole-branch review (stale 'plate' word in _name_pixels docstring; two vacuous retention pins ~389-394; muted hover-only label path not pixel-verified; dead bh arithmetic kept per brief; node_lines fallback '' vs 'PDF').
+
+### K-189: viewer_context: the registry of live PDF viewers
+owner: swarm-t5
+priority: P2
+tags: assistant
+files: klausmate/viewer_context.py,tests/test_viewer_context.py
+verify: python3 tests/test_viewer_context.py
+created: 2026-09-01
+claimed: 2026-09-01
+archived: 2026-09-02
+
+#### Comments
+- [2026-09-01 swarm-t5] klausmate/viewer_context.py,tests/test_viewer_context.py RED: ModuleNotFoundError (expected) GREEN: 13 passed, 0 failed MUTATION: Reversed iteration direction → pin 'last activated wins' FAILED as expected, restore → GREEN FULL LOOP: test_anki_tools (35), test_background (95), test_viewer_context (13) all pass before test_agent_host (not yet implemented) Implementation complete. All interfaces in brief match exactly. ViewState dataclass, registry dict, activation order tracking, and callback dispatch all working correctly.
+- [2026-09-02 controller] Task review (sonnet): spec compliant, Approved. One Important ruled plan-mandated by the controller: the report's GREEN transcript omitted the diagnostic line the module is required to print for a raising subscriber; report annotated, code unchanged. Minor deferred: subscribe()'s bare Callable annotation (inherited from the plan). Committed as 001548b.
