@@ -278,6 +278,61 @@ def mcp_args_to_params(action: str, args: dict) -> dict:
     return a
 
 
+# ---- MCP over HTTP (Task 4) ---------------------------------------------------
+
+PROTOCOL_VERSION = "2025-06-18"
+
+def mcp_tools() -> list[dict]:
+    return [{"name": a.mcp_name, "description": a.description, "inputSchema": a.schema}
+            for a in ACTIONS.values() if a.mcp_name]
+
+
+def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, Any, dict]:
+    """One JSON-RPC message → (http status, json body or None, extra headers)."""
+    if not isinstance(body, dict):
+        return 200, {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}, {}
+    rid = body.get("id")
+    method = str(body.get("method") or "")
+    params = body.get("params")
+    if params is None:
+        params = {}
+    if not isinstance(params, dict):
+        # JSON-RPC 2.0 formally permits params to be an Array (by-position)
+        # as well as an Object — legal-shaped input, not garbage — but every
+        # branch below calls params.get(...), which assumes an Object.
+        # Fix round 1 (review Important #1): this used to fall through to
+        # do_POST's generic safety net as an uncaught AttributeError,
+        # answering a non-JSON-RPC-shaped HTTP 500 instead of a clean,
+        # spec-shaped error the caller can parse the same way as any other
+        # JSON-RPC failure.
+        return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "invalid params: expected an object"}}, {}
+    if method == "notifications/initialized":
+        return 202, None, {}
+    if method == "initialize":
+        sid = secrets.token_hex(8)
+        end.sessions.add(sid)
+        res = {"protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
+               "capabilities": {"tools": {}}, "serverInfo": {"name": "klaus", "version": end.version}}
+        return 200, {"jsonrpc": "2.0", "id": rid, "result": res}, {"Mcp-Session-Id": sid}
+    if method == "ping":
+        return 200, {"jsonrpc": "2.0", "id": rid, "result": {}}, {}
+    if method == "tools/list":
+        return 200, {"jsonrpc": "2.0", "id": rid, "result": {"tools": mcp_tools()}}, {}
+    if method == "tools/call":
+        name = str(params.get("name") or "")
+        action = MCP_TO_ACTION.get(name)
+        if action is None:
+            out = {"content": [{"type": "text", "text": f"unknown tool {name}"}], "isError": True}
+        else:
+            r = end.handle(action, mcp_args_to_params(action, params.get("arguments") or {}), agent=True)
+            if r.get("error"):
+                out = {"content": [{"type": "text", "text": str(r["error"])}], "isError": True}
+            else:
+                out = {"content": [{"type": "text", "text": json.dumps(r.get("result"))}], "isError": False}
+        return 200, {"jsonrpc": "2.0", "id": rid, "result": out}, {}
+    return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"unknown method {method}"}}, {}
+
+
 # ---- previews ----------------------------------------------------------------
 
 def similar_existing(col, front: str) -> str | None:
@@ -611,7 +666,12 @@ def _handler_for(end: Endpoint):
             self._send(200, out)
 
         def _mcp(self, raw: bytes) -> None:
-            self._send(404, {"error": "mcp route arrives in Task 4"})
+            try:
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                return self._send(200, {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
+            status, out, extra = mcp_dispatch(end, body, self.headers.get("Mcp-Session-Id"))
+            self._send(status, out, extra)
     return H
 
 

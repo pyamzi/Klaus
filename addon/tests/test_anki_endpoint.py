@@ -575,6 +575,65 @@ slow_end = ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main, approver
 r = slow_end.handle("addNote", {"note": {"deckName": "Default", "modelName": "Basic", "fields": {"Front": "Z", "Back": "z"}}}, agent=False)
 check("an approver that never answers in time → 'approval timed out'", r["error"] == "approval timed out")
 
+section("MCP route")
+def rpc(method, params=None, rid=1, headers=None):
+    body = {"jsonrpc": "2.0", "id": rid, "method": method}
+    if params is not None: body["params"] = params
+    return post("/mcp", body, headers=headers)
+st, r, h = rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}})
+check("initialize echoes protocol, names klaus, sets a session header",
+      st == 200 and r["result"]["protocolVersion"] == "2025-06-18" and r["result"]["serverInfo"]["name"] == "klaus"
+      and "tools" in r["result"]["capabilities"] and any(k.lower() == "mcp-session-id" for k in h))
+sid = [v for k, v in h.items() if k.lower() == "mcp-session-id"][0]
+st, r, _ = post("/mcp", {"jsonrpc": "2.0", "method": "notifications/initialized"}, headers={"Mcp-Session-Id": sid})
+check("initialized → 202 no body", st == 202 and r is None)
+st, r, _ = rpc("ping", rid=2)
+check("ping → empty result", r["result"] == {})
+st, r, _ = rpc("tools/list", rid=3)
+names = {t["name"] for t in r["result"]["tools"]}
+check("tools/list equals the registry's MCP names with schemas",
+      names == set(ep.MCP_TO_ACTION) and all("inputSchema" in t and "description" in t for t in r["result"]["tools"]))
+st, r, _ = rpc("tools/call", {"name": "list_decks", "arguments": {}}, rid=4)
+check("tools/call → text content, not error", r["result"]["isError"] is False and r["result"]["content"][0]["type"] == "text"
+      and isinstance(json.loads(r["result"]["content"][0]["text"]), list))
+st, r, _ = rpc("tools/call", {"name": "add_note", "arguments": {"deck": "Default", "model": "Basic", "fields": {"Front": "M", "Back": "m"}}}, rid=5)
+check("add_note without source_page → isError with the message, not a JSON-RPC error",
+      "error" not in r and r["result"]["isError"] is True and "source" in r["result"]["content"][0]["text"].lower())
+n_before = len(approvals)
+st, r, _ = rpc("tools/call", {"name": "add_note", "arguments": {"deck": "Default", "model": "Basic", "fields": {"Front": "M", "Back": "m"}, "source_page": 9}}, rid=6)
+check("add_note with source_page → approval dialog, then a note id", len(approvals) == n_before + 1 and r["result"]["isError"] is False)
+st, r, _ = rpc("tools/call", {"name": "nope", "arguments": {}}, rid=7)
+check("unknown tool → isError", r["result"]["isError"] is True)
+st, r, _ = rpc("zzz/method", rid=8)
+check("unknown method → -32601", r["error"]["code"] == -32601)
+st, r, _ = post("/mcp", None, raw=b"{bad")
+check("bad json → -32700", r["error"]["code"] == -32700)
+# Fix round 1 (review Important #1): JSON-RPC 2.0 formally permits params to
+# be an Array (by-position) as well as an Object, so an array/string params
+# is legal-shaped input, not garbage — but `params.get(...)` inside
+# mcp_dispatch used to assume an Object unconditionally, crashing to a
+# non-JSON-RPC-shaped HTTP 500 instead of a clean -32602. rpc()'s own
+# params=None guard means passing a non-None, non-dict value (a list or a
+# str) here reaches mcp_dispatch exactly the way a real by-position caller
+# would.
+st, r, _ = rpc("initialize", [1, 2, 3], rid=9)
+check("initialize with array params (legal JSON-RPC, by-position) → -32602, not a crash",
+      st == 200 and r["error"]["code"] == -32602)
+st, r, _ = rpc("tools/call", "oops", rid=10)
+check("tools/call with string params → -32602, not a crash",
+      st == 200 and r["error"]["code"] == -32602)
+st, r, _ = rpc("ping", rid=11)
+check("...and the connection/server is still healthy right after both malformed-params requests",
+      st == 200 and r["result"] == {})
+req = urllib.request.Request(f"http://{host}:{port}/mcp", headers={"X-Klaus-Token": token}, method="GET")
+try:
+    urllib.request.urlopen(req, timeout=5); got = 200
+except urllib.error.HTTPError as e:
+    got = e.code
+check("GET /mcp → 405 (no SSE stream)", got == 405)
+r2 = ac("addNote", note={"deckName": "Default", "modelName": "Basic", "fields": {"Front": "M", "Back": "m"}})
+check("the MCP route sets the agent flag: the same note without a source page is refused on /mcp (above) but accepted on /", r2["error"] is None)
+
 end.stop()
 check("stop closes the port", True)
 
