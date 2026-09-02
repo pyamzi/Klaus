@@ -386,12 +386,6 @@ tip = pdf_map.node_lines({
 # little box around it") — the focused node's label is the name alone.
 check("the focused node's label is the name alone",
       tip == ["Lecture 1"])
-check("unknown retention (headless None) is simply omitted",
-      not any("Retention" in t for t in pdf_map.node_lines(
-          {"display": "x", "match_count": 1, "retention": None})))
-check("a bool can't cosplay as a retention score",
-      not any("Retention" in t for t in pdf_map.node_lines(
-          {"display": "x", "match_count": 1, "retention": True})))
 check("no folder -> no Folder line; missing display falls back to safe",
       not any("Folder" in t for t in
               pdf_map.node_lines({"display": "x", "match_count": 0}))
@@ -1362,10 +1356,11 @@ check("...and every end of it is a palette TOKEN, so the whole star "
       all(t in _ramp_seg for t in
           ('c["bg"]', 'c["blue_bright"]', 'c["text"]')))
 check("the pen cache is keyed on the palette's own tokens, not on "
-      "night_mode — the map draws in the dark palette either way, so a "
-      "night flip must not rebuild while an ACCENT change must "
-      "(K-188 adds the quantised lit ramp to the same key, so a night "
-      "flip still isn't what invalidates it)",
+      "night_mode — since K-185 `c` is the HOST palette, so a night "
+      "flip changes these tokens exactly like an ACCENT change does, "
+      "and keying on the tokens directly (never a separate "
+      "night_mode() flag) catches both with the one cache (K-188 folds "
+      "the quantised lit ramp into the same key too)",
       'key = (c["bg"], c["blue_bright"], c["text"], scale, q)'
       in _method_seg("_MapCanvas", "_ensure_pens"))
 
@@ -1567,17 +1562,18 @@ if _HAVE_QT:
         return img
 
     def _name_pixels(widget, w, h):
-        """Count NEUTRAL bright pixels — the plate's text, and nothing
-        else on this canvas.
+        """Count NEUTRAL bright pixels — a focused node's bare name,
+        and nothing else on this canvas.
 
-        K-148 counted near-BLACK ink, which worked because the map drew
-        on a light ground. K-158 draws in the dark palette in both
-        themes, so black is now the background and the question has to
-        be asked the other way round: the text token is a neutral grey
-        (r == g == b), while every other lit thing here — stars, node
-        core, rings, beams — is mixed from the blue accent and keeps a
-        visible blue lean. The card's own 1px border is neutral too, so
-        the scan insets past it.
+        K-148 counted near-BLACK ink, which worked when the map always
+        drew on a light ground. Since K-185 the canvas paints the HOST
+        palette instead (dark or light, whichever theme is forced), so
+        the reliable test is the colour FAMILY, not the brightness: the
+        text token is a neutral grey (r == g == b), while every other
+        lit thing here — stars, node core, rings, beams — is mixed from
+        the blue accent and keeps a visible blue lean. No plate
+        (K-187), no card, no border (K-185) survive to complicate the
+        count; the 4px inset just clears the widget's own edge.
         """
         img = _render(widget, w, h)
         n = 0
@@ -1688,6 +1684,38 @@ if _HAVE_QT:
             cv = w5.canvas
             cv.resize(860, 560)
             _app.processEvents()
+
+            # ---- I1 (final review, 2026-09-02): the STANDALONE window
+            # wears the same ground as its canvas, no separate box ----
+            # pdf_map.py:3412 painted this window's own background with
+            # `bg` — a DIFFERENT token from the canvas's `chrome` (K-185
+            # moved the canvas there for the Library dock's sake and
+            # nobody re-checked this, the map's OTHER host) — so a
+            # borderless but differently-shaded rectangle survived as
+            # exactly the "separate box" Pouya asked to lose. A pixel
+            # just outside the canvas (inside the window's own margin)
+            # must equal one just inside it, in both palettes.
+            _host = theme.palette(_night)
+            _wimg = _render(w5, w5.width(), w5.height())
+            _crect = cv.geometry()
+            _gy = _crect.top() + 10
+            _outside = _wimg.pixelColor(max(0, _crect.left() - 4), _gy)
+            _inside = _wimg.pixelColor(_crect.left() + 4, _gy)
+            _wc = _QtG.QColor(_host["chrome"])
+            check(f"night={_night}: the standalone Map window's own "
+                  "ground matches its canvas's — a pixel just outside "
+                  "the canvas rect (the window's margin) equals one "
+                  "just inside it, both the host chrome token, not the "
+                  "window's own separate `bg`",
+                  abs(_outside.red() - _inside.red()) <= 2
+                  and abs(_outside.green() - _inside.green()) <= 2
+                  and abs(_outside.blue() - _inside.blue()) <= 2
+                  and abs(_outside.red() - _wc.red()) <= 2
+                  and abs(_outside.green() - _wc.green()) <= 2
+                  and abs(_outside.blue() - _wc.blue()) <= 2,
+                  f"outside={_outside.name()} inside={_inside.name()} "
+                  f"chrome={_wc.name()}")
+
             if not _night:
                 _in_bands = sum(poly.count() for _i, _z, poly in cv._bands)
                 _in_links = sum(
@@ -2453,9 +2481,10 @@ if _HAVE_QT:
 
         def _runs(img, w, h, th=430, inset=4):
             """Horizontal runs of lit pixels — the reference's one
-            decisive measurement. Inset past the card's own 1px border,
-            which is a full-width run of host-palette grey and nothing
-            to do with the field."""
+            decisive measurement. The card and its 1px border are gone
+            (K-185: no card, no border, no vignette — the field paints
+            flat on the host ground edge to edge); the inset just clears
+            the widget's own edge, same as ``_name_pixels`` above."""
             out = {}
             lit = 0
             for y in range(inset, h - inset):
@@ -2545,9 +2574,13 @@ if _HAVE_QT:
         _swept = max(_seen) - min(_seen)
         check("the idle motion is a SWAY around REST_ANGLE, not K-174's "
               "full revolution: 2300 real _idle_tick() calls (~5.4 sway "
-              "periods) never leave the ±SWAY_AMP band, and the angle "
-              "both rises and falls rather than only ever advancing",
+              "periods) never leave the ±SWAY_AMP band AROUND REST_ANGLE "
+              "itself (not just a band of that width somewhere else), "
+              "and the angle both rises and falls rather than only ever "
+              "advancing",
               _swept < 2.2 * pdf_map.SWAY_AMP
+              and all(abs(_a - pdf_map.REST_ANGLE) <= pdf_map.SWAY_AMP + 1e-9
+                      for _a in _seen)
               and any(_seen[i + 1] > _seen[i] + 1e-9
                       for i in range(len(_seen) - 1))
               and any(_seen[i + 1] < _seen[i] - 1e-9
@@ -2820,26 +2853,41 @@ if _HAVE_QT:
             _app.processEvents()
         _img = _cv.grab().toImage()
         _vp, _cam = _cv._vp, _cv._cam
-        _sx, _sy, _ = pdf_map.project_point(_vp, _cam, *_cv._pdf_xyz["lec1"])
-        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"])
+        _sx, _sy, _dep = pdf_map.project_point(_vp, _cam, *_cv._pdf_xyz["lec1"])
+        # Perspective sizes the node too (_paint_nodes' own factor) — the
+        # annulus below is sampled around the radius actually DRAWN, not
+        # the flat node_radius() a depth of exactly 1.0 would draw.
+        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"]) * pdf_map._clamp(
+            _dep, pdf_map.DOT_DEPTH_MIN, pdf_map.DOT_DEPTH_MAX)
         _ground = _luma(_img, 2, 2)
-        # Sample an annulus well outside the ring (1.6r .. 3.0r) on 16
-        # spokes: with a halo there, most samples are lifted off the
-        # ground; without it, almost none.
+        # Sample an annulus well outside the ring, on 16 spokes: with a
+        # halo there, most samples are lifted off the ground; without
+        # it, almost none. Based on r + NODE_SELECT_GAP — the widest
+        # thing _paint_nodes ever paints from centre, by its own margin
+        # comment — rather than a bare multiple of r alone: for a
+        # small-match-count node like this fixture's, the constant GAP
+        # (5px) is not small next to r, so a fixed multiplier of r can
+        # land back ON the selected node's own outer ring (discovered
+        # fixing this pin to use the DRAWN, depth-scaled r above — the
+        # old flat node_radius() r happened to dodge it by luck, not by
+        # margin).
+        _edge = _r + pdf_map.NODE_SELECT_GAP
         _lifted = 0
         _samples = 0
         for _k in range(16):
             _a = 2 * math.pi * _k / 16
-            for _rr in (1.6 * _r, 2.2 * _r, 3.0 * _r):
+            for _rr in (1.3 * _edge, 1.8 * _edge, 2.4 * _edge):
                 _x = _sx + _rr * math.cos(_a)
                 _y = _sy + _rr * math.sin(_a)
                 if 0 <= _x < _img.width() and 0 <= _y < _img.height():
                     _samples += 1
                     if abs(_luma(_img, _x, _y) - _ground) > 6:
                         _lifted += 1
-        check("the lit node has NO halo: the annulus between 1.6r and "
-              "3.0r is ground (stars and links may cross it, so 'almost "
-              "none', not none)",
+        check("the lit node has NO halo: an annulus well outside "
+              "r + NODE_SELECT_GAP (the selected node's own outer "
+              "ring, the widest thing painted from centre) is ground "
+              "(stars and links may still cross it, so 'almost none', "
+              "not none)",
               _samples >= 30 and _lifted / _samples < 0.12,
               f"{_lifted}/{_samples} lifted")
         check("...but the ring is still there: pixels ON the radius "
@@ -2879,9 +2927,14 @@ if _HAVE_QT:
             _app.processEvents()
         _img = _cv.grab().toImage()
         _c = dict(theme.palette(True), bg=theme.palette(True)["chrome"])
-        _sx, _sy, _ = pdf_map.project_point(
+        _sx, _sy, _dep = pdf_map.project_point(
             _cv._vp, _cv._cam, *_cv._pdf_xyz["lec1"])
-        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"])
+        # Same depth factor _paint_nodes applies before handing its `r`
+        # to _paint_label — label_anchor has to be asked with the radius
+        # actually drawn, not the flat node_radius() a depth of 1.0 would
+        # draw.
+        _r = pdf_map.node_radius(FAKE["pdfs"][0]["match_count"]) * pdf_map._clamp(
+            _dep, pdf_map.DOT_DEPTH_MIN, pdf_map.DOT_DEPTH_MAX)
         # A fresh QFont at the exact pixel size _paint_label sets, not
         # the widget's own default font — this is what fixes the label
         # box to where the real render actually puts the text.

@@ -277,8 +277,10 @@ constellations rather than one sky — exactly what "satisfying
 interconnection" was not. ``spanning_tree`` runs Prim's algorithm once
 over the same sampled cloud that feeds ``constellation_links`` — pure,
 deterministic, no RNG anywhere in it, O(n^2) on the ~520-point sample
-and sub-millisecond there, computed once inside ``_MapCanvas.__init__``
-alongside the rest of the layout and never per frame. The new
+and ~25 ms there, cleanly quadratic (K-199, P1, bounds it — see
+``spanning_tree``'s own docstring for the measured table), computed
+once inside ``_MapCanvas.__init__`` alongside the rest of the layout
+and never per frame. The new
 ``"constellation"`` mode — now ``LINK_MODE``'s default — unions that
 backbone with the existing kNN density: the backbone bridges every gap
 kNN leaves open, kNN keeps the local shape dense and irregular, and the
@@ -1705,8 +1707,11 @@ def spanning_tree(points: Sequence) -> list:
     constellations rather than one sky; the tree bridges every gap kNN
     leaves open.
 
-    O(n^2) on the sampled cloud (~520 points -> ~270k distances,
-    measured under a millisecond); never run this on the full index.
+    O(n^2) on the sampled cloud (~520 points -> ~270k distances).
+    Measured (final review, 2026-09-02): ~25 ms there, cleanly
+    quadratic — growing 3.7x-4x per doubling, not the sub-millisecond
+    this docstring once claimed; K-199 (P1) is the card that bounds it.
+    Never run this on the full index.
     Pure and deterministic — no RNG anywhere in it, unlike the kNN/chord
     modes below, which both need a seed.
 
@@ -3404,12 +3409,19 @@ def open_map_window(parent=None):
             try:
                 self.setObjectName("KlausMapWindow")
                 self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-                # dialog_qss styles the children (labels, buttons); the
-                # one extra rule paints this non-QDialog window's own
-                # ground with the same token.
+                # dialog_qss styles the children (labels, buttons; its
+                # own labels are `background: transparent`) — the one
+                # extra rule paints this non-QDialog window's own ground
+                # on `chrome`, the SAME token the canvas paints (see
+                # `_paint` below), so the window and its canvas read as
+                # one surface rather than a box-in-a-box (final review
+                # I1, 2026-09-02: this rule painted `bg` here while
+                # K-185 had already moved the canvas on to `chrome` for
+                # the Library's sake, so only the standalone window kept
+                # the "separate box" Pouya asked to lose).
                 self.setStyleSheet(
                     theme.dialog_qss(night)
-                    + f"\nQWidget#KlausMapWindow {{ background-color: {c['bg']}; }}"
+                    + f"\nQWidget#KlausMapWindow {{ background-color: {c['chrome']}; }}"
                 )
             except Exception as exc:
                 print(f"[klausmate] map theme failed: {exc}")
