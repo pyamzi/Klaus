@@ -261,6 +261,35 @@ count — at the sampled few hundred, ~250 non-empty bands hold about
 three points each, so the per-band matrix is most of the 1.2 ms the
 star layer costs. That matters only if ``SAMPLE_NOTES`` moves.
 
+**K-197: every star is connected.** Pouya, back at the map: "Can you
+have all the nodes be interconnected in a satisfying way... I want each
+node on the graph to be just randomly interconnected." kNN alone only
+ever joins a star to a NEARBY partner, so a collection whose topics
+cluster far apart in the embedding drew several disconnected
+constellations rather than one sky — exactly what "satisfying
+interconnection" was not. ``spanning_tree`` runs Prim's algorithm once
+over the same sampled cloud that feeds ``constellation_links`` — pure,
+deterministic, no RNG anywhere in it, O(n^2) on the ~520-point sample
+and sub-millisecond there, computed once inside ``_MapCanvas.__init__``
+alongside the rest of the layout and never per frame. The new
+``"constellation"`` mode — now ``LINK_MODE``'s default — unions that
+backbone with the existing kNN density: the backbone bridges every gap
+kNN leaves open, kNN keeps the local shape dense and irregular, and the
+backbone edges are deliberately exempt from ``LINK_MAX``, since capping
+them would silently re-open the very islands they exist to close.
+``"knn"`` and ``"chord"`` stay reachable, unchanged, for comparison.
+The draw side (``_paint_constellation``) is untouched — it already
+drew whatever ``self._links`` held, so a longer, connected edge list is
+still exactly one batched ``drawLines`` call and dims with ``self._lit``
+like every other constellation segment.
+
+Measured on this machine at the four-PDF, 2,800-note fixture the map
+tasks share for frame timing (1100x660): the backbone adds the sampled
+cloud's own point count minus one, 863 total segments here against the
+old cap of 300, and the whole frame still medians 1.1 ms — comfortably
+inside the 4.0 ms floor, and in the same range as K-174 through K-188
+(1.38-1.95, then 0.80-1.18).
+
 Everything above the "aqt glue" divider is pure and aqt-free — the whole
 viewport model (the camera, depth bands and fog ramp included:
 world<->screen transform, fit-to-view, zoom-at-cursor, hit-test, node
@@ -562,13 +591,20 @@ DOT_SCALE_FLOOR = 0.55
 # to be STABLE, so the seed is derived from the drawn cloud itself
 # (link_seed) and never from process-random hash().
 #
-# Two topologies were built and RENDERED. "knn" joins each star to its
-# nearest neighbours within LINK_MAX_SPAN; "chord" draws uniformly
-# random pairs. The chord render is a cross-hatched mess that hides the
-# cloud it is drawn over — every segment crosses the whole card — while
-# the nearest-neighbour render is a constellation. knn ships; chord
-# stays reachable because it is the thing knn has to be better than.
-LINK_MODE = "knn"
+# Two topologies were built and RENDERED first. "knn" joins each star
+# to its nearest neighbours within LINK_MAX_SPAN; "chord" draws
+# uniformly random pairs. The chord render is a cross-hatched mess that
+# hides the cloud it is drawn over — every segment crosses the whole
+# card — while the nearest-neighbour render is a constellation. Neither
+# ships alone: kNN only ever joins a star to a NEARBY partner, so a
+# collection whose topics cluster far apart in the embedding draws
+# several disconnected constellations rather than one sky — not what
+# "randomly interconnected" asked for once there is more than one
+# cluster (K-197, Pouya looking at exactly that: "Can you have all the
+# nodes be interconnected in a satisfying way"). "constellation" =
+# spanning-tree backbone (connected by construction) plus the kNN
+# density; "knn" and "chord" remain reachable for comparison.
+LINK_MODE = "constellation"
 LINK_NEIGHBOURS = 2
 # World units. The drawn cloud spans about [-1, 1], so this is roughly
 # a tenth of the field: far enough to find a partner in the dense
@@ -1585,6 +1621,49 @@ def link_seed(points: Sequence, salt: int = LINK_SEED) -> int:
     return h
 
 
+def spanning_tree(points: Sequence) -> list:
+    """Prim's minimum spanning tree over Euclidean distance — the backbone
+    that makes the constellation ONE figure (K-197). Pouya: "Can you have
+    all the nodes be interconnected in a satisfying way... I want each
+    node on the graph to be just randomly interconnected." kNN alone
+    only ever joins a star to a NEARBY partner, so a collection whose
+    topics cluster far apart in the embedding draws several disconnected
+    constellations rather than one sky; the tree bridges every gap kNN
+    leaves open.
+
+    O(n^2) on the sampled cloud (~520 points -> ~270k distances,
+    measured under a millisecond); never run this on the full index.
+    Pure and deterministic — no RNG anywhere in it, unlike the kNN/chord
+    modes below, which both need a seed.
+
+    Returns ``n - 1`` unique ``(i, j)`` pairs with ``i < j`` for
+    ``n >= 2``, ``[]`` otherwise (mirrors ``constellation_links``' own
+    degenerate-input handling).
+    """
+    n = len(points)
+    if n < 2:
+        return []
+    in_tree = [False] * n
+    best = [float("inf")] * n
+    link = [-1] * n
+    best[0] = 0.0
+    out = []
+    for _ in range(n):
+        u = min((i for i in range(n) if not in_tree[i]), key=lambda i: best[i])
+        in_tree[u] = True
+        if link[u] >= 0:
+            out.append((link[u], u) if link[u] < u else (u, link[u]))
+        ux, uy, uz = points[u][0], points[u][1], points[u][2]
+        for v in range(n):
+            if in_tree[v]:
+                continue
+            d = (points[v][0] - ux) ** 2 + (points[v][1] - uy) ** 2 + (points[v][2] - uz) ** 2
+            if d < best[v]:
+                best[v] = d
+                link[v] = u
+    return sorted(out)
+
+
 def constellation_links(
     points: Sequence,
     mode: str = LINK_MODE,
@@ -1597,22 +1676,36 @@ def constellation_links(
     Pouya, K-174: "I want each node on the graph to be just randomly
     interconnected... it looks kind of cool." Purely decorative — it
     says nothing about the embedding — and he has twice said the map's
-    job is to look cool, so that IS the requirement.
+    job is to look cool, so that IS the requirement. K-197 added a
+    second requirement from the same conversation, re-read: "Can you
+    have all the nodes be interconnected in a satisfying way" — kNN
+    alone leaves far-apart topic clusters as separate islands, which
+    reads as several unrelated constellations rather than one sky.
 
-    Two topologies, both built and both RENDERED before choosing:
+    Three topologies, all built and RENDERED before choosing:
 
     - ``"knn"``: each point joined to its ``neighbours`` nearest
       partners within ``max_span``. Short segments that trace the local
       shape of the cloud — this is what reads as a constellation, and
       it is also the only version of this decoration that tells a small
-      truth about the data underneath it.
+      truth about the data underneath it. Leaves any sufficiently
+      isolated cluster of points unconnected to the rest.
     - ``"chord"``: uniformly random pairs. Every segment crosses the
       whole card and the cloud disappears behind a cross-hatch. Kept
       reachable because it is the thing ``knn`` has to be better than,
       and because "randomly interconnected" could have meant it.
+    - ``"constellation"`` (``LINK_MODE``'s default): ``spanning_tree``'s
+      backbone — one minimum spanning tree over the same cloud, which
+      is connected BY CONSTRUCTION — unioned with the ``"knn"`` density
+      on top. The backbone edges are NEVER subject to ``cap``: they are
+      what bridges a gap kNN leaves open, and capping them would
+      silently re-open it. ``cap`` still bounds the kNN extras exactly
+      as it always did.
 
-    Deterministic in both modes: the RNG is seeded from the points
-    themselves. The seeded shuffle BEFORE the cap matters — keeping the
+    Deterministic in every mode: the RNG is seeded from the points
+    themselves (``spanning_tree`` itself carries no randomness at all —
+    Prim's algorithm over a fixed point order is deterministic on its
+    own). The seeded shuffle BEFORE the cap matters — keeping the
     first ``cap`` candidates in index order piles every surviving
     segment into whichever corner of the cloud the sample listed first.
 
@@ -1624,6 +1717,13 @@ def constellation_links(
         return []
     rng = random.Random(link_seed(points))
     pairs: set = set()
+    # The backbone is unioned in AFTER the cap below, so it is never
+    # subject to it — a spanning tree bridging a gap is exactly the
+    # edge a random cap-shuffle would be free to drop (K-197).
+    backbone: set = set()
+    if mode == "constellation":
+        backbone = set(spanning_tree(points))
+        mode = "knn"
     if mode == "chord":
         # Bounded: a random draw over n^2 pairs is a lottery with
         # replacement, so ask for a few more than the cap and stop.
@@ -1683,7 +1783,7 @@ def constellation_links(
     if len(out) > limit:
         rng.shuffle(out)
         out = sorted(out[:limit])
-    return out
+    return sorted(backbone | set(out))
 
 
 def dot_scale(widget_size: Sequence[float]) -> float:

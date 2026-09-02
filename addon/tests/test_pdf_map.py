@@ -877,14 +877,22 @@ check("...and a focused PDF pushes the rest of the field back, so its "
 # load-bearing.
 _CPTS = [(math.cos(i * 0.7) * 0.6, math.sin(i * 1.3) * 0.55,
           math.cos(i * 0.31) * 0.5) for i in range(900)]
-_KNN = pdf_map.constellation_links(_CPTS)
+# Scoped to mode="knn" explicitly (Task 5, K-197): LINK_MODE's default
+# is now "constellation", and every check in this block is about the
+# kNN algorithm's OWN mechanics (cap-exactness, the span ceiling, seed
+# determinism, self-link/duplicate freedom) — none of it is about the
+# spanning-tree backbone. Pinning the mode keeps this whole block
+# numerically identical to what it always tested; the backbone's own
+# connectivity guarantee gets its own dedicated section below.
+_KNN = pdf_map.constellation_links(_CPTS, mode="knn")
 check("the constellation is STABLE — the same collection draws the "
       "same figure every time it opens. Re-randomising per frame "
       "shimmers and reads as broken. Checked in BOTH modes and with "
       "the cap biting, which is the only path the RNG is on",
-      _KNN and _KNN == pdf_map.constellation_links(list(_CPTS))
+      _KNN and _KNN == pdf_map.constellation_links(list(_CPTS), mode="knn")
       and len(_KNN) == pdf_map.LINK_MAX
-      and len(pdf_map.constellation_links(_CPTS, cap=10 ** 6)) > 900
+      and len(pdf_map.constellation_links(_CPTS, mode="knn", cap=10 ** 6))
+      > 900
       and pdf_map.constellation_links(_CPTS, mode="chord")
       == pdf_map.constellation_links(list(_CPTS), mode="chord"))
 check("...and the cap really CAPS, at every size, in both modes — it "
@@ -2949,5 +2957,78 @@ if _HAVE_QT:
         _cv.close()
     finally:
         theme.night_mode = _orig_night
+
+section("Task 5: the constellation is connected")
+# Pouya: "Can you have all the nodes be interconnected in a satisfying
+# way... I want each node on the graph to be just randomly
+# interconnected. It looks kind of cool." kNN only ever joins a star to
+# a NEARBY partner, so three topic clusters far apart in the embedding
+# draw as three separate constellations rather than one sky — pure
+# stdlib, no Qt needed, so this runs unconditionally.
+import random as _rnd
+
+_rng = _rnd.Random(5)
+_pts = [(cx + _rng.gauss(0, .05), cy + _rng.gauss(0, .05), _rng.gauss(0, .05))
+        for cx, cy in ((-.6, -.4), (.5, .3), (.1, -.7)) for _ in range(40)]
+
+
+def _components(n, pairs):
+    parent = list(range(n))
+
+    def f(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for i, j in pairs:
+        parent[f(i)] = f(j)
+    return len({f(i) for i in range(n)})
+
+
+_knn = pdf_map.constellation_links(_pts, "knn")
+# Empirically 5, not the 3 a same-size, same-shape cluster count would
+# suggest: LINK_NEIGHBOURS=2 is thin enough that the middle cluster's
+# own local kNN graph fragments into three pieces (sizes 20/14/6) while
+# the other two stay whole (40 apiece) — verified directly against
+# pdf_map.constellation_links(_pts, "knn"), unaffected by mode="knn"
+# being untouched code. The fact this baseline exists to establish —
+# kNN alone does NOT produce one connected figure — is what "the
+# constellation mode is ONE component" below exists to fix; the exact
+# count (5) is pinned because it is what this seeded fixture
+# deterministically produces, not because the number itself matters.
+check("baseline: kNN alone leaves the clusters fragmented into "
+      "multiple islands (5, not the three clusters themselves — one "
+      "cluster's own local kNN graph splits further at "
+      "LINK_NEIGHBOURS=2)",
+      _components(len(_pts), _knn) == 5,
+      f"{_components(len(_pts), _knn)} components")
+try:
+    _tree = pdf_map.spanning_tree(_pts)
+    check("spanning_tree returns n-1 unique i<j pairs",
+          len(_tree) == len(_pts) - 1 and len(set(_tree)) == len(_tree)
+          and all(i < j for i, j in _tree))
+    check("...that connect every point", _components(len(_pts), _tree) == 1)
+except AttributeError as _exc:
+    _tree = None
+    check("spanning_tree returns n-1 unique i<j pairs", False,
+          f"no spanning_tree yet ({_exc})")
+    check("...that connect every point", False,
+          f"no spanning_tree yet ({_exc})")
+_all = pdf_map.constellation_links(_pts, "constellation")
+check("the constellation mode is ONE component — no star is an island "
+      "(the 'satisfying interconnection')",
+      _components(len(_pts), _all) == 1)
+if _tree is None:
+    check("...and contains every backbone edge even under the cap", False,
+          "no spanning_tree yet")
+else:
+    check("...and contains every backbone edge even under the cap",
+          set(_tree) <= set(
+              pdf_map.constellation_links(_pts, "constellation", cap=5)))
+check("...and is deterministic",
+      _all == pdf_map.constellation_links(_pts, "constellation"))
+check("LINK_MODE defaults to the connected mode",
+      pdf_map.LINK_MODE == "constellation")
 
 raise SystemExit(report())
