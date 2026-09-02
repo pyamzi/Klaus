@@ -2185,11 +2185,11 @@ if _HAVE_QT:
               "dissolving into the field — the honest picture (a far "
               "match is a weaker one) and the difference between a "
               "constellation with an emphasised node and a dandelion. "
-              "Diluted on the pixels by two things the ratio has to "
-              "live with: the node's own halo already lights the "
-              "innermost ring in BOTH frames, and a spoke crossing a "
-              "near-white star DARKENS it. The ramp itself is pinned "
-              "exactly, in the pure section",
+              "Diluted on the pixels by one thing the ratio has to "
+              "live with: a spoke crossing a near-white star DARKENS "
+              "it (K-186 retired the node's own halo, which used to "
+              "light the innermost ring in BOTH frames here too). The "
+              "ramp itself is pinned exactly, in the pure section",
               _near_ink > 1.5 * _far_ink,
               f"mean delta {_near_ink:.0f} at 60-120px from the node, "
               f"{_far_ink:.0f} at 200-300px")

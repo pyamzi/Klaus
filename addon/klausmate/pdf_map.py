@@ -217,10 +217,15 @@ So, in this file:
   chords are a cross-hatch that buries the cloud and the PDF nodes.
 - The sway became a full REVOLUTION (``ROTATE_PERIOD_MS``), and the fit
   that has to survive it became ``sweep_bounds``.
-- **The PDF nodes still glow, on purpose.** "I like the shininess of
-  the PDFs. I like that." A handful of nodes a frame can afford a real
-  radial gradient; 28,670 notes cannot, and a field where everything
-  shines has nothing special in it.
+- **The PDF nodes glowed, on purpose, until K-186.** "I like the
+  shininess of the PDFs. I like that." A handful of nodes a frame
+  could afford a real radial gradient; 28,670 notes could not, and a
+  field where everything shines has nothing special in it.
+  **Retired at K-186**: Pouya went on to ask for the halo gone too
+  ("remove the general glow... I don't like the general glow that
+  comes with it") — the shininess he meant now lives in the ring and
+  lit core alone, with nothing painted between a node's own radius and
+  the old halo's 3.4x reach.
 - **The map stays a night sky in BOTH themes.** Inverting to dark
   points on a light ground was the live alternative and it throws away
   exactly the thing he singled out — a light source on white is a
@@ -334,7 +339,10 @@ LABEL_LINE_H = 14.0
 # enough offset-nudging.
 LABEL_EDGE_PAD = 6.0
 # The unfocused PDFs: a ring at this alpha and nothing else — no core,
-# no name, a fifth of the halo. Pouya, K-158: "only one PDF shows at a
+# no name, and a smaller ring than the lit node's own (K-186: this
+# factor used to be a fifth of the node's halo; the halo is gone, but
+# the constant — and the ghost's size relative to the ring — was not
+# retuned). Pouya, K-158: "only one PDF shows at a
 # time, potentially, and then it just zooms in on that section of the
 # cloud that hosts that PDF." A GHOST rather than nothing at all,
 # because the collection being bigger than what you are looking at is
