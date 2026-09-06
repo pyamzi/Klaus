@@ -172,11 +172,24 @@ same reason.
 - `__init__.py`: bootstrap + gui_hooks; JS bridge
   (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
   splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
-  `complete`/`ask` actions are gone with autocomplete/Ask); `_PdfTabContainer`
-  (tabbed PDF panel + window management: embed above/below/left/right of the
-  editor pane via a QSplitter wrapper, or float as a parentless real window;
-  native drag via `startSystemMove` with a watchdog + ghost fallback);
-  image-crop plumbing; Tools menu (`install_menu`: ONE entry,
+  `complete`/`ask` actions are gone with autocomplete/Ask); `PdfDock` (a
+  `QDockWidget` of the host window — Browse and Add Cards — since
+  2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
+  [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
+  handle so Qt moves, docks and floats the dock from the empty bar
+  (`setTitleBarWidget`'s contract; the tab bar does not stretch over that
+  space). Allowed areas: left, right, bottom; floating is Qt's attached
+  tool window, above the host and hidden with it — the parentless
+  Mission-Control window, the six pane-anchored placements (K-169's note
+  anchor included) and the `startSystemMove` tear-off with its watchdog
+  and ghost were all deleted with the 2026-09-05 dock. `pdf_tabs.json`
+  keeps `placement` (`left`/`right`/`bottom`/`float`, old values migrated
+  once by `pdf_handler.migrate_placement`) and `geom`; applied on the
+  first `panel_show`, never from Anki's saved `QMainWindow` state.
+  `setDockNestingEnabled(True)` on the host lets it sit beside Anki's
+  Browse sidebar dock. Host close still runs `PdfSidebar.cleanup()`
+  before the window's C++ objects die. image-crop plumbing; Tools menu
+  (`install_menu`: ONE entry,
   "KlausMate Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).
 - `heatmap.py` (aqt-free above its "aqt glue" divider): the **review
@@ -1296,6 +1309,8 @@ same reason.
   `setParent` into a new native window while a button is down. Tear-off =
   float on threshold + `startSystemMove()` (which *lies* — returns True even
   when the drag dies; a 300ms/40px watchdog detects that and falls back).
+  Since 2026-09-05 Klaus reparents nothing mid-gesture itself; `QDockWidget`
+  does its own moving.
 - **`QSplitter.setOrientation` transposes its sizePolicy** — re-assert the
   wrapped pane's policy after every orientation change or the host layout's
   stretch hints are lost (blank-space bug in the Add window).

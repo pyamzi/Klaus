@@ -17,7 +17,8 @@ machinery and re-fighting that bug.
 **That left the tab with no way to open a PDF at all, which was a
 regression** (K-173). The original note here claimed activation "routes to
 the docked PDF panel" — it does not and cannot: that panel hangs off an
-EDITOR (``editor._klausmate_pdf_tabs``, set on Add and Browse windows), and
+EDITOR (``editor._klausmate_pdf_tabs``, a ``PdfDock`` on Add and Browse
+windows), and
 the main window has no editor. There was no destination. The claim was
 written before it was checked.
 

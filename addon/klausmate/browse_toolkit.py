@@ -1533,11 +1533,10 @@ def browse_body_layout(browser: Any) -> Any:
     """The vertical layout that owns Browse's splitter, or None.
 
     Found by walking from ``form.splitter`` — a widget every Browse
-    window has and K-169's anchor already depends on — rather than by
-    naming the generated ``verticalLayout_3``. Generated form attributes
-    show the setupUi state only, and Anki mutates this window after
-    setupUi; browse_toggles and the K-169 anchor both walk for the same
-    reason.
+    window has — rather than by naming the generated
+    ``verticalLayout_3``. Generated form attributes show the setupUi
+    state only, and Anki mutates this window after setupUi;
+    browse_toggles walks for the same reason.
 
     Since 2026-09-05 this is only ``install``'s FALLBACK: the strip lives
     in the note column's own layout (``browse_note_column``), and lands
@@ -1591,26 +1590,17 @@ def browse_note_column(browser: Any) -> Any:
     """Browse's note-table column — the direct child of ``form.splitter``
     that holds ``form.tableView`` — or None.
 
-    The same walk K-169's note anchor uses (``_PdfTabContainer.
-    _browse_note_pane``): naming the generated ``form.widget`` would break
-    silently on an Anki rename, and Anki mutates this layout after setupUi.
+    Naming the generated ``form.widget`` would break silently on an Anki
+    rename, and Anki mutates this layout after setupUi.
     """
     form = getattr(browser, "form", None)
     split = getattr(form, "splitter", None)
     w = getattr(form, "tableView", None)
     if split is None or w is None:
         return None
-    # Once K-169 has docked the PDF panel beside the notes, the column's
-    # parent is its wrapper, not form.splitter — stop there too, so a
-    # strip installed after that still lands in the column, not the
-    # wrapper.
-    wrap = getattr(browser, "_klausmate_notes_split", None)
-    while w is not None:
-        p = w.parentWidget()
-        if p is split or (wrap is not None and p is wrap):
-            return w
-        w = p
-    return None
+    while w is not None and w.parentWidget() is not split:
+        w = w.parentWidget()
+    return w
 
 
 def install(browser: Any) -> Any:

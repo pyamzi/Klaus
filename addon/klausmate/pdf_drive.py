@@ -1277,7 +1277,7 @@ class DriveWindow(QWidget):
             # site triggered it — which is exactly "the Library knows
             # which PDF is showing", and why no new signal was invented
             # for this. The slot is free here: the only other assignment
-            # in the addon is _PdfTabContainer's, on its OWN sidebar.
+            # in the addon is PdfDock's, on its OWN sidebar.
             sidebar.on_loaded = self._on_viewer_loaded
             # After the tree, in both modes (Task 11 retired the third,
             # assistant pane) — the window's two-pane shape, which is

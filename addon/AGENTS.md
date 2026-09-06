@@ -75,7 +75,7 @@ Addons/                       # Git repo root
         ├── pdfs/                # Stored PDF copies (post-bake, real annotations included)
         ├── pdf_originals/       # Pristine copy captured once, used to regenerate bakes
         ├── annotations/         # Per-PDF highlight/note JSON, source of truth for baking
-        ├── pdf_tabs.json        # Open tabs, placement (dock above/below/float), thumbs, last_used
+        ├── pdf_tabs.json        # Open tabs, placement (dock left/right/bottom/float), thumbs, last_used
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
         ├── pdf_index/           # Per-PDF embedding indexes for retention scoring
@@ -155,11 +155,19 @@ unsuspend its cards, or chart its retention history
 
 ### Editor-side PDF panel
 
-`_PdfTabContainer` in `__init__.py` hosts any number of open PDFs, one bar of
-chrome per editor window: `[tabs ✕] [page n/m] [＋]`. It docks ABOVE or BELOW
-the note-editor pane (wrapping `editor.widget` in a `QSplitter`), or floats
-as a real, parentless window — dragged out via native `startSystemMove()`
-with a watchdog/ghost fallback for when that call lies about succeeding. One
+`PdfDock` — a `QDockWidget`, one per host window (Browse and Add Cards),
+created from `editor_did_init` exactly as the panel's earlier container
+was — hosts any number of open PDFs, with `_PanelBar` as its title-bar
+widget (`[◫] [＋] [tabs] … [page n/m] [⧉] [✕]`), which ignores presses it
+does not handle so Qt itself moves, docks and floats the dock from the
+bar's empty space. Allowed areas are left, right and bottom; floating is
+Qt's own attached tool window above the host, never a parentless real
+window — the old pane-anchored placements and the native
+`startSystemMove()` tear-off with its watchdog/ghost fallback are gone.
+`placement` (`left`/`right`/`bottom`/`float`, old values migrated once by
+`pdf_handler.migrate_placement`) and `geom` persist the same way and
+apply on the first `panel_show`, never from Anki's own saved
+`QMainWindow` state. One
 `PdfViewer`/`PdfSidebar` instance is reused across tabs. The open tab set,
 dock placement, thumbnails, and last-used page persist in
 `user_files/pdf_tabs.json` (all writers merge via `pdf_handler._save_tabs_file`,

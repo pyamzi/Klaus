@@ -1011,7 +1011,7 @@ class PdfViewer(QWidget):
         """Put the page indicator in the viewer's own footer when no
         host adopted it (K-153).
 
-        Adoption IS a reparent — ``_PdfTabContainer`` calls
+        Adoption IS a reparent — ``PdfDock`` calls
         ``header.addWidget(self._page_label)``, which makes the header
         the label's parent — so "is it still parented to us" is the
         entire test, and it needs no cooperation from any host. Re-run

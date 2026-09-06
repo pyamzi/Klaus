@@ -28,6 +28,7 @@ Three sections, and the middle one is the point.
 from __future__ import annotations
 
 import ast
+import inspect
 import os
 import sys
 import types
@@ -910,7 +911,7 @@ if _HAVE_QT:
               panel.tree.isHidden() and not panel.empty.isHidden())
         panel._absorb(payload)
 
-        section("geometry: the strip, the table, and K-169's PDF panel")
+        section("geometry: the strip and the table")
         win.show()
         _app.processEvents()
         strip.close_tool()
@@ -938,39 +939,9 @@ if _HAVE_QT:
               and win.form.tableView.height() > 150,
               f"strip={strip.height()} table={win.form.tableView.height()}")
 
-        # K-169's anchor: the note column wrapped in its own splitter
-        # INSIDE form.splitter, with the PDF panel beside it.
-        note_col = win.form.widget
-        idx = win.form.splitter.indexOf(note_col)
-        wrap = _QtW.QSplitter(_QtC.Qt.Orientation.Horizontal)
-        win.form.splitter.insertWidget(idx, wrap)
-        wrap.addWidget(note_col)
-        pdf = _QtW.QWidget()
-        _QtW.QVBoxLayout(pdf).addWidget(_QtW.QLabel("pdf"))
-        wrap.addWidget(pdf)
-        win._klausmate_notes_split = wrap
-        _app.processEvents()
-        # Inserting a child invalidates the outer splitter's saved sizes,
-        # so re-assert both after the layout pass — the same thing K-169's
-        # _dock_into does with the live width.
-        win.form.splitter.setSizes([760, 340])
-        wrap.setSizes([420, 340])
-        _app.processEvents()
-        check("with K-169's PDF panel docked beside the notes, the strip "
-              "travels WITH the note column inside the wrapper — beside "
-              "the PDF panel, never under it, and the body layout stays "
-              "one child",
-              wrap.isAncestorOf(strip) and strip.parentWidget() is note_col
-              and not pdf.isAncestorOf(strip)
-              and bt.browse_body_layout(win) is body and body.count() == 1)
-        check("and the column walk stops at that wrapper, so a strip "
-              "installed AFTER the panel docked still finds the column",
-              bt.browse_note_column(win) is note_col)
-        check("...and all three are on screen with real size",
-              strip.height() > 0 and pdf.width() > 100
-              and win.form.tableView.width() > 100
-              and win.form.tableView.height() > 100,
-              f"pdf={pdf.width()} table={win.form.tableView.size()}")
+        check("browse_note_column has no wrapper branch left — the note anchor "
+              "is gone with the placement engine (2026-09-05)",
+              "_klausmate_notes_split" not in inspect.getsource(bt.browse_note_column))
 
         section("narrow width")
         win.resize(620, 620)
