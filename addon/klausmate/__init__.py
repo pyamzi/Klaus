@@ -24,27 +24,15 @@ from aqt.editor import Editor, EditorWebView
 from aqt.operations import QueryOp
 from aqt.qt import (
     QAction,
-    QCursor,
     QDockWidget,
-    QDragEnterEvent,
-    QDropEvent,
     QEvent,
     QHBoxLayout,
     QImage,
-    QLabel,
-    QApplication,
     QMenu,
-    QMouseEvent,
-    QPoint,
-    QPointF,
-    QPushButton,
     QRect,
-    QSize,
-    QSplitter,
     QTabBar,
     QTimer,
     QToolButton,
-    QVBoxLayout,
     QWidget,
     Qt,
 )
@@ -747,8 +735,8 @@ def _ensure_sidebar_pdf(editor: Editor) -> bool:
 
     Module-level since K-056 (which removed the bottom PDF bar and the
     panel widget that hosted it) — the toolbar "Library..." button and
-    _PdfTabContainer.showEvent both need this and neither owns a panel
-    widget to hang it off anymore.
+    PdfDock.showEvent both need this and neither owns a panel widget to
+    hang it off anymore.
     """
     active = pdf_handler.get_active_pdf(USER_FILES)
     if not active:
@@ -805,242 +793,58 @@ def _pdf_display_name(safe: str) -> str:
         return safe
 
 
-# Placements anchored on Browse's NOTE-TABLE column instead of the editor
-# pane (K-169). They exist only in a window that HAS a note table, which is
-# why they are kept out of the shared placement key — see
-# _load_browse_placement below.
-NOTES_PLACEMENTS = ("notes-left", "notes-right")
-
-# Where a notes-* placement is remembered inside pdf_tabs.json. Its own key,
-# never the shared "placement" one: EVERY host window reads that one, and
-# Add Cards has no note table to anchor on. (pdf_handler.load_panel_state
-# also whitelists the five editor-anchored values, so a notes-* placement
-# written there would be silently dropped on the next read — the panel would
-# come back "above" and the Browse choice would be lost either way.)
-_BROWSE_PLACEMENT_KEY = "browse_placement"
-
-
-def _load_browse_placement() -> str | None:
-    """Browse's own remembered placement, or None. Anything that is not a
-    live notes-* value reads as None, so a hand-edited or stale file can
-    only cost the preference, never the panel."""
-    try:
-        val = pdf_handler._load_tabs_file(USER_FILES).get(
-            _BROWSE_PLACEMENT_KEY
-        )
-    except Exception:
-        return None
-    return val if val in NOTES_PLACEMENTS else None
+# Where the PDF dock may sit. Three window edges — the placement engine
+# that anchored the panel on a PANE (above/below the editor, beside the
+# note list) was deleted 2026-09-05 with the tear-off drag machinery
+# (K-169's rules died with the code they guarded); Qt's QDockWidget does
+# the moving now. Spec:
+# docs/superpowers/specs/2026-09-05-pdf-dock-design.md
+PANEL_AREAS = {
+    "left": Qt.DockWidgetArea.LeftDockWidgetArea,
+    "right": Qt.DockWidgetArea.RightDockWidgetArea,
+    "bottom": Qt.DockWidgetArea.BottomDockWidgetArea,
+}
+AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
 
-def _save_browse_placement(value: str | None) -> None:
-    """Remember (or, with None, forget) Browse's notes-anchored placement.
-    Goes through pdf_handler._save_tabs_file so it MERGES into
-    pdf_tabs.json like every other writer of that file — lecture_view.py's
-    precedent for a key pdf_handler has no accessor for."""
-    try:
-        pdf_handler._save_tabs_file(USER_FILES, {_BROWSE_PLACEMENT_KEY: value})
-    except Exception:
-        pass
+class _PanelBar(QWidget):
+    """The dock's title bar: ``[◫] [＋] [tabs]  …  [page n/m] [⧉] [✕]``.
 
-
-class _PdfTabContainer(QWidget):
-    """The PDF viewer panel, with native-feeling window management.
-
-    One bar of chrome: ``[tabs ✕] [page n/m] [＋]``. The panel docks
-    beside one of the host window's panes, or FLOATS as a normal macOS
-    window. Docking wraps the anchor pane in a private splitter (created
-    once, kept for the window's lifetime), so "above" means above *that
-    pane*, never the whole window.
-
-    There are TWO anchors. above/below/left/right wrap ``editor.widget``;
-    in Browse, notes-left/notes-right wrap the NOTE-TABLE column instead
-    (K-169), which is the only way to sit beside the note list — the
-    editor pane there IS the right-hand column. See the placement engine
-    below.
-
-    Window management mirrors macOS conventions:
-
-    - **drag a tab out of the tab-bar band** (or drag any empty bar
-      space) → the REAL panel floats instantly and macOS moves it live
-      under the cursor (``QWindow.startSystemMove``); wide bands over
-      the editor pane — and, in Browse, over the note table — preview
-      exactly where it would dock (arrow + caption, sized like the real
-      45% split). Release on a band to dock there, anywhere else to
-      stay floating. Dragging an already-floating panel by its bar is
-      the same native move. Drags that
-      stay inside the tab bar just reorder tabs, in any direction. A
-      translucent-ghost fallback covers the rare case where the OS
-      refuses/drops the native move (see the drag state machine in
-      ``__init__``).
-    - the floating panel is a real, parentless macOS window: it shows
-      in Mission Control, minimizes to the Dock, and Anki can come in
-      front of it. Its red traffic light hides the panel; its lifetime
-      is tied to the host window via ``_on_host_closing``.
-    - **✕ on each tab** closes that PDF (the stored file survives; reopen
-      it from ＋). Closing the last tab hides the panel.
-    - **＋** opens another stored PDF or a new file from disk
-
-    One viewer instance is reused across tabs; switching loads that PDF
-    and repoints the active-PDF marker. Per-tab reading position is kept
-    for the session; the tab set and placement persist across restarts.
+    Presses the bar does not handle are IGNORED so they reach the
+    QDockWidget, which moves, docks and floats from them — Qt's
+    setTitleBarWidget contract. The tab bar does NOT stretch over the
+    empty space (a stretch follows it), so a press there is the bar's
+    and starts a drag, while a press on a tab stays the tab bar's.
+    With a custom title bar Qt draws no float or close button, hence
+    the two at the right end. Colours only through theme tokens.
     """
 
-    def __init__(
-        self,
-        editor: Editor,
-        sidebar: Any,
-        main_window: Any,
-    ) -> None:
-        super().__init__(None)
-        self._editor = editor
-        self._sidebar = sidebar
-        self._win = main_window
-        self._syncing = False
-        self._last_page: dict[str, int] = {}
-
-        # Placement state (persisted). _placed means the panel has been
-        # physically put somewhere this session; until then panel_show()
-        # applies the remembered placement.
-        state = pdf_handler.load_panel_state(USER_FILES)
-        self._placement: str = state.get("placement", "above")
-        g = state.get("geom")
-        self._float_geom: QRect | None = QRect(*g) if g else None
-        self._placed = False
-        # Browse remembers its own side of the note table, in its own key.
-        # Read only in a window that has a note table, so an Add Cards
-        # panel can never inherit a placement its window cannot anchor.
-        if self._browse_form() is not None:
-            browse_placement = _load_browse_placement()
-            if browse_placement is not None:
-                self._placement = browse_placement
-
-        # Drag state machine. A bar/tab drag instantly floats the REAL
-        # panel and hands the move to macOS via
-        # QWindow.startSystemMove(); Qt then stops delivering mouse
-        # events to us, so the gesture's end is detected by a 100ms
-        # heartbeat timer plus an application-level event filter (see
-        # _drag_tick / _finalize_drag). On Cocoa, startSystemMove()
-        # returns True even when the window never actually follows the
-        # cursor (performWindowDragWithEvent: can silently no-op when
-        # the NSEvent originated in the old host window) — a watchdog
-        # in the heartbeat detects that and falls back to manually
-        # following the cursor; the old translucent-ghost tear-off is
-        # kept only for gestures after native move is proven broken.
-        #
-        # _drag_state ∈ {idle, pressed, native, armed, manual_follow,
-        # manual_ghost}:
-        #   idle          — no gesture
-        #   pressed       — button down on the bar, threshold not met
-        #   native        — macOS is (believed to be) moving the window
-        #   armed         — drag went quiet; next definitive event ends it
-        #   manual_follow — heartbeat/mouse events move the window
-        #   manual_ghost  — embedded fallback: ghost follows, panel
-        #                   relocates on release (pre-native behavior)
-        self._press_gp: QPoint | None = None
-        self._press_on_tab = False
-        self._drag_state = "idle"
-        # True only while WE send the synthetic tab-release below —
-        # sendEvent re-enters this eventFilter, and the release branch
-        # must let it pass through to the tab bar untouched instead of
-        # resetting the gesture that is just starting.
-        self._synthetic_release = False
-        # None = untested, True = proven working, False = proven broken
-        # (watchdog tripped / startSystemMove refused) → fall back.
-        self._native_move_ok: bool | None = None
-        self._drag_off: QPoint | None = None
-        self._active_zone: str | None = None
-        self._zone_overlay: QWidget | None = None
-        self._ghost: QLabel | None = None
-        self._drag_timer = QTimer(self)
-        self._drag_timer.setInterval(100)
-        self._drag_timer.timeout.connect(self._drag_tick)
-        self._drag_started = 0.0
-        self._last_activity = 0.0
-        # Direct drag evidence only: panel moveEvents while the gesture
-        # owns the window, and mouse events with the left button held.
-        # _last_activity (raw cursor motion) is too weak for the embed
-        # freshness gate — it keeps refreshing after an unobserved
-        # release; it is kept only for the armed 10s give-up cap.
-        self._last_drag_evidence = 0.0
-        self._last_cursor: QPoint | None = None
-        self._move_seen = False
-        # Where the window / cursor were when the drag machinery armed:
-        # a moveEvent only counts as proof that the native move works
-        # once one of them has travelled >8px — a spurious post-tear-off
-        # geometry adjustment must not disarm the watchdog.
-        self._drag_origin_pos: QPoint | None = None
-        self._drag_start_cursor: QPoint | None = None
-        self._app_filter_installed = False
-        self._closed = False
-
-        # Host lifetime: the floating panel is a PARENTLESS window (so
-        # macOS treats it as a real one — Mission Control, Dock
-        # minimize, can go behind Anki), which means it no longer dies
-        # with the Browse/Add window that spawned it. Watch the host
-        # for Close and take the panel down with it; the destroyed
-        # signal is a backstop for hosts torn down without a Close.
-        try:
-            self._win.installEventFilter(self)
-        except Exception:
-            pass
-        try:
-            self._win.destroyed.connect(self._on_host_destroyed)
-        except Exception:
-            pass
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        # The header is a real widget (not a bare layout) so it can take
-        # mouse events: dragging its empty area moves/tears off the panel.
-        self._header = QWidget(self)
-        self._header.setFixedHeight(30)
-        self._header.setCursor(Qt.CursorShape.OpenHandCursor)
-        # SynapsePro-style chrome: surface bar, hairline bottom border,
-        # pill tabs/buttons (theme.panel_header_qss). WA_StyledBackground
-        # because a plain QWidget won't paint a stylesheet background.
+    def __init__(self, dock: QWidget, sidebar: Any) -> None:
+        super().__init__(dock)
+        self.setObjectName("KlausPanelHeader")
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        # WA_StyledBackground because a plain QWidget won't paint a
+        # stylesheet background.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         try:
             from . import theme as _theme
 
-            self._header.setObjectName("KlausPanelHeader")
-            self._header.setAttribute(
-                Qt.WidgetAttribute.WA_StyledBackground, True
-            )
-            self._header.setStyleSheet(
-                _theme.panel_header_qss(_theme.night_mode())
-            )
+            self.setStyleSheet(_theme.panel_header_qss(_theme.night_mode()))
         except Exception as exc:
             print(f"[klausmate] panel header theme failed: {exc}")
-        header = QHBoxLayout(self._header)
-        header.setContentsMargins(6, 2, 6, 0)
-        header.setSpacing(4)
-        self._header.installEventFilter(self)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 0)
+        row.setSpacing(4)
 
-        self._tabs = QTabBar(self._header)
-        self._tabs.setDocumentMode(True)
-        self._tabs.setDrawBase(False)
-        self._tabs.setMovable(True)
-        self._tabs.setUsesScrollButtons(True)
-        self._tabs.setExpanding(False)
-        self._tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs.tabMoved.connect(lambda *_: self._persist())
-        # The tab bar stretches across the whole row, so it — not the
-        # header — is what the user actually drags. Filter it too.
-        self._tabs.installEventFilter(self)
-
-        # Controls sit on the LEFT of the bar (Preview-style: sidebar
-        # toggle at the far left), the tabs take the remaining width.
         viewer = getattr(sidebar, "_viewer", None)
 
         # Thumbnails-strip toggle. No checked-state bookkeeping: the
         # strip itself is the visible indicator.
-        thumbs_btn = QToolButton(self._header)
-        thumbs_btn.setText("◫")
-        thumbs_btn.setAutoRaise(True)
-        thumbs_btn.setToolTip("Show/hide page thumbnails")
+        self.thumbs_btn = QToolButton(self)
+        self.thumbs_btn.setText("◫")
+        self.thumbs_btn.setAutoRaise(True)
+        self.thumbs_btn.setToolTip("Show/hide page thumbnails")
 
         def _toggle_thumbs() -> None:
             try:
@@ -1049,18 +853,27 @@ class _PdfTabContainer(QWidget):
             except Exception as exc:
                 print(f"[klausmate] thumbnails toggle failed: {exc}")
 
-        thumbs_btn.clicked.connect(_toggle_thumbs)
-        header.addWidget(thumbs_btn)
+        self.thumbs_btn.clicked.connect(_toggle_thumbs)
+        row.addWidget(self.thumbs_btn)
 
-        add_btn = QToolButton(self._header)
-        add_btn.setText("＋")
-        add_btn.setAutoRaise(True)
-        add_btn.setToolTip("Open another PDF in a new tab")
-        add_btn.clicked.connect(self._show_add_menu)
-        self._add_btn = add_btn
-        header.addWidget(add_btn)
+        self.add_btn = QToolButton(self)
+        self.add_btn.setText("＋")
+        self.add_btn.setAutoRaise(True)
+        self.add_btn.setToolTip("Open another PDF in a new tab")
+        row.addWidget(self.add_btn)
 
-        header.addWidget(self._tabs, 1)
+        self.tabs = QTabBar(self)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setDrawBase(False)
+        self.tabs.setMovable(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setExpanding(False)
+        self.tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
+        # Stretch factor 0 plus the stretch below: the tab bar takes only
+        # the width its tabs need, and the leftover belongs to the bar —
+        # which is the surface Qt drags the dock by.
+        row.addWidget(self.tabs, 0)
+        row.addStretch(1)
 
         # The viewer's page indicator sits at the right end of the bar.
         page_label = (
@@ -1068,12 +881,157 @@ class _PdfTabContainer(QWidget):
         )
         if page_label is not None:
             page_label.setVisible(True)
-            header.addWidget(page_label)
+            row.addWidget(page_label)
 
-        lay.addWidget(self._header)
-        lay.addWidget(sidebar, 1)
+        self.float_btn = QToolButton(self)
+        self.float_btn.setText("⧉")
+        self.float_btn.setAutoRaise(True)
+        self.float_btn.setToolTip("Float the PDF panel / dock it back")
+        row.addWidget(self.float_btn)
 
+        self.hide_btn = QToolButton(self)
+        self.hide_btn.setText("✕")
+        self.hide_btn.setAutoRaise(True)
+        self.hide_btn.setToolTip("Hide the PDF panel (Library… shows it again)")
+        row.addWidget(self.hide_btn)
+
+        # First layout, before any resizeEvent fires: keep the cap right
+        # from the very first paint (F1, review round 1). 220, not the
+        # review's suggested 200: measured at a real 450px bar with four
+        # saturated tabs, 200 caps the tab bar at 250px and leaves only a
+        # 53px strip — 7px short of the >= 60px this is meant to
+        # guarantee (fixed chrome — the two icon buttons each side, the
+        # bar's own margins and inter-widget spacing — measures 147px
+        # regardless of the cap, so strip = bar_width - 147 - cap; 200
+        # does not clear 60 at this width, 220 clears it with margin).
+        self.tabs.setMaximumWidth(max(80, self.width() - 220))
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        # Cap the tab bar so a drag strip always survives between it and
+        # the float button, however many tabs are open: past one tab the
+        # trailing stretch alone collapsed to a measured 4px (F1, review
+        # round 1) — with the placement menu gone, dragging this bar is
+        # the only way to move the panel between areas.
+        super().resizeEvent(ev)
+        self.tabs.setMaximumWidth(max(80, self.width() - 220))
+
+    # Ignore, never accept: the dock handles these (drag, double-click).
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseDoubleClickEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+
+class PdfDock(QDockWidget):
+    """The PDF viewer panel: a native dock of its host window.
+
+    One bar of chrome (``_PanelBar``) is the dock's title bar; the one
+    shared ``PdfSidebar`` is its widget. Qt moves it, docks it left,
+    right or bottom, floats it as an attached tool window (above the
+    host, hidden and moved with it) and re-docks it — the 2026-08
+    pane-anchored placement engine and its tear-off drag machine are
+    gone (spec:
+    docs/superpowers/specs/2026-09-05-pdf-dock-design.md).
+
+    Persistence is Klaus's own: ``pdf_tabs.json``'s ``placement``
+    (``left``/``right``/``bottom``/``float``, old values migrated by
+    ``pdf_handler.migrate_placement`` at the read) and ``geom`` (the
+    floating geometry). Applied on the first ``panel_show`` of the
+    session, never from Anki's saved QMainWindow state, so a stale saved
+    layout can never overrule the user's last move.
+
+    - **✕ on each tab** closes that PDF (the stored file survives; reopen
+      it from ＋). Closing the last tab hides the panel.
+    - **＋** opens another stored PDF.
+    - **⧉** floats the panel or docks it back; **✕** at the bar's end
+      hides it (the toolbar's Library… button shows it again).
+
+    One viewer instance is reused across tabs; per-tab reading position
+    is kept for the session; the tab set and placement persist.
+    """
+
+    def __init__(self, editor: Editor, sidebar: Any, main_window: Any) -> None:
+        super().__init__("PDF", main_window)
+        self._editor = editor
+        self._sidebar = sidebar
+        self._win = main_window
+        self._syncing = False
+        self._last_page: dict[str, int] = {}
+        self._closed = False
+        # _placed means the remembered placement has been applied this
+        # session; until then panel_show() applies it.
+        self._placed = False
+
+        state = pdf_handler.load_panel_state(USER_FILES)
+        self._placement: str = pdf_handler.migrate_placement(
+            state.get("placement")
+        )
+        g = state.get("geom")
+        self._float_geom: QRect | None = QRect(*g) if g else None
+
+        self.setObjectName("KlausPdfDock")
+        self.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+
+        self._bar = _PanelBar(self, sidebar)
+        self._tabs = self._bar.tabs
+        self._add_btn = self._bar.add_btn
+        self._bar.add_btn.clicked.connect(self._show_add_menu)
+        self._bar.float_btn.clicked.connect(self._toggle_float)
+        self._bar.hide_btn.clicked.connect(self.panel_hide)
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+        self._tabs.tabMoved.connect(lambda *_: self._persist())
+        self.setTitleBarWidget(self._bar)
+        self.setWidget(sidebar)
         sidebar.on_loaded = self._on_sidebar_loaded
+
+        # Nesting lets this dock share Browse's left area with Anki's own
+        # sidebar dock (side by side, not only tabbed).
+        try:
+            main_window.setDockNestingEnabled(True)
+        except Exception:
+            pass
+        # A dock floats and re-docks only once it belongs to a main
+        # window: add it now, hidden, in its remembered area (or the
+        # right area for a floating one to come back to).
+        try:
+            main_window.addDockWidget(
+                PANEL_AREAS.get(self._placement, PANEL_AREAS["right"]), self
+            )
+        except Exception as exc:
+            print(f"[klausmate] pdf dock add failed: {exc}")
+        self.hide()
+        # Connected AFTER the add above, so restoring a placement never
+        # looks like the user moving the panel.
+        self.dockLocationChanged.connect(self._on_area_changed)
+        self.topLevelChanged.connect(self._on_floating_changed)
+
+        # Host lifetime: the viewer's webview must be released before
+        # the host's C++ objects die (PdfSidebar.cleanup), so watch the
+        # host's Close; destroyed is the backstop.
+        try:
+            self._win.installEventFilter(self)
+        except Exception:
+            pass
+        try:
+            self._win.destroyed.connect(self._on_host_destroyed)
+        except Exception:
+            pass
 
         # Restore last session's tab set as labels only — the document
         # itself loads lazily when a tab is selected / the panel is shown.
@@ -1085,27 +1043,64 @@ class _PdfTabContainer(QWidget):
         finally:
             self._syncing = False
 
-    # ---- show / hide (called by the Klaus bar toggle & chips) ----
+    # ---- show / hide (the toolbar Library… button and chips) ----
 
     def panel_show(self) -> None:
         if not self._placed:
+            self._placed = True
             if self._placement == "float":
-                self._make_floating(self._float_geom)
+                self.setFloating(True)
+                g = self._float_geom
+                if g is not None and g.width() > 200 and g.height() > 200:
+                    self.setGeometry(g)
+                else:
+                    try:
+                        wg = self._win.geometry()
+                        self.setGeometry(
+                            wg.x() + max(40, wg.width() - 560),
+                            wg.y() + 80, 520, 640,
+                        )
+                    except Exception:
+                        self.resize(520, 640)
             else:
-                self._embed(self._placement)
-        if self.isWindow():
-            try:
-                if self.isMinimized():
-                    self.showNormal()
-            except Exception:
-                pass
-            self.show()
-            self.raise_()
-        else:
-            self.setVisible(True)
+                area = PANEL_AREAS.get(self._placement, PANEL_AREAS["right"])
+                try:
+                    self._win.addDockWidget(area, self)
+                except Exception:
+                    pass
+                self.show()
+                # 45% of the host on first use. resizeDocks needs the dock
+                # visible and the host laid out, hence the show() above it.
+                vertical = area == Qt.DockWidgetArea.BottomDockWidgetArea
+                try:
+                    total = self._win.height() if vertical else self._win.width()
+                    self._win.resizeDocks(
+                        [self], [max(200, int(total * 0.45))],
+                        Qt.Orientation.Vertical if vertical
+                        else Qt.Orientation.Horizontal,
+                    )
+                except Exception:
+                    pass
+        self.show()
+        self.raise_()
 
-    def panel_hide(self) -> None:
+    # Connected to the bar's ✕ (and called directly), so it carries the
+    # slot guard like every other connected handler in this file — and
+    # therefore ``*_args``: @_guarded's wrapper is (*args, **kwargs), so
+    # PyQt hands it EVERY signal argument, and `clicked` carries a
+    # `checked` bool. A guarded zero-arg slot on `clicked` raises
+    # TypeError into its own guard and silently never runs (that is what
+    # kept the ＋ button dead for two releases, and browse_toggles'
+    # _sync_copy is the precedent).
+    @_guarded
+    def panel_hide(self, *_args) -> None:
         self.hide()
+
+    def _toggle_float(self) -> None:
+        try:
+            self.setFloating(not self.isFloating())
+        except Exception as exc:
+            print(f"[klausmate] pdf dock float toggle failed: {exc}")
 
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
@@ -1124,323 +1119,80 @@ class _PdfTabContainer(QWidget):
 
     def hideEvent(self, ev) -> None:  # noqa: N802
         super().hideEvent(ev)
-        if self.isWindow():
-            self._remember_float_geom()
+        self._remember_float_geom()
         try:
             self._sidebar._set_active(None)
         except Exception:
             pass
 
-    # ---- placement engine ----
-    #
-    # TWO ANCHORS, ONE ENGINE (K-169). Every docked placement wraps some
-    # PANE of the host window in a private QSplitter and inserts the panel
-    # beside it:
-    #
-    #   above / below / left / right  → the EDITOR pane   (_ensure_vsplit)
-    #   notes-left / notes-right      → Browse's NOTE-TABLE column
-    #                                                  (_ensure_notes_split)
-    #
-    # The editor anchor is the original one, and its docstring's warning
-    # still holds for it: "above" means above *that pane*, never the whole
-    # window. In Browse the editor pane is the right-hand column, so it can
-    # never reach the note list — which is why the second anchor exists.
-    #
-    # Both anchors share _wrap_pane (the wrap) and _dock_into (the insert +
-    # sizing), so there is exactly one copy of the reparent sequence and of
-    # the size-policy re-assert that QSplitter.setOrientation makes
-    # necessary. A third anchor is a third _ensure_* cache in front of the
-    # same two helpers.
+    # ---- placement memory ----
 
-    def _wrap_pane(self, pane: QWidget, vertical: bool) -> QSplitter | None:
-        """Put ``pane`` inside a fresh QSplitter, in its own place in the
-        host layout. Returns the wrapper, or None if the pane has nowhere
-        to be replaced.
+    @_guarded
+    def _on_area_changed(self, area) -> None:
+        if not self.isFloating():
+            self._placement = AREA_NAMES.get(area, self._placement)
+            self._persist_state()
 
-        Called once per anchor per window; the _ensure_* methods below
-        cache the result.
-        """
-        parent = pane.parentWidget()
-        if parent is None:
-            return None
-        split = QSplitter(
-            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
-        )
-        split.setChildrenCollapsible(False)
-        try:
-            # Inherit the pane's size policy. AddCards' fieldsArea carries
-            # verticalStretch=10 — the only hint giving it ALL surplus
-            # window height. QSplitter's default policy is orientation-
-            # dependent (vertically Preferred when horizontal), so without
-            # this the Type/Deck row balloons into blank space whenever
-            # the panel docks left/right.
-            split.setSizePolicy(pane.sizePolicy())
-        except Exception:
-            pass
-        if isinstance(parent, QSplitter):
-            idx = parent.indexOf(pane)
-            sizes = parent.sizes()
-            parent.insertWidget(idx, split)
-            split.addWidget(pane)  # reparents pane out of parent
+    @_guarded
+    def _on_floating_changed(self, floating: bool) -> None:
+        if floating:
+            self._placement = "float"
+        else:
             try:
-                parent.setSizes(sizes)
+                self._placement = AREA_NAMES.get(
+                    self._win.dockWidgetArea(self), self._placement
+                )
             except Exception:
                 pass
-        else:
-            lay = parent.layout()
-            if lay is None:
-                return None
-            lay.replaceWidget(pane, split)
-            split.addWidget(pane)
-        pane.setVisible(True)
-        return split
-
-    def _ensure_vsplit(self) -> QSplitter | None:
-        """Wrap the editor pane in a vertical splitter (once per window)."""
-        existing = getattr(self._editor, "_klausmate_vsplit", None)
-        if existing is not None:
-            return existing
-        ed_w = getattr(self._editor, "widget", None)
-        if ed_w is None:
-            return None
-        vsplit = self._wrap_pane(ed_w, True)
-        if vsplit is None:
-            return None
-        self._editor._klausmate_vsplit = vsplit  # type: ignore[attr-defined]
-        return vsplit
-
-    # ---- the Browse note-table anchor (K-169) ----
-
-    def _browse_form(self) -> Any:
-        """Browse's generated form, or None in every other host.
-
-        Identified by the widgets this anchor actually uses rather than by
-        class name: the Browser's standalone edit-current window hosts an
-        Editor too, and AddCards has a form of its own — neither carries a
-        ``splitter`` + ``tableView`` pair.
-        """
-        form = getattr(self._win, "form", None)
-        if form is None:
-            return None
-        if not isinstance(getattr(form, "splitter", None), QSplitter):
-            return None
-        if getattr(form, "tableView", None) is None:
-            return None
-        return form
-
-    def _browse_note_pane(self) -> QWidget | None:
-        """Browse's note-table COLUMN — the pane this anchor docks beside.
-
-        Found by walking UP from ``form.tableView`` to the direct child of
-        whatever currently owns that column, which is browse_toggles'
-        method for the editor column and for the same reason: naming the
-        generated attribute (``form.widget``) would break silently on an
-        Anki rename, and Anki mutates this layout after setupUi anyway.
-
-        The walk stops at the Browse splitter, or at OUR wrapper once the
-        panel is docked here — so it keeps returning the note column
-        itself in both states, never the wrapper that contains it.
-        """
-        form = self._browse_form()
-        if form is None:
-            return None
-        splitter = form.splitter
-        wrap = getattr(self._win, "_klausmate_notes_split", None)
-        w: QWidget | None = form.tableView
-        while w is not None:
-            p = w.parentWidget()
-            if p is splitter or (wrap is not None and p is wrap):
-                return w
-            w = p
-        return None
-
-    def _ensure_notes_split(self) -> QSplitter | None:
-        """Wrap Browse's note-table column in a horizontal splitter (once
-        per window). None in any window without a note table.
-
-        The wrapper is remembered on the HOST WINDOW, not on the editor:
-        it wraps a widget the window owns, and Browse's editor is
-        re-initialised more often than its layout is.
-
-        Deliberately a WRAPPER rather than a third child of
-        ``form.splitter``: Anki persists that splitter with
-        saveState()/restoreState() (aqt.utils.saveSplitter, profile key
-        "editor3Splitter") and restore applies the saved sizes positionally
-        against however many children exist. Docking into it directly would
-        write a three-size state that, read back into the two-child
-        splitter of a session where the panel is never opened, hands the
-        editor column the PDF's width. Wrapping keeps ``form.splitter`` at
-        exactly two children and one handle, so Anki's own Browse layout
-        round-trips untouched.
-        """
-        existing = getattr(self._win, "_klausmate_notes_split", None)
-        if existing is not None:
-            return existing
-        pane = self._browse_note_pane()
-        if pane is None:
-            return None
-        split = self._wrap_pane(pane, False)
-        if split is None:
-            return None
-        self._win._klausmate_notes_split = split  # type: ignore[attr-defined]
-        return split
-
-    def _dock_into(
-        self,
-        split: QSplitter,
-        pane: QWidget | None,
-        vertical: bool,
-        first: bool,
-        mode: str,
-    ) -> None:
-        """Insert the panel into an anchor's wrapper and size it. The one
-        implementation both anchors run — a new anchor must not grow a
-        second copy."""
-        split.setOrientation(
-            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
-        )
-        # setOrientation transposes QSplitter's size policy — re-assert the
-        # inherited pane policy so the wrapper keeps absorbing the window's
-        # surplus height in every orientation.
-        try:
-            if pane is not None:
-                split.setSizePolicy(pane.sizePolicy())
-        except Exception:
-            pass
-        split.insertWidget(0 if first else split.count(), self)
-        self.setVisible(True)
-        total = max(1, split.height() if vertical else split.width())
-        pdf_share = int(total * 0.45)
-        sizes = (
-            [pdf_share, total - pdf_share]
-            if first
-            else [total - pdf_share, pdf_share]
-        )
-        try:
-            split.setSizes(sizes)
-        except Exception:
-            pass
-        self._placement = mode
-        self._placed = True
-        self._persist_state()
-
-    def _embed(self, mode: str) -> None:
-        """Dock the panel beside one of the host window's panes.
-
-        notes-left / notes-right anchor on Browse's note table; every
-        other mode anchors on the editor pane, where the wrapper
-        splitter's orientation follows the side: above/below → vertical,
-        left/right → horizontal.
-        """
-        if mode in NOTES_PLACEMENTS:
-            notes_split = self._ensure_notes_split()
-            if notes_split is not None:
-                self._dock_into(
-                    notes_split,
-                    self._browse_note_pane(),
-                    False,
-                    mode == "notes-left",
-                    mode,
-                )
-                return
-            # No note table in this window — the anchor does not exist
-            # here. Fall through to the editor anchor on the same side
-            # rather than stranding the panel in a float.
-            mode = "left" if mode == "notes-left" else "right"
-        vsplit = self._ensure_vsplit()
-        if vsplit is None:
-            self._make_floating(self._float_geom)
-            return
-        self._dock_into(
-            vsplit,
-            getattr(self._editor, "widget", None),
-            mode in ("above", "below"),
-            mode in ("above", "left"),
-            mode,
-        )
-
-    def _make_floating(self, geom: QRect | None) -> None:
-        """Turn the panel into a real, PARENTLESS macOS window: it shows
-        in Mission Control, minimizes to the Dock, and Anki can come in
-        front of it (a child window would be forced always-on-top of its
-        parent). Its red ✕ still just hides the panel (default QWidget
-        close), and _on_host_closing() ties its lifetime to the host.
-
-        Sequence matters: setParent(None) → flags → geometry → show() —
-        only after show() does windowHandle() exist for
-        startSystemMove()."""
-        self.setParent(None)
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowMinMaxButtonsHint
-        )
-        self.setWindowTitle("PDF — KlausMate")
-        if geom is not None and geom.width() > 200 and geom.height() > 200:
-            self.setGeometry(geom)
-        else:
-            try:
-                wg = self._win.geometry()
-                self.setGeometry(
-                    wg.x() + max(40, wg.width() - 560),
-                    wg.y() + 80,
-                    520,
-                    640,
-                )
-            except Exception:
-                self.resize(520, 640)
-        self.show()
-        self.raise_()
-        self._placement = "float"
-        self._placed = True
         self._persist_state()
 
     def _remember_float_geom(self) -> None:
         # A minimized window reports Dock-related geometry — don't let
         # that overwrite the real placement.
         try:
-            if self.isMinimized():
-                return
+            if self.isFloating() and not self.isMinimized():
+                self._float_geom = QRect(self.geometry())
         except Exception:
             pass
-        if self.isWindow():
-            self._float_geom = QRect(self.geometry())
 
     def _persist_state(self) -> None:
+        self._remember_float_geom()
         geom = None
-        if self.isWindow():
-            self._remember_float_geom()
         if self._float_geom is not None:
             g = self._float_geom
             geom = [g.x(), g.y(), g.width(), g.height()]
-        notes = self._placement in NOTES_PLACEMENTS
-        if self._browse_form() is not None:
-            # Written on EVERY Browse placement change, None included:
-            # dragging the panel back onto the editor pane (or floating
-            # it) has to CLEAR the notes choice, or the next Browse open
-            # would silently overrule the move that just happened.
-            _save_browse_placement(self._placement if notes else None)
         try:
             pdf_handler.save_panel_state(
-                USER_FILES,
-                # A notes-* placement never reaches the SHARED key — Add
-                # Cards reads it too and has no note table. Passing None
-                # leaves the last editor-anchored choice standing there,
-                # which is exactly what Add Cards should still get.
-                placement=None if notes else self._placement,
-                geom=geom,
+                USER_FILES, placement=self._placement, geom=geom
             )
         except Exception:
             pass
 
     # ---- host lifetime ----
 
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        try:
+            if obj is self._win and ev.type() == QEvent.Type.Close:
+                # Leave the mouse pipeline NOW: a QPdfView deleted while
+                # under the cursor segfaulted in sip's receiver conversion
+                # (live crash, 2026-08-24). The host may still ignore()
+                # this Close (AddCards' discard prompt), so never tear
+                # down synchronously — check next tick.
+                self._hidden_for_close = self.isVisible()
+                if self._hidden_for_close:
+                    try:
+                        self.hide()
+                    except Exception:
+                        pass
+                QTimer.singleShot(0, self._host_close_check)
+                return False
+        except Exception:
+            pass
+        return super().eventFilter(obj, ev)
+
     def _host_close_check(self) -> None:
         """Deferred from the host's Close event: only tear down when the
-        close was actually accepted — the host may have evt.ignore()d it
-        (e.g. AddCards' discard prompt was cancelled), in which case
-        tearing down would leave live references to a dead panel."""
+        close was actually accepted — the host may have ignore()d it."""
         try:
             still_up = bool(self._win.isVisible())
         except Exception:
@@ -1452,8 +1204,7 @@ class _PdfTabContainer(QWidget):
             except Exception as exc:
                 print(f"[klausmate] pdf host-close teardown failed: {exc}")
         elif getattr(self, "_hidden_for_close", False):
-            # The close was cancelled (AddCards' discard prompt) — undo
-            # the precautionary hide from the Close filter.
+            # The close was cancelled — undo the precautionary hide.
             self._hidden_for_close = False
             try:
                 self.setVisible(True)
@@ -1461,51 +1212,26 @@ class _PdfTabContainer(QWidget):
                 pass
 
     def _on_host_closing(self) -> None:
-        """The Browse/Add window that spawned this panel is closing.
-        Embedded panels die with it naturally; a floating panel is
-        parentless (see _make_floating) and must be taken down
-        explicitly or it would linger as a zombie window."""
+        """The Browse/Add window is closing: persist, release the
+        renderer's webview while its C++ object still exists
+        (PdfSidebar.cleanup — a webview destroyed without it crashes
+        Anki's next theme change), drop the back-references. The dock
+        itself is the host's child and dies with it."""
         if self._closed:
             return
-        try:
-            if self._drag_state != "idle":
-                self._reset_drag()
-        except Exception:
-            pass
+        self._closed = True
         try:
             self._persist_state()
         except Exception:
             pass
-        # Release the renderer's webview from Anki's global hooks while
-        # its C++ object still exists — a webview destroyed without
-        # AnkiWebView.cleanup() crashes Anki's next theme change (see
-        # PdfSidebar.cleanup).
         try:
             self._sidebar.cleanup()
         except Exception:
             pass
-        # The drop-zone overlay is a parentless top-level window too.
-        ov = self._zone_overlay
-        if ov is not None:
-            self._zone_overlay = None
-            try:
-                ov.hide()
-                ov.deleteLater()
-            except Exception:
-                pass
-        if self.isWindow():
-            self._closed = True
-            print("[klausmate] pdf drag: host closing — closing floating panel")
-            try:
-                self.close()
-            except Exception:
-                pass
-            try:
-                self.deleteLater()
-            except Exception:
-                pass
-        # The host is really going away — drop the back-references so a
-        # later editor re-init / toggle can't reach a dead widget.
+        try:
+            self.hide()
+        except Exception:
+            pass
         try:
             self._win._klausmate_pdf_container = None
         except Exception:
@@ -1527,743 +1253,6 @@ class _PdfTabContainer(QWidget):
         except Exception:
             pass
 
-    # ---- drag: tear off / move / drop-dock ----
-
-    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
-        t = ev.type()
-
-        # -- host lifetime -------------------------------------------
-        try:
-            if obj is self._win and t == QEvent.Type.Close:
-                # Leave the mouse pipeline NOW: if the close goes through,
-                # the embedded viewer dies with the window, and a hidden
-                # widget can no longer be Qt's hover/tracking target — a
-                # QPdfView deleted while under the cursor segfaulted in
-                # sip's receiver conversion (live crash, 2026-08-24).
-                self._hidden_for_close = self.isVisible()
-                if self._hidden_for_close:
-                    try:
-                        self.hide()
-                    except Exception:
-                        pass
-                # The host may still evt.ignore() this Close (e.g. the
-                # user cancels AddCards' discard prompt), so NEVER tear
-                # down synchronously — check next tick whether the
-                # window actually went away.
-                QTimer.singleShot(0, self._host_close_check)
-                return False  # never block the host's close
-        except Exception:
-            pass
-
-        # -- application-level drag finalize --------------------------
-        # While macOS runs a system move, Qt may never deliver the
-        # release to this widget at all. This filter (installed on the
-        # QApplication only for the drag's duration) closes the gesture
-        # out on the next definitive event ANYWHERE: a release, a fresh
-        # press, or a mouse move with no buttons held (i.e. the release
-        # happened while Qt wasn't looking). Application filters run
-        # before object filters, so a new press on our own bar first
-        # finalizes the old drag here, then starts cleanly below.
-        if (
-            self._app_filter_installed
-            and not self._synthetic_release
-            and self._drag_state in ("native", "manual_follow", "armed")
-        ):
-            try:
-                if t == QEvent.Type.MouseButtonRelease:
-                    self._finalize_drag(True, "app-filter release")
-                elif t == QEvent.Type.MouseButtonPress:
-                    self._finalize_drag(True, "app-filter press")
-                elif t == QEvent.Type.MouseMove:
-                    if ev.buttons() == Qt.MouseButton.NoButton:
-                        self._finalize_drag(
-                            True, "app-filter buttonless move"
-                        )
-                    elif ev.buttons() & Qt.MouseButton.LeftButton:
-                        # Left button demonstrably still held → the
-                        # drag is alive (feeds the freshness gate).
-                        self._last_drag_evidence = time.time()
-            except Exception:
-                pass
-
-        # -- bar / tab gestures ---------------------------------------
-        if obj is self._header or obj is self._tabs:
-            if (
-                t == QEvent.Type.MouseButtonPress
-                and ev.button() == Qt.MouseButton.LeftButton
-            ):
-                gp = ev.globalPosition().toPoint()
-                self._press_gp = gp
-                self._drag_state = "pressed"
-                # A press on an actual tab must stay draggable-for-
-                # reorder; it only becomes a panel drag once the cursor
-                # leaves the tab-bar band. A press on empty tab-bar
-                # space (or header margins / page label) drags the
-                # panel after a small threshold.
-                self._press_on_tab = (
-                    obj is self._tabs
-                    and self._tabs.tabAt(ev.position().toPoint()) >= 0
-                )
-                if self.isWindow():
-                    self._drag_off = (
-                        gp - self.window().frameGeometry().topLeft()
-                    )
-                else:
-                    self._drag_off = None
-                return False  # let the tab bar select/reorder normally
-            if t == QEvent.Type.MouseMove and self._press_gp is not None:
-                gp = ev.globalPosition().toPoint()
-                state = self._drag_state
-                if state == "pressed":
-                    if self._press_on_tab:
-                        # Tab presses tear off when the cursor leaves
-                        # the tab-bar band — in ANY direction. Inside
-                        # the band, drags keep reordering tabs forever.
-                        try:
-                            band = self._tabs.rect().adjusted(-4, -4, 4, 4)
-                            escaped = not band.contains(
-                                self._tabs.mapFromGlobal(gp)
-                            )
-                        except Exception:
-                            escaped = False
-                    else:
-                        escaped = (gp - self._press_gp).manhattanLength() > 8
-                    if not escaped:
-                        return False
-                    self._header.setCursor(Qt.CursorShape.ClosedHandCursor)
-                    if self._press_on_tab:
-                        # The tab bar started a reorder-drag; close it out
-                        # with a synthetic release so it doesn't keep a
-                        # half-dragged tab while we move the whole panel.
-                        # (_synthetic_release keeps the reentrant filter
-                        # call from resetting our gesture state.)
-                        self._synthetic_release = True
-                        try:
-                            QApplication.sendEvent(
-                                self._tabs,
-                                QMouseEvent(
-                                    QEvent.Type.MouseButtonRelease,
-                                    QPointF(
-                                        self._tabs.mapFromGlobal(gp)
-                                    ),
-                                    QPointF(gp),
-                                    Qt.MouseButton.LeftButton,
-                                    Qt.MouseButton.NoButton,
-                                    Qt.KeyboardModifier.NoModifier,
-                                ),
-                            )
-                        except Exception:
-                            pass
-                        finally:
-                            self._synthetic_release = False
-                    self._start_panel_drag(gp)
-                    return True
-                if state == "manual_ghost":
-                    # Fallback tear-off: drive the ghost only — the real
-                    # panel is relocated on release. Reparenting it here,
-                    # mid-gesture, would destroy the NSView that owns the
-                    # Cocoa drag session and kill the mouse tracking.
-                    self._drag_ghost_to(gp)
-                    self._update_zone(gp)
-                    return True
-                if state == "manual_follow":
-                    # Fallback live-move for a floating panel (mouse
-                    # tracking is sound here — nothing was reparented).
-                    try:
-                        self.window().move(
-                            gp - (self._drag_off or QPoint(60, 15))
-                        )
-                    except Exception:
-                        pass
-                    self._update_zone(gp)
-                    self._last_activity = time.time()
-                    try:
-                        if ev.buttons() & Qt.MouseButton.LeftButton:
-                            self._last_drag_evidence = time.time()
-                    except Exception:
-                        pass
-                    return True
-                if state in ("native", "armed"):
-                    # Shouldn't normally arrive while the OS owns the
-                    # move; treat it as a sign of life either way.
-                    self._last_activity = time.time()
-                    try:
-                        if ev.buttons() & Qt.MouseButton.LeftButton:
-                            self._last_drag_evidence = time.time()
-                    except Exception:
-                        pass
-                    if state == "armed":
-                        if self._native_move_ok is False:
-                            # Native move is proven broken — resume in
-                            # the mode that actually works and handle
-                            # THIS event as a cursor-follow move.
-                            self._drag_state = "manual_follow"
-                            try:
-                                self.window().move(
-                                    gp
-                                    - (self._drag_off or QPoint(60, 15))
-                                )
-                            except Exception:
-                                pass
-                            self._update_zone(gp)
-                        else:
-                            self._drag_state = "native"
-                    return True
-                return False
-            if (
-                t == QEvent.Type.MouseButtonRelease
-                and ev.button() == Qt.MouseButton.LeftButton
-            ):
-                # Only the LEFT release ends a gesture — the press that
-                # started it was LeftButton-gated, so a stray middle /
-                # right click mid-drag must pass through untouched.
-                if self._synthetic_release:
-                    # Our own synthetic tab-release passing through on
-                    # its way to the tab bar — not a gesture end.
-                    return False
-                state = self._drag_state
-                if state == "pressed":
-                    self._press_gp = None
-                    self._drag_state = "idle"
-                    return False  # plain click: let the tab bar have it
-                if state == "manual_ghost":
-                    gp = ev.globalPosition().toPoint()
-                    zone = self._active_zone
-                    self._reset_drag()
-                    print(
-                        "[klausmate] pdf drag: ghost drop "
-                        f"(zone={zone})"
-                    )
-                    if zone:
-                        # Embedded → re-dock on another side. Deferred:
-                        # we are inside event delivery (_defer_placement).
-                        self._defer_placement(self._embed, zone)
-                    else:
-                        # Float at the drop point. The button is up, but
-                        # the reparent still must not run inside this
-                        # event's delivery (_defer_placement).
-                        self._defer_placement(self._tear_off, gp)
-                    return True
-                if state in ("native", "manual_follow", "armed"):
-                    self._finalize_drag(True, "bar release")
-                    return True
-                return False
-        return super().eventFilter(obj, ev)
-
-    def _start_panel_drag(self, gp: QPoint) -> None:
-        """A bar/tab drag gesture crossed its threshold — route it.
-
-        Primary path: float the REAL panel at the cursor and hand the
-        move to macOS (startSystemMove). Once _native_move_ok is False
-        (startSystemMove refused, or the watchdog caught it lying),
-        embedded tear-offs take the translucent-ghost path. An ALREADY-
-        FLOATING panel always re-probes startSystemMove() — no reparent
-        is involved, so this is the guaranteed-sound case — and the
-        watchdog / moveEvent verdict lets _native_move_ok heal back to
-        True (or stay False) for this session."""
-        if self._native_move_ok is False and not self.isWindow():
-            self._drag_state = "manual_ghost"
-            print("[klausmate] pdf drag: begin (manual_ghost fallback)")
-            self._drag_ghost_to(gp)
-            self._update_zone(gp)
-            return
-        if not self.isWindow():
-            self._tear_off(gp)
-        started = False
-        try:
-            wh = self.window().windowHandle()
-            if wh is not None:
-                started = bool(wh.startSystemMove())
-        except Exception:
-            started = False
-        if not started:
-            # Refused outright → proven broken; this drag still works
-            # via cursor-follow, future gestures use the ghost path.
-            self._native_move_ok = False
-            print(
-                "[klausmate] pdf drag: startSystemMove refused — "
-                "cursor-follow fallback"
-            )
-        self._arm_drag_machinery("native" if started else "manual_follow")
-
-    def _arm_drag_machinery(self, state: str) -> None:
-        """Start the heartbeat + app filter that shepherd a native (or
-        cursor-follow) drag to its finalize."""
-        now = time.time()
-        self._drag_started = now
-        self._last_activity = now
-        # The gesture just crossed its threshold under a held left
-        # button — that IS direct drag evidence.
-        self._last_drag_evidence = now
-        self._move_seen = False
-        try:
-            self._last_cursor = QPoint(QCursor.pos())
-        except Exception:
-            self._last_cursor = None
-        try:
-            self._drag_start_cursor = QPoint(QCursor.pos())
-        except Exception:
-            self._drag_start_cursor = None
-        # Post-tear-off origin: a moveEvent only proves the native move
-        # once the window (or cursor) has left this point by >8px.
-        try:
-            self._drag_origin_pos = QPoint(
-                self.window().frameGeometry().topLeft()
-            )
-        except Exception:
-            self._drag_origin_pos = None
-        self._drag_state = state
-        self._install_app_filter()
-        if not self._drag_timer.isActive():
-            self._drag_timer.start()
-        print(f"[klausmate] pdf drag: begin ({state})")
-
-    def _install_app_filter(self) -> None:
-        if self._app_filter_installed:
-            return
-        try:
-            app = QApplication.instance()
-            if app is not None:
-                app.installEventFilter(self)
-                self._app_filter_installed = True
-        except Exception:
-            pass
-
-    def _displaced_enough(self) -> bool:
-        """True once the window or the cursor has demonstrably travelled
-        (>8px) since the drag machinery armed — the bar a moveEvent must
-        clear before it counts as proof that the native move works."""
-        try:
-            if self._drag_origin_pos is not None:
-                d = (
-                    self.window().frameGeometry().topLeft()
-                    - self._drag_origin_pos
-                )
-                if d.manhattanLength() > 8:
-                    return True
-        except Exception:
-            pass
-        try:
-            if self._drag_start_cursor is not None:
-                d = QCursor.pos() - self._drag_start_cursor
-                if d.manhattanLength() > 8:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def moveEvent(self, ev) -> None:  # noqa: N802
-        super().moveEvent(ev)
-        # Gated strictly on the drag state: ordinary moves (title-bar
-        # drags of the floating window, layout changes) stay inert.
-        if self._drag_state not in ("native", "armed", "manual_follow"):
-            return
-        now = time.time()
-        if self._drag_state == "armed":
-            # Only a move backed by recent drag evidence resumes the
-            # gesture. Anything else (a native title-bar drag of a
-            # zombie-armed panel, an async layout adjustment) is a
-            # plain user reposition — no zone tracking, no promotion.
-            held = False
-            try:
-                held = bool(
-                    QApplication.mouseButtons()
-                    & Qt.MouseButton.LeftButton
-                )
-            except Exception:
-                pass
-            if not held and now - self._last_drag_evidence > 1.0:
-                return
-            self._drag_state = (
-                "manual_follow"
-                if self._native_move_ok is False
-                else "native"
-            )
-        if not self._move_seen:
-            if (
-                self._drag_state == "native"
-                and not self._displaced_enough()
-            ):
-                # A spurious async geometry adjustment right after
-                # tear-off must not count as native confirmation — it
-                # would set _native_move_ok and permanently disarm the
-                # watchdog. Stay unconfirmed.
-                return
-            self._move_seen = True
-            if self._drag_state == "native":
-                # The window demonstrably follows → native move works.
-                self._native_move_ok = True
-        self._last_activity = now
-        # The panel moved while the gesture owns the window — direct
-        # drag evidence (feeds the freshness gate in _finalize_drag).
-        self._last_drag_evidence = now
-        try:
-            self._update_zone(QCursor.pos())
-        except Exception:
-            pass
-
-    def _drag_tick(self) -> None:
-        """100ms heartbeat while a native/cursor-follow drag runs.
-
-        startSystemMove() lies on Cocoa — it returns True even when
-        performWindowDragWithEvent: silently no-ops — and during a REAL
-        system move Qt receives no mouse events, so the gesture's end
-        can't be observed directly. Tiers:
-
-        1. watchdog (only until the first moveEvent): the cursor has
-           clearly travelled but the window never moved → native move
-           is dead; demote to cursor-follow and remember the verdict.
-        2. primary end: Qt saw every button go up → finalize.
-        3. staleness: nothing moved for a while → "armed"; the app
-           filter finalizes on the next definitive event, a new
-           moveEvent re-activates, and a 10s cap gives up WITHOUT
-           embedding.
-        """
-        state = self._drag_state
-        if state not in ("native", "manual_follow", "armed"):
-            self._drag_timer.stop()
-            return
-        now = time.time()
-        try:
-            cur = QPoint(QCursor.pos())
-        except Exception:
-            return
-        moved = self._last_cursor is not None and cur != self._last_cursor
-        self._last_cursor = cur
-        if moved:
-            self._last_activity = now
-
-        # 1. Watchdog.
-        if (
-            state == "native"
-            and not self._move_seen
-            and now - self._drag_started >= 0.3
-            and self._press_gp is not None
-            and (cur - self._press_gp).manhattanLength() > 40
-        ):
-            self._native_move_ok = False
-            self._drag_state = state = "manual_follow"
-            print(
-                "[klausmate] pdf drag: watchdog — native move dead, "
-                "cursor-follow fallback"
-            )
-
-        # Cursor-follow: the heartbeat IS the drag.
-        if state == "manual_follow":
-            try:
-                self.window().move(cur - (self._drag_off or QPoint(60, 15)))
-            except Exception:
-                pass
-            self._update_zone(cur)
-
-        # 2. Primary end.
-        try:
-            buttons_up = (
-                QApplication.mouseButtons() == Qt.MouseButton.NoButton
-            )
-        except Exception:
-            buttons_up = False
-        if buttons_up:
-            self._finalize_drag(True, "buttons-up")
-            return
-
-        # 3. Staleness.
-        if state in ("native", "manual_follow"):
-            if not moved and now - self._last_activity > 0.6:
-                self._drag_state = "armed"
-                # A quiet gesture may already be a dead one (the
-                # release can be unobservable) — drop the dock preview
-                # so a stray late finalize can't embed a stale zone.
-                try:
-                    self._hide_zone()
-                except Exception:
-                    pass
-                print("[klausmate] pdf drag: armed (no activity)")
-        elif state == "armed":
-            if moved:
-                # User resumed the gesture (button still down as far as
-                # Qt knows).
-                self._drag_state = (
-                    "manual_follow"
-                    if self._native_move_ok is False
-                    else "native"
-                )
-            elif now - self._last_activity > 10.0:
-                self._finalize_drag(False, "armed 10s cap")
-
-    def _reset_drag(self) -> None:
-        """Tear down all drag machinery and return to idle."""
-        try:
-            if self._drag_timer.isActive():
-                self._drag_timer.stop()
-        except Exception:
-            pass
-        if self._app_filter_installed:
-            try:
-                app = QApplication.instance()
-                if app is not None:
-                    app.removeEventFilter(self)
-            except Exception:
-                pass
-            self._app_filter_installed = False
-        self._hide_zone()
-        self._destroy_ghost()
-        self._press_gp = None
-        self._move_seen = False
-        self._last_cursor = None
-        self._drag_origin_pos = None
-        self._drag_start_cursor = None
-        self._drag_state = "idle"
-        try:
-            self._header.setCursor(Qt.CursorShape.OpenHandCursor)
-        except Exception:
-            pass
-
-    def _defer_placement(self, fn, *args) -> None:
-        """Run a placement change (embed / tear-off) AFTER the current
-        event finishes delivering.
-
-        Reparenting this panel moves the live QPdfView between native
-        windows, which destroys and recreates the whole subtree's window
-        handles. Doing that synchronously inside ``eventFilter`` — where
-        every drop path below is called from — leaves Qt delivering a
-        mouse event into freed widgets: the next event's receiver
-        pointer is dangling and sip segfaults converting it to Python
-        before any of our code runs, so no try/except can catch it
-        (SIGSEGV in sipSubClass_QPdfView, reproduced live by tearing the
-        panel out and docking it back in, 2026-08-24). It is the same
-        "never reparent mid-mouse-gesture" rule the tear-off already
-        respects at pickup time, applied at drop time.
-
-        singleShot(0) returns control to Qt first; the app-level event
-        filter is already removed by ``_reset_drag`` (which every caller
-        runs BEFORE scheduling this), so by the time ``fn`` runs there is
-        no event in flight and no filter on the stack.
-        """
-
-        def run() -> None:
-            try:
-                if self._closed:
-                    return
-                fn(*args)
-            except RuntimeError:
-                pass  # panel died between scheduling and running
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] pdf drag: deferred placement failed: {exc}")
-
-        QTimer.singleShot(0, run)
-
-    def _finalize_drag(self, allow_embed: bool, why: str) -> None:
-        """Common end for native/cursor-follow drags: tear the machinery
-        down, then dock into the active zone or stay floating in place.
-
-        Embeds are additionally gated on freshness (<2s since the last
-        DIRECT drag evidence — a panel moveEvent during the gesture or
-        a mouse event with the left button held; raw cursor motion is
-        deliberately not enough, it keeps flowing after an unobserved
-        release): the staleness tiers can fire long after the user
-        actually let go, and a surprise late dock is worse than staying
-        floating. Esc-to-cancel was considered and dropped — key events
-        are unobservable while macOS runs a system move, so a cancel
-        gesture cannot be detected reliably."""
-        zone = self._active_zone
-        fresh = (time.time() - self._last_drag_evidence) < 2.0
-        self._reset_drag()
-        print(
-            f"[klausmate] pdf drag: finalize via {why} "
-            f"(zone={zone}, fresh={fresh}, embed_ok={allow_embed})"
-        )
-        if allow_embed and zone is not None and fresh:
-            # Deferred: this runs inside eventFilter (see _defer_placement).
-            self._defer_placement(self._embed, zone)
-        else:
-            self._persist_state()
-
-    def _tear_off(self, gp: QPoint) -> None:
-        w = max(480, self.width() or 480)
-        h = max(400, self.height() or 400)
-        self._drag_off = QPoint(w // 2, 15)
-        self._make_floating(QRect(gp - self._drag_off, QSize(w, h)))
-
-    def _drag_ghost_to(self, gp: QPoint) -> None:
-        """Show/move the translucent drag preview under the cursor.
-        FALLBACK ONLY: used when native window moves are proven broken
-        (``_native_move_ok is False``) and the panel is still embedded —
-        reparenting mid-gesture would kill Cocoa's mouse tracking, so
-        the ghost stands in and the panel relocates on release."""
-        g = self._ghost
-        if g is None:
-            pm = self.grab()
-            if pm.width() > 420:
-                pm = pm.scaledToWidth(
-                    420, Qt.TransformationMode.SmoothTransformation
-                )
-            g = QLabel(self._win)
-            g.setWindowFlags(
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-            )
-            g.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            g.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            g.setPixmap(pm)
-            g.resize(pm.size())
-            g.setWindowOpacity(0.55)
-            self._ghost = g
-        g.move(gp - QPoint(g.width() // 2, 12))
-        if not g.isVisible():
-            g.show()
-            g.raise_()
-
-    def _destroy_ghost(self) -> None:
-        if self._ghost is not None:
-            try:
-                self._ghost.hide()
-                self._ghost.deleteLater()
-            except Exception:
-                pass
-            self._ghost = None
-
-    _ZONE_CAPTIONS = {
-        "above": "⬆  Dock above",
-        "below": "⬇  Dock below",
-        "left": "⬅  Dock left",
-        "right": "➡  Dock right",
-        "notes-left": "⬅  Dock left of the notes",
-        "notes-right": "➡  Dock right of the notes",
-    }
-
-    def _update_zone(self, gp: QPoint) -> None:
-        """Track which dock zone (if any) the cursor is over and preview
-        it. Detection: generous 40% bands along each edge of the editor
-        pane; the central 20%×20% — and anywhere outside the pane — is
-        an easy "stay floating". In a corner the proportionally nearer
-        edge wins. The preview shows the TRUE post-drop layout: the 45%
-        band _embed() will actually allocate.
-
-        In Browse the note-table column carries the SAME grammar over its
-        own rect, minus the vertical pair: 40% bands left and right for
-        the two notes-* placements, a neutral 20% middle. The two panes
-        are siblings and never overlap, and this test runs only after the
-        editor pane declined, so the original bands are untouched."""
-        zone: str | None = None
-        pane = getattr(self._editor, "widget", None)
-        if pane is not None and pane.isVisible():
-            r = QRect(pane.mapToGlobal(QPoint(0, 0)), pane.size())
-            if r.contains(gp):
-                w, h = max(1, r.width()), max(1, r.height())
-                rel_x = gp.x() - r.left()
-                rel_y = gp.y() - r.top()
-                in_v = rel_y <= h * 0.4 or rel_y >= h * 0.6
-                in_h = rel_x <= w * 0.4 or rel_x >= w * 0.6
-                # In a corner, pick the edge the cursor is proportionally
-                # closest to.
-                dy = min(rel_y, h - rel_y) / h
-                dx = min(rel_x, w - rel_x) / w
-                if in_v and (not in_h or dy <= dx):
-                    zone = "above" if rel_y <= h * 0.4 else "below"
-                elif in_h:
-                    zone = "left" if rel_x <= w * 0.4 else "right"
-        if zone is None:
-            notes_pane = self._browse_note_pane()
-            if notes_pane is not None and notes_pane.isVisible():
-                r = QRect(
-                    notes_pane.mapToGlobal(QPoint(0, 0)), notes_pane.size()
-                )
-                if r.contains(gp):
-                    w = max(1, r.width())
-                    rel_x = gp.x() - r.left()
-                    if rel_x <= w * 0.4:
-                        zone = "notes-left"
-                    elif rel_x >= w * 0.6:
-                        zone = "notes-right"
-                    if zone is not None:
-                        pane = notes_pane
-        if zone == self._active_zone:
-            return
-        self._active_zone = zone
-        if zone is None:
-            if self._zone_overlay is not None:
-                self._zone_overlay.hide()
-            return
-        try:
-            self._show_zone_overlay(zone, pane)
-        except Exception:
-            pass
-
-    def _show_zone_overlay(self, zone: str, pane: QWidget) -> None:
-        """Place the drop-zone preview over ``pane``, the pane the zone
-        belongs to (the editor pane, or Browse's note column for a
-        notes-* zone). The overlay is ONE reusable TOP-LEVEL window, not
-        a child of that pane — during a native drag the panel itself is a
-        window floating over it, and a child overlay would be covered."""
-        ov = self._zone_overlay
-        if ov is None:
-            ov = QWidget(None)
-            ov.setWindowFlags(
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-                | Qt.WindowType.WindowTransparentForInput
-                | Qt.WindowType.WindowDoesNotAcceptFocus
-            )
-            ov.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            ov.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            lab = QLabel(ov)
-            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            try:
-                from . import theme as _theme
-
-                _night = _theme.night_mode()
-                _fill = _theme.accent_rgba(_night, 0.30)
-                _edge = _theme.accent_rgba(_night, 0.85)
-            except Exception:
-                _fill = "rgba(58, 130, 247, 0.30)"
-                _edge = "rgba(58, 130, 247, 0.85)"
-            lab.setStyleSheet(
-                f"background: {_fill};"
-                f"border: 2px solid {_edge};"
-                "border-radius: 10px;"
-                "color: white; font-size: 20px; font-weight: 600;"
-            )
-            box = QVBoxLayout(ov)
-            box.setContentsMargins(0, 0, 0, 0)
-            box.addWidget(lab)
-            ov._klaus_zone_label = lab  # type: ignore[attr-defined]
-            self._zone_overlay = ov
-        try:
-            ov._klaus_zone_label.setText(
-                self._ZONE_CAPTIONS.get(zone, zone)
-            )
-        except Exception:
-            pass
-        origin = pane.mapToGlobal(QPoint(0, 0))
-        ew, eh = pane.width(), pane.height()
-        if zone in ("above", "below"):
-            band = max(60, int(eh * 0.45))
-            geo = QRect(
-                origin.x(),
-                origin.y() if zone == "above" else origin.y() + eh - band,
-                ew,
-                band,
-            )
-        else:
-            band = max(60, int(ew * 0.45))
-            left_side = zone in ("left", "notes-left")
-            geo = QRect(
-                origin.x() if left_side else origin.x() + ew - band,
-                origin.y(),
-                band,
-                eh,
-            )
-        ov.setGeometry(geo)
-        ov.show()
-        ov.raise_()
-
-    def _hide_zone(self) -> None:
-        self._active_zone = None
-        if self._zone_overlay is not None:
-            self._zone_overlay.hide()
 
     # ---- per-tab ✕ ----
 
@@ -2380,7 +1369,9 @@ class _PdfTabContainer(QWidget):
     # ---- ＋ menu / placement ----
 
     @_guarded
-    def _show_add_menu(self) -> None:
+    def _show_add_menu(self, *_args) -> None:
+        # *_args for the same reason as panel_hide: ＋ is a `clicked`
+        # button and @_guarded's wrapper accepts every signal argument.
         menu = QMenu(self)
         open_names = set(self._tab_names())
         stored: list[str] = []
@@ -2419,8 +1410,8 @@ class _PdfTabContainer(QWidget):
 
 
 def on_editor_did_init(editor: Editor) -> None:
-    """Attach the tabbed PDF viewer panel (``_PdfTabContainer``) that
-    docks above/below the editor pane or floats as its own window. The
+    """Attach the tabbed PDF viewer panel (``PdfDock``) — a native dock
+    of the host window, left, right, bottom or floating over it. The
     panel starts hidden and is toggled via the Library... button, or
     auto-shown when the user opens a PDF.
     """
@@ -2436,19 +1427,24 @@ def on_editor_did_init(editor: Editor) -> None:
         # Default state for the page-aware retrieval helper.
         if not hasattr(editor, "_klausmate_active_pdf"):
             editor._klausmate_active_pdf = None  # type: ignore[attr-defined]
-        # The viewer panel needs a top-level Anki window to float against
-        # and an editor pane to dock around. Both the Add window and the
-        # Browser qualify; the Browser's standalone edit-current window
-        # does too (any QWidget window works — no dock APIs involved).
+        # The panel is a QDockWidget now, so its host must be a
+        # QMainWindow: Add Cards and the Browser are, and are the two
+        # windows D1 names. The Browser's standalone Edit Current window
+        # is a QDialog and takes no docks — it gets no panel rather than
+        # a broken one, and the Library... button says so (the old
+        # pane-wrapping panel did work there; that is the trade).
         parent_window = getattr(editor, "parentWindow", None)
         if parent_window is None:
+            return
+        if not hasattr(parent_window, "addDockWidget"):
+            print("[klausmate] PDF panel needs a QMainWindow host — skipped")
             return
         if getattr(editor, "_klausmate_pdf_tabs", None) is not None:
             return
 
         def _install_panel() -> None:
-            # Deferred by one event-loop tick so the window's layout is
-            # fully constructed before we wrap the editor pane.
+            # Deferred by one event-loop tick so the window's own docks
+            # and layout are fully constructed before ours joins them.
             try:
                 if getattr(editor, "_klausmate_pdf_tabs", None) is not None:
                     return
@@ -2458,7 +1454,7 @@ def on_editor_did_init(editor: Editor) -> None:
                 existing = getattr(
                     parent_window, "_klausmate_pdf_container", None
                 )
-                if isinstance(existing, _PdfTabContainer):
+                if isinstance(existing, PdfDock):
                     sidebar = existing._sidebar
                     editor._klausmate_pdf_tabs = existing  # type: ignore[attr-defined]
                     editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
@@ -2470,8 +1466,7 @@ def on_editor_did_init(editor: Editor) -> None:
                     return
 
                 sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
-                container = _PdfTabContainer(editor, sidebar, parent_window)
-                container.hide()  # placed + shown on first toggle/chip
+                container = PdfDock(editor, sidebar, parent_window)
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container

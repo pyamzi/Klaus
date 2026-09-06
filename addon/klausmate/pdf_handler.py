@@ -370,14 +370,21 @@ def migrate_placement(value: object) -> str:
 
 
 def load_panel_state(user_files_dir: str) -> dict:
-    """Viewer placement from last session: {"placement": "above"|"below"|
-    "left"|"right"|"float", "geom": [x, y, w, h]} — either key may be
-    absent."""
+    """Viewer placement from last session: {"placement": one of
+    ``PANEL_PLACEMENTS``, "geom": [x, y, w, h]} — either key may be
+    absent.
+
+    THE MIGRATION HAPPENS HERE, at the one read every caller goes
+    through (spec: "old values migrate once on read"). The whitelist
+    this replaced was the five PRE-dock values, so it silently dropped
+    a stored "bottom" — the value the dock itself writes — and the
+    panel came back on the right after every restart. A missing key
+    stays missing: the caller's own default decides, not "right"."""
     data = _load_tabs_file(user_files_dir)
     out: dict = {}
     placement = data.get("placement")
-    if placement in ("above", "below", "left", "right", "float"):
-        out["placement"] = placement
+    if placement is not None:
+        out["placement"] = migrate_placement(placement)
     geom = data.get("geom")
     if (
         isinstance(geom, list)

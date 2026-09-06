@@ -188,7 +188,13 @@ same reason.
   first `panel_show`, never from Anki's saved `QMainWindow` state.
   `setDockNestingEnabled(True)` on the host lets it sit beside Anki's
   Browse sidebar dock. Host close still runs `PdfSidebar.cleanup()`
-  before the window's C++ objects die. image-crop plumbing; Tools menu
+  before the window's C++ objects die. A QDialog host (the reviewer's
+  Edit Current) gets no dock — `hasattr(parent_window, 'addDockWidget')`
+  declines it with one log line — and the bar's ＋ button only started
+  working with the dock: `@_guarded` zero-argument slots connected to
+  `clicked` had been swallowing PyQt's `checked` argument as a TypeError
+  since the panel was built (both slots now take `*_args`). image-crop
+  plumbing; Tools menu
   (`install_menu`: ONE entry,
   "KlausMate Preferences…", inserted ahead of Anki's own items — the old
   Klaus submenu's actions live inside the Preferences dialog now).

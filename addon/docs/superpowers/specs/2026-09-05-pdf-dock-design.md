@@ -91,6 +91,9 @@ hence the two buttons above. The bar keeps `theme` tokens only.
   splitter" as anchors. Bottom of the window and left of the note list
   (beside the sidebar) are the nearest dock areas.
 - The parentless floating window with its own traffic lights.
+- The Browser's Edit Current window is a QDialog and cannot host a dock,
+  so it no longer gets a PDF panel; its Library… button shows the
+  "unavailable in this window" tooltip.
 
 ## Testing (offscreen PyQt6, `tests/test_klausmate.py`'s real-Qt section)
 
