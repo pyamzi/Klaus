@@ -341,6 +341,34 @@ def save_thumbs_state(
         _save_tabs_file(user_files_dir, updates)
 
 
+#: The values ``save_panel_state`` writes for ``placement`` since
+#: 2026-09-05 (the PDF panel is a QDockWidget: three areas plus floating).
+PANEL_PLACEMENTS = ("left", "right", "bottom", "float")
+
+_LEGACY_PLACEMENTS = {
+    # The 2026-08 placement engine anchored the panel on a pane, above or
+    # below the editor and beside the note list; the dock has window edges.
+    "above": "bottom",
+    "below": "bottom",
+    "left": "left",
+    "notes-left": "left",
+    "right": "right",
+    "notes-right": "right",
+    "float": "float",
+    "bottom": "bottom",
+}
+
+
+def migrate_placement(value: object) -> str:
+    """Map a stored ``placement`` — any build's — to one of
+    ``PANEL_PLACEMENTS``. Unknown, missing or non-string values land on
+    ``"right"``, the editor-side default; a corrupt file must cost a
+    default, never the panel."""
+    if isinstance(value, str):
+        return _LEGACY_PLACEMENTS.get(value.strip().lower(), "right")
+    return "right"
+
+
 def load_panel_state(user_files_dir: str) -> dict:
     """Viewer placement from last session: {"placement": "above"|"below"|
     "left"|"right"|"float", "geom": [x, y, w, h]} — either key may be
