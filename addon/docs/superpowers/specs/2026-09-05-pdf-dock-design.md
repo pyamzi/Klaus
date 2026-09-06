@@ -43,7 +43,8 @@ window. Approach chosen: **A, a native `QDockWidget` per host window.**
   values migrate once on read: `above` and `below` → `bottom`; `left`
   and `notes-left` → `left`; `right` and `notes-right` → `right`;
   `float` → `float`; anything else → `right`. The Browse-only
-  `browse_placement` key is ignored and removed on the next save.
+  `browse_placement` key is ignored and left in place; a stale key in
+  `pdf_tabs.json` costs nothing.
   Anki's `QMainWindow.saveState()`/`restoreState()` for Browse is left
   alone: the dock is created after Anki's restore, and Klaus applies its
   own remembered area, size and float state on first show, so a stale
