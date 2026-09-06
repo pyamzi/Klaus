@@ -683,8 +683,8 @@ class BrowseToolkit(QWidget):  # type: ignore[misc]
     open tool panel above them.
 
     Vertically Maximum so it takes its size hint and never a pixel more
-    — the splitter above keeps every surplus row of the window, which is
-    what stops the note table shrinking when nothing is open.
+    — the note table above it keeps every surplus row of the column, which
+    is what stops the table shrinking when nothing is open.
     """
 
     def __init__(self, browser: Any) -> None:
@@ -695,8 +695,13 @@ class BrowseToolkit(QWidget):  # type: ignore[misc]
         self._open: str = ""
 
         self.setObjectName("KlausBrowseToolkit")
+        # Horizontally IGNORED: the strip sits inside the note column since
+        # 2026-09-05, and a Preferred width there would add the button
+        # row's minimum to the window's floor (measured: 130 → 151 px).
+        # The column is never narrower than its own table, so the row is
+        # never actually clipped.
         self.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum
         )
 
         outer = QVBoxLayout(self)
@@ -1534,11 +1539,10 @@ def browse_body_layout(browser: Any) -> Any:
     setupUi; browse_toggles and the K-169 anchor both walk for the same
     reason.
 
-    Appending here puts the strip BELOW the splitter and OUTSIDE it,
-    which is what keeps it clear of K-169's note-column wrapper: that
-    wrapper is a child of ``form.splitter``, so the PDF panel and this
-    strip live in different layouts and can never contest each other's
-    space.
+    Since 2026-09-05 this is only ``install``'s FALLBACK: the strip lives
+    in the note column's own layout (``browse_note_column``), and lands
+    here — below the splitter, across the whole window — only when that
+    column has no vertical box layout to append to.
     """
     form = getattr(browser, "form", None)
     split = getattr(form, "splitter", None)
@@ -1583,14 +1587,51 @@ class _CloseWatcher(QObject):  # type: ignore[misc]
             return False
 
 
+def browse_note_column(browser: Any) -> Any:
+    """Browse's note-table column — the direct child of ``form.splitter``
+    that holds ``form.tableView`` — or None.
+
+    The same walk K-169's note anchor uses (``_PdfTabContainer.
+    _browse_note_pane``): naming the generated ``form.widget`` would break
+    silently on an Anki rename, and Anki mutates this layout after setupUi.
+    """
+    form = getattr(browser, "form", None)
+    split = getattr(form, "splitter", None)
+    w = getattr(form, "tableView", None)
+    if split is None or w is None:
+        return None
+    # Once K-169 has docked the PDF panel beside the notes, the column's
+    # parent is its wrapper, not form.splitter — stop there too, so a
+    # strip installed after that still lands in the column, not the
+    # wrapper.
+    wrap = getattr(browser, "_klausmate_notes_split", None)
+    while w is not None:
+        p = w.parentWidget()
+        if p is split or (wrap is not None and p is wrap):
+            return w
+        w = p
+    return None
+
+
 def install(browser: Any) -> Any:
-    """Put the strip at the bottom of one Browse window. Idempotent."""
+    """Put the strip under the note list of one Browse window. Idempotent.
+
+    The strip is the last row of the note column's own vertical layout,
+    so it spans the list and nothing else (Pouya, 2026-09-05: "only under
+    the list of cards, not under the editor"). A Browse whose note column
+    has no vertical box layout falls back to the body layout under the
+    whole splitter — the pre-2026-09-05 placement.
+    """
     existing = getattr(browser, "_klausmate_toolkit", None)
     if existing is not None:
         return existing
-    layout = browse_body_layout(browser)
+    col = browse_note_column(browser)
+    layout = col.layout() if col is not None else None
+    if not (isinstance(layout, QBoxLayout)
+            and layout.direction() == QBoxLayout.Direction.TopToBottom):
+        layout = browse_body_layout(browser)
     if layout is None:
-        print("[klausmate] browse toolkit: no vertical body layout in Browse")
+        print("[klausmate] browse toolkit: nowhere to put the strip in Browse")
         return None
     strip = BrowseToolkit(browser)
     layout.addWidget(strip)

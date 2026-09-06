@@ -670,29 +670,51 @@ if _HAVE_QT:
         win = _FakeBrowser()
         win.resize(1100, 700)
 
-        section("the strip actually lands in Browse")
-        layout = bt.browse_body_layout(win)
-        check("browse_body_layout finds the vertical layout that owns the "
-              "splitter, by WALKING from form.splitter rather than naming "
-              "the generated verticalLayout_3",
-              isinstance(layout, _QtW.QVBoxLayout))
+        section("the strip lands INSIDE the note column, under the list only")
+        col = bt.browse_note_column(win)
+        check("browse_note_column walks UP from form.tableView to the direct "
+              "child of form.splitter — the note column itself, never the "
+              "table and never the splitter",
+              col is win.form.widget)
         strip = bt.install(win)
         check("install() returns a strip and it is a real widget",
               isinstance(strip, _QtW.QWidget))
-        check("the strip is the LAST child of the body layout — i.e. "
-              "across the bottom of the window, under the note list",
-              layout.count() == 2
-              and layout.itemAt(layout.count() - 1).widget() is strip)
-        check("and it is a SIBLING of the splitter, not inside it — which "
-              "is what keeps it clear of K-169's note-column wrapper",
-              strip.parentWidget() is win.form.splitter.parentWidget()
-              and strip.parentWidget() is not win.form.splitter)
+        col_box = col.layout()
+        check("the strip is the LAST row of the note column's own layout — "
+              "under the note list, never under the editor column "
+              "(Pouya, 2026-09-05: 'only under the list, just the middle "
+              "section')",
+              col_box.itemAt(col_box.count() - 1).widget() is strip
+              and strip.parentWidget() is col)
+        body = bt.browse_body_layout(win)
+        check("and the body layout that owns the splitter is untouched — "
+              "one child, the splitter — so form.splitter's saved state and "
+              "K-169's note-column wrapper both round-trip unchanged",
+              body.count() == 1)
+        win.show()
+        _app.processEvents()
+        check("so the strip is exactly as wide as the note column's content "
+              "box and narrower than the splitter",
+              strip.width() == col.width() - col_box.contentsMargins().left()
+              - col_box.contentsMargins().right()
+              and strip.width() < win.form.splitter.width(),
+              f"strip={strip.width()} column={col.width()} "
+              f"splitter={win.form.splitter.width()}")
         check("install is idempotent — the Browser instance is cached all "
               "session and the hook can fire again",
-              bt.install(win) is strip and layout.count() == 2)
+              bt.install(win) is strip and col_box.count() == 3)
         check("a window with no splitter is a clean no-op, not a crash",
-              bt.browse_body_layout(types.SimpleNamespace(form=None)) is None
+              bt.browse_note_column(types.SimpleNamespace(form=None)) is None
+              and bt.browse_body_layout(types.SimpleNamespace(form=None)) is None
               and bt.install(types.SimpleNamespace(form=None)) is None)
+        win2 = _FakeBrowser()
+        win2.form.tableView = None
+        strip2 = bt.install(win2)
+        check("no tableView to walk from → the full-width body-layout "
+              "placement is the FALLBACK, not a crash",
+              isinstance(strip2, _QtW.QWidget)
+              and bt.browse_body_layout(win2).count() == 2
+              and strip2.parentWidget() is win2.form.splitter.parentWidget())
 
         section("the tool row and the panel")
         buttons = strip.findChildren(_QtW.QToolButton)
@@ -893,6 +915,8 @@ if _HAVE_QT:
         _app.processEvents()
         strip.close_tool()
         _app.processEvents()
+        col.layout().activate()
+        _app.processEvents()
         closed_h = strip.height()
         split_h = win.form.splitter.height()
         check("closed, the strip is a thin row and the splitter keeps "
@@ -904,6 +928,8 @@ if _HAVE_QT:
               and win.form.tableView.height() > 400,
               f"table={win.form.tableView.height()}")
         strip.open_tool("duplicates")
+        _app.processEvents()
+        col.layout().activate()
         _app.processEvents()
         check("open, the strip grows but stays bounded and the table "
               "survives",
@@ -931,10 +957,15 @@ if _HAVE_QT:
         wrap.setSizes([420, 340])
         _app.processEvents()
         check("with K-169's PDF panel docked beside the notes, the strip "
-              "is still found and is NOT inside the wrapper — the two "
-              "live in different layouts and cannot contest space",
-              bt.browse_body_layout(win) is layout
-              and not wrap.isAncestorOf(strip))
+              "travels WITH the note column inside the wrapper — beside "
+              "the PDF panel, never under it, and the body layout stays "
+              "one child",
+              wrap.isAncestorOf(strip) and strip.parentWidget() is note_col
+              and not pdf.isAncestorOf(strip)
+              and bt.browse_body_layout(win) is body and body.count() == 1)
+        check("and the column walk stops at that wrapper, so a strip "
+              "installed AFTER the panel docked still finds the column",
+              bt.browse_note_column(win) is note_col)
         check("...and all three are on screen with real size",
               strip.height() > 0 and pdf.width() > 100
               and win.form.tableView.width() > 100
