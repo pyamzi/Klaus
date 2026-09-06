@@ -1011,12 +1011,12 @@ class PdfViewer(QWidget):
         """Put the page indicator in the viewer's own footer when no
         host adopted it (K-153).
 
-        Adoption IS a reparent — ``PdfDock`` calls
-        ``header.addWidget(self._page_label)``, which makes the header
-        the label's parent — so "is it still parented to us" is the
-        entire test, and it needs no cooperation from any host. Re-run
-        on every show, so a host that adopts later simply takes the
-        label back out of our row and the row goes away.
+        Adoption IS a reparent — ``_PanelBar.__init__`` calls
+        ``row.addWidget(page_label)``, which makes the bar the label's
+        parent — so "is it still parented to us" is the entire test, and
+        it needs no cooperation from any host. Re-run on every show, so
+        a host that adopts later simply takes the label back out of our
+        row and the row goes away.
         """
         bar = getattr(self, "_page_bar", None)
         if bar is None or getattr(self, "_page_label", None) is None:

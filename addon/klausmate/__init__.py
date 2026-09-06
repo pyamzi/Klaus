@@ -17,7 +17,7 @@ import re
 import time
 import traceback
 import urllib.parse
-from typing import Any, Callable
+from typing import Any
 
 from aqt import gui_hooks, mw
 from aqt.editor import Editor, EditorWebView
@@ -36,7 +36,7 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import askUser, showInfo, showWarning, tooltip
+from aqt.utils import showWarning, tooltip
 from aqt.webview import WebContent
 
 from . import pdf_handler
@@ -1022,8 +1022,16 @@ class PdfDock(QDockWidget):
         self.topLevelChanged.connect(self._on_floating_changed)
 
         # Host lifetime: the viewer's webview must be released before
-        # the host's C++ objects die (PdfSidebar.cleanup), so watch the
-        # host's Close; destroyed is the backstop.
+        # the host's C++ objects die (PdfSidebar.cleanup), so watch
+        # both the host's Close and its destroyed signal. These are NOT
+        # primary/backstop: in Anki's real teardown (deleteLater()
+        # posted before close(), verified against Browser/AddCards/
+        # NewEditCurrent) the DeferredDelete runs first, so destroyed
+        # is the path that actually releases the webview; the Close
+        # branch below is deferred a further tick and arrives on an
+        # already-dead host, which is why IT is the one guarded by
+        # _closed (final-review M1 — the two were previously described
+        # backwards).
         try:
             self._win.installEventFilter(self)
         except Exception:
@@ -1049,8 +1057,8 @@ class PdfDock(QDockWidget):
         if not self._placed:
             self._placed = True
             if self._placement == "float":
-                self.setFloating(True)
                 g = self._float_geom
+                self.setFloating(True)
                 if g is not None and g.width() > 200 and g.height() > 200:
                     self.setGeometry(g)
                 else:
@@ -1062,9 +1070,30 @@ class PdfDock(QDockWidget):
                         )
                     except Exception:
                         self.resize(520, 640)
+                # setFloating(True) above synchronously fires
+                # topLevelChanged -> _persist_state -> _remember_float_geom,
+                # which stamps _float_geom with the hidden dock's
+                # pre-layout rect (0, 0, 100, 30) and writes THAT to disk
+                # before the geometry above is even applied — g was read
+                # first so it survives that clobber for the setGeometry
+                # call above, but _float_geom and disk are still wrong
+                # afterward. Recapture the truth now the real geometry is
+                # set, and flush it, or the first float of every session
+                # is remembered as (0, 0, 100, 30) (final-review C1).
+                self._float_geom = QRect(self.geometry())
+                self._persist_state()
             else:
                 area = PANEL_AREAS.get(self._placement, PANEL_AREAS["right"])
                 try:
+                    # NOT redundant with __init__'s addDockWidget: Qt's own
+                    # "in case it was already in here" re-add is also what
+                    # restores [sidebar, ours] order after Browse's own
+                    # sidebar heal (_reset_browse_layout_to_defaults)
+                    # re-appends Anki's sidebar dock one tick after ours
+                    # (both are singleShot(0)s — ours posted first, during
+                    # setupEditor; the heal's during browser_will_show).
+                    # Deleting this call as "already done in __init__"
+                    # loses that order (final-review M8).
                     self._win.addDockWidget(area, self)
                 except Exception:
                     pass
@@ -1245,9 +1274,12 @@ class PdfDock(QDockWidget):
             pass
 
     def _on_host_destroyed(self, *_args) -> None:
-        """Backstop for hosts destroyed without a Close event. The C++
-        side of our widgets may already be gone, so everything is
-        guarded — worst case this is a silent no-op."""
+        """The path that actually tears down in Anki's real close
+        sequence, not a rare-case backstop: deleteLater() is posted
+        before close() there, so this fires before the deferred Close
+        check ever gets a turn (final-review M1). Still guarded either
+        way — the C++ side of our widgets may already be gone — so a
+        host destroyed with no Close event at all is equally safe."""
         try:
             self._on_host_closing()
         except Exception:
@@ -1257,6 +1289,11 @@ class PdfDock(QDockWidget):
     # ---- per-tab ✕ ----
 
     def _decorate_tab(self, idx: int) -> None:
+        # Both call sites (session restore, _on_sidebar_loaded) route
+        # through here, so this is the one place a tab's tooltip needs
+        # setting: the FULL name, since ElideMiddle can only show part
+        # of it once tabs saturate the bar (final-review M9).
+        self._tabs.setTabToolTip(idx, self._tabs.tabText(idx))
         btn = QToolButton(self._tabs)
         btn.setText("✕")
         btn.setAutoRaise(True)
@@ -1428,11 +1465,14 @@ def on_editor_did_init(editor: Editor) -> None:
         if not hasattr(editor, "_klausmate_active_pdf"):
             editor._klausmate_active_pdf = None  # type: ignore[attr-defined]
         # The panel is a QDockWidget now, so its host must be a
-        # QMainWindow: Add Cards and the Browser are, and are the two
-        # windows D1 names. The Browser's standalone Edit Current window
-        # is a QDialog and takes no docks — it gets no panel rather than
-        # a broken one, and the Library... button says so (the old
-        # pane-wrapping panel did work there; that is the trade).
+        # QMainWindow: Anki's three editor windows — Browse, Add Cards
+        # and Edit Current — all are (verified against Anki 26.8.1 with
+        # `strings` on editcurrent.pyc: zero QDialog, one QMainWindow;
+        # `Ui_Dialog` is only the generated form's class name — final-
+        # review I1) and all get the dock. Only an editor whose window
+        # genuinely is not a QMainWindow (a third-party add-on's) gets
+        # no panel rather than a broken one, and the Library... button
+        # says so.
         parent_window = getattr(editor, "parentWindow", None)
         if parent_window is None:
             return

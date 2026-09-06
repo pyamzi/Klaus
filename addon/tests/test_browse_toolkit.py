@@ -689,8 +689,9 @@ if _HAVE_QT:
               and strip.parentWidget() is col)
         body = bt.browse_body_layout(win)
         check("and the body layout that owns the splitter is untouched — "
-              "one child, the splitter — so form.splitter's saved state and "
-              "K-169's note-column wrapper both round-trip unchanged",
+              "still one child, the splitter, no separate note-column "
+              "wrapper — so form.splitter's saved state round-trips "
+              "unchanged",
               body.count() == 1)
         win.show()
         _app.processEvents()

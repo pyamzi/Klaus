@@ -203,9 +203,18 @@ section("floating: an attached tool window, geometry remembered")
 win, editor, sb, d = _dock("float", geom=[120, 80, 520, 640])
 d.panel_show()
 _app.processEvents()
-check("'float' → floating, and the remembered geometry applied",
-      d.isFloating() and d.width() == 520 and d.height() == 640,
-      f"floating={d.isFloating()} size={d.size()}")
+check("'float' → floating, at the remembered POSITION and size (C1: "
+      "setFloating(True) clobbers _float_geom with the hidden dock's "
+      "pre-layout rect before it is read; the fallback geometry is "
+      "also 520x640, so a size-only pin never caught the regression)",
+      d.isFloating() and d.pos() == _QtC.QPoint(120, 80)
+      and d.size() == _QtC.QSize(520, 640),
+      f"floating={d.isFloating()} pos={d.pos()} size={d.size()}")
+check("...and the persisted geom after the show is still the stored "
+      "rect, not the hidden dock's pre-layout (0, 0, 100, 30)",
+      K.pdf_handler.load_panel_state(_scratch).get("geom")
+      == [120, 80, 520, 640],
+      K.pdf_handler.load_panel_state(_scratch).get("geom"))
 check("a floating dock is still the host's child — it dies with the window, "
       "and Qt keeps it above it (the attached behaviour Pouya chose)",
       d.parent() is win and d.isWindow())
