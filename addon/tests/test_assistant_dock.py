@@ -170,7 +170,7 @@ check("state_shortcuts_will_change is gone from the module's actual CODE (commen
       "docstrings that merely narrate the history are exempt — code_only strips both, "
       "same reasoning as every other 'X no longer appears' pin in this codebase)",
       "state_shortcuts_will_change" not in _CODE)
-_LAZY_SIBLINGS = ("agent_host", "viewer_context", "page_ocr", "assistant_sessions", "anki_endpoint")
+_LAZY_SIBLINGS = ("agent_host", "viewer_context", "page_store", "assistant_sessions", "anki_endpoint")
 _top_level_imports = set()
 for _node in ast.parse(_SRC).body:  # MODULE-level statements only — never ast.walk, which
     if isinstance(_node, ast.ImportFrom) and _node.module in (None, ""):  # would also match
@@ -357,12 +357,12 @@ if _HAVE_QT:
     def _fake_host_factory(callbacks):
         return _FakeHost(callbacks)
 
-    class _FakePageContext:
-        def __init__(self, text="page text", text_source="ocr", png=None, selection=""):
-            self.text = text
-            self.text_source = text_source
-            self.png = png
-            self.selection = selection
+    def _FakePageContext(text="page text", text_source="page-record", png=None,
+                         selection=""):
+        """The context provider's payload is a plain dict since 2026-09-15
+        (K-226) — page_store-backed, not an OCR dataclass."""
+        return {"text": text, "text_source": text_source, "png": png,
+                "selection": selection}
 
     def _fake_context_provider(view):
         return _FakePageContext()
@@ -465,7 +465,8 @@ if _HAVE_QT:
     viewer_context.reset()
     _png = b"\x89PNGfakebytes"
     _d3 = _make_dock(context_provider=lambda view: _FakePageContext(
-        text="the nephron filters blood", text_source="ocr", png=_png, selection="tubule"))
+        text="the nephron filters blood", text_source="page-record", png=_png,
+        selection="tubule"))
     _d3.input.setPlainText("What is this slide about?")
     _d3._do_send()
     check("sending calls host.send exactly once", len(_d3._host.sent) == 1)
@@ -499,6 +500,47 @@ if _HAVE_QT:
     _content_b = json.loads(_d3b._host.sent[0])["message"]["content"]
     check("no PNG from the provider -> the image block is simply omitted",
           len(_content_b) == 2 and all(b["type"] == "text" for b in _content_b))
+
+    # -- the REAL context provider reads the page record (K-226) ------------
+    # Replaces the OCR-scheduler pins: there is no OCR path and no Ollama
+    # client here any more — the page in view is whatever page_store holds
+    # for it, slide text and transcript segments combined.
+
+    page_store = importlib.import_module("klausmate.page_store")
+    _pdf_path = os.path.join(_uf_root, "lecture.pdf")
+    with open(_pdf_path, "wb") as _f:
+        _f.write(b"%PDF-1.4 not a real pdf")  # stat'd for the digest, never parsed
+    page_store.ensure_records(_uf_root, "pdfRec", _pdf_path, ["slide two text"])
+    page_store.append_segment(_uf_root, "pdfRec", _pdf_path, 0, 0.0, 4.0, "and the lecturer said this")
+    _rec = page_store.load_record(_uf_root, "pdfRec", _pdf_path, 0)
+
+    class _RecView:
+        pdf_safe = "pdfRec"
+        path = _pdf_path
+        page_index = 0
+        display = "Lecture.pdf"
+        page_count = 1
+        selection = ""
+
+    _ctx_rec = _d3b._page_context(_RecView())
+    check("the page context is a plain dict, not an OCR dataclass",
+          isinstance(_ctx_rec, dict))
+    check("its text IS the record's combined_text — slide text plus the "
+          "transcript segments, in page_store's own order",
+          _ctx_rec.get("text") == page_store.combined_text(_rec)
+          and "slide two text" in _ctx_rec["text"]
+          and "and the lecturer said this" in _ctx_rec["text"])
+    check("text_source is 'page-record' — the label the turn carries, and "
+          "never 'ocr' again",
+          _ctx_rec.get("text_source") == "page-record")
+    check("an unrenderable page degrades to no image rather than raising — "
+          "the turn still goes out on the text",
+          _ctx_rec.get("png") is None)
+    check("no view (nothing open) is an empty page-record context, not a crash",
+          _d3b._page_context(None) == {"text": "", "text_source": "page-record", "png": None})
+    check("the dock reads its INJECTED user_files, never the package's real "
+          "USER_FILES — a test must never touch the user's own library",
+          _d3b._user_files == _uf_root)
 
     # -- sending via the REAL Enter key path (eventFilter) ------------------
 
@@ -880,9 +922,6 @@ if _HAVE_QT:
 
     viewer_context.reset()
     _d_resched = _make_dock(host_factory=_SlowReapHost)
-    # The OCR scheduler arms its own QTimer.singleShot on every view
-    # change; silence it so `pending` holds the reap chain and nothing else.
-    _d_resched._scheduler = None
     viewer_context.report_document(42, "pdfI", "PDF I.pdf", "/x/I.pdf", 3)
     viewer_context.activate(42)
     app.processEvents()

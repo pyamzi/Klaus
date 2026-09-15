@@ -4,13 +4,14 @@ Send/Stop, sessions, slash completer.
 Klaus is a HOST for Claude Code (agent_host.py), not a loop of its own —
 this module is the Qt face of that host: one QDockWidget on Anki's main
 window that follows whatever PDF viewer is in view (viewer_context.py),
-attaches the page's OCR text/image (page_ocr.py) to every turn, and
-persists one Claude Code session per PDF (assistant_sessions.py). Design:
+attaches the page in view as text and image (page_store.py) to every
+turn, and persists one Claude Code session per PDF
+(assistant_sessions.py). Design:
 docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
 sections 4.3, 9, 10, 13.
 
 The five sibling modules this dock consumes (agent_host, viewer_context,
-page_ocr, assistant_sessions, anki_endpoint) are imported LAZILY inside
+page_store, assistant_sessions, anki_endpoint) are imported LAZILY inside
 functions, never at module top — the ``PDF_VIEWER_AVAILABLE`` pattern
 used across this addon — so this module still imports cleanly if one of
 them is momentarily missing or broken while the assistant lands in
@@ -216,7 +217,7 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         self.setObjectName("KlausAssistantDock")
         self._sessions = sessions if sessions is not None else _default_sessions()
         self._user_files = user_files if user_files is not None else _default_user_files()
-        self._context_provider = context_provider or self._default_context_provider
+        self._context_provider = context_provider or self._page_context
         self._endpoint_info = endpoint_info or self._default_endpoint_info
         self._host_factory = host_factory or self._default_host_factory
 
@@ -262,8 +263,6 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         self._assistant_raw_start = 0
         self._tool_blocks: dict = {}
         self._mcp_tooltip = ""
-        self._scheduler: Any = None
-
         self._build_chrome()
         self._build_ui()
         self._bridge = _Bridge()
@@ -275,7 +274,6 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
 
         self._unsub_viewer: Callable[[], None] | None = None
         self._subscribe_viewer()
-        self._setup_scheduler()
 
         try:
             self._width_save_timer = QTimer(self)
@@ -377,20 +375,6 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] assistant dock: viewer subscribe failed: {exc}")
 
-    def _setup_scheduler(self) -> None:
-        try:
-            from . import page_ocr
-
-            self._scheduler = page_ocr.OcrScheduler(
-                self._user_files, self._config, self._default_ollama_client
-            )
-            self._scheduler._timer = lambda: QTimer.singleShot(
-                page_ocr.DEBOUNCE_MS, self._scheduler.tick
-            )
-        except Exception as exc:
-            print(f"[klausmate] assistant dock: OCR scheduler setup failed: {exc}")
-            self._scheduler = None
-
     # -- defaults for the injectable seams -----------------------------------
 
     def _config(self) -> dict:
@@ -400,10 +384,30 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception:
             return {}
 
-    def _default_context_provider(self, view: Any) -> Any:
-        from . import page_ocr
+    def _page_context(self, view: Any) -> dict:
+        """The page in view as text and image, from the page record.
 
-        return page_ocr.context_for(view, self._user_files)
+        Neither half can fail the turn: a missing or unreadable record is
+        empty text, an unrenderable page is no image, and the turn still
+        goes out on whatever the other half produced (spec D1 — there is
+        no OCR round-trip in front of a send any more).
+        """
+        from . import page_store
+
+        text, png = "", None
+        if view is not None and getattr(view, "pdf_safe", ""):
+            try:
+                rec = page_store.load_record(
+                    self._user_files, view.pdf_safe, view.path, view.page_index
+                )
+                text = page_store.combined_text(rec)
+            except Exception as exc:
+                print(f"[klausmate] page record for the assistant failed: {exc}")
+            try:
+                png = page_store.render_page_png(view.path, view.page_index)
+            except Exception as exc:
+                print(f"[klausmate] page render for the assistant failed: {exc}")
+        return {"text": text, "text_source": "page-record", "png": png}
 
     def _default_endpoint_info(self):
         try:
@@ -416,12 +420,6 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] assistant dock: endpoint_info failed: {exc}")
             return None
-
-    def _default_ollama_client(self):
-        from . import ollama_client
-
-        endpoint = str(self._config().get("endpoint") or "http://localhost:11434")
-        return ollama_client.OllamaClient(endpoint)
 
     def _default_host_factory(self, callbacks: dict):
         from . import agent_host
@@ -530,11 +528,6 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             self._switch_session(view)
         except Exception as exc:
             print(f"[klausmate] assistant dock: session switch failed: {exc}")
-        try:
-            if self._scheduler is not None:
-                self._scheduler.on_view(view)
-        except Exception:
-            pass
 
     def _pdf_key(self) -> Any:
         """The followed PDF as the sessions store spells it: ``None`` is
@@ -797,11 +790,13 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] assistant dock: context provider failed: {exc}")
             page_ctx = None
-        selection = (getattr(page_ctx, "selection", "") if page_ctx is not None else "") or \
-            (getattr(view, "selection", "") or "")
-        page_text = getattr(page_ctx, "text", "") if page_ctx is not None else ""
-        text_source = getattr(page_ctx, "text_source", "none") if page_ctx is not None else "none"
-        png = getattr(page_ctx, "png", None) if page_ctx is not None else None
+        # The provider's payload is a dict (``_page_context``); a broken
+        # or absent one degrades to "nothing in view" rather than raising.
+        ctx = page_ctx if isinstance(page_ctx, dict) else {}
+        selection = (ctx.get("selection") or "") or (getattr(view, "selection", "") or "")
+        page_text = ctx.get("text") or ""
+        text_source = ctx.get("text_source") or "none"
+        png = ctx.get("png")
         ctx_dict = {
             "selection": selection,
             "page_text": page_text,

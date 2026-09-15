@@ -8,7 +8,6 @@ retention.py, and pdf_drive.py (the Library).
 
 from __future__ import annotations
 
-import atexit
 import base64
 import html as html_mod
 import json
@@ -21,7 +20,6 @@ from typing import Any
 
 from aqt import gui_hooks, mw
 from aqt.editor import Editor, EditorWebView
-from aqt.operations import QueryOp
 from aqt.qt import (
     QAction,
     QDockWidget,
@@ -40,12 +38,6 @@ from aqt.utils import showWarning, tooltip
 from aqt.webview import WebContent
 
 from . import pdf_handler
-from .ollama_client import OllamaClient, OllamaNotRunning
-from . import ollama_runtime
-from .ollama_runtime import (
-    ensure_server,
-    server_manager,
-)
 from .manage_models import manage_models_dialog
 from .slot_guard import guarded as _guarded
 from .browse_toggles import on_browser_will_show
@@ -100,6 +92,16 @@ _LEGACY_KEYS_DROPPED = (
     # (D1) — there is no separate assistant API key/backend/token to
     # store, the user's own `claude` login is the credential.
     "assistant_api_key", "assistant_backend", "assistant_token",
+    # Retired 2026-09-15 (K-226, spec D1/D8): Klaus went API-first. The
+    # local Ollama runtime and the vision-model OCR path are gone, so
+    # every key that only ever addressed them goes with them; the two
+    # keys that carried a VALUE worth keeping (embedding_api_key_openai,
+    # assistant_model) are renamed in _migrate_config BEFORE this loop
+    # runs, and only their spent old names are dropped here.
+    "embedding_provider", "embedding_api_key_voyage", "embedding_api_key_openai",
+    "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
+    "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
+    "_embed_default_migrated",
 )
 
 
@@ -112,43 +114,27 @@ def _migrate_config() -> None:
     """
     cfg = get_config()
     changed = False
+    # 2026-09-15 (K-226): two retired keys carried a VALUE the user set and
+    # would have to re-enter, so they are RENAMED before the drop loop
+    # below spends their old names. An empty destination only — a profile
+    # that already holds the new key keeps what it holds.
+    for old, new in (
+        ("embedding_api_key_openai", "api_key_openai"),
+        ("assistant_model", "reasoning_model"),
+    ):
+        if old in cfg:
+            if not str(cfg.get(new) or "").strip():
+                cfg[new] = cfg[old]
+            cfg.pop(old)
+            changed = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
-    # One-time guard for the ollama→voyage embedding default flip: an install
-    # from before `embedding_provider` existed in config.json would silently
-    # inherit the new cloud default while owning an ollama-built index (and no
-    # API key). Pin such installs back to ollama; leave fresh installs and
-    # deliberate cloud configs alone.
-    if not cfg.get("_embed_default_migrated"):
-        cfg["_embed_default_migrated"] = True
-        changed = True
-        from . import curation, embeddings
-
-        if embeddings.provider_name(cfg) != "ollama":
-            has_cloud_key = any(
-                str(cfg.get(f"embedding_api_key_{p}") or "").strip()
-                for p in ("voyage", "openai")
-            )
-            try:
-                index_exists = bool(curation.index_stats().get("exists"))
-            except Exception:
-                index_exists = False
-            is_existing = bool(cfg.get("_first_run_done")) or index_exists
-            if is_existing and not has_cloud_key:
-                cfg["embedding_provider"] = "ollama"
     if changed:
         write_config(cfg)
 
 
-
-
-def client(timeout: float | None = None) -> OllamaClient:
-    """Short-timeout client for health checks and model list/delete."""
-    cfg = get_config()
-    t = float(timeout) if timeout is not None else 30.0
-    return OllamaClient(cfg.get("endpoint", "http://localhost:11434"), timeout=t)
 
 
 # ----------------------------- card context ------------------------------
@@ -202,55 +188,6 @@ def _set_target_field(editor: Editor, field_name: str) -> None:
             editor.currentField = idx
         except Exception:
             pass
-
-
-# ----------------------------- error surfacing ----------------------------
-
-
-# Once per session: when a request fails only because the server isn't
-# running, try to start a managed/system Ollama silently before dialoging.
-_ollama_autostart_attempted = False
-
-
-def _save_config_on_main(cfg: dict[str, Any]) -> None:
-    """write_config marshalled to the main thread — ensure_server may need
-    to persist a new endpoint from inside a QueryOp worker thread."""
-    mw.taskman.run_on_main(lambda: write_config(cfg))
-
-
-def _try_silent_autostart(exc: Exception) -> bool:
-    """Start a local server in the background instead of showing a dialog.
-
-    Returns True when an attempt was kicked off (caller suppresses its
-    dialog — if the start fails, the next error surfaces normally).
-    """
-    global _ollama_autostart_attempted
-    if _ollama_autostart_attempted:
-        return False
-    if not isinstance(exc, OllamaNotRunning):
-        return False
-    if "timed out" in (str(exc) or "").lower():
-        return False  # server is up, model is just slow — nothing to start
-    if not get_config().get("runtime_auto_setup", True):
-        return False
-    if not (ollama_runtime.find_managed_runtime() or ollama_runtime.find_system_ollama()):
-        return False  # nothing to start — needs the one-click setup instead
-    _ollama_autostart_attempted = True
-    tooltip("Klaus: starting local AI engine…")
-
-    def do() -> Any:
-        return ensure_server(get_config(), save_config=_save_config_on_main)
-
-    def on_done(res: Any) -> None:
-        if getattr(res, "ok", False):
-            tooltip("Klaus: local AI ready — try again")
-        else:
-            print(f"[klausmate] silent autostart failed: {getattr(res, 'detail', '')}")
-
-    op = QueryOp(parent=mw, op=lambda col: do(), success=on_done)
-    op.failure(lambda e: print(f"[klausmate] silent autostart error: {e}"))
-    op.without_collection().run_in_background()
-    return True
 
 
 # One-time-per-session guard for the sidebar self-heal. A prior broken
@@ -1537,22 +1474,6 @@ mw.addonManager.setWebExports(
     r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(png|jpg|jpeg|webp|gif))",
 )
 mw.addonManager.setConfigAction(__name__, open_config)
-
-
-def _shutdown_managed_server() -> None:
-    """Stop an `ollama serve` we spawned/adopted. A reused user-owned
-    Ollama is never touched (ServerManager enforces that)."""
-    try:
-        server_manager.stop()
-    except Exception as e:
-        print(f"[klausmate] managed server shutdown failed: {e}")
-
-
-# aboutToQuit (not profile_will_close — that fires on profile *switches*
-# and the server must survive those) plus atexit as a crash-adjacent backup.
-if getattr(mw, "app", None) is not None:
-    mw.app.aboutToQuit.connect(_shutdown_managed_server)
-atexit.register(_shutdown_managed_server)
 
 
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)

@@ -111,10 +111,7 @@ section("setup_flow.py: window title casing")
 check('"Welcome to Klaus" prose title is left untouched (explicitly exempt)',
       '"Welcome to Klaus"' in _SETUP_SRC)
 check("addon-name window titles use KlausMate casing",
-      "KlausMate: Ollama isn't running" in _SETUP_SRC
-      and "KlausMate: local embedding model isn't set up yet" in _SETUP_SRC
-      and "KlausMate: embedding model needed" in _SETUP_SRC
-      and "KlausMate: semantic search needs an API key" in _SETUP_SRC)
+      "KlausMate: semantic search needs an API key" in _SETUP_SRC)
 check("bare 'Klaus:' titles were not left behind",
       "Klaus: Ollama isn't running" not in _SETUP_SRC
       and "Klaus: local embedding model isn't set up yet" not in _SETUP_SRC

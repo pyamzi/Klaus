@@ -324,14 +324,15 @@ check("__init__: the crop dialog opens window-modal — crop work rides "
       and "dlg.exec()" not in _K114["__init__"]
       and "msg.exec()" not in _K114["__init__"])
 
-check("setup_flow: all seven welcome/readiness QMessageBoxes (K-114's "
-      "five + K-125's two ex-askUser questions) open window-modal with "
-      "finished callbacks reading clickedButton() (Esc/close keep "
-      "their exec-era fall-through meaning); the file carries NO "
-      "nested-loop .exec() at all. An eighth box must be added "
-      "open()-shaped to keep these counts honest",
-      _K114["setup_flow"].count("msg.open()") == 7
-      and _K114["setup_flow"].count("msg.finished.connect(") == 7
+check("setup_flow: all three welcome/readiness QMessageBoxes (K-226 cut "
+      "the Ollama-era boxes; the welcome dialog, the K-125 "
+      "library-root question and the missing-key nudge remain) open "
+      "window-modal with finished callbacks reading clickedButton() "
+      "(Esc/close keep their exec-era fall-through meaning); the file "
+      "carries NO nested-loop .exec() at all. A fourth box must be "
+      "added open()-shaped to keep these counts honest",
+      _K114["setup_flow"].count("msg.open()") == 3
+      and _K114["setup_flow"].count("msg.finished.connect(") == 3
       and ".exec()" not in _K114["setup_flow"])
 
 check("pdfjs_viewer: note-edit and go-to-page are QInputDialog "
@@ -379,18 +380,15 @@ check("curation: the old while-loop's edges survive as callbacks — "
 check("setup_flow: askUser is gone entirely (identifier and import) — "
       "both questions are themed QMessageBoxes via open()",
       "askUser" not in _K114["setup_flow"])
-check("setup_flow: the two converted offers thread a continuation so "
-      "the readiness dialogs never stack on them — every early return "
-      "and both answers reach then() (the ordering blocking gave for "
-      "free)",
+check("setup_flow: the library-root offer threads a continuation so "
+      "the readiness dialogs never stack on it — every early return "
+      "and its answer reach then() (the ordering blocking gave for "
+      "free); K-226 deleted the runtime-update offer this used to "
+      "chain beside",
       "def _library_root_check(then" in _MODULES["setup_flow"]
-      and "def _maybe_offer_runtime_update(res: Any, then"
-      in _MODULES["setup_flow"]
       and "_library_root_check(_readiness_after_library_root)"
       in _K114["setup_flow"]
-      and "_maybe_offer_runtime_update(res, _readiness_check_body)"
-      in _K114["setup_flow"]
-      and _K114["setup_flow"].count("then()") >= 8)
+      and _K114["setup_flow"].count("then()") >= 4)
 check("setup_flow: the native folder sheet is deferred a tick past the "
       "finished handler, never nested inside it",
       "QTimer.singleShot(0, _pick_folder)" in _K114["setup_flow"])

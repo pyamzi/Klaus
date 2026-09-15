@@ -104,21 +104,15 @@ def auto_index_enabled(cfg: dict) -> bool:
 def missing_key_provider(cfg: dict) -> str:
     """The cloud provider whose API key is missing, or "" when ready.
 
-    The PURE half of ``setup_flow._embedding_ready``. That predicate's
-    Ollama half probes the server over HTTP with a 5s timeout ON THE
-    MAIN THREAD; ten dropped PDFs would pay it ten times and freeze the
-    drop for the better part of a minute. So the auto path checks only
-    what is free to check — a cloud key is a string in config — and lets
-    a genuinely unreachable Ollama arrive as the error it is, on the
-    status bar, where the user can read it.
+    The PURE half of ``setup_flow._embedding_ready`` — it checks only
+    what is free to check, a key is a string in config, so ten dropped
+    PDFs cost nothing on the main thread. Since 2026-09-15 (K-226) there
+    is exactly one embedding provider, so the name it returns is a
+    constant rather than a per-provider lookup.
     """
     if not isinstance(cfg, dict):
         return ""
-    provider = embeddings.provider_name(cfg)
-    if provider == "ollama":
-        return ""  # local provider, no key to be missing
-    key = str(cfg.get("embedding_api_key_" + provider) or "").strip()
-    return "" if key else provider
+    return "" if str(cfg.get("api_key_openai") or "").strip() else "OpenAI"
 
 
 # ── pure: the queue ──────────────────────────────────────────────────────
@@ -251,7 +245,7 @@ def queued_message(name: str, ahead: int) -> str:
 def missing_key_message(provider: str) -> str:
     return (
         f"KlausMate can't index yet — add your {provider} API key in "
-        "KlausMate Preferences → Semantic Search."
+        "KlausMate Preferences → API keys & models."
     )
 
 

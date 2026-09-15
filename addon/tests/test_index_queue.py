@@ -65,31 +65,25 @@ check(
 )
 
 check(
-    "voyage with no key is refused, by name",
-    iq.missing_key_provider({"embedding_provider": "voyage"}) == "voyage",
+    "no OpenAI key is refused, by name (2026-09-15: OpenAI is the only "
+    "embedding provider, so the name is a constant, not a lookup)",
+    iq.missing_key_provider({"api_key_openai": ""}) == "OpenAI",
 )
 check(
-    "voyage with a key passes",
-    iq.missing_key_provider(
-        {"embedding_provider": "voyage", "embedding_api_key_voyage": "vk-1"}
-    )
-    == "",
+    "an OpenAI key passes",
+    iq.missing_key_provider({"api_key_openai": "sk-1"}) == "",
 )
 check(
     "a whitespace-only key is no key",
-    iq.missing_key_provider(
-        {"embedding_provider": "openai", "embedding_api_key_openai": "   "}
-    )
-    == "openai",
+    iq.missing_key_provider({"api_key_openai": "   "}) == "OpenAI",
 )
 check(
-    "ollama is never key-gated — it has no key, and probing it would "
-    "cost a 5s main-thread timeout per dropped PDF",
-    iq.missing_key_provider({"embedding_provider": "ollama"}) == "",
+    "an empty config is judged missing — the key is absent, not blank",
+    iq.missing_key_provider({}) == "OpenAI",
 )
 check(
-    "the default provider is what an empty config is judged as",
-    iq.missing_key_provider({}) != "",
+    "a non-dict is never key-gated (the callers' defensive shape)",
+    iq.missing_key_provider(None) == "",
 )
 
 
@@ -168,7 +162,7 @@ check(
     iq.queued_message("A", 0).startswith("KlausMate: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
-check("the key refusal names the provider and where to fix it", "voyage" in iq.missing_key_message("voyage") and "Preferences" in iq.missing_key_message("voyage"))
+check("the key refusal names the provider and where to fix it", "OpenAI" in iq.missing_key_message("OpenAI") and "API keys & models" in iq.missing_key_message("OpenAI"))
 check(
     "the bar's one button stops a run and clears a finished one",
     iq.dock_button_label(iq.RunnerState(active=True)) == "Stop"
@@ -322,7 +316,7 @@ def new_world(cfg=None, names=("a", "b", "c")):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
 
-    iq.mw = FakeMw(cfg if cfg is not None else {"embedding_api_key_voyage": "vk"})
+    iq.mw = FakeMw(cfg if cfg is not None else {"api_key_openai": "sk"})
     iq.QTimer = FakeTimer
     iq.QDockWidget = None  # headless: no dock, the pure status_line is the pin
     FakeTimer.pending = []
@@ -576,7 +570,7 @@ iq.mw.col = None
 check("no profile, no job", iq.request_pdf("a", announce=False) is False)
 check("...and nothing queued to leak into the next profile", iq._queue.pending() == 0)
 
-tmp, pipe = new_world(cfg={"embedding_provider": "voyage"})
+tmp, pipe = new_world(cfg={"api_key_openai": ""})
 check("no API key, no job", iq.request_pdf("a", announce=False) is False)
 check(
     "...and the refusal is a MESSAGE, not a shrug — a silent no-op on "
@@ -586,7 +580,7 @@ check(
 FakeTimer.drain()
 check("...nothing ran", pipe.calls == [])
 
-tmp, pipe = new_world(cfg={"embedding_api_key_voyage": "vk", "auto_index_on_add": False})
+tmp, pipe = new_world(cfg={"api_key_openai": "sk", "auto_index_on_add": False})
 check("auto-index off: an import does not queue", iq.on_pdf_imported("a") is False)
 check("...but the Library's own button still works", iq.request_pdf("a", announce=False) is True)
 
@@ -628,10 +622,11 @@ section("the sweep set")
 
 tmp, pipe = new_world(names=("a", "b"))
 pdf_index = importlib.import_module("klausmate.pdf_index")
+embeddings = importlib.import_module("klausmate.embeddings")
 os.makedirs(pdf_index.index_dir(tmp, "a"))
 with open(os.path.join(pdf_index.index_dir(tmp, "a"), "manifest.json"), "w") as f:
-    f.write('{"version": %d, "chunks": [[1,0,5]], "embedded_rows": 1, '
-            '"provider": "voyage", "model": "voyage-3-lite", "dims": 512}'
+    f.write('{"version": %d, "pages": [[0,"h0"]], "embedded_rows": 1, '
+            '"provider": "openai", "model": "text-embedding-3-large", "dims": 1024}'
             % pdf_index.INDEX_VERSION)
 names = iq.indexed_pdf_names()
 check("a PDF with an index on disk is swept", "a" in names)
@@ -643,7 +638,7 @@ check(
 check(
     "an unchanged signature offers nothing — saving Preferences without "
     "touching the model must not propose a whole-collection re-embed",
-    iq.offer_model_sweep(None, ("voyage", "voyage-3-lite", 0)) is False,
+    iq.offer_model_sweep(None, embeddings.index_signature({})) is False,
 )
 check(
     "...and a closed profile offers nothing either",

@@ -1,37 +1,27 @@
 # KlausMate Configuration
 
-## Connection
+## API keys & models
 
-- **endpoint**: URL of your local Ollama server. Default `http://localhost:11434`.
-  Only used when `embedding_provider` is `ollama` — cloud providers (the
-  default) don't need Ollama at all. If Klaus's managed server has to move
-  to another port (something else owned 11434), this is updated
-  automatically.
+Klaus is API-first: semantic search runs on OpenAI and the assistant on
+Anthropic, both through **your own** API keys. There is no local engine
+to install, start or update any more. Set both keys in **KlausMate
+Preferences → API keys & models**; they are stored in this add-on's
+config (`meta.json`, plain text — standard for Anki add-ons) and never
+in the repo.
 
-## Local AI engine (automatic Ollama)
-
-- **runtime_auto_setup**: Default `true`. When you choose the local
-  (`ollama`) embedding provider, Klaus manages the engine for you: at
-  startup it silently starts Ollama when a copy exists (yours or its own),
-  and when none exists it offers a **one-click setup** that downloads the
-  official Ollama runtime from the [ollama/ollama GitHub release]
-  (https://github.com/ollama/ollama/releases) — MIT-licensed, verified against
-  the release's published SHA-256 checksums — into the add-on's
-  `user_files/runtime/` folder. Nothing is bundled with the add-on, and
-  nothing is downloaded before you confirm the setup prompt. A server Klaus
-  starts is stopped when Anki quits; an Ollama you installed yourself is
-  never touched. Set `false` to disable all automatic startup behavior (no
-  silent server start, no setup offers) — the one-click setup then remains
-  available only manually via **Manage models…**.
-- Limitation: with two Anki instances open at once, the first instance to
-  quit stops the shared managed server; the other restarts it on demand.
-- **_runtime_setup_declined**: Written automatically when you dismiss the
-  setup offer so Klaus stops re-prompting at startup. Delete it (or run the
-  setup from **Manage models…**) to see the offer again.
-- Models always live in the standard shared `~/.ollama` directory, so they are
-  shared with any other Ollama install and survive add-on updates. To reclaim
-  the engine's disk space use **Remove Klaus-managed runtime** in Klaus
-  settings.
+- **api_key_openai**: Your OpenAI API key. Default `""`. Powers card and
+  PDF embeddings (see **Card embeddings** below) and lecture
+  transcription. Without it nothing indexes, and Klaus says so rather
+  than failing quietly.
+- **api_key_anthropic**: Your Anthropic API key. Default `""`. Powers the
+  assistant.
+- **reasoning_model**: Which Claude model the assistant runs. Default
+  `"claude-sonnet-5"`.
+- **transcription_model**: Which OpenAI model transcribes recorded
+  lecture audio. Default `"gpt-4o-mini-transcribe"`.
+- **_embed_key_setup_declined**: Written automatically when you dismiss
+  the "needs an API key" nudge, so Klaus stops re-prompting at startup.
+  Delete it to see the nudge again.
 
 ## Semantic library (matching + retention)
 
@@ -94,30 +84,18 @@ working on stale vectors, or stop the sweep part-way from the same bar.
 
 Semantic search needs a one-time index of your cards (then it updates
 incrementally — only new/edited notes are re-embedded). Configure and
-build it in **Tools → Klaus → Manage models… → What Klaus uses →
-Semantic search**; the index itself lives in
-the add-on's `user_files/card_index/` folder. With a cloud provider
-(the default), card text is sent to that provider's API when indexing
-and searching; pick `ollama` if you want embeddings to stay fully on
-your machine.
+build it in **KlausMate Preferences → API keys & models**; the index
+itself lives in the add-on's `user_files/card_index/` folder. Card text
+is sent to OpenAI's embeddings API when indexing and searching.
 
-- **embedding_provider**: `voyage` (default — cloud API, needs a free key
-  from voyageai.com), `openai` (cloud, needs a key), or `ollama` (local,
-  free, private — limited by your machine's RAM). Existing installs keep
-  whatever provider they already had configured.
+- **embedding_model**: Embedding model ID. Default
+  `"text-embedding-3-large"`. Changing it rebuilds the index.
 - **embedding_dimensions**: output width for OpenAI's v3 embedding
   models, which are MRL-trained so a shorter vector keeps the most
   significant components. `1024` is the default: better retrieval than
   `text-embedding-3-small` at 1536, while being cheaper to rank and
   smaller on disk. `0` means the model's own width (3072 for -large).
-  Ignored by Voyage and Ollama, whose APIs have no such parameter.
   Changing it forces a full re-index.
-- **embedding_model**: Embedding model ID. Empty means the provider
-  default (`voyage-3-lite` / `text-embedding-3-small` /
-  `nomic-embed-text`). Changing provider or model rebuilds the index.
-- **embedding_api_key_openai** / **embedding_api_key_voyage**: API key for
-  the matching cloud provider. Stored in this add-on's config
-  (`meta.json`, plain text — standard for Anki add-ons).
 
 ### PDF study priorities
 
@@ -126,12 +104,6 @@ matched cards (at or above its sensitivity, see `pdf_match_threshold`
 above) you'd currently recall — so you know what to study first. It reads
 the same match cache the `!Library` tags do; nothing here embeds anything
 indexing wouldn't already need.
-
-- **pdf_match_agg**: How a card's score against a PDF's chunks is
-  aggregated — `max` (default) or `top3_mean` (mean of the 3 best chunk
-  matches; stricter, suppresses one-off spurious hits).
-- **pdf_index_max_chunks**: Cap on embedded chunks per PDF (default
-  `1000`). Very large PDFs are evenly down-sampled to this many chunks.
 
 ### Lecture view (review screen)
 
@@ -149,31 +121,12 @@ indexing wouldn't already need.
 
 ## Assistant
 
-Klaus is not itself the assistant: Claude Code is. Install it, run
-`claude` once from a terminal to log in, and Klaus finds it — there is
-no API key to paste into Klaus itself. The Assistant reaches a lecture
-page as OCR'd text and image, so it can read a scanned or image-only
-slide the same as one with a normal text layer. Configure it in
-**KlausMate Preferences → Assistant**.
+The assistant answers about whatever lecture page you are looking at,
+reaching it as the page record Klaus keeps for it — the slide's own text
+plus any transcript of what was said over it — together with the page
+image. It runs on Anthropic through your own `api_key_anthropic` (see
+**API keys & models** above); `reasoning_model` picks the model.
 
-- **ocr_enabled**: Default `true`. Whether Klaus reads every lecture
-  page you view (and both its neighbours, the next page and the
-  previous one) through a local
-  vision model, so a scanned slide, a screenshot or a diagram reaches
-  the Assistant as text. Off, a page still reaches the Assistant as its
-  own image plus whatever text layer the PDF carries — which is empty
-  for a scanned page.
-- **ocr_model**: Which local Ollama vision model performs it. Default
-  `"glm-ocr"`. Pull it — or `deepseek-ocr`, or any other installed
-  vision-capable model — from **KlausMate Preferences → Assistant**.
-- **claude_binary**: Path override for the `claude` executable. Default
-  `""` (empty) — Klaus auto-detects it. Set this only if more than one
-  copy is installed and a specific one is needed;
-  **Assistant → Claude Code binary → Override…** sets it from a file
-  picker.
-- **assistant_model**: Which Claude model the assistant runs. Default
-  `""` (empty), meaning Claude Code's own default model. Only needed to
-  pin a specific one.
 - **assistant_reopen**: Default `false`. Reopen the Assistant dock
   where you left it the next time Anki starts — the same idea as
   `lecture_view_reopen` above. Only reopens it if it was open when you
