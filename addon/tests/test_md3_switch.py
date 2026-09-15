@@ -188,7 +188,7 @@ check("every Preferences toggle is an Md3Switch, whatever their number",
 check("the toggles that predate live appearance preview still only "
       "mark_dirty(), so Save stays the sole writer",
       all(f"{name}.toggled.connect(lambda _checked: mark_dirty())" in _MM_CODE
-          for name in ("image_crop_cb", "runtime_auto_cb", "pdfjs_cb")))
+          for name in ("image_crop_cb", "pdfjs_cb")))
 check("...and the appearance one (the design master switch — the "
       "heatmap switch left Preferences 2026-08-30) routes through "
       "on_design_toggled → appearance_changed(): marks dirty AND "

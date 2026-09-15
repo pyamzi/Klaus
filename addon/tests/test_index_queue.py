@@ -143,11 +143,21 @@ check(
     == "Card index — Embedding cards…",
 )
 
-msg = iq.sweep_message(3, 12000, "voyage-3-lite")
-check("the sweep names the model", "voyage-3-lite" in msg)
-check("...counts both kinds of work", "12,000 notes" in msg and "3 PDFs" in msg)
-check("...and says it costs time and money", "minutes" in msg and "API usage" in msg)
-_one = iq.sweep_message(1, 1, "m")
+msg = iq.sweep_message(2, 30000, "text-embedding-3-large",
+                       "~1,000 tokens · about $0.01")
+check("the sweep names the model", "text-embedding-3-large" in msg)
+check("...counts both kinds of work", "30,000 notes" in msg and "2 PDFs" in msg)
+check(
+    "...and carries the cost estimate VERBATIM, plus whose key pays it — "
+    "a from-scratch re-embed of the whole collection is a paid API call, "
+    "and a confirm that hides the price is not a confirm",
+    "~1,000 tokens · about $0.01" in msg and "OpenAI" in msg,
+)
+check(
+    "...and still says the run can be stopped from the bottom bar",
+    "stop it" in msg.lower(),
+)
+_one = iq.sweep_message(1, 1, "m", "~0 tokens · under $0.01")
 # "1 PDF" is a SUBSTRING of "1 PDFs", so the obvious form of this check
 # passes against a message that never learned the singular at all — it
 # did, until the falsification pass made it fail and it didn't. The
@@ -199,7 +209,22 @@ check(
 # ------------------------------------------------------------ the fake world
 
 
+class FakeDb:
+    """Just enough of col.db for sweep_estimate's one scalar: the total
+    length of every note's fields. 0 by default so the pins that don't
+    care about cost are unaffected."""
+
+    def __init__(self):
+        self.total = 0
+
+    def scalar(self, _sql, *_a):
+        return self.total
+
+
 class FakeCol:
+    def __init__(self):
+        self.db = FakeDb()
+
     def note_count(self):
         return 1234
 
@@ -647,6 +672,119 @@ check(
 )
 
 
+# ------------------------------------------------------- what the sweep costs
+
+section("the sweep estimate")
+
+tmp, pipe = new_world(names=("a",))
+page_store = importlib.import_module("klausmate.page_store")
+pdf_handler = importlib.import_module("klausmate.pdf_handler")
+
+iq.mw.col.db.total = 40_000
+_est = iq.sweep_estimate([])
+check(
+    "the estimate counts the whole collection's note text — one scalar "
+    "over notes.flds, at cost.py's four-chars-a-token",
+    _est.tokens == 10_000 and _est.dollars > 0,
+    f"got {_est!r}",
+)
+
+import json as _json  # noqa: E402
+
+with open(os.path.join(tmp, "contexts", "a.json"), "w") as f:
+    _json.dump({"pages": ["x", "y"]}, f)
+_path = pdf_handler.pdf_path_for(tmp, "a") or ""
+page_store.ensure_records(tmp, "a", _path, ["a" * 4000, "b" * 4000])
+_est2 = iq.sweep_estimate(["a"])
+check(
+    "...plus every PAGE of every swept PDF — the page store is what gets "
+    "re-embedded now, not a chunking of the raw text file",
+    _est2.tokens == _est.tokens + 2000,
+    f"got {_est2!r} vs {_est!r}",
+)
+
+with open(os.path.join(tmp, "contexts", "d.json"), "w") as f:
+    _json.dump({"pages": ["p" * 2000, "q" * 2000]}, f)
+_est3 = iq.sweep_estimate(["d"])
+check(
+    "...and a PDF with stored slide text but NO page-store records yet "
+    "(no ensure_records call at all) is counted at its slide-text "
+    "length, not skipped as zero — every PDF on every existing profile "
+    "is in exactly this state the first time this ships",
+    _est3.tokens == _est.tokens + 1000,
+    f"got {_est3!r} vs {_est!r}",
+)
+
+check(
+    "a PDF with no pages on disk contributes nothing and never raises",
+    iq.sweep_estimate(["b"]).tokens == _est.tokens,
+)
+
+check(
+    "a FIRST key offers the sweep even though the signature never moved "
+    "— nothing was ever embedded, so there is nothing for the comparison "
+    "to see, and that is exactly the moment the offer matters",
+    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()),
+                         first_key=True) is True,
+)
+check(
+    "...and without it that same unchanged signature still offers nothing",
+    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()))
+    is False,
+)
+
+iq.mw.addonManager.cfg["embedding_model"] = "surprise-model-9"
+_raised = False
+try:
+    iq.sweep_estimate([])
+except Exception:
+    _raised = True
+iq.mw.addonManager.cfg.pop("embedding_model")
+check(
+    "a hand-typed model with no published price RAISES rather than "
+    "silently pricing itself as some other model...",
+    _raised,
+)
+check(
+    "...and offer_model_sweep catches that and says the cost is unknown, "
+    "so the confirm still appears (the re-embed is the user's to refuse)",
+    "cost unknown" in open(os.path.join(ADDON, "index_queue.py")).read(),
+)
+
+
+class _RaisingDb:
+    def scalar(self, _sql, *_a):
+        raise RuntimeError("notes scalar boom")
+
+
+_captured_estimate: dict = {}
+_orig_sweep_message = iq.sweep_message
+
+
+def _capture_sweep_message(n_pdfs, n_notes, model, estimate):
+    _captured_estimate["estimate"] = estimate
+    return _orig_sweep_message(n_pdfs, n_notes, model, estimate)
+
+
+_orig_notes_db = iq.mw.col.db
+iq.mw.col.db = _RaisingDb()
+iq.sweep_message = _capture_sweep_message
+try:
+    iq.offer_model_sweep(
+        None, embeddings.index_signature(iq._cfg()), first_key=True
+    )
+finally:
+    iq.mw.col.db = _orig_notes_db
+    iq.sweep_message = _orig_sweep_message
+check(
+    "a failed notes scalar does NOT degrade to a cheap estimate — the "
+    "confirm must read cost unknown, never price a real re-embed at "
+    "~0 tokens because one SQL call happened to fail",
+    _captured_estimate.get("estimate") == "cost unknown for this model",
+    f"got {_captured_estimate!r}",
+)
+
+
 # ------------------------------------------------------------- source pins
 
 section("one chain, one copy")
@@ -655,6 +793,14 @@ _iq_src = code_only(open(os.path.join(ADDON, "index_queue.py")).read())
 _drive_src = code_only(open(os.path.join(ADDON, "pdf_drive.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
+check(
+    "the priced confirm defaults to No — Save's own button is already "
+    "Enter-default, so Enter in the key field reaches this window-modal "
+    "confirm next with keyboard focus; a stray Enter must not start a "
+    "paid whole-collection re-embed, the same rule "
+    "clear_assistant_sessions' confirm already follows",
+    "box.setDefaultButton(QMessageBox.StandardButton.No)" in _iq_src,
+)
 check(
     "index_queue holds the ONLY copy of the chain",
     _iq_src.count("curation.ensure_index(") == 1

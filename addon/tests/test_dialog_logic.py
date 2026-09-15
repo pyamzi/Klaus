@@ -1,16 +1,16 @@
-"""State-machine tests for the Manage-models dialog's semantic-search half
-(embed_provider_combo / embed_model_combo / embed_key_edit).
+"""State-machine tests for the Preferences dialog's "API keys & models"
+page (openai_key_edit / embed_model_edit) and its default-sensitivity
+slider.
 
 PyQt6 cannot be imported here (its sip is 3.13-only), so this reimplements
-the dialog's decision logic against faithful combo semantics and asserts the
-behaviours that matter: the ui_state['syncing'] guard, the embed_fix_btn
-dispatcher (_embed_fix_kind returning 'key' / 'model' / ''), assignment
-round-trips, and the empty-library / uninstalled-model edge cases.
+the dialog's decision logic against faithful widget semantics and asserts
+the behaviours that matter: the ui_state['syncing'] / ['dirty'] guards,
+the deferred-save contract (Save is the one writer), and when saving
+offers the whole-collection re-embed sweep.
 
 Kept in lockstep with manage_models_dialog by construction — the functions
 below are transcribed from it; if that code changes these must too. The
-K-039 section further down covers manage_models._resolve_ollama_model and
-its config write-back guard in isolation and is maintained separately.
+source-pin sections further down read manage_models.py directly.
 """
 import sys
 
@@ -27,68 +27,11 @@ def check(name, cond, detail=""):
         print(f" FAIL {name} {detail}")
 
 
-class Combo:
-    """QComboBox semantics: items carry (text, data); index changes signal."""
-
-    def __init__(self, on_change=None):
-        self.items = []
-        self.index = -1
-        self.on_change = on_change
-        self._edit_text = ""
-
-    def clear(self):
-        self.items = []
-        self.index = -1
-
-    def addItem(self, text, data=None):
-        self.items.append((text, data))
-        if self.index == -1:
-            self.index = 0
-
-    def count(self):
-        return len(self.items)
-
-    def findData(self, data):
-        for i, (_t, d) in enumerate(self.items):
-            if d == data:
-                return i
-        return -1
-
-    def setCurrentIndex(self, i):
-        changed = i != self.index
-        self.index = i
-        if changed and self.on_change:
-            self.on_change()
-
-    def currentData(self):
-        if 0 <= self.index < len(self.items):
-            return self.items[self.index][1]
-        return None
-
-    def currentText(self):
-        if self._edit_text:
-            return self._edit_text
-        return self.items[self.index][0] if 0 <= self.index < len(self.items) else ""
-
-    def setEditText(self, t):
-        self._edit_text = t
-
-    def pick(self, data):
-        """Simulate a user choosing the item with this data."""
-        i = self.findData(data)
-        assert i >= 0, f"no item with data {data!r}"
-        self.setCurrentIndex(i)
-
-
 class LineEdit:
-    """QLineEdit semantics needed here: get/set text, and an editingFinished
-    signal that fires when the simulated user finishes typing (embed_key_edit
-    and embed_model_combo's line edit both connect editingFinished to
-    save_embed in the real dialog)."""
+    """QLineEdit semantics needed here: get/set text."""
 
-    def __init__(self, on_finish=None):
+    def __init__(self):
         self._text = ""
-        self.on_finish = on_finish
 
     def text(self):
         return self._text
@@ -96,396 +39,142 @@ class LineEdit:
     def setText(self, t):
         self._text = t
 
-    def type_and_leave(self, t):
-        """Simulate a user typing into the field and then leaving it."""
-        self._text = t
-        if self.on_finish:
-            self.on_finish()
 
-
-_EMBED_DEFAULTS = {
-    "ollama": "nomic-embed-text",
-    "openai": "text-embedding-3-small",
-    "voyage": "voyage-3-lite",
-}
-
-
-def _resolve_ollama_model(configured, models, indexed_model, default):
-    """Transcribed from manage_models._resolve_ollama_model, needed here so
-    World.sync_embed_widgets can be transcribed faithfully too. The K-039
-    section below transcribes its own copy independently for isolated
-    resolver checks — both must be kept in lockstep with the real function."""
-    configured = configured.strip()
-    if configured:
-        return configured
-    if indexed_model and indexed_model in models:
-        return indexed_model
-    if len(models) == 1:
-        return models[0]
-    return default
+_DEFAULT_EMBED_MODEL = "text-embedding-3-large"
 
 
 class World:
-    """The manage_models_dialog's semantic-search closure, transcribed:
-    embed_provider_combo / embed_model_combo / embed_key_edit, the
-    ui_state['syncing'] guard, and the embed_fix_btn dispatcher
-    (_embed_fix_kind / on_embed_fix_clicked)."""
+    """manage_models_dialog's "API keys & models" closure, transcribed:
+    openai_key_edit / embed_model_edit, the ui_state['syncing'] and
+    ['dirty'] guards, sync_embed_widgets and save_embed. There is ONE
+    embedding provider now (OpenAI), so the provider combo, the
+    per-provider key fan-out and the Ollama resolver are gone — what is
+    left to get wrong is the deferred-save contract, which is what these
+    pins are for."""
 
-    def __init__(self, cfg, models, indexed_model=""):
+    def __init__(self, cfg):
         self.cfg = dict(cfg)
-        # indexed_model mirrors curation.index_stats()["model"] when an
-        # index already exists, else "".
-        self.indexed_model = indexed_model
-        self.ui_state = {
-            "models": list(models), "syncing": False, "embed_fix_kind": "",
-            "dirty": False, "shown_provider": "",
-        }
+        self.ui_state = {"syncing": False, "dirty": False}
         self.saves = 0
-        self.opened_key_pages = []
-        self.pulled_models = []
-
-        # Deferred save: widgets mark dirty, save_all() writes.
-        self.embed_provider_combo = Combo(on_change=self.on_provider_changed)
-        self.embed_provider_combo.addItem("Voyage API (Default)", "voyage")
-        self.embed_provider_combo.addItem("OpenAI API", "openai")
-        self.embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
-        self.embed_model_combo = Combo(on_change=lambda: self.mark_dirty())
-        self.embed_key_edit = LineEdit(on_finish=lambda: self.mark_dirty())
-
+        self.sweeps = []
+        self.openai_key_edit = LineEdit()
+        self.embed_model_edit = LineEdit()
         self.sync_embed_widgets()
 
-    # --- transcribed from embeddings.py (provider_name/embedding_model/index_signature) ---
-
-    def _provider_name(self):
-        p = str(self.cfg.get("embedding_provider") or "voyage").strip().lower()
-        return p if p in _EMBED_DEFAULTS else "voyage"
+    # --- transcribed from embeddings.py (embedding_model/index_signature) ---
 
     def _embedding_model(self):
-        model = str(self.cfg.get("embedding_model") or "").strip()
-        return model or _EMBED_DEFAULTS[self._provider_name()]
+        return str(self.cfg.get("embedding_model") or "").strip() or _DEFAULT_EMBED_MODEL
 
     def _index_signature(self):
-        return self._provider_name(), self._embedding_model()
-
-    def _embed_cfg_key(self, provider):
-        return f"embedding_api_key_{provider}"
+        return "openai", self._embedding_model(), 0
 
     # --- transcribed from manage_models_dialog ---
-
-    def pick_model(self, name):
-        """Editable combo: choosing an item from the dropdown syncs the
-        line edit's text to it (real QComboBox behaviour for an editable
-        box) before the change signal fires. Combo's setCurrentIndex alone
-        doesn't do that, so the harness does it explicitly."""
-        combo = self.embed_model_combo
-        i = combo.findData(name)
-        assert i >= 0, f"no item with data {name!r}"
-        combo.setEditText(name)
-        combo.setCurrentIndex(i)
 
     def mark_dirty(self):
         if self.ui_state["syncing"]:
             return
         self.ui_state["dirty"] = True
 
-    def clear_dirty(self):
-        self.ui_state["dirty"] = False
-
-    def on_provider_changed(self):
-        if self.ui_state["syncing"]:
+    def sync_embed_widgets(self):
+        if self.ui_state["dirty"]:
             return
-        self.mark_dirty()
-        self.sync_embed_widgets(
-            provider_override=str(self.embed_provider_combo.currentData() or "ollama")
-        )
-
-    def save_all(self):
-        self.clear_dirty()
-        self.save_embed()
-
-    def sync_embed_widgets(self, provider_override=None):
-        if provider_override is None and self.ui_state["dirty"]:
-            return  # never clobber unsaved edits
         self.ui_state["syncing"] = True
         try:
-            provider = provider_override or self._provider_name()
-            self.ui_state["shown_provider"] = provider
-            idx = max(0, self.embed_provider_combo.findData(provider))
-            self.embed_provider_combo.setCurrentIndex(idx)
-            # Local provider -> offer every installed model; cloud -> free
-            # text (no items, just the line edit).
-            self.embed_model_combo.clear()
-            if provider == "ollama":
-                for name in self.ui_state["models"]:
-                    self.embed_model_combo.addItem(name, name)
-            configured_model = str(self.cfg.get("embedding_model") or "")
-            if provider_override is not None:
-                # Widgets moving to a provider other than the stored one:
-                # the stored model name belongs to the old provider.
-                configured_model = ""
-            if provider == "ollama":
-                resolved = _resolve_ollama_model(
-                    configured_model, self.ui_state["models"], self.indexed_model,
-                    _EMBED_DEFAULTS["ollama"],
-                )
-                if (
-                    resolved != configured_model
-                    and self.ui_state["models"]
-                    and provider_override is None
-                ):
-                    # Heal the config now, not just the widget (K-039) —
-                    # only when models were actually enumerated, so an
-                    # unreachable Ollama can't durably orphan an index.
-                    self.cfg["embedding_model"] = resolved
-                self.embed_model_combo.setEditText(resolved)
-            else:
-                self.embed_model_combo.setEditText(configured_model)
-            self.embed_key_edit.setText(
-                str(self.cfg.get(self._embed_cfg_key(provider)) or ""))
+            self.openai_key_edit.setText(str(self.cfg.get("api_key_openai") or ""))
+            self.embed_model_edit.setText(str(self.cfg.get("embedding_model") or ""))
         finally:
             self.ui_state["syncing"] = False
-        self.update_embed_status()
 
-    def update_embed_status(self):
-        self.ui_state["embed_fix_kind"] = self._embed_fix_kind()
+    def type_key(self, text):
+        self.openai_key_edit.setText(text)
+        self.mark_dirty()
 
-    def _embed_fix_kind(self):
-        """'key' when the selected cloud provider has no API key configured,
-        'model' when the local embed model named in config isn't installed,
-        '' when neither."""
-        sig = self._index_signature()
-        provider = self.embed_provider_combo.currentData() or "ollama"
-        is_cloud = provider != "ollama"
-        if is_cloud and not str(self.cfg.get(self._embed_cfg_key(provider)) or "").strip():
-            return "key"
-        if not is_cloud and sig[1] and sig[1] not in self.ui_state["models"]:
-            return "model"
-        return ""
-
-    def on_embed_fix_clicked(self):
-        """Sole handler for embed_fix_btn.clicked — dispatches on the state
-        update_embed_status() last computed, not recomputed here."""
-        kind = self.ui_state.get("embed_fix_kind", "")
-        if kind == "key":
-            provider = str(self.embed_provider_combo.currentData() or "voyage")
-            self.opened_key_pages.append(provider)
-        elif kind == "model":
-            self.pulled_models.append(self.embed_model_combo.currentText().strip())
+    def type_model(self, text):
+        self.embed_model_edit.setText(text)
+        self.mark_dirty()
 
     def save_embed(self):
         if self.ui_state["syncing"]:
             return
+        prev_sig = self._index_signature()
+        had_key = bool(str(self.cfg.get("api_key_openai") or "").strip())
+        self.cfg["api_key_openai"] = self.openai_key_edit.text().strip()
+        self.cfg["embedding_model"] = self.embed_model_edit.text().strip()
         self.saves += 1
-        provider = str(self.embed_provider_combo.currentData() or "ollama")
-        prev = self._provider_name()
-        self.cfg["embedding_provider"] = provider
-        # Widgets were repopulated for `provider` when it was picked, so
-        # their contents already belong to it (comparing against the
-        # STORED provider here would discard a model typed for the new
-        # one — the auto-save-era bug).
-        if self.ui_state.get("shown_provider", provider) == provider:
-            self.cfg["embedding_model"] = self.embed_model_combo.currentText().strip()
-        else:
-            self.cfg["embedding_model"] = ""
-        if provider != "ollama":
-            self.cfg[self._embed_cfg_key(provider)] = self.embed_key_edit.text().strip()
-        if provider != prev:
-            self.sync_embed_widgets()  # reload model/key fields for the new provider
-        else:
-            self.update_embed_status()
+        self.sweeps.append(
+            (prev_sig, self._index_signature(),
+             not had_key and bool(self.cfg["api_key_openai"]))
+        )
+
+    def save_all(self):
+        self.ui_state["dirty"] = False
+        self.save_embed()
 
 
-BASE = {"embedding_provider": "voyage", "embedding_model": "",
-        "embedding_api_key_voyage": ""}
+BASE = {"api_key_openai": "", "embedding_model": ""}
 
-print("== provider default and the syncing guard ==")
-w = World(BASE, models=[])
-check("defaults to voyage", w.embed_provider_combo.currentData() == "voyage")
+print("== opening the page writes nothing ==")
+w = World(BASE)
+check("the key field seeds from config", w.openai_key_edit.text() == "")
 check("opening the dialog saves nothing", w.saves == 0)
 before = w.saves
 w.sync_embed_widgets()
-check("repopulating combos writes no config", w.saves == before)
-
-print("== cloud provider with no key -> kind 'key' ==")
-w = World(BASE, models=[])
-check("voyage with empty key needs a key", w.ui_state["embed_fix_kind"] == "key")
-check("cloud provider offers no model items, free text only",
-      w.embed_model_combo.count() == 0)
-w.on_embed_fix_clicked()
-check("fix button opens the voyage key page", w.opened_key_pages == ["voyage"])
-
-print("== cloud provider with a key -> kind '' (ready) ==")
-w = World({**BASE, "embedding_api_key_voyage": "pa-xyz"}, models=[])
-check("key present clears the warning", w.ui_state["embed_fix_kind"] == "")
-
-print("== local provider with an uninstalled model -> kind 'model' ==")
-w = World({"embedding_provider": "ollama", "embedding_model": "mxbai-embed-large"},
-          models=["nomic-embed-text"])
-check("configured model not in library needs a pull",
-      w.ui_state["embed_fix_kind"] == "model")
-check("model dropdown lists only what's installed, not the missing one",
-      [n for n, _d in w.embed_model_combo.items] == ["nomic-embed-text"])
-w.on_embed_fix_clicked()
-check("fix button pulls the configured (missing) model, not an installed one",
-      w.pulled_models == ["mxbai-embed-large"])
-
-print("== local provider, model installed -> kind '' (ready) ==")
-w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
-          models=["nomic-embed-text", "all-minilm"])
-check("installed model needs no fix", w.ui_state["embed_fix_kind"] == "")
-check("model dropdown offers only the installed models",
-      sorted(n for n, _d in w.embed_model_combo.items) == ["all-minilm", "nomic-embed-text"])
-
-print("== local provider, empty library -> still 'model' (edge case) ==")
-w = World({"embedding_provider": "ollama", "embedding_model": ""}, models=[])
-check("empty config falls back to the hardcoded default for display",
-      w.embed_model_combo.currentText() == "nomic-embed-text")
-check("but an empty library still can't run it -> kind 'model'",
-      w.ui_state["embed_fix_kind"] == "model")
-check("empty library is not healed into config (nothing installed to confirm)",
-      w.cfg["embedding_model"] == "")
-
-print("== empty configured model heals from an installed library on open ==")
-w = World({"embedding_provider": "ollama", "embedding_model": ""},
-          models=["embeddinggemma"])
-check("resolver picks the one installed model",
-      w.embed_model_combo.currentText() == "embeddinggemma")
-check("and writes it back to config (the sync_embed_widgets heal branch)",
-      w.cfg["embedding_model"] == "embeddinggemma")
-check("healing on open does not count as a user save", w.saves == 0)
+check("repopulating the fields writes no config", w.saves == before)
 
 print("== deferred save: edits do not reach config until Save ==")
-w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
-          models=["nomic-embed-text", "all-minilm"])
-w.pick_model("all-minilm")
-check("picking a model marks dirty", w.ui_state["dirty"] is True)
-check("picking a model writes NOTHING yet",
-      w.cfg["embedding_model"] == "nomic-embed-text")
-check("no save happened", w.saves == 0)
+w = World(BASE)
+w.type_key("sk-new-key")
+check("typing a key marks dirty but writes nothing",
+      w.ui_state["dirty"] is True and w.cfg["api_key_openai"] == "")
 w.save_all()
-check("Save persists the pick", w.cfg["embedding_model"] == "all-minilm")
+check("Save persists the key", w.cfg["api_key_openai"] == "sk-new-key")
 check("Save clears dirty", w.ui_state["dirty"] is False)
 
-w = World(BASE, models=[])
-w.embed_key_edit.type_and_leave("pa-new-key")
-check("typing a key marks dirty but writes nothing",
-      w.ui_state["dirty"] is True
-      and w.cfg.get("embedding_api_key_voyage") == "")
+w = World({"api_key_openai": "sk", "embedding_model": ""})
+w.type_model("text-embedding-3-small")
+check("typing a model writes nothing yet", w.cfg["embedding_model"] == "")
 w.save_all()
-check("Save persists the key", w.cfg["embedding_api_key_voyage"] == "pa-new-key")
+check("Save persists the model", w.cfg["embedding_model"] == "text-embedding-3-small")
 
 print("== a refresh while dirty must not clobber unsaved edits ==")
-w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
-          models=["nomic-embed-text", "all-minilm"])
-w.pick_model("all-minilm")
-w.sync_embed_widgets()          # what refresh() does after a pull/check
-check("unsaved pick survives a refresh",
-      w.embed_model_combo.currentText() == "all-minilm")
+w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
+w.type_model("text-embedding-3-small")
+w.sync_embed_widgets()          # what refresh() does
+check("unsaved edit survives a refresh",
+      w.embed_model_edit.text() == "text-embedding-3-small")
 w.save_all()
 check("and still saves correctly afterwards",
-      w.cfg["embedding_model"] == "all-minilm")
+      w.cfg["embedding_model"] == "text-embedding-3-small")
 
-print("== switching provider reloads the fields without writing ==")
-w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
-          models=["nomic-embed-text"])
-w.embed_provider_combo.pick("openai")
-check("provider switch writes nothing yet",
-      w.cfg["embedding_provider"] == "ollama")
-check("but the widgets already show the new provider",
-      w.ui_state["shown_provider"] == "openai")
-check("cloud fields reset to empty (no openai key yet)", w.embed_key_edit.text() == "")
+print("== the sweep offer: a model change, or a first key ==")
+w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
+w.type_model("text-embedding-3-small")
 w.save_all()
-check("Save writes the new provider", w.cfg["embedding_provider"] == "openai")
-check("old provider's model is dropped, not carried over", w.cfg["embedding_model"] == "")
+_prev, _cur, _first = w.sweeps[-1]
+check("the PREVIOUS signature is the one the stored vectors were made "
+      "with, captured before the widgets overwrite config",
+      _prev == ("openai", "text-embedding-3-large", 0))
+check("...and the current one is what was just saved",
+      _cur == ("openai", "text-embedding-3-small", 0))
+check("a model change is not a first key", _first is False)
 
-print("== provider switch THEN a typed model keeps the typed model (regression) ==")
-# Under the auto-save-era logic (compare against the STORED provider) this
-# silently saved "" and the typed model vanished.
-w = World({"embedding_provider": "ollama", "embedding_model": "nomic-embed-text"},
-          models=["nomic-embed-text"])
-w.embed_provider_combo.pick("openai")
-w.embed_model_combo.setEditText("text-embedding-3-large")
+w = World(BASE)
+w.type_key("sk-first")
 w.save_all()
-check("the model typed for the NEW provider survives Save",
-      w.cfg["embedding_model"] == "text-embedding-3-large")
-check("provider saved alongside it", w.cfg["embedding_provider"] == "openai")
+_prev, _cur, _first = w.sweeps[-1]
+check("an empty key filled in for the first time IS a first key — the "
+      "signature never moved, but nothing has ever been embedded",
+      _first is True and _prev == _cur)
 
-print("== empty embedding_model resolver (K-039, manage_models._resolve_ollama_model) ==")
-
-
-def _resolve_ollama_model(configured, models, indexed_model, default):
-    """Transcribed verbatim from manage_models._resolve_ollama_model — if
-    that function changes this must too. Decides what real model name the
-    ollama 'Search model' field should show/hold when embedding_model is
-    empty, instead of silently falling through to
-    embeddings.DEFAULT_MODELS['ollama'] (which can mismatch an existing
-    index and make one click on 'Index Now' discard it)."""
-    configured = configured.strip()
-    if configured:
-        return configured
-    if indexed_model and indexed_model in models:
-        return indexed_model
-    if len(models) == 1:
-        return models[0]
-    return default
-
-
-check(
-    "empty + indexed model installed -> the indexed model",
-    _resolve_ollama_model("", ["nomic-embed-text", "embeddinggemma:latest"],
-                          "embeddinggemma:latest", "nomic-embed-text")
-    == "embeddinggemma:latest",
-)
-check(
-    "empty + exactly one installed -> that one",
-    _resolve_ollama_model("", ["embeddinggemma:latest"], "", "nomic-embed-text")
-    == "embeddinggemma:latest",
-)
-check(
-    "empty + none installed -> hardcoded default",
-    _resolve_ollama_model("", [], "", "nomic-embed-text") == "nomic-embed-text",
-)
-check(
-    "non-empty -> untouched, indexed/installed state ignored",
-    _resolve_ollama_model("qwen3:4b", ["embeddinggemma:latest"],
-                          "embeddinggemma:latest", "nomic-embed-text")
-    == "qwen3:4b",
-)
-check(
-    "indexed model present but NOT installed -> falls through, not (a)",
-    _resolve_ollama_model("", ["all-minilm", "bge-m3"], "embeddinggemma:latest",
-                          "nomic-embed-text") == "nomic-embed-text",
-)
-
-
-
-print("== resolver write-back must not persist an uninformed fallback (K-039 review) ==")
-
-
-def _should_persist(resolved, configured, models):
-    """Transcribed from manage_models.sync_embed_widgets' heal branch.
-
-    The resolver always returns SOMETHING to display, but the config may
-    only be rewritten when we actually enumerated the installed models.
-    With an empty list (Ollama unreachable) the resolver falls through to
-    the hardcoded default; persisting that would durably orphan an index
-    built with a different model.
-    """
-    return resolved != configured and bool(models)
-
-
-check(
-    "informed resolution persists",
-    _should_persist("embeddinggemma:latest", "", ["embeddinggemma:latest"]) is True,
-)
-check(
-    "uninformed fallback (no model list) does NOT persist",
-    _should_persist("nomic-embed-text", "", []) is False,
-)
-check(
-    "no change means no write even with a populated list",
-    _should_persist("qwen3:4b", "qwen3:4b", ["qwen3:4b"]) is False,
-)
+w = World({"api_key_openai": "sk-old", "embedding_model": "text-embedding-3-large"})
+w.type_key("sk-rotated")
+w.save_all()
+_prev, _cur, _first = w.sweeps[-1]
+check("rotating an existing key is NOT a first key — the vectors on "
+      "disk are still valid, and re-embedding the collection on a key "
+      "change would be a bill for nothing",
+      _first is False and _prev == _cur)
 
 
 print("== default-sensitivity slider: migration-side bail (K-052) ==")
@@ -783,22 +472,22 @@ check("settings search: a filter field sits in the sidebar",
 check("search rows carry haystacks and register per page",
       "roww.klaus_search" in _src2
       and "_rows_by_page.setdefault(" in _src2)
-check("structural hiding beats a search hit (Ollama key row)",
+check("structural hiding beats a search hit (the image-only rows)",
       "hit and not roww.klaus_hidden" in _src2
-      and "key_row.klaus_hidden = not is_cloud" in _src2)
+      and "bg_fit_row.klaus_hidden = not (design_on and is_image)" in _src2)
 check("pages without rows stay findable by their haystack",
       "_page_haystack[nav_label]" in _src2)
 check("no-hit pages dim + lose clickability instead of vanishing",
       "Qt.ItemFlag.ItemIsEnabled" in _src2
       and "ForegroundRole" in _src2)
 check("every section is a page with a sidebar pill and a big title",
-      _src2.count("= _page(") == 5
+      _src2.count("= _page(") == 4
       and 'setObjectName("SettingsNav")' in _src2
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
-      '_finish_nav("General", "Appearance", "Assistant", "Semantic '
-      'Search",' in _src2)
+      '_finish_nav("General", "Appearance", "Assistant",\n'
+      '                "API keys & models")' in _src2)
 # The assistant panel shipped telling users to "add one under KlausMate
 # Preferences" for a key that had nowhere to be typed. This is that surface.
 check("the Assistant page exists, so the panel's own error message points "
@@ -816,18 +505,20 @@ check("the old provider-key / hosted-token credential fields are gone — "
       and "assistant_token_edit" not in _src2
       and "assistant_backend_combo" not in _src2
       and "_sync_assistant_rows" not in _src2)
-check("the page offers OCR, the Claude binary, a model override, "
-      "reopen-on-start, and Clear Sessions",
-      "ocr_enabled_cb" in _src2 and "ocr_model_combo" in _src2
-      and "claude_binary_lbl" in _src2 and "assistant_model_edit" in _src2
-      and "assistant_reopen_cb" in _src2 and "clear_sessions_btn" in _src2)
+check("the page offers reopen-on-start and Clear Sessions — and no "
+      "OCR row and no Claude Code binary row, both gone with the local "
+      "runtime (spec D1)",
+      "assistant_reopen_cb" in _src2 and "clear_sessions_btn" in _src2
+      and "ocr_enabled_cb" not in _src2 and "ocr_model_combo" not in _src2
+      and "claude_binary_lbl" not in _src2
+      and "claude_override_btn" not in _src2)
 check("save_all writes them — a preference with no line in a save_* is "
       "exactly how pdf_renderer shipped broken", "save_assistant()" in _src2)
-check("every new control marks dirty, or Save would silently skip it",
-      "ocr_enabled_cb.toggled.connect" in _src2
-      and "ocr_model_combo.currentIndexChanged.connect" in _src2
-      and "assistant_model_edit.textEdited.connect" in _src2
-      and "assistant_reopen_cb.toggled.connect" in _src2)
+check("every control marks dirty, or Save would silently skip it",
+      "assistant_reopen_cb.toggled.connect" in _src2
+      and "anthropic_key_edit.textEdited.connect" in _src2
+      and "reasoning_model_edit.textEdited.connect" in _src2
+      and "transcription_model_edit.textEdited.connect" in _src2)
 check("Clear Sessions confirms window-modal — a hand-built QMessageBox, "
       "open() + finished (K-125) — never the blocking QMessageBox.question()",
       "msg.open()" in _src2 and "msg.finished.connect(_on_answered)" in _src2)
@@ -842,10 +533,9 @@ check("the nav is ONE list — no per-page nav buttons remain",
       and "nav.setCheckable" not in _src2)
 check("blank-viewport clicks cannot clear the selection",
       "_select_page(_nav_state" in _src2)
-check("the API-key ROW hides whole for Ollama — via the search "
-      "filter's structural-hide channel, separator handling included",
-      "key_row.klaus_hidden = not is_cloud" in _src2
-      and "roww.klaus_sep.setVisible(show and seen)" in _src2)
+check("a structurally hidden row takes its separator with it, so a "
+      "hidden row never leaves a stray hairline behind",
+      "roww.klaus_sep.setVisible(show and seen)" in _src2)
 check("the Cancel/Save bar sits under a full-width hairline",
       'setObjectName("ButtonBarLine")' in _src2)
 
@@ -996,31 +686,6 @@ check("nav geometry is pure view geometry: setSizeHint rows + list "
       and "nav_list.setSpacing(3)" in _src2
       and "nav_list.setFixedHeight(" in _src2)
 
-
-print("== install page onto the K-106 shell language (K-111) ==")
-# Page 0 (the pre-K-106 "Set up local AI" page) predated the sidebar shell
-# and hand-styled its two headings with literal setStyleSheet font strings.
-# K-111 gives it the same PageTitle/PageSubtitle opening as every other
-# page (built by hand here, not via _page(), since this page keeps its own
-# full-frame layout with no sidebar pill) and moves InstallHeading /
-# InstallSection onto objectNames K-110 styles centrally.
-_install_src = _src2.split("# ----- Page 0: Install Ollama", 1)[1].split(
-    "# ----- Page 1:", 1)[0]
-check("no literal font setStyleSheet remains on the install page",
-      "font-weight" not in _install_src
-      and "font-size" not in _install_src)
-check("the install page opens with a PageTitle + PageSubtitle pair, "
-      "margins matching _page()",
-      'install_title.setObjectName("PageTitle")' in _install_src
-      and 'install_body.setObjectName("PageSubtitle")' in _install_src
-      and "install_body.setWordWrap(True)" in _install_src
-      and "setContentsMargins(24, 18, 24, 8)" in _install_src)
-check("the two hand-styled labels moved to InstallHeading / InstallSection",
-      # The old "Set up local AI" heading label is GONE — with a real
-      # PageTitle above it, keeping it duplicated the title (caught in
-      # orchestrator review of K-111).
-      "install_heading" not in _install_src
-      and 'manual_lbl.setObjectName("InstallSection")' in _install_src)
 
 # ── Appearance: live preview, deferred save ──────────────────────────────
 # The user's ask: appearance changes show up live while configuring, but
@@ -1177,6 +842,135 @@ check("...and that applier really is a top-level name in __init__, or "
 check("the background paint seam honours the preview",
       "background.resolve(background.effective_cfg(_config()))" in _tb_src)
 
+print("== the API-first page list and its two save_* writers (D1) ==")
+# One page replaces two: the provider combo, the per-provider key fan-out
+# and the whole "Local model library (Ollama)" page are gone, and the two
+# API keys plus the three model names live together where the money is
+# spent. RAW source throughout — an absence pin against code_only() is
+# vacuous, because code_only strips the string literals these keys ARE.
+check("the page is called \"API keys & models\", as a nav label and a title",
+      '"API keys & models",\n        "API keys & models",' in _src2)
+check("...and neither page it replaces survives",
+      '"Semantic Search"' not in _src2 and '"Local Models"' not in _src2)
+check("the five fields the spec names are all constructed",
+      all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
+                               "embed_model_edit", "reasoning_model_edit",
+                               "transcription_model_edit")))
+check("both key fields are password-masked — a shoulder or a screen "
+      "share must not read an API key off Preferences",
+      _src2.count("EchoMode.Password") == 2
+      and "openai_key_edit.setEchoMode" in _src2
+      and "anthropic_key_edit.setEchoMode" in _src2)
+_ast_tree = __import__("ast").parse(_src2)
+
+
+def _key_edit_leaks(tree) -> bool:
+    """True if a print/tooltip/setText/showWarning/showInfo call has a
+    ``*_key_edit.text()`` call anywhere inside its arguments.
+
+    An AST walk, not a same-line text scan: the old pin only rejected
+    ``print(`` and ``_key_edit.text()`` sharing one physical line, so a
+    leak split across two lines (a value assigned on one line, printed
+    on the next) would have passed it clean.
+    """
+    import ast as _a
+
+    sinks = {"print", "tooltip", "setText", "showWarning", "showInfo"}
+
+    def _callee_name(call):
+        f = call.func
+        if isinstance(f, _a.Name):
+            return f.id
+        if isinstance(f, _a.Attribute):
+            return f.attr
+        return None
+
+    def _owner_name(node):
+        if isinstance(node, _a.Name):
+            return node.id
+        if isinstance(node, _a.Attribute):
+            return node.attr
+        return None
+
+    def _is_key_edit_text_call(node):
+        return (
+            isinstance(node, _a.Call)
+            and isinstance(node.func, _a.Attribute)
+            and node.func.attr == "text"
+            and (_owner_name(node.func.value) or "").endswith("_key_edit")
+        )
+
+    for node in _a.walk(tree):
+        if isinstance(node, _a.Call) and _callee_name(node) in sinks:
+            args_and_kwargs = list(node.args) + [kw.value for kw in node.keywords]
+            for part in args_and_kwargs:
+                if any(_is_key_edit_text_call(sub) for sub in _a.walk(part)):
+                    return True
+    return False
+
+
+check("a key's VALUE is read only to be saved — never into a print, a "
+      "tooltip or a status label — an AST walk over every sink call's "
+      "arguments, so a leak split across two lines cannot slip past",
+      "openai_key_edit.text()" in _src2 and not _key_edit_leaks(_ast_tree))
+
+
+def _fn_src(name):
+    import ast as _a
+    for node in _a.walk(_ast_tree):
+        if isinstance(node, _a.FunctionDef) and node.name == name:
+            return _a.get_source_segment(_src2, node) or ""
+    return ""
+
+
+_save_embed_src = _fn_src("save_embed")
+check("save_embed was found", bool(_save_embed_src))
+check("save_embed writes the OpenAI key and the embedding model...",
+      '"api_key_openai"' in _save_embed_src
+      and '"embedding_model"' in _save_embed_src)
+check("...and never the retired provider key — one provider now, so a "
+      "stored embedding_provider would be a value nothing reads",
+      "embedding_provider" not in _save_embed_src
+      and "embedding_api_key_" not in _save_embed_src)
+
+_save_assistant_src = _fn_src("save_assistant")
+check("save_assistant was found", bool(_save_assistant_src))
+for _k in ("api_key_anthropic", "reasoning_model", "transcription_model"):
+    check(f'save_assistant writes "{_k}"', f'"{_k}"' in _save_assistant_src)
+check("...and never the Ollama/Claude-Code era keys",
+      "claude_binary" not in _save_assistant_src
+      and "ocr_model" not in _save_assistant_src
+      and "ocr_enabled" not in _save_assistant_src
+      and "assistant_model" not in _save_assistant_src)
+check("every one of the five fields is written by exactly one save_*",
+      _src2.count('cfg["api_key_openai"] = ') == 1
+      and _src2.count('cfg["api_key_anthropic"] = ') == 1
+      and _src2.count('cfg["embedding_model"] = ') == 1
+      and _src2.count('cfg["reasoning_model"] = ') == 1
+      and _src2.count('cfg["transcription_model"] = ') == 1)
+_sync_embed_src = _fn_src("sync_embed_widgets")
+check("load_assistant runs INSIDE sync_embed_widgets' syncing guard — "
+      "seeding a switch that is already true emits toggled, and outside "
+      "the guard that marks a dialog nobody has touched as dirty",
+      "load_assistant()" in _sync_embed_src
+      and _sync_embed_src.index("load_assistant()")
+      < _sync_embed_src.index('ui_state["syncing"] = False'))
+check("every assistant widget connects in the ONE connect block at the "
+      "bottom, after mark_dirty exists — connecting them where the page "
+      "is built put a setChecked(True) ahead of mark_dirty's binding and "
+      "raised NameError out of a Qt signal for anyone with "
+      "assistant_reopen on",
+      _src2.index("def mark_dirty() -> None:")
+      < _src2.index("assistant_reopen_cb.toggled.connect")
+      and _src2.index("def mark_dirty() -> None:")
+      < _src2.index("anthropic_key_edit.textEdited.connect"))
+check("General no longer offers to manage a local runtime",
+      "runtime_auto_cb" not in _src2 and "runtime_auto_setup" not in _src2)
+check("and no module-top import of the deleted runtime modules survives",
+      "ollama_client" not in _src2 and "ollama_runtime" not in _src2
+      and "ollama_setup" not in _src2)
+
+
 print("== changing the model re-indexes everything (K-152) ==")
 # save_embed is the ONE writer of the embedding keys, so it is also the
 # only place that can see the settings move under the stored vectors.
@@ -1211,7 +1005,7 @@ def _stmt_index(fn, needle):
 
 
 _sig_line = _stmt_index(_save_embed, "index_signature(cfg)")
-_mut_line = _stmt_index(_save_embed, "cfg['embedding_provider'] =")
+_mut_line = _stmt_index(_save_embed, "cfg['api_key_openai'] =")
 _write_line = _stmt_index(_save_embed, "write_config(cfg)")
 _offer_line = _stmt_index(_save_embed, "offer_model_sweep")
 check("the previous signature is captured off STORED config",
@@ -1223,6 +1017,24 @@ check("...and the sweep is offered AFTER the write, so a decline still "
       "leaves the new settings saved",
       _offer_line is not None and _write_line is not None
       and _write_line < _offer_line)
+_had_key_line = _stmt_index(_save_embed, "had_key =")
+check("the had_key flag is captured off STORED config too, BEFORE the "
+      "write — reading it afterwards would make every first key look "
+      "like a key that was already there",
+      _had_key_line is not None and _mut_line is not None
+      and _had_key_line < _mut_line)
+_first_key_arg = None
+for _n in ast.walk(_save_embed):
+    if isinstance(_n, ast.Call) and "offer_model_sweep" in ast.unparse(_n.func):
+        for _kw in _n.keywords:
+            if _kw.arg == "first_key":
+                _first_key_arg = ast.unparse(_kw.value)
+check("save_embed asks for the sweep on a FIRST key as well as a moved "
+      "signature — a hard False here makes the offer unreachable for "
+      "the one user who most needs it, and nothing else would notice",
+      _first_key_arg is not None and "had_key" in _first_key_arg,
+      f"got {_first_key_arg!r}")
+
 check("save_embed hands the comparison to index_queue rather than "
       "spelling a signature == of its own",
       "index_queue.offer_model_sweep(" in code_only(_mm_src)

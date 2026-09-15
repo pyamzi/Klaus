@@ -215,19 +215,19 @@ def dock_button_label(snapshot: RunnerState) -> str:
     return "Stop" if snapshot.active else "Dismiss"
 
 
-def sweep_message(n_pdfs: int, n_notes: int, model: str) -> str:
+def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str) -> str:
     """The confirm text for a model change. Never start a sweep without
-    saying how much work it is: a changed model invalidates every stored
-    vector, so this is a from-scratch re-embed of the whole collection,
-    billed per token on a cloud provider."""
+    saying how much work it is AND what it costs: a changed model
+    invalidates every stored vector, so this is a from-scratch re-embed
+    of the whole collection, billed per token to the user's own OpenAI
+    key. ``estimate`` is cost.format_estimate's own string, carried
+    verbatim — this module never formats money itself."""
     pdfs = "1 PDF" if n_pdfs == 1 else f"{n_pdfs:,} PDFs"
     notes = "1 note" if n_notes == 1 else f"{n_notes:,} notes"
     return (
         f"Re-index everything with {model}?\n\n"
-        f"Vectors from the old model can't be compared with the new one, "
-        f"so {notes} and {pdfs} have to be embedded again from scratch. "
-        "This can take several minutes and, on a cloud provider, costs "
-        "API usage.\n\n"
+        f"{notes} and {pdfs} will be embedded again from scratch — "
+        f"{estimate}, billed to your OpenAI key.\n\n"
         "You can stop it at any time from the bar at the bottom of the "
         "main window."
     )
@@ -727,8 +727,54 @@ def signature_changed(previous: tuple, current: tuple) -> bool:
         return False
 
 
-def offer_model_sweep(parent: Any, previous: tuple) -> bool:
-    """Preferences → Save changed provider/model/dims: offer to re-index.
+def sweep_estimate(names: list[str]) -> Any:
+    """What re-embedding everything would cost, as a ``cost.Estimate``.
+
+    Every note's field text plus every PAGE of every swept PDF — the
+    page store is what gets embedded now, so a chunking of the raw text
+    file would be counting the wrong thing. The note half is ONE SQL
+    scalar rather than a walk of the collection: this runs on the main
+    thread, inside Save, with the user waiting.
+
+    Raises (KeyError) for a model with no published price in cost.PRICES
+    — deliberately, rather than quietly pricing a hand-typed model as
+    some other one. ``offer_model_sweep`` catches it and says so.
+    """
+    from . import cost, page_store, pdf_handler
+
+    chars = 0
+    # A failed scalar here must NOT degrade to a cheap $0 estimate — it
+    # propagates (like the price-lookup KeyError above it) so
+    # offer_model_sweep's own catch reads it as "cost unknown", never
+    # as a priced re-embed that costs real money for the wrong reason.
+    chars += int(
+        mw.col.db.scalar("select coalesce(sum(length(flds)),0) from notes") or 0
+    )
+    for name in names:
+        try:
+            safe = pdf_handler._safe_basename(name)
+            pages = pdf_handler.load_pages(_user_files(), name) or []
+            path = pdf_handler.pdf_path_for(_user_files(), safe) or ""
+            # ponytail: one JSON read per page on the main thread inside
+            # Save; a QueryOp if libraries reach ~10k pages.
+            rows = page_store.page_texts(_user_files(), safe, path, len(pages))
+            stored = sum(len(t) for _p, _h, t in rows)
+            chars += stored or sum(len(p) for p in pages)
+        except Exception as exc:
+            print(f"[klausmate] page-text size unavailable for {name}: {exc}")
+    return cost.estimate_embed(chars, embeddings.embedding_model(_cfg()))
+
+
+def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> bool:
+    """Preferences → Save changed the model, or set the API key for the
+    first time: offer to re-index.
+
+    ``first_key`` exists because the signature does NOT move when a user
+    finally pastes their key — nothing was ever embedded, so there is
+    nothing to compare — and that is precisely the moment the offer is
+    most useful. Rotating an existing key is not a first key: those
+    vectors are still valid, and re-embedding them would be a bill for
+    nothing.
 
     Returns True when the question was actually asked. Window-modal via
     ``open()`` and a ``finished`` callback — K-114: ``exec()`` on a
@@ -739,14 +785,23 @@ def offer_model_sweep(parent: Any, previous: tuple) -> bool:
     if mw is None or getattr(mw, "col", None) is None:
         return False
     current = embeddings.index_signature(_cfg())
-    if not signature_changed(previous, current):
+    if not (first_key or signature_changed(previous, current)):
         return False
     names = indexed_pdf_names()
     try:
         note_count = mw.col.note_count()
     except Exception:
         note_count = 0
-    text = sweep_message(len(names), note_count, current[1] or current[0])
+    try:
+        from . import cost
+
+        estimate = cost.format_estimate(sweep_estimate(names))
+    except Exception as exc:
+        print(f"[klausmate] sweep estimate failed: {exc}")
+        estimate = "cost unknown for this model"
+    text = sweep_message(
+        len(names), note_count, current[1] or current[0], estimate
+    )
     jobs = sweep_jobs(names)
 
     def answered(_result: int) -> None:
@@ -766,7 +821,7 @@ def offer_model_sweep(parent: Any, previous: tuple) -> bool:
     box.setStandardButtons(
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
     )
-    box.setDefaultButton(QMessageBox.StandardButton.Yes)
+    box.setDefaultButton(QMessageBox.StandardButton.No)
     no_btn = box.button(QMessageBox.StandardButton.No)
     if no_btn is not None:
         no_btn.setObjectName("SecondaryButton")

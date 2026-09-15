@@ -1,27 +1,27 @@
-"""KlausMate Preferences dialog: provision the local AI runtime, pull a
-local embedding model, configure semantic search, and hold the two
-maintenance action (Check Connection).
+"""KlausMate Preferences dialog: the two API keys and the three model
+names, the Library folder, and the KlausBook appearance layer.
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
 split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
-point (K-045 folded the old 'Klaus' submenu's three items in here) — plus
-the first-run one-click setup path.
+point (K-045 folded the old 'Klaus' submenu's three items in here).
 
-Klaus is embeddings-only (K-027 dropped autocomplete and the Ask ⌘K
-popover): the Semantic search and Local model library sections are one
-job — where semantic search's embeddings come from (Voyage / OpenAI / a
-local Ollama model). General holds the two toggles orphaned by
-settings_ui.py's deletion, plus Test connection (K-045 moved it out
-of the Tools menu so it stays reachable — a menu item that vanishes is
-worse than one click deeper; the old Clear-library-tag action is gone
-entirely, K-critique caught this docstring still advertising it).
+Since the API-first reversal (2026-09-15, spec D1) Klaus talks to exactly
+two services with the user's own keys — OpenAI for embeddings and lecture
+transcription, Anthropic for the assistant and card pertinence — so the
+old Semantic Search page (a provider combo fanned out over three
+per-provider key slots) and the whole "Local model library (Ollama)" page
+with its install / pull / delete / classify machinery are gone, together
+with the runtime they managed. One page, "API keys & models", holds what
+is left, and it is also where a changed embedding model or a first OpenAI
+key offers the whole-collection re-embed sweep, priced by cost.py before
+anything is spent.
 
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
 function, after the package has finished loading. _pkg() below is that
 lazy accessor (same pattern as curation.py's _pkg()); it reaches config
-and helpers that live in __init__.py: get_config, write_config, client,
-open_config, _save_config_on_main.
+and helpers that live in __init__.py: get_config, write_config,
+open_config.
 """
 
 from __future__ import annotations
@@ -43,7 +43,6 @@ from aqt.qt import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSlider,
     QStackedWidget,
     QTimer,
@@ -51,104 +50,15 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
+from aqt.utils import askUser, showInfo, showWarning, tooltip
 
 from .md3_switch import Md3Switch
-from .ollama_client import OllamaError
-from .ollama_runtime import RuntimeProvisionError, full_setup, runtime_download_size_hint
-from .ollama_setup import (
-    OLLAMA_DOWNLOAD_URL,
-    InstallMethod,
-    install_methods,
-    ollama_reachable,
-    run_install_method,
-)
 
 
 def _pkg():
     import importlib
 
     return importlib.import_module(__package__)
-
-
-# ----------------------------- model manager -----------------------------
-
-# Embedding-model presets offered in the pull dropdown. Index 0 must stay
-# nomic-embed-text — it is embeddings.DEFAULT_MODELS['ollama'] and the
-# model the one-click setup flow auto-pulls when the library is empty.
-_EMBED_PRESETS = [
-    ("nomic-embed-text", "default, best all-round · ~274 MB"),
-    ("all-minilm", "tiny, fastest · ~46 MB"),
-    ("snowflake-arctic-embed", "strong retrieval · ~670 MB"),
-    ("mxbai-embed-large", "best quality · ~670 MB"),
-    ("bge-m3", "multilingual, long context · ~1.2 GB"),
-    ("embeddinggemma", "Google, newest · ~620 MB"),
-]
-
-# OCR-model presets offered in the Assistant page's Pull dropdown — the
-# vision-capable counterpart to _EMBED_PRESETS above. Klaus's own OCR
-# path (page_ocr.py) calls Ollama's /api/generate with images; these are
-# just the two starter models worth surfacing, not an exhaustive list.
-_OCR_PRESETS = [
-    ("glm-ocr", "GLM-OCR — multimodal OCR for complex documents · ~2.5 GB"),
-    ("deepseek-ocr", "DeepSeek-OCR — token-efficient OCR · ~3 GB"),
-]
-
-# Display labels for the Local Models list's Type column (rebuild_library_list).
-_MODEL_TYPE_LABELS = {"embedding": "Embedding", "ocr": "OCR", "chat": "Chat"}
-
-
-def classify_model(show: dict) -> str:
-    """Pure: which of "embedding" / "ocr" / "chat" a /api/show payload
-    describes, by Ollama's own reported capabilities list.
-
-    "embedding" if "embedding" is among them; "ocr" if "vision" is
-    (Klaus reads a scanned/no-text-layer PDF page through such a model);
-    otherwise, or on anything malformed (missing key, non-dict input, a
-    capabilities value that isn't even a list), "chat" — called once per
-    installed model, so one odd response must never raise and blank the
-    whole Local Models list.
-    """
-    caps = show.get("capabilities") if isinstance(show, dict) else None
-    if not isinstance(caps, (list, tuple, set)):
-        return "chat"
-    if "embedding" in caps:
-        return "embedding"
-    if "vision" in caps:
-        return "ocr"
-    return "chat"
-
-
-def embedding_candidates(models: list, model_types: dict) -> list:
-    """Pure: the subset of `models` classified "embedding" by
-    `model_types` (classify_model's cache shape, name -> "embedding" /
-    "ocr" / "chat").
-
-    Review K-194 Critical #1: sync_embed_widgets used to filter the
-    DISPLAYED dropdown list this way inline, but still handed the
-    UNFILTERED inventory to _resolve_ollama_model and to the
-    write-to-disk guard right below it — so with exactly one installed
-    model that happened to be OCR-typed, the resolver's "the one model
-    installed" branch returned it, and it got silently persisted as
-    embedding_model. Both call sites now build this list ONCE and use
-    it in both places, so a non-embedding model can never reach either
-    the dropdown OR the auto-heal / write path. A name absent from
-    model_types (e.g. mid-classification, see _classify_models_async)
-    is excluded, not assumed embedding — the same conservative default
-    classify_model itself falls back to for a failed /api/show.
-    """
-    return [n for n in models if model_types.get(n) == "embedding"]
-
-
-_EMBED_KEY_URLS = {
-    "voyage": "https://dash.voyageai.com/api-keys",
-    "openai": "https://platform.openai.com/api-keys",
-}
-
-_EMBED_KEY_PLACEHOLDERS = {
-    "voyage": "pa-…  (free tier at voyageai.com; stored in add-on config)",
-    "openai": "sk-…  (platform.openai.com; stored in add-on config)",
-}
 
 
 def _addon_version() -> str:
@@ -265,59 +175,14 @@ def _image_thumb(path: str, w: int = 88, h: int = 54) -> Any:
         return None
 
 
-def _format_pull_event(ev: dict) -> tuple[str, int]:
-    """Return (human status, percent 0-100) for an Ollama pull progress event."""
-    status = str(ev.get("status") or "")
-    total = ev.get("total")
-    completed = ev.get("completed")
-    pct = 0
-    if isinstance(total, (int, float)) and total > 0 and isinstance(completed, (int, float)):
-        pct = int(min(100, max(0, completed * 100 / total)))
-    if status == "success":
-        pct = 100
-    digest = str(ev.get("digest") or "")
-    digest_short = digest[:12] + "…" if digest else ""
-    label = status
-    if digest_short:
-        label = f"{status} ({digest_short})"
-    if pct and total:
-        mb = total / (1024 * 1024)
-        label = f"{label} — {pct}% of {mb:.0f} MB"
-    return label, pct
-
-
-def _resolve_ollama_model(
-    configured: str, models: list[str], indexed_model: str, default: str
-) -> str:
-    """What real model name the Ollama 'Search model' field should show when
-    the config's embedding_model is empty, instead of silently falling
-    through to embeddings.DEFAULT_MODELS['ollama'] — a stored index built
-    with a different model would then look orphaned, and one click on
-    'Index Now' would discard it (K-039). Dialog-level resolution
-    only; the embedding contract in embeddings.py is untouched.
-
-    Precedence: (a) the model the existing index was actually built with,
-    if it is currently installed; (b) the one model installed, if there is
-    exactly one; (c) the hardcoded default.
-    """
-    configured = configured.strip()
-    if configured:
-        return configured
-    if indexed_model and indexed_model in models:
-        return indexed_model
-    if len(models) == 1:
-        return models[0]
-    return default
-
-
 class _KlausManageDialog(QDialog):
     """QDialog whose EVERY close path goes through the confirm callback.
 
     Esc triggers QDialog.reject() and the title-bar ✕ triggers closeEvent —
     neither hits a Close button's clicked signal. Without routing them
-    through confirm_close, a runtime setup download would keep streaming
-    invisibly after the dialog vanishes (and a retry would corrupt the
-    shared .part file).
+    through confirm_close, a running card-index build would keep
+    embedding — and billing — invisibly after the dialog vanishes, and
+    unsaved preference edits would be discarded without a word.
     """
 
     confirm_close_cb: Callable[[], None] | None = None
@@ -450,13 +315,13 @@ def _run_dialog_probe() -> None:
           "backing-store flush did NOT crash")
 
 
-def manage_models_dialog(setup: bool = False) -> None:
-    """Set up the local AI runtime, pull an embedding model, and configure
-    semantic search.
+def manage_models_dialog(*_args: Any) -> None:
+    """Open (or front) the one Preferences window.
 
-    ``setup=True`` is the one-click first-run path: it auto-opens the
-    provisioning confirm on the setup page, and after the server is up it
-    chains straight into pulling the starter model when none exist.
+    ``*_args`` because a QAction's ``triggered`` signal hands its slot a
+    ``checked`` bool: the old ``setup`` parameter used to absorb it, and
+    dropping it outright would have turned every Tools-menu click into a
+    TypeError.
     """
     if _BARE_DIALOG_PROBE:
         try:
@@ -499,84 +364,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
 
-    stack = QStackedWidget()
-    outer.addWidget(stack)
-
-    # ----- Page 0: Install Ollama -----------------------------------------
-    # Predates the K-106 sidebar shell; K-111 brought its title/subtitle
-    # onto the same objectName language as _page() below (PageTitle +
-    # PageSubtitle) even though this page keeps its own full-frame layout
-    # with no sidebar/nav pill — a user with no Ollama shouldn't see
-    # settings navigation offering pages that can't work yet.
-    install_page = QWidget()
-    install_layout = QVBoxLayout(install_page)
-    install_layout.setContentsMargins(24, 18, 24, 8)
-    install_layout.setSpacing(8)
-
-    install_title = QLabel("Set up local AI")
-    install_title.setObjectName("PageTitle")
-    install_layout.addWidget(install_title)
-
-    install_body = QLabel(
-        "Klaus runs AI locally through Ollama — nothing ever leaves your "
-        "computer. Klaus can download and manage its own copy "
-        "automatically, or you can install Ollama yourself."
-    )
-    install_body.setObjectName("PageSubtitle")
-    install_body.setWordWrap(True)
-    install_layout.addWidget(install_body)
-    install_layout.addSpacing(8)
-
-    install_status = QLabel()
-    install_status.setWordWrap(True)
-    install_status.setStyleSheet(_MUTED)
-    install_layout.addWidget(install_status)
-
-    auto_setup_btn = QPushButton(
-        f"Set up automatically ({runtime_download_size_hint()} download)"
-    )
-    auto_setup_btn.setDefault(True)
-    install_layout.addWidget(auto_setup_btn)
-
-    manual_lbl = QLabel("Manual options")
-    manual_lbl.setObjectName("InstallSection")
-    install_layout.addWidget(manual_lbl)
-
-    download_btn = QPushButton("Open Download Page")
-    download_btn.setObjectName("SecondaryButton")
-    install_layout.addWidget(download_btn)
-
-    install_methods_box = QWidget()
-    install_methods_layout = QVBoxLayout(install_methods_box)
-    install_methods_layout.setContentsMargins(0, 0, 0, 0)
-    install_methods_layout.setSpacing(6)
-    install_layout.addWidget(install_methods_box)
-
-    install_steps = QLabel(
-        "After installing manually:\n"
-        "1. Finish the installer and grant permissions if prompted.\n"
-        "2. Start Ollama (open the app or ensure the service is running).\n"
-        "3. Click Check Connection, then download a model on the next screen."
-    )
-    install_steps.setWordWrap(True)
-    install_steps.setStyleSheet(_MUTED)
-    install_layout.addWidget(install_steps)
-
-    install_btn_row = QHBoxLayout()
-    check_conn_btn = QPushButton("Check Connection")
-    check_conn_btn.setObjectName("SecondaryButton")
-    install_btn_row.addWidget(check_conn_btn)
-    install_btn_row.addStretch(1)
-    install_layout.addLayout(install_btn_row)
-    install_layout.addStretch(1)
-
-    stack.addWidget(install_page)
-
-    # ----- Page 1: semantic search, then its model library -----------------
-    # Klaus is embeddings-only: there is exactly one job here. This box asks
-    # the three questions that job needs answered — where do embeddings come
-    # from, what proves you can use it, which model — and the library below
-    # is pure inventory (pull, delete, see what's installed).
+    # ----- The settings shell ---------------------------------------------
+    # One page of pages: the sidebar's nav list on the left, the stack of
+    # settings pages on the right. There is no outer stack any more — the
+    # "Set up local AI" page that used to sit in front of this one went
+    # with the local runtime it installed.
     models_page = QWidget()
     models_page_layout = QVBoxLayout(models_page)
     models_page_layout.setContentsMargins(0, 0, 0, 0)
@@ -589,10 +381,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # + muted subtitle over ONE rounded #CardFrame group inside a
     # transparent scroll area, and each simple setting is a _row():
     # bold name + muted description on the left, its control pinned
-    # right, hairline-separated. The install page (page 0 of the OUTER
-    # stack) stays a full-frame page with no sidebar: a user with no
-    # Ollama should not see navigation offering settings that cannot
-    # work yet.
+    # right, hairline-separated.
     from aqt.qt import QFrame, QScrollArea
 
     body = QHBoxLayout()
@@ -815,8 +604,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         group.addWidget(roww)
         roww.klaus_desc = desc_lbl
         roww.klaus_sep = sep
-        # klaus_hidden = structurally hidden (e.g. the API-key row under
-        # Ollama) — it always beats a search hit in _apply_search.
+        # klaus_hidden = structurally hidden (e.g. the image-only
+        # background rows) — it always beats a search hit in
+        # _apply_search.
         roww.klaus_hidden = False
         roww.klaus_search = f"{name} {desc_lbl.text()}".lower()
         _rows_by_page.setdefault(
@@ -883,62 +673,72 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     search_edit.textChanged.connect(_apply_search)
 
-    embed_layout = _page(
-        "Semantic Search",
-        "Semantic Search",
-        "Finds cards by meaning, not just keywords — powers the "
-        "Library's per-PDF card matching and retention scores. Needs a "
-        "Voyage or OpenAI key (both have free tiers) or a local Ollama "
-        "model from the Local Models page.",
+    keys_layout = _page(
+        "API keys & models",
+        "API keys & models",
+        "Klaus talks to OpenAI (embeddings, lecture transcription) and "
+        "Anthropic (the assistant, and judging which cards a lecture "
+        "really covers) with your own keys. Both are stored in this "
+        "add-on's config on your machine and never sent anywhere else.",
     )
 
-    embed_provider_combo = QComboBox()
-    embed_provider_combo.addItem("Voyage API (Default)", "voyage")
-    embed_provider_combo.addItem("OpenAI API", "openai")
-    embed_provider_combo.addItem("Local Ollama (Private, Free)", "ollama")
-    embed_provider_combo.setMinimumWidth(220)
-    embed_fix_btn = QPushButton("Download")
-    embed_fix_btn.setVisible(False)
-    provider_ctl = QHBoxLayout()
-    provider_ctl.setContentsMargins(0, 0, 0, 0)
-    provider_ctl.addWidget(embed_provider_combo)
-    provider_ctl.addWidget(embed_fix_btn)
+    openai_key_edit = QLineEdit()
+    openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    openai_key_edit.setMinimumWidth(220)
+    openai_key_edit.setPlaceholderText("sk-…  (platform.openai.com)")
     _row(
-        embed_layout,
-        "Embeddings from",
-        "Voyage and OpenAI are cloud APIs; Ollama runs on your machine, "
-        "private and free.",
-        provider_ctl,
+        keys_layout,
+        "OpenAI API key",
+        "Embeddings and lecture transcription.",
+        openai_key_edit,
     )
 
-    embed_model_combo = QComboBox()
-    embed_model_combo.setEditable(True)
-    embed_model_combo.setMinimumWidth(220)
+    anthropic_key_edit = QLineEdit()
+    anthropic_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    anthropic_key_edit.setMinimumWidth(220)
+    anthropic_key_edit.setPlaceholderText("sk-ant-…  (console.anthropic.com)")
     _row(
-        embed_layout,
-        "Search model",
-        "Blank uses the provider's default. Changing provider or model "
-        "rebuilds the card index.",
-        embed_model_combo,
+        keys_layout,
+        "Anthropic API key",
+        "The assistant and card pertinence.",
+        anthropic_key_edit,
     )
 
-    embed_key_edit = QLineEdit()
-    embed_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    embed_key_edit.setMinimumWidth(220)
-    # The whole row hides for Ollama (update_embed_status) — the local
-    # provider has no key to ask for.
-    key_row = _row(
-        embed_layout,
-        "API key",
-        "For the selected cloud provider. Stored in this add-on's "
-        "config on your machine.",
-        embed_key_edit,
+    embed_model_edit = QLineEdit()
+    embed_model_edit.setMinimumWidth(220)
+    embed_model_edit.setPlaceholderText("text-embedding-3-large")
+    _row(
+        keys_layout,
+        "Embedding model",
+        "Changing it re-embeds everything (Klaus asks first, with an "
+        "estimate).",
+        embed_model_edit,
+    )
+
+    reasoning_model_edit = QLineEdit()
+    reasoning_model_edit.setMinimumWidth(220)
+    reasoning_model_edit.setPlaceholderText("claude-sonnet-5")
+    _row(
+        keys_layout,
+        "Reasoning model",
+        "Judges cards against lecture pages and powers the assistant.",
+        reasoning_model_edit,
+    )
+
+    transcription_model_edit = QLineEdit()
+    transcription_model_edit.setMinimumWidth(220)
+    transcription_model_edit.setPlaceholderText("gpt-4o-mini-transcribe")
+    _row(
+        keys_layout,
+        "Transcription model",
+        "Turns lecture audio into per-slide notes.",
+        transcription_model_edit,
     )
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
     index_btn = QPushButton("Index Now")
-    _row(embed_layout, "Card index", embed_status, index_btn)
+    _row(keys_layout, "Card index", embed_status, index_btn)
 
     # ----- Default match sensitivity -----------------------------------
     # The global starting point for retention._migrate_default_threshold /
@@ -956,58 +756,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     threshold_ctl.addWidget(threshold_slider)
     threshold_ctl.addWidget(threshold_value_lbl)
     _row(
-        embed_layout,
+        keys_layout,
         "Default match sensitivity",
         "For every PDF that hasn't been tuned individually. Changing it "
         "offers to reset tuned PDFs too; any single PDF can still be "
         "adjusted in the Library (right-click → Match sensitivity).",
         threshold_ctl,
     )
-
-    # ----- Local model library (inventory only) -------------------------
-    lib_layout = _page(
-        "Local Models",
-        "Local Models",
-        "Ollama embedding models installed on this machine — download new "
-        "ones, delete what you no longer use.",
-    )
-    lib_layout.setContentsMargins(16, 12, 16, 12)
-    lib_layout.setSpacing(6)
-
-    status_lbl = QLabel()
-    status_lbl.setStyleSheet(_MUTED)
-    lib_layout.addWidget(status_lbl)
-
-    lib_lst = QListWidget()
-    lib_lst.setMinimumHeight(96)
-    lib_layout.addWidget(lib_lst)
-
-    pull_row = QHBoxLayout()
-    pull_input = QComboBox()
-    pull_input.setEditable(True)
-    pull_input.setMinimumWidth(220)
-    pull_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def _fill_pull_presets() -> None:
-        pull_input.clear()
-        for name, desc in _EMBED_PRESETS:
-            pull_input.addItem(f"{name}   ({desc})", name)
-        pull_input.setCurrentIndex(-1)
-        edit = pull_input.lineEdit()
-        if edit is not None:
-            edit.setPlaceholderText("pick or type an embedding model to download")
-
-    _fill_pull_presets()
-    pull_btn = QPushButton("Download")
-    delete_btn = QPushButton("Delete")
-    delete_btn.setObjectName("DangerButton")
-    refresh_btn = QPushButton("Refresh")
-    refresh_btn.setObjectName("SecondaryButton")
-    pull_row.addWidget(pull_input, 1)
-    pull_row.addWidget(pull_btn)
-    pull_row.addWidget(delete_btn)
-    pull_row.addWidget(refresh_btn)
-    lib_layout.addLayout(pull_row)
 
     # ----- General ------------------------------------------------------
     general_layout = _page(
@@ -1024,15 +779,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         "Right-click or double-click an image in a note field to crop a "
         "copy — the original file is untouched.",
         image_crop_cb,
-    )
-
-    runtime_auto_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        general_layout,
-        "Manage Ollama automatically",
-        "Start the local AI engine in the background and offer one-click "
-        "setup when it's missing.",
-        runtime_auto_cb,
     )
 
     # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
@@ -1062,12 +808,12 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     # Maintenance — the connection check that used to live in the
     # Tools > Klaus submenu (K-045).
-    test_conn_btn = QPushButton("Check Connection")
+    test_conn_btn = QPushButton("Check Keys")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
         general_layout,
         "Connection",
-        "Check that the embedding provider is reachable.",
+        "Check that both API keys are set.",
         test_conn_btn,
     )
 
@@ -1297,7 +1043,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         max(0, anki_theme_combo.findData(_cur_theme))
     )
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
-    runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
     from .pdfjs_viewer import renderer_from_config as _renderer_from_config
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
@@ -1705,181 +1450,18 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     _refresh_library_label()
     # ---- Assistant --------------------------------------------------
-    # Klaus is not itself the assistant: Claude Code is. This page
-    # points at the local `claude` binary agent_host.py (Task 2)
-    # discovers, and at the local OCR model that reads a lecture page's
-    # slide text and images. The old Assistant panel — its promised
-    # future features and its own provider-key / hosted-token picker —
-    # is gone; see AGENTS.md's "What used to be here".
+    # The assistant runs on the Anthropic key on the keys page —
+    # `api_key_anthropic` and `reasoning_model`, both edited there
+    # because that is where every paid model name lives now. What is
+    # left here is the dock's own behaviour and its stored history: the
+    # OCR switch, the OCR model picker and the Claude Code binary row
+    # all went with the local runtime and the CLI child (spec D1).
     assistant_layout = _page(
         "Assistant",
         "Assistant",
-        "Claude Code is the engine: install it, run `claude` once to "
-        "log in, and Klaus finds it. The page you are viewing reaches "
-        "it as OCR text and image.",
-    )
-
-    ocr_enabled_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        assistant_layout,
-        "OCR",
-        "Read every lecture page you view through a local vision model, "
-        "so a scanned slide or a diagram reaches the Assistant as text. "
-        "Off, it still gets the PDF's own text layer — which is empty "
-        "for a scanned page.",
-        ocr_enabled_cb,
-    )
-
-    ocr_model_combo = QComboBox()
-    ocr_pull_btn = QPushButton("Pull")
-    ocr_model_ctl = QHBoxLayout()
-    ocr_model_ctl.setContentsMargins(0, 0, 0, 0)
-    ocr_model_ctl.addWidget(ocr_model_combo, 1)
-    ocr_model_ctl.addWidget(ocr_pull_btn)
-    _row(
-        assistant_layout,
-        "OCR model",
-        "Which local vision model reads the page. Pull downloads the "
-        "selected one through Ollama, the same way the embedding "
-        "models on the Semantic Search page do.",
-        ocr_model_ctl,
-    )
-
-    def _fill_ocr_model_combo() -> None:
-        """Installed OCR-typed models (from _classify_models_async's
-        off-thread /api/show pass) plus the presets, so an unpulled one
-        can still be picked and then downloaded with the Pull button
-        beside it. Same never-clobber-an-unsaved-pick guard as
-        sync_threshold_widget / sync_embed_widgets — a Refresh click
-        elsewhere must not silently discard a pick made on this page
-        before Save.
-
-        Intersected against ui_state["models"] (the current inventory),
-        not just filtered by cached type: model_types can briefly lag
-        behind models (classification is async and/or a model was just
-        deleted), and a stale "ocr" entry for a name no longer installed
-        must not resurrect it in the picker."""
-        if ui_state["dirty"]:
-            return
-        ui_state["syncing"] = True
-        try:
-            cfg = _pkg().get_config()
-            want = str(cfg.get("ocr_model") or "glm-ocr")
-            current = set(ui_state["models"])
-            installed = sorted(
-                name for name, kind in ui_state["model_types"].items()
-                if kind == "ocr" and name in current
-            )
-            ocr_model_combo.clear()
-            for name in installed:
-                ocr_model_combo.addItem(name, name)
-            installed_set = set(installed)
-            for name, desc in _OCR_PRESETS:
-                if name not in installed_set:
-                    ocr_model_combo.addItem(f"{name}   ({desc})", name)
-            idx = ocr_model_combo.findData(want)
-            if idx < 0:
-                # Stored choice is neither installed nor a known preset —
-                # keep it rather than silently swapping in glm-ocr.
-                ocr_model_combo.addItem(want, want)
-                idx = ocr_model_combo.count() - 1
-            ocr_model_combo.setCurrentIndex(idx)
-        finally:
-            ui_state["syncing"] = False
-
-    def _pull_ocr_selected() -> None:
-        """Reuses start_pull()'s existing progress bar / refresh() cycle
-        instead of a second pull implementation — same technique as the
-        embed row's own pull_missing(name) fix-it button."""
-        if op_state["active"]:
-            return
-        idx = ocr_model_combo.currentIndex()
-        name = str(ocr_model_combo.itemData(idx) or "") if idx >= 0 else ""
-        if not name:
-            return
-        edit = pull_input.lineEdit()
-        if edit is not None:
-            edit.setText(name)
-        start_pull()
-
-    claude_binary_lbl = QLabel()
-    claude_binary_lbl.setWordWrap(True)
-    claude_override_btn = QPushButton("Override…")
-    claude_override_btn.setObjectName("SecondaryButton")
-    _row(
-        assistant_layout, "Claude Code binary", claude_binary_lbl, claude_override_btn
-    )
-
-    # Pending (possibly unsaved) claude_binary value. Empty means
-    # "auto-detect" — the same override-or-search contract
-    # agent_host.find_claude itself takes.
-    _assistant_state: dict[str, str] = {"claude_binary": ""}
-
-    def _resolve_claude_binary(explicit: str) -> str:
-        """Read-only detection via Task 2's agent_host — imported lazily
-        because this dialog can open before that module exists (a fresh
-        checkout mid-build) or on a machine missing it entirely.
-        Degrades to "" (rendered as "not found"), never raises."""
-        try:
-            from . import agent_host
-        except Exception as exc:
-            print(f"[klausmate] agent_host unavailable: {exc}")
-            return ""
-        try:
-            # Cached for the profile session (spec §4.1): step 3 of the
-            # search spawns the user's login shell with a 3 s timeout,
-            # and this runs on the main thread every time Preferences
-            # opens or the label refreshes.
-            return agent_host.find_claude_cached(explicit) or ""
-        except Exception as exc:
-            print(f"[klausmate] agent_host.find_claude failed: {exc}")
-            return ""
-
-    def _refresh_claude_binary_label() -> None:
-        found = _resolve_claude_binary(_assistant_state["claude_binary"])
-        claude_binary_lbl.setText(found or "not found")
-
-    def _pick_claude_binary() -> None:
-        from aqt.qt import QFileDialog
-
-        # An INSTANCE + open() (K-125), never the static
-        # getOpenFileName()/getExistingDirectory() convenience helpers —
-        # those exec() their own nested loop.
-        dialog = QFileDialog(dlg, "Locate the claude binary")
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
-
-        def _on_selected(path: str) -> None:
-            if not path:
-                return
-            _assistant_state["claude_binary"] = path
-            try:
-                from . import agent_host
-
-                # The profile-session cache is keyed on the override, so
-                # a new pick resolves fresh on the key alone. Clearing
-                # it as well is what lets a user who INSTALLED claude
-                # since the dialog opened get a real answer without
-                # restarting Anki: a miss is cached now, so the empty
-                # override's stored "not found" would otherwise stand.
-                agent_host.clear_binary_cache()
-            except Exception as exc:
-                print(f"[klausmate] agent_host cache clear failed: {exc}")
-            _refresh_claude_binary_label()
-            mark_dirty()
-
-        dialog.fileSelected.connect(_on_selected)
-        dialog.finished.connect(dialog.deleteLater)
-        dialog.open()
-
-    assistant_model_edit = QLineEdit()
-    assistant_model_edit.setMinimumWidth(220)
-    assistant_model_edit.setPlaceholderText("default")
-    _row(
-        assistant_layout,
-        "Model",
-        "Which Claude model the assistant runs. Leave blank for Claude "
-        "Code's own default.",
-        assistant_model_edit,
+        "Answers about the lecture page you are viewing — its slide "
+        "text, any transcript of what was said over it, and the page "
+        "image. It runs on Anthropic with the key above.",
     )
 
     assistant_reopen_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
@@ -1917,7 +1499,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         msg.setIcon(QMessageBox.Icon.Question)
         msg.setText(
             "Clear every saved Assistant conversation?\n\n"
-            "This removes the session history Claude Code keeps per "
+            "This removes the session history the Assistant keeps per "
             "PDF. Notes, PDFs, and highlights are never touched."
         )
         msg.setStandardButtons(
@@ -1962,23 +1544,22 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     def load_assistant() -> None:
         cfg = _pkg().get_config()
-        ocr_enabled_cb.setChecked(bool(cfg.get("ocr_enabled", True)))
-        _assistant_state["claude_binary"] = str(cfg.get("claude_binary") or "")
-        _refresh_claude_binary_label()
-        assistant_model_edit.setText(str(cfg.get("assistant_model") or ""))
+        anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
+        reasoning_model_edit.setText(str(cfg.get("reasoning_model") or ""))
+        transcription_model_edit.setText(
+            str(cfg.get("transcription_model") or "")
+        )
         assistant_reopen_cb.setChecked(bool(cfg.get("assistant_reopen", False)))
-        # ocr_model_combo itself is (re)populated by refresh() /
-        # _fill_ocr_model_combo — no models are known yet this early in
-        # dialog construction, exactly like embed_model_combo/lib_lst.
 
     def save_assistant() -> None:
+        """The Anthropic key and the two model names it pays for, plus
+        the dock's own state. They are EDITED on the keys page (that is
+        where every paid model name lives) and written here, so the
+        Assistant's settings still have exactly one writer."""
         cfg = _pkg().get_config()
-        cfg["ocr_enabled"] = bool(ocr_enabled_cb.isChecked())
-        idx = ocr_model_combo.currentIndex()
-        picked = str(ocr_model_combo.itemData(idx) or "") if idx >= 0 else ""
-        cfg["ocr_model"] = picked or "glm-ocr"
-        cfg["claude_binary"] = _assistant_state["claude_binary"]
-        cfg["assistant_model"] = assistant_model_edit.text().strip()
+        cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
+        cfg["reasoning_model"] = reasoning_model_edit.text().strip()
+        cfg["transcription_model"] = transcription_model_edit.text().strip()
         cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
         # No Preferences row for these two — they're dock state, set by
         # dragging the Assistant dock and by opening/closing it.
@@ -1993,19 +1574,10 @@ def manage_models_dialog(setup: bool = False) -> None:
         cfg["assistant_dock_open"] = bool(cfg.get("assistant_dock_open", False))
         _pkg().write_config(cfg)
 
-    ocr_enabled_cb.toggled.connect(lambda _c: mark_dirty())
-    ocr_model_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
-    ocr_pull_btn.clicked.connect(_pull_ocr_selected)
-    claude_override_btn.clicked.connect(_pick_claude_binary)
-    assistant_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
-    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
-    load_assistant()
+    _finish_nav("General", "Appearance", "Assistant",
+                "API keys & models")
 
-    _finish_nav("General", "Appearance", "Assistant", "Semantic Search",
-                "Local Models")
-
-    stack.addWidget(models_page)
+    outer.addWidget(models_page, 1)
 
     # ----- Shared footer --------------------------------------------------
     bar_line = QFrame()
@@ -2035,7 +1607,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     unsaved_lbl.setStyleSheet(_MUTED)
     close_row.addWidget(unsaved_lbl)
     close_row.addStretch(1)
-    cancel_btn = QPushButton("Cancel Download")
+    cancel_btn = QPushButton("Stop Indexing")
     cancel_btn.setObjectName("SecondaryButton")
     cancel_btn.setVisible(False)
     close_row.addWidget(cancel_btn)
@@ -2053,579 +1625,56 @@ def manage_models_dialog(setup: bool = False) -> None:
     close_row.addWidget(save_btn)
     foot.addLayout(close_row)
 
-    install_action_btns: list[QPushButton] = []
+    # "kind" is only ever "index" now — the pull / install / runtime-setup
+    # operations went with the local runtime — but it stays a named kind
+    # so confirm_close keeps reading one thing.
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
-    # Written by refresh(); read by the index pipeline (missing-model check)
-    # and the section-sync guards (avoid save-on-programmatic-set loops).
-    # "dirty"/"shown_provider" back the deferred-save model: preference
-    # widgets no longer write on every keystroke or toggle — Save does.
-    # "shown_provider" is the provider the embed widgets are currently
-    # DISPLAYING, which runs ahead of the stored config while unsaved.
-    ui_state: dict[str, Any] = {
-        "models": [],
-        # name -> "embedding"/"ocr"/"chat", from _classify_models_async's
-        # off-thread /api/show pass — classify_model over each installed
-        # model, fetched once per refresh and cached here for the
-        # dialog's life.
-        "model_types": {},
-        # Bumped by every refresh() call; a completed classification
-        # whose generation no longer matches is a stale result from a
-        # superseded refresh and is dropped rather than applied.
-        "classify_gen": 0,
-        "syncing": False,
-        "dirty": False,
-        "shown_provider": "",
-    }
+    # "syncing"/"dirty" back the deferred-save model: preference widgets
+    # never write on a keystroke or a toggle — Save does. "syncing" is
+    # what stops a programmatic repopulation looking like a user edit.
+    ui_state: dict[str, Any] = {"syncing": False, "dirty": False}
 
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
         for w in (
-            pull_btn, pull_input, delete_btn, refresh_btn,
-            auto_setup_btn, download_btn, check_conn_btn,
-            embed_provider_combo, embed_model_combo, embed_key_edit,
-            embed_fix_btn, index_btn, test_conn_btn,
-            ocr_model_combo, ocr_pull_btn,
+            openai_key_edit, anthropic_key_edit, embed_model_edit,
+            reasoning_model_edit, transcription_model_edit,
+            index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
-        for btn in install_action_btns:
-            btn.setEnabled(not busy)
         progress.setVisible(busy)
         progress_lbl.setVisible(busy)
 
-    def endpoint_url() -> str:
-        return _pkg().get_config().get("endpoint", "http://localhost:11434")
-
-    def rebuild_install_method_buttons() -> None:
-        while install_methods_layout.count():
-            item = install_methods_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        install_action_btns.clear()
-        for method in install_methods():
-            btn = QPushButton(method.label)
-            btn.setToolTip(method.description)
-            install_action_btns.append(btn)
-            install_methods_layout.addWidget(btn)
-
-            def _make_handler(m: InstallMethod = method) -> Callable[[], None]:
-                return lambda: start_install(m)
-
-            btn.clicked.connect(_make_handler())
-
-    def show_install_page() -> None:
-        stack.setCurrentIndex(0)
-        install_status.setText(
-            f"Could not reach Ollama at {endpoint_url()}.\n"
-            "Use Set up automatically below — or install manually, start "
-            "it, then click Check connection."
-        )
-
-    def get_selected_model() -> str:
-        item = lib_lst.currentItem()
-        if not item:
-            return ""
-        return item.data(Qt.ItemDataRole.UserRole) or item.text()
-
-    def _needs_local_runtime(cfg: dict) -> bool:
-        """True only when Ollama is the active embedding provider. A cloud
-        (Voyage/OpenAI) user has no reason to land on a ~1GB local-runtime
-        install page just because Ollama isn't running (K-036) — the
-        install page stays reachable (switch the provider to Ollama, or
-        click Pull), it just stops being the default landing."""
-        from . import embeddings
-
-        return embeddings.provider_name(cfg) == "ollama"
-
     def refresh() -> None:
-        cfg = _pkg().get_config()
-        ep = endpoint_url()
-        models: list[str] = []
-        reached = False
-        if ollama_reachable(ep):
-            try:
-                models = list(_pkg().client().list_models())
-                reached = True
-            except OllamaError:
-                reached = False
-
-        if not reached and _needs_local_runtime(cfg):
-            show_install_page()
-            return
-
-        stack.setCurrentIndex(1)
-        ui_state["models"] = models
-        status_lbl.setText(
-            f"Connected to {ep}"
-            if reached
-            else "Local library needs Ollama — not required for your current provider."
-        )
-        # model_types is intentionally left as-is here (not reset) — the
-        # widgets below read whatever classification is already cached,
-        # so a model this dialog already knows about doesn't flash to
-        # "Chat" every refresh; _classify_models_async re-syncs them
-        # again once it lands a fresh pass for the CURRENT models list.
+        """Reload every deferred-save widget from stored config. The one
+        entry point that used to probe a local server and rebuild a model
+        inventory; with two cloud keys there is nothing to probe."""
         sync_embed_widgets()
         sync_threshold_widget()
-        rebuild_library_list()
-        _fill_ocr_model_combo()
-        _classify_models_async(models)
 
-    def _classify_models_async(models: list[str]) -> None:
-        """Off-main-thread /api/show pass (K-194 review, Important #1).
+    # ----- API keys & models handlers --------------------------------------
 
-        Classifying N installed models is 1..N sequential HTTP calls,
-        each carrying OllamaClient's own 30s timeout if one hangs —
-        running that inline in refresh() could freeze the whole
-        Preferences window for minutes against a large local library.
-        This runs in a QueryOp exactly like every other network op in
-        this dialog (start_pull, delete_selected, start_install);
-        model_types is written and the three widgets that read it are
-        re-synced back on the MAIN thread in on_done, never from the
-        worker. A failed /api/show for one model still tolerates to
-        "chat" — same contract refresh() used to enforce inline, just no
-        longer holding up the caller.
+    def sync_embed_widgets() -> None:
+        """Seed the five fields from stored config.
 
-        ui_state["classify_gen"] guards against a stale result: if
-        Refresh is clicked again (or a pull/delete completes) before
-        this pass returns, that newer refresh() bumps the generation,
-        and this pass's own on_done sees the mismatch and drops its
-        result instead of overwriting fresher data with stale data.
+        Never while dirty: a refresh landing mid-edit must not overwrite
+        unsaved values with the stored ones. The key fields are seeded
+        here and read only by save_embed / save_assistant — a key's value
+        never reaches a print, a tooltip or a status label.
         """
-        if not models:
-            # Nothing to classify (no models, or Ollama unreachable) —
-            # and nothing stale should survive either, so a session that
-            # goes from "some models" to "none" doesn't leave phantom
-            # types behind for names that no longer exist.
-            ui_state["model_types"] = {}
-            return
-        gen = ui_state["classify_gen"] = ui_state["classify_gen"] + 1
-
-        def do() -> dict[str, str]:
-            types: dict[str, str] = {}
-            for name in models:
-                try:
-                    show = _pkg().client()._post("/api/show", {"model": name})
-                except Exception:
-                    show = {}
-                types[name] = classify_model(show)
-            return types
-
-        def on_done(types: dict[str, str]) -> None:
-            if gen != ui_state["classify_gen"]:
-                return  # superseded by a later refresh() — drop it
-            ui_state["model_types"] = types
-            sync_embed_widgets()
-            rebuild_library_list()
-            _fill_ocr_model_combo()
-
-        def on_fail(exc: Exception) -> None:
-            print(f"[klausmate] model classification failed: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def rebuild_library_list() -> None:
-        """Inventory with a 'used by' badge and a Type column (Embedding /
-        OCR / Chat, from the cached classify_model pass) — pure
-        inventory, doesn't assign anything (the embed row above does
-        that)."""
-        from . import embeddings
-
-        cfg = _pkg().get_config()
-        models = ui_state["models"]
-        selected = get_selected_model()
-        lib_lst.clear()
-
-        embed_active = (
-            embeddings.embedding_model(cfg)
-            if embeddings.provider_name(cfg) == "ollama"
-            else None
-        )
-
-        if not models:
-            placeholder = QListWidgetItem("(no models installed — download one below)")
-            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-            lib_lst.addItem(placeholder)
-            return
-        for name in models:
-            kind = ui_state["model_types"].get(name, "chat")
-            type_label = _MODEL_TYPE_LABELS.get(kind, "Chat")
-            suffix = "   ·  used by: search" if name == embed_active else ""
-            item = QListWidgetItem(f"{name}   ·  {type_label}{suffix}")
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            lib_lst.addItem(item)
-            if name == selected:
-                lib_lst.setCurrentItem(item)
-
-    def start_install(method: InstallMethod) -> None:
-        ok = QMessageBox.question(
-            dlg,
-            "Install Ollama?",
-            "Klaus will run this command on your computer:\n\n"
-            f"  {method.command_display}\n\n"
-            "You may be asked for your password in a system dialog. "
-            "This can take several minutes.\n\n"
-            "Continue?",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        op_state["kind"] = "install"
-        set_busy(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText(f"Installing via {method.id}…")
-
-        def do() -> tuple[int, str]:
-            return run_install_method(method)
-
-        def on_done(result: tuple[int, str]) -> None:
-            code, output = result
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            if code == 0:
-                showInfo(
-                    "Ollama install command finished.\n\n"
-                    "Start the Ollama app if it is not already running, then "
-                    "click Check connection."
-                )
-            else:
-                showWarning(
-                    f"Install command exited with code {code}.\n\n{output}"
-                )
-            refresh()
-
-        def on_fail(exc: Exception) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(
-                f"Could not run install command:\n\n{type(exc).__name__}: {exc}"
-            )
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def maybe_auto_pull_starter() -> None:
-        """setup mode: after the server is up, chain straight into pulling
-        the default embedding model when none exist — one click end to
-        end."""
-        if not setup:
-            return
-        try:
-            if _pkg().client().list_models():
-                return
-        except OllamaError:
-            return
-        pull_input.setCurrentIndex(0)  # default preset (nomic-embed-text)
-        start_pull()
-
-    def start_auto_setup() -> None:
-        if op_state["active"]:
-            return
-        starter_note = (
-            "Afterwards, if no model is installed yet, Klaus will also "
-            f"download the starter embedding model {_EMBED_PRESETS[0][0]} "
-            "(~274 MB).\n\n"
-            if setup
-            else ""
-        )
-        ok = QMessageBox.question(
-            dlg,
-            "Set up local AI?",
-            "Klaus will download the Ollama runtime from the official "
-            f"GitHub release ({runtime_download_size_hint()}, verified "
-            "against its published checksum) and run it in the background "
-            "while Anki is open.\n\n"
-            "It is stored in the add-on's user_files folder and can be "
-            f"removed at any time.\n\n{starter_note}"
-            "Continue?",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        cancel_event = threading.Event()
-        op_state["kind"] = "setup"
-        op_state["cancel"] = cancel_event
-        set_busy(True)
-        cancel_btn.setVisible(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText("Preparing setup…")
-
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
-
-            def apply() -> None:
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setRange(0, 100)
-                    progress.setValue(pct)
-                else:
-                    # Phases without byte totals (checksums, extract,
-                    # winget) show as indeterminate.
-                    progress.setRange(0, 0)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> Any:
-            return full_setup(
-                _pkg().get_config(),
-                on_progress=on_event,
-                cancel_flag=cancel_event,
-                save_config=_pkg()._save_config_on_main,
-            )
-
-        def finish() -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            cancel_btn.setVisible(False)
-            op_state["kind"] = ""
-            op_state["cancel"] = None
-
-        def on_done(res: Any) -> None:
-            finish()
-            if getattr(res, "ok", False):
-                cfg = _pkg().get_config()
-                if cfg.get("_runtime_setup_declined"):
-                    cfg["_runtime_setup_declined"] = False
-                    _pkg().write_config(cfg)
-                if getattr(res, "port_moved", False):
-                    tooltip(f"Klaus: local AI running on {res.endpoint}")
-                else:
-                    tooltip("Klaus: local AI ready")
-                refresh()
-                maybe_auto_pull_starter()
-            else:
-                showWarning(
-                    "Setup did not complete:\n\n"
-                    + (getattr(res, "detail", "") or "Unknown error.")
-                )
-                refresh()
-
-        def on_fail(exc: Exception) -> None:
-            finish()
-            if isinstance(exc, RuntimeProvisionError):
-                if exc.kind == "cancelled":
-                    tooltip("Klaus: setup cancelled")
-                    return
-                # unsupported_platform lands back on this page, where the
-                # manual options are already visible.
-                showWarning(str(exc))
-            else:
-                showWarning(f"Setup failed:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def cancel_setup_download() -> None:
-        ev = op_state.get("cancel")
-        if ev is not None:
-            ev.set()
-            progress_lbl.setText("Cancelling…")
-
-    def pull_missing(name: str) -> None:
-        """Fix-it button on the embed row: download the model it points
-        at."""
-        if not name or op_state["active"]:
-            return
-        edit = pull_input.lineEdit()
-        if edit is not None:
-            edit.setText(name)
-        start_pull()
-
-    def delete_selected() -> None:
-        name = get_selected_model()
-        if not name:
-            return
-        cfg = _pkg().get_config()
-        from . import embeddings
-
-        used_by_search = (
-            embeddings.provider_name(cfg) == "ollama"
-            and embeddings.embedding_model(cfg) == name
-        )
-        warn = (
-            f"\n\n⚠ {name} is currently used by semantic search — "
-            "that will stop working until you pick another model."
-            if used_by_search
-            else ""
-        )
-        ok = QMessageBox.question(
-            dlg,
-            "Delete model",
-            f"Delete '{name}' from Ollama?\n\nThis frees disk space but you'll "
-            f"need to download it again to use it.{warn}",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        op_state["kind"] = "delete"
-        set_busy(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText(f"Deleting {name}…")
-
-        def do() -> None:
-            _pkg().client().delete(name)
-
-        def on_done(_: Any) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            tooltip(f"Klaus: deleted {name}")
-            refresh()
-
-        def on_fail(exc: Exception) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(f"Could not delete {name}:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def start_pull() -> None:
-        edit = pull_input.lineEdit()
-        typed = (edit.text() if edit else "").strip()
-        idx = pull_input.currentIndex()
-        # Only trust currentData while the visible text still matches the
-        # selected preset — after the user edits the line, currentIndex
-        # goes stale and would silently pull the wrong model.
-        if idx >= 0 and typed == pull_input.itemText(idx).strip():
-            name = str(pull_input.currentData() or typed)
-        else:
-            name = typed
-        name = name.strip()
-        if not name:
-            return
-        op_state["kind"] = "pull"
-        set_busy(True)
-        progress.setValue(0)
-        progress_lbl.setText(f"Starting pull of {name}…")
-
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
-
-            def apply() -> None:
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setValue(pct)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> None:
-            _pkg().client().pull(name, on_event=on_event)
-
-        def on_done(_: Any) -> None:
-            progress.setValue(100)
-            progress_lbl.setText(f"Downloaded {name} ✓")
-            set_busy(False)
-            op_state["kind"] = ""
-            tooltip(f"Klaus: {name} ready")
-            refresh()
-
-        def on_fail(exc: Exception) -> None:
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(f"Could not pull {name}:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    # ----- Semantic search handlers ----------------------------------------
-
-    def _embed_cfg_key(provider: str) -> str:
-        return f"embedding_api_key_{provider}"
-
-    def sync_embed_widgets(provider_override: str | None = None) -> None:
-        from . import curation, embeddings
-
-        # Refreshes (model pulls, connection checks) must never overwrite
-        # unsaved edits with stored values. A provider switch passes
-        # provider_override and is exempt — it IS the edit being applied,
-        # and it needs the model/key fields reloaded for the new provider
-        # without anything being written to disk.
-        if provider_override is None and ui_state["dirty"]:
+        if ui_state["dirty"]:
             return
         ui_state["syncing"] = True
         try:
             cfg = _pkg().get_config()
-            provider = provider_override or embeddings.provider_name(cfg)
-            ui_state["shown_provider"] = provider
-            idx = max(0, embed_provider_combo.findData(provider))
-            embed_provider_combo.setCurrentIndex(idx)
-            # Local provider → offer every installed EMBEDDING-typed model
-            # (the library can now also hold OCR/chat models, classified
-            # by the /api/show pass — those don't belong in this
-            # dropdown); cloud → free text. Built ONCE and used at every
-            # site below — review K-194 Critical #1 was exactly this list
-            # being filtered here but NOT at the resolver call or the
-            # write guard, so a lone installed OCR model could get
-            # silently resolved and persisted as embedding_model.
-            # Filtering never blocks a stored/healed choice from being
-            # DISPLAYED: the combo stays editable, so _resolve_ollama_model
-            # below can still surface a configured model classification
-            # missed — it just can no longer get WRITTEN from a
-            # non-embedding candidate list.
-            embedding_models = embedding_candidates(
-                ui_state["models"], ui_state["model_types"]
-            )
-            embed_model_combo.clear()
-            if provider == "ollama":
-                for name in embedding_models:
-                    embed_model_combo.addItem(name, name)
-            configured_model = str(cfg.get("embedding_model") or "")
-            if provider_override is not None:
-                # Moving the widgets to a different provider than the one
-                # stored: the stored model name belongs to the old one.
-                configured_model = ""
-            if provider == "ollama":
-                st = curation.index_stats()
-                indexed_model = st["model"] if st["exists"] else ""
-                resolved = _resolve_ollama_model(
-                    configured_model,
-                    embedding_models,
-                    indexed_model,
-                    embeddings.DEFAULT_MODELS["ollama"],
-                )
-                if (
-                    resolved != configured_model
-                    and embedding_models
-                    and provider_override is None
-                ):
-                    # Heal the config now, not just the widget — an empty
-                    # field must not silently mean DEFAULT_MODELS['ollama']
-                    # everywhere else this config is read (index_signature,
-                    # the real indexing pipeline in curation.py).
-                    #
-                    # Only persist when embedding_models is non-empty. It
-                    # reads empty for three reasons — Ollama unreachable
-                    # (server down, or the provider combo was just
-                    # switched back to ollama while it's down), Ollama
-                    # reachable but nothing installed classifies as
-                    # "embedding" yet, or classification simply hasn't
-                    # finished (_classify_models_async runs off-thread and
-                    # re-syncs this widget when it lands) — and in every
-                    # case the resolver falls through to the hardcoded
-                    # default. Writing THAT to disk would permanently
-                    # orphan an index built with another model — the
-                    # exact failure this resolver exists to prevent, made
-                    # durable. Display it, never store it.
-                    cfg["embedding_model"] = resolved
-                    _pkg().write_config(cfg)
-                embed_model_combo.setEditText(resolved)
-            else:
-                embed_model_combo.setEditText(configured_model)
-            edit = embed_model_combo.lineEdit()
-            if edit is not None:
-                edit.setPlaceholderText(
-                    f"default: {embeddings.DEFAULT_MODELS[provider]}"
-                )
-            embed_key_edit.setText(str(cfg.get(_embed_cfg_key(provider)) or ""))
-            embed_key_edit.setPlaceholderText(_EMBED_KEY_PLACEHOLDERS.get(provider, ""))
+            openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
+            embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
+            # INSIDE the guard: load_assistant flips a switch, and a
+            # switch that starts out true emits toggled -> mark_dirty,
+            # which would light up "Unsaved changes" on a dialog nobody
+            # has touched.
+            load_assistant()
         finally:
             ui_state["syncing"] = False
         update_embed_status()
@@ -2640,36 +1689,15 @@ def manage_models_dialog(setup: bool = False) -> None:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} days ago"
 
-    def _embed_fix_kind() -> str:
-        """What embed_fix_btn should do right now: 'key' when the selected
-        cloud provider has no API key configured, 'model' when the local
-        embed model named in config isn't installed, '' when neither. The
-        single source of truth for both the row warning and the button
-        dispatcher below — they must never compute this separately or the
-        two could disagree about what the button is currently offering."""
-        from . import embeddings
-
-        cfg = _pkg().get_config()
-        sig = embeddings.index_signature(cfg)
-        provider = embed_provider_combo.currentData() or "ollama"
-        is_cloud = provider != "ollama"
-        if is_cloud and not str(cfg.get(_embed_cfg_key(provider)) or "").strip():
-            return "key"
-        if not is_cloud and sig[1] and sig[1] not in ui_state["models"]:
-            return "model"
-        return ""
-
     def update_embed_status() -> None:
         from . import curation, embeddings
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        provider = embed_provider_combo.currentData() or "ollama"
-        is_cloud = provider != "ollama"
-        key_row.klaus_hidden = not is_cloud
-        _apply_search(search_edit.text())
         st = curation.index_stats()
-        if not st["exists"]:
+        if not str(cfg.get("api_key_openai") or "").strip():
+            txt = "Add your OpenAI API key above to enable semantic search."
+        elif not st["exists"]:
             txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
@@ -2679,74 +1707,39 @@ def manage_models_dialog(setup: bool = False) -> None:
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
-        # embed_fix_btn's role (open a key page vs. pull a model) switches
-        # with `kind`. on_embed_fix_clicked() reads ui_state["embed_fix_kind"]
-        # rather than being re-wired here, so there is exactly one .connect()
-        # for this button for the life of the dialog (see the connect block).
-        kind = _embed_fix_kind()
-        ui_state["embed_fix_kind"] = kind
-        if kind == "key":
-            embed_fix_btn.setText("Get key")
-        elif kind == "model":
-            embed_fix_btn.setText("Download")
-        embed_fix_btn.setVisible(bool(kind))
-
-    def on_embed_fix_clicked() -> None:
-        """Sole handler for embed_fix_btn.clicked (connected once, at the
-        bottom). Dispatches on the state update_embed_status() last
-        computed instead of the button being rewired per state change —
-        Qt connects accumulate, so a naive second .connect() on a state
-        change would leave both the old and new handler firing."""
-        kind = ui_state.get("embed_fix_kind", "")
-        if kind == "key":
-            provider = str(embed_provider_combo.currentData() or "voyage")
-            openLink(_EMBED_KEY_URLS.get(provider, _EMBED_KEY_URLS["voyage"]))
-        elif kind == "model":
-            pull_missing(embed_model_combo.currentText().strip())
-
     def save_embed() -> None:
         if ui_state["syncing"]:
             return
         from . import embeddings
 
         cfg = _pkg().get_config()
-        provider = str(embed_provider_combo.currentData() or "ollama")
-        prev = embeddings.provider_name(cfg)
         # Captured BEFORE the mutations below, off STORED config: this is
         # what every vector on disk was made with, and comparing it with
         # what config holds after the write is the only honest way to ask
         # "did the model move under the index?" (K-152).
         prev_sig = embeddings.index_signature(cfg)
-        cfg["embedding_provider"] = provider
-        # The widgets were repopulated for `provider` the moment it was
-        # picked (on_provider_changed), so by Save time their contents
-        # already belong to it — take them. Comparing against the STORED
-        # provider here (as this did under auto-save, when the widgets
-        # still held the old provider's model at signal time) would now
-        # discard a model the user deliberately typed for the new one.
-        if ui_state.get("shown_provider", provider) == provider:
-            cfg["embedding_model"] = embed_model_combo.currentText().strip()
-        else:
-            cfg["embedding_model"] = ""
-        if provider != "ollama":
-            cfg[_embed_cfg_key(provider)] = embed_key_edit.text().strip()
+        had_key = bool(str(cfg.get("api_key_openai") or "").strip())
+        cfg["api_key_openai"] = openai_key_edit.text().strip()
+        cfg["embedding_model"] = embed_model_edit.text().strip()
         _pkg().write_config(cfg)
-        if provider != prev:
-            sync_embed_widgets()  # reload model/key fields for the new provider
-        else:
-            update_embed_status()
-        rebuild_library_list()  # the "used by: search" badge may have moved
-        # K-152: a changed provider/model/width invalidates EVERY stored
+        update_embed_status()
+        # K-152: a changed model or width invalidates EVERY stored
         # vector, and PDF indexes rebuild only lazily — one at a time,
         # whenever you next happen to touch that PDF — so without this
         # the whole Library goes quietly stale until each is opened by
-        # hand. offer_model_sweep does the comparison (via
-        # embeddings.signature_matches, never a tuple ==), counts the
-        # work, and asks before spending anything.
+        # hand. A FIRST key is the other half: the signature never moves
+        # (nothing was ever embedded), and that is exactly the moment
+        # the offer is most useful. offer_model_sweep does the
+        # comparison (via embeddings.signature_matches, never a tuple
+        # ==), counts the work, prices it, and asks before spending.
         try:
             from . import index_queue
 
-            index_queue.offer_model_sweep(dlg, prev_sig)
+            index_queue.offer_model_sweep(
+                dlg,
+                prev_sig,
+                first_key=not had_key and bool(cfg["api_key_openai"]),
+            )
         except Exception as exc:
             print(f"[klausmate] model-change sweep offer failed: {exc}")
 
@@ -2847,6 +1840,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         except Exception as e:
             print(f"[klausmate] library refresh after sensitivity save failed: {e}")
 
+    def cancel_index() -> None:
+        ev = op_state.get("cancel")
+        if ev is not None:
+            ev.set()
+            progress_lbl.setText("Cancelling…")
+
     def finish_index() -> None:
         progress.setRange(0, 100)
         set_busy(False)
@@ -2912,48 +1911,6 @@ def manage_models_dialog(setup: bool = False) -> None:
             cancel=cancel_event,
         )
 
-    def _pull_embedder_then_index(model: str) -> None:
-        op_state["kind"] = "pull"
-        set_busy(True)
-        progress.setRange(0, 100)
-        progress.setValue(0)
-        progress_lbl.setText(f"Downloading embedding model {model}…")
-
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
-
-            def apply() -> None:
-                if not _dlg_alive():
-                    return
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setValue(pct)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> None:
-            _pkg().client().pull(model, on_event=on_event)
-
-        def on_done(_: Any) -> None:
-            if not _dlg_alive():
-                return
-            set_busy(False)
-            op_state["kind"] = ""
-            refresh()
-            _run_index()
-
-        def on_fail(exc: Exception) -> None:
-            if _dlg_alive():
-                set_busy(False)
-                op_state["kind"] = ""
-            showWarning(
-                f"Could not pull {model}:\n\n{type(exc).__name__}: {exc}"
-            )
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
     def start_index() -> None:
         if op_state["active"]:
             return
@@ -2961,13 +1918,8 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        provider, model = sig[0], sig[1]
-        if provider != "ollama" and not str(
-            cfg.get(_embed_cfg_key(provider)) or ""
-        ).strip():
-            showWarning(
-                f"Enter your {provider} API key above before indexing."
-            )
+        if not str(cfg.get("api_key_openai") or "").strip():
+            showWarning("Enter your OpenAI API key above before indexing.")
             return
         st = curation.index_stats()
         if st["exists"] and not embeddings.signature_matches(
@@ -2983,14 +1935,11 @@ def manage_models_dialog(setup: bool = False) -> None:
                 "Re-index from scratch?",
                 f"Re-index all {note_count:,} cards from scratch? The "
                 f"existing index was built with {st['model']} and the "
-                f"current setting is {model}.",
+                f"current setting is {sig[1]}.",
             )
             if ok != QMessageBox.StandardButton.Yes:
                 return
-        if provider == "ollama" and model not in ui_state["models"]:
-            _pull_embedder_then_index(model)
-        else:
-            _run_index()
+        _run_index()
 
     def confirm_close() -> None:
         # Checked BEFORE the running-operation branches: several of those
@@ -3007,54 +1956,24 @@ def manage_models_dialog(setup: bool = False) -> None:
                 return
             clear_dirty()
         if op_state["active"]:
-            if op_state["kind"] == "index":
-                ok = QMessageBox.question(
-                    dlg,
-                    "Stop indexing?",
-                    "Card indexing is still running.\n\n"
-                    "Stop it and close? Progress is saved — indexing resumes "
-                    "where it stopped next time.",
-                )
-                if ok != QMessageBox.StandardButton.Yes:
-                    return
-                ev = op_state.get("cancel")
-                if ev is not None:
-                    ev.set()
-                dlg.accept()
-                return
-            if op_state["kind"] == "setup":
-                # Unlike pulls, a runtime download must not keep streaming
-                # invisibly after the dialog goes away — cancel it.
-                ok = QMessageBox.question(
-                    dlg,
-                    "Cancel setup?",
-                    "The local AI setup is still downloading.\n\n"
-                    "Cancel it and close? (Nothing partial is kept.)",
-                )
-                if ok != QMessageBox.StandardButton.Yes:
-                    return
-                cancel_setup_download()
-                dlg.accept()
-                return
-            label = "operation"
-            if op_state["kind"] == "pull":
-                label = "model pull"
-            elif op_state["kind"] == "install":
-                label = "Ollama install"
+            # Indexing is the one long operation left in this window.
             ok = QMessageBox.question(
                 dlg,
-                "Operation in progress",
-                f"A {label} is running in the background.\n\n"
-                "Close anyway? (It will continue.)",
+                "Stop indexing?",
+                "Card indexing is still running.\n\n"
+                "Stop it and close? Progress is saved — indexing resumes "
+                "where it stopped next time.",
             )
             if ok != QMessageBox.StandardButton.Yes:
                 return
+            ev = op_state.get("cancel")
+            if ev is not None:
+                ev.set()
         dlg.accept()
 
     def save_general() -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
-        cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
         spec = _bg_state["spec"]
         cfg["background_mode"] = spec["mode"]
@@ -3119,17 +2038,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         ui_state["dirty"] = False
         save_btn.setEnabled(False)
         unsaved_lbl.setText("")
-
-    def on_provider_changed(_idx: int) -> None:
-        """Reload the model list and key field for the newly picked
-        provider WITHOUT writing config. The provider is passed through
-        explicitly because config still holds the old one until Save."""
-        if ui_state["syncing"]:
-            return
-        mark_dirty()
-        sync_embed_widgets(
-            provider_override=str(embed_provider_combo.currentData() or "ollama")
-        )
 
     def _bg_preview_cfg() -> dict:
         """The PENDING appearance keys in config shape, for background's
@@ -3370,64 +2278,49 @@ def manage_models_dialog(setup: bool = False) -> None:
     def test_connection() -> None:
         """Moved from the old Tools > Klaus > Test connection (K-045).
 
-        Fixed on the move: it used to call client().health() with the
-        client's default 30-second timeout, synchronously on this same
-        main thread — a packet-dropping endpoint froze all of Anki for
-        30s. ollama_reachable uses a short timeout for exactly this
-        reason (see its docstring). It's also now provider-aware: a
-        cloud-provider user gets a key-presence check, not an Ollama
-        probe — Ollama is optional and shouldn't be implied otherwise.
+        A key-PRESENCE check, not a network probe: a live call would
+        cost money to answer a question the user did not ask, and the
+        only failure it could report that this cannot is a wrong key —
+        which the first real request reports anyway, with its own
+        message.
         """
-        from . import embeddings
-
         cfg = _pkg().get_config()
-        provider = embeddings.provider_name(cfg)
-        if provider != "ollama":
-            provider_label = "Voyage" if provider == "voyage" else "OpenAI"
-            key = str(cfg.get(_embed_cfg_key(provider)) or "").strip()
-            if key:
-                showInfo(f"{provider_label} API key is set.", parent=dlg)
-            else:
-                showWarning(
-                    f"No {provider_label} API key is set. Add one above.",
-                    parent=dlg,
-                )
-            return
-        ep = endpoint_url()
-        if ollama_reachable(ep):
-            showInfo("Connected to Ollama.", parent=dlg)
-        else:
+        missing = [
+            label
+            for label, key in (
+                ("OpenAI", "api_key_openai"),
+                ("Anthropic", "api_key_anthropic"),
+            )
+            if not str(cfg.get(key) or "").strip()
+        ]
+        if missing:
             showWarning(
-                f"Could not reach Ollama at {ep}.\n"
-                "Install/start it from https://ollama.com/download",
+                "No API key is set for: "
+                + ", ".join(missing)
+                + ".\n\nAdd one in KlausMate Preferences → API keys & models.",
                 parent=dlg,
             )
+        else:
+            showInfo("Both API keys are set.", parent=dlg)
 
-    auto_setup_btn.clicked.connect(start_auto_setup)
-    cancel_btn.clicked.connect(cancel_setup_download)
+    cancel_btn.clicked.connect(cancel_index)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
-    download_btn.clicked.connect(lambda: openLink(OLLAMA_DOWNLOAD_URL))
-    check_conn_btn.clicked.connect(refresh)
     test_conn_btn.clicked.connect(test_connection)
-    delete_btn.clicked.connect(delete_selected)
-    refresh_btn.clicked.connect(refresh)
-    pull_btn.clicked.connect(start_pull)
     close_btn.clicked.connect(confirm_close)
-    embed_fix_btn.clicked.connect(on_embed_fix_clicked)
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    embed_provider_combo.currentIndexChanged.connect(on_provider_changed)
-    _embed_model_edit_widget = embed_model_combo.lineEdit()
-    if _embed_model_edit_widget is not None:
-        _embed_model_edit_widget.textEdited.connect(lambda _t: mark_dirty())
-    embed_model_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
-    embed_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    reasoning_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    transcription_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
+    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
-    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
     anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
     klausbook_cb.toggled.connect(on_design_toggled)
@@ -3598,15 +2491,7 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     dlg.finished.connect(_forget_dialog)
 
-    rebuild_install_method_buttons()
     refresh()
-    if setup:
-        if stack.currentIndex() == 0:
-            # One-click path: go straight to the provisioning confirm.
-            QTimer.singleShot(0, start_auto_setup)
-        else:
-            # Server already fine — jump to getting a first model.
-            QTimer.singleShot(0, maybe_auto_pull_starter)
     # show(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
     # Qt 6.11, showing this dialog application-modal via exec()
     # segfaulted in its first backing-store flush
