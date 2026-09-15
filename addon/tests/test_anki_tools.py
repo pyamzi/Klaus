@@ -10,7 +10,11 @@ than faked here — the confirmation dialog and the main-thread marshalling
 are Qt, and a stub that "passes" for them would be worse than no test.
 """
 import json
+import os
+import shutil
 import sys
+import tempfile
+from array import array
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section
@@ -167,6 +171,144 @@ try:
     check("a broken index is a ToolError", False)
 except at.ToolError:
     check("a broken index is a ToolError the model can read, not a crash", True)
+
+section("the real PDF search: pdf_index v2 + page_store (K-225 fix)")
+# The section above only proves _h_search_lecture_pdfs delegates to
+# whatever ctx["search_pdfs"] gives it. _semantic_pdf_search — the real
+# implementation default_ctx() wires in as that capability — was never
+# itself exercised, which is exactly how it went on calling the deleted
+# pdf_index.best_chunk/.chunks/chunk_text_at (Task 5 moved pdf_index to
+# one row per page: best_page/.pages) without any test noticing. These
+# pins drive the real function end to end, no injected fake, against a
+# real v2 index and real page_store records in a scratch user_files.
+page_store = importlib.import_module("klausmate.page_store")
+pdf_index = importlib.import_module("klausmate.pdf_index")
+pdf_handler = importlib.import_module("klausmate.pdf_handler")
+embeddings = importlib.import_module("klausmate.embeddings")
+# install() gives klausmate a synthetic __init__ (so importing submodules
+# never has to run the real, aqt-heavy klausmate/__init__.py) — it has no
+# get_config of its own, same gap test_tag_migrate.py's own hand-rolled
+# stub package fills the same way.
+importlib.import_module("klausmate").get_config = lambda: {}
+
+_sp_dir = tempfile.mkdtemp(prefix="klaus_test_ap_")
+
+
+def _sp_make(name, slide_pages, page_vecs, dims=2):
+    """One indexed PDF on disk: contexts + a dummy PDF file + a fresh,
+    matching v2 pdf_index (one unit vector per page)."""
+    ctx_dir = os.path.join(_sp_dir, "contexts")
+    os.makedirs(ctx_dir, exist_ok=True)
+    with open(os.path.join(ctx_dir, name + ".json"), "w") as f:
+        json.dump({"pages": slide_pages, "page_count": len(slide_pages)}, f)
+    with open(os.path.join(ctx_dir, name + ".txt"), "w") as f:
+        f.write("\n\n".join(slide_pages))
+    pdf_dir = os.path.join(_sp_dir, "pdfs")
+    os.makedirs(pdf_dir, exist_ok=True)
+    with open(os.path.join(pdf_dir, name + ".pdf"), "wb") as f:
+        f.write(b"%PDF-fake")
+    idx = pdf_index.PdfIndex(
+        provider="openai", model="m", pdf_name=name, dims=dims,
+        source_sig=pdf_index.source_signature(_sp_dir, name),
+        pages=[(i + 1, "h%d" % (i + 1)) for i in range(len(page_vecs))],
+        embedded_rows=len(page_vecs),
+    )
+    for v in page_vecs:
+        idx.vectors.extend(v)
+    pdf_index.save(idx, pdf_index.index_dir(_sp_dir, name))
+    return pdf_handler.pdf_path_for(_sp_dir, name)
+
+
+def _sp_make_dotpdf(raw_stem, safe, slide_pages, page_vecs, dims=2):
+    """Like _sp_make, but the context stem list_contexts will discover
+    (``raw_stem``) differs from its ``_safe_basename`` (``safe``) — the
+    double-extension import (e.g. an original display name of
+    "X.pdf.pdf") that made Minor 5's reader/writer key mismatch possible.
+    Only the discovery .txt is written under the raw stem; every real
+    store (context .json, pdf file, pdf_index, and — by the caller —
+    page_store) is keyed under ``safe``, mirroring what do_build itself
+    writes under ``pdf_handler._safe_basename(pdf_name)``.
+    """
+    ctx_dir = os.path.join(_sp_dir, "contexts")
+    os.makedirs(ctx_dir, exist_ok=True)
+    with open(os.path.join(ctx_dir, raw_stem + ".txt"), "w") as f:
+        f.write("\n\n".join(slide_pages))
+    with open(os.path.join(ctx_dir, safe + ".json"), "w") as f:
+        json.dump({"pages": slide_pages, "page_count": len(slide_pages)}, f)
+    pdf_dir = os.path.join(_sp_dir, "pdfs")
+    os.makedirs(pdf_dir, exist_ok=True)
+    with open(os.path.join(pdf_dir, safe + ".pdf"), "wb") as f:
+        f.write(b"%PDF-fake")
+    idx = pdf_index.PdfIndex(
+        provider="openai", model="m", pdf_name=safe, dims=dims,
+        source_sig=pdf_index.source_signature(_sp_dir, safe),
+        pages=[(i + 1, "h%d" % (i + 1)) for i in range(len(page_vecs))],
+        embedded_rows=len(page_vecs),
+    )
+    for v in page_vecs:
+        idx.vectors.extend(v)
+    pdf_index.save(idx, pdf_index.index_dir(_sp_dir, safe))
+    return pdf_handler.pdf_path_for(_sp_dir, safe)
+
+
+# Lecture_A: page 2 (index 1) gets a page_store record with a transcript
+# segment, so its combined text differs from the raw slide text — proof
+# the hit's text came from page_store, not just pdf_handler.load_pages.
+_pathA = _sp_make("Lecture_A", ["Slide A1", "Slide A2"], [[1.0, 0.0], [0.0, 1.0]])
+page_store.ensure_records(_sp_dir, "Lecture_A", _pathA, ["Slide A1", "Slide A2"])
+page_store.append_segment(_sp_dir, "Lecture_A", _pathA, 1, 0.0, 1.0, "Said on page two")
+# Lecture_B: no page_store record anywhere -> must fall back to slide text.
+_sp_make("Lecture_B", ["Slide B1"], [[0.0, 1.0]])
+# Extra.pdf: neither Lecture_A nor Lecture_B exercises _safe_basename doing
+# anything (both names are already fixed points), which is exactly how the
+# anki_tools/do_build key mismatch stayed latent (Minor 5). This name's
+# discovered stem ("Extra.pdf") differs from its safe basename ("Extra") —
+# a page_store record keyed under the wrong one is silently invisible.
+_pathExtra = _sp_make_dotpdf("Extra.pdf", "Extra", ["Slide E1"], [[0.0, 1.0]])
+page_store.ensure_records(_sp_dir, "Extra", _pathExtra, ["Slide E1"])
+page_store.append_segment(_sp_dir, "Extra", _pathExtra, 0, 0.0, 1.0, "Said on page one")
+
+# Stub the embedding call itself (no network, no API key, no paid call):
+# the query vector [0, 1] is engineered to win row 2 of Lecture_A (its
+# [0, 1] page vector), the only row of Lecture_B, and the only row of Extra.
+_orig_provider_from_config = embeddings.provider_from_config
+_orig_index_signature = embeddings.index_signature
+
+
+class _FakeQueryProvider:
+    def embed(self, texts, kind="query"):
+        return [[0.0, 1.0]]
+
+
+embeddings.provider_from_config = lambda get_config: _FakeQueryProvider()
+embeddings.index_signature = lambda cfg: ("openai", "m", 2)
+try:
+    _sp_hits = {h.get("source"): h
+                for h in at._semantic_pdf_search("photosynthesis", 5, _sp_dir)}
+finally:
+    embeddings.provider_from_config = _orig_provider_from_config
+    embeddings.index_signature = _orig_index_signature
+    shutil.rmtree(_sp_dir, ignore_errors=True)
+
+check("every fresh per-PDF index is scored and returned",
+      set(_sp_hits) == {"Lecture_A", "Lecture_B", "Extra.pdf"})
+_hitA, _hitB = _sp_hits.get("Lecture_A") or {}, _sp_hits.get("Lecture_B") or {}
+check("the hit's page is the argmax row's 1-based page (best_page, not "
+      "the deleted best_chunk)", _hitA.get("page") == 2 and _hitB.get("page") == 1)
+check("a page WITH a page_store record returns its COMBINED text (slide + "
+      "transcript) — proves the fix reads page_store, not just slide text",
+      _hitA.get("text") == "Slide A2\n\nSaid on page two")
+check("a page with NO page_store record falls back to the raw slide text",
+      _hitB.get("text") == "Slide B1")
+
+_hitExtra = _sp_hits.get("Extra.pdf") or {}
+check("Minor 5 fix-round-2 pin: pdf_path_for and page_store.load_record "
+      "key off the SAME _safe_basename(name) do_build uses, even when the "
+      "discovered stem itself still has a trailing .pdf — the hit's text "
+      "includes the transcript segment, proving load_record found the "
+      "record under \"Extra\", not the raw \"Extra.pdf\"",
+      _hitExtra.get("text") == "Slide E1\n\nSaid on page one",
+      _hitExtra)
 
 section("writes need the human, every time")
 _c = Col()

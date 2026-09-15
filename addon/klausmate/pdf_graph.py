@@ -35,11 +35,11 @@ no loader is missing, so nothing was added to either module. This file
 only ever reads the *card* index directly (for note positions); PDF-side
 vectors are never read here at all — the PDF->note relationship comes
 entirely from the already-computed ``matches.json`` cache via
-``retention.load_matches``, never from re-scoring chunk vectors.
+``retention.load_matches``, never from re-scoring page vectors.
 
 Match-cache semantics: ``retention.load_matches`` returns ``None`` when
 the cache is missing OR any of its invalidation keys (signature, dims,
-source signature, card-index digest, aggregation mode) don't match what
+source signature, card-index digest) don't match what
 this call expects. Either way that means "unknown" — this module skips
 that PDF entirely (no node, no edges) rather than inventing an empty or
 stale match set for it.
@@ -326,7 +326,6 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
     # there — it is load-bearing for the layout cache, whose digest is
     # blind to a re-embed at a different width (_signature_ok).
     sig = (cidx.provider, cidx.model, cidx.dims)
-    agg = str(cfg.get("pdf_match_agg") or retention.DEFAULT_AGG)
     digest = retention.card_index_digest(cidx)
 
     # K-167: the whole 29.5 s was this. Positions are a pure function of
@@ -363,9 +362,10 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
         name = fname[:-4] if fname.endswith(".txt") else fname
         safe = pdf_handler._safe_basename(name)
         src_sig = pdf_index.source_signature(user_files, name)
-        matches = retention.load_matches(name, sig, cidx.dims, src_sig, digest, agg)
-        if matches is None:
+        cached = retention.load_matches(name, sig, cidx.dims, src_sig, digest)
+        if cached is None:
             continue  # unknown -- never invent an empty match set
+        matches, _pages = cached
 
         threshold = retention.get_threshold(name, cfg)
         hits = [

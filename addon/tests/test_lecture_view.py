@@ -68,15 +68,15 @@ def write_ctx_txt(ufd, safe, text):
         f.write(text)
 
 
-def make_pdf_index(ufd, safe, chunks, rows, provider="p", model="m", dims=4):
+def make_pdf_index(ufd, safe, pages, rows, provider="p", model="m", dims=4):
     idx = pdf_index.PdfIndex(
         provider=provider,
         model=model,
         pdf_name=safe,
         dims=dims,
         source_sig=pdf_index.source_signature(ufd, safe) or (0, 0),
-        chunks=list(chunks),
-        embedded_rows=len(chunks),
+        pages=list(pages),
+        embedded_rows=len(pages),
         vectors=flat(rows),
     )
     pdf_index.save(idx, pdf_index.index_dir(ufd, safe))
@@ -145,24 +145,25 @@ check(
     == ["PDF_B", "PDF_A"],
 )
 
-section("best_chunk argmax")
+section("best_page argmax")
 
 ufd = fresh_ufd()
 write_ctx_json(ufd, "B", ["p1", "p2", "p3"])
 idx_b = make_pdf_index(
     ufd,
     "B",
-    chunks=[(1, 0, 2), (2, 0, 2), (7, 0, 2)],
+    pages=[(1, "h1"), (2, "h2"), (7, "h7")],
     rows=[unit([0, 1, 0, 0]), unit([0.6, 0.8, 0, 0]), unit([1, 0, 0, 0])],
 )
-j, s = pdf_index.best_chunk(idx_b, unit([1, 0, 0, 0]))
-check("argmax row found", j == 2)
+page, s = pdf_index.best_page(idx_b, unit([1, 0, 0, 0]))
+check("argmax row found (row 2 -> page 7)", page == 7)
 check("argmax score is the dot", abs(s - 1.0) < 1e-6)
-j2, s2 = pdf_index.best_chunk(idx_b, unit([0, 1, 0, 0]))
-check("different query, different row", j2 == 0 and abs(s2 - 1.0) < 1e-6)
+page2, s2 = pdf_index.best_page(idx_b, unit([0, 1, 0, 0]))
+check("different query, different page (row 0 -> page 1)",
+      page2 == 1 and abs(s2 - 1.0) < 1e-6)
 check(
     "empty index unusable",
-    pdf_index.best_chunk(
+    pdf_index.best_page(
         pdf_index.PdfIndex(provider="p", model="m", pdf_name="x", dims=4),
         unit([1, 0, 0, 0]),
     )
@@ -170,7 +171,7 @@ check(
 )
 check(
     "dims mismatch unusable",
-    pdf_index.best_chunk(idx_b, [1.0, 0.0]) == (-1, 0.0),
+    pdf_index.best_page(idx_b, [1.0, 0.0]) == (-1, 0.0),
 )
 
 section("row map + targeted vector read")
@@ -223,13 +224,13 @@ write_ctx_json(ufd3, "PDF_B", ["b"] * 8)
 make_pdf_index(
     ufd3,
     "PDF_A",
-    chunks=[(1, 0, 2)],
+    pages=[(1, "h1")],
     rows=[unit([0.8, 0.6, 0, 0])],
 )
 make_pdf_index(
     ufd3,
     "PDF_B",
-    chunks=[(1, 0, 2), (2, 0, 2), (7, 0, 2)],
+    pages=[(1, "h1"), (2, "h2"), (7, "h7")],
     rows=[unit([0, 1, 0, 0]), unit([0.6, 0.8, 0, 0]), unit([1, 0, 0, 0])],
 )
 make_card_index(
@@ -243,7 +244,7 @@ both = ["!Library::A", "!Library::B"]
 out = resolver.resolve(100, both)
 check("match wins over both candidates", isinstance(out, LectureMatch))
 check("winner is the closer PDF", out.safe == "PDF_B")
-check("page is the argmax chunk's stored page", out.page == 7)
+check("page is the argmax page's own stored number", out.page == 7)
 check("pages are known (json context)", out.pages_known is True)
 check("fresh index is not stale", out.stale is False)
 check("score carried", abs(out.score - 1.0) < 1e-6)
@@ -289,7 +290,7 @@ check(
 )
 write_ctx_json(ufd4, "PDF_A", ["x"])
 make_pdf_index(
-    ufd4, "PDF_A", chunks=[(1, 0, 1)], rows=[unit([1, 0, 0, 0])],
+    ufd4, "PDF_A", pages=[(1, "h1")], rows=[unit([1, 0, 0, 0])],
     provider="OTHER",
 )
 r4.invalidate()
@@ -304,7 +305,7 @@ section("resolve: legacy pages + stale")
 ufd5 = fresh_ufd()
 write_prefs(ufd5, {"PDF_L": {"tag": "!Library::L"}})
 write_ctx_txt(ufd5, "PDF_L", "one big blob")  # legacy: .txt only, no .json
-make_pdf_index(ufd5, "PDF_L", chunks=[(1, 0, 4)], rows=[unit([1, 0, 0, 0])])
+make_pdf_index(ufd5, "PDF_L", pages=[(1, "h1")], rows=[unit([1, 0, 0, 0])])
 make_card_index(ufd5, nids=[1], rows=[unit([1, 0, 0, 0])])
 r5 = lecture_view.LectureResolver(ufd5)
 out5 = r5.resolve(1, ["!Library::L"])
@@ -314,7 +315,7 @@ check("legacy pages unknown", out5.pages_known is False and out5.page == 0)
 ufd6 = fresh_ufd()
 write_prefs(ufd6, {"PDF_S": {"tag": "!Library::S"}})
 write_ctx_json(ufd6, "PDF_S", ["p"])
-make_pdf_index(ufd6, "PDF_S", chunks=[(1, 0, 1)], rows=[unit([1, 0, 0, 0])])
+make_pdf_index(ufd6, "PDF_S", pages=[(1, "h1")], rows=[unit([1, 0, 0, 0])])
 make_card_index(ufd6, nids=[1], rows=[unit([1, 0, 0, 0])])
 r6 = lecture_view.LectureResolver(ufd6)
 first = r6.resolve(1, ["!Library::S"])
@@ -342,12 +343,12 @@ try:
     b = r7.resolve(100, both)
     check("cache hit returns equal outcome", a == b)
     check("cache hit re-loads nothing", calls["n"] == loads_first)
-    # Rewrite PDF_B's index so a different chunk (page 3) wins, and
+    # Rewrite PDF_B's index so a different page (page 3) wins, and
     # bump its manifest stamp — the cached result must be recomputed.
     make_pdf_index(
         ufd3,
         "PDF_B",
-        chunks=[(3, 0, 2)],
+        pages=[(3, "h3")],
         rows=[unit([1, 0, 0, 0])],
     )
     man = os.path.join(pdf_index.index_dir(ufd3, "PDF_B"), pdf_index.MANIFEST_FILE)
@@ -383,8 +384,8 @@ _iv = fresh_ufd()
 write_prefs(_iv, {"PDF_A": {"tag": "!Library::Z"}})
 write_ctx_json(_iv, "PDF_A", ["a"])
 write_ctx_json(_iv, "PDF_B", ["b"])
-make_pdf_index(_iv, "PDF_A", chunks=[(1, 0, 1)], rows=[unit([1, 0, 0, 0])])
-make_pdf_index(_iv, "PDF_B", chunks=[(9, 0, 1)], rows=[unit([1, 0, 0, 0])])
+make_pdf_index(_iv, "PDF_A", pages=[(1, "h1")], rows=[unit([1, 0, 0, 0])])
+make_pdf_index(_iv, "PDF_B", pages=[(9, "h9")], rows=[unit([1, 0, 0, 0])])
 make_card_index(_iv, nids=[1], rows=[unit([1, 0, 0, 0])])
 r_iv = lecture_view.LectureResolver(_iv)
 _iv_first = r_iv.resolve(1, ["!Library::Z"])

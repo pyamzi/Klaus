@@ -2494,7 +2494,8 @@ def delete_context(user_files_dir: str, name: str) -> None:
                 os.remove(path)
             except OSError:
                 pass
-    # Lazy import: pdf_index imports our _chunk_text at module level.
+    # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
+    # module level, for _safe_basename).
     try:
         from . import pdf_index
 
@@ -2528,37 +2529,4 @@ def delete_context(user_files_dir: str, name: str) -> None:
         print(f"[klausmate] retention history cleanup failed for {base}: {exc}")
     if get_active_pdf(user_files_dir) == base:
         clear_active_pdf(user_files_dir)
-
-
-# ----------------------------- chunking ----------------------------------
-
-_CHUNK_SIZE = 400
-_CHUNK_OVERLAP = 50
-
-
-def _chunk_text(text: str, source: str) -> list[dict]:
-    chunks: list[dict] = []
-    text = text.strip()
-    if not text:
-        return chunks
-    i = 0
-    n = len(text)
-    while i < n:
-        end = min(i + _CHUNK_SIZE, n)
-        if end < n:
-            window = text[i:end]
-            for sep in ("\n\n", ". ", "\n"):
-                idx = window.rfind(sep)
-                if idx >= _CHUNK_SIZE // 2:
-                    end = i + idx + len(sep)
-                    break
-        chunk_text = text[i:end].strip()
-        if chunk_text:
-            # "start" = offset into the (stripped) input text; pdf_index uses
-            # it for stable chunk identity. BM25/curation ignore it.
-            chunks.append({"source": source, "text": chunk_text, "start": i})
-        if end >= n:
-            break
-        i = max(end - _CHUNK_OVERLAP, i + 1)
-    return chunks
 

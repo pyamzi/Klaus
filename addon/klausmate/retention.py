@@ -1,8 +1,9 @@
 """PDF study priorities — retention scoring of cards matched to each PDF.
 
-Pipeline per PDF: embed its chunks persistently (pdf_index.py) → score every
-indexed note against those chunks (max cosine, cached in matches.json) →
-pull FSRS retrievability for the matched notes' cards → aggregate a
+Pipeline per PDF: embed its pages persistently, one vector per page
+(pdf_index.py, fed by page_store.py) → score every indexed note against
+those pages (max cosine, cached in matches.json) → pull FSRS
+retrievability for the matched notes' cards → aggregate a
 similarity-weighted retention score → rank PDFs by study priority.
 
 Layout mirrors curation.py: pure math helpers up top (headlessly testable),
@@ -25,7 +26,6 @@ stored tag (tag_sync.get_stored_tag) — see K-055.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import json
 import math
 import os
@@ -36,14 +36,14 @@ from typing import Any, Callable
 from aqt import mw
 from aqt.operations import QueryOp
 
-from . import card_index, curation, embeddings, pdf_handler, pdf_index
+from . import card_index, curation, embeddings, page_store, pdf_handler, pdf_index
 
 USER_FILES = curation.USER_FILES
 INDEX_DIR = curation.INDEX_DIR
 
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
-MATCHES_VERSION = 1
+MATCHES_VERSION = 2
 
 # Cache floor for match scores — deliberately far below any usable
 # threshold, so the panel's threshold slider is a pure re-filter of the
@@ -73,11 +73,6 @@ _DEFAULT_APPLIED_KEY = "_threshold_default_applied"
 # distinguishing signal — once set, migration leaves the value alone
 # forever, independent of _DEFAULT_APPLIED_KEY bookkeeping.
 _THRESHOLD_USER_SET_KEY = "_threshold_user_set"
-DEFAULT_AGG = "max"
-DEFAULT_MAX_CHUNKS = 1000
-
-PDF_FLUSH_EVERY = 256  # vectors between partial saves while embedding a PDF
-
 # IN-list chunk for the nid→queue batch (card_queues). SQLite's default
 # host-parameter cap is 999; 900 leaves headroom without multiplying
 # round-trips on a 30k-note pool.
@@ -158,16 +153,18 @@ def card_index_digest(cidx: card_index.CardIndex) -> str:
 def match_scores(
     pdf_idx: pdf_index.PdfIndex,
     cidx: card_index.CardIndex,
-    agg: str = DEFAULT_AGG,
     floor: float = MATCH_FLOOR,
     cancel: threading.Event | None = None,
     on_progress: Callable[[int, int], None] | None = None,
-) -> list[tuple[int, float]]:
-    """Score every indexed note against the PDF's chunks → [(nid, score)].
+) -> tuple[list[tuple[int, float]], dict[int, int]]:
+    """Score every indexed note against the PDF's pages →
+    ([(nid, score)], {nid: best page, 1-based}).
 
-    ``agg``: "max" (best single chunk) or "top3_mean" (mean of the 3 best —
-    stricter, suppresses one-off spurious hits). Both indexes hold unit
-    vectors, so similarity is a plain dot product.
+    One vector per page now (pdf_index v2), so a note's score is simply
+    its best-matching page — the argmax that used to be discarded is the
+    whole point now, since a note's best page is what the Lecture panel
+    and the matches cache both need. Both indexes hold unit vectors, so
+    similarity is a plain dot product.
     """
     if (pdf_idx.provider, pdf_idx.model) != (cidx.provider, cidx.model):
         raise ValueError(
@@ -177,29 +174,28 @@ def match_scores(
     if pdf_idx.dims != cidx.dims:
         raise ValueError("Embedding dimensions differ — re-embed the PDF.")
     d = cidx.dims
-    n_chunks = pdf_idx.embedded_rows
-    if not cidx.nids or not n_chunks or d <= 0:
-        return []
+    n_pages = pdf_idx.embedded_rows
+    if not cidx.nids or not n_pages or d <= 0:
+        return [], {}
     cmv = memoryview(cidx.vectors)
     pmv = memoryview(pdf_idx.vectors)
-    chunk_rows = [pmv[j * d : (j + 1) * d] for j in range(n_chunks)]
-    top3 = agg == "top3_mean"
+    page_rows = [pmv[j * d : (j + 1) * d] for j in range(n_pages)]
     out: list[tuple[int, float]] = []
+    pages: dict[int, int] = {}
     total = len(cidx.nids)
     for i, nid in enumerate(cidx.nids):
         if cancel is not None and i % 512 == 0 and cancel.is_set():
-            return out
+            return out, pages
         if on_progress and i % 512 == 0:
             on_progress(i, total)
         row = cmv[i * d : (i + 1) * d]
-        if top3:
-            best = heapq.nlargest(3, (_sumprod(row, c) for c in chunk_rows))
-            score = sum(best) / len(best)
-        else:
-            score = max(_sumprod(row, c) for c in chunk_rows)
+        scores = [_sumprod(row, c) for c in page_rows]
+        best = max(range(len(scores)), key=lambda k: scores[k])
+        score = scores[best]
         if score >= floor:
             out.append((nid, score))
-    return out
+            pages[nid] = pdf_idx.pages[best][0]
+    return out, pages
 
 
 def fsrs_retrievability(
@@ -316,9 +312,9 @@ def load_matches(
     dims: int,
     source_sig: tuple[int, int] | None,
     digest: str,
-    agg: str,
-) -> list[tuple[int, float]] | None:
-    """Cached [(nid, score)] when every invalidation key matches, else None."""
+) -> tuple[list[tuple[int, float]], dict[int, int]] | None:
+    """Cached ([(nid, score)], {nid: best page}) when every invalidation key
+    matches, else None."""
     try:
         with open(_matches_path(name), encoding="utf-8") as f:
             m = json.load(f)
@@ -335,14 +331,14 @@ def load_matches(
             return None
         if str(m.get("card_index_digest")) != digest:
             return None
-        if str(m.get("agg")) != agg:
-            return None
         if float(m.get("floor", -1.0)) != MATCH_FLOOR:
             # MATCH_FLOOR changed since this cache was written — a cache
             # built with a different floor could be silently missing rows
             # that should now be included. Treat as cold, never stale-valid.
             return None
-        return [(int(nid), float(score)) for nid, score in m["matches"]]
+        matches = [(int(nid), float(score)) for nid, score in m["matches"]]
+        pages = {int(k): int(v) for k, v in (m.get("pages") or {}).items()}
+        return matches, pages
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
 
@@ -353,8 +349,8 @@ def save_matches(
     dims: int,
     source_sig: tuple[int, int],
     digest: str,
-    agg: str,
     matches: list[tuple[int, float]],
+    pages: dict[int, int],
 ) -> None:
     payload = {
         "version": MATCHES_VERSION,
@@ -363,9 +359,9 @@ def save_matches(
         "dims": dims,
         "pdf_source_sig": list(source_sig),
         "card_index_digest": digest,
-        "agg": agg,
         "floor": MATCH_FLOOR,
         "matches": [[nid, round(score, 6)] for nid, score in matches],
+        "pages": {str(nid): p for nid, p in pages.items()},
     }
     pdf_handler._atomic_write_json(
         _matches_path(name), payload, separators=(",", ":")
@@ -583,10 +579,10 @@ def ensure_pdf_index(
     cancel: threading.Event | None = None,
     _reentrant: bool = False,
 ) -> None:
-    """Bring one PDF's chunk index up to date. Callbacks fire on main.
+    """Bring one PDF's page index up to date. Callbacks fire on main.
 
-    Never needs the collection — chunking reads files, embedding hits the
-    provider — so the whole pipeline runs ``without_collection()``.
+    Never needs the collection — reading pages hits files, embedding hits
+    the provider — so the whole pipeline runs ``without_collection()``.
     Cancellation persists ``embedded_rows``; the next run resumes there.
 
     Guards ``curation._busy`` — the ONE re-entrancy token shared with the
@@ -620,10 +616,6 @@ def ensure_pdf_index(
     def do_build(_col=None) -> pdf_index.PdfIndex:
         cfg = _cfg()
         sig = embeddings.index_signature(cfg)
-        try:
-            max_chunks = int(cfg.get("pdf_index_max_chunks") or DEFAULT_MAX_CHUNKS)
-        except (TypeError, ValueError):
-            max_chunks = DEFAULT_MAX_CHUNKS
         src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
         if src_sig is None:
             raise RuntimeError(f"No stored text for “{pdf_name}” — re-import the PDF.")
@@ -636,63 +628,64 @@ def ensure_pdf_index(
         if pages is None:
             # Legacy import without per-page JSON: treat the whole text as one page.
             base = pdf_handler._safe_basename(pdf_name)
-            txt_path = os.path.join(USER_FILES, "contexts", base + ".txt")
-            with open(txt_path, encoding="utf-8") as f:
+            with open(os.path.join(USER_FILES, "contexts", base + ".txt"), encoding="utf-8") as f:
                 pages = [f.read()]
-        chunked = pdf_index.chunk_pages(pages, max_chunks)
-        if not chunked:
+        safe = pdf_handler._safe_basename(pdf_name)
+        path = pdf_handler.pdf_path_for(USER_FILES, safe) or ""
+        page_store.ensure_records(USER_FILES, safe, path, pages)
+        rows = page_store.page_texts(USER_FILES, safe, path, len(pages))   # (page, hash, text)
+        if not any(t for _p, _h, t in rows):
             raise RuntimeError(f"“{pdf_name}” has no extractable text to embed.")
-        keys = [(p, s, ln) for p, s, ln, _t in chunked]
-        texts = [t for _p, _s, _ln, t in chunked]
-
-        resumable = (
-            idx is not None
-            and embeddings.signature_matches(
-                idx.provider, idx.model, idx.dims, sig
-            )
-            and idx.source_sig == src_sig
-            and idx.chunks == keys
-            and 0 < idx.embedded_rows < len(keys)
-        )
-        if not resumable:
-            safe = pdf_handler._safe_basename(pdf_name)
-            idx = pdf_index.PdfIndex(
-                provider=sig[0], model=sig[1], pdf_name=safe,
-                source_sig=src_sig, chunks=keys,
-            )
-        start_row = idx.embedded_rows
-        todo = texts[start_row:]
-        total = len(texts)
+        keys = [(p, h) for p, h, _t in rows]
+        # Keep every row whose hash is unchanged (same provider/model/dims);
+        # embed only the rest. Rows are rebuilt in page order.
+        old: dict[int, tuple[str, list[float]]] = {}
+        if idx is not None and embeddings.signature_matches(idx.provider, idx.model, idx.dims, sig) and idx.dims > 0:
+            mv = memoryview(idx.vectors)
+            for i, (p, h) in enumerate(idx.pages[: idx.embedded_rows]):
+                old[p] = (h, list(mv[i * idx.dims:(i + 1) * idx.dims]))
+        new_idx = pdf_index.PdfIndex(provider=sig[0], model=sig[1], pdf_name=safe, source_sig=src_sig, pages=keys,
+                                     dims=(idx.dims if idx is not None and old else 0))
+        # Empty combined_text (a slide with no text layer and no transcript)
+        # is kept out of the provider entirely — some providers reject ""
+        # outright — and gets the spec's zero vector instead (seeded below,
+        # once dims is known); best_page's plain dot product then scores it
+        # 0.0 and it can never win over a real match.
+        todo = [(i, t) for i, (p, h, t) in enumerate(rows) if t and not (p in old and old[p][0] == h)]
+        vectors_by_row: dict[int, list[float]] = {i: old[p][1] for i, (p, h, _t) in enumerate(rows) if p in old and old[p][0] == h}
+        total = len(rows)
         provider = embeddings.provider_from_config(_cfg)
-        since_flush = 0
-        for offset, vecs in embeddings.embed_batches(
-            provider, todo, cancel=cancel, kind="document"
-        ):
-            for vec in vecs:
+        for offset, vecs in embeddings.embed_batches(provider, [t for _i, t in todo], cancel=cancel, kind="document"):
+            for k, vec in enumerate(vecs):
+                row_i = todo[offset + k][0]
                 if vec is None:
-                    # Zero vector (empty-ish chunk) — keep row alignment with
-                    # a null vector; it can't win a cosine match.
-                    if idx.dims == 0:
-                        raise RuntimeError("First PDF chunk produced no embedding.")
-                    idx.vectors.extend([0.0] * idx.dims)
+                    if new_idx.dims == 0:
+                        raise RuntimeError("First page produced no embedding.")
+                    vectors_by_row[row_i] = [0.0] * new_idx.dims
                 else:
-                    if idx.dims == 0:
-                        idx.dims = len(vec)
-                    elif len(vec) != idx.dims:
+                    if new_idx.dims == 0:
+                        new_idx.dims = len(vec)
+                    elif len(vec) != new_idx.dims:
                         raise ValueError("Embedding dims changed mid-index")
-                    idx.vectors.extend(vec)
-                idx.embedded_rows += 1
-            since_flush += len(vecs)
+                    vectors_by_row[row_i] = vec
             if on_progress:
-                done = idx.embedded_rows
-                mw.taskman.run_on_main(
-                    lambda d=done: on_progress("Embedding PDF…", d, total)
-                )
-            if since_flush >= PDF_FLUSH_EVERY:
-                pdf_index.save(idx, dir_path)
-                since_flush = 0
-        pdf_index.save(idx, dir_path)
-        return idx
+                mw.taskman.run_on_main(lambda d=len(vectors_by_row): on_progress("Embedding pages…", d, total))
+        if new_idx.dims:
+            # dims is resolvable here whenever any row was ever embedded —
+            # either just now, or earlier (old carries idx.dims forward) —
+            # and the any(t for ...) guard above guarantees at least one
+            # non-empty row exists, so a first-ever build always sets it.
+            for i, (_p, _h, t) in enumerate(rows):
+                if not t and i not in vectors_by_row:
+                    vectors_by_row[i] = [0.0] * new_idx.dims
+        for i in range(total):
+            vec = vectors_by_row.get(i)
+            if vec is None:
+                break  # never embedded (cancelled) — resume here next run
+            new_idx.vectors.extend(vec)
+            new_idx.embedded_rows += 1
+        pdf_index.save(new_idx, dir_path)
+        return new_idx
 
     def done(idx: pdf_index.PdfIndex) -> None:
         release()
@@ -719,7 +712,7 @@ def ensure_matches(
     """Return cached (or freshly computed) card↔PDF match scores.
 
     Guards ``curation._busy`` exactly like ensure_pdf_index above — this
-    used to run entirely unguarded, letting its O(notes x chunks) match
+    used to run entirely unguarded, letting its O(notes x pages) match
     pass start concurrently with an index build. Pass ``_reentrant=True``
     when a caller already holds the token.
     """
@@ -736,10 +729,9 @@ def ensure_matches(
         if not _reentrant:
             curation._busy = False
 
-    def do_match(_col=None) -> list[tuple[int, float]]:
+    def do_match(_col=None) -> tuple[list[tuple[int, float]], dict[int, int]]:
         cfg = _cfg()
         sig = embeddings.index_signature(cfg)
-        agg = str(cfg.get("pdf_match_agg") or DEFAULT_AGG)
         src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
         pidx = pdf_index.load(pdf_index.index_dir(USER_FILES, pdf_name))
         if not pdf_index.is_fresh(pidx, src_sig, sig):
@@ -751,7 +743,7 @@ def ensure_matches(
                 "Klaus Preferences → Semantic Search first."
             )
         digest = card_index_digest(cidx)
-        cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg)
+        cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest)
         if cached is not None:
             return cached
 
@@ -761,19 +753,17 @@ def ensure_matches(
                     lambda d=done, t=total: on_progress("Matching cards…", d, t)
                 )
 
-        matches = match_scores(
-            pidx, cidx, agg=agg, cancel=cancel, on_progress=prog
-        )
+        matches, pages = match_scores(pidx, cidx, cancel=cancel, on_progress=prog)
         if cancel is not None and cancel.is_set():
-            return matches  # partial — do not cache
+            return matches, pages  # partial — do not cache
         matches.sort(key=lambda m: m[1], reverse=True)
-        save_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg, matches)
-        return matches
+        save_matches(pdf_name, sig, cidx.dims, src_sig, digest, matches, pages)
+        return matches, pages
 
-    def done(matches: list[tuple[int, float]]) -> None:
+    def done(result: tuple[list[tuple[int, float]], dict[int, int]]) -> None:
         release()
         if on_done:
-            on_done(matches)
+            on_done(result[0])
 
     def fail(exc: Exception) -> None:
         release()
@@ -812,7 +802,6 @@ def priority_rows(col, cfg: dict) -> dict:
     history can never break the Library.
     """
     sig = embeddings.index_signature(cfg)
-    agg = str(cfg.get("pdf_match_agg") or DEFAULT_AGG)
     cidx = card_index.load(INDEX_DIR)
     digest = card_index_digest(cidx) if cidx is not None else ""
     card_ok = cidx is not None and card_index.check_signature(cidx, sig)
@@ -840,9 +829,11 @@ def priority_rows(col, cfg: dict) -> dict:
         )
         matches = None
         if indexed and not stale and card_ok:
-            matches = load_matches(name, sig, cidx.dims, src_sig, digest, agg)
-            if matches is None:
+            cached = load_matches(name, sig, cidx.dims, src_sig, digest)
+            if cached is None:
                 stale = True  # embedded but matches need a (re)compute
+            else:
+                matches, _pages = cached
         row = {
             "name": safe,
             "label": name,

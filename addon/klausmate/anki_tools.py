@@ -213,16 +213,18 @@ def default_ctx() -> dict:
 
 
 def _semantic_pdf_search(query: str, top_k: int, user_files: str) -> list[dict]:
-    """Best-matching chunk from each indexed lecture PDF, ranked.
+    """Best-matching PAGE from each indexed lecture PDF, ranked.
 
     Replaces the BM25 retrieval this tool was written against. One query
     embedding is scored against every fresh per-PDF index via
-    ``pdf_index.best_chunk``; a PDF whose index is stale or built on a
+    ``pdf_index.best_page``; a PDF whose index is stale or built on a
     different embedding signature is SKIPPED rather than scored, because a
     score from another embedding space is not a smaller number, it is a
-    meaningless one.
+    meaningless one. The hit's text is that page's ``page_store`` record —
+    slide text plus any transcript said over it — falling back to the bare
+    slide text when there is no record, or no PDF file to key one on.
     """
-    from . import embeddings, pdf_handler, pdf_index
+    from . import embeddings, page_store, pdf_handler, pdf_index
 
     pkg = __import__(__package__, fromlist=["get_config"])
     cfg = pkg.get_config() or {}
@@ -241,15 +243,22 @@ def _semantic_pdf_search(query: str, top_k: int, user_files: str) -> list[dict]:
             src = pdf_index.source_signature(user_files, name)
             if not pdf_index.is_fresh(idx, src, sig):
                 continue
-            row, score = pdf_index.best_chunk(idx, vec)
-            if row < 0 or score <= 0:
+            page, score = pdf_index.best_page(idx, vec)
+            if page < 1 or score <= 0:
                 continue
-            pages = pdf_handler.load_pages(user_files, name) or []
-            text = pdf_index.chunk_text_at(pages, idx.chunks[row])
+            text = ""
+            safe = pdf_handler._safe_basename(name)
+            path = pdf_handler.pdf_path_for(user_files, safe)
+            if path:
+                rec = page_store.load_record(user_files, safe, path, page - 1)
+                text = page_store.combined_text(rec)
+            if not text:
+                pages = pdf_handler.load_pages(user_files, name) or []
+                if 0 <= page - 1 < len(pages):
+                    text = pages[page - 1]
             hits.append({
                 "source": name,
-                # chunks carry a 1-based page; report it as the user sees it
-                "page": int(idx.chunks[row][0]),
+                "page": page,
                 "text": text,
                 "score": float(score),
             })

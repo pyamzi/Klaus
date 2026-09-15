@@ -12,7 +12,6 @@ import threading
 import time
 import types
 from array import array
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ADDON = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
@@ -71,19 +70,23 @@ def check(name, cond, detail=""):
 # ---------------------------------------------------------------- providers
 
 print("== provider selection ==")
-check("default provider is voyage for {}", embeddings.provider_name({}) == "voyage")
-check("unknown provider falls back to voyage",
-      embeddings.provider_name({"embedding_provider": "banana"}) == "voyage")
-check("explicit ollama respected",
-      embeddings.provider_name({"embedding_provider": "ollama"}) == "ollama")
-check("voyage default model",
-      embeddings.embedding_model({}) == "voyage-3-lite")
+# OpenAI is the only embedding provider now (K-222/Task 2) — Voyage and
+# Ollama are gone from embeddings.py entirely, and provider_name is a
+# constant function kept only so existing callers still compile and run.
+check("openai is the only provider, for any cfg",
+      embeddings.provider_name({}) == "openai")
+check("an unrecognized/legacy provider key changes nothing — always openai",
+      embeddings.provider_name({"embedding_provider": "banana"}) == "openai")
+check("an explicit ollama/voyage request is ignored too — always openai",
+      embeddings.provider_name({"embedding_provider": "ollama"}) == "openai")
+check("openai default model is text-embedding-3-large",
+      embeddings.embedding_model({}) == "text-embedding-3-large")
 check("signature carries dims, so a width change invalidates the index",
-      embeddings.index_signature({}) == ("voyage", "voyage-3-lite", 0))
-check("dims are omitted for providers whose API has no such parameter",
+      embeddings.index_signature({}) == ("openai", "text-embedding-3-large", 0))
+check("dims ARE sent for text-embedding-3-large — it's Matryoshka/dimension-capable",
       embeddings.index_signature(
-          {"embedding_provider": "voyage", "embedding_dimensions": 1024}
-      )[2] == 0)
+          {"embedding_provider": "openai", "embedding_dimensions": 1024}
+      )[2] == 1024)
 # An index built at one width cannot be ranked against another, so the
 # width has to reach check_signature — not merely be recorded.
 _ix = card_index.empty_index("openai", "text-embedding-3-large")
@@ -189,95 +192,77 @@ check("...and sent for OpenAI's v3 models, which are MRL-trained",
 
 print("== missing key ==")
 try:
-    embeddings.VoyageEmbeddings(lambda: {}).embed(["hi"])
-    check("voyage no key raises", False)
+    embeddings.OpenAIEmbeddings(lambda: {}).embed(["hi"])
+    check("openai no key raises", False)
 except embeddings.EmbeddingError as e:
-    check("voyage no key raises 401", e.status == 401)
+    check("openai no key raises 401", e.status == 401)
     check("401 message mentions Manage models", "Manage models" in e.user_message())
 
-# Mock server: scripted responses per request.
-SCRIPT = []          # list of (status, body_dict_or_none, headers)
-REQUESTS = []        # recorded request payloads
-
-
-class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        n = int(self.headers.get("content-length") or 0)
-        REQUESTS.append(json.loads(self.rfile.read(n).decode("utf-8")))
-        status, body, headers = SCRIPT.pop(0) if SCRIPT else (200, None, {})
-        if body is None:
-            count = len(REQUESTS[-1].get("input") or [])
-            body = {"data": [{"index": i, "embedding": [1.0, 0.0]} for i in range(count)]}
-        raw = json.dumps(body).encode("utf-8")
-        self.send_response(status)
-        for k, v in headers.items():
-            self.send_header(k, v)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
-
-    def log_message(self, *a):
-        pass
-
-
-srv = HTTPServer(("127.0.0.1", 0), Handler)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-base = f"http://127.0.0.1:{srv.server_port}"
-embeddings.VOYAGE_API_BASE = base
-embeddings.OPENAI_API_BASE = base
-
-print("== mock HTTP ==")
-cfg = {"embedding_api_key_voyage": "k", "embedding_provider": "voyage"}
-prov = embeddings.VoyageEmbeddings(lambda: cfg)
-SCRIPT[:] = [(200, None, {})]
-REQUESTS.clear()
-vecs = prov.embed(["a", "b"], kind="document")
-check("voyage embed returns 2 vectors", len(vecs) == 2)
-check("voyage sends input_type document",
-      REQUESTS[-1].get("input_type") == "document")
-prov.embed(["a"], kind="query")
-check("voyage sends input_type query", REQUESTS[-1].get("input_type") == "query")
-
-SCRIPT[:] = [(429, {"error": "slow down"}, {"retry-after": "0"}), (200, None, {})]
-REQUESTS.clear()
-vecs = prov.embed(["a"])
-check("429 retried once then succeeds", len(vecs) == 1 and len(REQUESTS) == 2)
-
-# URLError retry: point at a closed port; expect ~1 retry then error.
-embeddings.VOYAGE_API_BASE = "http://127.0.0.1:1"
-t0 = time.time()
-try:
-    prov.embed(["a"])
-    check("URLError raises", False)
-except embeddings.EmbeddingError as e:
-    took = time.time() - t0
-    check("URLError raises EmbeddingError after retry",
-          "reach" in str(e).lower() and took >= 1.9, f"took={took:.1f}s")
-embeddings.VOYAGE_API_BASE = base
-
-# batch clamp
-class FakeVoyage:
-    name = "voyage"
+# The HTTP-level behavior (auth header, retries, dims field, batching) now
+# lives entirely in openai_client.py and is covered by
+# tests/test_openai_client.py — OpenAIEmbeddings.embed is a thin
+# translation shim over it (see embeddings.py), so it isn't re-mocked here.
+# embed_batches itself is still this module's own — provider-agnostic
+# batching with no clamp (the old Voyage-specific 128 clamp is gone with
+# Voyage): a fake provider is enough to pin the loop, no HTTP involved.
+class FakeProvider:
     def __init__(self):
         self.sizes = []
     def embed(self, texts, kind="document"):
         self.sizes.append(len(texts))
         return [[1.0, 0.0]] * len(texts)
 
-fv = FakeVoyage()
-list(embeddings.embed_batches(fv, ["x"] * 300, batch_size=999))
-check("voyage batch clamped to 128", max(fv.sizes) == 128, str(fv.sizes))
+fp = FakeProvider()
+list(embeddings.embed_batches(fp, ["x"] * 300, batch_size=999))
+check("batch_size passed straight through — no provider-level clamp",
+      fp.sizes == [300], str(fp.sizes))
 
 # ---------------------------------------------------------------- pdf_index
 
-print("== pdf_index ==")
+print("== pdf_index v2: one row per page, hash-keyed ==")
+# Task 5 (K-225): pdf_index moved from chunking a page's text into several
+# rows to ONE vector per page, fed by page_store.py. The chunking helpers
+# (stride_sample/chunk_pages/chunk_text_at) and pdf_handler._chunk_text are
+# gone outright — there is no chunk table left to sample or recover text
+# from.
+_pi_tmp = tempfile.mkdtemp(prefix="klaus_test_pi_")
+_pi_idx = pdf_index.PdfIndex(
+    provider="openai", model="m", pdf_name="lec", dims=2, source_sig=(1, 2),
+    pages=[(1, "aaaa"), (2, "bbbb")], embedded_rows=2,
+    vectors=array("f", [1.0, 0.0, 0.0, 1.0]),
+)
+pdf_index.save(_pi_idx, _pi_tmp)
+_pi_back = pdf_index.load(_pi_tmp)
+check("pages round-trip as (page_1based, text_hash)",
+      _pi_back is not None and _pi_back.pages == [(1, "aaaa"), (2, "bbbb")]
+      and _pi_back.embedded_rows == 2)
+with open(os.path.join(_pi_tmp, "manifest.json"), "w") as f:
+    f.write(json.dumps({"version": 1, "chunks": [], "dims": 2, "provider": "x", "model": "y"}))
+check("a version-1 (chunk) manifest reads as absent → rebuild",
+      pdf_index.load(_pi_tmp) is None)
+check("best_page is the argmax row's page, 1-based",
+      pdf_index.best_page(_pi_back, [0.0, 1.0]) == (2, 1.0))
+check("a zero vector never wins best_page",
+      pdf_index.best_page(
+          pdf_index.PdfIndex(provider="o", model="m", pdf_name="z", dims=2,
+                              pages=[(1, "h")], embedded_rows=1,
+                              vectors=array("f", [0.0, 0.0])),
+          [1.0, 0.0],
+      ) == (1, 0.0))
+check("chunking helpers are gone",
+      not hasattr(pdf_index, "chunk_pages")
+      and not hasattr(pdf_index, "stride_sample")
+      and not hasattr(pdf_index, "chunk_text_at")
+      and not hasattr(pdf_handler, "_chunk_text"))
+shutil.rmtree(_pi_tmp, ignore_errors=True)
+
+print("== pdf_index: disk lifecycle ==")
 tmp = tempfile.mkdtemp(prefix="klaus_test_")
 ctx_dir = os.path.join(tmp, "contexts")
 os.makedirs(ctx_dir)
 
 pages = [
-    ("Alpha beta gamma. " * 40).strip(),   # page 1: long enough for 2+ chunks
+    ("Alpha beta gamma. " * 40).strip(),   # page 1
     "",                                      # page 2: empty
     ("Delta epsilon zeta. " * 40).strip(),  # page 3
 ]
@@ -286,24 +271,16 @@ with open(os.path.join(ctx_dir, "Lecture_1.json"), "w") as f:
 with open(os.path.join(ctx_dir, "Lecture_1.txt"), "w") as f:
     f.write("\n\n".join(pages))
 
-chunks = pdf_index.chunk_pages(pages, cap=1000)
-check("chunks produced", len(chunks) >= 4, str(len(chunks)))
-check("page attribution", {c[0] for c in chunks} == {1, 3}, str({c[0] for c in chunks}))
-check("chunk text recoverable",
-      all(pdf_index.chunk_text_at(pages, (p, s, ln)) == t.strip()
-          for p, s, ln, t in chunks))
-capped = pdf_index.chunk_pages(pages, cap=3)
-check("stride cap", len(capped) == 3)
-
 sig = pdf_index.source_signature(tmp, "Lecture 1.pdf")
 check("source signature resolves via safe name", sig is not None)
 
+page_rows = [(i + 1, "h%d" % (i + 1)) for i in range(len(pages))]
 idx = pdf_index.PdfIndex(
-    provider="voyage", model="voyage-3-lite", pdf_name="Lecture_1",
-    source_sig=sig, chunks=[(p, s, ln) for p, s, ln, _ in chunks],
+    provider="openai", model="text-embedding-3-large", pdf_name="Lecture_1",
+    source_sig=sig, pages=list(page_rows),
 )
 idx.dims = 4
-for i in range(len(chunks)):
+for i in range(len(page_rows)):
     v = [0.0] * 4
     v[i % 4] = 1.0
     idx.vectors.extend(v)
@@ -311,23 +288,23 @@ for i in range(len(chunks)):
 d = pdf_index.index_dir(tmp, "Lecture 1")
 pdf_index.save(idx, d)
 idx2 = pdf_index.load(d)
-check("save/load roundtrip", idx2 is not None and idx2.chunks == idx.chunks
+check("save/load roundtrip", idx2 is not None and idx2.pages == idx.pages
       and idx2.embedded_rows == idx.embedded_rows and idx2.vectors == idx.vectors)
-check("is_fresh true", pdf_index.is_fresh(idx2, sig, ("voyage", "voyage-3-lite")))
+check("is_fresh true", pdf_index.is_fresh(idx2, sig, ("openai", "text-embedding-3-large")))
 check("is_fresh false on provider change",
       not pdf_index.is_fresh(idx2, sig, ("openai", "text-embedding-3-small")))
 check("is_fresh false on source change",
-      not pdf_index.is_fresh(idx2, (sig[0] + 1, sig[1]), ("voyage", "voyage-3-lite")))
+      not pdf_index.is_fresh(idx2, (sig[0] + 1, sig[1]), ("openai", "text-embedding-3-large")))
 
-# resume state: fewer embedded rows than chunks
+# resume state: fewer embedded rows than pages
 idx2.embedded_rows -= 2
 del idx2.vectors[-8:]
 pdf_index.save(idx2, d)
 idx3 = pdf_index.load(d)
 check("partial index loads with resume cursor",
-      idx3 is not None and idx3.embedded_rows == len(chunks) - 2)
+      idx3 is not None and idx3.embedded_rows == len(page_rows) - 2)
 check("partial index is not fresh",
-      not pdf_index.is_fresh(idx3, sig, ("voyage", "voyage-3-lite")))
+      not pdf_index.is_fresh(idx3, sig, ("openai", "text-embedding-3-large")))
 
 # corrupt vectors -> load None
 with open(os.path.join(d, "vectors.f32"), "ab") as f:
@@ -335,7 +312,7 @@ with open(os.path.join(d, "vectors.f32"), "ab") as f:
 check("truncated/oversized vectors -> rebuild", pdf_index.load(d) is None)
 
 st = pdf_index.stats_from_disk(d)
-check("stats_from_disk reads manifest", st["exists"] and st["chunks"] == len(chunks))
+check("stats_from_disk reads manifest", st["exists"] and st["pages"] == len(page_rows))
 # The twin: both exits answer the same keys, and every non-manifest takes
 # the failure exit — the SAME five payloads card_index gets, not just one.
 _pi_missing = pdf_index.stats_from_disk(os.path.join(tmp, "no-such-index"))
@@ -502,27 +479,35 @@ if HAVE_RETENTION:
           < retention.fsrs_retrievability(10.0, 0.5, 5.0))
     check("s<=0 guarded", retention.fsrs_retrievability(0.0, 0.5, 5.0) == 0.0)
 
-    # match_scores on hand-built unit vectors
-    cidx = card_index.CardIndex(provider="voyage", model="voyage-3-lite", dims=2)
+    # match_scores on hand-built unit vectors — one vector per PAGE now
+    # (pdf_index v2): a note's score is simply its best-matching page, so
+    # there is no more chunk-level "agg" (top3_mean is gone along with it).
+    cidx = card_index.CardIndex(provider="openai", model="text-embedding-3-large", dims=2)
     for nid, vec in [(1, [1.0, 0.0]), (2, [0.0, 1.0]),
                      (3, [math.sqrt(0.5), math.sqrt(0.5)])]:
         cidx.nids.append(nid)
         cidx.mods.append(0)
         cidx.hashes.append("h%d" % nid)
         cidx.vectors.extend(vec)
-    pidx = pdf_index.PdfIndex(provider="voyage", model="voyage-3-lite",
+    pidx = pdf_index.PdfIndex(provider="openai", model="text-embedding-3-large",
                               pdf_name="x", dims=2)
-    for vec in ([1.0, 0.0], [0.0, 1.0]):
-        pidx.chunks.append((1, 0, 1))
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        pidx.pages.append((i + 1, "h%d" % (i + 1)))
         pidx.vectors.extend(vec)
         pidx.embedded_rows += 1
-    scores = dict(retention.match_scores(pidx, cidx, agg="max", floor=0.0))
-    check("max agg: nid1 = 1.0", abs(scores[1] - 1.0) < 1e-6)
-    check("max agg: nid3 = 0.707", abs(scores[3] - math.sqrt(0.5)) < 1e-6)
-    floored = dict(retention.match_scores(pidx, cidx, agg="max", floor=0.9))
-    check("floor filters", set(floored) == {1, 2})
-    t3 = dict(retention.match_scores(pidx, cidx, agg="top3_mean", floor=0.0))
-    check("top3_mean of 2 chunks averages both", abs(t3[1] - 0.5) < 1e-6, f"{t3[1]}")
+    scores_out, pages_out = retention.match_scores(pidx, cidx, floor=0.0)
+    scores = dict(scores_out)
+    check("best-page score: nid1 = 1.0, on page 1",
+          abs(scores[1] - 1.0) < 1e-6 and pages_out[1] == 1)
+    check("best-page score: nid3 = 0.707 (equidistant from both pages)",
+          abs(scores[3] - math.sqrt(0.5)) < 1e-6)
+    check("every scored note has a best page, 1-based",
+          all(nid in pages_out and pages_out[nid] >= 1 for nid, _ in scores_out))
+    floored_out, _floored_pages = retention.match_scores(pidx, cidx, floor=0.9)
+    check("floor filters", set(dict(floored_out)) == {1, 2})
+    check("pdf_match_agg is gone",
+          not hasattr(retention, "DEFAULT_AGG")
+          and "pdf_match_agg" not in open(retention.__file__).read())
     try:
         bad = pdf_index.PdfIndex(provider="openai", model="x", pdf_name="x", dims=2)
         retention.match_scores(bad, cidx)
@@ -555,19 +540,311 @@ if HAVE_RETENTION:
     # matches.json roundtrip + invalidation (patch USER_FILES to tmp)
     retention.USER_FILES = tmp
     m = [(1, 0.8), (2, 0.4)]
-    sig2 = ("voyage", "voyage-3-lite")
+    m_pages = {1: 1, 2: 3}
+    sig2 = ("openai", "text-embedding-3-large")
     src2 = (123, 456)
-    retention.save_matches("Lecture 1", sig2, 2, src2, "digest1", "max", m)
-    got = retention.load_matches("Lecture 1", sig2, 2, src2, "digest1", "max")
-    check("matches roundtrip", got == [(1, 0.8), (2, 0.4)])
+    retention.save_matches("Lecture 1", sig2, 2, src2, "digest1", m, m_pages)
+    got = retention.load_matches("Lecture 1", sig2, 2, src2, "digest1")
+    check("matches + pages roundtrip",
+          got == ([(1, 0.8), (2, 0.4)], {1: 1, 2: 3}))
     check("matches invalid on digest",
-          retention.load_matches("Lecture 1", sig2, 2, src2, "other", "max") is None)
-    check("matches invalid on agg",
-          retention.load_matches("Lecture 1", sig2, 2, src2, "digest1", "top3_mean") is None)
+          retention.load_matches("Lecture 1", sig2, 2, src2, "other") is None)
     check("matches invalid on dims",
-          retention.load_matches("Lecture 1", sig2, 3, src2, "digest1", "max") is None)
+          retention.load_matches("Lecture 1", sig2, 3, src2, "digest1") is None)
     check("matches invalid on source sig",
-          retention.load_matches("Lecture 1", sig2, 2, (9, 9), "digest1", "max") is None)
+          retention.load_matches("Lecture 1", sig2, 2, (9, 9), "digest1") is None)
+
+    # MATCHES_VERSION bump (Important 3, fix round 2): the cache payload
+    # gained "pages" and lost "agg" without a version bump, so a pre-K-225
+    # matches.json could load as valid against a rebuilt (and page-keyed
+    # differently) pdf_index. Bumping the constant is only half the pin —
+    # the other half is proving a stored v1 payload actually reads as
+    # absent now, mirroring how every other invalidation check above calls
+    # load_matches.
+    check("MATCHES_VERSION bumped to 2 (payload gained \"pages\", lost \"agg\")",
+          retention.MATCHES_VERSION == 2)
+    _v1_path = retention._matches_path("Lecture 1")
+    with open(_v1_path, encoding="utf-8") as f:
+        _v1_payload = json.load(f)
+    _v1_payload["version"] = 1
+    with open(_v1_path, "w", encoding="utf-8") as f:
+        json.dump(_v1_payload, f)
+    check("a stored v1 matches.json now reads as absent/stale, not valid",
+          retention.load_matches("Lecture 1", sig2, 2, src2, "digest1") is None)
+
+    print("== ensure_pdf_index: do_build's hash-reuse (mutation harness) ==")
+    # Exercises do_build's REAL body end to end — _AnyOp above never calls
+    # `op` at all, which is right for tests that don't care what
+    # ensure_pdf_index actually computes, but wrong for proving the
+    # hash-reuse skip (an unchanged page's vector is carried over rather
+    # than re-embedded) has teeth. A small local QueryOp fake runs `op`
+    # synchronously instead of dropping it, so do_build's own code executes
+    # here — and provider_from_config/_cfg are patched just enough to
+    # dodge the real aqt/config chain this stub harness doesn't have.
+    class _SyncOp:
+        def __init__(self, parent=None, op=None, success=None):
+            self._op = op
+            self._success = success
+            self._failure = None
+
+        def success(self, fn):
+            self._success = fn
+            return self
+
+        def failure(self, fn):
+            self._failure = fn
+            return self
+
+        def without_collection(self):
+            return self
+
+        def run_in_background(self):
+            try:
+                result = self._op(None)
+            except Exception as exc:  # noqa: BLE001
+                if self._failure:
+                    self._failure(exc)
+                return
+            if self._success:
+                self._success(result)
+
+    class _CountingProvider:
+        name = "openai"
+
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            return [[1.0, 0.0] for _ in texts]
+
+    _hr_tmp = tempfile.mkdtemp(prefix="klaus_test_hr_")
+    os.makedirs(os.path.join(_hr_tmp, "contexts"))
+    _hr_pages = ["alpha page one", "beta page two", "gamma page three"]
+    with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+        json.dump({"pages": _hr_pages, "page_count": 3}, f)
+
+    _hr_provider = _CountingProvider()
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _hr_provider
+    retention.USER_FILES = _hr_tmp
+    try:
+        _hr_built = {}
+        _hr_errors = []
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("do_build harness: first build hit no error", _hr_errors == [],
+              str(_hr_errors))
+        check("first build embeds every page (3 texts, one batch)",
+              len(_hr_provider.calls) == 1 and len(_hr_provider.calls[0]) == 3,
+              str(_hr_provider.calls))
+        check("first build's index is complete, 3 pages",
+              "idx" in _hr_built and _hr_built["idx"].embedded_rows == 3
+              and [p for p, _h in _hr_built["idx"].pages] == [1, 2, 3])
+
+        # Change ONE page's text (a new context file -> a new source
+        # signature, so is_fresh() no longer short-circuits and do_build's
+        # own page-by-page hash comparison actually runs).
+        _hr_pages[1] = "beta page two REVISED"
+        with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+            json.dump({"pages": _hr_pages, "page_count": 3}, f)
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx2", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("do_build harness: second build hit no error", _hr_errors == [],
+              str(_hr_errors))
+        check("second build re-embeds ONLY the one changed page — every "
+              "other page's vector is reused by hash, never re-sent to "
+              "the provider",
+              len(_hr_provider.calls) == 2 and len(_hr_provider.calls[1]) == 1,
+              str(_hr_provider.calls))
+        check("second build's index is still complete, 3 pages",
+              "idx2" in _hr_built and _hr_built["idx2"].embedded_rows == 3
+              and [p for p, _h in _hr_built["idx2"].pages] == [1, 2, 3])
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_hr_tmp, ignore_errors=True)
+
+    print("== ensure_pdf_index: cancel leaves a resumable, incomplete index "
+          "(Critical 1 fix-round-2 pin) ==")
+    # Regression pin for the silent-data-loss bug: do_build used to zero-fill
+    # every never-embedded row AND count it as embedded, so a cancelled build
+    # saved a "complete" index that was actually part garbage, and — because
+    # is_fresh() then read True — never resumed. 100 distinct pages (> the
+    # embed_batches BATCH_SIZE of 64) so a cancel mid-first-batch leaves a
+    # real, provable gap: batch one (rows 0-63) lands, batch two never runs.
+    class _CancelingProvider:
+        name = "openai"
+
+        def __init__(self, cancel_event):
+            self.calls = []
+            self._cancel_event = cancel_event
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            self._cancel_event.set()  # fires mid-batch-one, before batch two
+            return [[1.0, 0.0] for _ in texts]
+
+    _c1_total = 100
+    _c1_tmp = tempfile.mkdtemp(prefix="klaus_test_c1_")
+    os.makedirs(os.path.join(_c1_tmp, "contexts"))
+    _c1_pages = [f"page {i} distinct text" for i in range(1, _c1_total + 1)]
+    with open(os.path.join(_c1_tmp, "contexts", "C1.json"), "w") as f:
+        json.dump({"pages": _c1_pages, "page_count": _c1_total}, f)
+
+    _c1_cancel = threading.Event()
+    _c1_provider = _CancelingProvider(_c1_cancel)
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _c1_provider
+    retention.USER_FILES = _c1_tmp
+    try:
+        _c1_built = {}
+        _c1_errors = []
+        retention.ensure_pdf_index(
+            None, "C1",
+            cancel=_c1_cancel,
+            on_done=lambda idx: _c1_built.setdefault("idx", idx),
+            on_error=lambda e: _c1_errors.append(e),
+        )
+        check("cancel pin: cancelled build hit no error", _c1_errors == [],
+              str(_c1_errors))
+        check("cancel pin: provider saw exactly one batch (64 pages) before "
+              "the cancel stopped the second",
+              len(_c1_provider.calls) == 1 and len(_c1_provider.calls[0]) == 64,
+              [len(c) for c in _c1_provider.calls])
+
+        _c1_dir = pdf_index.index_dir(_c1_tmp, "C1")
+        _c1_reloaded = pdf_index.load(_c1_dir)
+        check("cancel pin: reloaded index has fewer embedded rows than pages "
+              "— no zero vector was substituted for the un-embedded rows",
+              _c1_reloaded is not None and _c1_reloaded.embedded_rows == 64
+              and _c1_reloaded.embedded_rows < _c1_total,
+              None if _c1_reloaded is None else _c1_reloaded.embedded_rows)
+        check("cancel pin: reloaded index is not complete",
+              _c1_reloaded is not None and not _c1_reloaded.is_complete())
+        _c1_sig = ("openai", "text-embedding-3-large", 0)
+        _c1_src = pdf_index.source_signature(_c1_tmp, "C1")
+        check("cancel pin: reloaded index is not fresh (so the next run "
+              "won't short-circuit and skip resuming)",
+              not pdf_index.is_fresh(_c1_reloaded, _c1_src, _c1_sig))
+
+        # Second build, nothing cancelled this time: must resume, not restart
+        # — the provider is called again ONLY for the 36 rows still missing.
+        _c1_provider.calls.clear()
+        _c1_cancel2 = threading.Event()
+        _c1_built2 = {}
+        _c1_errors2 = []
+        retention.ensure_pdf_index(
+            None, "C1",
+            cancel=_c1_cancel2,
+            on_done=lambda idx: _c1_built2.setdefault("idx", idx),
+            on_error=lambda e: _c1_errors2.append(e),
+        )
+        check("cancel pin: resumed build hit no error", _c1_errors2 == [],
+              str(_c1_errors2))
+        check("cancel pin: resumed build's index is now complete, all "
+              "100 pages",
+              "idx" in _c1_built2 and _c1_built2["idx"].embedded_rows == _c1_total
+              and _c1_built2["idx"].is_complete())
+        check("cancel pin: provider re-called only for the 36 rows that "
+              "were never embedded, not all 100",
+              sum(len(c) for c in _c1_provider.calls) == _c1_total - 64,
+              [len(c) for c in _c1_provider.calls])
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_c1_tmp, ignore_errors=True)
+
+    print("== ensure_pdf_index: an empty page gets a zero vector, never text "
+          "sent to the provider (Critical 2 fix-round-2 pin) ==")
+    # Spec D3: "a page with empty combined_text gets a zero vector and never
+    # wins best_page." A 3-page fixture whose middle page has no text at all
+    # (no slide text layer, no transcript) — page_store.combined_text("") for
+    # that page, exactly the image-only-slide case the review reproduced.
+    class _RecordingProvider:
+        name = "openai"
+
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            # "one" -> [1,0], anything else (must be non-empty by the fix)
+            # -> [0,1] — two distinguishable, already-unit vectors.
+            return [([1.0, 0.0] if "one" in t else [0.0, 1.0]) for t in texts]
+
+    _c2_tmp = tempfile.mkdtemp(prefix="klaus_test_c2_")
+    os.makedirs(os.path.join(_c2_tmp, "contexts"))
+    _c2_pages = ["Slide one has text", "", "Slide three has text"]
+    with open(os.path.join(_c2_tmp, "contexts", "C2.json"), "w") as f:
+        json.dump({"pages": _c2_pages, "page_count": 3}, f)
+
+    _c2_provider = _RecordingProvider()
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _c2_provider
+    retention.USER_FILES = _c2_tmp
+    try:
+        _c2_built = {}
+        _c2_errors = []
+        retention.ensure_pdf_index(
+            None, "C2",
+            on_done=lambda idx: _c2_built.setdefault("idx", idx),
+            on_error=lambda e: _c2_errors.append(e),
+        )
+        check("empty-page pin: build hit no error", _c2_errors == [],
+              str(_c2_errors))
+        _c2_all_texts = [t for batch in _c2_provider.calls for t in batch]
+        check('empty-page pin: "" never reaches the provider',
+              "" not in _c2_all_texts, _c2_all_texts)
+        check("empty-page pin: index is complete with all 3 rows",
+              "idx" in _c2_built and _c2_built["idx"].embedded_rows == 3
+              and _c2_built["idx"].is_complete())
+
+        _c2_idx = _c2_built["idx"]
+        _c2_mv = memoryview(_c2_idx.vectors)
+        _c2_mid = list(_c2_mv[1 * _c2_idx.dims:2 * _c2_idx.dims])
+        check("empty-page pin: the empty middle page's row is an explicit "
+              "zero vector", _c2_mid == [0.0] * _c2_idx.dims, _c2_mid)
+
+        _c2_q1 = embeddings.normalize([1.0, 0.0])
+        _c2_q3 = embeddings.normalize([0.0, 1.0])
+        _c2_page_for_1, _c2_score_for_1 = pdf_index.best_page(_c2_idx, _c2_q1)
+        _c2_page_for_3, _c2_score_for_3 = pdf_index.best_page(_c2_idx, _c2_q3)
+        check("empty-page pin: best_page never returns the empty page 2, "
+              "for a query matching either neighbor",
+              _c2_page_for_1 == 1 and _c2_page_for_3 == 3,
+              (_c2_page_for_1, _c2_page_for_3))
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_c2_tmp, ignore_errors=True)
 
     # threshold prefs
     retention.set_threshold("Lecture 1", 0.42)
@@ -647,7 +924,6 @@ if HAVE_RETENTION:
     check("excluded nid absent", 4 not in cr)
 
 shutil.rmtree(tmp, ignore_errors=True)
-srv.shutdown()
 
 print("== threshold default migration (retention._migrate_default_threshold) ==")
 

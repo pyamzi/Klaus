@@ -203,12 +203,12 @@ digest = retention.card_index_digest(cidx)
 src_sig = pdf_index.source_signature(tmp, "Lecture_1")
 pidx = pdf_index.PdfIndex(
     provider=sig[0], model=sig[1], pdf_name="Lecture_1", dims=2,
-    source_sig=src_sig, chunks=[(0, 0, 10)], embedded_rows=1,
+    source_sig=src_sig, pages=[(1, "h1")], embedded_rows=1,
     vectors=array("f", [1.0, 0.0]),
 )
 pdf_index.save(pidx, pdf_index.index_dir(tmp, "Lecture_1"))
-retention.save_matches("Lecture_1", sig, 2, src_sig, digest, "max",
-                       [(1, 0.9), (2, 0.8), (3, 0.5)])
+retention.save_matches("Lecture_1", sig, 2, src_sig, digest,
+                       [(1, 0.9), (2, 0.8), (3, 0.5)], {1: 1, 2: 1, 3: 1})
 
 
 class FakeDB:

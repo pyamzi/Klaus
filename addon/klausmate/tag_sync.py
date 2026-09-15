@@ -396,13 +396,13 @@ def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
     from . import card_index, embeddings, pdf_index, retention
 
     cfg_sig = embeddings.index_signature(cfg)
-    agg = str(cfg.get("pdf_match_agg") or retention.DEFAULT_AGG)
     src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
     cidx = card_index.load(retention.INDEX_DIR)
     if cidx is None or not card_index.check_signature(cidx, cfg_sig):
         return None
     digest = retention.card_index_digest(cidx)
-    return retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest, agg)
+    cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
+    return cached[0] if cached is not None else None
 
 
 def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:

@@ -323,7 +323,6 @@ try:
 
     sig = (cidx.provider, cidx.model)
     digest = retention.card_index_digest(cidx)
-    agg = retention.DEFAULT_AGG
 
     # -- three PDFs: A and B get a match cache, C never does -------------
     def _write_context(name: str) -> tuple[int, int]:
@@ -342,8 +341,8 @@ try:
 
     matches_a = [(1, 0.90), (2, 0.85), (3, 0.50)]
     matches_b = [(5, 0.95), (6, 0.20)]
-    retention.save_matches("PdfA", sig, cidx.dims, src_a, digest, agg, matches_a)
-    retention.save_matches("PdfB", sig, cidx.dims, src_b, digest, agg, matches_b)
+    retention.save_matches("PdfA", sig, cidx.dims, src_a, digest, matches_a, {})
+    retention.save_matches("PdfB", sig, cidx.dims, src_b, digest, matches_b, {})
     # PdfC deliberately gets no matches.json at all.
 
     drive_store.record_import(tmp, "PdfA", "Physiology Lecture 1.pdf")
@@ -352,7 +351,7 @@ try:
 
     check(
         "PdfC has no match cache on disk",
-        retention.load_matches("PdfC", sig, cidx.dims, src_c, digest, agg) is None,
+        retention.load_matches("PdfC", sig, cidx.dims, src_c, digest) is None,
     )
 
     data = pdf_graph.build_graph_data(tmp, {})
@@ -499,8 +498,8 @@ try:
     _sigz = (_cz.provider, _cz.model)
     retention.save_matches(
         "PdfZ", _sigz, _cz.dims, pdf_index.source_signature(cache_tmp, "PdfZ"),
-        retention.card_index_digest(_cz), retention.DEFAULT_AGG,
-        [(101, 0.95), (102, 0.90), (103, 0.40)],
+        retention.card_index_digest(_cz),
+        [(101, 0.95), (102, 0.90), (103, 0.40)], {},
     )
 
     # Count real projections rather than forbidding them: a spy that RAISED

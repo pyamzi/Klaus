@@ -8,8 +8,9 @@ note tags → `!Library::*` candidates (inverted from pdf_index/prefs.json
 — the tag IS the membership verdict, so there is deliberately NO
 threshold re-gating here; only MATCH_FLOOR rejects absurd tag/vector
 disagreement) → the note's one embedding row (card_index.read_vector,
-never the full ~90MB load) → pdf_index.best_chunk argmax → the chunk's
-stored 1-based page. All vectors are already on disk; a resolve is a few
+never the full ~90MB load) → pdf_index.best_page argmax → its own
+1-based page number, straight off the index (one vector per page now).
+All vectors are already on disk; a resolve is a few
 stats + one 3KB seek + ≤1000 dot products. When nothing matches, the
 panel says exactly NO_LECTURE_TEXT — Pouya's wording.
 
@@ -220,17 +221,17 @@ class LectureResolver:
                 continue
             if idx.dims != rm.dims:
                 continue
-            j, score = pdf_index.best_chunk(idx, vec)
-            if j < 0:
+            page_1based, score = pdf_index.best_page(idx, vec)
+            if page_1based < 0:
                 continue
             # Deterministic winner: highest score, then lexical safe.
             if best is None or score > best[0] or (
                 score == best[0] and safe < best[1]
             ):
-                best = (score, safe, j, idx)
+                best = (score, safe, page_1based, idx)
         if best is None:
             return NoLecture(R_INDEX_UNAVAILABLE), consulted
-        score, safe, j, idx = best
+        score, safe, page_1based, idx = best
         if score < MATCH_FLOOR:
             return NoLecture(R_BELOW_FLOOR), consulted
 
@@ -238,7 +239,7 @@ class LectureResolver:
         note(ctx_json)
         pages_known = pdf_handler.load_pages(self._ufd, safe) is not None
         stale = pdf_index.source_signature(self._ufd, safe) != idx.source_sig
-        page = int(idx.chunks[j][0]) if pages_known else 0
+        page = page_1based if pages_known else 0
         return (
             LectureMatch(
                 safe=safe,
