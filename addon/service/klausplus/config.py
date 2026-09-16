@@ -7,7 +7,7 @@ units. Keys are read once and never logged.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Human units (spec D1): a judged card is ~250 Anthropic tokens, an assistant turn ~6,000.
 TOKENS_PER_CARD = 250
@@ -23,15 +23,15 @@ def _truthy(v: str | None) -> bool:
 class Settings:
     database_path: str = "/data/klausplus.sqlite3"
     public_base_url: str = "https://klausmate.fly.dev"
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
+    openai_api_key: str = field(default="", repr=False)
+    anthropic_api_key: str = field(default="", repr=False)
     openai_base: str = "https://api.openai.com/v1"
     anthropic_base: str = "https://api.anthropic.com"
-    stripe_secret_key: str = ""
-    stripe_webhook_secret: str = ""
+    stripe_secret_key: str = field(default="", repr=False)
+    stripe_webhook_secret: str = field(default="", repr=False)
     stripe_price_monthly: str = ""
     stripe_price_yearly: str = ""
-    resend_api_key: str = ""
+    resend_api_key: str = field(default="", repr=False)
     resend_from: str = ""
     min_client_version: str = "0.2.0"
     paused: bool = False
@@ -47,6 +47,7 @@ class Settings:
     audio_day_seconds: int = 240 * 60
     max_json_bytes: int = 4 * 1024 * 1024
     max_audio_bytes: int = 25 * 1024 * 1024
+    allowed_models: tuple = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +69,7 @@ class Settings:
             operator_name=e("OPERATOR_NAME") or d.operator_name,
             operator_email=e("OPERATOR_EMAIL") or "",
             operator_country=e("OPERATOR_COUNTRY") or "",
+            allowed_models=tuple(m.strip() for m in (e("KLAUS_PLUS_ALLOWED_MODELS") or "").split(",") if m.strip()),
         )
 
     @property

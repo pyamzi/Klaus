@@ -30,3 +30,4 @@ __pycache__/
 .DS_Store
 .claude/worktrees/
 .cursor/
+service/klausplus.egg-info/

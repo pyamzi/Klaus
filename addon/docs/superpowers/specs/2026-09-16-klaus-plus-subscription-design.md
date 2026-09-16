@@ -116,7 +116,13 @@ service and one add-on mode; it changes no feature.
   day; bodies capped (4 MB JSON, 25 MB audio); a revoked or unknown key
   is `401` with no detail. `KLAUS_PLUS_PAUSED=1` in secrets refuses every
   proxied call with a maintenance message — the kill switch for a runaway
-  bill.
+  bill. `KLAUS_PLUS_ALLOWED_MODELS` (optional, comma-separated) is the
+  finer lever: when set, a request naming any other model is refused
+  `400` before any provider call; unset, the caller's model is forwarded
+  as-is and the provider spend caps stay the backstop. The quotas are
+  priced against Sonnet-class and `text-embedding-3-large` costs, so a
+  body hand-crafted for an Opus-class model spends several times the
+  priced quota — this knob is what closes that without a redeploy.
 - **Version floor.** `MIN_CLIENT_VERSION` on the service; an older add-on
   gets `426` and the message "update Klaus from Tools → Add-ons".
 
@@ -173,9 +179,9 @@ service and one add-on mode; it changes no feature.
   30 lecture hours, 812 of 3,000 cards, 31 of 200 turns"), and three
   buttons: **Subscribe…** (opens `/subscribe` in the browser),
   **Manage subscription…** (opens the portal link), **Check** (refreshes
-  the verdict). When a key is present the two provider-key rows dim with
-  the caption "not needed on Klaus Plus" and stay editable (the free tier
-  is one deletion away). No `exec()`, theme tokens only, `mark_dirty`
+  the verdict). When a key is present the two provider-key rows are recaptioned
+  "not needed on Klaus Plus" and stay editable — never disabled or
+  greyed, the free tier is one deletion away. No `exec()`, theme tokens only, `mark_dirty`
   discipline unchanged.
 - **Config keys**: `klaus_plus_key` (`""`), `klaus_plus_cache` (`{}`),
   `klaus_plus_base` (`"https://klausmate.fly.dev"`, a free-text row
@@ -242,7 +248,7 @@ provides before launch (see "What Pouya provides").
   no key: "Klaus Plus: $12/month or $99/year, no API keys needed" and a
   Subscribe… button. After checkout the browser shows the key once and
   it arrives by email; pasted and saved, the status line fills in and the
-  provider-key rows dim.
+  provider-key rows are recaptioned "not needed on Klaus Plus".
 - Everything else is unchanged: indexing, the sweep prompt (now in quota
   terms), the assistant, the Lecture panel. At a cap, one message with
   the reset date and the option to add a personal key instead.
