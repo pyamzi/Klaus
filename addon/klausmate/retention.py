@@ -306,6 +306,39 @@ def _matches_path(name: str) -> str:
     return os.path.join(pdf_index.index_dir(USER_FILES, name), MATCHES_FILE)
 
 
+def pages_digest(name: str) -> str:
+    """blake2b over this PDF index's page hashes, in order — the key that
+    ties a cached ranking to the page TEXT it was actually computed from.
+
+    None of the other keys can see a transcript (K-236): ``pdf_source_sig``
+    stamps ``contexts/<safe>.json``, which ``page_store.append_segment``
+    never touches, so a page whose said-text grew re-embeds (do_build's own
+    ``idx.pages != keys`` check) while ``load_matches`` went on serving the
+    old ranking against the new vectors.
+
+    Manifest-only — never the vectors — and computed HERE rather than
+    passed in, so all five callers (ensure_matches, priority_rows,
+    pdf_graph, tag_sync) get the invalidation without a sixth signature to
+    keep in step. "" when there is no readable index, which is what makes a
+    pre-v2 profile's save/load pair agree with itself.
+    """
+    m = card_index.read_manifest(
+        pdf_index.index_dir(USER_FILES, name),
+        pdf_index.INDEX_VERSION,
+        pdf_index.MANIFEST_FILE,
+    )
+    if not m:
+        return ""
+    try:
+        h = hashlib.blake2b(digest_size=8)
+        for row in m.get("pages") or []:
+            h.update(str(row[1]).encode("utf-8"))
+            h.update(b"\x1f")
+        return h.hexdigest()
+    except (KeyError, TypeError, IndexError):
+        return ""
+
+
 def load_matches(
     name: str,
     signature: tuple[str, str],
@@ -330,6 +363,10 @@ def load_matches(
         if source_sig is None or (int(sig[0]), int(sig[1])) != source_sig:
             return None
         if str(m.get("card_index_digest")) != digest:
+            return None
+        if str(m.get("pages_digest") or "") != pages_digest(name):
+            # The pages themselves moved under this ranking (a re-embed, a
+            # grown transcript, a pre-v2 payload with no digest at all).
             return None
         if float(m.get("floor", -1.0)) != MATCH_FLOOR:
             # MATCH_FLOOR changed since this cache was written — a cache
@@ -358,6 +395,7 @@ def save_matches(
         "model": signature[1],
         "dims": dims,
         "pdf_source_sig": list(source_sig),
+        "pages_digest": pages_digest(name),
         "card_index_digest": digest,
         "floor": MATCH_FLOOR,
         "matches": [[nid, round(score, 6)] for nid, score in matches],
@@ -621,8 +659,6 @@ def ensure_pdf_index(
             raise RuntimeError(f"No stored text for “{pdf_name}” — re-import the PDF.")
         dir_path = pdf_index.index_dir(USER_FILES, pdf_name)
         idx = pdf_index.load(dir_path)
-        if pdf_index.is_fresh(idx, src_sig, sig):
-            return idx
 
         pages = pdf_handler.load_pages(USER_FILES, pdf_name)
         if pages is None:
@@ -634,9 +670,18 @@ def ensure_pdf_index(
         path = pdf_handler.pdf_path_for(USER_FILES, safe) or ""
         page_store.ensure_records(USER_FILES, safe, path, pages)
         rows = page_store.page_texts(USER_FILES, safe, path, len(pages))   # (page, hash, text)
+        keys = [(p, h) for p, h, _t in rows]
+        # is_fresh() is NOT enough on its own (K-236): it stamps
+        # contexts/<safe>.json, and page_store.append_segment writes a page
+        # RECORD and never that file — so after a transcript lands the index
+        # reads as current and the page's stale hash sits there forever,
+        # which made D3's "a page whose transcript grew re-embeds alone"
+        # untrue. ensure_records is idempotent, so reading the page keys
+        # first costs one pass over the records and buys that sentence back.
+        if pdf_index.is_fresh(idx, src_sig, sig) and idx.pages == keys:
+            return idx
         if not any(t for _p, _h, t in rows):
             raise RuntimeError(f"“{pdf_name}” has no extractable text to embed.")
-        keys = [(p, h) for p, h, _t in rows]
         # Keep every row whose hash is unchanged (same provider/model/dims);
         # embed only the rest. Rows are rebuilt in page order.
         old: dict[int, tuple[str, list[float]]] = {}
@@ -740,7 +785,7 @@ def ensure_matches(
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
                 "The card index needs a rebuild — press Index Now in "
-                "Klaus Preferences → Semantic Search first."
+                "KlausMate Preferences → API keys & models first."
             )
         digest = card_index_digest(cidx)
         cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest)

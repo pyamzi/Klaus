@@ -1012,10 +1012,18 @@ same reason.
     `cost.format_estimate(sweep_estimate(names))` (note text plus page
     text, falling back to the stored slide text), and the confirm's
     DEFAULT BUTTON IS NO, because it is the one dialog in Klaus that can
-    spend money. `first_key` exists because pasting the first key does
+    spend money — and says so, including what declining does NOT buy
+    (the card index still rebuilds unpriced on the next PDF add).
+    `first_key` exists because pasting the first key does
     NOT move the signature — nothing was ever embedded — yet that is
     exactly when the offer is worth making; rotating a key is not a
-    first key, those vectors are still valid.
+    first key, those vectors are still valid. The THIRD trigger is
+    `stale_index_names()` (K-236) — manifests whose `version !=
+    pdf_index.INDEX_VERSION` — because an upgrade moves no signature
+    either, yet every one of those indexes reads as absent; that is
+    also why `indexed_pdf_names` tests for the manifest FILE and never
+    `stats_from_disk`, which answers None for any version but the
+    current one and so hid the whole upgrade population from the sweep.
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
     and re-embeds the collection on a paid API, silently (the exact bug
@@ -1130,10 +1138,19 @@ same reason.
     it; what `save_embed` compares is `embeddings.index_signature`
     before and after.
   - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
-    readiness checks. Two steps only since 2026-09-15: the library-root
+    readiness checks. Two steps since 2026-09-15: the library-root
     pick, then ONE missing-key nudge whose wording is the module-level
     `KEYS_COPY` constant — the welcome dialog and the profile-open nudge
-    quote the same string so setup can never be described two ways. No
+    quote the same string so setup can never be described two ways.
+    When the key IS set, that second step instead runs
+    `_offer_v2_index_sweep` (K-236): once per profile, and only while
+    `index_queue.stale_index_names()` finds pre-v2 manifests, it opens
+    the priced sweep confirm and writes `_v2_index_sweep_offered`
+    whether the answer was yes or no — a refused whole-collection
+    re-embed is an answer, not a snooze. Preferences' Save shares this
+    same trigger (`index_queue.offer_model_sweep`) and MAY re-offer
+    while stale manifests remain; this profile-open call is the
+    once-per-profile one, gated by `_v2_index_sweep_offered`. No
     provider branch, no local-server probe and no runtime offer survive;
     `_embedding_ready` is `bool(cfg["api_key_openai"])` and nothing else
     (naming both keys while checking one is a known gap — board K-231).
@@ -1407,8 +1424,13 @@ same reason.
   page's OCR rows). There is no local engine and no managed runtime any
   more; `user_files/runtime/` and `user_files/ocr/` are dead directories
   a user may simply delete. `_migrate_config` renames
-  `embedding_api_key_openai` → `api_key_openai` and `assistant_model` →
-  `reasoning_model`, and scrubs `embedding_provider`,
+  `embedding_api_key_openai` → `api_key_openai` (`assistant_model` is
+  DROPPED, not renamed — Anki's `getConfig` merges `config.json`'s
+  defaults under the user's keys, so `reasoning_model` is never empty
+  and takes its default), clears `embedding_model` when the scrubbed
+  `embedding_provider` was not OpenAI (the model belonged to the
+  provider), drops `_embed_key_setup_declined` once so the API-first
+  regime gets one fresh key nudge, and scrubs `embedding_provider`,
   `embedding_api_key_voyage`, `ocr_enabled`, `ocr_model`,
   `runtime_auto_setup`, `claude_binary`, `endpoint`,
   `pdf_index_max_chunks` and `pdf_match_agg` — those names in

@@ -414,8 +414,12 @@ plus (retired 2026-09-01) `assistant_api_key` / `assistant_backend` /
 for was cut back to Claude Code's own login before it ever shipped —
 keep both cleanups until users have upgraded past them. It also carries
 the 2026-09-15 migration: `embedding_api_key_openai` → `api_key_openai`
-and `assistant_model` → `reasoning_model` are RENAMED (the value is
-worth keeping) before `_LEGACY_KEYS_DROPPED` scrubs the rest —
+is RENAMED (its destination default is `""`, so the value really does
+carry over) before `_LEGACY_KEYS_DROPPED` scrubs the rest.
+`assistant_model` is DROPPED, not renamed — Anki's `getConfig` merges
+`config.json`'s defaults under the profile's keys, so `reasoning_model`
+is never empty and a copy-into-empty could never fire; `reasoning_model`
+takes its default. Scrubbed beside it —
 `embedding_provider`, `embedding_api_key_voyage`, `ocr_enabled`,
 `ocr_model`, `runtime_auto_setup`, `claude_binary`, `endpoint`,
 `pdf_index_max_chunks`, `pdf_match_agg`. Those names appearing in

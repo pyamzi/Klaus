@@ -293,6 +293,44 @@ def _readiness_after_library_root() -> None:
     _readiness_check_body()
 
 
+def _offer_v2_index_sweep(cfg: dict) -> None:
+    """One-time upgrade offer: rebuild the PDF indexes pdf_index v2 left
+    unreadable (K-236).
+
+    A profile whose indexes predate v2 reads as having NO indexes at all
+    — every Library row blank, the Lecture panel silent, every PDF
+    invisible to the assistant — because an upgrade moves no embedding
+    signature, so nothing else triggers a rebuild on its own.
+    Preferences' Save shares this same trigger
+    (``index_queue.offer_model_sweep``) and MAY re-offer while stale
+    manifests remain; this profile-open call is the ONCE-per-profile
+    one, gated on ``_v2_index_sweep_offered`` below — the flag is
+    written whether the user said yes or no, because "no" to a priced
+    whole-collection re-embed is an answer, not a snooze.
+
+    Passing the CURRENT signature as ``previous`` is deliberate — it
+    leaves the stale-manifest scan as the only trigger that can fire
+    here, so this never doubles as a model-change prompt.
+    """
+    if cfg.get("_v2_index_sweep_offered"):
+        return
+    try:
+        from . import embeddings, index_queue
+
+        if not index_queue.stale_index_names():
+            return  # nothing to upgrade — ask later if that changes
+        if not index_queue.offer_model_sweep(
+            mw, embeddings.index_signature(cfg)
+        ):
+            return  # never asked (no profile, refused trigger) — no flag
+    except Exception as exc:
+        print(f"[klausmate] v2 index sweep offer failed: {exc}")
+        return
+    cfg2 = _pkg().get_config()
+    cfg2["_v2_index_sweep_offered"] = True
+    _pkg().write_config(cfg2)
+
+
 def _readiness_check_body() -> None:
     """The readiness dialog: one nudge when the OpenAI key is missing.
 
@@ -303,7 +341,10 @@ def _readiness_check_body() -> None:
     """
     cfg = _pkg().get_config()
     if _embedding_ready(cfg):
-        return  # All set — silent
+        # Set up, but possibly carrying pre-v2 indexes that now read as
+        # absent — the one thing left worth asking about.
+        _offer_v2_index_sweep(cfg)
+        return
     if cfg.get("_embed_key_setup_declined"):
         return
 

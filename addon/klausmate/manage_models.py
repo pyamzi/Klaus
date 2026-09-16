@@ -7,7 +7,10 @@ point (K-045 folded the old 'Klaus' submenu's three items in here).
 
 Since the API-first reversal (2026-09-15, spec D1) Klaus talks to exactly
 two services with the user's own keys — OpenAI for embeddings and lecture
-transcription, Anthropic for the assistant and card pertinence — so the
+transcription, and Anthropic, whose key is STORED for the spec's Plans 2
+and 3 (card pertinence, the assistant on the Messages API) and read by
+nothing today: the assistant still runs on the user's own Claude Code
+login. So the
 old Semantic Search page (a provider combo fanned out over three
 per-provider key slots) and the whole "Local model library (Ollama)" page
 with its install / pull / delete / classify machinery are gone, together

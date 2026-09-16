@@ -63,6 +63,8 @@ the whole policy without Qt.
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 from typing import Any, Callable, NamedTuple
 
@@ -228,6 +230,15 @@ def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str) -> str:
         f"Re-index everything with {model}?\n\n"
         f"{notes} and {pdfs} will be embedded again from scratch — "
         f"{estimate}, billed to your OpenAI key.\n\n"
+        # Declining does NOT prevent the spend this priced: the next PDF
+        # add runs curation.ensure_index as phase one and embeds every
+        # note from scratch, unpriced and unconfirmed. Before the
+        # API-first turn that path was free (a local engine); now it
+        # bills the same key this dialog just asked about, so "No" has
+        # to say what it really means. K-237 is the queue-side confirm
+        # that would let it mean "and free".
+        "If you decline, the card index is still rebuilt — unpriced — "
+        "the first time a PDF is indexed.\n\n"
         "You can stop it at any time from the bar at the bottom of the "
         "main window."
     )
@@ -686,26 +697,72 @@ def _fail(exc: Exception) -> None:
 # ── the model-change sweep ───────────────────────────────────────────────
 
 
+def _manifest_paths() -> list[tuple[str, str]]:
+    """(PDF name, where its index manifest would live), for every PDF
+    with stored text. One walk, two readers below."""
+    from . import pdf_handler, pdf_index
+
+    root = _user_files()
+    out: list[tuple[str, str]] = []
+    for fname in pdf_handler.list_contexts(root):
+        name = fname[:-4] if fname.endswith(".txt") else fname
+        out.append(
+            (name, os.path.join(pdf_index.index_dir(root, name), pdf_index.MANIFEST_FILE))
+        )
+    return out
+
+
 def indexed_pdf_names() -> list[str]:
     """Every PDF that has an index on disk, fresh or stale.
 
-    Membership is "has a manifest", NOT a signature comparison — after a
-    model change every one of them is stale by definition, and hand-
-    spelling that comparison is exactly how eight call sites silently
-    broke when the signature grew a third element.
+    Membership is "has a manifest FILE", NOT a signature comparison —
+    after a model change every one of them is stale by definition, and
+    hand-spelling that comparison is exactly how eight call sites
+    silently broke when the signature grew a third element.
+
+    Nor a PARSED, version-checked manifest (K-236): ``stats_from_disk``
+    reads through ``card_index.read_manifest``, which answers None for
+    any version but the current one, so asking it here excluded every
+    index built before pdf_index v2 — the exact population D8's sweep
+    exists for. The upgrader accepted a priced re-index and only the
+    card index rebuilt.
     """
     names: list[str] = []
     try:
-        from . import pdf_handler, pdf_index
-
-        root = _user_files()
-        for fname in pdf_handler.list_contexts(root):
-            name = fname[:-4] if fname.endswith(".txt") else fname
-            st = pdf_index.stats_from_disk(pdf_index.index_dir(root, name))
-            if st["exists"]:
+        for name, manifest in _manifest_paths():
+            if os.path.isfile(manifest):
                 names.append(name)
     except Exception as exc:
         print(f"[klausmate] index sweep scan failed: {exc}")
+    return names
+
+
+def stale_index_names() -> list[str]:
+    """Every PDF whose manifest was written by an older INDEX_VERSION.
+
+    These read as ABSENT everywhere (``pdf_index.load`` and
+    ``stats_from_disk`` both gate on the version), so the Library shows
+    them unembedded, the Lecture panel finds no page and the assistant
+    skips them — and nothing would ever offer to rebuild them, because
+    an UPGRADE moves no embedding signature. That is why this is the
+    third sweep trigger (K-236). A corrupt manifest is not stale: it
+    rebuilds on demand, and a whole-collection prompt is the wrong
+    answer to one bad file.
+    """
+    names: list[str] = []
+    try:
+        from . import pdf_index
+
+        for name, manifest in _manifest_paths():
+            try:
+                with open(manifest, encoding="utf-8") as f:
+                    version = json.load(f).get("version")
+            except (OSError, ValueError, AttributeError):
+                continue
+            if version != pdf_index.INDEX_VERSION:
+                names.append(name)
+    except Exception as exc:
+        print(f"[klausmate] stale index scan failed: {exc}")
     return names
 
 
@@ -776,6 +833,11 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
     vectors are still valid, and re-embedding them would be a bill for
     nothing.
 
+    A stale-version manifest on disk is the third trigger, for the same
+    reason (K-236): an upgrade to pdf_index v2 moves no signature either,
+    yet every one of those indexes now reads as absent.
+    ``setup_flow`` calls this once per profile on that ground alone.
+
     Returns True when the question was actually asked. Window-modal via
     ``open()`` and a ``finished`` callback — K-114: ``exec()`` on a
     static (question/askUser) runs a nested app-modal loop that segfaults
@@ -785,7 +847,9 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
     if mw is None or getattr(mw, "col", None) is None:
         return False
     current = embeddings.index_signature(_cfg())
-    if not (first_key or signature_changed(previous, current)):
+    if not (
+        first_key or signature_changed(previous, current) or stale_index_names()
+    ):
         return False
     names = indexed_pdf_names()
     try:

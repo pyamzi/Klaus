@@ -63,7 +63,7 @@ class EmbeddingError(Exception):
         if self.status in (401, 403):
             return (
                 f"{name} rejected the embedding API key — check it in "
-                "Tools → Klaus → Manage models."
+                "KlausMate Preferences → API keys & models."
             )
         if self.status == 429:
             wait = f" in {int(self.retry_after)}s" if self.retry_after else " shortly"

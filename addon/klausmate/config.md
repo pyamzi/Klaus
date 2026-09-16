@@ -22,11 +22,20 @@ standard for Anki add-ons) and never in the repo.
 - **reasoning_model**: Free text, default `"claude-sonnet-5"`. Written
   here but **not yet wired** — the assistant's Claude Code child does
   not read it; a future release (Plan 3) will.
-- **transcription_model**: Which OpenAI model transcribes recorded
-  lecture audio. Default `"gpt-4o-mini-transcribe"`.
+- **transcription_model**: Which OpenAI model would transcribe recorded
+  lecture audio. Default `"gpt-4o-mini-transcribe"`. Written here but
+  **not yet wired**, like `reasoning_model` above — there is no lecture
+  recorder yet; it arrives with the spec's Plan 2.
 - **_embed_key_setup_declined**: Written automatically when you dismiss
   the "needs an API key" nudge, so Klaus stops re-prompting at startup.
-  Delete it to see the nudge again.
+  Delete it to see the nudge again. Cleared ONCE by the 2026-09-15
+  migration: it was a "no thanks" to an optional key, back when a local
+  engine existed, and the API-first release genuinely requires one — so
+  an upgrading profile gets exactly one fresh nudge.
+- **_v2_index_sweep_offered**: Written automatically after Klaus offers,
+  once per profile, to rebuild PDF indexes written before the one-vector-
+  per-page format (those read as no index at all). Set whether you accept
+  or decline. Delete it to be asked again.
 
 ## Semantic library (matching + retention)
 

@@ -393,6 +393,24 @@ check("setup_flow: the native folder sheet is deferred a tick past the "
       "finished handler, never nested inside it",
       "QTimer.singleShot(0, _pick_folder)" in _K114["setup_flow"])
 
+# K-236: raw source, never code_only — every name this pin cares about
+# lives in a string literal, and code_only strips those, so the whole
+# check would pass against a file that lost the feature.
+_V2_SWEEP_SRC = _func_src("setup_flow", "_offer_v2_index_sweep")
+check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
+      "index-sweep offer — an upgrade to pdf_index v2 moves no "
+      "embedding signature, so Preferences' Save can never ask, while "
+      "every pre-v2 index reads as absent (blank Library, silent "
+      "Lecture panel). Asked once per profile off the stale-manifest "
+      "scan, and the flag is written whether the answer was yes or NO: "
+      "a refused whole-collection re-embed is an answer, not a snooze",
+      "_offer_v2_index_sweep(cfg)"
+      in _func_src("setup_flow", "_readiness_check_body")
+      and '_v2_index_sweep_offered' in _V2_SWEEP_SRC
+      and "index_queue.stale_index_names()" in _V2_SWEEP_SRC
+      and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC
+      and "write_config(cfg2)" in _V2_SWEEP_SRC)
+
 
 section("2026-09-05: the placement engine and the tear-off are gone — "
         "Qt docks the PDF panel")

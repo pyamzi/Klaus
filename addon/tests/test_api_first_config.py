@@ -98,44 +98,100 @@ check(
 
 # ------------------------------------------------- _migrate_config
 
-section("_migrate_config renames the two surviving keys and scrubs the rest")
+section("_migrate_config: one rename, and what an Ollama-era profile loses")
 
-_store = {
-    "embedding_api_key_openai": "sk-old",
-    "assistant_model": "claude-x",
-    "embedding_provider": "voyage",
-    "ocr_model": "glm-ocr",
-    "_embed_default_migrated": True,
-}
+# Anki's getConfig returns config.json's DEFAULTS merged under the
+# profile's own keys, so every default is already present in the dict
+# _migrate_config sees. Modelling that is the whole point (I3): with a
+# bare store, reasoning_model reads empty and the old
+# "assistant_model -> reasoning_model" rename looked like it fired. In
+# production it never could.
+def _profile(**user_keys) -> dict:
+    merged = dict(cfg)
+    merged.update(user_keys)
+    return merged
+
+
+_store = _profile(
+    embedding_api_key_openai="sk-old",
+    assistant_model="claude-x",
+    embedding_provider="ollama",
+    embedding_model="nomic-embed-text",
+    ocr_model="glm-ocr",
+    _embed_default_migrated=True,
+    _embed_key_setup_declined=True,
+)
 _written: dict = {}
 K.get_config = lambda: dict(_store)
 K.write_config = lambda c: _written.update(c)
 K._migrate_config()
 
 check(
-    "api key and model renamed, old keys gone, nothing else invented",
+    "the API key is renamed — its destination default IS \"\", so this "
+    "one really does migrate a value the user would otherwise re-enter",
     _written.get("api_key_openai") == "sk-old"
-    and _written.get("reasoning_model") == "claude-x"
-    and not any(
+    and "embedding_api_key_openai" not in _written,
+)
+check(
+    "assistant_model is DROPPED, not renamed: reasoning_model already "
+    "holds config.json's default under Anki's merge, so a copy-into-"
+    "empty could never fire — and the old value is a Claude Code alias "
+    "the Messages API would reject anyway. Code, test and docs now say "
+    "the same thing",
+    _written.get("reasoning_model") == cfg["reasoning_model"]
+    and "assistant_model" not in _written,
+)
+check(
+    "a dead provider takes its model with it — the pre-plan dialog wrote "
+    "the resolved Ollama model into embedding_model, and carrying "
+    '"nomic-embed-text" into an OpenAI-only world prices as a KeyError '
+    'and embeds as an HTTP 404. "" resolves to the OpenAI default',
+    _written.get("embedding_model") == "",
+)
+check(
+    "the declined-key flag goes with them: it was a 'no thanks' to an "
+    "OPTIONAL key (a local engine existed then) and would otherwise "
+    "silence the only profile-open message saying Klaus now REQUIRES "
+    "one — the API-first regime gets exactly one fresh nudge",
+    "_embed_key_setup_declined" not in _written,
+)
+check(
+    "...and the rest of the Ollama era is scrubbed, nothing invented",
+    not any(
         k in _written
-        for k in (
-            "embedding_api_key_openai",
-            "assistant_model",
-            "embedding_provider",
-            "ocr_model",
-        )
+        for k in ("embedding_provider", "ocr_model", "_embed_default_migrated")
     ),
 )
 
+# An OpenAI-era profile keeps the model it actually chose.
+_storeO = _profile(embedding_provider="openai", embedding_model="text-embedding-3-small")
+_writtenO: dict = {}
+K.get_config = lambda: dict(_storeO)
+K.write_config = lambda c: _writtenO.update(c)
+K._migrate_config()
 check(
-    "the one-time ollama->voyage default pin is gone with the provider it "
-    "pinned to — _embed_default_migrated is scrubbed, never re-written",
-    "_embed_default_migrated" not in _written,
+    "an OpenAI-era profile's embedding model SURVIVES — only a dead "
+    "provider's model is cleared, never a valid choice the user made",
+    _writtenO.get("embedding_model") == "text-embedding-3-small",
+)
+
+# A profile that carried no retired key at all is not touched: a decline
+# recorded AFTER the migration is honoured forever.
+_storeD = _profile(api_key_openai="", _embed_key_setup_declined=True)
+_wroteD = []
+K.get_config = lambda: dict(_storeD)
+K.write_config = lambda c: _wroteD.append(c)
+K._migrate_config()
+check(
+    "a decline made in the API-first regime is NOT re-cleared — the "
+    "fresh nudge is one-time, tied to the retired keys actually present, "
+    "not a prompt that returns every launch",
+    _wroteD == [],
 )
 
 # A profile that already holds the new names must not have them clobbered
 # by a stale old one: the rename only fills an EMPTY destination.
-_store2 = {"embedding_api_key_openai": "sk-old", "api_key_openai": "sk-new"}
+_store2 = _profile(embedding_api_key_openai="sk-old", api_key_openai="sk-new")
 _written2: dict = {}
 K.get_config = lambda: dict(_store2)
 K.write_config = lambda c: _written2.update(c)
@@ -147,7 +203,7 @@ check(
 )
 
 # Idempotence: a profile already migrated writes nothing at all.
-_store3 = {"api_key_openai": "sk", "reasoning_model": "claude-sonnet-5"}
+_store3 = _profile(api_key_openai="sk")
 _wrote_any = []
 K.get_config = lambda: dict(_store3)
 K.write_config = lambda c: _wrote_any.append(c)

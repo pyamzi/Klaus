@@ -157,6 +157,14 @@ check(
     "...and still says the run can be stopped from the bottom bar",
     "stop it" in msg.lower(),
 )
+check(
+    "...and says what declining actually COSTS — the next PDF add runs "
+    "the card index from scratch as phase one, unpriced and unconfirmed, "
+    "so a bare No reads as 'not now, and free' when it means 'not now, "
+    "and without being asked again'",
+    "If you decline, the card index is still rebuilt — unpriced — the "
+    "first time a PDF is indexed." in msg,
+)
 _one = iq.sweep_message(1, 1, "m", "~0 tokens · under $0.01")
 # "1 PDF" is a SUBSTRING of "1 PDFs", so the obvious form of this check
 # passes against a message that never learned the singular at all — it
@@ -666,9 +674,60 @@ check(
     iq.offer_model_sweep(None, embeddings.index_signature({})) is False,
 )
 check(
+    "...and with every manifest at the current version nothing is stale, "
+    "so the upgrade trigger cannot fire on a profile with nothing to "
+    "upgrade",
+    iq.stale_index_names() == [],
+    str(iq.stale_index_names()),
+)
+
+# A PRE-UPGRADE index: the shape an existing profile actually carries on
+# the morning it installs this plan.
+os.makedirs(pdf_index.index_dir(tmp, "b"))
+with open(os.path.join(pdf_index.index_dir(tmp, "b"), "manifest.json"), "w") as f:
+    f.write('{"version": 1, "chunks": [[0,"h0"]], "embedded_rows": 1, '
+            '"provider": "voyage", "model": "voyage-3-lite", "dims": 1024}')
+check(
+    "a pre-upgrade (v1) manifest is swept too — membership is \"has a "
+    "manifest file\", ANY version. stats_from_disk reads through "
+    "card_index.read_manifest, which answers None for every version but "
+    "the current one, so a version gate here silently excludes the exact "
+    "population the sweep exists for: every index built before this plan",
+    sorted(iq.indexed_pdf_names()) == ["a", "b"],
+    str(iq.indexed_pdf_names()),
+)
+check(
+    "...and stale_index_names names ONLY the out-of-date one",
+    iq.stale_index_names() == ["b"],
+    str(iq.stale_index_names()),
+)
+check(
+    "a stale-version manifest is the THIRD sweep trigger: it offers the "
+    "re-index even though the signature never moved and the key is not "
+    "new — an upgrade moves no signature, so without this an upgrader is "
+    "never asked, while every PDF reads as absent in the Library",
+    iq.offer_model_sweep(None, embeddings.index_signature({})) is True,
+)
+check(
     "...and a closed profile offers nothing either",
     (setattr(iq.mw, "col", None), iq.offer_model_sweep(None, ("openai", "x", 0)))[1]
     is False,
+)
+
+# A null (non-dict) manifest, sorting BEFORE "b" in the walk
+# (_manifest_paths follows list_contexts' sort order): a corrupt
+# manifest must be skipped, not a scan-stopper — "b"'s real v1
+# manifest, later in the walk, still has to be reported stale.
+with open(os.path.join(tmp, "contexts", "aaa.txt"), "w") as f:
+    f.write("page text aaa")
+os.makedirs(pdf_index.index_dir(tmp, "aaa"))
+with open(os.path.join(pdf_index.index_dir(tmp, "aaa"), "manifest.json"), "w") as f:
+    f.write("null")
+check(
+    "a null manifest doesn't truncate the scan — the real v1 manifest "
+    "past it is still reported stale",
+    iq.stale_index_names() == ["b"],
+    str(iq.stale_index_names()),
 )
 
 

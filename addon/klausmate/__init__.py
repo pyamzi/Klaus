@@ -95,9 +95,10 @@ _LEGACY_KEYS_DROPPED = (
     # Retired 2026-09-15 (K-226, spec D1/D8): Klaus went API-first. The
     # local Ollama runtime and the vision-model OCR path are gone, so
     # every key that only ever addressed them goes with them; the two
-    # keys that carried a VALUE worth keeping (embedding_api_key_openai,
-    # assistant_model) are renamed in _migrate_config BEFORE this loop
-    # runs, and only their spent old names are dropped here.
+    # one key that carried a VALUE worth keeping (embedding_api_key_openai)
+    # is renamed in _migrate_config BEFORE this loop runs, and only its
+    # spent old name is dropped here. assistant_model is a plain drop:
+    # see _migrate_config for why a rename could never have fired.
     "embedding_provider", "embedding_api_key_voyage", "embedding_api_key_openai",
     "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
     "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
@@ -114,24 +115,47 @@ def _migrate_config() -> None:
     """
     cfg = get_config()
     changed = False
-    # 2026-09-15 (K-226): two retired keys carried a VALUE the user set and
-    # would have to re-enter, so they are RENAMED before the drop loop
-    # below spends their old names. An empty destination only — a profile
-    # that already holds the new key keeps what it holds.
-    for old, new in (
-        ("embedding_api_key_openai", "api_key_openai"),
-        ("assistant_model", "reasoning_model"),
-    ):
+    # 2026-09-15 (K-226): ONE retired key carried a VALUE the user set and
+    # would have to re-enter, so it is RENAMED before the drop loop below
+    # spends its old name. An empty destination only — a profile that
+    # already holds the new key keeps what it holds.
+    #
+    # assistant_model is NOT in here (K-236): Anki's getConfig returns
+    # config.json's defaults merged UNDER the profile's keys, so
+    # reasoning_model is never empty and the copy could never fire. It is
+    # dropped below, which is the better outcome anyway — the stored value
+    # is a Claude Code model alias the Messages API would reject, and
+    # nothing reads reasoning_model yet (K-235).
+    for old, new in (("embedding_api_key_openai", "api_key_openai"),):
         if old in cfg:
             if not str(cfg.get(new) or "").strip():
                 cfg[new] = cfg[old]
             cfg.pop(old)
             changed = True
+    # 2026-09-16 (K-236): the embedding MODEL belonged to the provider
+    # being scrubbed — the pre-plan dialog wrote the resolved Ollama model
+    # into this key, and "nomic-embed-text" in an OpenAI-only world prices
+    # as a KeyError in cost.PRICES and embeds as an HTTP 404. "" resolves
+    # to embeddings.DEFAULT_MODELS' OpenAI default.
+    if str(cfg.get("embedding_provider") or "openai") != "openai":
+        cfg["embedding_model"] = ""
+        changed = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
     if changed:
+        # 2026-09-16 (K-236): a profile that carried ANY retired key comes
+        # from the pre-API-first world, where an embedding key was optional
+        # because a local engine existed. `_embed_key_setup_declined` was a
+        # "no thanks" to an OPTIONAL key, and leaving it set silences the
+        # ONE profile-open message saying Klaus now REQUIRES one — the
+        # user's next signal would be a refusal tooltip on a drop. Cleared
+        # here, and only here: `changed` can never be True twice (the keys
+        # that set it are gone after this write), so the new regime gets
+        # exactly one fresh nudge and a decline made AFTER it is honoured
+        # forever.
+        cfg.pop("_embed_key_setup_declined", None)
         write_config(cfg)
 
 

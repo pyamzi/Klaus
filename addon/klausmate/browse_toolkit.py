@@ -211,12 +211,12 @@ NO_ENGINE_TEXT = (
 )
 NO_PROFILE_TEXT = "Open a collection first."
 NO_INDEX_TEXT = (
-    "No search index yet. Build one in KlausMate Preferences → Semantic "
-    "Search, then come back."
+    "No search index yet. Build one in KlausMate Preferences → API keys "
+    "& models, then come back."
 )
 STALE_INDEX_TEXT = (
     "The search index was built with a different embedding model. "
-    "Re-index in KlausMate Preferences → Semantic Search."
+    "Re-index in KlausMate Preferences → API keys & models."
 )
 THIN_INDEX_TEXT = "The search index holds too few notes to compare."
 
