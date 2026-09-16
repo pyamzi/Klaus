@@ -339,6 +339,78 @@ created: 2026-09-02
 
 Final review 2026-09-02 M3 (optional polish, accepted rather than fixed in the final round): the hover state is computed from the last pointer sample and is not re-hit-tested as the sway moves the projected nodes, so a still pointer can sit over a node that has drifted out from under it (or onto one) without the lit state following. Pin it with an _idle_tick() under a forced cursor position.
 
+### K-230: Assistant page PNG: cache the render beside the page record (every Send re-rasterises on the main thread since K-226)
+owner: -
+priority: P2
+tags: api-first,plan2
+files: klausmate/page_store.py,klausmate/assistant_dock.py,tests/test_page_store.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_page_store.py
+created: 2026-09-15
+
+### K-231: Readiness nudge names both keys but checks only the OpenAI one; the assistant fails at its first turn without an Anthropic key
+owner: -
+priority: P2
+tags: api-first,plan3
+files: klausmate/setup_flow.py,tests/test_setup_crop_theme.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_setup_crop_theme.py
+created: 2026-09-15
+
+### K-232: manage_models.py still runs four K-114-banned blocking dialogs (askUser ~1815; QMessageBox.question ~1933/1949/1960) — convert to window-modal open()+finished
+owner: -
+priority: P2
+tags: k114,preferences
+files: klausmate/manage_models.py,tests/test_dialog_logic.py
+verify: ! grep -n 'askUser\|QMessageBox.question' klausmate/manage_models.py
+created: 2026-09-15
+
+### K-233: duplicates.py similarity tiers are calibrated on nomic-embed-text (768-d local); re-read the band edges off text-embedding-3-large at 1024 dims
+owner: -
+priority: P2
+tags: api-first,calibration
+files: klausmate/duplicates.py,tests/test_duplicates.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_duplicates.py
+created: 2026-09-15
+
+### K-234: tests/test_pdf_dock.py flakes under the full offscreen loop (1 in 3 runs; green standalone) — find the order/timer dependency
+owner: -
+priority: P2
+tags: tests,flaky
+files: tests/test_pdf_dock.py
+verify: for i in 1 2 3; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdf_dock.py >/dev/null 2>&1 || exit 1; done
+created: 2026-09-15
+
+### K-235: reasoning_model is orphaned: Preferences writes it, assistant_dock.py:446 still passes the scrubbed assistant_model to the Claude Code child (T6 rename regression; Plan 3 deletes the child)
+owner: -
+priority: P2
+tags: api-first,plan3
+files: klausmate/assistant_dock.py,tests/test_assistant_dock.py
+verify: ! grep -n 'assistant_model' klausmate/assistant_dock.py
+created: 2026-09-16
+
+### K-237: Queue-side priced confirm before any from-scratch card-index embed (declining the Preferences sweep still bills the next PDF add)
+owner: -
+priority: P2
+tags: api-first,money
+files: klausmate/index_queue.py,tests/test_index_queue.py
+verify: grep -q 'card-index confirm' klausmate/index_queue.py
+created: 2026-09-16
+
+### K-238: Plan 2 recorder must refuse path == '' (digest12('') is a constant directory; segments written there vanish once the file resolves)
+owner: -
+priority: P2
+tags: api-first,plan2
+files: klausmate/page_store.py,tests/test_page_store.py
+verify: grep -q 'path == ""' klausmate/page_store.py
+created: 2026-09-16
+
+### K-239: Paid smokes behind KLAUS_LIVE_API=1 do not exist (spec testing list): embed one string, transcribe a 3 s WAV, one Messages turn
+owner: -
+priority: P2
+tags: api-first,tests
+files: tests/test_live_api.py
+verify: test -e tests/test_live_api.py
+created: 2026-09-16
+
 ## Ready
 
 ## Doing
@@ -374,6 +446,21 @@ Plan Task 4. After T1-T3 are committed; moves to Ready then.
 #### Comments
 - [2026-09-05 claude-t4] Task 4 Step 4 -- live checklist (needs-human; not executed by the worker). Loop (39/39 files, 0 failed) and renders (10 PNGs, all 4 placements x night/day, integrated) are posted in the task-4 report. Verbatim from the brief: 1. Restart Anki. Open Browse; click the editor toolbar's Library… button → the PDF panel appears docked where it was last left (an old placement migrated: above/below → bottom, notes-left → left). 2. Drag the panel's empty bar to Browse's left edge → it docks beside Anki's sidebar; to the bottom edge → under both columns; away from any edge → it floats and stays above Browse. 3. Double-click the empty bar → floats; double-click again → docks back where it came from. 4. ⧉ toggles float/dock; the bar's ✕ hides the panel; Library… shows it again; ＋ still lists the Library's PDFs; a tab drag still reorders tabs. 5. Close Browse with the panel floating → no zombie window; reopen Browse → the panel comes back floating at the same place. 6. Add Cards: the same five steps; cancel Add Cards' discard prompt with the panel open → the panel is still there. 7. Under the pdf.js renderer (Preferences → Appearance) the docked and floating panel both render pages (the webview inside a QDockWidget — the Lecture dock already proves this on the main window).
 - [2026-09-05 orchestrator] Review Approved: loop 39 files/4419 checks reproduced, renders reproduced and inspected, checklist verbatim. Stays in Review, needs-human: the seven-item live checklist above is Pouya's gate.
+
+### K-229: API-first T9: integration — loop, live embed smoke (flagged), checklist
+owner: claude-t9
+priority: P2
+tags: api-first,plan1,integration,needs-human
+files: docs/superpowers/plans/2026-09-15-page-store-and-api-clients.md
+verify: for t in tests/test_*.py; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 "$t" >/dev/null 2>&1 || exit 1; done
+created: 2026-09-15
+claimed: 2026-09-16
+
+Plan 1 Task 9. Last.
+
+#### Comments
+- [2026-09-16 claude-t9] 1. Restart Anki. Open KlausMate Preferences → the page is "API keys & models" with two key fields and three model fields; no Ollama page, no OCR row, no Claude Code binary row. 2. Paste the OpenAI key and Save → the re-index prompt shows note and PDF counts and a token/dollar estimate; accept. 3. The bottom status bar shows "Embedding pages…" per PDF; the Library's rows refresh; a PDF's index directory has `manifest.json` version 2 with `pages`. 4. Right-click a PDF → Show matches in Browse still opens the `!Library` tag search. 5. Open a PDF in Browse's dock, press Ctrl+Shift+K, ask "what is on this slide?" → the answer cites the page text (no OCR); the Preferences page has no OCR switch. 6. Reviewer → Lecture panel still jumps to the matched page. 7. Remove the OpenAI key and Save → drop a PDF onto the deck screen → the refusal names the Preferences page. 8. Paste the OpenAI key for the first time and Save → a priced re-index prompt appears whose DEFAULT button is No (Enter must not start a paid sweep); accept it deliberately with Yes → the sweep runs. (New in this plan: a first key offers the sweep even though nothing changed.) 9. Live API check, embeddings: after the sweep, open the Library → every PDF row shows a retention score; `user_files/pdf_index/<safe>/manifest.json` has `"version": 2` and a `"pages"` list; the bottom status dock read "Embedding pages…" during the run. 10. Live API check, transcription: not reachable from any UI yet (Plan 2's recorder) — skip; only note that Preferences shows the `transcription_model` field with its placeholder. 11. Known gaps, not defects to report: the readiness nudge names both keys but checks only the OpenAI one (K-231); the assistant's page image is re-rendered on every Send, no cache (K-230); the `reasoning_model` field is written but not read by the assistant until Plan 3 (K-235); removing the OpenAI key and Saving does not re-prompt.
+- [2026-09-16 orchestrator] Loop on 4b4841c: 43/43 files, 4505 passed, 0 failed; compile + audit selftest clean; the paid smoke skipped (no key in the session environment). Stays in Review, needs-human: the 11-item live checklist above is Pouya's.
 
 ## Done
 
@@ -758,3 +845,153 @@ Final review C1 + I1 + fix-now minors. C1 pin (d.pos() == QPoint(120, 80) after 
 #### Comments
 - [2026-09-06 claude-fixfinal] Fix wave complete. C1: reordered g=self._float_geom before setFloating(True) in panel_show's float branch, added self._float_geom=QRect(self.geometry()) + self._persist_state() after (the persist-flush was an addition beyond the review's literal two lines, needed to satisfy the ruling's own disk-geom pin -- verified by probe before writing it). Pin repointed to position (QPoint(120,80)/QSize(520,640)) + persisted geom; RED confirmed before the fix (pos=442,82, disk=[0,0,100,30]; 71 passed 2 failed), GREEN after (73 passed 0 failed, md5 85d3e303c45411603d936c3fa64e1756), mutation (reordered back) re-failed as expected, restore verified byte-identical via md5. I1: strings on Anki 26.8.1's editcurrent.pyc confirms 0 QDialog / 1 QMainWindow / NewEditCurrent -- corrected design.md, CLAUDE.md and the __init__.py guard comment to say Edit Current gets the dock. All 7 fix-now minors done (dead imports Callable/askUser/showInfo, pdf_viewer.py stale prose, second-addDockWidget comment, tab tooltips, M1 backwards backstop comments, CLAUDE.md grammar seam, test_browse_toolkit.py stale message). Full loop: all 39 test_*.py files 0 failed (4420 checks). Report: .superpowers/sdd/2026-09-05-pdf-dock/fixfinal-report.md. Leaving in Doing for the scoped re-review.
 - [2026-09-06 orchestrator] Scoped re-review clean (C1, I1, minors addressed; no new breakage). Committed 18b64ec.
+
+### K-224: API-first T4: cost — paid-pass estimates
+owner: claude-t4
+priority: P1
+tags: api-first,plan1,sonnet-safe
+files: klausmate/cost.py,tests/test_cost.py
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_cost.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 4 (spec D8).
+
+#### Comments
+- [2026-09-15 claude-t4] Implementation complete: cost.py with full API (estimate_embed, estimate_judge, estimate_transcribe, add, format_estimate), PRICES dated 2026-09-15, tests pass (8/8). Mutation test: CHARS_PER_TOKEN 4→5 fails (2 fails), restore passes (0 fails), md5 restored byte-identical. Ready for review.
+- [2026-09-15 orchestrator] Review Approved. Committed d53c341.
+
+### K-221: API-first T1: page_store — one record per (PDF, page)
+owner: claude-t1
+priority: P1
+tags: api-first,plan1
+files: klausmate/page_store.py,tests/test_page_store.py
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_page_store.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 1 (spec D2).
+
+#### Comments
+- [2026-09-15 claude-t1] Implemented klausmate/page_store.py + tests/test_page_store.py verbatim from task-1-brief.md. RED: ModuleNotFoundError: klausmate.page_store (file absent). GREEN: 13 passed, 0 failed. Fixed one bug in the brief's own literal test text: the final page_texts check compared rows[0][1] against text_hash(rec2), but rec2 was snapshotted before an intervening out-of-order append_segment call on the same page (the previous check), making it permanently stale vs the fresh on-disk read page_texts does -- no correct implementation could pass it as written. One-line fix: refresh rec2 right before the page_texts section. Implementation code needed zero changes from the brief. Mutation (Step 5): removed the segments.sort() in append_segment -> RED (only 'segments keep time order even when appended out of order' failed, 12 passed/1 failed); restored -> GREEN (13/0). md5 before=5c52e3d8e9c7acb885d96c6ef6eb3d79 after=5c52e3d8e9c7acb885d96c6ef6eb3d79 (byte-identical). py_compile through the addons21 symlink passes. Ran the full tests/test_*.py loop: all green except tests/test_anthropic_client.py, which is K-223's in-progress file (owner claude-t3, untracked, not in my file list) -- pre-existing, unrelated to this change. Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-1-report.md. Card left in Doing for review.
+- [2026-09-15 orchestrator] Review Approved. Committed e128de2.
+
+### K-223: API-first T3: anthropic_client — the revived Messages client with SSE
+owner: claude-t3
+priority: P1
+tags: api-first,plan1
+files: klausmate/anthropic_client.py,tests/test_anthropic_client.py,tests/fixtures/anthropic/text_turn.sse,tests/fixtures/anthropic/tool_use_turn.sse,tests/fixtures/anthropic/dropped_stream.sse
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anthropic_client.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 3 (spec D1).
+
+#### Comments
+- [2026-09-15 claude-t3] Done, card stays in Doing for review. klausmate/anthropic_client.py revived from a494f2d:llm_client.py with the hosted half dropped (HostedBackend, HOSTED_API_BASE, _BACKENDS, backend_name, backend_from_config, the hosted flag and its copy); DirectBackend -> Client, key from cfg['api_key_anthropic'], new complete() beside stream(), _urlopen added as the test seam. tests/test_anthropic_client.py = 37 pins over 3 recorded SSE fixtures (tests/fixtures/anthropic/) + a fake _urlopen; no network. verify BEFORE exit=1 (ModuleNotFoundError), AFTER exit=0 (37 passed, 0 failed). Full loop: every tests/test_*.py 0 failed. Mutation: deleted the post-loop finalisation block in consume_sse -> exactly 1 FAIL ('a dropped stream still finalises tool_use input'), restored byte-identical, md5 445624c8f900f44309ab39b5c108a892 both sides. ONE deviation worth review: the real API sends 'input':{} in a tool_use content_block_start, so the old post-loop guard (not isinstance(input, dict)) never fired against a real stream - the finalisation is now keyed on a 'finalised' set filled at content_block_stop, which is what makes the dropped-stream case work at all. Also user_message() returns the detail verbatim for error_type='no_key', so a missing key no longer reads as 'That API key was rejected'.
+- [2026-09-15 orchestrator] Review: changes required — one guard in _finalise_tool_input (empty parts must not overwrite a pre-filled input) plus a pin. Fix round 1 dispatched; deferred minor: no pin on the 30 s retry-after clamp.
+- [2026-09-15 orchestrator] Committed 08f76dc (fix round 1: empty-parts guard + 2 pins; re-review approved, 39 pins). Done.
+
+### K-222: API-first T2: openai_client (embed, transcribe); embeddings keeps OpenAI only
+owner: claude-t2
+priority: P1
+tags: api-first,plan1
+files: klausmate/openai_client.py,klausmate/embeddings.py,tests/test_openai_client.py
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_openai_client.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 2 (spec D1). test_klausmate.py's embeddings pins are Task 8's if they break; note them.
+
+#### Comments
+- [2026-09-15 claude-t2] DONE (implementation). RED->GREEN: tests/test_openai_client.py did not exist -> ModuleNotFoundError (verify BEFORE, exit 2 no-such-file; then exit 1 ModuleNotFoundError once the test file existed alone) -> wrote klausmate/openai_client.py (embed/transcribe/_request/_multipart/OpenAIError, verbatim to brief) -> 9 passed, 0 failed. embeddings.py reduced to one provider per brief: deleted OllamaEmbeddings, VoyageEmbeddings, OLLAMA_TIMEOUT_S, CLOUD_TIMEOUT_S, _post_json, _vectors_by_index, OPENAI_API_BASE/VOYAGE_API_BASE (both now dead once OpenAIEmbeddings.embed delegates to openai_client.embed), the Voyage clamp in embed_batches, and the docstring's Ollama/Voyage bullets; DEFAULT_MODELS={"openai":"text-embedding-3-large"}, DEFAULT_PROVIDER="openai", _PROVIDER_CLASSES={"openai":OpenAIEmbeddings}; provider_name(cfg) now unconditionally returns "openai" (kept the function+signature, per instructions, so existing callers survive); OpenAIEmbeddings.embed reads api_key_openai and delegates to openai_client.embed/raises EmbeddingError on openai_client.OpenAIError. Verify AFTER (board command): exit 0. Mutation (step 5), two rounds since the brief's own predicted mutation turned out not to be caught (see below) - both restored byte-identical, md5 657c5b05360c9264d871715f742eb66e before/after each round (confirmed via md5sum + diff): 1. Brief's literal mutation - replaced the out[i]=vec reorder loop with `return [item.get("embedding") for item in data]` (response order, no reorder). Empirically NOT caught: still 9 passed/0 failed. Root cause: the fixture's 2-item embed response gives every index the SAME literal [0.1,0.2], and every other embed() call in the suite uses exactly 1 item, so no given pin can actually distinguish response-order from index-order output. Flagging this as a real (small) gap in the spec'd test, not fixed here since tests/test_openai_client.py's content was written verbatim to the brief. 2. To still satisfy the actual mutation-testing requirement (proof the suite has teeth on embed()), flipped `if dims:` -> `if not dims:` around the dimensions field. Caught immediately: 7 passed, 2 failed ("POSTs to /v1/embeddings..." and "dims=0 omits the dimensions field"). Restored, re-verified green. Compile: py_compile clean for both files through the repo AND the real Anki symlink. test_klausmate.py (not mine, per instructions - did not edit, ran anyway): 22 ok, then 6 FAIL, then a hard crash (uncaught AttributeError, not just a failed check) - report has the full "For Task 8" list with line numbers. Everything from that crash point to EOF (the file is 2294 lines; pdf_index/pdf_handler sections etc.) never executed this run, but none of it touches embeddings.* so it is very likely unaffected once the crash is fixed - not re-verified in isolation, flagging rather than asserting. Two things beyond what the brief named, found while checking "any caller that would break" (git grep of OllamaEmbeddings/VoyageEmbeddings/provider_name, and a broader `embeddings\.` sweep across klausmate/): - tests/test_index_queue.py: crashes (KeyError: 'cards' at line 357, after "phase 1 is the CARD index, always" FAILs at line 356). Root-caused via a clean A/B (temporarily swapped embeddings.py back to HEAD, confirmed 122 passed/0 failed baseline, restored mine byte-identical after) - NOT an embeddings.py regression, it's new_world()'s default test fixture `{"embedding_api_key_voyage": "vk"}` (line 325, similar at 74/81/579/589) going stale now that missing_key_provider (index_queue.py:117-121, unchanged by me) checks embedding_api_key_openai instead. index_queue.py itself imports and runs fine; only that test file's fixtures are stale. Likely the same task that rewires missing_key_provider to read api_key_openai (referenced in the plan doc around the manage_models.py/config.json config-key-rename task). - klausmate/manage_models.py:2592 and :2625 (`embeddings.DEFAULT_MODELS["ollama"]` and the unconditional `embeddings.DEFAULT_MODELS[provider]`) will raise KeyError('ollama') or KeyError('voyage') TODAY in a live Anki if a user opens KlausMate Preferences and switches the still-present provider combo (lines 896-898: Voyage/OpenAI/Ollama options still all offered; on_provider_changed at line 3420 passes provider_override straight through). Not caught by any headless test - test_dialog_logic.py's World class is a hand-rolled transcription of this dialog's logic, decoupled from the real function (confirmed test_dialog_logic.py 147/147 green, unaffected either way). Latent until the task that deletes the provider combo lands; flagging since it's a real runtime KeyError risk in the meantime, not just a stale assertion. Also ran (unaffected, confirmed green): test_dialog_logic.py 147/147, test_retention_history.py 70/70, test_browse_toolkit.py 131/131 - the other files my grep of embedding_provider/embedding_api_key_openai/embedding_api_key_voyage turned up. Files touched: klausmate/openai_client.py (new), klausmate/embeddings.py (modified), tests/test_openai_client.py (new). No git writes made (per instructions). Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-2-report.md. Card left in Doing.
+- [2026-09-15 orchestrator] Review: production code approved; changes required = the per-index fixture vectors for the input-order pin (orchestrator ruling) + drop the stale _post_json docstring mention. Fix round 1 dispatched.
+- [2026-09-15 orchestrator] Committed 42badb2 (fix round 1: per-index fixture + docstring; re-review approved, 9 pins). Done.
+
+### K-226: API-first T6: delete the Ollama runtime and OCR; config migration; the assistant's context on page_store
+owner: claude-t6
+priority: P1
+tags: api-first,plan1
+files: klausmate/page_ocr.py,tests/test_page_ocr.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/assistant_dock.py,klausmate/agent_host.py,klausmate/index_queue.py,klausmate/config.json,klausmate/config.md,tests/test_assistant_dock.py,tests/test_dialog_logic.py,tests/test_index_queue.py,tests/test_agent_host.py,tests/test_api_first_config.py,tests/test_setup_crop_theme.py,tests/test_bridge_reentrancy.py
+verify: test ! -e klausmate/page_ocr.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_assistant_dock.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_index_queue.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 6 (spec D1, D8). Ready after T1+T2. NOTE: tests/test_klausmate.py is T5's; T6's own pins go in the files listed here; T8 re-baselines test_klausmate.
+
+#### Comments
+- [2026-09-15 claude-t6] Pre-flight (orchestrator ruling 3 triggered): klausmate/manage_models.py imports the three Ollama modules at MODULE TOP - line 57 'from .ollama_client import OllamaError', line 58 'from .ollama_runtime import RuntimeProvisionError, full_setup, runtime_download_size_hint', lines 59-63 'from .ollama_setup import (..., ollama_reachable,)'. Deleting them breaks: klausmate/__init__.py:49 (which imports manage_models) -> the four test files that exec __init__.py (test_imports, test_bridge_reentrancy, test_pdf_dock, test_slot_guards) AND tests/test_imports.py globs every klausmate/*.py so it imports manage_models directly - no guarded import in a file I own can save that one. Proceeding with everything else; the three rm's are held for the orchestrator's ruling. page_ocr.py has no module-top importer and is safe to delete.
+- [2026-09-15 claude-t6] NEEDS_CONTEXT. All brief modifications DONE and green; 3 of 5 deletions HELD (Ruling 3). Held: ollama_client/runtime/setup.py - manage_models.py:57,58,59-65 imports them at module top, and tests/test_imports.py globs+imports every klausmate/*.py, so no guard in a file I own saves it. I stripped every OTHER import of them (__init__.py, setup_flow.py), so manage_models.py is now their ONLY consumer: after T7, 'rm klausmate/ollama_{client,runtime,setup}.py' finishes this card and flips verify to 0. page_ocr.py + test_page_ocr.py ARE deleted. Changed: config.json (11 keys out, 4 in, embedding_model=text-embedding-3-large), config.md (API keys & models section, Card embeddings, Assistant rewritten), __init__.py (ollama imports/client()/_save_config_on_main/_try_silent_autostart/_shutdown_managed_server out; _LEGACY_KEYS_DROPPED +12; _migrate_config renames before the drop loop), setup_flow.py (Ollama gone; _embedding_ready = api_key_openai; KEYS_COPY constant; _maybe_offer_runtime_update deleted), assistant_dock.py (_page_context on page_store, scheduler+ollama client out, consumer reads a dict), index_queue.py (missing_key_provider -> OpenAI; message -> 'API keys & models'). GREEN: test_index_queue 122/0 (CRASHED at baseline), test_assistant_dock 168/0, test_agent_host 88/0, test_page_store 13/0, test_dialog_logic 147/0, test_imports 53/0; new tests/test_api_first_config.py 24/3 (the 3 held rm's, by design). 6 mutations applied, each caught its pin, each restored byte-identical (md5s in the report) - incl. one proving the pin catches the brief's own USER_FILES bug. Deviations: _page_context uses self._user_files not the brief's bare USER_FILES (undefined in that module + would point tests at the real user_files); agent_host.py needed no change (text_source is already a parameter, no OCR docstring); test_dialog_logic.py untouched - it has ZERO setup_flow refs, its Ollama pins all transcribe manage_models_dialog, so they belong to K-227. NOT EDITED, outside my card, red from my required changes: test_bridge_reentrancy.py (2: setup_flow msg.open() census 7->3, _maybe_offer_runtime_update gone), test_setup_crop_theme.py (1: three deleted window titles), test_manage_models_assistant.py (10: ocr_*/claude_binary/assistant_model config census -> K-227). Exact one-line fixes for all three are in the report. Also unowned: pdf_graph.py:329 + tag_sync.py:399 call retention.DEFAULT_AGG, removed by T5 in the working tree - live AttributeError. No git write commands, no paid API calls, real user_files never touched. Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-6-report.md
+- [2026-09-15 claude-t6] Fix round 1 done: re-baselined the two census pins your §8(d) named (test_setup_crop_theme.py:113-114 title census; test_bridge_reentrancy.py:327-336 and 383-391 setup_flow dialog/continuation counts). Re-measured live setup_flow.py myself first (msg.open()=3, msg.finished.connect(=3, then()=5, .exec()=0) — matched your numbers exactly. Both files now 0 failed (31/0 and 79/0, same total check counts as before — only content re-baselined). 3 mutations (one per re-baselined pin), all killed their pin alone and restored byte-identical. No other file touched — setup_flow.py's M status in git predates this session. Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-6-fix1-report.md
+- [2026-09-15 orchestrator] Committed 1198041; review approved. Note for later readers: the assistant_model→reasoning_model rename is dead in production (getConfig merges config.json's default, so the destination is never empty) — intended: a Claude Code alias is not a Messages API model id; the api_key_openai rename works. The three Ollama modules are deleted by K-227.
+
+### K-225: API-first T5: one vector per page (pdf_index v2, retention, lecture_view)
+owner: claude-t5
+priority: P1
+tags: api-first,plan1
+files: klausmate/pdf_index.py,klausmate/retention.py,klausmate/lecture_view.py,klausmate/pdf_handler.py,tests/test_klausmate.py,tests/test_lecture_view.py,tests/test_retention_history.py,klausmate/pdf_graph.py,klausmate/tag_sync.py,tests/test_projection.py,klausmate/anki_tools.py,tests/test_anki_tools.py,tests/test_anki_endpoint.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_klausmate.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_view.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 5 (spec D3). Ready after T1+T2 are Done.
+
+#### Comments
+- [2026-09-15 claude-t5] Done. pdf_index v2 (pages not chunks, best_page not best_chunk), retention.py's match_scores/load_matches/save_matches/do_build/ensure_matches/priority_rows rewired, lecture_view.py updated, pdf_handler._chunk_text deleted (no other caller). Scope widened mid-task to include pdf_graph.py + tag_sync.py (both read retention.DEFAULT_AGG, now deleted) - fixed both, plus tests/test_projection.py which was the one test exercising them. Verify (test_klausmate.py && test_lecture_view.py): exit 0, 352+111 passed. Also green: test_retention_history.py (70), test_projection.py (76), test_drive.py (343), test_page_store.py (13), test_pdf_map.py (299), test_index_queue.py (122, better than the pre-warned expectation). 3 mutation rounds run (do_build hash-reuse per brief Step 5, best_page argmax, match_scores page-recording), each caught, each restored byte-identical (md5 verified). Full report at .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-5-report.md. For Task 7/8: klausmate/anki_tools.py's _semantic_pdf_search (best_chunk/chunk_text_at/.chunks) is a live break outside my file list, not fixed - see report's 'For Task 7/8' section for the exact shape needed.
+- [2026-09-15 claude-t5] Fix round 1 done. anki_tools._semantic_pdf_search rewritten: pdf_index.best_page (not best_chunk) gives (page, score); text = page_store.combined_text(page_store.load_record(user_files, name, pdf_path_for(...), page-1)), falling back to pdf_handler.load_pages(...)[page-1] when no path or empty record. Wire key/hit shape/try-except/ranking/top_k clamp unchanged. New real end-to-end pins added to tests/test_anki_tools.py (built a live v2 PdfIndex + page_store records in a scratch user_files, embedding call monkeypatched, no network): RED (4 fail, AttributeError swallowed per-PDF then get_config gap fixed) -> GREEN (51 passed). Two mutations (ignore-the-record; page instead of page-1 into load_record) each broke exactly the transcript-combined-text pin and nothing else; reverted byte-identical (md5 confirmed). test_anki_endpoint.py checked, unaffected, left untouched. test_card_forge.py/test_assistant_sessions.py re-run clean (60/62 passed). Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-5-fix1-report.md. Concern (out of my scope, flagging only): test_api_first_config.py/test_dialog_logic.py/test_manage_models_assistant.py are currently red at HEAD over Ollama-deletion/config-migration (K-226/Task 6 territory) -- unrelated to anki_tools/pdf_index/page_store, not touched.
+- [2026-09-15 orchestrator] Review: changes required — cancelled builds must persist embedded_rows < total (no zero rows for unembedded pages); empty pages get explicit zero vectors and never reach the API; MATCHES_VERSION=2; drop done_new; _safe_basename keying in anki_tools. Fix round 2 dispatched.
+- [2026-09-15 claude-t5] Fix round 2 done, all 5 required changes + 4 pins. (1) do_build assembly loop now breaks at the first never-embedded row instead of zero-filling+counting it (retention.py:681-687) - a cancelled build persists embedded_rows<total, is_complete/is_fresh both False, next run resumes. Checked the old[] hash-reuse table per the ruling: already correctly bounded to idx.embedded_rows, no change needed there. (2) todo now filters out empty combined_text (retention.py:654) and seeds those rows as explicit [0.0]*dims once dims is known (673-680), so '' never reaches the provider and best_page never returns an empty page. (3) MATCHES_VERSION=2 (line 46). (4) done_new deleted (dead counter). (5) anki_tools.py:250-253 computes safe=_safe_basename(name) once and passes it to both pdf_path_for and page_store.load_record, matching do_build's own keying (pdf_path_for already re-sanitizes internally either way; load_record does not, which is the part that actually mattered). 4 new pins, each RED under its own reverted change then GREEN restored, all 4 files restored byte-identical (md5 verified): P1 cancel-then-resume on a 100-page fixture (>BATCH_SIZE 64), P2 a 3-page fixture with an empty middle page, P3 MATCHES_VERSION + a hand-written v1 matches.json reading as stale, P4 a name ('Extra.pdf') that changes under _safe_basename, proving load_record finds the do_build-written record only post-fix. test_klausmate.py 367/0, test_anki_tools.py 52/0, test_lecture_view/test_retention_history/test_projection/test_drive/test_pdf_map all unchanged and green. Whole-tree sweep (41 files) all green on first run; verify: (test_klausmate.py && test_lecture_view.py) exits 0. py_compile through the addons21 symlink clean. Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-5-fix2-report.md. Concern (out of scope, flagging only): tests/test_index_queue.py (klausmate/index_queue.py isn't in my file list) flakes on one assertion under the full whole-tree sweep only (passes standalone every time, 3/3) - doesn't import retention or anki_tools, unrelated to this round, not fixed.
+- [2026-09-15 orchestrator] Committed 0000960 after two fix rounds (anki_tools on best_page; cancel-safe assembly, zero rows for empty pages, MATCHES_VERSION 2); re-review approved. Note: hash reuse does not survive a cancel that lands before an edited page's batch (prefix cursor) — a paid-API cost, not a regression.
+
+### K-227: API-first T7: Preferences 'API keys & models'; the sweep estimate
+owner: claude-t7
+priority: P1
+tags: api-first,plan1
+files: klausmate/manage_models.py,tests/test_manage_models_assistant.py,klausmate/ollama_client.py,klausmate/ollama_runtime.py,klausmate/ollama_setup.py,klausmate/index_queue.py,tests/test_index_queue.py,tests/test_dialog_logic.py,tests/test_md3_switch.py
+verify: grep -q 'API keys & models' klausmate/manage_models.py && test ! -e klausmate/ollama_client.py && test ! -e klausmate/ollama_runtime.py && test ! -e klausmate/ollama_setup.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_manage_models_assistant.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_api_first_config.py
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 7 (spec D1, D8). Ready after T2, T4, T6. index_queue.py and tests/test_index_queue.py + tests/test_dialog_logic.py are shared with T6 — T7 waits for T6 Done, then its files widen to include them.
+
+#### Comments
+- [2026-09-15 orchestrator] Widened (T6 fallout): deletes ollama_client/runtime/setup after the Preferences rewrite (manage_models imports them at module top); re-baselines tests/test_manage_models_assistant.py's config census and tests/test_dialog_logic.py's Ollama pins; removes the _pkg().client()/_save_config_on_main call sites; verify gains the three test ! -e clauses and tests/test_api_first_config.py.
+- [2026-09-15 claude-t7] RED: pins written and failing. test_index_queue crashes on sweep_message's 4th arg; test_dialog_logic 114/19; test_manage_models_assistant ~45 fails; test_api_first_config 24/3 (the three held rm's). Baseline verify: exit 1. Implementing now.
+- [2026-09-15 claude-t7] GREEN. verify: exit 0 (was 1). manage_models.py 3643->2528 lines: one 'API keys & models' page (openai/anthropic keys masked, embedding/reasoning/transcription models), Semantic Search + Local Models pages and the install page deleted, Assistant page down to Reopen-on-start + Clear Sessions, General loses 'Manage Ollama automatically'. index_queue gains sweep_estimate() (notes scalar + page_store page texts) and sweep_message's 4th estimate arg; offer_model_sweep(first_key=). rm'd ollama_client/runtime/setup.py -> test_api_first_config 27/0. Tests: index_queue 130/0, dialog_logic 137/0, manage_models_assistant 99/0, drive 343/0, imports 50/0, bridge 79/0. Full loop: 40 files, ONE red -> tests/test_md3_switch.py:188 pins runtime_auto_cb, which I deleted; that file is on no card, one-line fix in the report (drop it from the tuple). 11 mutations, all killed, all restored byte-identical (M3/M6 survived round 1 - the first_key path was pinned only in a transcription; both now have real pins). Offscreen smoke constructs the real dialog: nav + titles + rows correct, page grabs 768x634, Save writes all five keys. Found and fixed a LIVE crash while at it: load_assistant()'s setChecked fired toggled into mark_dirty ~1500 lines before it was bound - NameError out of a Qt signal for anyone with assistant_reopen true (shipped in K-194). Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-7-report.md
+- [2026-09-15 claude-t7] Re-baseline test_md3_switch.py:191 pin: removed runtime_auto_cb from tuple after K-227 deleted the toggle. 44 passed, 0 failed.
+- [2026-09-15 orchestrator] Review: changes required — sweep_estimate must fall back to stored slide text for PDFs without page records (the migration case) + pin; also: confirm defaults to No, scalar failure → unknown cost, ceiling comment, AST key-leak pin. Fix round 2 dispatched.
+- [2026-09-15 claude-t7] Fix round 2 done. Important 1: sweep_estimate now falls back to stored slide text (page_texts sum or sum(pages)) when a PDF has no page-store records yet — pin RED (10000 vs want 11000) -> GREEN, mutation killed+restored (md5 fc240df7.. -> 6d00ca5c..). Minor 2: confirm's setDefaultButton is now No (source pin on _iq_src, mirroring the file's own code_only convention since the box.open() example the task named lives in test_dialog_logic.py:1004 and this harness's QMessageBox stub records nothing) — RED->GREEN, mutation killed+restored (..6d00ca5c.. -> ..4bc4a828..). Minor 3: the notes col.db.scalar try/except is removed so a failure propagates into offer_model_sweep's own catch ('cost unknown for this model') instead of silently pricing ~0 tokens — pin monkeypatches sweep_message to capture the built estimate string, RED ('~0 tokens · under $0.01') -> GREEN, mutation killed+restored (..4bc4a828.. -> ..74226254..). Minor 4: ponytail ceiling comment above the per-page page_texts loop, no code change. Minor 7: test_dialog_logic.py's key-leak pin is now an AST walk (_key_edit_leaks) instead of a same-line scan; passes today (137/0, unchanged count) against real manage_models.py; mutation-tested by extracting that exact function from the shipped test and running it against a SCRATCH copy of manage_models.py with a two-physical-line leak appended (print(...) spanning 3 lines) — new pin catches it, old line-scoped logic does not, manage_models.py itself never touched (md5 c60fde41.. unchanged). All required files 0 failed (test_index_queue 133/0, test_dialog_logic 137/0, test_manage_models_assistant 99/0, test_api_first_config 27/0), full tests/test_*.py loop 0 failed, py_compile through the addons21 symlink clean, board show K-227 exit 0, card's literal verify: chain run directly exit 0. Final md5s: index_queue.py 74226254acf1553e28040f2d4d4fec37, test_index_queue.py f655d21c4469b6e1bb6bc114d1083d35, test_dialog_logic.py 6cdb262c1940f45860a5f7d3943e3b16. Full report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-7-fix2-report.md
+- [2026-09-15 orchestrator] Committed 1b6fccd after two fix rounds (md3 census; sweep estimate fallback, confirm defaults to No, scalar failure → unknown cost, AST key-leak pin); re-review approved. T9 checklist: the first-key sweep is a new priced prompt, defaulting to No.
+
+### K-228: API-first T8: docs, mutation audit, test_klausmate re-baseline
+owner: claude-t8
+priority: P2
+tags: api-first,plan1,docs
+files: CLAUDE.md,AGENTS.md,scripts/mutation_audit.py,scripts/AUDIT.md,tests/test_page_store.py,klausmate/agent_host.py,klausmate/duplicates.py,klausmate/anki_tools.py,klausmate/projection.py,klausmate/config.md,klausmate/index_queue.py,klausmate/md3_switch.py,tests/test_openai_client.py,tests/test_cost.py,klausmate/anthropic_client.py
+verify: ! grep -q -i 'glm-ocr' CLAUDE.md && grep -q 'page_store' CLAUDE.md
+created: 2026-09-15
+claimed: 2026-09-15
+
+Plan 1 Task 8. After T1–T7.
+
+#### Comments
+- [2026-09-15 claude-t8] Claimed. verify: FAILED before work (no page_store in CLAUDE.md). CLAUDE.md rewritten: intro history para dated, new API-first 2026-09-15 para (Plan 1 only, Plans 2-3 designed-not-built), module map for embeddings/pdf_index/retention/pdf_handler/manage_models/setup_flow/index_queue/lecture_view/agent_host/assistant_dock, new entries for page_store/openai_client/anthropic_client/cost, Deleted list gains the four modules with commits 1198041 + 1b6fccd. AGENTS.md next.
+- [2026-09-15 claude-t8] DONE. verify: FAIL before -> PASS after. Full loop: 43 files, 0 FAILED (run 3x; one flaky test_pdf_dock in run 1, rc=0 standalone, clean in runs 2-3). py_compile through the addons21 symlink OK. Docs: CLAUDE.md (16 paragraph groups incl. 4 new module entries page_store/openai_client/anthropic_client/cost + dated Deleted block for the 4 deleted modules, 1198041 + 1b6fccd), AGENTS.md (11 incl. the privacy paragraph: OpenAI for embeddings, Anthropic only via the Claude Code child, api_key_anthropic stored and UNUSED), config.md verified against config.json (1 stale phrase fixed). mutation_audit: AUDIT_MODULES +4; selftest OK; 70 mutations, 27 caught / 29 crash / 14 survived, ZERO gut survivors; AUDIT.md third lane appended. Fixed en route: render_page_png had no test at all (died with tests/test_page_ocr.py) - restored in tests/test_page_store.py pinning the PNG IHDR scale, 13->16 checks. FINDINGS (not mine to edit): tests/test_openai_client.py:59 pins the URL against oc.API_BASE itself (cannot fail); tests/test_cost.py:26 titles judge arithmetic it never asserts; klausmate/index_queue.py:657 docstring still says Voyage (genuinely stale). Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-8-report.md
+- [2026-09-16 claude-t8] Fix round done: index_queue.py:657 verified (Voyage->OpenAI, inherited); md3_switch.py:3-9 docstring tidied (no pin, free to reshape); test_openai_client.py:59,74 RED evidence gathered on a scratch copy (new literal pins fail on a bad host, old oc.API_BASE+... form falsely passes 9/9 on the same bad host); test_cost.py gained one literal-arithmetic pin (j.tokens==21700, $0.069) verified RED on both JUDGE_PROMPT_OVERHEAD_TOKENS and JUDGE_OUTPUT_TOKENS_PER_CARD in a scratch copy. mutation_audit --modules openai_client: API_BASE no longer survives (4 trivial timeout-const survivors only). --modules cost: 0 survivors. Full verify green (133/44/9/9 + full 43-file loop 0 FAILED); git diff --quiet HEAD -- klausmate/openai_client.py stayed clean throughout. Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/task-8-fix1-report.md
+- [2026-09-16 orchestrator] Review: changes required — CLAUDE.md pdf_index entry (match_scores/agg), config.md's assistant/Anthropic-key/reasoning_model text, AUDIT.md re-run totals, plus seven one-sentence minors. Fix round 2 dispatched.
+- [2026-09-16 claude-t8] Fix round 2 done (review's 3 required + orchestrator's 7 minors, all prose, no code lines): CLAUDE.md pdf_index.py entry (match_scores is retention.py's, no agg= arg, only floor), CLAUDE.md Deleted-block hashes now say removed in 1198041/1b6fccd, CLAUDE.md cost.py caller -> index_queue, CLAUDE.md Five modules heading fixed; config.md's assistant/api_key_anthropic/reasoning_model text now matches AGENTS.md (Claude Code login, key stored unused, reasoning_model not yet wired) + dropped stale 'provider'; AGENTS.md pages path zero-padded + embeddings.py no longer listed as a network client; agent_host.py find_claude_cached docstring drops the dead claude_binary/Override picker credit; anthropic_client.py comment no longer names the deleted embeddings.OPENAI_API_BASE. AUDIT.md: marked the K-228 lane's tables as the pre-fix snapshot, pointed Findings-worth-a-card at the follow-up, and appended the 4-module re-run I ran myself: caught=32/caught-crash=29/survived=9 (matches review exactly). Tests: test_manage_models_assistant 99/0, test_agent_host 88/0, test_anthropic_client 39/0, test_api_first_config 27/0, test_klausmate 367/0. git diff -U0 on agent_host.py/anthropic_client.py is docstring/comment-only; py_compile through the symlink OK. Report: task-8-fix2-report.md
+- [2026-09-16 orchestrator] Committed 4b4841c after a completion round (four routed items) and a docs fix round (ten prose items); both re-reviews approved.
+
+### K-236: API-first Plan 1: final fix wave (C1 sweep set any version; I1 stale-manifest sweep offer once; I2/I3/I4 migration; I5 transcript re-embed + pages_digest; I6 'No' wording; M1-M4 strings/docs)
+owner: claude-fix
+priority: P2
+tags: api-first,plan1,fix-wave
+files: klausmate/index_queue.py,klausmate/__init__.py,klausmate/setup_flow.py,klausmate/retention.py,klausmate/manage_models.py,klausmate/embeddings.py,klausmate/browse_toolkit.py,klausmate/config.md,CLAUDE.md,AGENTS.md,tests/test_index_queue.py,tests/test_api_first_config.py,tests/test_klausmate.py,tests/test_bridge_reentrancy.py,tests/test_setup_crop_theme.py,tests/test_dialog_logic.py,tests/test_manage_models_assistant.py
+verify: grep -q 'pages_digest' klausmate/retention.py && grep -q '_v2_index_sweep_offered' klausmate/setup_flow.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_index_queue.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_api_first_config.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-fix] Fix wave DONE. verify: failed before (exit 1), passes after (exit 0). All nine required items landed: C1 (indexed_pdf_names tests the manifest FILE, any version, via a shared _manifest_paths walker), I1 (stale_index_names + third sweep trigger + setup_flow._offer_v2_index_sweep guarded by _v2_index_sweep_offered), I2 (dead provider clears embedding_model), I3 (assistant_model DROPPED not renamed; comment + AGENTS.md + CLAUDE.md corrected; migration re-pinned against a store that merges config.json defaults, and that pin still proves embedding_api_key_openai migrates), I4 (_embed_key_setup_declined popped once), I5 (do_build returns early only when is_fresh AND idx.pages == keys; matches cache gains a pages_digest), I6 (sweep_message says what declining costs), M1/M2 (five stale nav strings incl. browse_toolkit's NO_INDEX_TEXT, not just STALE_INDEX_TEXT), M3/M4 (config.md + AGENTS.md + CLAUDE.md). Every new pin RED first, GREEN after, mutated once and restored byte-identical (md5s in the report). Full loop: 43 test files, 0 failed, 4524 checks; py_compile through the addons21 symlink OK. Three deviations, all in the report: (1) the I1 flag is set on offer_model_sweep's return (True only after box.open()) rather than inside its answered closure, to avoid plumbing a callback through index_queue for one caller; (2) I4's pop hangs on 'changed' rather than being unconditional -- _migrate_config runs every profile open, so a bare pop would re-clear the flag forever and the nudge would never stop; (3) pages_digest is computed INSIDE save_matches/load_matches from the index manifest rather than added as a sixth parameter, because two of the five call sites (pdf_graph.py, tag_sync.py) are outside this card's files and a caller-spelled digest is one more signature to get wrong. CLAUDE.md:~730 left as-is: after I5(a) its sentence is TRUE, and the new pin proves it. Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/final-fix-report.md. Not filed: K-237 (queue-side priced confirm before a from-scratch card-index embed) is named in the sweep_message comment but creating that card is the orchestrator's.
+- [2026-09-16 claude-fix] Residuals fixed: stale_index_names() now catches AttributeError from a non-dict manifest (pin added, 139/0); setup_flow docstring + CLAUDE.md corrected (Save shares the sweep trigger and may re-offer; the profile-open call is the once-per-profile one). bridge_reentrancy 80/0, py_compile OK.
+- [2026-09-16 orchestrator] Committed d73dcaf; re-review approved (ship); the two residuals folded in and verified by the orchestrator (139/0, 80/0, full loop green).
