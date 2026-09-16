@@ -47,3 +47,58 @@ def recover_done(operator: str) -> str:
 
 def paywall(operator: str, message: str) -> str:
     return _frame("Klaus Plus", f"<h1>Not yet</h1><p>{escape(message)}</p><p><a href=\"/\">Back</a></p>", operator)
+
+
+def terms(operator: str, email_addr: str, country: str) -> str:
+    o, e, c = escape(operator), escape(email_addr), escape(country)
+    body = f"""<h1>Klaus Plus — Terms of Service</h1>
+<p>Klaus Plus is a subscription operated by {o} ("we") that gives the KlausMate Anki add-on metered access to third-party
+AI providers through our service, so that you do not have to manage API keys yourself. By subscribing you agree to these terms.</p>
+<h2>What you get</h2>
+<p>Each calendar month (UTC), a subscription includes 30 hours of lecture audio transcribed, 3,000 cards judged and 200 assistant
+turns, with embeddings included. Quotas do not carry over. We may change quotas or prices with 30 days' notice by email; a change
+does not affect a period already paid for. When a quota is used up, the add-on tells you and you may use your own API keys instead.</p>
+<h2>Your licence key</h2>
+<p>The key is personal to you and may be used on the computers you study on. Do not share it or resell access. We may revoke a key
+that is shared or used to abuse the service, and we may rate-limit unusual traffic.</p>
+<h2>Acceptable use</h2>
+<p>Klaus Plus is for personal study. You may not use it to bulk-process content you have no right to use, to build a competing
+service, or to send content that the providers' own policies prohibit. Access is through the Klaus add-on with your own licence key:
+no automated, scripted or bulk use of the service, and no scraping of it. You are responsible for the material you send through the service.</p>
+<h2>Payment, cancellation, refunds</h2>
+<p>Payments are handled by Stripe. Subscriptions renew automatically until cancelled. Cancel any time from the "Manage subscription"
+link in KlausMate Preferences; access continues until the period end and no further charge is made. If Klaus Plus is not
+what you expected, email us within 14 days of your first payment for a full refund of that payment.</p>
+<h2>Availability and liability</h2>
+<p>The service depends on third-party providers and is offered as is. We aim for continuous availability but do not guarantee it;
+if we pause the service for maintenance, quotas are not consumed. To the extent the law allows, our liability is limited to the fees
+you paid in the three months before a claim.</p>
+<h2>Contact and law</h2>
+<p>Questions and refund requests: <a href="mailto:{e}">{e}</a>. These terms are governed by the law of {c}.</p>"""
+    return _frame("Klaus Plus — Terms of Service", body, operator)
+
+
+def privacy(operator: str, email_addr: str) -> str:
+    o, e = escape(operator), escape(email_addr)
+    body = f"""<h1>Klaus Plus — Privacy Policy</h1>
+<p>This policy describes what the Klaus Plus service, operated by {o}, stores and what it does not.</p>
+<h2>What we store</h2>
+<ul><li>Your Stripe customer id and the billing email Stripe reports to us.</li>
+<li>A hash of your licence key (the key itself is not stored and cannot be read back).</li>
+<li>Your subscription status and period end, as reported by Stripe.</li>
+<li>Monthly usage counters: audio seconds transcribed, tokens used for judging and for the assistant, embedding tokens.</li>
+<li>Service logs with the request path, status, timing and the metered amount, keyed by a short prefix of your key's hash.</li></ul>
+<h2>What we do not store</h2>
+<p>Your lecture text, audio, page images, notes, cards and transcripts are <strong>not stored</strong>. Requests are relayed to the provider
+and the response relayed back; the content is discarded as soon as the response is delivered. Logs never contain request or response bodies.</p>
+<h2>Who receives your data</h2>
+<ul><li><strong>Stripe</strong> processes payments and holds your card details; we never see them.</li>
+<li><strong>OpenAI</strong> receives the text you embed and the audio you transcribe, to produce the result.</li>
+<li><strong>Anthropic</strong> receives the pages, cards and messages you send to the judge and the assistant, to produce the result.</li>
+<li><strong>Resend</strong> delivers our emails (your key, quota notices).</li>
+<li><strong>Fly.io</strong> hosts the service.</li></ul>
+<p>Each provider handles the content under its own terms; we send them nothing beyond what a request needs.</p>
+<h2>Retention and deletion</h2>
+<p>Usage counters are kept for 13 months for billing questions. Your customer record is deleted 30 days after your subscription ends.
+Email <a href="mailto:{e}">{e}</a> to have it deleted sooner, or to ask what we hold about you.</p>"""
+    return _frame("Klaus Plus — Privacy Policy", body, operator)
