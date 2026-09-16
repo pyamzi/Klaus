@@ -342,6 +342,96 @@ check("config.md names the two API keys the add-on actually uses",
 
 
 # =====================================================================
+section("the Klaus Plus group on the keys page (T8, spec D4)")
+# =====================================================================
+# The subscription's rows sit ABOVE the provider keys, because the whole
+# point of a Plus key is that you never paste the other two. The service
+# URL is deliberately NOT here: it is a self-hoster's / staging row, and
+# putting it beside the licence key would invite editing the endpoint
+# while pasting a key.
+_keys_page = _SRC.split('"API keys & models",\n        "API keys & models",', 1)[1]
+_keys_page = _keys_page.split("general_layout = _page(", 1)[0]
+
+for _row_name in ('"Klaus Plus key"', '"Klaus Plus"'):
+    check(f"the keys page carries a {_row_name} row", _row_name in _keys_page)
+check("the Klaus Plus rows come FIRST — above the two provider keys, "
+      "which is the reading order the offer depends on",
+      _keys_page.index('"Klaus Plus key"') < _keys_page.index('"OpenAI API key"')
+      and _keys_page.index('"Klaus Plus"') < _keys_page.index('"Anthropic API key"'))
+check('the service URL row is NOT on this page — "Klaus Plus service" '
+      "belongs to General",
+      '"Klaus Plus service"' not in _keys_page
+      and '"Klaus Plus service"' in _SRC)
+check("the page subtitle says the keys are skippable on Plus, or the "
+      "group above it reads as a fourth thing to fill in",
+      "Klaus Plus" in _keys_page.split("\n    )", 1)[0])
+
+check("both provider rows are CAPTURED, not discarded — their "
+      "descriptions are repainted when a Plus key is present, which "
+      "needs the row widget _row returns",
+      "openai_row = _row(" in _SRC and "anthropic_row = _row(" in _SRC)
+check("...and the caption that replaces them is the spec's wording, "
+      "with the free tier still one deletion away",
+      '"Not needed on Klaus Plus; kept for the free tier."' in _SRC)
+
+_refresh_plus = _func_seg("refresh_plus_status")
+check("refresh_plus_status was found in the source", bool(_refresh_plus))
+_refresh_code = code_only(_refresh_plus)
+check("Manage and Check are disabled without a key — both are calls the "
+      "service answers 401 to, and a button that can only fail is worse "
+      "than no button",
+      "plus_manage_btn.setEnabled(has)" in _refresh_code
+      and "plus_check_btn.setEnabled(has)" in _refresh_code)
+check("Subscribe is NOT disabled — it is the one thing a user without a "
+      "key is there to press",
+      "plus_subscribe_btn.setEnabled(" not in _SRC)
+check("the key's PRESENCE is read through plus.key(), which validates "
+      "the kp_ shape — a half-pasted key must not light the group up as "
+      "a working subscription",
+      "plus.key(" in _refresh_code)
+check("the cached verdict is read by plus.CACHE, not a re-spelled "
+      "string literal",
+      "plus.CACHE" in _refresh_code or "plus.CACHE" in _SRC)
+
+_on_plus_check_src = _func_seg("on_plus_check")
+check("on_plus_check was found in the source", bool(_on_plus_check_src))
+check("on_plus_check hands plus.refresh a MERGING writer — write_config "
+      "REPLACES the whole stored config blob, so passing it straight "
+      "through would wipe every other setting (api keys, library_root, "
+      "the Plus key itself) on the first Check (K-247 fix 1)",
+      "patch_config" in _on_plus_check_src
+      and "write_config" not in _on_plus_check_src)
+
+check("plus is imported at module top — it is aqt-free stdlib, so the "
+      "lazy-import rule the collection-touching modules live under does "
+      "not apply",
+      "from . import plus" in _SRC.split("def _pkg", 1)[0])
+check("openLink comes from aqt.utils beside the other dialog helpers — "
+      "Anki's own browser hop, which honours the user's default browser "
+      "and never opens a webview inside Anki",
+      "from aqt.utils import" in _SRC
+      and "openLink" in _SRC.split("from aqt.utils import", 1)[1].split("\n", 1)[0])
+
+
+# =====================================================================
+section("config.md: the Klaus Plus keys")
+# =====================================================================
+with open(_CONFIG_MD_PATH) as f:
+    _md_plus = f.read()
+check("a Klaus Plus subsection exists under the keys heading",
+      "### Klaus Plus" in _md_plus)
+for key in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base"):
+    check(f"config.md documents {key}", f"**{key}**" in _md_plus)
+check("the cache is documented as state the add-on writes, safe to "
+      "clear — a user who sees a stale verdict must know it is not a "
+      "setting they broke",
+      "safe to clear" in _md_plus.lower())
+check("config.md shows the kp_ shape, so a user can tell a licence key "
+      "from the two provider keys documented right above it",
+      "kp_" in _md_plus)
+
+
+# =====================================================================
 section("AGENTS.md's privacy paragraph names the assistant (I9)")
 # =====================================================================
 # "the only network calls Klaus makes are for embeddings … No telemetry"

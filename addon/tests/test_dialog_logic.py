@@ -12,9 +12,22 @@ Kept in lockstep with manage_models_dialog by construction — the functions
 below are transcribed from it; if that code changes these must too. The
 source-pin sections further down read manage_models.py directly.
 """
+import importlib.util
+import os
 import sys
 
 PASS = FAIL = 0
+
+# plus.py is aqt-free stdlib, so the World below can use the REAL
+# plus.key()/plus.KEY rather than transcribing the kp_ validation and
+# letting the two drift.
+_plus_spec = importlib.util.spec_from_file_location(
+    "_klaus_plus_under_test",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                 "klausmate", "plus.py"),
+)
+plus = importlib.util.module_from_spec(_plus_spec)
+_plus_spec.loader.exec_module(plus)
 
 
 def check(name, cond, detail=""):
@@ -59,6 +72,7 @@ class World:
         self.sweeps = []
         self.openai_key_edit = LineEdit()
         self.embed_model_edit = LineEdit()
+        self.plus_key_edit = LineEdit()
         self.sync_embed_widgets()
 
     # --- transcribed from embeddings.py (embedding_model/index_signature) ---
@@ -83,6 +97,7 @@ class World:
         try:
             self.openai_key_edit.setText(str(self.cfg.get("api_key_openai") or ""))
             self.embed_model_edit.setText(str(self.cfg.get("embedding_model") or ""))
+            self.plus_key_edit.setText(str(self.cfg.get(plus.KEY) or ""))
         finally:
             self.ui_state["syncing"] = False
 
@@ -94,17 +109,27 @@ class World:
         self.embed_model_edit.setText(text)
         self.mark_dirty()
 
+    def type_plus_key(self, text):
+        self.plus_key_edit.setText(text)
+        self.mark_dirty()
+
     def save_embed(self):
         if self.ui_state["syncing"]:
             return
         prev_sig = self._index_signature()
         had_key = bool(str(self.cfg.get("api_key_openai") or "").strip())
+        had_plus = bool(plus.key(self.cfg))
+        prev_plus = str(self.cfg.get(plus.KEY) or "").strip()
         self.cfg["api_key_openai"] = self.openai_key_edit.text().strip()
         self.cfg["embedding_model"] = self.embed_model_edit.text().strip()
+        self.cfg["klaus_plus_key"] = self.plus_key_edit.text().strip()
+        if self.cfg["klaus_plus_key"] != prev_plus:
+            self.cfg["klaus_plus_cache"] = {}
         self.saves += 1
         self.sweeps.append(
             (prev_sig, self._index_signature(),
-             not had_key and bool(self.cfg["api_key_openai"]))
+             (not had_key and bool(self.cfg["api_key_openai"]))
+             or (not had_plus and bool(plus.key(self.cfg))))
         )
 
     def save_all(self):
@@ -175,6 +200,63 @@ check("rotating an existing key is NOT a first key — the vectors on "
       "disk are still valid, and re-embedding the collection on a key "
       "change would be a bill for nothing",
       _first is False and _prev == _cur)
+
+
+print("== a first Klaus Plus key is a first key too (T8 ruling 1) ==")
+# A subscriber never pastes a provider key, so without this branch the
+# one user whose library has never been embedded is the one the sweep
+# offer never reaches — silently, forever.
+_KP = "kp_" + "a" * 32          # plus.key(): kp_ prefix, 35 characters
+_KP2 = "kp_" + "b" * 32
+
+w = World(BASE)
+w.type_plus_key(_KP)
+w.save_all()
+_prev, _cur, _first = w.sweeps[-1]
+check("a first Plus key offers the sweep, exactly like a first OpenAI "
+      "key — the signature does not move for either",
+      _first is True and _prev == _cur)
+
+w = World({"api_key_openai": "", "embedding_model": "", "klaus_plus_key": _KP})
+w.type_plus_key(_KP2)
+w.save_all()
+check("swapping one Plus key for another is NOT a first key — the "
+      "vectors on disk are still valid, and re-embedding on a key "
+      "change would be a bill for nothing",
+      w.sweeps[-1][2] is False)
+
+w = World(BASE)
+w.type_plus_key("kp_too-short")
+w.save_all()
+check("a half-pasted key is not a first key either: presence is read "
+      "through plus.key(), which validates the kp_ shape, so a typo "
+      "cannot trigger a whole-collection re-embed",
+      w.sweeps[-1][2] is False)
+
+print("== a changed Plus key clears the cached verdict (T8 ruling 2) ==")
+w = World({"api_key_openai": "sk", "embedding_model": "",
+           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
+w.type_plus_key(_KP2)
+w.save_all()
+check("the cache goes in the SAME write — left behind, a revoked or "
+      "swapped key reads as active for the whole 7-day grace window",
+      w.cfg["klaus_plus_cache"] == {})
+
+w = World({"api_key_openai": "sk", "embedding_model": "",
+           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
+w.type_model("text-embedding-3-small")
+w.save_all()
+check("...but a Save that did not touch the key keeps it — otherwise "
+      "every Save throws away a verdict and re-asks the service",
+      w.cfg["klaus_plus_cache"] == {"status": "active"})
+
+w = World({"api_key_openai": "sk", "embedding_model": "",
+           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
+w.type_plus_key("")
+w.save_all()
+check("deleting the key clears it too — the free tier is one deletion "
+      "away, and a stale verdict must not outlive the subscription",
+      w.cfg["klaus_plus_key"] == "" and w.cfg["klaus_plus_cache"] == {})
 
 
 print("== default-sensitivity slider: migration-side bail (K-052) ==")
@@ -856,11 +938,14 @@ check("the five fields the spec names are all constructed",
       all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
                                "embed_model_edit", "reasoning_model_edit",
                                "transcription_model_edit")))
-check("both key fields are password-masked — a shoulder or a screen "
-      "share must not read an API key off Preferences",
-      _src2.count("EchoMode.Password") == 2
+check("every key field is password-masked — a shoulder or a screen "
+      "share must not read an API key off Preferences. The Klaus Plus "
+      "licence key is a credential too: it is the whole subscription, "
+      "and anyone who reads it off a stream can spend the quota",
+      _src2.count("EchoMode.Password") == 3
       and "openai_key_edit.setEchoMode" in _src2
-      and "anthropic_key_edit.setEchoMode" in _src2)
+      and "anthropic_key_edit.setEchoMode" in _src2
+      and "plus_key_edit.setEchoMode" in _src2)
 _ast_tree = __import__("ast").parse(_src2)
 
 
@@ -1034,6 +1119,11 @@ check("save_embed asks for the sweep on a FIRST key as well as a moved "
       "the one user who most needs it, and nothing else would notice",
       _first_key_arg is not None and "had_key" in _first_key_arg,
       f"got {_first_key_arg!r}")
+check("...and a first KLAUS PLUS key counts as one too (T8 ruling 1): "
+      "deleting that half of the condition leaves had_plus assigned and "
+      "every other source pin green, so the argument itself is pinned",
+      _first_key_arg is not None and "had_plus" in _first_key_arg,
+      f"got {_first_key_arg!r}")
 
 check("save_embed hands the comparison to index_queue rather than "
       "spelling a signature == of its own",
@@ -1045,6 +1135,156 @@ check("the sweep offer is raised window-modal — open() and a finished "
       "segfaults on Qt 6.11 + macOS 26, and the Preferences window this "
       "is raised from is itself non-modal)",
       "box.open()" in _iq_code and ".exec()" not in _iq_code)
+
+print("== Klaus Plus: the Preferences group (T8, spec D4) ==")
+# The subscription's whole surface in the dialog. Same two layers as the
+# rest of this file: RAW source for anything a string literal IS, and an
+# AST walk for the things a text scan reads wrong (a connect made where
+# the page is BUILT is textually identical to one made in the connect
+# block, but runs before mark_dirty exists).
+check("the five widgets the spec names are all constructed",
+      all(n in _src2 for n in ("plus_key_edit", "plus_status",
+                               "plus_subscribe_btn", "plus_manage_btn",
+                               "plus_check_btn")))
+check("...plus the service-URL field, which lives on GENERAL — the one "
+      "row here a self-hoster or a staging run needs and nobody else "
+      "should meet while pasting a licence key",
+      "plus_base_edit" in _src2
+      and _src2.index("plus_base_edit") > _src2.index('"General",\n        "General",'))
+check("the three buttons are SecondaryButton — Klaus's own opt-out from "
+      "the blue primary, so a row of three never reads as three "
+      "primaries (theme tokens only, no hardcoded colour)",
+      'b.setObjectName("SecondaryButton")' in _src2
+      and "for b in (plus_subscribe_btn, plus_manage_btn, plus_check_btn):"
+      in _src2)
+check("the key field is never spelled in a message either — the licence "
+      "key reaches config and nothing else (the same AST walk that "
+      "guards the provider keys; plus_key_edit ends in _key_edit, so it "
+      "is already in the walker's scope)",
+      "plus_key_edit.text()" in _src2 and not _key_edit_leaks(_ast_tree))
+
+_save_embed_src2 = _fn_src("save_embed")
+_save_general_src2 = _fn_src("save_general")
+check("save_embed writes the Klaus Plus key", '"klaus_plus_key"' in _save_embed_src2)
+check("...and clears the cached verdict in the SAME write when the key "
+      "moved — a cache describing the old subscription would let a "
+      "revoked or swapped key read as active for the whole grace week",
+      '"klaus_plus_cache"' in _save_embed_src2)
+check("save_general writes the service URL, and NOT the key — one key, "
+      "one writer, or Save's two halves race to spell it",
+      '"klaus_plus_base"' in _save_general_src2
+      and '"klaus_plus_key"' not in _save_general_src2)
+check("each Klaus Plus key is written by exactly one save_*",
+      _src2.count('cfg["klaus_plus_key"] = ') == 1
+      and _src2.count('cfg["klaus_plus_base"] = ') == 1
+      and _src2.count('cfg["klaus_plus_cache"] = ') == 1)
+check("a FIRST Plus key offers the priced sweep exactly as a first "
+      "OpenAI key does — the signature never moves for either (nothing "
+      "was ever embedded), so without this the one user whose whole "
+      "library is unindexed is the one never asked",
+      "had_plus" in _save_embed_src2
+      and _save_embed_src2.index("had_plus")
+      < _save_embed_src2.index('cfg["api_key_openai"] ='))
+
+_sync_src2 = _fn_src("sync_embed_widgets")
+check("sync_embed_widgets seeds both new fields inside the syncing "
+      "guard, and repaints the status line",
+      "plus_key_edit.setText" in _sync_src2
+      and "plus_base_edit.setText" in _sync_src2
+      and "refresh_plus_status()" in _sync_src2
+      and _sync_src2.index("plus_key_edit.setText")
+      < _sync_src2.index('ui_state["syncing"] = False'))
+
+check("both editable Plus fields mark dirty, and all three BUTTONS do "
+      "not — they act now (open a browser, ask the service); marking a "
+      "dialog dirty for pressing Check would invent unsaved changes "
+      "nobody made",
+      "plus_key_edit.textEdited.connect" in _src2
+      and "plus_base_edit.textEdited.connect" in _src2
+      and "plus_subscribe_btn.clicked.connect" in _src2
+      and "plus_manage_btn.clicked.connect" in _src2
+      and "plus_check_btn.clicked.connect" in _src2
+      and not any(f"{b}.clicked.connect(lambda" in _src2
+                  for b in ("plus_subscribe_btn", "plus_manage_btn",
+                            "plus_check_btn")))
+check("...and they connect in the ONE block at the bottom, after "
+      "mark_dirty exists (K-227's lesson, same as every other widget)",
+      _src2.index("def mark_dirty() -> None:")
+      < _src2.index("plus_key_edit.textEdited.connect")
+      and _src2.index("def mark_dirty() -> None:")
+      < _src2.index("plus_check_btn.clicked.connect"))
+
+_PLUS_HANDLERS = ("on_plus_subscribe", "on_plus_manage", "on_plus_check",
+                  "refresh_plus_status")
+_plus_handlers = "\n".join(_fn_src(n) for n in _PLUS_HANDLERS)
+check("all four handlers were found",
+      all(_fn_src(n) for n in _PLUS_HANDLERS))
+check("no exec() anywhere in the new group — K-114 is addon-wide, and "
+      "this dialog is the one that segfaulted on it",
+      ".exec()" not in _plus_handlers and "exec(" not in _plus_handlers)
+check("Subscribe and Manage are the only openLink calls, one each — a "
+      "browser hop is the ONLY way Klaus touches payment: no card "
+      "number, no Stripe form, nothing to enter inside Anki",
+      _src2.count("openLink(") == 2
+      and "openLink(" in _fn_src("on_plus_subscribe")
+      and "openLink(" in _fn_src("on_plus_manage"))
+check("Subscribe needs no key and no network — it is a URL built from "
+      "the configured base, so a user with nothing configured can still "
+      "reach the page that sells them one",
+      "plus.base(" in _fn_src("on_plus_subscribe")
+      and "run_in_background" not in _fn_src("on_plus_subscribe"))
+check("...while both calls that DO touch the network run on taskman, "
+      "never on the main thread: a 15 s urlopen timeout inside a click "
+      "handler freezes Anki's whole UI, spinning beachball and all",
+      "mw.taskman.run_in_background(" in _fn_src("on_plus_manage")
+      and "mw.taskman.run_in_background(" in _fn_src("on_plus_check")
+      and "plus.portal_url(" in _fn_src("on_plus_manage")
+      and "plus.refresh(" in _fn_src("on_plus_check"))
+check("each background result is unwrapped inside try/except — an "
+      "unraised future's exception would otherwise surface as Anki's "
+      "own crash dialog for an offline laptop",
+      _fn_src("on_plus_manage").count("fut.result()") == 1
+      and "except Exception" in _fn_src("on_plus_manage")
+      and "except Exception" in _fn_src("on_plus_check"))
+check("the provider rows stay EDITABLE with a Plus key — the free tier "
+      "is one deletion away, so the note is a caption, never a "
+      "setReadOnly/setEnabled(False)",
+      "Not needed on Klaus Plus" in _src2
+      and "klaus_desc.setText" in _src2
+      and "openai_key_edit.setReadOnly" not in _src2
+      and "openai_key_edit.setEnabled(False)" not in _src2)
+check("the card-index status line names Klaus Plus as the other way to "
+      "have semantic search — telling a paying subscriber to add an "
+      "OpenAI key is the contradiction the provider-row caption exists "
+      "to prevent",
+      "or a Klaus Plus key" in _fn_src("update_embed_status"))
+check("the UI reads its status text from plus.status_line, never its "
+      "own re-spelling of the quota — the wording lives once",
+      "plus.status_line(" in _src2 and _src2.count("plus.status_line(") == 1)
+
+print("== Check Keys does not contradict a Plus subscriber (K-247 fix 3) ==")
+# test_connection (General -> Connection) used to warn "No API key is
+# set for: OpenAI, Anthropic" whenever the provider keys were empty --
+# true by coincidence and false by intent for a Plus subscriber, who is
+# never meant to fill those in. Same contradiction ruling 1 already
+# removed from update_embed_status, one page over.
+_test_conn_src = _fn_src("test_connection")
+check("test_connection was found", bool(_test_conn_src))
+_plus_branch = _test_conn_src.split("if plus.key(cfg):", 1)[1].split("return", 1)[0] \
+    if "if plus.key(cfg):" in _test_conn_src else ""
+check("test_connection short-circuits on plus.key(cfg) before it can "
+      "reach the missing-key warning, and that branch's own message "
+      "names Klaus Plus rather than saying a key is missing or not set",
+      bool(_plus_branch)
+      and "Klaus Plus" in _plus_branch
+      and "missing" not in _plus_branch.lower()
+      and "not set" not in _plus_branch.lower())
+check("...and the short-circuit reads config FRESH rather than trusting "
+      "a stale local, so a key pasted and saved earlier in the same "
+      "session is seen",
+      "_pkg().get_config()" in _test_conn_src)
+
+
 check("Preferences' own Index Now still calls curation directly — it "
       "has its own progress bar and cancel, and the runner WAITS for "
       "the shared token rather than racing it",

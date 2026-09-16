@@ -59,6 +59,27 @@ def write_config(cfg: dict[str, Any]) -> None:
     mw.addonManager.writeConfig(__name__, cfg)
 
 
+def patch_config(updates: dict[str, Any]) -> None:
+    """Merge *updates* into the STORED config, on the main thread.
+
+    ``write_config`` REPLACES the whole blob (that is why ``_migrate_config``
+    can scrub keys by popping them), so a partial dict handed to it wipes
+    every other setting. This is the one config writer a background thread
+    may use, and the writer every ``plus.*`` sink must be.
+    """
+    def _apply() -> None:
+        try:
+            cfg = get_config()
+            cfg.update(updates)
+            write_config(cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] patch_config failed: {e.__class__.__name__}")
+    try:
+        mw.taskman.run_on_main(_apply)
+    except Exception:  # no taskman (tests, early boot): apply inline
+        _apply()
+
+
 # Retired config keys, scrubbed from old profiles on next launch. Covers the
 # old chat_* -> klaus_* rename pairs (both sides are now dead -- no renaming,
 # just dropped) plus every key the removed autocomplete/Ask/Browse-search

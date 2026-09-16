@@ -37,6 +37,36 @@ standard for Anki add-ons) and never in the repo.
   per-page format (those read as no index at all). Set whether you accept
   or decline. Delete it to be asked again.
 
+### Klaus Plus
+
+Klaus Plus is the alternative to the two keys above: one subscription,
+one key, and Klaus talks to its own service instead of to OpenAI and
+Anthropic directly. Bring-your-own-keys stays free and unchanged — a
+Plus key simply makes the provider keys unnecessary, and deleting it
+puts you straight back on them.
+
+- **klaus_plus_key**: Your Klaus Plus licence key — the `kp_…` string
+  from the welcome page after you subscribe, or from the email that
+  follows it. Default `""`. With it set, `api_key_openai` and
+  `api_key_anthropic` are not needed; the provider-key rows in
+  Preferences stay editable anyway, so the free tier is one deletion
+  away. Stored like every other key, in this add-on's config
+  (`meta.json`, plain text), and never sent anywhere but the Klaus Plus
+  service.
+- **klaus_plus_cache**: Not a setting — state Klaus writes: the last
+  verdict the service gave (active, past due, refused) with the date it
+  was checked, the renewal date, and the quota readout Preferences shows.
+  Default `{}`. Safe to clear: the next **Check** (or the next call that
+  needs it) fills it in again. Klaus re-checks every 6 hours, and honours
+  a cached "active" for up to 7 days when the service cannot be reached,
+  so a flight or an outage does not cost you the subscription you paid
+  for.
+- **klaus_plus_base**: The Klaus Plus service URL. Default `""`, which
+  falls back to the built-in service, `https://klausmate.fly.dev`
+  (`plus.DEFAULT_BASE`) — editable under **KlausMate Preferences →
+  General → Klaus Plus service**. Change it only to point at a staging
+  or self-hosted service.
+
 ## Semantic library (matching + retention)
 
 One embed per imported PDF serves two jobs, both driven by the same match

@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+import types
 
 sys.path.insert(
     0,
@@ -40,6 +41,10 @@ from PyQt6 import QtWidgets  # noqa: E402
 _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 _SCRATCH = tempfile.mkdtemp(prefix="klaus-t6-")
 K = exec_klausmate_under_qt(_SCRATCH)
+# The real get_config/write_config, captured before the _migrate_config
+# section below monkeypatches K.get_config/K.write_config to fixture
+# lambdas for the rest of the file's run.
+_real_get_config, _real_write_config = K.get_config, K.write_config
 
 
 # ------------------------------------------------- deletions
@@ -231,6 +236,118 @@ check(
     )
     <= set(K._LEGACY_KEYS_DROPPED),
 )
+
+
+# ------------------------------------------------- Klaus Plus (2026-09-16)
+
+section("Klaus Plus: the three config keys, and config.md naming them")
+
+_plus = __import__("importlib").import_module("klausmate.plus")
+
+for k, v in (
+    ("klaus_plus_key", ""),
+    ("klaus_plus_cache", {}),
+    ("klaus_plus_base", ""),
+):
+    check(f"config.json defines {k} = {v!r}", k in cfg and cfg[k] == v,
+          f"got {cfg.get(k, '<missing>')!r}")
+
+check(
+    "config.json ships klaus_plus_base EMPTY rather than freezing "
+    "today's URL into every profile's meta.json on the first Save — "
+    "plus.base()'s own fallback supplies plus.DEFAULT_BASE, so the "
+    "literal URL lives in exactly one place and a later change reaches "
+    "upgraded profiles too (K-247 fix 6)",
+    cfg.get("klaus_plus_base") == ""
+    and _plus.base({"klaus_plus_base": cfg.get("klaus_plus_base")}) == _plus.DEFAULT_BASE,
+)
+check(
+    "the three keys are spelled by plus.py's own constants, so a rename "
+    "there cannot leave config.json shipping the old names",
+    (_plus.KEY, _plus.CACHE, _plus.BASE)
+    == ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base"),
+)
+check(
+    "no licence key, price or service secret ships in config.json — the "
+    "default key is empty and the gate is the service, not the add-on",
+    cfg["klaus_plus_key"] == "" and cfg["klaus_plus_cache"] == {},
+)
+
+_md_t8 = open(os.path.join(ROOT, "klausmate", "config.md"), encoding="utf-8").read()
+for k in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base"):
+    check(f"config.md documents {k}", f"**{k}**" in _md_t8)
+check("config.md has a Klaus Plus subsection to put them under",
+      "### Klaus Plus" in _md_t8)
+
+
+# ------------------------------------------------- patch_config (K-247 fix 1)
+
+section("patch_config: a merging, main-thread config writer")
+
+# write_config REPLACES the whole stored blob (mw.addonManager.writeConfig
+# semantics) -- that is the point of the fake below, mirroring production
+# instead of a dict.update() double that would hide the exact bug this
+# guards against. get_config/write_config are restored to the real
+# functions first: the _migrate_config section above left them pointing
+# at fixture lambdas that never touch mw at all.
+K.get_config, K.write_config = _real_get_config, _real_write_config
+
+
+class _FakeAddonManager:
+    """mirrors mw.addonManager: writeConfig REPLACES, like production."""
+
+    def __init__(self, cfg):
+        self._cfg = dict(cfg)
+
+    def getConfig(self, _name):
+        return dict(self._cfg)
+
+    def writeConfig(self, _name, cfg):
+        self._cfg = dict(cfg)
+
+
+class _FakeTaskman:
+    """Records what would run on the main thread instead of running it,
+    so the test can see whether patch_config queued or applied inline."""
+
+    def __init__(self):
+        self.queued = []
+
+    def run_on_main(self, fn):
+        self.queued.append(fn)
+
+
+_orig_mw = K.mw
+_fake_mgr = _FakeAddonManager(
+    {"api_key_openai": "sk-real", "library_root": "/library",
+     "klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_cache": {}}
+)
+_fake_tm = _FakeTaskman()
+K.mw = types.SimpleNamespace(addonManager=_fake_mgr, taskman=_fake_tm)
+try:
+    K.patch_config({"klaus_plus_cache": {"status": "active"}})
+    check(
+        "patch_config queues the write through mw.taskman.run_on_main "
+        "rather than applying it inline while taskman is there to ask",
+        len(_fake_tm.queued) == 1
+        and _fake_mgr._cfg.get("klaus_plus_cache") == {},
+    )
+    _fake_tm.queued[0]()
+    _after = K.get_config()
+    check(
+        "...and once that queued closure runs, every OTHER stored "
+        "setting survives untouched — write_config REPLACES the whole "
+        "blob, so patch_config must merge into a fresh read before "
+        "calling it, or a Check wipes both API keys and library_root",
+        _after.get("api_key_openai") == "sk-real"
+        and _after.get("library_root") == "/library"
+        and _after.get("klaus_plus_key") == "kp_" + "a" * 32,
+    )
+    check("...with the patched key itself applied",
+          _after.get("klaus_plus_cache") == {"status": "active"})
+finally:
+    K.mw = _orig_mw
+    K.get_config, K.write_config = _real_get_config, _real_write_config
 
 
 raise SystemExit(report())
