@@ -163,10 +163,10 @@ service and one add-on mode; it changes no feature.
 - **Gates.** `index_queue.missing_key_provider` returns `""` when a Plus
   key is present; `setup_flow._embedding_ready` likewise; `KEYS_COPY`
   gains one sentence naming Klaus Plus as the keyless option. The priced
-  sweep confirm, when Plus is active, shows "counts against your Klaus
-  Plus quota: N of 30 lecture hours this month" instead of dollars, from
-  the cached `/v1/me` numbers; the dollar estimate stays for the free
-  tier.
+  sweep confirm, when Plus is active, says "included in Klaus Plus, no
+  charge" instead of a dollar estimate — embeddings are unmetered on
+  Plus; the dollar estimate stays for the free tier. Quota wording
+  belongs to the metered calls (transcription and judging, Plan 2).
 - **Preferences.** The "API keys & models" page gains a "Klaus Plus"
   group above the keys: the licence key (`EchoMode.Password`, deferred
   save like every field), a status line ("Plus · renews 2026-10-01 · 4 of
