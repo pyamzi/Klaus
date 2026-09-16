@@ -130,6 +130,14 @@ AUDIT_MODULES = (
     # status rendering are all aqt-free above its glue divider, so the
     # 122 checks in tests/test_index_queue.py reach nearly all of it.
     "index_queue",
+    # The API-first modules (2026-09-15, added by K-228).  page_store
+    # and cost are pure; openai_client and anthropic_client are pure
+    # above one _urlopen the tests replace — so, like the rest of this
+    # roster, nearly every function is reachable from its own test file.
+    "page_store",
+    "cost",
+    "openai_client",
+    "anthropic_client",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

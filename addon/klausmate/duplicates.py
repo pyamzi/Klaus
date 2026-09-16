@@ -59,8 +59,9 @@ integer operation per pair:
    reported is always the exact cosine, never the Hamming estimate: the
    prefilter can cost recall, never precision.
 
-Measured end to end on Pouya's live index (28,670 × 768,
-ollama ``nomic-embed-text:latest``, python 3.14 — Anki bundles 3.13),
+Measured end to end on Pouya's live index (28,670 × 768, under
+``nomic-embed-text``, the local embedding model Klaus ran on 2026-09-01
+and no longer ships, python 3.14 — Anki bundles 3.13),
 running this module, not a prototype of it:
 
     column_means            0.9 s
@@ -108,10 +109,11 @@ collection is small enough that every pair fits in the budget the cut
 opens to ``dims`` and the scan becomes exact brute force with no
 prefilter at all.
 
-A constant would have been model-specific. The default provider is
-Voyage; Pouya's live model is Ollama ``nomic-embed-text``; the geometry
-that makes 0.359 the right fraction here is not transferable, so it is
-measured per run instead. ``audit_rows`` turns the guess into a number:
+A constant would have been model-specific: the cut that makes 0.359 the
+right fraction for one embedding space transfers to no other, and Klaus
+has already changed spaces once (the local 768-dim model these numbers
+were read on, then OpenAI ``text-embedding-3-large`` at 1024 from
+2026-09-15). So it is measured per run instead. ``audit_rows`` turns the guess into a number:
 it exact-scans that many random notes after the sweep and reports the
 recall actually achieved.
 
@@ -206,10 +208,14 @@ else:
 
 # --------------------------------------------------------------- tiers
 
-# Calibrated against Pouya's 28,670-note index on 2026-09-01 (ollama
-# nomic-embed-text:latest, 768 dims). See "What the scores mean" above —
-# these are band edges read off real pairs, not round numbers, and they
-# are NOT transferable to another embedding model unchanged.
+# Calibrated against Pouya's 28,670-note index on 2026-09-01, under the
+# local embedding model Klaus ran then (768 dims). See "What the scores
+# mean" above — these are band edges read off real pairs, not round
+# numbers, and they are NOT transferable to another embedding model
+# unchanged. Which means they are DUE: the 2026-09-15 API-first turn
+# moved embeddings to OpenAI text-embedding-3-large at 1024 dims, so
+# these edges describe a space this add-on no longer produces vectors
+# in. Re-read them off real pairs before trusting a tier name.
 DUPLICATE = 0.95
 NEAR = 0.90
 CLOSE = 0.85

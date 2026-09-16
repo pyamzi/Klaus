@@ -29,8 +29,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
-# Module globals so tests can point them at a local http.server or a fake,
-# matching embeddings.OPENAI_API_BASE.
+# Module globals so tests can point them at a local http.server or a
+# fake — the same pattern openai_client.py uses for its own tests.
 API_BASE = "https://api.anthropic.com"
 API_VERSION = "2023-06-01"
 

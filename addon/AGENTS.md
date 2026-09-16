@@ -15,21 +15,28 @@ here" below if you're archaeology-diving through git history) — though
 Claude is back since 2026-09-02, in a different shape, as the Claude Code
 CLI behind the assistant dock (see "The assistant" below).
 
-**Privacy:** Klaus makes network calls for three things, and nothing else
-— no telemetry, ever.
+**Privacy:** Klaus makes network calls for two things, and nothing else
+— no telemetry, ever. (Accurate as of 2026-09-15, the API-first turn:
+there is no local engine any more, so nothing stays on the machine by
+being local — it stays on the machine by not being sent.)
 
-- **Embeddings** (the search index): the default provider is **Voyage**,
-  a cloud API, so card text and lecture-PDF text are sent to Voyage's
-  servers unless you switch `embedding_provider` to `ollama` in config,
-  which keeps everything local. `openai` is a second cloud option.
+- **Embeddings** (the search index): **OpenAI**, through your own
+  `api_key_openai`. Card text and lecture-page text (the slide's text
+  plus any transcript stored with it) are sent to OpenAI's embeddings
+  API when indexing and when searching. This is the only thing that key
+  is used for today.
 - **The assistant**, and only while you use it: each turn you send goes
   to **Anthropic**, through the `claude` binary running under your own
-  Claude Code login — Klaus stores no API key of its own. A turn carries
-  your message plus the page you are viewing: its text, its image, and
-  any text you have selected. Nothing is sent when the Assistant dock is
+  Claude Code login — Klaus stores no key for it. A turn carries your
+  message plus the page you are viewing: its text, its image, and any
+  text you have selected. Nothing is sent when the Assistant dock is
   closed or unused.
-- **OCR** of a lecture page (`ocr_enabled`, on by default): local only —
-  the page image goes to **your own Ollama**, never off the machine.
+- **`api_key_anthropic` is stored and unused.** No Klaus code calls the
+  Anthropic API directly: `anthropic_client.py` exists but has no
+  caller, and the assistant reaches Anthropic only the indirect way
+  above. The key is there for the spec's Plan 2 (the pertinence phase)
+  and Plan 3 (the assistant on the Messages API), neither of which is
+  built. When one of them lands, this paragraph is what has to change.
 
 ---
 
@@ -46,23 +53,24 @@ Addons/                       # Git repo root
 └── klausmate/                # Anki add-on package (copy/symlink into addons21/)
     ├── README.md              # Ships inside the add-on — user-facing usage
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
-    ├── embeddings.py           # Embedding provider abstraction: Voyage (default) / OpenAI / Ollama, aqt-free
+    ├── embeddings.py           # Embeddings: OpenAI only, unit-normalized vectors, the index signature (aqt-free)
+    ├── openai_client.py        # Stdlib HTTP to OpenAI: embed() and transcribe(), one retry (aqt-free)
+    ├── anthropic_client.py     # Stdlib HTTP to the Anthropic Messages API — built for Plans 2/3, no caller yet (aqt-free)
+    ├── cost.py                 # Dated prices + estimates shown before any paid pass (pure)
+    ├── page_store.py           # One record per (PDF, page): slide text + transcript segments; the API-first seam
     ├── card_index.py           # Persistent embedding index over the user's notes (aqt-free)
     ├── curation.py             # Card index build (ensure_index) + the undoable Browse deck copier
     ├── pdf_drop.py             # PDF drop square + MainWebView.dropEvent wrap on the deck list / overview screens
-    ├── pdf_index.py            # Persistent embedding index over one PDF's text chunks (aqt-free)
+    ├── pdf_index.py            # Persistent embedding index over one PDF — ONE vector per page (aqt-free)
     ├── retention.py            # Per-PDF retention/study-priority scoring for the Library
     ├── pdf_handler.py          # PDF import/storage, text extraction, per-tab state, annotation baking
     ├── pdf_viewer.py           # PdfViewer (QPdfView + selection/highlight overlay, find, thumbnails) and PdfSidebar
     ├── pdf_drive.py            # The Library window — virtual-folder tree + PdfSidebar
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
-    ├── manage_models.py        # "Manage models" dialog: embedding provider/key, local Ollama model pulls, general toggles
-    ├── setup_flow.py           # First-run dialog + per-profile-open readiness checks, gated on the active embedding provider
+    ├── manage_models.py        # KlausMate Preferences: the two API keys, the three model fields, general/appearance toggles
+    ├── setup_flow.py           # First-run dialog + per-profile-open readiness checks (library root, then one key nudge)
     ├── tag_migrate.py          # One-time klaus:: -> !Library:: tag rename for upgrading collections
     ├── browse_toggles.py       # Browse toolbar ◧/◨ sidebar and editor-column toggles
-    ├── ollama_client.py        # Stdlib HTTP client for Ollama: /api/embed, pull, delete (no text generation)
-    ├── ollama_runtime.py       # Managed Ollama download/extract/serve under user_files/runtime/
-    ├── ollama_setup.py         # First-run install detection (Homebrew, winget)
     ├── crop_dialog.py          # Image-crop dialog (crop saved as a new media file)
     ├── config.json             # Default add-on config
     ├── config.md               # Config key documentation (shown in Anki config UI)
@@ -78,8 +86,8 @@ Addons/                       # Git repo root
         ├── pdf_tabs.json        # Open tabs, placement (dock left/right/bottom/float), thumbs, last_used
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
-        ├── pdf_index/           # Per-PDF embedding indexes for retention scoring
-        └── runtime/             # Klaus-managed Ollama install, versioned subdirectory
+        ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) for retention scoring
+        └── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text + transcript segments (page_store.py)
 ```
 
 **Install path:** `addons21/klausmate/` (folder name must be alphanumeric per Anki conventions).
@@ -104,15 +112,17 @@ curation.py :: ensure_index() — sync the card index (only new/edited notes
         │        path that refreshes it; the Curate button used to do it
         │        invisibly, which is why K-146 had to add it here.
         ▼
-embeddings.py — Voyage / OpenAI / Ollama, unit-normalized vectors
+embeddings.py — OpenAI (openai_client.embed), unit-normalized vectors
         │
         ▼
 card_index.py — user_files/card_index/: packed float32 vectors + manifest,
         │        top-K via math.sumprod over memoryviews (no numpy)
         ▼
 retention.py :: ensure_pdf_index() → ensure_matches() — embed the PDF's
-        │        chunks, score every indexed note (max cosine, cached in
-        │        matches.json)
+        │        PAGES (one vector each, from page_store.page_texts; a page
+        │        whose text_hash is unchanged keeps its vector), score every
+        │        indexed note (max cosine, cached in matches.json with the
+        │        winning page)
         ▼
 tag_sync.py :: sync_after_matches() — the notes at/above this PDF's
           sensitivity threshold become the members of its one
@@ -134,10 +144,10 @@ pdf_drive.py — the Library window: a tree of virtual folders (drive_store.py,
         │       user_files/drive.json — nothing on disk moves) next to a
         │       standalone PdfSidebar
         ▼
-retention.py — per PDF: embed its chunks (pdf_index.py) → score every
-        │       indexed note against those chunks (max cosine, cached in
-        │       matches.json) → pull FSRS retrievability for matched cards
-        │       → aggregate into a study-priority score
+retention.py — per PDF: embed its pages (pdf_index.py, one vector each) →
+        │       score every indexed note against those pages (max cosine,
+        │       cached in matches.json) → pull FSRS retrievability for
+        │       matched cards → aggregate into a study-priority score
         ▼
 Library row shows the score; right-click can index/re-index, adjust match
 sensitivity, show matches in Browse (it hops to the PDF's own !Library tag —
@@ -185,8 +195,10 @@ viewer_context.py :: current() — the LAST ACTIVATED PdfSidebar (Library,
         │  Browse's editor pane, or the Lecture dock) that still has a
         │  document open, plus its page and selection
         ▼
-page_ocr.py :: context_for() — that page as OCR'd text (cached) or the
-        │  PDF's own text layer, plus a rendered PNG
+page_store.py — that page's record (the slide's own text, plus any
+        │  transcript segments stored with it) and render_page_png(); read
+        │  at Send time by assistant_dock._page_context, neither half able
+        │  to fail the turn
         ▼
 agent_host.py :: build_turn() — one stream-json user message (text +
         │  a "[Klaus context]" block + image) written to the `claude`
@@ -199,21 +211,23 @@ anki_endpoint.py — mcp__klaus__* tool calls from the child arrive here
 
 One assistant, one engine: Klaus hosts the **Claude Code CLI** as a
 child process (`agent_host.py`) rather than running a chat loop of its
-own — no API keys stored in Klaus, the user's own `claude` login and
-subscription pay for it. Six modules, one concern each:
+own — no assistant key stored in Klaus, the user's own `claude` login and
+subscription pay for it. (The 2026-09-15 spec's Plan 3 replaces this
+engine with `anthropic_client.py` and deletes `anki_endpoint.py`; it is
+not built, so what follows is current, not historical.) Five modules,
+one concern each:
 `agent_host.py` (finds, spawns, and streams with the `claude` binary —
 binary discovery falls back to the user's login shell before known
 install paths, since a GUI-launched Anki has a minimal `PATH`),
 `anki_endpoint.py` (the localhost server both the wider AnkiConnect
 ecosystem and the child's own MCP tools reach), `viewer_context.py` (a
 registry of every live `PdfSidebar`; the assistant follows whichever one
-was activated last), `page_ocr.py` (the followed page as text — OCR
-through a local Ollama vision model, or the PDF's text layer — plus
-image, cached per PDF digest and page under `user_files/ocr/`),
+was activated last),
 `assistant_sessions.py` (one Claude Code session id per PDF, plus slash-
 command prompt files, under `user_files/assistant/`), and
 `assistant_dock.py` itself (header, transcript, input, Send/Stop, New
-Session, slash completion).
+Session, slash completion). The page in view comes from `page_store.py`,
+which the index shares — see the layout above.
 
 Every write the assistant makes — adding a note, editing fields, tagging
 — goes through the SAME kind of plain-text approval dialog Klaus shows
@@ -238,7 +252,7 @@ gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)  # right-
 gui_hooks.main_window_did_init.append(install_menu)                 # Tools → KlausMate Preferences…
 gui_hooks.profile_did_open.append(_migrate_config)                  # legacy chat_*/claude_* key cleanup
 gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-time klaus:: -> !Library:: rename
-gui_hooks.profile_did_open.append(first_run_check)                  # embeddings-provider onboarding
+gui_hooks.profile_did_open.append(first_run_check)                  # first-run: library root + the API-key nudge
 gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.profile_did_open.append(_start_assistant_endpoint)        # anki_endpoint bind (mw.col must exist)
 gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel + tab container
@@ -350,7 +364,8 @@ child's own environment (verified live against build 2.1.228) — because
 `ps` is readable by every local process. Its read tools are confined to
 the library root: `agent_host.decide_permission` denies any
 `file_path`/`path`/`pattern` that resolves outside it, which matters
-because a lecture page's OCR text is untrusted content on every turn.
+because a lecture page's own text — attached to every turn as the page
+record — is untrusted content.
 See CLAUDE.md's module map for the approval-dialog and card-tagging
 rules.
 
@@ -374,33 +389,37 @@ wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
 - UI: **Tools → KlausMate Preferences…** (`manage_models_dialog`; the top bar's star opens it too, and raw JSON is still at **Tools → Add-ons → Klausmate → Config**)
 - Key docs: `klausmate/config.md`
 
-Notable keys: `embedding_provider` (`voyage` default | `openai` | `ollama`),
-`embedding_model`, `embedding_api_key_voyage` / `embedding_api_key_openai`,
-`pdf_match_threshold`, `pdf_match_agg`,
-`pdf_index_max_chunks`, `endpoint` (Ollama server URL), `runtime_auto_setup`
-(Klaus manages its own local Ollama install when needed), `image_crop_enabled`,
+Notable keys, as of the 2026-09-15 API-first turn — **two keys and three
+model names, no provider anywhere**: `api_key_openai` and
+`api_key_anthropic` (both empty by default, both entered in Preferences
+→ API keys & models, both living in `meta.json` and never in the repo),
+`embedding_model` (`text-embedding-3-large`), `embedding_dimensions`
+(`1024`), `reasoning_model` (`claude-sonnet-5`), `transcription_model`
+(`gpt-4o-mini-transcribe`), `pdf_match_threshold`, `image_crop_enabled`,
 `klausbook_design` (default false — master switch for the design
 layer: toolbar/bottombar restyle, backgrounds, frosted panels,
 dashboard editing; tools always work),
 `heatmap_enabled` (the review heatmap under the deck list),
 `dashboard_order` (deck-screen widget order; written by the dashboard's
 right-click → Edit Widgets mode — drag to reorder, ⊖/＋ toggle the
-per-widget bools). The assistant's own keys: `ocr_enabled` (default
-true — OCR a lecture page through a local vision model when it has no
-text layer), `ocr_model` (default `"glm-ocr"`), `claude_binary` (path
-override for the `claude` executable; default `""` auto-detects),
-`assistant_model` (which Claude model the assistant runs; default `""`
-= Claude Code's own default), `assistant_reopen` (default false —
-reopen the Assistant dock on the next Anki start), and
-`assistant_dock_width` (default `420` — the dock's last width, written
-by dragging it, not a Preferences row).
+per-widget bools). The assistant's own remaining keys are
+`assistant_reopen` (default false — reopen the Assistant dock on the
+next Anki start) and `assistant_dock_width` (default `420` — the dock's
+last width, written by dragging it, not a Preferences row).
 
 `_migrate_config()` (on `profile_did_open`) cleans up legacy `chat_*` /
 `claude_*` config keys left over from the deleted Ask-on-Claude feature,
 plus (retired 2026-09-01) `assistant_api_key` / `assistant_backend` /
 `assistant_token` — the hosted/bring-your-own-key split those keys were
 for was cut back to Claude Code's own login before it ever shipped —
-keep both cleanups until users have upgraded past them.
+keep both cleanups until users have upgraded past them. It also carries
+the 2026-09-15 migration: `embedding_api_key_openai` → `api_key_openai`
+and `assistant_model` → `reasoning_model` are RENAMED (the value is
+worth keeping) before `_LEGACY_KEYS_DROPPED` scrubs the rest —
+`embedding_provider`, `embedding_api_key_voyage`, `ocr_enabled`,
+`ocr_model`, `runtime_auto_setup`, `claude_binary`, `endpoint`,
+`pdf_index_max_chunks`, `pdf_match_agg`. Those names appearing in
+`__init__.py` are the cleanup, not a surviving feature.
 
 ---
 
@@ -411,11 +430,14 @@ keep both cleanups until users have upgraded past them.
 | Anki / aqt / gui_hooks | Anki runtime |
 | `pypdf` 6.11.0 | Vendored under `klausmate/vendor/` — the **sole** third-party dependency |
 | `PyQt6.QtPdf` / `PyQt6.QtPdfWidgets` | Anki's PyQt6 (PDF viewer; graceful fallback if missing) |
-| Ollama | Optional — user-installed, or Klaus-managed under `user_files/runtime/` via `ollama_runtime.py`; used only if `embedding_provider` is `ollama` |
-| Voyage / OpenAI embedding APIs | Optional — `embeddings.py`, used only when `embedding_provider` selects them |
+| OpenAI embeddings API | Required for indexing — `openai_client.py` behind `embeddings.py`, with the user's own `api_key_openai` |
+| Anthropic Messages API | `anthropic_client.py`, written for the spec's Plans 2 and 3 — no caller yet |
+| Claude Code CLI (`claude`) | Optional — the assistant's engine; the user installs and logs into it themselves |
 
-Every network client (`ollama_client.py`, `embeddings.py`) is **stdlib
-only** (`urllib`) — no `requests`, no third-party SDKs, no bundled wheels.
+Every network client (`openai_client.py`, `anthropic_client.py`) is
+**stdlib only** (`urllib`) — no `requests`, no third-party SDKs, no
+bundled wheels; `embeddings.py` builds on `openai_client.py` and opens
+no socket of its own.
 No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 `pdf_index.py` do ranking with `math.sumprod` over `array('f')` memoryviews.
 
@@ -463,7 +485,7 @@ mypy klausmate
 ## Code conventions (this project)
 
 - Prefer **gui_hooks** over monkey-patching.
-- Background work: always `QueryOp` / `without_collection()` for network calls (Ollama, Voyage, OpenAI); UI updates via `mw.taskman.run_on_main` when needed.
+- Background work: always `QueryOp` / `without_collection()` for network calls (OpenAI today, Anthropic when Plans 2/3 land); UI updates via `mw.taskman.run_on_main` when needed.
 - Import Qt from `aqt.qt`; QtPdf from `PyQt6.QtPdf` behind try/except (`pdf_viewer.py`).
 - Editor-attached state via attributes — see "Editor-attached state" above.
 - When adding config keys: update `config.json`, `config.md`, and the relevant section of `manage_models.py`.
@@ -502,6 +524,22 @@ endpoint rather than dormant. See CLAUDE.md's header and module map for
 the exact commits. Don't resurrect a hosted/bring-your-own-key split, a
 separate podcast feature, or a Library-panel assistant — the assistant
 is `assistant_dock.py`.
+
+A third clearing-out, **2026-09-15**, was the API-first turn (Pouya:
+"forget about the local-only approach … an API-first approach to
+simplify everything";
+`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md`). Gone with
+it: the local embedding engine and everything that managed it
+(`ollama_client.py`, `ollama_runtime.py`, `ollama_setup.py`, the
+"Local model library" Preferences page, `user_files/runtime/`), the
+Voyage embedding provider and the whole notion of choosing a provider,
+and slide OCR (`page_ocr.py`, its tests, `user_files/ocr/`, the vision
+model and its presets) — the PDF's own text layer inside a page record,
+plus the page image, replace it. Chunk-level matching inside a page went
+too: one page, one vector. Don't resurrect provider-choice,
+local-install or OCR language; `openai_client.py`, `page_store.py`,
+`cost.py` and `anthropic_client.py` are what arrived in their place —
+the first three wired, the last one waiting for the plan that calls it.
 
 ---
 

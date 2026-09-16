@@ -85,9 +85,13 @@ not spend iterations to buy speed: K-167's own table shows truncating
 to 25 moves points by up to 0.605 (~212 px) and does not improve
 monotonically as the count rises, because of the isotropy above.
 
-The stride is deterministic (same idea as ``pdf_index.stride_sample``,
-reimplemented locally so this module has no project-specific imports at
-all).
+The stride is deterministic: ``_stride_indices`` walks ``n/cap`` through
+the rows in order, so the same index yields the same fit sample every
+time and ``pdf_graph``'s cached layout stays reproducible. It lives here
+rather than being imported so this module has no project-specific
+imports at all — ``pdf_index`` had a twin of it until the 2026-09-15
+page-level index removed the need (one vector per page is not a
+population you sample).
 
 Degenerate inputs (0 rows, 1 row, or every sampled row identical after
 mean-centering) never divide by zero: the power iteration detects a

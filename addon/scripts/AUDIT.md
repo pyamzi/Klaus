@@ -569,3 +569,160 @@ are the parts that would lose a user's work; they are in the *edges*:
 what happens when a bookkeeping call raises, and what the status
 surface says when nothing is running. Four cards' worth, none urgent,
 all cheap.
+
+---
+
+# Third lane — the API-first modules (K-228, 2026-09-15)
+
+Plan 1 of
+`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md` landed four
+new modules, and Task 8 added all four to `AUDIT_MODULES`:
+`page_store`, `cost`, `openai_client`, `anthropic_client`. They belong
+here for the same reason the rest of the roster does — each is pure, or
+pure above one `_urlopen` its tests replace, so nearly every function is
+reachable from its own test file, which is the condition this audit
+needs.
+
+Run 2026-09-15 after `--selftest` passed (6 test-file runs, 0.4s, all
+three cases answered correctly): 70 mutations, 78 test-file runs, 4.1s —
+the pre-fix snapshot; see the follow-up below for the totals after both
+findings closed.
+
+| module | sha256 | test file run | checks |
+|---|---|---|---:|
+| `klausmate/page_store.py` | `9fc229c45cc4` | `test_page_store.py` (`6b78631127f9`) | 16 |
+| `klausmate/cost.py` | `8754377b80b9` | `test_cost.py` (`281e18b72f38`) | 8 |
+| `klausmate/openai_client.py` | `478ed6d1c7a8` | `test_openai_client.py` (`9ce6d8e6ac87`) | 9 |
+| `klausmate/anthropic_client.py` | `5f0dc5a1175d` | `test_anthropic_client.py` (`7ef603227884`) | 39 |
+
+| operator | mutations | caught | crash | survived |
+|---|---:|---:|---:|---:|
+| `gut` | 39 | 13 | 26 | **0** |
+| `const` | 13 | 6 | – | 7 |
+| `const-loud` | 13 | 5 | 2 | 6 |
+| `boolflip` | 5 | 3 | 1 | 1 |
+| **total** | **70** | **27** | **29** | **14** |
+
+**Not one `gut` survivor in four modules.** Every function body in all
+four is behaviourally pinned: emptying any of them fails its test file.
+That is the number that matters, and it is the first lane in this
+document to return it clean. All fourteen survivors are module-level
+constants or one boolean keyword, judged below.
+
+## Found and fixed during this lane: `render_page_png`
+
+The first run had `page_store.py:143 render_page_png (gut)` surviving —
+gut the body and `test_page_store.py` still passed. The cause was a
+deletion, not an oversight: `render_page_png` moved into `page_store`
+from `page_ocr.py`, which was deleted on 2026-09-15 and took
+`tests/test_page_ocr.py` — the **only** test of that function — with it.
+`test_page_store.py`'s header said so out loud ("covered by
+tests/test_page_ocr.py"), which by then named a file that did not exist.
+
+Fixed in this lane rather than reported, since K-228 owns that test
+file. Two things were done differently from the check that was lost:
+
+- The old check built its one-page PDF with the vendored `pypdf`, which
+  **this machine's python3 cannot import at all** — so restoring it
+  verbatim would have restored a permanent `SKIP`, a vacuous pin wearing
+  a different hat. The page is now a literal 300×200 PDF written by hand
+  in the test; pdfium reads it fine.
+- The old assertion was `png[:8] == b"\x89PNG…" and len(png) > 100`,
+  which any PNG at all satisfies. It now reads the width out of the
+  PNG's own IHDR, so the SCALE is pinned: `long_edge=140` on a 300×200
+  page must come back 140 wide, and the default must be `LONG_EDGE`
+  (1400) — the size the assistant actually sends. Out-of-range pages are
+  pinned to raise.
+
+That took `page_store` from 4 survivors to 1, and killed both `LONG_EDGE`
+constant survivors as a side effect.
+
+## Findings worth a card
+
+**1. `test_openai_client.py:59` compares the URL against the constant it
+is testing.** `url == oc.API_BASE + "/embeddings"` is the K-135 shape:
+mutate `API_BASE` and both sides move together, so the check cannot fail
+on it — `API_BASE (const)` survives, and it is the only `const` survivor
+in this lane that is load-bearing. This is the one string that decides
+where a paid request goes and where a key is sent; point it at
+`http://klaus.invalid` and nine checks still pass. Assert the literal
+`"https://api.openai.com/v1/embeddings"` once, in one check, and keep
+the symbolic comparison everywhere else.
+
+**2. `test_cost.py:26` names arithmetic it does not verify.** The check
+is titled "judge: 10 batches, each (page + 8 cards + prompt overhead) in
+and ~40 tokens per verdict out" and asserts
+`j.tokens > 0 and j.dollars > 0 and estimate_judge(160, 1200).tokens >
+j.tokens`. Both constants in that sentence —
+`JUDGE_PROMPT_OVERHEAD_TOKENS` and `JUDGE_OUTPUT_TOKENS_PER_CARD` —
+survive at both strengths, including the loud one, because monotonicity
+and positivity hold whatever they are. Not strictly vacuous (zeroing
+`estimate_judge` would fail it), but the title promises a computation the
+pin never performs. One `j.tokens == <the worked number>` would close it.
+Cheap, and worth it before Plan 2 puts a price in front of the user.
+
+Both findings above were closed the same day — see the follow-up below.
+
+## Survivors judged trivial
+
+*Timeouts.* `EMBED_TIMEOUT_S`, `TRANSCRIBE_TIMEOUT_S`
+(`openai_client.py:18,19`), `DEFAULT_TIMEOUT_S`, `_MAX_RETRY_AFTER_S`
+(`anthropic_client.py:43,44`). Tuning values with no observable
+behaviour headless — the fake `_urlopen` records the timeout it is
+handed, so they *could* be pinned, but pinning a duration pins the
+tuning, not the contract. The behaviour that matters (a bounded wait
+exists; a `retry-after` is honoured but capped) is already caught.
+
+*The `cost` judge constants*, as their own finding above — trivial as
+constants, not trivial as a titled-but-unpinned computation.
+
+*One boolflip, behaviour-equivalent:* `ensure_ascii=False` in
+`page_store._atomic_json` (`:70`). Flipping it changes the bytes on disk
+for non-ASCII text and changes nothing at all about what `json.load`
+gives back, which is the only thing any caller sees. There is no
+assertion that could catch it without asserting file bytes, and file
+bytes are not the contract.
+
+## Bottom line for this lane
+
+Four modules, 72 checks between them, and the tool cannot falsify a
+single function body in any of them. The two findings are both in test
+files, both the same shape this document keeps finding — a pin that
+reads its own source of truth, and a pin whose title outruns its
+assertion — and neither is in the code that spends money. The hole that
+mattered was the one the deletion opened, and it is closed.
+
+### Follow-up, same day (K-228 completion round)
+
+Both findings above were closed before this lane was committed:
+`tests/test_openai_client.py` now pins the literal
+`https://api.openai.com/v1/embeddings` and `…/audio/transcriptions`
+(a scratch copy with `API_BASE = "http://klaus.invalid/v1"` fails both
+pins; the old `oc.API_BASE + …` form passed against the same bad host),
+and `tests/test_cost.py` pins the judge's worked arithmetic as a literal
+(21,700 tokens · $0.069 for `estimate_judge(80, 1200, 600, 8)`). Re-run:
+
+    python3 scripts/mutation_audit.py --modules openai_client
+    -- caught=2, caught-crash=6, survived=4   (the two timeout constants, const + const-loud)
+    python3 scripts/mutation_audit.py --modules cost
+    -- caught=7, caught-crash=5, survived=0
+
+`API_BASE`, `JUDGE_PROMPT_OVERHEAD_TOKENS` and
+`JUDGE_OUTPUT_TOKENS_PER_CARD` no longer survive. The remaining
+survivors in this lane are the timeout durations judged trivial above.
+
+**Fix-round-2 re-run, same day, all four modules together:**
+
+    python3 scripts/mutation_audit.py --modules page_store,cost,openai_client,anthropic_client
+    -- caught=32, caught-crash=29, survived=9
+
+Up from 27/29/14 pre-fix. All 9 remaining survivors are the timeout
+constants judged trivial above (`EMBED_TIMEOUT_S`/`TRANSCRIBE_TIMEOUT_S`
+in `openai_client.py`, `DEFAULT_TIMEOUT_S`/`_MAX_RETRY_AFTER_S` in
+`anthropic_client.py`, one each at `const` and `const-loud`) plus the
+one behaviour-equivalent `boolflip` in `page_store._atomic_json` also
+judged above — no `gut` survivor in any of the four modules. Note for
+whoever next diffs this table against the tree: `anthropic_client.py`'s
+sha256 no longer matches the `5f0dc5a1175d` row above — this same task
+(K-228 fix round 2) touched a comment in that file (Finding 9), which
+changes the file's hash without changing any executable line.

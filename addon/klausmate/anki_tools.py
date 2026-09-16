@@ -109,8 +109,9 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "search_lecture_pdfs",
         "description": (
-            "Search the user's imported lecture PDFs (BM25) and return the "
-            "most relevant text excerpts with sources."
+            "Semantic search over the user's imported lecture PDFs: "
+            "returns the best-matching page from each indexed PDF, with "
+            "its text and source. Ask in plain language."
         ),
         "inputSchema": {
             "type": "object",

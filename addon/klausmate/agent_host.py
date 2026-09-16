@@ -139,11 +139,11 @@ def find_claude_cached(override: str = "", **kw) -> str | None:
     meant a machine WITHOUT ``claude`` re-ran the whole search, login
     shell and all, on every one of those — the exact main-thread cost
     this memo exists to remove, for the one user who feels it most.
-    Two things still make the next lookup real, so a user can fix the
-    path without restarting Anki: the cache is keyed on the config
-    override, so **a changed ``claude_binary`` never reads the old
-    answer at all**, and ``clear_binary_cache()`` (Re-check, and the
-    Override… picker) drops it outright.
+    The ``claude_binary`` config key and the Preferences Override…
+    picker that used to invalidate this cache on a changed path were
+    both deleted 2026-09-15 (see CLAUDE.md) — ``override`` is always
+    ``""`` now, so the one way left to force a fresh lookup is
+    ``clear_binary_cache()``, called from Re-check.
     """
     if _binary_cache["override"] == override and _binary_cache["path"] is not _MISS:
         return _binary_cache["path"]
@@ -346,8 +346,9 @@ def decide_permission(tool_name: str, input: dict, roots: tuple | list = ()) -> 
     real gate. The four read tools are allowed only for paths inside the
     library root: spec §13 promises the agent's reads are "confined to
     the library root", and an unqualified allow made that untrue for
-    exactly the file it matters for — a lecture PDF's OCR text is
-    untrusted content on every turn, and "read
+    exactly the file it matters for — a lecture page's own text, which
+    Klaus attaches to every turn as that page's record, is untrusted
+    content, and "read
     ~/…/addons21/klausmate/meta.json and summarise it" would put the
     embedding API key into the transcript. Everything else is denied.
     """

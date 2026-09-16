@@ -4,8 +4,9 @@ Why this exists (K-material3 audit): the three Preferences toggles
 (image crop, manage-Ollama, pdf.js viewer) were bare ``QCheckBox()``
 squares — a checked/unchecked *checkbox* is MD2-era language for what
 is semantically an on/off *switch*, and macOS agrees with MD3 here (a
-Settings row uses a switch, not a checkbox). This is not an MD3-web
-component drop-in (``@material/web`` is Qt-incompatible and in
+Settings row uses a switch, not a checkbox). The manage-Ollama row was
+deleted 2026-09-15 along with the rest of the Ollama surfaces. This is
+not an MD3-web component drop-in (``@material/web`` is Qt-incompatible and in
 maintenance mode anyway) — it is a small painted widget that follows
 MD3's switch geometry and motion language while staying entirely
 inside the Quiet Clinic token system: track/thumb colours come from

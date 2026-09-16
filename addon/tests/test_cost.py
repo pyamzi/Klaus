@@ -25,6 +25,9 @@ check("embed: chars/4 tokens at the per-million input price", e.tokens == 1_000_
 j = cost.estimate_judge(n_cards=80, page_chars_mean=1200, card_chars_mean=600, batch=8)
 check("judge: 10 batches, each (page + 8 cards + prompt overhead) in and ~40 tokens per verdict out",
       j.tokens > 0 and j.dollars > 0 and cost.estimate_judge(160, 1200).tokens > j.tokens)
+check("judge worked arithmetic pins JUDGE_PROMPT_OVERHEAD_TOKENS and JUDGE_OUTPUT_TOKENS_PER_CARD: "
+      "10 batches x (350 + 1200//4 + 8*(600//4)) = 18500 in, 80*40 = 3200 out -> 21700 tokens, $0.069",
+      j.tokens == 21700 and abs(j.dollars - 0.069) < 1e-9)
 t = cost.estimate_transcribe(3600)
 check("transcribe: priced per minute, 60 minutes", abs(t.dollars - 60 * cost.PRICES["gpt-4o-mini-transcribe"][0]) < 1e-9)
 check("format_estimate reads like '~1,000,000 tokens · about $0.13'", cost.format_estimate(e) == "~1,000,000 tokens · about $0.13")

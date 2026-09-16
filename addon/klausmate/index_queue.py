@@ -654,7 +654,7 @@ def _job_stopped() -> None:
 
 
 def _fail(exc: Exception) -> None:
-    """One failure ends the run. Voyage being down would fail all ten
+    """One failure ends the run. OpenAI being down would fail all ten
     queued jobs identically; ten identical errors is not information,
     and each attempt is a billable request.
 

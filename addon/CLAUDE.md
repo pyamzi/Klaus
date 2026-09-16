@@ -10,23 +10,26 @@ reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 
 Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
-capability was semantic search, which defaults to the **Voyage** cloud
-embedding API (Ollama is an optional local alternative, OpenAI a second
-cloud option). Autocomplete, ⌘K Ask, the Klaus chat panel, the Settings
-dialog, and the original Claude/Anthropic integration were all deleted
-then — if you find docs, comments, or instincts that assume THOSE
-surfaces still exist, they're stale. See AGENTS.md's "What used to be
-here".
+capability was semantic search, which defaulted then to the **Voyage**
+cloud embedding API, with a local Ollama alternative and OpenAI as a
+second cloud option — history as of 2026-09-15, when the API-first turn
+below cut that to OpenAI alone. Autocomplete, ⌘K Ask, the Klaus chat
+panel, the Settings dialog, and the original Claude/Anthropic
+integration were all deleted then — if you find docs, comments, or
+instincts that assume THOSE surfaces still exist, they're stale. See
+AGENTS.md's "What used to be here".
 
 **Klaus grew a second AI capability starting 2026-09-01** (Pouya, that
 evening: "Wrap the Claude Code CLI, exactly like Claudian"), landing as
 six new modules overnight into 2026-09-02. One assistant, docked on
 Anki's main window (`assistant_dock.py`, shortcut `Ctrl+Shift+K`), whose
 engine is the **Claude Code CLI** running as a child process
-(`agent_host.py`) — no loop of Klaus's own, no API keys stored in Klaus,
-the user's own `claude` login and subscription pay for it. Its context
-is whatever the user is viewing in a Klaus PDF viewer — the current page
-as OCR text (`page_ocr.py`) plus image, and any selected text, tracked
+(`agent_host.py`) — no loop of Klaus's own, no assistant API key in
+Klaus's config, the user's own `claude` login and subscription pay for
+it. Its context
+is whatever the user is viewing in a Klaus PDF viewer — the current
+page's own record (`page_store.py`: the slide's text plus any transcript
+said over it) rendered to a PNG, and any selected text, tracked
 by `viewer_context.py` — attached to every turn. It reads the lecture
 library, searches and reads the user's notes, and can draft cards, every
 write behind Klaus's own approval dialog, all reached through Klaus's
@@ -56,6 +59,31 @@ layer, restored from `30847b9^`) is what `anki_endpoint.py` calls
 straight into for every read and write — its handlers untouched, only
 reused. Don't resurrect the two-assistant/hosted-tier language, and
 don't invent a second UI surface — this dock is the decided one.
+
+**Klaus went API-first on 2026-09-15** (Pouya: "forget about the
+local-only approach … an API-first approach to simplify everything").
+Two keys, both the user's own, both in Anki's addon config:
+`api_key_openai` embeds cards and lecture pages, `api_key_anthropic` is
+the reasoning key. There is no local engine left to install, start or
+update — `ollama_client.py`, `ollama_runtime.py`, `ollama_setup.py` and
+`page_ocr.py` were deleted that day, along with the Voyage and Ollama
+embedding providers, the "Local model library (Ollama)" Preferences
+page, and slide OCR (the PDF's own text layer plus the page image
+replace it). **The seam is the page**: one record per (PDF, page)
+holding the slide's text and what was said over it (`page_store.py`),
+ONE embedding vector per page (`pdf_index.py` v2 — no chunker inside a
+page any more), and the assistant reading that same record. Design:
+`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md`. **Only
+Plan 1 of that spec is built** (D1/D2/D3/D8: the page store, the two API
+clients, page-level vectors, cost estimates, Preferences, the config
+migration). Plan 2 (`pertinence.py` — Claude judging each candidate card
+against its best page — plus the lecture recorder and transcripts) and
+Plan 3 (the assistant moved onto the Anthropic Messages API, deleting
+`anki_endpoint.py` and the Claude Code child) are DESIGNED, NOT BUILT:
+don't document them as present and don't code against them. Today the
+assistant is still the Claude Code child described above, and no Klaus
+code calls the Anthropic API — the Anthropic key is stored for Plans 2
+and 3 to use.
 
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
@@ -430,8 +458,10 @@ same reason.
   the single resolution choke point** (mapped location first, legacy
   `pdfs/<safe>.pdf` fallback; tests pass `root=` explicitly to stay
   aqt-free). No retrieval consumer remains here (autocomplete/Ask, the only
-  callers of its old BM25 search, are gone) — `_chunk_text` now only feeds
-  the semantic-curation pipeline (`curation.py`, `pdf_index.py`).
+  callers of its old BM25 search, are gone, and the 400-char chunker went
+  with the 2026-09-15 page-level index) — what retrieval reads now is
+  `load_pages` (`contexts/<safe>.json`, one string per page), which
+  `page_store.ensure_records` seeds each page record's `slide_text` from.
   `bake_annotations(dir, name)` writes highlights/notes into the stored
   PDF as REAL annotations
   (vendored pypdf): pristine original captured once in `pdf_originals/`,
@@ -691,9 +721,15 @@ same reason.
   before/after tag diff on profile open, never a real event). Reserved
   leaves `Curating`/`Curated`/`Matching` are never touched.
 - `retention.py`: per-PDF retention/study-priority score shown in the
-  Library — embed the PDF's chunks (`pdf_index.py`) → score every indexed
-  note against them (max cosine, cached in `matches.json`) → pull FSRS
-  retrievability for matched cards → aggregate. The old
+  Library — embed the PDF's PAGES (`pdf_index.py`, one vector each) →
+  score every indexed note against them (max cosine, cached in
+  `matches.json`, which since MATCHES_VERSION 2 also stores each note's
+  best `"pages"` entry) → pull FSRS retrievability for matched cards →
+  aggregate. `do_build` embeds `page_store.page_texts` and REUSES any
+  page whose `text_hash` is unchanged (the `card_index` hash rule), so a
+  page whose transcript grew re-embeds alone and a cancelled build
+  resumes from `embedded_rows`; an empty page gets a zero vector and can
+  never win `best_page`. The old
   `!Library::Matching` preview tag was retired in K-055 — "Show matches
   in Browse" now hops to the per-PDF `tag_sync` tag. Since K-118
   every priority row also carries `note_count`/`card_count`/
@@ -726,7 +762,7 @@ same reason.
   (prefs.json inverted, casefolded; the tag IS the membership verdict
   — deliberately NO threshold re-gating, `MATCH_FLOOR` sanity only) →
   one seek-read card vector (`card_index.load_row_map`/`read_vector`)
-  → `pdf_index.best_chunk` argmax → that chunk's stored 1-based page;
+  → `pdf_index.best_page` argmax → that page's stored 1-based number;
   results cached per (nid, tags), revalidated by file stamps. No match
   shows exactly "No lecture page available for this card." pdfjs
   first-load jumps ride a generation-stamped retry ladder (the page
@@ -843,10 +879,36 @@ same reason.
   or a notes-only PDF never bakes; `delete_context` also does not
   unlink the sidecar, so a re-import under the same safe name would
   inherit a stranger's notes.
-- `pdf_index.py` (aqt-free): persistent embedding index over one PDF's text
-  chunks, `card_index.py`'s sibling for the PDF side. K-119 adds
-  `best_chunk(idx, vec)` — match_scores' inner max-dot loop keeping
-  the argmax it discards; page for row j = `chunks[j][0]` (1-based).
+- `pdf_index.py` (aqt-free): persistent embedding index over one PDF,
+  `card_index.py`'s sibling for the PDF side. **v2 (2026-09-15) is ONE
+  VECTOR PER PAGE**: `PdfIndex.pages` is `(page_1based, text_hash)` per
+  row, `INDEX_VERSION = 2` so every v1 manifest reads as absent and
+  rebuilds (the K-167 rule), and `best_page(index, vec) -> (page,
+  score)` replaces `best_chunk`. The 400-char chunker, `chunk_pages`,
+  `stride_sample`, `chunk_text_at`, `DEFAULT_MAX_CHUNKS` and the
+  `pdf_index_max_chunks` key are gone with it, as is `pdf_match_agg` —
+  with one vector per page a note's score simply IS its best-matching
+  page, so `retention.match_scores` takes no aggregation argument at
+  all (only `floor`), and the row text comes from
+  `page_store.page_texts` (slide text plus transcript), never from a
+  chunker here.
+- `page_store.py` (aqt-free above its divider; 2026-09-15, spec D2):
+  **the seam every API-first capability keys on** — one JSON record per
+  (PDF, page) at `user_files/pages/<safe>/<digest12>/<page:04d>.json`,
+  holding the slide's own `slide_text` plus `segments` (what was said
+  over it, `{t0,t1,text}`). `combined_text` is slide text then the
+  segments in time order; `text_hash` (blake2b, 16 hex) over that is
+  what `pdf_index` stores per row and what decides a re-embed.
+  `ensure_records` seeds `slide_text` from `pdf_handler.load_pages` and
+  is **idempotent — it never overwrites segments**, so re-importing or
+  re-indexing a PDF cannot erase a transcript. `digest12` is a SHA-256
+  over the file's path, size and mtime (moved here from the deleted
+  `page_ocr.py`), so a REPLACED file gets a fresh directory rather than
+  silently inheriting another PDF's pages. Writes are atomic
+  (tmp + `os.replace`); a corrupt record reads as empty and is logged.
+  `render_page_png` (QtPdf, 1400px long edge) is the one Qt import, below
+  the divider. `subscribe(cb)` is `viewer_context`'s shape — synchronous,
+  a raising subscriber logged — for Plan 2's transcript strip.
 - `md3_switch.py`: `Md3Switch(QCheckBox)` — the MD3 track-and-thumb
   switch used for every settings-row on/off (K-material3 audit;
   replaced bare checkboxes in `manage_models.py`). Pure geometry/colour
@@ -865,11 +927,18 @@ same reason.
   retention score — the embedding side of Klaus's AI; the assistant,
   Claude Code hosted as a child process, is the other one — see
   "The assistant (Claude Code)" below):
-  - `embeddings.py` (aqt-free): provider abstraction — Voyage
-    (default, `voyage-3-lite`), with Ollama `/api/embed` (`nomic-embed-text`)
-    and OpenAI (`text-embedding-3-small`) as alternatives. `OPENAI_API_BASE`/
-    `VOYAGE_API_BASE` module globals exist for test monkeypatching. Vectors
-    are **unit-normalized at write time**.
+  - `embeddings.py` (aqt-free): **OpenAI only** since 2026-09-15 —
+    `provider_name` answers `"openai"` whatever the config says,
+    `DEFAULT_MODELS` has one entry (`text-embedding-3-large`), the key is
+    `api_key_openai`, and the HTTP lives in `openai_client.py` (this
+    module no longer opens a socket, so the old `OPENAI_API_BASE`/
+    `VOYAGE_API_BASE` monkeypatch globals are gone — point
+    `openai_client._urlopen` at a fake instead). `embedding_dimensions`
+    (default 1024) is sent only for the Matryoshka-trained v3 models
+    (`DIMENSION_CAPABLE_MODELS`), so a future model can't be handed a
+    width it will reject. Vectors are **unit-normalized at write time**,
+    and `index_signature`/`signature_matches` stay the ONE way any cache
+    compares provider/model/dims.
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
     detector; `note.mod` only a pre-filter** — the Browse-preview tag bumps
@@ -926,17 +995,27 @@ same reason.
     `lecture_view` pattern; an overlay child over the central webview
     is a z-order gamble) carrying the same text and a Stop button,
     visible on the deck screen, the overview and mid-review — cannot
-    describe one job differently. Gates: no profile, no cloud API key,
-    no run (the refusal is a MESSAGE, not a shrug). A PDF deleted
+    describe one job differently. Gates: no profile, no OpenAI key
+    (`missing_key_provider` reads `api_key_openai` — one provider, so
+    the name it returns is a constant), no run (the refusal is a
+    MESSAGE, not a shrug). A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
     never fails the batch behind it. Cancel bumps `_seq`, which is what
     stops `after_matches` tagging on the PARTIAL ranking
     `ensure_matches` hands back. **Closing the Library no longer
     cancels indexing** (the job may have been started from the deck
-    screen). `offer_model_sweep(parent, prev_sig)`, called from
-    `manage_models.save_embed` with the signature captured BEFORE the
-    widgets overwrite config, re-indexes the card index plus every PDF
-    with an index on disk — announced first, counted in notes and PDFs.
+    screen). `offer_model_sweep(parent, prev_sig, first_key=…)`, called
+    from `manage_models.save_embed` with the signature captured BEFORE
+    the widgets overwrite config, re-indexes the card index plus every
+    PDF with an index on disk — announced first, counted in notes and
+    PDFs, and **priced**: `sweep_message` carries
+    `cost.format_estimate(sweep_estimate(names))` (note text plus page
+    text, falling back to the stored slide text), and the confirm's
+    DEFAULT BUTTON IS NO, because it is the one dialog in Klaus that can
+    spend money. `first_key` exists because pasting the first key does
+    NOT move the signature — nothing was ever embedded — yet that is
+    exactly when the offer is worth making; rotating a key is not a
+    first key, those vectors are still valid.
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
     and re-embeds the collection on a paid API, silently (the exact bug
@@ -988,7 +1067,8 @@ same reason.
     star logo beside the Garamond wordmark, over a search field that filters
     setting rows across pages (`_apply_search`; rows carry
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
-    how the API-key row hides whole for Ollama — always beats a search
+    how a background row hides whole for the mode that doesn't use it —
+    always beats a search
     hit); Cancel/Save sit under a full-width `ButtonBarLine` hairline
     outside the pages. Appearance also hosts the accent swatch grid —
     bare colour squares 7 per row, names in tooltips, last square =
@@ -1016,29 +1096,27 @@ same reason.
     `_bg_preview_cfg` carries that key from STORED config live per
     tick. Image-only rows disable WHOLE (`bg_fit_row`/`bg_blur_row`/
     `bg_wash_row`) so labels dim with their controls.
-    Pages: **Semantic Search** (embedding
-    provider/key/model — `_resolve_ollama_model()` guards against silently
-    orphaning an existing index when the ollama model config is empty),
-    **Local model library (Ollama)** (pull/delete embedding models —
-    `_EMBED_PRESETS`: nomic-embed-text, snowflake-arctic-embed,
-    mxbai-embed-large, embeddinggemma; since K-194 also a Type column —
-    Embedding/OCR/Chat — over EVERY installed model, from one off-thread
-    `/api/show` pass per model (`classify_model`, pure: "embedding" if
-    `"embedding"` is in the reported capabilities, "ocr" if `"vision"`
-    is, else "chat"; a stale or missing classification never blanks the
-    list), cached in `ui_state["model_types"]` and re-synced after every
-    pull/delete/refresh), **Assistant** (K-194: an OCR on/off switch and
-    a model combo — installed vision-typed models plus `_OCR_PRESETS`
-    (`glm-ocr`, `deepseek-ocr`) — sharing this dialog's own `start_pull()`
-    rather than a second pull path; the auto-detected `claude_binary`
-    with an Override… file picker; free-text `assistant_model`;
-    `assistant_reopen`; a Clear Sessions button that wipes
-    `assistant_sessions.json` behind a window-modal confirm — notes,
-    PDFs, and highlights are never touched by it),
-    **General**/**Appearance** (`image_crop_enabled`,
-    `runtime_auto_setup`, and `pdf_renderer` toggles — no other UI
-    touches these keys; the pdf.js checkbox maps "native"/"pdfjs" and
-    needs a restart). **Preferences are deferred-save**: widgets only
+    Pages, in `_finish_nav` order: **General** (`image_crop_enabled`
+    and `pdf_renderer` — no other UI touches these keys; the pdf.js
+    checkbox maps "native"/"pdfjs" and needs a restart — plus the
+    library folder and **Check Keys**, which since 2026-09-15 is a
+    PRESENCE check on the two keys, not a probe of a local server),
+    **Appearance**, **Assistant** (free-text `reasoning_model` lives on
+    the keys page; here it is `assistant_reopen` and a Clear Sessions
+    button that wipes `assistant_sessions.json` behind a window-modal
+    confirm — notes, PDFs, and highlights are never touched by it), and
+    **API keys & models** (2026-09-15, replacing "Semantic Search" and
+    the deleted "Local model library (Ollama)" page): both keys as
+    `EchoMode.Password` line edits, the embedding / reasoning /
+    transcription model fields, the global sensitivity slider, the card
+    index's status line with **Index Now**, and **Stop Indexing**. There
+    is no provider combo — there is one provider — and no OCR row, no
+    model-pull table and no Claude-binary picker. `save_embed` captures
+    `index_signature` BEFORE the widgets overwrite config and hands it to
+    `index_queue.offer_model_sweep(..., first_key=…)`, so a first OpenAI
+    key (which does not move the signature) offers the sweep too; the
+    sweep's confirm carries a `cost` estimate and **defaults to No** —
+    it is the one dialog that can spend money. **Preferences are deferred-save**: widgets only
     call `mark_dirty()`; `save_all()` behind the **Save** button is the
     single writer of preference keys, closing dirty prompts to discard,
     and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
@@ -1046,35 +1124,62 @@ same reason.
     preference = widget + `mark_dirty` signal + a line in the matching
     `save_*`; a forgotten signal now costs a missing dirty mark, not a
     silently unsaved setting (which is exactly how `pdf_renderer`
-    shipped broken). `sync_embed_widgets(provider_override=...)` is how
-    a provider switch reloads the model/key fields without writing, and
-    `ui_state["shown_provider"]` — not the stored provider — is what
-    `save_embed` compares against.
+    shipped broken). `sync_embed_widgets()` takes no arguments any
+    more — with one provider there is no provider switch to reload the
+    key and model fields for, and `ui_state["shown_provider"]` went with
+    it; what `save_embed` compares is `embeddings.index_signature`
+    before and after.
   - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
-    readiness checks, gated on `embeddings.provider_name(cfg)` — a
-    Voyage/OpenAI profile never sees Ollama-flavored copy or probes.
-  - `ollama_client.py`: stdlib HTTP client — `/api/embed`, pull, delete,
-    and (K-192) `generate(model, prompt, images, timeout)`: one
-    non-streaming `/api/generate` call (`stream: false`) carrying base64
-    images, for the assistant's OCR path only (`page_ocr.ocr_page`).
-    **This is not the old text-generation surface come back** — no
-    message history, no streaming, no chat/completion use — don't wire
-    it into anything else without a fresh design call; `page_ocr.py`
-    passes its own 60s timeout since OCR of a dense slide runs longer
-    than the client's own default.
-  - `ollama_runtime.py`/`ollama_setup.py`: managed Ollama provisioning.
-    **Never kill a user-owned Ollama** — only servers Klaus spawned
-    (pidfile + process-identity verify). No UI control removes a
-    Klaus-managed install; reclaiming that disk space is a manual delete of
-    `user_files/runtime/` (after switching off "Manage Ollama automatically"
-    in Manage models → General so it doesn't just come back).
+    readiness checks. Two steps only since 2026-09-15: the library-root
+    pick, then ONE missing-key nudge whose wording is the module-level
+    `KEYS_COPY` constant — the welcome dialog and the profile-open nudge
+    quote the same string so setup can never be described two ways. No
+    provider branch, no local-server probe and no runtime offer survive;
+    `_embedding_ready` is `bool(cfg["api_key_openai"])` and nothing else
+    (naming both keys while checking one is a known gap — board K-231).
+  - `openai_client.py` (aqt-free, stdlib): the ONE place Klaus talks to
+    OpenAI — `embed(key, texts, model, dims)` and `transcribe(key,
+    wav_bytes, model, …)` (multipart with a hand-built boundary), one
+    retry on 429/5xx, `OpenAIError.user_message()` for the dialog copy.
+    stdlib `urllib` because the official SDK needs compiled wheels an
+    AnkiWeb add-on cannot vendor. **The key is passed in by the caller
+    and NEVER logged** — no config read here, no key in an exception
+    string. Tests point `_urlopen` at a fake.
+  - `anthropic_client.py` (aqt-free, stdlib): the Anthropic Messages
+    client, revived on 2026-09-15 from the `llm_client.py` deleted in the
+    2026-09-02 convergence (`a494f2d`) — without the second backend, its
+    token, and the hosted-tier copy. `Client(get_config).stream(payload)`
+    over `POST /v1/messages` with `anthropic-version: 2023-06-01`, plus
+    one non-streaming `complete()` for Plan 2's pertinence phase;
+    `consume_sse` **finalises a `tool_use` block from its partial JSON
+    when the stream drops**, which is what stops a cut connection turning
+    a half-received tool call into a silent no-op. **Nothing calls it
+    yet** — it is here for Plans 2 and 3; don't describe the assistant as
+    running on it.
+  - `cost.py` (pure): what a paid pass would cost, before Klaus spends
+    anything — `PRICES` (dollars per million tokens, or per minute for
+    audio, **dated in a comment: edit them when they change**),
+    `estimate_embed`/`estimate_judge`/`estimate_transcribe` →
+    `Estimate(tokens, dollars)`, and `format_estimate` → "~12,400 tokens
+    · about $0.04". Tokens are chars ÷ 4: an estimate, shown as one,
+    never a bill. `index_queue` is its one caller today.
 - **The assistant (Claude Code)** — Klaus hosts the `claude` binary as a
-  child process rather than running a loop of its own (D1: no API keys
-  in Klaus, the user's own login and subscription). Design:
+  child process rather than running a loop of its own (that spec's D1:
+  no assistant key in Klaus, the user's own login and subscription —
+  `api_key_anthropic` exists for Plans 2 and 3 and buys this nothing).
+  Design:
   `docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`.
-  Six modules:
+  **Still true today**, and the 2026-09-15 spec's Plan 3 — which moves
+  this onto `anthropic_client.py` and deletes `anki_endpoint.py` and
+  `agent_host.py` — is NOT built: describe and change what is here, not
+  what is planned. One piece of it went early, though: the Preferences
+  "claude binary" row and the `claude_binary` config key were deleted
+  with the Ollama surfaces on 2026-09-15, so `find_claude`'s override
+  argument is now always `""` and discovery is `shutil.which` → login
+  shell → known paths. Five modules, plus the page store above:
   - `agent_host.py` (aqt-free): finds, spawns, and feeds the `claude`
-    child. `find_claude` tries, in order, a config override, then
+    child. `find_claude` tries, in order, a config override (inert since
+    the key went — see above), then
     `shutil.which`, then **the login shell's own PATH**
     (`[$SHELL, "-lc", "command -v claude"]`, 3 s timeout), then known
     install locations — GUI-launched Anki inherits launchd's minimal
@@ -1099,8 +1204,9 @@ same reason.
     what they answer is now CONFINED: a `file_path`/`path`/`pattern`
     resolving outside the library root (or `user_files/assistant/` when
     there is no root — the same directory `start()` gives the child as
-    its cwd) is denied, because a lecture page's OCR text is untrusted
-    content on every turn and "read `…/klausmate/meta.json` and
+    its cwd) is denied, because a lecture page's own text — the page
+    record Klaus attaches to every turn — is untrusted
+    content, and "read `…/klausmate/meta.json` and
     summarise it" would otherwise put the embedding API key in the
     transcript. **The endpoint token is never in argv**: `command_line`
     takes no token parameter at all, the MCP header carries the literal
@@ -1196,23 +1302,16 @@ same reason.
     actually looking at. `subscribe` callbacks run synchronously on the
     caller's thread; a raising subscriber is logged, never left to break
     the reporter.
-  - `page_ocr.py` (aqt-free above its "aqt glue" divider): the page in
-    view as text and image for the assistant's context block.
-    `context_for` prefers a cached OCR transcript, falls back to the
-    PDF's own text layer (`text_source` says which), and always tries
-    for a PNG (`QPdfDocument`, 1400px long edge, cached alongside).
-    **OCR never blocks a send**: `OcrScheduler` debounces 400ms after a
-    `viewer_context` change, then runs the vision model on ONE daemon
-    worker (prefetching page±1 when idle) — a turn always goes out
-    immediately on the text layer (or on nothing), never waiting on the
-    network. Cache key is **the PDF's digest plus the page number** —
-    `user_files/ocr/<pdf_safe>/<digest12>/<page:04d>.md|.png`,
-    `digest12` = 12 hex chars of a SHA-256 over the file's path, size,
-    and mtime — so a page is OCR'd once, and a replaced file (different
-    size or mtime) gets a fresh cache directory rather than silently
-    serving another PDF's stale transcript. No OCR model configured, or
-    Ollama unreachable, degrades to the text-layer fallback with one log
-    line, never a dialog.
+  - the page in view as text and image is `page_store.py`'s job (its
+    own entry above): `assistant_dock._page_context` loads that page's
+    record for the text (`text_source` is always `"page-record"` now)
+    and calls `render_page_png` for the image. **Neither half can fail
+    the turn** — a missing record is empty text, an unrenderable page is
+    no image, and the send goes out on whatever the other half produced.
+    The 2026-09-15 API-first turn deleted `page_ocr.py` and with it the
+    OCR scheduler, so there is no debounce, no prefetch and no model
+    round-trip in front of a send; the PNG is re-rendered on every Send
+    and is not cached yet (board K-230).
   - `assistant_sessions.py` (aqt-free, stdlib-only): three stores under
     `user_files/assistant/` — `sessions.json` (**one Claude Code session
     id per PDF**, plus one "global" slot for no-PDF chats, so switching
@@ -1251,7 +1350,9 @@ same reason.
     emitting thread differs from the slot's (a real `AgentHost`) and
     calls directly when it doesn't (a synchronous fake host in tests),
     so no widget is ever touched off the main thread either way. The
-    dock follows `viewer_context` (session switches, OCR scheduling) and
+    dock follows `viewer_context` (session switches; the page record and
+    its PNG are read at Send time by `_page_context`, not scheduled
+    ahead) and
     resumes the right `assistant_sessions` entry on every switch.
     **The child is spawned LAZILY, by `_ensure_child` on Send** — never
     at construction, never on a viewer switch (which only signals the
@@ -1295,6 +1396,23 @@ same reason.
   `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
   2026-09-01): there was never a separate assistant credential to keep;
   the user's own `claude` login is it.
+  Deleted a third time, **2026-09-15**, by the API-first turn
+  (`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md`, D1 —
+  "forget about the local-only approach"): `page_ocr.py` with
+  `tests/test_page_ocr.py` (removed in `1198041`, K-226 — slide OCR is replaced by
+  the PDF's own text layer in the page record plus the page image), and
+  `ollama_client.py`, `ollama_runtime.py`, `ollama_setup.py`
+  (removed in `1b6fccd`, K-227 — with the Ollama and Voyage embedding providers,
+  the "Local model library (Ollama)" Preferences page and the Assistant
+  page's OCR rows). There is no local engine and no managed runtime any
+  more; `user_files/runtime/` and `user_files/ocr/` are dead directories
+  a user may simply delete. `_migrate_config` renames
+  `embedding_api_key_openai` → `api_key_openai` and `assistant_model` →
+  `reasoning_model`, and scrubs `embedding_provider`,
+  `embedding_api_key_voyage`, `ocr_enabled`, `ocr_model`,
+  `runtime_auto_setup`, `claude_binary`, `endpoint`,
+  `pdf_index_max_chunks` and `pdf_match_agg` — those names in
+  `__init__.py` are the migration, not a surviving feature.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1400,7 +1518,9 @@ same reason.
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has
   `pypdf.annotations`); no other third-party deps, no native code.
-- Ollama embedding-model presets live in `_EMBED_PRESETS`
-  (`manage_models.py`) — there is no text-generation model list anymore
-  (autocomplete/Ask are gone), and no first-run auto-pull; the user picks a
-  provider/model explicitly.
+- There is no model PICKER anywhere any more — no preset list, no pull
+  table, no provider combo. Every model is a free-text field on
+  Preferences → API keys & models (`embedding_model`, `reasoning_model`,
+  `transcription_model`), each with the default as its placeholder, so a
+  model released tomorrow needs no code change. Defaults live in
+  `config.json` and, for embeddings, `embeddings.DEFAULT_MODELS`.

@@ -2,21 +2,26 @@
 
 ## API keys & models
 
-Klaus is API-first: semantic search runs on OpenAI and the assistant on
-Anthropic, both through **your own** API keys. There is no local engine
-to install, start or update any more. Set both keys in **KlausMate
-Preferences → API keys & models**; they are stored in this add-on's
-config (`meta.json`, plain text — standard for Anki add-ons) and never
-in the repo.
+Klaus is API-first: semantic search runs on OpenAI, through **your own**
+`api_key_openai`. The assistant is separate — it runs on your own Claude
+Code login (the `claude` CLI, launched as a child process), not on a key
+stored here. There is no local engine to install, start or update any
+more. Set both keys in **KlausMate Preferences → API keys & models**;
+they are stored in this add-on's config (`meta.json`, plain text —
+standard for Anki add-ons) and never in the repo.
 
 - **api_key_openai**: Your OpenAI API key. Default `""`. Powers card and
   PDF embeddings (see **Card embeddings** below) and lecture
   transcription. Without it nothing indexes, and Klaus says so rather
   than failing quietly.
-- **api_key_anthropic**: Your Anthropic API key. Default `""`. Powers the
-  assistant.
-- **reasoning_model**: Which Claude model the assistant runs. Default
-  `"claude-sonnet-5"`.
+- **api_key_anthropic**: Your Anthropic API key. Default `""`. Stored for
+  a future release (the spec's Plan 2 pertinence phase and Plan 3) — no
+  Klaus code calls the Anthropic API today, and the assistant does not
+  read this key; it runs on your own Claude Code login instead (see
+  **Assistant** below).
+- **reasoning_model**: Free text, default `"claude-sonnet-5"`. Written
+  here but **not yet wired** — the assistant's Claude Code child does
+  not read it; a future release (Plan 3) will.
 - **transcription_model**: Which OpenAI model transcribes recorded
   lecture audio. Default `"gpt-4o-mini-transcribe"`.
 - **_embed_key_setup_declined**: Written automatically when you dismiss
@@ -69,7 +74,7 @@ a run that finished.
 
 **Changing the embedding model re-indexes everything.** Vectors made by
 one model cannot be compared with another's, so when you change
-provider, model or `embedding_dimensions` in KlausMate Preferences,
+model or `embedding_dimensions` in KlausMate Preferences,
 saving offers to re-embed your notes and every indexed PDF from scratch.
 It tells you how many of each first, and you can decline and keep
 working on stale vectors, or stop the sweep part-way from the same bar.
@@ -114,7 +119,8 @@ indexing wouldn't already need.
   context menu -> Lecture View. It shows the lecture page that best
   matches the current card (resolved from the same embeddings the
   Library's matching uses — the note's `!Library` tag picks the PDF,
-  the argmax chunk picks the page) and follows along as cards change;
+  and the PDF's best-scoring page is the page) and follows along as
+  cards change;
   when a card has no matching lecture it says "No lecture page
   available for this card." Panel width and open-state live in
   `pdf_tabs.json` (`lecture_view` key) — state, not preferences.
@@ -124,8 +130,10 @@ indexing wouldn't already need.
 The assistant answers about whatever lecture page you are looking at,
 reaching it as the page record Klaus keeps for it — the slide's own text
 plus any transcript of what was said over it — together with the page
-image. It runs on Anthropic through your own `api_key_anthropic` (see
-**API keys & models** above); `reasoning_model` picks the model.
+image. It runs on your own Claude Code login today — the `claude` CLI,
+launched as a child process, not a Klaus-held key. `api_key_anthropic`
+and `reasoning_model` (see **API keys & models** above) are stored for a
+future release and are not read by the assistant yet.
 
 - **assistant_reopen**: Default `false`. Reopen the Assistant dock
   where you left it the next time Anki starts — the same idea as

@@ -56,7 +56,7 @@ vecs = oc.embed("sk-test", ["a", "b"], "text-embedding-3-large", 1024)
 url, headers, data, timeout = calls[-1]
 body = json.loads(data)
 check("POSTs to /v1/embeddings with bearer auth, model, dimensions",
-      url == oc.API_BASE + "/embeddings" and headers.get("Authorization") == "Bearer sk-test"
+      url == "https://api.openai.com/v1/embeddings" and headers.get("Authorization") == "Bearer sk-test"
       and body == {"model": "text-embedding-3-large", "input": ["a", "b"], "dimensions": 1024})
 check("vectors come back in INPUT order regardless of response order",
       vecs == [[0.0, 0.0], [1.0, 0.0]] and len(vecs) == 2)
@@ -71,7 +71,7 @@ text = oc.transcribe("sk-test", wav, "gpt-4o-mini-transcribe", language="en", pr
 url, headers, data, timeout = calls[-1]
 ct = headers.get("Content-type") or headers.get("Content-Type")
 check("POSTs multipart to /v1/audio/transcriptions",
-      url == oc.API_BASE + "/audio/transcriptions" and ct.startswith("multipart/form-data; boundary="))
+      url == "https://api.openai.com/v1/audio/transcriptions" and ct.startswith("multipart/form-data; boundary="))
 boundary = ct.split("boundary=")[1].encode()
 check("multipart carries file, model, response_format=json, language, prompt, and the wav bytes",
       data.count(b"--" + boundary) >= 6 and b'name="file"; filename="chunk.wav"' in data
