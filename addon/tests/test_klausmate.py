@@ -2,6 +2,7 @@
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_klausmate.py
 """
+import io
 import json
 import math
 import os
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 import types
+import urllib.error
 from array import array
 
 ADDON = os.path.join(
@@ -220,6 +222,147 @@ fp = FakeProvider()
 list(embeddings.embed_batches(fp, ["x"] * 300, batch_size=999))
 check("batch_size passed straight through — no provider-level clamp",
       fp.sizes == [300], str(fp.sizes))
+
+print("== Klaus Plus routes embeddings through the service ==")
+openai_client = importlib.import_module("klausmate.openai_client")
+plus_mod = importlib.import_module("klausmate.plus")
+_orig_openai_urlopen = openai_client._urlopen
+
+
+class _PlusResp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_plus_calls = []
+
+
+def _plus_urlopen(req, timeout=None):
+    _plus_calls.append((req.full_url, dict(req.headers)))
+    body = json.loads(req.data)
+    n = len(body["input"])
+    return _PlusResp(json.dumps(
+        {"data": [{"index": i, "embedding": [1.0]} for i in range(n)]}
+    ).encode())
+
+
+openai_client._urlopen = _plus_urlopen
+try:
+    vecs = embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    url, headers = _plus_calls[-1]
+    check("a Plus key routes embeddings to the service, no api_key_openai needed",
+          url == "https://svc.test/embeddings"
+          and headers.get("Authorization") == "Bearer kp_" + "a" * 32
+          and len(vecs) == 1)
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+# A refusal (401/402/426) while on Plus must be remembered through the
+# PACKAGE's patch_config (plus.note_refusal) — a PATCH writer, reached
+# lazily since embeddings.py cannot import __init__ at module top (it
+# imports aqt). patch_config MERGES into the stored config; the
+# package's plain write_config REPLACES it wholesale and must never be
+# the sink a Plus refusal reaches (a one-key patch through it would wipe
+# every other setting — API keys, library root, every preference). A
+# synthetic write_config is left defined here too, recording, purely to
+# prove the refusal path never touches it.
+_refusals = []
+_write_calls = []
+
+
+def _patch_config(patch):
+    _refusals.append(patch)
+
+
+def _write_config(cfg):
+    _write_calls.append(cfg)
+
+
+pkg.patch_config = _patch_config
+pkg.write_config = _write_config
+
+_UNRECOGNISED_KEY_MSG = "Klaus Plus key not recognised — check it under KlausMate Preferences."
+_MAINTENANCE_MSG = "Klaus Plus is paused for maintenance — try again later, or use your own API key."
+
+
+def _plus_401_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 401, "unauthorized",
+        {}, io.BytesIO(json.dumps({"error": {"message": _UNRECOGNISED_KEY_MSG}}).encode()))
+
+
+openai_client._urlopen = _plus_401_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 401 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 401 on Plus surfaces the service's message verbatim, not OpenAI's canned key-rejection copy",
+          e.status == 401 and e.user_message() == _UNRECOGNISED_KEY_MSG)
+    check("a 401 on Plus is remembered via patch_config with exactly one key (CACHE), message verbatim",
+          bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
+          and _refusals[-1][plus_mod.CACHE]["status"] == "refused:401"
+          and _refusals[-1][plus_mod.CACHE]["message"] == _UNRECOGNISED_KEY_MSG)
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+_refusals.clear()
+_write_calls.clear()
+
+
+def _plus_402_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 402, "quota",
+        {}, io.BytesIO(json.dumps({"error": {"message": "quota used up"}}).encode()))
+
+
+openai_client._urlopen = _plus_402_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 402 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 402 on Plus is remembered via patch_config with exactly one key: CACHE",
+          e.status == 402 and bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
+          and _refusals[-1][plus_mod.CACHE].get("status") == "refused:402")
+    check("the refusal never reaches the package's write_config (that one REPLACES the whole config — C1)",
+          _write_calls == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+_refusals.clear()
+_write_calls.clear()
+
+
+def _plus_503_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 503, "unavailable",
+        {}, io.BytesIO(json.dumps({"error": {"message": _MAINTENANCE_MSG}}).encode()))
+
+
+openai_client._urlopen = _plus_503_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 503 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 503 on Plus surfaces the service's message verbatim too, not 'OpenAI is overloaded'",
+          e.status == 503 and e.user_message() == _MAINTENANCE_MSG)
+    check("a 503 is not cached as a refusal (not a gate decision — a restart isn't a refusal)",
+          _refusals == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+del pkg.patch_config
+del pkg.write_config
 
 # ---------------------------------------------------------------- pdf_index
 

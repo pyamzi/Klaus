@@ -87,6 +87,17 @@ def parse_quota(headers: Any) -> dict | None:
 
 def remember(cfg: dict, snapshot: dict | None, status: str, write_config: Callable[[dict], None],
              now: float | None = None, period_end: float = 0.0, message: str = "") -> dict:
+    """Record a verdict and hand the sink exactly ``{CACHE: c}``.
+
+    Despite the parameter's name, ``write_config`` here must be a PATCH
+    writer — the package's ``patch_config`` (getConfig -> update ->
+    writeConfig) — never the package's own plain ``write_config``, which
+    REPLACES the whole stored config wholesale. Handing this a one-key
+    dict through that plain writer wipes every other setting (API keys,
+    library root, every preference) on the first refusal. Every
+    ``plus.*`` caller (embeddings.py, manage_models.py, ...) must pass
+    ``patch_config``.
+    """
     now = time.time() if now is None else now
     c = {"status": status, "checked_at": now, "period_end": float(period_end or _cache(cfg).get("period_end") or 0)}
     if snapshot is not None:

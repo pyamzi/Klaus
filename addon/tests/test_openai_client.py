@@ -83,6 +83,46 @@ check("multipart carries file, model, response_format=json, language, prompt, an
       and wav in data)
 check("returns the stripped text", text == "hello lecture")
 
+section("an Endpoint replaces the provider: base URL and headers")
+calls.clear()
+from klausmate import plus as _plus
+ep = _plus.Endpoint("https://svc.test", {"Authorization": "Bearer kp_" + "d" * 32, "X-Klaus-Purpose": "embed", "X-Klaus-Client": "0.2.0"})
+vecs = oc.embed("", ["a"], "text-embedding-3-large", 1024, endpoint=ep)
+url, headers, data, _ = calls[-1]
+check("the endpoint's base and headers are used, no provider key needed",
+      url == "https://svc.test/embeddings" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
+      and headers.get("X-klaus-purpose", headers.get("X-Klaus-Purpose")) == "embed" and len(vecs) == 1)
+check("the default endpoint is still the provider", oc.API_BASE == "https://api.openai.com/v1")
+
+section("the service's error message reaches the user")
+
+
+def quota_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 402, "quota", {}, io.BytesIO(json.dumps({"error": {"message": "used up; resets on 2026-10-01"}}).encode()))
+
+
+oc._urlopen = quota_urlopen
+try:
+    oc.embed("", ["a"], "m", 0, endpoint=ep)
+    check("402 raises OpenAIError", False)
+except oc.OpenAIError as e:
+    check("402 raises OpenAIError carrying the service's message verbatim", e.status == 402 and e.user_message() == "used up; resets on 2026-10-01")
+
+
+def maintenance_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 503, "maintenance", {}, io.BytesIO(json.dumps(
+        {"error": {"message": "Klaus Plus is paused for maintenance — try again later, or use your own API key."}}).encode()))
+
+
+oc._urlopen = maintenance_urlopen
+try:
+    oc.embed("", ["a"], "m", 0, endpoint=ep)
+    check("503 raises OpenAIError", False)
+except oc.OpenAIError as e:
+    check("503 raises OpenAIError carrying the service's message verbatim too, not 'OpenAI is overloaded'",
+          e.status == 503 and e.user_message() == "Klaus Plus is paused for maintenance — try again later, or use your own API key.")
+oc._urlopen = fake_urlopen
+
 section("errors")
 
 

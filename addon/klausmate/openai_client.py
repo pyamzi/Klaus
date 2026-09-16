@@ -14,6 +14,8 @@ import urllib.request
 import uuid
 from typing import Any
 
+from . import plus
+
 API_BASE = "https://api.openai.com/v1"
 EMBED_TIMEOUT_S = 60.0
 TRANSCRIBE_TIMEOUT_S = 120.0
@@ -28,6 +30,11 @@ class OpenAIError(Exception):
         self.retry_after = retry_after
 
     def user_message(self) -> str:
+        if self.status in (402, 426, 503):
+            # The service's own wording (Klaus Plus quota/version/
+            # maintenance refusals) — verbatim, not buried under a canned
+            # line that was written for the provider's own errors.
+            return str(self)
         if self.status in (401, 403):
             return "OpenAI rejected the API key — check it in KlausMate Preferences → API keys & models."
         if self.status == 429:
@@ -54,10 +61,18 @@ def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, wha
             except (TypeError, ValueError):
                 pass
             try:
-                body = e.read().decode("utf-8", errors="replace")[:300]
+                raw = e.read().decode("utf-8", errors="replace")
             except Exception:
-                body = ""
-            last = OpenAIError(f"OpenAI {what} failed (HTTP {e.code}): {body or e.reason}", status=e.code, retry_after=retry_after)
+                raw = ""
+            service_message = ""
+            try:
+                parsed = json.loads(raw) if raw else {}
+                service_message = str((parsed.get("error") or {}).get("message") or "")
+            except (ValueError, AttributeError):
+                service_message = ""
+            body = raw[:300]
+            message = service_message or f"OpenAI {what} failed (HTTP {e.code}): {body or e.reason}"
+            last = OpenAIError(message, status=e.code, retry_after=retry_after)
             if attempt == 0 and (e.code == 429 or e.code >= 500):
                 _SLEEP(min(retry_after or 2.0, 10.0))
                 continue
@@ -73,14 +88,17 @@ def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, wha
     raise last  # type: ignore[misc]
 
 
-def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EMBED_TIMEOUT_S) -> list[list[float]]:
+def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EMBED_TIMEOUT_S,
+         endpoint: plus.Endpoint | None = None) -> list[list[float]]:
     if not texts:
         return []
     body: dict[str, Any] = {"model": model, "input": list(texts)}
     if dims:
         body["dimensions"] = int(dims)
-    resp = _request(f"{API_BASE}/embeddings", json.dumps(body).encode("utf-8"),
-                    {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}, timeout, "embeddings")
+    url = (endpoint.base if endpoint else API_BASE) + "/embeddings"
+    headers = {"Content-Type": "application/json",
+              **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
+    resp = _request(url, json.dumps(body).encode("utf-8"), headers, timeout, "embeddings")
     data = resp.get("data")
     if not isinstance(data, list) or len(data) != len(texts):
         raise OpenAIError(f"OpenAI returned {len(data) if isinstance(data, list) else 'no'} embeddings for {len(texts)} inputs")
@@ -107,11 +125,12 @@ def _multipart(fields: list[tuple[str, str]], file_field: str, filename: str, co
 
 
 def transcribe(key: str, wav_bytes: bytes, model: str, language: str = "en", prompt: str = "",
-               timeout: float = TRANSCRIBE_TIMEOUT_S) -> str:
+               timeout: float = TRANSCRIBE_TIMEOUT_S, endpoint: plus.Endpoint | None = None) -> str:
     fields = [("model", model), ("response_format", "json"), ("language", language)]
     if prompt:
         fields.append(("prompt", prompt[:800]))
     data, ct = _multipart(fields, "file", "chunk.wav", "audio/wav", wav_bytes)
-    resp = _request(f"{API_BASE}/audio/transcriptions", data,
-                    {"Content-Type": ct, "Authorization": f"Bearer {key}"}, timeout, "transcription")
+    url = (endpoint.base if endpoint else API_BASE) + "/audio/transcriptions"
+    headers = {"Content-Type": ct, **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
+    resp = _request(url, data, headers, timeout, "transcription")
     return str(resp.get("text") or "").strip()

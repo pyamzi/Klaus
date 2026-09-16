@@ -411,6 +411,15 @@ check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
       and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC
       and "write_config(cfg2)" in _V2_SWEEP_SRC)
 
+# Klaus Plus / setup_flow readiness pins used to live here as source-only
+# checks (an AST-extracted-source substring for _embedding_ready and a
+# whole-file substring for KEYS_COPY) — both were vacuous, passing even
+# with the Klaus Plus feature deleted (a comment could fake the first,
+# and this task's own docstring wording could fake the second). Real,
+# live coverage — importing setup_flow and calling _embedding_ready(),
+# reading KEYS_COPY directly — now lives in test_setup_crop_theme.py,
+# which already imports this module (fix1, K-246 review I4).
+
 
 section("2026-09-05: the placement engine and the tear-off are gone — "
         "Qt docks the PDF panel")

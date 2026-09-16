@@ -192,4 +192,13 @@ check("save-as-new-file encode path intact",
 check("crop dialog title still names the file, not renamed to KlausMate",
       'f"Crop Image — {fname}"' in _CROP_SRC)
 
+section("Klaus Plus: setup_flow readiness and copy (fix1, K-246 review I4 — "
+        "live pins; the two source-only pins this replaced in "
+        "test_bridge_reentrancy.py passed even with the feature deleted)")
+check("a Klaus Plus key alone makes semantic search ready",
+      setup_flow._embedding_ready({"klaus_plus_key": "kp_" + "a" * 32}) is True)
+check("neither key: still not ready", setup_flow._embedding_ready({}) is False)
+check("KEYS_COPY itself — not some comment elsewhere in the file — names Klaus Plus",
+      "Klaus Plus" in setup_flow.KEYS_COPY)
+
 raise SystemExit(report())

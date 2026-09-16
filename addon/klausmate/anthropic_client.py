@@ -29,6 +29,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
+from . import plus
+
 # Module globals so tests can point them at a local http.server or a
 # fake — the same pattern openai_client.py uses for its own tests.
 API_BASE = "https://api.anthropic.com"
@@ -67,6 +69,11 @@ class LLMError(Exception):
         # no key that theirs was rejected sends them to check a field that
         # is empty.
         if self.error_type == "no_key":
+            return detail
+        if self.status in (402, 426, 503):
+            # The service's own wording (Klaus Plus quota/version/
+            # maintenance refusals) — verbatim, not buried under a canned
+            # line written for the provider's own errors.
             return detail
         if self.status in (401, 403):
             return (
@@ -304,28 +311,39 @@ class Client:
             "anthropic-version": API_VERSION,
         }
 
-    def stream(self, payload: dict, **kw) -> dict:
+    def _target(self, purpose: str) -> tuple[str, dict]:
+        """(url, headers) for one request: Klaus Plus when it is active,
+        the user's own key straight to the provider otherwise.
+
+        ``_key()``'s ``no_key`` error only fires off Plus — a Plus
+        subscriber has no reason to ever see "add your Anthropic key".
+        """
+        cfg = self._get_config() or {}
+        if plus.active(cfg):
+            ep = plus.endpoint(cfg, purpose)
+            return ep.base + "/v1/messages", {**ep.headers, "Content-Type": "application/json"}
+        return API_BASE + "/v1/messages", self._headers(self._key())
+
+    def stream(self, payload: dict, purpose: str = "assistant", **kw) -> dict:
         """One streaming request, drained into finalized content blocks."""
-        key = self._key()
+        url, headers = self._target(purpose)
         body = dict(payload)
         body["stream"] = True
         resp = _open_stream(
-            f"{API_BASE}/v1/messages",
+            url,
             json.dumps(body).encode("utf-8"),
-            self._headers(key),
+            headers,
             float(kw.pop("timeout", DEFAULT_TIMEOUT_S)),
         )
         return consume_sse(resp, **kw)
 
-    def complete(self, payload: dict, timeout: float = DEFAULT_TIMEOUT_S) -> dict:
+    def complete(self, payload: dict, timeout: float = DEFAULT_TIMEOUT_S, purpose: str = "assistant") -> dict:
         """One non-streaming request; the parsed response body."""
-        key = self._key()
+        url, headers = self._target(purpose)
         body = dict(payload)
         body.pop("stream", None)
         req_data = json.dumps(body).encode("utf-8")
-        resp = _open_stream(
-            f"{API_BASE}/v1/messages", req_data, self._headers(key), float(timeout)
-        )
+        resp = _open_stream(url, req_data, headers, float(timeout))
         try:
             raw = resp.read().decode("utf-8")
         finally:

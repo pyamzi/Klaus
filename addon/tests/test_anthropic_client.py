@@ -283,6 +283,44 @@ check(
     ).user_message().lower(),
 )
 
+section("Plus routing: the client goes to the service with the purpose tag when a key exists")
+seen = []
+
+
+def svc_urlopen(req, timeout=None):
+    seen.append((req.full_url, dict(req.headers)))
+    if json.loads(req.data).get("stream"):
+        return stream_of("text_turn.sse")
+    # complete() never sets stream and reads a plain JSON body (see the
+    # non-Plus case above) — reusing the SSE fixture unconditionally here
+    # would hand its consume_sse-shaped bytes to json.loads() and raise.
+    return _Resp(
+        json.dumps(
+            {"id": "msg_p", "content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}
+        ).encode()
+    )
+
+
+ac._urlopen = svc_urlopen
+plus_client = ac.Client(lambda: {"klaus_plus_key": "kp_" + "e" * 32, "klaus_plus_base": "https://svc.test"})
+plus_res = plus_client.stream({"model": "claude-sonnet-5", "max_tokens": 5, "messages": []}, purpose="judge")
+check(
+    "POSTs the service's /v1/messages with the bearer key and purpose, no x-api-key",
+    seen[-1][0] == "https://svc.test/v1/messages"
+    and seen[-1][1].get("Authorization") == "Bearer kp_" + "e" * 32
+    and seen[-1][1].get("X-klaus-purpose", seen[-1][1].get("X-Klaus-Purpose")) == "judge"
+    and "X-api-key" not in seen[-1][1] and "x-api-key" not in seen[-1][1],
+)
+check("...and still streams the turn normally", ac.text_of(plus_res) == "Hello")
+seen.clear()
+plus_client.complete({"model": "m", "max_tokens": 1, "messages": []}, purpose="judge")
+check("complete routes to the service too, not just stream", seen[-1][0] == "https://svc.test/v1/messages")
+try:
+    ac.Client(lambda: {}).complete({"messages": []})
+    check("no key at all → LLMError no_key", False)
+except ac.LLMError as e:
+    check("no key at all → LLMError no_key", e.error_type == "no_key")
+
 section("http failures: statuses, retries, and what the user is told")
 http = {"fail_first": 0, "status": 200, "calls": 0}
 
@@ -339,7 +377,7 @@ check(
     "same words twice",
     seen == ["Hel", "lo"],
 )
-http["status"] = 503
+http["status"] = 500
 http["calls"] = 0
 try:
     c.complete({"model": "m", "max_tokens": 1, "messages": []})
@@ -348,6 +386,34 @@ except ac.LLMError as e:
     check(
         "a 5xx is retried once and then blames the service, not the user",
         http["calls"] == 2 and "overloaded" in e.user_message(),
+    )
+http["status"] = 402
+http["calls"] = 0
+try:
+    c.complete({"model": "m", "max_tokens": 1, "messages": []})
+    check("a 402 raises", False)
+except ac.LLMError as e:
+    check(
+        "a 402 (not retryable) carries the service's error.message verbatim, "
+        "not 'Assistant error: ...'",
+        http["calls"] == 1 and e.user_message() == "nope",
+    )
+# Re-baselined for Task 7 (Klaus Plus): 503 used to fall into the generic
+# ">=500" branch above and get the same canned "overloaded" copy — moved
+# to 500 for that pin instead, since 503 now carries the SERVICE's own
+# wording verbatim (Klaus Plus uses 503 for quota/maintenance refusals,
+# and burying that behind "try again in a minute" would hide exactly the
+# text the quota banner needs).
+http["status"] = 503
+http["calls"] = 0
+try:
+    c.complete({"model": "m", "max_tokens": 1, "messages": []})
+    check("a 503 raises", False)
+except ac.LLMError as e:
+    check(
+        "a 503 is retried once and then carries the service's error."
+        "message verbatim, not the generic overloaded copy",
+        http["calls"] == 2 and e.user_message() == "nope",
     )
 http["status"] = 200
 ac._urlopen = lambda req, timeout=None: _Resp(b"<html>nope")

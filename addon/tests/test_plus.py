@@ -31,6 +31,7 @@ now = 1_800_000_000.0
 written = {}
 snap = {"month": "2026-09", "resets_at": now + 86400, "counters": {}, "human": {"lecture_hours": [4.0, 30.0], "cards": [812, 3000], "turns": [31, 200]}}
 cache = plus.remember(dict(cfg), snap, "active", written.update, now=now)
+_keys_remember = set(written.keys())
 check("remember writes klaus_plus_cache with the snapshot, status and checked_at",
       written["klaus_plus_cache"]["status"] == "active" and written["klaus_plus_cache"]["checked_at"] == now
       and written["klaus_plus_cache"]["quota"]["human"]["cards"] == [812, 3000])
@@ -39,6 +40,7 @@ check("fresh active → active", plus.active(cfg2, now=now + 3600))
 check("stale but within 7-day grace → active", plus.active(cfg2, now=now + 3 * 86400))
 check("older than 7 days → not active", plus.active(cfg2, now=now + 8 * 86400) is False)
 plus.note_refusal(cfg2, 402, written.update, now=now + 10)
+_keys_note_refusal = set(written.keys())
 cfg3 = dict(cfg, klaus_plus_cache=written["klaus_plus_cache"])
 check("a 402 marks the cache refused and active() is False while fresh", written["klaus_plus_cache"]["status"] == "refused:402"
       and plus.active(cfg3, now=now + 20) is False)
@@ -68,9 +70,14 @@ def fake_urlopen(req, timeout=None):
     return _Resp(json.dumps({"url": "https://portal.test/p"}).encode())
 written.clear()
 out = plus.refresh(lambda: dict(cfg), written.update, urlopen=fake_urlopen)
+_keys_refresh = set(written.keys())
 check("refresh GETs /v1/me with the bearer key and writes the cache",
       calls[0][0] == "https://svc.test/v1/me" and calls[0][1].get("Authorization") == "Bearer kp_" + "c" * 32
       and written["klaus_plus_cache"]["status"] == "active" and out["quota"]["human"]["cards"] == [812, 3000])
+check("remember/note_refusal/refresh each hand the sink a dict with exactly one key, CACHE — "
+      "never the full config (a future {**cfg, CACHE: c} would clobber a concurrent "
+      "Preferences save through a patch writer)",
+      _keys_remember == {plus.CACHE} and _keys_note_refusal == {plus.CACHE} and _keys_refresh == {plus.CACHE})
 check("portal_url POSTs /v1/portal and returns the url",
       plus.portal_url(cfg, urlopen=fake_urlopen) == "https://portal.test/p" and calls[1][0] == "https://svc.test/v1/portal")
 def failing(req, timeout=None):

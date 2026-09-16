@@ -60,6 +60,10 @@ class EmbeddingError(Exception):
 
     def user_message(self) -> str:
         name = self.provider or "the embedding provider"
+        if self.provider == "Klaus Plus":
+            # The service's own wording (quota/version/maintenance
+            # refusals) — verbatim, never re-canned as OpenAI copy below.
+            return str(self)
         if self.status in (401, 403):
             return (
                 f"{name} rejected the embedding API key — check it in "
@@ -145,7 +149,39 @@ class OpenAIEmbeddings:
     def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
         if not texts:
             return []
-        cfg = self._get_config()
+        cfg = self._get_config() or {}
+        from . import openai_client, plus
+
+        if plus.active(cfg):
+            try:
+                return openai_client.embed(
+                    "", texts, embedding_model(cfg), _dimensions_for(cfg),
+                    endpoint=plus.endpoint(cfg, "embed"),
+                )
+            except openai_client.OpenAIError as e:
+                if e.status in (401, 402, 426):
+                    # Remembered so the UI can say why — through the
+                    # PACKAGE's patch_config, reached lazily: this module
+                    # is aqt-free and cannot import __init__ (which
+                    # imports aqt) at module top. patch_config hops to the
+                    # main thread itself (this branch may run on
+                    # curation's QueryOp worker thread) and MERGES into
+                    # the stored config; the package's plain write_config
+                    # REPLACES the whole config and must never be the
+                    # sink here (a one-key patch through it would wipe
+                    # every other setting). A stub package with neither
+                    # attribute is a genuine wiring break, not silently
+                    # swallowed.
+                    pkg = __import__(__package__, fromlist=["patch_config"])
+                    wc = getattr(pkg, "patch_config", None)
+                    if wc is None:
+                        print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
+                    else:
+                        plus.note_refusal(cfg, e.status, wc, message=str(e))
+                raise EmbeddingError(
+                    str(e), provider="Klaus Plus", status=e.status, retry_after=e.retry_after
+                ) from e
+
         key = str(cfg.get("api_key_openai") or "").strip()
         if not key:
             raise EmbeddingError(
@@ -154,8 +190,6 @@ class OpenAIEmbeddings:
                 provider="OpenAI",
                 status=401,
             )
-        from . import openai_client
-
         try:
             return openai_client.embed(
                 key, texts, embedding_model(cfg), _dimensions_for(cfg)

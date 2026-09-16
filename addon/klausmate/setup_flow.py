@@ -28,6 +28,7 @@ from aqt.operations import QueryOp
 from aqt.qt import QMessageBox, QTimer
 from aqt.utils import showWarning, tooltip
 
+from . import plus
 from .manage_models import manage_models_dialog
 
 # The one place the two keys are named for the user. Both readiness
@@ -36,7 +37,7 @@ from .manage_models import manage_models_dialog
 KEYS_COPY = (
     "Semantic search and the assistant use OpenAI and Anthropic through "
     "your own API keys. Add them in KlausMate Preferences → API keys & "
-    "models."
+    "models. Or subscribe to Klaus Plus there and skip the keys."
 )
 
 
@@ -74,8 +75,9 @@ _first_run_dialog_shown_this_session: bool = False
 
 def _embedding_ready(cfg: dict) -> bool:
     """True if semantic search can actually run right now — the OpenAI
-    key is present. Nothing to probe: a key is a string in config."""
-    return bool(str(cfg.get("api_key_openai") or "").strip())
+    key or a Klaus Plus subscription is present. Nothing to probe: a
+    key is a string in config."""
+    return bool(str(cfg.get("api_key_openai") or "").strip()) or bool(plus.key(cfg))
 
 
 def first_run_check() -> None:
