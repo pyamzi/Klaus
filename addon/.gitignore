@@ -21,6 +21,9 @@ board/.lock
 board/*.tmp
 board/attachments/*.part
 
+# ─── Service venv ────────────────────────────────────────────────────────────
+service/.venv/
+
 # ─── Noise ────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
