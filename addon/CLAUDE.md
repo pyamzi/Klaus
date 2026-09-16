@@ -85,6 +85,49 @@ assistant is still the Claude Code child described above, and no Klaus
 code calls the Anthropic API — the Anthropic key is stored for Plans 2
 and 3 to use.
 
+**Klaus Plus, 2026-09-16** (Pouya: "Instead of APIs, would it be
+possible to create a subscription system?"): a SECOND way to pay for the
+AI, not a second Klaus. **Free** is exactly the API-first turn above —
+the user's own `api_key_openai`/`api_key_anthropic`, their own bill,
+unmetered, unchanged. **Klaus Plus** is $12/month or $99/year (Pouya
+chose Fly.io and pays the AI bills; the orchestrator set the price and
+the quotas) for one `kp_` licence key instead of provider keys: Klaus
+sends the same request bodies to **its own service** — `service/` in
+this repo, FastAPI on one Fly Machine at `https://klausmate.fly.dev`,
+SQLite on a volume, Stripe for billing, Resend for the one welcome
+email — which holds Pouya's provider keys, relays to OpenAI and
+Anthropic, and counts. Per UTC month, no rollover: 30 lecture hours of
+audio, 3,000 judged cards (750,000 `judge` tokens at 250 a card),
+200 assistant turns (1,200,000 `assistant` tokens at 6,000 a turn),
+embeddings unmetered under a 20,000,000-token abuse ceiling; `past_due`
+works 3 days, `canceled` to `period_end`. Design:
+`docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md`.
+**The add-on holds no secret and gates nothing** — it ships as readable
+Python, so the ONLY gate is the service answering 401/402/426, and
+every "am I on Plus?" answer in `klausmate/` is a hint for wording, not
+an entitlement check. Three config keys, all in Anki's addon config and
+never in the repo: `klaus_plus_key`, `klaus_plus_cache` (the verdict
+cache) and `klaus_plus_base` (default `""` = the built-in
+`plus.DEFAULT_BASE`, shown as the field's placeholder, for a staging or
+self-hosted service). The surface is Preferences → **API keys & models**,
+where a "Klaus Plus" group sits ABOVE the keys — licence key
+(`EchoMode.Password`), a `plus.status_line` readout, and Subscribe… /
+Manage subscription… / **Check** (which refreshes the verdict on a
+background task) — and the provider-key rows are RECAPTIONED "not
+needed on Klaus Plus" while staying EDITABLE: never dimmed, never
+disabled, because the free tier has to be one deletion away. `service/`
+is a separate program, never shipped (`scripts/package.sh` stages only
+`klausmate/`, plus an explicit `--exclude 'service/'`); its deploy
+runbook is `service/README.md` and nothing in it belongs in the
+add-on. What is NOT built: Plans 2 and 3 of the API-first spec are still
+unbuilt — the `judge` and `assistant` purposes exist on the service FOR
+them, not because they have a caller. **`embeddings.py` is the ONE live
+Plus path today** (`plus.endpoint(cfg, "embed")`):
+`openai_client.transcribe` has no caller in the add-on at all and
+`anthropic_client.Client` has none either, so three of the four purposes
+and three of the four counters are plumbing waiting for their callers.
+Say "indexing goes through the service" and don't imply the rest does.
+
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
@@ -200,7 +243,17 @@ same reason.
 - `__init__.py`: bootstrap + gui_hooks; JS bridge
   (`pycmd("klausmate:<action>:<b64 json>")` routed in `on_js_message`, which
   splits `":", 2` — only `focus`/`crop`/`log`/`dbg` actions remain, the
-  `complete`/`ask` actions are gone with autocomplete/Ask); `PdfDock` (a
+  `complete`/`ask` actions are gone with autocomplete/Ask); the config
+  accessors — **`write_config(cfg)` REPLACES the whole stored blob**
+  (that is exactly why `_migrate_config` can scrub a key by popping it),
+  so a partial dict handed to it wipes every other setting, API keys and
+  library root included. **`patch_config(updates)`** (getConfig → update
+  → writeConfig, hopped onto the main thread via `mw.taskman.run_on_main`
+  and applied inline when there is no taskman) is the merge writer, and
+  the ONE config writer a background thread may use — which is why every
+  `plus.*` sink takes it and never the plain writer (two reviewers found
+  that wipe as a Critical; `plus.remember`'s parameter is still *named*
+  `write_config`, so read the type, not the name); `PdfDock` (a
   `QDockWidget` of the host window — Browse and Add Cards — since
   2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
   [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
@@ -997,7 +1050,10 @@ same reason.
     visible on the deck screen, the overview and mid-review — cannot
     describe one job differently. Gates: no profile, no OpenAI key
     (`missing_key_provider` reads `api_key_openai` — one provider, so
-    the name it returns is a constant), no run (the refusal is a
+    the name it returns is a constant — but answers `""` for a
+    `plus.key` too, since a Klaus Plus subscriber needs no provider key;
+    that is a wording gate, not an entitlement one, and the service
+    still has the last word), no run (the refusal is a
     MESSAGE, not a shrug). A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
     never fails the batch behind it. Cancel bumps `_seq`, which is what
@@ -1114,12 +1170,30 @@ same reason.
     button that wipes `assistant_sessions.json` behind a window-modal
     confirm — notes, PDFs, and highlights are never touched by it), and
     **API keys & models** (2026-09-15, replacing "Semantic Search" and
-    the deleted "Local model library (Ollama)" page): both keys as
-    `EchoMode.Password` line edits, the embedding / reasoning /
+    the deleted "Local model library (Ollama)" page): a **Klaus Plus**
+    group ABOVE the keys (2026-09-16) — the licence key as a third
+    password field, a `plus.status_line` readout, and Subscribe… /
+    Manage subscription… / Check. Only **Subscribe…** is a bare
+    `openLink` (`base + "/subscribe"` — a browser hop is the ONLY way
+    Klaus touches payment). The other two are NETWORK calls, and both
+    run `run_in_background` for the same reason: `plus.TIMEOUT_S` is
+    15 s, and a `urlopen` that long on the click handler freezes Anki's
+    whole UI. **Manage subscription…** fetches `plus.portal_url()`
+    (`POST /v1/portal`) on that task and only THEN opens the URL it
+    returns — an empty answer is a tooltip, never a blank browser tab —
+    and **Check** runs `plus.refresh` with `patch_config` as its sink —
+    then both keys as
+    `EchoMode.Password` line edits, RECAPTIONED "Not needed on Klaus
+    Plus; kept for the free tier." while a licence key is present and
+    **still editable** (never disabled: the free tier is one deletion
+    away), the embedding / reasoning /
     transcription model fields, the global sensitivity slider, the card
     index's status line with **Index Now**, and **Stop Indexing**. There
     is no provider combo — there is one provider — and no OCR row, no
-    model-pull table and no Claude-binary picker. `save_embed` captures
+    model-pull table and no Claude-binary picker. Changing the licence
+    key CLEARS `klaus_plus_cache` on save, so a new key is never judged
+    by the old key's verdict; `klaus_plus_base` is a General row whose
+    placeholder is `plus.DEFAULT_BASE`. `save_embed` captures
     `index_signature` BEFORE the widgets overwrite config and hands it to
     `index_queue.offer_model_sweep(..., first_key=…)`, so a first OpenAI
     key (which does not move the signature) offers the sweep too; the
@@ -1152,7 +1226,9 @@ same reason.
     while stale manifests remain; this profile-open call is the
     once-per-profile one, gated by `_v2_index_sweep_offered`. No
     provider branch, no local-server probe and no runtime offer survive;
-    `_embedding_ready` is `bool(cfg["api_key_openai"])` and nothing else
+    `_embedding_ready` is `bool(cfg["api_key_openai"]) or
+    bool(plus.key(cfg))` — a Klaus Plus key satisfies it on its own
+    (K-246), since a subscriber has no provider key to nudge for
     (naming both keys while checking one is a known gap — board K-231).
   - `openai_client.py` (aqt-free, stdlib): the ONE place Klaus talks to
     OpenAI — `embed(key, texts, model, dims)` and `transcribe(key,
@@ -1161,7 +1237,12 @@ same reason.
     stdlib `urllib` because the official SDK needs compiled wheels an
     AnkiWeb add-on cannot vendor. **The key is passed in by the caller
     and NEVER logged** — no config read here, no key in an exception
-    string. Tests point `_urlopen` at a fake.
+    string. Tests point `_urlopen` at a fake. Since 2026-09-16 both
+    functions take an optional `endpoint: plus.Endpoint` — None means
+    OpenAI with the caller's own key, an Endpoint means the Klaus Plus
+    service with its bearer and purpose headers — so every existing
+    test stands unchanged; `anthropic_client.Client._target(purpose)`
+    is the same seam on the Anthropic side.
   - `anthropic_client.py` (aqt-free, stdlib): the Anthropic Messages
     client, revived on 2026-09-15 from the `llm_client.py` deleted in the
     2026-09-02 convergence (`a494f2d`) — without the second backend, its
@@ -1179,7 +1260,34 @@ same reason.
     `estimate_embed`/`estimate_judge`/`estimate_transcribe` →
     `Estimate(tokens, dollars)`, and `format_estimate` → "~12,400 tokens
     · about $0.04". Tokens are chars ÷ 4: an estimate, shown as one,
-    never a bill. `index_queue` is its one caller today.
+    never a bill. `index_queue` is its one caller today. Still the FREE
+    tier's number only — on Plus the sweep says "included in Klaus Plus,
+    no charge." and no estimate is computed.
+  - `plus.py` (aqt-free, stdlib): the **Klaus Plus seam** — `key(cfg)`
+    (a `kp_` prefix and 35 chars, nothing else; there is no secret to
+    check against), `base(cfg)` (`klaus_plus_base` or `DEFAULT_BASE`),
+    `endpoint(cfg, purpose)` → the `Endpoint(base, headers)` NamedTuple
+    both clients take (`Authorization: Bearer …`, `X-Klaus-Purpose` from
+    `PURPOSES`, `X-Klaus-Client` = manifest `human_version`, which is
+    what a `426` refuses), `parse_quota`, `refresh`, `portal_url`,
+    `status_line`, and the verdict cache. **Its one non-obvious rule:
+    the cache is GENEROUS BY DESIGN, and deliberately more generous than
+    the spec's own one-line summary of it.** `active()` is true with a
+    key and NO cache at all (nothing has refused yet); a cached "active"
+    is honoured for `GRACE_S` — 7 days — long past its 6-hour
+    `CACHE_TTL_S` freshness; a `refused:` verdict EXPIRES after that
+    same TTL so the service gets asked again; and `refresh()` keeps the
+    old cache untouched on a 5xx, a timeout or an unparseable body,
+    recording a refusal only for an answer the service actually meant
+    (4xx). That is correct precisely BECAUSE the add-on is not the gate:
+    a flight, an outage or a Fly restart must never cost a paying user
+    the month they bought, and nothing is lost by being wrong for a week
+    — the service refuses the very next call it does answer. **Every
+    `plus.*` sink is `patch_config`, never `write_config`** (see the
+    `__init__.py` entry): `remember`'s parameter is *named*
+    `write_config` and handing it the package's actual `write_config`
+    wipes every other setting on the first refusal. The key is never
+    logged, never in an exception message, never in a URL.
 - **The assistant (Claude Code)** — Klaus hosts the `claude` binary as a
   child process rather than running a loop of its own (that spec's D1:
   no assistant key in Klaus, the user's own login and subscription —

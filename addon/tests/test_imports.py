@@ -100,7 +100,43 @@ def main() -> int:
     else:
         check("import klausmate (__init__.py)", True)
 
+    _check_licences()
     return report()
+
+
+# The AGPL header, verbatim: the first two non-blank lines of the canonical
+# text at https://www.gnu.org/licenses/agpl-3.0.txt. Never paraphrase these.
+_AGPL_HEADER = ("GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3, 19 November 2007")
+
+
+def _check_licences() -> None:
+    """Both LICENSE files exist and carry the AGPL v3 header.
+
+    This test is already the census of what the add-on folder contains, so
+    it is where the two licence files are pinned (K-248). `klausmate/LICENSE`
+    is the load-bearing one: the AGPL obliges the SHIPPED program to carry
+    its licence, and `scripts/package.sh` copies the add-on folder wholesale
+    — so a missing or edited file there is a licensing defect that reaches
+    every user, silently. The repo-root copy is the same text for anyone
+    reading the source. `service/` is a separate program and is deliberately
+    NOT covered by either file.
+    """
+    section("licence files (AGPL v3)")
+    for label, path in (
+        ("LICENSE", os.path.join(ADDON, "..", "LICENSE")),
+        ("klausmate/LICENSE", os.path.join(ADDON, "LICENSE")),
+    ):
+        if not os.path.isfile(path):
+            check(f"{label} exists", False, "- file not found")
+            continue
+        check(f"{label} exists", True)
+        with open(path, encoding="utf-8") as fh:
+            head = [ln.strip() for ln in fh.read(4096).splitlines() if ln.strip()][:2]
+        check(
+            f"{label} starts with the AGPL v3 header",
+            tuple(head) == _AGPL_HEADER,
+            f"- got {head!r}, want {list(_AGPL_HEADER)!r}",
+        )
 
 
 if __name__ == "__main__":

@@ -15,7 +15,11 @@ here" below if you're archaeology-diving through git history) — though
 Claude is back since 2026-09-02, in a different shape, as the Claude Code
 CLI behind the assistant dock (see "The assistant" below).
 
-**Privacy:** Klaus makes network calls for two things, and nothing else
+**Privacy:** Klaus makes network calls for two things — three on Klaus
+Plus, where the subscription itself is checked against Klaus's own
+service (`GET /v1/me` behind Preferences' **Check**, `POST /v1/portal`
+behind **Manage subscription…**; both carry the licence key and nothing
+else, and neither fires without one) — and nothing else
 — no telemetry, ever. (Accurate as of 2026-09-15, the API-first turn:
 there is no local engine any more, so nothing stays on the machine by
 being local — it stays on the machine by not being sent.)
@@ -37,6 +41,34 @@ being local — it stays on the machine by not being sent.)
   above. The key is there for the spec's Plan 2 (the pertinence phase)
   and Plan 3 (the assistant on the Messages API), neither of which is
   built. When one of them lands, this paragraph is what has to change.
+- **On Klaus Plus, one hop is added and nothing else changes** (2026-09-16).
+  A subscriber has no provider keys; the same request bodies go to
+  **Klaus's own service** (`service/` in this repo, `klausmate.fly.dev`),
+  which relays them to OpenAI and Anthropic with the operator's keys and
+  **stores counters only** — the Stripe customer id, the email Stripe
+  reports, the licence key's SHA-256 hash, the subscription status and
+  period end, and the month's four usage numbers. Lecture text, audio and
+  page images pass through and are gone: no request or response body is
+  stored, and none is logged (logs carry method, path, status, an
+  8-character key-hash prefix, latency and the metered amount — a service
+  test asserts it). Nothing about WHAT you study is retained. The service's
+  own statement of this is `<PUBLIC_BASE_URL>/privacy` — on the built-in
+  base, <https://klausmate.fly.dev/privacy> — and the
+  add-on's cache of the verdict never leaves the machine. Still no
+  telemetry: a free-tier profile makes exactly the calls above and never
+  contacts `klausmate.fly.dev` on its own — with no `klaus_plus_key`,
+  `plus.key` is `""`, `plus.active` is False and no Plus code path opens a
+  socket. (Pressing **Subscribe…** opens that URL in your browser; that is
+  you, not Klaus reporting anything.) Scope, today: **indexing is the only
+  call that actually takes this hop** — `embeddings.py` is the one caller of
+  `plus.endpoint`; `openai_client.transcribe` and `anthropic_client.Client`
+  have no caller in the add-on at all, so the `transcribe`/`judge`/
+  `assistant` purposes are plumbing for Plans 2 and 3, not traffic. Two
+  calls to the service carry no lecture content at all and are the
+  subscription talking about itself: `plus.refresh` → `GET /v1/me` (the
+  **Check** button and the verdict cache) and `plus.portal_url` →
+  `POST /v1/portal` (**Manage subscription…**), each sending the licence
+  key and nothing else.
 
 ---
 
@@ -48,14 +80,26 @@ Addons/                       # Git repo root
 ├── CLAUDE.md                 # Module map + hard-won gotchas (authority for internals)
 ├── README.md                 # Repo entry point — build/install from source
 ├── ANKIWEB.md                # Description blurb for the AnkiWeb listing
+├── LICENSE                   # GNU AGPL v3 (the add-on; `service/` is a separate program)
 ├── scripts/
 │   └── package.sh            # Builds dist/klausmate.ankiaddon
+├── service/                  # Klaus Plus — a SEPARATE program, NEVER shipped to users.
+│   ├── README.md              # The operator's deploy runbook (Fly, Stripe, secrets, kill switch)
+│   ├── klausplus/             # FastAPI app: proxy.py (the three metered routes + /v1/me),
+│   │                          #   entitlement.py, meter.py, keys.py, db.py (SQLite), billing.py
+│   │                          #   (Stripe + the pages), email.py (Resend), config.py (every quota)
+│   ├── tests/                 # pytest — `cd service && .venv/bin/python -m pytest -q`
+│   ├── Dockerfile             # python:3.12-slim, uvicorn klausplus.main:app on :8080
+│   ├── fly.toml               # One Fly Machine, /data volume, /healthz check
+│   └── pyproject.toml         # fastapi, uvicorn, httpx, stripe — server-side deps only
 └── klausmate/                # Anki add-on package (copy/symlink into addons21/)
     ├── README.md              # Ships inside the add-on — user-facing usage
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
     ├── embeddings.py           # Embeddings: OpenAI only, unit-normalized vectors, the index signature (aqt-free)
     ├── openai_client.py        # Stdlib HTTP to OpenAI: embed() and transcribe(), one retry (aqt-free)
     ├── anthropic_client.py     # Stdlib HTTP to the Anthropic Messages API — built for Plans 2/3, no caller yet (aqt-free)
+    ├── plus.py                 # Klaus Plus: the licence key, the per-call Endpoint both clients take, the cached verdict (aqt-free)
+    ├── LICENSE                 # The same AGPL v3 text, shipped inside the package
     ├── cost.py                 # Dated prices + estimates shown before any paid pass (pure)
     ├── page_store.py           # One record per (PDF, page): slide text + transcript segments; the API-first seam
     ├── card_index.py           # Persistent embedding index over the user's notes (aqt-free)
@@ -407,6 +451,29 @@ per-widget bools). The assistant's own remaining keys are
 next Anki start) and `assistant_dock_width` (default `420` — the dock's
 last width, written by dragging it, not a Preferences row).
 
+**Klaus Plus adds three keys** (2026-09-16), all in `meta.json` like
+every other key, none of them ever in the repo:
+
+- `klaus_plus_key` (`""`) — the licence key, `kp_` + 32 hex. Its
+  presence is what `plus.key()` calls Plus; there is nothing to verify
+  against locally, and nothing here gates anything: the service
+  answering 401/402/426 is the only gate.
+- `klaus_plus_cache` (`{}`) — not a setting but state Klaus writes:
+  `status`, `checked_at`, `period_end`, the quota snapshot and the
+  service's own message. 6-hour freshness, and a cached "active" is
+  honoured for 7 days when the service cannot be reached.
+- `klaus_plus_base` (`""`) — empty means the built-in
+  `plus.DEFAULT_BASE` (`https://klausmate.fly.dev`), which is what the
+  field shows as its placeholder. A General row, there only for a
+  staging or self-hosted service.
+
+**Every writer of `klaus_plus_cache` uses `patch_config`, never
+`write_config`** — `write_config` replaces the whole stored blob, so a
+one-key dict through it wipes the user's API keys and every other
+setting. `patch_config` (getConfig → update → writeConfig, hopped to the
+main thread) is also the only config writer a background thread may use,
+which is what Preferences' **Check** task needs.
+
 `_migrate_config()` (on `profile_did_open`) cleans up legacy `chat_*` /
 `claude_*` config keys left over from the deleted Ask-on-Claude feature,
 plus (retired 2026-09-01) `assistant_api_key` / `assistant_backend` /
@@ -432,16 +499,24 @@ takes its default. Scrubbed beside it —
 | Component | Source |
 |-----------|--------|
 | Anki / aqt / gui_hooks | Anki runtime |
-| `pypdf` 6.11.0 | Vendored under `klausmate/vendor/` — the **sole** third-party dependency |
+| `pypdf` 6.11.0 | Vendored under `klausmate/vendor/` — the **sole** third-party dependency *of the add-on* (the `service/` rows below are a separate program) |
 | `PyQt6.QtPdf` / `PyQt6.QtPdfWidgets` | Anki's PyQt6 (PDF viewer; graceful fallback if missing) |
-| OpenAI embeddings API | Required for indexing — `openai_client.py` behind `embeddings.py`, with the user's own `api_key_openai` |
+| OpenAI embeddings API | Required for indexing — `openai_client.py` behind `embeddings.py`, with the user's own `api_key_openai` (or, on Klaus Plus, relayed by the service) |
 | Anthropic Messages API | `anthropic_client.py`, written for the spec's Plans 2 and 3 — no caller yet |
 | Claude Code CLI (`claude`) | Optional — the assistant's engine; the user installs and logs into it themselves |
+| **Fly.io** | **`service/` only** — one Machine + a 1 GB volume hosts Klaus Plus. Not a dependency of the add-on; nothing in `klausmate/` knows about Fly beyond a default URL string. |
+| **Stripe** (`stripe` SDK, API `2024-06-20`) | **`service/` only** — Checkout, the Customer Portal and the webhooks that drive entitlement. No payment code, no price constant and no Stripe id ships in the add-on. |
+| **Resend** | **`service/` only, and optional there** — the one welcome email carrying the licence key. Off unless both `RESEND_API_KEY` and `RESEND_FROM` are set; without them the welcome page simply says no email was sent. |
 
-Every network client (`openai_client.py`, `anthropic_client.py`) is
+Every network client in the ADD-ON (`openai_client.py`,
+`anthropic_client.py`, `plus.py`) is
 **stdlib only** (`urllib`) — no `requests`, no third-party SDKs, no
 bundled wheels; `embeddings.py` builds on `openai_client.py` and opens
-no socket of its own.
+no socket of its own. The three service-side rows above are the
+deliberate exception and are the reason `service/` is a separate
+program: its `pyproject.toml` pulls fastapi, uvicorn, httpx and stripe,
+none of which an AnkiWeb add-on could vendor, and none of which is ever
+packaged.
 No numpy either — Anki's venv doesn't have it, so `card_index.py`/
 `pdf_index.py` do ranking with `math.sumprod` over `array('f')` memoryviews.
 
@@ -466,6 +541,7 @@ Produces `dist/klausmate.ankiaddon`. The script stages files to a tempdir, bumps
 - Build from **inside** the staging dir (the zip must NOT contain a `klausmate/` wrapper folder — AnkiWeb rejects those).
 - Strip every `__pycache__`/`*.pyc`/`.DS_Store` (AnkiWeb rejects archives that contain them).
 - Exclude `meta.json*` (per-user config, may hold API keys — the glob covers timestamped backups too) and all `user_files/` contents except `README.txt`.
+- **Never ship `service/`.** It sits outside `klausmate/`, so staging only `$SRC/` already leaves it out; the explicit `--exclude 'service/'` beside the others is the guard for the day someone widens `$SRC` or adds a `klausmate/service/`. Verify after any change to the script: `unzip -l dist/klausmate.ankiaddon | grep service/` must print nothing.
 
 ### Tests
 
@@ -475,6 +551,13 @@ Headless logic tests stub `aqt`/`anki` and never touch real Qt widgets — see `
 for t in tests/test_*.py; do
   env QT_QPA_PLATFORM=offscreen python3 "$t" || exit 1
 done
+```
+
+The Klaus Plus service has its own, separate suite (pytest, its own venv,
+never part of the add-on loop):
+
+```sh
+cd service && .venv/bin/python -m pytest -q
 ```
 
 ### Type checking
