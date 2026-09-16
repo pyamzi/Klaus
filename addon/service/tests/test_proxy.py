@@ -3,10 +3,11 @@ import asyncio
 import io
 import json
 import struct
+import time
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from klausplus import keys
+from klausplus import email, keys
 from klausplus.app import create_app
 from klausplus.db import next_month_start
 
@@ -55,7 +56,7 @@ def world(settings, now):
     store = app.state.store
     cid = store.upsert_customer("cus_1", "a@b.c", now)
     key = keys.mint()
-    store.set_key_hash(cid, keys.hash_key(key))
+    store.set_key_hash(cid, keys.hash_key(key), now)
     store.set_subscription("cus_1", "active", int(now) + 20 * 86400, False, now)
     return {"app": app, "client": TestClient(app), "up": up, "store": store, "cid": cid, "key": key, "clock": clock}
 
@@ -224,3 +225,52 @@ def test_wav_seconds():
     assert abs(wav_seconds(_wav(12.5)) - 12.5) < 0.01
     with pytest.raises(ValueError):
         wav_seconds(b"RIFFxxxxWAVEjunk")
+
+
+# --- fix round 1 (K-243), I-5: the 80%-of-quota notice ----------------------
+
+
+def test_quota_notice_sent_once_on_crossing_80_percent(world, settings, monkeypatch):
+    world["app"].state.settings = settings.__class__(
+        **{**settings.__dict__, "resend_api_key": "re_x", "resend_from": "Klaus <plus@klaus.test>"})
+    sent = []
+    monkeypatch.setattr(email, "send_quota_notice", lambda s, to, purpose, human_line: sent.append((to, purpose)) or True)
+    cap = settings.quota_judge_tokens
+    world["store"].add_usage(world["cid"], "2026-09", "judge_tokens", int(cap * 0.8) - 10)
+    body = {"model": "claude-sonnet-5", "max_tokens": 5, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 200
+    assert sent == [("a@b.c", "judge")]
+    # the next charge is still above the line, not crossing it again: no second notice
+    assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 200
+    assert sent == [("a@b.c", "judge")]
+
+
+def test_quota_notice_not_sent_when_email_disabled(world, settings, monkeypatch):
+    assert not settings.email_enabled
+    sent = []
+    monkeypatch.setattr(email, "send_quota_notice", lambda *a, **k: sent.append(a) or True)
+    cap = settings.quota_judge_tokens
+    world["store"].add_usage(world["cid"], "2026-09", "judge_tokens", int(cap * 0.8) - 10)
+    body = {"model": "claude-sonnet-5", "max_tokens": 5, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 200
+    assert sent == []
+
+
+def test_quota_notice_sent_once_on_crossing_80_percent_via_stream(world, settings, monkeypatch):
+    """Same as above, through the SSE relay's fire-and-forget path (run_in_executor,
+    no BackgroundTasks available there) — polls briefly since the send runs on a
+    worker thread after the streamed response has already closed."""
+    world["app"].state.settings = settings.__class__(
+        **{**settings.__dict__, "resend_api_key": "re_x", "resend_from": "Klaus <plus@klaus.test>"})
+    sent = []
+    monkeypatch.setattr(email, "send_quota_notice", lambda s, to, purpose, human_line: sent.append((to, purpose)) or True)
+    cap = settings.quota_assistant_tokens
+    world["store"].add_usage(world["cid"], "2026-09", "assistant_tokens", int(cap * 0.8) - 100)
+    body = {"model": "claude-sonnet-5", "max_tokens": 50, "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+    with world["client"].stream("POST", "/v1/messages", json=body, headers=_h(world, "assistant")) as r:
+        assert r.status_code == 200
+        b"".join(r.iter_bytes())
+    deadline = time.time() + 1.0
+    while not sent and time.time() < deadline:
+        time.sleep(0.01)
+    assert sent == [("a@b.c", "assistant")]

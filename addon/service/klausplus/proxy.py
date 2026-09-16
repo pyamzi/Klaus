@@ -1,16 +1,17 @@
 """Auth, limits and the three proxied routes. Bodies pass through; only counters stay."""
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import entitlement, keys, meter
+from . import email, entitlement, keys, meter
 
 router = APIRouter()
 
@@ -46,7 +47,11 @@ class RateLimiter:
             return True
 
 
-def authenticate(request: Request, purpose_required: bool = True) -> Any:
+def authenticate(request: Request, purpose_required: bool = True, require_active: bool = True) -> Any:
+    """`require_active=False` (fix1/K-243, C-1) skips only the entitlement 402 —
+    identity (401), the paused 503, the version floor and the rate limit still apply.
+    The Customer Portal needs this: a lapsed customer must still be able to reach
+    Stripe to fix a card or resubscribe."""
     st = request.app.state
     settings, store, now = st.settings, st.store, st.now()
     if settings.paused:
@@ -58,9 +63,10 @@ def authenticate(request: Request, purpose_required: bool = True) -> Any:
     row = store.customer_by_hash(keys.hash_key(token)) if keys.looks_like_key(token) else None
     if row is None:
         raise _err(401, "Klaus Plus key not recognised — check it under KlausMate Preferences.")
-    state, reason = entitlement.verdict(row, now, settings.grace_days)
-    if state != "active":
-        raise _err(402, f"Klaus Plus is not active ({reason}) — manage your subscription under KlausMate Preferences.")
+    if require_active:
+        state, reason = entitlement.verdict(row, now, settings.grace_days)
+        if state != "active":
+            raise _err(402, f"Klaus Plus is not active ({reason}) — manage your subscription under KlausMate Preferences.")
     if not st.limiter.allow(int(row["id"]), now):
         raise _err(429, "Too many requests — Klaus Plus allows 60 a minute; wait a moment.")
     purpose = request.headers.get("X-Klaus-Purpose", "")
@@ -89,6 +95,43 @@ def _log(request: Request, status: int, metered: int, started: float) -> None:
     prefix = (row["key_hash"] or "")[:8] if row is not None else "-"
     request.app.state.log.info("%s %s %d key=%s ms=%d metered=%d", request.method, request.url.path, status, prefix,
                                int((time.time() - started) * 1000), metered)
+
+
+def _safe_send_quota_notice(st: Any, to: str, purpose: str, human_line: str) -> None:
+    """round2: a quota notice must never fail the request (or background task, or
+    stream teardown) it rides in on. One log line on failure, never the address."""
+    try:
+        email.send_quota_notice(st.settings, to, purpose, human_line)
+    except Exception as exc:
+        st.log.info("quota notice failed: %s", type(exc).__name__)
+
+
+def _notify_quota(background_tasks: BackgroundTasks, st: Any, row: Any, snap: dict) -> None:
+    """I-5/spec D3: schedule (never send inline) the 80%-of-quota email for each
+    purpose this charge just crossed. `snap` is a meter.charge() result."""
+    crossed = snap.get("crossed_80") or []
+    if not crossed or not st.settings.email_enabled:
+        return
+    to = str(row["email"] or "") if row is not None else ""
+    if not to:
+        return
+    for purpose in crossed:
+        background_tasks.add_task(_safe_send_quota_notice, st, to, purpose, meter._HUMAN.get(purpose, purpose))
+
+
+def _notify_quota_fire_and_forget(st: Any, row: Any, snap: dict) -> None:
+    """Same as _notify_quota, for the SSE relay's `finally`, which has no BackgroundTasks —
+    runs the (synchronous, already-guarded) send on a worker thread so it can never block
+    or break stream teardown."""
+    crossed = snap.get("crossed_80") or []
+    if not crossed or not st.settings.email_enabled:
+        return
+    to = str(row["email"] or "") if row is not None else ""
+    if not to:
+        return
+    loop = asyncio.get_running_loop()
+    for purpose in crossed:
+        loop.run_in_executor(None, _safe_send_quota_notice, st, to, purpose, meter._HUMAN.get(purpose, purpose))
 
 
 def wav_seconds(data: bytes) -> float:
@@ -122,7 +165,7 @@ def me(request: Request) -> JSONResponse:
 
 
 @router.post("/v1/embeddings")
-async def embeddings(request: Request) -> Response:
+async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Response:
     started = time.time()
     row = authenticate(request)
     st = request.app.state
@@ -148,14 +191,15 @@ async def embeddings(request: Request) -> Response:
             metered = int((resp.json().get("usage") or {}).get("total_tokens") or guess)
         except (ValueError, AttributeError, TypeError):
             metered = guess
-        meter.charge(st.store, st.settings, int(row["id"]), "embed", metered, st.now())
+        snap = meter.charge(st.store, st.settings, int(row["id"]), "embed", metered, st.now())
+        _notify_quota(background_tasks, st, row, snap)
     _log(request, resp.status_code, metered, started)
     return Response(resp.content, status_code=resp.status_code, media_type="application/json",
                     headers=_quota_header(request, int(row["id"])))
 
 
 @router.post("/v1/audio/transcriptions")
-async def transcriptions(request: Request) -> Response:
+async def transcriptions(request: Request, background_tasks: BackgroundTasks) -> Response:
     started = time.time()
     row = authenticate(request)
     st = request.app.state
@@ -188,7 +232,8 @@ async def transcriptions(request: Request) -> Response:
     metered = 0
     if resp.status_code == 200:
         metered = seconds
-        meter.charge(st.store, st.settings, cid, "transcribe", seconds, st.now())
+        snap = meter.charge(st.store, st.settings, cid, "transcribe", seconds, st.now())
+        _notify_quota(background_tasks, st, row, snap)
     _log(request, resp.status_code, metered, started)
     return Response(resp.content, status_code=resp.status_code, media_type="application/json", headers=_quota_header(request, cid))
 
@@ -207,7 +252,7 @@ def _usage_from_sse_line(line: bytes, acc: dict) -> None:
 
 
 @router.post("/v1/messages")
-async def messages(request: Request) -> Response:
+async def messages(request: Request, background_tasks: BackgroundTasks) -> Response:
     started = time.time()
     row = authenticate(request)
     st = request.app.state
@@ -237,7 +282,8 @@ async def messages(request: Request) -> Response:
                 metered = int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
             except (ValueError, AttributeError, TypeError):
                 metered = 0
-            meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
+            snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
+            _notify_quota(background_tasks, st, row, snap)
         _log(request, resp.status_code, metered, started)
         return Response(content, status_code=resp.status_code, media_type="application/json", headers=_quota_header(request, cid))
 
@@ -255,8 +301,9 @@ async def messages(request: Request) -> Response:
         finally:
             try:
                 metered = acc["in"] + acc["out"]
-                meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
+                snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
                 _log(request, 200, metered, started)
+                _notify_quota_fire_and_forget(st, row, snap)
             finally:
                 await resp.aclose()
 

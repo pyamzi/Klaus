@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS customers (
   stripe_customer_id TEXT UNIQUE NOT NULL,
   email TEXT NOT NULL DEFAULT '',
   key_hash TEXT UNIQUE,
+  key_rotated_at REAL,
   status TEXT NOT NULL DEFAULT 'incomplete',
   period_end INTEGER NOT NULL DEFAULT 0,
   cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
@@ -119,9 +120,22 @@ class Store:
             self._c.execute("UPDATE customers SET status = 'active', past_due_since = 0, updated_at = ? "
                             "WHERE stripe_customer_id = ? AND status = 'past_due'", (int(now), stripe_customer_id))
 
-    def set_key_hash(self, customer_id: int, key_hash: str) -> None:
+    def set_key_hash(self, customer_id: int, key_hash: str, now: float = 0.0) -> None:
+        """Unconditional rotation. `now` (fix1/K-243) stamps `key_rotated_at`, the
+        recovery cooldown clock; defaults to 0.0 for the one pre-existing caller
+        (`tests/test_app.py`, out of this fix round's file scope) that predates it."""
         with self._lock:
-            self._c.execute("UPDATE customers SET key_hash = ? WHERE id = ?", (key_hash, customer_id))
+            self._c.execute("UPDATE customers SET key_hash = ?, key_rotated_at = ? WHERE id = ?",
+                            (key_hash, now, customer_id))
+
+    def set_key_hash_if_unset(self, customer_id: int, key_hash: str, now: float) -> bool:
+        """Atomic mint (fix1/K-243, I-3): only writes when no key exists yet.
+        True iff this call won the race and the hash now stored is this one."""
+        with self._lock:
+            cur = self._c.execute(
+                "UPDATE customers SET key_hash = ?, key_rotated_at = ? WHERE id = ? AND (key_hash IS NULL OR key_hash = '')",
+                (key_hash, now, customer_id))
+            return cur.rowcount == 1
 
     def customer_by_hash(self, key_hash: str) -> Any:
         return self._c.execute("SELECT * FROM customers WHERE key_hash = ?", (key_hash,)).fetchone()

@@ -139,10 +139,20 @@ service and one add-on mode; it changes no feature.
   (`past_due`, the 3-day grace starts). Signatures verified with the
   webhook secret; events are idempotent by event id.
 - **Customer Portal** for cancel, card and invoice history, reached
-  from Preferences' "Manage subscription…" through `/portal`.
+  from Preferences' "Manage subscription…" through `/portal`. Any
+  RECOGNISED key opens it — a lapsed or cancelled subscriber is exactly
+  who needs to fix a card or resubscribe, so the portal skips the
+  entitlement verdict (identity, the version floor and the rate limit
+  still apply).
 - **Email** through Resend's free tier (3,000 emails a month): the key
-  on purchase, the key again on `/recover`, a notice at 80% of any
-  quota. One more free account for Pouya; the alternative — no email,
+  on purchase, a fresh key on `/recover`, a notice at 80% of any
+  quota. Recovery is deliberately dull: the same page for an unknown,
+  an inactive and an active address; a new key is minted only when the
+  email actually went out, at most once an hour per customer, and only
+  from an address that is not hammering the form — so nobody can
+  rotate a paying customer's key from the outside or drain the email
+  tier. Minting on the welcome page is a conditional update, so two
+  concurrent visits can never both be told "shown only once". One more free account for Pouya; the alternative — no email,
   the key shown once on the success page only — is a launch option if
   he prefers zero extra accounts, at the cost of a support burden for
   lost keys.
