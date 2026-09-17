@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 USAGE_COLUMNS = ("embed_tokens", "audio_seconds", "judge_tokens", "assistant_tokens")
+# The `status` a row carries until something writes a real one: the schema default above,
+# and so exactly what `upsert_customer` leaves behind. `seed_subscription_if_unset` tests
+# for it, which is why the two must stay spelled the same.
+UNSET_STATUS = "incomplete"
 
 # K-263. A subscription has ENDED at its period end; with no period end, when it
 # went past due; failing both, when the row was created (paid page never reached,
@@ -146,6 +150,21 @@ class Store:
                 "past_due_since = CASE WHEN ? = 'past_due' THEN CASE WHEN past_due_since = 0 THEN ? ELSE past_due_since END ELSE 0 END, "
                 "updated_at = ? WHERE stripe_customer_id = ?",
                 (status, int(period_end or 0), 1 if cancel_at_period_end else 0, status, int(now), int(now), stripe_customer_id))
+
+    def seed_subscription_if_unset(self, customer_id: int, status: str, period_end: int, now: float) -> bool:
+        """K-277: /welcome may write what the Checkout session says, but ONLY while no webhook
+        has written this row's subscription state — a welcome page opened (or reloaded from a
+        bookmark) after a cancellation or a payment failure landed would otherwise overwrite it
+        with the session's older status and revive a lapsed subscription. One conditional
+        UPDATE, the `claim_recovery` / `set_key_hash_if_unset` shape; True iff this call seeded
+        the row. `cancel_at_period_end` is deliberately not seeded: a subscription Checkout has
+        just created never carries it, the column already defaults to 0, and the first
+        subscription webhook writes it for real."""
+        with self._lock:
+            cur = self._c.execute(
+                "UPDATE customers SET status = ?, period_end = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (status, int(period_end or 0), int(now), customer_id, UNSET_STATUS))
+            return cur.rowcount == 1
 
     def mark_past_due(self, stripe_customer_id: str, now: float) -> None:
         with self._lock:

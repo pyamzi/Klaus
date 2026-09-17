@@ -89,6 +89,32 @@ def test_welcome_unpaid_session_is_refused(world):
     assert world["client"].get("/welcome?session_id=cs_1").status_code == 402
 
 
+def test_a_welcome_after_a_cancellation_webhook_never_revives_the_subscription(world, monkeypatch, now):
+    """K-277: /welcome wrote the Checkout session's status unconditionally, so the page
+    opened (or reloaded from a bookmark) after a cancellation landed put the row back to
+    active. The key is still minted and shown once either way."""
+    event = {"id": "evt_1", "type": "customer.subscription.deleted",
+             "data": {"object": {"customer": "cus_1", "status": "canceled", "current_period_end": int(now) + 10}}}
+    monkeypatch.setattr(billing, "_construct_event", lambda payload, sig, secret: event)
+    assert world["client"].post("/stripe/webhook", content=b"{}",
+                                headers={"stripe-signature": "t=1,v1=x"}).status_code == 200
+    assert world["store"].customer_by_stripe_id("cus_1")["status"] == "canceled"
+    r = world["client"].get("/welcome?session_id=cs_1")
+    assert r.status_code == 200 and "kp_" in r.text
+    row = world["store"].customer_by_stripe_id("cus_1")
+    assert row["status"] == "canceled" and row["period_end"] == int(now) + 10 and row["key_hash"]
+
+
+def test_a_welcome_seeds_a_fresh_row_and_a_second_one_does_not_re_seed(world, now):
+    """The other half: with nothing written yet the session IS the best state there is."""
+    assert world["client"].get("/welcome?session_id=cs_1").status_code == 200
+    row = world["store"].customer_by_stripe_id("cus_1")
+    assert row["status"] == "active" and row["period_end"] == 1_900_000_000
+    world["store"].set_subscription("cus_1", "past_due", int(now), False, now)
+    world["client"].get("/welcome?session_id=cs_1")
+    assert world["store"].customer_by_stripe_id("cus_1")["status"] == "past_due"
+
+
 def test_webhook_verifies_and_applies_once(world, monkeypatch, now):
     events = [{"id": "evt_1", "type": "customer.subscription.updated",
                "data": {"object": {"customer": "cus_9", "status": "active", "current_period_end": int(now) + 86400}}}]

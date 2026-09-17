@@ -119,3 +119,19 @@ def test_claim_recovery_is_won_by_exactly_one_caller_inside_the_window(store, no
     # outlived a NEWER claim cannot roll that claim back
     store.release_recovery(cid, now, now + 3600)                  # stale stamp: not this claim's
     assert store.customer_by_id(cid)["key_rotated_at"] == now + 3601
+
+
+def test_seed_subscription_if_unset_wins_once_and_never_overwrites_a_webhook(store, now):
+    """K-277: /welcome may seed what the Checkout session says only while no webhook has
+    written this row — one conditional UPDATE, the claim_recovery shape."""
+    cid = store.upsert_customer("cus_1", "", now)
+    assert store.customer_by_id(cid)["status"] == "incomplete"  # exactly what upsert_customer leaves
+    assert store.seed_subscription_if_unset(cid, "active", int(now) + 86400, now) is True
+    row = store.customer_by_id(cid)
+    assert row["status"] == "active" and row["period_end"] == int(now) + 86400
+    assert store.seed_subscription_if_unset(cid, "trialing", 5, now) is False
+    row = store.customer_by_id(cid)
+    assert row["status"] == "active" and row["period_end"] == int(now) + 86400  # the loser wrote nothing
+    store.set_subscription("cus_1", "canceled", int(now), False, now)
+    assert store.seed_subscription_if_unset(cid, "active", int(now) + 99, now) is False
+    assert store.customer_by_id(cid)["status"] == "canceled"
