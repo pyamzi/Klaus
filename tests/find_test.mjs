@@ -48,6 +48,31 @@ test("matches do not overlap, and a miss is empty", () => {
   );
 });
 
+test("offsets point into the original text, not the folded one", () => {
+  // "İ" (U+0130) lowercases to TWO UTF-16 units, so a naive fold-then-report
+  // would push every later offset out by one and select the wrong characters
+  // in the text layer. Both hits here must still land on "ok".
+  const pages = [{ page: 1, text: "İstanbul ok İzmir ok" }];
+  const found = findMatches(pages, "OK");
+  assert.deepEqual(
+    {
+      found,
+      slices: found.map((m) => pages[0].text.slice(m.start, m.end)),
+      dotted: findMatches(pages, "i̇zmir").map((m) =>
+        pages[0].text.slice(m.start, m.end),
+      ),
+    },
+    {
+      found: [
+        { page: 1, start: 9, end: 11 },
+        { page: 1, start: 18, end: 20 },
+      ],
+      slices: ["ok", "ok"],
+      dotted: ["İzmir"],
+    },
+  );
+});
+
 test("count label has klausmate's four forms, verbatim", () => {
   assert.deepEqual(
     {

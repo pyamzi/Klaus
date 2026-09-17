@@ -22,9 +22,10 @@ import { countLabel, cycleIndex, findMatches, type Match, type PageText } from "
 const THUMB_WIDTH = 140;
 const STAGE_PADDING = 32;
 const FIND_DEBOUNCE_MS = 250;
-// The text layer renders a tick after the slide swaps; give it that tick
-// before mapping a match onto it.
-const REVEAL_DELAY_MS = 120;
+// A slide's text layer only starts rendering once its canvas render promise
+// resolves, so a match on a slow page can be several hundred ms away. Watch
+// for the layer instead of guessing, and give up rather than watch forever.
+const REVEAL_TIMEOUT_MS = 4000;
 
 interface ImpressViewProps {
   pdfId: string;
@@ -46,10 +47,14 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   const [matches, setMatches] = useState<Match[]>([]);
   const [matchIndex, setMatchIndex] = useState(-1);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const [searchedQuery, setSearchedQuery] = useState("");
+  const searchTimer = useRef<number | undefined>(undefined);
 
   const closeFind = useCallback(() => {
+    window.clearTimeout(searchTimer.current);
     setFindOpen(false);
     setQuery("");
+    setSearchedQuery("");
     setMatches([]);
     setMatchIndex(-1);
   }, []);
@@ -158,28 +163,36 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     };
   }, [findOpen, doc, pageText]);
 
+  const runSearch = useCallback(
+    (text: string): Match[] => {
+      const found = pageText ? findMatches(pageText, text) : [];
+      setMatches(found);
+      setMatchIndex(-1);
+      setSearchedQuery(text);
+      return found;
+    },
+    [pageText],
+  );
+
   // Live search, debounced. A fresh query selects no match yet: the label
   // reads "{n} matches" until Enter or Cmd+G moves to one, so typing never
   // yanks the stage out from under you.
   useEffect(() => {
     if (!findOpen) return;
-    const id = window.setTimeout(() => {
-      setMatches(pageText ? findMatches(pageText, query) : []);
-      setMatchIndex(-1);
-    }, FIND_DEBOUNCE_MS);
-    return () => window.clearTimeout(id);
-  }, [findOpen, query, pageText]);
+    searchTimer.current = window.setTimeout(() => runSearch(query), FIND_DEBOUNCE_MS);
+    return () => window.clearTimeout(searchTimer.current);
+  }, [findOpen, query, runSearch]);
 
   /**
-   * Map a page-text offset range onto the rendered text layer and select it —
+   * Map a page-text offset range onto that page's rendered text layer and
+   * select it —
    * the text layer already tints ::selection, so the match shows up without a
    * second highlight mechanism. Silently does nothing if the layer is not
    * ready or the offsets do not line up.
    */
-  const revealMatch = useCallback((start: number, end: number) => {
-    const layer = stageRef.current?.querySelector(".textLayer");
+  const revealMatch = useCallback((layer: Element, start: number, end: number) => {
     const selection = window.getSelection();
-    if (!layer || !selection) return;
+    if (!selection) return;
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
     let consumed = 0;
     let startNode: Text | null = null;
@@ -208,20 +221,61 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     startNode.parentElement?.scrollIntoView({ block: "nearest" });
   }, []);
 
-  // Moving to a match navigates to its slide, then reveals it there.
+  // Moving to a match navigates to its slide, then reveals it once that
+  // slide's text layer has actually rendered — which may be well after the
+  // navigation, so this watches the stage instead of racing a timer.
   useEffect(() => {
     const match = matches[matchIndex];
-    if (!match) return;
+    const stage = stageRef.current;
+    if (!match || !stage) return;
     setCurrent(match.page);
-    const id = window.setTimeout(() => revealMatch(match.start, match.end), REVEAL_DELAY_MS);
-    return () => window.clearTimeout(id);
+
+    let done = false;
+    const attempt = () => {
+      if (done) return;
+      // Pinned to the target page: this effect runs before the slide swap
+      // commits, so an unpinned ".textLayer" would match the page we are
+      // leaving — which is populated — and select against the wrong text.
+      const layer = stage.querySelector(`.pdf-page[data-page="${match.page}"] .textLayer`);
+      if (!layer?.textContent) return;
+      done = true;
+      observer.disconnect();
+      window.clearTimeout(deadline);
+      revealMatch(layer, match.start, match.end);
+    };
+    const observer = new MutationObserver(attempt);
+    observer.observe(stage, { childList: true, subtree: true });
+    const deadline = window.setTimeout(() => observer.disconnect(), REVEAL_TIMEOUT_MS);
+    attempt();
+
+    return () => {
+      done = true;
+      observer.disconnect();
+      window.clearTimeout(deadline);
+    };
   }, [matchIndex, matches, revealMatch]);
 
-  // With no matches this lands on -1 and nothing navigates; the count label
-  // already says "0 matches", so a toast on top of it would just be noise.
+  /**
+   * Next/previous match. With no matches this lands on -1 and nothing
+   * navigates; the count label already says "0 matches", so a toast on top
+   * of it would just be noise.
+   *
+   * Enter within the debounce window has to search what is on screen now —
+   * otherwise the first Enter of a search does nothing and a re-typed query
+   * jumps to the old query's hit.
+   */
   const cycleMatch = useCallback(
-    (step: number) => setMatchIndex((i) => cycleIndex(i, matches.length, step)),
-    [matches.length],
+    (step: number) => {
+      const stale = query !== searchedQuery;
+      if (!stale) {
+        setMatchIndex((i) => cycleIndex(i, matches.length, step));
+        return;
+      }
+      window.clearTimeout(searchTimer.current);
+      const found = runSearch(query);
+      setMatchIndex(cycleIndex(-1, found.length, step));
+    },
+    [matches.length, query, searchedQuery, runSearch],
   );
 
   const openFind = useCallback(() => {
@@ -240,6 +294,13 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     const last = doc.numPages;
     const findActions: Action[] = ["find", "find-next", "find-prev"];
     const onKey = (e: KeyboardEvent) => {
+      // Esc belongs to the find bar whenever it is open, whatever has focus —
+      // the buttons and the slide included, not just the input.
+      if (findOpen && e.key === "Escape") {
+        e.preventDefault();
+        closeFind();
+        return;
+      }
       const action = matchShortcut(e);
       if (!action) return;
       // Find combos are claimed even from the find field; everything else
@@ -289,7 +350,7 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc, baseSize, fitScale, selectSlideText, openFind, cycleMatch, findOpen]);
+  }, [doc, baseSize, fitScale, selectSlideText, openFind, cycleMatch, closeFind, findOpen]);
 
   const commitPageDraft = () => {
     if (!doc) return;

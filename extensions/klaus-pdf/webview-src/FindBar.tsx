@@ -36,6 +36,8 @@ export default function FindBar({
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         onKeyDown={(e) => {
+          // Escape is handled globally in ImpressView so it works wherever
+          // focus is — including on these buttons.
           if (e.key === "Enter") {
             e.preventDefault();
             if (e.shiftKey) {
@@ -43,16 +45,21 @@ export default function FindBar({
             } else {
               onNext();
             }
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
           }
         }}
       />
-      <span className="find-count">{label}</span>
-      <button onClick={onPrev} title="Previous match (Shift+Enter)">‹</button>
-      <button onClick={onNext} title="Next match (Enter)">›</button>
-      <button onClick={onClose} title="Close (Esc)">✕</button>
+      <span className="find-count" role="status">{label}</span>
+      {/* Glyph buttons need real names: a title tooltip is not a
+          screen-reader label, and "‹" describes nothing. */}
+      <button onClick={onPrev} aria-label="Previous match" title="Previous match (Shift+Enter)">
+        ‹
+      </button>
+      <button onClick={onNext} aria-label="Next match" title="Next match (Enter)">
+        ›
+      </button>
+      <button onClick={onClose} aria-label="Close find bar" title="Close (Esc)">
+        ✕
+      </button>
     </div>
   );
 }

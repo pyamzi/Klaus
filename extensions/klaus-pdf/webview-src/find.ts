@@ -16,21 +16,49 @@ export interface Match {
 }
 
 /**
- * Case-insensitive, non-overlapping matches in page order. A blank query
- * matches nothing — an empty find bar is not a search for everything.
+ * Case-folded text plus a map back to the original string.
+ *
+ * Lowercasing is not length-preserving — "İ".toLowerCase() is two UTF-16
+ * units, "SS".toLowerCase() stays two but other locales differ — so folding
+ * a page and then reporting folded offsets would select the wrong characters
+ * in the rendered text layer. `offsets[i]` is the original index that folded
+ * unit `i` came from, with a final sentinel entry so a match ending at the
+ * very end of the text still maps.
+ */
+function fold(text: string): { folded: string; offsets: number[] } {
+  let folded = "";
+  const offsets: number[] = [];
+  for (let i = 0; i < text.length; ) {
+    const char = String.fromCodePoint(text.codePointAt(i) as number);
+    const lower = char.toLowerCase();
+    for (let unit = 0; unit < lower.length; unit++) {
+      offsets.push(i);
+    }
+    folded += lower;
+    i += char.length;
+  }
+  offsets.push(text.length);
+  return { folded, offsets };
+}
+
+/**
+ * Case-insensitive, non-overlapping matches in page order, reported as
+ * offsets into the *original* page text. A blank query matches nothing — an
+ * empty find bar is not a search for everything.
  */
 export function findMatches(pages: PageText[], query: string): Match[] {
-  const needle = query.trim().toLowerCase();
+  const needle = fold(query.trim()).folded;
   if (!needle) {
     return [];
   }
   const matches: Match[] = [];
   for (const { page, text } of pages) {
-    const haystack = text.toLowerCase();
-    let at = haystack.indexOf(needle);
+    const { folded, offsets } = fold(text);
+    let at = folded.indexOf(needle);
     while (at !== -1) {
-      matches.push({ page, start: at, end: at + needle.length });
-      at = haystack.indexOf(needle, at + needle.length);
+      const end = at + needle.length;
+      matches.push({ page, start: offsets[at], end: offsets[end] });
+      at = folded.indexOf(needle, end);
     }
   }
   return matches;
