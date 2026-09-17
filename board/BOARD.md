@@ -125,17 +125,35 @@ created: 2026-09-17
 
 Per-highlight notes per parity spec: Add note.../Edit note... via context menu, box anchored top-right of first rect, rgba(255,245,170,235) fill, 1px rgb(190,170,80) border, rgb(70,60,20) 10px text, <=180px wide, <=4 lines, radius 3. Distinct from the per-slide notes sidebar.
 
-### KB-016: Shortcut + toast parity in the PDF editor
-owner: -
-priority: P2
-tags: parity,sonnet-safe
-created: 2026-09-17
-
-Per parity spec: Cmd+= / Cmd+- (x1.25, clamp 0.25-5), Cmd+0 fit, Cmd+A select page text, Cmd+Alt+G go-to-page, PageUp/Down + Home/End (exists), double/triple-click selection, and a transient 'Klaus: ...' toast component for all feedback (no modals).
-
 ## Ready
 
 ## Doing
+
+### KB-016: Shortcut + toast parity in the PDF editor
+owner: orchestrator
+priority: P2
+tags: parity,sonnet-safe
+files: extensions/klaus-pdf/webview-src/shortcuts.ts,extensions/klaus-pdf/webview-src/toast.ts,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/viewer.css,tests/shortcuts_test.mjs
+verify: node --test tests/shortcuts_test.mjs && cd extensions/klaus-pdf && npm run typecheck
+created: 2026-09-17
+claimed: 2026-09-17
+
+Per docs/reference/klausmate-viewer-parity.md, bring the editor's keyboard and feedback behavior up to klausmate's.
+
+Behavior:
+- Cmd/Ctrl+= and Cmd/Ctrl++ zoom in x1.25, Cmd/Ctrl+- zooms out /1.25, clamped 0.25-5.0. The toolbar buttons use the same step and clamp (today they are x1.2 / 0.1-6).
+- Cmd/Ctrl+0 fits the slide to the stage.
+- Cmd/Ctrl+A selects the current slide's text layer; with no text on the page, toast "Klaus: no selectable text on this page" and change nothing.
+- Cmd/Ctrl+Alt+G focuses an inline page field in the toolbar; the page label is click-to-edit too. Out-of-range or non-numeric input is refused with a toast and leaves the slide unchanged. No native dialog: a webview has no prompt(), and the voice rule forbids modals.
+- PageUp/PageDown/Home/End keep working; nothing above fires while focus is in the notes textarea or the page field.
+- Double-click selects a word, triple-click a paragraph, on the slide text layer.
+- Every piece of feedback goes through one transient toast, each message prefixed "Klaus: ", auto-dismissed, never a modal and never inline text.
+
+Acceptance criteria:
+- Shortcut matching, the zoom ladder and page-number parsing live in a pure module with no React/DOM imports, so the gate needs no browser.
+- tests/shortcuts_test.mjs asserts: the zoom step is exactly 1.25 and clamps at 0.25 and 5.0 from both directions; each shortcut in the table maps to its action for both Cmd and Ctrl; a plain key or a typing target yields no action; page parsing rejects "", "abc", "0" and n+1 while accepting "1" and n.
+- npm run typecheck in extensions/klaus-pdf is clean.
+- The verify command fails on the pre-card tree (the module and test do not exist) and passes after.
 
 ## Review
 
