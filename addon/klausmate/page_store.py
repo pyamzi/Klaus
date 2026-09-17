@@ -5,16 +5,18 @@ index embeds combined_text per page, the pertinence phase judges a card
 against one page, the assistant reads one page, the recorder appends
 transcript segments to one page. Records live at
 user_files/pages/<pdf_safe>/<digest>/<page:04d>.json. <digest> is resolved
-through a pointer file, pages/<pdf_safe>/current: normally text_digest
-(pages), a hash of the document's own TEXT, so a bake
-(pdf_handler.bake_annotations rewrites the file with os.replace) or a
-move inside the Library — neither changes what the page says — cannot
-orphan the records; a legacy digest12(path) directory found with no
-pointer yet (a profile indexed before this scheme existed) is adopted in
-place rather than abandoned. Only genuinely different text — a different
-PDF re-imported under the same safe name — repoints at a fresh directory
-(see ensure_records); the old one is left on disk until delete_context
-removes it.
+through a pointer file, pages/<pdf_safe>/current, and settled by
+document_identity: normally text_digest(pages), a hash of the document's
+own TEXT, so a bake (pdf_handler.bake_annotations rewrites the file with
+os.replace) or a move inside the Library — neither changes what the page
+says — cannot orphan the records; for a TEXT-LESS document (a scan with
+no text layer, which has no text to be identified by) the bytes of its
+pristine original instead. A legacy digest12(path) directory found with
+no pointer yet (a profile indexed before this scheme existed) is adopted
+in place rather than abandoned. Only a genuinely different document —
+another PDF re-imported under the same safe name — repoints at a fresh
+directory (see ensure_records); the old one is left on disk until
+delete_context removes it.
 
 aqt-free above the divider; render_page_png (QtPdf) sits below it.
 """
@@ -46,21 +48,83 @@ def digest12(path: str, stat=os.stat) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
-def text_digest(pages: list[str]) -> str:
-    """The document's identity: a hash of what the pages actually SAY,
-    not the file carrying them — stable across a bake's os.replace or a
-    move, since neither touches the text layer. Whitespace is collapsed
-    per page before hashing so re-extracting the same text with
-    different line-wrapping still resolves to the same directory.
+def _norm(text) -> str:
+    return " ".join(str(text or "").split())
 
-    Known limit: a text-less document (a scanned deck with no text
-    layer) hashes purely on its PAGE COUNT, since every page normalizes
-    to "". Two different scanned PDFs of the same length, re-imported
-    under the same safe name, share this digest and therefore each
-    other's directory — no worse than sharing a slide deck's identity,
-    but worth knowing before debugging a mismatched transcript."""
-    normalized = "\x1f".join(" ".join(str(p or "").split()) for p in pages)
+
+def text_digest(pages: list[str]) -> str:
+    """A text-BEARING document's identity: a hash of what the pages
+    actually SAY, not the file carrying them — stable across a bake's
+    os.replace or a move, since neither touches the text layer.
+    Whitespace is collapsed per page before hashing so re-extracting the
+    same text with different line-wrapping still resolves to the same
+    directory.
+
+    Not the whole story: a text-less document (a scanned deck with no
+    text layer) would hash purely on its PAGE COUNT here, since every
+    page normalizes to "", so two different scans of the same length
+    would collide. Those are identified by their pristine original's
+    bytes instead — document_identity is the one place that decides
+    which of the two a document gets, and the ONLY caller ensure_records
+    asks."""
+    normalized = "\x1f".join(_norm(p) for p in pages)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def _textless(pages: list[str]) -> bool:
+    """True when nothing in this document has any text at all — a scan
+    with no text layer, and so nothing text_digest can tell apart."""
+    return not any(_norm(p) for p in pages)
+
+
+def _file_digest(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()[:12]
+
+
+def document_identity(user_files: str, pdf_safe: str, path: str, pages: list[str]) -> str:
+    """The directory name this document's page records live under.
+
+    text_digest(pages) for anything with text on a page. A TEXT-LESS
+    document says nothing, so it is identified by the BYTES of its
+    pristine original (pdf_originals/<base>.pdf) — captured here, by the
+    same stripped capture the first bake does rather than a second copy,
+    when no bake has captured one yet. That file is what a bake
+    regenerates FROM and never writes, and pdf_handler.save_pdf drops
+    it when the PDF is re-ingested under the same safe name, so the
+    digest survives every bake and move and still differs between two
+    different scans of the same length.
+
+    One edge, accepted (K-268 review): a text-less legacy directory
+    (pre-pointer scheme) is recognised as this file's by the legacy
+    path digest, which a bake changes — so a text-less deck that got a
+    transcript before any index run AND was baked before its first
+    ensure_records starts a fresh directory; the old one stays on disk
+    for delete_context, nothing is deleted.
+
+    Nothing here may raise: a missing or unreadable file, an
+    unavailable pypdf, a failed capture all fall back to text_digest
+    with one log line. A page-count identity is worse than a byte one;
+    an import that dies on a torn file is worse than both.
+    """
+    if not _textless(pages):
+        return text_digest(pages)
+    try:
+        # Lazy: pdf_handler reaches back into this module (delete_context).
+        from . import pdf_handler
+        pristine = os.path.join(
+            pdf_handler._originals_dir(user_files),
+            pdf_handler._safe_basename(pdf_safe) + ".pdf",
+        )
+        if not os.path.isfile(pristine):
+            pdf_handler._capture_pristine_stripped(user_files, pdf_safe, path)
+        return _file_digest(pristine)
+    except Exception as exc:
+        print(f"[klausmate] text-less identity fell back to page count for {pdf_safe}: {exc}")
+        return text_digest(pages)
 
 
 def _pointer_path(user_files: str, pdf_safe: str) -> str:
@@ -143,9 +207,19 @@ def _atomic_json(p: str, rec: dict) -> None:
     os.replace(tmp, p)
 
 
-def _same_text(rec_dir: str, pages: list[str]) -> bool:
+def _same_text(rec_dir: str, pages: list[str], same_file: bool = False) -> bool:
     """True when the records already in *rec_dir* are compatible with
     what *pages* say — the same document under another directory name.
+
+    A TEXT-LESS document is the exception, and it is why *same_file*
+    exists (K-268): it has no text to be compatible WITH, so every
+    record below is skipped and an all-empty directory belonging to a
+    DIFFERENT scan of the same length would be adopted along with its
+    transcript. For one of those, sameness has to be proved outside the
+    text — *same_file*, which ensure_records sets only for the LEGACY
+    (path-digest) directory, a directory reachable only through
+    digest12 of the live file and so minted for this document's own
+    bytes, never for a name that merely matches.
 
     A page with no record file yet (FileNotFoundError, or any other
     unreadable/corrupt record — same tolerance load_record gives them),
@@ -158,16 +232,18 @@ def _same_text(rec_dir: str, pages: list[str]) -> bool:
     than orphaned. Only a stored NON-EMPTY slide_text that disagrees
     with the new text proves a different document.
     """
+    if _textless(pages) and not same_file:
+        return False
     for i, text in enumerate(pages):
         try:
             with open(os.path.join(rec_dir, f"{int(i):04d}.json"), encoding="utf-8") as f:
                 rec = json.load(f)
         except (OSError, ValueError):
             continue
-        stored = " ".join(str((rec or {}).get("slide_text") or "").split())
+        stored = _norm((rec or {}).get("slide_text"))
         if not stored:
             continue
-        if stored != " ".join(str(text or "").split()):
+        if stored != _norm(text):
             return False
     return True
 
@@ -178,17 +254,17 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
     Settles the identity pointer before seeding: adopt an on-disk legacy
     (path-digest) directory the first time one is found — a profile that
     already indexed under Plan 1 keeps its records — otherwise key on
-    text_digest(pages). A pointer that already names a DIFFERENT text
-    digest means the PDF itself was replaced (a different document
+    document_identity(pages). A pointer that already names a DIFFERENT
+    identity means the PDF itself was replaced (a different document
     re-imported under the same safe name): records move to a fresh
     directory, and the old one is left on disk until delete_context
     removes it.
     """
-    td = text_digest(pages)
+    td = document_identity(user_files, pdf_safe, path, pages)
     base = os.path.join(user_files, SUBDIR, pdf_safe)
+    legacy = digest12(path)
     pointer = _read_pointer(user_files, pdf_safe)
     if pointer is None:
-        legacy = digest12(path)
         pointer = legacy if os.path.isdir(os.path.join(base, legacy)) else td
         _write_pointer(user_files, pdf_safe, pointer)
     if pointer != td:
@@ -196,12 +272,15 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
         # cases, told apart by CONTENT, never by name: a legacy
         # (path-digest) directory holding this same document — a record's
         # segments may already live there (a transcript taken before the
-        # first index run) — is renamed onto the text digest and kept; a
+        # first index run) — is renamed onto the identity and kept; a
         # directory whose slide text differs is a replaced document and is
-        # left behind for delete_context.
+        # left behind for delete_context. A text-less document has no
+        # slide text to tell those apart with, so for one of those only
+        # the legacy directory — the one digest12 of the live file names
+        # — counts as the same document (K-268).
         old_dir = os.path.join(base, pointer)
         td_dir = os.path.join(base, td)
-        if os.path.isdir(old_dir) and _same_text(old_dir, pages):
+        if os.path.isdir(old_dir) and _same_text(old_dir, pages, pointer == legacy):
             if os.path.isdir(td_dir):
                 # td already has its own directory on disk, and old_dir's
                 # content matches too — it is a valid home as-is (M-15).

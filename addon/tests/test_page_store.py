@@ -332,4 +332,83 @@ check("reads still resolve through the (unmoved) pointer, seeing the old directo
       ps.load_record(_uf3, "lec3", _pdf3, 0)["slide_text"] == _pages3[0])
 shutil.rmtree(_uf3, ignore_errors=True)
 
+
+section("a text-less (scanned) document is identified by its pristine bytes, not its page count (K-268)")
+# Copilot, stacked PR #3: text_digest hashes what the pages SAY, so a deck
+# with no text layer hashes on its PAGE COUNT alone — two different scans
+# of the same length, re-imported under one safe name, shared a directory
+# and inherited each other's transcript. Identity for those is now the
+# pristine original's bytes (pdf_originals/<base>.pdf), which a bake never
+# writes and save_pdf drops on a re-ingest.
+_tl = tempfile.mkdtemp(prefix="klaus-pages-textless-")
+_scan_a = _blank_pdf(os.path.join(_tl, "scan_a.pdf"), 300, 200)
+_scan_b = _blank_pdf(os.path.join(_tl, "scan_b.pdf"), 612, 792)
+_blank = [""]  # one page, no text layer at all
+check("text_digest alone cannot tell two one-page scans apart (the bug)",
+      ps.text_digest([""]) == ps.text_digest([" \n "]))
+ps.ensure_records(_tl, "scan", _scan_a, _blank)
+ps.append_segment(_tl, "scan", _scan_a, 0, 0.0, 5.0, "said over scan A")
+_dir_a = ps.record_dir(_tl, "scan", _scan_a)
+_id_a = ps._read_pointer(_tl, "scan")
+check("a text-less document is NOT keyed on its page-count text digest",
+      _id_a != ps.text_digest(_blank) and len(_id_a) == 12
+      and all(c in "0123456789abcdef" for c in _id_a), str(_id_a))
+check("...it captured the pristine original the first bake would have captured",
+      os.path.isfile(os.path.join(_tl, "pdf_originals", "scan.pdf")))
+
+# A bake rewrites the working file with os.replace; the pristine copy is
+# what it regenerates FROM, so it is untouched.
+with open(_scan_a, "ab") as _f:
+    _f.write(b"%% baked annotations\n")
+os.utime(_scan_a, (1000, 1000))
+check("a text-less document keeps its identity after a bake changes its bytes",
+      ps.document_identity(_tl, "scan", _scan_a, _blank) == _id_a)
+check("...so record_dir still resolves to the directory holding its transcript",
+      ps.record_dir(_tl, "scan", _scan_a) == _dir_a)
+
+# save_pdf drops the stale pristine when a PDF is re-ingested under the
+# same safe name, so the replacing scan is captured fresh.
+os.remove(os.path.join(_tl, "pdf_originals", "scan.pdf"))
+ps.ensure_records(_tl, "scan", _scan_b, _blank)
+_id_b = ps._read_pointer(_tl, "scan")
+check("a DIFFERENT text-less scan of the same page count gets a different identity",
+      _id_b != _id_a, f"{_id_a} vs {_id_b}")
+check("...its records land in their own directory",
+      ps.record_dir(_tl, "scan", _scan_b) != _dir_a)
+check("...inheriting no segment from the scan it replaced",
+      ps.load_record(_tl, "scan", _scan_b, 0)["segments"] == [])
+check("...and the replaced scan's transcript is left on disk for delete_context",
+      json.load(open(os.path.join(_dir_a, "0000.json")))["segments"][0]["text"] == "said over scan A")
+shutil.rmtree(_tl, ignore_errors=True)
+
+section("a legacy path-digest directory of the SAME text-less file is still adopted (K-268)")
+_lg = tempfile.mkdtemp(prefix="klaus-pages-textless-legacy-")
+_scan_c = _blank_pdf(os.path.join(_lg, "scan_c.pdf"), 400, 250)
+_leg_dir = os.path.join(_lg, ps.SUBDIR, "scanc", ps.digest12(_scan_c))
+os.makedirs(_leg_dir)
+# Pre-pointer scheme, and the only record is a transcript taken before any
+# index run — exactly where an early segment lives, and all-empty text.
+with open(os.path.join(_leg_dir, "0000.json"), "w", encoding="utf-8") as _f:
+    json.dump({"version": 1, "slide_text": "",
+               "segments": [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}],
+               "updated_at": 0.0}, _f)
+ps.ensure_records(_lg, "scanc", _scan_c, [""])
+check("the legacy directory migrated onto the pristine-bytes identity, not orphaned",
+      not os.path.isdir(_leg_dir)
+      and ps._read_pointer(_lg, "scanc") == ps.document_identity(_lg, "scanc", _scan_c, [""]))
+check("...carrying the transcript taken before the first index run",
+      ps.load_record(_lg, "scanc", _scan_c, 0)["segments"]
+      == [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}])
+check("a text-bearing document's identity is still exactly text_digest",
+      ps.document_identity(_lg, "scanc", _scan_c, ["Real slide text"])
+      == ps.text_digest(["Real slide text"]))
+shutil.rmtree(_lg, ignore_errors=True)
+
+# K-268 review: the fallback is pinned, not just promised — no file at all
+# (nothing to capture, nothing to hash) must still answer an identity, the
+# page-count digest, rather than raise out of an import.
+_missing = ps.document_identity(_tmp_ident if '_tmp_ident' in dir() else tempfile.mkdtemp(prefix='klaus-ident-'), 'ghost', '/nonexistent/klaus/ghost.pdf', ['', ''])
+check('a text-less document whose file is missing falls back to the page-count digest',
+      _missing == ps.text_digest(['', '']), _missing)
+
 raise SystemExit(report())
