@@ -131,6 +131,18 @@ async def _read_capped(request: Request, cap: int) -> bytes:
     return request._body
 
 
+def _usage_fallback(request: Request, purpose: str, reserved: int) -> int:
+    """K-275: what a 2xx that reported nothing is worth. `usage` absent, zero or unparseable
+    metered 0, and settling 0 against the reservation handed the whole estimate back — a
+    provider (or a proxy in front of one) that omits usage made every judged card and every
+    assistant turn free. The honest figure left is the estimate the request was ADMITTED on.
+    The line names the purpose and that figure, never the payload: it carries card text and
+    lecture-page text."""
+    request.app.state.log.info("usage absent or unparseable on a 2xx — metering the reserved estimate "
+                               "purpose=%s reserved=%d", purpose, reserved)
+    return reserved
+
+
 def _log(request: Request, status: int, metered: int, started: float) -> None:
     row = getattr(request.state, "customer", None)
     prefix = (row["key_hash"] or "")[:8] if row is not None else "-"
@@ -250,9 +262,10 @@ async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Res
         await _check_upstream_auth(request, resp)
         if resp.status_code == 200:
             try:
-                metered = int((resp.json().get("usage") or {}).get("total_tokens") or guess)
+                metered = int((resp.json().get("usage") or {}).get("total_tokens") or 0)
             except (ValueError, AttributeError, TypeError):
-                metered = guess
+                metered = 0
+            metered = metered or _usage_fallback(request, "embed", guess)
     finally:
         snap = meter.settle(st.store, st.settings, int(row["id"]), "embed", guess, metered, res.at)
     if resp.status_code == 200:
@@ -404,6 +417,7 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
                               + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0))
                 except (ValueError, AttributeError, TypeError):
                     metered = 0
+                metered = metered or _usage_fallback(request, purpose, reserved)
             snap = meter.settle(st.store, st.settings, cid, purpose, reserved, metered, res.at)
             settled = True
             if resp.status_code == 200:
@@ -428,6 +442,8 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
             finally:
                 try:
                     metered = acc["in"] + acc["cache_creation"] + acc["cache_read"] + acc["out"]
+                    # A stream that emitted no usage event at all leaves every accumulator 0.
+                    metered = metered or _usage_fallback(request, purpose, reserved)
                     snap = meter.settle(st.store, st.settings, cid, purpose, reserved, metered, res.at)
                     _log(request, 200, metered, started)
                     _notify_quota_fire_and_forget(st, row, snap)

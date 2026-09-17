@@ -252,6 +252,77 @@ def test_the_streamed_quota_header_never_advertises_the_reservation(world):
     assert json.loads(r.headers["X-Klaus-Quota"])["counters"]["assistant"]["used"] == 245
 
 
+_NO_USAGE_SSE = (b'event: message_start\ndata: {"type":"message_start","message":{}}\n\n'
+                 b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n'
+                 b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+
+
+def _judge_body(max_tokens=4096):
+    """The exact bytes, so the test knows the reservation the route will compute."""
+    raw = json.dumps({"model": "claude-sonnet-5", "max_tokens": max_tokens,
+                      "messages": [{"role": "user", "content": "hi"}]}).encode()
+    return raw, len(raw) // 4 + max_tokens
+
+
+def test_a_2xx_without_usage_meters_the_reservation_not_nothing(world, monkeypatch):
+    """K-275: `usage` absent or unparseable metered 0, which settled the reservation back to
+    nothing — a provider (or a proxy in front of one) that omits usage made every judged card
+    free. A 2xx now settles the estimate the request was ADMITTED on."""
+    raw, reserved = _judge_body()
+    hdrs = dict(_h(world, "judge"), **{"content-type": "application/json"})
+
+    async def no_usage(body, stream):
+        return httpx.Response(200, json={"id": "m", "content": [{"type": "text", "text": "ok"}]})
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", no_usage)
+    assert world["client"].post("/v1/messages", content=raw, headers=hdrs).status_code == 200
+    assert world["store"].usage(world["cid"], "2026-09")["judge_tokens"] == reserved
+
+    async def junk_usage(body, stream):
+        return httpx.Response(200, json={"id": "m", "content": [], "usage": "lots and lots"})
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", junk_usage)
+    assert world["client"].post("/v1/messages", content=raw, headers=hdrs).status_code == 200
+    assert world["store"].usage(world["cid"], "2026-09")["judge_tokens"] == 2 * reserved
+
+
+def test_a_stream_that_reports_no_usage_meters_the_reservation(world, monkeypatch):
+    """K-275, the same gap on the SSE path: no usage event leaves all four accumulators at 0."""
+    raw, reserved = _judge_body()
+    hdrs = dict(_h(world, "assistant"), **{"content-type": "application/json"})
+    body = json.loads(raw)
+    body["stream"] = True
+    streamed = json.dumps(body).encode()
+    reserved_stream = len(streamed) // 4 + 4096
+
+    async def silent(body, stream):
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_NO_USAGE_SSE)
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", silent)
+    with world["client"].stream("POST", "/v1/messages", content=streamed, headers=hdrs) as r:
+        assert r.status_code == 200
+        assert b"message_stop" in b"".join(r.iter_bytes())
+    assert world["store"].usage(world["cid"], "2026-09")["assistant_tokens"] == reserved_stream
+    # and a stream that DOES report usage still meters the real figure, not the estimate
+    monkeypatch.undo()
+    with world["client"].stream("POST", "/v1/messages", content=streamed, headers=hdrs) as r:
+        b"".join(r.iter_bytes())
+    assert world["store"].usage(world["cid"], "2026-09")["assistant_tokens"] == reserved_stream + 125
+
+
+def test_embeddings_without_usage_meters_the_guess_however_it_is_malformed(world, monkeypatch):
+    """K-275: /v1/embeddings already fell back to the guess — pinned here so it stays that
+    way for a malformed usage block, not only a missing one."""
+    for payload in ({"data": []}, {"data": [], "usage": "nope"}, {"data": [], "usage": {"total_tokens": "abc"}}):
+        async def canned(path, body, _p=payload):
+            return httpx.Response(200, json=_p)
+        monkeypatch.setattr(world["app"].state.upstream, "openai_json", canned)
+        before = world["store"].usage(world["cid"], "2026-09")["embed_tokens"]
+        r = world["client"].post("/v1/embeddings", json={"input": ["abcdefgh", "ijklmnop"]}, headers=_h(world, "embed"))
+        assert r.status_code == 200
+        assert world["store"].usage(world["cid"], "2026-09")["embed_tokens"] == before + 4, payload
+
+
 def test_messages_402_when_max_tokens_cannot_fit_the_remaining_quota(world, settings):
     """K-262: the pre-check is an estimate (body chars/4 + max_tokens), not a bare 1 --
     a turn that cannot possibly fit in what is left is refused before the provider call."""
