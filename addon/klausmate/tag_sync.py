@@ -322,6 +322,38 @@ def _escape_tag(tag: str) -> str:
     return tag.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def tag_query(tag: str) -> str:
+    """One quoted ``tag:`` operand, escaped for Anki's search syntax.
+
+    A tag is user-derived — ``desired_tag``'s sanitizer only strips
+    whitespace and a literal ``::`` — yet it goes straight into Anki's
+    QUERY LANGUAGE. Four characters matter there and the sanitizer keeps
+    all four: ``"`` terminates the quoted operand, ``\\`` escapes
+    whatever follows it, and in a ``tag:`` search ``*`` matches any run
+    while ``_`` matches any single character. ``_`` is not exotic —
+    ``_sanitize_segment`` mints one for every space, so "Week 3" becomes
+    ``Week_3`` and an unescaped query for it also matches ``Week-3``.
+
+    The escaping is Anki's own (anki-main): ``rslib/src/text.rs``'s
+    ``escape_anki_wildcards`` (:512) backslash-escapes exactly
+    ``[\\\\*_]``; ``rslib/src/search/writer.rs``'s ``maybe_quote``
+    (:103) wraps in ``"…"`` after ``replace('"', '\\\\"')``; and
+    ``rslib/src/search/parser.rs``'s ``unescape`` (:731) accepts
+    ``\\\\ \\" \\: \\( \\) \\-`` while deliberately leaving ``\\*`` and
+    ``\\_`` for the SQL writer (its own test at :881, "parser doesn't
+    unescape ``\\*_``"). Backslash first, or the escapes we add would be
+    escaped again.
+
+    Every caller that puts a tag in front of ``find_notes``,
+    ``find_cards`` or ``Browser.search_for`` uses this. ``_escape_tag``
+    above stays the narrower form ``apply_membership`` has always sent —
+    widening THAT query is a membership change, not a search fix.
+    """
+    return 'tag:"{}"'.format(
+        _escape_tag(tag).replace("*", "\\*").replace("_", "\\_")
+    )
+
+
 def apply_membership(col, tag: str, desired: set[int]) -> tuple[list[int], list[int]]:
     """Diff `tag`'s current members against `desired` and bulk add/remove
     the difference. Returns (added, removed) — empty lists if already in

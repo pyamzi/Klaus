@@ -4334,8 +4334,12 @@ class PdfSidebar(QWidget):
 
         # Transcript strip (Plan 2 D6, K-258): a Qt widget under the page
         # for the native renderer; pdf.js draws its own copy of this same
-        # strip INSIDE the page via the bridge instead (set_transcript
-        # below dispatches on which one applies). Every attribute exists
+        # strip via the bridge instead — a docked footer that is a
+        # SIBLING of `#pages`, never inside a page div (K-258 fix round
+        # 1: in-flow inside the fixed-height .page was painted over by
+        # the next page, which is why the footer touches no page
+        # geometry). set_transcript below dispatches on which one
+        # applies. Every attribute exists
         # — as None — even when the strip cannot be built, matching this
         # file's own convention for optional UI (the find bar, the
         # thumbnail strip above).

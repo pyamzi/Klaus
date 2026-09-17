@@ -897,4 +897,107 @@ check("...and both their WAVs are kept for the next Record's requeue_leftovers",
       all(os.path.exists(_p) for _ch, _p in _q_paths[1:]))
 check("...with nothing appended behind the closing profile", q_segs == [], repr(q_segs))
 
+# =======================================================================
+# PR #4 FOURTH re-review (Copilot) -- K-272.
+# =======================================================================
+
+# ---------------------------------------------------------------------
+# (2) enqueue() clears _closed while the OLD worker may still be alive
+# with stop()'s sentinel already on the queue. _ensure_thread sees a live
+# thread and starts nothing; the old worker then eats the stale sentinel
+# and returns, leaving the freshly enqueued chunk pending until some
+# later enqueue happens to revive a worker. A sentinel is only an exit
+# order while _closed is STILL True.
+# ---------------------------------------------------------------------
+section("PR #4 fourth re-review: an enqueue that reopens the uploader is never stranded")
+_ro_gate = threading.Event()
+_ro_seen = threading.Event()
+
+
+def fake_transcribe_held(key, wav, model, language="en", prompt="", timeout=None):
+    _ro_seen.set()
+    _ro_gate.wait(5.0)
+    return "held text"
+
+
+lr._transcribe = fake_transcribe_held
+ro_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+_ro_p1 = lr.chunk_path(root, "reopentest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(_ro_p1), exist_ok=True)
+open(_ro_p1, "wb").write(b"RIFF 1")
+ro_up.enqueue("reopentest", os.path.join(root, "reopentest.pdf"), lr.Chunk(1, 0.0, 30.0), _ro_p1)
+check("the worker is parked inside a transcription, so stop()'s sentinel "
+      "queues BEHIND it rather than being consumed immediately",
+      _ro_seen.wait(2.0))
+# The worker is deliberately held, so don't pay stop()'s real join here.
+_ro_join, lr.STOP_JOIN_S = lr.STOP_JOIN_S, 0.05
+try:
+    ro_up.stop()
+finally:
+    lr.STOP_JOIN_S = _ro_join
+_ro_thread = ro_up._thread
+check("stop() left the parked worker alive with its sentinel unconsumed",
+      _ro_thread is not None and _ro_thread.is_alive() and ro_up._closed)
+_ro_p2 = lr.chunk_path(root, "reopentest", lr.Chunk(2, 30.0, 60.0))
+open(_ro_p2, "wb").write(b"RIFF 2")
+ro_up.enqueue("reopentest", os.path.join(root, "reopentest.pdf"), lr.Chunk(2, 30.0, 60.0), _ro_p2)
+check("the reopening enqueue starts no SECOND worker (the first is alive)",
+      ro_up._thread is _ro_thread and not ro_up._closed)
+_ro_gate.set()
+check("the reopened chunk is processed rather than stranded behind the "
+      "stale sentinel — drain() returns and the WAV is gone",
+      _returns_within(ro_up.drain, 4.0) and not os.path.exists(_ro_p2))
+check("...and it was the same worker thread throughout (no respawn)",
+      ro_up._thread is _ro_thread)
+
+# ---------------------------------------------------------------------
+# (3) append_segment is DURABLE; on_segment is only a notification. With
+# the notify inside the same try the exception reached _loop, which keeps
+# the WAV for retry -- so the next requeue_leftovers transcribed (paid)
+# and appended the very same segment a second time. Unlink first, then
+# notify inside its own try.
+# ---------------------------------------------------------------------
+section("PR #4 fourth re-review: a raising on_segment never re-transcribes its chunk")
+_ns_calls: list = []
+_ns_notified: list = []
+
+
+def fake_transcribe_counted(key, wav, model, language="en", prompt="", timeout=None):
+    _ns_calls.append(model)
+    return "spoken over the slide"
+
+
+def on_segment_raises(safe, page):
+    _ns_notified.append((safe, page))
+    raise RuntimeError("boom from on_segment")
+
+
+lr._transcribe = fake_transcribe_counted
+ns_up = lr.Uploader(root, lambda: {"api_key_openai": "k"}, on_segment=on_segment_raises)
+_ns_pdf = os.path.join(root, "notifytest.pdf")
+_ns_p1 = lr.chunk_path(root, "notifytest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(_ns_p1), exist_ok=True)
+open(_ns_p1, "wb").write(b"RIFF N")
+ns_up.enqueue("notifytest", _ns_pdf, lr.Chunk(1, 0.0, 30.0), _ns_p1)
+check("drain() returns (the raise is swallowed, not propagated to _loop)",
+      _returns_within(ns_up.drain, 3.0))
+check("on_segment WAS reached — the notification still happens",
+      _ns_notified == [("notifytest", 0)], repr(_ns_notified))
+check("the WAV is unlinked despite the raise, so nothing re-queues it",
+      not os.path.exists(_ns_p1))
+check("requeue_leftovers finds nothing to transcribe a second time",
+      ns_up.requeue_leftovers("notifytest", _ns_pdf) == 0)
+ns_up.drain()
+_ns_rec = page_store.load_record(root, "notifytest", _ns_pdf, 0)
+check("the segment is in the page record exactly ONCE",
+      len(_ns_rec.get("segments") or []) == 1, repr(_ns_rec.get("segments")))
+check("...and it was transcribed exactly once (no paid re-run)",
+      len(_ns_calls) == 1, repr(_ns_calls))
+_ns_p2 = lr.chunk_path(root, "notifytest", lr.Chunk(2, 30.0, 60.0))
+open(_ns_p2, "wb").write(b"RIFF N2")
+ns_up.enqueue("notifytest", _ns_pdf, lr.Chunk(2, 30.0, 60.0), _ns_p2)
+check("the worker survives and processes the next chunk",
+      _returns_within(ns_up.drain, 3.0) and not os.path.exists(_ns_p2)
+      and len(_ns_notified) == 2, repr(_ns_notified))
+
 raise SystemExit(report())

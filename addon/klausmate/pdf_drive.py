@@ -2326,19 +2326,29 @@ class DriveWindow(QWidget):
             self.status.setText("Re-index this PDF to create its Library tag.")
             return
         browser = aqt.dialogs.open("Browser", mw)
-        browser.search_for(f'tag:"{tag}"')
+        browser.search_for(tag_sync.tag_query(tag))
 
     def _on_doubtful(self, safe: str) -> None:
         """K-254: "Doubtful cards…" — this PDF's own lecture tag,
         intersected with the global Doubtful tag. No matches/threshold
         math needed here (unlike _on_browse): tag membership already IS
-        the confirmed/rejected split, so this is a plain tag search."""
+        the confirmed/rejected split, so this is a plain tag search.
+
+        Both operands come from ``tag_sync.tag_query`` (PR #4 fourth
+        review): a tag is user-derived and this is Anki's query
+        language, where a quote ends the operand and ``*``/``_`` are
+        wildcards.
+        """
         tag = tag_sync.get_stored_tag(safe)
         if not tag:
             self.status.setText("Re-index this PDF to create its Library tag.")
             return
         browser = aqt.dialogs.open("Browser", mw)
-        browser.search_for(f'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"')
+        browser.search_for(
+            tag_sync.tag_query(tag_sync.DOUBTFUL_TAG)
+            + " "
+            + tag_sync.tag_query(tag)
+        )
 
     def _set_suspended_cards(self, safe: str, suspend: bool) -> None:
         """Suspend or unsuspend every card of this PDF's matched notes
@@ -2362,9 +2372,7 @@ class DriveWindow(QWidget):
             folder, display = tag_sync._folder_and_display(safe)
             tag = tag_sync.desired_tag(folder, display)
         try:
-            cids = list(
-                mw.col.find_cards(f'tag:"{tag_sync._escape_tag(tag)}"')
-            )
+            cids = list(mw.col.find_cards(tag_sync.tag_query(tag)))
         except Exception as e:  # noqa: BLE001
             self.status.setText(f"Could not find this PDF's cards: {e}")
             return

@@ -1673,7 +1673,7 @@ if _HAVE_QT:
         _folder_and_display=lambda safe: ("Anatomy/Week 3",
                                           'Renal "Phys".pdf'),
         desired_tag=_real_ts.desired_tag,
-        _escape_tag=_real_ts._escape_tag,
+        tag_query=_real_ts.tag_query,
     )
     _orig_ts, _orig_mw = pdf_drive.tag_sync, pdf_drive.mw
     _sh = _SuspendHost()
@@ -1683,9 +1683,15 @@ if _HAVE_QT:
         pdf_drive.tag_sync = _fake_ts
         pdf_drive.mw = types.SimpleNamespace(col=_col)
         pdf_drive.DriveWindow._set_suspended_cards(_sh, "Renal_Phys", True)
-        _want_q = 'tag:"!Library::Anatomy::Week_3::Renal_\\"Phys\\""'
+        # PR #4 fourth review (1): the suspend hop is the third `tag:`
+        # site in this file and builds its operand from the same
+        # tag_query — so the underscores desired_tag mints out of spaces
+        # ("Week 3" -> "Week_3") are escaped too, instead of standing as
+        # Anki's any-single-character wildcard and suspending a
+        # neighbouring PDF's cards.
+        _want_q = 'tag:"!Library::Anatomy::Week\\_3::Renal\\_\\"Phys\\""'
         check("no stored tag -> the DERIVED desired_tag is queried, "
-              "quotes escaped", _col.queries == [_want_q],
+              "quotes and wildcards escaped", _col.queries == [_want_q],
               repr(_col.queries))
         check("suspend reaches col.sched.suspend_cards with the found "
               "cids", _col.sched.suspended == [[11, 22]]
@@ -1699,7 +1705,7 @@ if _HAVE_QT:
         pdf_drive.DriveWindow._set_suspended_cards(_sh, "Renal_Phys", False)
         check("a stored tag wins over the derived one (tag_sync's "
               "never-a-derived-guess rule)",
-              _col2.queries == ['tag:"!Library::Stored_Tag"'],
+              _col2.queries == ['tag:"!Library::Stored\\_Tag"'],
               repr(_col2.queries))
         check("unsuspend reaches col.sched.unsuspend_cards",
               _col2.sched.unsuspended == [[7]]
@@ -1923,9 +1929,66 @@ if _HAVE_QT:
     # Raw source (string literals) on purpose — code_only would strip both.
     check("DOUBTFUL_MENU_LABEL is the exact ellipsis-suffixed label",
           'DOUBTFUL_MENU_LABEL = "Doubtful cards…"' in _PD_SRC)
-    check("the Doubtful search intersects the global tag with this PDF's "
-          "own lecture tag",
-          'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"' in _PD_SRC)
+    print("== PR #4 fourth review (1): both Browse hops escape the tag ==")
+    # Copilot's fourth review: the stored lecture tag was interpolated
+    # raw into Anki's query language by BOTH hops. A quote terminates
+    # the operand, a backslash escapes what follows, and in a tag:
+    # search * matches any run and _ any single character — so a PDF
+    # named 'Renal "Phys" 1_2*.pdf' opened Browse on something else
+    # entirely. One helper, tag_sync.tag_query, now mints the operand.
+    class _FakeBrowser:
+        def __init__(self):
+            self.searches = []
+
+        def search_for(self, q):
+            self.searches.append(q)
+
+    class _BrowseHost:
+        def __init__(self, matches):
+            self.matches = matches
+            self.status = _StatusStub()
+
+    _fb = _FakeBrowser()
+    _hop_tag = '!Library::Renal_"Phys"_1_2*'
+    _hop_ts = types.SimpleNamespace(
+        get_stored_tag=lambda safe: _hop_tag,
+        DOUBTFUL_TAG=_real_ts.DOUBTFUL_TAG,
+        tag_query=_real_ts.tag_query,
+    )
+    _hop_ret = types.SimpleNamespace(get_threshold=lambda safe, cfg: 0.5,
+                                     _cfg=lambda: {})
+    _o_aqt = pdf_drive.aqt
+    _o_ts_hop, _o_ret_hop = pdf_drive.tag_sync, pdf_drive.retention
+    try:
+        pdf_drive.aqt = types.SimpleNamespace(
+            dialogs=types.SimpleNamespace(open=lambda name, parent: _fb))
+        pdf_drive.tag_sync, pdf_drive.retention = _hop_ts, _hop_ret
+        _bh = _BrowseHost({"renal": [(1, 0.9), (2, 0.2)]})
+        pdf_drive.DriveWindow._on_browse(_bh, "renal")
+        check("Show matches hops on the tag_query operand",
+              _fb.searches == [_real_ts.tag_query(_hop_tag)],
+              repr(_fb.searches))
+        check("the quote and both wildcards really are escaped in what "
+              "Browse receives",
+              _fb.searches
+              and 'Renal\\_\\"Phys\\"\\_1\\_2\\*' in _fb.searches[0],
+              repr(_fb.searches))
+        _fb.searches.clear()
+        pdf_drive.DriveWindow._on_doubtful(_bh, "renal")
+        check("the Doubtful search intersects the global tag with this "
+              "PDF's own lecture tag — both through tag_query",
+              _fb.searches == [_real_ts.tag_query(_real_ts.DOUBTFUL_TAG)
+                               + " " + _real_ts.tag_query(_hop_tag)],
+              repr(_fb.searches))
+    finally:
+        pdf_drive.aqt = _o_aqt
+        pdf_drive.tag_sync, pdf_drive.retention = _o_ts_hop, _o_ret_hop
+    # No raw interpolation survives anywhere in the file (code_only would
+    # strip these string literals, so this reads the raw source).
+    check("no hop interpolates a bare tag into the query any more",
+          'f\'tag:"{tag}"\'' not in _PD_SRC
+          and 'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"' not in _PD_SRC
+          and "_escape_tag" not in _PD_SRC)
 
     shutil.rmtree(_rq_uf, ignore_errors=True)
 

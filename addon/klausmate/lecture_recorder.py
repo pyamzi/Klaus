@@ -214,7 +214,16 @@ class Uploader:
                 # unfinished-task count `drain()`/`join()` waits on never
                 # reaches zero and every future drain() hangs forever.
                 self._q.task_done()
-                return
+                if self._closed:
+                    return
+                # STALE sentinel (PR #4 fourth re-review): an enqueue
+                # reopened the uploader while this worker was still busy,
+                # so `_ensure_thread` saw a live thread and started none.
+                # Exiting now would strand everything queued behind the
+                # sentinel until some later enqueue happened to revive a
+                # worker. `_closed` is the order; the sentinel is only
+                # how it gets delivered.
+                continue
             try:
                 self._one(*item)
             except Exception as exc:
@@ -317,16 +326,27 @@ class Uploader:
             print(f"[klausmate] lecture recorder: uploader closed mid-upload, "
                   f"keeping {os.path.basename(wav_path)}")
             return
-        if text.strip():
+        text = text.strip()
+        if text:
             self._ensure_page(pdf_safe, pdf_path)
-            page_store.append_segment(self._user_files, pdf_safe, pdf_path, chunk.page - 1, chunk.t0, chunk.t1, text.strip())
-            self._last_text[pdf_safe] = text.strip()
-            if self._on_segment:
-                self._on_segment(pdf_safe, chunk.page - 1)
+            page_store.append_segment(self._user_files, pdf_safe, pdf_path, chunk.page - 1, chunk.t0, chunk.t1, text)
+            self._last_text[pdf_safe] = text
         try:
             os.unlink(wav_path)
         except OSError:
             pass
+        # AFTER the unlink, and never fatal (PR #4 fourth re-review). The
+        # append above is the durable write; `on_segment` is only a
+        # notification to Qt. With it inside the block above, a raising
+        # consumer reached `_loop`, which keeps the WAV for retry — so
+        # the next `requeue_leftovers` transcribed (a paid call) and
+        # appended the SAME segment a second time.
+        if text and self._on_segment:
+            try:
+                self._on_segment(pdf_safe, chunk.page - 1)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] lecture recorder: on_segment failed "
+                      f"({exc.__class__.__name__}) after the segment was stored")
 
     def requeue_leftovers(self, pdf_safe: str, pdf_path: str) -> int:
         d = os.path.join(self._user_files, "recordings", pdf_safe)

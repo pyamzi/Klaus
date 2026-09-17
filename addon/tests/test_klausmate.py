@@ -1224,6 +1224,38 @@ if HAVE_TAG_SYNC:
           and _plan["rename"] is None,
           _plan)
 
+    # PR #4 fourth review (1): a stored lecture tag is user-derived and
+    # lands inside Anki's QUERY LANGUAGE. desired_tag's sanitizer only
+    # strips whitespace and "::", so a PDF named 'Lec "1" 100%_a*b\c'
+    # keeps the quote (which terminates the operand), the backslash
+    # (which escapes whatever follows it) and * / _ — in a tag: search
+    # * matches any run and _ any single character. tag_query is the ONE
+    # helper both Browse hops build their operand with.
+    #
+    # Anki's own rules, from the source (anki-main):
+    #   rslib/src/text.rs:512-515  escape_anki_wildcards backslash-
+    #     escapes exactly [\\*_];
+    #   rslib/src/search/writer.rs:103-109  maybe_quote wraps in "…"
+    #     after txt.replace('"', "\\\"");
+    #   rslib/src/search/parser.rs:731-772  unescape() accepts
+    #     \\ \" \: \( \) \- and invalid_escape_sequence's escapable set
+    #     is [\\":*_()-]; \* and \_ are deliberately left for the SQL
+    #     writer (its own test at parser.rs:881-884: "parser doesn't
+    #     unescape \*_", consumed by text.rs to_custom_re:475-487).
+    _messy = '!Library::Lec "1" 100%_a*b\\c'
+    check("tag_query escapes backslash, quote and both wildcards inside "
+          "one quoted tag: operand",
+          tag_sync.tag_query(_messy)
+          == 'tag:"!Library::Lec \\"1\\" 100%\\_a\\*b\\\\c"',
+          tag_sync.tag_query(_messy))
+    check("a plain tag round-trips unchanged inside tag:\"…\"",
+          tag_sync.tag_query("!Library::Renal") == 'tag:"!Library::Renal"',
+          tag_sync.tag_query("!Library::Renal"))
+    check("the Doubtful tag itself is quoted the same way (no bare "
+          "operand left anywhere)",
+          tag_sync.tag_query(tag_sync.DOUBTFUL_TAG)
+          == 'tag:"!Library::Doubtful"')
+
 if HAVE_TAG_SYNC and HAVE_RETENTION:
     # _do_sync_one reaches retention._load_prefs()/_prefs_path() for
     # get_stored_tag/set_stored_tag — never the real user_files (global
