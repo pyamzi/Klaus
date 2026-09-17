@@ -1088,9 +1088,12 @@ check("the rejected set is read ONCE, at the method's own top level — "
       "it, never inside preview()/apply() (which would mean once per "
       "keystroke)",
       _rej_pos != -1 and _preview_pos != -1 and _rej_pos < _preview_pos)
-check("both the live preview AND the OK path score against it, not just "
-      "one",
-      _THRESH_CODE.count("rejected=_rejected") == 2)
+check("every rejected-aware call in the method uses it: preview's "
+      "pdf_retention, apply's pdf_retention, and (PR #4 F5) apply's "
+      "note_card_counts — a count computed without it would disagree "
+      "with the score printed beside it",
+      _THRESH_CODE.count("rejected=_rejected") == 3,
+      _THRESH_CODE.count("rejected=_rejected"))
 _THRESH_FLAT = _THRESH_CODE.replace(" ", "")
 check("a read failure degrades to nothing-rejected rather than a "
       "broken dialog",
@@ -1714,6 +1717,117 @@ if _HAVE_QT:
     finally:
         pdf_drive.tag_sync, pdf_drive.mw = _orig_ts, _orig_mw
         _run_now_col[:] = []
+
+    print("== PR #4 F5: Match Sensitivity OK recomputes the COUNTS too ==")
+    # Copilot on stacked PR #4: apply() refreshed pdf_retention but left
+    # note/card/suspended/doubtful at the OLD threshold, so the Cards
+    # cell showed a confirmed score for the new threshold beside a stale
+    # "· n doubtful" — two numbers from two different thresholds in one
+    # row. priority_rows already hands card_queues back beside card_r
+    # for exactly this col-free re-aggregation.
+    _th_pt = importlib.import_module("klausmate.pertinence")
+    _th_uf = tempfile.mkdtemp(prefix="klaus_thresh_uf_")
+    _th_prev_uf = pkg.USER_FILES
+    pkg.USER_FILES = _th_uf
+    # A REAL judged.json: nid 102 rejected, minted through the module's
+    # own entry_for so a shape change here cannot silently stop matching.
+    _th_pt.save_judged(_th_uf, "Thr", {
+        "version": _th_pt.VERSION, "model": "m",
+        "verdicts": {"102": _th_pt.entry_for(
+            _th_pt.Verdict(102, False, "not this slide", 1, "ph", "ch", "m"))},
+    })
+
+    class _ThreshHost(_QtW.QWidget):
+        _on_threshold = pdf_drive.DriveWindow._on_threshold
+        _apply_row = pdf_drive.DriveWindow._apply_row
+        _set_retention_color = pdf_drive.DriveWindow._set_retention_color
+        _set_suspended_dim = pdf_drive.DriveWindow._set_suspended_dim
+
+        def _iter_pdf_items(self):
+            return iter(self.items)
+
+    _th_host = _ThreshHost()
+    _th_tree = pdf_drive._LibraryTree(_fw)
+    _th_tree.setColumnCount(4)
+    _th_item = pdf_drive._LibraryItem(_th_tree, ["Thr.pdf"])
+    _th_item.setData(0, pdf_drive._ROLE_SAFE, "Thr")
+    _th_host.items = [_th_item]
+    # 101 confirmed (2 cards), 102 REJECTED (2 cards), 103 confirmed
+    # (1 card) — and 103 is the one the slider drops below threshold.
+    _th_host.matches = {"Thr": [(101, 0.90), (102, 0.72), (103, 0.62)]}
+    _th_host.card_r = {101: [(0.9, False), (0.8, False)],
+                       102: [(0.7, False), (0.7, False)],
+                       103: [(0.5, True)]}
+    _th_host.card_queues = {101: [0, 0], 102: [0, 0], 103: [0]}
+    _th_host.rows = {"Thr": {"indexed": True, "stale": False, "retention": 0.9,
+                             "matched_cards": 3, "new_pct": 0.0, "priority": 0.0,
+                             "note_count": 2, "card_count": 3,
+                             "suspended_count": 0, "doubtful_count": 2}}
+
+    _th_stored = {}
+    _th_synced = []
+    _th_orig = (pdf_drive.retention._cfg, pdf_drive.retention.get_threshold,
+                pdf_drive.retention.set_threshold,
+                pdf_drive.tag_sync.sync_after_threshold, pdf_drive.mw)
+    pdf_drive.retention._cfg = lambda: {}
+    pdf_drive.retention.get_threshold = lambda name, cfg: _th_stored.get(name, 0.60)
+    pdf_drive.retention.set_threshold = lambda name, v: _th_stored.__setitem__(name, v)
+    pdf_drive.tag_sync.sync_after_threshold = lambda *a, **k: _th_synced.append(a)
+    pdf_drive.mw = types.SimpleNamespace(col=None)
+    try:
+        _th_host._on_threshold("Thr")
+        _th_dlg = _th_host.findChildren(_QtW.QDialog)[-1]
+        _th_slider = _th_dlg.findChildren(_QtW.QSlider)[0]
+        check("the dialog opens on the PDF's current threshold (0.60), "
+              "with 101/102/103 all above it",
+              _th_slider.value() == 60, _th_slider.value())
+        _th_slider.setValue(70)  # past 103's 0.62 — it leaves the match set
+        _th_dlg.accept()
+        app.processEvents()
+        _th_row = _th_host.rows["Thr"]
+        check("PR #4 F5: OK recomputes the COUNTS against the new "
+              "threshold, not just the score — 103 drops out, so one "
+              "confirmed note and its card go with it",
+              (_th_row["note_count"], _th_row["card_count"],
+               _th_row["suspended_count"]) == (1, 2, 0),
+              repr({k: _th_row[k] for k in
+                    ("note_count", "card_count", "suspended_count")}))
+        check("...and the doubtful count is confirmed-only arithmetic on "
+              "the SAME threshold: 102's two cards, counted in CARDS "
+              "because the Cards cell is where they are read",
+              _th_row["doubtful_count"] == 2, _th_row["doubtful_count"])
+        check("...the retention score agrees with them — it was already "
+              "recomputed, and 102 is excluded from both",
+              _th_row["matched_cards"] == 2
+              and abs(_th_row["retention"] - 0.85) < 1e-9,
+              repr((_th_row["matched_cards"], _th_row["retention"])))
+        check("...and the row reaches the tree: the Cards cell now reads "
+              "the new pair, not the pre-OK one",
+              _th_item.text(2) == "2 · 2 doubtful", repr(_th_item.text(2)))
+
+        # Raise it past 102 as well: the doubtful count must FALL, which
+        # a stale-counts regression could never do.
+        _th_slider2_dlg_before = len(_th_host.findChildren(_QtW.QDialog))
+        _th_host._on_threshold("Thr")
+        _th_dlg2 = _th_host.findChildren(_QtW.QDialog)[-1]
+        check("a second dialog really opened on the SAVED threshold",
+              len(_th_host.findChildren(_QtW.QDialog)) == _th_slider2_dlg_before + 1
+              and _th_dlg2.findChildren(_QtW.QSlider)[0].value() == 70)
+        # 80 is the slider's own maximum, and 102 scores 0.72 — past it.
+        _th_dlg2.findChildren(_QtW.QSlider)[0].setValue(80)
+        _th_dlg2.accept()
+        app.processEvents()
+        _th_row2 = _th_host.rows["Thr"]
+        check("PR #4 F5: raising past the rejected card's own score drops "
+              "it out of doubtful too — the suffix disappears with it",
+              _th_row2["doubtful_count"] == 0
+              and _th_item.text(2) == "2", repr(_th_item.text(2)))
+    finally:
+        (pdf_drive.retention._cfg, pdf_drive.retention.get_threshold,
+         pdf_drive.retention.set_threshold,
+         pdf_drive.tag_sync.sync_after_threshold, pdf_drive.mw) = _th_orig
+        pkg.USER_FILES = _th_prev_uf
+        shutil.rmtree(_th_uf, ignore_errors=True)
 
     print("== K-117: the PDF context menu on real QMenus ==")
     _menu_row_full = {"indexed": True, "stale": False, "retention": 0.42,

@@ -394,6 +394,7 @@ def ensure_judged(
 
     page_rows: dict[int, tuple[str, str]] = {}  # page -> (page_hash, combined_text)
     todo: dict[int, list[CardText]] = {}
+    retired = False
     for nid in cands:
         page = pages.get(nid) or 0
         if page <= 0:
@@ -405,9 +406,25 @@ def ensure_judged(
         if not text:
             continue
         entry = judged["verdicts"].get(str(nid))
-        if entry is not None and not is_stale(entry, h, page_rows[page][0], model):
-            continue  # cached and fresh
+        if entry is not None:
+            if not is_stale(entry, h, page_rows[page][0], model):
+                continue  # cached and fresh
+            # RETIRE it here, not "when a fresh verdict replaces it" (PR #4,
+            # Copilot + Codex): every completion path below reports
+            # rejected_nids(judged) — Skip, a cancel, a fatal refusal, a
+            # batch that fails or omits this card — so an entry left behind
+            # keeps a card Doubtful in retention and tag_sync on the
+            # strength of a verdict about text that no longer exists. D4's
+            # own rule is that an unjudged card counts as CONFIRMED.
+            del judged["verdicts"][str(nid)]
+            retired = True
         todo.setdefault(page, []).append(CardText(nid, text, h))
+
+    if retired:
+        # Once, before the prompt: whatever the user answers (and whatever
+        # the job then manages to judge), the obsolete verdicts are already
+        # off disk for every other reader of judged.json.
+        save_judged(user_files, safe, judged)
 
     if not todo:
         on_done(rejected_nids(judged))

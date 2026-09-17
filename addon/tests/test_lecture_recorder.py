@@ -175,7 +175,8 @@ check("callers that pass only pcm/rate still get mono 16-bit (unchanged default)
 section("chunk_path and the uploader")
 root = tempfile.mkdtemp()
 p = lr.chunk_path(root, "lec", lr.Chunk(3, 100.0, 130.0))
-check("recordings/<safe>/<t0>-p<page:04d>.wav", p.endswith(os.path.join("recordings", "lec", "100-p0003.wav")))
+check("recordings/<safe>/<t0 to the millisecond>-p<page:04d>.wav",
+      p.endswith(os.path.join("recordings", "lec", "100.000-p0003.wav")), p)
 segs = []
 calls = []
 def fake_transcribe(key, wav, model, language="en", prompt="", timeout=None):
@@ -242,7 +243,9 @@ def fake_transcribe_plus(key, wav, model, language="en", prompt="", timeout=None
     return "plus transcript"
 lr._transcribe = fake_transcribe_plus
 
-plus_cfg = {"klaus_plus_key": "kp_" + "z" * 32, "transcription_model": "gpt-4o-mini-transcribe",
+# "f", not "z": plus.key() checks the service's own alphabet (kp_ + 32 lowercase
+# hex), so a non-hex placeholder reads as no licence key at all.
+plus_cfg = {"klaus_plus_key": "kp_" + "f" * 32, "transcription_model": "gpt-4o-mini-transcribe",
            "api_key_openai": "sk-must-not-be-used"}
 plus_segs = []
 plus_up = lr.Uploader(root, lambda: plus_cfg, on_segment=lambda safe, page: plus_segs.append((safe, page)))
@@ -600,7 +603,7 @@ try:
           "own time, and hands its WAV to the uploader",
           len(tick_up.calls) == 1 and first[0] == "ticktest"
           and first[1] == lr.Chunk(1, 5000.0, 5005.0)
-          and os.path.basename(first[2]) == "5000-p0001.wav",
+          and os.path.basename(first[2]) == "5000.000-p0001.wav",
           repr(tick_up.calls))
     check("...and that WAV carries the bytes this tick read off the "
           "device (44-byte header + the 16 PCM bytes), not just a header",
@@ -617,7 +620,7 @@ try:
           "exist_ok, so the second write is not swallowed by its except",
           len(tick_up.calls) == 2 and first is not None
           and second[1] == lr.Chunk(2, 5005.0, 5035.0)
-          and os.path.basename(second[2]) == "5005-p0002.wav"
+          and os.path.basename(second[2]) == "5005.000-p0002.wav"
           and os.path.dirname(second[2]) == os.path.dirname(first[2])
           and os.path.getsize(second[2]) == 44 + len(tick_pcm),
           repr(tick_up.calls))
@@ -625,5 +628,83 @@ try:
           tick_status == [(5.0, 3), (35.0, 3)], repr(tick_status))
 finally:
     lr.time = _real_lr_time
+
+# ---------------------------------------------------------------------
+# PR #4 F2 (Copilot + Codex): chunk_path truncated t0 to whole seconds,
+# so two chunks closed inside one second -- a page bounce, or Stop then
+# Record on the same page -- shared ONE filename. The second _flush
+# overwrote the first's audio, and the asynchronous upload then unlinked
+# a WAV that no longer held the bytes it had transcribed.
+# ---------------------------------------------------------------------
+section("PR #4 F2: sub-second chunks get distinct filenames; legacy names still parse")
+sub_a = lr.chunk_path(root, "subsec", lr.Chunk(1, 12.250, 42.250))
+sub_b = lr.chunk_path(root, "subsec", lr.Chunk(1, 12.450, 42.450))
+check("two chunks 0.2 s apart on the same page get DIFFERENT paths "
+      "(whole-second names collided and the loser's audio was lost)",
+      sub_a != sub_b, f"{os.path.basename(sub_a)} vs {os.path.basename(sub_b)}")
+check("...and the millisecond is what distinguishes them",
+      os.path.basename(sub_a) == "12.250-p0001.wav"
+      and os.path.basename(sub_b) == "12.450-p0001.wav",
+      f"{os.path.basename(sub_a)} / {os.path.basename(sub_b)}")
+
+sub_dir = os.path.join(root, "recordings", "subsec")
+os.makedirs(sub_dir, exist_ok=True)
+open(os.path.join(sub_dir, "12.500-p0001.wav"), "wb").write(b"RIFF-later")
+open(os.path.join(sub_dir, "12.250-p0001.wav"), "wb").write(b"RIFF-earlier")
+open(os.path.join(sub_dir, "12-p0001.wav"), "wb").write(b"RIFF-legacy")
+sub_order = []
+def fake_transcribe_sub(key, wav, model, language="en", prompt="", timeout=None, **kw):
+    sub_order.append(wav.decode())
+    return ""
+lr._transcribe = fake_transcribe_sub
+sub_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+n_sub = sub_up.requeue_leftovers("subsec", os.path.join(root, "subsec.pdf"))
+sub_up.drain()
+check("requeue_leftovers still reads a legacy whole-second name alongside the new "
+      "millisecond ones — old leftovers on disk must not become foreign files",
+      n_sub == 3, n_sub)
+check("...and orders them NUMERICALLY by t0: 12 < 12.250 < 12.500 (a decimal parsed "
+      "as an int would raise, and a string sort puts 12.250 before 12)",
+      sub_order == ["RIFF-legacy", "RIFF-earlier", "RIFF-later"], sub_order)
+
+# ---------------------------------------------------------------------
+# PR #4 F4: openai_client._request folds up to 300 bytes of the
+# PROVIDER'S error body into the OpenAIError's message, and that body can
+# echo request-derived text -- here, the continuity prompt, which is the
+# previous segment's transcript. Log the class and status only, the way
+# pertinence's judge does.
+# ---------------------------------------------------------------------
+section("PR #4 F4: a failed transcription logs class and status, never the message")
+import contextlib  # noqa: E402 -- local to this section
+
+MARKER = "PATIENT-NAME-FROM-THE-TRANSCRIPT"
+def fake_transcribe_leaky(key, wav, model, language="en", prompt="", timeout=None, **kw):
+    raise lr.openai_client.OpenAIError(f"400 Bad Request: {{\"error\": \"{MARKER}\"}}", status=400)
+lr._transcribe = fake_transcribe_leaky
+leak_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+p_leak = lr.chunk_path(root, "leaktest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(p_leak), exist_ok=True); open(p_leak, "wb").write(b"RIFF OK")
+leak_log = io.StringIO()
+with contextlib.redirect_stdout(leak_log):
+    leak_up.enqueue("leaktest", os.path.join(root, "leaktest.pdf"), lr.Chunk(1, 0.0, 30.0), p_leak)
+    leak_up.drain()
+leak_txt = leak_log.getvalue()
+check("the provider's error body never reaches the log", MARKER not in leak_txt, leak_txt)
+check("...but the failure is still reported, by class and status, and the WAV kept",
+      "OpenAIError" in leak_txt and "400" in leak_txt and os.path.exists(p_leak), leak_txt)
+
+def fake_transcribe_leaky_generic(key, wav, model, language="en", prompt="", timeout=None, **kw):
+    raise RuntimeError(f"unexpected: {MARKER}")
+lr._transcribe = fake_transcribe_leaky_generic
+p_leak2 = lr.chunk_path(root, "leaktest", lr.Chunk(1, 30.0, 60.0))
+open(p_leak2, "wb").write(b"RIFF OK")
+leak_log2 = io.StringIO()
+with contextlib.redirect_stdout(leak_log2):
+    leak_up.enqueue("leaktest", os.path.join(root, "leaktest.pdf"), lr.Chunk(1, 30.0, 60.0), p_leak2)
+    leak_up.drain()
+leak_txt2 = leak_log2.getvalue()
+check("the generic except is the same rule — class only, no message",
+      MARKER not in leak_txt2 and "RuntimeError" in leak_txt2 and os.path.exists(p_leak2),
+      leak_txt2)
 
 raise SystemExit(report())

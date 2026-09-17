@@ -962,6 +962,11 @@ class DriveWindow(QWidget):
         # token could only ever describe half of it.
         self.seq = 0
         self.card_r: dict = {}
+        # Beside card_r, and for the same reason (K-118): priority_rows
+        # hands the nid -> [queue] map back so a threshold change can
+        # re-aggregate the Cards/Notes counts with no collection access.
+        # Match Sensitivity's OK is the one caller (PR #4 F5).
+        self.card_queues: dict = {}
         self.matches: dict = {}
         self.rows: dict[str, dict] = {}
         # ---- the K-143 map dock's state, before anything builds it ----
@@ -2136,6 +2141,7 @@ class DriveWindow(QWidget):
             if seq != self.seq or not self._alive():
                 return
             self.card_r = out.get("card_r") or {}
+            self.card_queues = out.get("card_queues") or {}
             self.matches = out.get("matches") or {}
             self.rows = {r["name"]: r for r in out.get("rows") or []}
             for item in self._iter_pdf_items():
@@ -2277,11 +2283,19 @@ class DriveWindow(QWidget):
             tag_sync.sync_after_threshold(mw, safe, matches, value)
             row = self.rows.get(safe)
             if row is not None and matches is not None:
+                pairs = [(int(n), float(s)) for n, s in matches]
                 agg = retention.pdf_retention(
-                    [(int(n), float(s)) for n, s in matches], value, self.card_r,
-                    rejected=_rejected,
+                    pairs, value, self.card_r, rejected=_rejected,
                 )
-                row.update(threshold=value, **{
+                # The COUNTS move with the threshold too (PR #4 F5) —
+                # without this the Cards cell showed a score computed at
+                # the new threshold beside a "· n doubtful" (and a card
+                # count, and a note count) computed at the old one.
+                notes, cards, susp, doubtful = retention.note_card_counts(
+                    pairs, value, self.card_queues, rejected=_rejected,
+                )
+                row.update(threshold=value, note_count=notes, card_count=cards,
+                           suspended_count=susp, doubtful_count=doubtful, **{
                     k: agg[k] for k in ("retention", "matched_cards", "new_pct", "priority")
                 })
                 for item in self._iter_pdf_items():

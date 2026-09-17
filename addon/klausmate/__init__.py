@@ -991,17 +991,32 @@ def _request_index_when_idle(name: str) -> None:
 
 def _release_recorder(owner: Any) -> None:
     """Teardown-only stop (fix round 1, I1): releases *owner*'s recorder,
-    if one is running, without touching any UI or scheduling a re-index —
-    the widgets calling this may be mid-destruction (a Browse/Add Cards
-    window closing, a dock's own shutdown). Never call this from the
-    Record/Stop button itself; that path is start_or_stop_recording,
-    which also updates the button and requests a re-index.
+    if one is running, without touching any UI — the widgets calling this
+    may be mid-destruction (a Browse/Add Cards window closing, a dock's
+    own shutdown). Never call this from the Record/Stop button itself;
+    that path is start_or_stop_recording, which also updates the button.
+
+    It DOES schedule the same drain-aware re-index the Stop button does
+    (PR #4, Codex): `rec.stop()` flushes the tail chunk into the uploader
+    here exactly as it does there, so without this the lecture you closed
+    Browse on stayed out of the page vectors until a manual re-index.
+
+    NOT reached on profile close — `_stop_lecture_uploader` stops every
+    `_active_recorders` member itself, deliberately, because the uploader
+    a poll would wait on dies with the profile (its generation counter is
+    the second net, for a poll already armed, not the first).
     """
     rec = owner._recorder
     if rec is not None and rec.is_recording:
         rec.stop()
         _active_recorders.discard(rec)
         owner._recorder = None
+        name = getattr(rec, "pdf_name", "")
+        if name:
+            try:
+                _request_index_when_idle(name)
+            except Exception as exc:
+                print(f"[klausmate] re-index after teardown failed for {name}: {exc}")
 
 
 class _PanelBar(QWidget):

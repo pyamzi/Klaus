@@ -691,6 +691,75 @@ check("...and NOTHING is written to the Klaus Plus cache for a user who has no l
 check("...the job still completes normally", _done == [set()] and _errors == [])
 _client_raises.clear()
 
+section("ensure_judged: PR #4 F1 — a stale verdict is RETIRED the moment it is detected")
+# Copilot/Codex on stacked PR #4: a stale entry was queued for re-judging
+# but LEFT in judged.json, so every completion path that doesn't reach a
+# fresh verdict for it — Skip, cancel, a fatal refusal, a batch that
+# fails or omits the card — went on reporting the obsolete rejection, and
+# retention/tag_sync went on calling the card Doubtful though it is now
+# unjudged. D4's rule is that an unjudged card counts as CONFIRMED.
+_stale_fields = {11: ["Q: stale mechanism of X?", "A: Y"], 12: ["Q: stale Z?", "A: W"]}
+_stale_mw = GlueMw({"api_key_anthropic": "sk-ant-fake", "pdf_match_threshold": 0.75}, _stale_fields)
+iq.mw = _stale_mw
+page_store.ensure_records(_root, "lec_stale", "", ["", "", "", "Slide 4 of the stale-verdict lecture."])
+os.makedirs(os.path.dirname(retention._matches_path("lec_stale")), exist_ok=True)
+with open(retention._matches_path("lec_stale"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"11": 4, "12": 4}}, f)
+_done.clear()
+_stale_matches = [(11, 0.9), (12, 0.85)]
+ask_stale_yes, _ = make_ask(True)
+pt.ensure_judged(
+    _stale_mw, "lec_stale", _stale_matches,
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_stale_yes,
+)
+check("a first judged pass mints real entries — 11 pertinent, 12 rejected",
+      _done == [{12}] and set(pt.load_judged(_root, "lec_stale")["verdicts"]) == {"11", "12"},
+      repr(_done))
+
+# Card 11 moves; card 12's own entry is untouched and still FRESH.
+_stale_fields[11] = ["Q: stale mechanism of X, rewritten?", "A: Y, still"]
+_done.clear()
+_calls_before_skip_fresh = len(_client_calls)
+ask_skip_fresh, ask_skip_fresh_log = make_ask(False)
+pt.ensure_judged(
+    _stale_mw, "lec_stale", _stale_matches,
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_skip_fresh,
+)
+check("Skip with only card 11 stale: no client call, and the prompt really appeared "
+      "(so this is the Skip path, not the nothing-to-do shortcut)",
+      len(_client_calls) == _calls_before_skip_fresh and len(ask_skip_fresh_log) == 1)
+check("...a FRESH negative verdict is still reported — retirement must not wipe "
+      "verdicts that still describe the card and page in front of it",
+      _done == [{12}], repr(_done))
+_after_fresh_skip = pt.load_judged(_root, "lec_stale")
+check("...and the STALE entry (11) is gone from judged.json, retired on detection "
+      "rather than left to be re-reported forever",
+      set(_after_fresh_skip["verdicts"]) == {"12"}, repr(set(_after_fresh_skip["verdicts"])))
+
+# Now card 12 moves too: its NEGATIVE verdict is stale, so nothing may be
+# reported and nothing may stay on disk.
+_stale_fields[12] = ["Q: stale Z, rewritten?", "A: W, still"]
+_done.clear()
+_calls_before_skip_stale = len(_client_calls)
+ask_skip_stale, ask_skip_stale_log = make_ask(False)
+pt.ensure_judged(
+    _stale_mw, "lec_stale", _stale_matches,
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_skip_stale,
+)
+check("Skip with the REJECTION itself stale: no client call, prompt shown",
+      len(_client_calls) == _calls_before_skip_stale and len(ask_skip_stale_log) == 1)
+check("...on_done reports an EMPTY set — the card is unjudged now, and D4 counts "
+      "an unjudged card as confirmed, not Doubtful",
+      _done == [set()], repr(_done))
+check("...and the obsolete rejection is off disk, so retention and "
+      "tag_sync.doubtful_members cannot keep tagging it either",
+      pt.load_judged(_root, "lec_stale")["verdicts"] == {},
+      repr(pt.load_judged(_root, "lec_stale")["verdicts"]))
+check("no on_error fired across the retirement section", _errors == [])
+
 section("module hygiene")
 check("the module docstring no longer claims a divider that was never drawn (fix round 1, Finding 8)",
       "above the divider" not in (pt.__doc__ or ""))

@@ -685,6 +685,16 @@ try:
         return _orig_cleanup4()
 
     sb4.cleanup = _tracked_cleanup4
+    # PR #4 F3 (Codex): host close flushes the tail chunk into the
+    # uploader exactly as the Stop button does, so it owes the same
+    # drain-aware re-index — without it the lecture you close Browse on
+    # stays out of the page vectors until someone re-indexes by hand.
+    _requested.clear()
+    K._index_when_idle.clear()
+    K.index_queue.request_pdf = _fake_request_pdf
+    _fake_uploader.pending_left = [1, 0]  # busy, then drained
+    _real_poll_ms_i1 = K.INDEX_IDLE_POLL_MS
+    K.INDEX_IDLE_POLL_MS = 0  # same poll, no wall-clock wait
     d4._on_host_closing()
     check("I1: the microphone is released — stopped, dropped from the "
           "active set, and the dock forgets it — and that happened "
@@ -696,9 +706,22 @@ try:
           and d4._recorder is None
           and _FakeRecorder.instances[0] not in K._active_recorders
           and _call_order == ["stop", "cleanup"])
+    check("PR #4 F3: closing the host ARMS the same drain-aware poll the "
+          "Stop button arms — for the recorder's OWN pdf, and not before "
+          "the uploader says it owes nothing",
+          K._index_when_idle == {"lec.pdf"} and _requested == [],
+          f"armed={K._index_when_idle} requested={_requested}")
+    for _ in range(8):
+        _app.processEvents()
+    check("PR #4 F3: ...and once the uploader drains, the re-index really "
+          "fires, so the transcript reaches the page vectors",
+          _requested == ["lec.pdf"] and "lec.pdf" not in K._index_when_idle,
+          f"requested={_requested} armed={K._index_when_idle}")
 finally:
+    K.INDEX_IDLE_POLL_MS = _real_poll_ms_i1
     K.lecture_recorder.Recorder = _real_recorder_cls
     K.uploader = _real_uploader_fn
+    K.index_queue.request_pdf = _real_request_pdf
 
 section("record button: two docks refuse a second concurrent recording "
         "(I4, fix round 1)")
@@ -791,6 +814,7 @@ _teardown_calls: list = []
 class _FakeTeardownRecorder:
     def __init__(self):
         self.is_recording = True
+        self.pdf_name = "lec.pdf"  # a name a re-index COULD be requested for
 
     def stop(self):
         _teardown_calls.append("recorder")
@@ -804,6 +828,7 @@ class _FakeTeardownUploader:
 
 _fake_td_rec = _FakeTeardownRecorder()
 K._active_recorders.add(_fake_td_rec)
+K._index_when_idle.clear()
 _orig_internal_uploader = K._uploader
 K._uploader = _FakeTeardownUploader()
 K._stop_lecture_uploader()
@@ -812,6 +837,11 @@ check("I2: every _active_recorders member is stopped BEFORE the "
       _teardown_calls == ["recorder", "uploader"]
       and K._active_recorders == set()
       and K._uploader is None)
+check("PR #4 F3: profile close arms NO drain poll, even for a live "
+      "recording — the uploader it would wait on dies with the profile, "
+      "and _stop_lecture_uploader keeps its own path for exactly that "
+      "reason (the generation counter is the second net, not the first)",
+      K._index_when_idle == set(), repr(K._index_when_idle))
 K._uploader = _orig_internal_uploader
 
 # I-2 fix round 1: the queue a drain poll is watching dies with the

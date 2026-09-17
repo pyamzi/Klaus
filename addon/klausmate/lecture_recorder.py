@@ -124,11 +124,20 @@ def wav_bytes(pcm: bytes, rate: int = 16000, channels: int = 1, width: int = 2) 
 
 
 def chunk_path(user_files: str, pdf_safe: str, chunk: Chunk) -> str:
-    name = f"{int(chunk.t0)}-p{chunk.page:04d}.wav"
+    """Millisecond precision in the name, not whole seconds (PR #4,
+    Copilot + Codex): two chunks can close inside one second — a page
+    bounce, or Stop then Record on the same page — and a truncated t0
+    gave them ONE filename, so the second _flush overwrote the first's
+    audio and the asynchronous upload then unlinked a WAV holding bytes
+    it had never transcribed."""
+    name = f"{chunk.t0:.3f}-p{chunk.page:04d}.wav"
     return os.path.join(user_files, "recordings", pdf_safe, name)
 
 
-_LEFTOVER_RE = re.compile(r"(\d+)-p(\d{4})\.wav$")
+# The decimal is optional so a leftover written by an older Klaus ("12-p0001.wav")
+# still parses and still uploads — a name this regex misses is a foreign file,
+# i.e. an orphaned lecture.
+_LEFTOVER_RE = re.compile(r"(\d+(?:\.\d+)?)-p(\d{4})\.wav$")
 
 # Module-level indirection so tests can swap the network call for a fake
 # without touching openai_client itself (the house pattern — see
@@ -260,10 +269,17 @@ class Uploader:
                     print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
                 else:
                     plus.note_refusal(cfg, exc.status, sink, message=exc.user_message())
-            print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)}: {exc}")
+            # Class and status ONLY, never the message (PR #4, Codex):
+            # openai_client._request folds up to 300 bytes of the provider's
+            # error body into it, and that body can echo request-derived
+            # text — here the continuity prompt, which IS the previous
+            # segment's transcript. Same rule the judge follows.
+            print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)} "
+                  f"(OpenAIError status={exc.status})")
             return
         except Exception as exc:
-            print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)}: {exc}")
+            print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)} "
+                  f"({exc.__class__.__name__})")
             return
         if text.strip():
             self._ensure_page(pdf_safe, pdf_path)
@@ -289,10 +305,10 @@ class Uploader:
         for name in os.listdir(d):
             m = _LEFTOVER_RE.match(name)
             if m:
-                matches.append((int(m.group(1)), int(m.group(2)), name))
+                matches.append((float(m.group(1)), int(m.group(2)), name))
         matches.sort(key=lambda row: row[0])
         for t0, page, name in matches:
-            self.enqueue(pdf_safe, pdf_path, Chunk(page, float(t0), float(t0) + CHUNK_S), os.path.join(d, name))
+            self.enqueue(pdf_safe, pdf_path, Chunk(page, t0, t0 + CHUNK_S), os.path.join(d, name))
         return len(matches)
 
     def stop(self) -> None:
