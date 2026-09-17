@@ -68,9 +68,15 @@ def welcome(request: Request, session_id: str = "") -> Any:
     email_addr = str(((session.get("customer_details") or {}).get("email")) or "")
     cid = st.store.upsert_customer(cus, email_addr, now)
     sub = session.get("subscription") or {}
-    if sub:
-        st.store.set_subscription(cus, str(sub.get("status") or "active"), entitlement.period_end_of(sub),
-                                  bool(sub.get("cancel_at_period_end")), now)
+    # K-277: SEED, never write over. This page can be opened, reloaded or bookmarked long after
+    # a cancellation or a payment failure has landed, and the session it reads still describes
+    # the moment of checkout — writing that unconditionally revived a lapsed subscription. It
+    # stays outside the `created` ordering guard on purpose (K-273 explains the trade): a
+    # Checkout session carries no event stamp, so "has anything been written yet" is the only
+    # ordering question it can honestly answer.
+    if sub and not st.store.seed_subscription_if_unset(cid, str(sub.get("status") or "active"),
+                                                       entitlement.period_end_of(sub), now):
+        st.log.debug("welcome: %s already has subscription state — leaving the webhook's", cus)
     row = st.store.customer_by_id(cid)
     if row["key_hash"]:
         return HTMLResponse(templates.welcome(_operator(s), None, False, already=True))
