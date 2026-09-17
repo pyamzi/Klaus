@@ -14,18 +14,41 @@ theme = importlib.import_module("klausmate.theme")
 section("logo")
 html = top_bar.logo_html()
 check("inline svg", "<svg" in html and "</svg>" in html)
-check("hand-drawn star is a stroked open path",
-      'fill="none"' in html and "stroke-linejoin" in html
-      and 'd="M' in html)
+# K-270 re-baseline: the mark is Pouya's "impossible star" — FIVE
+# filled polygons, not one stroked open path. A stroke on this artwork
+# would outline every arm and read as a different drawing entirely, so
+# the absence of `stroke=` is the pin, not decoration.
+check("the impossible star is five FILLED paths in the 1254 box",
+      'viewBox="0 0 1254 1254"' in html
+      and html.count("<path") == 5
+      and html.count('fill="var(--klaus-accent, currentColor)"') == 5)
+check("nothing is stroked — a filled mark, never an outlined one",
+      "stroke" not in html and 'fill="none"' not in html)
+check("every path in the svg is one of _STAR_PATHS, verbatim",
+      all(f'd="{d}"' in html for d in top_bar._STAR_PATHS)
+      and len(top_bar._STAR_PATHS) == 5)
 check("colour comes from the CSS var with a currentColor fallback — "
       "the var only exists while the design layer injects toolbar_css; "
       "on a stock toolbar the star must inherit Anki's own link colour "
-      "rather than vanish (an unresolvable var() makes stroke invalid)",
+      "rather than vanish (an unresolvable var() makes the fill invalid)",
       "var(--klaus-accent, currentColor)" in html
       and "#" not in html.split("href=#")[1])
 check("clicking the star opens Klaus's own settings",
       "pycmd('klausmate:settings')" in html)
 check("addressable for styling", 'id="klaus-logo"' in html)
+# The <a> is the accessible element: it carries the name a screen
+# reader announces and the click target. klaus-logo.svg ships its own
+# role/aria-label for standalone viewing; repeating them on the inline
+# copy would announce the mark twice inside one link.
+check("the <a> owns the accessible name — the inner svg repeats neither "
+      "role nor aria-label",
+      html.count("aria-label=") == 1
+      and 'aria-label="Klaus settings"' in html
+      and "role=" not in html
+      and 'title="Klaus settings"' in html)
+check("the 26x26 seat is unchanged — the box is the toolbar's, only the "
+      "artwork inside it changed",
+      'width="26" height="26"' in html)
 
 section("toolbar css")
 css = theme.toolbar_css()
@@ -296,12 +319,39 @@ check("hook injects it for deck-browser and overview bottom bars only",
       and "ReviewerBottomBar" not in open("klausmate/top_bar.py").read())
 
 section("star geometry shared with Qt surfaces")
-pts = top_bar.star_points()
-check("star_points parses every vertex of the hand-drawn path",
-      len(pts) == 5 and pts[0] == (5.5, 1.5) and pts[-1] == (12.8, 24.5))
+# K-270: star_points() (one 5-vertex polygon) became star_polygons()
+# (five polygons, one per filled path), because the impossible star is
+# five separate shapes. Qt surfaces fill these; the toolbar's SVG fills
+# the same strings. ONE source of truth: _STAR_PATHS.
+polys = top_bar.star_polygons()
+# Vertex counts measured off the asset itself, not retyped: a path that
+# silently loses a vertex is a mark that silently changes shape.
+_counts = [len([c for c in d.replace("M", "").replace("Z", "").split("L")
+                if len(c.split()) == 2])
+           for d in top_bar._STAR_PATHS]
+check("star_polygons parses every vertex of all five paths",
+      len(polys) == 5
+      and [len(p) for p in polys] == _counts
+      and _counts == [39, 46, 37, 39, 35])
 check("all vertices live inside the declared viewBox",
-      all(0 <= x <= top_bar.STAR_VIEWBOX and 0 <= y <= top_bar.STAR_VIEWBOX
-          for x, y in pts))
+      top_bar.STAR_VIEWBOX == 1254
+      and all(0 <= x <= top_bar.STAR_VIEWBOX and 0 <= y <= top_bar.STAR_VIEWBOX
+              for poly in polys for x, y in poly))
+check("star_points is gone — one shape of the data, not two",
+      not hasattr(top_bar, "star_points"))
+
+# The asset and the code cannot drift: klausmate/web/klaus-logo.svg is
+# the design source of record (Pouya's original, copied unchanged), and
+# _STAR_PATHS is what actually paints. If someone redraws the mark in
+# the file and forgets the module — or the other way round — this fails.
+import xml.etree.ElementTree as _ET
+_svg_root = _ET.parse("klausmate/web/klaus-logo.svg").getroot()
+_svg_ds = [p.get("d") for p in
+           _svg_root.iter("{http://www.w3.org/2000/svg}path")]
+check("klaus-logo.svg parses and declares the same 1254 box",
+      _svg_root.get("viewBox") == "0 0 1254 1254")
+check("its five path d strings ARE _STAR_PATHS, verbatim",
+      _svg_ds == list(top_bar._STAR_PATHS))
 
 section("live preview mid-review (non-modal Preferences, 2026-08-30)")
 # mw.reset() rebuilds the study queues (aqt/main.py says so in its own

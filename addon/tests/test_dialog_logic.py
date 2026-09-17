@@ -544,8 +544,8 @@ check("sidebar carries the app identity",
 check("sidebar identity: star logo beside the Garamond wordmark",
       "_logo_pixmap" in _src2
       and 'QLabel("KlausMate")' in _src2
-      and "_top_bar.star_points()" in _src2)
-check("the logo strokes blue_accent and repaints on an accent save",
+      and "_top_bar.star_polygons()" in _src2)
+check("the logo fills blue_accent and repaints on an accent save",
       'QColor(c["blue_accent"])' in _src2
       and "logo_lbl.setPixmap(_new_logo)" in _src2)
 check("settings search: a filter field sits in the sidebar",

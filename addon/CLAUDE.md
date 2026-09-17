@@ -614,8 +614,11 @@ same reason.
   Windows without touching NSWindow/DWM; the palette `chrome` token is
   only the fallback. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
-  hand-drawn star SVG (inline, `--klaus-accent` CSS var, click →
-  Klaus Preferences via `klausmate:settings` on
+  **impossible star** (K-270, Pouya's `klaus-logo.svg`, 2026-09-17; the
+  design source of record is `klausmate/web/klaus-logo.svg`): five
+  FILLED paths inline in a 26×26 box on a `viewBox="0 0 1254 1254"`,
+  each `fill="var(--klaus-accent, currentColor)"` and none of them
+  stroked, click → Klaus Preferences via `klausmate:settings` on
   `webview_did_receive_js_message`; the same hook also routes the
   on-screen gradient editor's `klausmate:bggrad` drag-end messages
   into `background.grad_edit_event`). Because it only restyles, Anki's links, Klaus's Library link,
@@ -643,7 +646,7 @@ same reason.
   main/panel css + the panel_js weld), the toolbar/bottombar restyle,
   the chrome push, and the whole dashboard injection (which also resets
   `_EDIT` so toggling off mid-jiggle can't strand edit mode). NOT
-  gated: the star (strokes `var(--klaus-accent, currentColor)` so it
+  gated: the star (fills `var(--klaus-accent, currentColor)` so it
   survives on the stock bar), the heatmap, every functional injection,
   and Klaus's own windows. In native mode the deck screen draws NO
   Klaus widgets: the heatmap's two injections are gated too (at the
@@ -1367,8 +1370,10 @@ same reason.
     `profile_will_close` rejects it before the collection goes away. **SynapsePro settings shell
     (K-106 — replaced the K-105 card grid; built from a screenshot of
     SynapsePro 1.5.x, the vendored source only has their older grid)**:
-    a fixed `SettingsSidebar` (star-logo pixmap drawn from
-    `top_bar.star_points()`, app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
+    a fixed `SettingsSidebar` (star-logo pixmap FILLED from
+    `top_bar.star_polygons()` — five polygons into ONE `QPainterPath` on
+    `WindingFill`, SVG's own rule, at the label's own
+    `devicePixelRatioF()` — app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
     per-page buttons; three pill-mush rounds proved per-button polish
     timing unfixable) with a row per page) beside a QStackedWidget of pages.
     Each page = `PageTitle`/`PageSubtitle` over ONE rounded `CardFrame`

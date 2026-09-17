@@ -454,4 +454,97 @@ check("it says what a turn actually carries (the page and the selection)",
 check("no telemetry is still stated", "telemetry" in _privacy.lower())
 
 
+# =====================================================================
+section("K-270: the sidebar star is FILLED in the accent (real pixels)")
+# =====================================================================
+# The Preferences sidebar mark is a baked QPixmap, so the only honest
+# proof that it renders — and renders in the accent, not a stroke and
+# not black — is to read its pixels. _logo_pixmap does all of its Qt
+# work through a LAZY `from aqt.qt import ...`, so swapping that one
+# module for a real-PyQt6 shim is enough; no purge, no re-import.
+check("the docstring no longer promises a stroke",
+      "stroke" not in (manage_models._logo_pixmap.__doc__ or "").lower()
+      and "fill" in (manage_models._logo_pixmap.__doc__ or "").lower())
+check("it fills a path, never pens one",
+      "QPen" not in _func_seg("_logo_pixmap")
+      and "fillPath" in _func_seg("_logo_pixmap"))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+try:
+    from PyQt6 import QtCore as _QtC  # noqa: E402
+    from PyQt6 import QtGui as _QtG  # noqa: E402
+    from PyQt6 import QtWidgets as _QtW  # noqa: E402
+    _HAVE_QT = True
+except Exception as _qt_e:  # noqa: BLE001
+    _HAVE_QT = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — "
+          "the source pins above still ran")
+
+if _HAVE_QT:
+    import types as _types
+
+    _qt_shim = _types.ModuleType("aqt.qt")
+
+    def _qt_getattr(name, _mods=(_QtW, _QtC, _QtG)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
+
+    _qt_shim.__getattr__ = _qt_getattr
+    sys.modules["aqt.qt"] = _qt_shim
+    _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
+
+    _theme = importlib.import_module("klausmate.theme")
+    _accent = _QtG.QColor(_theme.palette(_theme.night_mode())["blue_accent"])
+
+    # devicePixelRatio FOLLOWS THE WIDGET: the sidebar label is the one
+    # that knows what screen it is on. A baked 2.0 renders soft on a 1x
+    # display and is the kind of thing nobody notices until a screenshot.
+    _lbl = _QtW.QLabel()
+    _px = manage_models._logo_pixmap(64, _lbl.devicePixelRatioF())
+    check("the sidebar logo pixmap renders at all", _px is not None)
+    check("its devicePixelRatio follows the widget, not a baked 2.0",
+          _px is not None
+          and _px.devicePixelRatio() == _lbl.devicePixelRatioF())
+    check("the real sidebar size (24) renders too",
+          manage_models._logo_pixmap(24, 1.0) is not None)
+
+    if _px is not None:
+        _img = _px.toImage().convertToFormat(
+            _QtG.QImage.Format.Format_ARGB32)
+        _w, _h = _img.width(), _img.height()
+        _opaque = 0
+        _wrong = 0
+        for _y in range(_h):
+            for _x in range(_w):
+                _c = _img.pixelColor(_x, _y)
+                if _c.alpha() > 250:
+                    _opaque += 1
+                    if (_c.red(), _c.green(), _c.blue()) != (
+                            _accent.red(), _accent.green(), _accent.blue()):
+                        _wrong += 1
+        check("the mark actually covers the box — a filled star, not an "
+              "empty pixmap and not a hairline outline",
+              _opaque > _w * _h * 0.10, f"{_opaque}/{_w * _h} opaque")
+        check("every solid pixel is the ACCENT — no baked #171717 from "
+              "the asset, no second colour from a stroke",
+              _wrong == 0, f"{_wrong} off-accent")
+        # The impossible star's arms never reach the box's corners; a
+        # mark that filled them would be a square, i.e. the wrong art.
+        _k = max(2, _w // 12)
+        _corners = [(0, 0), (_w - _k, 0), (0, _h - _k), (_w - _k, _h - _k)]
+        _corner_ink = sum(
+            1
+            for _cx, _cy in _corners
+            for _y in range(_cy, _cy + _k)
+            for _x in range(_cx, _cx + _k)
+            if _img.pixelColor(_x, _y).alpha() != 0
+        )
+        check("all four corners stay empty — the star's own silhouette",
+              _corner_ink == 0, f"{_corner_ink} inked corner px")
+
+
 raise SystemExit(report())

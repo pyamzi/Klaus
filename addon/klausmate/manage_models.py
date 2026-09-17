@@ -78,41 +78,59 @@ def _addon_version() -> str:
         return ""
 
 
-def _logo_pixmap(size: int) -> Any:
-    """The Klaus star for the Preferences sidebar, drawn exactly like
-    the top bar's: an open stroke in the accent colour on a transparent
-    ground — no icon-square treatment — from the same
-    top_bar.star_points() data the toolbar's SVG strokes."""
+def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
+    """The Klaus impossible star for the Preferences sidebar, drawn
+    exactly like the top bar's: five FILLED shapes in the accent colour
+    on a transparent ground — no icon-square treatment — from the same
+    top_bar.star_polygons() data the toolbar's SVG fills.
+
+    ``dpr`` comes from the label that will show it, so the mark is
+    crisp on whatever screen the dialog opened on rather than on an
+    assumed Retina one; 2.0 is only the fallback for a caller with no
+    widget to ask.
+
+    ONE QPainterPath with WindingFill, not five drawPolygon calls:
+    winding is SVG's own default fill rule, so a self-crossing arm
+    fills here the way it fills in klaus-logo.svg. Qt's polygon default
+    is odd-even, which would punch holes the drawing does not have.
+    """
     try:
-        from aqt.qt import QColor, QPainter, QPen, QPixmap, QPointF, QPolygonF
+        from aqt.qt import (
+            QColor,
+            QPainter,
+            QPainterPath,
+            QPixmap,
+            QPointF,
+            QPolygonF,
+            Qt,
+        )
 
         from . import theme as _theme
         from . import top_bar as _top_bar
 
-        dpr = 2.0
         px = QPixmap(int(size * dpr), int(size * dpr))
         px.setDevicePixelRatio(dpr)
         px.fill(QColor(0, 0, 0, 0))
         painter = QPainter(px)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = _theme.palette(_theme.night_mode())
-        # Inset by the pen's radius so the stroke can't clip at the edges.
-        width = max(1.3, size * 0.09)
-        inset = width / 2.0
-        scale = (size - width) / _top_bar.STAR_VIEWBOX
-        poly = QPolygonF(
-            [
-                QPointF(x * scale + inset, y * scale + inset)
-                for x, y in _top_bar.star_points()
-            ]
-        )
-        pen = QPen(QColor(c["blue_accent"]))
-        pen.setWidthF(width)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPolygon(poly)
+        # The same margin the stroked mark left: half the old pen width
+        # on every side, so the star keeps its seat in the 24px row.
+        inset = max(1.3, size * 0.09) / 2.0
+        scale = (size - inset * 2.0) / _top_bar.STAR_VIEWBOX
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.WindingFill)
+        for poly in _top_bar.star_polygons():
+            path.addPolygon(
+                QPolygonF(
+                    [
+                        QPointF(x * scale + inset, y * scale + inset)
+                        for x, y in poly
+                    ]
+                )
+            )
+            path.closeSubpath()
+        painter.fillPath(path, QColor(c["blue_accent"]))
         painter.end()
         return px
     except Exception as exc:
@@ -286,7 +304,7 @@ def _run_dialog_probe() -> None:
         sidebar.setFixedWidth(192)
         side = QVBoxLayout(sidebar)
         logo_lbl = QLabel()
-        _logo = _logo_pixmap(24)
+        _logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
         if _logo is not None:
             logo_lbl.setPixmap(_logo)
         logo_lbl.setFixedSize(24, 24)
@@ -407,7 +425,7 @@ def manage_models_dialog(*_args: Any) -> None:
     head_row.setContentsMargins(0, 0, 0, 0)
     head_row.setSpacing(7)
     logo_lbl = QLabel()
-    _logo = _logo_pixmap(24)
+    _logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
     if _logo is not None:
         logo_lbl.setPixmap(_logo)
     logo_lbl.setFixedSize(24, 24)
@@ -2301,9 +2319,9 @@ def manage_models_dialog(*_args: Any) -> None:
             # The swatches carry their own inline QSS, so the dialog
             # sheet swap above wipes them — repaint from _accent_state.
             sync_accent_swatches()
-            # The sidebar star is a baked pixmap stroked in blue_accent;
+            # The sidebar star is a baked pixmap filled in blue_accent;
             # re-render it or it keeps the old accent until reopen.
-            _new_logo = _logo_pixmap(24)
+            _new_logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
             if _new_logo is not None:
                 logo_lbl.setPixmap(_new_logo)
         except Exception as _exc:
