@@ -438,6 +438,24 @@ while time.time() < deadline and not got4["exited"]:
     time.sleep(0.02)
 check("both stderr lines land in the log before the reader thread reports exited",
       seen_before_exit and not exited_before_check and bool(got4["exited"]))
+check("the exited callback carries the generation the reader thread was started "
+      "with (K-211) — what lets a caller tell a superseded child's belated exit "
+      "apart from the CURRENT one",
+      got4["exited"] and got4["exited"][0] == (None, 1))
 host4.close()
+
+section("generation counter — bumped by every start() (K-211 generation guard)")
+# _on_exited's fix needs a way to tell an OUTGOING child's belated exit
+# apart from the current, live one. This is the counter it compares
+# against — same idiom as assistant_dock's own _stop_gen.
+_host_gen = ah.AgentHost("/bin/claude", port=1, token="t", library_root=tmp, system_prompt_path=os.path.join(tmp, "sp.md"),
+                        model="", log_path=os.path.join(tmp, "gen.log"), callbacks=cbs, spawn=lambda c, **k: FakeProc([]))
+check("generation starts at 0, before any start()", _host_gen.generation == 0)
+_host_gen.start()
+check("the first start() bumps generation to 1", _host_gen.generation == 1)
+_host_gen.start()
+check("a second start() on the SAME host bumps it again, to 2 — close() in "
+      "between (tearing down the old child) does not reset it",
+      _host_gen.generation == 2)
 
 raise SystemExit(report())

@@ -193,7 +193,7 @@ class _Bridge(_ObjBase):  # type: ignore[misc]
     result = _signal(dict)
     denied = _signal(str)
     error = _signal(str)
-    exited = _signal(object)
+    exited = _signal(object, object)  # (rc, generation) — K-211
 
 
 class AssistantDock(_DockBase):  # type: ignore[misc]
@@ -494,7 +494,7 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             "result": lambda payload: self._bridge.result.emit(payload if isinstance(payload, dict) else {}),
             "permission_denied": lambda name: self._bridge.denied.emit(str(name or "")),
             "error": lambda msg: self._bridge.error.emit(str(msg or "")),
-            "exited": lambda rc: self._bridge.exited.emit(rc),
+            "exited": lambda rc, gen: self._bridge.exited.emit(rc, gen),
         }
         try:
             self._host = self._host_factory(callbacks)
@@ -590,6 +590,7 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         # forget it, so the next Send starts the incoming PDF's own.
         self._begin_async_stop()
         self._host_pdf_safe = _UNSET
+        self._discard_assistant_block()  # K-211: drop it, never flush it, below
         resumed = None
         try:
             resumed = self._sessions.session_for(self._user_files, pdf_safe)
@@ -904,6 +905,7 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         # Send would resume it. `_do_stop` deliberately does NOT do
         # this: remembering a stopped turn's session is the point there.
         self._sending_pdf_safe = _UNSET
+        self._discard_assistant_block()  # K-211: same leak as _switch_session
         try:
             self._sessions.forget(self._user_files, pdf_safe)
         except Exception as exc:
@@ -993,6 +995,18 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             self.transcript.setTextCursor(cur)
         except Exception as exc:
             print(f"[klausmate] assistant dock: delta render failed: {exc}")
+
+    def _discard_assistant_block(self) -> None:
+        """Drop any assistant text still buffered from the OUTGOING turn,
+        WITHOUT rendering it (K-211). Call this before clearing the
+        transcript out from under an open block — a viewer switch or New
+        Session — so the `_close_assistant_block` that the following
+        `_append_muted_line` triggers finds `_assistant_block_open`
+        already False and does nothing, instead of flushing the stale
+        raw text at a now-meaningless cursor position into the freshly
+        cleared document, landing it ABOVE the new header."""
+        self._assistant_block_open = False
+        self._assistant_raw_text = ""
 
     def _close_assistant_block(self) -> None:
         if not self._assistant_block_open:
@@ -1091,7 +1105,21 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         self._set_running(False)
         self._set_status_dot("error", str(msg))
 
-    def _on_exited(self, rc: Any) -> None:
+    def _on_exited(self, rc: Any, generation: Any = _UNSET) -> None:
+        # Generation guard (K-211; same capture-and-compare idiom as
+        # _stop_gen/_poll_stop above). AgentHost._read's `finally` ALWAYS
+        # fires this callback, for every child that ever ran — including
+        # an OUTGOING one already superseded by a later _ensure_child()
+        # start while its own reader thread was still winding down
+        # (_drain_stderr joins the SUCCESSOR's stderr thread, so the old
+        # child's exit can be delayed until well after the new one is
+        # live). Acting on a stale generation would reset state that
+        # belongs to the live turn and make its real result look lost —
+        # so a mismatch is a silent no-op. `generation is _UNSET` (a
+        # direct call with no generation info) always proceeds.
+        current = getattr(self._host, "generation", _UNSET) if self._host is not None else _UNSET
+        if generation is not _UNSET and current is not _UNSET and generation != current:
+            return
         self._set_running(False)
         # There is no child any more, whatever the code: the next Send
         # spawns one (_ensure_child). Without this the dock stayed
