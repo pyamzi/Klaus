@@ -259,6 +259,18 @@ class Uploader:
         self._seeded.add(pdf_safe)
 
     def _one(self, pdf_safe: str, pdf_path: str, chunk: Chunk, wav_path: str) -> None:
+        if self._closed:
+            # Queued BEHIND stop()'s sentinel (PR #4 third re-review):
+            # `_closed` is set before the sentinel goes in, but every
+            # chunk already on the queue still reaches this worker
+            # first. Transcribing them would be a paid call per chunk
+            # whose result the post-transcription `_closed` check below
+            # then throws away. Bail before the config is even read; the
+            # WAV stays for the next Record's requeue_leftovers, and the
+            # loop's own `finally` still task_done()s this item.
+            print(f"[klausmate] lecture recorder: uploader closed, "
+                  f"keeping queued {os.path.basename(wav_path)}")
+            return
         cfg = self._get_config() or {}
         model = str(cfg.get("transcription_model") or "gpt-4o-mini-transcribe")
         key = str(cfg.get("api_key_openai") or "").strip()

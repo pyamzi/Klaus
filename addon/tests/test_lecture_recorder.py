@@ -845,4 +845,56 @@ _bar_gate.set()
 bar_up.drain()
 check("...and it drops to 0 once the upload really finished", bar_rec.queued == 0)
 
+# ---------------------------------------------------------------------
+# PR #4 third re-review (Copilot), finding 2: `stop()` sets `_closed` and
+# enqueues its sentinel, but every chunk already SITTING IN THE QUEUE
+# ahead of that sentinel still reaches `_one()` — which read the config
+# and transcribed (a paid call, per chunk) before the post-transcription
+# `_closed` check threw the result away. The in-flight chunk above is
+# unavoidable; the queued ones are pure waste, and on a long lecture
+# there can be many of them. `_one()` must bail at the top.
+# ---------------------------------------------------------------------
+section("PR #4 third re-review: chunks queued behind the stop sentinel are never transcribed")
+_q_gate = threading.Event()
+_q_seen = threading.Event()
+_q_calls: list = []
+
+
+def fake_transcribe_counting(key, wav, model, language="en", prompt="", timeout=None):
+    _q_calls.append(model)
+    _q_seen.set()
+    _q_gate.wait(5.0)
+    return "barrier text"
+
+
+lr._transcribe = fake_transcribe_counting
+q_segs: list = []
+q_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+                   on_segment=lambda safe, page: q_segs.append((safe, page)))
+_q_paths = []
+for _i, _ch in enumerate((lr.Chunk(1, 0.0, 30.0), lr.Chunk(1, 30.0, 60.0), lr.Chunk(1, 60.0, 90.0))):
+    _p = lr.chunk_path(root, "queuedtest", _ch)
+    os.makedirs(os.path.dirname(_p), exist_ok=True)
+    open(_p, "wb").write(b"RIFF OK")
+    _q_paths.append((_ch, _p))
+# The first chunk holds the single worker inside the network call, so the
+# other two are still QUEUED (never started) when stop() runs — exactly
+# the shape the finding describes.
+q_up.enqueue("queuedtest", os.path.join(root, "queuedtest.pdf"), *_q_paths[0])
+check("the worker is parked inside the first chunk's transcription, so the "
+      "next two really are queued rather than in flight", _q_seen.wait(2.0))
+for _ch, _p in _q_paths[1:]:
+    q_up.enqueue("queuedtest", os.path.join(root, "queuedtest.pdf"), _ch, _p)
+check("...and both of them are on the queue when the teardown starts",
+      q_up.queued() == 2, f"queued={q_up.queued()}")
+threading.Timer(0.05, _q_gate.set).start()  # the barrier returns after stop()
+check("stop() returns instead of hanging", _returns_within(q_up.stop, 4.0))
+check("exactly ONE transcription happened — the barrier that was already in "
+      "flight. The two chunks queued behind the sentinel cost nothing: no "
+      "config read, no paid call, no result to throw away",
+      _q_calls == ["gpt-4o-mini-transcribe"], repr(_q_calls))
+check("...and both their WAVs are kept for the next Record's requeue_leftovers",
+      all(os.path.exists(_p) for _ch, _p in _q_paths[1:]))
+check("...with nothing appended behind the closing profile", q_segs == [], repr(q_segs))
+
 raise SystemExit(report())

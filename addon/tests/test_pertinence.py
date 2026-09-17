@@ -581,6 +581,66 @@ with contextlib.redirect_stdout(_nokey_log2):
     )
 check("a PDF nobody has ever judged still reports nothing rejected on the "
       "same keyless path", _done == [set()], repr(_done))
+
+# ---------------------------------------------------------------------
+# PR #4 third re-review (Copilot), finding 3: the keyless early return
+# used to sit ABOVE the candidate/staleness pass, so it reported every
+# stored `pertinent: false` entry without ever asking is_stale. A card
+# (or its page) edited after the last paid run therefore stayed Doubtful
+# forever for as long as the user had no key — contradicting the
+# documented contract that a verdict lasts until the card, the page or
+# the model changes, and contradicting the KEYED path, which retires
+# exactly those entries. The gate now sits BELOW the pass: same one log
+# line, same no-prompt, but the store is pruned first and the report
+# comes off the pruned store.
+# ---------------------------------------------------------------------
+page_store.ensure_records(_root, "lec3", "", ["", "", "", "Slide 4 of a third lecture."])
+os.makedirs(os.path.dirname(retention._matches_path("lec3")), exist_ok=True)
+with open(retention._matches_path("lec3"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"12": 4, "13": 4}}, f)
+_page_hash3 = page_store.text_hash(page_store.load_record(_root, "lec3", "", 3))
+_, _card_hash12 = pt._card_text(_nokey_mw.col, 12, lambda s: s)
+
+
+def _entry3(card_hash):
+    return {"pertinent": False, "reason": "rejected in an earlier paid run",
+            "page": 4, "page_hash": _page_hash3, "card_hash": card_hash,
+            "model": "claude-sonnet-5"}
+
+
+pt.save_judged(_root, "lec3", {"version": pt.VERSION, "model": "claude-sonnet-5",
+                               "verdicts": {"12": _entry3(_card_hash12),
+                                            "13": _entry3("hash-of-text-long-gone")}})
+check("the fixture really holds two rejections, one of them stale (or the "
+      "pins below prove nothing)",
+      pt.rejected_nids(pt.load_judged(_root, "lec3")) == {12, 13}
+      and not pt.is_stale(_entry3(_card_hash12), _card_hash12, _page_hash3, "claude-sonnet-5")
+      and pt.is_stale(_entry3("hash-of-text-long-gone"),
+                      pt._card_text(_nokey_mw.col, 13, lambda s: s)[1],
+                      _page_hash3, "claude-sonnet-5"))
+_done.clear()
+_calls_before_stale = len(_client_calls)
+_nokey_log3 = io.StringIO()
+with contextlib.redirect_stdout(_nokey_log3):
+    pt.ensure_judged(
+        _nokey_mw, "lec3", [(12, 0.9), (13, 0.85)],
+        on_done=_done.append, on_error=_errors.append, cancel=None,
+        on_progress=lambda *a: None, ask=ask_must_not_run,
+    )
+check("keyless: the FRESH rejection is reported and the STALE one is not — "
+      "no key is not a reason to keep a card doubtful over text that no "
+      "longer exists",
+      _done == [{12}], repr(_done))
+check("...and the stale entry is really gone from judged.json, so every "
+      "other reader of the store (retention, tag_sync) agrees with what "
+      "this phase just reported",
+      set(pt.load_judged(_root, "lec3")["verdicts"].keys()) == {"12"},
+      repr(pt.load_judged(_root, "lec3")["verdicts"]))
+check("...still no prompt, still no client call, still exactly one log line",
+      ask_must_not_run_log == [] and len(_client_calls) == _calls_before_stale
+      and _nokey_log3.getvalue().count("[klausmate]") == 1,
+      _nokey_log3.getvalue())
+
 check("no on_error ever fired across the whole glue section", _errors == [])
 
 section("ensure_judged: fix round 1, C1 — an un-priced reasoning_model never wedges the phase")

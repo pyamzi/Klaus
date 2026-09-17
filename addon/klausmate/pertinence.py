@@ -378,20 +378,6 @@ def ensure_judged(
     display = display_name(pdf_name)
     user_files = _user_files()
     safe = pdf_handler._safe_basename(pdf_name)
-    if not plus.active(cfg) and not str(cfg.get("api_key_anthropic") or "").strip():
-        # The verdicts already on disk STAND, so this path reports them
-        # rather than set() (PR #4 second re-review): they were paid for,
-        # each one is keyed on its card's and its page's own text hashes,
-        # and `retention.priority_rows`/`tag_sync.doubtful_members` read
-        # that same store whatever this phase answers. Reporting nothing
-        # would not un-doubt a card — it would only make this phase
-        # disagree with every other reader of judged.json, and pulling a
-        # key must never silently move a card either way.
-        print(f"[klausmate] pertinence: no Anthropic key and Klaus Plus is not active "
-              f"— “{display}” stays unjudged; earlier verdicts stand.")
-        on_done(rejected_nids(load_judged(user_files, safe)))
-        return
-
     path = pdf_handler.pdf_path_for(user_files, safe) or ""
     threshold = retention.get_threshold(pdf_name, cfg)
     pages = _matched_pages(pdf_name)
@@ -433,6 +419,28 @@ def ensure_judged(
         # the job then manages to judge), the obsolete verdicts are already
         # off disk for every other reader of judged.json.
         save_judged(user_files, safe, judged)
+
+    if not plus.active(cfg) and not str(cfg.get("api_key_anthropic") or "").strip():
+        # BELOW the staleness pass, deliberately (PR #4 third re-review).
+        # The verdicts already on disk STAND, so this path reports them
+        # rather than set() (PR #4 second re-review): they were paid for,
+        # each one is keyed on its card's and its page's own text hashes,
+        # and `retention.priority_rows`/`tag_sync.doubtful_members` read
+        # that same store whatever this phase answers. Reporting nothing
+        # would not un-doubt a card — it would only make this phase
+        # disagree with every other reader of judged.json, and pulling a
+        # key must never silently move a card either way. But "keyed on
+        # the card's and the page's own text hashes" is only true while
+        # someone actually CHECKS those hashes: gating above the pass
+        # reported every stored rejection unconditionally, so a card
+        # edited after the last paid run stayed Doubtful for as long as
+        # the user had no key. The pass above has now retired exactly
+        # those entries (and saved), so this reports the pruned store —
+        # the same verdicts the keyed path would stand by.
+        print(f"[klausmate] pertinence: no Anthropic key and Klaus Plus is not active "
+              f"— “{display}” stays unjudged; earlier verdicts stand.")
+        on_done(rejected_nids(judged))
+        return
 
     if not todo:
         on_done(rejected_nids(judged))

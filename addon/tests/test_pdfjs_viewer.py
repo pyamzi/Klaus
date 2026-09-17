@@ -1810,6 +1810,36 @@ check("the transcript text lands as textContent, never innerHTML — a "
       "markup of its own",
       '.textContent = text' in _HTML258)
 
+# PR #4 third re-review (Copilot), finding 4: the chevron swapped its
+# glyph and nothing else, so the collapsed/expanded state existed only
+# as a typographic hint. A screen reader read "▸ Transcript" as a button
+# with no state at all. aria-expanded is the standard for exactly this
+# control, and the header must also name the region it controls.
+_KTHEAD_MARKUP = _HTML258.split('id="ktHead"', 1)[1].split(">", 1)[0] if 'id="ktHead"' in _HTML258 else ""
+check("the toggle names the body it controls (which carries an id to "
+      "point at)", 'id="ktBody"' in _HTML258 and 'aria-controls="ktBody"' in _KTHEAD_MARKUP,
+      repr(_KTHEAD_MARKUP))
+_KTHEAD_FN = _HTML258.split('getElementById("ktHead").addEventListener', 1)
+check("the click handler exists as a real function to inspect", len(_KTHEAD_FN) == 2)
+def _uncommented(js: str) -> str:
+    """The JS with `//` line comments dropped, so a source pin cannot be
+    satisfied by a commented-out line (K-269 review). Crude on purpose:
+    neither extracted body carries a `://` literal."""
+    return "\n".join(line.split("//", 1)[0] for line in js.splitlines())
+
+_KTHEAD_BODY = _uncommented(_KTHEAD_FN[1].split("});", 1)[0]) if len(_KTHEAD_FN) == 2 else ""
+check("...and every toggle publishes the new state as aria-expanded, "
+      "computed from the class that actually decides it rather than a "
+      "second flag that could drift from it",
+      'setAttribute("aria-expanded"' in _KTHEAD_BODY
+      and 'classList.contains("collapsed")' in _KTHEAD_BODY,
+      repr(_KTHEAD_BODY))
+check("klausSetTranscript sets it too, so the state is published the "
+      "first time the strip is shown — never only after a user has "
+      "already clicked it once",
+      'setAttribute("aria-expanded"'
+      in _uncommented(_HTML258.split("window.klausSetTranscript = function", 1)[-1].split("};", 1)[0]))
+
 section("K-258 fix round 1 (C1): the strip is OUT of the page flow")
 # The original shape appended .klaus-transcript INSIDE
 # state.pageDivs[pageIndex] — an in-flow child of a .page div whose

@@ -349,7 +349,7 @@ origin, matching the native viewer and the bake pipeline exactly
       <button id="findnext" title="Next match (Enter)">&#8250;</button>
       <button id="findclose" title="Close (Esc)">&#10005;</button>
     </div>
-    <div id="scroll"><div id="pages"></div><div id="error"></div><div id="klausTranscript"><button type="button" id="ktHead" class="ktHead">&#9662; Transcript</button><div id="ktBody" class="ktBody"></div></div></div>
+    <div id="scroll"><div id="pages"></div><div id="error"></div><div id="klausTranscript"><button type="button" id="ktHead" class="ktHead" aria-controls="ktBody" aria-expanded="true">&#9662; Transcript</button><div id="ktBody" class="ktBody"></div></div></div>
     <div id="annobar">
       <button id="abHl" title="Highlight" aria-pressed="false">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
@@ -2235,6 +2235,9 @@ window.klausSetTranscript = function (pageIndex, text) {
   if (!strip) return;
   strip.querySelector(".ktBody").textContent = text || "";
   strip.classList.toggle("visible", !!text);
+  // Publish the state the FIRST time the strip is shown, not only once
+  // the user has already clicked the chevron (PR #4 third re-review).
+  document.getElementById("ktHead").setAttribute("aria-expanded", strip.classList.contains("collapsed") ? "false" : "true");
 };
 
 /* The chevron is static markup (see #klausTranscript above), so it is
@@ -2245,6 +2248,10 @@ document.getElementById("ktHead").addEventListener("click", function () {
   strip.classList.toggle("collapsed");
   head.textContent =
     (strip.classList.contains("collapsed") ? "▸" : "▾") + " Transcript";
+  // The glyph alone left the state typographic — invisible to a screen
+  // reader (PR #4 third re-review). Read off the class that actually
+  // decides it, never a second flag that could drift from it.
+  head.setAttribute("aria-expanded", strip.classList.contains("collapsed") ? "false" : "true");
 });
 
 post("boot");

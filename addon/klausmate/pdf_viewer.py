@@ -4398,6 +4398,14 @@ class PdfSidebar(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
         label = QLabel("", scroll)
+        # PR #4 third re-review: transcript text is UNTRUSTED — a
+        # microphone through a transcription API — and QLabel.setText
+        # defaults to AutoText, which sniffs the string and renders
+        # anything markup-shaped as markup (an <img>, a link). Declared
+        # once here so every set_transcript below inherits it; the
+        # pdf.js half of this same strip gets it from writing with
+        # textContent.
+        label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
         label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop

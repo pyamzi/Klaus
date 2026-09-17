@@ -151,6 +151,27 @@ if _HAVE_QT:
           sb._transcript_scroll.focusPolicy() == _NoFocus)
     check("...and the label",
           sb._transcript_label.focusPolicy() == _NoFocus)
+    # PR #4 third re-review (Copilot): QLabel.setText defaults to
+    # Qt.TextFormat.AutoText, which sniffs the string and renders
+    # anything that looks like markup AS markup — `<img src=...>`, a
+    # link, a bold run. Transcript text is untrusted: it comes off a
+    # microphone and back out of a transcription API. The pdf.js half of
+    # this same strip already writes with textContent; PlainText is the
+    # Qt-side equivalent, declared ONCE where the label is built so
+    # every set_transcript inherits it.
+    check("the label is PlainText, so no set_transcript can ever parse "
+          "markup out of a transcript",
+          sb._transcript_label.textFormat() == _QtC.Qt.TextFormat.PlainText,
+          repr(sb._transcript_label.textFormat()))
+    sb.set_transcript(0, "<b>bold</b>")
+    # text() is format-independent (QLabel keeps the string it was
+    # given either way), so the pin above is the load-bearing one; this
+    # one documents the whole contract end to end: what the strip is
+    # asked to show is what a reader sees, tag characters and all.
+    check("...and a transcript carrying markup is shown as its literal "
+          "characters",
+          sb._transcript_label.text() == "<b>bold</b>",
+          repr(sb._transcript_label.text()))
     sb.set_transcript(0, "hello transcript")
     check("set_transcript shows the strip with the given text",
           sb._transcript.isVisible()
