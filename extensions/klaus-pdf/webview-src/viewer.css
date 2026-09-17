@@ -1,3 +1,38 @@
+/* Obsidian-like theme: dark-first, quiet chrome, one accent family.
+   Both palettes ship in one sheet — VS Code puts .vscode-light /
+   .vscode-dark on the webview body; dark is the default. Discipline
+   inherited from klausmate's design system: hairline borders, veil
+   hovers (translucent, never opaque), no shadows except the sanctioned
+   paper shadow on rendered pages. */
+
+:root {
+  --bg-primary: #1e1e1e;   /* editor canvas */
+  --bg-secondary: #262626; /* sidebars, chrome */
+  --border: #363636;       /* hairlines */
+  --text-normal: #dadada;
+  --text-muted: #9e9e9e;
+  --text-faint: #6e6e6e;
+  --accent: #7f6df2;
+  --accent-tint: rgba(127, 109, 242, 0.25);
+  --veil-hover: rgba(255, 255, 255, 0.055);
+  --veil-press: rgba(255, 255, 255, 0.1);
+  --danger: #e06c75;
+}
+
+body.vscode-light {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f6f6;
+  --border: #e0e0e0;
+  --text-normal: #222222;
+  --text-muted: #808080;
+  --text-faint: #b3b3b3;
+  --accent: #705dcf;
+  --accent-tint: rgba(112, 93, 207, 0.18);
+  --veil-hover: rgba(0, 0, 0, 0.05);
+  --veil-press: rgba(0, 0, 0, 0.09);
+  --danger: #c0392b;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -8,13 +43,14 @@ body,
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 #root {
   display: flex;
   flex-direction: row;
-  background: #46484f;
+  background: var(--bg-primary);
+  color: var(--text-normal);
 }
 
 .impress {
@@ -24,6 +60,8 @@ body,
   height: 100%;
 }
 
+/* ---------- Filmstrip (left sidebar) ---------- */
+
 .filmstrip {
   width: 168px;
   flex-shrink: 0;
@@ -32,7 +70,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #35373d;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
 }
 
 .thumb {
@@ -44,12 +83,16 @@ body,
   cursor: pointer;
 }
 
+.thumb:hover {
+  background: var(--veil-hover);
+}
+
 .thumb.selected {
-  border-color: #5b8def;
+  border-color: var(--accent);
 }
 
 .thumb .pdf-page {
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
 .thumb-num {
@@ -59,9 +102,11 @@ body,
   padding: 1px 6px;
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.55);
-  color: #d7d8dd;
+  color: #dadada;
   font-size: 11px;
 }
+
+/* ---------- Stage ---------- */
 
 .stage-column {
   flex: 1;
@@ -70,103 +115,14 @@ body,
   flex-direction: column;
 }
 
-.stage {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: auto;
-  padding: 32px;
-}
-
-.notes-sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: #2a2b31;
-  border-left: 1px solid #4a4c55;
-}
-
-.notes-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  color: #d7d8dd;
-  font-size: 13px;
-}
-
-.notes-header > span:first-child {
-  flex: 1;
-  font-weight: 600;
-}
-
-.notes-status {
-  font-size: 11px;
-  color: #8b8d98;
-}
-
-.notes-status-error {
-  color: #f2b8bd;
-}
-
-.notes-toggle {
-  padding: 2px 10px;
-  border: 1px solid #4a4c55;
-  border-radius: 6px;
-  background: #34353c;
-  color: #d7d8dd;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.notes-input {
-  flex: 1;
-  margin: 0 10px 10px;
-  padding: 10px;
-  border: 1px solid #4a4c55;
-  border-radius: 8px;
-  background: #1e1f24;
-  color: #e8e8ea;
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  resize: none;
-}
-
-.notes-preview {
-  flex: 1;
-  overflow-y: auto;
-  margin: 0 10px 10px;
-  padding: 10px;
-  border-radius: 8px;
-  background: #1e1f24;
-  color: #e8e8ea;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.notes-preview img {
-  max-width: 100%;
-  border-radius: 4px;
-}
-
-.notes-error {
-  margin: 10px;
-  padding: 10px;
-  border-radius: 8px;
-  background: #3a2326;
-  color: #f2b8bd;
-  font-size: 12.5px;
-}
-
 .viewer-toolbar {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 8px 14px;
-  background: #2a2b31;
-  color: #d7d8dd;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-normal);
   font-size: 13px;
   flex-shrink: 0;
 }
@@ -177,10 +133,11 @@ body,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text-muted);
 }
 
 .viewer-pages {
-  color: #9a9ca6;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -194,20 +151,37 @@ body,
   min-width: 44px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
 }
 
 .viewer-zoom button {
   padding: 3px 10px;
-  border: 1px solid #4a4c55;
+  border: none;
   border-radius: 6px;
-  background: #34353c;
-  color: #d7d8dd;
+  background: transparent;
+  color: var(--text-muted);
   font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
 }
 
 .viewer-zoom button:hover {
-  background: #3f414a;
+  background: var(--veil-hover);
+  color: var(--text-normal);
+}
+
+.viewer-zoom button:active {
+  background: var(--veil-press);
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 32px;
 }
 
 .viewer-message {
@@ -215,21 +189,124 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #c3c5cc;
-  font-size: 14px;
+  color: var(--text-muted);
+  font-size: 13px;
   padding: 24px;
   text-align: center;
 }
 
+/* Paper: the one sanctioned shadow. */
 .pdf-page {
   position: relative;
   background: #fff;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
 }
 
 .pdf-page-canvas canvas {
   display: block;
+}
+
+/* ---------- Notes sidebar (right) ---------- */
+
+.notes-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  color: var(--text-normal);
+  font-size: 13px;
+}
+
+.notes-header > span:first-child {
+  flex: 1;
+  font-weight: 600;
+}
+
+.notes-status {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.notes-status-error {
+  color: var(--danger);
+}
+
+.notes-toggle {
+  padding: 2px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notes-toggle:hover {
+  background: var(--veil-hover);
+  color: var(--text-normal);
+}
+
+.notes-input {
+  flex: 1;
+  margin: 0 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  resize: none;
+}
+
+.notes-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.notes-input::placeholder {
+  color: var(--text-faint);
+}
+
+.notes-preview {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 10px 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-normal);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.notes-preview img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.notes-preview a {
+  color: var(--accent);
+}
+
+.notes-error {
+  margin: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--danger);
+  font-size: 12px;
 }
 
 /* ---------- pdf.js text layer (selection) ---------- */
@@ -255,5 +332,5 @@ body,
 }
 
 .textLayer ::selection {
-  background: rgba(41, 98, 255, 0.3);
+  background: var(--accent-tint);
 }
