@@ -101,3 +101,21 @@ def test_last_event_created_migrates_onto_a_database_created_without_it(settings
     row = store.customer_by_stripe_id("cus_old")
     assert row["email"] == "a@b.c" and row["last_event_created"] is None
     assert store.claim_event_created("cus_old", 100) is True
+
+
+def test_claim_recovery_is_won_by_exactly_one_caller_inside_the_window(store, now):
+    """K-271: /recover checked the cooldown and rotated the key in two separate statements,
+    so two requests in flight could both pass, both mint, and the key in the first email was
+    dead on arrival. The window is claimed with ONE conditional UPDATE instead."""
+    cid = store.upsert_customer("cus_1", "a@b.c", now)
+    assert store.claim_recovery(cid, now, 3600) is True           # never rotated: key_rotated_at IS NULL
+    assert store.claim_recovery(cid, now + 1, 3600) is False      # the loser, inside the window
+    assert store.customer_by_id(cid)["key_rotated_at"] == now     # and it wrote nothing
+    assert store.claim_recovery(cid, now + 3601, 3600) is True    # the window has passed
+    store.release_recovery(cid, now, now + 3601)                  # the email never went out
+    assert store.customer_by_id(cid)["key_rotated_at"] == now
+    assert store.claim_recovery(cid, now + 3601, 3600) is True    # so it is claimable again
+    # K-271 review: a release is guarded by the stamp its own claim wrote — a send that
+    # outlived a NEWER claim cannot roll that claim back
+    store.release_recovery(cid, now, now + 3600)                  # stale stamp: not this claim's
+    assert store.customer_by_id(cid)["key_rotated_at"] == now + 3601
