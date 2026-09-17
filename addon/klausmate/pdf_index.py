@@ -1,28 +1,31 @@
-"""Persistent embedding index over one PDF's text chunks.
+"""Persistent embedding index over one PDF's pages — one vector per page.
 
 Pure stdlib, aqt-free — the sibling of ``card_index.py`` for the PDF side
 of the retention feature. Each imported PDF gets its own directory:
 
 Storage layout (``user_files/pdf_index/<safe_name>/``):
 
-- ``vectors.f32``   — unit vectors, row-major packed float32
-- ``manifest.json`` — chunk table (page / char offset / length, parallel to
-  vector rows), the (provider, model, dims) signature, the source file
-  signature, and the resume cursor ``embedded_rows``
+- ``vectors.f32``   — unit vectors, row-major packed float32, one row per
+  page
+- ``manifest.json`` — page table ((page_1based, text_hash) per row,
+  parallel to vector rows), the (provider, model, dims) signature, the
+  source file signature, and the resume cursor ``embedded_rows``
 - ``matches.json``  — card-match cache, owned by retention.py (deleted with
   the directory, never read here)
 
 Staleness: ``source_sig`` is (mtime, size) of ``contexts/<safe>.json`` —
 re-importing a PDF rewrites that file and invalidates the index (the same
 idiom as pdf_handler's BM25 cache). A provider/model change invalidates
-via the signature, exactly like the card index.
+via the signature, exactly like the card index. Each page's own text hash
+(page_store.text_hash) is the finer-grained key retention.py's rebuild
+uses to reuse a page's vector unchanged instead of re-embedding it.
 
-Resume: chunking is deterministic, so a cancelled embedding run persists
-``embedded_rows`` < len(chunks); the next run re-chunks, verifies the
-source signature and chunk table still match, and continues embedding at
-that row. Crash safety mirrors card_index: vectors are written before the
-manifest (both tmp + ``os.replace``), and a size mismatch on load means
-rebuild.
+Resume: the page table (page_store.page_texts) is deterministic and in
+page order, so a cancelled embedding run persists ``embedded_rows`` <
+len(pages); the next run re-derives the table, verifies the source
+signature still matches, and continues embedding at that row. Crash
+safety mirrors card_index: vectors are written before the manifest (both
+tmp + ``os.replace``), and a size mismatch on load means rebuild.
 """
 
 from __future__ import annotations
@@ -34,9 +37,9 @@ import time
 from array import array
 from dataclasses import dataclass, field
 
-from . import pdf_handler
+from . import card_index, embeddings, pdf_handler
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 SUBDIR = "pdf_index"
 VECTORS_FILE = "vectors.f32"
 MANIFEST_FILE = "manifest.json"
@@ -48,16 +51,16 @@ class PdfIndex:
     model: str
     pdf_name: str
     dims: int = 0
-    # (mtime, size) of the source contexts/<safe>.json at chunking time
+    # (mtime, size) of the source contexts/<safe>.json at page-table time
     source_sig: tuple[int, int] = (0, 0)
-    # (page_1based, char_start, char_len) per chunk, parallel to vector rows
-    chunks: list[tuple[int, int, int]] = field(default_factory=list)
+    # (page_1based, text_hash) per page, parallel to vector rows
+    pages: list[tuple[int, str]] = field(default_factory=list)
     embedded_rows: int = 0
     vectors: array = field(default_factory=lambda: array("f"))
     updated_at: float = 0.0
 
     def is_complete(self) -> bool:
-        return bool(self.chunks) and self.embedded_rows == len(self.chunks)
+        return bool(self.pages) and self.embedded_rows == len(self.pages)
 
 
 def index_dir(user_files_dir: str, name: str) -> str:
@@ -79,37 +82,6 @@ def source_signature(user_files_dir: str, name: str) -> tuple[int, int] | None:
     return None
 
 
-def stride_sample(items: list, cap: int) -> list:
-    """Evenly sample ``cap`` items, keeping document order."""
-    if len(items) <= cap:
-        return list(items)
-    step = len(items) / cap
-    return [items[int(i * step)] for i in range(cap)]
-
-
-def chunk_pages(pages: list[str], cap: int) -> list[tuple[int, int, int, str]]:
-    """Chunk a PDF page-by-page → [(page_1based, start, length, text)].
-
-    Per-page chunking loses cross-page-boundary chunks but is what gives
-    each chunk a page attribution. Deterministic for a given input, which
-    is what makes ``embedded_rows`` a valid resume cursor.
-    """
-    out: list[tuple[int, int, int, str]] = []
-    for page_no, page_text in enumerate(pages, start=1):
-        for c in pdf_handler._chunk_text(page_text or "", source=""):
-            text = c["text"]
-            out.append((page_no, int(c.get("start") or 0), len(text), text))
-    return stride_sample(out, cap) if cap > 0 else out
-
-
-def chunk_text_at(pages: list[str], chunk: tuple[int, int, int]) -> str:
-    """Recover a chunk's text from the pages via its (page, start, len) key."""
-    page_no, start, length = chunk
-    if not (1 <= page_no <= len(pages)):
-        return ""
-    return (pages[page_no - 1] or "").strip()[start : start + length].strip()
-
-
 # ------------------------------------------------------------------- disk
 
 
@@ -122,10 +94,10 @@ def load(dir_path: str) -> PdfIndex | None:
             m = json.load(f)
         if m.get("version") != INDEX_VERSION:
             return None
-        chunks = [(int(c[0]), int(c[1]), int(c[2])) for c in m["chunks"]]
+        pages = [(int(p[0]), str(p[1])) for p in m["pages"]]
         dims = int(m["dims"])
         embedded_rows = int(m.get("embedded_rows") or 0)
-        if not (0 <= embedded_rows <= len(chunks)):
+        if not (0 <= embedded_rows <= len(pages)):
             return None
         vectors = array("f")
         if embedded_rows:
@@ -143,7 +115,7 @@ def load(dir_path: str) -> PdfIndex | None:
             pdf_name=str(m.get("pdf_name") or ""),
             dims=dims,
             source_sig=(int(sig[0]), int(sig[1])),
-            chunks=chunks,
+            pages=pages,
             embedded_rows=embedded_rows,
             vectors=vectors,
             updated_at=float(m.get("updated_at") or 0.0),
@@ -172,7 +144,7 @@ def save(index: PdfIndex, dir_path: str) -> None:
         "pdf_name": index.pdf_name,
         "dims": index.dims,
         "source_sig": list(index.source_sig),
-        "chunks": [list(c) for c in index.chunks],
+        "pages": [list(p) for p in index.pages],
         "embedded_rows": index.embedded_rows,
         "updated_at": index.updated_at,
     }
@@ -196,39 +168,47 @@ def is_fresh(
         index is not None
         and source_sig is not None
         and index.source_sig == source_sig
-        and (index.provider, index.model) == signature
+        and embeddings.signature_matches(
+            index.provider, index.model, index.dims, signature
+        )
         and index.is_complete()
     )
 
 
+# The failure exit's answer; test_klausmate pins that the success exit
+# answers the same key set (card_index.stats_from_disk shipped that drift).
+_EMPTY_STATS: dict = {
+    "exists": False,
+    "pages": 0,
+    "embedded": 0,
+    "complete": False,
+    "provider": "",
+    "model": "",
+    "dims": 0,
+    "updated_at": 0.0,
+}
+
+
 def stats_from_disk(dir_path: str) -> dict:
     """Manifest-only stats for the panel — never loads the vectors."""
+    m = card_index.read_manifest(dir_path, INDEX_VERSION, MANIFEST_FILE)
+    if m is None:
+        return dict(_EMPTY_STATS)
     try:
-        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            raise ValueError("version mismatch")
-        chunks = m["chunks"]
+        pages = m["pages"]
         embedded = int(m.get("embedded_rows") or 0)
         return {
             "exists": True,
-            "chunks": len(chunks),
+            "pages": len(pages),
             "embedded": embedded,
-            "complete": bool(chunks) and embedded == len(chunks),
+            "complete": bool(pages) and embedded == len(pages),
             "provider": str(m.get("provider") or ""),
             "model": str(m.get("model") or ""),
+            "dims": int(m.get("dims") or 0),
             "updated_at": float(m.get("updated_at") or 0.0),
         }
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {
-            "exists": False,
-            "chunks": 0,
-            "embedded": 0,
-            "complete": False,
-            "provider": "",
-            "model": "",
-            "updated_at": 0.0,
-        }
+    except (KeyError, TypeError, ValueError):  # a dict, but not a manifest
+        return dict(_EMPTY_STATS)
 
 
 def delete(user_files_dir: str, name: str) -> None:
@@ -237,3 +217,31 @@ def delete(user_files_dir: str, name: str) -> None:
         shutil.rmtree(index_dir(user_files_dir, name))
     except OSError:
         pass
+
+
+try:
+    from math import sumprod as _sumprod
+except ImportError:  # pre-3.12 fallback (Anki bundles 3.13)
+    def _sumprod(a, b):  # type: ignore[misc]
+        return sum(x * y for x, y in zip(a, b))
+
+
+def best_page(index: PdfIndex, vec) -> tuple[int, float]:
+    """Argmax-dot row for one unit query vector; (page_1based, score), or
+    (-1, 0.0) when the index is empty or the dims disagree. A zero row
+    scores 0.0 and only wins when every row does."""
+    dims, rows = index.dims, index.embedded_rows
+    if rows <= 0 or dims <= 0:
+        return (-1, 0.0)
+    try:
+        if len(vec) != dims:
+            return (-1, 0.0)
+    except TypeError:
+        return (-1, 0.0)
+    mv = memoryview(index.vectors)
+    best_i, best = 0, float("-inf")
+    for i in range(rows):
+        s = _sumprod(mv[i * dims:(i + 1) * dims], vec)
+        if s > best:
+            best_i, best = i, s
+    return (index.pages[best_i][0], float(best))

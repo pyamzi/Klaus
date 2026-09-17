@@ -1,0 +1,550 @@
+"""The Preferences dialog after the API-first reversal (2026-09-15,
+K-227): the Assistant page reduced to what survives the local runtime's
+deletion, and the retired keys gone from config.json / config.md.
+
+Three layers, same recipe as tests/test_pdf_map.py and
+tests/test_dialog_logic.py (PyQt6 cannot be imported here — see the
+klaus-test skill):
+
+  1. the module imports for real, so a leftover import of a deleted
+     module fails loudly here rather than at Anki start-up.
+  2. Structural/source pins on the RAW source (never anki_stubs.code_only
+     for an absence check — code_only strips string literals, so a pin
+     like '"assistant_api_key" not in code_only(...)' would trivially
+     pass even if the key were still a live dict-literal string
+     somewhere in the file; see klaus-design-language memory note "code_only
+     strips strings"). _func_seg extracts one function's exact source via
+     ast.walk, same recipe as test_pdf_map.py's _func_seg — it finds a
+     FunctionDef by name regardless of nesting depth, which is what lets
+     it reach into manage_models_dialog's closures (save_assistant,
+     clear_assistant_sessions, etc.).
+  3. config.json / config.md content pins (plain file reads + json.load).
+
+Run: python3 tests/test_manage_models_assistant.py
+"""
+from __future__ import annotations
+
+import ast
+import io
+import json
+import os
+import sys
+import textwrap
+import tokenize
+
+sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(__file__), "..", ".claude", "skills", "klaus-test", "scripts"
+    ),
+)
+
+from anki_stubs import ADDON, check, code_only, install, report, section  # noqa: E402
+
+install()
+
+import importlib  # noqa: E402
+
+manage_models = importlib.import_module("klausmate.manage_models")
+
+_MM_PATH = os.path.join(ADDON, "manage_models.py")
+_SRC = open(_MM_PATH).read()  # RAW source — absence pins must read this, not code_only
+_CODE = code_only(_SRC)  # comments AND strings stripped, for shape/wiring pins
+_TREE = ast.parse(_SRC)
+
+_REPO_ROOT = os.path.dirname(ADDON)
+_CONFIG_JSON_PATH = os.path.join(ADDON, "config.json")
+_CONFIG_MD_PATH = os.path.join(ADDON, "config.md")
+
+
+def _func_seg(name: str) -> str:
+    """Source segment of the (unique) function/method ``name``, found by
+    walking the WHOLE tree — reaches nested closures regardless of how
+    deep inside manage_models_dialog they live. Same recipe as
+    tests/test_pdf_map.py's _func_seg."""
+    for node in ast.walk(_TREE):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(_SRC, node) or ""
+    return ""
+
+
+def _strip_comments_keep_strings(src: str) -> str:
+    """Comments removed, STRINGS KEPT — for pins that need to see a
+    string literal (e.g. a dict key) but must not be fooled by a
+    docstring/comment merely mentioning it."""
+    try:
+        kept = [
+            tok
+            for tok in tokenize.generate_tokens(io.StringIO(src).readline)
+            if tok.type != tokenize.COMMENT
+        ]
+        return tokenize.untokenize(kept)
+    except Exception:
+        return src
+
+
+def _call_arg_source(func_src: str, callee_name: str, arg_index: int):
+    """Unparsed source of the positional arg at `arg_index` in the first
+    Call to a bare-name `callee_name` found anywhere in `func_src`.
+
+    `func_src` is typically a _func_seg(...) result — a nested-function
+    segment that keeps its ORIGINAL indentation (4 or 8 spaces, since
+    it's a closure inside manage_models_dialog), so it has to be
+    textwrap.dedent()-ed before ast.parse() will accept it as a
+    standalone module. Returns None (not "") when the call or that
+    argument isn't found, so a caller can assert "found AND looks
+    right" as one condition rather than a found-but-empty string
+    silently reading as a mismatch.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(func_src))
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == callee_name
+            and len(node.args) > arg_index
+        ):
+            return ast.unparse(node.args[arg_index])
+    return None
+
+
+def _if_test_source(func_src: str, marker: str):
+    """Unparsed source of the `test` of the first `If` node in func_src
+    whose unparsed test contains `marker` — a way to find ONE specific
+    if-statement by a phrase unique to its condition, since ast.walk
+    gives no other handle on "the if I mean" without a line number that
+    would go stale on the next reformat. Same dedent/None contract as
+    _call_arg_source."""
+    try:
+        tree = ast.parse(textwrap.dedent(func_src))
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            src = ast.unparse(node.test)
+            if marker in src:
+                return src
+    return None
+
+
+# =====================================================================
+section("the local-runtime era is gone from this module (spec D1)")
+# =====================================================================
+# One provider, no local runtime: the Ollama client/runtime/setup modules
+# are deleted, so a module-top import of any of them would stop the whole
+# add-on loading — and the pull/classify/preset machinery they fed goes
+# with them. RAW source: code_only() strips string literals, which is
+# exactly what an absence pin must still be able to see.
+for _gone in ("ollama_client", "ollama_runtime", "ollama_setup", "page_ocr",
+              "OllamaError", "InstallMethod", "install_methods",
+              "ollama_reachable", "run_install_method", "full_setup"):
+    check(f"{_gone} is not referenced anywhere in manage_models.py",
+          _gone not in _SRC)
+
+for _gone_attr in ("classify_model", "embedding_candidates",
+                   "_resolve_ollama_model", "_EMBED_PRESETS", "_OCR_PRESETS",
+                   "_MODEL_TYPE_LABELS", "_format_pull_event"):
+    check(f"manage_models.{_gone_attr} no longer exists",
+          not hasattr(manage_models, _gone_attr) and _gone_attr not in _SRC)
+
+check("no pull / delete / install machinery survives — there is nothing "
+      "local left to manage",
+      "start_pull" not in _SRC and "delete_selected" not in _SRC
+      and "start_install" not in _SRC and "start_auto_setup" not in _SRC
+      and "pull_missing" not in _SRC)
+check('the "endpoint" config key is gone with the local server',
+      "endpoint_url" not in _SRC and '"endpoint"' not in _SRC)
+
+
+# =====================================================================
+section("config.json: the Assistant's own keys, the OCR/binary keys gone")
+# =====================================================================
+with open(_CONFIG_JSON_PATH) as f:
+    _cfg_json_text = f.read()
+_cfg = json.loads(_cfg_json_text)
+
+_ASSISTANT_DEFAULTS = {
+    "assistant_reopen": False,
+    "assistant_dock_width": 420,
+    # assistant_dock_open (final review I7): assistant_reopen was
+    # written by Preferences and read by nobody. The dock now records
+    # whether it was open here, and honours the pair on profile open.
+    "assistant_dock_open": False,
+}
+for key, want in _ASSISTANT_DEFAULTS.items():
+    check(f"config.json[{key!r}] == {want!r}",
+          key in _cfg and _cfg[key] == want,
+          f"got {_cfg.get(key, '<missing>')!r}")
+
+for dropped in ("assistant_api_key", "assistant_backend", "assistant_token",
+                "ocr_enabled", "ocr_model", "claude_binary",
+                "assistant_model"):
+    check(f"config.json no longer has {dropped!r}", dropped not in _cfg)
+
+check("config.json is still valid, single, well-formed JSON (a hand "
+      "edit that drops a trailing comma wrong would fail this)",
+      isinstance(_cfg, dict))
+
+
+# =====================================================================
+section("source pins: every retired credential surface is gone")
+# =====================================================================
+# RAW source, deliberately not _CODE (code_only strips string literals,
+# which would make an absence pin on a bare dict-key string vacuous).
+_top_of_file = _CODE.split("def manage_models_dialog", 1)[0]
+
+for dropped_literal in ('"assistant_api_key"', '"assistant_backend"',
+                        '"assistant_token"', '"ocr_enabled"', '"ocr_model"',
+                        '"claude_binary"', '"assistant_model"'):
+    check(f"{dropped_literal} absent from manage_models.py (raw source)",
+          dropped_literal not in _SRC)
+check('"podcast" absent from manage_models.py (raw source) — the old '
+      "Assistant subtitle promised one",
+      "podcast" not in _SRC.lower())
+check('"practise" / "practice" absent too — the other promise the old '
+      "subtitle made",
+      "practise" not in _SRC.lower() and "practice" not in _SRC.lower())
+
+for gone_name in ("assistant_key_edit", "assistant_token_edit",
+                  "assistant_backend_combo", "assistant_key_row",
+                  "assistant_token_row", "_sync_assistant_rows",
+                  "ocr_enabled_cb", "ocr_model_combo", "ocr_pull_btn",
+                  "_fill_ocr_model_combo", "_pull_ocr_selected",
+                  "claude_binary_lbl", "claude_override_btn",
+                  "_pick_claude_binary", "_resolve_claude_binary",
+                  "assistant_model_edit"):
+    check(f"{gone_name} no longer defined/referenced", gone_name not in _SRC)
+
+
+# =====================================================================
+section("save_assistant: the Anthropic key and the two model names")
+# =====================================================================
+_save_assistant_src = _func_seg("save_assistant")
+check("save_assistant was found in the source", bool(_save_assistant_src))
+_save_body = _strip_comments_keep_strings(_save_assistant_src)
+for key in ("api_key_anthropic", "reasoning_model", "transcription_model",
+            "assistant_reopen", "assistant_dock_width", "assistant_dock_open"):
+    check(f'"{key}" present in save_assistant\'s body',
+          f'"{key}"' in _save_body)
+# Parked T8 finding, fixed then and still pinned: meta.json is
+# hand-editable, and a non-numeric stored width made int() raise INSIDE
+# save_all — breaking the Save button for every other setting on the
+# page, not just this one.
+check("the round-tripped width int() is guarded, falling back to 420",
+      "except (TypeError, ValueError)" in _save_assistant_src
+      and "= 420" in _save_assistant_src)
+check("save_assistant still writes through write_config, like every "
+      "other save_* in this dialog",
+      "write_config(cfg)" in code_only(_save_assistant_src))
+check("no leftover write of any retired key inside save_assistant",
+      not any(
+          f'"{k}"' in _save_body
+          for k in ("assistant_api_key", "assistant_backend",
+                    "assistant_token", "ocr_enabled", "ocr_model",
+                    "claude_binary", "assistant_model")
+      ))
+
+
+# =====================================================================
+section("load_assistant: reads those keys back")
+# =====================================================================
+_load_assistant_src = _func_seg("load_assistant")
+check("load_assistant was found in the source", bool(_load_assistant_src))
+_load_body = _strip_comments_keep_strings(_load_assistant_src)
+for key in ("api_key_anthropic", "reasoning_model", "transcription_model",
+            "assistant_reopen"):
+    check(f'load_assistant reads "{key}" back from config',
+          f'"{key}"' in _load_body)
+
+
+# =====================================================================
+section("the Assistant page: two rows, no OCR row, no binary row")
+# =====================================================================
+check('the _page("Assistant", "Assistant", ...) call site still exists '
+      "(same nav_label/title shape test_dialog_logic.py pins)",
+      '"Assistant",\n        "Assistant",' in _SRC)
+_assistant_page_call = _SRC.split(
+    '"Assistant",\n        "Assistant",', 1
+)[1].split(")", 1)[0]
+check("the subtitle no longer promises practice or a podcast",
+      "practise" not in _assistant_page_call.lower()
+      and "podcast" not in _assistant_page_call.lower())
+check("the subtitle no longer sends the user to install Claude Code — "
+      "the assistant runs on the Anthropic key on the keys page",
+      "Claude Code" not in _assistant_page_call
+      and "Anthropic" in _assistant_page_call)
+
+for widget_name in ("assistant_reopen_cb", "clear_sessions_btn"):
+    check(f"{widget_name} constructed in the source", widget_name in _SRC)
+
+check("every surviving control marks dirty, or Save would silently skip "
+      "it (exactly how pdf_renderer shipped broken, per this file's own "
+      "mark_dirty docstring)",
+      "assistant_reopen_cb.toggled.connect" in _SRC
+      and "anthropic_key_edit.textEdited.connect" in _SRC
+      and "reasoning_model_edit.textEdited.connect" in _SRC
+      and "transcription_model_edit.textEdited.connect" in _SRC)
+
+check("Clear Sessions is a SecondaryButton", (
+    'clear_sessions_btn.setObjectName("SecondaryButton")' in _SRC
+))
+
+
+# =====================================================================
+section("Clear Sessions: window-modal confirm, never QMessageBox.question")
+# =====================================================================
+_clear_fn_candidates = [
+    n for n in ("clear_assistant_sessions", "_clear_sessions_confirmed",
+                "_on_clear_sessions_answered")
+    if _func_seg(n)
+]
+check("a Clear Sessions handler function exists", bool(_clear_fn_candidates))
+_clear_all_src = "\n".join(_func_seg(n) for n in (
+    "clear_assistant_sessions", "_clear_sessions_confirmed",
+))
+_clear_all_code = code_only(_clear_all_src)
+check("built by hand (QMessageBox(...) instance), not the blocking "
+      "static QMessageBox.question(...)",
+      "QMessageBox(" in _clear_all_code and "QMessageBox.question(" not in _clear_all_code)
+check("raised window-modal: open() + a finished callback, K-125's "
+      "pattern (never .exec())",
+      "msg.open()" in _clear_all_code
+      and "msg.finished.connect(" in _clear_all_code
+      and ".exec()" not in _clear_all_code)
+check("assistant_sessions.clear_all is imported lazily, never at "
+      "module top",
+      "assistant_sessions" not in _top_of_file)
+check("only on a confirmed Yes does it call assistant_sessions.clear_all",
+      "assistant_sessions.clear_all(" in _clear_all_code)
+check("the import is guarded — a missing module degrades to a log line "
+      "instead of crashing the whole dialog",
+      "except" in _clear_all_src and "assistant_sessions" in _clear_all_src)
+
+
+# =====================================================================
+section("config.md: the Assistant keys, the retired ones gone")
+# =====================================================================
+with open(_CONFIG_MD_PATH) as f:
+    _md = f.read()
+check("an Assistant heading exists", "## Assistant" in _md)
+for key in ("assistant_reopen", "assistant_dock_width", "assistant_dock_open"):
+    check(f"config.md documents {key}", f"**{key}**" in _md)
+for dropped in ("assistant_backend", "assistant_api_key", "assistant_token",
+                "ocr_enabled", "ocr_model", "claude_binary",
+                "assistant_model"):
+    check(f"config.md no longer documents {dropped}",
+          f"**{dropped}**" not in _md)
+check("config.md names the two API keys the add-on actually uses",
+      "**api_key_openai**" in _md and "**api_key_anthropic**" in _md)
+
+
+# =====================================================================
+section("the Klaus Plus group on the keys page (T8, spec D4)")
+# =====================================================================
+# The subscription's rows sit ABOVE the provider keys, because the whole
+# point of a Plus key is that you never paste the other two. The service
+# URL is deliberately NOT here: it is a self-hoster's / staging row, and
+# putting it beside the licence key would invite editing the endpoint
+# while pasting a key.
+_keys_page = _SRC.split('"API keys & models",\n        "API keys & models",', 1)[1]
+_keys_page = _keys_page.split("general_layout = _page(", 1)[0]
+
+for _row_name in ('"Klaus Plus key"', '"Klaus Plus"'):
+    check(f"the keys page carries a {_row_name} row", _row_name in _keys_page)
+check("the Klaus Plus rows come FIRST — above the two provider keys, "
+      "which is the reading order the offer depends on",
+      _keys_page.index('"Klaus Plus key"') < _keys_page.index('"OpenAI API key"')
+      and _keys_page.index('"Klaus Plus"') < _keys_page.index('"Anthropic API key"'))
+check('the service URL row is NOT on this page — "Klaus Plus service" '
+      "belongs to General",
+      '"Klaus Plus service"' not in _keys_page
+      and '"Klaus Plus service"' in _SRC)
+check("the page subtitle says the keys are skippable on Plus, or the "
+      "group above it reads as a fourth thing to fill in",
+      "Klaus Plus" in _keys_page.split("\n    )", 1)[0])
+
+check("both provider rows are CAPTURED, not discarded — their "
+      "descriptions are repainted when a Plus key is present, which "
+      "needs the row widget _row returns",
+      "openai_row = _row(" in _SRC and "anthropic_row = _row(" in _SRC)
+check("...and the caption that replaces them is the spec's wording, "
+      "with the free tier still one deletion away",
+      '"Not needed on Klaus Plus; kept for the free tier."' in _SRC)
+
+_refresh_plus = _func_seg("refresh_plus_status")
+check("refresh_plus_status was found in the source", bool(_refresh_plus))
+_refresh_code = code_only(_refresh_plus)
+check("Manage and Check are disabled without a key — both are calls the "
+      "service answers 401 to, and a button that can only fail is worse "
+      "than no button",
+      "plus_manage_btn.setEnabled(has)" in _refresh_code
+      and "plus_check_btn.setEnabled(has)" in _refresh_code)
+check("Subscribe is NOT disabled — it is the one thing a user without a "
+      "key is there to press",
+      "plus_subscribe_btn.setEnabled(" not in _SRC)
+check("the key's PRESENCE is read through plus.key(), which validates "
+      "the kp_ shape — a half-pasted key must not light the group up as "
+      "a working subscription",
+      "plus.key(" in _refresh_code)
+check("the cached verdict is read by plus.CACHE, not a re-spelled "
+      "string literal",
+      "plus.CACHE" in _refresh_code or "plus.CACHE" in _SRC)
+
+_on_plus_check_src = _func_seg("on_plus_check")
+check("on_plus_check was found in the source", bool(_on_plus_check_src))
+check("on_plus_check hands plus.refresh a MERGING writer — write_config "
+      "REPLACES the whole stored config blob, so passing it straight "
+      "through would wipe every other setting (api keys, library_root, "
+      "the Plus key itself) on the first Check (K-247 fix 1)",
+      "patch_config" in _on_plus_check_src
+      and "write_config" not in _on_plus_check_src)
+
+check("plus is imported at module top — it is aqt-free stdlib, so the "
+      "lazy-import rule the collection-touching modules live under does "
+      "not apply",
+      "from . import plus" in _SRC.split("def _pkg", 1)[0])
+check("openLink comes from aqt.utils beside the other dialog helpers — "
+      "Anki's own browser hop, which honours the user's default browser "
+      "and never opens a webview inside Anki",
+      "from aqt.utils import" in _SRC
+      and "openLink" in _SRC.split("from aqt.utils import", 1)[1].split("\n", 1)[0])
+
+
+# =====================================================================
+section("config.md: the Klaus Plus keys")
+# =====================================================================
+with open(_CONFIG_MD_PATH) as f:
+    _md_plus = f.read()
+check("a Klaus Plus subsection exists under the keys heading",
+      "### Klaus Plus" in _md_plus)
+for key in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base"):
+    check(f"config.md documents {key}", f"**{key}**" in _md_plus)
+check("the cache is documented as state the add-on writes, safe to "
+      "clear — a user who sees a stale verdict must know it is not a "
+      "setting they broke",
+      "safe to clear" in _md_plus.lower())
+check("config.md shows the kp_ shape, so a user can tell a licence key "
+      "from the two provider keys documented right above it",
+      "kp_" in _md_plus)
+
+
+# =====================================================================
+section("AGENTS.md's privacy paragraph names the assistant (I9)")
+# =====================================================================
+# "the only network calls Klaus makes are for embeddings … No telemetry"
+# became false the moment the assistant shipped: every turn sends the
+# page's text, its image, the selection and the user's prompt to
+# Anthropic. That paragraph is the first thing a privacy-conscious user
+# reads. (The provider list in it is Task 8's to bring to the API-first
+# world — pinned here only for what must never stop being true.)
+_AGENTS_MD = os.path.join(os.path.dirname(_CONFIG_MD_PATH), "..", "AGENTS.md")
+_AGENTS_MD = os.path.normpath(_AGENTS_MD)
+with open(_AGENTS_MD) as f:
+    _agents = f.read()
+_privacy = _agents.split("---", 1)[0]
+check("the privacy section no longer claims embeddings are the ONLY network calls",
+      "the only network calls Klaus makes are for embeddings" not in _privacy)
+check("it names Anthropic as a destination, and says it is the assistant's",
+      "Anthropic" in _privacy and "assistant" in _privacy.lower())
+check("it says what a turn actually carries (the page and the selection)",
+      "select" in _privacy.lower() and "image" in _privacy.lower())
+check("no telemetry is still stated", "telemetry" in _privacy.lower())
+
+
+# =====================================================================
+section("K-270: the sidebar star is FILLED in the accent (real pixels)")
+# =====================================================================
+# The Preferences sidebar mark is a baked QPixmap, so the only honest
+# proof that it renders — and renders in the accent, not a stroke and
+# not black — is to read its pixels. _logo_pixmap does all of its Qt
+# work through a LAZY `from aqt.qt import ...`, so swapping that one
+# module for a real-PyQt6 shim is enough; no purge, no re-import.
+check("the docstring no longer promises a stroke",
+      "stroke" not in (manage_models._logo_pixmap.__doc__ or "").lower()
+      and "fill" in (manage_models._logo_pixmap.__doc__ or "").lower())
+check("it fills a path, never pens one",
+      "QPen" not in _func_seg("_logo_pixmap")
+      and "fillPath" in _func_seg("_logo_pixmap"))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+try:
+    from PyQt6 import QtCore as _QtC  # noqa: E402
+    from PyQt6 import QtGui as _QtG  # noqa: E402
+    from PyQt6 import QtWidgets as _QtW  # noqa: E402
+    _HAVE_QT = True
+except Exception as _qt_e:  # noqa: BLE001
+    _HAVE_QT = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — "
+          "the source pins above still ran")
+
+if _HAVE_QT:
+    import types as _types
+
+    _qt_shim = _types.ModuleType("aqt.qt")
+
+    def _qt_getattr(name, _mods=(_QtW, _QtC, _QtG)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
+
+    _qt_shim.__getattr__ = _qt_getattr
+    sys.modules["aqt.qt"] = _qt_shim
+    _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
+
+    _theme = importlib.import_module("klausmate.theme")
+    _accent = _QtG.QColor(_theme.palette(_theme.night_mode())["blue_accent"])
+
+    # devicePixelRatio FOLLOWS THE WIDGET: the sidebar label is the one
+    # that knows what screen it is on. A baked 2.0 renders soft on a 1x
+    # display and is the kind of thing nobody notices until a screenshot.
+    _lbl = _QtW.QLabel()
+    _px = manage_models._logo_pixmap(64, _lbl.devicePixelRatioF())
+    check("the sidebar logo pixmap renders at all", _px is not None)
+    check("its devicePixelRatio follows the widget, not a baked 2.0",
+          _px is not None
+          and _px.devicePixelRatio() == _lbl.devicePixelRatioF())
+    check("the real sidebar size (24) renders too",
+          manage_models._logo_pixmap(24, 1.0) is not None)
+
+    if _px is not None:
+        _img = _px.toImage().convertToFormat(
+            _QtG.QImage.Format.Format_ARGB32)
+        _w, _h = _img.width(), _img.height()
+        _opaque = 0
+        _wrong = 0
+        for _y in range(_h):
+            for _x in range(_w):
+                _c = _img.pixelColor(_x, _y)
+                if _c.alpha() > 250:
+                    _opaque += 1
+                    if (_c.red(), _c.green(), _c.blue()) != (
+                            _accent.red(), _accent.green(), _accent.blue()):
+                        _wrong += 1
+        check("the mark actually covers the box — a filled star, not an "
+              "empty pixmap and not a hairline outline",
+              _opaque > _w * _h * 0.10, f"{_opaque}/{_w * _h} opaque")
+        check("every solid pixel is the ACCENT — no baked #171717 from "
+              "the asset, no second colour from a stroke",
+              _wrong == 0, f"{_wrong} off-accent")
+        # The impossible star's arms never reach the box's corners; a
+        # mark that filled them would be a square, i.e. the wrong art.
+        _k = max(2, _w // 12)
+        _corners = [(0, 0), (_w - _k, 0), (0, _h - _k), (_w - _k, _h - _k)]
+        _corner_ink = sum(
+            1
+            for _cx, _cy in _corners
+            for _y in range(_cy, _cy + _k)
+            for _x in range(_cx, _cx + _k)
+            if _img.pixelColor(_x, _y).alpha() != 0
+        )
+        check("all four corners stay empty — the star's own silhouette",
+              _corner_ink == 0, f"{_corner_ink} inked corner px")
+
+
+raise SystemExit(report())

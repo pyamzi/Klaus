@@ -84,33 +84,69 @@ check("a single day is a streak of one",
 # ---------------------------------------------------------------- ramp
 section("the colour ramp")
 
+# The factors are Glutanimate's (renderer._dynamic_legend_factors), and
+# so is the floor: below ~20/day the steps stop separating anything.
+_N = len(heatmap.RAMP_FACTORS)
+check("the ramp uses the reference addon's nine factors",
+      heatmap.RAMP_FACTORS
+      == (0.125, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 4.0))
 for _avg in (0, 1, 2, 3, 7, 40, 800):
     _levels = heatmap.ramp_levels(_avg)
-    if len(_levels) != 4 or any(
-        _levels[i] >= _levels[i + 1] for i in range(3)
+    if len(_levels) != _N or any(
+        _levels[i] >= _levels[i + 1] for i in range(_N - 1)
     ):
-        check(f"ramp for avg={_avg} is four ascending steps", False,
+        check(f"ramp for avg={_avg} is {_N} ascending steps", False,
               str(_levels))
         break
 else:
-    check("every average yields four STRICTLY ascending steps — a tiny "
+    check(f"every average yields {_N} STRICTLY ascending steps — a tiny "
           "average must not collapse the ramp to one usable colour", True)
 
-check("the top step is a full day's work for this user",
-      heatmap.ramp_levels(40)[-1] == 40)
-check("the ramp scales with the user: 20/day and 800/day get the same "
-      "four meanings, not the same four numbers",
-      heatmap.ramp_levels(20) != heatmap.ramp_levels(800))
+check("a low average is floored at the reference's 20, so the steps "
+      "still separate something",
+      heatmap.ramp_levels(3) == heatmap.ramp_levels(20)
+      and heatmap.RAMP_MIN_BASE == 20)
+check("above the floor the ramp scales with the user",
+      heatmap.ramp_levels(40) != heatmap.ramp_levels(800))
+check("a full day sits MID-ramp now, not at the top — that is the whole "
+      "point of the reference's factors: days above the average stay "
+      "distinguishable instead of flattening into one colour",
+      heatmap.ramp_levels(40)[heatmap.RAMP_FACTORS.index(1.0)] == 40
+      and heatmap.ramp_levels(40)[-1] == 160)
 
-_levels = heatmap.ramp_levels(40)  # [10, 20, 30, 40]
+# Alphas. Nine steps spread LINEARLY put an average day at 0.56 and
+# washed the whole grid out — visible immediately against the live
+# collection, invisible to every pin above. The reference can spread its
+# nine steps evenly because they are nine distinct HUES; ours are one
+# accent at rising alpha over a dark panel, so the curve has to
+# front-load.
+_A = heatmap.ramp_alphas(0.15, 1.0)
+check("one alpha per ramp step", len(_A) == _N)
+check("alphas rise all the way to full accent",
+      _A == tuple(sorted(_A)) and _A[-1] == 1.0 and _A[0] >= 0.1)
+_avg_step = heatmap.RAMP_FACTORS.index(1.0)
+check("an average day still reads as SOLID ink, not a wash — this is "
+      "the whole reason the curve is not linear",
+      _A[_avg_step] >= 0.6)
+check("...and it is genuinely front-loaded, not linear in disguise",
+      _A[_avg_step] > 0.15 + (1.0 - 0.15) * _avg_step / (_N - 1) + 0.05)
+check("there is still headroom above an average day, so a 2x or 4x day "
+      "is distinguishable from it",
+      len([a for a in _A if a > _A[_avg_step]]) >= 3)
+
+_levels = heatmap.ramp_levels(40)
 check("nothing studied is step 0", heatmap.level_for(0, _levels) == 0)
 check("a negative count cannot colour a cell",
       heatmap.level_for(-5, _levels) == 0)
 check("one card is already step 1", heatmap.level_for(1, _levels) == 1)
 check("a threshold belongs to its own step",
-      [heatmap.level_for(v, _levels) for v in _levels] == [1, 2, 3, 4])
+      [heatmap.level_for(v, _levels) for v in _levels]
+      == list(range(1, _N + 1)))
 check("a monster day tops out rather than overflowing",
-      heatmap.level_for(10 ** 6, _levels) == 4)
+      heatmap.level_for(10 ** 6, _levels) == _N)
+check("an average day and a 4x day no longer draw the SAME ink "
+      "(the bug the reference's factors fix)",
+      heatmap.level_for(40, _levels) != heatmap.level_for(160, _levels))
 
 
 # ---------------------------------------------------------------- grid
@@ -153,8 +189,6 @@ check("forecast_days=0 stops the grid at today",
 
 _labels = heatmap.month_labels(_cols)
 check("one label slot per column", len(_labels) == len(_cols))
-check("the first column is never labelled — its month began off-screen",
-      _labels[0] == "")
 _year = heatmap.month_labels(
     heatmap.build_columns({}, {}, _today, 365, 28))
 check("a year of columns names about twelve months",
@@ -162,6 +196,59 @@ check("a year of columns names about twelve months",
       str([m for m in _year if m]))
 check("month names are the real ones, in order",
       all(m in heatmap._MONTHS for m in _year if m))
+
+
+# K-141 (Pouya, 2026-09-01): "I just want the days to align with the
+# months perfectly, like the day that fits August is under August, and
+# if it's in September, it's under September." Columns are grouped by
+# month now, so this is exact rather than a best effort — a week that
+# straddles a boundary is SPLIT between the two runs. The cost he
+# explicitly accepted ("You don't have to have perfect squares") is
+# partial columns at each end of a month.
+def _label_month_at(labels, index):
+    """The month whose label governs column *index*."""
+    for j in range(index, -1, -1):
+        if labels[j]:
+            return heatmap._MONTHS.index(labels[j]) + 1
+    return None
+
+
+def _misfiled(columns):
+    """Every (date, governing label) pair that disagrees."""
+    labels = heatmap.month_labels(columns)
+    bad = []
+    for index, column in enumerate(columns):
+        governing = _label_month_at(labels, index)
+        for cell in column["cells"]:
+            if cell is None:
+                continue
+            if heatmap.day_to_date(cell[0]).month != governing:
+                bad.append((heatmap.day_to_date(cell[0]), governing))
+    return bad
+
+
+_wins = [heatmap.build_columns({}, {}, _today + off, 365, 28)
+         for off in range(0, 371, 37)]
+check("EVERY day sits under its own month's label — not most of them, "
+      "all of them; a week spanning a boundary is split between the "
+      "two month runs instead of being assigned to one",
+      all(not _misfiled(w) for w in _wins),
+      "; ".join(f"{d} under {m}" for w in _wins for d, m in _misfiled(w)[:3]))
+check("...and no day is lost or duplicated in the splitting — the "
+      "window still holds exactly history + forecast days",
+      all(len({c[0] for col in w for c in col["cells"] if c}) == 365 + 28
+          for w in _wins))
+check("a month's first column is where its label goes, including the "
+      "very first — its days really are that month's days",
+      heatmap.month_labels(
+          heatmap.build_columns({}, {}, 20000, 365, 28))[0] != "")
+check("every column belongs to exactly one month, so labelling can "
+      "no longer be a guess",
+      all("month" in col for w in _wins for col in w))
+
+check("...including the months that begin ON a Sunday, which the old "
+      "week-start rule got right by luck",
+      not _misfiled(heatmap.build_columns({}, {}, _today, 365, 28)))
 
 
 # ------------------------------------------------------------- markup
@@ -181,23 +268,38 @@ check("a day with NOTHING on it is not — an empty Browse reads as a "
 check("a scheduled day is clickable too", "klausmate:heatmap:101" in _html)
 check("future cells are drawn from the future ramp",
       "f1" in _html or "f2" in _html or "f3" in _html or "f4" in _html)
-check("cells carry a plain-language tooltip",
-      "40 reviews" in _html and "6 cards due" in _html
-      and "No reviews" in _html)
-check("one review is not '1 reviews'",
-      "1 review ·" in heatmap.heatmap_html({100: 1}, {}, 100, _stats, 5, 0))
-check("the stats line is in the panel, and every chip label survives "
-      "being read alone — the chips wrap on a narrow window, where "
-      "'best' and 'of days' had no noun to lean on",
-      "day streak" in _html and "best streak" in _html
-      and "cards/day" in _html and "of days studied" in _html)
+check("tooltips use the reference's phrasing — cards reviewed / cards "
+      "due / no reviews, joined with 'on'",
+      "40 cards reviewed on" in _html and "6 cards due on" in _html
+      and "No reviews on" in _html)
+check("one card is not '1 cards'",
+      "1 card reviewed on"
+      in heatmap.heatmap_html({100: 1}, {}, 100, _stats, 5, 0))
+check("an empty FUTURE day says nothing is due, not that nothing was "
+      "reviewed — the reference splits those two",
+      "No cards due on"
+      in heatmap.heatmap_html({}, {101: 6}, 100, _stats, 5, 7))
+check("the stats row carries the reference addon's four labels, in its "
+      "order (daily average, days learned, longest, current)",
+      [m for m in re.findall(
+          r"Daily average|Days learned|Longest streak|Current streak",
+          _html)]
+      == ["Daily average", "Days learned", "Longest streak",
+          "Current streak"])
+check("labels lead, values follow — the reference's layout",
+      re.search(r"Daily average:</span>\s*<b[^>]*>", _html) is not None)
+check("each stat carries the reference's own explanatory tooltip",
+      "Average reviews on active days" in _html
+      and "Percentage of days with review activity" in _html
+      and "All types of repetitions included." in _html)
 _cells = heatmap.build_columns({99: 40}, {101: 6}, 100, 14, 7)
 # Anchored so `klaus-hm-cells` and `klaus-hm-corner` cannot be counted
 # as cells: the class must end right after the `c`.
 _cell_tags = len(re.findall(r'class="klaus-hm-c[ "]', _html))
-check("exactly one cell element per grid slot, plus the five legend "
-      "swatches",
-      _cell_tags == sum(len(c["cells"]) for c in _cells) + 5,
+check("exactly one cell element per grid slot and NOTHING else — the "
+      "reference ships displayLegend:false, so there are no legend "
+      "swatches left to count",
+      _cell_tags == sum(len(c["cells"]) for c in _cells),
       f"{_cell_tags} tags")
 # NB: the 14-day window above happens to start on a Sunday and end on a
 # Saturday, so it has no ragged ends at all. Ask for one that does.
@@ -206,48 +308,103 @@ _ragged = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
 check("out-of-window slots render as padding, so a window that does "
       "not begin on a Sunday still keeps its seven rows",
       "klaus-hm-c pad" in _ragged)
-check("weekday labels appear on alternate rows only",
-      _html.count(">Mon<") == 1 and ">Tue<" not in _html)
+check("the left rail names EVERY row, as initials — S M T W T F S "
+      "(Pouya, 2026-08-31), not GitHub's alternating three-letter names",
+      re.findall(r'<span class="klaus-hm-w">(.*?)</span>', _html)
+      == ["S", "M", "T", "W", "T", "F", "S"])
+check("the rail's letters are derived from the tooltip's day names, so "
+      "the two can never name different days",
+      heatmap._WEEKDAY_INITIALS
+      == tuple(name[0] for name in heatmap._WEEKDAYS))
+check("no heading survives above the grid — the grid says what it is",
+      "Review activity" not in _html
+      and "klaus-hm-heading" not in _html
+      and "klaus-hm-heading" not in heatmap.heatmap_css())
 
-# The legend. Its ramp is PERSONAL — quartiles of the user's own daily
-# average — so expectations are computed from ramp_levels on this
-# test's own stats, never hardcoded: the real-collection section below
-# renders whatever the live average is.
-_lv = heatmap.ramp_levels(_stats["daily_avg"])
-check("the legend runs 0 → 'a full day (N)' with N computed from THIS "
-      "user's ramp — GitHub's Less/More says nothing about a ramp that "
-      "is quartiles of the user's own daily average",
-      "<span>0</span>" in _html
-      and f"a full day ({_lv[-1]})" in _html
+# ---- months are given air --------------------------------------- K-121
+_year_html = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
+                                  history_days=365, forecast_days=28)
+_year_cols = heatmap.build_columns({99: 40}, {}, 100, 365, 28)
+_year_starts = [bool(m) for m in heatmap.month_labels(_year_cols)]
+check("a month's first column opens a gap",
+      _year_html.count('class="klaus-hm-col ms"') == sum(_year_starts))
+check("...and the LABEL above it moves by the same rule, from the same "
+      "list — a gap the month name did not follow would be worse than "
+      "no gap at all",
+      _year_html.count('class="klaus-hm-m ms"') == sum(_year_starts))
+check("one stylesheet rule carries both, so they cannot drift apart",
+      ".klaus-hm-col.ms, .klaus-hm-m.ms {" in heatmap.heatmap_css())
+check("the gap is real air, not a whole extra column",
+      0 < heatmap.MONTH_GAP < heatmap.CELL)
+
+# ---- the corner menu --------------------------------------------- K-121
+check("the panel carries a settings control in its corner",
+      '<details class="klaus-hm-gear">' in _html)
+check("...that needs no script of ours in Anki's deck-browser document",
+      "<script" not in _html)
+check("Range offers exactly the menu's own choices",
+      all(f"{heatmap.SET_PREFIX}history:{days}" in _html
+          for days in heatmap.RANGE_CHOICES)
+      and len(heatmap.RANGE_CHOICES) == len(heatmap.RANGE_LABELS))
+check("Upcoming can be turned on and off",
+      f"{heatmap.SET_PREFIX}forecast:1" in _html
+      and f"{heatmap.SET_PREFIX}forecast:0" in _html)
+_menu = heatmap.heatmap_html({99: 40}, {}, 100, _stats,
+                             history_days=182, forecast_days=0)
+check("the live values are the ones shown as selected",
+      "klaus-hm-opt on\" onclick=\"pycmd('%shistory:182')"
+      % heatmap.SET_PREFIX in _menu
+      and "klaus-hm-opt on\" onclick=\"pycmd('%sforecast:0')"
+      % heatmap.SET_PREFIX in _menu)
+check("exactly one Range choice and one Upcoming choice read as current",
+      _menu.count('klaus-hm-opt on"') == 2)
+
+# The legend is GONE. Glutanimate's addon ships displayLegend:false —
+# it shows the grid and the stats row and nothing else — and matching it
+# was Pouya's call (2026-08-31), knowingly retiring the personal
+# "0 → a full day (N)" line the 2026-08-27 audit had built.
+check("no legend element survives",
+      'class="klaus-hm-legend"' not in _html)
+check("...nor its wording, in either dialect",
+      "a full day" not in _html
       and "Less" not in _html and "More" not in _html)
-check("each legend swatch's tooltip is the exact count band it stands "
-      "for, derived from the same cut-offs level_for colours by",
-      'title="No reviews"' in _html
-      and f'title="1–{_lv[0]} reviews"' in _html
-      and f'title="{_lv[-2] + 1}+ reviews"' in _html)
-_legend_body = re.search(r'<div class="klaus-hm-legend">(.*?)</div>', _html)
-check("still exactly five swatches in the legend, one per colour step",
-      _legend_body is not None
-      and _legend_body.group(1).count("klaus-hm-c") == 5)
-check("the audit's worked example: levels [28,56,83,111] spell their "
-      "bands with en dashes, only the outer bands naming the unit",
-      heatmap._legend_titles([28, 56, 83, 111])
-      == ["No reviews", "1–28 reviews", "29–56", "57–83", "84+ reviews"])
-check("a tiny ramp still reads: a band one count wide is just its "
-      "number, and one review is never '1 reviews'",
-      heatmap._legend_titles([1, 2, 3, 4])
-      == ["No reviews", "1 review", "2", "3", "4+ reviews"])
+check("_legend_titles is gone with it, not left as dead code",
+      not hasattr(heatmap, "_legend_titles"))
 
 
 # ----------------------------------------------------------------- css
 section("stylesheet")
 
 _css = heatmap.heatmap_css()
+check("the bar under the grid is gone in BOTH engines (Pouya, "
+      "2026-08-31) while the box still scrolls — hidden, not disabled: "
+      "trackpad and shift-wheel still reach a year that overflows",
+      "scrollbar-width: none" in _css
+      and "::-webkit-scrollbar { display: none; }" in _css
+      and "overflow-x: auto" in _css
+      and "scrollbar { height" not in _css)
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "
       "on whichever theme was live at draw time",
       ":root {" in _css and ":root.night-mode {" in _css)
+# K-142 (found by scripts/mutation_audit.py, confirmed by hand): the
+# check above only proves the two SELECTORS exist. Swapping the palette
+# blocks — light mode painting the DARK palette — left the whole suite
+# green, and so did making night identical to day. The invariant is
+# that each block carries ITS OWN palette, so pin the values.
+_day_blk = re.search(r":root \{(.*?)\}", _css, re.S)
+_night_blk = re.search(r":root\.night-mode \{(.*?)\}", _css, re.S)
+check("the two palette blocks are not identical — a night mode that "
+      "merely repeats day mode is the bug this pin exists to prevent",
+      _day_blk is not None and _night_blk is not None
+      and _day_blk.group(1) != _night_blk.group(1))
+check("...and each block carries its OWN palette's ink, so the two "
+      "cannot be swapped and still pass",
+      theme.palette(False)["text"].lower() in _day_blk.group(1).lower()
+      and theme.palette(True)["text"].lower() in _night_blk.group(1).lower()
+      and theme.palette(True)["text"].lower()
+      not in _day_blk.group(1).lower())
 check("heatmap_css takes no `night` argument, for that same reason",
       heatmap.heatmap_css.__code__.co_argcount == 0)
 
@@ -273,12 +430,11 @@ check("and never FORCES a width — that is what pushed the deck panel "
       "off-screen before. `max-width: 100%` caps and is welcome; a "
       "bare `width: 100%` or a `min-width` is not",
       not re.search(r"(?<!max-)width: 100%", _css)
-      and "min-width" not in _css
+      # A POSITIVE minimum is the hazard; `min-width: 0` is its
+      # opposite — it removes the automatic minimum flex would
+      # otherwise impose (see .klaus-hm-m).
+      and set(re.findall(r"min-width:\s*([^;]+);", _css)) <= {"0"}
       and "max-width: 100%" in _css)
-check("month labels ride the same column pitch as the cells, so they "
-      "line up by construction rather than by measurement",
-      f"grid-auto-columns: {heatmap.CELL + heatmap.GAP}px" in _css
-      and f"grid-auto-columns: {heatmap.CELL}px" in _css)
 check("weekday labels ride the same row pitch",
       _css.count(f"repeat(7, {heatmap.CELL}px)") == 2)
 check("all four done-steps and all four due-steps are defined",
@@ -295,6 +451,23 @@ def _rule(selector):
     return _m.group(1) if _m else ""
 
 
+check("month labels ride the same column pitch as the cells, so they "
+      "line up by construction rather than by measurement: both strips "
+      "are flex rows of CELL-wide items sharing the cells' own gap",
+      _css.count(f"display: flex; gap: {heatmap.GAP}px") == 2
+      and f"flex: 0 0 {heatmap.CELL}px" in _rule(".klaus-hm-m"))
+check("the month strip's boxes cannot be inflated by their own text — "
+      "a flex item's automatic minimum is its min-content size, and a "
+      "nowrap month name would floor each LABELLED box above the cell "
+      "pitch and walk every later label off its column",
+      "min-width: 0" in _rule(".klaus-hm-m"))
+check("the corner menu is opaque and PALETTE-owned, in both palettes "
+      "— borrowing Anki's --canvas-overlay would land a white popover "
+      "on a dark deck screen wherever that token is not defined",
+      _css.count("--klaus-hm-menu:") == 2
+      and "background: var(--klaus-hm-menu)" in _rule(".klaus-hm-menu")
+      and "rgba" not in _rule(".klaus-hm-menu").split("box-shadow")[0])
+
 check("month and weekday labels wear FULL text colour at their 10px — "
       "muted's contrast was AA-checked against bg/surface, never "
       "against an arbitrary photo behind a 50% tint, and these are the "
@@ -304,10 +477,8 @@ check("month and weekday labels wear FULL text colour at their 10px — "
       and "font-size: 10px" in _rule(".klaus-hm-m")
       and "--klaus-hm-muted" not in _rule(".klaus-hm-m")
       and "--klaus-hm-muted" not in _rule(".klaus-hm-w"))
-check("the legend line too — it carries information now (0 → a full "
-      "day), not boilerplate",
-      "color: var(--klaus-hm-text)" in _rule(".klaus-hm-legend")
-      and "--klaus-hm-muted" not in _rule(".klaus-hm-legend"))
+check("no legend rule is left in the sheet either",
+      ".klaus-hm-legend" not in _css)
 check("the stat labels alone STAY muted — their bold accent numbers "
       "anchor them — so the muted token must stay defined",
       "color: var(--klaus-hm-muted)" in _rule(".klaus-hm-stat")
@@ -404,22 +575,120 @@ check("history is NOT date-limited — the streak and the share of days "
       "studied are only honest over everything",
       "FROM revlog WHERE ease > 0 GROUP BY day" in _sql)
 
-_db2 = FakeDB(ids=[1, 2, 3])
-check("a day's cards are found by re-running the very expression that "
-      "built the bucket, so no timezone question is reintroduced",
-      heatmap.cards_reviewed_on(FakeCol(_db2, day_cutoff=_cutoff), 20000)
-      == [1, 2, 3])
-_sql2, _params2 = _db2.calls[0]
-check("...matched against that day number in seconds",
-      _params2 == (20000 * DAY,))
-check("and selected through `cards`, so rows whose card was deleted "
-      "drop out", "FROM cards WHERE id IN" in _sql2)
-
 check("switched off, nothing is rendered and no query runs",
       heatmap.render_for_collection(
           FakeCol(FakeDB(), day_cutoff=_cutoff),
           {"heatmap_enabled": False}) == ""
       )
+
+section("clicking a day (K-131)")
+
+# Pouya, 2026-08-31: "when I click on an individual output, it doesn't
+# show this klausday search query... the klausday thing does not help."
+# It was opaque AND inert: the token was resolved by assigning
+# search_context.card_ids, and Anki's SearchContext has no such field
+# (its fields are search/browser/order/reverse/addon_metadata/ids —
+# read out of aqt/browser/table/__init__.pyc), so the assignment did
+# nothing and Anki parsed "klausday:20000" as a field search matching
+# no cards. Native operators now, which are also editable by hand.
+_T = 20000
+check("a future day asks Anki what is due that many days out",
+      heatmap.day_query(_T + 5, _T) == "prop:due=5"
+      and heatmap.day_query(_T + 1, _T) == "prop:due=1")
+check("today is simply rated:1",
+      heatmap.day_query(_T, _T) == "rated:1")
+check("a past day is a bounded pair — 'answered within n days' minus "
+      "'answered within n-1', which leaves exactly that one day",
+      heatmap.day_query(_T - 1, _T) == "rated:2 -rated:1"
+      and heatmap.day_query(_T - 30, _T) == "rated:31 -rated:30")
+check("the oldest drawable day still lands inside Anki's 365-day cap "
+      "on rated: — which is WHY the range menu stops at a year",
+      heatmap.day_query(_T - (max(heatmap.RANGE_CHOICES) - 1), _T)
+      == "rated:365 -rated:364"
+      and max(heatmap.RANGE_CHOICES) <= 365)
+check("every query is built from NATIVE operators only — nothing "
+      "private left for Anki to fail to understand",
+      all(q.split(":")[0].lstrip("-") in ("prop", "rated")
+          for day in (_T + 3, _T, _T - 1, _T - 200)
+          for q in heatmap.day_query(day, _T).split()))
+check("the klausday token, its resolver hook and its query helper are "
+      "GONE, not left as dead code",
+      not hasattr(heatmap, "SEARCH_PREFIX")
+      and not hasattr(heatmap, "cards_reviewed_on")
+      and not hasattr(heatmap, "_on_browser_will_search")
+      and "browser_will_search"
+      not in open("klausmate/heatmap.py", encoding="utf8").read())
+
+section("the KlausBook design gate")
+_HM_SRC = open("klausmate/heatmap.py", encoding="utf8").read()
+_render_slice = _HM_SRC.split("def _on_deck_browser_content")[1].split(
+    "def _on_webview_will_set_content")[0]
+_css_slice = _HM_SRC.split("def _on_webview_will_set_content")[1].split(
+    "def _open_day")[0]
+check("the panel is a deck-screen WIDGET, so it renders only with the "
+      "KlausBook design layer on — native mode leaves Anki's deck "
+      "screen exactly as Anki draws it",
+      "design_enabled" in _render_slice)
+check("its stylesheet is gated the same way, so the css can never "
+      "outlive the markup it styles",
+      "design_enabled" in _css_slice)
+check("the gate is NOT folded into enabled(): Preferences seeds its "
+      "switch from enabled(stored) and saves that state back, so "
+      "gating there would uncheck the switch and quietly persist "
+      "heatmap_enabled False — losing an untouched preference",
+      heatmap.enabled({"klausbook_design": False}) is True)
+
+section("the corner menu's settings")
+
+check("the range defaults to a year",
+      heatmap.history_window({}) == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.DEFAULT_HISTORY_DAYS in heatmap.RANGE_CHOICES)
+check("each of the menu's own choices is honoured",
+      all(heatmap.history_window({"heatmap_history_days": d}) == d
+          for d in heatmap.RANGE_CHOICES))
+check("a value the menu cannot produce is NOT allowed to size the "
+      "grid — a hand-edited 9000 would draw a 25-year ribbon",
+      heatmap.history_window({"heatmap_history_days": 9000})
+      == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.history_window({"heatmap_history_days": "365"})
+      == heatmap.DEFAULT_HISTORY_DAYS
+      and heatmap.history_window(None) == heatmap.DEFAULT_HISTORY_DAYS)
+check("the forecast is on by default and off only when asked",
+      heatmap.forecast_window({}) == heatmap.DEFAULT_FORECAST_DAYS
+      and heatmap.forecast_window({"heatmap_forecast": False}) == 0)
+check("a corrupt forecast value SHOWS the forecast — the same "
+      "direction enabled() errs in, so bad config never silently "
+      "subtracts from the panel",
+      heatmap.forecast_window({"heatmap_forecast": "no"})
+      == heatmap.DEFAULT_FORECAST_DAYS)
+
+_written = []
+_orig_write = heatmap._write_cfg
+heatmap._write_cfg = lambda updates: _written.append(updates)
+try:
+    for _payload in ("history:182", "forecast:0", "forecast:1"):
+        heatmap._apply_setting(_payload)
+    check("a valid choice writes exactly its own key",
+          _written == [{"heatmap_history_days": 182},
+                       {"heatmap_forecast": False},
+                       {"heatmap_forecast": True}])
+    _written.clear()
+    for _junk in ("history:9000", "history:abc", "forecast:2", "colors:lime",
+                  "", "history:", ":", "history:365:extra"):
+        heatmap._apply_setting(_junk)
+    check("and nothing the page could invent writes ANYTHING — the "
+          "webview is never trusted with a config value",
+          _written == [], str(_written))
+    _written.clear()
+    check("a settings message is answered as handled",
+          heatmap._on_js_message(
+              (False, None), heatmap.SET_PREFIX + "history:91", None)
+          == (True, None))
+    check("...and routed as a SETTING, not as a day — 'set:history:91' "
+          "ends in a number the day parser would happily swallow",
+          _written == [{"heatmap_history_days": 91}], str(_written))
+finally:
+    heatmap._write_cfg = _orig_write
 
 section("bridge")
 check("a click is deferred, never run inside the webchannel handler",
@@ -430,6 +699,32 @@ check("a foreign message is passed straight through untouched",
 check("a malformed day is swallowed rather than raising into Anki",
       heatmap._on_js_message((False, None), "klausmate:heatmap:xyz", None)
       == (True, None))
+# The two bridge sites worker-K could not reach from its own claim
+# (K-142). Returning (False, None) re-opens the message to the rest of
+# Anki's hook chain; both flips survived the mutation audit.
+check("a rejected setting is still ANSWERED — a False here hands the "
+      "payload back to Anki's hook chain instead of ending it",
+      heatmap._apply_setting("history:9999") == (True, None)
+      and heatmap._apply_setting("nonsense") == (True, None))
+_timer_calls = []
+
+
+class _RecordingTimer:
+    @staticmethod
+    def singleShot(ms, fn):
+        _timer_calls.append((ms, fn))
+
+
+import types as _types  # noqa: E402
+_fake_qt = _types.ModuleType("aqt.qt")
+_fake_qt.QTimer = _RecordingTimer
+sys.modules["aqt.qt"] = _fake_qt
+check("a day click is answered as handled AND deferred off the bridge "
+      "— running Browse inside the webchannel call is the reentrancy "
+      "hazard tests/test_bridge_reentrancy.py exists for",
+      heatmap._on_js_message((False, None), "klausmate:heatmap:20000", None)
+      == (True, None)
+      and len(_timer_calls) == 1 and _timer_calls[0][0] == 0)
 
 
 # --------------------------------------------------- the real collection
@@ -477,8 +772,13 @@ else:
           and _stats_real["streak_cur"] <= _stats_real["streak_max"]
           and _stats_real["days_learned"] == len(_real_rows))
     _grid = heatmap.build_columns(dict(_real_rows), {}, _today_real, 365, 28)
-    check("a year of real data lays out as whole weeks",
-          all(len(c["cells"]) == 7 for c in _grid) and 55 <= len(_grid) <= 58,
+    # Every column is still seven ROWS tall (that is what keeps a
+    # cell's weekday readable off its row), but a year is no longer
+    # ~56 columns: grouping by month splits each boundary week, which
+    # costs 10-13 extra columns across a 13-month window. Measured
+    # across 400 window positions: 66-69.
+    check("a year of real data lays out as full-height month runs",
+          all(len(c["cells"]) == 7 for c in _grid) and 64 <= len(_grid) <= 71,
           f"{len(_grid)} columns")
     _real_html = heatmap.heatmap_html(
         dict(_real_rows), {}, _today_real, _stats_real)

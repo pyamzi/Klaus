@@ -4,8 +4,9 @@ Why this exists (K-material3 audit): the three Preferences toggles
 (image crop, manage-Ollama, pdf.js viewer) were bare ``QCheckBox()``
 squares — a checked/unchecked *checkbox* is MD2-era language for what
 is semantically an on/off *switch*, and macOS agrees with MD3 here (a
-Settings row uses a switch, not a checkbox). This is not an MD3-web
-component drop-in (``@material/web`` is Qt-incompatible and in
+Settings row uses a switch, not a checkbox). The manage-Ollama row was
+deleted 2026-09-15 along with the rest of the Ollama surfaces. This is
+not an MD3-web component drop-in (``@material/web`` is Qt-incompatible and in
 maintenance mode anyway) — it is a small painted widget that follows
 MD3's switch geometry and motion language while staying entirely
 inside the Quiet Clinic token system: track/thumb colours come from
@@ -137,6 +138,17 @@ except Exception:  # pragma: no cover — degrades to plain checkbox
     QCheckBox = object  # type: ignore[assignment,misc]
 
 
+def _reduce_motion() -> bool:
+    """Anki's Reduce Motion preference; False when aqt is unavailable
+    (headless tests) or the preference cannot be read."""
+    try:
+        from aqt import mw
+
+        return bool(mw.pm.reduce_motion())
+    except Exception:
+        return False
+
+
 class Md3Switch(QCheckBox):  # type: ignore[misc]
     """Drop-in replacement for a label-less ``QCheckBox()`` row control.
 
@@ -187,8 +199,12 @@ class Md3Switch(QCheckBox):  # type: ignore[misc]
         """
         target = 1.0 if checked else 0.0
         self._anim.stop()
-        if not self.isVisible():
-            self._progress = target
+        # Reduce Motion is Anki's own preference (HIG says honour it);
+        # the deck-screen jiggle already keys on body.reduce-motion —
+        # this is the Qt-side counterpart. _set_progress repaints only
+        # when visible, which both branches want.
+        if not self.isVisible() or _reduce_motion():
+            self._set_progress(target)
             return
         self._anim.setStartValue(self._progress)
         self._anim.setEndValue(target)

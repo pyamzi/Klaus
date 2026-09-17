@@ -2,6 +2,7 @@
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_klausmate.py
 """
+import io
 import json
 import math
 import os
@@ -11,8 +12,8 @@ import tempfile
 import threading
 import time
 import types
+import urllib.error
 from array import array
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ADDON = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
@@ -71,106 +72,378 @@ def check(name, cond, detail=""):
 # ---------------------------------------------------------------- providers
 
 print("== provider selection ==")
-check("default provider is voyage for {}", embeddings.provider_name({}) == "voyage")
-check("unknown provider falls back to voyage",
-      embeddings.provider_name({"embedding_provider": "banana"}) == "voyage")
-check("explicit ollama respected",
-      embeddings.provider_name({"embedding_provider": "ollama"}) == "ollama")
-check("voyage default model",
-      embeddings.embedding_model({}) == "voyage-3-lite")
-check("signature", embeddings.index_signature({}) == ("voyage", "voyage-3-lite"))
+# OpenAI is the only embedding provider now (K-222/Task 2) — Voyage and
+# Ollama are gone from embeddings.py entirely, and provider_name is a
+# constant function kept only so existing callers still compile and run.
+check("openai is the only provider, for any cfg",
+      embeddings.provider_name({}) == "openai")
+check("an unrecognized/legacy provider key changes nothing — always openai",
+      embeddings.provider_name({"embedding_provider": "banana"}) == "openai")
+check("an explicit ollama/voyage request is ignored too — always openai",
+      embeddings.provider_name({"embedding_provider": "ollama"}) == "openai")
+check("openai default model is text-embedding-3-large",
+      embeddings.embedding_model({}) == "text-embedding-3-large")
+check("signature carries dims, so a width change invalidates the index",
+      embeddings.index_signature({}) == ("openai", "text-embedding-3-large", 0))
+check("dims ARE sent for text-embedding-3-large — it's Matryoshka/dimension-capable",
+      embeddings.index_signature(
+          {"embedding_provider": "openai", "embedding_dimensions": 1024}
+      )[2] == 1024)
+# An index built at one width cannot be ranked against another, so the
+# width has to reach check_signature — not merely be recorded.
+_ix = card_index.empty_index("openai", "text-embedding-3-large")
+_ix.dims = 1024
+check("an index matches when the requested width is the one it was built at",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 1024)))
+check("a DIFFERENT requested width forces a rebuild",
+      not card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 3072)))
+check("width 0 means 'the model's default' and cannot disagree with an "
+      "index that already has one",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large", 0)))
+check("a two-tuple signature still works — existing callers are unbroken",
+      card_index.check_signature(_ix, ("openai", "text-embedding-3-large")))
+check("provider/model mismatch still wins regardless of width",
+      not card_index.check_signature(_ix, ("voyage", "voyage-3-lite", 1024)))
+
+# stats_from_disk has TWO exits and its callers cannot see which one they
+# got. A missing or corrupt index is exactly when a caller is most likely
+# to be probing, so the failure dict has to answer every key the success
+# dict does — or stats["dims"] raises KeyError on the one path that needed
+# an answer most. The success branch once listed "dims" TWICE and the
+# failure branch not at all. pdf_index.stats_from_disk is the model: same
+# keys out of both exits.
+def _failure_exit(fn, path, ref_keys, payload=None, manifest=None):
+    """Write ``payload`` as the manifest (when given), call ``fn(path)`` and
+    return (ok, why): ok iff it took the FAILURE exit with ``ref_keys``
+    intact. Caught so a regression records a FAIL instead of aborting the
+    ~170 checks below — the defect under test IS an escaping exception."""
+    if payload is not None:
+        with open(os.path.join(path, manifest), "w", encoding="utf-8") as f:
+            f.write(payload)
+    try:
+        st = fn(path)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"RAISED {exc!r}"
+    return set(st) == set(ref_keys) and not st["exists"], repr(st)
+
+
+_sfd_tmp = tempfile.mkdtemp()
+_sfd_dir = os.path.join(_sfd_tmp, "card_index")
+_sfd_ix = card_index.empty_index("voyage", "voyage-3-lite", 1024)
+card_index.save(_sfd_ix, _sfd_dir)
+_sfd_ok = card_index.stats_from_disk(_sfd_dir)
+check("stats_from_disk: a real manifest reports exists + its width",
+      _sfd_ok["exists"] and _sfd_ok["dims"] == 1024, repr(_sfd_ok))
+# stats_from_disk has TWO exits and its callers cannot see which one they
+# got, so the failure dict must answer every key the success dict does —
+# the success branch once listed "dims" TWICE and the failure branch not
+# at all, and stats["dims"] raised on exactly the missing-index case.
+_sfd_missing = card_index.stats_from_disk(os.path.join(_sfd_tmp, "no-such-dir"))
+check("stats_from_disk: a MISSING index returns the same key set as a "
+      "present one, and stats['dims'] answers 0 rather than raising",
+      set(_sfd_missing) == set(_sfd_ok)
+      and _sfd_missing["dims"] == 0 and not _sfd_missing["exists"],
+      f"success={sorted(_sfd_ok)} failure={sorted(_sfd_missing)}")
+# Every OTHER way a manifest can fail to be one takes the same exit with
+# the same keys: an older INDEX_VERSION (the realistic upgrade path),
+# non-JSON text, and valid JSON that is NOT an object — a truncated write
+# can leave "null", and m.get() on it used to raise straight through into
+# Preferences' three unguarded stats["exists"] reads.
+with open(os.path.join(_sfd_dir, card_index.MANIFEST_FILE), encoding="utf-8") as f:
+    _sfd_m = json.load(f)
+_sfd_stale_payload = json.dumps({**_sfd_m, "version": card_index.INDEX_VERSION + 1})
+for _label, _payload in (("a version-mismatched manifest", _sfd_stale_payload),
+                         ("a CORRUPT (non-JSON) manifest", "{not json"),
+                         ("a manifest of null", "null"),
+                         ("a manifest of []", "[]"),
+                         ("a manifest of a bare string", '"str"')):
+    check(f"card_index.stats_from_disk: {_label} takes the failure exit "
+          "with every key intact",
+          *_failure_exit(card_index.stats_from_disk, _sfd_dir, _sfd_ok,
+                         payload=_payload, manifest=card_index.MANIFEST_FILE))
+shutil.rmtree(_sfd_tmp, ignore_errors=True)
+
+# Widening index_signature from (provider, model) to (provider, model,
+# dims) broke EIGHT call sites at once, and most of them failed silently:
+# a two-tuple compared against a three-tuple is simply never equal, so the
+# caches went permanently stale instead of raising. The fix was one shared
+# comparator; this pin is what stops the next reader spelling it by hand
+# again.
+import os as _os, re as _re
+# Only comparisons against a SIGNATURE. An index-vs-index compatibility
+# check (retention._score_notes) is a different question and rightly keeps
+# its own two-part test, so it can say "spaces differ" and "dimensions
+# differ" as separate errors.
+_SIG_SPELLINGS = _re.compile(
+    r"\(\w+\.provider,\s*\w+\.model\)\s*[!=]=\s*(?:cfg_)?sig(?:nature)?\b|"
+    r'\(st\["provider"\],\s*st\["model"\]\)\s*[!=]='
+)
+for _name in ("card_index.py", "pdf_index.py", "retention.py",
+              "manage_models.py", "curation.py", "tag_sync.py"):
+    _src = open(_os.path.join("klausmate", _name), encoding="utf-8").read()
+    check(f"{_name} compares signatures through embeddings.signature_matches, "
+          "never by hand",
+          _SIG_SPELLINGS.search(_src) is None)
+
+check("...and sent for OpenAI's v3 models, which are MRL-trained",
+      embeddings.index_signature(
+          {"embedding_provider": "openai",
+           "embedding_model": "text-embedding-3-large",
+           "embedding_dimensions": 1024}
+      ) == ("openai", "text-embedding-3-large", 1024))
 
 print("== missing key ==")
 try:
-    embeddings.VoyageEmbeddings(lambda: {}).embed(["hi"])
-    check("voyage no key raises", False)
+    embeddings.OpenAIEmbeddings(lambda: {}).embed(["hi"])
+    check("openai no key raises", False)
 except embeddings.EmbeddingError as e:
-    check("voyage no key raises 401", e.status == 401)
-    check("401 message mentions Manage models", "Manage models" in e.user_message())
+    check("openai no key raises 401", e.status == 401)
+    # K-236: the old copy sent the user to "Tools → Klaus → Manage models",
+    # a menu K-045 folded away and K-227 finished off — a dead address on a
+    # message that only ever appears when something needs fixing.
+    check("401 message names the page that actually holds the key",
+          "KlausMate Preferences → API keys & models" in e.user_message())
 
-# Mock server: scripted responses per request.
-SCRIPT = []          # list of (status, body_dict_or_none, headers)
-REQUESTS = []        # recorded request payloads
-
-
-class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        n = int(self.headers.get("content-length") or 0)
-        REQUESTS.append(json.loads(self.rfile.read(n).decode("utf-8")))
-        status, body, headers = SCRIPT.pop(0) if SCRIPT else (200, None, {})
-        if body is None:
-            count = len(REQUESTS[-1].get("input") or [])
-            body = {"data": [{"index": i, "embedding": [1.0, 0.0]} for i in range(count)]}
-        raw = json.dumps(body).encode("utf-8")
-        self.send_response(status)
-        for k, v in headers.items():
-            self.send_header(k, v)
-        self.send_header("content-type", "application/json")
-        self.send_header("content-length", str(len(raw)))
-        self.end_headers()
-        self.wfile.write(raw)
-
-    def log_message(self, *a):
-        pass
-
-
-srv = HTTPServer(("127.0.0.1", 0), Handler)
-threading.Thread(target=srv.serve_forever, daemon=True).start()
-base = f"http://127.0.0.1:{srv.server_port}"
-embeddings.VOYAGE_API_BASE = base
-embeddings.OPENAI_API_BASE = base
-
-print("== mock HTTP ==")
-cfg = {"embedding_api_key_voyage": "k", "embedding_provider": "voyage"}
-prov = embeddings.VoyageEmbeddings(lambda: cfg)
-SCRIPT[:] = [(200, None, {})]
-REQUESTS.clear()
-vecs = prov.embed(["a", "b"], kind="document")
-check("voyage embed returns 2 vectors", len(vecs) == 2)
-check("voyage sends input_type document",
-      REQUESTS[-1].get("input_type") == "document")
-prov.embed(["a"], kind="query")
-check("voyage sends input_type query", REQUESTS[-1].get("input_type") == "query")
-
-SCRIPT[:] = [(429, {"error": "slow down"}, {"retry-after": "0"}), (200, None, {})]
-REQUESTS.clear()
-vecs = prov.embed(["a"])
-check("429 retried once then succeeds", len(vecs) == 1 and len(REQUESTS) == 2)
-
-# URLError retry: point at a closed port; expect ~1 retry then error.
-embeddings.VOYAGE_API_BASE = "http://127.0.0.1:1"
-t0 = time.time()
-try:
-    prov.embed(["a"])
-    check("URLError raises", False)
-except embeddings.EmbeddingError as e:
-    took = time.time() - t0
-    check("URLError raises EmbeddingError after retry",
-          "reach" in str(e).lower() and took >= 1.9, f"took={took:.1f}s")
-embeddings.VOYAGE_API_BASE = base
-
-# batch clamp
-class FakeVoyage:
-    name = "voyage"
+# The HTTP-level behavior (auth header, retries, dims field, batching) now
+# lives entirely in openai_client.py and is covered by
+# tests/test_openai_client.py — OpenAIEmbeddings.embed is a thin
+# translation shim over it (see embeddings.py), so it isn't re-mocked here.
+# embed_batches itself is still this module's own — provider-agnostic
+# batching with no clamp (the old Voyage-specific 128 clamp is gone with
+# Voyage): a fake provider is enough to pin the loop, no HTTP involved.
+class FakeProvider:
     def __init__(self):
         self.sizes = []
     def embed(self, texts, kind="document"):
         self.sizes.append(len(texts))
         return [[1.0, 0.0]] * len(texts)
 
-fv = FakeVoyage()
-list(embeddings.embed_batches(fv, ["x"] * 300, batch_size=999))
-check("voyage batch clamped to 128", max(fv.sizes) == 128, str(fv.sizes))
+fp = FakeProvider()
+list(embeddings.embed_batches(fp, ["x"] * 300, batch_size=999))
+check("batch_size passed straight through — no provider-level clamp",
+      fp.sizes == [300], str(fp.sizes))
+
+print("== Klaus Plus routes embeddings through the service ==")
+openai_client = importlib.import_module("klausmate.openai_client")
+plus_mod = importlib.import_module("klausmate.plus")
+_orig_openai_urlopen = openai_client._urlopen
+
+
+class _PlusResp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+_plus_calls = []
+
+
+def _plus_urlopen(req, timeout=None):
+    _plus_calls.append((req.full_url, dict(req.headers)))
+    body = json.loads(req.data)
+    n = len(body["input"])
+    return _PlusResp(json.dumps(
+        {"data": [{"index": i, "embedding": [1.0]} for i in range(n)]}
+    ).encode())
+
+
+openai_client._urlopen = _plus_urlopen
+try:
+    vecs = embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    url, headers = _plus_calls[-1]
+    check("a Plus key routes embeddings to the service, no api_key_openai needed",
+          url == "https://svc.test/v1/embeddings"
+          and headers.get("Authorization") == "Bearer kp_" + "a" * 32
+          and len(vecs) == 1)
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+# A refusal (401/402/426) while on Plus must be remembered through the
+# PACKAGE's patch_config (plus.note_refusal) — a PATCH writer, reached
+# lazily since embeddings.py cannot import __init__ at module top (it
+# imports aqt). patch_config MERGES into the stored config; the
+# package's plain write_config REPLACES it wholesale and must never be
+# the sink a Plus refusal reaches (a one-key patch through it would wipe
+# every other setting — API keys, library root, every preference). A
+# synthetic write_config is left defined here too, recording, purely to
+# prove the refusal path never touches it.
+_refusals = []
+_write_calls = []
+
+
+def _patch_config(patch):
+    _refusals.append(patch)
+
+
+def _write_config(cfg):
+    _write_calls.append(cfg)
+
+
+pkg.patch_config = _patch_config
+pkg.write_config = _write_config
+
+_UNRECOGNISED_KEY_MSG = "Klaus Plus key not recognised — check it under KlausMate Preferences."
+_MAINTENANCE_MSG = "Klaus Plus is paused for maintenance — try again later, or use your own API key."
+
+
+def _plus_401_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 401, "unauthorized",
+        {}, io.BytesIO(json.dumps({"error": {"message": _UNRECOGNISED_KEY_MSG}}).encode()))
+
+
+openai_client._urlopen = _plus_401_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 401 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 401 on Plus surfaces the service's message verbatim, not OpenAI's canned key-rejection copy",
+          e.status == 401 and e.user_message() == _UNRECOGNISED_KEY_MSG)
+    check("a 401 on Plus is remembered via patch_config with exactly one key (CACHE), message verbatim",
+          bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
+          and _refusals[-1][plus_mod.CACHE]["status"] == "refused:401"
+          and _refusals[-1][plus_mod.CACHE]["message"] == _UNRECOGNISED_KEY_MSG)
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+_refusals.clear()
+_write_calls.clear()
+
+
+def _plus_402_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 402, "quota",
+        {}, io.BytesIO(json.dumps({"error": {"message": "quota used up"}}).encode()))
+
+
+openai_client._urlopen = _plus_402_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 402 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 402 on Plus is remembered via patch_config with exactly one key: CACHE",
+          e.status == 402 and bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
+          and _refusals[-1][plus_mod.CACHE].get("status") == "refused:402")
+    check("the refusal never reaches the package's write_config (that one REPLACES the whole config — C1)",
+          _write_calls == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+_refusals.clear()
+_write_calls.clear()
+
+
+def _plus_503_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(
+        req.full_url, 503, "unavailable",
+        {}, io.BytesIO(json.dumps({"error": {"message": _MAINTENANCE_MSG}}).encode()))
+
+
+openai_client._urlopen = _plus_503_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a 503 on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a 503 on Plus surfaces the service's message verbatim too, not 'OpenAI is overloaded'",
+          e.status == 503 and e.user_message() == _MAINTENANCE_MSG)
+    check("a 503 is not cached as a refusal (not a gate decision — a restart isn't a refusal)",
+          _refusals == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+
+_refusals.clear()
+_write_calls.clear()
+
+# A connection-level failure never reaches the service at all — status is
+# None, openai_client's own message says "Could not reach OpenAI ..."
+# (it has no idea it was talking to Klaus Plus) — so on the Plus path that
+# message must be renamed, or a service outage reads as an OpenAI outage
+# (M-10). _SLEEP is patched out for this one case only: _request retries
+# once on a URLError with a real 2s time.sleep, which every other Plus
+# fake here avoids by raising a status the retry branch doesn't cover.
+_orig_openai_sleep = openai_client._SLEEP
+openai_client._SLEEP = lambda *a, **k: None
+
+
+def _plus_network_urlopen(req, timeout=None):
+    raise urllib.error.URLError("connection refused")
+
+
+openai_client._urlopen = _plus_network_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a connection error on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a connection error on Plus names the service, not just 'Could not reach "
+          "OpenAI ...' (M-10)",
+          e.status is None and e.user_message().startswith("Klaus Plus: "), e.user_message())
+    check("a connection error (no status at all) is never cached as a refusal",
+          _refusals == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+    openai_client._SLEEP = _orig_openai_sleep
+
+del pkg.patch_config
+del pkg.write_config
 
 # ---------------------------------------------------------------- pdf_index
 
-print("== pdf_index ==")
+print("== pdf_index v2: one row per page, hash-keyed ==")
+# Task 5 (K-225): pdf_index moved from chunking a page's text into several
+# rows to ONE vector per page, fed by page_store.py. The chunking helpers
+# (stride_sample/chunk_pages/chunk_text_at) and pdf_handler._chunk_text are
+# gone outright — there is no chunk table left to sample or recover text
+# from.
+_pi_tmp = tempfile.mkdtemp(prefix="klaus_test_pi_")
+_pi_idx = pdf_index.PdfIndex(
+    provider="openai", model="m", pdf_name="lec", dims=2, source_sig=(1, 2),
+    pages=[(1, "aaaa"), (2, "bbbb")], embedded_rows=2,
+    vectors=array("f", [1.0, 0.0, 0.0, 1.0]),
+)
+pdf_index.save(_pi_idx, _pi_tmp)
+_pi_back = pdf_index.load(_pi_tmp)
+check("pages round-trip as (page_1based, text_hash)",
+      _pi_back is not None and _pi_back.pages == [(1, "aaaa"), (2, "bbbb")]
+      and _pi_back.embedded_rows == 2)
+with open(os.path.join(_pi_tmp, "manifest.json"), "w") as f:
+    f.write(json.dumps({"version": 1, "chunks": [], "dims": 2, "provider": "x", "model": "y"}))
+check("a version-1 (chunk) manifest reads as absent → rebuild",
+      pdf_index.load(_pi_tmp) is None)
+check("best_page is the argmax row's page, 1-based",
+      pdf_index.best_page(_pi_back, [0.0, 1.0]) == (2, 1.0))
+check("a zero vector never wins best_page",
+      pdf_index.best_page(
+          pdf_index.PdfIndex(provider="o", model="m", pdf_name="z", dims=2,
+                              pages=[(1, "h")], embedded_rows=1,
+                              vectors=array("f", [0.0, 0.0])),
+          [1.0, 0.0],
+      ) == (1, 0.0))
+check("chunking helpers are gone",
+      not hasattr(pdf_index, "chunk_pages")
+      and not hasattr(pdf_index, "stride_sample")
+      and not hasattr(pdf_index, "chunk_text_at")
+      and not hasattr(pdf_handler, "_chunk_text"))
+shutil.rmtree(_pi_tmp, ignore_errors=True)
+
+print("== pdf_index: disk lifecycle ==")
 tmp = tempfile.mkdtemp(prefix="klaus_test_")
 ctx_dir = os.path.join(tmp, "contexts")
 os.makedirs(ctx_dir)
 
 pages = [
-    ("Alpha beta gamma. " * 40).strip(),   # page 1: long enough for 2+ chunks
+    ("Alpha beta gamma. " * 40).strip(),   # page 1
     "",                                      # page 2: empty
     ("Delta epsilon zeta. " * 40).strip(),  # page 3
 ]
@@ -179,24 +452,16 @@ with open(os.path.join(ctx_dir, "Lecture_1.json"), "w") as f:
 with open(os.path.join(ctx_dir, "Lecture_1.txt"), "w") as f:
     f.write("\n\n".join(pages))
 
-chunks = pdf_index.chunk_pages(pages, cap=1000)
-check("chunks produced", len(chunks) >= 4, str(len(chunks)))
-check("page attribution", {c[0] for c in chunks} == {1, 3}, str({c[0] for c in chunks}))
-check("chunk text recoverable",
-      all(pdf_index.chunk_text_at(pages, (p, s, ln)) == t.strip()
-          for p, s, ln, t in chunks))
-capped = pdf_index.chunk_pages(pages, cap=3)
-check("stride cap", len(capped) == 3)
-
 sig = pdf_index.source_signature(tmp, "Lecture 1.pdf")
 check("source signature resolves via safe name", sig is not None)
 
+page_rows = [(i + 1, "h%d" % (i + 1)) for i in range(len(pages))]
 idx = pdf_index.PdfIndex(
-    provider="voyage", model="voyage-3-lite", pdf_name="Lecture_1",
-    source_sig=sig, chunks=[(p, s, ln) for p, s, ln, _ in chunks],
+    provider="openai", model="text-embedding-3-large", pdf_name="Lecture_1",
+    source_sig=sig, pages=list(page_rows),
 )
 idx.dims = 4
-for i in range(len(chunks)):
+for i in range(len(page_rows)):
     v = [0.0] * 4
     v[i % 4] = 1.0
     idx.vectors.extend(v)
@@ -204,23 +469,23 @@ for i in range(len(chunks)):
 d = pdf_index.index_dir(tmp, "Lecture 1")
 pdf_index.save(idx, d)
 idx2 = pdf_index.load(d)
-check("save/load roundtrip", idx2 is not None and idx2.chunks == idx.chunks
+check("save/load roundtrip", idx2 is not None and idx2.pages == idx.pages
       and idx2.embedded_rows == idx.embedded_rows and idx2.vectors == idx.vectors)
-check("is_fresh true", pdf_index.is_fresh(idx2, sig, ("voyage", "voyage-3-lite")))
+check("is_fresh true", pdf_index.is_fresh(idx2, sig, ("openai", "text-embedding-3-large")))
 check("is_fresh false on provider change",
       not pdf_index.is_fresh(idx2, sig, ("openai", "text-embedding-3-small")))
 check("is_fresh false on source change",
-      not pdf_index.is_fresh(idx2, (sig[0] + 1, sig[1]), ("voyage", "voyage-3-lite")))
+      not pdf_index.is_fresh(idx2, (sig[0] + 1, sig[1]), ("openai", "text-embedding-3-large")))
 
-# resume state: fewer embedded rows than chunks
+# resume state: fewer embedded rows than pages
 idx2.embedded_rows -= 2
 del idx2.vectors[-8:]
 pdf_index.save(idx2, d)
 idx3 = pdf_index.load(d)
 check("partial index loads with resume cursor",
-      idx3 is not None and idx3.embedded_rows == len(chunks) - 2)
+      idx3 is not None and idx3.embedded_rows == len(page_rows) - 2)
 check("partial index is not fresh",
-      not pdf_index.is_fresh(idx3, sig, ("voyage", "voyage-3-lite")))
+      not pdf_index.is_fresh(idx3, sig, ("openai", "text-embedding-3-large")))
 
 # corrupt vectors -> load None
 with open(os.path.join(d, "vectors.f32"), "ab") as f:
@@ -228,7 +493,25 @@ with open(os.path.join(d, "vectors.f32"), "ab") as f:
 check("truncated/oversized vectors -> rebuild", pdf_index.load(d) is None)
 
 st = pdf_index.stats_from_disk(d)
-check("stats_from_disk reads manifest", st["exists"] and st["chunks"] == len(chunks))
+check("stats_from_disk reads manifest", st["exists"] and st["pages"] == len(page_rows))
+# The twin: both exits answer the same keys, and every non-manifest takes
+# the failure exit — the SAME five payloads card_index gets, not just one.
+_pi_missing = pdf_index.stats_from_disk(os.path.join(tmp, "no-such-index"))
+check("pdf_index.stats_from_disk: a missing index returns the same key set "
+      "as a present one",
+      set(_pi_missing) == set(st) and not _pi_missing["exists"],
+      f"success={sorted(st)} failure={sorted(_pi_missing)}")
+_pi_bad = os.path.join(tmp, "bad-manifest"); os.makedirs(_pi_bad)
+for _label, _payload in (("a version-mismatched manifest",
+                          json.dumps({"version": pdf_index.INDEX_VERSION + 1})),
+                         ("a CORRUPT (non-JSON) manifest", "{not json"),
+                         ("a manifest of null", "null"),
+                         ("a manifest of []", "[]"),
+                         ("a manifest of a bare string", '"str"')):
+    check(f"pdf_index.stats_from_disk: {_label} takes the failure exit "
+          "with every key intact",
+          *_failure_exit(pdf_index.stats_from_disk, _pi_bad, st,
+                         payload=_payload, manifest=pdf_index.MANIFEST_FILE))
 
 pdf_index.delete(tmp, "Lecture 1")
 check("delete removes dir", not os.path.isdir(d))
@@ -238,8 +521,18 @@ d2 = pdf_index.index_dir(tmp, "Lecture 1")
 os.makedirs(d2, exist_ok=True)
 with open(os.path.join(d2, "manifest.json"), "w") as f:
     f.write("{}")
+# PR1 review fix: user_files/pages/<safe>/ (page_store.py) is a sibling
+# that delete_context never touched — a re-import under this same safe
+# basename would silently inherit a stranger's slide text and transcript.
+_dc_page_store = importlib.import_module("klausmate.page_store")
+_dc_page_store.ensure_records(tmp, "Lecture_1", os.path.join(tmp, "Lecture 1.pdf"),
+                               ["slide text"])
+d3 = os.path.join(tmp, _dc_page_store.SUBDIR, "Lecture_1")
+check("pages dir exists before delete (sanity — the pin below must exercise something)",
+      os.path.isdir(d3))
 pdf_handler.delete_context(tmp, "Lecture 1")
 check("delete_context removes pdf_index dir", not os.path.isdir(d2))
+check("delete_context removes the pages dir too", not os.path.isdir(d3))
 
 # ------------------------------------- pdf_handler: atomic writes + recency
 
@@ -350,7 +643,7 @@ aqt_mod.dialogs = types.SimpleNamespace(open=lambda *a, **k: None)
 _stub("aqt.operations", CollectionOp=_AnyOp, QueryOp=_AnyOp)
 _stub("aqt.utils", tooltip=lambda *a, **k: None, askUser=lambda *a, **k: False,
       showWarning=lambda *a, **k: None)
-_stub("aqt.qt", QAction=object, QInputDialog=object, qconnect=lambda *a, **k: None)
+_stub("aqt.qt", QAction=object, QInputDialog=object, QMessageBox=object, qconnect=lambda *a, **k: None)
 _stub("aqt.gui_hooks")
 aqt_mod.gui_hooks = sys.modules["aqt.gui_hooks"]
 _stub("anki")
@@ -377,27 +670,35 @@ if HAVE_RETENTION:
           < retention.fsrs_retrievability(10.0, 0.5, 5.0))
     check("s<=0 guarded", retention.fsrs_retrievability(0.0, 0.5, 5.0) == 0.0)
 
-    # match_scores on hand-built unit vectors
-    cidx = card_index.CardIndex(provider="voyage", model="voyage-3-lite", dims=2)
+    # match_scores on hand-built unit vectors — one vector per PAGE now
+    # (pdf_index v2): a note's score is simply its best-matching page, so
+    # there is no more chunk-level "agg" (top3_mean is gone along with it).
+    cidx = card_index.CardIndex(provider="openai", model="text-embedding-3-large", dims=2)
     for nid, vec in [(1, [1.0, 0.0]), (2, [0.0, 1.0]),
                      (3, [math.sqrt(0.5), math.sqrt(0.5)])]:
         cidx.nids.append(nid)
         cidx.mods.append(0)
         cidx.hashes.append("h%d" % nid)
         cidx.vectors.extend(vec)
-    pidx = pdf_index.PdfIndex(provider="voyage", model="voyage-3-lite",
+    pidx = pdf_index.PdfIndex(provider="openai", model="text-embedding-3-large",
                               pdf_name="x", dims=2)
-    for vec in ([1.0, 0.0], [0.0, 1.0]):
-        pidx.chunks.append((1, 0, 1))
+    for i, vec in enumerate(([1.0, 0.0], [0.0, 1.0])):
+        pidx.pages.append((i + 1, "h%d" % (i + 1)))
         pidx.vectors.extend(vec)
         pidx.embedded_rows += 1
-    scores = dict(retention.match_scores(pidx, cidx, agg="max", floor=0.0))
-    check("max agg: nid1 = 1.0", abs(scores[1] - 1.0) < 1e-6)
-    check("max agg: nid3 = 0.707", abs(scores[3] - math.sqrt(0.5)) < 1e-6)
-    floored = dict(retention.match_scores(pidx, cidx, agg="max", floor=0.9))
-    check("floor filters", set(floored) == {1, 2})
-    t3 = dict(retention.match_scores(pidx, cidx, agg="top3_mean", floor=0.0))
-    check("top3_mean of 2 chunks averages both", abs(t3[1] - 0.5) < 1e-6, f"{t3[1]}")
+    scores_out, pages_out = retention.match_scores(pidx, cidx, floor=0.0)
+    scores = dict(scores_out)
+    check("best-page score: nid1 = 1.0, on page 1",
+          abs(scores[1] - 1.0) < 1e-6 and pages_out[1] == 1)
+    check("best-page score: nid3 = 0.707 (equidistant from both pages)",
+          abs(scores[3] - math.sqrt(0.5)) < 1e-6)
+    check("every scored note has a best page, 1-based",
+          all(nid in pages_out and pages_out[nid] >= 1 for nid, _ in scores_out))
+    floored_out, _floored_pages = retention.match_scores(pidx, cidx, floor=0.9)
+    check("floor filters", set(dict(floored_out)) == {1, 2})
+    check("pdf_match_agg is gone",
+          not hasattr(retention, "DEFAULT_AGG")
+          and "pdf_match_agg" not in open(retention.__file__).read())
     try:
         bad = pdf_index.PdfIndex(provider="openai", model="x", pdf_name="x", dims=2)
         retention.match_scores(bad, cidx)
@@ -430,19 +731,385 @@ if HAVE_RETENTION:
     # matches.json roundtrip + invalidation (patch USER_FILES to tmp)
     retention.USER_FILES = tmp
     m = [(1, 0.8), (2, 0.4)]
-    sig2 = ("voyage", "voyage-3-lite")
+    m_pages = {1: 1, 2: 3}
+    sig2 = ("openai", "text-embedding-3-large")
     src2 = (123, 456)
-    retention.save_matches("Lecture 1", sig2, 2, src2, "digest1", "max", m)
-    got = retention.load_matches("Lecture 1", sig2, 2, src2, "digest1", "max")
-    check("matches roundtrip", got == [(1, 0.8), (2, 0.4)])
+    retention.save_matches("Lecture 1", sig2, 2, src2, "digest1", m, m_pages)
+    got = retention.load_matches("Lecture 1", sig2, 2, src2, "digest1")
+    check("matches + pages roundtrip",
+          got == ([(1, 0.8), (2, 0.4)], {1: 1, 2: 3}))
     check("matches invalid on digest",
-          retention.load_matches("Lecture 1", sig2, 2, src2, "other", "max") is None)
-    check("matches invalid on agg",
-          retention.load_matches("Lecture 1", sig2, 2, src2, "digest1", "top3_mean") is None)
+          retention.load_matches("Lecture 1", sig2, 2, src2, "other") is None)
     check("matches invalid on dims",
-          retention.load_matches("Lecture 1", sig2, 3, src2, "digest1", "max") is None)
+          retention.load_matches("Lecture 1", sig2, 3, src2, "digest1") is None)
     check("matches invalid on source sig",
-          retention.load_matches("Lecture 1", sig2, 2, (9, 9), "digest1", "max") is None)
+          retention.load_matches("Lecture 1", sig2, 2, (9, 9), "digest1") is None)
+
+    # MATCHES_VERSION bump (Important 3, fix round 2): the cache payload
+    # gained "pages" and lost "agg" without a version bump, so a pre-K-225
+    # matches.json could load as valid against a rebuilt (and page-keyed
+    # differently) pdf_index. Bumping the constant is only half the pin —
+    # the other half is proving a stored v1 payload actually reads as
+    # absent now, mirroring how every other invalidation check above calls
+    # load_matches.
+    check("MATCHES_VERSION bumped to 2 (payload gained \"pages\", lost \"agg\")",
+          retention.MATCHES_VERSION == 2)
+    _v1_path = retention._matches_path("Lecture 1")
+    with open(_v1_path, encoding="utf-8") as f:
+        _v1_payload = json.load(f)
+    _v1_payload["version"] = 1
+    with open(_v1_path, "w", encoding="utf-8") as f:
+        json.dump(_v1_payload, f)
+    check("a stored v1 matches.json now reads as absent/stale, not valid",
+          retention.load_matches("Lecture 1", sig2, 2, src2, "digest1") is None)
+
+    print("== ensure_pdf_index: do_build's hash-reuse (mutation harness) ==")
+    # Exercises do_build's REAL body end to end — _AnyOp above never calls
+    # `op` at all, which is right for tests that don't care what
+    # ensure_pdf_index actually computes, but wrong for proving the
+    # hash-reuse skip (an unchanged page's vector is carried over rather
+    # than re-embedded) has teeth. A small local QueryOp fake runs `op`
+    # synchronously instead of dropping it, so do_build's own code executes
+    # here — and provider_from_config/_cfg are patched just enough to
+    # dodge the real aqt/config chain this stub harness doesn't have.
+    class _SyncOp:
+        def __init__(self, parent=None, op=None, success=None):
+            self._op = op
+            self._success = success
+            self._failure = None
+
+        def success(self, fn):
+            self._success = fn
+            return self
+
+        def failure(self, fn):
+            self._failure = fn
+            return self
+
+        def without_collection(self):
+            return self
+
+        def run_in_background(self):
+            try:
+                result = self._op(None)
+            except Exception as exc:  # noqa: BLE001
+                if self._failure:
+                    self._failure(exc)
+                return
+            if self._success:
+                self._success(result)
+
+    class _CountingProvider:
+        name = "openai"
+
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            return [[1.0, 0.0] for _ in texts]
+
+    _hr_tmp = tempfile.mkdtemp(prefix="klaus_test_hr_")
+    os.makedirs(os.path.join(_hr_tmp, "contexts"))
+    _hr_pages = ["alpha page one", "beta page two", "gamma page three"]
+    with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+        json.dump({"pages": _hr_pages, "page_count": 3}, f)
+
+    _hr_provider = _CountingProvider()
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _hr_provider
+    retention.USER_FILES = _hr_tmp
+    try:
+        _hr_built = {}
+        _hr_errors = []
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("do_build harness: first build hit no error", _hr_errors == [],
+              str(_hr_errors))
+        check("first build embeds every page (3 texts, one batch)",
+              len(_hr_provider.calls) == 1 and len(_hr_provider.calls[0]) == 3,
+              str(_hr_provider.calls))
+        check("first build's index is complete, 3 pages",
+              "idx" in _hr_built and _hr_built["idx"].embedded_rows == 3
+              and [p for p, _h in _hr_built["idx"].pages] == [1, 2, 3])
+
+        # Change ONE page's text (a new context file -> a new source
+        # signature, so is_fresh() no longer short-circuits and do_build's
+        # own page-by-page hash comparison actually runs).
+        _hr_pages[1] = "beta page two REVISED"
+        with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+            json.dump({"pages": _hr_pages, "page_count": 3}, f)
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx2", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("do_build harness: second build hit no error", _hr_errors == [],
+              str(_hr_errors))
+        check("second build re-embeds ONLY the one changed page — every "
+              "other page's vector is reused by hash, never re-sent to "
+              "the provider",
+              len(_hr_provider.calls) == 2 and len(_hr_provider.calls[1]) == 1,
+              str(_hr_provider.calls))
+        check("second build's index is still complete, 3 pages",
+              "idx2" in _hr_built and _hr_built["idx2"].embedded_rows == 3
+              and [p for p, _h in _hr_built["idx2"].pages] == [1, 2, 3])
+
+        # -- a TRANSCRIPT grows (K-236 / I5) ---------------------------
+        # page_store.append_segment writes the page RECORD and never
+        # contexts/<safe>.json, so the source signature — the only thing
+        # is_fresh() can see — does not move. do_build used to return at
+        # is_fresh before any hash was compared, which made D3's "a page
+        # whose transcript grew re-embeds alone" untrue: the new text was
+        # never embedded and the stale hash stayed on disk forever.
+        page_store = importlib.import_module("klausmate.page_store")
+        pdf_handler = importlib.import_module("klausmate.pdf_handler")
+        _hr_safe = pdf_handler._safe_basename("HR")
+        _hr_path = pdf_handler.pdf_path_for(_hr_tmp, _hr_safe) or ""
+        _hr_src_before = pdf_index.source_signature(_hr_tmp, "HR")
+        _hr_hash_before = dict(_hr_built["idx2"].pages)[3]
+        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 2, 0.0, 5.0,
+                                  "and this is what the lecturer said")
+        check("a transcript append does not move the context file's "
+              "signature — is_fresh() alone cannot see it",
+              pdf_index.source_signature(_hr_tmp, "HR") == _hr_src_before)
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx3", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("do_build harness: transcript build hit no error",
+              _hr_errors == [], str(_hr_errors))
+        check("a page whose TRANSCRIPT grew re-embeds ALONE — exactly one "
+              "text reaches the provider, and it is the page that changed",
+              len(_hr_provider.calls) == 3
+              and len(_hr_provider.calls[2]) == 1
+              and "lecturer said" in _hr_provider.calls[2][0],
+              str(_hr_provider.calls[2:]))
+        check("...and the index's stored hash for that page moves with it, "
+              "so the next build sees the page as current",
+              "idx3" in _hr_built
+              and dict(_hr_built["idx3"].pages)[3] != _hr_hash_before
+              and _hr_built["idx3"].embedded_rows == 3)
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx4", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("...and an unchanged rebuild still embeds NOTHING — the page "
+              "comparison must not cost a re-embed on every open",
+              len(_hr_provider.calls) == 3, str(_hr_provider.calls[2:]))
+
+        # -- the matches cache follows the same pages (K-236 / I5b) -----
+        _m_sig = ("openai", "text-embedding-3-large")
+        _m_src = pdf_index.source_signature(_hr_tmp, "HR")
+        retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
+                               [(1, 0.9)], {1: 3})
+        check("the matches cache hits while the pages it was ranked "
+              "against are unchanged",
+              retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
+              is not None)
+        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 0, 5.0, 9.0,
+                                  "more words said over slide one")
+        retention.ensure_pdf_index(
+            None, "HR",
+            on_done=lambda idx: _hr_built.setdefault("idx5", idx),
+            on_error=lambda e: _hr_errors.append(e),
+        )
+        check("...and goes COLD once a page re-embedded under it — every "
+              "other key (pdf_source_sig, the card digest, the signature) "
+              "is blind to a transcript, so without the pages digest "
+              "ensure_matches would serve the old ranking against the "
+              "new vectors",
+              retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
+              is None)
+        retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
+                               [(1, 0.8)], {1: 1})
+        check("...and hits again once the ranking is recomputed for them",
+              retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
+              == ([(1, 0.8)], {1: 1}))
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_hr_tmp, ignore_errors=True)
+
+    print("== ensure_pdf_index: cancel leaves a resumable, incomplete index "
+          "(Critical 1 fix-round-2 pin) ==")
+    # Regression pin for the silent-data-loss bug: do_build used to zero-fill
+    # every never-embedded row AND count it as embedded, so a cancelled build
+    # saved a "complete" index that was actually part garbage, and — because
+    # is_fresh() then read True — never resumed. 100 distinct pages (> the
+    # embed_batches BATCH_SIZE of 64) so a cancel mid-first-batch leaves a
+    # real, provable gap: batch one (rows 0-63) lands, batch two never runs.
+    class _CancelingProvider:
+        name = "openai"
+
+        def __init__(self, cancel_event):
+            self.calls = []
+            self._cancel_event = cancel_event
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            self._cancel_event.set()  # fires mid-batch-one, before batch two
+            return [[1.0, 0.0] for _ in texts]
+
+    _c1_total = 100
+    _c1_tmp = tempfile.mkdtemp(prefix="klaus_test_c1_")
+    os.makedirs(os.path.join(_c1_tmp, "contexts"))
+    _c1_pages = [f"page {i} distinct text" for i in range(1, _c1_total + 1)]
+    with open(os.path.join(_c1_tmp, "contexts", "C1.json"), "w") as f:
+        json.dump({"pages": _c1_pages, "page_count": _c1_total}, f)
+
+    _c1_cancel = threading.Event()
+    _c1_provider = _CancelingProvider(_c1_cancel)
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _c1_provider
+    retention.USER_FILES = _c1_tmp
+    try:
+        _c1_built = {}
+        _c1_errors = []
+        retention.ensure_pdf_index(
+            None, "C1",
+            cancel=_c1_cancel,
+            on_done=lambda idx: _c1_built.setdefault("idx", idx),
+            on_error=lambda e: _c1_errors.append(e),
+        )
+        check("cancel pin: cancelled build hit no error", _c1_errors == [],
+              str(_c1_errors))
+        check("cancel pin: provider saw exactly one batch (64 pages) before "
+              "the cancel stopped the second",
+              len(_c1_provider.calls) == 1 and len(_c1_provider.calls[0]) == 64,
+              [len(c) for c in _c1_provider.calls])
+
+        _c1_dir = pdf_index.index_dir(_c1_tmp, "C1")
+        _c1_reloaded = pdf_index.load(_c1_dir)
+        check("cancel pin: reloaded index has fewer embedded rows than pages "
+              "— no zero vector was substituted for the un-embedded rows",
+              _c1_reloaded is not None and _c1_reloaded.embedded_rows == 64
+              and _c1_reloaded.embedded_rows < _c1_total,
+              None if _c1_reloaded is None else _c1_reloaded.embedded_rows)
+        check("cancel pin: reloaded index is not complete",
+              _c1_reloaded is not None and not _c1_reloaded.is_complete())
+        _c1_sig = ("openai", "text-embedding-3-large", 0)
+        _c1_src = pdf_index.source_signature(_c1_tmp, "C1")
+        check("cancel pin: reloaded index is not fresh (so the next run "
+              "won't short-circuit and skip resuming)",
+              not pdf_index.is_fresh(_c1_reloaded, _c1_src, _c1_sig))
+
+        # Second build, nothing cancelled this time: must resume, not restart
+        # — the provider is called again ONLY for the 36 rows still missing.
+        _c1_provider.calls.clear()
+        _c1_cancel2 = threading.Event()
+        _c1_built2 = {}
+        _c1_errors2 = []
+        retention.ensure_pdf_index(
+            None, "C1",
+            cancel=_c1_cancel2,
+            on_done=lambda idx: _c1_built2.setdefault("idx", idx),
+            on_error=lambda e: _c1_errors2.append(e),
+        )
+        check("cancel pin: resumed build hit no error", _c1_errors2 == [],
+              str(_c1_errors2))
+        check("cancel pin: resumed build's index is now complete, all "
+              "100 pages",
+              "idx" in _c1_built2 and _c1_built2["idx"].embedded_rows == _c1_total
+              and _c1_built2["idx"].is_complete())
+        check("cancel pin: provider re-called only for the 36 rows that "
+              "were never embedded, not all 100",
+              sum(len(c) for c in _c1_provider.calls) == _c1_total - 64,
+              [len(c) for c in _c1_provider.calls])
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_c1_tmp, ignore_errors=True)
+
+    print("== ensure_pdf_index: an empty page gets a zero vector, never text "
+          "sent to the provider (Critical 2 fix-round-2 pin) ==")
+    # Spec D3: "a page with empty combined_text gets a zero vector and never
+    # wins best_page." A 3-page fixture whose middle page has no text at all
+    # (no slide text layer, no transcript) — page_store.combined_text("") for
+    # that page, exactly the image-only-slide case the review reproduced.
+    class _RecordingProvider:
+        name = "openai"
+
+        def __init__(self):
+            self.calls = []
+
+        def embed(self, texts, kind="document"):
+            self.calls.append(list(texts))
+            # "one" -> [1,0], anything else (must be non-empty by the fix)
+            # -> [0,1] — two distinguishable, already-unit vectors.
+            return [([1.0, 0.0] if "one" in t else [0.0, 1.0]) for t in texts]
+
+    _c2_tmp = tempfile.mkdtemp(prefix="klaus_test_c2_")
+    os.makedirs(os.path.join(_c2_tmp, "contexts"))
+    _c2_pages = ["Slide one has text", "", "Slide three has text"]
+    with open(os.path.join(_c2_tmp, "contexts", "C2.json"), "w") as f:
+        json.dump({"pages": _c2_pages, "page_count": 3}, f)
+
+    _c2_provider = _RecordingProvider()
+    _orig_queryop = retention.QueryOp
+    _orig_cfg_fn = retention._cfg
+    _orig_provider_from_config = embeddings.provider_from_config
+    _orig_user_files = retention.USER_FILES
+    retention.QueryOp = _SyncOp
+    retention._cfg = lambda: {"embedding_model": "text-embedding-3-large"}
+    embeddings.provider_from_config = lambda get_config: _c2_provider
+    retention.USER_FILES = _c2_tmp
+    try:
+        _c2_built = {}
+        _c2_errors = []
+        retention.ensure_pdf_index(
+            None, "C2",
+            on_done=lambda idx: _c2_built.setdefault("idx", idx),
+            on_error=lambda e: _c2_errors.append(e),
+        )
+        check("empty-page pin: build hit no error", _c2_errors == [],
+              str(_c2_errors))
+        _c2_all_texts = [t for batch in _c2_provider.calls for t in batch]
+        check('empty-page pin: "" never reaches the provider',
+              "" not in _c2_all_texts, _c2_all_texts)
+        check("empty-page pin: index is complete with all 3 rows",
+              "idx" in _c2_built and _c2_built["idx"].embedded_rows == 3
+              and _c2_built["idx"].is_complete())
+
+        _c2_idx = _c2_built["idx"]
+        _c2_mv = memoryview(_c2_idx.vectors)
+        _c2_mid = list(_c2_mv[1 * _c2_idx.dims:2 * _c2_idx.dims])
+        check("empty-page pin: the empty middle page's row is an explicit "
+              "zero vector", _c2_mid == [0.0] * _c2_idx.dims, _c2_mid)
+
+        _c2_q1 = embeddings.normalize([1.0, 0.0])
+        _c2_q3 = embeddings.normalize([0.0, 1.0])
+        _c2_page_for_1, _c2_score_for_1 = pdf_index.best_page(_c2_idx, _c2_q1)
+        _c2_page_for_3, _c2_score_for_3 = pdf_index.best_page(_c2_idx, _c2_q3)
+        check("empty-page pin: best_page never returns the empty page 2, "
+              "for a query matching either neighbor",
+              _c2_page_for_1 == 1 and _c2_page_for_3 == 3,
+              (_c2_page_for_1, _c2_page_for_3))
+    finally:
+        retention.QueryOp = _orig_queryop
+        retention._cfg = _orig_cfg_fn
+        embeddings.provider_from_config = _orig_provider_from_config
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_c2_tmp, ignore_errors=True)
 
     # threshold prefs
     retention.set_threshold("Lecture 1", 0.42)
@@ -522,7 +1189,350 @@ if HAVE_RETENTION:
     check("excluded nid absent", 4 not in cr)
 
 shutil.rmtree(tmp, ignore_errors=True)
-srv.shutdown()
+
+# ------------------------------------------------- K-254: Doubtful tag +
+# ------------------------------------------------- confirmed-only counts
+
+print("== K-254: Doubtful tag membership (tag_sync) ==")
+
+try:
+    tag_sync = importlib.import_module("klausmate.tag_sync")
+    HAVE_TAG_SYNC = True
+except Exception as e:
+    HAVE_TAG_SYNC = False
+    print(f" SKIP tag_sync import failed: {type(e).__name__}: {e}")
+
+if HAVE_TAG_SYNC:
+    check("the Doubtful tag is reserved and named",
+          tag_sync.DOUBTFUL_TAG == "!Library::Doubtful"
+          and "doubtful" in tag_sync.RESERVED_LEAVES)
+
+    # K-254 review Minor 5: the constant-only pin above never exercises
+    # what "reserved" actually buys — plan_reconcile (K-054's reverse
+    # sync) treats any !Library::<reserved leaf> tag as ineligible for
+    # the "this PDF got renamed in the sidebar" inference. Without the
+    # reserve, a lone missing PDF plus the freshly-created global
+    # Doubtful tag looks EXACTLY like a PDF renamed to "Doubtful" —
+    # profile-open reconcile would then rename the PDF and hand it that
+    # tag. With the reserve, the same inputs plan a safe "reapply"
+    # instead, touching Doubtful not at all.
+    _plan = tag_sync.plan_reconcile(
+        {"renal": "!Library::Renal"}, {"!Library::Doubtful"}
+    )
+    check("!Library::Doubtful is never a reconcile-rename candidate",
+          _plan["candidates"] == [] and _plan["action"] == "reapply"
+          and _plan["rename"] is None,
+          _plan)
+
+    # PR #4 fourth review (1): a stored lecture tag is user-derived and
+    # lands inside Anki's QUERY LANGUAGE. desired_tag's sanitizer only
+    # strips whitespace and "::", so a PDF named 'Lec "1" 100%_a*b\c'
+    # keeps the quote (which terminates the operand), the backslash
+    # (which escapes whatever follows it) and * / _ — in a tag: search
+    # * matches any run and _ any single character. tag_query is the ONE
+    # helper both Browse hops build their operand with.
+    #
+    # Anki's own rules, from the source (anki-main):
+    #   rslib/src/text.rs:512-515  escape_anki_wildcards backslash-
+    #     escapes exactly [\\*_];
+    #   rslib/src/search/writer.rs:103-109  maybe_quote wraps in "…"
+    #     after txt.replace('"', "\\\"");
+    #   rslib/src/search/parser.rs:731-772  unescape() accepts
+    #     \\ \" \: \( \) \- and invalid_escape_sequence's escapable set
+    #     is [\\":*_()-]; \* and \_ are deliberately left for the SQL
+    #     writer (its own test at parser.rs:881-884: "parser doesn't
+    #     unescape \*_", consumed by text.rs to_custom_re:475-487).
+    _messy = '!Library::Lec "1" 100%_a*b\\c'
+    check("tag_query escapes backslash, quote and both wildcards inside "
+          "one quoted tag: operand",
+          tag_sync.tag_query(_messy)
+          == 'tag:"!Library::Lec \\"1\\" 100%\\_a\\*b\\\\c"',
+          tag_sync.tag_query(_messy))
+    check("a plain tag round-trips unchanged inside tag:\"…\"",
+          tag_sync.tag_query("!Library::Renal") == 'tag:"!Library::Renal"',
+          tag_sync.tag_query("!Library::Renal"))
+    check("the Doubtful tag itself is quoted the same way (no bare "
+          "operand left anywhere)",
+          tag_sync.tag_query(tag_sync.DOUBTFUL_TAG)
+          == 'tag:"!Library::Doubtful"')
+
+if HAVE_TAG_SYNC and HAVE_RETENTION:
+    # _do_sync_one reaches retention._load_prefs()/_prefs_path() for
+    # get_stored_tag/set_stored_tag — never the real user_files (global
+    # constraints), so USER_FILES is patched to a scratch dir for this
+    # block only, exactly like the retention section above did for tmp.
+    _dbt_tmp = tempfile.mkdtemp()
+    _orig_user_files = retention.USER_FILES
+    retention.USER_FILES = _dbt_tmp
+    try:
+        class _FakeTags:
+            """col.tags double: bulk_add/bulk_remove mutate the SAME
+            {tag: {nid,...}} map find_notes reads, so a round trip through
+            apply_membership is a real diff, not a recorded call."""
+
+            def __init__(self, tagmap):
+                self._tagmap = tagmap
+
+            def bulk_add(self, nids, tag):
+                self._tagmap.setdefault(tag, set()).update(nids)
+
+            def bulk_remove(self, nids, tag):
+                self._tagmap.setdefault(tag, set()).difference_update(nids)
+
+        class FakeCol:
+            """Minimal collection double for tag_sync's col-only helpers
+            (apply_membership/apply_rename) — extended with members(), the
+            test-only readback the brief asks for."""
+
+            def __init__(self, tags=None):
+                self._tagmap = {k: set(v) for k, v in (tags or {}).items()}
+                self.tags = _FakeTags(self._tagmap)
+
+            def find_notes(self, query):
+                # apply_membership only ever asks 'tag:"<escaped tag>"'.
+                tag = query[len('tag:"'):-1]
+                return set(self._tagmap.get(tag, set()))
+
+            def members(self, tag):
+                return set(self._tagmap.get(tag, set()))
+
+        col = FakeCol(tags={"!Library::Renal": {1, 2, 3}, "!Library::Doubtful": {9}})
+        res = tag_sync._do_sync_one(
+            col, "renal", "!Library::Renal", desired_nids={1, 2, 3}, doubtful={2, 5}
+        )
+        check("the lecture tag keeps every match; Doubtful becomes exactly "
+              "the rejected set across PDFs",
+              col.members("!Library::Renal") == {1, 2, 3}
+              and col.members("!Library::Doubtful") == {2, 5},
+              (col.members("!Library::Renal"), col.members("!Library::Doubtful")))
+        check("both diffs are reported back",
+              res["doubtful_added"] == [2, 5] and res["doubtful_removed"] == [9],
+              res)
+
+        col2 = FakeCol(tags={"!Library::Renal": {1, 2, 3}})
+        res2 = tag_sync._do_sync_one(
+            col2, "renal", "!Library::Renal", desired_nids={1, 2, 3}
+        )
+        check("doubtful=None (plain indexing, no judge pass yet) never "
+              "invents or touches the Doubtful tag",
+              "!Library::Doubtful" not in col2._tagmap
+              and res2["doubtful_added"] == [] and res2["doubtful_removed"] == [])
+
+        # Final review I-3: membership is the rejected set INTERSECTED with
+        # each PDF's CURRENT at-threshold candidates, not the raw union of
+        # every verdict ever written. judged.json is append-only, so without
+        # the intersection a card that stops matching its lecture (the
+        # sensitivity slider moved, or the note was edited) keeps
+        # !Library::Doubtful forever — invisible inside Klaus, but not to a
+        # user's own search or filtered deck on the bare tag, and with no
+        # self-heal short of becoming that PDF's candidate again.
+        _pert = importlib.import_module("klausmate.pertinence")
+
+        def _seed_judged(safe, rejected, matches=None):
+            _pert.save_judged(_dbt_tmp, safe, {
+                "version": _pert.VERSION, "model": "m",
+                "verdicts": {str(n): {"pertinent": False, "reason": "", "page": 1,
+                                      "page_hash": "", "card_hash": "", "model": "m"}
+                             for n in rejected},
+            })
+            if matches is not None:
+                _mp = retention._matches_path(safe)
+                os.makedirs(os.path.dirname(_mp), exist_ok=True)
+                with open(_mp, "w", encoding="utf-8") as _f:
+                    _f.write(matches if isinstance(matches, str) else json.dumps({"matches": matches}))
+
+        # nid 2 rejected and still matching; nid 5 rejected but has fallen to
+        # 0.10; nid 8 matches but was never rejected. cardio has verdicts and
+        # NO matches.json at all.
+        _seed_judged("renal", [2, 5], matches=[[2, 0.9], [5, 0.10], [8, 0.95]])
+        _seed_judged("cardio", [7])
+        _members = tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
+        check("a rejected nid that has dropped below its PDF's threshold is no longer "
+              "doubtful; one still at/above it is; a matched nid nobody rejected never is",
+              _members == {2, 7}, _members)
+        check("...and a PDF whose matches.json is missing keeps its WHOLE rejected set — "
+              "never strip on missing data",
+              7 in _members and 7 in _pert.rejected_nids(_pert.load_judged(_dbt_tmp, "cardio")))
+        check("raising Match Sensitivity past a rejected card's score self-heals it out of "
+              "the tag on the next sync of any kind (the I-3 scenario)",
+              tag_sync.doubtful_members({"pdf_match_threshold": 0.95}) == {7})
+        _seed_judged("renal", [2, 5], matches="{not json at all")
+        check("a corrupt matches.json is 'don't know', not 'nobody' — renal's rejections "
+              "all stand rather than silently vanishing",
+              tag_sync.doubtful_members({"pdf_match_threshold": 0.5}) == {2, 5, 7})
+        check("the union across PDFs is untouched by the narrowing (a card rejected for A "
+              "and confirmed for B is still Doubtful — spec rule, known design debt)",
+              _pert.all_rejected(_dbt_tmp) == {2, 5, 7})
+        # Copilot review of PR #4 (2026-09-17): a judged.json that EXISTS but
+        # is unreadable used to read as EMPTY here, so that PDF contributed
+        # nothing and the full recompute stripped its Doubtful members —
+        # the opposite of the fail-safe above. It must raise instead; every
+        # sink catches that and passes doubtful=None (tag untouched).
+        with open(_pert.judged_path(_dbt_tmp, "cardio"), "w", encoding="utf-8") as _f:
+            _f.write("{torn")
+        _raised = False
+        try:
+            tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
+        except ValueError:
+            _raised = True
+        check("a judged.json that exists but cannot be read makes doubtful_members RAISE "
+              "(the sinks turn that into doubtful=None) rather than strip that PDF's members",
+              _raised)
+        shutil.rmtree(os.path.join(_dbt_tmp, "pdf_index"), ignore_errors=True)
+
+        # K-254 review Important 2 + 3: sync_after_threshold's own guard
+        # and wiring — mutations 5/7 in the review walked straight
+        # through the pure-function pins above because nothing exercised
+        # the GLUE. `_run_sync_op` is stubbed to run `work` synchronously
+        # instead of queuing a CollectionOp (this file's aqt.operations
+        # stub is a pure no-op — see the module docstring above — so the
+        # real op would never fire at all), and `_folder_and_display` is
+        # stubbed to skip curation/drive_store, which is not what this
+        # pin is about.
+        pertinence = importlib.import_module("klausmate.pertinence")
+        _orig_folder_display = tag_sync._folder_and_display
+        _orig_run_sync_op = tag_sync._run_sync_op
+        _orig_doubtful_members = tag_sync.doubtful_members
+        pkg.get_config = lambda: {}
+        tag_sync._folder_and_display = lambda safe: (None, "Renal")
+        _captured: list = []
+        tag_sync._run_sync_op = (
+            lambda parent, label, work, on_done=None, on_finished=None:
+            _captured.append(work)
+        )
+        def _run_captured(fcol):
+            """`_captured[0](fcol)` if the guard under test actually let
+            work reach `_run_sync_op`, else None — so a regression in
+            the guard FAILS the check below instead of crashing this
+            whole test file via IndexError and hiding every later pin."""
+            return _captured[0](fcol) if _captured else None
+
+        try:
+            def _boom_doubtful(cfg):
+                raise RuntimeError("boom — simulated judged.json corruption")
+
+            tag_sync.doubtful_members = _boom_doubtful
+            _captured.clear()
+            tag_sync.sync_after_threshold(
+                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
+            )
+            check("doubtful_members raising still reaches _run_sync_op — the "
+                  "lecture-tag retag the user just confirmed is never "
+                  "cancelled by a Doubtful-side failure",
+                  len(_captured) == 1)
+            _fcol = FakeCol()
+            _gres = _run_captured(_fcol)
+            check("...and doubtful safely becomes None (_do_sync_one's own "
+                  "contract), not a crash and not an invented tag",
+                  _gres is not None
+                  and _gres["doubtful_added"] == [] and _gres["doubtful_removed"] == []
+                  and "!Library::Doubtful" not in _fcol._tagmap)
+
+            tag_sync.doubtful_members = lambda cfg: {2, 5}
+            _captured.clear()
+            tag_sync.sync_after_threshold(
+                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
+            )
+            _fcol2 = FakeCol()
+            _run_captured(_fcol2)
+            check("when doubtful_members SUCCEEDS, its set really reaches "
+                  "_do_sync_one's doubtful= — the exact wiring mutation 7 "
+                  "(drop doubtful from this call) would break",
+                  _fcol2.members("!Library::Doubtful") == {2, 5})
+
+            # sync_after_clear_overrides — same two guarantees, batch
+            # path. `_cached_matches` is stubbed too: with a cold
+            # card_index (nothing seeded on this scratch USER_FILES) it
+            # would return None for every PDF and the function would
+            # return before ever reaching _run_sync_op, which is not
+            # what either pin below is about.
+            _orig_cached_matches = tag_sync._cached_matches
+            tag_sync._cached_matches = lambda safe, cfg: [(1, 0.9), (2, 0.8)]
+            try:
+                tag_sync.doubtful_members = _boom_doubtful
+                _captured.clear()
+                tag_sync.sync_after_clear_overrides(None, ["renal"])
+                check("sync_after_clear_overrides: doubtful_members raising "
+                      "still reaches _run_sync_op for the whole batch",
+                      len(_captured) == 1)
+                _fcol3 = FakeCol()
+                _run_captured(_fcol3)  # work(col) — {"added","removed","count"} shape, not _do_sync_one's
+                check("...doubtful is None, not a crash, for the batch too "
+                      "— the Doubtful tag is left untouched entirely",
+                      "!Library::Doubtful" not in _fcol3._tagmap)
+
+                tag_sync.doubtful_members = lambda cfg: {7}
+                _captured.clear()
+                tag_sync.sync_after_clear_overrides(None, ["renal"])
+                _fcol4 = FakeCol()
+                _run_captured(_fcol4)
+                check("sync_after_clear_overrides: a successful doubtful_members "
+                      "reaches _do_sync_one's doubtful= here too",
+                      _fcol4.members("!Library::Doubtful") == {7})
+            finally:
+                tag_sync._cached_matches = _orig_cached_matches
+        finally:
+            tag_sync._folder_and_display = _orig_folder_display
+            tag_sync._run_sync_op = _orig_run_sync_op
+            tag_sync.doubtful_members = _orig_doubtful_members
+            del pkg.get_config
+    finally:
+        retention.USER_FILES = _orig_user_files
+        shutil.rmtree(_dbt_tmp, ignore_errors=True)
+
+print("== K-254: retention counts confirmed cards only ==")
+
+if HAVE_RETENTION:
+    # note_card_counts: matches at/above threshold are nid 1 (.9) and
+    # nid 2 (.8); nid 3 (.7) is already below threshold. nid 2 is
+    # rejected, so it moves entirely out of notes/cards/suspended and
+    # into doubtful_count — confirmed = matched - rejected. nid 2 also
+    # has THREE cards (two viewable queues, one suspended -1), which is
+    # the point of this fixture (K-254 review Minor 6): doubtful_count
+    # is a CARD count sharing card_count's own unit — the Cards cell
+    # renders it as "{card_count} · {doubtful_count} doubtful" — not a
+    # note count, so a single rejected note with multiple viewable cards
+    # must report more than 1.
+    n, c, s, d = retention.note_card_counts(
+        [(1, 0.9), (2, 0.8), (3, 0.7)], 0.75,
+        {1: [0], 2: [0, 2, -1]}, rejected={2},
+    )
+    check("note_count excludes rejected; doubtful_count reports the "
+          "rejected note's VIEWABLE cards (2), not the note (1)",
+          n == 1 and d == 2, (n, c, s, d))
+    check("a rejected note's cards are never counted as viewable or "
+          "suspended either — not even its suspended one",
+          c == 1 and s == 0, (n, c, s, d))
+
+    n0, c0, s0, d0 = retention.note_card_counts(
+        [(1, 0.9), (2, 0.8)], 0.75, {1: [0], 2: [0]}
+    )
+    check("rejected=None (the default) matches the pre-K-254 3-tuple "
+          "contract with doubtful_count 0",
+          (n0, c0, s0, d0) == (2, 2, 0, 0))
+
+    # pdf_retention: same two notes, nid 2's card barely retained (0.1).
+    # Excluding it as rejected should RAISE the confirmed score, not
+    # lower it — the rejected card was dragging the average down.
+    _card_r_254 = {1: [(0.9, False)], 2: [(0.1, False)]}
+    r_all = retention.pdf_retention([(1, 0.9), (2, 0.8)], 0.75, _card_r_254)
+    r_conf = retention.pdf_retention(
+        [(1, 0.9), (2, 0.8)], 0.75, _card_r_254, rejected={2}
+    )
+    check("the score ignores rejected cards",
+          r_conf["retention"] > r_all["retention"],
+          (r_all["retention"], r_conf["retention"]))
+    # K-254 review Minor 7: this used to compare the SAME call to
+    # itself ("retention.pdf_retention(...) == r_all"), which can only
+    # ever prove determinism — mutation-tested to survive a real
+    # divergence (rejected=None silently dropping the weakest match).
+    # Concrete values instead: both notes matched, both single-card, and
+    # the exact pre-K-254 aggregate (0.9*0.9 + 0.8*0.1 over 0.9+0.8).
+    check("rejected=None reproduces the pre-K-254 aggregate exactly — "
+          "concrete values, not a call compared to its own result",
+          r_all["matched_notes"] == 2 and r_all["matched_cards"] == 2
+          and abs(r_all["retention"] - 0.5235294117647059) < 1e-9,
+          r_all)
 
 print("== threshold default migration (retention._migrate_default_threshold) ==")
 
@@ -1967,6 +2977,203 @@ except Exception as e:
           f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 finally:
     shutil.rmtree(pv_uf, ignore_errors=True)
+
+print("== K-140: the dead editor state stays dead ==")
+# _klausmate_target_field_index/_name were written at three sites and
+# read at none — vestiges of autocomplete/Ask, removed in 2026-08.
+# Anki's own editor.currentField is the whole mechanism; image crop
+# rewrites by scanning note.fields and PDF page insert travels through
+# the clipboard, so nothing downstream wants a Klaus-side copy.
+_INIT_K140 = open("klausmate/__init__.py", encoding="utf-8").read()
+check("no _klausmate_target_field_* ATTRIBUTE is written or read — a "
+      "helpful re-add would be write-only state all over again. The "
+      "_set_target_field FUNCTION is alive and is not what this pins.",
+      "_klausmate_target_field" not in _INIT_K140
+      and "def _set_target_field" in _INIT_K140)
+check("...and the docstring says what DOES carry the target, so the "
+      "next reader does not reinstate it",
+      "currentField" in _INIT_K140)
+
+print("== K-159: a baked text box keeps its size and colour ==")
+# THE BUG, live: "the fonts don't render properly on the PDF viewer in
+# Preview... they're always small." Vendored pypdf's FreeText builds
+# /DA only inside `if border_color:` (and even then writes only a
+# colour, never a font), and pdf_handler passes border_color=None
+# deliberately — K-150's reasoning stands, Preview frames a text box
+# only while it is selected. So /DA shipped EMPTY, size and colour
+# lived only in /DS (the rich-text CSS string most readers ignore),
+# and every note fell back to a reader default: small, black.
+#
+# MEASURED IN A RENDERER, not in a hex dump. PDFKit — the framework
+# Preview itself draws with — reported, for a 24pt red record:
+#     before:  font=Helvetica size=12.0  color=white 0   (i.e. black)
+#     after:   font=Helvetica size=24.0  color=RGB 1 0 0
+# and pdf.js (annotationMode ENABLE) agreed: defaultAppearanceData
+# went from {fontSize:10, fontName:"", black} to {fontSize:24,
+# fontName:"Helv", red}. /DR was tried and is NOT needed — PDFKit
+# resolves /Helv with no resource dictionary and no /AcroForm.
+check("the string is the PDF operator form, size then colour",
+      pdf_handler.free_text_da("#ff0000", 24) == "/Helv 24 Tf 1 0 0 rg")
+check("numbers are operands, not reprs — no 12.0, no 17 decimals",
+      pdf_handler.free_text_da("#000000", 12.0) == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("#fadc50", 13.5)
+      == "/Helv 13.5 Tf 0.9804 0.8627 0.3137 rg")
+check("a junk or absent colour falls back to the caller's default, "
+      "never lands in the appearance string verbatim",
+      pdf_handler.free_text_da(None, 12) == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("rgb(1,2,3)", 12)
+      == "/Helv 12 Tf 0 0 0 rg"
+      and pdf_handler.free_text_da("#fff", 12) == "/Helv 12 Tf 0 0 0 rg")
+try:
+    _da_nonhex = pdf_handler.free_text_da("#12345g", 12)
+except Exception as _da_exc:            # noqa: BLE001 - the point is that
+    _da_nonhex = f"raised {_da_exc!r}"  # it must not raise
+check("...including a SIX-character non-hex string — the length is "
+      "not the check, the alphabet is (the shorter cases above all "
+      "pass a length-only guard, so they pinned nothing on their own)",
+      _da_nonhex == "/Helv 12 Tf 0 0 0 rg", repr(_da_nonhex))
+check("a junk, zero, negative or non-finite size falls back to 12 — a "
+      "`0 Tf` means auto-size to some readers and nothing to others",
+      all(pdf_handler.text_point_size(v) == 12.0
+          for v in (None, "big", 0, -3, float("nan"), float("inf"), [])))
+check("a real size survives, ints and floats alike",
+      pdf_handler.text_point_size(24) == 24.0
+      and pdf_handler.text_point_size("18") == 18.0
+      and pdf_handler.text_point_size(13.5) == 13.5)
+check("one size constant feeds both appearance strings, so /DS and "
+      "/DA can never disagree about a note's size",
+      "font_size=f\"{pt}pt\"" in open(
+          os.path.join(ADDON, "pdf_handler.py"), encoding="utf-8").read())
+
+if not pdf_handler.BAKE_AVAILABLE:
+    print("  SKIP pypdf unavailable — /DA bake round-trip unverified")
+else:
+    from pypdf import PdfReader as _DaReader, PdfWriter as _DaWriter
+    from pypdf.annotations import FreeText as _DaFreeText
+
+    # The hazard is REAL and still present in the vendored copy: build
+    # a borderless FreeText pypdf's own way and its /DA is the empty
+    # string. Without this the fix below could be guarding a case that
+    # a pypdf bump had already fixed, and nobody would know.
+    _da_probe = _DaFreeText(text="x", rect=(0, 0, 10, 10),
+                            font_size="24pt", font_color="ff0000",
+                            border_color=None, background_color=None)
+    check("pypdf still writes an EMPTY /DA for a borderless box — the "
+          "bug this fixes has not gone away underneath us",
+          str(_da_probe.get("/DA")) == ""
+          and "24pt" in str(_da_probe.get("/DS")))
+
+    _da_uf = tempfile.mkdtemp(prefix="klaus_k159_")
+    _DA_N = "K159_DA"
+    os.makedirs(os.path.join(_da_uf, "pdfs"))
+    _da_work = os.path.join(_da_uf, "pdfs", _DA_N + ".pdf")
+    _w159 = _DaWriter()
+    _w159.add_blank_page(width=612, height=792)
+    with open(_da_work, "wb") as _fh159:
+        _w159.write(_fh159)
+    # A 24pt red note beside a 12pt black one: the pair Pouya can tell
+    # apart at a glance, and the pair the renderers were checked with.
+    _da_recs = [
+        {"id": "e" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 80.0, 320.0, 40.0]], "text": "BIG RED 24pt",
+         "note": "", "color": "#ff0000", "size": 24},
+        {"id": "f" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 200.0, 220.0, 20.0]], "text": "small black 12pt",
+         "note": "", "color": "#000000", "size": 12},
+        {"id": "0" * 32, "kind": "text", "page": 0,
+         "rects": [[60.0, 300.0, 220.0, 20.0]], "text": "junk style",
+         "note": "", "color": "not-a-colour", "size": "huge"},
+    ]
+    pdf_handler.save_annotations(_da_uf, _DA_N, _da_recs)
+    check("bake succeeds", pdf_handler.bake_annotations(_da_uf, _DA_N))
+    _da_free = [
+        a.get_object()
+        for a in (_DaReader(_da_work).pages[0].get("/Annots") or [])
+        if str(a.get_object().get("/Subtype")) == "/FreeText"
+    ]
+    _da_by_text = {str(o.get("/Contents")): o for o in _da_free}
+    check("one FreeText per record", len(_da_free) == 3, repr(_da_by_text))
+    check("the big red note carries its own size AND colour in /DA",
+          str(_da_by_text["BIG RED 24pt"].get("/DA"))
+          == "/Helv 24 Tf 1 0 0 rg",
+          repr(str(_da_by_text["BIG RED 24pt"].get("/DA"))))
+    check("the small black one carries its own, different, size",
+          str(_da_by_text["small black 12pt"].get("/DA"))
+          == "/Helv 12 Tf 0 0 0 rg")
+    check("a junk style bakes as the 12pt black fallback rather than "
+          "an unparseable operand a reader would choke on",
+          str(_da_by_text["junk style"].get("/DA"))
+          == "/Helv 12 Tf 0 0 0 rg")
+    check("Klaus reads its OWN baked style back — before /DA existed "
+          "_freetext_style saw (#000000, None) for every box, so an "
+          "adopted copy of a Klaus note lost its size and colour",
+          pdf_handler._freetext_style(_da_by_text["BIG RED 24pt"])
+          == ("#ff0000", 24.0)
+          and pdf_handler._freetext_style(
+              _da_by_text["small black 12pt"]) == ("#000000", 12.0))
+    # `.get("/W", -1)` rather than `["/W"]`: pypdf writes /BS only in
+    # the border_color-is-None branch, so a border creeping back means
+    # the key is ABSENT — and a KeyError here would abort the file
+    # instead of reporting one honest failure.
+    check("the border stays OFF — /DA and the border are separate "
+          "concerns, and conflating them is what caused this (K-150: "
+          "Preview frames a text box only while it is selected)",
+          all(int((o.get("/BS") or {}).get("/W", -1)) == 0
+              for o in _da_free)
+          and all(o.get("/C") is None for o in _da_free),
+          repr([(o.get("/BS"), o.get("/C")) for o in _da_free]))
+    check("no /AcroForm or /DR was invented in the user's PDF — /Helv "
+          "is a base-14 name readers resolve on their own (verified "
+          "in PDFKit with neither present)",
+          _DaReader(_da_work).trailer["/Root"].get("/AcroForm") is None
+          and all(o.get("/DR") is None for o in _da_free))
+    shutil.rmtree(_da_uf, ignore_errors=True)
+
+print("== Task 11: the dead in-house assistant-loop modules are gone ==")
+# D6 (docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
+# section 2/11): llm_client, entitlement, assistant_session, podcast and
+# assistant_panel were the whole in-house chat/practice/podcast loop the
+# Claude Code assistant (agent_host + anki_endpoint + assistant_dock)
+# replaces. Both the modules and their tests must be gone, and — the part
+# a plain `rm` cannot verify by itself — no SURVIVING test's own bootstrap
+# may still try to import one, or that test would fail at collection time
+# with an ImportError instead of a clean, honest "file not found" here.
+_DEL_MODS = ("llm_client", "entitlement", "assistant_session", "podcast",
+             "assistant_panel")
+for _dm in _DEL_MODS:
+    check(f"klausmate/{_dm}.py no longer exists",
+          not os.path.exists(os.path.join(ADDON, _dm + ".py")))
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEL_TESTS = tuple("test_" + m + ".py" for m in _DEL_MODS)
+for _dt in _DEL_TESTS:
+    check(f"tests/{_dt} no longer exists",
+          not os.path.exists(os.path.join(_TESTS_DIR, _dt)))
+
+# Real import shapes only — never a bare substring — so this cannot
+# misfire on unrelated prose that merely mentions the word: a raw-source
+# check for the retired "podcast" copy in manage_models.py (present-day,
+# in test_manage_models_assistant.py), or the SURVIVING assistant_sessions
+# (plural — Task 7's per-PDF session store), whose name is a superstring
+# of the deleted assistant_session.py (singular) and must never trip a
+# bare `in` test. \b word boundaries are what keep the two apart.
+_IMPORT_SHAPES = {
+    _dm: _re.compile(
+        r'import_module\(\s*["\']klausmate\.' + _re.escape(_dm) + r'["\']\s*\)'
+        r'|from\s+klausmate\s+import\s+' + _re.escape(_dm) + r'\b'
+        r'|from\s+klausmate\.' + _re.escape(_dm) + r'\s+import'
+        r'|import\s+klausmate\.' + _re.escape(_dm) + r'\b'
+    )
+    for _dm in _DEL_MODS
+}
+for _tf in sorted(os.listdir(_TESTS_DIR)):
+    if not _tf.endswith(".py") or _tf in _DEL_TESTS:
+        continue
+    with open(os.path.join(_TESTS_DIR, _tf), encoding="utf-8") as _fh:
+        _tsrc = _fh.read()
+    _hits = [_dm for _dm, _pat in _IMPORT_SHAPES.items() if _pat.search(_tsrc)]
+    check(f"tests/{_tf} does not import a deleted module in its bootstrap",
+          not _hits, str(_hits))
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

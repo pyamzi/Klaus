@@ -24,7 +24,7 @@ LINK="$HOME/Library/Application Support/Anki2/addons21/klausmate"
 if [ ! -L "$LINK" ]; then
   echo "klausmate: the addons21 symlink is MISSING ($LINK)." >&2
   echo "Anki is not loading this code. Recreate it with:" >&2
-  echo "  ln -s /Users/pyamzi/Documents/Github/Addons/klausmate \"$LINK\"" >&2
+  echo "  ln -s /Users/pyamzi/Documents/Github/KlausMate-Context/klausmate \"$LINK\"" >&2
   exit 2
 fi
 if [ ! -e "$LINK" ]; then

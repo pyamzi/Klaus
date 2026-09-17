@@ -1,13 +1,13 @@
-"""KlausMate — semantic PDF library and deck curation for Anki.
+"""KlausMate — semantic lecture-PDF library for Anki.
 
 Bootstrap and Qt glue for the add-on: the PDF viewer panel and its tabs,
 the editor's PDF bar, image cropping, and the Browse toolbar toggles.
-Embeddings power the rest — see curation.py, retention.py, and pdf_drive.py.
+Embeddings power the rest — see curation.py (the card index),
+retention.py, and pdf_drive.py (the Library).
 """
 
 from __future__ import annotations
 
-import atexit
 import base64
 import html as html_mod
 import json
@@ -16,49 +16,31 @@ import re
 import time
 import traceback
 import urllib.parse
-from typing import Any, Callable
+from typing import Any
 
 from aqt import gui_hooks, mw
 from aqt.editor import Editor, EditorWebView
-from aqt.operations import QueryOp
 from aqt.qt import (
     QAction,
-    QCursor,
-    QDialog,
     QDockWidget,
-    QDragEnterEvent,
-    QDropEvent,
     QEvent,
     QHBoxLayout,
     QImage,
     QLabel,
-    QApplication,
     QMenu,
-    QMouseEvent,
-    QPoint,
-    QPointF,
-    QPushButton,
     QRect,
-    QSize,
-    QSplitter,
     QTabBar,
     QTimer,
     QToolButton,
-    QVBoxLayout,
     QWidget,
     Qt,
 )
-from aqt.utils import askUser, showInfo, showWarning, tooltip
+from aqt.utils import showWarning, tooltip
 from aqt.webview import WebContent
 
 from . import pdf_handler
-from .ollama_client import OllamaClient, OllamaNotRunning
-from . import ollama_runtime
-from .ollama_runtime import (
-    ensure_server,
-    server_manager,
-)
 from .manage_models import manage_models_dialog
+from .slot_guard import guarded as _guarded
 from .browse_toggles import on_browser_will_show
 from .setup_flow import first_run_check, setup_readiness_check
 
@@ -76,6 +58,27 @@ def get_config() -> dict[str, Any]:
 
 def write_config(cfg: dict[str, Any]) -> None:
     mw.addonManager.writeConfig(__name__, cfg)
+
+
+def patch_config(updates: dict[str, Any]) -> None:
+    """Merge *updates* into the STORED config, on the main thread.
+
+    ``write_config`` REPLACES the whole blob (that is why ``_migrate_config``
+    can scrub keys by popping them), so a partial dict handed to it wipes
+    every other setting. This is the one config writer a background thread
+    may use, and the writer every ``plus.*`` sink must be.
+    """
+    def _apply() -> None:
+        try:
+            cfg = get_config()
+            cfg.update(updates)
+            write_config(cfg)
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] patch_config failed: {e.__class__.__name__}")
+    try:
+        mw.taskman.run_on_main(_apply)
+    except Exception:  # no taskman (tests, early boot): apply inline
+        _apply()
 
 
 # Retired config keys, scrubbed from old profiles on next launch. Covers the
@@ -106,6 +109,22 @@ _LEGACY_KEYS_DROPPED = (
     # Retired 2026-08-25 same-day: the Klaus Workspace (K-102) shipped and
     # was replaced by the top-bar restyle before any release.
     "workspace_enabled",
+    # Retired 2026-09-01: Task 8 dropped these from config.json/config.md
+    # when the premium/hosted assistant path was cut back to Claude Code
+    # (D1) — there is no separate assistant API key/backend/token to
+    # store, the user's own `claude` login is the credential.
+    "assistant_api_key", "assistant_backend", "assistant_token",
+    # Retired 2026-09-15 (K-226, spec D1/D8): Klaus went API-first. The
+    # local Ollama runtime and the vision-model OCR path are gone, so
+    # every key that only ever addressed them goes with them; the two
+    # one key that carried a VALUE worth keeping (embedding_api_key_openai)
+    # is renamed in _migrate_config BEFORE this loop runs, and only its
+    # spent old name is dropped here. assistant_model is a plain drop:
+    # see _migrate_config for why a rename could never have fired.
+    "embedding_provider", "embedding_api_key_voyage", "embedding_api_key_openai",
+    "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
+    "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
+    "_embed_default_migrated",
 )
 
 
@@ -118,43 +137,50 @@ def _migrate_config() -> None:
     """
     cfg = get_config()
     changed = False
+    # 2026-09-15 (K-226): ONE retired key carried a VALUE the user set and
+    # would have to re-enter, so it is RENAMED before the drop loop below
+    # spends its old name. An empty destination only — a profile that
+    # already holds the new key keeps what it holds.
+    #
+    # assistant_model is NOT in here (K-236): Anki's getConfig returns
+    # config.json's defaults merged UNDER the profile's keys, so
+    # reasoning_model is never empty and the copy could never fire. It is
+    # dropped below, which is the better outcome anyway — the stored value
+    # is a Claude Code model alias the Messages API would reject, and
+    # nothing reads reasoning_model yet (K-235).
+    for old, new in (("embedding_api_key_openai", "api_key_openai"),):
+        if old in cfg:
+            if not str(cfg.get(new) or "").strip():
+                cfg[new] = cfg[old]
+            cfg.pop(old)
+            changed = True
+    # 2026-09-16 (K-236): the embedding MODEL belonged to the provider
+    # being scrubbed — the pre-plan dialog wrote the resolved Ollama model
+    # into this key, and "nomic-embed-text" in an OpenAI-only world prices
+    # as a KeyError in cost.PRICES and embeds as an HTTP 404. "" resolves
+    # to embeddings.DEFAULT_MODELS' OpenAI default.
+    if str(cfg.get("embedding_provider") or "openai") != "openai":
+        cfg["embedding_model"] = ""
+        changed = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
-    # One-time guard for the ollama→voyage embedding default flip: an install
-    # from before `embedding_provider` existed in config.json would silently
-    # inherit the new cloud default while owning an ollama-built index (and no
-    # API key). Pin such installs back to ollama; leave fresh installs and
-    # deliberate cloud configs alone.
-    if not cfg.get("_embed_default_migrated"):
-        cfg["_embed_default_migrated"] = True
-        changed = True
-        from . import curation, embeddings
-
-        if embeddings.provider_name(cfg) != "ollama":
-            has_cloud_key = any(
-                str(cfg.get(f"embedding_api_key_{p}") or "").strip()
-                for p in ("voyage", "openai")
-            )
-            try:
-                index_exists = bool(curation.index_stats().get("exists"))
-            except Exception:
-                index_exists = False
-            is_existing = bool(cfg.get("_first_run_done")) or index_exists
-            if is_existing and not has_cloud_key:
-                cfg["embedding_provider"] = "ollama"
     if changed:
+        # 2026-09-16 (K-236): a profile that carried ANY retired key comes
+        # from the pre-API-first world, where an embedding key was optional
+        # because a local engine existed. `_embed_key_setup_declined` was a
+        # "no thanks" to an OPTIONAL key, and leaving it set silences the
+        # ONE profile-open message saying Klaus now REQUIRES one — the
+        # user's next signal would be a refusal tooltip on a drop. Cleared
+        # here, and only here: `changed` can never be True twice (the keys
+        # that set it are gone after this write), so the new regime gets
+        # exactly one fresh nudge and a decline made AFTER it is honoured
+        # forever.
+        cfg.pop("_embed_key_setup_declined", None)
         write_config(cfg)
 
 
-
-
-def client(timeout: float | None = None) -> OllamaClient:
-    """Short-timeout client for health checks and model list/delete."""
-    cfg = get_config()
-    t = float(timeout) if timeout is not None else 30.0
-    return OllamaClient(cfg.get("endpoint", "http://localhost:11434"), timeout=t)
 
 
 # ----------------------------- card context ------------------------------
@@ -178,7 +204,18 @@ def _strip_html(s: str) -> str:
 
 
 def _set_target_field(editor: Editor, field_name: str) -> None:
-    """Remember the last field the user clicked for PDF page insert."""
+    """Point Anki's own ``editor.currentField`` at the field the user last
+    clicked, for PDF page insert.
+
+    That assignment is the WHOLE mechanism: Anki's own attribute is what
+    carries the target from here on. Klaus used to shadow it with two
+    private per-editor attributes (the field's index and its name, plus a
+    default-init at editor setup); every one of them was write-only once
+    autocomplete/Ask were removed, and K-140 deleted all four sites. Don't
+    re-add a Klaus-side copy — nothing downstream wants one: image crop
+    rewrites by scanning every entry of ``note.fields``, and PDF page
+    insert travels through the system clipboard.
+    """
     if not field_name:
         return
     idx: int | None = None
@@ -194,60 +231,9 @@ def _set_target_field(editor: Editor, field_name: str) -> None:
         pass
     if idx is not None:
         try:
-            editor._klausmate_target_field_index = idx  # type: ignore[attr-defined]
-            editor._klausmate_target_field_name = field_name  # type: ignore[attr-defined]
             editor.currentField = idx
         except Exception:
             pass
-
-
-# ----------------------------- error surfacing ----------------------------
-
-
-# Once per session: when a request fails only because the server isn't
-# running, try to start a managed/system Ollama silently before dialoging.
-_ollama_autostart_attempted = False
-
-
-def _save_config_on_main(cfg: dict[str, Any]) -> None:
-    """write_config marshalled to the main thread — ensure_server may need
-    to persist a new endpoint from inside a QueryOp worker thread."""
-    mw.taskman.run_on_main(lambda: write_config(cfg))
-
-
-def _try_silent_autostart(exc: Exception) -> bool:
-    """Start a local server in the background instead of showing a dialog.
-
-    Returns True when an attempt was kicked off (caller suppresses its
-    dialog — if the start fails, the next error surfaces normally).
-    """
-    global _ollama_autostart_attempted
-    if _ollama_autostart_attempted:
-        return False
-    if not isinstance(exc, OllamaNotRunning):
-        return False
-    if "timed out" in (str(exc) or "").lower():
-        return False  # server is up, model is just slow — nothing to start
-    if not get_config().get("runtime_auto_setup", True):
-        return False
-    if not (ollama_runtime.find_managed_runtime() or ollama_runtime.find_system_ollama()):
-        return False  # nothing to start — needs the one-click setup instead
-    _ollama_autostart_attempted = True
-    tooltip("Klaus: starting local AI engine…")
-
-    def do() -> Any:
-        return ensure_server(get_config(), save_config=_save_config_on_main)
-
-    def on_done(res: Any) -> None:
-        if getattr(res, "ok", False):
-            tooltip("Klaus: local AI ready — try again")
-        else:
-            print(f"[klausmate] silent autostart failed: {getattr(res, 'detail', '')}")
-
-    op = QueryOp(parent=mw, op=lambda col: do(), success=on_done)
-    op.failure(lambda e: print(f"[klausmate] silent autostart error: {e}"))
-    op.without_collection().run_in_background()
-    return True
 
 
 # One-time-per-session guard for the sidebar self-heal. A prior broken
@@ -481,96 +467,115 @@ def _launch_crop_dialog(editor: Editor, fname: str) -> None:
             return
         if getattr(editor, "_klausmate_crop_open", False):
             return
-        editor._klausmate_crop_open = True  # type: ignore[attr-defined]
-        try:
-            # fname crosses the JS trust boundary — allow bare filenames
-            # only (the media folder is flat, so that is always correct).
-            if (
-                not fname
-                or "/" in fname
-                or "\\" in fname
-                or ".." in fname
-            ):
-                tooltip("Klaus: invalid image filename", parent=editor.widget)
-                return
-            path = os.path.join(editor.mw.col.media.dir(), fname)
-            if not os.path.isfile(path):
-                tooltip(
-                    f"Klaus: image not found: {fname}", parent=editor.widget
-                )
-                return
-            image = QImage(path)
-            if image.isNull():
-                tooltip(
-                    "Klaus: could not load image (unsupported format)",
-                    parent=editor.widget,
-                )
-                return
-            from .crop_dialog import ImageCropDialog, encode_cropped
-
-            dlg = ImageCropDialog(image, fname, parent=editor.parentWindow)
-            if dlg.exec() != QDialog.DialogCode.Accepted:
-                return
-            cropped = dlg.cropped_image()
-            if cropped is None or cropped.isNull():
-                return
-            stem, _, ext = fname.rpartition(".")
-            if not stem:
-                stem, ext = fname, ""
-            data, out_ext = encode_cropped(cropped, ext)
-            new_fname = editor.mw.col.media.write_data(
-                f"{stem}_crop.{out_ext}", data
+        # fname crosses the JS trust boundary — allow bare filenames
+        # only (the media folder is flat, so that is always correct).
+        if (
+            not fname
+            or "/" in fname
+            or "\\" in fname
+            or ".." in fname
+        ):
+            tooltip("Klaus: invalid image filename", parent=editor.widget)
+            return
+        path = os.path.join(editor.mw.col.media.dir(), fname)
+        if not os.path.isfile(path):
+            tooltip(
+                f"Klaus: image not found: {fname}", parent=editor.widget
             )
+            return
+        image = QImage(path)
+        if image.isNull():
+            tooltip(
+                "Klaus: could not load image (unsupported format)",
+                parent=editor.widget,
+            )
+            return
+        from .crop_dialog import ImageCropDialog, encode_cropped
 
-            def apply_to_note() -> None:
-                try:
-                    note = editor.note
-                    if note is None:
-                        return  # editor closed while the dialog was up
-                    any_change = False
-                    for i, field_html in enumerate(note.fields):
-                        new_html, field_changed = _replace_img_src(
-                            field_html, fname, new_fname
-                        )
-                        if field_changed:
-                            note.fields[i] = new_html
-                            any_change = True
-                    if not any_change:
+        dlg = ImageCropDialog(image, fname, parent=editor.parentWindow)
+
+        def on_accepted() -> None:
+            try:
+                cropped = dlg.cropped_image()
+                if cropped is None or cropped.isNull():
+                    return
+                stem, _, ext = fname.rpartition(".")
+                if not stem:
+                    stem, ext = fname, ""
+                data, out_ext = encode_cropped(cropped, ext)
+                new_fname = editor.mw.col.media.write_data(
+                    f"{stem}_crop.{out_ext}", data
+                )
+
+                def apply_to_note() -> None:
+                    try:
+                        note = editor.note
+                        if note is None:
+                            return  # editor closed while the dialog was up
+                        any_change = False
+                        for i, field_html in enumerate(note.fields):
+                            new_html, field_changed = _replace_img_src(
+                                field_html, fname, new_fname
+                            )
+                            if field_changed:
+                                note.fields[i] = new_html
+                                any_change = True
+                        if not any_change:
+                            tooltip(
+                                f"Klaus: saved {new_fname}, but the note's "
+                                "HTML doesn't reference the original image",
+                                parent=editor.widget,
+                            )
+                            return
+                        if not editor.addMode:
+                            # Persist; initiator=editor so no auto-reload.
+                            editor._save_current_note()
+                        editor.loadNoteKeepingFocus()
                         tooltip(
-                            f"Klaus: saved {new_fname}, but the note's HTML "
-                            "doesn't reference the original image",
+                            f"Klaus: cropped image saved as {new_fname}",
                             parent=editor.widget,
                         )
-                        return
-                    if not editor.addMode:
-                        # Persist; initiator=editor so no auto-reload.
-                        editor._save_current_note()
-                    editor.loadNoteKeepingFocus()
-                    tooltip(
-                        f"Klaus: cropped image saved as {new_fname}",
-                        parent=editor.widget,
-                    )
-                except Exception as e:
-                    print(
-                        "[klausmate] crop apply failed: "
-                        f"{type(e).__name__}: {e}"
-                    )
-                    traceback.print_exc()
+                    except Exception as e:
+                        print(
+                            "[klausmate] crop apply failed: "
+                            f"{type(e).__name__}: {e}"
+                        )
+                        traceback.print_exc()
 
-            # Flush pending in-webview edits into note.fields FIRST
-            # (call_after_note_saved evals JS saveNow(); key:/blur: bridge
-            # cmds land in note.fields via onBridgeCmd before the callback
-            # fires), THEN mutate the fields.
-            editor.call_after_note_saved(apply_to_note, keepFocus=True)
-        finally:
+                # Flush pending in-webview edits into note.fields FIRST
+                # (call_after_note_saved evals JS saveNow(); key:/blur:
+                # bridge cmds land in note.fields via onBridgeCmd before
+                # the callback fires), THEN mutate the fields.
+                editor.call_after_note_saved(apply_to_note, keepFocus=True)
+            except Exception as e:
+                print(f"[klausmate] crop failed: {type(e).__name__}: {e}")
+                traceback.print_exc()
+
+        @_guarded
+        def on_finished(_r: int) -> None:
+            # The open-guard spans the DIALOG'S lifetime now, not this
+            # call's — reset here, where exec()'s finally used to.
             editor._klausmate_crop_open = False  # type: ignore[attr-defined]
+            dlg.deleteLater()
+
+        # K-114: window-modal open() + signal callbacks, never app-modal
+        # exec() (the macOS 26 + Qt 6.11 segfault class; see
+        # test_bridge_reentrancy). finished fires before accepted, but
+        # deleteLater only lands once control returns to the event loop,
+        # so on_accepted still sees a live dialog. The guard is set AFTER
+        # open() succeeds: nothing can re-enter in between on one thread,
+        # and a failed open() then can't strand the flag True.
+        dlg.accepted.connect(on_accepted)
+        dlg.finished.connect(on_finished)
+        dlg.open()
+        editor._klausmate_crop_open = True  # type: ignore[attr-defined]
     except Exception as e:
         print(f"[klausmate] crop failed: {type(e).__name__}: {e}")
         traceback.print_exc()
 
 
 def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
-    """Add "Crop image" when the editor context menu opened on an <img>."""
+    """Add "Crop Image" when the editor context menu opened on an <img>."""
     try:
         if not bool(get_config().get("image_crop_enabled", True)):
             return
@@ -585,7 +590,7 @@ def on_editor_context_menu(webview: EditorWebView, menu: QMenu) -> None:
         fname = req.mediaUrl().fileName()  # QUrl.fileName() -> decoded
         if not fname:
             return  # data: URIs / mathjax have no filename
-        action = menu.addAction("Crop image")
+        action = menu.addAction("Crop Image")
         action.triggered.connect(
             lambda _=False, e=editor, f=fname: _launch_crop_dialog(e, f)
         )
@@ -604,13 +609,22 @@ def install_menu() -> None:
     """Single Tools-menu entry point, at the top of the menu.
 
     Everything that used to live in a 'Klaus' submenu (Clear library tag,
-    Manage models…, Test connection) now lives inside the KlausMate
+    Manage models…, Check Connection) now lives inside the KlausMate
     Preferences dialog itself (manage_models.py) — a menu that only ever
     grows one deeper is still one click, and it keeps this menu from
     forking into a second place users have to think to look. Anki has
     already populated menuTools by the time main_window_did_init fires,
     so insertAction against its current first action is what puts us
     ahead of Anki's own items rather than appending after them.
+
+    Task 11: the assistant's Tools entry is inserted right after
+    Preferences, reusing assistant_dock's OWN QAction
+    (assistant_dock.menu_action()) rather than building a second one —
+    that action already carries the Ctrl+Shift+K shortcut
+    (assistant_dock.setup(), called at import time below, alongside
+    _pdf_drive.setup()), so this never registers a second shortcut for
+    the same chord. menu_action() answers None if setup() has not run
+    (or Qt is unavailable) — skipped rather than forcing a stub action.
     """
     menu = mw.form.menuTools
     action = QAction("KlausMate Preferences…", mw)
@@ -620,6 +634,18 @@ def install_menu() -> None:
         menu.insertAction(existing_actions[0], action)
     else:
         menu.addAction(action)
+    try:
+        from . import assistant_dock
+
+        assistant_action = assistant_dock.menu_action()
+    except Exception as exc:
+        print(f"[klausmate] assistant menu action unavailable: {exc}")
+        assistant_action = None
+    if assistant_action is not None:
+        if existing_actions:
+            menu.insertAction(existing_actions[0], assistant_action)
+        else:
+            menu.addAction(assistant_action)
 
 
 # ------------------------------ PDF import -------------------------------
@@ -652,6 +678,18 @@ def import_pdf_file(path: str) -> str | None:
     except Exception as e:
         showWarning(f"Could not read PDF: {e}")
         return None
+    # PR1 review fix: seed page records right after the page text is
+    # extracted and saved to contexts, not only inside the paid index run
+    # (retention.do_build's ensure_pdf_index) — so the assistant has
+    # slide text even with auto-index off, no OpenAI key, or a failed
+    # index. Every import surface returns through this one funnel.
+    try:
+        from . import page_store
+
+        pages = pdf_handler.load_pages(USER_FILES, info["name"]) or []
+        page_store.ensure_records(USER_FILES, info["name"], path, pages)
+    except Exception as e:
+        print(f"[klausmate] page record seeding on import failed: {e}")
     if info["page_count"] == 0:
         showWarning(
             "No text extracted from this PDF.\n"
@@ -668,6 +706,19 @@ def import_pdf_file(path: str) -> str | None:
     except Exception as e:
         print(f"[klausmate] drive display-name record failed: {e}")
     tooltip(f"Klaus: loaded '{info['name']}'")
+    # K-152: adding a PDF indexes it. This funnel is the ONE place every
+    # import surface returns through, so hooking it here (rather than at
+    # each drop site) is what makes the deck-screen drop, the deck-screen
+    # square, the Library tree drop and the Library's Browse… all behave
+    # the same. index_queue owns every gate — auto-index off, no profile,
+    # no API key — and its own status bar; a failure to queue must never
+    # cost the user an otherwise-good import.
+    try:
+        from . import index_queue
+
+        index_queue.on_pdf_imported(str(info["name"]))
+    except Exception as e:
+        print(f"[klausmate] auto-index on import failed: {e}")
     return str(info["name"])
 
 
@@ -679,8 +730,8 @@ def _ensure_sidebar_pdf(editor: Editor) -> bool:
 
     Module-level since K-056 (which removed the bottom PDF bar and the
     panel widget that hosted it) — the toolbar "Library..." button and
-    _PdfTabContainer.showEvent both need this and neither owns a panel
-    widget to hang it off anymore.
+    PdfDock.showEvent both need this and neither owns a panel widget to
+    hang it off anymore.
     """
     active = pdf_handler.get_active_pdf(USER_FILES)
     if not active:
@@ -725,8 +776,9 @@ def _on_library_button(editor: Editor) -> None:
 def _pdf_display_name(safe: str) -> str:
     """Human label for a stored PDF, falling back to its safe basename.
 
-    Mirrors deck_curate._display_name's defensive pattern (drive_store
-    lookup, safe on any failure) without importing deck_curate for it.
+    A drive_store lookup that is safe on any failure: display names are
+    bookkeeping, and a missing or corrupt drive.json must cost a label,
+    never a menu.
     """
     try:
         from . import drive_store
@@ -736,190 +788,275 @@ def _pdf_display_name(safe: str) -> str:
         return safe
 
 
-class _PdfTabContainer(QWidget):
-    """The PDF viewer panel, with native-feeling window management.
+# Where the PDF dock may sit. Three window edges — the placement engine
+# that anchored the panel on a PANE (above/below the editor, beside the
+# note list) was deleted 2026-09-05 with the tear-off drag machinery
+# (K-169's rules died with the code they guarded); Qt's QDockWidget does
+# the moving now. Spec:
+# docs/superpowers/specs/2026-09-05-pdf-dock-design.md
+PANEL_AREAS = {
+    "left": Qt.DockWidgetArea.LeftDockWidgetArea,
+    "right": Qt.DockWidgetArea.RightDockWidgetArea,
+    "bottom": Qt.DockWidgetArea.BottomDockWidgetArea,
+}
+AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
-    One bar of chrome: ``[tabs ✕] [page n/m] [＋]``. The panel lives in
-    one of three places — docked ABOVE the note-editor pane, docked BELOW
-    it, or FLOATING as a normal macOS window. Docking wraps
-    ``editor.widget`` in a vertical splitter (created once, kept for the
-    window's lifetime), so "above" means above *that pane*, never the
-    whole window.
 
-    Window management mirrors macOS conventions:
+# ---------------------------- lecture recording ----------------------------
+# D6 (2026-09-15 spec): ● Record / ■ Stop on the PDF dock's _PanelBar and on
+# the Lecture dock's header. One Uploader per profile (module-level,
+# lazily created here and by _start_lecture_uploader below); both docks
+# share the Record/Stop slot body so Recorder/Uploader wiring exists once.
 
-    - **drag a tab out of the tab-bar band** (or drag any empty bar
-      space) → the REAL panel floats instantly and macOS moves it live
-      under the cursor (``QWindow.startSystemMove``); wide bands over
-      the editor pane preview exactly where it would dock (arrow +
-      caption, sized like the real 45% split). Release on a band to
-      dock there, anywhere else to stay floating. Dragging an already-
-      floating panel by its bar is the same native move. Drags that
-      stay inside the tab bar just reorder tabs, in any direction. A
-      translucent-ghost fallback covers the rare case where the OS
-      refuses/drops the native move (see the drag state machine in
-      ``__init__``).
-    - the floating panel is a real, parentless macOS window: it shows
-      in Mission Control, minimizes to the Dock, and Anki can come in
-      front of it. Its red traffic light hides the panel; its lifetime
-      is tied to the host window via ``_on_host_closing``.
-    - **✕ on each tab** closes that PDF (the stored file survives; reopen
-      it from ＋). Closing the last tab hides the panel.
-    - **＋** opens another stored PDF or a new file from disk
+_uploader: Any = None
+# Main thread only (fix round 1, m4): touched at exactly four sites — a
+# Record/Stop click, a teardown path, and the two profile hooks — never
+# from the uploader's worker thread. No lock; if a future caller ever
+# reaches this from a worker thread, that call needs its own
+# mw.taskman.run_on_main, not a lock here.
+_active_recorders: set = set()
 
-    One viewer instance is reused across tabs; switching loads that PDF
-    and repoints the active-PDF marker. Per-tab reading position is kept
-    for the session; the tab set and placement persist across restarts.
+
+def uploader() -> Any:
+    """The profile's one lecture_recorder.Uploader — created at profile
+    open (_start_lecture_uploader, registered near the other profile
+    hooks) and reused by every recording start/stop; never recreated
+    mid-profile (lecture_recorder's own fix-round-1 C1: a fresh Uploader
+    per Record would drop whatever the old one still had queued). Lazy
+    here too, so a caller before profile_did_open — or a test driving
+    this module directly — still gets a working instance.
+    """
+    global _uploader
+    if _uploader is None:
+        from . import lecture_recorder
+
+        _uploader = lecture_recorder.Uploader(USER_FILES, get_config)
+    return _uploader
+
+
+def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
+    """Shared Record/Stop slot body for ``PdfDock`` and the Lecture dock.
+
+    Both keep ``_recorder`` (``None`` or a ``lecture_recorder.Recorder``)
+    and expose ``set_recording(on, status)`` for their button/status text.
+    ``sidebar`` is read live through closures (``get_page``), never
+    snapshotted, so it must be the one PdfSidebar this recording is
+    scoped to (Notes for Task 5, item 4) — never
+    ``viewer_context.current()``, which follows whichever viewer was
+    activated last and could drift to a different PDF mid-lecture.
+    """
+    from . import lecture_recorder
+
+    if owner._recorder is not None and owner._recorder.is_recording:
+        rec = owner._recorder
+        name = rec.pdf_name
+        rec.stop()
+        _active_recorders.discard(rec)
+        owner._recorder = None
+        owner.set_recording(False, "")
+        try:
+            owner._update_record_enabled()
+        except Exception as exc:
+            print(f"[klausmate] record button refresh failed: {exc}")
+        _request_index_when_idle(name)
+        return
+    if _active_recorders:
+        # I4 (fix round 1): each dock only ever checks its OWN
+        # _recorder, so nothing stopped Browse's dock, Add Cards' dock
+        # and the Lecture dock from each opening a second QAudioSource on
+        # the same microphone — two chunk streams appended to the same
+        # page records, and double the metered Klaus Plus minutes. One
+        # recording at a time, full stop, regardless of which dock owns
+        # it.
+        other = next(iter(_active_recorders))
+        tooltip(f"Already recording {getattr(other, 'pdf_name', 'a lecture')}")
+        return
+    name = getattr(sidebar, "_name", None)
+    path = (
+        pdf_handler.pdf_path_for(USER_FILES, pdf_handler._safe_basename(name))
+        if name else None
+    )
+    if not name or not path:
+        tooltip("Open a PDF first")
+        return
+    safe = pdf_handler._safe_basename(name)
+
+    def _get_page() -> int:
+        # C1 (fix round 1): a PdfSidebar is REUSED across documents (a
+        # PdfDock tab change; LectureDock._show_match auto-following the
+        # next reviewed card) — closing over the sidebar alone means a
+        # document switch mid-recording silently starts reporting the
+        # NEW document's page while the Recorder keeps writing chunks
+        # under the OLD one's pdf_safe. Returning 0 here is not "page
+        # zero": Recorder._tick's own `int(self._get_page() or
+        # self._chunker.page)` treats a falsy return as "no page update
+        # this tick", which freezes the chunker on its last known page
+        # instead of mis-filing the next segment under the wrong PDF.
+        if pdf_handler._safe_basename(getattr(sidebar, "_name", "") or "") != safe:
+            return 0
+        return int(getattr(sidebar, "_current_page", 0)) + 1
+
+    rec = lecture_recorder.Recorder(
+        USER_FILES, safe, path,
+        get_page=_get_page,
+        on_status=lambda s, q: owner.set_recording(
+            True, f"{int(s) // 60}:{int(s) % 60:02d} · {q} to transcribe"
+        ),
+        uploader=uploader(),
+    )
+    rec.pdf_name = name
+    # Notes for Task 5, item 6/2: once, when Record starts for THIS PDF,
+    # before Recorder.start() — never mid-recording, or a leftover WAV
+    # the live recorder is about to write over gets re-enqueued out from
+    # under it.
+    uploader().requeue_leftovers(safe, path)
+    if rec.start():
+        owner._recorder = rec
+        _active_recorders.add(rec)
+        owner.set_recording(True, "0:00")
+    else:
+        tooltip("No microphone available")
+
+
+# PDF display names with a drain poll armed (final review, I-2). Main
+# thread only, same rule as _active_recorders above — it is only ever
+# touched by a Stop click and by the poll's own QTimer callback.
+_index_when_idle: set = set()
+# Bumped by _stop_lecture_uploader; a poll captures it at arm time and
+# stops dead once it no longer matches (fix round 1). The queue a poll is
+# waiting on belongs to the profile that was open when Record stopped —
+# and its daemon worker can finish that last chunk AFTER the profile is
+# gone, dropping pending() to 0 and firing a re-index into whatever
+# profile opened next.
+_index_when_idle_gen = 0
+INDEX_IDLE_POLL_MS = 500
+INDEX_IDLE_CAP_S = 20 * 60.0
+
+
+def _request_index_when_idle(name: str) -> None:
+    """Re-index *name* once the lecture uploader has drained (I-2).
+
+    ``Recorder.stop()`` flushes the tail chunk INTO the uploader, whose
+    HTTP transcription then takes seconds on the worker thread — so
+    requesting the re-index in the same breath embeds the page records
+    without the end of the lecture (and without any backlog), and nothing
+    ever re-triggers: ``append_segment`` notifies the transcript strip and
+    no one else.
+
+    A main-thread poll, deliberately NOT an idle callback inside the
+    ``Uploader``: that queue also goes idle BETWEEN chunks mid-recording,
+    and this re-index ends at the Judge/Skip dialog — which must never
+    appear while the lecturer is still talking. De-duplicated per name (a
+    second Stop for the same PDF re-uses the armed poll) and capped, so a
+    hung upload delays the re-index instead of stranding it forever.
+    """
+    from . import index_queue
+
+    try:
+        up = uploader()
+        pending = up.pending
+    except Exception as exc:
+        print(f"[klausmate] lecture uploader unavailable, re-indexing {name} now: {exc}")
+        index_queue.request_pdf(name)
+        return
+    if name in _index_when_idle:
+        return
+    _index_when_idle.add(name)
+    deadline = time.monotonic() + INDEX_IDLE_CAP_S
+    gen = _index_when_idle_gen
+
+    def _poll() -> None:
+        if gen != _index_when_idle_gen:
+            return  # the profile this poll was armed in is gone
+        try:
+            left = int(pending())
+        except Exception as exc:
+            print(f"[klausmate] lecture uploader pending() failed: {exc}")
+            left = 0
+        if left and time.monotonic() < deadline:
+            QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
+            return
+        if left:
+            print(f"[klausmate] lecture recorder: {left} chunk(s) still not "
+                  f"transcribed after {int(INDEX_IDLE_CAP_S // 60)} minutes — "
+                  f"re-indexing {name} anyway")
+        _index_when_idle.discard(name)
+        try:
+            index_queue.request_pdf(name)
+        except Exception as exc:
+            print(f"[klausmate] re-index request failed for {name}: {exc}")
+
+    QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
+
+
+def _release_recorder(owner: Any) -> None:
+    """Teardown-only stop (fix round 1, I1): releases *owner*'s recorder,
+    if one is running, without touching any UI — the widgets calling this
+    may be mid-destruction (a Browse/Add Cards window closing, a dock's
+    own shutdown). Never call this from the Record/Stop button itself;
+    that path is start_or_stop_recording, which also updates the button.
+
+    It DOES schedule the same drain-aware re-index the Stop button does
+    (PR #4, Codex): `rec.stop()` flushes the tail chunk into the uploader
+    here exactly as it does there, so without this the lecture you closed
+    Browse on stayed out of the page vectors until a manual re-index.
+
+    NOT reached on profile close — `_stop_lecture_uploader` stops every
+    `_active_recorders` member itself, deliberately, because the uploader
+    a poll would wait on dies with the profile (its generation counter is
+    the second net, for a poll already armed, not the first).
+    """
+    rec = owner._recorder
+    if rec is not None and rec.is_recording:
+        rec.stop()
+        _active_recorders.discard(rec)
+        owner._recorder = None
+        name = getattr(rec, "pdf_name", "")
+        if name:
+            try:
+                _request_index_when_idle(name)
+            except Exception as exc:
+                print(f"[klausmate] re-index after teardown failed for {name}: {exc}")
+
+
+class _PanelBar(QWidget):
+    """The dock's title bar: ``[◫] [＋] [●] [tabs]  …  [page n/m] [⧉] [✕]``.
+
+    Presses the bar does not handle are IGNORED so they reach the
+    QDockWidget, which moves, docks and floats from them — Qt's
+    setTitleBarWidget contract. The tab bar does NOT stretch over the
+    empty space (a stretch follows it), so a press there is the bar's
+    and starts a drag, while a press on a tab stays the tab bar's.
+    With a custom title bar Qt draws no float or close button, hence
+    the two at the right end. Colours only through theme tokens.
     """
 
-    def __init__(
-        self,
-        editor: Editor,
-        sidebar: Any,
-        main_window: Any,
-    ) -> None:
-        super().__init__(None)
-        self._editor = editor
-        self._sidebar = sidebar
-        self._win = main_window
-        self._syncing = False
-        self._last_page: dict[str, int] = {}
-
-        # Placement state (persisted). _placed means the panel has been
-        # physically put somewhere this session; until then panel_show()
-        # applies the remembered placement.
-        state = pdf_handler.load_panel_state(USER_FILES)
-        self._placement: str = state.get("placement", "above")
-        g = state.get("geom")
-        self._float_geom: QRect | None = QRect(*g) if g else None
-        self._placed = False
-
-        # Drag state machine. A bar/tab drag instantly floats the REAL
-        # panel and hands the move to macOS via
-        # QWindow.startSystemMove(); Qt then stops delivering mouse
-        # events to us, so the gesture's end is detected by a 100ms
-        # heartbeat timer plus an application-level event filter (see
-        # _drag_tick / _finalize_drag). On Cocoa, startSystemMove()
-        # returns True even when the window never actually follows the
-        # cursor (performWindowDragWithEvent: can silently no-op when
-        # the NSEvent originated in the old host window) — a watchdog
-        # in the heartbeat detects that and falls back to manually
-        # following the cursor; the old translucent-ghost tear-off is
-        # kept only for gestures after native move is proven broken.
-        #
-        # _drag_state ∈ {idle, pressed, native, armed, manual_follow,
-        # manual_ghost}:
-        #   idle          — no gesture
-        #   pressed       — button down on the bar, threshold not met
-        #   native        — macOS is (believed to be) moving the window
-        #   armed         — drag went quiet; next definitive event ends it
-        #   manual_follow — heartbeat/mouse events move the window
-        #   manual_ghost  — embedded fallback: ghost follows, panel
-        #                   relocates on release (pre-native behavior)
-        self._press_gp: QPoint | None = None
-        self._press_on_tab = False
-        self._drag_state = "idle"
-        # True only while WE send the synthetic tab-release below —
-        # sendEvent re-enters this eventFilter, and the release branch
-        # must let it pass through to the tab bar untouched instead of
-        # resetting the gesture that is just starting.
-        self._synthetic_release = False
-        # None = untested, True = proven working, False = proven broken
-        # (watchdog tripped / startSystemMove refused) → fall back.
-        self._native_move_ok: bool | None = None
-        self._drag_off: QPoint | None = None
-        self._active_zone: str | None = None
-        self._zone_overlay: QWidget | None = None
-        self._ghost: QLabel | None = None
-        self._drag_timer = QTimer(self)
-        self._drag_timer.setInterval(100)
-        self._drag_timer.timeout.connect(self._drag_tick)
-        self._drag_started = 0.0
-        self._last_activity = 0.0
-        # Direct drag evidence only: panel moveEvents while the gesture
-        # owns the window, and mouse events with the left button held.
-        # _last_activity (raw cursor motion) is too weak for the embed
-        # freshness gate — it keeps refreshing after an unobserved
-        # release; it is kept only for the armed 10s give-up cap.
-        self._last_drag_evidence = 0.0
-        self._last_cursor: QPoint | None = None
-        self._move_seen = False
-        # Where the window / cursor were when the drag machinery armed:
-        # a moveEvent only counts as proof that the native move works
-        # once one of them has travelled >8px — a spurious post-tear-off
-        # geometry adjustment must not disarm the watchdog.
-        self._drag_origin_pos: QPoint | None = None
-        self._drag_start_cursor: QPoint | None = None
-        self._app_filter_installed = False
-        self._closed = False
-
-        # Host lifetime: the floating panel is a PARENTLESS window (so
-        # macOS treats it as a real one — Mission Control, Dock
-        # minimize, can go behind Anki), which means it no longer dies
-        # with the Browse/Add window that spawned it. Watch the host
-        # for Close and take the panel down with it; the destroyed
-        # signal is a backstop for hosts torn down without a Close.
-        try:
-            self._win.installEventFilter(self)
-        except Exception:
-            pass
-        try:
-            self._win.destroyed.connect(self._on_host_destroyed)
-        except Exception:
-            pass
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(0)
-
-        # The header is a real widget (not a bare layout) so it can take
-        # mouse events: dragging its empty area moves/tears off the panel.
-        self._header = QWidget(self)
-        self._header.setFixedHeight(30)
-        self._header.setCursor(Qt.CursorShape.OpenHandCursor)
-        # SynapsePro-style chrome: surface bar, hairline bottom border,
-        # pill tabs/buttons (theme.panel_header_qss). WA_StyledBackground
-        # because a plain QWidget won't paint a stylesheet background.
+    def __init__(self, dock: QWidget, sidebar: Any) -> None:
+        super().__init__(dock)
+        self.setObjectName("KlausPanelHeader")
+        self.setFixedHeight(30)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        # WA_StyledBackground because a plain QWidget won't paint a
+        # stylesheet background.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         try:
             from . import theme as _theme
 
-            self._header.setObjectName("KlausPanelHeader")
-            self._header.setAttribute(
-                Qt.WidgetAttribute.WA_StyledBackground, True
-            )
-            self._header.setStyleSheet(
-                _theme.panel_header_qss(_theme.night_mode())
-            )
+            self.setStyleSheet(_theme.panel_header_qss(_theme.night_mode()))
         except Exception as exc:
             print(f"[klausmate] panel header theme failed: {exc}")
-        header = QHBoxLayout(self._header)
-        header.setContentsMargins(6, 2, 6, 0)
-        header.setSpacing(4)
-        self._header.installEventFilter(self)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 2, 6, 0)
+        row.setSpacing(4)
 
-        self._tabs = QTabBar(self._header)
-        self._tabs.setDocumentMode(True)
-        self._tabs.setDrawBase(False)
-        self._tabs.setMovable(True)
-        self._tabs.setUsesScrollButtons(True)
-        self._tabs.setExpanding(False)
-        self._tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
-        self._tabs.currentChanged.connect(self._on_tab_changed)
-        self._tabs.tabMoved.connect(lambda *_: self._persist())
-        # The tab bar stretches across the whole row, so it — not the
-        # header — is what the user actually drags. Filter it too.
-        self._tabs.installEventFilter(self)
-
-        # Controls sit on the LEFT of the bar (Preview-style: sidebar
-        # toggle at the far left), the tabs take the remaining width.
         viewer = getattr(sidebar, "_viewer", None)
 
         # Thumbnails-strip toggle. No checked-state bookkeeping: the
         # strip itself is the visible indicator.
-        thumbs_btn = QToolButton(self._header)
-        thumbs_btn.setText("◫")
-        thumbs_btn.setAutoRaise(True)
-        thumbs_btn.setToolTip("Show/hide page thumbnails")
+        self.thumbs_btn = QToolButton(self)
+        self.thumbs_btn.setText("◫")
+        self.thumbs_btn.setAutoRaise(True)
+        self.thumbs_btn.setToolTip("Show/hide page thumbnails")
 
         def _toggle_thumbs() -> None:
             try:
@@ -928,18 +1065,59 @@ class _PdfTabContainer(QWidget):
             except Exception as exc:
                 print(f"[klausmate] thumbnails toggle failed: {exc}")
 
-        thumbs_btn.clicked.connect(_toggle_thumbs)
-        header.addWidget(thumbs_btn)
+        self.thumbs_btn.clicked.connect(_toggle_thumbs)
+        row.addWidget(self.thumbs_btn)
 
-        add_btn = QToolButton(self._header)
-        add_btn.setText("＋")
-        add_btn.setAutoRaise(True)
-        add_btn.setToolTip("Open another PDF in a new tab")
-        add_btn.clicked.connect(self._show_add_menu)
-        self._add_btn = add_btn
-        header.addWidget(add_btn)
+        self.add_btn = QToolButton(self)
+        self.add_btn.setText("＋")
+        self.add_btn.setAutoRaise(True)
+        self.add_btn.setToolTip("Open another PDF in a new tab")
+        row.addWidget(self.add_btn)
 
-        header.addWidget(self._tabs, 1)
+        # Record/Stop (D6). Disabled until a document is actually showing
+        # (ruling 5: never record without a PDF in view) — PdfDock flips
+        # this on _on_sidebar_loaded / a tab close, so the initial value
+        # here only has to be right for the dock's very first paint.
+        self.record_btn = QToolButton(self)
+        self.record_btn.setText("●")
+        self.record_btn.setAutoRaise(True)
+        _has_doc = getattr(sidebar, "_name", None) is not None
+        # m1 (fix round 1): the disabled tooltip says WHY, matching
+        # PdfDock._update_record_enabled's later updates.
+        self.record_btn.setToolTip(
+            "Record this lecture" if _has_doc else "Open a PDF to record this lecture"
+        )
+        self.record_btn.setEnabled(_has_doc)
+        row.addWidget(self.record_btn)
+
+        self.tabs = QTabBar(self)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setDrawBase(False)
+        self.tabs.setMovable(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setExpanding(False)
+        self.tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
+        # Stretch factor 0 plus the stretch below: the tab bar takes only
+        # the width its tabs need, and the leftover belongs to the bar —
+        # which is the surface Qt drags the dock by.
+        row.addWidget(self.tabs, 0)
+        row.addStretch(1)
+
+        # Elapsed time / "n to transcribe" while recording, beside the
+        # page indicator — same label style as it (theme.muted_label_qss;
+        # the try/except fallback is that label's own established idiom,
+        # not a new one).
+        self.status_label = QLabel("", self)
+        try:
+            self.status_label.setStyleSheet(
+                _theme.muted_label_qss(_theme.night_mode(), 10)
+            )
+        except Exception:
+            self.status_label.setStyleSheet(
+                "color: rgba(100,100,100,0.95); font-size: 10px;"
+            )
+        self.status_label.setVisible(False)
+        row.addWidget(self.status_label)
 
         # The viewer's page indicator sits at the right end of the bar.
         page_label = (
@@ -947,12 +1125,177 @@ class _PdfTabContainer(QWidget):
         )
         if page_label is not None:
             page_label.setVisible(True)
-            header.addWidget(page_label)
+            row.addWidget(page_label)
 
-        lay.addWidget(self._header)
-        lay.addWidget(sidebar, 1)
+        self.float_btn = QToolButton(self)
+        self.float_btn.setText("⧉")
+        self.float_btn.setAutoRaise(True)
+        self.float_btn.setToolTip("Float the PDF panel / dock it back")
+        row.addWidget(self.float_btn)
 
+        self.hide_btn = QToolButton(self)
+        self.hide_btn.setText("✕")
+        self.hide_btn.setAutoRaise(True)
+        self.hide_btn.setToolTip("Hide the PDF panel (Library… shows it again)")
+        row.addWidget(self.hide_btn)
+
+        # First layout, before any resizeEvent fires: keep the cap right
+        # from the very first paint (F1, review round 1). 250, not the
+        # original 220: measured at a real 450px bar with four saturated
+        # tabs, 220 left only a 36px strip once the Record button (K-257)
+        # joined the left-side chrome — short of the >= 60px this is
+        # meant to guarantee (fixed chrome, now three icon buttons on the
+        # left and two on the right plus margins/spacing, measures wider
+        # than the pre-Record 147px regardless of the cap, so strip =
+        # bar_width - chrome - cap; 250 clears 60 again with margin).
+        self.tabs.setMaximumWidth(max(80, self.width() - 250))
+
+    def set_recording(self, on: bool, status: str) -> None:
+        """Flip the Record/Stop glyph and update the elapsed-time label."""
+        self.record_btn.setText("■" if on else "●")
+        self.record_btn.setToolTip(
+            "Stop recording this lecture" if on else "Record this lecture"
+        )
+        self.status_label.setText(status)
+        self.status_label.setVisible(bool(status))
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        # Cap the tab bar so a drag strip always survives between it and
+        # the float button, however many tabs are open: past one tab the
+        # trailing stretch alone collapsed to a measured 4px (F1, review
+        # round 1) — with the placement menu gone, dragging this bar is
+        # the only way to move the panel between areas.
+        super().resizeEvent(ev)
+        self.tabs.setMaximumWidth(max(80, self.width() - 250))
+
+    # Ignore, never accept: the dock handles these (drag, double-click).
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+    def mouseDoubleClickEvent(self, ev) -> None:  # noqa: N802
+        ev.ignore()
+
+
+class PdfDock(QDockWidget):
+    """The PDF viewer panel: a native dock of its host window.
+
+    One bar of chrome (``_PanelBar``) is the dock's title bar; the one
+    shared ``PdfSidebar`` is its widget. Qt moves it, docks it left,
+    right or bottom, floats it as an attached tool window (above the
+    host, hidden and moved with it) and re-docks it — the 2026-08
+    pane-anchored placement engine and its tear-off drag machine are
+    gone (spec:
+    docs/superpowers/specs/2026-09-05-pdf-dock-design.md).
+
+    Persistence is Klaus's own: ``pdf_tabs.json``'s ``placement``
+    (``left``/``right``/``bottom``/``float``, old values migrated by
+    ``pdf_handler.migrate_placement`` at the read) and ``geom`` (the
+    floating geometry). Applied on the first ``panel_show`` of the
+    session, never from Anki's saved QMainWindow state, so a stale saved
+    layout can never overrule the user's last move.
+
+    - **✕ on each tab** closes that PDF (the stored file survives; reopen
+      it from ＋). Closing the last tab hides the panel.
+    - **＋** opens another stored PDF.
+    - **⧉** floats the panel or docks it back; **✕** at the bar's end
+      hides it (the toolbar's Library… button shows it again).
+
+    One viewer instance is reused across tabs; per-tab reading position
+    is kept for the session; the tab set and placement persist.
+    """
+
+    def __init__(self, editor: Editor, sidebar: Any, main_window: Any) -> None:
+        super().__init__("PDF", main_window)
+        self._editor = editor
+        self._sidebar = sidebar
+        self._win = main_window
+        self._syncing = False
+        self._last_page: dict[str, int] = {}
+        self._closed = False
+        self._recorder: Any = None
+        # _placed means the remembered placement has been applied this
+        # session; until then panel_show() applies it.
+        self._placed = False
+
+        state = pdf_handler.load_panel_state(USER_FILES)
+        self._placement: str = pdf_handler.migrate_placement(
+            state.get("placement")
+        )
+        g = state.get("geom")
+        self._float_geom: QRect | None = QRect(*g) if g else None
+
+        self.setObjectName("KlausPdfDock")
+        self.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+
+        self._bar = _PanelBar(self, sidebar)
+        self._tabs = self._bar.tabs
+        self._add_btn = self._bar.add_btn
+        self.record_btn = self._bar.record_btn
+        self._bar.add_btn.clicked.connect(self._show_add_menu)
+        self._bar.record_btn.clicked.connect(self._toggle_record)
+        self._bar.float_btn.clicked.connect(self._toggle_float)
+        self._bar.hide_btn.clicked.connect(self.panel_hide)
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+        self._tabs.tabMoved.connect(lambda *_: self._persist())
+        self.setTitleBarWidget(self._bar)
+        self.setWidget(sidebar)
         sidebar.on_loaded = self._on_sidebar_loaded
+
+        # Nesting lets this dock share Browse's left area with Anki's own
+        # sidebar dock (side by side, not only tabbed).
+        try:
+            main_window.setDockNestingEnabled(True)
+        except Exception:
+            pass
+        # A dock floats and re-docks only once it belongs to a main
+        # window: add it now, hidden, in its remembered area (or the
+        # right area for a floating one to come back to).
+        try:
+            main_window.addDockWidget(
+                PANEL_AREAS.get(self._placement, PANEL_AREAS["right"]), self
+            )
+        except Exception as exc:
+            print(f"[klausmate] pdf dock add failed: {exc}")
+        self.hide()
+        # Connected AFTER the add above, so restoring a placement never
+        # looks like the user moving the panel.
+        self.dockLocationChanged.connect(self._on_area_changed)
+        self.topLevelChanged.connect(self._on_floating_changed)
+
+        # Host lifetime: the viewer's webview must be released before
+        # the host's C++ objects die (PdfSidebar.cleanup), so watch
+        # both the host's Close and its destroyed signal. These are NOT
+        # primary/backstop: in Anki's real teardown (deleteLater()
+        # posted before close(), verified against Browser/AddCards/
+        # NewEditCurrent) the DeferredDelete runs first, so destroyed
+        # is the path that actually releases the webview; the Close
+        # branch below is deferred a further tick and arrives on an
+        # already-dead host, which is why IT is the one guarded by
+        # _closed (final-review M1 — the two were previously described
+        # backwards).
+        try:
+            self._win.installEventFilter(self)
+        except Exception:
+            pass
+        try:
+            self._win.destroyed.connect(self._on_host_destroyed)
+        except Exception:
+            pass
 
         # Restore last session's tab set as labels only — the document
         # itself loads lazily when a tab is selected / the panel is shown.
@@ -964,27 +1307,110 @@ class _PdfTabContainer(QWidget):
         finally:
             self._syncing = False
 
-    # ---- show / hide (called by the Klaus bar toggle & chips) ----
+    # ---- show / hide (the toolbar Library… button and chips) ----
 
     def panel_show(self) -> None:
         if not self._placed:
+            self._placed = True
             if self._placement == "float":
-                self._make_floating(self._float_geom)
+                g = self._float_geom
+                self.setFloating(True)
+                if g is not None and g.width() > 200 and g.height() > 200:
+                    self.setGeometry(g)
+                else:
+                    try:
+                        wg = self._win.geometry()
+                        self.setGeometry(
+                            wg.x() + max(40, wg.width() - 560),
+                            wg.y() + 80, 520, 640,
+                        )
+                    except Exception:
+                        self.resize(520, 640)
+                # setFloating(True) above synchronously fires
+                # topLevelChanged -> _persist_state -> _remember_float_geom,
+                # which stamps _float_geom with the hidden dock's
+                # pre-layout rect (0, 0, 100, 30) and writes THAT to disk
+                # before the geometry above is even applied — g was read
+                # first so it survives that clobber for the setGeometry
+                # call above, but _float_geom and disk are still wrong
+                # afterward. Recapture the truth now the real geometry is
+                # set, and flush it, or the first float of every session
+                # is remembered as (0, 0, 100, 30) (final-review C1).
+                self._float_geom = QRect(self.geometry())
+                self._persist_state()
             else:
-                self._embed(self._placement)
-        if self.isWindow():
-            try:
-                if self.isMinimized():
-                    self.showNormal()
-            except Exception:
-                pass
-            self.show()
-            self.raise_()
-        else:
-            self.setVisible(True)
+                area = PANEL_AREAS.get(self._placement, PANEL_AREAS["right"])
+                try:
+                    # NOT redundant with __init__'s addDockWidget: Qt's own
+                    # "in case it was already in here" re-add is also what
+                    # restores [sidebar, ours] order after Browse's own
+                    # sidebar heal (_reset_browse_layout_to_defaults)
+                    # re-appends Anki's sidebar dock one tick after ours
+                    # (both are singleShot(0)s — ours posted first, during
+                    # setupEditor; the heal's during browser_will_show).
+                    # Deleting this call as "already done in __init__"
+                    # loses that order (final-review M8).
+                    self._win.addDockWidget(area, self)
+                except Exception:
+                    pass
+                self.show()
+                # 45% of the host on first use. resizeDocks needs the dock
+                # visible and the host laid out, hence the show() above it.
+                vertical = area == Qt.DockWidgetArea.BottomDockWidgetArea
+                try:
+                    total = self._win.height() if vertical else self._win.width()
+                    self._win.resizeDocks(
+                        [self], [max(200, int(total * 0.45))],
+                        Qt.Orientation.Vertical if vertical
+                        else Qt.Orientation.Horizontal,
+                    )
+                except Exception:
+                    pass
+        self.show()
+        self.raise_()
 
-    def panel_hide(self) -> None:
+    # Connected to the bar's ✕ (and called directly), so it carries the
+    # slot guard like every other connected handler in this file — and
+    # therefore ``*_args``: @_guarded's wrapper is (*args, **kwargs), so
+    # PyQt hands it EVERY signal argument, and `clicked` carries a
+    # `checked` bool. A guarded zero-arg slot on `clicked` raises
+    # TypeError into its own guard and silently never runs (that is what
+    # kept the ＋ button dead for two releases, and browse_toggles'
+    # _sync_copy is the precedent).
+    @_guarded
+    def panel_hide(self, *_args) -> None:
         self.hide()
+
+    def _toggle_float(self) -> None:
+        try:
+            self.setFloating(not self.isFloating())
+        except Exception as exc:
+            print(f"[klausmate] pdf dock float toggle failed: {exc}")
+
+    @_guarded
+    def _toggle_record(self, *_args) -> None:
+        # *_args: a `clicked` bool, same reason as every other guarded
+        # slot on this bar (panel_hide's comment explains the TypeError
+        # this avoids).
+        start_or_stop_recording(self, self._sidebar)
+
+    def set_recording(self, on: bool, status: str) -> None:
+        self._bar.set_recording(on, status)
+
+    def _update_record_enabled(self) -> None:
+        has_doc = getattr(self._sidebar, "_name", None) is not None
+        recording = self._recorder is not None and self._recorder.is_recording
+        try:
+            self._bar.record_btn.setEnabled(has_doc or recording)
+            # m1 (fix round 1): say WHY it's disabled, not just repeat the
+            # enabled tooltip. Left alone while recording, or this would
+            # stomp set_recording's "Stop recording this lecture".
+            if not recording:
+                self._bar.record_btn.setToolTip(
+                    "Record this lecture" if has_doc else "Open a PDF to record this lecture"
+                )
+        except Exception as exc:
+            print(f"[klausmate] record button refresh failed: {exc}")
 
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
@@ -1003,148 +1429,45 @@ class _PdfTabContainer(QWidget):
 
     def hideEvent(self, ev) -> None:  # noqa: N802
         super().hideEvent(ev)
-        if self.isWindow():
-            self._remember_float_geom()
+        self._remember_float_geom()
         try:
             self._sidebar._set_active(None)
         except Exception:
             pass
 
-    # ---- placement engine ----
+    # ---- placement memory ----
 
-    def _ensure_vsplit(self) -> QSplitter | None:
-        """Wrap the editor pane in a vertical splitter (once per window)."""
-        existing = getattr(self._editor, "_klausmate_vsplit", None)
-        if existing is not None:
-            return existing
-        ed_w = getattr(self._editor, "widget", None)
-        if ed_w is None:
-            return None
-        parent = ed_w.parentWidget()
-        if parent is None:
-            return None
-        vsplit = QSplitter(Qt.Orientation.Vertical)
-        vsplit.setChildrenCollapsible(False)
-        try:
-            # Inherit the pane's size policy. AddCards' fieldsArea carries
-            # verticalStretch=10 — the only hint giving it ALL surplus
-            # window height. QSplitter's default policy is orientation-
-            # dependent (vertically Preferred when horizontal), so without
-            # this the Type/Deck row balloons into blank space whenever
-            # the panel docks left/right.
-            vsplit.setSizePolicy(ed_w.sizePolicy())
-        except Exception:
-            pass
-        if isinstance(parent, QSplitter):
-            idx = parent.indexOf(ed_w)
-            sizes = parent.sizes()
-            parent.insertWidget(idx, vsplit)
-            vsplit.addWidget(ed_w)  # reparents ed_w out of parent
-            try:
-                parent.setSizes(sizes)
-            except Exception:
-                pass
-        else:
-            lay = parent.layout()
-            if lay is None:
-                return None
-            lay.replaceWidget(ed_w, vsplit)
-            vsplit.addWidget(ed_w)
-        ed_w.setVisible(True)
-        self._editor._klausmate_vsplit = vsplit  # type: ignore[attr-defined]
-        return vsplit
+    @_guarded
+    def _on_area_changed(self, area) -> None:
+        if not self.isFloating():
+            self._placement = AREA_NAMES.get(area, self._placement)
+            self._persist_state()
 
-    def _embed(self, mode: str) -> None:
-        """Dock the panel on one side of the editor pane. The wrapper
-        splitter's orientation follows the side: above/below → vertical,
-        left/right → horizontal."""
-        vsplit = self._ensure_vsplit()
-        if vsplit is None:
-            self._make_floating(self._float_geom)
-            return
-        vertical = mode in ("above", "below")
-        vsplit.setOrientation(
-            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal
-        )
-        # setOrientation transposes QSplitter's size policy — re-assert the
-        # inherited pane policy so the wrapper keeps absorbing the window's
-        # surplus height in every orientation.
-        try:
-            ed_w = getattr(self._editor, "widget", None)
-            if ed_w is not None:
-                vsplit.setSizePolicy(ed_w.sizePolicy())
-        except Exception:
-            pass
-        first = mode in ("above", "left")
-        vsplit.insertWidget(0 if first else vsplit.count(), self)
-        self.setVisible(True)
-        total = max(1, vsplit.height() if vertical else vsplit.width())
-        pdf_share = int(total * 0.45)
-        sizes = (
-            [pdf_share, total - pdf_share]
-            if first
-            else [total - pdf_share, pdf_share]
-        )
-        try:
-            vsplit.setSizes(sizes)
-        except Exception:
-            pass
-        self._placement = mode
-        self._placed = True
-        self._persist_state()
-
-    def _make_floating(self, geom: QRect | None) -> None:
-        """Turn the panel into a real, PARENTLESS macOS window: it shows
-        in Mission Control, minimizes to the Dock, and Anki can come in
-        front of it (a child window would be forced always-on-top of its
-        parent). Its red ✕ still just hides the panel (default QWidget
-        close), and _on_host_closing() ties its lifetime to the host.
-
-        Sequence matters: setParent(None) → flags → geometry → show() —
-        only after show() does windowHandle() exist for
-        startSystemMove()."""
-        self.setParent(None)
-        self.setWindowFlags(
-            Qt.WindowType.Window
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.WindowMinMaxButtonsHint
-        )
-        self.setWindowTitle("PDF — Klaus")
-        if geom is not None and geom.width() > 200 and geom.height() > 200:
-            self.setGeometry(geom)
+    @_guarded
+    def _on_floating_changed(self, floating: bool) -> None:
+        if floating:
+            self._placement = "float"
         else:
             try:
-                wg = self._win.geometry()
-                self.setGeometry(
-                    wg.x() + max(40, wg.width() - 560),
-                    wg.y() + 80,
-                    520,
-                    640,
+                self._placement = AREA_NAMES.get(
+                    self._win.dockWidgetArea(self), self._placement
                 )
             except Exception:
-                self.resize(520, 640)
-        self.show()
-        self.raise_()
-        self._placement = "float"
-        self._placed = True
+                pass
         self._persist_state()
 
     def _remember_float_geom(self) -> None:
         # A minimized window reports Dock-related geometry — don't let
         # that overwrite the real placement.
         try:
-            if self.isMinimized():
-                return
+            if self.isFloating() and not self.isMinimized():
+                self._float_geom = QRect(self.geometry())
         except Exception:
             pass
-        if self.isWindow():
-            self._float_geom = QRect(self.geometry())
 
     def _persist_state(self) -> None:
+        self._remember_float_geom()
         geom = None
-        if self.isWindow():
-            self._remember_float_geom()
         if self._float_geom is not None:
             g = self._float_geom
             geom = [g.x(), g.y(), g.width(), g.height()]
@@ -1157,11 +1480,29 @@ class _PdfTabContainer(QWidget):
 
     # ---- host lifetime ----
 
+    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
+        try:
+            if obj is self._win and ev.type() == QEvent.Type.Close:
+                # Leave the mouse pipeline NOW: a QPdfView deleted while
+                # under the cursor segfaulted in sip's receiver conversion
+                # (live crash, 2026-08-24). The host may still ignore()
+                # this Close (AddCards' discard prompt), so never tear
+                # down synchronously — check next tick.
+                self._hidden_for_close = self.isVisible()
+                if self._hidden_for_close:
+                    try:
+                        self.hide()
+                    except Exception:
+                        pass
+                QTimer.singleShot(0, self._host_close_check)
+                return False
+        except Exception:
+            pass
+        return super().eventFilter(obj, ev)
+
     def _host_close_check(self) -> None:
         """Deferred from the host's Close event: only tear down when the
-        close was actually accepted — the host may have evt.ignore()d it
-        (e.g. AddCards' discard prompt was cancelled), in which case
-        tearing down would leave live references to a dead panel."""
+        close was actually accepted — the host may have ignore()d it."""
         try:
             still_up = bool(self._win.isVisible())
         except Exception:
@@ -1173,8 +1514,7 @@ class _PdfTabContainer(QWidget):
             except Exception as exc:
                 print(f"[klausmate] pdf host-close teardown failed: {exc}")
         elif getattr(self, "_hidden_for_close", False):
-            # The close was cancelled (AddCards' discard prompt) — undo
-            # the precautionary hide from the Close filter.
+            # The close was cancelled — undo the precautionary hide.
             self._hidden_for_close = False
             try:
                 self.setVisible(True)
@@ -1182,51 +1522,36 @@ class _PdfTabContainer(QWidget):
                 pass
 
     def _on_host_closing(self) -> None:
-        """The Browse/Add window that spawned this panel is closing.
-        Embedded panels die with it naturally; a floating panel is
-        parentless (see _make_floating) and must be taken down
-        explicitly or it would linger as a zombie window."""
+        """The Browse/Add window is closing: persist, release the
+        renderer's webview while its C++ object still exists
+        (PdfSidebar.cleanup — a webview destroyed without it crashes
+        Anki's next theme change), drop the back-references. The dock
+        itself is the host's child and dies with it.
+
+        Stops a live recorder FIRST (fix round 1, I1) — before this
+        method existed a Browse window closing mid-lecture left the
+        microphone hot with no way to stop it short of profile close,
+        and reopening Browse built a fresh PdfDock whose new _recorder
+        started a SECOND simultaneous capture of the same lecture."""
         if self._closed:
             return
+        self._closed = True
         try:
-            if self._drag_state != "idle":
-                self._reset_drag()
-        except Exception:
-            pass
+            _release_recorder(self)
+        except Exception as exc:
+            print(f"[klausmate] pdf dock recorder release on host close failed: {exc}")
         try:
             self._persist_state()
         except Exception:
             pass
-        # Release the renderer's webview from Anki's global hooks while
-        # its C++ object still exists — a webview destroyed without
-        # AnkiWebView.cleanup() crashes Anki's next theme change (see
-        # PdfSidebar.cleanup).
         try:
             self._sidebar.cleanup()
         except Exception:
             pass
-        # The drop-zone overlay is a parentless top-level window too.
-        ov = self._zone_overlay
-        if ov is not None:
-            self._zone_overlay = None
-            try:
-                ov.hide()
-                ov.deleteLater()
-            except Exception:
-                pass
-        if self.isWindow():
-            self._closed = True
-            print("[klausmate] pdf drag: host closing — closing floating panel")
-            try:
-                self.close()
-            except Exception:
-                pass
-            try:
-                self.deleteLater()
-            except Exception:
-                pass
-        # The host is really going away — drop the back-references so a
-        # later editor re-init / toggle can't reach a dead widget.
+        try:
+            self.hide()
+        except Exception:
+            pass
         try:
             self._win._klausmate_pdf_container = None
         except Exception:
@@ -1240,730 +1565,26 @@ class _PdfTabContainer(QWidget):
             pass
 
     def _on_host_destroyed(self, *_args) -> None:
-        """Backstop for hosts destroyed without a Close event. The C++
-        side of our widgets may already be gone, so everything is
-        guarded — worst case this is a silent no-op."""
+        """The path that actually tears down in Anki's real close
+        sequence, not a rare-case backstop: deleteLater() is posted
+        before close() there, so this fires before the deferred Close
+        check ever gets a turn (final-review M1). Still guarded either
+        way — the C++ side of our widgets may already be gone — so a
+        host destroyed with no Close event at all is equally safe."""
         try:
             self._on_host_closing()
         except Exception:
             pass
 
-    # ---- drag: tear off / move / drop-dock ----
-
-    def eventFilter(self, obj, ev) -> bool:  # noqa: N802
-        t = ev.type()
-
-        # -- host lifetime -------------------------------------------
-        try:
-            if obj is self._win and t == QEvent.Type.Close:
-                # Leave the mouse pipeline NOW: if the close goes through,
-                # the embedded viewer dies with the window, and a hidden
-                # widget can no longer be Qt's hover/tracking target — a
-                # QPdfView deleted while under the cursor segfaulted in
-                # sip's receiver conversion (live crash, 2026-08-24).
-                self._hidden_for_close = self.isVisible()
-                if self._hidden_for_close:
-                    try:
-                        self.hide()
-                    except Exception:
-                        pass
-                # The host may still evt.ignore() this Close (e.g. the
-                # user cancels AddCards' discard prompt), so NEVER tear
-                # down synchronously — check next tick whether the
-                # window actually went away.
-                QTimer.singleShot(0, self._host_close_check)
-                return False  # never block the host's close
-        except Exception:
-            pass
-
-        # -- application-level drag finalize --------------------------
-        # While macOS runs a system move, Qt may never deliver the
-        # release to this widget at all. This filter (installed on the
-        # QApplication only for the drag's duration) closes the gesture
-        # out on the next definitive event ANYWHERE: a release, a fresh
-        # press, or a mouse move with no buttons held (i.e. the release
-        # happened while Qt wasn't looking). Application filters run
-        # before object filters, so a new press on our own bar first
-        # finalizes the old drag here, then starts cleanly below.
-        if (
-            self._app_filter_installed
-            and not self._synthetic_release
-            and self._drag_state in ("native", "manual_follow", "armed")
-        ):
-            try:
-                if t == QEvent.Type.MouseButtonRelease:
-                    self._finalize_drag(True, "app-filter release")
-                elif t == QEvent.Type.MouseButtonPress:
-                    self._finalize_drag(True, "app-filter press")
-                elif t == QEvent.Type.MouseMove:
-                    if ev.buttons() == Qt.MouseButton.NoButton:
-                        self._finalize_drag(
-                            True, "app-filter buttonless move"
-                        )
-                    elif ev.buttons() & Qt.MouseButton.LeftButton:
-                        # Left button demonstrably still held → the
-                        # drag is alive (feeds the freshness gate).
-                        self._last_drag_evidence = time.time()
-            except Exception:
-                pass
-
-        # -- bar / tab gestures ---------------------------------------
-        if obj is self._header or obj is self._tabs:
-            if (
-                t == QEvent.Type.MouseButtonPress
-                and ev.button() == Qt.MouseButton.LeftButton
-            ):
-                gp = ev.globalPosition().toPoint()
-                self._press_gp = gp
-                self._drag_state = "pressed"
-                # A press on an actual tab must stay draggable-for-
-                # reorder; it only becomes a panel drag once the cursor
-                # leaves the tab-bar band. A press on empty tab-bar
-                # space (or header margins / page label) drags the
-                # panel after a small threshold.
-                self._press_on_tab = (
-                    obj is self._tabs
-                    and self._tabs.tabAt(ev.position().toPoint()) >= 0
-                )
-                if self.isWindow():
-                    self._drag_off = (
-                        gp - self.window().frameGeometry().topLeft()
-                    )
-                else:
-                    self._drag_off = None
-                return False  # let the tab bar select/reorder normally
-            if t == QEvent.Type.MouseMove and self._press_gp is not None:
-                gp = ev.globalPosition().toPoint()
-                state = self._drag_state
-                if state == "pressed":
-                    if self._press_on_tab:
-                        # Tab presses tear off when the cursor leaves
-                        # the tab-bar band — in ANY direction. Inside
-                        # the band, drags keep reordering tabs forever.
-                        try:
-                            band = self._tabs.rect().adjusted(-4, -4, 4, 4)
-                            escaped = not band.contains(
-                                self._tabs.mapFromGlobal(gp)
-                            )
-                        except Exception:
-                            escaped = False
-                    else:
-                        escaped = (gp - self._press_gp).manhattanLength() > 8
-                    if not escaped:
-                        return False
-                    self._header.setCursor(Qt.CursorShape.ClosedHandCursor)
-                    if self._press_on_tab:
-                        # The tab bar started a reorder-drag; close it out
-                        # with a synthetic release so it doesn't keep a
-                        # half-dragged tab while we move the whole panel.
-                        # (_synthetic_release keeps the reentrant filter
-                        # call from resetting our gesture state.)
-                        self._synthetic_release = True
-                        try:
-                            QApplication.sendEvent(
-                                self._tabs,
-                                QMouseEvent(
-                                    QEvent.Type.MouseButtonRelease,
-                                    QPointF(
-                                        self._tabs.mapFromGlobal(gp)
-                                    ),
-                                    QPointF(gp),
-                                    Qt.MouseButton.LeftButton,
-                                    Qt.MouseButton.NoButton,
-                                    Qt.KeyboardModifier.NoModifier,
-                                ),
-                            )
-                        except Exception:
-                            pass
-                        finally:
-                            self._synthetic_release = False
-                    self._start_panel_drag(gp)
-                    return True
-                if state == "manual_ghost":
-                    # Fallback tear-off: drive the ghost only — the real
-                    # panel is relocated on release. Reparenting it here,
-                    # mid-gesture, would destroy the NSView that owns the
-                    # Cocoa drag session and kill the mouse tracking.
-                    self._drag_ghost_to(gp)
-                    self._update_zone(gp)
-                    return True
-                if state == "manual_follow":
-                    # Fallback live-move for a floating panel (mouse
-                    # tracking is sound here — nothing was reparented).
-                    try:
-                        self.window().move(
-                            gp - (self._drag_off or QPoint(60, 15))
-                        )
-                    except Exception:
-                        pass
-                    self._update_zone(gp)
-                    self._last_activity = time.time()
-                    try:
-                        if ev.buttons() & Qt.MouseButton.LeftButton:
-                            self._last_drag_evidence = time.time()
-                    except Exception:
-                        pass
-                    return True
-                if state in ("native", "armed"):
-                    # Shouldn't normally arrive while the OS owns the
-                    # move; treat it as a sign of life either way.
-                    self._last_activity = time.time()
-                    try:
-                        if ev.buttons() & Qt.MouseButton.LeftButton:
-                            self._last_drag_evidence = time.time()
-                    except Exception:
-                        pass
-                    if state == "armed":
-                        if self._native_move_ok is False:
-                            # Native move is proven broken — resume in
-                            # the mode that actually works and handle
-                            # THIS event as a cursor-follow move.
-                            self._drag_state = "manual_follow"
-                            try:
-                                self.window().move(
-                                    gp
-                                    - (self._drag_off or QPoint(60, 15))
-                                )
-                            except Exception:
-                                pass
-                            self._update_zone(gp)
-                        else:
-                            self._drag_state = "native"
-                    return True
-                return False
-            if (
-                t == QEvent.Type.MouseButtonRelease
-                and ev.button() == Qt.MouseButton.LeftButton
-            ):
-                # Only the LEFT release ends a gesture — the press that
-                # started it was LeftButton-gated, so a stray middle /
-                # right click mid-drag must pass through untouched.
-                if self._synthetic_release:
-                    # Our own synthetic tab-release passing through on
-                    # its way to the tab bar — not a gesture end.
-                    return False
-                state = self._drag_state
-                if state == "pressed":
-                    self._press_gp = None
-                    self._drag_state = "idle"
-                    return False  # plain click: let the tab bar have it
-                if state == "manual_ghost":
-                    gp = ev.globalPosition().toPoint()
-                    zone = self._active_zone
-                    self._reset_drag()
-                    print(
-                        "[klausmate] pdf drag: ghost drop "
-                        f"(zone={zone})"
-                    )
-                    if zone:
-                        # Embedded → re-dock on another side. Deferred:
-                        # we are inside event delivery (_defer_placement).
-                        self._defer_placement(self._embed, zone)
-                    else:
-                        # Float at the drop point. The button is up, but
-                        # the reparent still must not run inside this
-                        # event's delivery (_defer_placement).
-                        self._defer_placement(self._tear_off, gp)
-                    return True
-                if state in ("native", "manual_follow", "armed"):
-                    self._finalize_drag(True, "bar release")
-                    return True
-                return False
-        return super().eventFilter(obj, ev)
-
-    def _start_panel_drag(self, gp: QPoint) -> None:
-        """A bar/tab drag gesture crossed its threshold — route it.
-
-        Primary path: float the REAL panel at the cursor and hand the
-        move to macOS (startSystemMove). Once _native_move_ok is False
-        (startSystemMove refused, or the watchdog caught it lying),
-        embedded tear-offs take the translucent-ghost path. An ALREADY-
-        FLOATING panel always re-probes startSystemMove() — no reparent
-        is involved, so this is the guaranteed-sound case — and the
-        watchdog / moveEvent verdict lets _native_move_ok heal back to
-        True (or stay False) for this session."""
-        if self._native_move_ok is False and not self.isWindow():
-            self._drag_state = "manual_ghost"
-            print("[klausmate] pdf drag: begin (manual_ghost fallback)")
-            self._drag_ghost_to(gp)
-            self._update_zone(gp)
-            return
-        if not self.isWindow():
-            self._tear_off(gp)
-        started = False
-        try:
-            wh = self.window().windowHandle()
-            if wh is not None:
-                started = bool(wh.startSystemMove())
-        except Exception:
-            started = False
-        if not started:
-            # Refused outright → proven broken; this drag still works
-            # via cursor-follow, future gestures use the ghost path.
-            self._native_move_ok = False
-            print(
-                "[klausmate] pdf drag: startSystemMove refused — "
-                "cursor-follow fallback"
-            )
-        self._arm_drag_machinery("native" if started else "manual_follow")
-
-    def _arm_drag_machinery(self, state: str) -> None:
-        """Start the heartbeat + app filter that shepherd a native (or
-        cursor-follow) drag to its finalize."""
-        now = time.time()
-        self._drag_started = now
-        self._last_activity = now
-        # The gesture just crossed its threshold under a held left
-        # button — that IS direct drag evidence.
-        self._last_drag_evidence = now
-        self._move_seen = False
-        try:
-            self._last_cursor = QPoint(QCursor.pos())
-        except Exception:
-            self._last_cursor = None
-        try:
-            self._drag_start_cursor = QPoint(QCursor.pos())
-        except Exception:
-            self._drag_start_cursor = None
-        # Post-tear-off origin: a moveEvent only proves the native move
-        # once the window (or cursor) has left this point by >8px.
-        try:
-            self._drag_origin_pos = QPoint(
-                self.window().frameGeometry().topLeft()
-            )
-        except Exception:
-            self._drag_origin_pos = None
-        self._drag_state = state
-        self._install_app_filter()
-        if not self._drag_timer.isActive():
-            self._drag_timer.start()
-        print(f"[klausmate] pdf drag: begin ({state})")
-
-    def _install_app_filter(self) -> None:
-        if self._app_filter_installed:
-            return
-        try:
-            app = QApplication.instance()
-            if app is not None:
-                app.installEventFilter(self)
-                self._app_filter_installed = True
-        except Exception:
-            pass
-
-    def _displaced_enough(self) -> bool:
-        """True once the window or the cursor has demonstrably travelled
-        (>8px) since the drag machinery armed — the bar a moveEvent must
-        clear before it counts as proof that the native move works."""
-        try:
-            if self._drag_origin_pos is not None:
-                d = (
-                    self.window().frameGeometry().topLeft()
-                    - self._drag_origin_pos
-                )
-                if d.manhattanLength() > 8:
-                    return True
-        except Exception:
-            pass
-        try:
-            if self._drag_start_cursor is not None:
-                d = QCursor.pos() - self._drag_start_cursor
-                if d.manhattanLength() > 8:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    def moveEvent(self, ev) -> None:  # noqa: N802
-        super().moveEvent(ev)
-        # Gated strictly on the drag state: ordinary moves (title-bar
-        # drags of the floating window, layout changes) stay inert.
-        if self._drag_state not in ("native", "armed", "manual_follow"):
-            return
-        now = time.time()
-        if self._drag_state == "armed":
-            # Only a move backed by recent drag evidence resumes the
-            # gesture. Anything else (a native title-bar drag of a
-            # zombie-armed panel, an async layout adjustment) is a
-            # plain user reposition — no zone tracking, no promotion.
-            held = False
-            try:
-                held = bool(
-                    QApplication.mouseButtons()
-                    & Qt.MouseButton.LeftButton
-                )
-            except Exception:
-                pass
-            if not held and now - self._last_drag_evidence > 1.0:
-                return
-            self._drag_state = (
-                "manual_follow"
-                if self._native_move_ok is False
-                else "native"
-            )
-        if not self._move_seen:
-            if (
-                self._drag_state == "native"
-                and not self._displaced_enough()
-            ):
-                # A spurious async geometry adjustment right after
-                # tear-off must not count as native confirmation — it
-                # would set _native_move_ok and permanently disarm the
-                # watchdog. Stay unconfirmed.
-                return
-            self._move_seen = True
-            if self._drag_state == "native":
-                # The window demonstrably follows → native move works.
-                self._native_move_ok = True
-        self._last_activity = now
-        # The panel moved while the gesture owns the window — direct
-        # drag evidence (feeds the freshness gate in _finalize_drag).
-        self._last_drag_evidence = now
-        try:
-            self._update_zone(QCursor.pos())
-        except Exception:
-            pass
-
-    def _drag_tick(self) -> None:
-        """100ms heartbeat while a native/cursor-follow drag runs.
-
-        startSystemMove() lies on Cocoa — it returns True even when
-        performWindowDragWithEvent: silently no-ops — and during a REAL
-        system move Qt receives no mouse events, so the gesture's end
-        can't be observed directly. Tiers:
-
-        1. watchdog (only until the first moveEvent): the cursor has
-           clearly travelled but the window never moved → native move
-           is dead; demote to cursor-follow and remember the verdict.
-        2. primary end: Qt saw every button go up → finalize.
-        3. staleness: nothing moved for a while → "armed"; the app
-           filter finalizes on the next definitive event, a new
-           moveEvent re-activates, and a 10s cap gives up WITHOUT
-           embedding.
-        """
-        state = self._drag_state
-        if state not in ("native", "manual_follow", "armed"):
-            self._drag_timer.stop()
-            return
-        now = time.time()
-        try:
-            cur = QPoint(QCursor.pos())
-        except Exception:
-            return
-        moved = self._last_cursor is not None and cur != self._last_cursor
-        self._last_cursor = cur
-        if moved:
-            self._last_activity = now
-
-        # 1. Watchdog.
-        if (
-            state == "native"
-            and not self._move_seen
-            and now - self._drag_started >= 0.3
-            and self._press_gp is not None
-            and (cur - self._press_gp).manhattanLength() > 40
-        ):
-            self._native_move_ok = False
-            self._drag_state = state = "manual_follow"
-            print(
-                "[klausmate] pdf drag: watchdog — native move dead, "
-                "cursor-follow fallback"
-            )
-
-        # Cursor-follow: the heartbeat IS the drag.
-        if state == "manual_follow":
-            try:
-                self.window().move(cur - (self._drag_off or QPoint(60, 15)))
-            except Exception:
-                pass
-            self._update_zone(cur)
-
-        # 2. Primary end.
-        try:
-            buttons_up = (
-                QApplication.mouseButtons() == Qt.MouseButton.NoButton
-            )
-        except Exception:
-            buttons_up = False
-        if buttons_up:
-            self._finalize_drag(True, "buttons-up")
-            return
-
-        # 3. Staleness.
-        if state in ("native", "manual_follow"):
-            if not moved and now - self._last_activity > 0.6:
-                self._drag_state = "armed"
-                # A quiet gesture may already be a dead one (the
-                # release can be unobservable) — drop the dock preview
-                # so a stray late finalize can't embed a stale zone.
-                try:
-                    self._hide_zone()
-                except Exception:
-                    pass
-                print("[klausmate] pdf drag: armed (no activity)")
-        elif state == "armed":
-            if moved:
-                # User resumed the gesture (button still down as far as
-                # Qt knows).
-                self._drag_state = (
-                    "manual_follow"
-                    if self._native_move_ok is False
-                    else "native"
-                )
-            elif now - self._last_activity > 10.0:
-                self._finalize_drag(False, "armed 10s cap")
-
-    def _reset_drag(self) -> None:
-        """Tear down all drag machinery and return to idle."""
-        try:
-            if self._drag_timer.isActive():
-                self._drag_timer.stop()
-        except Exception:
-            pass
-        if self._app_filter_installed:
-            try:
-                app = QApplication.instance()
-                if app is not None:
-                    app.removeEventFilter(self)
-            except Exception:
-                pass
-            self._app_filter_installed = False
-        self._hide_zone()
-        self._destroy_ghost()
-        self._press_gp = None
-        self._move_seen = False
-        self._last_cursor = None
-        self._drag_origin_pos = None
-        self._drag_start_cursor = None
-        self._drag_state = "idle"
-        try:
-            self._header.setCursor(Qt.CursorShape.OpenHandCursor)
-        except Exception:
-            pass
-
-    def _defer_placement(self, fn, *args) -> None:
-        """Run a placement change (embed / tear-off) AFTER the current
-        event finishes delivering.
-
-        Reparenting this panel moves the live QPdfView between native
-        windows, which destroys and recreates the whole subtree's window
-        handles. Doing that synchronously inside ``eventFilter`` — where
-        every drop path below is called from — leaves Qt delivering a
-        mouse event into freed widgets: the next event's receiver
-        pointer is dangling and sip segfaults converting it to Python
-        before any of our code runs, so no try/except can catch it
-        (SIGSEGV in sipSubClass_QPdfView, reproduced live by tearing the
-        panel out and docking it back in, 2026-08-24). It is the same
-        "never reparent mid-mouse-gesture" rule the tear-off already
-        respects at pickup time, applied at drop time.
-
-        singleShot(0) returns control to Qt first; the app-level event
-        filter is already removed by ``_reset_drag`` (which every caller
-        runs BEFORE scheduling this), so by the time ``fn`` runs there is
-        no event in flight and no filter on the stack.
-        """
-
-        def run() -> None:
-            try:
-                if self._closed:
-                    return
-                fn(*args)
-            except RuntimeError:
-                pass  # panel died between scheduling and running
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] pdf drag: deferred placement failed: {exc}")
-
-        QTimer.singleShot(0, run)
-
-    def _finalize_drag(self, allow_embed: bool, why: str) -> None:
-        """Common end for native/cursor-follow drags: tear the machinery
-        down, then dock into the active zone or stay floating in place.
-
-        Embeds are additionally gated on freshness (<2s since the last
-        DIRECT drag evidence — a panel moveEvent during the gesture or
-        a mouse event with the left button held; raw cursor motion is
-        deliberately not enough, it keeps flowing after an unobserved
-        release): the staleness tiers can fire long after the user
-        actually let go, and a surprise late dock is worse than staying
-        floating. Esc-to-cancel was considered and dropped — key events
-        are unobservable while macOS runs a system move, so a cancel
-        gesture cannot be detected reliably."""
-        zone = self._active_zone
-        fresh = (time.time() - self._last_drag_evidence) < 2.0
-        self._reset_drag()
-        print(
-            f"[klausmate] pdf drag: finalize via {why} "
-            f"(zone={zone}, fresh={fresh}, embed_ok={allow_embed})"
-        )
-        if allow_embed and zone is not None and fresh:
-            # Deferred: this runs inside eventFilter (see _defer_placement).
-            self._defer_placement(self._embed, zone)
-        else:
-            self._persist_state()
-
-    def _tear_off(self, gp: QPoint) -> None:
-        w = max(480, self.width() or 480)
-        h = max(400, self.height() or 400)
-        self._drag_off = QPoint(w // 2, 15)
-        self._make_floating(QRect(gp - self._drag_off, QSize(w, h)))
-
-    def _drag_ghost_to(self, gp: QPoint) -> None:
-        """Show/move the translucent drag preview under the cursor.
-        FALLBACK ONLY: used when native window moves are proven broken
-        (``_native_move_ok is False``) and the panel is still embedded —
-        reparenting mid-gesture would kill Cocoa's mouse tracking, so
-        the ghost stands in and the panel relocates on release."""
-        g = self._ghost
-        if g is None:
-            pm = self.grab()
-            if pm.width() > 420:
-                pm = pm.scaledToWidth(
-                    420, Qt.TransformationMode.SmoothTransformation
-                )
-            g = QLabel(self._win)
-            g.setWindowFlags(
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-            )
-            g.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            g.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            g.setPixmap(pm)
-            g.resize(pm.size())
-            g.setWindowOpacity(0.55)
-            self._ghost = g
-        g.move(gp - QPoint(g.width() // 2, 12))
-        if not g.isVisible():
-            g.show()
-            g.raise_()
-
-    def _destroy_ghost(self) -> None:
-        if self._ghost is not None:
-            try:
-                self._ghost.hide()
-                self._ghost.deleteLater()
-            except Exception:
-                pass
-            self._ghost = None
-
-    _ZONE_CAPTIONS = {
-        "above": "⬆  Dock above",
-        "below": "⬇  Dock below",
-        "left": "⬅  Dock left",
-        "right": "➡  Dock right",
-    }
-
-    def _update_zone(self, gp: QPoint) -> None:
-        """Track which dock zone (if any) the cursor is over and preview
-        it. Detection: generous 40% bands along each edge of the editor
-        pane; the central 20%×20% — and anywhere outside the pane — is
-        an easy "stay floating". In a corner the proportionally nearer
-        edge wins. The preview shows the TRUE post-drop layout: the 45%
-        band _embed() will actually allocate."""
-        zone: str | None = None
-        ed_w = getattr(self._editor, "widget", None)
-        if ed_w is not None and ed_w.isVisible():
-            r = QRect(ed_w.mapToGlobal(QPoint(0, 0)), ed_w.size())
-            if r.contains(gp):
-                w, h = max(1, r.width()), max(1, r.height())
-                rel_x = gp.x() - r.left()
-                rel_y = gp.y() - r.top()
-                in_v = rel_y <= h * 0.4 or rel_y >= h * 0.6
-                in_h = rel_x <= w * 0.4 or rel_x >= w * 0.6
-                # In a corner, pick the edge the cursor is proportionally
-                # closest to.
-                dy = min(rel_y, h - rel_y) / h
-                dx = min(rel_x, w - rel_x) / w
-                if in_v and (not in_h or dy <= dx):
-                    zone = "above" if rel_y <= h * 0.4 else "below"
-                elif in_h:
-                    zone = "left" if rel_x <= w * 0.4 else "right"
-        if zone == self._active_zone:
-            return
-        self._active_zone = zone
-        if zone is None:
-            if self._zone_overlay is not None:
-                self._zone_overlay.hide()
-            return
-        try:
-            self._show_zone_overlay(zone, ed_w)
-        except Exception:
-            pass
-
-    def _show_zone_overlay(self, zone: str, ed_w: QWidget) -> None:
-        """Place the drop-zone preview. The overlay is ONE reusable
-        TOP-LEVEL window, not a child of the editor pane — during a
-        native drag the panel itself is a window floating over the
-        editor, and a child overlay would be covered by it."""
-        ov = self._zone_overlay
-        if ov is None:
-            ov = QWidget(None)
-            ov.setWindowFlags(
-                Qt.WindowType.Tool
-                | Qt.WindowType.FramelessWindowHint
-                | Qt.WindowType.WindowStaysOnTopHint
-                | Qt.WindowType.WindowTransparentForInput
-                | Qt.WindowType.WindowDoesNotAcceptFocus
-            )
-            ov.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-            ov.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            lab = QLabel(ov)
-            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            try:
-                from . import theme as _theme
-
-                _night = _theme.night_mode()
-                _fill = _theme.accent_rgba(_night, 0.30)
-                _edge = _theme.accent_rgba(_night, 0.85)
-            except Exception:
-                _fill = "rgba(58, 130, 247, 0.30)"
-                _edge = "rgba(58, 130, 247, 0.85)"
-            lab.setStyleSheet(
-                f"background: {_fill};"
-                f"border: 2px solid {_edge};"
-                "border-radius: 10px;"
-                "color: white; font-size: 20px; font-weight: 600;"
-            )
-            box = QVBoxLayout(ov)
-            box.setContentsMargins(0, 0, 0, 0)
-            box.addWidget(lab)
-            ov._klaus_zone_label = lab  # type: ignore[attr-defined]
-            self._zone_overlay = ov
-        try:
-            ov._klaus_zone_label.setText(
-                self._ZONE_CAPTIONS.get(zone, zone)
-            )
-        except Exception:
-            pass
-        origin = ed_w.mapToGlobal(QPoint(0, 0))
-        ew, eh = ed_w.width(), ed_w.height()
-        if zone in ("above", "below"):
-            band = max(60, int(eh * 0.45))
-            geo = QRect(
-                origin.x(),
-                origin.y() if zone == "above" else origin.y() + eh - band,
-                ew,
-                band,
-            )
-        else:
-            band = max(60, int(ew * 0.45))
-            geo = QRect(
-                origin.x() if zone == "left" else origin.x() + ew - band,
-                origin.y(),
-                band,
-                eh,
-            )
-        ov.setGeometry(geo)
-        ov.show()
-        ov.raise_()
-
-    def _hide_zone(self) -> None:
-        self._active_zone = None
-        if self._zone_overlay is not None:
-            self._zone_overlay.hide()
 
     # ---- per-tab ✕ ----
 
     def _decorate_tab(self, idx: int) -> None:
+        # Both call sites (session restore, _on_sidebar_loaded) route
+        # through here, so this is the one place a tab's tooltip needs
+        # setting: the FULL name, since ElideMiddle can only show part
+        # of it once tabs saturate the bar (final-review M9).
+        self._tabs.setTabToolTip(idx, self._tabs.tabText(idx))
         btn = QToolButton(self._tabs)
         btn.setText("✕")
         btn.setAutoRaise(True)
@@ -2025,7 +1646,9 @@ class _PdfTabContainer(QWidget):
             self._syncing = False
         self._persist()
         self._set_active_pointer(name)
+        self._update_record_enabled()
 
+    @_guarded
     def _on_tab_changed(self, idx: int) -> None:
         if self._syncing or idx < 0:
             return
@@ -2065,6 +1688,7 @@ class _PdfTabContainer(QWidget):
                 pdf_handler.clear_active_pdf(USER_FILES)
             except Exception:
                 pass
+            self._update_record_enabled()
             self.panel_hide()
 
     def close_tab(self, name: str) -> None:
@@ -2074,24 +1698,28 @@ class _PdfTabContainer(QWidget):
 
     # ---- ＋ menu / placement ----
 
-    def _show_add_menu(self) -> None:
+    @_guarded
+    def _show_add_menu(self, *_args) -> None:
+        # *_args for the same reason as panel_hide: ＋ is a `clicked`
+        # button and @_guarded's wrapper accepts every signal argument.
         menu = QMenu(self)
         open_names = set(self._tab_names())
         stored: list[str] = []
         # Most recently used first (pdf_handler.list_by_recency ranks by
         # last_used, falling back to contexts/<safe>.txt mtime — ingest
         # time — rather than pdfs/<safe>.pdf's mtime, which shutil.copy2
-        # preserves from the source file). Same source deck_curate uses.
+        # preserves from the source file).
         for base in pdf_handler.list_by_recency(USER_FILES):
             if base in open_names:
                 continue
             if pdf_handler.pdf_path_for(USER_FILES, base):
                 stored.append(base)
-        # No cap, unlike deck_curate's curate-from-recent menu (top 20).
-        # That one is a shortcut with the Library as the full path; THIS
-        # menu is the only way to open a stored PDF in the editor's
-        # viewer, so truncating it would strand every PDF past the top 20
-        # with no route in. QMenu scrolls natively when it overflows.
+        # No cap. This menu is the only way to open a stored PDF in the
+        # editor's viewer, so truncating it would strand every PDF past
+        # the cut with no route in. (The deck screen used to carry a
+        # top-20 curate-from-recent menu, the shortcut this was
+        # contrasted against; K-146 removed it and the Library is the
+        # full path now.) QMenu scrolls natively when it overflows.
         for base in stored:
             act = menu.addAction(_pdf_display_name(base))
             act.triggered.connect(
@@ -2112,8 +1740,8 @@ class _PdfTabContainer(QWidget):
 
 
 def on_editor_did_init(editor: Editor) -> None:
-    """Attach the tabbed PDF viewer panel (``_PdfTabContainer``) that
-    docks above/below the editor pane or floats as its own window. The
+    """Attach the tabbed PDF viewer panel (``PdfDock``) — a native dock
+    of the host window, left, right, bottom or floating over it. The
     panel starts hidden and is toggled via the Library... button, or
     auto-shown when the user opens a PDF.
     """
@@ -2126,25 +1754,30 @@ def on_editor_did_init(editor: Editor) -> None:
             return
         pdf_handler.ensure_active_pdf(USER_FILES)
 
-
-        if not hasattr(editor, "_klausmate_target_field_index"):
-            editor._klausmate_target_field_index = None  # type: ignore[attr-defined]
         # Default state for the page-aware retrieval helper.
         if not hasattr(editor, "_klausmate_active_pdf"):
             editor._klausmate_active_pdf = None  # type: ignore[attr-defined]
-        # The viewer panel needs a top-level Anki window to float against
-        # and an editor pane to dock around. Both the Add window and the
-        # Browser qualify; the Browser's standalone edit-current window
-        # does too (any QWidget window works — no dock APIs involved).
+        # The panel is a QDockWidget now, so its host must be a
+        # QMainWindow: Anki's three editor windows — Browse, Add Cards
+        # and Edit Current — all are (verified against Anki 26.8.1 with
+        # `strings` on editcurrent.pyc: zero QDialog, one QMainWindow;
+        # `Ui_Dialog` is only the generated form's class name — final-
+        # review I1) and all get the dock. Only an editor whose window
+        # genuinely is not a QMainWindow (a third-party add-on's) gets
+        # no panel rather than a broken one, and the Library... button
+        # says so.
         parent_window = getattr(editor, "parentWindow", None)
         if parent_window is None:
+            return
+        if not hasattr(parent_window, "addDockWidget"):
+            print("[klausmate] PDF panel needs a QMainWindow host — skipped")
             return
         if getattr(editor, "_klausmate_pdf_tabs", None) is not None:
             return
 
         def _install_panel() -> None:
-            # Deferred by one event-loop tick so the window's layout is
-            # fully constructed before we wrap the editor pane.
+            # Deferred by one event-loop tick so the window's own docks
+            # and layout are fully constructed before ours joins them.
             try:
                 if getattr(editor, "_klausmate_pdf_tabs", None) is not None:
                     return
@@ -2154,7 +1787,7 @@ def on_editor_did_init(editor: Editor) -> None:
                 existing = getattr(
                     parent_window, "_klausmate_pdf_container", None
                 )
-                if isinstance(existing, _PdfTabContainer):
+                if isinstance(existing, PdfDock):
                     sidebar = existing._sidebar
                     editor._klausmate_pdf_tabs = existing  # type: ignore[attr-defined]
                     editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
@@ -2166,8 +1799,7 @@ def on_editor_did_init(editor: Editor) -> None:
                     return
 
                 sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
-                container = _PdfTabContainer(editor, sidebar, parent_window)
-                container.hide()  # placed + shown on first toggle/chip
+                container = PdfDock(editor, sidebar, parent_window)
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container
@@ -2200,22 +1832,6 @@ mw.addonManager.setWebExports(
 mw.addonManager.setConfigAction(__name__, open_config)
 
 
-def _shutdown_managed_server() -> None:
-    """Stop an `ollama serve` we spawned/adopted. A reused user-owned
-    Ollama is never touched (ServerManager enforces that)."""
-    try:
-        server_manager.stop()
-    except Exception as e:
-        print(f"[klausmate] managed server shutdown failed: {e}")
-
-
-# aboutToQuit (not profile_will_close — that fires on profile *switches*
-# and the server must survive those) plus atexit as a crash-adjacent backup.
-if getattr(mw, "app", None) is not None:
-    mw.app.aboutToQuit.connect(_shutdown_managed_server)
-atexit.register(_shutdown_managed_server)
-
-
 gui_hooks.webview_will_set_content.append(on_webview_will_set_content)
 gui_hooks.webview_did_receive_js_message.append(on_js_message)
 gui_hooks.editor_will_show_context_menu.append(on_editor_context_menu)
@@ -2237,12 +1853,59 @@ try:
 except Exception as _e:
     print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 
+
+def _stop_assistant_on_profile_close() -> None:
+    """Mirror of _start_assistant_endpoint (registered on profile_did_open,
+    below) — but ORDER matters here in a way it doesn't there: the dock's
+    own host (the child `claude` process) must close BEFORE the endpoint
+    it talks to goes down, never after, or a turn still in flight could
+    have its MCP tool call hit a connection that is already refused.
+
+    Registration order is the primary fix (gui_hooks fires listeners in
+    append order): this function's own .append() call, further down this
+    file, is deliberately placed AFTER assistant_dock.setup() — which
+    registers assistant_dock._teardown (the function that actually calls
+    dock.shutdown() -> self._host.close()) on this SAME hook — so
+    _teardown always fires first in the real profile-close pass.
+
+    This body is belt-and-braces on top of that, in case setup() itself
+    never ran (a guarded import failure at import time, say) or some
+    future edit reorders the two .append() calls again without noticing:
+    it calls _teardown() explicitly FIRST — the exact function setup()
+    would otherwise register, safe to call twice since it is a no-op once
+    _dock_instance is already None — then close_assistant() (a no-op by
+    then too, in the common case; kept as its own independent guarded
+    step), then stops the endpoint LAST, always.
+    """
+    try:
+        from . import assistant_dock
+
+        assistant_dock._teardown()
+    except Exception as exc:
+        print(f"[klausmate] assistant dock teardown (belt-and-braces) failed: {type(exc).__name__}: {exc}")
+    try:
+        from . import assistant_dock
+
+        assistant_dock.close_assistant()
+    except Exception as exc:
+        print(f"[klausmate] assistant dock close failed: {type(exc).__name__}: {exc}")
+    try:
+        from . import anki_endpoint
+
+        anki_endpoint.stop_for_profile()
+    except Exception as exc:
+        print(f"[klausmate] assistant endpoint stop failed: {type(exc).__name__}: {exc}")
+
+
 def _apply_color_theme() -> None:
     """Overlay the user's accent preset onto every later palette() call
-    (SynapsePro's mechanism, K-107). Must run BEFORE any Klaus surface
-    draws in this profile — profile_did_open precedes the toolbar's
-    first webview_will_set_content, so the top bar's baked palettes
-    already carry the accent."""
+    (SynapsePro's mechanism, K-107). Runs on profile_did_open — before
+    the deck screen and its panels draw, but NOT before the top
+    toolbar: Anki draws that once in finish_ui_setup(), before any
+    profile opens (verified in aqt/main.py), so the bar's first sheet
+    bakes the default accent. top_bar._on_profile_open_redraw shares
+    this hook and redraws the bar a tick later; without it the star
+    launched blue on every restart (live repro, 2026-08-30)."""
     try:
         from . import theme as _theme
 
@@ -2254,6 +1917,16 @@ def _apply_color_theme() -> None:
     except Exception as _exc:
         print(f"[klausmate] colour theme failed: {_exc}")
 
+
+# The Library screen must step aside whenever Anki moves to one of its own
+# states, or it sits on top of the deck list forever — Anki changes state
+# without knowing another widget is covering its webviews.
+try:
+    from . import library_tab as _library_tab
+
+    _library_tab.install_hooks()
+except Exception as _e:
+    print(f"[klausmate] library tab hooks not installed: {_e}")
 
 gui_hooks.profile_did_open.append(_apply_color_theme)
 gui_hooks.profile_did_open.append(_migrate_config)
@@ -2290,18 +1963,41 @@ gui_hooks.profile_did_open.append(_library_rescan_on_profile_open)
 gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
+
+
+def _start_assistant_endpoint() -> None:
+    """Klaus's own AnkiConnect/MCP endpoint (anki_endpoint.py), bound for
+    the life of this profile — mw.col only exists once profile_did_open
+    fires, which is why this is a profile hook rather than the top-level
+    setup() call below (that one only needs mw, which exists earlier).
+    Guarded: a failed bind must not cost the rest of profile_did_open,
+    and the assistant dock already copes with anki_endpoint.current()
+    being None (chat still works, just without Anki tools — see
+    assistant_dock._on_init's mcp_ok branch)."""
+    try:
+        from . import anki_endpoint
+
+        anki_endpoint.start_for_profile()
+    except Exception as exc:
+        print(f"[klausmate] assistant endpoint start failed: {type(exc).__name__}: {exc}")
+
+
+gui_hooks.profile_did_open.append(_start_assistant_endpoint)
 gui_hooks.editor_did_init.append(on_editor_did_init)
 if hasattr(gui_hooks, "browser_will_show"):
     gui_hooks.browser_will_show.append(on_browser_will_show)
 
-# Deck-screen curation and the PDF drive install independently — a failure
-# in one must not cost the user the other (or the editor features above).
+# The deck-screen PDF import surface and the Library install
+# independently — a failure in one must not cost the user the other (or
+# the editor features above). The module is import-only since K-146 (the
+# drop wrap, the drop square, and its file picker; nothing it installs
+# touches a deck), and named pdf_drop for it since K-151.
 try:
-    from . import deck_curate as _deck_curate
+    from . import pdf_drop as _pdf_drop
 
-    _deck_curate.setup()
+    _pdf_drop.setup()
 except Exception as _e:
-    print(f"[klausmate] deck curate setup failed: {type(_e).__name__}: {_e}")
+    print(f"[klausmate] pdf drop setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import pdf_drive as _pdf_drive
@@ -2309,6 +2005,100 @@ try:
     _pdf_drive.setup()
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
+
+# The assistant dock's Tools-menu action + Ctrl+Shift+K shortcut: a plain
+# QAction on mw, live regardless of profile state (see assistant_dock.setup's
+# own docstring), so — like _pdf_drive.setup() just above — this runs once
+# at import time rather than waiting on a profile hook. install_menu() is
+# only REGISTERED against main_window_did_init above (it fires later, once
+# Anki finishes constructing the main window) — so this synchronous call,
+# reached during the same module import, always completes first and
+# menu_action() already answers the real QAction by the time install_menu()
+# actually runs.
+try:
+    from . import assistant_dock
+
+    assistant_dock.setup()
+except Exception as _e:
+    print(f"[klausmate] assistant dock setup failed: {type(_e).__name__}: {_e}")
+
+# Registered here — AFTER assistant_dock.setup() above, not beside
+# _stop_assistant_on_profile_close's own definition further up this file
+# — on purpose: gui_hooks fires profile_will_close listeners in append
+# order, and setup() is what registers assistant_dock._teardown (closes
+# the child claude process) on this same hook. This ordering is what
+# makes the dock's host close before _stop_assistant_on_profile_close
+# stops the endpoint it talks to; see that function's own docstring.
+gui_hooks.profile_will_close.append(_stop_assistant_on_profile_close)
+
+# The index runner: profile teardown only. Everything else about it is
+# demand-driven (an import, the Library's button, a model change), so
+# there is no hook to register until a job exists.
+try:
+    from . import index_queue as _index_queue
+
+    _index_queue.setup()
+except Exception as _e:
+    print(f"[klausmate] index queue setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import lecture_view as _lecture_view
+
+    _lecture_view.setup()
+except Exception as _e:
+    print(f"[klausmate] lecture view setup failed: {type(_e).__name__}: {_e}")
+
+
+def _start_lecture_uploader() -> None:
+    try:
+        uploader()
+    except Exception as exc:
+        print(f"[klausmate] lecture uploader start failed: {type(exc).__name__}: {exc}")
+
+
+gui_hooks.profile_did_open.append(_start_lecture_uploader)
+
+
+def _stop_lecture_uploader() -> None:
+    """Ruling 4: stop any in-flight recorder BEFORE the uploader — a
+    Recorder mid-chunk enqueues into it, so tearing the queue down first
+    would orphan that chunk's WAV against a dead worker. ``_active_recorders``
+    covers every dock (PdfDock instances close over their own; the Lecture
+    dock's singleton is one more), not just whichever one this profile
+    happens to remember.
+
+    Bumping ``_index_when_idle_gen`` here (fix round 1) is what stops a
+    drain poll armed against THIS profile's uploader from outliving it:
+    the queue it is watching dies with the profile, but its daemon worker
+    may still finish the chunk it holds, and a poll that then saw
+    ``pending() == 0`` would request a re-index by display name in
+    whatever profile opened next.
+
+    Dropping the singleton right after ``stop()`` is only safe because
+    ``Uploader.stop`` now closes the uploader before it enqueues its
+    sentinel and then waits (bounded, ``STOP_JOIN_S``) for the worker: a
+    chunk still mid-transcription appends nothing and keeps its WAV for
+    the next profile's ``requeue_leftovers`` instead of writing a page
+    record behind a profile that is already gone (PR #4 second
+    re-review)."""
+    global _uploader, _index_when_idle_gen
+    for rec in list(_active_recorders):
+        try:
+            rec.stop()
+        except Exception as exc:
+            print(f"[klausmate] recorder stop at profile close failed: {type(exc).__name__}: {exc}")
+    _active_recorders.clear()
+    if _uploader is not None:
+        try:
+            _uploader.stop()
+        except Exception as exc:
+            print(f"[klausmate] lecture uploader stop failed: {type(exc).__name__}: {exc}")
+        _uploader = None
+    _index_when_idle_gen += 1
+    _index_when_idle.clear()
+
+
+gui_hooks.profile_will_close.append(_stop_lecture_uploader)
 
 try:
     from . import top_bar as _top_bar
@@ -2323,6 +2113,20 @@ try:
     _browse_highlight.setup()
 except Exception as _e:
     print(f"[klausmate] browse highlight setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import browse_retention as _browse_retention
+
+    _browse_retention.setup()
+except Exception as _e:
+    print(f"[klausmate] browse retention setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import browse_toolkit as _browse_toolkit
+
+    _browse_toolkit.setup_hooks()
+except Exception as _e:
+    print(f"[klausmate] browse toolkit setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import heatmap as _heatmap
@@ -2341,6 +2145,13 @@ try:
     _dashboard.setup()
 except Exception as _e:
     print(f"[klausmate] dashboard setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    from . import window_chrome as _window_chrome
+
+    _window_chrome.setup()
+except Exception as _e:
+    print(f"[klausmate] window chrome setup failed: {type(_e).__name__}: {_e}")
 
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is

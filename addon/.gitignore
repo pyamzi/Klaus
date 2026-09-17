@@ -21,9 +21,13 @@ board/.lock
 board/*.tmp
 board/attachments/*.part
 
+# ─── Service venv ────────────────────────────────────────────────────────────
+service/.venv/
+
 # ─── Noise ────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 .DS_Store
 .claude/worktrees/
 .cursor/
+service/klausplus.egg-info/

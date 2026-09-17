@@ -18,6 +18,7 @@ from aqt.qt import (
     QAbstractItemView,
     QApplication,
     QEvent,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QKeySequence,
@@ -31,6 +32,7 @@ from aqt.qt import (
     QPointF,
     QRect,
     QRectF,
+    QScrollArea,
     QShortcut,
     QSize,
     QSizePolicy,
@@ -529,25 +531,36 @@ class _SelectionOverlay(QWidget):
         ):
             return
         painter = QPainter(self)
-        if QColor is not None and self._highlight_rects:
-            # Persistent highlights go beneath everything else:
-            # translucent, Preview-style, in each record's own color.
-            painter.setPen(Qt.PenStyle.NoPen)
-            for rect, color in self._highlight_rects:
-                painter.setBrush(color)
-                painter.drawRect(rect)
-        if QColor is not None and self._text_boxes:
-            self._paint_texts(painter)
-        if QColor is not None and self._rects:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(_selection_highlight_color())
-            for rect in self._rects:
-                painter.drawRect(rect)
-        if self._marquee is not None:
-            self._paint_marquee(painter)
-        if QColor is not None and self._note_boxes:
-            self._paint_notes(painter)
-        painter.end()
+        try:
+            if QColor is not None and self._highlight_rects:
+                # Persistent highlights go beneath everything else:
+                # translucent, Preview-style, in each record's own color.
+                painter.setPen(Qt.PenStyle.NoPen)
+                for rect, color in self._highlight_rects:
+                    painter.setBrush(color)
+                    painter.drawRect(rect)
+            if QColor is not None and self._text_boxes:
+                self._paint_texts(painter)
+            if QColor is not None and self._rects:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(_selection_highlight_color())
+                for rect in self._rects:
+                    painter.drawRect(rect)
+            if self._marquee is not None:
+                self._paint_marquee(painter)
+            if QColor is not None and self._note_boxes:
+                self._paint_notes(painter)
+        except Exception as exc:
+            # A drawing bug must degrade to "the overlay didn't draw",
+            # never to an exception escaping mid-paint (stdout, not
+            # Anki's error dialog — a repainting widget would spam).
+            print(f"[klausmate] overlay paint failed: {exc}")
+        finally:
+            # ALWAYS close the painter, however the block above exits: a
+            # QPainter left live on a widget corrupts the window's
+            # backing store and segfaults Qt on the next flush — the
+            # md3_switch 2026-08-26 crash spree in one sentence.
+            painter.end()
 
     def _paint_texts(self, painter: Any) -> None:
         """Mirrored outside text (K-078/K-083): each record's contents
@@ -667,6 +680,11 @@ class PdfViewer(QWidget):
         self._select_start: tuple[int, QPointF] | None = None
         self._select_end: tuple[int, QPointF] | None = None
         self._selection_text = ""
+        # Task 10 (K-196): plain callback attribute, same shape as
+        # on_page_changed — set by PdfSidebar after construction (never
+        # passed into __init__, since only the native renderer has one),
+        # so it must default to None and every call site guard it.
+        self.on_selection_changed: Callable[[str], None] | None = None
         self._pdf_selection: Any = None
         self._overlay: _SelectionOverlay | None = None
         self._viewport: QWidget | None = None
@@ -754,6 +772,11 @@ class PdfViewer(QWidget):
         self._find_debounce: Any = None
         self._search_jump_pending = False
         self._current_search_index = -1
+        # Fallback footer for the page indicator (K-153) — declared here
+        # as None, like the find bar and the strip above, so every other
+        # code path guards on None instead of hasattr. Built at the end
+        # of __init__, once the view it sits under exists.
+        self._page_bar: QWidget | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -797,6 +820,25 @@ class PdfViewer(QWidget):
             except Exception:
                 self._pdf_view.setPageMode(QPdfView.PageMode.SinglePage)
             self._pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            # A documentless QPdfView paints its viewport in the palette's
+            # Dark/Base roles — Qt's mid-grey, a slab between two dark panes
+            # (K-178). Point every role it might read at the bg token, a
+            # step darker than the chrome the panels wear (Pouya: "the middle
+            # area for the PDF to be darker"). Roles, not a stylesheet: the
+            # view paints the gap between pages itself, from its palette.
+            try:
+                from . import theme as _theme
+
+                ground = QColor(_theme.palette(_theme.night_mode())["bg"])
+                pal = self._pdf_view.palette()
+                for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base,
+                             QPalette.ColorRole.Dark, QPalette.ColorRole.Mid):
+                    pal.setColor(role, ground)
+                self._pdf_view.setPalette(pal)
+                self._pdf_view.viewport().setPalette(pal)
+                self._pdf_view.viewport().setAutoFillBackground(True)
+            except Exception as exc:
+                print(f"[klausmate] viewer ground failed: {exc}")
             try:
                 nav = self._pdf_view.pageNavigator()
                 if hasattr(nav, "currentPageChanged"):
@@ -944,6 +986,63 @@ class PdfViewer(QWidget):
             self._pdf_view = None
             outer.addWidget(QLabel("(PDF view unavailable)"), 1)
 
+        # Fallback slot for the page indicator (K-153). The label above
+        # is normally ADOPTED into a host's header bar — but only the
+        # editor panel's tab container does that, so in the Library and
+        # the lecture dock the page number was built, hidden, and never
+        # shown: no readout, and click-to-go-to-page unreachable (only
+        # Cmd+Opt+G still worked). This slim right-aligned footer row is
+        # where the label goes when nothing claims it. It stays EMPTY
+        # and hidden at construction — the label is only moved in from
+        # showEvent, by which time an adopting host has already taken
+        # it — so we never race a host for the widget, and the viewer
+        # stays chrome-free wherever a host does provide a header.
+        try:
+            bar = QWidget(self)
+            row = QHBoxLayout(bar)
+            row.setContentsMargins(8, 2, 8, 3)
+            row.setSpacing(0)
+            row.addStretch(1)
+            bar.setVisible(False)
+            outer.addWidget(bar)
+            self._page_bar = bar
+        except Exception as exc:
+            print(f"[klausmate] in-place page bar unavailable: {exc}")
+
+    def _show_page_label_in_place(self) -> None:
+        """Put the page indicator in the viewer's own footer when no
+        host adopted it (K-153).
+
+        Adoption IS a reparent — ``_PanelBar.__init__`` calls
+        ``row.addWidget(page_label)``, which makes the bar the label's
+        parent — so "is it still parented to us" is the entire test, and
+        it needs no cooperation from any host. Re-run on every show, so
+        a host that adopts later simply takes the label back out of our
+        row and the row goes away.
+        """
+        bar = getattr(self, "_page_bar", None)
+        if bar is None or getattr(self, "_page_label", None) is None:
+            return
+        try:
+            parent = self._page_label.parentWidget()
+            if parent is not self and parent is not bar:
+                # A host owns the label; keep our footer out of the way.
+                bar.setVisible(False)
+                return
+            if parent is not bar:
+                # Free-floating child of the viewer, in no layout yet —
+                # so this reparent is silent (a widget already IN a
+                # layout would make Qt warn and steal it).
+                bar.layout().addWidget(self._page_label)
+            self._update_page_label(self._current_page())
+            has_pages = self._page_count > 0
+            self._page_label.setVisible(has_pages)
+            bar.setVisible(has_pages)
+        except RuntimeError:
+            pass  # adopted label died with its host header (see below)
+        except Exception as exc:
+            print(f"[klausmate] in-place page label failed: {exc}")
+
     def set_page_texts(self, texts: list[str]) -> None:
         self._page_texts = texts or []
 
@@ -974,6 +1073,9 @@ class PdfViewer(QWidget):
             self._page_count = 0
         self._sync_overlay_geometry()
         self._update_page_label(self._current_page())
+        # A tab switch / first load while already on screen is the other
+        # moment the in-place footer's answer can change (0 pages -> n).
+        self._show_page_label_in_place()
         try:
             self._thumb_cache.clear()
         except Exception:
@@ -1334,6 +1436,11 @@ class PdfViewer(QWidget):
         self._drag_selecting = False
         if self._overlay is not None:
             self._overlay.set_rects([])
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
 
     def _update_selection(self) -> None:
         if (
@@ -1385,6 +1492,11 @@ class PdfViewer(QWidget):
         self._selection_page_rects = page_rects
         if self._overlay is not None:
             self._overlay.set_rects(rects)
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
 
     # ------------------------------------------------------------------
     # Marquee copy-as-image (Option/Alt+drag, plan A2)
@@ -2238,6 +2350,11 @@ class PdfViewer(QWidget):
         self._selection_page_rects = page_rects
         if self._overlay is not None:
             self._overlay.set_rects(vp_rects)
+        if self.on_selection_changed is not None:
+            try:
+                self.on_selection_changed(self._selection_text)
+            except Exception as exc:
+                print(f"[klausmate] on_selection_changed failed: {exc}")
         return True
 
     def _nearest_page_at(self, vp_pos: QPoint) -> int | None:
@@ -2443,7 +2560,7 @@ class PdfViewer(QWidget):
         copy_act = menu.addAction("Copy")
         copy_act.setEnabled(bool(self._selection_text.strip()))
         # Re-copy a persisted Option/Alt+drag marquee (plan A2).
-        marquee_act = menu.addAction("Copy selection as image")
+        marquee_act = menu.addAction("Copy Selection as Image")
         marquee_act.setEnabled(self._marquee_rect_pts is not None)
         # Persistent highlight from the live selection (plan B). Stays
         # disabled on image-only/scanned PDFs — no text selection there.
@@ -2490,22 +2607,22 @@ class PdfViewer(QWidget):
                     note_act = menu.addAction(
                         "Edit note…" if has_note else "Add note…"
                     )
-                    remove_hl_act = menu.addAction("Remove highlight")
+                    remove_hl_act = menu.addAction("Remove Highlight")
         fallback = (
             self._page_texts[page] if 0 <= page < len(self._page_texts) else ""
         )
-        page_act = menu.addAction("Copy page text")
+        page_act = menu.addAction("Copy Page Text")
         page_act.setEnabled(bool(fallback.strip()))
         # Discoverability twin of Cmd/Ctrl+double-click (A2).
-        slide_act = menu.addAction("Copy slide as image")
+        slide_act = menu.addAction("Copy Slide as Image")
         slide_act.setEnabled(self._doc is not None and self._page_count > 0)
         menu.addSeparator()
         # Zoom lived only on ⌘+/−/0 with no visible affordance anywhere
         # (critique P3) — the menu is its discoverable twin. The "\t"
         # right-aligns the key hint without registering a shortcut.
-        zoom_in_act = menu.addAction("Zoom in\t⌘+")
-        zoom_out_act = menu.addAction("Zoom out\t⌘−")
-        zoom_reset_act = menu.addAction("Actual size\t⌘0")
+        zoom_in_act = menu.addAction("Zoom In\t⌘+")
+        zoom_out_act = menu.addAction("Zoom Out\t⌘−")
+        zoom_reset_act = menu.addAction("Actual Size\t⌘0")
         chosen = menu.exec(self._pdf_view.mapToGlobal(pos))
         if chosen is None:
             return
@@ -4014,6 +4131,10 @@ class PdfViewer(QWidget):
                 self._update_marquee_overlay()
         except Exception:
             pass
+        # Adoption (or not) is settled by now — every host that wants the
+        # page indicator has taken it during its own construction, which
+        # runs before the panel is ever shown.
+        self._show_page_label_in_place()
         self._arm_thumb_render()
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
@@ -4116,6 +4237,24 @@ class PdfSidebar(QWidget):
 
     def __init__(self, editor: Editor, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        # The panel styles ITSELF (K-153), exactly as the find bar and
+        # the thumb strip already do — those two are the only parts of
+        # the viewer that looked identical in all three hosts, and that
+        # is precisely because they never depended on which window they
+        # landed in. This widget used to carry no sheet and no styled
+        # background, so it painted nothing and the host showed through
+        # every gap. Applied here, on the one widget every host wraps,
+        # rather than in any host: no host can forget it, both renderers
+        # (QPdfView and pdf.js) sit inside it, and a fourth host gets
+        # the look for free. See theme.pdf_panel_qss for each rule.
+        try:
+            from . import theme as _theme
+
+            self.setObjectName("KlausPdfPanel")
+            self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            self.setStyleSheet(_theme.pdf_panel_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] pdf panel theme failed: {exc}")
         self._editor = editor
         self._name: Optional[str] = None
         # External-change fingerprint of the loaded working PDF (K-078).
@@ -4127,6 +4266,13 @@ class PdfSidebar(QWidget):
         self._doc: Optional[QPdfDocument] = None
         self._page_count = 0
         self._current_page = 0
+        # Task 10 (K-196) fix round 1: which document _on_pdfjs_count's
+        # eventual callback belongs to. Set in load_pdf's pdf.js branch
+        # at the same moment as self._name; _on_pdfjs_count compares the
+        # two by IDENTITY (not just "is self._name truthy") before
+        # touching viewer_context, so a late count for a document this
+        # sidebar has since left cannot resurrect it.
+        self._pending_count_name: Optional[str] = None
         # Set by the tab container so every load — regardless of which
         # call site triggered it — is reflected in the tab bar.
         self.on_loaded: Optional[Callable[[str], None]] = None
@@ -4162,6 +4308,7 @@ class PdfSidebar(QWidget):
                 on_page_changed=self.notify_page_changed,
                 parent=self,
             )
+            self._viewer.on_selection = self._report_selection
             outer.addWidget(self._viewer, 1)
             self._fallback_label = None
         elif PDF_VIEWER_AVAILABLE and QPdfDocument is not None:
@@ -4170,6 +4317,7 @@ class PdfSidebar(QWidget):
                 on_page_changed=self.notify_page_changed,
                 parent=self,
             )
+            self._viewer.on_selection_changed = self._report_selection
             outer.addWidget(self._viewer, 1)
             self._fallback_label = None
         else:
@@ -4184,8 +4332,220 @@ class PdfSidebar(QWidget):
             self._fallback_label.setWordWrap(True)
             outer.addWidget(self._fallback_label, 1)
 
+        # Transcript strip (Plan 2 D6, K-258): a Qt widget under the page
+        # for the native renderer; pdf.js draws its own copy of this same
+        # strip via the bridge instead — a docked footer that is a
+        # SIBLING of `#pages`, never inside a page div (K-258 fix round
+        # 1: in-flow inside the fixed-height .page was painted over by
+        # the next page, which is why the footer touches no page
+        # geometry). set_transcript below dispatches on which one
+        # applies. Every attribute exists
+        # — as None — even when the strip cannot be built, matching this
+        # file's own convention for optional UI (the find bar, the
+        # thumbnail strip above).
+        self._transcript: QWidget | None = None
+        self._transcript_chevron: QToolButton | None = None
+        self._transcript_scroll: QScrollArea | None = None
+        self._transcript_label: QLabel | None = None
+        self._transcript_unsubscribe: Callable[[], None] | None = None
+        # Latched by cleanup() before it unsubscribes: a page_store
+        # notification deferred through _run_on_main can still be sitting
+        # in Qt's event queue when this sidebar is torn down (PR #4 fifth
+        # re-review). One-way, like the uploader's own _closed — every
+        # teardown path here is final.
+        self._torn_down = False
+        if self._renderer != "pdfjs":
+            try:
+                self._build_transcript_strip(outer)
+            except Exception as exc:
+                print(f"[klausmate] transcript strip unavailable: {exc}")
+        try:
+            from . import page_store as _page_store
+
+            self._transcript_unsubscribe = _page_store.subscribe(
+                self._on_page_store_notify
+            )
+        except Exception as exc:
+            print(f"[klausmate] transcript subscribe failed: {exc}")
+
+    def _build_transcript_strip(self, outer: QVBoxLayout) -> None:
+        """Build the collapsible native-renderer transcript strip
+        (hidden until ``set_transcript`` has text to show): a
+        "Transcript" chevron over a capped-height ``QScrollArea``
+        holding the page's spoken-over text. Steals no focus and binds
+        no shortcut of its own — a plain checkable button and a plain
+        label."""
+        from . import theme as _theme
+
+        strip = QWidget(self)
+        strip.setObjectName("KlausTranscriptStrip")
+        strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        strip.setStyleSheet(_theme.transcript_strip_qss(_theme.night_mode()))
+        lay = QVBoxLayout(strip)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(2)
+
+        chevron = QToolButton(strip)
+        chevron.setCheckable(True)
+        chevron.setChecked(True)
+        chevron.setText("▾ Transcript")
+        chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+        chevron.setAutoRaise(True)
+        # Fix round 1 (M1): DECLARED, not just defaulted — Qt's own
+        # QToolButton default (TabFocus, no click-focus bit) already
+        # keeps a mouse click here off the viewer's focus chain, but a
+        # default is not an invariant. This file's own established
+        # pattern for exactly this "don't let an ancillary widget steal
+        # the viewer's shortcuts" concern (see the thumbnail list at
+        # `lst.setFocusPolicy(Qt.FocusPolicy.NoFocus)`).
+        chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        chevron.toggled.connect(self._on_transcript_chevron_toggled)
+        lay.addWidget(chevron)
+
+        scroll = QScrollArea(strip)
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(120)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
+        # PR #4 sixth review: a scroll area paints its VIEWPORT child,
+        # not itself, so a viewport left filling from the palette would
+        # draw the transcript body as an opaque default rectangle on top
+        # of the strip's chrome. The sheet's own
+        # `QWidget#KlausTranscriptStrip QScrollArea { background:
+        # transparent }` already clears it (pinned by the dark-mode pixel
+        # read in tests/test_transcript_strip.py) — this is the belt to
+        # that sheet's braces, so narrowing the rule later cannot quietly
+        # bring the rectangle back.
+        scroll.viewport().setAutoFillBackground(False)
+        label = QLabel("", scroll)
+        # PR #4 third re-review: transcript text is UNTRUSTED — a
+        # microphone through a transcription API — and QLabel.setText
+        # defaults to AutoText, which sniffs the string and renders
+        # anything markup-shaped as markup (an <img>, a link). Declared
+        # once here so every set_transcript below inherits it; the
+        # pdf.js half of this same strip gets it from writing with
+        # textContent.
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setWordWrap(True)
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
+        scroll.setWidget(label)
+        lay.addWidget(scroll)
+
+        strip.setVisible(False)
+        outer.addWidget(strip)
+        self._transcript = strip
+        self._transcript_chevron = chevron
+        self._transcript_scroll = scroll
+        self._transcript_label = label
+
+    def _on_transcript_chevron_toggled(self, checked: bool) -> None:
+        if self._transcript_scroll is not None:
+            self._transcript_scroll.setVisible(checked)
+        if self._transcript_chevron is not None:
+            self._transcript_chevron.setText(
+                "▾ Transcript" if checked else "▸ Transcript"
+            )
+
+    def set_transcript(self, page_index: int, text: str) -> None:
+        """Show *text* as *page_index*'s transcript: the native strip
+        when this sidebar built one, or (pdf.js) push it into the page
+        itself over the bridge — the ``klausSetTranscript`` call.
+        ``page_index`` mirrors that bridge call's own signature;
+        callers (``_refresh_transcript``, the page_store subscription)
+        already only reach this for the sidebar's own current page.
+        """
+        text = str(text or "").strip()
+        if self._transcript is not None and self._transcript_label is not None:
+            self._transcript_label.setText(text)
+            self._transcript.setVisible(bool(text))
+            return
+        if self._renderer == "pdfjs" and self._viewer is not None:
+            try:
+                self._viewer.set_transcript(page_index, text)
+            except Exception as exc:
+                print(f"[klausmate] pdfjs transcript push failed: {exc}")
+
+    def _refresh_transcript(self) -> None:
+        """Pull the current page's transcript out of page_store and
+        show it (or hide the strip when there is none) — the one path
+        both a page change and a page_store notification for this
+        PDF funnel through. The SLIDE text is deliberately excluded:
+        this strip is what was SAID over the page, not the page itself."""
+        text = ""
+        if self._name is not None:
+            try:
+                from . import page_store as _page_store
+                from . import pdf_handler as _pdf_handler
+                from . import USER_FILES  # type: ignore
+
+                path = _pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
+                rec = _page_store.load_record(
+                    USER_FILES, self._name, path, self._current_page
+                )
+                text = "\n".join(
+                    str(seg.get("text") or "").strip()
+                    for seg in rec.get("segments") or []
+                    if str(seg.get("text") or "").strip()
+                )
+            except Exception as exc:
+                print(f"[klausmate] transcript refresh failed: {exc}")
+                text = ""
+        self.set_transcript(self._current_page, text)
+
+    def _on_page_store_notify(self, pdf_safe: str, page_index: int) -> None:
+        """page_store.subscribe callback: refresh only for THIS
+        sidebar's own PDF and only while the notified page is the one
+        actually on screen — a recorder appending a segment to a page
+        the user has since scrolled past must not repaint over it.
+
+        Marshalled through _run_on_main (K-257 fix round 1, cross-task):
+        page_store.append_segment calls this synchronously, and the
+        lecture recorder's Uploader calls append_segment from its own
+        daemon worker thread — so, once Task 5 wired a recorder that
+        actually appends segments, this callback started touching
+        self._transcript/_transcript_label off the main thread. The
+        whole body is deferred (not just the widget touch) so the
+        pdf_safe/page_index check itself reads the freshest self._name/
+        self._current_page at the moment it actually runs, not whatever
+        they were on the worker thread a moment earlier.
+        """
+        def _apply() -> None:
+            # Deferred means "later", and later can be after cleanup():
+            # the dock closes, the widgets die, and this closure then
+            # refreshes a QLabel whose C++ half is gone — a RuntimeError
+            # raised out of the uploader's notify chain (PR #4 fifth
+            # re-review). The latch is the answer; the try is for the
+            # widget Qt deletes without anyone calling cleanup().
+            if self._torn_down:
+                return
+            if pdf_safe == self._name and page_index == self._current_page:
+                try:
+                    self._refresh_transcript()
+                except RuntimeError as exc:
+                    print(f"[klausmate] transcript notify skipped: {exc}")
+
+        _run_on_main(_apply)
+
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
+
+    def _report_selection(self, text: str) -> None:
+        """Task 10 (K-196): forward a live selection into viewer_context.
+
+        One method wired as BOTH renderers' selection hook (native
+        ``on_selection_changed``, pdf.js ``on_selection``) — same
+        payload shape (plain text), same registry call, so there is
+        only one guarded viewer_context call site to keep in sync.
+        """
+        try:
+            from . import viewer_context
+
+            viewer_context.report_selection(id(self), text)
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def is_loaded(self, name: str | None = None) -> bool:
         if self._name is None or self._page_count <= 0:
@@ -4208,6 +4568,7 @@ class PdfSidebar(QWidget):
             self._name = None
             self._file_stat = None
             self._set_active(None)
+            self._refresh_transcript()
             return
         self._file_stat = _stat_of(path)
 
@@ -4216,6 +4577,10 @@ class PdfSidebar(QWidget):
             # arrives async over the bridge (on_count refines the
             # text-pages approximation used until then).
             self._name = name
+            # Task 10 (K-196) fix round 1: the name THIS load belongs to,
+            # captured now so the eventual async count callback can tell
+            # a late count for an abandoned load apart from a fresh one.
+            self._pending_count_name = name
             pages_text = pdf_handler.load_pages(USER_FILES, name) or []
             self._page_count = len(pages_text)
             self._viewer.set_page_texts(pages_text)
@@ -4238,6 +4603,7 @@ class PdfSidebar(QWidget):
             self._page_count = len(pages)
             if self._page_count > 0:
                 self._set_active((name, (0, min(2, self._page_count - 1))))
+            self._refresh_transcript()  # fix round 1 (M2)
             self._notify_loaded(name)
             return
 
@@ -4247,7 +4613,17 @@ class PdfSidebar(QWidget):
             try:
                 self._doc.load(QUrl.fromLocalFile(path))
             except Exception:
+                # ...and drop the previous PDF with it (PR #4 fifth re-review):
+                # self._name still named the PDF that loaded FINE a moment
+                # ago, so clearing the strip alone was not enough — the next
+                # page_store notify or page change for that name re-read its
+                # record and put the stale text straight back on screen
+                # (K-276 review, measured). Same shape as the no-path branch
+                # above: forget the document, THEN refresh.
+                self._name = None
+                self._file_stat = None
                 self._set_active(None)
+                self._refresh_transcript()
                 return
 
         self._name = name
@@ -4270,10 +4646,52 @@ class PdfSidebar(QWidget):
         self._notify_loaded(name)
 
     def _on_pdfjs_count(self, count: int) -> None:
-        if count > 0:
+        """Task 10 (K-196) fix round 1: the async pdf.js count refines
+        the text-layer estimate report_document (already fired from
+        _notify_loaded) used — but this callback is registered once per
+        load and can still arrive AFTER the sidebar has moved on to a
+        different document (a fast reload-before-count race). Guarded on
+        IDENTITY, not presence: self._name == self._pending_count_name
+        is "this count still belongs to the document that is actually
+        showing", not just "some document happens to be loaded". A
+        stale count is a complete no-op — it must not touch
+        self._page_count (that would be reporting a foreign page count
+        as this sidebar's own) and, critically, must not call
+        viewer_context.activate() or reset page/selection the way a
+        full _report_document() re-call would: it goes through the
+        narrower report_page_count instead, which touches only
+        page_count in place."""
+        if count > 0 and self._name and self._name == self._pending_count_name:
             self._page_count = count
+            try:
+                from . import viewer_context
+
+                viewer_context.report_page_count(id(self), self._page_count)
+            except Exception as exc:
+                print(f"[klausmate] viewer_context: {exc}")
+
+    def _report_document(self) -> None:
+        """Task 10 (K-196): tell viewer_context which document this
+        sidebar shows and mark it the active one. Called once a
+        document is actually on screen (every load_pdf success path
+        funnels through _notify_loaded). _on_pdfjs_count's later,
+        narrower catch-up goes through report_page_count instead — see
+        its own docstring for why re-calling this one would be wrong."""
+        try:
+            from . import drive_store, pdf_handler, viewer_context
+            from . import USER_FILES  # type: ignore
+
+            display = drive_store.display_name(USER_FILES, self._name) or self._name
+            path = pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
+            viewer_context.report_document(
+                id(self), self._name, display, path, self._page_count
+            )
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _notify_loaded(self, name: str) -> None:
+        self._report_document()
         cb = self.on_loaded
         if cb is None:
             return
@@ -4399,14 +4817,29 @@ class PdfSidebar(QWidget):
         owns an AnkiWebView, which must be unregistered from Anki's
         global hooks — see PdfJsViewer.cleanup); QPdfView has nothing
         to release. Call from every path that tears a sidebar down."""
+        # Before the unsubscribe, not after: a notification that already
+        # made it through subscribe() may be waiting its main-thread turn
+        # (see _on_page_store_notify).
+        self._torn_down = True
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
-        if fn is None:
-            return
+        if fn is not None:
+            try:
+                fn()
+            except Exception as exc:
+                print(f"[klausmate] viewer cleanup failed: {exc}")
+        unsub, self._transcript_unsubscribe = self._transcript_unsubscribe, None
+        if unsub is not None:
+            try:
+                unsub()
+            except Exception as exc:
+                print(f"[klausmate] transcript unsubscribe failed: {exc}")
         try:
-            fn()
+            from . import viewer_context
+
+            viewer_context.forget(id(self))
         except Exception as exc:
-            print(f"[klausmate] viewer cleanup failed: {exc}")
+            print(f"[klausmate] viewer_context: {exc}")
 
     def clear(self) -> None:
         self._name = None
@@ -4420,6 +4853,13 @@ class PdfSidebar(QWidget):
             except Exception:
                 pass
         self._set_active(None)
+        self._refresh_transcript()
+        try:
+            from . import viewer_context
+
+            viewer_context.forget(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _on_page_changed(self, page: int) -> None:
         if self._name is None or self._page_count <= 0:
@@ -4433,6 +4873,13 @@ class PdfSidebar(QWidget):
         end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
         self._set_active((self._name, (start, end)))
+        self._refresh_transcript()
+        try:
+            from . import viewer_context
+
+            viewer_context.report_page(id(self), self._current_page)
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
 
     def _set_active(self, value) -> None:
         if self._editor is None:
@@ -4441,3 +4888,29 @@ class PdfSidebar(QWidget):
             setattr(self._editor, "_klausmate_active_pdf", value)
         except Exception:
             pass
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        # Task 10 (K-196): the assistant dock follows viewer_context's
+        # last-ACTIVATED viewer — the Library's, Browse's editor pane and
+        # the Lecture dock all reuse this one widget, so becoming visible
+        # (a tab switch, an unhide) is "the user is looking at this one"
+        # regardless of which host it lives in.
+        super().showEvent(ev)
+        try:
+            from . import viewer_context
+
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        # Same seam as showEvent: a click into an already-visible sidebar
+        # (e.g. the user switches focus between two open panes without
+        # either one being re-shown) still moves it to "current".
+        super().mousePressEvent(ev)
+        try:
+            from . import viewer_context
+
+            viewer_context.activate(id(self))
+        except Exception as exc:
+            print(f"[klausmate] viewer_context: {exc}")

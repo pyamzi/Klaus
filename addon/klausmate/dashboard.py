@@ -49,7 +49,7 @@ from . import background, theme
 # visibility bool in config.json.
 WIDGETS: tuple = (
     ("decks", None, "Decks"),
-    ("heatmap", "heatmap_enabled", "Review heatmap"),
+    ("heatmap", "heatmap_enabled", "Review Heatmap"),
 )
 
 
@@ -229,8 +229,18 @@ def dashboard_css() -> str:
         # padded box) cannot happen with them.
         " .klaus-widget {"
         " position: relative; width: fit-content; max-width: 100%;"
-        " margin: 0 auto;"
+        " margin: 0 auto 1.1em auto;"
         " }"
+        # The wrapper must hug what the user can SEE: the edit badge
+        # anchors to its corners, and a wrapped child's own margin sits
+        # INSIDE the wrapper box — the heatmap's 1.4em margin-top
+        # floated the ⊖ into empty page space above the panel (live
+        # screenshot 2026-08-30). The child's rhythm is neutralised
+        # here and the wrapper's bottom margin carries spacing instead;
+        # native mode is untouched, since this sheet only exists with
+        # the design on. Child selector outranks heatmap_css's own
+        # .klaus-hm margin rule — no !important needed.
+        " .klaus-widget > .klaus-hm { margin: 0; }"
         " @keyframes klaus-jiggle {"
         " 0% { transform: rotate(-0.4deg); }"
         " 50% { transform: rotate(0.4deg); }"
@@ -272,8 +282,16 @@ def dashboard_css() -> str:
         " box-shadow: 0 1px 4px rgba(0,0,0,0.25);"
         f" font-family: {theme.FONT_FAMILY};"
         " }"
-        # Top-right, the corner opposite deck_curate's armed-PDF drop
-        # square (fixed, bottom-left family, z 50) — and above it.
+        # An invisible halo grows the 22px disc to a ~34px hit target
+        # (HIG asks ~28+ for pointer targets) with zero visual change —
+        # a pseudo-element is part of its button's hit area.
+        " .klaus-w-remove::after {"
+        " content: \"\"; position: absolute; inset: -6px;"
+        " }"
+        # RTL mirrors the badge to the leading corner, like iOS does.
+        " [dir=rtl] .klaus-w-remove { left: auto; right: -8px; }"
+        # Top-right, the corner opposite pdf_drop's PDF drop square
+        # (fixed, bottom-left family, z 50) — and above it.
         " .klaus-dash-bar {"
         " position: fixed; top: 12px; right: 14px; z-index: 60;"
         " display: flex; gap: 8px;"
@@ -351,8 +369,12 @@ def _config() -> dict:
     return background.effective_cfg(stored)
 
 
-def _write_cfg(updates: dict) -> None:
+def write_cfg(updates: dict) -> None:
     """Apply *updates* to STORED config (never to a preview dict).
+
+    Public because it is the package's ONE implementation of the preview
+    rule below — heatmap's corner menu writes its settings through here
+    rather than growing a second copy of it.
 
     If a Preferences preview is armed, the preview REPLACES config for
     every effective_cfg reader — so the same updates are patched into a
@@ -404,10 +426,22 @@ def _refresh() -> None:
 
 
 def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
+    global _EDIT
     try:
         from aqt.deckbrowser import DeckBrowser
 
         if not isinstance(context, DeckBrowser):
+            return
+        # Widget editing belongs to the KlausBook design layer: with it
+        # off, no css and no boot script — no wrap, no jiggle, and the
+        # heatmap renders in Anki's stock position. The flag reset
+        # matters: toggling the layer off MID-JIGGLE renders a page
+        # with no JS to ever send edit-off, so without this a later
+        # re-enable would boot the dashboard jiggling unprompted.
+        # (Toggled off and on again entirely from another screen, the
+        # flag survives — acceptable; it self-heals on any off-render.)
+        if not background.design_enabled(_config()):
+            _EDIT = False
             return
         web_content.head += "<style>" + dashboard_css() + "</style>"
         # Body-appended, so it parses AFTER background.panel_js (hook
@@ -448,7 +482,7 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     updates = apply_action(action)
     if updates is None:
         return (True, None)
-    _write_cfg(updates)
+    write_cfg(updates)
     if act == "add":
         try:
             from aqt.qt import QTimer

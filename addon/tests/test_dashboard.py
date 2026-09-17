@@ -66,6 +66,16 @@ check("a removable widget follows its own bool",
 check("a corrupt value reads as SHOWN (heatmap.enabled's rule — bad "
       "config must not silently hide a feature)",
       dash.widget_shown({"heatmap_enabled": "no"}, "heatmap") is True)
+# The corrupt-VALUE branch above was pinned; the corrupt-CONFIG branch
+# beside it was not, and inverting it survived the K-139 mutation audit
+# (finding 4). Same documented rule, one step earlier: config that is not
+# a dict at all is still not permission to hide a feature.
+check("a config that is not a dict at all reads as SHOWN too — the same "
+      "rule one step earlier, and the branch a whole unreadable config "
+      "falls into",
+      dash.widget_shown(None, "heatmap") is True
+      and dash.widget_shown("garbage", "heatmap") is True
+      and dash.widget_shown([("heatmap_enabled", False)], "heatmap") is True)
 check("an unknown id is not shown", dash.widget_shown({}, "evil") is False)
 
 
@@ -103,15 +113,24 @@ check("garbage decodes to None, never an exception into Anki",
 # ------------------------------------------------------------ boot state
 section("boot state and boot html")
 
+# Read BEFORE the bridge section below flips it: this is the module's boot
+# value, and the audit (finding 3) flipped `_EDIT: bool = False` to True
+# with nothing noticing — every deck browser would boot into jiggle mode.
+# The flag's RESET paths are source-pinned; its default was not pinned at
+# all, and "never persisted, reopening Anki always starts calm" is only
+# true if the module-level default is False.
+check("edit mode boots OFF — a fresh session must never open jiggling",
+      dash._EDIT is False)
+
 _state = dash.boot_state({"heatmap_enabled": False,
                           "dashboard_order": ["heatmap", "decks"]}, True)
 check("order, edit flag, removables and labels all ship",
       _state["order"] == ["heatmap", "decks"] and _state["edit"] is True
       and _state["removable"] == ["heatmap"]
-      and _state["labels"] == {"heatmap": "Review heatmap"})
+      and _state["labels"] == {"heatmap": "Review Heatmap"})
 check("hidden is CONFIG-driven — the disabled heatmap is offered "
       "under ＋ even though no DOM was consulted",
-      _state["hidden"] == [{"id": "heatmap", "label": "Review heatmap"}])
+      _state["hidden"] == [{"id": "heatmap", "label": "Review Heatmap"}])
 check("nothing hidden when everything is enabled",
       dash.boot_state({}, False)["hidden"] == [])
 
@@ -129,6 +148,23 @@ section("stylesheet")
 _css = dash.dashboard_css()
 check("both palettes ship, keyed on Anki's own night-mode class",
       ":root {" in _css and ":root.night-mode {" in _css)
+# K-142 (found by scripts/mutation_audit.py, confirmed by hand): the
+# check above only proves the two SELECTORS exist. Swapping the palette
+# blocks — light mode painting the DARK palette — left the whole suite
+# green, and so did making night identical to day. The invariant is
+# that each block carries ITS OWN palette, so pin the values.
+_day_blk = re.search(r":root \{(.*?)\}", _css, re.S)
+_night_blk = re.search(r":root\.night-mode \{(.*?)\}", _css, re.S)
+check("the two palette blocks are not identical — a night mode that "
+      "merely repeats day mode is the bug this pin exists to prevent",
+      _day_blk is not None and _night_blk is not None
+      and _day_blk.group(1) != _night_blk.group(1))
+check("...and each block carries its OWN palette's ink, so the two "
+      "cannot be swapped and still pass",
+      theme.palette(False)["text"].lower() in _day_blk.group(1).lower()
+      and theme.palette(True)["text"].lower() in _night_blk.group(1).lower()
+      and theme.palette(True)["text"].lower()
+      not in _day_blk.group(1).lower())
 check("dashboard_css takes no `night` argument (Anki flips the class "
       "with JS and never re-runs the injecting hook)",
       dash.dashboard_css.__code__.co_argcount == 0)
@@ -155,11 +191,25 @@ check("the wrapper's ONLY width is fit-content — hugs a narrow deck "
       and "max-width: 100%" in _wrapper_rule
       and _wrapper_rule.count("width") == 2
       and not re.search(r"(?<!max-)width: 100%", _css))
-check("edit chrome floats ABOVE deck_curate's armed-PDF drop square "
+check("edit chrome floats ABOVE pdf_drop's PDF drop square "
       "(fixed, z-index 50): bar 60, menus 70",
       "z-index: 60" in _css and "z-index: 70" in _css)
 check("the shield outranks page content but sits under the badge",
       "z-index: 5;" in _css and "z-index: 6;" in _css)
+check("the ⊖ badge's hit target outgrows its 22px disc via an "
+      "invisible halo (HIG asks ~28px+ for pointer targets) — a "
+      "pseudo-element is part of the button's hit area",
+      ".klaus-w-remove::after {" in _css
+      and "inset: -6px" in _css.split(".klaus-w-remove::after {")[1])
+check("the badge mirrors to the leading corner in RTL",
+      "[dir=rtl] .klaus-w-remove { left: auto; right: -8px; }" in _css)
+check("the wrapper hugs what the user can SEE: a wrapped heatmap's "
+      "own margins are neutralised, because a child margin sits "
+      "INSIDE the wrapper box and floated the \u2296 badge into empty "
+      "page space above the panel (screenshot 2026-08-30)",
+      ".klaus-widget > .klaus-hm { margin: 0; }" in _css)
+check("...and the wrapper carries the vertical rhythm itself",
+      "margin: 0 auto 1.1em auto;" in _css)
 check("a dragged widget stops jiggling — a CSS animation would "
       "otherwise override the inline drag transform outright",
       "animation: none !important; z-index: 7;" in _css)
@@ -167,6 +217,16 @@ check("a dragged widget stops jiggling — a CSS animation would "
 section("the wiring (source pins)")
 _SRC = open("klausmate/dashboard.py").read()
 _CODE = code_only(_SRC)
+_gate_slice = _SRC.split("def _on_webview_will_set_content")[1].split(
+    "def _on_js_message")[0]
+check("the whole dashboard is behind the KlausBook design gate — "
+      "widget editing IS design layer, so native mode gets Anki's "
+      "stock deck screen with the heatmap in its stock position",
+      "design_enabled" in _gate_slice)
+check("the off-branch clears the edit flag: toggling the layer off "
+      "mid-jiggle leaves no JS to ever send edit-off, and a stale "
+      "flag would boot a later re-enable jiggling unprompted",
+      "_EDIT = False" in _gate_slice)
 check("setup registers content, js-message and profile-open hooks",
       "webview_will_set_content.append(_on_webview_will_set_content)"
       in _CODE
@@ -188,27 +248,46 @@ check("config writes patch an armed Preferences preview, or the next "
 
 section("bridge handler behaviour (stubbed)")
 _calls = []
-dash._write_cfg = lambda u: _calls.append(u)  # glue stubbed; policy real
+dash.write_cfg = lambda u: _calls.append(u)  # glue stubbed; policy real
 check("a foreign message passes through untouched",
       dash._on_js_message(("sentinel",), "klausmate:settings", None)
       == ("sentinel",))
 _b = lambda obj: "klausmate:dash:" + base64.b64encode(
     json.dumps(obj).encode()).decode()
-dash._on_js_message((False, None), _b({"action": "edit-on"}), None)
+_r_on = dash._on_js_message((False, None), _b({"action": "edit-on"}), None)
 check("edit-on arms the session flag", dash._EDIT is True)
-dash._on_js_message((False, None), _b({"action": "edit-off"}), None)
+_r_off = dash._on_js_message((False, None), _b({"action": "edit-off"}), None)
 check("edit-off clears it", dash._EDIT is False)
-dash._on_js_message((False, None), _b({"action": "remove", "id": "heatmap"}),
-                    None)
+_r_rm = dash._on_js_message(
+    (False, None), _b({"action": "remove", "id": "heatmap"}), None)
 check("remove writes the widget's bool through the policy gate",
       _calls == [{"heatmap_enabled": False}])
-dash._on_js_message((False, None), _b({"action": "remove", "id": "decks"}),
-                    None)
+_r_mand = dash._on_js_message(
+    (False, None), _b({"action": "remove", "id": "decks"}), None)
 check("removing the mandatory widget writes NOTHING",
       _calls == [{"heatmap_enabled": False}])
 check("malformed payloads are swallowed",
       dash._on_js_message((False, None), "klausmate:dash:!!!", None)
       == (True, None))
+
+# The "we handled this" half of the bridge contract. Every RETURN out of a
+# dash: message must be (True, None): returning False re-opens the message
+# to the rest of Anki's hook chain, which then sees an unknown pycmd. The
+# K-139 audit flipped five of this handler's six such returns to False with
+# nothing noticing (only the malformed-payload one above was pinned). Four
+# of those five are reachable and are pinned here; the fifth guards an
+# IndexError on message.split(":", 2)[2], which the startswith() check
+# above it makes impossible — that one is dead defensive code, and stays a
+# survivor by construction rather than by omission.
+check("EVERY dash: outcome reports the message handled — armed, cleared, "
+      "refused by the policy gate, and written — so a klausmate: pycmd "
+      "never falls through to the rest of Anki's hook chain",
+      _r_on == (True, None) and _r_off == (True, None)
+      and _r_mand == (True, None) and _r_rm == (True, None))
+check("a foreign message is the ONE case that keeps travelling, and it "
+      "travels unchanged",
+      dash._on_js_message(("passing", "through"), "klausmate:lecture", None)
+      == ("passing", "through"))
 
 
 # ----------------------------------------------- the DOM half, for real

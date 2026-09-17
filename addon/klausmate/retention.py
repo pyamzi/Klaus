@@ -1,8 +1,9 @@
 """PDF study priorities — retention scoring of cards matched to each PDF.
 
-Pipeline per PDF: embed its chunks persistently (pdf_index.py) → score every
-indexed note against those chunks (max cosine, cached in matches.json) →
-pull FSRS retrievability for the matched notes' cards → aggregate a
+Pipeline per PDF: embed its pages persistently, one vector per page
+(pdf_index.py, fed by page_store.py) → score every indexed note against
+those pages (max cosine, cached in matches.json) → pull FSRS
+retrievability for the matched notes' cards → aggregate a
 similarity-weighted retention score → rank PDFs by study priority.
 
 Layout mirrors curation.py: pure math helpers up top (headlessly testable),
@@ -25,7 +26,6 @@ stored tag (tag_sync.get_stored_tag) — see K-055.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import json
 import math
 import os
@@ -36,14 +36,14 @@ from typing import Any, Callable
 from aqt import mw
 from aqt.operations import QueryOp
 
-from . import card_index, curation, embeddings, pdf_handler, pdf_index
+from . import card_index, curation, embeddings, page_store, pdf_handler, pdf_index
 
 USER_FILES = curation.USER_FILES
 INDEX_DIR = curation.INDEX_DIR
 
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
-MATCHES_VERSION = 1
+MATCHES_VERSION = 2
 
 # Cache floor for match scores — deliberately far below any usable
 # threshold, so the panel's threshold slider is a pure re-filter of the
@@ -73,10 +73,10 @@ _DEFAULT_APPLIED_KEY = "_threshold_default_applied"
 # distinguishing signal — once set, migration leaves the value alone
 # forever, independent of _DEFAULT_APPLIED_KEY bookkeeping.
 _THRESHOLD_USER_SET_KEY = "_threshold_user_set"
-DEFAULT_AGG = "max"
-DEFAULT_MAX_CHUNKS = 1000
-
-PDF_FLUSH_EVERY = 256  # vectors between partial saves while embedding a PDF
+# IN-list chunk for the nid→queue batch (card_queues). SQLite's default
+# host-parameter cap is 999; 900 leaves headroom without multiplying
+# round-trips on a 30k-note pool.
+CARD_QUEUE_CHUNK = 900
 
 ProgressFn = Callable[[str, int, int], None]
 
@@ -153,16 +153,18 @@ def card_index_digest(cidx: card_index.CardIndex) -> str:
 def match_scores(
     pdf_idx: pdf_index.PdfIndex,
     cidx: card_index.CardIndex,
-    agg: str = DEFAULT_AGG,
     floor: float = MATCH_FLOOR,
     cancel: threading.Event | None = None,
     on_progress: Callable[[int, int], None] | None = None,
-) -> list[tuple[int, float]]:
-    """Score every indexed note against the PDF's chunks → [(nid, score)].
+) -> tuple[list[tuple[int, float]], dict[int, int]]:
+    """Score every indexed note against the PDF's pages →
+    ([(nid, score)], {nid: best page, 1-based}).
 
-    ``agg``: "max" (best single chunk) or "top3_mean" (mean of the 3 best —
-    stricter, suppresses one-off spurious hits). Both indexes hold unit
-    vectors, so similarity is a plain dot product.
+    One vector per page now (pdf_index v2), so a note's score is simply
+    its best-matching page — the argmax that used to be discarded is the
+    whole point now, since a note's best page is what the Lecture panel
+    and the matches cache both need. Both indexes hold unit vectors, so
+    similarity is a plain dot product.
     """
     if (pdf_idx.provider, pdf_idx.model) != (cidx.provider, cidx.model):
         raise ValueError(
@@ -172,29 +174,28 @@ def match_scores(
     if pdf_idx.dims != cidx.dims:
         raise ValueError("Embedding dimensions differ — re-embed the PDF.")
     d = cidx.dims
-    n_chunks = pdf_idx.embedded_rows
-    if not cidx.nids or not n_chunks or d <= 0:
-        return []
+    n_pages = pdf_idx.embedded_rows
+    if not cidx.nids or not n_pages or d <= 0:
+        return [], {}
     cmv = memoryview(cidx.vectors)
     pmv = memoryview(pdf_idx.vectors)
-    chunk_rows = [pmv[j * d : (j + 1) * d] for j in range(n_chunks)]
-    top3 = agg == "top3_mean"
+    page_rows = [pmv[j * d : (j + 1) * d] for j in range(n_pages)]
     out: list[tuple[int, float]] = []
+    pages: dict[int, int] = {}
     total = len(cidx.nids)
     for i, nid in enumerate(cidx.nids):
         if cancel is not None and i % 512 == 0 and cancel.is_set():
-            return out
+            return out, pages
         if on_progress and i % 512 == 0:
             on_progress(i, total)
         row = cmv[i * d : (i + 1) * d]
-        if top3:
-            best = heapq.nlargest(3, (_sumprod(row, c) for c in chunk_rows))
-            score = sum(best) / len(best)
-        else:
-            score = max(_sumprod(row, c) for c in chunk_rows)
+        scores = [_sumprod(row, c) for c in page_rows]
+        best = max(range(len(scores)), key=lambda k: scores[k])
+        score = scores[best]
         if score >= floor:
             out.append((nid, score))
-    return out
+            pages[nid] = pdf_idx.pages[best][0]
+    return out, pages
 
 
 def fsrs_retrievability(
@@ -222,6 +223,7 @@ def pdf_retention(
     matches: list[tuple[int, float]],
     threshold: float,
     card_r: dict[int, list[tuple[float, bool]]],
+    rejected: set[int] | None = None,
 ) -> dict:
     """Similarity-weighted retention over the matched notes' cards.
 
@@ -229,14 +231,21 @@ def pdf_retention(
     inherit their note's similarity, so multi-card notes weigh more (more
     study material) — intentional. Notes missing from ``card_r`` (deleted
     since indexing) are skipped.
+
+    ``rejected`` (K-254, Plan 2 pertinence): nid set to leave out of the
+    aggregate even though it matched at/above threshold — confirmed =
+    matched − rejected, and an unjudged nid (absent from ``rejected``)
+    counts as confirmed. None (the default) scores every match, exactly
+    the pre-K-254 behaviour.
     """
     weight_sum = 0.0
     weighted_r = 0.0
     matched_cards = 0
     new_cards = 0
     matched_notes = 0
+    rejected = rejected or ()
     for nid, sim in matches:
-        if sim < threshold:
+        if sim < threshold or nid in rejected:
             continue
         cards = card_r.get(nid)
         if not cards:
@@ -263,11 +272,101 @@ def pdf_retention(
     }
 
 
+def note_card_counts(
+    matches: list[tuple[int, float]],
+    threshold: float,
+    queue_map: dict[int, list[int]],
+    rejected: set[int] | None = None,
+) -> tuple[int, int, int, int]:
+    """(note_count, card_count, suspended_count, doubtful_count) over
+    matches at/above ``threshold`` — the Library's Cards/Notes split
+    (K-118), confirmed-only as of K-254.
+
+    ``queue_map``: nid → [queue per card] (card_queues below). A note
+    absent from the map (deleted since indexing) is skipped, mirroring
+    pdf_retention's card_r rule, so note_count == pdf_retention's
+    matched_notes for the same threshold. ``card_count`` is the VIEWABLE
+    cards — queue != -1 — so buried cards (-2/-3, back on their own
+    tomorrow) still count as viewable; only suspension (-1) moves a card
+    to ``suspended_count``. card_count + suspended_count == pdf_retention's
+    matched_cards by construction, EXCLUDING rejected nids from all three.
+
+    ``rejected`` (K-254): a matched, card-having nid in this set
+    contributes its VIEWABLE cards (queue != -1, ``card_count``'s own
+    rule) to ``doubtful_count`` and nowhere else — never into
+    note/card/suspended — so confirmed = matched − rejected the same way
+    pdf_retention scores it. Counting CARDS rather than notes is
+    deliberate (K-254 review Minor 6): ``doubtful_count`` is read
+    straight into the Cards cell (``"{card_count} · {doubtful_count}
+    doubtful"``), so it must share that cell's unit, not the Notes
+    column's — a two-card note with one rejected note still reads as
+    "2 doubtful", not "1". A rejected note's suspended cards count
+    toward neither side, same as a confirmed note's would not count
+    toward ``suspended_count`` here. None (the default) reports
+    doubtful_count 0 and behaves exactly like the pre-K-254 3-tuple
+    otherwise.
+    """
+    notes = 0
+    viewable = 0
+    suspended = 0
+    doubtful = 0
+    rejected = rejected or ()
+    for nid, sim in matches:
+        if sim < threshold:
+            continue
+        queues = queue_map.get(nid)
+        if not queues:
+            continue
+        if nid in rejected:
+            doubtful += sum(1 for q in queues if q != -1)
+            continue
+        notes += 1
+        for q in queues:
+            if q == -1:
+                suspended += 1
+            else:
+                viewable += 1
+    return notes, viewable, suspended, doubtful
+
+
 # ------------------------------------------------------- matches.json cache
 
 
 def _matches_path(name: str) -> str:
     return os.path.join(pdf_index.index_dir(USER_FILES, name), MATCHES_FILE)
+
+
+def pages_digest(name: str) -> str:
+    """blake2b over this PDF index's page hashes, in order — the key that
+    ties a cached ranking to the page TEXT it was actually computed from.
+
+    None of the other keys can see a transcript (K-236): ``pdf_source_sig``
+    stamps ``contexts/<safe>.json``, which ``page_store.append_segment``
+    never touches, so a page whose said-text grew re-embeds (do_build's own
+    ``idx.pages != keys`` check) while ``load_matches`` went on serving the
+    old ranking against the new vectors.
+
+    Manifest-only — never the vectors — and computed HERE rather than
+    passed in, so all five callers (ensure_matches, priority_rows,
+    pdf_graph, tag_sync) get the invalidation without a sixth signature to
+    keep in step. "" when there is no readable index, which is what makes a
+    pre-v2 profile's save/load pair agree with itself.
+    """
+    m = card_index.read_manifest(
+        pdf_index.index_dir(USER_FILES, name),
+        pdf_index.INDEX_VERSION,
+        pdf_index.MANIFEST_FILE,
+    )
+    if not m:
+        return ""
+    try:
+        h = hashlib.blake2b(digest_size=8)
+        for row in m.get("pages") or []:
+            h.update(str(row[1]).encode("utf-8"))
+            h.update(b"\x1f")
+        return h.hexdigest()
+    except (KeyError, TypeError, IndexError):
+        return ""
 
 
 def load_matches(
@@ -276,15 +375,17 @@ def load_matches(
     dims: int,
     source_sig: tuple[int, int] | None,
     digest: str,
-    agg: str,
-) -> list[tuple[int, float]] | None:
-    """Cached [(nid, score)] when every invalidation key matches, else None."""
+) -> tuple[list[tuple[int, float]], dict[int, int]] | None:
+    """Cached ([(nid, score)], {nid: best page}) when every invalidation key
+    matches, else None."""
     try:
         with open(_matches_path(name), encoding="utf-8") as f:
             m = json.load(f)
         if m.get("version") != MATCHES_VERSION:
             return None
-        if (str(m["provider"]), str(m["model"])) != signature:
+        if not embeddings.signature_matches(
+            str(m["provider"]), str(m["model"]), int(m["dims"]), signature
+        ):
             return None
         if int(m["dims"]) != dims:
             return None
@@ -293,14 +394,18 @@ def load_matches(
             return None
         if str(m.get("card_index_digest")) != digest:
             return None
-        if str(m.get("agg")) != agg:
+        if str(m.get("pages_digest") or "") != pages_digest(name):
+            # The pages themselves moved under this ranking (a re-embed, a
+            # grown transcript, a pre-v2 payload with no digest at all).
             return None
         if float(m.get("floor", -1.0)) != MATCH_FLOOR:
             # MATCH_FLOOR changed since this cache was written — a cache
             # built with a different floor could be silently missing rows
             # that should now be included. Treat as cold, never stale-valid.
             return None
-        return [(int(nid), float(score)) for nid, score in m["matches"]]
+        matches = [(int(nid), float(score)) for nid, score in m["matches"]]
+        pages = {int(k): int(v) for k, v in (m.get("pages") or {}).items()}
+        return matches, pages
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
 
@@ -311,8 +416,8 @@ def save_matches(
     dims: int,
     source_sig: tuple[int, int],
     digest: str,
-    agg: str,
     matches: list[tuple[int, float]],
+    pages: dict[int, int],
 ) -> None:
     payload = {
         "version": MATCHES_VERSION,
@@ -320,10 +425,11 @@ def save_matches(
         "model": signature[1],
         "dims": dims,
         "pdf_source_sig": list(source_sig),
+        "pages_digest": pages_digest(name),
         "card_index_digest": digest,
-        "agg": agg,
         "floor": MATCH_FLOOR,
         "matches": [[nid, round(score, 6)] for nid, score in matches],
+        "pages": {str(nid): p for nid, p in pages.items()},
     }
     pdf_handler._atomic_write_json(
         _matches_path(name), payload, separators=(",", ":")
@@ -501,6 +607,29 @@ def card_retrievability(col, nids: set[int]) -> dict[int, list[tuple[float, bool
     return out
 
 
+def card_queues(col, nids: set[int]) -> dict[int, list[int]]:
+    """nid → [queue value per card], from ONE batched query over the pool.
+
+    ``queue == -1`` means suspended; everything else is viewable (new,
+    learning, review, buried). Chunked at CARD_QUEUE_CHUNK because
+    SQLite's default host-parameter cap is 999 — a 30k-note pool must
+    not become 30k placeholders in one statement, and per-row queries
+    are the other failure mode this exists to prevent. Sorted pool =
+    deterministic chunks (and warmer index walks) for free.
+    """
+    out: dict[int, list[int]] = {}
+    pool = sorted(nids)
+    for i in range(0, len(pool), CARD_QUEUE_CHUNK):
+        chunk = pool[i : i + CARD_QUEUE_CHUNK]
+        marks = ",".join("?" * len(chunk))
+        rows = col.db.all(
+            f"select nid, queue from cards where nid in ({marks})", *chunk
+        )
+        for nid, queue in rows:
+            out.setdefault(int(nid), []).append(int(queue))
+    return out
+
+
 # ------------------------------------------------------------ aqt pipeline
 
 
@@ -518,16 +647,22 @@ def ensure_pdf_index(
     cancel: threading.Event | None = None,
     _reentrant: bool = False,
 ) -> None:
-    """Bring one PDF's chunk index up to date. Callbacks fire on main.
+    """Bring one PDF's page index up to date. Callbacks fire on main.
 
-    Never needs the collection — chunking reads files, embedding hits the
-    provider — so the whole pipeline runs ``without_collection()``.
+    Never needs the collection — reading pages hits files, embedding hits
+    the provider — so the whole pipeline runs ``without_collection()``.
     Cancellation persists ``embedded_rows``; the next run resumes there.
 
     Guards ``curation._busy`` — the ONE re-entrancy token shared with the
-    card-index sync and ensure_matches below, so a caller composing several
-    phases (curation.run_curation) can hold it once across all of them.
-    Pass ``_reentrant=True`` when the caller already holds it.
+    card-index sync and ensure_matches below, so a caller composing
+    several phases could hold it once across all of them. Pass
+    ``_reentrant=True`` when the caller already holds it.
+
+    No caller does. ``index_queue._run`` composes this with the two
+    around it and lets each phase take the token in TURN, because its
+    cancellation branches return without a release and a held token
+    would leak (K-146's finding; the caller this parenthetical used to
+    name, ``curation.run_curation``, was deleted by that same card).
     """
     if not _reentrant:
         if curation._busy:
@@ -549,77 +684,83 @@ def ensure_pdf_index(
     def do_build(_col=None) -> pdf_index.PdfIndex:
         cfg = _cfg()
         sig = embeddings.index_signature(cfg)
-        try:
-            max_chunks = int(cfg.get("pdf_index_max_chunks") or DEFAULT_MAX_CHUNKS)
-        except (TypeError, ValueError):
-            max_chunks = DEFAULT_MAX_CHUNKS
         src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
         if src_sig is None:
             raise RuntimeError(f"No stored text for “{pdf_name}” — re-import the PDF.")
         dir_path = pdf_index.index_dir(USER_FILES, pdf_name)
         idx = pdf_index.load(dir_path)
-        if pdf_index.is_fresh(idx, src_sig, sig):
-            return idx
 
         pages = pdf_handler.load_pages(USER_FILES, pdf_name)
         if pages is None:
             # Legacy import without per-page JSON: treat the whole text as one page.
             base = pdf_handler._safe_basename(pdf_name)
-            txt_path = os.path.join(USER_FILES, "contexts", base + ".txt")
-            with open(txt_path, encoding="utf-8") as f:
+            with open(os.path.join(USER_FILES, "contexts", base + ".txt"), encoding="utf-8") as f:
                 pages = [f.read()]
-        chunked = pdf_index.chunk_pages(pages, max_chunks)
-        if not chunked:
+        safe = pdf_handler._safe_basename(pdf_name)
+        path = pdf_handler.pdf_path_for(USER_FILES, safe) or ""
+        page_store.ensure_records(USER_FILES, safe, path, pages)
+        rows = page_store.page_texts(USER_FILES, safe, path, len(pages))   # (page, hash, text)
+        keys = [(p, h) for p, h, _t in rows]
+        # is_fresh() is NOT enough on its own (K-236): it stamps
+        # contexts/<safe>.json, and page_store.append_segment writes a page
+        # RECORD and never that file — so after a transcript lands the index
+        # reads as current and the page's stale hash sits there forever,
+        # which made D3's "a page whose transcript grew re-embeds alone"
+        # untrue. ensure_records is idempotent, so reading the page keys
+        # first costs one pass over the records and buys that sentence back.
+        if pdf_index.is_fresh(idx, src_sig, sig) and idx.pages == keys:
+            return idx
+        if not any(t for _p, _h, t in rows):
             raise RuntimeError(f"“{pdf_name}” has no extractable text to embed.")
-        keys = [(p, s, ln) for p, s, ln, _t in chunked]
-        texts = [t for _p, _s, _ln, t in chunked]
-
-        resumable = (
-            idx is not None
-            and (idx.provider, idx.model) == sig
-            and idx.source_sig == src_sig
-            and idx.chunks == keys
-            and 0 < idx.embedded_rows < len(keys)
-        )
-        if not resumable:
-            safe = pdf_handler._safe_basename(pdf_name)
-            idx = pdf_index.PdfIndex(
-                provider=sig[0], model=sig[1], pdf_name=safe,
-                source_sig=src_sig, chunks=keys,
-            )
-        start_row = idx.embedded_rows
-        todo = texts[start_row:]
-        total = len(texts)
+        # Keep every row whose hash is unchanged (same provider/model/dims);
+        # embed only the rest. Rows are rebuilt in page order.
+        old: dict[int, tuple[str, list[float]]] = {}
+        if idx is not None and embeddings.signature_matches(idx.provider, idx.model, idx.dims, sig) and idx.dims > 0:
+            mv = memoryview(idx.vectors)
+            for i, (p, h) in enumerate(idx.pages[: idx.embedded_rows]):
+                old[p] = (h, list(mv[i * idx.dims:(i + 1) * idx.dims]))
+        new_idx = pdf_index.PdfIndex(provider=sig[0], model=sig[1], pdf_name=safe, source_sig=src_sig, pages=keys,
+                                     dims=(idx.dims if idx is not None and old else 0))
+        # Empty combined_text (a slide with no text layer and no transcript)
+        # is kept out of the provider entirely — some providers reject ""
+        # outright — and gets the spec's zero vector instead (seeded below,
+        # once dims is known); best_page's plain dot product then scores it
+        # 0.0 and it can never win over a real match.
+        todo = [(i, t) for i, (p, h, t) in enumerate(rows) if t and not (p in old and old[p][0] == h)]
+        vectors_by_row: dict[int, list[float]] = {i: old[p][1] for i, (p, h, _t) in enumerate(rows) if p in old and old[p][0] == h}
+        total = len(rows)
         provider = embeddings.provider_from_config(_cfg)
-        since_flush = 0
-        for offset, vecs in embeddings.embed_batches(
-            provider, todo, cancel=cancel, kind="document"
-        ):
-            for vec in vecs:
+        for offset, vecs in embeddings.embed_batches(provider, [t for _i, t in todo], cancel=cancel, kind="document"):
+            for k, vec in enumerate(vecs):
+                row_i = todo[offset + k][0]
                 if vec is None:
-                    # Zero vector (empty-ish chunk) — keep row alignment with
-                    # a null vector; it can't win a cosine match.
-                    if idx.dims == 0:
-                        raise RuntimeError("First PDF chunk produced no embedding.")
-                    idx.vectors.extend([0.0] * idx.dims)
+                    if new_idx.dims == 0:
+                        raise RuntimeError("First page produced no embedding.")
+                    vectors_by_row[row_i] = [0.0] * new_idx.dims
                 else:
-                    if idx.dims == 0:
-                        idx.dims = len(vec)
-                    elif len(vec) != idx.dims:
+                    if new_idx.dims == 0:
+                        new_idx.dims = len(vec)
+                    elif len(vec) != new_idx.dims:
                         raise ValueError("Embedding dims changed mid-index")
-                    idx.vectors.extend(vec)
-                idx.embedded_rows += 1
-            since_flush += len(vecs)
+                    vectors_by_row[row_i] = vec
             if on_progress:
-                done = idx.embedded_rows
-                mw.taskman.run_on_main(
-                    lambda d=done: on_progress("Embedding PDF…", d, total)
-                )
-            if since_flush >= PDF_FLUSH_EVERY:
-                pdf_index.save(idx, dir_path)
-                since_flush = 0
-        pdf_index.save(idx, dir_path)
-        return idx
+                mw.taskman.run_on_main(lambda d=len(vectors_by_row): on_progress("Embedding pages…", d, total))
+        if new_idx.dims:
+            # dims is resolvable here whenever any row was ever embedded —
+            # either just now, or earlier (old carries idx.dims forward) —
+            # and the any(t for ...) guard above guarantees at least one
+            # non-empty row exists, so a first-ever build always sets it.
+            for i, (_p, _h, t) in enumerate(rows):
+                if not t and i not in vectors_by_row:
+                    vectors_by_row[i] = [0.0] * new_idx.dims
+        for i in range(total):
+            vec = vectors_by_row.get(i)
+            if vec is None:
+                break  # never embedded (cancelled) — resume here next run
+            new_idx.vectors.extend(vec)
+            new_idx.embedded_rows += 1
+        pdf_index.save(new_idx, dir_path)
+        return new_idx
 
     def done(idx: pdf_index.PdfIndex) -> None:
         release()
@@ -646,7 +787,7 @@ def ensure_matches(
     """Return cached (or freshly computed) card↔PDF match scores.
 
     Guards ``curation._busy`` exactly like ensure_pdf_index above — this
-    used to run entirely unguarded, letting its O(notes x chunks) match
+    used to run entirely unguarded, letting its O(notes x pages) match
     pass start concurrently with an index build. Pass ``_reentrant=True``
     when a caller already holds the token.
     """
@@ -663,10 +804,9 @@ def ensure_matches(
         if not _reentrant:
             curation._busy = False
 
-    def do_match(_col=None) -> list[tuple[int, float]]:
+    def do_match(_col=None) -> tuple[list[tuple[int, float]], dict[int, int]]:
         cfg = _cfg()
         sig = embeddings.index_signature(cfg)
-        agg = str(cfg.get("pdf_match_agg") or DEFAULT_AGG)
         src_sig = pdf_index.source_signature(USER_FILES, pdf_name)
         pidx = pdf_index.load(pdf_index.index_dir(USER_FILES, pdf_name))
         if not pdf_index.is_fresh(pidx, src_sig, sig):
@@ -674,11 +814,11 @@ def ensure_matches(
         cidx = card_index.load(INDEX_DIR)
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
-                "The card index needs a rebuild — run a search or re-index "
-                "from Manage models first."
+                "The card index needs a rebuild — press Index Now in "
+                "KlausMate Preferences → API keys & models first."
             )
         digest = card_index_digest(cidx)
-        cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg)
+        cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest)
         if cached is not None:
             return cached
 
@@ -688,19 +828,17 @@ def ensure_matches(
                     lambda d=done, t=total: on_progress("Matching cards…", d, t)
                 )
 
-        matches = match_scores(
-            pidx, cidx, agg=agg, cancel=cancel, on_progress=prog
-        )
+        matches, pages = match_scores(pidx, cidx, cancel=cancel, on_progress=prog)
         if cancel is not None and cancel.is_set():
-            return matches  # partial — do not cache
+            return matches, pages  # partial — do not cache
         matches.sort(key=lambda m: m[1], reverse=True)
-        save_matches(pdf_name, sig, cidx.dims, src_sig, digest, agg, matches)
-        return matches
+        save_matches(pdf_name, sig, cidx.dims, src_sig, digest, matches, pages)
+        return matches, pages
 
-    def done(matches: list[tuple[int, float]]) -> None:
+    def done(result: tuple[list[tuple[int, float]], dict[int, int]]) -> None:
         release()
         if on_done:
-            on_done(matches)
+            on_done(result[0])
 
     def fail(exc: Exception) -> None:
         release()
@@ -719,11 +857,32 @@ def priority_rows(col, cfg: dict) -> dict:
 
     Uses only cached artifacts (pdf indexes, match caches) — never embeds.
     Freshness flags drive the panel's Embed/Refresh buttons instead.
-    Returns {"rows": [...], "approx": bool, "card_r": {nid: [...]}} — card_r
-    is handed back so threshold changes can re-aggregate without the col.
+    Returns {"rows": [...], "approx": bool, "card_r": {nid: [...]},
+    "matches", "card_index_ok", "card_queues"} — card_r (and, same trick,
+    card_queues) are handed back so threshold changes can re-aggregate
+    without the col: pdf_retention and note_card_counts are both pure.
+
+    Count keys per row (K-118, additive — the Library's Cards/Notes split
+    and per-PDF suspend read them; every row carries them, unindexed rows
+    at 0): ``note_count`` = matched notes at/above the row's threshold,
+    ``card_count`` = those notes' cards with queue != -1 (viewable),
+    ``suspended_count`` = cards with queue == -1. Aggregated from ONE
+    batched nid→queue query (card_queues) over the whole match pool, as
+    of each row's CONFIGURED threshold — a live threshold-slider preview
+    that re-aggregates retention via card_r can re-derive counts the same
+    way from card_queues, or simply show them as-of-configured.
+    ``doubtful_count`` (K-254) is additive the same way: pertinence's
+    judged.json for this PDF, loaded per row (guarded — a bad or absent
+    file never breaks the pass, it just reads as unjudged), gives the
+    rejected nid set that note_count/card_count/suspended_count now
+    exclude (confirmed = matched − rejected) and that doubtful_count
+    reports on its own; 0 for a PDF never judged.
+
+    Right before returning, a retention snapshot per PDF is appended to
+    retention_history.json (retention_history.record_rows) — guarded, so
+    history can never break the Library.
     """
     sig = embeddings.index_signature(cfg)
-    agg = str(cfg.get("pdf_match_agg") or DEFAULT_AGG)
     cidx = card_index.load(INDEX_DIR)
     digest = card_index_digest(cidx) if cidx is not None else ""
     card_ok = cidx is not None and card_index.check_signature(cidx, sig)
@@ -744,14 +903,18 @@ def priority_rows(col, cfg: dict) -> dict:
         st = pdf_index.stats_from_disk(pdf_index.index_dir(USER_FILES, name))
         indexed = st["exists"] and st["complete"]
         stale = indexed and (
-            (st["provider"], st["model"]) != sig
+            not embeddings.signature_matches(
+                st["provider"], st["model"], st.get("dims", 0), sig
+            )
             or src_sig is None
         )
         matches = None
         if indexed and not stale and card_ok:
-            matches = load_matches(name, sig, cidx.dims, src_sig, digest, agg)
-            if matches is None:
+            cached = load_matches(name, sig, cidx.dims, src_sig, digest)
+            if cached is None:
                 stale = True  # embedded but matches need a (re)compute
+            else:
+                matches, _pages = cached
         row = {
             "name": safe,
             "label": name,
@@ -762,6 +925,10 @@ def priority_rows(col, cfg: dict) -> dict:
             "matched_cards": 0,
             "new_pct": 0.0,
             "priority": 0.0,
+            "note_count": 0,
+            "card_count": 0,
+            "suspended_count": 0,
+            "doubtful_count": 0,
         }
         if matches is not None:
             all_matches[safe] = matches
@@ -769,22 +936,51 @@ def priority_rows(col, cfg: dict) -> dict:
         rows.append(row)
 
     card_r = card_retrievability(col, nid_pool) if nid_pool else {}
+    queue_map = card_queues(col, nid_pool) if nid_pool else {}
+    try:
+        from . import pertinence
+    except Exception as exc:
+        print(f"[klausmate] pertinence unavailable, doubtful counts disabled: {exc}")
+        pertinence = None
     for row in rows:
         matches = all_matches.get(row["name"])
         if matches is None:
             continue
-        agg_out = pdf_retention(matches, row["threshold"], card_r)
+        rejected: set[int] = set()
+        if pertinence is not None:
+            try:
+                judged = pertinence.load_judged(USER_FILES, row["name"])
+                rejected = pertinence.rejected_nids(judged)
+            except Exception as exc:
+                print(f"[klausmate] judged.json unreadable for {row['name']!r}: {exc}")
+        agg_out = pdf_retention(matches, row["threshold"], card_r, rejected=rejected)
+        n_notes, n_viewable, n_suspended, n_doubtful = note_card_counts(
+            matches, row["threshold"], queue_map, rejected=rejected
+        )
         row.update(
             retention=agg_out["retention"],
             matched_cards=agg_out["matched_cards"],
             new_pct=agg_out["new_pct"],
             priority=agg_out["priority"],
+            note_count=n_notes,
+            card_count=n_viewable,
+            suspended_count=n_suspended,
+            doubtful_count=n_doubtful,
         )
     rows.sort(key=lambda r: (r["retention"] is None, -r["priority"], r["label"]))
+    try:
+        # Lazy import inside the guard: even an import-time failure in the
+        # history module must degrade to a log line, never a dead Library.
+        from . import retention_history
+
+        retention_history.record_rows(USER_FILES, rows)
+    except Exception as exc:
+        print(f"[klausmate] retention history not recorded: {exc}")
     return {
         "rows": rows,
         "approx": not fsrs_on,
         "card_r": card_r,
         "matches": all_matches,
         "card_index_ok": card_ok,
+        "card_queues": queue_map,
     }

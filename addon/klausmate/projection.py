@@ -1,12 +1,12 @@
-"""2D projection of high-dimensional unit-normalized embedding vectors.
+"""3D projection of high-dimensional unit-normalized embedding vectors.
 
 Pure stdlib, aqt-free — importable with no Anki/Qt present at all (proven
 by ``tests/test_projection.py``, which imports this module standalone).
-This is the numeric foundation for the future Obsidian-like embedding map
-(K-058 Phase D); this card builds only the math + graph-assembly layer,
-no window/canvas.
+This is the numeric foundation under the Obsidian-like embedding map
+(K-058 Phase D): ``pdf_graph`` turns these points into the map's nodes
+and edges, and ``pdf_map`` draws them.
 
-Method: top-2 principal components by power iteration with deflation,
+Method: top-3 principal components by power iteration with deflation,
 computed directly on the (mean-centered) n x d data matrix — never
 forming the d x d covariance matrix, which would cost O(n*d^2) and swamp
 everything else once d=768. Each iteration instead does two O(n*d)
@@ -22,19 +22,84 @@ so this needs no separate transposed copy of the data.
 
 Determinism: each component's power-iteration start vector is drawn from
 ``random.Random(seed)`` (never a non-deterministic source), and both the
-point cap and the iteration count are fixed parameters — same input +
-same seed = bit-identical output.
+fit-sample size and the iteration count are fixed parameters — same input
++ same seed = bit-identical output.
 
-Point cap: real note/PDF-chunk indexes can hold tens of thousands of
-rows; ``max_points`` evenly stride-samples down to a size that stays
-interactive in a future canvas. The stride is deterministic (same idea as
-``pdf_index.stride_sample``, reimplemented locally so this module has no
-project-specific imports at all).
+FIT on a sample, PROJECT everything (K-138). ``fit_rows`` caps how many
+rows the component DIRECTIONS are computed from, not how many points
+come out: every row in ``rows`` gets a position. The split is what makes
+"show every note" affordable. Finding a direction costs
+``MAX_ITERATIONS`` passes over the fit rows (two O(n*d) products each);
+*using* one costs a single dot product per row. So on Pouya's 28,668-note
+collection the old whole-pipeline-on-everything shape would have been
+~7x the fit bill, while fitting on 4,000 evenly-strided rows and then
+scoring all 28,668 adds only the scoring passes — measured at ~9% on
+top of today's cost, for 7x the notes.
+
+THE SAMPLE DOES NOT PIN THE AXES, and this docstring claimed it did
+until K-167 measured it. Refitting from a DIFFERENT even 4,000 of the
+same 28,670 vectors moves the median note 0.449 in these [-1, 1] units,
+about 150 px on a 700 px canvas, and swaps components 2 and 3 outright
+(|<v2, v2'>| = 0.45 while |<v2, v3'>| = 0.86). The reason is that the
+cloud is nearly isotropic — the three axes' standard deviations on
+Pouya's index are 0.1332, 0.1236 and 0.1190, so there is no eigengap to
+separate them by. Only the three-dimensional SUBSPACE is stable (6-18
+degrees under a resample); which orthogonal frame of it comes back is
+sampling noise. Consequences worth knowing before touching anything
+here: the layout is a stable picture only for an unchanged index (which
+is exactly what pdf_graph's cache keys on); a cached FIT is not reusable
+across an index change and pdf_graph says why at length; and K-148's
+non-monotone iteration table below is this same fact seen from the
+other side — power iteration separates two components at their variance
+ratio per pass, and 0.93^40 is 0.05, so the third axis was never going
+to converge in 40 iterations however many it was given. Making the
+picture stable under a growing collection means fitting from more rows
+(or from a basis that does not depend on the sample), not from a
+cleverer 4,000.
+
+That also keeps the memory flat. Only the fit sample is ever packed into
+the ``array('d')`` working buffer (4,000 x 768 x 8B = 24 MB); packing all
+28,668 rows would have been 176 MB. Scoring reads the caller's own rows
+in place and subtracts the sample mean's contribution analytically —
+``dot(x - mean, v) == dot(x, v) - dot(mean, v)`` — so no centered copy of
+the full data is ever built.
+
+THREE components, not two (K-148). Pouya asked for the map to be 3D and
+"a vibe, like you're in cyberspace" — so the map needs a depth axis, and
+the honest one is the next principal component rather than a decorative
+z made up from the other two. It costs exactly what the second one cost:
+one more deflation round, one more power iteration, and one more dot
+product per row in ``_score_all`` (with the leakage corrections that go
+with it). Measured on Pouya's live 28,670 x 768 card index: 17.4 s
+for two components, 26.9 s for three (+55%, which is the extra power
+iteration and the extra dot product per row, as predicted) — and the
+whole ``build_graph_data`` around it 26.6 s. That is why BOTH of the
+map's hosts build this off the UI thread now (K-143 for the Library's
+dock, K-144 for the standalone window).
+
+Re-measured K-167, same index, same machine: ``project`` 29.47 s, of
+which the FIT is 29.29 s and scoring all 28,670 rows 2.06 s. So the fit
+is 99.4% of this module's cost and 99.9% of the map's, which is why
+``pdf_graph`` caches the answer rather than tuning the arithmetic. Do
+not spend iterations to buy speed: K-167's own table shows truncating
+to 25 moves points by up to 0.605 (~212 px) and does not improve
+monotonically as the count rises, because of the isotropy above.
+
+The stride is deterministic: ``_stride_indices`` walks ``n/cap`` through
+the rows in order, so the same index yields the same fit sample every
+time and ``pdf_graph``'s cached layout stays reproducible. It lives here
+rather than being imported so this module has no project-specific
+imports at all — ``pdf_index`` had a twin of it until the 2026-09-15
+page-level index removed the need (one vector per page is not a
+population you sample).
 
 Degenerate inputs (0 rows, 1 row, or every sampled row identical after
 mean-centering) never divide by zero: the power iteration detects a
 zero-norm update and stops, and axis normalization falls back to 0.0 for
 every point when a component has no spread instead of inventing a range.
+A cloud with no third dimension left to find (fewer rows than components,
+or a genuinely flat one) lands every point at z 0.0 — a flat plane, which
+is exactly what it is, rather than noise dressed up as depth.
 """
 
 from __future__ import annotations
@@ -50,7 +115,14 @@ except ImportError:  # pre-3.12 fallback (Anki bundles 3.13; this repo's
     def _sumprod(a, b):  # type: ignore[misc]
         return sum(x * y for x, y in zip(a, b))
 
-DEFAULT_MAX_POINTS = 4000
+# How many rows the component DIRECTIONS are fitted from. NOT an output
+# cap — every row passed to project() gets a point regardless (K-138).
+DEFAULT_FIT_ROWS = 4000
+# How many principal components the map wants: x, y, and the depth axis
+# K-148's 3D view rotates around. Not a knob — it is the length of every
+# point tuple this module returns, and pdf_map's whole camera is written
+# for three.
+COMPONENTS = 3
 MAX_ITERATIONS = 40
 _CONVERGENCE_EPS = 1e-9
 
@@ -113,6 +185,24 @@ def _power_iterate(
     return v, s
 
 
+def _deflate(flat: array, row_mv: memoryview, n: int, d: int, s, v) -> None:
+    """Remove component ``v``'s contribution from the centered data in
+    place, so the next power iteration finds the NEXT direction.
+
+    Pulled out of ``project`` when K-148 added a third component: two
+    identical copies of this loop is exactly how the second and third
+    axes would quietly drift apart.
+    """
+    for i in range(n):
+        base = i * d
+        c = s[i]
+        if c:
+            row = row_mv[base:base + d]
+            flat[base:base + d] = array(
+                "d", (x - c * y for x, y in zip(row, v))
+            )
+
+
 def _normalize_axis(values: Sequence[float]) -> list[float]:
     """Independently rescale one axis into [-1, 1]; 0.0 everywhere when
     the axis has no spread (never divides by a zero span)."""
@@ -130,66 +220,116 @@ def _normalize_axis(values: Sequence[float]) -> list[float]:
 def project(
     rows: Sequence,
     *,
-    max_points: int = DEFAULT_MAX_POINTS,
+    fit_rows: int = DEFAULT_FIT_ROWS,
     seed: int = 0,
-) -> tuple[list[tuple[float, float]], list[int]]:
-    """Project ``rows`` to 2D via the top-2 principal components.
+) -> tuple[list[tuple[float, float, float]], list[int]]:
+    """Project EVERY row to 3D via the top-3 principal components.
 
     ``rows`` is any sequence of equal-length, equal-dimension sequences of
     floats — typically ``memoryview`` slices of a packed ``array('f')``
     from ``card_index``/``pdf_index`` (unit vectors, but this function
     does not require that).
 
-    Returns ``(points, indices)``: ``points[k]`` is the 2D position of
-    ``rows[indices[k]]``, both axes independently normalized into
-    [-1, 1]. When ``len(rows) > max_points``, an even stride sample of
-    that many rows is used and ``indices`` reports exactly which —
-    callers need this to map projected points back to the original row's
-    identity (e.g. a note id).
+    Returns ``(points, indices)``: ``points[k]`` is the ``(x, y, z)``
+    position of ``rows[indices[k]]``, all three axes independently
+    normalized into [-1, 1]. ``indices`` is ``range(len(rows))`` — it
+    stays in the return signature because callers (``pdf_graph``) zip it
+    against ``points`` to recover each row's identity, and because it was
+    a strict subset before K-138 made every row a point.
+
+    ``fit_rows`` bounds only the even stride sample the two component
+    directions are COMPUTED from; rows outside it are still projected
+    onto those directions. See the module docstring for why that split
+    is what makes "every note on the map" affordable.
     """
     n_total = len(rows)
     if n_total == 0:
         return [], []
-    indices = _stride_indices(n_total, max_points)
-    n = len(indices)
-    d = len(rows[indices[0]])
+    indices = list(range(n_total))
+    fit_idx = _stride_indices(n_total, fit_rows)
+    n = len(fit_idx)
+    d = len(rows[fit_idx[0]])
     if d <= 0:
-        return [(0.0, 0.0) for _ in indices], indices
+        return [(0.0, 0.0, 0.0) for _ in indices], indices
 
     flat = array("d")
-    for i in indices:
+    for i in fit_idx:
         row = rows[i]
         if len(row) != d:
             raise ValueError("all rows must share the same dimensionality")
         flat.extend(float(x) for x in row)
     row_mv = memoryview(flat)
 
-    # Mean-center, one column (strided slice) at a time.
+    # Mean-center, one column (strided slice) at a time. The mean is the
+    # FIT sample's; it is kept, because every row outside the sample has
+    # to be centered against the same origin to land on the same map.
+    mean = array("d", (0.0 for _ in range(d)))
     for j in range(d):
         col = row_mv[j:n * d:d]
         m = sum(col) / n
+        mean[j] = m
         flat[j:n * d:d] = array("d", (x - m for x in col))
     row_mv = memoryview(flat)
 
     rng = random.Random(seed)
-    start1 = array("d", (rng.uniform(-1.0, 1.0) for _ in range(d)))
-    v1, s1 = _power_iterate(row_mv, n, d, start1)
+    # One direction per component, each found on the data with every
+    # earlier direction already deflated out of it.
+    comps: list[array] = []
+    for k in range(COMPONENTS):
+        start = array("d", (rng.uniform(-1.0, 1.0) for _ in range(d)))
+        v, s = _power_iterate(row_mv, n, d, start)
+        comps.append(v)
+        if k + 1 < COMPONENTS:  # nothing left to search: skip a 3M-op pass
+            _deflate(flat, row_mv, n, d, s, v)
+            row_mv = memoryview(flat)
 
-    # Deflate: remove the v1 component from the centered data before
-    # searching for the second one.
-    for i in range(n):
-        base = i * d
-        c = s1[i]
-        if c:
-            row = row_mv[base:base + d]
-            flat[base:base + d] = array(
-                "d", (x - c * y for x, y in zip(row, v1))
-            )
-    row_mv = memoryview(flat)
+    return _score_all(rows, d, mean, comps), indices
 
-    start2 = array("d", (rng.uniform(-1.0, 1.0) for _ in range(d)))
-    _v2, s2 = _power_iterate(row_mv, n, d, start2)
 
-    xs = _normalize_axis(s1)
-    ys = _normalize_axis(s2)
-    return list(zip(xs, ys)), indices
+def _score_all(rows: Sequence, d: int, mean: array, comps: list):
+    """Every row's ``(x, y, z)``, each axis normalized into [-1, 1].
+
+    One dot product per row per component and no centered copy of the
+    data: the sample mean's contribution is a constant per component, so
+    ``dot(x - mean, v) == dot(x, v) - dot(mean, v)``.
+
+    Each score subtracts the EARLIER components' leakage
+    (``- a * v1v2``, and for the third ``- a * v1v3 - b * v2v3``), which
+    is exactly what projecting onto the successively DEFLATED data did
+    before every row got a point.
+
+    Measured honestly (K-148 falsification): given the deflation above,
+    those terms are STRUCTURALLY near zero, not merely small. ``_deflate``
+    removes a component exactly, row by row, so the deflated data lies in
+    that component's orthogonal complement — and ``X.T @ s`` can only
+    ever produce directions inside it. The dot products they scale by
+    come out at 1e-17, and deleting the terms changes nothing this
+    module's tests can see. They stay because they are what makes the
+    formula *right* rather than *right on this data*: any future change
+    to how deflation works (a sampled deflation, a reordering, an
+    early-out) reintroduces real non-orthogonality, and then these are
+    the only thing standing between the depth axis and a copy of the
+    horizontal one. What IS pinned, because it is observable, is that the
+    three DIRECTIONS come back mutually orthogonal.
+
+    A row of the wrong length is a caller bug, not a shrug: the pre-3.12
+    ``_sumprod`` fallback is ``zip``-based and would silently score a
+    short row against a truncated component instead.
+    """
+    means = [_sumprod(mean, v) for v in comps]
+    # cross[k][j] = <v_j, v_k> for j < k — the leakage of every earlier
+    # component into this one.
+    cross = [[_sumprod(comps[j], v) for j in range(k)]
+             for k, v in enumerate(comps)]
+    axes: list = [array("d") for _ in comps]
+    for row in rows:
+        if len(row) != d:
+            raise ValueError("all rows must share the same dimensionality")
+        scores: list = []
+        for k, v in enumerate(comps):
+            s = _sumprod(row, v) - means[k]
+            for j, c in enumerate(cross[k]):
+                s -= scores[j] * c
+            scores.append(s)
+            axes[k].append(s)
+    return list(zip(*(_normalize_axis(a) for a in axes)))

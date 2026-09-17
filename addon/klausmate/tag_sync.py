@@ -14,13 +14,16 @@ THE INVARIANT: every indexed PDF owns exactly one collection tag,
 ``!Library::<folder path, / -> ::>::<leaf>``, where ``leaf`` is the PDF's
 display name minus a trailing ``.pdf``/``.txt``, sanitized tag-legal. The
 tag's members are exactly the notes whose cached match score is at or
-above that PDF's sensitivity threshold. The three reserved leaves
+above that PDF's sensitivity threshold. The four reserved leaves
 (``Curating``, ``Curated``, ``Matching`` — the static tags already living
 at the ``!Library`` root; see curation.CURATED_TAG. ``Matching``
 was retention.py's own Browse-preview tag until K-055 retired it — kept
 reserved anyway so a PDF literally named "Matching" can never collide
-with that historical name) get a ``-pdf`` suffix if a display name would
-otherwise collide with one of them at the root.
+with that historical name — and ``Doubtful``, K-254's own root tag, whose
+members are the pertinence-rejected nids each PDF still matches,
+unioned across every PDF) get
+a ``-pdf`` suffix if a display name would otherwise collide with one of
+them at the root.
 
 State: each PDF's prefs.json entry (the same file retention.py's
 threshold overrides live in) gains a ``"tag"`` key — the last tag name
@@ -95,7 +98,19 @@ CONFIG_KEY = "library_tags_enabled"
 # stub tag_migrate.py already uses, and these three names are exactly as
 # stable as tag_migrate.TAG_RENAME_MAP's old side — they name tags that
 # already exist in shipped collections and must never quietly drift.
-RESERVED_LEAVES = frozenset({"curating", "curated", "matching"})
+# "doubtful" joined them in K-254: DOUBTFUL_TAG below is Klaus's own new
+# root tag (pertinence-rejected cards), reserved the same way so a PDF
+# literally named "Doubtful.pdf" can never collide with it either.
+RESERVED_LEAVES = frozenset({"curating", "curated", "matching", "doubtful"})
+
+# The Doubtful tag (K-254, spec D5): membership is the UNION, across
+# every PDF's judged.json, of the pertinence-rejected nids that PDF
+# STILL matches at/above its threshold (`doubtful_members`, final review
+# 2026-09-17) — global, not per-PDF, unlike every other tag this module
+# manages. _do_sync_one
+# recomputes it in full (apply_membership's own diff) whenever a caller
+# hands it a `doubtful` set; passing None leaves it untouched entirely.
+DOUBTFUL_TAG = "!Library::Doubtful"
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _UNDERSCORE_RUN_RE = re.compile(r"_+")
@@ -113,10 +128,12 @@ def library_tags_enabled(cfg: dict) -> bool:
 def strip_pdf_ext(display: str) -> str:
     """Display name minus a trailing ``.pdf`` or ``.txt`` (case-insensitive).
 
-    Mirrors curation.suggest_deck_name's extension list rather than
-    pdf_handler._safe_basename: that helper sanitizes for the FILESYSTEM
-    (a different, more aggressive alphabet) and is the wrong tool for
-    deriving a tag's display-facing leaf.
+    Deliberately NOT pdf_handler._safe_basename: that helper sanitizes
+    for the FILESYSTEM (a different, more aggressive alphabet) and is
+    the wrong tool for deriving a tag's display-facing leaf. The two
+    extensions come from curation.suggest_deck_name, which used the
+    same pair for the deck names it minted — K-146 deleted that
+    function with the curate button; this list outlived it.
     """
     name = display or ""
     lower = name.lower()
@@ -149,11 +166,11 @@ def desired_tag(folder: str | None, display: str) -> str:
     carrying its .pdf extension, spaces, whatever the user typed).
 
     Reserved-leaf collision (a display name that sanitizes to "Curating",
-    "Curated", or "Matching" — the last one historical: retention.py's own
-    Browse-preview tag until K-055 retired it) only matters at the
-    !Library ROOT — nested under any folder the full tag path already
-    differs from the reserved one, so only the folder-less case gets the
-    "-pdf" suffix.
+    "Curated", "Matching" — historical: retention.py's own Browse-preview
+    tag until K-055 retired it — or "Doubtful", K-254's own root tag) only
+    matters at the !Library ROOT — nested under any folder the full tag
+    path already differs from the reserved one, so only the folder-less
+    case gets the "-pdf" suffix.
     """
     leaf = _sanitize_segment(strip_pdf_ext(display)) or "PDF"
     segments = [s for s in (_sanitize_segment(p) for p in (folder or "").split("/")) if s]
@@ -301,15 +318,48 @@ def plan_reconcile(stored_by_safe: dict[str, str], existing_tags: set[str]) -> d
 # "what tag should this be" resolution the aqt-glue layer below does.
 
 
-def _escape_tag(tag: str) -> str:
-    return tag.replace("\\", "\\\\").replace('"', '\\"')
+def tag_query(tag: str) -> str:
+    """One quoted ``tag:`` operand, escaped for Anki's search syntax.
+
+    A tag is user-derived — ``desired_tag``'s sanitizer only strips
+    whitespace and a literal ``::`` — yet it goes straight into Anki's
+    QUERY LANGUAGE. Four characters matter there and the sanitizer keeps
+    all four: ``"`` terminates the quoted operand, ``\\`` escapes
+    whatever follows it, and in a ``tag:`` search ``*`` matches any run
+    while ``_`` matches any single character. ``_`` is not exotic —
+    ``_sanitize_segment`` mints one for every space, so "Week 3" becomes
+    ``Week_3`` and an unescaped query for it also matches ``Week-3``.
+
+    The escaping is Anki's own (anki-main): ``rslib/src/text.rs``'s
+    ``escape_anki_wildcards`` (:512) backslash-escapes exactly
+    ``[\\\\*_]``; ``rslib/src/search/writer.rs``'s ``maybe_quote``
+    (:103) wraps in ``"…"`` after ``replace('"', '\\\\"')``; and
+    ``rslib/src/search/parser.rs``'s ``unescape`` (:731) accepts
+    ``\\\\ \\" \\: \\( \\) \\-`` while deliberately leaving ``\\*`` and
+    ``\\_`` for the SQL writer (its own test at :881, "parser doesn't
+    unescape ``\\*_``"). Backslash first, or the escapes we add would be
+    escaped again.
+
+    EVERY caller that puts a tag in front of ``find_notes``,
+    ``find_cards`` or ``Browser.search_for`` uses this — the membership
+    diff below included since K-274. It used to build its own operand
+    with a quote-only escape, on the reasoning that widening that query
+    is a membership change rather than a search fix. It is both: the
+    notes the wildcards drag in come back as ``current``, and everything
+    in ``current`` that is not desired is bulk-REMOVED from the tag. One
+    helper, one escaping.
+    """
+    return 'tag:"{}"'.format(
+        tag.replace("\\", "\\\\").replace('"', '\\"')
+           .replace("*", "\\*").replace("_", "\\_")
+    )
 
 
 def apply_membership(col, tag: str, desired: set[int]) -> tuple[list[int], list[int]]:
     """Diff `tag`'s current members against `desired` and bulk add/remove
     the difference. Returns (added, removed) — empty lists if already in
     sync (a real no-op: no bulk_add/bulk_remove call at all)."""
-    current = set(col.find_notes(f'tag:"{_escape_tag(tag)}"'))
+    current = set(col.find_notes(tag_query(tag)))
     to_add, to_remove = diff_membership(set(desired), current)
     if to_add:
         col.tags.bulk_add(to_add, tag)
@@ -394,28 +444,123 @@ def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
     from . import card_index, embeddings, pdf_index, retention
 
     cfg_sig = embeddings.index_signature(cfg)
-    agg = str(cfg.get("pdf_match_agg") or retention.DEFAULT_AGG)
     src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
     cidx = card_index.load(retention.INDEX_DIR)
     if cidx is None or not card_index.check_signature(cidx, cfg_sig):
         return None
     digest = retention.card_index_digest(cidx)
-    return retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest, agg)
+    cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
+    return cached[0] if cached is not None else None
 
 
-def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
+def _do_sync_one(
+    col, safe: str, tag: str, desired_nids: set[int], doubtful: set[int] | None = None
+) -> dict:
     """The membership-diff body shared by sync_after_matches,
     sync_after_threshold, and sync_after_clear_overrides. Self-healing:
     if the stored tag exists but doesn't match the freshly computed
     desired one (should only happen if a rename event was somehow missed
     — see module docstring), carries the old tag's members across before
-    diffing, rather than leaving them orphaned under a dead tag name."""
+    diffing, rather than leaving them orphaned under a dead tag name.
+
+    ``doubtful`` (K-254) is the GLOBAL set of pertinence-rejected nids —
+    not scoped to `safe` — so this recomputes DOUBTFUL_TAG's membership
+    in full via the same apply_membership diff, exactly like every other
+    tag here. None (the default) leaves DOUBTFUL_TAG untouched entirely,
+    which is what lets plain indexing/curating (sync_after_matches with
+    no judge pass yet run) skip it rather than wiping real verdicts.
+    """
     stored = get_stored_tag(safe)
     renamed = apply_rename(col, stored, tag)
     added, removed = apply_membership(col, tag, desired_nids)
     if stored != tag:
         set_stored_tag(safe, tag)
-    return {"tag": tag, "added": added, "removed": removed, "renamed": renamed}
+    doubtful_added: list[int] = []
+    doubtful_removed: list[int] = []
+    if doubtful is not None:
+        doubtful_added, doubtful_removed = apply_membership(col, DOUBTFUL_TAG, doubtful)
+    return {
+        "tag": tag,
+        "added": added,
+        "removed": removed,
+        "renamed": renamed,
+        "doubtful_added": doubtful_added,
+        "doubtful_removed": doubtful_removed,
+    }
+
+
+def _at_threshold_nids(safe: str, cfg: dict) -> set[int] | None:
+    """Every nid currently at or above `safe`'s sensitivity threshold, read
+    RAW from its matches.json — or None when that file cannot be read.
+
+    Raw on purpose, exactly as `pertinence._matched_pages` reads the same
+    file: the validated `retention.load_matches` answers None for every PDF
+    whose cached ranking is cold after ANY card-index change, so validating
+    here would defeat the intersection below for every PDF except the one
+    just indexed. None is "don't know", never "nobody" — a caller must
+    never strip on it.
+    """
+    import json
+    import os.path
+
+    from . import retention
+
+    try:
+        with open(retention._matches_path(safe), encoding="utf-8") as f:
+            rows = (json.load(f) or {}).get("matches") or []
+        threshold = retention.get_threshold(safe, cfg)
+        return {int(nid) for nid, score in rows if float(score) >= threshold}
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"[klausmate] tag_sync: no readable matches for {safe!r} ({exc}) — its rejections all stand.")
+        return None
+
+
+def doubtful_members(cfg: dict) -> set[int]:
+    """DOUBTFUL_TAG's membership: every pertinence-rejected nid that is
+    STILL one of its PDF's at-threshold candidates (final review I-3).
+
+    `pertinence.all_rejected` alone unions every verdict ever written, and
+    judged.json is only ever added to — so raising a lecture's Match
+    Sensitivity (or editing a note until it stops matching) left the old
+    rejection in place and the card wearing `!Library::Doubtful` though no
+    PDF doubted it any more, with no path back: it is only re-judged if it
+    becomes that PDF's candidate again. Invisible inside Klaus (the counts
+    and "Doubtful cards…" both re-intersect) but not to a user's own search
+    or filtered deck on the bare tag. Intersecting HERE, at the one reader
+    all the sinks share, self-heals on the next sync of any kind.
+
+    The union across PDFs stays: a card rejected for A but confirmed for B
+    is still Doubtful. That is the spec's rule (and a known design debt —
+    per-card overrule is a board card), not something this narrowing
+    touches.
+
+    Never strips on missing data: a PDF whose matches.json is absent or
+    unreadable keeps its whole rejected set, and a judged.json that EXISTS
+    but cannot be read RAISES (``load_judged(strict=True)``) rather than
+    reading as "nobody rejected" — every sink catches that and passes
+    ``doubtful=None``, which leaves the tag untouched until the judge
+    rewrites the store on that PDF's next index (Copilot review of PR #4,
+    2026-09-17: the empty read was stripping members after a torn write).
+    """
+    import os
+
+    from . import pertinence, retention
+
+    user_files = retention.USER_FILES
+    out: set[int] = set()
+    try:
+        names = os.listdir(os.path.join(user_files, "pdf_index"))
+    except OSError:
+        return out
+    for safe in names:
+        if not os.path.isfile(pertinence.judged_path(user_files, safe)):
+            continue
+        rejected = pertinence.rejected_nids(pertinence.load_judged(user_files, safe, strict=True))
+        if not rejected:
+            continue
+        at_threshold = _at_threshold_nids(safe, cfg)
+        out |= rejected if at_threshold is None else (rejected & at_threshold)
+    return out
 
 
 # ------------------------------------------------------------- aqt glue
@@ -492,6 +637,7 @@ def sync_after_matches(
     pdf_name: str,
     matches: list[tuple[int, float]] | None,
     *,
+    doubtful: set[int] | None = None,
     on_done: Callable[[], None] | None = None,
 ) -> None:
     """Event 1 — indexing/curating a PDF creates or refreshes its tag.
@@ -502,6 +648,13 @@ def sync_after_matches(
     value is never None in practice — ensure_matches raises on failure
     rather than returning None — the guard below is defense in depth only,
     matching every other event's "never strip on missing data" rule.
+
+    ``doubtful`` (K-254) is passed straight through to `_do_sync_one`;
+    None (the default — every call site above except the judge phase)
+    leaves DOUBTFUL_TAG untouched, so plain indexing never re-derives it
+    from a stale or absent judged.json. The judge phase (index_queue's
+    phase four, Task 3) is the one caller that passes
+    `doubtful_members(cfg)` here.
 
     ``on_done`` (K-064) fires exactly once when the event is SETTLED —
     after the sync op succeeds or fails, and immediately on every early
@@ -542,7 +695,7 @@ def sync_after_matches(
         _run_sync_op(
             parent,
             f"Klaus: tag “{display}” in !Library",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids),
+            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
             on_done=lambda result: _tooltip_membership(parent, display, result),
             on_finished=settled,
         )
@@ -561,6 +714,14 @@ def sync_after_threshold(
     preview already uses, so "no cached matches yet" reads identically in
     both places instead of the tag sync silently disagreeing with what
     the dialog just showed.
+
+    Doubtful (K-254) is recomputed from `doubtful_members(cfg)` here —
+    never re-judged — so dragging the sensitivity slider can never spend
+    a paid pass; it only reflects whatever verdicts already exist. That
+    read is its own try/except (K-254 review Important 2): a failure
+    there falls back to `doubtful=None` rather than aborting the retag
+    the user just confirmed — only the primary tag sync's own failure
+    (below) does that.
     """
     try:
         cfg = _cfg()
@@ -574,10 +735,20 @@ def sync_after_threshold(
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
 
+        # K-254 review Important 2: guarded on its own, same shape as
+        # priority_rows — a failure in the AUXILIARY Doubtful read must
+        # never take down the PRIMARY retag the user just confirmed by
+        # moving the slider.
+        try:
+            doubtful = doubtful_members(cfg)
+        except Exception as exc:
+            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
+            doubtful = None
+
         _run_sync_op(
             parent,
             f"Klaus: retag “{display}” for new sensitivity",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids),
+            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
             on_done=lambda result: _tooltip_membership(parent, display, result),
         )
     except Exception as exc:  # noqa: BLE001
@@ -593,7 +764,13 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
     itself only returns a count). One undo entry for the whole batch,
     matching the folder-rename batching rule below. A PDF whose matches
     cache is cold is skipped individually (never strips that one PDF's
-    tag) without blocking the rest of the batch.
+    tag) without blocking the rest of the batch. Doubtful (K-254) is
+    computed ONCE from `doubtful_members(cfg)` for the whole batch —
+    never re-judged, and never per-PDF, since it is one global tag. That
+    computation is its own try/except (K-254 review Important 2,
+    mirroring sync_after_threshold above): a failure there is
+    `doubtful=None` for the whole batch, never a reason to skip the
+    retag every cleared PDF is here for.
     """
     try:
         cfg = _cfg()
@@ -601,6 +778,14 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
             return
         from . import retention
 
+        # K-254 review Important 2: same guard as sync_after_threshold —
+        # an auxiliary Doubtful-read failure must not cancel the whole
+        # batch's retag.
+        try:
+            doubtful = doubtful_members(cfg)
+        except Exception as exc:
+            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
+            doubtful = None
         plans: list[tuple[str, str, set[int]]] = []
         for safe in cleared_safes:
             matches = _cached_matches(safe, cfg)
@@ -617,7 +802,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         def work(col):
             added = removed = 0
             for safe, tag, desired_nids in plans:
-                r = _do_sync_one(col, safe, tag, desired_nids)
+                r = _do_sync_one(col, safe, tag, desired_nids, doubtful)
                 added += len(r["added"])
                 removed += len(r["removed"])
             return {"added": added, "removed": removed, "count": len(plans)}

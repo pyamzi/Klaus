@@ -28,9 +28,9 @@ machines that aren't this one are product concerns, not nice-to-haves.
 KlausMate ("Klaus") turns Anki into a lecture-PDF study cockpit. All
 four jobs are confirmed as genuinely central, not ranked:
 
-1. **Exam prep from lectures** — turn a lecture PDF into a curated deck
-   fast (semantic curation: embed the PDF, match the collection, copy
-   matches into a new deck).
+1. **Exam prep from lectures** — find the cards a lecture covers fast
+   (embed the PDF, match the collection, tag the matches), and copy a
+   chosen set of them into a new deck from Browse.
 2. **Daily review companion** — per-PDF retention scores tell the user
    what to study today (FSRS retrievability aggregated over each PDF's
    matched cards).
@@ -45,14 +45,19 @@ no external PDF reader, no manual triage of what to study next.
 
 ## Positioning
 
-Everything runs inside Anki against the user's own collection, and the
-one AI capability is embeddings-only semantic search (Voyage cloud by
-default; Ollama fully local as the private option; OpenAI as a second
-cloud option). No chat, no generation, no autocomplete — those were
-built and deliberately deleted (2026-08). A neighboring addon could not
-truthfully claim: per-PDF retention scoring joined to FSRS, semantic
-curation from the user's own lecture PDFs, and a native annotation
-viewer, in one addon with no mandatory cloud dependency.
+Everything runs inside Anki against the user's own collection. Two AI
+capabilities, both API-first since 2026-09-15: semantic search over the
+collection and the lecture pages (OpenAI embeddings, one vector per
+page — the local Ollama and Voyage paths were removed), and an
+assistant docked on Anki's main window that rides the Claude Code CLI
+under the user's own login, reading the page in view. No autocomplete,
+no chat panel of Klaus's own — those were built and deliberately
+deleted (2026-08). The AI is paid for either with the user's own keys
+or through Klaus Plus, a metered subscription relayed by Klaus's own
+service (2026-09-16). A neighboring addon could not truthfully claim:
+per-PDF retention scoring joined to FSRS, semantic matching of the
+collection against the user's own lecture PDFs, and a native annotation
+viewer, in one addon.
 
 ## Operating Context
 
@@ -61,9 +66,9 @@ viewer, in one addon with no mandatory cloud dependency.
   addon deliberately does NOT embed Anki's windows (two attempts
   removed — a durable decision).
 - Study ritual: import lecture PDFs into the Library (a user-chosen
-  on-disk folder mirrored two-way), index them, curate decks per
-  lecture, review daily guided by retention scores, annotate while
-  reviewing.
+  on-disk folder mirrored two-way), index them so each lecture's cards
+  carry its tag, review daily guided by retention scores, annotate
+  while reviewing.
 - Coordination for development: multi-agent kanban board
   (`board/BOARD.md` via `board/board.py`), archived history in
   `board/ARCHIVE.md`.
@@ -107,8 +112,11 @@ Volunteered and binding from the owner:
   light/dark key sets, user-selectable accent themes (six presets +
   custom colour), translucent Apple-material state veils, a documented
   radius/type scale enforced by tests. Seamless window chrome (top and
-  bottom toolbars matching, frosted over custom backgrounds) is a
-  committed identity feature.
+  bottom toolbars matching each other and the OS window's own colour)
+  is a committed identity feature. The bars are deliberately NOT tied
+  to the custom wallpaper (removed 2026-08-30, Pouya's call) — that
+  frost is the deck panels' job now, via real `backdrop-filter` on the
+  same document.
 
 ## Evidence on Hand
 
@@ -123,11 +131,15 @@ Volunteered and binding from the owner:
 
 ## Product Principles
 
-1. **The collection is sacred.** Curation copies, never moves; every
+1. **The collection is sacred.** The deck copier copies, never moves; every
    mutation is undoable; tags are owned and reconciled, not sprayed.
-2. **Local-first privacy is a feature.** Cloud embeddings are the
-   convenient default, but a fully-local path (Ollama) must always
-   exist and never degrade to mandatory cloud.
+2. **Privacy by disclosure, not by locality.** Since the API-first turn
+   (2026-09-15) the AI is cloud: OpenAI embeds the cards and lecture pages,
+   the assistant runs on the user's own Claude Code login, and Klaus Plus
+   relays through Klaus's own service. What leaves the machine, and to
+   whom, is stated in the README's privacy block and the service's
+   `/privacy` page; nothing is sent that those pages do not name, and
+   no telemetry ever. Every paid pass is priced before it runs.
 3. **Restyle, never rebuild, Anki.** Klaus lives inside Anki's own
    surfaces (toolbar restyled in place, Browse extended, stock
    multi-window). Attempts to replace Anki's shell failed twice and

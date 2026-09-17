@@ -81,8 +81,10 @@ class SyncPlan:
         )
 
 
-def empty_index(provider: str, model: str) -> CardIndex:
-    return CardIndex(provider=provider, model=model)
+def empty_index(provider: str, model: str, dims: int = 0) -> CardIndex:
+    """Callers splat a signature straight in (``empty_index(*signature)``),
+    so this has to accept the width the signature now carries."""
+    return CardIndex(provider=provider, model=model, dims=int(dims or 0))
 
 
 def text_hash(text: str) -> str:
@@ -179,18 +181,73 @@ def save(index: CardIndex, dir_path: str) -> None:
     os.replace(tmp, manifest_path)
 
 
-def check_signature(index: CardIndex | None, signature: tuple[str, str]) -> bool:
-    """True when the on-disk index matches the configured (provider, model)."""
-    return index is not None and (index.provider, index.model) == signature
+def check_signature(index: CardIndex | None, signature: tuple) -> bool:
+    """True when the on-disk index matches the configured signature.
+
+    Takes (provider, model) or (provider, model, dims). Dims is compared
+    only when the config actually asks for a width: 0 means "whatever the
+    model returns", so it cannot disagree with an index built at 3072.
+    A NON-zero request must match exactly — vectors of different widths are
+    not comparable, and a mismatch has to force a rebuild rather than
+    silently rank against truncated neighbours.
+
+    Tolerating the 2-tuple keeps every existing caller and the transcribed
+    copy in test_dialog_logic honest without a flag day.
+    """
+    if index is None:
+        return False
+    from . import embeddings
+
+    return embeddings.signature_matches(
+        index.provider, index.model, index.dims, signature
+    )
+
+
+def read_manifest(
+    dir_path: str,
+    version: int = INDEX_VERSION,
+    manifest_file: str = MANIFEST_FILE,
+) -> dict | None:
+    """The manifest as a dict, or None for every way it can fail to be
+    one: missing, unreadable, corrupt JSON, valid JSON that is not an
+    object (a truncated write can leave ``null``), or the wrong version.
+
+    One preamble for the six manifest readers across card_index,
+    pdf_index and retention (the other four still inline it — see the
+    board). The not-an-object gate is ``isinstance``, the house idiom
+    (drive_store.py), never a caught AttributeError: that would also
+    hide an attribute typo inside the caller as "no index yet".
+    """
+    try:
+        with open(os.path.join(dir_path, manifest_file), encoding="utf-8") as f:
+            m = json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(m, dict) or m.get("version") != version:
+        return None
+    return m
+
+
+# The failure exit's answer. tests/test_klausmate.py pins that the success
+# exit answers the same key set — that pin, not a spread, is what stops
+# the two exits drifting apart the way "dims" once did.
+_EMPTY_STATS: dict = {
+    "count": 0,
+    "skipped": 0,
+    "updated_at": 0.0,
+    "exists": False,
+    "provider": "",
+    "model": "",
+    "dims": 0,
+}
 
 
 def stats_from_disk(dir_path: str) -> dict:
     """Status-line stats from the manifest alone — never loads the vectors."""
+    m = read_manifest(dir_path)
+    if m is None:
+        return dict(_EMPTY_STATS)
     try:
-        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            raise ValueError("version mismatch")
         return {
             "count": len(m["nids"]),
             "skipped": len(m.get("skipped") or {}),
@@ -198,16 +255,10 @@ def stats_from_disk(dir_path: str) -> dict:
             "exists": True,
             "provider": str(m.get("provider") or ""),
             "model": str(m.get("model") or ""),
+            "dims": int(m.get("dims") or 0),
         }
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return {
-            "count": 0,
-            "skipped": 0,
-            "updated_at": 0.0,
-            "exists": False,
-            "provider": "",
-            "model": "",
-        }
+    except (KeyError, TypeError, ValueError):  # a dict, but not a manifest
+        return dict(_EMPTY_STATS)
 
 
 # ------------------------------------------------------------------- sync
@@ -285,7 +336,12 @@ def apply_sync(
     """
     old = index if index is not None else empty_index(*signature)
     new = empty_index(*signature)
-    new.dims = old.dims if (old.provider, old.model) == signature else 0
+    from . import embeddings
+
+    _same = embeddings.signature_matches(
+        old.provider, old.model, old.dims, signature
+    )
+    new.dims = old.dims if _same else 0
 
     deleted = set(plan.to_delete)
     mod_updates = dict(plan.mod_only)
@@ -309,7 +365,7 @@ def apply_sync(
         new.vectors.extend(vec)
 
     # carry forward old rows (unless deleted / re-embedded / now skipped)
-    if (old.provider, old.model) == signature:
+    if _same:
         for i, nid in enumerate(old.nids):
             if nid in deleted or nid in embeds or nid in newly_skipped:
                 continue
@@ -363,3 +419,69 @@ def top_k(
         elif score > heap[0][0]:
             heapq.heapreplace(heap, (score, nid))
     return [(nid, score) for score, nid in sorted(heap, reverse=True)]
+
+
+# ------------------------------------------------- targeted row access
+# (K-119) The lecture view needs ONE note's vector per card flip; load()
+# would drag the whole vectors.f32 (~90MB at 30k notes x 768 dims) into
+# RAM for that. RowMap is the manifest alone; read_vector seeks a
+# single row.
+
+
+@dataclass
+class RowMap:
+    provider: str
+    model: str
+    dims: int
+    rows: dict[int, int]
+    skipped: set[int]
+    updated_at: float
+
+
+def load_row_map(dir_path: str) -> RowMap | None:
+    """Manifest-only view of the index; None on missing/corrupt
+    (load()'s tolerance, minus the vector read)."""
+    try:
+        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
+            m = json.load(f)
+        if not isinstance(m, dict):
+            return None
+        if m.get("version") != INDEX_VERSION:
+            return None
+        nids = [int(n) for n in m["nids"]]
+        mods = m["mods"]
+        hashes = m["hashes"]
+        dims = int(m["dims"])
+        if not (len(nids) == len(mods) == len(hashes)):
+            return None
+        if nids and dims <= 0:
+            return None
+        return RowMap(
+            provider=str(m["provider"]),
+            model=str(m["model"]),
+            dims=dims,
+            rows={nid: i for i, nid in enumerate(nids)},
+            skipped={int(k) for k in (m.get("skipped") or {})},
+            updated_at=float(m.get("updated_at") or 0.0),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def read_vector(dir_path: str, row: int, dims: int) -> array | None:
+    """One vector row by seek. The size check is the mid-rebuild guard:
+    vectors.f32 is replaced atomically, but a stale RowMap can point
+    past the end of a shrunk file."""
+    if row < 0 or dims <= 0:
+        return None
+    vec = array("f")
+    path = os.path.join(dir_path, VECTORS_FILE)
+    try:
+        if os.path.getsize(path) < (row + 1) * dims * vec.itemsize:
+            return None
+        with open(path, "rb") as f:
+            f.seek(row * dims * vec.itemsize)
+            vec.fromfile(f, dims)
+        return vec
+    except (OSError, EOFError, ValueError):
+        return None

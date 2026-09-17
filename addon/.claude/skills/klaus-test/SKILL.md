@@ -13,10 +13,19 @@ imported normally. This skill provides the workaround and the conventions.
 - Anki 26.8.1 ships **3.13 bytecode only** at
   `/Applications/Anki.app/Contents/Resources/app_packages`; this machine's
   `python3` is **3.9**. `import aqt` fails with `bad magic number`.
-- PyQt6 there is **not** loadable either — `sip` is a 3.13-only extension,
-  not abi3. **Qt widgets cannot be instantiated or rendered in tests.**
-  Layout and appearance can only be checked by restarting Anki and looking.
-- Therefore: test *logic*, never *widgets*.
+- Anki's bundled PyQt6 is **not** loadable — `sip` is a 3.13-only
+  extension, not abi3. But system `python3` has its OWN PyQt6 installed
+  (verified 2026-08-31, K-117): **real offscreen widget tests ARE
+  possible** — see `tests/test_drive.py`'s real-Qt section (aqt.qt shim
+  over genuine PyQt6, `QT_QPA_PLATFORM=offscreen`, renders to QPixmap
+  for visual checks). Prefer logic tests; reach for real Qt when the
+  behavior lives in widget mechanics (drag/drop, sorting, menus).
+  Final look still needs a restarted Anki.
+- So: prefer logic, and reach for real Qt when the behaviour IS widget
+  mechanics — state, threading, signals. (This line used to read "never
+  *widgets*", which contradicted the paragraph above it and is the version
+  a reader remembers: it cost a whole session of "appearance cannot be
+  tested" hedging before anyone noticed test_drive already did it.)
 
 ## Writing a test
 
@@ -72,6 +81,14 @@ silently flipped the configured engine.
 
 ## Hard rules
 
+- **Falsification drivers must purge `__pycache__` and set
+  `PYTHONDONTWRITEBYTECODE=1`** (K-117 lesson): a same-byte-size
+  mutation within one mtime second defeats cpython's (mtime,size) pyc
+  check, so the run silently executes the PREVIOUS code and the pin
+  "fails to fail". Also: a synthetic `QDropEvent` does not own its
+  `QMimeData` — keep a Python reference bound, or the event points at
+  freed memory.
+
 - **Never point tests at `klausmate/user_files/`** — it holds real PDFs,
   annotations, and the card index. Use `tempfile.mkdtemp()` and pass that as
   `user_files_dir`; every storage function takes it as its first argument.
@@ -85,6 +102,6 @@ silently flipped the configured engine.
 ## Existing suites
 
 `tests/test_klausmate.py` (embeddings, pdf_index, retention math),
-`tests/test_drive.py` (drive_store, deck_curate helpers),
+`tests/test_drive.py` (drive_store, pdf_drop helpers),
 `tests/test_dialog_logic.py` (Manage-models dialog state machine).
 Run all three after any change to the modules they cover.

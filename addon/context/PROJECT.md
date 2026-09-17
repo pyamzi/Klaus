@@ -1,8 +1,9 @@
 # Orientation
 
-**klausmate** is an Anki add-on: inline autocomplete, ⌘K Ask, semantic deck
-curation from lecture PDFs, a PDF viewer with highlights, and per-PDF
-retention scoring. It runs inside Anki 26.8.1 on PyQt6, in stdlib Python
+**klausmate** is an Anki add-on: a lecture-PDF Library, semantic matching
+of the collection against each PDF, a PDF viewer with highlights, and
+per-PDF retention scoring. (Autocomplete, ⌘K Ask and the chat panel were
+deleted in 2026-08 — see CLAUDE.md.) It runs inside Anki 26.8.1 on PyQt6, in stdlib Python
 plus a vendored pypdf. Roughly 18k lines, mostly in `klausmate/`.
 
 This file is orientation only. The real references are:
@@ -36,7 +37,7 @@ git worktree copy.
 
 ## Current focus
 
-The PDF drive window and the deck-screen Curate Deck button are newly built
+The PDF drive window and the deck-screen PDF drop square are newly built
 and have not been exercised in a live Anki yet (K-001). Docs lag the code in
 two places (K-003, K-005). `klausmate/__init__.py` is overgrown at ~6k lines
 and needs slicing before it can be worked on in parallel (K-006).

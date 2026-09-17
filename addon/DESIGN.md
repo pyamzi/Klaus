@@ -135,7 +135,8 @@ state flips.
 - Flat, hairline-divided surfaces; depth from tone and translucency,
   never drop shadows.
 - Seamless window chrome: the top and bottom toolbars read as part of
-  the OS window, frosted over custom backgrounds.
+  the OS window, matching its own colour — independent of whatever
+  custom wallpaper is chosen for the deck screen.
 - One hand-drawn mark and one Garamond wordmark carrying the entire
   brand; everything else defers to the system.
 
@@ -261,13 +262,18 @@ Flat by conviction. There are **no drop shadows anywhere** — the only
 `box-shadow` declarations in the system are `none !important`
 flatteners killing Anki's own toolbar card. Depth is conveyed three
 ways: tonal layering (white surfaces on fog ground), hairline borders
-(Fog Border at 1px), and translucency. The toolbars are the showpiece:
-over a custom background they render a blurred copy of it (22px
-Gaussian, bled past every edge so the kernel never samples emptiness)
-under a 55%-opacity chrome tint — frosted glass without compositor
-access. Over a flat colour the bar simply *is* that colour, because a
-Gaussian blur of a flat fill is that fill; the seam disappears by
-construction, not by measurement. Two sanctioned exceptions,
+(Fog Border at 1px), and translucency. The deck panels are the
+showpiece: over a custom photo they take a real `backdrop-filter`
+blur — panel and wallpaper share one document, so the compositor does
+the actual work, no painted copy required. Over a flat colour the
+blur is a no-op by definition, so the panel simply reads as that
+colour; the seam disappears by construction, not by measurement. The
+top and bottom toolbars are flat chrome always, deliberately
+independent of the wallpaper (2026-08-30) — they used to fake the
+same frost with a painted copy, since their webview can't composite
+with the window behind it, and that mechanism was removed rather than
+kept as a second, weaker version of what the panels now do for real.
+Two sanctioned exceptions,
 both inside the PDF viewer's webview canvas: **paper** (rendered PDF
 pages carry a soft 1-4px page shadow — the paper metaphor, as Preview
 does) and **floating overlays** (the viewer's custom context menu

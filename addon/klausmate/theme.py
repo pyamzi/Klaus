@@ -24,6 +24,21 @@ a night-mode flip mid-session catches up on the next open.
 
 from __future__ import annotations
 
+import os
+
+
+def _asset_url(name: str) -> str:
+    """A Qt-stylesheet ``url(...)`` for a file shipped in klausmate/web.
+
+    QSS images cannot be data: URIs or drawn with borders the way a
+    web sheet would — they must be real files — so the few chrome
+    glyphs QSS needs (the combo chevron) ship as tiny SVGs next to the
+    web assets. Forward slashes on purpose: Qt's stylesheet parser
+    wants them on every platform, Windows included."""
+    path = os.path.join(os.path.dirname(__file__), "web", name)
+    return 'url("%s")' % path.replace("\\", "/")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Typography
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,6 +93,11 @@ LIGHT: dict = {
     "red_hover":    "#D7261E",
     "red_bg":       "#FFEBEB",
     "red_text":     "#D32F2F",
+    # Text-weight green, red_text's sibling: "green" is the vivid
+    # system green (#28CD41) — right for fills and dots, neon as INK,
+    # especially on dark where red_text is a soft #FFCCCC. K-127's
+    # retention column pairs these two as calm semantic text colours.
+    "green_text":   "#1F7A3D",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
@@ -116,12 +136,42 @@ DARK: dict = {
     "red_hover":    "#D7261E",
     "red_bg":       "#5A1E1E",
     "red_text":     "#FFCCCC",
+    "green_text":   "#B9E8C9",
 
     # ── Green (success) ──────────────────────────────────────────────────
     "green":        "#28CD41",
     "green_bg":     "#1E3A2E",
     "green_border": "#2D5A45",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Highlight inks (K-149) — the marker colours the pdf.js annobar offers.
+#
+# These live OUTSIDE the light/dark palettes on purpose: a highlight is
+# INK ON THE PAGE, not chrome. The value is written into the record, the
+# record bakes into the PDF as the annotation's /C, and that file opens
+# in Preview and Acrobat where Klaus's night mode does not exist — so a
+# per-mode fork here would mean the same mark rendering two different
+# colours depending on where you look at it. They do not follow the
+# accent theme either, for the same reason (and because five marker
+# inks derived from one accent would be five near-identical hues).
+#
+# Chosen to read at the viewer's 43% paint alpha over white paper AND
+# to stay distinguishable from each other when two abut. YELLOW MUST
+# STAY FIRST: it is pdfjs_viewer.HIGHLIGHT_COLOR, the native viewer's
+# default, and every pre-K-149 record on disk already carries it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+HIGHLIGHT_INKS: tuple[tuple[str, str], ...] = (
+    ("yellow", "#FADC50"),
+    ("green",  "#8AE08C"),
+    ("blue",   "#7FC6F2"),
+    ("pink",   "#F79AC8"),
+    ("orange", "#F7B267"),
+)
+
+HIGHLIGHT_INK_DEFAULT: str = HIGHLIGHT_INKS[0][1]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -467,15 +517,53 @@ def dialog_qss(night: bool) -> str:
         border-radius: 8px;
         padding: 4px 8px;
     }}
+    /* Combos read as pickers, not text fields (Pouya: "make the
+       dropdowns look better"): room on the right for a real chevron
+       — QSS draws NO arrow once ::drop-down is styled, which is
+       exactly why these looked like dead line-edits — plus a hover
+       state so they invite the click. The chevron is a shipped SVG
+       (see _asset_url): QSS images must be files. */
+    QComboBox {{
+        padding: 4px 26px 4px 10px;
+        min-height: 20px;
+    }}
+    QComboBox:hover {{
+        border: 1px solid {c['grey_dark']};
+        background-color: {c['bg']};
+    }}
     QComboBox:focus, QLineEdit:focus {{
         border: 1px solid {c['blue_bright']};
     }}
-    QComboBox::drop-down {{ border: none; width: 25px; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 24px;
+        border: none;
+        background: transparent;
+    }}
+    QComboBox::down-arrow {{
+        image: {_asset_url('chevron-night.svg' if night else 'chevron-day.svg')};
+        width: 10px;
+        height: 6px;
+    }}
     QComboBox QAbstractItemView {{
         background-color: {c['surface']};
         color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 4px;
+        outline: 0;
         selection-background-color: {c['selection_bg']};
         selection-color: {c['text']};
+    }}
+    QComboBox QAbstractItemView::item {{
+        min-height: 22px;
+        padding: 3px 8px;
+        border-radius: 6px;
+    }}
+    QComboBox QAbstractItemView::item:selected {{
+        background-color: {c['blue_accent']};
+        color: white;
     }}
     /* SynapsePro settings cards (K-105): QFrame#CardFrame is the
        section container, QLabel#SubHeaderLabel its heading, and the
@@ -631,7 +719,7 @@ def dialog_qss(night: bool) -> str:
         color: {c['text']};
     }}
     /* Disabled states (K-108). An inert control MUST look inert: the
-       Appearance page disables Fit/Blur/Choose image unless the
+       Appearance page disables Fit/Blur/Choose Image unless the
        background is an image, and those controls read as fully live.
        Cause: an id selector (QPushButton#SecondaryButton) outranks a
        pseudo-state one (QPushButton:disabled), so the enabled style
@@ -717,6 +805,73 @@ def panel_header_qss(night: bool) -> str:
     """
 
 
+def pdf_panel_qss(night: bool) -> str:
+    """The PDF viewer's own panel, objectName ``KlausPdfPanel`` (K-153).
+
+    Pouya: "I want it to be the same throughout the entire Anki app,
+    because it should be consistent no matter what." The viewer lives
+    in three hosts — the editor panel, the Library window and the
+    review-time lecture dock — and only the parts that SELF-STYLE
+    (``find_bar_qss``'s ``#KlausFindBar``, ``thumb_strip_qss``'s
+    ``#KlausThumbStrip``, and pdf.js's ``css_vars``) already looked
+    identical in all three. Everything that drifted, drifted because
+    it relied on ancestry: ``PdfSidebar`` was a plain QWidget with no
+    sheet and no ``WA_StyledBackground``, so it painted NOTHING and
+    whatever was behind it showed through every gap — the find bar's
+    margins, the strip gutter, the QPdfView frame. In the Library that
+    ambient was ``library_qss``; in the lecture dock, ``mw``'s stock
+    palette; in the editor panel, whatever the host happened to be.
+    And ``klausbook_design`` defaults FALSE, so two of the three hosts
+    inherited nothing at all in a default profile while the Library —
+    Klaus's own window — was styled unconditionally. That asymmetry is
+    the whole reason the Library's viewer looked best.
+
+    So ``PdfSidebar`` applies this TO ITSELF, the way the find bar and
+    the strip already do: no host can forget it, and a fourth host
+    gets the look for free. ONE id selector, deliberately — the sheet
+    must not grow rules that duplicate the find bar's or the strip's
+    territory. It cannot outrank them in any case: a widget's own
+    stylesheet beats an inherited one irrespective of specificity
+    (measured, K-153), and both of those carry their own.
+
+    Contents, and why each is here:
+
+    * the panel background — one deterministic base instead of bleed.
+    * ``QSplitter::handle`` — the ONE rule of ``library_qss``'s ~20
+      that ever reached inside the viewer (its thumb-strip splitter).
+      Scoped as a descendant of the panel so it CANNOT touch the
+      Library window's own two splitters, which still take theirs from
+      the window-scoped copy that stays put in :func:`library_qss`.
+    * ``QLabel`` — the viewer's labels are all secondary readouts (the
+      page indicator, the find-bar match counter, the two
+      viewer-unavailable fallbacks). The two readouts carry
+      ``muted_label_qss`` on themselves and were never at risk; the
+      FALLBACKS carry nothing, so they took their colour from whatever
+      window they were in — ``utility_window_qss``'s bare
+      ``QLabel { color: text }`` in Add Cards. This makes muted the
+      panel's default for any label that does not ask otherwise,
+      including ones added later.
+
+    Scrollbars are deliberately NOT styled: nothing styles QScrollBar
+    in any host today, which makes them the one part of the viewer
+    that is already identical everywhere. Styling them here would
+    create drift, not remove it.
+    """
+    c = palette(night)
+    return f"""
+    QWidget#KlausPdfPanel {{
+        background-color: {c['bg']};
+    }}
+    QWidget#KlausPdfPanel QSplitter::handle {{
+        background: {c['bg']};
+    }}
+    QWidget#KlausPdfPanel QLabel {{
+        color: {c['text_muted']};
+        background: transparent;
+    }}
+    """
+
+
 def find_bar_qss(night: bool) -> str:
     """The viewer's find bar, objectName ``KlausFindBar`` — surface strip,
     rounded input with an accent focus ring, borderless nav glyphs."""
@@ -752,57 +907,230 @@ def find_bar_qss(night: bool) -> str:
 
 
 def library_qss(night: bool) -> str:
-    """The Library window (DriveWindow): window on ``bg``, the tree a
-    white card with rounded corners and quiet selection, buttons
-    secondary-grey by default (``PrimaryButton`` opts into blue —
-    inverse of :func:`dialog_qss`, because the Library's row of utility
-    buttons must not scream)."""
+    """The Library window (DriveWindow), in the VS Code Explorer
+    vernacular (K-117 — Pouya: "make it look like the VSCode UI"):
+    compact 22px rows of 13px type, FLAT full-width hover/selection
+    bands, chevron twisties on folders (shipped SVG files — QSS images
+    cannot be data: URIs, see :func:`_asset_url`), an uppercase
+    letter-spaced muted section caption (``#LibrarySectionHeader`` —
+    the "LIBRARY" label; Qt QSS has no text-transform, so the text
+    itself is uppercase in pdf_drive), quiet flat toolbar buttons, and
+    11px muted column headers. Numeric-column right-alignment is
+    per-item state set in pdf_drive; this sheet only paints. The
+    Library keeps its button inversion of :func:`dialog_qss` — quiet
+    default, ``PrimaryButton`` opts into blue.
+
+    K-130 (HIG pass, Pouya screenshot 2026-08-31) refines WITHIN that
+    vernacular: styled ``::up-arrow``/``::down-arrow`` sort glyphs
+    parked in a 16px ``::section`` padding-right reserve (Qt's stock
+    chevron used to paint OVER the caption text — "Note∧"); weight-500
+    headers; hover/pressed/focus affordance on the still-quiet caption
+    buttons; and the selection band tinted with the ACTIVE accent
+    (:func:`accent_rgba` at 0.16, the SettingsNav fill) instead of the
+    grey ``selection_bg``, with full-strength text.
+
+    A selected tree ROW is two paint regions, not one: the item AND
+    the branch (indentation/disclosure-arrow) cell that every row
+    reserves, folder or not — same trap as Browse's sidebar
+    (``sidebar_tree_qss``). Styling only ``::item:selected`` left Qt
+    painting the branch cell with the raw palette Highlight colour —
+    system blue — which showed up as a stray tinted block jammed
+    against the item's rounded corner (live screenshot, 2026-08-30).
+    ``selection-background-color: transparent`` stops that underlay
+    outright; the ``::branch`` states recolour the reserved cell to
+    match the item exactly, and ``show-decoration-selected: 1`` makes
+    the band span the indent column too, so hover/selection read as
+    ONE flat full-width bar — the VS Code treatment, and exactly what
+    the no-radius rule below already demanded.
+
+    K-175 (the Explorer redesign, library_explorer.py) moves the tree
+    and its header onto ``bg`` — VS Code's sidebar is the grey ground,
+    its editor the white one, and the tree pane IS the sidebar here —
+    mixes the accent band over that ground, draws a hairline along
+    each sash, and styles the ``QToolButton#LibraryGlyph`` caption
+    actions. Icons, indent guides and the column-0 band are painted by
+    the delegate, which reads the SAME tokens as this sheet.
+
+    Since 2026-09-01 (Pouya: "I want the panels, like the left panel,
+    to be the same color as the top bar") the tree and its header move
+    again, one token further: off ``bg`` onto ``chrome`` — the top
+    bar's own token, and the same one Task 1 of the constellation-and-
+    panel-integration plan already painted the embedding map on, which
+    is what makes the map read as part of this panel rather than a
+    card dropped onto it. ``BAND_BASE`` (library_explorer.py) and the
+    two ``accent_mix`` calls in the selection rules below move with
+    it, so the band keeps compositing over the tree's REAL ground
+    instead of a retired one.
+
+    A 2026-09-02 review found the window's own splitter handles could
+    not stay on ``bg`` as first shipped: on the map-dock sash, where
+    both neighbouring panes are NOW chrome, a ``bg`` grab measured as a
+    7-of-7px stripe belonging to neither pane — a visible regression on
+    exactly the seam Step 6 asks to read as "one flat surface". Each
+    handle's grab now matches the pane its hairline is flush to
+    (chrome) instead of carrying a third colour of its own: on the map
+    dock that puts the sash back to a 1px hairline with an invisible
+    grab (VS Code's own treatment, restored); on the main sash it still
+    reads as a real seam, since the PDF pane on the other side is
+    ``bg`` (Task 8) — a step darker. ``pdf_panel_qss``'s own scoped
+    copy of this rule, for the viewer's internal thumb-strip splitter,
+    stays on ``bg`` — that splitter's neighbours are still ``bg``.
+    """
     c = palette(night)
     return f"""
     QWidget#KlausLibraryWindow {{
-        background-color: {c['bg']};
+        background-color: {c['chrome']};
         color: {c['text']};
+        font-size: 13px;
+    }}
+    QLabel#LibrarySectionHeader {{
+        color: {c['text_muted']};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        background: transparent;
     }}
     QWidget#KlausLibraryWindow QTreeWidget {{
-        background-color: {c['surface']};
-        alternate-background-color: {c['surface']};
+        /* chrome, not bg (2026-09-01, Pouya: "the panels the same
+           colour as the top bar"): the sidebar and the bar are one
+           surface; the PDF pane, on bg, is the step darker. */
+        background-color: {c['chrome']};
+        alternate-background-color: {c['chrome']};
         color: {c['text']};
-        border: 1px solid {c['grey_light']};
-        border-radius: 12px;
-        padding: 4px;
+        border: none;
+        padding: 0px;
+        font-size: 13px;
+        selection-background-color: transparent;
+        show-decoration-selected: 1;
+        outline: 0;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item {{
-        border-radius: 6px;
-        padding: 2px 0px;
+        /* Deliberately NO border-radius here. ::item is a per-CELL
+           subcontrol, never a row, and this tree has four columns
+           (PDF / Retention / Cards / Notes) — so a radius rounds each
+           column's selection box on its own, and the adjacent rounded
+           corners notch the band at every column boundary. That is the
+           visible bug: "bumps" along what should be one straight
+           highlight. sidebar_tree_qss, the addon's other tree, has
+           never carried a radius on ::item; this one was the outlier.
+           A rounded FULL-ROW pill is not expressible in Qt QSS at all —
+           there is no first-/last-column selector — so it would take a
+           QStyledItemDelegate painting one rect across the viewport.
+           min-height 22px is the VS Code Explorer row — and the
+           vertical padding is 0 because it ADDS to that: with 1px top
+           and bottom the measured row was 24px (offscreen, K-175),
+           so "22px rows" had been the sheet's word, not the pixels. */
+        min-height: 22px;
+        padding: 0px 4px;
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:hover {{
         background: {c['hover_subtle']};
     }}
     QWidget#KlausLibraryWindow QTreeWidget::item:selected {{
-        background: {c['selection_bg']};
+        /* The ACTIVE accent at the SettingsNav alpha, not the grey
+           selection_bg (K-130) — but pre-composited OPAQUE
+           (accent_mix): the band spans two paint regions, and an rgba
+           fill composites over each region's own base (measured
+           different greys, offscreen 2026-08-31); one opaque ink is
+           identical in both by construction. Full-strength text on
+           top; recolours with every colour theme either way. The base
+           is chrome, not bg, since 2026-09-01 — it must always be the
+           tree's REAL ground or the band tints the wrong paper. */
+        background: {accent_mix(night, 0.16, 'chrome')};
         color: {c['text']};
     }}
-    QWidget#KlausLibraryWindow QHeaderView::section {{
+    QWidget#KlausLibraryWindow QTreeWidget::branch {{
         background: transparent;
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
+        background: {accent_mix(night, 0.16, 'chrome')};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
+        image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
+    }}
+    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:open {{
+        image: {_asset_url('chevron-night.svg' if night else 'chevron-day.svg')};
+    }}
+    QWidget#KlausLibraryWindow QHeaderView {{
+        /* The header WIDGET, not just its sections: the area beyond the
+           last column is bare QHeaderView, and unstyled it painted the
+           palette base — a bright block in night mode (offscreen
+           render, 2026-08-31). Shares the tree's ground below — chrome,
+           since 2026-09-01 — or the column captions sit in a stripe of
+           the tree's OLD colour, sandwiched between two chrome bands. */
+        background: {c['chrome']};
+        border: none;
+    }}
+    QWidget#KlausLibraryWindow QHeaderView::section {{
+        background: {c['chrome']};
         color: {c['text_muted']};
         border: none;
         border-bottom: 1px solid {c['grey_light']};
-        padding: 4px 6px;
-        font-weight: 600;
+        /* The 16px right padding is a RESERVE for the sort glyph
+           (K-130): the ::up/down-arrow subcontrols below live in the
+           section's padding box, so caption text (the content box)
+           and glyph can never overlap at any column width — a narrow
+           column elides the text instead. */
+        padding: 4px 8px;
+        font-size: 11px;
+        /* 500, not 600 — column headers are secondary structure
+           (HIG); 600 shouted over 13px body rows. */
+        font-weight: 500;
+    }}
+    /* Sort indicator (K-130). Unstyled, Qt drew its stock chevron
+       INSIDE the caption's text area — the "Note∧" mess (screenshot,
+       2026-08-31). Styling the subcontrols makes the glyph ours: a
+       small muted triangle via the border trick (QSS ``image:``
+       cannot take a data: URI and no up-chevron SVG ships in web/),
+       parked centre-right in the padding reserve above. */
+    QWidget#KlausLibraryWindow QHeaderView::down-arrow {{
+        /* A real image with an explicit size, NOT the zero-size
+           border-triangle hack: Qt derives the sorted section's
+           indicator reserve from this subcontrol's metrics, and the
+           zero-size hack made it compute a bogus huge reserve that
+           elided even 'Notes' at 88px (offscreen probes,
+           2026-08-31). 8x5 + margins = a truthful ~16px reserve. */
+        image: {_asset_url('sort-down-night.svg' if night else 'sort-down-day.svg')};
+        width: 8px;
+        height: 5px;
+        margin-left: 3px;
+    }}
+    QWidget#KlausLibraryWindow QHeaderView::up-arrow {{
+        image: {_asset_url('sort-up-night.svg' if night else 'sort-up-day.svg')};
+        width: 8px;
+        height: 5px;
+        margin-left: 3px;
     }}
     QWidget#KlausLibraryWindow QPushButton {{
-        background-color: {c['grey_light']};
-        color: {c['text']};
-        border: none;
-        border-radius: 8px;
-        padding: 5px 14px;
+        background-color: transparent;
+        color: {c['text_muted']};
+        /* Transparent 1px border, not none: :focus recolours it in
+           place, so the ring costs zero layout jitter (dialog_qss's
+           border-none buttons accept a 1px shift on focus; the quiet
+           caption row shouldn't). Radius stays 6px — the K-110
+           small-control step; the spec's 5px is off-scale. */
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
         font-weight: 600;
     }}
     QWidget#KlausLibraryWindow QPushButton:hover {{
-        background-color: {c['grey_mid']};
+        background-color: {c['hover_subtle']};
+        color: {c['text']};
     }}
     QWidget#KlausLibraryWindow QPushButton:pressed {{
-        background-color: {c['grey_dark']};
+        /* One VISIBLE step past the hover fill in each palette: dark
+           grey_mid equals dark hover_subtle (#404040), so dark steps
+           on to grey_dark; light steps hover_subtle -> grey_mid (the
+           panel-header quiet-toolbutton convention). */
+        background-color: {c['grey_dark'] if night else c['grey_mid']};
+    }}
+    QWidget#KlausLibraryWindow QPushButton:focus {{
+        border: 1px solid {c['blue_bright']};
     }}
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton {{
         background-color: {c['blue']};
@@ -811,6 +1139,169 @@ def library_qss(night: bool) -> str:
     }}
     QWidget#KlausLibraryWindow QPushButton#PrimaryButton:hover {{
         background-color: {c['blue_hover']};
+    }}
+    /* The window's own two splitters — the main horizontal one and the
+       map dock's vertical one — still take their handle colour from
+       here. K-153 COPIED this rule into pdf_panel_qss rather than
+       moving it: that copy is scoped under #KlausPdfPanel so it reaches
+       only the viewer's internal thumb-strip splitter (in every host,
+       not just this window), and these two keep theirs. The two RULES
+       diverge on purpose since the 2026-09-02 fix round: this one
+       follows the panel onto chrome, pdf_panel_qss's copy stays on bg
+       — the viewer pane it grabs is bg too (Task 8), so that handle
+       still reads as a seam in ITS OWN pane's ground. */
+    QWidget#KlausLibraryWindow QSplitter::handle {{
+        background: {c['chrome']};
+    }}
+    /* K-175: VS Code draws a 1px sideBar.border along its sash and
+       leaves the GRAB itself the colour of the pane it closes — never
+       a third colour of its own (fixed 2026-09-02: a bg grab between
+       two now-chrome panes measured as a 7px stripe belonging to
+       neither, not the invisible grab this comment used to claim).
+       :horizontal is the SPLITTER's orientation (a vertical bar
+       between side-by-side panes), so the hairline sits on the bar's
+       left edge, flush against the pane it closes; the map dock's
+       vertical splitter gets the same line on its top edge — and on
+       THAT splitter, both panes are chrome, so the rule above puts the
+       grab back to invisible, hairline only. On the main sash the grab
+       is chrome too, reading as part of the tree side; the PDF pane
+       past the hairline is bg (Task 8), a step darker, so the seam
+       still shows there. Width is geometry and lives in
+       library_explorer (SASH_W), set from pdf_drive. */
+    QWidget#KlausLibraryWindow QSplitter::handle:horizontal {{
+        border-left: 1px solid {c['grey_light']};
+    }}
+    QWidget#KlausLibraryWindow QSplitter::handle:vertical {{
+        border-top: 1px solid {c['grey_light']};
+    }}
+    /* K-175: the section-caption glyph actions (library_explorer.
+       GlyphButton). Same quiet-at-rest / hover / pressed / focus
+       ladder as the caption QPushButtons above, on a QToolButton that
+       paints its own 16px glyph. Zero padding: the glyph is centred
+       by the widget in a fixed 24x22 box. The id is repeated on
+       :disabled so it outranks the resting rule (CLAUDE.md: an id
+       outranks a pseudo-state). */
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph {{
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        padding: 0px;
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:pressed {{
+        background: {c['grey_dark'] if night else c['grey_mid']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:disabled {{
+        background: transparent;
+    }}
+    """
+
+
+def assistant_dock_qss(night: bool) -> str:
+    """The Claude Code assistant dock, objectName ``KlausAssistantDock``
+    (K-198, replacing the retired ``KlausAssistantPanel`` third-pane —
+    see ``library_qss``'s history). Joins the ``dialog_qss`` family:
+    ground on ``chrome`` like the top/bottom bars and every other Klaus
+    panel; header, selection chip and status dot in ``text_muted``; the
+    transcript itself ALSO on ``chrome`` (its edges dissolve into the
+    dock instead of reading as a separate white card sitting on it),
+    with `text` body copy and `surface`-boxed ``<pre>`` blocks for the
+    markdown-lite renderer's fenced code; the input on ``surface`` with
+    a quiet ``grey_light`` hairline; and buttons following
+    :func:`dialog_qss`'s own roles verbatim (blue-primary Send/Stop,
+    grey ``SecondaryButton`` for New Session and Re-check).
+
+    The focus ring is ``blue_bright``, not ``blue_border``: every other
+    ``:focus`` rule in this module (QComboBox/QLineEdit, QPushButton,
+    the LibraryGlyph action, SettingsSearch) uses ``blue_bright``
+    specifically because it is visible in BOTH palettes — ``blue_border``
+    is ``"none"`` in light mode (a button's resting-state chrome, not an
+    accent ring), and a focus indicator that disappears in light mode
+    fails the same P1 this module's own dialog_qss comment already
+    fixed once for buttons. Kept consistent here rather than forked.
+    """
+    c = palette(night)
+    return f"""
+    QDockWidget#KlausAssistantDock {{
+        background: {c['chrome']};
+        color: {c['text']};
+        font-size: 13px;
+    }}
+    QDockWidget#KlausAssistantDock QLabel#KlausAssistantHeader {{
+        color: {c['text_muted']};
+        font-size: 12px;
+        font-weight: 600;
+        background: transparent;
+    }}
+    QDockWidget#KlausAssistantDock QLabel#KlausAssistantChip {{
+        color: {c['text_muted']};
+        font-size: 11px;
+        background: transparent;
+    }}
+    QDockWidget#KlausAssistantDock QLabel#KlausAssistantStatusDot {{
+        color: {c['text_muted']};
+        font-size: 11px;
+        background: transparent;
+    }}
+    QDockWidget#KlausAssistantDock QTextEdit#KlausAssistantTranscript {{
+        background-color: {c['chrome']};
+        color: {c['text']};
+        border: none;
+        font-size: 13px;
+    }}
+    QDockWidget#KlausAssistantDock QTextEdit#KlausAssistantTranscript pre {{
+        background-color: {c['surface']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 8px;
+        padding: 6px;
+    }}
+    QDockWidget#KlausAssistantDock QPlainTextEdit#KlausAssistantInput {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        border-radius: 8px;
+        padding: 6px 8px;
+        font-size: 13px;
+    }}
+    QDockWidget#KlausAssistantDock QPlainTextEdit#KlausAssistantInput:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QDockWidget#KlausAssistantDock QPushButton {{
+        background-color: {c['blue']};
+        color: white;
+        border: {c['blue_border']};
+        border-radius: 8px;
+        padding: 6px 16px;
+        font-weight: 600;
+        font-size: 13px;
+    }}
+    QDockWidget#KlausAssistantDock QPushButton:hover {{ background-color: {c['blue_hover']}; }}
+    QDockWidget#KlausAssistantDock QPushButton:pressed {{ background-color: {c['blue_pressed']}; }}
+    QDockWidget#KlausAssistantDock QPushButton:focus {{ border: 1px solid {c['blue_bright']}; }}
+    QDockWidget#KlausAssistantDock QPushButton:disabled {{
+        background-color: {c['grey_light']};
+        color: {c['text_faint']};
+    }}
+    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton {{
+        background-color: {c['grey_light']};
+        color: {c['text']};
+        border: none;
+    }}
+    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:hover {{
+        background-color: {c['grey_mid']};
+    }}
+    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:pressed {{
+        background-color: {c['grey_dark']};
+    }}
+    QDockWidget#KlausAssistantDock QPushButton#SecondaryButton:disabled {{
+        background-color: {c['grey_light']};
+        color: {c['text_faint']};
+        border: none;
     }}
     """
 
@@ -843,14 +1334,75 @@ def thumb_strip_qss(night: bool) -> str:
     """
 
 
-def drop_zone_qss(night: bool, object_name: str) -> str:
-    """The shared drop-square language (Library drop zone; the deck-screen
-    squares in deck_curate render the same values as HTML). Dashed grey
-    idle border that turns solid accent on drag-over."""
+def transcript_strip_qss(night: bool) -> str:
+    """The transcript strip under the page, in BOTH PDF renderers
+    (Plan 2 D6) — objectName ``KlausTranscriptStrip`` for the native
+    viewer's Qt widget (the pdf.js side draws its own copy of this
+    same language straight in CSS, off ``theme.css_vars`` — see
+    ``web/pdfjs_viewer.html``'s ``.klaus-transcript`` rules). A
+    ``chrome`` ground with a ``grey_light`` hairline on top — the same
+    seam ``dialog_qss``'s RowSeparator/ButtonBarLine draw — and the
+    chevron plus the transcript text both in ``text_muted`` at 12px:
+    the lecturer's words are a caption under the page, not body copy
+    competing with it.
+
+    The ``QScrollArea`` rule is load-bearing, not tidiness (PR #4 sixth
+    review): a scroll area paints its VIEWPORT child, and Qt clears that
+    viewport's own palette fill only because this rule declares the
+    scroll area transparent. Narrow or delete it and the transcript body
+    comes back as an opaque palette-coloured rectangle over the strip's
+    chrome — a dark-mode pixel read in tests/test_transcript_strip.py
+    fails if it ever does.
+    """
     c = palette(night)
     return f"""
+    QWidget#KlausTranscriptStrip {{
+        background-color: {c['chrome']};
+        border-top: 1px solid {c['grey_light']};
+    }}
+    QWidget#KlausTranscriptStrip QToolButton {{
+        background: transparent;
+        border: none;
+        color: {c['text_muted']};
+        font-size: 12px;
+        font-weight: 600;
+        padding: 2px 0px;
+    }}
+    QWidget#KlausTranscriptStrip QScrollArea {{
+        background: transparent;
+        border: none;
+    }}
+    QWidget#KlausTranscriptStrip QLabel {{
+        background: transparent;
+        color: {c['text_muted']};
+        font-size: 12px;
+    }}
+    """
+
+
+def drop_zone_qss(
+    night: bool, object_name: str, idle_border: bool = True
+) -> str:
+    """The shared drop-square language (Library drop zone; the deck-screen
+    squares in deck_curate render the same values as HTML). Dashed grey
+    idle border that turns solid accent on drag-over.
+
+    ``idle_border=False`` keeps the drag-over half and drops the idle
+    dashed box, for a surface that is a drop target but must not
+    ADVERTISE as a box while idle — the Library's empty state (K-132),
+    which is quiet muted guidance text until a .pdf drag arrives, in a
+    pane that already carries one dashed square below the tree (two
+    would read as two targets). The idle border is not removed but made
+    TRANSPARENT: the box model stays identical, so the text cannot
+    shift by a pixel when the accent border appears under the drag.
+    """
+    c = palette(night)
+    idle_edge = (
+        f"1px dashed {c['grey_mid']}" if idle_border else "1px solid transparent"
+    )
+    return f"""
     #{object_name} {{
-        border: 1px dashed {c['grey_mid']};
+        border: {idle_edge};
         /* Container role (a droppable card, not a button/chip) — 12px
            per the design scale above; this had drifted to a bespoke
            10px. */
@@ -882,6 +1434,25 @@ def accent_rgba(night: bool, alpha: float) -> str:
     h = palette(night)["blue_bright"].lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r}, {g}, {b}, {alpha:g})"
+
+
+def accent_mix(night: bool, alpha: float, base: str = "surface") -> str:
+    """``blue_bright`` pre-composited over the ``base`` token (default
+    ``surface``) at *alpha*, as OPAQUE hex. For selection bands that
+    span two QSS paint regions (tree item + branch): an rgba fill
+    composites over whatever base each region happens to have —
+    measured different greys per region on the Library tree
+    (offscreen, 2026-08-31) — while one opaque ink is identical
+    everywhere by construction. ``base`` exists because the Library
+    tree moved onto ``bg`` (K-175): a band mixed over ``surface`` on a
+    ``bg`` ground is a tint of the wrong paper."""
+    c = palette(night)
+    ah, sh = c["blue_bright"].lstrip("#"), c[base].lstrip("#")
+    mixed = (
+        round(int(ah[i:i + 2], 16) * alpha + int(sh[i:i + 2], 16) * (1 - alpha))
+        for i in (0, 2, 4)
+    )
+    return "#%02X%02X%02X" % tuple(mixed)
 
 
 def _toolbar_vars(c: dict, night: bool) -> str:
@@ -1017,13 +1588,10 @@ def toolbar_css() -> str:
     .header .hitem {{ {_chip_base_rules()} }}
     .header .hitem:hover {{ {_chip_hover_rules()} }}
     .header .hitem:active {{ {_chip_active_rules()} }}
-    #klaus-logo {{
-        display: flex;
-        align-items: center;
-        padding: 0 8px 0 2px;
-        cursor: pointer;
-    }}
-    #klaus-logo svg {{ display: block; }}
+    /* #klaus-logo carries its own geometry inline (top_bar.logo_html)
+       so the star sits in the SAME spot whether or not this sheet is
+       injected — the design gate must never move the mark. Nothing
+       mode-specific is left to say about it here. */
     """
 
 
@@ -1035,8 +1603,10 @@ def bottombar_css() -> str:
     rest, the translucent hover/press veils on interaction, so the
     highlight tints whatever background is behind the bar. Injected by
     top_bar for ``DeckBrowserBottomBar``/``OverviewBottomBar`` contexts
-    only; the reviewer's answer bar keeps Anki's own styling (its
-    colours carry scheduling meaning).
+    only; the reviewer's answer bar has its own sheet
+    (:func:`reviewer_bar_css`, injected by window_chrome) built from
+    the SAME chip blocks — its scheduling colours live in the count
+    and interval spans, which that sheet deliberately never styles.
     """
     return f"""
     :root {{ {_toolbar_vars(palette(False), False)} }}
@@ -1072,8 +1642,27 @@ def css_vars(night: bool) -> str:
     """Theme tokens as CSS custom properties for webview surfaces
     (pdfjs_viewer.html's ``__THEME_VARS__`` substitution) — the same
     Qt-side tokens rendered for HTML, so webviews and widgets cannot
-    drift (SynapsePro mirrors its palette into ``:root`` the same way)."""
+    drift (SynapsePro mirrors its palette into ``:root`` the same way).
+
+    ``--hover-subtle`` is the webview half of the SAME hover fill every
+    QSS builder reaches for (``find_bar_qss``, ``thumb_strip_qss``,
+    ``library_qss`` — all ``c['hover_subtle']``): the pdf.js findbar,
+    annobar, context menu and thumbnail strip hover over ``--surface``
+    exactly as their Qt siblings do, so the token, not a hand-mixed
+    neutral, is what keeps the two halves of that family in step.
+    pdfjs_viewer.html keeps a fallback for it, ordered so this
+    definition wins — a safety net, not a second source of truth.
+
+    ``--ink-*`` (K-149) is the highlight swatch palette: one var per
+    :data:`HIGHLIGHT_INKS` entry, so the annobar's colour buttons carry
+    no hex of their own (CLAUDE.md: UI files must not hardcode colours)
+    and the page reads the chosen value straight back out of the
+    custom property. Emitted IDENTICALLY in both modes — see the
+    HIGHLIGHT_INKS comment: this is ink on the page, not chrome."""
     c = palette(night)
+    inks = "".join(
+        f" --ink-{name}: {value};" for name, value in HIGHLIGHT_INKS
+    )
     return (
         f"--bg: {c['bg']};"
         f" --surface: {c['surface']};"
@@ -1081,9 +1670,11 @@ def css_vars(night: bool) -> str:
         f" --text-muted: {c['text_muted']};"
         f" --grey-light: {c['grey_light']};"
         f" --grey-mid: {c['grey_mid']};"
+        f" --hover-subtle: {c['hover_subtle']};"
         f" --accent: {c['blue_bright']};"
         f" --accent-selection: {accent_rgba(night, 0.35)};"
         f" --font: {FONT_FAMILY};"
+        + inks
     )
 
 
@@ -1091,3 +1682,361 @@ def muted_label_qss(night: bool, size_px: int = 11) -> str:
     """Inline style for secondary/status labels (SynapsePro's text_muted)."""
     c = palette(night)
     return f"color: {c['text_muted']}; font-size: {size_px}px;"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Anki-window builders (the KlausBook layer beyond the deck screen).
+# Consumed by window_chrome.py, gated on klausbook_design at the
+# painters — these are pure strings and know nothing about the gate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def browse_qss(night: bool) -> str:
+    """The Browse window, HARMONIZED — tokens, never transformation.
+
+    Browse is Anki's densest work surface, so this sheet recolours and
+    nothing else: table selection/hairlines, header typography, the
+    search combo in the find bar's language. Layout, density and row
+    heights stay Anki's. Deliberately unreachable and left semantic:
+    the flag/marked/suspended row tints (delegate-painted from
+    aqt.colors at paint time) and the Cards/Notes switch (custom
+    paintEvent). The window background is EXPLICIT because Anki's
+    optional "Anki" widget style ships an app-scope
+    ``QWidget{background:none}`` — a widget-scope sheet with a real
+    background survives it.
+
+    Applied to the Browser instance by window_chrome (the sidebar tree
+    needs its own instance sheet — see :func:`sidebar_tree_qss`).
+    """
+    c = palette(night)
+    return f"""
+    QMainWindow {{
+        background-color: {c['bg']};
+    }}
+    QTableView {{
+        background-color: {c['surface']};
+        alternate-background-color: {c['surface']};
+        color: {c['text']};
+        border: none;
+        gridline-color: {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QHeaderView::section {{
+        background: {c['surface']};
+        color: {c['text_muted']};
+        border: none;
+        border-bottom: 1px solid {c['grey_light']};
+        padding: 4px 6px;
+        font-weight: 600;
+    }}
+    QComboBox#searchEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QComboBox#searchEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QComboBox#searchEdit::drop-down {{
+        border: none;
+        width: 18px;
+    }}
+    QComboBox#searchEdit QAbstractItemView {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 6px;
+        padding: 2px 6px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QSplitter::handle {{
+        background: {c['grey_light']};
+    }}
+    QDockWidget {{
+        background-color: {c['bg']};
+    }}
+    """
+
+
+def sidebar_tree_qss(night: bool) -> str:
+    """The Browse sidebar tree — an INSTANCE sheet, and that is the
+    point: Anki's SidebarTreeView sets its own widget-level stylesheet
+    and re-applies it on every theme flip, and a widget-level sheet
+    beats any ancestor's. So this replaces Anki's wholesale, which
+    means it must RE-DECLARE what Anki's carried (the padding and the
+    zero border) or replacing it would visibly shift the tree.
+
+    A selected tree ROW is two paint regions, not one: the BRANCH cell
+    (the disclosure-arrow column) and the item. Styling only
+    ``::item:selected`` left Qt painting the branch cell and the
+    selection underlay with the palette highlight — system dark blue —
+    which surfaced as dark fragments at the row's left edge, and
+    peeked through the corner cutouts of a rounded item (live
+    screenshot, 2026-08-29). Hence three rules here, not one:
+    ``selection-background-color: transparent`` stops the style's own
+    underlay painting entirely, the ``::branch`` states recolour the
+    arrow column in step with the item, and the selection stays a
+    FULL-WIDTH RECTANGLE — Anki's stock geometry, recoloured, which is
+    what "harmonize" means, and square corners have nothing to leak
+    through. ``outline: 0`` drops the style's dotted focus rect for
+    the same reason; the selection colour itself carries focus, as it
+    does in every macOS sidebar.
+    """
+    c = palette(night)
+    return f"""
+    QTreeView {{
+        padding: 3px;
+        padding-right: 0px;
+        border: 0;
+        background: {c['bg']};
+        color: {c['text']};
+        selection-background-color: transparent;
+        show-decoration-selected: 1;
+        outline: 0;
+    }}
+    QTreeView::item {{
+        padding: 1px 0px;
+    }}
+    QTreeView::item:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QTreeView::item:selected {{
+        background: {c['selection_bg']};
+        color: {c['text']};
+    }}
+    QTreeView::branch {{
+        background: transparent;
+    }}
+    QTreeView::branch:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QTreeView::branch:selected {{
+        background: {c['selection_bg']};
+    }}
+    """
+
+
+def utility_window_qss(night: bool) -> str:
+    """Shared Qt chrome for Add Cards and the Stats dialog.
+
+    Library polarity on purpose: these windows are rows of utility
+    buttons (Add, Close, Help, History, the deck/notetype choosers,
+    Save PDF) and a wall of blue would shout — grey secondary by
+    default, with ONLY the dialog-default action (:default) taking the
+    accent. Explicit window background for the same "Anki" widget
+    style reason as :func:`browse_qss`.
+    """
+    c = palette(night)
+    return f"""
+    QMainWindow, QDialog {{
+        background-color: {c['bg']};
+    }}
+    QLabel {{
+        color: {c['text']};
+        background: transparent;
+    }}
+    QPushButton {{
+        background-color: {c['grey_light']};
+        color: {c['text']};
+        border: none;
+        border-radius: 8px;
+        padding: 5px 14px;
+        font-weight: 600;
+    }}
+    QPushButton:hover {{
+        background-color: {c['grey_mid']};
+    }}
+    QPushButton:pressed {{
+        background-color: {c['grey_dark']};
+    }}
+    QPushButton:disabled {{
+        color: {c['text_faint']};
+    }}
+    QPushButton:default {{
+        background-color: {c['blue']};
+        color: white;
+        border: {c['blue_border']};
+    }}
+    QPushButton:default:hover {{
+        background-color: {c['blue_hover']};
+    }}
+    QComboBox {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QComboBox QAbstractItemView {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_light']};
+        selection-background-color: {c['selection_bg']};
+        selection-color: {c['text']};
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    """
+
+
+def editor_tags_qss(night: bool) -> str:
+    """The legacy editor's Qt tag bar — another INSTANCE sheet, for
+    the same reason as the sidebar tree: Anki gives the group box and
+    the TagEdit widget-level sheets, so only a sheet on the widgets
+    themselves can restyle them. TagEdit extends QLineEdit, so the
+    input rule reaches it by class.
+    """
+    c = palette(night)
+    return f"""
+    QGroupBox {{
+        border: none;
+        background: transparent;
+    }}
+    QLabel {{
+        color: {c['text_muted']};
+        background: transparent;
+    }}
+    QLineEdit {{
+        background-color: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['grey_mid']};
+        border-radius: 8px;
+        padding: 3px 8px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    """
+
+
+def reviewer_bar_css() -> str:
+    """The reviewer's bottom bar — CHROME ONLY, and the scheduling
+    semantics survive BY OMISSION: this sheet contains no rule for the
+    count spans or the interval labels above the buttons, so their
+    colours pass through untouched. The buttons themselves were never
+    coloured by Anki (verified: they are generic <button>s inheriting
+    the platform sheet) — reshaping them into the Klaus chip language
+    changes shape, not meaning.
+
+    Same both-palettes/no-argument contract as :func:`toolbar_css`,
+    and the chips are the SAME shared declaration blocks the top and
+    deck bottom bars use, so all three bars agree by construction.
+    Flat chrome on purpose — no frosted background copy here: the
+    reviewer's main webview is deliberately wallpaper-free, and a
+    frosted photo strip under a flat card screen would read detached.
+    """
+    return f"""
+    :root {{ {_toolbar_vars(palette(False), False)} }}
+    :root.night-mode,
+    body.night_mode,
+    body.nightMode {{ {_toolbar_vars(palette(True), True)} }}
+    html, body {{
+        background: var(--klaus-chrome) !important;
+        border: none !important;
+    }}
+    #outer {{
+        border-top: none !important;
+        background: transparent !important;
+    }}
+    button {{
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        {_chip_base_rules()}
+    }}
+    button:hover {{ {_chip_hover_rules()} }}
+    button:active {{ {_chip_active_rules()} }}
+    button:focus {{ outline: 0 !important; border: none !important; }}
+    button:focus-visible {{
+        outline: 2px solid var(--klaus-accent) !important;
+        outline-offset: 1px !important;
+    }}
+    """
+
+
+def editor_css() -> str:
+    """The editor webview (Add Cards, Browse, Edit Current) —
+    harmonization for the chrome AROUND the fields: toolbar strip on
+    the window ground, field containers as quiet hairline cards with
+    an accent focus, muted field labels. The fields' CONTENT is the
+    user's card text and is never styled. Both palettes keyed on the
+    night classes AnkiWebView flips live; injected via
+    ``web_content.head``, which lands after css/editor.css and wins
+    ties without needing !important.
+    """
+    light = palette(False)
+    dark = palette(True)
+    def vars_for(c: dict) -> str:
+        return (
+            f"--klaus-bg: {c['bg']};"
+            f" --klaus-surface: {c['surface']};"
+            f" --klaus-border: {c['grey_light']};"
+            f" --klaus-border-mid: {c['grey_mid']};"
+            f" --klaus-text-muted: {c['text_muted']};"
+            f" --klaus-accent: {c['blue_bright']};"
+        )
+    return f"""
+    :root {{ {vars_for(light)} }}
+    :root.night-mode,
+    body.night_mode,
+    body.nightMode {{ {vars_for(dark)} }}
+    .editor-toolbar,
+    .button-toolbar {{
+        background: var(--klaus-bg);
+    }}
+    .field-container {{
+        border: 1px solid var(--klaus-border);
+        border-radius: 8px;
+    }}
+    .field-container:focus-within {{
+        border-color: var(--klaus-accent);
+    }}
+    .label-container {{
+        color: var(--klaus-text-muted);
+        font-size: 11px;
+    }}
+    """
+
+
+def stats_css() -> str:
+    """The Stats (graphs) page — variables only, and ONLY the
+    structural ones: page ground, graph-card surface, hairlines. The
+    page's components consume Anki's own custom properties, so
+    harmonizing means overriding four vars, not fighting sveltekit
+    markup. Never touched: every ``--fg`` variable and every
+    graph-semantic colour (young/mature/ease series carry meaning).
+    Injected post-load by window_chrome through
+    ``webview_did_inject_style_into_page``.
+    """
+    light = palette(False)
+    dark = palette(True)
+    def vars_for(c: dict) -> str:
+        return (
+            f"--canvas: {c['bg']};"
+            f" --canvas-elevated: {c['surface']};"
+            f" --border: {c['grey_light']};"
+            f" --border-subtle: {c['grey_light']};"
+        )
+    return f"""
+    :root {{ {vars_for(light)} }}
+    :root.night-mode {{ {vars_for(dark)} }}
+    """

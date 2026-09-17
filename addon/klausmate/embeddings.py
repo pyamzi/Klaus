@@ -1,12 +1,8 @@
-"""Embedding providers for Klaus semantic search.
+"""Embedding provider for Klaus semantic search.
 
-Turns card text / prompts / PDF chunks into unit vectors via one of:
-
-- ``ollama``  — local ``/api/embed`` (default; private, free)
-- ``openai``  — ``POST {OPENAI_API_BASE}/embeddings`` with a user API key
-- ``voyage``  — ``POST {VOYAGE_API_BASE}/embeddings`` with a user API key
-
-(Anthropic has no embeddings API, so Claude users pick one of the above.)
+Turns card text / prompts / PDF chunks into unit vectors via OpenAI's
+embeddings API — the sole provider now (Ollama and Voyage are gone; the
+actual HTTP lives in openai_client.py).
 
 aqt-free and stdlib-only: config is injected as a callable so the module is
 drivable headlessly against mock HTTP servers, and works within AnkiWeb's
@@ -16,31 +12,34 @@ so downstream similarity is a plain dot product (see card_index.top_k).
 
 from __future__ import annotations
 
-import json
 import math
 import threading
-import time
-import urllib.error
-import urllib.request
 from array import array
-from typing import Any, Callable, Iterator
+from typing import Callable, Iterator
 
-# Module globals (not constants) so tests can point them at mock servers.
-OPENAI_API_BASE = "https://api.openai.com/v1"
-VOYAGE_API_BASE = "https://api.voyageai.com/v1"
+DEFAULT_MODELS = {"openai": "text-embedding-3-large"}
 
-DEFAULT_MODELS = {
-    "ollama": "nomic-embed-text",
-    "openai": "text-embedding-3-small",
-    "voyage": "voyage-3-lite",
-}
+DEFAULT_PROVIDER = "openai"
 
-DEFAULT_PROVIDER = "voyage"
+# OpenAI's v3 embedding models are trained with Matryoshka Representation
+# Learning: the most significant components sit at the FRONT of the vector,
+# so asking for fewer dimensions truncates the tail and degrades gracefully
+# rather than catastrophically. text-embedding-3-large shortened to 256 still
+# beats the old ada-002 at 1536.
+#
+# That is why the large model can be the fast one here. Ranking cost is
+# linear in dimensions — card_index.top_k is a sumprod over packed rows — so
+# -large at 1024 is BETTER than -small at 1536 on retrieval quality while
+# being cheaper to rank and smaller on disk. Full 3072 is available by
+# setting the key to 0 (meaning "whatever the model gives").
+#
+# Only these two models accept the parameter — _dimensions_for() gates on
+# the model, not just the provider, so a future non-Matryoshka model can't
+# silently get sent a dimensions value it will reject.
+DIMENSION_CAPABLE_MODELS = ("text-embedding-3-small", "text-embedding-3-large")
+DEFAULT_DIMENSIONS = 1024
 
 BATCH_SIZE = 64
-CLOUD_TIMEOUT_S = 60.0
-# Local embed calls can block on a cold model load, same as generation.
-OLLAMA_TIMEOUT_S = 180.0
 
 GetConfig = Callable[[], dict]
 
@@ -61,10 +60,14 @@ class EmbeddingError(Exception):
 
     def user_message(self) -> str:
         name = self.provider or "the embedding provider"
+        if self.provider == "Klaus Plus":
+            # The service's own wording (quota/version/maintenance
+            # refusals) — verbatim, never re-canned as OpenAI copy below.
+            return str(self)
         if self.status in (401, 403):
             return (
                 f"{name} rejected the embedding API key — check it in "
-                "Tools → Klaus → Manage models."
+                "KlausMate Preferences → API keys & models."
             )
         if self.status == 429:
             wait = f" in {int(self.retry_after)}s" if self.retry_after else " shortly"
@@ -75,8 +78,8 @@ class EmbeddingError(Exception):
 
 
 def provider_name(cfg: dict) -> str:
-    p = str(cfg.get("embedding_provider") or DEFAULT_PROVIDER).strip().lower()
-    return p if p in DEFAULT_MODELS else DEFAULT_PROVIDER
+    """OpenAI is now the only embedding provider; kept for existing callers."""
+    return "openai"
 
 
 def embedding_model(cfg: dict) -> str:
@@ -84,120 +87,57 @@ def embedding_model(cfg: dict) -> str:
     return model or DEFAULT_MODELS[provider_name(cfg)]
 
 
-def index_signature(cfg: dict) -> tuple[str, str]:
-    """(provider, model) — a change in either invalidates the card index."""
-    return provider_name(cfg), embedding_model(cfg)
+def embedding_dimensions(cfg: dict) -> int:
+    """Requested output dimensions, or 0 for the model's own default."""
+    try:
+        value = int(cfg.get("embedding_dimensions") or 0)
+    except (TypeError, ValueError):
+        return DEFAULT_DIMENSIONS
+    return value if value > 0 else 0
+
+
+def _dimensions_for(cfg: dict) -> int:
+    """The `dimensions` value to send, or 0 to omit the parameter entirely.
+
+    Gated on the model, not just the provider: only OpenAI's v3 embedding
+    models accept it, and sending it anywhere else is a 400.
+    """
+    if embedding_model(cfg) not in DIMENSION_CAPABLE_MODELS:
+        return 0
+    return embedding_dimensions(cfg)
+
+
+def index_signature(cfg: dict) -> tuple[str, str, int]:
+    """(provider, model, dims) — a change in ANY of the three invalidates the
+    card index.
+
+    Dims belongs here: the same model at 3072 and at 1024 produces vectors
+    that cannot be compared with each other, and without it in the signature
+    that switch would be caught only later, by card_index's file-size check.
+    """
+    return provider_name(cfg), embedding_model(cfg), _dimensions_for(cfg)
+
+
+def signature_matches(
+    provider: str, model: str, dims: int, signature: tuple
+) -> bool:
+    """True when a PERSISTED (provider, model, dims) satisfies `signature`.
+
+    One helper for every store that caches embeddings — the card index, the
+    per-PDF index, the matches cache. Each of them used to spell this
+    comparison itself as a two-tuple equality, which is precisely why adding
+    a third element to the signature broke three call sites at once.
+
+    dims is compared only when the signature asks for a specific width; 0
+    means "the model's own default" and cannot disagree with a stored width.
+    """
+    if (provider, model) != (signature[0], signature[1]):
+        return False
+    want = int(signature[2]) if len(signature) > 2 else 0
+    return not want or int(dims or 0) == want
 
 
 # --------------------------------------------------------------- providers
-
-
-def _post_json(
-    url: str,
-    payload: dict,
-    headers: dict[str, str],
-    provider: str,
-    timeout: float = CLOUD_TIMEOUT_S,
-) -> dict:
-    """POST JSON with one retry on 429/5xx; errors become EmbeddingError."""
-    last: EmbeddingError | None = None
-    for attempt in (0, 1):
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", **headers},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            retry_after: float | None = None
-            try:
-                ra = e.headers.get("retry-after") if e.headers else None
-                if ra:
-                    retry_after = float(ra)
-            except (TypeError, ValueError):
-                pass
-            try:
-                body = e.read().decode("utf-8", errors="replace")[:300]
-            except Exception:
-                body = ""
-            last = EmbeddingError(
-                f"{provider} embeddings failed (HTTP {e.code}): {body or e.reason}",
-                provider=provider,
-                status=e.code,
-                retry_after=retry_after,
-            )
-            if attempt == 0 and (e.code == 429 or e.code >= 500):
-                time.sleep(min(retry_after or 2.0, 10.0))
-                continue
-            raise last from e
-        except urllib.error.URLError as e:
-            last = EmbeddingError(
-                f"Could not reach {provider} embeddings API: {e.reason}",
-                provider=provider,
-            )
-            # Transient network blips are expensive mid-index (a 30k-note
-            # library re-embeds from scratch on failure); one retry.
-            if attempt == 0:
-                time.sleep(2.0)
-                continue
-            raise last from e
-        except json.JSONDecodeError as e:
-            raise EmbeddingError(
-                f"Invalid JSON from {provider} embeddings API",
-                provider=provider,
-            ) from e
-    raise last  # unreachable, satisfies the type checker
-
-
-def _vectors_by_index(data: Any, count: int, provider: str) -> list[list[float]]:
-    """Restore input order from an OpenAI-shaped ``data[*].index`` response."""
-    if not isinstance(data, list) or len(data) != count:
-        got = len(data) if isinstance(data, list) else "none"
-        raise EmbeddingError(
-            f"{provider} returned {got} embeddings for {count} inputs",
-            provider=provider,
-        )
-    out: list[list[float] | None] = [None] * count
-    for item in data:
-        i = item.get("index")
-        vec = item.get("embedding")
-        if not isinstance(i, int) or not (0 <= i < count) or not isinstance(vec, list):
-            raise EmbeddingError(
-                f"Malformed embedding item from {provider}", provider=provider
-            )
-        out[i] = vec
-    if any(v is None for v in out):
-        raise EmbeddingError(
-            f"{provider} response is missing embedding indices", provider=provider
-        )
-    return out  # type: ignore[return-value]
-
-
-class OllamaEmbeddings:
-    name = "ollama"
-
-    def __init__(self, get_config: GetConfig) -> None:
-        self._get_config = get_config
-
-    def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
-        if not texts:
-            return []
-        from .ollama_client import OllamaClient, OllamaError, OllamaNotRunning
-
-        cfg = self._get_config()
-        # Endpoint read per call: the managed runtime may rewrite the port.
-        endpoint = str(cfg.get("endpoint") or "http://localhost:11434")
-        client = OllamaClient(endpoint, timeout=OLLAMA_TIMEOUT_S)
-        model = embedding_model(cfg)
-        try:
-            return client.embed(model, texts)
-        except OllamaNotRunning as e:
-            raise EmbeddingError(str(e), provider="Ollama") from e
-        except OllamaError as e:
-            raise EmbeddingError(str(e), provider="Ollama") from e
 
 
 class OpenAIEmbeddings:
@@ -209,61 +149,65 @@ class OpenAIEmbeddings:
     def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
         if not texts:
             return []
-        cfg = self._get_config()
-        key = str(cfg.get("embedding_api_key_openai") or "").strip()
+        cfg = self._get_config() or {}
+        from . import openai_client, plus
+
+        if plus.active(cfg):
+            try:
+                return openai_client.embed(
+                    "", texts, embedding_model(cfg), _dimensions_for(cfg),
+                    endpoint=plus.endpoint(cfg, "embed"),
+                )
+            except openai_client.OpenAIError as e:
+                if e.status in (401, 402, 426):
+                    # Remembered so the UI can say why — through the
+                    # PACKAGE's patch_config, reached lazily: this module
+                    # is aqt-free and cannot import __init__ (which
+                    # imports aqt) at module top. patch_config hops to the
+                    # main thread itself (this branch may run on
+                    # curation's QueryOp worker thread) and MERGES into
+                    # the stored config; the package's plain write_config
+                    # REPLACES the whole config and must never be the
+                    # sink here (a one-key patch through it would wipe
+                    # every other setting). A stub package with neither
+                    # attribute is a genuine wiring break, not silently
+                    # swallowed.
+                    pkg = __import__(__package__, fromlist=["patch_config"])
+                    wc = getattr(pkg, "patch_config", None)
+                    if wc is None:
+                        print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
+                    else:
+                        plus.note_refusal(cfg, e.status, wc, message=str(e))
+                # e.status is None for a connection-level failure (no HTTP
+                # response at all — openai_client never learned it was
+                # talking to Klaus Plus) — its message says "Could not
+                # reach OpenAI ...", which on THIS path names the wrong
+                # thing to blame (M-10). A real status means the service
+                # itself answered, in its own words: verbatim, unprefixed.
+                raise EmbeddingError(
+                    str(e) if e.status is not None else f"Klaus Plus: {e}",
+                    provider="Klaus Plus", status=e.status, retry_after=e.retry_after,
+                ) from e
+
+        key = str(cfg.get("api_key_openai") or "").strip()
         if not key:
             raise EmbeddingError(
-                "OpenAI embedding API key is not set — add it in "
-                "Tools → Klaus → Manage models.",
+                "OpenAI API key is not set — add it in KlausMate Preferences "
+                "→ API keys & models.",
                 provider="OpenAI",
                 status=401,
             )
-        resp = _post_json(
-            f"{OPENAI_API_BASE}/embeddings",
-            {"model": embedding_model(cfg), "input": texts},
-            {"Authorization": f"Bearer {key}"},
-            provider="OpenAI",
-        )
-        return _vectors_by_index(resp.get("data"), len(texts), "OpenAI")
-
-
-class VoyageEmbeddings:
-    name = "voyage"
-
-    def __init__(self, get_config: GetConfig) -> None:
-        self._get_config = get_config
-
-    def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
-        if not texts:
-            return []
-        cfg = self._get_config()
-        key = str(cfg.get("embedding_api_key_voyage") or "").strip()
-        if not key:
-            raise EmbeddingError(
-                "Voyage embedding API key is not set — add it in "
-                "Tools → Klaus → Manage models.",
-                provider="Voyage",
-                status=401,
+        try:
+            return openai_client.embed(
+                key, texts, embedding_model(cfg), _dimensions_for(cfg)
             )
-        resp = _post_json(
-            f"{VOYAGE_API_BASE}/embeddings",
-            {
-                "model": embedding_model(cfg),
-                "input": texts,
-                # Voyage embeds queries and documents asymmetrically.
-                "input_type": "query" if kind == "query" else "document",
-            },
-            {"Authorization": f"Bearer {key}"},
-            provider="Voyage",
-        )
-        return _vectors_by_index(resp.get("data"), len(texts), "Voyage")
+        except openai_client.OpenAIError as e:
+            raise EmbeddingError(
+                str(e), provider="OpenAI", status=e.status, retry_after=e.retry_after
+            ) from e
 
 
-_PROVIDER_CLASSES = {
-    "ollama": OllamaEmbeddings,
-    "openai": OpenAIEmbeddings,
-    "voyage": VoyageEmbeddings,
-}
+_PROVIDER_CLASSES = {"openai": OpenAIEmbeddings}
 
 
 def provider_from_config(get_config: GetConfig):
@@ -301,10 +245,6 @@ def embed_batches(
     (curation saves the index every ~1k vectors for cancel/crash resume).
     Stops cleanly between batches when ``cancel`` is set.
     """
-    # Voyage rejects requests with more than 128 inputs (OpenAI allows 2048,
-    # Ollama has no cap) — clamp so a future BATCH_SIZE bump can't break it.
-    if getattr(provider, "name", "") == "voyage":
-        batch_size = min(batch_size, 128)
     for start in range(0, len(texts), batch_size):
         if cancel is not None and cancel.is_set():
             return

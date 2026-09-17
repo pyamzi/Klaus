@@ -11,7 +11,7 @@ The workaround: register a synthetic `klausmate` package plus stub
 aqt/anki modules in sys.modules *before* importing the module under test.
 Anything aqt-free (embeddings, card_index, pdf_index, drive_store) needs
 only the package stub; anything importing aqt (retention, curation,
-pdf_drive, deck_curate, ...) needs install_aqt_stubs() as well.
+pdf_drive, pdf_drop, ...) needs install_aqt_stubs() as well.
 
 Usage:
     from anki_stubs import install, check, report
@@ -28,7 +28,7 @@ enum class it touches), plus a handful of names out of `aqt.editor`,
 `aqt.webview`, `aqt.deckbrowser`, `aqt.preferences`, `anki.hooks` and
 `anki.utils`. Hand-enumerating all of those (and keeping the list in sync
 as the addon grows) is exactly the kind of stub drift that let
-`klausmate.pdf_drive` and `klausmate.deck_curate` go completely
+`klausmate.pdf_drive` and `klausmate.pdf_drop` go completely
 import-untested — the old stub only defined QAction, QInputDialog,
 QMessageBox, QTimer and qconnect.
 
@@ -264,6 +264,39 @@ def install_aqt_stubs() -> None:
 def install(addon_dir: str = ADDON) -> None:
     install_package_stub(addon_dir)
     install_aqt_stubs()
+
+
+def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str = ADDON):
+    """Execute klausmate/__init__.py as a module under REAL PyQt6 with the
+    aqt/anki stubs in place, and point its USER_FILES at ``scratch``.
+
+    Returns the module namespace. Needs QT_QPA_PLATFORM=offscreen, a
+    QApplication already constructed, and install() already run — the
+    permissive aqt stubs (mw, gui_hooks, aqt.editor, ...) are what let
+    __init__.py's module-level bootstrap run at all; only `aqt.qt` is
+    swapped for the real Qt here. The two hand-rolled copies in
+    test_slot_guards.py and test_bridge_reentrancy.py predate this.
+    """
+    import importlib.util
+
+    from PyQt6 import QtCore, QtGui, QtWidgets
+
+    shim = types.ModuleType("aqt.qt")
+    for mod in (QtCore, QtGui, QtWidgets):
+        for name in dir(mod):
+            if not name.startswith("_"):
+                setattr(shim, name, getattr(mod, name))
+    shim.qconnect = lambda sig, fn: sig.connect(fn)
+    sys.modules["aqt.qt"] = shim
+    sys.modules["aqt"].qt = shim
+    spec = importlib.util.spec_from_file_location(
+        "klausmate", os.path.join(addon_dir, "__init__.py"),
+        submodule_search_locations=[addon_dir])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["klausmate"] = module
+    spec.loader.exec_module(module)
+    module.USER_FILES = scratch_user_files
+    return module
 
 
 # ----------------------------------------------------------- assertions

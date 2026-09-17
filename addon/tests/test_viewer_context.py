@@ -1,0 +1,52 @@
+import sys
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+from anki_stubs import check, install, report, section
+install()
+import importlib
+vc = importlib.import_module("klausmate.viewer_context")
+
+section("registry")
+vc.reset()
+seen = []
+unsub = vc.subscribe(lambda v: seen.append(v))
+check("empty → None", vc.current() is None)
+vc.report_document(1, "lec1", "Lecture 1.pdf", "/lib/Lecture 1.pdf", 40)
+check("a reported document is not current until activated", vc.current() is None)
+vc.activate(1)
+v = vc.current()
+check("activate makes it current with page 0", v is not None and v.pdf_safe == "lec1" and v.display == "Lecture 1.pdf" and v.page_index == 0 and v.page_count == 40)
+vc.report_page(1, 6)
+check("page updates", vc.current().page_index == 6)
+vc.report_selection(1, "loop of Henle")
+check("selection updates", vc.current().selection == "loop of Henle")
+# Task 10 (K-196) fix round 1 (review Important #2): report_page_count
+# is a narrower sibling of report_page — it must touch page_count ONLY,
+# never page_index/selection, so a pdf.js count catch-up can never look
+# like a re-report of the whole document.
+vc.report_page_count(1, 55)
+check("report_page_count updates page_count in place, leaving page_index and selection untouched", vc.current().page_count == 55 and vc.current().page_index == 6 and vc.current().selection == "loop of Henle")
+vc.report_document(2, "lec2", "Lecture 2.pdf", "/lib/Lecture 2.pdf", 10)
+vc.activate(2)
+check("last activated wins", vc.current().pdf_safe == "lec2")
+vc.report_page_count(1, 77)
+check("report_page_count does NOT activate — updating the non-current viewer's count leaves the other one current", vc.current().pdf_safe == "lec2")
+vc.activate(1)
+check("re-activating an older viewer brings it back with its own page", vc.current().pdf_safe == "lec1" and vc.current().page_index == 6)
+check("...and the count report_page_count applied while it was not current is still there", vc.current().page_count == 77)
+vc.forget(1)
+check("forget falls back to the most recently activated remaining viewer", vc.current().pdf_safe == "lec2")
+vc.report_page(99, 3)
+check("unknown viewer ids are ignored", vc.current().pdf_safe == "lec2" and vc.current().page_index == 0)
+vc.report_page_count(99, 5)
+check("...same for report_page_count", vc.current().pdf_safe == "lec2" and vc.current().page_count == 10)
+vc.report_document(2, "", "", "", 0)
+check("a viewer with no document is not current", vc.current() is None)
+check("subscribers saw every change, None included", seen and seen[-1] is None and any(x is not None for x in seen))
+unsub()
+vc.report_document(3, "x", "X", "/x", 1); vc.activate(3)
+check("unsubscribed callback is silent", seen[-1] is None)
+def boom(v): raise RuntimeError("cb")
+vc.subscribe(boom)
+vc.report_page(3, 0)
+check("a raising subscriber never breaks the registry", vc.current().pdf_safe == "x")
+report()

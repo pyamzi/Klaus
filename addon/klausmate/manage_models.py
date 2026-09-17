@@ -1,27 +1,30 @@
-"""KlausMate Preferences dialog: provision the local AI runtime, pull a
-local embedding model, configure semantic search, and hold the two
-maintenance action (Test connection).
+"""KlausMate Preferences dialog: the two API keys and the three model
+names, the Library folder, and the KlausBook appearance layer.
 
 Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
 split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
-point (K-045 folded the old 'Klaus' submenu's three items in here) — plus
-the first-run one-click setup path.
+point (K-045 folded the old 'Klaus' submenu's three items in here).
 
-Klaus is embeddings-only (K-027 dropped autocomplete and the Ask ⌘K
-popover): the Semantic search and Local model library sections are one
-job — where semantic search's embeddings come from (Voyage / OpenAI / a
-local Ollama model). General holds the two toggles orphaned by
-settings_ui.py's deletion, plus Test connection (K-045 moved it out
-of the Tools menu so it stays reachable — a menu item that vanishes is
-worse than one click deeper; the old Clear-library-tag action is gone
-entirely, K-critique caught this docstring still advertising it).
+Since the API-first reversal (2026-09-15, spec D1) Klaus talks to exactly
+two services with the user's own keys — OpenAI for embeddings and lecture
+transcription, and Anthropic, whose key is STORED for the spec's Plans 2
+and 3 (card pertinence, the assistant on the Messages API) and read by
+nothing today: the assistant still runs on the user's own Claude Code
+login. So the
+old Semantic Search page (a provider combo fanned out over three
+per-provider key slots) and the whole "Local model library (Ollama)" page
+with its install / pull / delete / classify machinery are gone, together
+with the runtime they managed. One page, "API keys & models", holds what
+is left, and it is also where a changed embedding model or a first OpenAI
+key offers the whole-collection re-embed sweep, priced by cost.py before
+anything is spent.
 
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
 function, after the package has finished loading. _pkg() below is that
 lazy accessor (same pattern as curation.py's _pkg()); it reaches config
-and helpers that live in __init__.py: get_config, write_config, client,
-open_config, _save_config_on_main.
+and helpers that live in __init__.py: get_config, write_config,
+open_config.
 """
 
 from __future__ import annotations
@@ -43,7 +46,6 @@ from aqt.qt import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSizePolicy,
     QSlider,
     QStackedWidget,
     QTimer,
@@ -53,47 +55,14 @@ from aqt.qt import (
 )
 from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
 
+from . import plus
 from .md3_switch import Md3Switch
-from .ollama_client import OllamaError
-from .ollama_runtime import RuntimeProvisionError, full_setup, runtime_download_size_hint
-from .ollama_setup import (
-    OLLAMA_DOWNLOAD_URL,
-    InstallMethod,
-    install_methods,
-    ollama_reachable,
-    run_install_method,
-)
 
 
 def _pkg():
     import importlib
 
     return importlib.import_module(__package__)
-
-
-# ----------------------------- model manager -----------------------------
-
-# Embedding-model presets offered in the pull dropdown. Index 0 must stay
-# nomic-embed-text — it is embeddings.DEFAULT_MODELS['ollama'] and the
-# model the one-click setup flow auto-pulls when the library is empty.
-_EMBED_PRESETS = [
-    ("nomic-embed-text", "default, best all-round · ~274 MB"),
-    ("all-minilm", "tiny, fastest · ~46 MB"),
-    ("snowflake-arctic-embed", "strong retrieval · ~670 MB"),
-    ("mxbai-embed-large", "best quality · ~670 MB"),
-    ("bge-m3", "multilingual, long context · ~1.2 GB"),
-    ("embeddinggemma", "Google, newest · ~620 MB"),
-]
-
-_EMBED_KEY_URLS = {
-    "voyage": "https://dash.voyageai.com/api-keys",
-    "openai": "https://platform.openai.com/api-keys",
-}
-
-_EMBED_KEY_PLACEHOLDERS = {
-    "voyage": "pa-…  (free tier at voyageai.com; stored in add-on config)",
-    "openai": "sk-…  (platform.openai.com; stored in add-on config)",
-}
 
 
 def _addon_version() -> str:
@@ -109,41 +78,59 @@ def _addon_version() -> str:
         return ""
 
 
-def _logo_pixmap(size: int) -> Any:
-    """The Klaus star for the Preferences sidebar, drawn exactly like
-    the top bar's: an open stroke in the accent colour on a transparent
-    ground — no icon-square treatment — from the same
-    top_bar.star_points() data the toolbar's SVG strokes."""
+def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
+    """The Klaus impossible star for the Preferences sidebar, drawn
+    exactly like the top bar's: five FILLED shapes in the accent colour
+    on a transparent ground — no icon-square treatment — from the same
+    top_bar.star_polygons() data the toolbar's SVG fills.
+
+    ``dpr`` comes from the label that will show it, so the mark is
+    crisp on whatever screen the dialog opened on rather than on an
+    assumed Retina one; 2.0 is only the fallback for a caller with no
+    widget to ask.
+
+    ONE QPainterPath with WindingFill, not five drawPolygon calls:
+    winding is SVG's own default fill rule, so a self-crossing arm
+    fills here the way it fills in klaus-logo.svg. Qt's polygon default
+    is odd-even, which would punch holes the drawing does not have.
+    """
     try:
-        from aqt.qt import QColor, QPainter, QPen, QPixmap, QPointF, QPolygonF
+        from aqt.qt import (
+            QColor,
+            QPainter,
+            QPainterPath,
+            QPixmap,
+            QPointF,
+            QPolygonF,
+            Qt,
+        )
 
         from . import theme as _theme
         from . import top_bar as _top_bar
 
-        dpr = 2.0
         px = QPixmap(int(size * dpr), int(size * dpr))
         px.setDevicePixelRatio(dpr)
         px.fill(QColor(0, 0, 0, 0))
         painter = QPainter(px)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = _theme.palette(_theme.night_mode())
-        # Inset by the pen's radius so the stroke can't clip at the edges.
-        width = max(1.3, size * 0.09)
-        inset = width / 2.0
-        scale = (size - width) / _top_bar.STAR_VIEWBOX
-        poly = QPolygonF(
-            [
-                QPointF(x * scale + inset, y * scale + inset)
-                for x, y in _top_bar.star_points()
-            ]
-        )
-        pen = QPen(QColor(c["blue_accent"]))
-        pen.setWidthF(width)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPolygon(poly)
+        # The same margin the stroked mark left: half the old pen width
+        # on every side, so the star keeps its seat in the 24px row.
+        inset = max(1.3, size * 0.09) / 2.0
+        scale = (size - inset * 2.0) / _top_bar.STAR_VIEWBOX
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.WindingFill)
+        for poly in _top_bar.star_polygons():
+            path.addPolygon(
+                QPolygonF(
+                    [
+                        QPointF(x * scale + inset, y * scale + inset)
+                        for x, y in poly
+                    ]
+                )
+            )
+            path.closeSubpath()
+        painter.fillPath(path, QColor(c["blue_accent"]))
         painter.end()
         return px
     except Exception as exc:
@@ -151,49 +138,63 @@ def _logo_pixmap(size: int) -> Any:
         return None
 
 
-def _format_pull_event(ev: dict) -> tuple[str, int]:
-    """Return (human status, percent 0-100) for an Ollama pull progress event."""
-    status = str(ev.get("status") or "")
-    total = ev.get("total")
-    completed = ev.get("completed")
-    pct = 0
-    if isinstance(total, (int, float)) and total > 0 and isinstance(completed, (int, float)):
-        pct = int(min(100, max(0, completed * 100 / total)))
-    if status == "success":
-        pct = 100
-    digest = str(ev.get("digest") or "")
-    digest_short = digest[:12] + "…" if digest else ""
-    label = status
-    if digest_short:
-        label = f"{status} ({digest_short})"
-    if pct and total:
-        mb = total / (1024 * 1024)
-        label = f"{label} — {pct}% of {mb:.0f} MB"
-    return label, pct
+def _elide_middle(name: str, max_len: int = 44) -> str:
+    """Middle-elide a long filename for the image captions.
+
+    Word wrap cannot break an unbroken token, so one long stored
+    filename (they arrive as e.g. hf_20260827_161844_<uuid>.jpg) sets
+    the page's minimum width and brings back the horizontal scrollbar
+    the captions were cured of. The middle goes because the ends are
+    the identifying parts: prefix and extension. Full name lives in
+    the tooltip."""
+    if len(name) <= max_len:
+        return name
+    keep = (max_len - 1) // 2
+    return f"{name[:keep]}…{name[-keep:]}"
 
 
-def _resolve_ollama_model(
-    configured: str, models: list[str], indexed_model: str, default: str
-) -> str:
-    """What real model name the Ollama 'Search model' field should show when
-    the config's embedding_model is empty, instead of silently falling
-    through to embeddings.DEFAULT_MODELS['ollama'] — a stored index built
-    with a different model would then look orphaned, and one click on
-    'Index cards now' would discard it (K-039). Dialog-level resolution
-    only; the embedding contract in embeddings.py is untouched.
+def _image_thumb(path: str, w: int = 88, h: int = 54) -> Any:
+    """A small rounded preview of a stored background image, for the
+    Appearance captions (Pouya: "I want to be able to see a thumbnail
+    of the image as well in the settings panel"). Centre-cropped to
+    w×h, clipped to the design scale's 6px chip radius, rendered at 2×
+    for retina (harmless at 1×). None when the file is missing or
+    unreadable — the caller hides the label, it never shows a broken
+    frame."""
+    try:
+        from aqt.qt import QPainter, QPainterPath, QPixmap
 
-    Precedence: (a) the model the existing index was actually built with,
-    if it is currently installed; (b) the one model installed, if there is
-    exactly one; (c) the hardcoded default.
-    """
-    configured = configured.strip()
-    if configured:
-        return configured
-    if indexed_model and indexed_model in models:
-        return indexed_model
-    if len(models) == 1:
-        return models[0]
-    return default
+        src = QPixmap(path)
+        if src.isNull():
+            return None
+        dpr = 2
+        pw, ph = w * dpr, h * dpr
+        scaled = src.scaled(
+            pw,
+            ph,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        cropped = scaled.copy(
+            max(0, (scaled.width() - pw) // 2),
+            max(0, (scaled.height() - ph) // 2),
+            pw,
+            ph,
+        )
+        out = QPixmap(pw, ph)
+        out.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        clip = QPainterPath()
+        clip.addRoundedRect(0.0, 0.0, float(pw), float(ph), 6.0 * dpr, 6.0 * dpr)
+        painter.setClipPath(clip)
+        painter.drawPixmap(0, 0, cropped)
+        painter.end()
+        out.setDevicePixelRatio(dpr)
+        return out
+    except Exception as exc:
+        print(f"[klausmate] background thumb failed: {exc}")
+        return None
 
 
 class _KlausManageDialog(QDialog):
@@ -201,9 +202,9 @@ class _KlausManageDialog(QDialog):
 
     Esc triggers QDialog.reject() and the title-bar ✕ triggers closeEvent —
     neither hits a Close button's clicked signal. Without routing them
-    through confirm_close, a runtime setup download would keep streaming
-    invisibly after the dialog vanishes (and a retry would corrupt the
-    shared .part file).
+    through confirm_close, a running card-index build would keep
+    embedding — and billing — invisibly after the dialog vanishes, and
+    unsaved preference edits would be discarded without a word.
     """
 
     confirm_close_cb: Callable[[], None] | None = None
@@ -241,6 +242,13 @@ class _KlausManageDialog(QDialog):
 _BARE_DIALOG_PROBE = False
 _PROBE_STAGE = 3
 _PROBE_KEEPALIVE: list = []
+
+# The one live Preferences window (None when closed). Non-modal since
+# 2026-08-30, so the star can be clicked while it is already open —
+# this is what lets that front the existing window instead of stacking
+# a second one (two dialogs would fight over the preview seam and race
+# each other's Save).
+_OPEN_DLG: Any = None
 
 
 def _run_dialog_probe() -> None:
@@ -296,7 +304,7 @@ def _run_dialog_probe() -> None:
         sidebar.setFixedWidth(192)
         side = QVBoxLayout(sidebar)
         logo_lbl = QLabel()
-        _logo = _logo_pixmap(24)
+        _logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
         if _logo is not None:
             logo_lbl.setPixmap(_logo)
         logo_lbl.setFixedSize(24, 24)
@@ -329,13 +337,13 @@ def _run_dialog_probe() -> None:
           "backing-store flush did NOT crash")
 
 
-def manage_models_dialog(setup: bool = False) -> None:
-    """Set up the local AI runtime, pull an embedding model, and configure
-    semantic search.
+def manage_models_dialog(*_args: Any) -> None:
+    """Open (or front) the one Preferences window.
 
-    ``setup=True`` is the one-click first-run path: it auto-opens the
-    provisioning confirm on the setup page, and after the server is up it
-    chains straight into pulling the starter model when none exist.
+    ``*_args`` because a QAction's ``triggered`` signal hands its slot a
+    ``checked`` bool: the old ``setup`` parameter used to absorb it, and
+    dropping it outright would have turned every Tools-menu click into a
+    TypeError.
     """
     if _BARE_DIALOG_PROBE:
         try:
@@ -343,6 +351,17 @@ def manage_models_dialog(setup: bool = False) -> None:
         except Exception as exc:
             print(f"[klausmate] dialog probe failed: {exc}")
         return
+
+    global _OPEN_DLG
+    if _OPEN_DLG is not None:
+        try:
+            if _OPEN_DLG.isVisible():
+                _OPEN_DLG.raise_()
+                _OPEN_DLG.activateWindow()
+                return
+        except Exception:
+            pass  # a dead/half-torn-down window: fall through and rebuild
+        _OPEN_DLG = None
 
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("KlausMate Preferences")
@@ -367,84 +386,11 @@ def manage_models_dialog(setup: bool = False) -> None:
     outer.setContentsMargins(0, 0, 0, 0)
     outer.setSpacing(0)
 
-    stack = QStackedWidget()
-    outer.addWidget(stack)
-
-    # ----- Page 0: Install Ollama -----------------------------------------
-    # Predates the K-106 sidebar shell; K-111 brought its title/subtitle
-    # onto the same objectName language as _page() below (PageTitle +
-    # PageSubtitle) even though this page keeps its own full-frame layout
-    # with no sidebar/nav pill — a user with no Ollama shouldn't see
-    # settings navigation offering pages that can't work yet.
-    install_page = QWidget()
-    install_layout = QVBoxLayout(install_page)
-    install_layout.setContentsMargins(24, 18, 24, 8)
-    install_layout.setSpacing(8)
-
-    install_title = QLabel("Set up local AI")
-    install_title.setObjectName("PageTitle")
-    install_layout.addWidget(install_title)
-
-    install_body = QLabel(
-        "Klaus runs AI locally through Ollama — nothing ever leaves your "
-        "computer. Klaus can download and manage its own copy "
-        "automatically, or you can install Ollama yourself."
-    )
-    install_body.setObjectName("PageSubtitle")
-    install_body.setWordWrap(True)
-    install_layout.addWidget(install_body)
-    install_layout.addSpacing(8)
-
-    install_status = QLabel()
-    install_status.setWordWrap(True)
-    install_status.setStyleSheet(_MUTED)
-    install_layout.addWidget(install_status)
-
-    auto_setup_btn = QPushButton(
-        f"Set up automatically ({runtime_download_size_hint()} download)"
-    )
-    auto_setup_btn.setDefault(True)
-    install_layout.addWidget(auto_setup_btn)
-
-    manual_lbl = QLabel("Manual options")
-    manual_lbl.setObjectName("InstallSection")
-    install_layout.addWidget(manual_lbl)
-
-    download_btn = QPushButton("Open download page")
-    download_btn.setObjectName("SecondaryButton")
-    install_layout.addWidget(download_btn)
-
-    install_methods_box = QWidget()
-    install_methods_layout = QVBoxLayout(install_methods_box)
-    install_methods_layout.setContentsMargins(0, 0, 0, 0)
-    install_methods_layout.setSpacing(6)
-    install_layout.addWidget(install_methods_box)
-
-    install_steps = QLabel(
-        "After installing manually:\n"
-        "1. Finish the installer and grant permissions if prompted.\n"
-        "2. Start Ollama (open the app or ensure the service is running).\n"
-        "3. Click Check connection, then pull a model on the next screen."
-    )
-    install_steps.setWordWrap(True)
-    install_steps.setStyleSheet(_MUTED)
-    install_layout.addWidget(install_steps)
-
-    install_btn_row = QHBoxLayout()
-    check_conn_btn = QPushButton("Check connection")
-    check_conn_btn.setObjectName("SecondaryButton")
-    install_btn_row.addWidget(check_conn_btn)
-    install_btn_row.addStretch(1)
-    install_layout.addLayout(install_btn_row)
-    install_layout.addStretch(1)
-
-    stack.addWidget(install_page)
-
-    # ----- Page 1: semantic search, then its model library -----------------
-    # Klaus is embeddings-only: there is exactly one job here. This box asks
-    # the three questions that job needs answered — where do embeddings come
-    # from, what proves you can use it, which model — and the library below
-    # is pure inventory (pull, delete, see what's installed).
+    # ----- The settings shell ---------------------------------------------
+    # One page of pages: the sidebar's nav list on the left, the stack of
+    # settings pages on the right. There is no outer stack any more — the
+    # "Set up local AI" page that used to sit in front of this one went
+    # with the local runtime it installed.
     models_page = QWidget()
     models_page_layout = QVBoxLayout(models_page)
     models_page_layout.setContentsMargins(0, 0, 0, 0)
@@ -457,10 +403,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     # + muted subtitle over ONE rounded #CardFrame group inside a
     # transparent scroll area, and each simple setting is a _row():
     # bold name + muted description on the left, its control pinned
-    # right, hairline-separated. The install page (page 0 of the OUTER
-    # stack) stays a full-frame page with no sidebar: a user with no
-    # Ollama should not see navigation offering settings that cannot
-    # work yet.
+    # right, hairline-separated.
     from aqt.qt import QFrame, QScrollArea
 
     body = QHBoxLayout()
@@ -482,7 +425,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     head_row.setContentsMargins(0, 0, 0, 0)
     head_row.setSpacing(7)
     logo_lbl = QLabel()
-    _logo = _logo_pixmap(24)
+    _logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
     if _logo is not None:
         logo_lbl.setPixmap(_logo)
     logo_lbl.setFixedSize(24, 24)
@@ -584,6 +527,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         scroll = QScrollArea()
         scroll.setObjectName("ContentScrollArea")
         scroll.setWidgetResizable(True)
+        # Never sideways (Pouya: "It's so annoying to have to scroll
+        # horizontally") — pages scroll vertically only, like the nav.
+        # Content must WRAP into the viewport instead: every caption
+        # label word-wraps, and long unbroken filenames are elided
+        # (_elide_middle), because one unwrappable line is all it
+        # takes to push the page's minimum width past the window.
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         inner = QWidget()
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -674,8 +626,9 @@ def manage_models_dialog(setup: bool = False) -> None:
         group.addWidget(roww)
         roww.klaus_desc = desc_lbl
         roww.klaus_sep = sep
-        # klaus_hidden = structurally hidden (e.g. the API-key row under
-        # Ollama) — it always beats a search hit in _apply_search.
+        # klaus_hidden = structurally hidden (e.g. the image-only
+        # background rows) — it always beats a search hit in
+        # _apply_search.
         roww.klaus_hidden = False
         roww.klaus_search = f"{name} {desc_lbl.text()}".lower()
         _rows_by_page.setdefault(
@@ -742,62 +695,112 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     search_edit.textChanged.connect(_apply_search)
 
-    embed_layout = _page(
-        "Semantic Search",
-        "Semantic Search",
-        "Finds cards and decks by meaning, not just keywords — powers "
-        "Curate Deck and the Library's retention scores. Needs a Voyage "
-        "or OpenAI key (both have free tiers) or a local Ollama model "
-        "from the Local Models page.",
+    keys_layout = _page(
+        "API keys & models",
+        "API keys & models",
+        "Klaus talks to OpenAI (embeddings, lecture transcription) and "
+        "Anthropic (the assistant, and judging which cards a lecture "
+        "really covers) with your own keys. Both are stored in this "
+        "add-on's config on your machine and never sent anywhere else. "
+        "Or subscribe to Klaus Plus and skip the keys.",
     )
 
-    embed_provider_combo = QComboBox()
-    embed_provider_combo.addItem("Voyage API (default)", "voyage")
-    embed_provider_combo.addItem("OpenAI API", "openai")
-    embed_provider_combo.addItem("Local Ollama (private, free)", "ollama")
-    embed_provider_combo.setMinimumWidth(220)
-    embed_fix_btn = QPushButton("Pull it")
-    embed_fix_btn.setVisible(False)
-    provider_ctl = QHBoxLayout()
-    provider_ctl.setContentsMargins(0, 0, 0, 0)
-    provider_ctl.addWidget(embed_provider_combo)
-    provider_ctl.addWidget(embed_fix_btn)
+    # ----- Klaus Plus ---------------------------------------------------
+    # ABOVE the provider keys on purpose: the whole point of a licence
+    # key is that the two rows under it never need filling in. Nothing
+    # here gates anything — the add-on ships as readable Python, and the
+    # service answering 401/402 is the only gate there is.
+    plus_key_edit = QLineEdit()
+    plus_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    plus_key_edit.setMinimumWidth(220)
+    plus_key_edit.setPlaceholderText("kp_…  (from your welcome page or email)")
     _row(
-        embed_layout,
-        "Embeddings from",
-        "Voyage and OpenAI are cloud APIs; Ollama runs on your machine, "
-        "private and free.",
-        provider_ctl,
+        keys_layout,
+        "Klaus Plus key",
+        "Subscribers paste their licence key here; no other keys are "
+        "needed then.",
+        plus_key_edit,
     )
 
-    embed_model_combo = QComboBox()
-    embed_model_combo.setEditable(True)
-    embed_model_combo.setMinimumWidth(220)
+    plus_status = QLabel()
+    plus_status.setWordWrap(True)
+    plus_status.setOpenExternalLinks(True)
+    plus_btns = QHBoxLayout()
+    plus_subscribe_btn = QPushButton("Subscribe…")
+    plus_manage_btn = QPushButton("Manage subscription…")
+    plus_check_btn = QPushButton("Check")
+    for b in (plus_subscribe_btn, plus_manage_btn, plus_check_btn):
+        b.setObjectName("SecondaryButton")
+        plus_btns.addWidget(b)
+    _row(keys_layout, "Klaus Plus", plus_status, plus_btns)
+
+    openai_key_edit = QLineEdit()
+    openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    openai_key_edit.setMinimumWidth(220)
+    openai_key_edit.setPlaceholderText("sk-…  (platform.openai.com)")
+    # Both provider rows are CAPTURED: refresh_plus_status repaints their
+    # descriptions when a Plus key is present. They stay editable — the
+    # free tier is one deletion away.
+    openai_row = _row(
+        keys_layout,
+        "OpenAI API key",
+        "Embeddings and lecture transcription.",
+        openai_key_edit,
+    )
+
+    anthropic_key_edit = QLineEdit()
+    anthropic_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+    anthropic_key_edit.setMinimumWidth(220)
+    anthropic_key_edit.setPlaceholderText("sk-ant-…  (console.anthropic.com)")
+    anthropic_row = _row(
+        keys_layout,
+        "Anthropic API key",
+        "The assistant and card pertinence.",
+        anthropic_key_edit,
+    )
+    # Captured HERE, not re-spelled in refresh_plus_status: the two
+    # descriptions above are the only place they're authored, so editing
+    # one cannot silently revert on the next repaint (K-247 fix 4).
+    _plus_base_descs = {
+        openai_row: openai_row.klaus_desc.text(),
+        anthropic_row: anthropic_row.klaus_desc.text(),
+    }
+
+    embed_model_edit = QLineEdit()
+    embed_model_edit.setMinimumWidth(220)
+    embed_model_edit.setPlaceholderText("text-embedding-3-large")
     _row(
-        embed_layout,
-        "Search model",
-        "Blank uses the provider's default. Changing provider or model "
-        "rebuilds the card index.",
-        embed_model_combo,
+        keys_layout,
+        "Embedding model",
+        "Changing it re-embeds everything (Klaus asks first, with an "
+        "estimate).",
+        embed_model_edit,
     )
 
-    embed_key_edit = QLineEdit()
-    embed_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    embed_key_edit.setMinimumWidth(220)
-    # The whole row hides for Ollama (update_embed_status) — the local
-    # provider has no key to ask for.
-    key_row = _row(
-        embed_layout,
-        "API key",
-        "For the selected cloud provider. Stored in this add-on's "
-        "config on your machine.",
-        embed_key_edit,
+    reasoning_model_edit = QLineEdit()
+    reasoning_model_edit.setMinimumWidth(220)
+    reasoning_model_edit.setPlaceholderText("claude-sonnet-5")
+    _row(
+        keys_layout,
+        "Reasoning model",
+        "Judges cards against lecture pages and powers the assistant.",
+        reasoning_model_edit,
+    )
+
+    transcription_model_edit = QLineEdit()
+    transcription_model_edit.setMinimumWidth(220)
+    transcription_model_edit.setPlaceholderText("gpt-4o-mini-transcribe")
+    _row(
+        keys_layout,
+        "Transcription model",
+        "Turns lecture audio into per-slide notes.",
+        transcription_model_edit,
     )
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
-    index_btn = QPushButton("Index cards now")
-    _row(embed_layout, "Card index", embed_status, index_btn)
+    index_btn = QPushButton("Index Now")
+    _row(keys_layout, "Card index", embed_status, index_btn)
 
     # ----- Default match sensitivity -----------------------------------
     # The global starting point for retention._migrate_default_threshold /
@@ -815,58 +818,13 @@ def manage_models_dialog(setup: bool = False) -> None:
     threshold_ctl.addWidget(threshold_slider)
     threshold_ctl.addWidget(threshold_value_lbl)
     _row(
-        embed_layout,
+        keys_layout,
         "Default match sensitivity",
         "For every PDF that hasn't been tuned individually. Changing it "
         "offers to reset tuned PDFs too; any single PDF can still be "
         "adjusted in the Library (right-click → Match sensitivity).",
         threshold_ctl,
     )
-
-    # ----- Local model library (inventory only) -------------------------
-    lib_layout = _page(
-        "Local Models",
-        "Local Models",
-        "Ollama embedding models installed on this machine — pull new "
-        "ones, delete what you no longer use.",
-    )
-    lib_layout.setContentsMargins(16, 12, 16, 12)
-    lib_layout.setSpacing(6)
-
-    status_lbl = QLabel()
-    status_lbl.setStyleSheet(_MUTED)
-    lib_layout.addWidget(status_lbl)
-
-    lib_lst = QListWidget()
-    lib_lst.setMinimumHeight(96)
-    lib_layout.addWidget(lib_lst)
-
-    pull_row = QHBoxLayout()
-    pull_input = QComboBox()
-    pull_input.setEditable(True)
-    pull_input.setMinimumWidth(220)
-    pull_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def _fill_pull_presets() -> None:
-        pull_input.clear()
-        for name, desc in _EMBED_PRESETS:
-            pull_input.addItem(f"{name}   ({desc})", name)
-        pull_input.setCurrentIndex(-1)
-        edit = pull_input.lineEdit()
-        if edit is not None:
-            edit.setPlaceholderText("pick or type an embedding model to download")
-
-    _fill_pull_presets()
-    pull_btn = QPushButton("Pull")
-    delete_btn = QPushButton("Delete")
-    delete_btn.setObjectName("DangerButton")
-    refresh_btn = QPushButton("Refresh")
-    refresh_btn.setObjectName("SecondaryButton")
-    pull_row.addWidget(pull_input, 1)
-    pull_row.addWidget(pull_btn)
-    pull_row.addWidget(delete_btn)
-    pull_row.addWidget(refresh_btn)
-    lib_layout.addLayout(pull_row)
 
     # ----- General ------------------------------------------------------
     general_layout = _page(
@@ -883,15 +841,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         "Right-click or double-click an image in a note field to crop a "
         "copy — the original file is untouched.",
         image_crop_cb,
-    )
-
-    runtime_auto_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        general_layout,
-        "Manage Ollama automatically",
-        "Start the local AI engine in the background and offer one-click "
-        "setup when it's missing.",
-        runtime_auto_cb,
     )
 
     # Advanced: renderer flag for the K-095 pdf.js migration. Maps the
@@ -921,55 +870,125 @@ def manage_models_dialog(setup: bool = False) -> None:
 
     # Maintenance — the connection check that used to live in the
     # Tools > Klaus submenu (K-045).
-    test_conn_btn = QPushButton("Test connection")
+    test_conn_btn = QPushButton("Check Keys")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
         general_layout,
         "Connection",
-        "Check that the embedding provider is reachable.",
+        "Check that both API keys are set.",
         test_conn_btn,
     )
 
-    # ---- Appearance: custom background + the frosted top bar ----
-    # A blurred flat colour IS that colour, so "Solid colour" also makes
-    # the top bar match the window chrome exactly (background.py).
+    # The ONE reason the service URL is config at all: a self-hoster or a
+    # staging run. Deliberately NOT beside the licence key — nobody
+    # pasting a key should be invited to retarget the endpoint at the
+    # same time.
+    plus_base_edit = QLineEdit()
+    plus_base_edit.setMinimumWidth(220)
+    plus_base_edit.setPlaceholderText(plus.DEFAULT_BASE)
+    _row(
+        general_layout,
+        "Klaus Plus service",
+        "Where the Klaus Plus subscription is checked. Leave it empty "
+        "unless you run your own or a staging service.",
+        plus_base_edit,
+    )
+
+    # ---- Appearance: custom background + the deck-screen panels ----
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "The background of Anki's deck, overview and congrats screens, "
-        "the accent colour, and the review heatmap. The Klaus top bar "
-        "shows the same background blurred, so it reads as frosted "
-        "glass over it.",
+        "The KlausBook design layer and everything it draws — the "
+        "background of Anki's deck and overview screens and its "
+        "panels, a separate background for the study screen, and the "
+        "deck-screen widgets — plus the accent color, which styles "
+        "Klaus's own windows in either mode. Widgets like the review "
+        "heatmap are added or removed on the deck screen itself: "
+        "right-click it and choose Edit Widgets….",
+    )
+
+    # Anki's own Light/Dark switch, mirrored here (Pouya: "add the
+    # light mode / dark mode in the main settings to the klausmate
+    # settings") — the ONE row on this page that writes an Anki
+    # preference (profile meta via mw.set_theme), not a Klaus config
+    # key. Applied on Save, deferred like every non-background pref: a
+    # live-previewed theme flip would flash the whole app twice on a
+    # Cancel.
+    anki_theme_combo = QComboBox()
+    anki_theme_combo.addItem("Follow System", 0)
+    anki_theme_combo.addItem("Light", 1)
+    anki_theme_combo.addItem("Dark", 2)
+    _row(
+        appearance_layout,
+        "Theme",
+        "Light or dark for all of Anki — the same switch as Anki's "
+        "own preferences. Applies when you press Save.",
+        anki_theme_combo,
+    )
+
+    # The master switch, next — everything below it on this page is
+    # either gated by it (backgrounds) or independent of it (accent),
+    # and reading it first makes that hierarchy legible.
+    klausbook_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
+    _row(
+        appearance_layout,
+        "KlausBook design",
+        "Restyle Anki toward the KlausBook look — toolbar, backgrounds, "
+        "frosted panels, and widget editing on the deck screen. "
+        "Off, Anki keeps its native design and Klaus adds only its "
+        "tools.",
+        klausbook_cb,
     )
 
     bg_mode_combo = QComboBox()
-    bg_mode_combo.addItem("Anki's own (default)", "theme")
-    bg_mode_combo.addItem("Solid colour", "color")
+    bg_mode_combo.addItem("Anki's Own (Default)", "theme")
+    bg_mode_combo.addItem("Color Gradient", "color")
     bg_mode_combo.addItem("Image", "image")
-    bg_colour_btn = QPushButton("Colour…")
-    bg_colour_btn.setObjectName("SecondaryButton")
-    bg_image_btn = QPushButton("Choose image…")
+    # ONE control in the row: the mode. Everything a gradient needs is
+    # edited ON the screen itself (dots/rings/＋ — Pouya: "It ought to
+    # be simple"), the backdrop is always the default white (the edge
+    # "shouldn't be an option at all"), and the image button only
+    # appears once Image is the selected mode.
+    bg_image_btn = QPushButton("Choose Image…")
     bg_image_btn.setObjectName("SecondaryButton")
     bg_ctl = QHBoxLayout()
     bg_ctl.setContentsMargins(0, 0, 0, 0)
     bg_ctl.addWidget(bg_mode_combo)
-    bg_ctl.addWidget(bg_colour_btn)
     bg_ctl.addWidget(bg_image_btn)
-    _row(
+    bg_mode_row = _row(
         appearance_layout,
         "Background",
-        "Anki's own look, a solid colour, or an image of yours.",
+        "Anki's own look, gradient spheres, or an image of yours.",
         bg_ctl,
     )
 
+    # Caption line for the gradient state — word-wrapped: this is the
+    # longest line on the page, and an unwrapped QLabel's one-line
+    # width becomes the whole page's minimum width (the horizontal
+    # scrollbar, live screenshot 2026-08-30).
+    bg_grad_lbl = QLabel()
+    bg_grad_lbl.setObjectName("SettingDesc")
+    bg_grad_lbl.setWordWrap(True)
+    appearance_layout.addWidget(bg_grad_lbl)
+
+    # Caption line under the mode row: a rounded thumbnail of the
+    # chosen picture beside its filename (thumbnail per Pouya,
+    # 2026-08-30). One container so the pair shows/hides whole.
+    bg_thumb_lbl = QLabel()
     bg_image_lbl = QLabel()
     bg_image_lbl.setWordWrap(True)
     bg_image_lbl.setObjectName("SettingDesc")
-    appearance_layout.addWidget(bg_image_lbl)
+    bg_caption = QWidget()
+    _bg_cap_lay = QHBoxLayout(bg_caption)
+    _bg_cap_lay.setContentsMargins(0, 0, 0, 0)
+    _bg_cap_lay.setSpacing(8)
+    _bg_cap_lay.addWidget(bg_thumb_lbl)
+    _bg_cap_lay.addWidget(bg_image_lbl, 1)
+    appearance_layout.addWidget(bg_caption)
 
     bg_fit_combo = QComboBox()
-    bg_fit_combo.addItem("Fill the window", "cover")
-    bg_fit_combo.addItem("Fit inside", "contain")
+    bg_fit_combo.addItem("Fill the Window", "cover")
+    bg_fit_combo.addItem("Fit Inside", "contain")
     bg_fit_combo.addItem("Tile", "tile")
     bg_fit_row = _row(
         appearance_layout,
@@ -989,28 +1008,118 @@ def manage_models_dialog(setup: bool = False) -> None:
     blur_ctl.addWidget(bg_blur_lbl)
     bg_blur_row = _row(
         appearance_layout,
-        "Blur",
-        "How strongly the toolbars and content panels frost the image "
-        "behind them.",
+        "Panel Frost",
+        "How strongly the content panels frost the image behind them.",
         blur_ctl,
     )
 
-    # Not a background setting, but it lives and dies by the same
-    # frosted-panel look, so it belongs on this page rather than under
-    # General's feature toggles.
-    heatmap_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
+    # The image WASH — a different layer from the panel frost above:
+    # ONE theme-aware veil (white by day, dark at night) plus a blur
+    # over the whole picture, between it and everything on it.
+    bg_wash_slider = QSlider(Qt.Orientation.Horizontal)
+    bg_wash_slider.setRange(0, 100)
+    bg_wash_slider.setFixedWidth(140)
+    bg_wash_lbl = QLabel()
+    bg_wash_lbl.setObjectName("SettingDesc")
+    wash_ctl = QHBoxLayout()
+    wash_ctl.setContentsMargins(0, 0, 0, 0)
+    wash_ctl.addWidget(bg_wash_slider)
+    wash_ctl.addWidget(bg_wash_lbl)
+    bg_wash_row = _row(
         appearance_layout,
-        "Review heatmap",
-        "Show a year of study activity under the deck list, with the "
-        "next four weeks of scheduled cards. Click a day to open it in "
-        "Browse.",
-        heatmap_cb,
+        "Image Wash",
+        "Mutes the whole picture behind a soft blurred veil — white "
+        "in light mode, dark at night.",
+        wash_ctl,
     )
 
+    # A SEPARATE picture for the study screen — Pouya: "this needs to
+    # be separate from the background I set for the regular main
+    # section." Same mode/colour/image/fit shape as the deck screen's
+    # own group above, its own independent state, no Blur row: a card
+    # has no panels to frost, so there is nothing a blur control would
+    # visibly do.
+    study_mode_combo = QComboBox()
+    study_mode_combo.addItem("Anki's Own (Default)", "theme")
+    study_mode_combo.addItem("Color Gradient", "color")
+    study_mode_combo.addItem("Image", "image")
+    study_image_btn = QPushButton("Choose Image…")
+    study_image_btn.setObjectName("SecondaryButton")
+    study_ctl = QHBoxLayout()
+    study_ctl.setContentsMargins(0, 0, 0, 0)
+    study_ctl.addWidget(study_mode_combo)
+    study_ctl.addWidget(study_image_btn)
+    study_mode_row = _row(
+        appearance_layout,
+        "Study screen background",
+        "A different picture than the deck screen's, shown behind "
+        "your cards while you study.",
+        study_ctl,
+    )
+
+    study_grad_lbl = QLabel()
+    study_grad_lbl.setObjectName("SettingDesc")
+    study_grad_lbl.setWordWrap(True)
+    appearance_layout.addWidget(study_grad_lbl)
+
+    study_thumb_lbl = QLabel()
+    study_image_lbl = QLabel()
+    study_image_lbl.setWordWrap(True)
+    study_image_lbl.setObjectName("SettingDesc")
+    study_caption = QWidget()
+    _study_cap_lay = QHBoxLayout(study_caption)
+    _study_cap_lay.setContentsMargins(0, 0, 0, 0)
+    _study_cap_lay.setSpacing(8)
+    _study_cap_lay.addWidget(study_thumb_lbl)
+    _study_cap_lay.addWidget(study_image_lbl, 1)
+    appearance_layout.addWidget(study_caption)
+
+    study_fit_combo = QComboBox()
+    study_fit_combo.addItem("Fill the Window", "cover")
+    study_fit_combo.addItem("Fit Inside", "contain")
+    study_fit_combo.addItem("Tile", "tile")
+    study_fit_row = _row(
+        appearance_layout,
+        "Fit",
+        "How an image is scaled to the window.",
+        study_fit_combo,
+    )
+
+    # The study screen's own wash — same veil, its own key, so a busy
+    # picture can be muted behind the cards without touching the deck
+    # screen's. (No Panel-Frost sibling here: the study screen has no
+    # panels to frost.)
+    study_wash_slider = QSlider(Qt.Orientation.Horizontal)
+    study_wash_slider.setRange(0, 100)
+    study_wash_slider.setFixedWidth(140)
+    study_wash_lbl = QLabel()
+    study_wash_lbl.setObjectName("SettingDesc")
+    study_wash_ctl = QHBoxLayout()
+    study_wash_ctl.setContentsMargins(0, 0, 0, 0)
+    study_wash_ctl.addWidget(study_wash_slider)
+    study_wash_ctl.addWidget(study_wash_lbl)
+    study_wash_row = _row(
+        appearance_layout,
+        "Image Wash",
+        "Mutes the whole picture behind a soft blurred veil — white "
+        "in light mode, dark at night.",
+        study_wash_ctl,
+    )
+
+    # No Review-heatmap switch here (removed 2026-08-30, Pouya: "I can
+    # add / remove widgets another way") — the deck screen's Edit
+    # Widgets mode (⊖ / ＋) is the ONE writer of heatmap_enabled now.
+    # _bg_preview_cfg still carries the key, read from stored config.
+
     _general_cfg = _pkg().get_config()
+    try:
+        _cur_theme = int(getattr(mw.pm.theme(), "value", 0))
+    except Exception:
+        _cur_theme = 0
+    anki_theme_combo.setCurrentIndex(
+        max(0, anki_theme_combo.findData(_cur_theme))
+    )
     image_crop_cb.setChecked(bool(_general_cfg.get("image_crop_enabled", True)))
-    runtime_auto_cb.setChecked(bool(_general_cfg.get("runtime_auto_setup", True)))
     from .pdfjs_viewer import renderer_from_config as _renderer_from_config
 
     pdfjs_cb.setChecked(_renderer_from_config(_general_cfg) == "pdfjs")
@@ -1018,16 +1127,22 @@ def manage_models_dialog(setup: bool = False) -> None:
     from . import dashboard as _dashboard
     from . import heatmap as _heatmap
 
-    heatmap_cb.setChecked(_heatmap.enabled(_general_cfg))
-
     from . import background as _background
+
+    klausbook_cb.setChecked(_background.design_enabled(_general_cfg))
 
     # Own syncing flag, NOT ui_state["syncing"]: this block builds and
     # runs sync_background_widgets() BEFORE ui_state is assigned further
     # down the function, and a closure's free variable is only looked up
     # at call time — referencing ui_state here crashed the dialog with
     # NameError the moment Preferences opened (live traceback).
-    _bg_state = {"spec": _background.resolve(_general_cfg), "syncing": False}
+    _bg_state = {
+        "spec": _background.resolve(_general_cfg),
+        "reviewer_spec": _background.resolve(
+            _general_cfg, prefix="reviewer_background"
+        ),
+        "syncing": False,
+    }
     # Coalesces live appearance previews: top_bar.refresh() redraws the
     # toolbar and resets the main window, and the blur slider fires
     # continuously while dragged, so previewing per signal would repaint
@@ -1036,6 +1151,70 @@ def manage_models_dialog(setup: bool = False) -> None:
     _preview_timer = QTimer(dlg)
     _preview_timer.setSingleShot(True)
     _preview_timer.setInterval(140)
+
+    def _sync_caption(
+        thumb: Any,
+        text_lbl: Any,
+        container: Any,
+        spec_x: dict,
+        is_image: bool,
+        design_on: bool,
+    ) -> None:
+        """One caption line = rounded thumbnail + filename, shown and
+        hidden as a pair. The thumb is re-rendered from the stored copy
+        under user_files/backgrounds, so it always previews what the
+        wallpaper will actually load, not the original file."""
+        name = spec_x["image"]
+        text_lbl.setText(
+            f'Image: {_elide_middle(name)} &nbsp;&middot;&nbsp; '
+            f'<a href="rm">Remove</a>'
+            if name
+            else ("No image chosen yet." if is_image else "")
+        )
+        text_lbl.setToolTip(name)
+        pix = None
+        if name:
+            try:
+                import os as _os
+
+                from . import USER_FILES as _UF
+
+                pix = _image_thumb(
+                    _os.path.join(_UF, _background.IMAGE_DIR, name)
+                )
+            except Exception:
+                pix = None
+        if pix is not None:
+            thumb.setPixmap(pix)
+        else:
+            thumb.clear()
+        thumb.setVisible(pix is not None)
+        container.setEnabled(design_on)
+        container.setVisible(bool(text_lbl.text()) or pix is not None)
+
+    def _sync_grad_caption(
+        lbl: Any, spec_x: dict, is_colour: bool, design_on: bool
+    ) -> None:
+        """The gradient caption: one swatch per sphere and the
+        on-screen editing vocabulary — the whole model in a sentence,
+        since the handles live on the screen and not in this dialog.
+        Hidden outside colour mode."""
+        if is_colour:
+            swatches = " ".join(
+                f'<span style="color:{g["color"]}">&#11044;</span>'
+                for g in spec_x["gradients"]
+            )
+            n = len(spec_x["gradients"])
+            lbl.setText(
+                f'{n} sphere{"s" if n != 1 else ""} {swatches} — edited '
+                f"on the screen itself: drag a dot to move it, its ring "
+                f"to resize, click a dot to recolor, right-click to "
+                f"remove, ＋ to add another."
+            )
+        else:
+            lbl.setText("")
+        lbl.setEnabled(design_on)
+        lbl.setVisible(bool(lbl.text()))
 
     def sync_background_widgets() -> None:
         """Repaint the Appearance controls from _bg_state (never from
@@ -1049,23 +1228,75 @@ def manage_models_dialog(setup: bool = False) -> None:
                 max(0, bg_fit_combo.findData(spec["fit"]))
             )
             bg_blur_slider.setValue(int(spec["blur"]))
+            bg_wash_slider.setValue(int(spec["wash"]))
+            r_spec = _bg_state["reviewer_spec"]
+            study_mode_combo.setCurrentIndex(
+                max(0, study_mode_combo.findData(r_spec["mode"]))
+            )
+            study_fit_combo.setCurrentIndex(
+                max(0, study_fit_combo.findData(r_spec["fit"]))
+            )
+            study_wash_slider.setValue(int(r_spec["wash"]))
         finally:
             _bg_state["syncing"] = False
         bg_blur_lbl.setText(f"{spec['blur']}px")
+        bg_wash_lbl.setText(f"{spec['wash']}%")
         is_image = spec["mode"] == "image"
         is_colour = spec["mode"] == "color"
-        bg_colour_btn.setEnabled(is_colour or is_image)
-        bg_image_btn.setEnabled(is_image)
-        # Whole rows, so the name and description grey out with the
-        # control — a live-looking label over a dead slider was the
-        # reason these read as broken rather than inactive.
-        bg_fit_row.setEnabled(is_image)
-        bg_blur_row.setEnabled(is_image)
-        bg_image_lbl.setText(
-            f"Image: {spec['image']}" if spec["image"]
-            else ("No image chosen yet." if is_image else "")
+        # Progressive disclosure (Pouya: "I shouldn't see all the
+        # settings like the color and the image unless that item is
+        # selected"): rows HIDE outright — via klaus_hidden, the same
+        # structural flag the API-key row uses, so a settings search
+        # can never resurface them — instead of greying. Design off
+        # hides the whole background block; a mode shows only its own
+        # rows. The accent grid alone survives every state: it colours
+        # Klaus's own windows, which keep their design in both modes.
+        design_on = klausbook_cb.isChecked()
+        bg_mode_row.klaus_hidden = not design_on
+        bg_image_btn.setVisible(is_image)
+        _sync_grad_caption(
+            bg_grad_lbl, spec, design_on and is_colour, design_on
         )
-        bg_image_lbl.setVisible(bool(bg_image_lbl.text()))
+        bg_fit_row.klaus_hidden = not (design_on and is_image)
+        bg_blur_row.klaus_hidden = not (design_on and is_image)
+        bg_wash_row.klaus_hidden = not (design_on and is_image)
+        _sync_caption(
+            bg_thumb_lbl, bg_image_lbl, bg_caption, spec,
+            design_on and is_image, design_on,
+        )
+
+        r_spec = _bg_state["reviewer_spec"]
+        r_is_image = r_spec["mode"] == "image"
+        r_is_colour = r_spec["mode"] == "color"
+        study_wash_lbl.setText(f"{r_spec['wash']}%")
+        study_mode_row.klaus_hidden = not design_on
+        study_image_btn.setVisible(r_is_image)
+        _sync_grad_caption(
+            study_grad_lbl, r_spec, design_on and r_is_colour, design_on
+        )
+        study_fit_row.klaus_hidden = not (design_on and r_is_image)
+        study_wash_row.klaus_hidden = not (design_on and r_is_image)
+        _sync_caption(
+            study_thumb_lbl,
+            study_image_lbl,
+            study_caption,
+            r_spec,
+            design_on and r_is_image,
+            design_on,
+        )
+        # klaus_hidden only takes effect through the search filter's
+        # walk — the API-key row's exact pattern. Guarded: the first
+        # sync runs while the settings shell is still being built.
+        try:
+            _apply_search(search_edit.text())
+        except Exception:
+            pass
+
+    def on_design_toggled(_checked: bool) -> None:
+        # Live-preview like every appearance edit, then re-grey the
+        # background rows the switch governs.
+        appearance_changed()
+        sync_background_widgets()
 
     def on_bg_mode_changed(_i: int) -> None:
         if _bg_state["syncing"]:
@@ -1089,14 +1320,15 @@ def manage_models_dialog(setup: bool = False) -> None:
         _bg_state["spec"]["blur"] = int(value)
         appearance_changed()
 
-    def pick_bg_colour() -> None:
-        from aqt.qt import QColor, QColorDialog
-
-        current = QColor(_bg_state["spec"]["color"])
-        chosen = QColorDialog.getColor(current, dlg, "Background colour")
-        if not chosen.isValid():
+    def on_bg_wash_changed(value: int) -> None:
+        bg_wash_lbl.setText(f"{value}%")
+        if _bg_state["syncing"]:
             return
-        _bg_state["spec"]["color"] = chosen.name()
+        _bg_state["spec"]["wash"] = int(value)
+        appearance_changed()
+
+    def on_bg_image_removed(_href: str) -> None:
+        _bg_state["spec"]["image"] = ""
         appearance_changed()
         sync_background_widgets()
 
@@ -1117,6 +1349,55 @@ def manage_models_dialog(setup: bool = False) -> None:
             return
         _bg_state["spec"]["image"] = stored
         _bg_state["spec"]["mode"] = "image"
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_study_mode_changed(_i: int) -> None:
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["mode"] = str(
+            study_mode_combo.currentData() or "theme"
+        )
+        appearance_changed()
+        sync_background_widgets()
+
+    def on_study_fit_changed(_i: int) -> None:
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["fit"] = str(
+            study_fit_combo.currentData() or "cover"
+        )
+        appearance_changed()
+
+    def on_study_wash_changed(value: int) -> None:
+        study_wash_lbl.setText(f"{value}%")
+        if _bg_state["syncing"]:
+            return
+        _bg_state["reviewer_spec"]["wash"] = int(value)
+        appearance_changed()
+
+    def on_study_image_removed(_href: str) -> None:
+        _bg_state["reviewer_spec"]["image"] = ""
+        appearance_changed()
+        sync_background_widgets()
+
+    def pick_study_image() -> None:
+        from aqt.qt import QFileDialog
+
+        path, _f = QFileDialog.getOpenFileName(
+            dlg, "Choose a study screen image", "",
+            "Images (*.png *.jpg *.jpeg *.webp *.gif)",
+        )
+        if not path:
+            return
+        from . import USER_FILES  # type: ignore
+
+        stored = _background.store_image(USER_FILES, path)
+        if not stored:
+            showWarning("Could not use that image.", parent=dlg)
+            return
+        _bg_state["reviewer_spec"]["image"] = stored
+        _bg_state["reviewer_spec"]["mode"] = "image"
         appearance_changed()
         sync_background_widgets()
 
@@ -1177,7 +1458,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         from aqt.qt import QColor, QColorDialog
 
         chosen = QColorDialog.getColor(
-            QColor(str(_accent_state["custom"])), dlg, "Accent colour"
+            QColor(str(_accent_state["custom"])), dlg, "Accent Color"
         )
         if chosen.isValid():
             _accent_state["custom"] = chosen.name()
@@ -1201,8 +1482,14 @@ def manage_models_dialog(setup: bool = False) -> None:
         sw.setFixedSize(22, 22)
         sw.setCursor(Qt.CursorShape.PointingHandCursor)
         sw.setToolTip(
-            "Custom colour — click to pick" if _is_custom
+            "Custom color — click to pick" if _is_custom
             else _name.capitalize()
+        )
+        # A bare colour square is silent in VoiceOver; the accessible
+        # name carries the identity the tooltip shows sighted users.
+        sw.setAccessibleName(
+            "Custom accent color" if _is_custom
+            else f"{_name.capitalize()} accent color"
         )
         sw.clicked.connect(
             (lambda _=False: _pick_custom_accent()) if _is_custom
@@ -1226,9 +1513,9 @@ def manage_models_dialog(setup: bool = False) -> None:
     sync_accent_swatches()
     _row(
         appearance_layout,
-        "Accent colour",
-        "Recolours buttons, pills and highlights across every Klaus "
-        "surface. The last square is your own colour — click it to pick.",
+        "Accent color",
+        "Recolors buttons, pills and highlights across every Klaus "
+        "surface. The last square is your own color — click it to pick.",
         accent_ctl,
     )
 
@@ -1239,9 +1526,135 @@ def manage_models_dialog(setup: bool = False) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    _finish_nav("General", "Appearance", "Semantic Search", "Local Models")
+    # ---- Assistant --------------------------------------------------
+    # The assistant runs on the Anthropic key on the keys page —
+    # `api_key_anthropic` and `reasoning_model`, both edited there
+    # because that is where every paid model name lives now. What is
+    # left here is the dock's own behaviour and its stored history: the
+    # OCR switch, the OCR model picker and the Claude Code binary row
+    # all went with the local runtime and the CLI child (spec D1).
+    assistant_layout = _page(
+        "Assistant",
+        "Assistant",
+        "Answers about the lecture page you are viewing — its slide "
+        "text, any transcript of what was said over it, and the page "
+        "image. It runs on Anthropic with the key above.",
+    )
 
-    stack.addWidget(models_page)
+    assistant_reopen_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
+    _row(
+        assistant_layout,
+        "Reopen on start",
+        "Reopen the Assistant dock where you left it the next time Anki "
+        "starts.",
+        assistant_reopen_cb,
+    )
+
+    def _clear_sessions_confirmed() -> None:
+        """The destructive back half, run only from the confirm's Yes.
+        assistant_sessions is Task 7's module, imported lazily for the
+        same reason agent_host is above."""
+        try:
+            from . import USER_FILES, assistant_sessions
+        except Exception as exc:
+            print(f"[klausmate] assistant_sessions unavailable: {exc}")
+            return
+        try:
+            assistant_sessions.clear_all(USER_FILES)
+        except Exception as exc:
+            print(f"[klausmate] assistant_sessions.clear_all failed: {exc}")
+            return
+        tooltip("Klaus: assistant sessions cleared", parent=dlg)
+
+    def clear_assistant_sessions() -> None:
+        # Hand-built QMessageBox + open() + finished (K-125), same
+        # pattern as pdf_drive._delete_pdf — never the blocking
+        # QMessageBox.question() static (its internal exec() is the
+        # K-114 segfault class).
+        msg = QMessageBox(dlg)
+        msg.setWindowTitle("Clear Sessions")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(
+            "Clear every saved Assistant conversation?\n\n"
+            "This removes the session history the Assistant keeps per "
+            "PDF. Notes, PDFs, and highlights are never touched."
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        yes_btn = msg.button(QMessageBox.StandardButton.Yes)
+        if yes_btn is not None:
+            yes_btn.setObjectName("DangerButton")
+        no_btn = msg.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setObjectName("SecondaryButton")
+        try:
+            from . import theme as _theme
+
+            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] clear-sessions dialog theme failed: {exc}")
+
+        def _on_answered(_r: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = (
+                clicked is not None
+                and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+            )
+            msg.deleteLater()
+            if confirmed:
+                _clear_sessions_confirmed()
+
+        msg.finished.connect(_on_answered)
+        msg.open()
+
+    clear_sessions_btn = QPushButton("Clear Sessions")
+    clear_sessions_btn.setObjectName("SecondaryButton")
+    _row(
+        assistant_layout,
+        "Sessions",
+        "Deletes the saved Assistant conversation history for every "
+        "PDF. Notes, PDFs, and highlights are never touched.",
+        clear_sessions_btn,
+    )
+
+    def load_assistant() -> None:
+        cfg = _pkg().get_config()
+        anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
+        reasoning_model_edit.setText(str(cfg.get("reasoning_model") or ""))
+        transcription_model_edit.setText(
+            str(cfg.get("transcription_model") or "")
+        )
+        assistant_reopen_cb.setChecked(bool(cfg.get("assistant_reopen", False)))
+
+    def save_assistant() -> None:
+        """The Anthropic key and the two model names it pays for, plus
+        the dock's own state. They are EDITED on the keys page (that is
+        where every paid model name lives) and written here, so the
+        Assistant's settings still have exactly one writer."""
+        cfg = _pkg().get_config()
+        cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
+        cfg["reasoning_model"] = reasoning_model_edit.text().strip()
+        cfg["transcription_model"] = transcription_model_edit.text().strip()
+        cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
+        # No Preferences row for these two — they're dock state, set by
+        # dragging the Assistant dock and by opening/closing it.
+        # Round-tripped so this save never wipes them back to defaults.
+        # int() is guarded because meta.json is hand-editable and a
+        # non-numeric width must not break the Save button for every
+        # other setting on the page (parked T8 finding).
+        try:
+            cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
+        except (TypeError, ValueError):
+            cfg["assistant_dock_width"] = 420
+        cfg["assistant_dock_open"] = bool(cfg.get("assistant_dock_open", False))
+        _pkg().write_config(cfg)
+
+    _finish_nav("General", "Appearance", "Assistant",
+                "API keys & models")
+
+    outer.addWidget(models_page, 1)
 
     # ----- Shared footer --------------------------------------------------
     bar_line = QFrame()
@@ -1271,7 +1684,7 @@ def manage_models_dialog(setup: bool = False) -> None:
     unsaved_lbl.setStyleSheet(_MUTED)
     close_row.addWidget(unsaved_lbl)
     close_row.addStretch(1)
-    cancel_btn = QPushButton("Cancel download")
+    cancel_btn = QPushButton("Stop Indexing")
     cancel_btn.setObjectName("SecondaryButton")
     cancel_btn.setVisible(False)
     close_row.addWidget(cancel_btn)
@@ -1282,492 +1695,151 @@ def manage_models_dialog(setup: bool = False) -> None:
     # writer of preference keys — see mark_dirty()/save_all().
     save_btn = QPushButton("Save")
     save_btn.setEnabled(False)
+    # The dialog's default button: Return saves once there is something
+    # to save (Qt never fires a disabled default). HIG: a dialog names
+    # its default action; crop_dialog and setup_flow already comply.
+    save_btn.setDefault(True)
     close_row.addWidget(save_btn)
     foot.addLayout(close_row)
 
-    install_action_btns: list[QPushButton] = []
+    # "kind" is only ever "index" now — the pull / install / runtime-setup
+    # operations went with the local runtime — but it stays a named kind
+    # so confirm_close keeps reading one thing.
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
-    # Written by refresh(); read by the index pipeline (missing-model check)
-    # and the section-sync guards (avoid save-on-programmatic-set loops).
-    # "dirty"/"shown_provider" back the deferred-save model: preference
-    # widgets no longer write on every keystroke or toggle — Save does.
-    # "shown_provider" is the provider the embed widgets are currently
-    # DISPLAYING, which runs ahead of the stored config while unsaved.
-    ui_state: dict[str, Any] = {
-        "models": [],
-        "syncing": False,
-        "dirty": False,
-        "shown_provider": "",
-    }
+    # "syncing"/"dirty" back the deferred-save model: preference widgets
+    # never write on a keystroke or a toggle — Save does. "syncing" is
+    # what stops a programmatic repopulation looking like a user edit.
+    ui_state: dict[str, Any] = {"syncing": False, "dirty": False}
 
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
         for w in (
-            pull_btn, pull_input, delete_btn, refresh_btn,
-            auto_setup_btn, download_btn, check_conn_btn,
-            embed_provider_combo, embed_model_combo, embed_key_edit,
-            embed_fix_btn, index_btn, test_conn_btn,
+            openai_key_edit, anthropic_key_edit, embed_model_edit,
+            reasoning_model_edit, transcription_model_edit,
+            index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
-        for btn in install_action_btns:
-            btn.setEnabled(not busy)
         progress.setVisible(busy)
         progress_lbl.setVisible(busy)
 
-    def endpoint_url() -> str:
-        return _pkg().get_config().get("endpoint", "http://localhost:11434")
-
-    def rebuild_install_method_buttons() -> None:
-        while install_methods_layout.count():
-            item = install_methods_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        install_action_btns.clear()
-        for method in install_methods():
-            btn = QPushButton(method.label)
-            btn.setToolTip(method.description)
-            install_action_btns.append(btn)
-            install_methods_layout.addWidget(btn)
-
-            def _make_handler(m: InstallMethod = method) -> Callable[[], None]:
-                return lambda: start_install(m)
-
-            btn.clicked.connect(_make_handler())
-
-    def show_install_page() -> None:
-        stack.setCurrentIndex(0)
-        install_status.setText(
-            f"Could not reach Ollama at {endpoint_url()}.\n"
-            "Use Set up automatically below — or install manually, start "
-            "it, then click Check connection."
-        )
-
-    def get_selected_model() -> str:
-        item = lib_lst.currentItem()
-        if not item:
-            return ""
-        return item.data(Qt.ItemDataRole.UserRole) or item.text()
-
-    def _needs_local_runtime(cfg: dict) -> bool:
-        """True only when Ollama is the active embedding provider. A cloud
-        (Voyage/OpenAI) user has no reason to land on a ~1GB local-runtime
-        install page just because Ollama isn't running (K-036) — the
-        install page stays reachable (switch the provider to Ollama, or
-        click Pull), it just stops being the default landing."""
-        from . import embeddings
-
-        return embeddings.provider_name(cfg) == "ollama"
-
     def refresh() -> None:
-        cfg = _pkg().get_config()
-        ep = endpoint_url()
-        models: list[str] = []
-        reached = False
-        if ollama_reachable(ep):
-            try:
-                models = list(_pkg().client().list_models())
-                reached = True
-            except OllamaError:
-                reached = False
-
-        if not reached and _needs_local_runtime(cfg):
-            show_install_page()
-            return
-
-        stack.setCurrentIndex(1)
-        ui_state["models"] = models
-        status_lbl.setText(
-            f"Connected to {ep}"
-            if reached
-            else "Local library needs Ollama — not required for your current provider."
-        )
+        """Reload every deferred-save widget from stored config. The one
+        entry point that used to probe a local server and rebuild a model
+        inventory; with two cloud keys there is nothing to probe."""
         sync_embed_widgets()
         sync_threshold_widget()
-        rebuild_library_list()
 
-    def rebuild_library_list() -> None:
-        """Inventory with a 'used by' badge — pure inventory, doesn't
-        assign anything (the embed row above does that)."""
-        from . import embeddings
+    # ----- API keys & models handlers --------------------------------------
 
-        cfg = _pkg().get_config()
-        models = ui_state["models"]
-        selected = get_selected_model()
-        lib_lst.clear()
+    def _plus_cfg() -> dict:
+        return _pkg().get_config() or {}
 
-        embed_active = (
-            embeddings.embedding_model(cfg)
-            if embeddings.provider_name(cfg) == "ollama"
-            else None
+    def refresh_plus_status() -> None:
+        """Repaint the Plus row and the two provider captions from STORED
+        config. Presence is read through plus.key(), which validates the
+        kp_ shape, so a half-pasted key cannot light the group up as a
+        working subscription. The provider rows stay EDITABLE — the free
+        tier is one deletion away — so the note is a caption, never a
+        setReadOnly."""
+        cfg = _plus_cfg()
+        has = bool(plus.key(cfg))
+        base_line = (
+            plus.status_line(cfg.get(plus.CACHE) or {}) if has
+            else "Klaus Plus: $12/month or $99/year — no API keys needed."
         )
-
-        if not models:
-            placeholder = QListWidgetItem("(no models installed — pull one below)")
-            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
-            lib_lst.addItem(placeholder)
-            return
-        for name in models:
-            suffix = "   ·  used by: search" if name == embed_active else ""
-            item = QListWidgetItem(name + suffix)
-            item.setData(Qt.ItemDataRole.UserRole, name)
-            lib_lst.addItem(item)
-            if name == selected:
-                lib_lst.setCurrentItem(item)
-
-    def start_install(method: InstallMethod) -> None:
-        ok = QMessageBox.question(
-            dlg,
-            "Install Ollama?",
-            "Klaus will run this command on your computer:\n\n"
-            f"  {method.command_display}\n\n"
-            "You may be asked for your password in a system dialog. "
-            "This can take several minutes.\n\n"
-            "Continue?",
+        # Terms/Privacy live on the GROUP row's status text (never the
+        # licence-key field's row above it) so they survive every repaint
+        # this function does (M-11: spec D5 promised a link from
+        # Preferences and nothing built it).
+        service_base = plus.base(cfg)
+        plus_status.setText(
+            f'{base_line}<br><a href="{service_base}/terms">Terms</a> · '
+            f'<a href="{service_base}/privacy">Privacy</a>'
         )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        op_state["kind"] = "install"
-        set_busy(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText(f"Installing via {method.id}…")
+        # Both are calls the service answers 401 to without a key; a
+        # button that can only fail is worse than no button. Subscribe
+        # stays live — it is the one thing a user without a key is here
+        # to press.
+        plus_manage_btn.setEnabled(has)
+        plus_check_btn.setEnabled(has)
+        note = "Not needed on Klaus Plus; kept for the free tier." if has else None
+        for roww in (openai_row, anthropic_row):
+            roww.klaus_desc.setText(note or _plus_base_descs[roww])
 
-        def do() -> tuple[int, str]:
-            return run_install_method(method)
+    def on_plus_subscribe() -> None:
+        """A URL built from the configured base — no key, no network, so
+        a user with nothing configured can still reach the page that
+        sells them one. A browser hop is the ONLY way Klaus touches
+        payment: nothing to enter inside Anki."""
+        openLink(plus.base(_plus_cfg()) + "/subscribe")
 
-        def on_done(result: tuple[int, str]) -> None:
-            code, output = result
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            if code == 0:
-                showInfo(
-                    "Ollama install command finished.\n\n"
-                    "Start the Ollama app if it is not already running, then "
-                    "click Check connection."
-                )
+    def on_plus_manage() -> None:
+        cfg = _plus_cfg()
+
+        def work() -> str:
+            return plus.portal_url(cfg)
+
+        def done(fut) -> None:
+            try:
+                url = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] Klaus Plus portal failed: {exc.__class__.__name__}")
+                url = ""
+            if url:
+                openLink(url)
             else:
-                showWarning(
-                    f"Install command exited with code {code}.\n\n{output}"
-                )
-            refresh()
+                tooltip("Could not open the subscription portal — check the key and try again.")
 
-        def on_fail(exc: Exception) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(
-                f"Could not run install command:\n\n{type(exc).__name__}: {exc}"
-            )
+        # taskman, not the click handler: plus.TIMEOUT_S is 15 s, and a
+        # urlopen that long on the main thread freezes Anki's whole UI.
+        mw.taskman.run_in_background(work, done)
 
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
+    def on_plus_check() -> None:
+        def work() -> dict:
+            # patch_config, not the raw replacing writer: this runs on
+            # the worker thread, and handing plus.refresh's patch sink a
+            # REPLACE would zero every other setting on one Check
+            # (K-247 fix 1). patch_config merges into a fresh read and
+            # hops back to the main thread itself, so the worker thread
+            # never touches meta.json directly.
+            return plus.refresh(_pkg().get_config, _pkg().patch_config)
 
-    def maybe_auto_pull_starter() -> None:
-        """setup mode: after the server is up, chain straight into pulling
-        the default embedding model when none exist — one click end to
-        end."""
-        if not setup:
-            return
-        try:
-            if _pkg().client().list_models():
-                return
-        except OllamaError:
-            return
-        pull_input.setCurrentIndex(0)  # default preset (nomic-embed-text)
-        start_pull()
+        def done(fut) -> None:
+            try:
+                fut.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] Klaus Plus check failed: {exc.__class__.__name__}")
+            refresh_plus_status()
 
-    def start_auto_setup() -> None:
-        if op_state["active"]:
-            return
-        starter_note = (
-            "Afterwards, if no model is installed yet, Klaus will also "
-            f"pull the starter embedding model {_EMBED_PRESETS[0][0]} "
-            "(~274 MB).\n\n"
-            if setup
-            else ""
-        )
-        ok = QMessageBox.question(
-            dlg,
-            "Set up local AI?",
-            "Klaus will download the Ollama runtime from the official "
-            f"GitHub release ({runtime_download_size_hint()}, verified "
-            "against its published checksum) and run it in the background "
-            "while Anki is open.\n\n"
-            "It is stored in the add-on's user_files folder and can be "
-            f"removed at any time.\n\n{starter_note}"
-            "Continue?",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        cancel_event = threading.Event()
-        op_state["kind"] = "setup"
-        op_state["cancel"] = cancel_event
-        set_busy(True)
-        cancel_btn.setVisible(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText("Preparing setup…")
+        mw.taskman.run_in_background(work, done)
 
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
+    def sync_embed_widgets() -> None:
+        """Seed the five fields from stored config.
 
-            def apply() -> None:
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setRange(0, 100)
-                    progress.setValue(pct)
-                else:
-                    # Phases without byte totals (checksums, extract,
-                    # winget) show as indeterminate.
-                    progress.setRange(0, 0)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> Any:
-            return full_setup(
-                _pkg().get_config(),
-                on_progress=on_event,
-                cancel_flag=cancel_event,
-                save_config=_pkg()._save_config_on_main,
-            )
-
-        def finish() -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            cancel_btn.setVisible(False)
-            op_state["kind"] = ""
-            op_state["cancel"] = None
-
-        def on_done(res: Any) -> None:
-            finish()
-            if getattr(res, "ok", False):
-                cfg = _pkg().get_config()
-                if cfg.get("_runtime_setup_declined"):
-                    cfg["_runtime_setup_declined"] = False
-                    _pkg().write_config(cfg)
-                if getattr(res, "port_moved", False):
-                    tooltip(f"Klaus: local AI running on {res.endpoint}")
-                else:
-                    tooltip("Klaus: local AI ready")
-                refresh()
-                maybe_auto_pull_starter()
-            else:
-                showWarning(
-                    "Setup did not complete:\n\n"
-                    + (getattr(res, "detail", "") or "Unknown error.")
-                )
-                refresh()
-
-        def on_fail(exc: Exception) -> None:
-            finish()
-            if isinstance(exc, RuntimeProvisionError):
-                if exc.kind == "cancelled":
-                    tooltip("Klaus: setup cancelled")
-                    return
-                # unsupported_platform lands back on this page, where the
-                # manual options are already visible.
-                showWarning(str(exc))
-            else:
-                showWarning(f"Setup failed:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def cancel_setup_download() -> None:
-        ev = op_state.get("cancel")
-        if ev is not None:
-            ev.set()
-            progress_lbl.setText("Cancelling…")
-
-    def pull_missing(name: str) -> None:
-        """Fix-it button on the embed row: download the model it points
-        at."""
-        if not name or op_state["active"]:
-            return
-        edit = pull_input.lineEdit()
-        if edit is not None:
-            edit.setText(name)
-        start_pull()
-
-    def delete_selected() -> None:
-        name = get_selected_model()
-        if not name:
-            return
-        cfg = _pkg().get_config()
-        from . import embeddings
-
-        used_by_search = (
-            embeddings.provider_name(cfg) == "ollama"
-            and embeddings.embedding_model(cfg) == name
-        )
-        warn = (
-            f"\n\n⚠ {name} is currently used by semantic search — "
-            "that will stop working until you pick another model."
-            if used_by_search
-            else ""
-        )
-        ok = QMessageBox.question(
-            dlg,
-            "Delete model",
-            f"Delete '{name}' from Ollama?\n\nThis frees disk space but you'll "
-            f"need to pull it again to use it.{warn}",
-        )
-        if ok != QMessageBox.StandardButton.Yes:
-            return
-        op_state["kind"] = "delete"
-        set_busy(True)
-        progress.setRange(0, 0)
-        progress_lbl.setText(f"Deleting {name}…")
-
-        def do() -> None:
-            _pkg().client().delete(name)
-
-        def on_done(_: Any) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            tooltip(f"Klaus: deleted {name}")
-            refresh()
-
-        def on_fail(exc: Exception) -> None:
-            progress.setRange(0, 100)
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(f"Could not delete {name}:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    def start_pull() -> None:
-        edit = pull_input.lineEdit()
-        typed = (edit.text() if edit else "").strip()
-        idx = pull_input.currentIndex()
-        # Only trust currentData while the visible text still matches the
-        # selected preset — after the user edits the line, currentIndex
-        # goes stale and would silently pull the wrong model.
-        if idx >= 0 and typed == pull_input.itemText(idx).strip():
-            name = str(pull_input.currentData() or typed)
-        else:
-            name = typed
-        name = name.strip()
-        if not name:
-            return
-        op_state["kind"] = "pull"
-        set_busy(True)
-        progress.setValue(0)
-        progress_lbl.setText(f"Starting pull of {name}…")
-
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
-
-            def apply() -> None:
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setValue(pct)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> None:
-            _pkg().client().pull(name, on_event=on_event)
-
-        def on_done(_: Any) -> None:
-            progress.setValue(100)
-            progress_lbl.setText(f"Pulled {name} ✓")
-            set_busy(False)
-            op_state["kind"] = ""
-            tooltip(f"Klaus: {name} ready")
-            refresh()
-
-        def on_fail(exc: Exception) -> None:
-            set_busy(False)
-            op_state["kind"] = ""
-            showWarning(f"Could not pull {name}:\n\n{type(exc).__name__}: {exc}")
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
-    # ----- Semantic search handlers ----------------------------------------
-
-    def _embed_cfg_key(provider: str) -> str:
-        return f"embedding_api_key_{provider}"
-
-    def sync_embed_widgets(provider_override: str | None = None) -> None:
-        from . import curation, embeddings
-
-        # Refreshes (model pulls, connection checks) must never overwrite
-        # unsaved edits with stored values. A provider switch passes
-        # provider_override and is exempt — it IS the edit being applied,
-        # and it needs the model/key fields reloaded for the new provider
-        # without anything being written to disk.
-        if provider_override is None and ui_state["dirty"]:
+        Never while dirty: a refresh landing mid-edit must not overwrite
+        unsaved values with the stored ones. The key fields are seeded
+        here and read only by save_embed / save_assistant — a key's value
+        never reaches a print, a tooltip or a status label.
+        """
+        if ui_state["dirty"]:
             return
         ui_state["syncing"] = True
         try:
             cfg = _pkg().get_config()
-            provider = provider_override or embeddings.provider_name(cfg)
-            ui_state["shown_provider"] = provider
-            idx = max(0, embed_provider_combo.findData(provider))
-            embed_provider_combo.setCurrentIndex(idx)
-            # Local provider → offer every installed model (the library is
-            # one flat list, nothing else pulls a non-embedding model into
-            # it); cloud → free text.
-            embed_model_combo.clear()
-            if provider == "ollama":
-                for name in ui_state["models"]:
-                    embed_model_combo.addItem(name, name)
-            configured_model = str(cfg.get("embedding_model") or "")
-            if provider_override is not None:
-                # Moving the widgets to a different provider than the one
-                # stored: the stored model name belongs to the old one.
-                configured_model = ""
-            if provider == "ollama":
-                st = curation.index_stats()
-                indexed_model = st["model"] if st["exists"] else ""
-                resolved = _resolve_ollama_model(
-                    configured_model,
-                    ui_state["models"],
-                    indexed_model,
-                    embeddings.DEFAULT_MODELS["ollama"],
-                )
-                if (
-                    resolved != configured_model
-                    and ui_state["models"]
-                    and provider_override is None
-                ):
-                    # Heal the config now, not just the widget — an empty
-                    # field must not silently mean DEFAULT_MODELS['ollama']
-                    # everywhere else this config is read (index_signature,
-                    # the real indexing pipeline in curation.py).
-                    #
-                    # Only persist when we actually enumerated the installed
-                    # models. An empty list means we could not ask Ollama
-                    # (server down, or the user just switched the provider
-                    # combo back to ollama while it is down), and the
-                    # resolver then falls through to the hardcoded default.
-                    # Writing THAT to disk would permanently orphan an index
-                    # built with another model — the exact failure this
-                    # resolver exists to prevent, made durable. Display it,
-                    # never store it.
-                    cfg["embedding_model"] = resolved
-                    _pkg().write_config(cfg)
-                embed_model_combo.setEditText(resolved)
-            else:
-                embed_model_combo.setEditText(configured_model)
-            edit = embed_model_combo.lineEdit()
-            if edit is not None:
-                edit.setPlaceholderText(
-                    f"default: {embeddings.DEFAULT_MODELS[provider]}"
-                )
-            embed_key_edit.setText(str(cfg.get(_embed_cfg_key(provider)) or ""))
-            embed_key_edit.setPlaceholderText(_EMBED_KEY_PLACEHOLDERS.get(provider, ""))
+            openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
+            embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
+            plus_key_edit.setText(str(cfg.get(plus.KEY) or ""))
+            plus_base_edit.setText(str(cfg.get(plus.BASE) or ""))
+            # INSIDE the guard: load_assistant flips a switch, and a
+            # switch that starts out true emits toggled -> mark_dirty,
+            # which would light up "Unsaved changes" on a dialog nobody
+            # has touched.
+            load_assistant()
         finally:
             ui_state["syncing"] = False
         update_embed_status()
+        refresh_plus_status()
 
     def _fmt_ago(ts: float) -> str:
         secs = max(0, int(time.time() - ts))
@@ -1779,67 +1851,29 @@ def manage_models_dialog(setup: bool = False) -> None:
             return f"{secs // 3600} h ago"
         return f"{secs // 86400} days ago"
 
-    def _embed_fix_kind() -> str:
-        """What embed_fix_btn should do right now: 'key' when the selected
-        cloud provider has no API key configured, 'model' when the local
-        embed model named in config isn't installed, '' when neither. The
-        single source of truth for both the row warning and the button
-        dispatcher below — they must never compute this separately or the
-        two could disagree about what the button is currently offering."""
-        from . import embeddings
-
-        cfg = _pkg().get_config()
-        sig = embeddings.index_signature(cfg)
-        provider = embed_provider_combo.currentData() or "ollama"
-        is_cloud = provider != "ollama"
-        if is_cloud and not str(cfg.get(_embed_cfg_key(provider)) or "").strip():
-            return "key"
-        if not is_cloud and sig[1] and sig[1] not in ui_state["models"]:
-            return "model"
-        return ""
-
     def update_embed_status() -> None:
         from . import curation, embeddings
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        provider = embed_provider_combo.currentData() or "ollama"
-        is_cloud = provider != "ollama"
-        key_row.klaus_hidden = not is_cloud
-        _apply_search(search_edit.text())
         st = curation.index_stats()
-        if not st["exists"]:
-            txt = "No card index yet — click “Index cards now” to enable semantic search."
+        # A Plus key counts: telling a paying subscriber to add an OpenAI
+        # key is the exact contradiction the provider-row caption two
+        # rows up exists to prevent.
+        if not str(cfg.get("api_key_openai") or "").strip() and not plus.key(cfg):
+            txt = (
+                "Add your OpenAI API key above — or a Klaus Plus key — "
+                "to enable semantic search."
+            )
+        elif not st["exists"]:
+            txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
-            if (st["provider"], st["model"]) != sig:
+            if not embeddings.signature_matches(
+                st["provider"], st["model"], st.get("dims", 0), sig
+            ):
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
-
-        # embed_fix_btn's role (open a key page vs. pull a model) switches
-        # with `kind`. on_embed_fix_clicked() reads ui_state["embed_fix_kind"]
-        # rather than being re-wired here, so there is exactly one .connect()
-        # for this button for the life of the dialog (see the connect block).
-        kind = _embed_fix_kind()
-        ui_state["embed_fix_kind"] = kind
-        if kind == "key":
-            embed_fix_btn.setText("Get key")
-        elif kind == "model":
-            embed_fix_btn.setText("Pull it")
-        embed_fix_btn.setVisible(bool(kind))
-
-    def on_embed_fix_clicked() -> None:
-        """Sole handler for embed_fix_btn.clicked (connected once, at the
-        bottom). Dispatches on the state update_embed_status() last
-        computed instead of the button being rewired per state change —
-        Qt connects accumulate, so a naive second .connect() on a state
-        change would leave both the old and new handler firing."""
-        kind = ui_state.get("embed_fix_kind", "")
-        if kind == "key":
-            provider = str(embed_provider_combo.currentData() or "voyage")
-            openLink(_EMBED_KEY_URLS.get(provider, _EMBED_KEY_URLS["voyage"]))
-        elif kind == "model":
-            pull_missing(embed_model_combo.currentText().strip())
 
     def save_embed() -> None:
         if ui_state["syncing"]:
@@ -1847,27 +1881,52 @@ def manage_models_dialog(setup: bool = False) -> None:
         from . import embeddings
 
         cfg = _pkg().get_config()
-        provider = str(embed_provider_combo.currentData() or "ollama")
-        prev = embeddings.provider_name(cfg)
-        cfg["embedding_provider"] = provider
-        # The widgets were repopulated for `provider` the moment it was
-        # picked (on_provider_changed), so by Save time their contents
-        # already belong to it — take them. Comparing against the STORED
-        # provider here (as this did under auto-save, when the widgets
-        # still held the old provider's model at signal time) would now
-        # discard a model the user deliberately typed for the new one.
-        if ui_state.get("shown_provider", provider) == provider:
-            cfg["embedding_model"] = embed_model_combo.currentText().strip()
-        else:
-            cfg["embedding_model"] = ""
-        if provider != "ollama":
-            cfg[_embed_cfg_key(provider)] = embed_key_edit.text().strip()
+        # Captured BEFORE the mutations below, off STORED config: this is
+        # what every vector on disk was made with, and comparing it with
+        # what config holds after the write is the only honest way to ask
+        # "did the model move under the index?" (K-152).
+        prev_sig = embeddings.index_signature(cfg)
+        had_key = bool(str(cfg.get("api_key_openai") or "").strip())
+        # Same capture-before-the-write rule for the subscription: a
+        # FIRST Plus key never moves the signature either (nothing was
+        # ever embedded), and that is exactly the user whose whole
+        # library is unindexed.
+        had_plus = bool(plus.key(cfg))
+        prev_plus = str(cfg.get(plus.KEY) or "").strip()
+        cfg["api_key_openai"] = openai_key_edit.text().strip()
+        cfg["embedding_model"] = embed_model_edit.text().strip()
+        cfg["klaus_plus_key"] = plus_key_edit.text().strip()
+        if cfg["klaus_plus_key"] != prev_plus:
+            # The cached verdict describes the OLD subscription, and a
+            # non-refused verdict is honoured with no expiry of its own
+            # (I-3). Left behind, a swapped key would show the previous
+            # subscription's status and quota until the next real Check.
+            cfg["klaus_plus_cache"] = {}
         _pkg().write_config(cfg)
-        if provider != prev:
-            sync_embed_widgets()  # reload model/key fields for the new provider
-        else:
-            update_embed_status()
-        rebuild_library_list()  # the "used by: search" badge may have moved
+        update_embed_status()
+        refresh_plus_status()
+        # K-152: a changed model or width invalidates EVERY stored
+        # vector, and PDF indexes rebuild only lazily — one at a time,
+        # whenever you next happen to touch that PDF — so without this
+        # the whole Library goes quietly stale until each is opened by
+        # hand. A FIRST key is the other half: the signature never moves
+        # (nothing was ever embedded), and that is exactly the moment
+        # the offer is most useful. offer_model_sweep does the
+        # comparison (via embeddings.signature_matches, never a tuple
+        # ==), counts the work, prices it, and asks before spending.
+        try:
+            from . import index_queue
+
+            index_queue.offer_model_sweep(
+                dlg,
+                prev_sig,
+                first_key=(
+                    (not had_key and bool(cfg["api_key_openai"]))
+                    or (not had_plus and bool(plus.key(cfg)))
+                ),
+            )
+        except Exception as exc:
+            print(f"[klausmate] model-change sweep offer failed: {exc}")
 
     def _update_threshold_label(value: int) -> None:
         threshold_value_lbl.setText(f"{value / 100:.2f}")
@@ -1966,6 +2025,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         except Exception as e:
             print(f"[klausmate] library refresh after sensitivity save failed: {e}")
 
+    def cancel_index() -> None:
+        ev = op_state.get("cancel")
+        if ev is not None:
+            ev.set()
+            progress_lbl.setText("Cancelling…")
+
     def finish_index() -> None:
         progress.setRange(0, 100)
         set_busy(False)
@@ -2031,48 +2096,6 @@ def manage_models_dialog(setup: bool = False) -> None:
             cancel=cancel_event,
         )
 
-    def _pull_embedder_then_index(model: str) -> None:
-        op_state["kind"] = "pull"
-        set_busy(True)
-        progress.setRange(0, 100)
-        progress.setValue(0)
-        progress_lbl.setText(f"Downloading embedding model {model}…")
-
-        def on_event(ev: dict) -> None:
-            label, pct = _format_pull_event(ev)
-
-            def apply() -> None:
-                if not _dlg_alive():
-                    return
-                progress_lbl.setText(label)
-                if pct:
-                    progress.setValue(pct)
-
-            mw.taskman.run_on_main(apply)
-
-        def do() -> None:
-            _pkg().client().pull(model, on_event=on_event)
-
-        def on_done(_: Any) -> None:
-            if not _dlg_alive():
-                return
-            set_busy(False)
-            op_state["kind"] = ""
-            refresh()
-            _run_index()
-
-        def on_fail(exc: Exception) -> None:
-            if _dlg_alive():
-                set_busy(False)
-                op_state["kind"] = ""
-            showWarning(
-                f"Could not pull {model}:\n\n{type(exc).__name__}: {exc}"
-            )
-
-        op = QueryOp(parent=dlg, op=lambda col: do(), success=on_done)
-        op.failure(on_fail)
-        op.without_collection().run_in_background()
-
     def start_index() -> None:
         if op_state["active"]:
             return
@@ -2080,16 +2103,13 @@ def manage_models_dialog(setup: bool = False) -> None:
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        provider, model = sig
-        if provider != "ollama" and not str(
-            cfg.get(_embed_cfg_key(provider)) or ""
-        ).strip():
-            showWarning(
-                f"Enter your {provider} API key above before indexing."
-            )
+        if not str(cfg.get("api_key_openai") or "").strip():
+            showWarning("Enter your OpenAI API key above before indexing.")
             return
         st = curation.index_stats()
-        if st["exists"] and (st["provider"], st["model"]) != sig:
+        if st["exists"] and not embeddings.signature_matches(
+            st["provider"], st["model"], st.get("dims", 0), sig
+        ):
             # Destructive: the stored vectors don't match the model about
             # to run, so a rebuild-from-scratch is one confirm away rather
             # than one click away. A matching signature (fresh build or
@@ -2100,14 +2120,11 @@ def manage_models_dialog(setup: bool = False) -> None:
                 "Re-index from scratch?",
                 f"Re-index all {note_count:,} cards from scratch? The "
                 f"existing index was built with {st['model']} and the "
-                f"current setting is {model}.",
+                f"current setting is {sig[1]}.",
             )
             if ok != QMessageBox.StandardButton.Yes:
                 return
-        if provider == "ollama" and model not in ui_state["models"]:
-            _pull_embedder_then_index(model)
-        else:
-            _run_index()
+        _run_index()
 
     def confirm_close() -> None:
         # Checked BEFORE the running-operation branches: several of those
@@ -2124,65 +2141,70 @@ def manage_models_dialog(setup: bool = False) -> None:
                 return
             clear_dirty()
         if op_state["active"]:
-            if op_state["kind"] == "index":
-                ok = QMessageBox.question(
-                    dlg,
-                    "Stop indexing?",
-                    "Card indexing is still running.\n\n"
-                    "Stop it and close? Progress is saved — indexing resumes "
-                    "where it stopped next time.",
-                )
-                if ok != QMessageBox.StandardButton.Yes:
-                    return
-                ev = op_state.get("cancel")
-                if ev is not None:
-                    ev.set()
-                dlg.accept()
-                return
-            if op_state["kind"] == "setup":
-                # Unlike pulls, a runtime download must not keep streaming
-                # invisibly after the dialog goes away — cancel it.
-                ok = QMessageBox.question(
-                    dlg,
-                    "Cancel setup?",
-                    "The local AI setup is still downloading.\n\n"
-                    "Cancel it and close? (Nothing partial is kept.)",
-                )
-                if ok != QMessageBox.StandardButton.Yes:
-                    return
-                cancel_setup_download()
-                dlg.accept()
-                return
-            label = "operation"
-            if op_state["kind"] == "pull":
-                label = "model pull"
-            elif op_state["kind"] == "install":
-                label = "Ollama install"
+            # Indexing is the one long operation left in this window.
             ok = QMessageBox.question(
                 dlg,
-                "Operation in progress",
-                f"A {label} is running in the background.\n\n"
-                "Close anyway? (It will continue.)",
+                "Stop indexing?",
+                "Card indexing is still running.\n\n"
+                "Stop it and close? Progress is saved — indexing resumes "
+                "where it stopped next time.",
             )
             if ok != QMessageBox.StandardButton.Yes:
                 return
+            ev = op_state.get("cancel")
+            if ev is not None:
+                ev.set()
         dlg.accept()
 
     def save_general() -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
-        cfg["runtime_auto_setup"] = bool(runtime_auto_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
+        # The service URL only. The licence key belongs to save_embed —
+        # one key, one writer, or Save's two halves race to spell it.
+        cfg["klaus_plus_base"] = plus_base_edit.text().strip()
         spec = _bg_state["spec"]
         cfg["background_mode"] = spec["mode"]
         cfg["background_color"] = spec["color"]
         cfg["background_image"] = spec["image"]
         cfg["background_fit"] = spec["fit"]
         cfg["background_blur"] = int(spec["blur"])
+        cfg["background_wash"] = int(spec["wash"])
+        cfg["background_grad_x"] = int(spec["grad_x"])
+        cfg["background_grad_y"] = int(spec["grad_y"])
+        cfg["background_grad_size"] = int(spec["grad_size"])
+        cfg["background_gradients"] = [dict(g) for g in spec["gradients"]]
+        r_spec = _bg_state["reviewer_spec"]
+        cfg["reviewer_background_mode"] = r_spec["mode"]
+        cfg["reviewer_background_color"] = r_spec["color"]
+        cfg["reviewer_background_image"] = r_spec["image"]
+        cfg["reviewer_background_fit"] = r_spec["fit"]
+        cfg["reviewer_background_wash"] = int(r_spec["wash"])
+        cfg["reviewer_background_grad_x"] = int(r_spec["grad_x"])
+        cfg["reviewer_background_grad_y"] = int(r_spec["grad_y"])
+        cfg["reviewer_background_grad_size"] = int(r_spec["grad_size"])
+        cfg["reviewer_background_gradients"] = [
+            dict(g) for g in r_spec["gradients"]
+        ]
         cfg["color_theme"] = _accent_state["name"]
         cfg["color_theme_custom"] = _accent_state["custom"]
-        cfg["heatmap_enabled"] = bool(heatmap_cb.isChecked())
+        # No heatmap_enabled write: since 2026-08-30 the deck screen's
+        # Edit Widgets mode is the only UI that owns that key, and a
+        # write here would clobber a mid-session ⊖/＋ edit with the
+        # value this dialog happened to open with.
+        cfg["klausbook_design"] = bool(klausbook_cb.isChecked())
         _pkg().write_config(cfg)
+        # Anki's own theme — the one non-Klaus preference this dialog
+        # writes. Only when actually changed: mw.set_theme re-runs
+        # setupStyle, which repaints every webview in the app.
+        try:
+            from aqt.theme import Theme as _Theme
+
+            _want = int(anki_theme_combo.currentData() or 0)
+            if int(getattr(mw.pm.theme(), "value", 0)) != _want:
+                mw.set_theme(_Theme(_want))
+        except Exception as _exc:
+            print(f"[klausmate] theme apply failed: {_exc}")
 
     def mark_dirty() -> None:
         """A preference widget changed — nothing is written until Save.
@@ -2205,17 +2227,6 @@ def manage_models_dialog(setup: bool = False) -> None:
         save_btn.setEnabled(False)
         unsaved_lbl.setText("")
 
-    def on_provider_changed(_idx: int) -> None:
-        """Reload the model list and key field for the newly picked
-        provider WITHOUT writing config. The provider is passed through
-        explicitly because config still holds the old one until Save."""
-        if ui_state["syncing"]:
-            return
-        mark_dirty()
-        sync_embed_widgets(
-            provider_override=str(embed_provider_combo.currentData() or "ollama")
-        )
-
     def _bg_preview_cfg() -> dict:
         """The PENDING appearance keys in config shape, for background's
         preview override — the same keys save_general() writes.
@@ -2224,8 +2235,12 @@ def manage_models_dialog(setup: bool = False) -> None:
         background.effective_cfg, so a key left out of it does not fall
         back to the stored value, it falls back to that reader's own
         default. heatmap_enabled is here for exactly that reason:
-        without it, opening Preferences with the heatmap switched off
-        and nudging the blur would preview it back into existence.
+        without it, opening Preferences with the heatmap removed and
+        nudging the blur would preview it back into existence. This
+        dialog no longer edits that key (Edit Widgets on the deck
+        screen does), so it is carried from STORED config, read live
+        per tick like dashboard_order below — a ⊖/＋ edit made while
+        Preferences is open must survive the next preview tick.
         """
         spec = _bg_state["spec"]
         return {
@@ -2234,7 +2249,48 @@ def manage_models_dialog(setup: bool = False) -> None:
             "background_image": spec["image"],
             "background_fit": spec["fit"],
             "background_blur": int(spec["blur"]),
-            "heatmap_enabled": bool(heatmap_cb.isChecked()),
+            "background_wash": int(spec["wash"]),
+            "background_grad_x": int(spec["grad_x"]),
+            "background_grad_y": int(spec["grad_y"]),
+            "background_grad_size": int(spec["grad_size"]),
+            "background_gradients": [dict(g) for g in spec["gradients"]],
+            # The study screen's OWN spec — carried for the same reason
+            # as every key here: the preview dict REPLACES config, so
+            # omitting these would snap the study background back to
+            # its stored value (or default) on the very next preview
+            # tick, even though the main background's edit is what
+            # triggered it.
+            "reviewer_background_mode": _bg_state["reviewer_spec"]["mode"],
+            "reviewer_background_color": _bg_state["reviewer_spec"]["color"],
+            "reviewer_background_image": _bg_state["reviewer_spec"]["image"],
+            "reviewer_background_fit": _bg_state["reviewer_spec"]["fit"],
+            "reviewer_background_wash": int(
+                _bg_state["reviewer_spec"]["wash"]
+            ),
+            "reviewer_background_grad_x": _bg_state["reviewer_spec"]["grad_x"],
+            "reviewer_background_grad_y": _bg_state["reviewer_spec"]["grad_y"],
+            "reviewer_background_grad_size": _bg_state["reviewer_spec"][
+                "grad_size"
+            ],
+            "reviewer_background_gradients": [
+                dict(g) for g in _bg_state["reviewer_spec"]["gradients"]
+            ],
+            "heatmap_enabled": bool(_heatmap.enabled(_pkg().get_config())),
+            # The heatmap's own corner menu writes these two, and it can
+            # be used while this dialog is open — so they are carried
+            # from STORED config and read live per tick, exactly like
+            # heatmap_enabled above and dashboard_order below.
+            "heatmap_history_days": _heatmap.history_window(
+                _pkg().get_config()
+            ),
+            "heatmap_forecast": _heatmap.forecast_window(
+                _pkg().get_config()
+            ) > 0,
+            # Same expression save_general writes. The design gates all
+            # read through effective_cfg and their default is OFF, so a
+            # preview dict missing this key would strip the whole look
+            # on the first blur nudge.
+            "klausbook_design": bool(klausbook_cb.isChecked()),
             # The dashboard reads its order through effective_cfg too;
             # Preferences has no order UI, so carry the stored value —
             # read live per tick, in case the dashboard writes mid-preview.
@@ -2263,9 +2319,9 @@ def manage_models_dialog(setup: bool = False) -> None:
             # The swatches carry their own inline QSS, so the dialog
             # sheet swap above wipes them — repaint from _accent_state.
             sync_accent_swatches()
-            # The sidebar star is a baked pixmap stroked in blue_accent;
+            # The sidebar star is a baked pixmap filled in blue_accent;
             # re-render it or it keeps the old accent until reopen.
-            _new_logo = _logo_pixmap(24)
+            _new_logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
             if _new_logo is not None:
                 logo_lbl.setPixmap(_new_logo)
         except Exception as _exc:
@@ -2276,6 +2332,15 @@ def manage_models_dialog(setup: bool = False) -> None:
             _top_bar.refresh()
         except Exception as _exc:
             print(f"[klausmate] background refresh failed: {_exc}")
+        try:
+            # Already-open Anki windows (Browse, Add, Stats — cached by
+            # aqt.dialogs) restyle through the tracked walk, so the
+            # toggle and every accent edit preview there live too.
+            from . import window_chrome as _window_chrome
+
+            _window_chrome.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] window chrome refresh failed: {_exc}")
 
     def revert_appearance_preview() -> None:
         """Put the STORED appearance back on screen.
@@ -2302,6 +2367,12 @@ def manage_models_dialog(setup: bool = False) -> None:
             _top_bar.refresh()
         except Exception as _exc:
             print(f"[klausmate] appearance revert refresh failed: {_exc}")
+        try:
+            from . import window_chrome as _window_chrome
+
+            _window_chrome.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] window chrome revert failed: {_exc}")
 
     def appearance_changed() -> None:
         """An appearance widget moved: mark unsaved AND preview it live.
@@ -2325,6 +2396,7 @@ def manage_models_dialog(setup: bool = False) -> None:
         save_embed()
         save_threshold()
         save_general()
+        save_assistant()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
@@ -2394,89 +2466,235 @@ def manage_models_dialog(setup: bool = False) -> None:
     def test_connection() -> None:
         """Moved from the old Tools > Klaus > Test connection (K-045).
 
-        Fixed on the move: it used to call client().health() with the
-        client's default 30-second timeout, synchronously on this same
-        main thread — a packet-dropping endpoint froze all of Anki for
-        30s. ollama_reachable uses a short timeout for exactly this
-        reason (see its docstring). It's also now provider-aware: a
-        cloud-provider user gets a key-presence check, not an Ollama
-        probe — Ollama is optional and shouldn't be implied otherwise.
+        A key-PRESENCE check, not a network probe: a live call would
+        cost money to answer a question the user did not ask, and the
+        only failure it could report that this cannot is a wrong key —
+        which the first real request reports anyway, with its own
+        message.
         """
-        from . import embeddings
-
         cfg = _pkg().get_config()
-        provider = embeddings.provider_name(cfg)
-        if provider != "ollama":
-            provider_label = "Voyage" if provider == "voyage" else "OpenAI"
-            key = str(cfg.get(_embed_cfg_key(provider)) or "").strip()
-            if key:
-                showInfo(f"{provider_label} API key is set.", parent=dlg)
-            else:
-                showWarning(
-                    f"No {provider_label} API key is set. Add one above.",
-                    parent=dlg,
-                )
+        pairs = (("OpenAI", "api_key_openai"), ("Anthropic", "api_key_anthropic"))
+        if plus.key(cfg):
+            # A subscriber's provider keys are empty BY DESIGN — the
+            # "No API key is set for" warning below is the exact
+            # contradiction judgement call 1 already removed from
+            # update_embed_status, one page over.
+            present = [label for label, k in pairs if str(cfg.get(k) or "").strip()]
+            lines = [
+                "Klaus Plus key set — the OpenAI and Anthropic keys are "
+                "optional while Plus is active."
+            ]
+            lines += [f"{label} API key is also set." for label in present]
+            showInfo("\n".join(lines), parent=dlg)
             return
-        ep = endpoint_url()
-        if ollama_reachable(ep):
-            showInfo("Connected to Ollama.", parent=dlg)
-        else:
+        missing = [label for label, key in pairs if not str(cfg.get(key) or "").strip()]
+        if missing:
             showWarning(
-                f"Could not reach Ollama at {ep}.\n"
-                "Install/start it from https://ollama.com/download",
+                "No API key is set for: "
+                + ", ".join(missing)
+                + ".\n\nAdd one in KlausMate Preferences → API keys & models.",
                 parent=dlg,
             )
+        else:
+            showInfo("Both API keys are set.", parent=dlg)
 
-    auto_setup_btn.clicked.connect(start_auto_setup)
-    cancel_btn.clicked.connect(cancel_setup_download)
+    cancel_btn.clicked.connect(cancel_index)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
-    download_btn.clicked.connect(lambda: openLink(OLLAMA_DOWNLOAD_URL))
-    check_conn_btn.clicked.connect(refresh)
     test_conn_btn.clicked.connect(test_connection)
-    delete_btn.clicked.connect(delete_selected)
-    refresh_btn.clicked.connect(refresh)
-    pull_btn.clicked.connect(start_pull)
     close_btn.clicked.connect(confirm_close)
-    embed_fix_btn.clicked.connect(on_embed_fix_clicked)
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    embed_provider_combo.currentIndexChanged.connect(on_provider_changed)
-    _embed_model_edit_widget = embed_model_combo.lineEdit()
-    if _embed_model_edit_widget is not None:
-        _embed_model_edit_widget.textEdited.connect(lambda _t: mark_dirty())
-    embed_model_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
-    embed_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    plus_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    plus_base_edit.textEdited.connect(lambda _t: mark_dirty())
+    # The three buttons ACT (open a browser, ask the service) — they do
+    # not edit, so none of them marks the dialog dirty.
+    plus_subscribe_btn.clicked.connect(on_plus_subscribe)
+    plus_manage_btn.clicked.connect(on_plus_manage)
+    plus_check_btn.clicked.connect(on_plus_check)
+    openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    reasoning_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    transcription_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
+    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
     image_crop_cb.toggled.connect(lambda _checked: mark_dirty())
-    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
     pdfjs_cb.toggled.connect(lambda _checked: mark_dirty())
-    heatmap_cb.toggled.connect(lambda _checked: appearance_changed())
+    anki_theme_combo.currentIndexChanged.connect(lambda _i: mark_dirty())
+    klausbook_cb.toggled.connect(on_design_toggled)
     bg_mode_combo.currentIndexChanged.connect(on_bg_mode_changed)
     bg_fit_combo.currentIndexChanged.connect(on_bg_fit_changed)
     bg_blur_slider.valueChanged.connect(on_bg_blur_changed)
-    bg_colour_btn.clicked.connect(pick_bg_colour)
+    bg_wash_slider.valueChanged.connect(on_bg_wash_changed)
+    bg_image_lbl.linkActivated.connect(on_bg_image_removed)
     bg_image_btn.clicked.connect(pick_bg_image)
+    study_mode_combo.currentIndexChanged.connect(on_study_mode_changed)
+    study_fit_combo.currentIndexChanged.connect(on_study_fit_changed)
+    study_wash_slider.valueChanged.connect(on_study_wash_changed)
+    study_image_lbl.linkActivated.connect(on_study_image_removed)
+    study_image_btn.clicked.connect(pick_study_image)
     save_btn.clicked.connect(save_all)
     library_change_btn.clicked.connect(change_library_folder)
     _preview_timer.timeout.connect(apply_appearance_live)
+    # ── On-screen gradient editing (Pouya picked drag-on-screen over
+    # sliders) ── rides the OPEN dialog: while Preferences is up, a
+    # gradient background grows a draggable centre dot + size ring on
+    # its own screen. JS repaints the page live during the drag; the
+    # release lands here through background.grad_edit_event (clamped)
+    # and this sink.
+    def _quiet_preview() -> None:
+        try:
+            _background.set_preview(_bg_preview_cfg())
+        except Exception as _exc:
+            print(f"[klausmate] gradient preview failed: {_exc}")
+
+    def _replant_editor() -> None:
+        """Rebuild the screen so the editor regrows with fresh sphere
+        indices — for STRUCTURAL edits only (add/remove/recolor);
+        geometry drags must never come through here."""
+        try:
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+        except Exception as _exc:
+            print(f"[klausmate] gradient replant failed: {_exc}")
+
+    def _on_grad_geom(s: dict, i: int, data: dict) -> None:
+        """A sphere moved/resized. QUIET on purpose — never
+        top_bar.refresh(): the page already shows the dragged stack
+        (the editor painted it inline), and a refresh would rebuild
+        the page under the pointer."""
+        g = s["gradients"][i]
+        g["x"], g["y"], g["size"] = data["x"], data["y"], data["size"]
+        if i == 0:
+            # Legacy single-gradient mirror (what save_general also
+            # writes), so a downgrade or hand-read config stays sane.
+            s["grad_x"], s["grad_y"], s["grad_size"] = (
+                data["x"], data["y"], data["size"],
+            )
+        mark_dirty()
+        _quiet_preview()
+
+    def _pick_sphere_colour(spec_key: str, i: int) -> None:
+        """Recolor sphere i — the on-screen dot IS the colour chip, a
+        click on it lands here (deferred one tick: modal work must
+        never run inside a webchannel dispatch)."""
+        from aqt.qt import QColor, QColorDialog
+
+        s = _bg_state[spec_key]
+        if not 0 <= i < len(s["gradients"]):
+            return
+        chosen = QColorDialog.getColor(
+            QColor(s["gradients"][i]["color"]), dlg, "Sphere Color"
+        )
+        if not chosen.isValid():
+            return
+        s["gradients"][i]["color"] = chosen.name()
+        if i == 0:
+            s["color"] = chosen.name()
+        mark_dirty()
+        _quiet_preview()
+        sync_background_widgets()
+        _replant_editor()
+
+    def _on_grad_dragged(target: str, op: str, data: dict) -> None:
+        """The on-screen editor's bridge sink (values already clamped
+        in background.grad_edit_event). List bounds and the sphere cap
+        are enforced HERE — JS indices are never trusted either."""
+        spec_key = "reviewer_spec" if target == "reviewer" else "spec"
+        s = _bg_state[spec_key]
+        gradients = s["gradients"]
+        i = int(data.get("i", 0))
+        if op == "geom":
+            if 0 <= i < len(gradients):
+                _on_grad_geom(s, i, data)
+        elif op == "add":
+            if len(gradients) < _background.MAX_SPHERES:
+                try:
+                    new_colour = _theme_presets.palette(
+                        _theme_presets.night_mode()
+                    )["blue_bright"]
+                except Exception:
+                    new_colour = "#0a84ff"
+                gradients.append(
+                    {"color": new_colour, "x": 50, "y": 45, "size": 60}
+                )
+                mark_dirty()
+                _quiet_preview()
+                sync_background_widgets()
+                _replant_editor()
+        elif op == "remove":
+            # The last sphere stays — colour mode IS a gradient; an
+            # empty stack would be flat, which was removed outright.
+            if len(gradients) > 1 and 0 <= i < len(gradients):
+                gradients.pop(i)
+                mark_dirty()
+                _quiet_preview()
+                sync_background_widgets()
+                _replant_editor()
+        elif op == "pick":
+            QTimer.singleShot(
+                0, lambda: _pick_sphere_colour(spec_key, i)
+            )
+
+    _background.set_grad_edit(True, _on_grad_dragged)
+
+    def _disarm_grad_edit(_result: int) -> None:
+        """Connected BEFORE the preview revert below, so between them
+        exactly one refresh clears the handles on every close path:
+        with a preview armed the revert's own refresh rebuilds without
+        the flag; with nothing previewed the revert early-returns and
+        this refresh does the clearing."""
+        _background.set_grad_edit(False, None)
+        if not _background.preview_active():
+            try:
+                from . import top_bar as _top_bar
+
+                _top_bar.refresh()
+            except Exception:
+                pass
+
+    dlg.finished.connect(_disarm_grad_edit)
     # finished fires on EVERY close path (Save, Cancel, Esc, title-bar ✕),
     # so it is the one place an unsaved preview can be guaranteed not to
     # outlive the dialog. No-op unless a preview is actually armed.
     dlg.finished.connect(lambda _result: revert_appearance_preview())
 
-    rebuild_install_method_buttons()
+    def _on_profile_will_close() -> None:
+        # A NON-MODAL window can outlive its profile — close it before
+        # the collection goes away. reject() routes through finished →
+        # revert_appearance_preview, so an armed preview cannot leak
+        # into the next profile either.
+        try:
+            dlg.reject()
+        except Exception:
+            pass
+
+    try:
+        from aqt import gui_hooks as _gui_hooks
+
+        _gui_hooks.profile_will_close.append(_on_profile_will_close)
+    except Exception as _exc:
+        print(f"[klausmate] preferences profile guard failed: {_exc}")
+
+    def _forget_dialog(_result: int) -> None:
+        global _OPEN_DLG
+        _OPEN_DLG = None
+        try:
+            from aqt import gui_hooks as _gui_hooks2
+
+            _gui_hooks2.profile_will_close.remove(_on_profile_will_close)
+        except Exception:
+            pass
+
+    dlg.finished.connect(_forget_dialog)
+
     refresh()
-    if setup:
-        if stack.currentIndex() == 0:
-            # One-click path: go straight to the provisioning confirm.
-            QTimer.singleShot(0, start_auto_setup)
-        else:
-            # Server already fine — jump to getting a first model.
-            QTimer.singleShot(0, maybe_auto_pull_starter)
-    # open(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
+    # show(), NEVER exec() (live crash, 2026-08-26): on macOS 26.5 +
     # Qt 6.11, showing this dialog application-modal via exec()
     # segfaulted in its first backing-store flush
     # (QPaintDevice::devicePixelRatio on null inside QBackingStore::flush)
@@ -2484,9 +2702,29 @@ def manage_models_dialog(setup: bool = False) -> None:
     # QAction, and a clean QTimer slot — so the app-modal nested loop
     # (Qt runs it through AppKit's NSApp modal-session machinery, which
     # races Tahoe's window-appear animation) is the trigger, not how the
-    # dialog was opened. Window-modal open() takes the normal window
-    # path, like Anki's own dialogs and our QMenus, none of which crash.
+    # dialog was opened. The window-modal open() that replaced exec()
+    # takes the normal window path; show() is that same path minus the
+    # modality — dropped on purpose (2026-08-30, Pouya): Preferences is
+    # a live control panel now, used BESIDE the main window while
+    # appearance edits preview on it (and the on-screen gradient
+    # handles need the deck screen clickable at all). _OPEN_DLG above
+    # keeps it a singleton; profile_will_close closes it in time.
     # Nothing here consumed exec()'s return value; every close path is
     # already callback-driven (confirm_close / save_all).
-    dlg.open()
+    _OPEN_DLG = dlg
+    dlg.show()
+    # Plant the gradient drag handles right away when a gradient is
+    # already configured (arming an edge colour later plants them via
+    # that edit's own live-preview refresh). After show(), so the one
+    # deck-screen rebuild happens behind the appearing window.
+    try:
+        if (
+            _bg_state["spec"]["mode"] == "color"
+            or _bg_state["reviewer_spec"]["mode"] == "color"
+        ):
+            from . import top_bar as _top_bar
+
+            _top_bar.refresh()
+    except Exception as _exc:
+        print(f"[klausmate] gradient handle plant failed: {_exc}")
 

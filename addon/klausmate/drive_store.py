@@ -28,7 +28,6 @@ pdf but missing from ``folders`` is implicitly part of the tree.
 
 from __future__ import annotations
 
-import colorsys
 import json
 import os
 
@@ -244,18 +243,27 @@ def build_tree(context_names: list[str], data: dict) -> dict:
     return {"folders": dict(sorted(folders.items())), "root": root}
 
 
-def retention_color(fraction: float, night_mode: bool = False) -> tuple[int, int, int]:
-    """Red (0%) -> green (100%) retention indicator, as a plain RGB tuple.
+def retention_level(fraction: float) -> str:
+    """Bucket a retention fraction: ``"low"`` < 0.70 <= ``"mid"`` < 0.85
+    <= ``"high"``.
 
-    Pure HSV hue interpolation (hue 0 -> 120 degrees). Deliberately
-    returns ints, never a QColor, so this stays aqt-free/Qt-free and
-    headlessly testable. Night mode uses a lighter, less saturated ramp
-    so the text stays legible on a dark background — in both themes the
-    ramp is muted on purpose: this is a quiet nudge on the retention
-    figure itself, not a highlight.
+    Replaces the K-117 HSV hue ramp (K-127): a continuous red->green
+    sweep gave every row its own arbitrary tertiary hue — 59% rendered
+    chartreuse — with no meaning attached to any of them. Three semantic
+    levels instead: FSRS desired retention sits around 0.9, so >= 0.85
+    reads "at target" (high), < 0.70 is genuinely poor (low), and the
+    wide middle band is simply fine — the caller gives it no ink at all.
+
+    Deliberately returns a level name, never a colour, so this stays
+    aqt-free/Qt-free and headlessly testable; the theme-token mapping
+    lives with the one consumer (pdf_drive._set_retention_color).
+    Out-of-range values clamp into [0, 1] exactly like the old ramp;
+    non-numeric input raises like ``float()`` does, into that caller's
+    guard.
     """
     frac = max(0.0, min(1.0, float(fraction)))
-    hue = (frac * 120.0) / 360.0
-    saturation, value = (0.5, 0.9) if night_mode else (0.65, 0.75)
-    r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
-    return (round(r * 255), round(g * 255), round(b * 255))
+    if frac < 0.70:
+        return "low"
+    if frac < 0.85:
+        return "mid"
+    return "high"

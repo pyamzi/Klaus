@@ -341,15 +341,50 @@ def save_thumbs_state(
         _save_tabs_file(user_files_dir, updates)
 
 
+#: The values ``save_panel_state`` writes for ``placement`` since
+#: 2026-09-05 (the PDF panel is a QDockWidget: three areas plus floating).
+PANEL_PLACEMENTS = ("left", "right", "bottom", "float")
+
+_LEGACY_PLACEMENTS = {
+    # The 2026-08 placement engine anchored the panel on a pane, above or
+    # below the editor and beside the note list; the dock has window edges.
+    "above": "bottom",
+    "below": "bottom",
+    "left": "left",
+    "notes-left": "left",
+    "right": "right",
+    "notes-right": "right",
+    "float": "float",
+    "bottom": "bottom",
+}
+
+
+def migrate_placement(value: object) -> str:
+    """Map a stored ``placement`` — any build's — to one of
+    ``PANEL_PLACEMENTS``. Unknown, missing or non-string values land on
+    ``"right"``, the editor-side default; a corrupt file must cost a
+    default, never the panel."""
+    if isinstance(value, str):
+        return _LEGACY_PLACEMENTS.get(value.strip().lower(), "right")
+    return "right"
+
+
 def load_panel_state(user_files_dir: str) -> dict:
-    """Viewer placement from last session: {"placement": "above"|"below"|
-    "left"|"right"|"float", "geom": [x, y, w, h]} — either key may be
-    absent."""
+    """Viewer placement from last session: {"placement": one of
+    ``PANEL_PLACEMENTS``, "geom": [x, y, w, h]} — either key may be
+    absent.
+
+    THE MIGRATION HAPPENS HERE, at the one read every caller goes
+    through (spec: "old values migrate once on read"). The whitelist
+    this replaced was the five PRE-dock values, so it silently dropped
+    a stored "bottom" — the value the dock itself writes — and the
+    panel came back on the right after every restart. A missing key
+    stays missing: the caller's own default decides, not "right"."""
     data = _load_tabs_file(user_files_dir)
     out: dict = {}
     placement = data.get("placement")
-    if placement in ("above", "below", "left", "right", "float"):
-        out["placement"] = placement
+    if placement is not None:
+        out["placement"] = migrate_placement(placement)
     geom = data.get("geom")
     if (
         isinstance(geom, list)
@@ -1337,6 +1372,79 @@ def _bake_color(value, fallback: str) -> str:
     return fallback
 
 
+# The base-14 font name every reader resolves without a resource
+# dictionary. Spelled once so the /DA string and any future /DR entry
+# can never name different fonts.
+_DA_FONT = "Helv"
+
+# The size a text record falls back to when its own is missing or junk
+# — one constant behind both the /DS string pypdf builds and the /DA
+# string we build, so the two halves of one annotation's appearance can
+# never disagree.
+TEXT_SIZE_FALLBACK = 12
+
+
+def _num(value: float) -> str:
+    """A PDF numeric token: ``12`` not ``12.0``, ``0.9804`` not
+    ``0.9803921568627451`` — a content-stream operand, not a repr."""
+    return f"{round(float(value), 4):g}"
+
+
+def free_text_da(color, size, fallback_color: str = "000000") -> str:
+    """The FreeText default-appearance string, ``/Helv 24 Tf 1 0 0 rg``.
+
+    WHY WE BUILD THIS OURSELVES (K-159, and it is the whole bug):
+    vendored pypdf's ``FreeText`` writes ``/DA`` only inside
+    ``if border_color:`` — and it writes only the colour there, never a
+    font. We pass ``border_color=None`` deliberately (K-150: Preview
+    frames a text box only while it is selected, so a permanent border
+    would be wrong), so every baked text box shipped ``/DA ()``. Size
+    and colour went into ``/DS`` alone, the rich-text CSS string, which
+    Preview and most readers ignore — so they fell back to a default
+    appearance and every note rendered small and black. MEASURED, not
+    assumed: PDFKit (the framework Preview itself draws with) reported
+    ``font=Helvetica size=12.0 color=white 0`` for a 24pt red record,
+    and reported ``size=24.0 color=RGB 1 0 0`` once this string was
+    present. The border stays off: the border and the appearance string
+    are separate concerns, and conflating them is what produced the bug.
+
+    ``/DR`` is deliberately NOT written. ``/Helv`` is one of the base-14
+    names readers resolve implicitly, and PDFKit was measured rendering
+    both the size and the colour correctly with no resource dictionary
+    and no ``/AcroForm`` anywhere in the file — inventing an empty form
+    dictionary in a user's lecture PDF to restate a font every reader
+    already knows would be a bigger change than the fix.
+
+    Round-trips: ``_freetext_style`` parses exactly this shape back
+    (``/Helv <n> Tf`` and ``r g b rg``), so a Klaus box re-read from the
+    file carries the style it was baked with instead of black/None.
+    """
+    hexv = _bake_color(color, fallback_color)
+    r, g, b = (int(hexv[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    return (
+        f"/{_DA_FONT} {_num(text_point_size(size))} Tf "
+        f"{_num(r)} {_num(g)} {_num(b)} rg"
+    )
+
+
+def text_point_size(size) -> float:
+    """A text record's font size in points, ``TEXT_SIZE_FALLBACK`` for
+    anything missing, non-numeric, non-positive or non-finite.
+
+    The bake's ``hl.get('size') or 12`` used to say this inline, in one
+    place. It now has two readers — pypdf's ``/DS`` and our own ``/DA``
+    — and a note whose two appearance strings disagreed about its size
+    would be worse than the bug K-159 fixes.
+    """
+    try:
+        pt = float(size)
+    except (TypeError, ValueError):
+        return float(TEXT_SIZE_FALLBACK)
+    if not math.isfinite(pt) or pt <= 0:
+        return float(TEXT_SIZE_FALLBACK)
+    return pt
+
+
 def bake_annotations(
     user_files_dir: str,
     name: str,
@@ -1551,6 +1659,7 @@ def bake_annotations(
                 if not rects:
                     continue
                 x, y, w, h = (float(v) for v in rects[0])
+                pt = text_point_size(hl.get("size"))
                 free = _BakeFreeText(
                     text=str(hl.get("text") or ""),
                     rect=(
@@ -1559,10 +1668,17 @@ def bake_annotations(
                         ox + x + w,
                         oy + ph - y,
                     ),
-                    font_size=f"{hl.get('size') or 12}pt",
+                    font_size=f"{pt}pt",
                     font_color=_bake_color(hl.get("color"), "000000"),
                     border_color=None,
                     background_color=None,
+                )
+                # /DA, which pypdf leaves EMPTY for a borderless box —
+                # see free_text_da. Without it Preview renders every
+                # note at its own default size in black, whatever /DS
+                # says (measured in PDFKit, K-159).
+                free[_BakeName("/DA")] = _BakeString(
+                    free_text_da(hl.get("color"), pt)
                 )
                 _mark_klaus(free, hl)
                 writer.add_annotation(page, free)
@@ -2378,13 +2494,26 @@ def delete_context(user_files_dir: str, name: str) -> None:
                 os.remove(path)
             except OSError:
                 pass
-    # Lazy import: pdf_index imports our _chunk_text at module level.
+    # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
+    # module level, for _safe_basename).
     try:
         from . import pdf_index
 
         pdf_index.delete(user_files_dir, base)
     except Exception as exc:
         print(f"[klausmate] pdf_index cleanup failed for {base}: {exc}")
+    # user_files/pages/<safe>/ is a sibling too (page_store.py) — the
+    # PR1 review fix re-keys it onto a text digest so a bake or a move
+    # cannot orphan it, but an actual delete must still remove it, or a
+    # re-import under this safe basename would inherit a stranger's
+    # slide text and transcript. Lazy import: avoids a module cycle,
+    # matching the pdf_index import just above.
+    try:
+        from . import page_store
+
+        shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
+    except Exception as exc:
+        print(f"[klausmate] page record cleanup failed for {base}: {exc}")
     try:
         from . import drive_store
 
@@ -2401,39 +2530,15 @@ def delete_context(user_files_dir: str, name: str) -> None:
         retention.forget_prefs(base)
     except Exception as exc:
         print(f"[klausmate] prefs cleanup failed for {base}: {exc}")
+    # retention_history.json is a sibling too, with the same blind spot:
+    # a re-import under this safe basename would otherwise inherit the
+    # deleted PDF's whole retention curve.
+    try:
+        from . import retention_history
+
+        retention_history.forget_history(user_files_dir, base)
+    except Exception as exc:
+        print(f"[klausmate] retention history cleanup failed for {base}: {exc}")
     if get_active_pdf(user_files_dir) == base:
         clear_active_pdf(user_files_dir)
-
-
-# ----------------------------- chunking ----------------------------------
-
-_CHUNK_SIZE = 400
-_CHUNK_OVERLAP = 50
-
-
-def _chunk_text(text: str, source: str) -> list[dict]:
-    chunks: list[dict] = []
-    text = text.strip()
-    if not text:
-        return chunks
-    i = 0
-    n = len(text)
-    while i < n:
-        end = min(i + _CHUNK_SIZE, n)
-        if end < n:
-            window = text[i:end]
-            for sep in ("\n\n", ". ", "\n"):
-                idx = window.rfind(sep)
-                if idx >= _CHUNK_SIZE // 2:
-                    end = i + idx + len(sep)
-                    break
-        chunk_text = text[i:end].strip()
-        if chunk_text:
-            # "start" = offset into the (stripped) input text; pdf_index uses
-            # it for stable chunk identity. BM25/curation ignore it.
-            chunks.append({"source": source, "text": chunk_text, "start": i})
-        if end >= n:
-            break
-        i = max(end - _CHUNK_OVERLAP, i + 1)
-    return chunks
 

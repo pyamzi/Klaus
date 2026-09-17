@@ -1,4 +1,4 @@
-"""Headless tests for the custom background + frosted top bar."""
+"""Headless tests for the custom background + frosted deck panels."""
 import importlib
 import os
 import re
@@ -39,8 +39,12 @@ check("url built under the addon's web export",
 check("no url without a valid image", bg.image_url("klausmate", "x.py") == "")
 
 section("main_css: Anki's own screens")
-check("theme mode paints nothing at all",
-      bg.main_css(bg.resolve({})) == "")
+check("theme mode paints no WALLPAPER — but the panel family still "
+      "ships: panels follow the design, only the wallpaper follows "
+      "the mode (KlausBook over Anki's own ground was a half-designed "
+      "screen before — stock grey hover, stranded studied line)",
+      "html, body { background" not in bg.main_css(bg.resolve({}))
+      and "--klaus-panel:" in bg.main_css(bg.resolve({})))
 colour = bg.resolve({"background_mode": "color", "background_color": "#123456"})
 check("colour mode fills html/body", "#123456" in bg.main_css(colour))
 img = bg.resolve({"background_mode": "image", "background_image": "w.jpg"})
@@ -49,51 +53,369 @@ css = bg.main_css(img, url)
 check("image mode references the export url", url in css)
 check("image mode is fixed + covering",
       "background-attachment: fixed" in css and "cover" in css)
-check("image mode without a url degrades to nothing",
-      bg.main_css(img, "") == "")
+check("image mode without a url degrades to panels-without-wallpaper "
+      "— a broken image must not strip the whole panel family",
+      "background-image" not in bg.main_css(img, "")
+      and "--klaus-panel:" in bg.main_css(img, ""))
 
-section("bar_css: the frost")
-# The whole point: blurring a flat colour is a no-op, so the bar simply
-# IS that colour and matches the window chrome with no measuring.
-bar = bg.bar_css(colour)
-check("colour mode needs no blur at all",
-      "#123456" in bar and "blur(" not in bar)
-check("theme mode leaves the bar to the theme tokens",
-      bg.bar_css(bg.resolve({})) == "")
-bar_img = bg.bar_css(img, url)
-check("image mode blurs a copy of the background",
-      "filter: blur(" in bar_img and url in bar_img)
-check("the blurred layer sits behind the links", "z-index: -1" in bar_img)
-check("content is lifted above the frost", ".header > *" in bar_img)
-check("a tint keeps links readable over any photo",
-      "--klaus-chrome" in bar_img and "opacity:" in bar_img)
-# Blur samples outside the element; without bleed the edges go pale.
-blur_px = img["blur"]
-check("the frost layer bleeds past every edge",
-      f"{-blur_px * 2}px" in bar_img)
-check("no url means no frost", bg.bar_css(img, "") == "")
+section("image wash: ONE veil between the picture and everything on it")
+check("resolve reads {prefix}_wash — clamped, default 0 (off)",
+      bg.resolve({})["wash"] == 0
+      and bg.resolve({"background_wash": 60})["wash"] == 60
+      and bg.resolve({"background_wash": 300})["wash"] == 0
+      and bg.resolve({"background_wash": "lots"})["wash"] == 0
+      and bg.resolve({"reviewer_background_wash": 40},
+                     prefix="reviewer_background")["wash"] == 40)
+_washed = bg.resolve({"background_mode": "image",
+                      "background_image": "w.jpg",
+                      "background_wash": 60})
+_wcss = bg.main_css(_washed, url)
+check("the veil ships only when wash > 0 — the default emits nothing",
+      "body::before" in _wcss and "body::before" not in css)
+check("the veil sits BETWEEN picture and content: image on <html> "
+      "ALONE, body forced transparent (Anki paints body with --canvas "
+      "— without the override the veil would be buried under a second "
+      "copy of the picture), veil fixed at z-index -1, click-through",
+      "html {" in _wcss
+      and "body { background: transparent !important; }" in _wcss
+      and "z-index: -1;" in _wcss
+      and "pointer-events: none;" in _wcss)
+check("theme-aware (Pouya picked this variant): white veil by day, "
+      "near-black under Anki's own night class — both palettes ship "
+      "in one sheet, keyed on :root.night-mode (house rule)",
+      "rgba(255,255,255,0.51)" in _wcss
+      and ":root.night-mode body::before" in _wcss
+      and "rgba(12,12,14,0.51)" in _wcss)
+check("the wash blurs the picture itself (backdrop-filter on the "
+      "veil), independent of the panels' own frost knob",
+      "backdrop-filter: blur(14.4px)" in _wcss)
+check("the panel family still frosts ON TOP of the washed picture",
+      "--klaus-panel:" in _wcss)
+check("the reviewer gets the same veil from its OWN key — and its "
+      "image also moves to html-only with the transparent body",
+      "body::before" in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "image",
+                      "reviewer_background_image": "s.jpg",
+                      "reviewer_background_wash": 30},
+                     prefix="reviewer_background"), "u.png")
+      and "html body.card.card.nightMode"
+      in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "image",
+                      "reviewer_background_image": "s.jpg"},
+                     prefix="reviewer_background"), "u.png"))
 
-section("bar_css bottom variant (K-109): the bottom toolbar")
-bot_col = bg.bar_css(colour, bottom=True)
-check("colour mode paints html+body — the bottom bar has no .header "
-      "class, only the #header table",
-      "#123456" in bot_col and "html, body" in bot_col
-      and ".header" not in bot_col)
-bot_img = bg.bar_css(img, url, bottom=True)
-check("image mode frosts off body and samples the image's BOTTOM edge "
-      "(the slice of the window background the bar continues)",
-      "body::before" in bot_img
-      and "background-position: center bottom" in bot_img
-      and "filter: blur(" in bot_img)
-check("same tint + bleed discipline as the top bar",
-      "--klaus-chrome" in bot_img and f"{-img['blur'] * 2}px" in bot_img)
-check("buttons take full contrast + shadow over a photo, from a "
-      "selector that outranks the chip base",
-      "body #header button" in bot_img and "text-shadow" in bot_img)
-check("bottom frost also degrades to nothing without a url",
-      bg.bar_css(img, "", bottom=True) == "")
-check("top output is byte-identical to before the bottom param",
-      bg.bar_css(colour) == bg.bar_css(colour, bottom=False) == bar)
+def _spec_of(sel: str) -> tuple:
+    """(classes, types) specificity of a simple compound selector —
+    enough to compare the card-background reset against real notetype
+    rules. No ids involved on either side."""
+    import re as _re
+    return (len(_re.findall(r"\.[A-Za-z0-9_-]+", sel)),
+            len(_re.findall(r"(?:^|[\s>])([a-z]+)", sel)))
+
+
+section("colour mode IS a stack of gradient spheres (flat removed)")
+# Flat colour was removed outright (2026-08-30), and the backdrop is
+# NOT an option (Pouya: "the edge color... shouldn't be an option at
+# all") — every sphere fades over the default white ground, and any
+# color2 stored during the brief era it was configurable is ignored.
+check("the backdrop is ALWAYS the default ground — a stored color2 "
+      "is ignored, never an option",
+      bg.resolve({"background_mode": "color"})["color2"]
+      == bg.DEFAULT_COLOR
+      and bg.resolve({"background_color2": "#123456"})["color2"]
+      == bg.DEFAULT_COLOR
+      and not hasattr(bg, "derive_edge_colour"))
+check("the GROUND follows the theme — white by day, dark under "
+      ":root.night-mode, both palettes in one sheet (house rule; a "
+      "baked white ground was a floodlight at night) — in BOTH "
+      "builders, painted on <html> ALONE with body transparent: "
+      "painting both composited every sphere layer TWICE, and where "
+      "the body box ended the doubled intensity stopped — a faint "
+      "line across the gradient (live complaint, 2026-08-30)",
+      f"background-color: {bg.DEFAULT_COLOR} !important;"
+      in bg.main_css(colour)
+      and ":root.night-mode {" in bg.main_css(colour)
+      and "html, body" not in bg.main_css(colour)
+      and "body { background: transparent !important; }"
+      in bg.main_css(colour)
+      and f"background-color: {bg.NIGHT_COLOR} !important;"
+      in bg.main_css(colour)
+      and "html body.card.card.nightMode"
+      in bg.reviewer_css(bg.resolve(
+          {"reviewer_background_mode": "color"},
+          prefix="reviewer_background")))
+# The reviewer's <body> IS the card: Anki gives it class="card"
+# plus nightMode/night_mode, and shared notetypes paint it opaque
+# with !important. AnKing's, read out of Pouya's own collection
+# (2026-08-31): `.nightMode.card, .night_mode .card {
+# background-color: #272828 !important; }` — specificity (0,2,0)
+# WITH !important, which outranks a plain `body { ... !important }`
+# and hid the wallpaper down to the card's bottom edge (the hard
+# line across the study screen).
+for _sel in ("html body,", "html body.card.card,",
+             "html body.card.card.nightMode",
+             "html body.card.card.night_mode"):
+    check(f"the reviewer's card-background reset carries {_sel.strip(',')}",
+          _sel in bg.reviewer_css(bg.resolve(
+              {"reviewer_background_mode": "color"},
+              prefix="reviewer_background")))
+check("...and it OUTRANKS a real notetype rule — (0,3,2) beats the "
+      "(0,2,0) AnKing selector, with headroom over (0,3,0) ones",
+      _spec_of("html body.card.card.nightMode")
+      > _spec_of(".nightMode.card")
+      and _spec_of("html body.card.card.nightMode")
+      > _spec_of(".card.nightMode.x"))
+check("ONLY the background is neutralised — the card's colours, "
+      "borders and everything else it designed stay ITS business",
+      "background: transparent !important;" in bg.reviewer_css(
+          bg.resolve({"reviewer_background_mode": "color"},
+                     prefix="reviewer_background"))
+      and "color:" not in bg.reviewer_css(bg.resolve(
+          {"reviewer_background_mode": "color"},
+          prefix="reviewer_background")).split("html body,")[1]
+      .split("}")[0])
+check("theme mode still emits NOTHING, so a default profile's cards "
+      "are untouched — the reset ships only with a real wallpaper",
+      bg.reviewer_css(bg.resolve({}, prefix="reviewer_background")) == "")
+
+_theme_mod = importlib.import_module("klausmate.theme")
+check("both grounds ARE the bars' chrome tokens, by reference — the "
+      "window reads as one surface with its top and bottom bars "
+      "(Pouya: night's #1E2225 drew a visible edge at both bar "
+      "boundaries)",
+      bg.NIGHT_COLOR == _theme_mod.DARK["chrome"]
+      and bg.DEFAULT_COLOR == _theme_mod.LIGHT["chrome"])
+check("an UNSET sphere (still default white) paints nothing — over "
+      "the white day-ground it is invisible anyway, and at night it "
+      "would sit as a phantom glow the user never chose; the default "
+      "colour spec renders as the plain theme-aware ground",
+      bg.gradient_css_value(bg.resolve({"background_mode": "color"})) == ""
+      and "background-image" not in bg.main_css(
+          bg.resolve({"background_mode": "color"}))
+      and "radial-gradient(" in bg.main_css(colour))
+_grad = bg.resolve({"background_mode": "color",
+                    "background_color": "#102030",
+                    "background_color2": "#a0b0c0",
+                    "background_grad_x": 30, "background_grad_y": 70,
+                    "background_grad_size": 120})
+check("one sphere = one radial layer, its own colour fading to the "
+      "SAME colour at alpha 0 (never through black transparent), at "
+      "the dragged position and size",
+      bg.gradient_css_value(_grad)
+      == "radial-gradient(at 30% 70%, #102030 0%, #10203000 120%)")
+_multi = bg.resolve({
+    "background_mode": "color", "background_color2": "#0b0b10",
+    "background_gradients": [
+        {"color": "#ff0000", "x": 20, "y": 30, "size": 50},
+        {"color": "#00ff00", "x": 80, "y": 60, "size": 90},
+        {"color": "not-a-colour"},
+        "junk",
+    ],
+})
+check("MULTIPLE spheres stack first-on-top over ONE backdrop — bad "
+      "entries are dropped, and the backdrop rides as "
+      "background-color so the layers can compose",
+      bg.gradient_css_value(_multi)
+      == "radial-gradient(at 20% 30%, #ff0000 0%, #ff000000 50%), "
+         "radial-gradient(at 80% 60%, #00ff00 0%, #00ff0000 90%)"
+      and f"background-color: {bg.DEFAULT_COLOR} !important;"
+      in bg.main_css(_multi)
+      and "background-image: radial-gradient" in bg.main_css(_multi))
+check("the sphere list is capped at MAX_SPHERES and a missing list "
+      "is built from the legacy single-gradient keys, #rgb colours "
+      "normalised to six digits (the alpha-0 stop needs them)",
+      len(bg.resolve({"background_gradients": [
+          {"color": "#111111"}] * 9})["gradients"]) == bg.MAX_SPHERES
+      and _grad["gradients"] == [
+          {"color": "#102030", "x": 30, "y": 70, "size": 120}]
+      and bg.resolve({"background_gradients": [
+          {"color": "#AbC"}]})["gradients"][0]["color"] == "#aabbcc")
+_gcss = bg.main_css(_grad)
+check("colour mode paints the gradient fixed — scrolling must not "
+      "slide its centre — with the panel family still on top",
+      "radial-gradient(at 30% 70%" in _gcss
+      and "background-attachment: fixed" in _gcss
+      and "--klaus-panel:" in _gcss)
+check("geometry is clamped and defaulted — bad values land on centre "
+      "50/42 and size 100, and a bad edge colour is re-derived from "
+      "the centre: hand-edited config can never emit broken CSS",
+      bg.resolve({"background_grad_x": 999})["grad_x"] == 50
+      and bg.resolve({"background_grad_y": -3})["grad_y"] == 42
+      and bg.resolve({"background_grad_size": 5})["grad_size"] == 100
+      and bg.resolve({"background_color2": "red"})["color2"]
+      == bg.DEFAULT_COLOR)
+_rev_grad = bg.reviewer_css(bg.resolve(
+    {"reviewer_background_mode": "color",
+     "reviewer_background_gradients": [
+         {"color": "#3a6ea5", "x": 40, "y": 40, "size": 80}]},
+    prefix="reviewer_background"))
+check("the reviewer's colour mode takes the same gradient from its "
+      "OWN keys — and still no panel family",
+      "radial-gradient(" in _rev_grad
+      and "--klaus-panel" not in _rev_grad)
+
+section("on-screen gradient editor (drag on the actual screen)")
+# Nothing above this line has touched the arming flag, so this reads the
+# module's BOOT state. K-142/audit finding 2: `_GRAD_EDIT = False` could
+# be flipped to True with nothing noticing — the disarm below is pinned,
+# the default never was. Armed by default means every user's deck screen
+# grows drag handles in a normal session, with a green suite.
+check("the editor is DISARMED at import — it is armed only by the OPEN "
+      "Preferences dialog, never by config and never by default",
+      bg.grad_edit_active() is False and bg._GRAD_EDIT is False)
+_events: list = []
+bg.set_grad_edit(True, lambda t, op, d: _events.append((t, op, d)))
+check("arming is what turns it on (so the boot check above is reading a "
+      "flag that CAN be True, not one that is structurally False)",
+      bg.grad_edit_active() is True)
+bg.grad_edit_event({"target": "reviewer", "op": "geom", "i": 99,
+                    "x": 105, "y": -5, "size": 999})
+bg.grad_edit_event({"target": "weird", "op": "pick", "i": 1.9})
+bg.grad_edit_event({"target": "main", "op": "add"})
+bg.grad_edit_event({"target": "main", "op": "explode", "i": 0})
+bg.set_grad_edit(False, None)
+bg.grad_edit_event({"target": "main", "op": "geom", "i": 0,
+                    "x": 1, "y": 1, "size": 50})
+check("bridge ops are validated and every value clamped (index "
+      "included), the target normalised, unknown ops dropped, and "
+      "the whole channel dead after disarm — JS is never trusted and "
+      "a stale dialog can never be written into",
+      _events == [
+          ("reviewer", "geom",
+           {"i": bg.MAX_SPHERES - 1, "x": 100, "y": 0, "size": 200}),
+          ("main", "pick", {"i": 1}),
+          ("main", "add", {"i": 0}),
+      ]
+      and bg.grad_edit_active() is False)
+_ed = bg.gradient_edit_eval_js(_grad, "main")
+check("the editor ships for every colour-mode spec (colour mode IS a "
+      "gradient now) — image and theme specs grow no handles",
+      "klaus-grad-edit" in bg.gradient_edit_eval_js(colour, "main")
+      and bg.gradient_edit_eval_js(img, "main") == ""
+      and bg.gradient_edit_eval_js(bg.resolve({}), "main") == ""
+      and "klaus-grad-edit" in _ed)
+check("self-guarding, clamped drag math, drag-end bridge message "
+      "(the whole loop verified LIVE in the Chromium harness: a real "
+      "drag to the upper-left sent target/x/y/size 'main'/25/25/100 "
+      "and repainted the page's gradient inline)",
+      "if(document.getElementById('klaus-grad-edit')){return;}" in _ed
+      and "klausmate:bggrad:" in _ed
+      and "clamp(" in _ed
+      and "setPointerCapture" in _ed)
+check("each sphere's size grip is CLAMPED into the viewport along "
+      "the ray toward the screen centre — at size 100 a ring's "
+      "radius is the half-diagonal, so an unclamped grip sat "
+      "off-screen and the radius could never be adjusted at all",
+      "Math.atan2(h/2-cy,w/2-cx)" in _ed
+      and "gx=clamp(gx,16,w-16);" in _ed
+      and "gy=clamp(gy,16,h-16);" in _ed)
+check("the editor grows one handle set PER sphere, the dot painted "
+      "in that sphere's own colour (the dot IS its colour chip), "
+      "with click→pick, right-click→remove, and a ＋ pill gated on "
+      "the cap",
+      "for(var i0=0;i0<G.length;i0++){mkSphere(i0);}" in _ed
+      and "dot.style.background=G[i][0];" in _ed
+      and "op:'pick'" in _ed and "op:'remove'" in _ed
+      and "op:'add'" in _ed and "if(G.length<CAP){" in _ed)
+check("the editor never sets background-color inline (the ground "
+      "lives in the sheet, keyed on night-mode — an inline colour "
+      "would floodlight night for the session), paints the drag "
+      "stack on documentElement ALONE (inline body paint would "
+      "re-double the layers the sheet just un-doubled), and mirrors "
+      "the unset-white skip; the dot carries a hairline ring so a "
+      "white sphere's chip stays findable on white",
+      "background-color" not in _ed
+      and "var el=document.documentElement;" in _ed
+      and "document.body].forEach" not in _ed
+      and "if(g[0].toLowerCase()===DEF){continue;}" in _ed
+      and "0 0 0 1px rgba(0,0,0,0.28)" in _ed)
+check("drag/click gestures take the PRIMARY button only — without "
+      "the filter a right-press's buttonless release read as a "
+      "click, so right-click sent remove AND pick and the colour "
+      "dialog opened over a just-deleted sphere (caught live in the "
+      "harness payload log)",
+      "if(ev.button!==0){return;}" in _ed)
+check("the body wrapper is the same core in a <script> tag, and "
+      "empty exactly when the core is",
+      bg.gradient_edit_js(_grad, "main").startswith("<script>")
+      and bg.gradient_edit_js(_grad, "main").endswith("</script>")
+      and bg.gradient_edit_js(img, "main") == "")
+check("the cleanup JS removes the overlay by id (the reviewer's page "
+      "persists across refresh, so removal must be imperative there)",
+      "klaus-grad-edit" in bg.GRAD_EDIT_CLEANUP_JS
+      and "remove()" in bg.GRAD_EDIT_CLEANUP_JS)
+
+section("resolve(cfg, prefix=...): a second, INDEPENDENT background")
+# Pouya: "this needs to be separate from the background I set for the
+# regular main section." One validator, two isolated results.
+check("prefix defaults to the deck screen's own keys — every existing "
+      "caller (resolve(cfg), no second argument) is unaffected",
+      bg.resolve({"background_mode": "color"})["mode"] == "color")
+_both = {
+    "background_mode": "color", "background_color": "#111111",
+    "reviewer_background_mode": "image",
+    "reviewer_background_image": "study.jpg",
+    "reviewer_background_color": "#222222",
+}
+_main = bg.resolve(_both)
+_study = bg.resolve(_both, prefix="reviewer_background")
+check("the two reads never cross-contaminate — setting the deck "
+      "screen to a colour has NO effect on the study screen's own "
+      "mode, and vice versa",
+      _main["mode"] == "color" and _main["color"] == "#111111"
+      and _study["mode"] == "image" and _study["color"] == "#222222")
+check("the study screen's image is its OWN key, never the deck "
+      "screen's (there isn't one here to fall back to)",
+      _study["image"] == "study.jpg")
+check("an unset study background degrades to theme mode, same as an "
+      "unset main one — a profile that never touched this setting "
+      "gets Anki's own reviewer background, not a crash",
+      bg.resolve({}, prefix="reviewer_background")["mode"] == "theme")
+check("bad values in the study prefix fall back exactly like the "
+      "main prefix's do — one validator, one set of guarantees",
+      bg.resolve({"reviewer_background_color": "not-a-colour"},
+                 prefix="reviewer_background")["color"] == bg.DEFAULT_COLOR
+      and bg.resolve({"reviewer_background_fit": "zoom"},
+                     prefix="reviewer_background")["fit"] == "cover")
+
+section("reviewer_css: the study screen's wallpaper — no panels, no blur")
+check("theme mode paints nothing — Anki's own reviewer background, "
+      "untouched",
+      bg.reviewer_css(bg.resolve({}, prefix="reviewer_background")) == "")
+_study_colour = bg.resolve(
+    {"reviewer_background_mode": "color",
+     "reviewer_background_color": "#654321"},
+    prefix="reviewer_background",
+)
+_colour_css = bg.reviewer_css(_study_colour)
+check("colour mode fills html/body", "#654321" in _colour_css)
+check("NO panel family — a card's background is the user's own "
+      "notetype, never Klaus's to touch",
+      "table, .callout" not in _colour_css
+      and "--klaus-panel" not in _colour_css)
+_study_image = bg.resolve(
+    {"reviewer_background_mode": "image",
+     "reviewer_background_image": "study.jpg"},
+    prefix="reviewer_background",
+)
+_study_url = bg.image_url("klausmate", "study.jpg")
+_image_css = bg.reviewer_css(_study_image, _study_url)
+check("image mode references the export url, fixed + covering",
+      _study_url in _image_css
+      and "background-attachment: fixed" in _image_css
+      and "cover" in _image_css)
+check("image mode without a url degrades to nothing — same discipline "
+      "as the deck screen, a broken image must not paint a blank fill",
+      bg.reviewer_css(_study_image, "") == "")
+check("NO blur anywhere — there is nothing behind the card for a "
+      "compositing layer to frost, so no control does anything here",
+      "blur(" not in _colour_css and "blur(" not in _image_css
+      and "backdrop-filter" not in _colour_css
+      and "backdrop-filter" not in _image_css)
+check("the reviewer's own spec still carries a validated blur field "
+      "(resolve() is one validator for both) — it is simply never "
+      "READ by reviewer_css, which is the guarantee that matters",
+      "blur" in _study_colour)
 
 section("store_image")
 tmp = tempfile.mkdtemp()
@@ -172,7 +494,7 @@ check("the row rule is scoped to tr.deck — unscoped, it also matched the "
       "OVERVIEW's layout table and turned its cells into opaque slabs on "
       "hover, inside the frosted panel (Anki's own copy of this rule is "
       "unscoped but ships only in deckbrowser.css; ours is injected into "
-      "the overview and congrats screens too)",
+      "the overview screen too)",
       "tr:hover" not in _panels.replace("tr.deck:hover", "")
       and " .current td," not in _panels)
 _pa, _sa = _alphas(_panels, "--klaus-panel"), _alphas(_panels,
@@ -251,12 +573,13 @@ check("the old two-box weld is fully gone (no flattened table corners, "
 check("the moved row is NOT a tr.deck, so the hover/current rule cannot "
       "highlight it as if it were a deck",
       "tr.klaus-studied" not in _row_rule)
-check("the script ships exactly when the panel styling does, so the two "
-      "can never disagree about whether Klaus styles this screen",
+check("the script ships exactly when the panel styling does — which "
+      "is now EVERY mode, theme included: the weld belongs to the "
+      "design, not to the wallpaper",
       bool(bg.panel_js(_img))
       and bool(bg.panel_js(bg.resolve(
           {"background_mode": "color", "background_color": "#123456"})))
-      and bg.panel_js(bg.resolve({"background_mode": "theme"})) == "")
+      and bool(bg.panel_js(bg.resolve({"background_mode": "theme"}))))
 check("it is a self-contained, fully guarded <script>",
       bg.panel_js(_img).startswith("<script>")
       and bg.panel_js(_img).endswith("</script>")
@@ -290,6 +613,26 @@ else:
     print("  SKIP  panel_js DOM behaviour (node not installed) — NOT "
           "counted as a pass")
 
+section("the KlausBook design gate (design_enabled)")
+check("default OFF: Klaus ships as tools inside a stock Anki, and the "
+      "KlausBook look is the opt-in",
+      bg.design_enabled({}) is False and bg.design_enabled(None) is False)
+check("on only when literally True",
+      bg.design_enabled({"klausbook_design": True}) is True)
+check("corrupt values read as OFF — the OPPOSITE polarity of "
+      "heatmap.enabled's corrupt-reads-as-on rule, because a corrupt "
+      "entry must not surprise-restyle the user's whole app",
+      bg.design_enabled({"klausbook_design": "yes"}) is False
+      and bg.design_enabled({"klausbook_design": 1}) is False)
+check("resolve() IGNORES the design key — the gate lives at the paint "
+      "funnel (top_bar._background_css), never in resolve: Preferences "
+      "seeds its widgets through resolve(stored config) and writes the "
+      "spec back on Save, so a resolve-level gate would display "
+      "'theme' for a stored image background and Save would silently "
+      "WIPE it",
+      bg.resolve({"background_mode": "image", "background_image": "x.png",
+                  "klausbook_design": False})["mode"] == "image")
+
 _colour_panels = bg.panel_css(bg.resolve(
     {"background_mode": "color", "background_color": "#123456"}))
 check("panels look the SAME whichever background is painted — colour "
@@ -301,9 +644,18 @@ check("...but NOT the blur: a Gaussian blur of a flat colour is that "
       "colour, so backdrop-filter there would cost a compositing layer "
       "per panel to change nothing",
       "backdrop-filter" not in _colour_panels)
-check("theme mode stays untouched — Klaus paints no background there, "
-      "and Anki's stock look already glasses these surfaces itself",
-      bg.panel_css(bg.resolve({"background_mode": "theme"})) == "")
+_theme_panels = bg.panel_css(bg.resolve({"background_mode": "theme"}))
+check("theme mode gets the SAME panel family as the painted modes — "
+      "since the klausbook_design toggle shipped, NATIVE mode is the "
+      "stock-keeper, so 'design on' must mean one look on every "
+      "ground (Pouya's call, 2026-08-30)",
+      "table, .callout, .klaus-hm {" in _theme_panels
+      and "tr.klaus-studied td," in _theme_panels
+      and "--klaus-panel:" in _theme_panels)
+check("...but the FROST stays image-only in theme mode too — blurring "
+      "Anki's flat ground would cost a compositing layer per panel to "
+      "change nothing",
+      "backdrop-filter" not in _theme_panels)
 check("main_css carries the panels in BOTH painted modes",
       "--klaus-panel:" in bg.main_css(bg.resolve(
           {"background_mode": "color", "background_color": "#123456"}))
@@ -312,7 +664,7 @@ check("an out-of-range blur falls back rather than emitting junk CSS",
       f"blur({bg.DEFAULT_BLUR}px)" in bg.panel_css(
           {"mode": "image", "blur": 9999}))
 check("main_css ships the panel rules with the image background, so one "
-      "injection covers deck list, overview and congrats alike",
+      "injection covers the deck list and the overview alike",
       "backdrop-filter" in bg.main_css(_img, "pic.png")
       and "backdrop-filter" not in bg.main_css(
           bg.resolve({"background_mode": "color"})))

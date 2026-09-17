@@ -15,7 +15,7 @@ done
 | File | Covers |
 |---|---|
 | `test_klausmate.py` | embedding providers + HTTP retries, `pdf_index` storage/resume, retention & FSRS math |
-| `test_drive.py` | `drive_store` folders/display names, `deck_curate` pure helpers |
+| `test_drive.py` | `drive_store` folders/display names, `pdf_drop` pure helpers |
 | `test_dialog_logic.py` | Manage-models dialog state machine (job assignment, missing-model warnings) |
 
 `test_dialog_logic.py` transcribes the dialog's handler logic against fake

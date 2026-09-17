@@ -5,7 +5,7 @@ Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_imports.py
 Why this exists (K-008): the human reported the PDF drive window does not
 open at all in live Anki. `klausmate/__init__.py` wraps both
 `from . import pdf_drive as _pdf_drive; _pdf_drive.setup()` and the
-equivalent for `deck_curate` in a `try/except Exception` that only prints —
+equivalent for `pdf_drop` in a `try/except Exception` that only prints —
 so an ImportError or NameError anywhere in pdf_drive.py's own module-level
 code would be swallowed silently and the window would just never register,
 with no trace beyond a buried `print()` in Anki's console.
@@ -14,7 +14,7 @@ Nothing caught this before now: the old `aqt.qt` stub in
 `.claude/skills/klaus-test/scripts/anki_stubs.py` only defined QAction,
 QInputDialog, QMessageBox, QTimer and qconnect, so `from aqt.qt import
 QWidget` (or any of the ~55 other Qt names klausmate actually imports)
-raised before either pdf_drive.py's or deck_curate.py's own code ever ran —
+raised before either pdf_drive.py's or pdf_drop.py's own code ever ran —
 meaning those modules had literally never been import-tested. anki_stubs.py
 now stubs aqt/anki permissively (see its module docstring); this test uses
 that to import every klausmate module directly, bypassing __init__.py's
@@ -82,7 +82,7 @@ def main() -> int:
     # anything — for exactly the file where the human's bug report points.
     # Load the real __init__.py from disk and execute it under the
     # "klausmate" name instead, so its own module-level code (including
-    # the try/except around pdf_drive/deck_curate setup()) actually runs.
+    # the try/except around pdf_drive/pdf_drop setup()) actually runs.
     section("klausmate package bootstrap (__init__.py)")
     init_path = os.path.join(ADDON, "__init__.py")
     spec = importlib.util.spec_from_file_location(
@@ -100,7 +100,43 @@ def main() -> int:
     else:
         check("import klausmate (__init__.py)", True)
 
+    _check_licences()
     return report()
+
+
+# The AGPL header, verbatim: the first two non-blank lines of the canonical
+# text at https://www.gnu.org/licenses/agpl-3.0.txt. Never paraphrase these.
+_AGPL_HEADER = ("GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3, 19 November 2007")
+
+
+def _check_licences() -> None:
+    """Both LICENSE files exist and carry the AGPL v3 header.
+
+    This test is already the census of what the add-on folder contains, so
+    it is where the two licence files are pinned (K-248). `klausmate/LICENSE`
+    is the load-bearing one: the AGPL obliges the SHIPPED program to carry
+    its licence, and `scripts/package.sh` copies the add-on folder wholesale
+    — so a missing or edited file there is a licensing defect that reaches
+    every user, silently. The repo-root copy is the same text for anyone
+    reading the source. `service/` is a separate program and is deliberately
+    NOT covered by either file.
+    """
+    section("licence files (AGPL v3)")
+    for label, path in (
+        ("LICENSE", os.path.join(ADDON, "..", "LICENSE")),
+        ("klausmate/LICENSE", os.path.join(ADDON, "LICENSE")),
+    ):
+        if not os.path.isfile(path):
+            check(f"{label} exists", False, "- file not found")
+            continue
+        check(f"{label} exists", True)
+        with open(path, encoding="utf-8") as fh:
+            head = [ln.strip() for ln in fh.read(4096).splitlines() if ln.strip()][:2]
+        check(
+            f"{label} starts with the AGPL v3 header",
+            tuple(head) == _AGPL_HEADER,
+            f"- got {head!r}, want {list(_AGPL_HEADER)!r}",
+        )
 
 
 if __name__ == "__main__":
