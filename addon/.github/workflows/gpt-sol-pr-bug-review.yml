@@ -117,6 +117,8 @@ jobs:
 
               if event_name == "pull_request":
                   pr = payload["pull_request"]
+                  head_repo_full_name = (pr["head"].get("repo") or {}).get("full_name", "")
+                  base_repo_full_name = (pr["base"].get("repo") or {}).get("full_name", "")
                   return {
                       "repo": repo,
                       "number": int(pr["number"]),
@@ -125,17 +127,22 @@ jobs:
                       "base_sha": pr["base"]["sha"],
                       "head_sha": pr["head"]["sha"],
                       "head_ref": pr["head"].get("ref", ""),
-                      "head_repo_full_name": (pr["head"].get("repo") or {}).get("full_name", ""),
-                      "is_fork": bool((pr["head"].get("repo") or {}).get("fork", False)),
+                      "head_repo_full_name": head_repo_full_name,
+                      "base_repo_full_name": base_repo_full_name,
+                      "is_cross_repo": bool(head_repo_full_name and base_repo_full_name and head_repo_full_name != base_repo_full_name),
                   }
 
               if event_name == "workflow_dispatch":
                   pr_number_raw = os.environ.get("WORKFLOW_PR_NUMBER", "").strip()
                   if not pr_number_raw:
                       raise RuntimeError("workflow_dispatch requires pr_number input")
+                  if not token:
+                      raise RuntimeError("workflow_dispatch requires GITHUB_TOKEN to resolve PR metadata")
                   pr_number = int(pr_number_raw)
                   pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
                   pr = gh_request("GET", pr_url, token)
+                  head_repo_full_name = (pr["head"].get("repo") or {}).get("full_name", "")
+                  base_repo_full_name = (pr["base"].get("repo") or {}).get("full_name", "")
                   return {
                       "repo": repo,
                       "number": int(pr["number"]),
@@ -144,8 +151,9 @@ jobs:
                       "base_sha": pr["base"]["sha"],
                       "head_sha": pr["head"]["sha"],
                       "head_ref": pr["head"].get("ref", ""),
-                      "head_repo_full_name": (pr["head"].get("repo") or {}).get("full_name", ""),
-                      "is_fork": bool((pr["head"].get("repo") or {}).get("fork", False)),
+                      "head_repo_full_name": head_repo_full_name,
+                      "base_repo_full_name": base_repo_full_name,
+                      "is_cross_repo": bool(head_repo_full_name and base_repo_full_name and head_repo_full_name != base_repo_full_name),
                   }
 
               raise RuntimeError(f"Unsupported event: {event_name}")
@@ -292,17 +300,25 @@ jobs:
               github_token = os.environ.get("GITHUB_TOKEN", "").strip()
               openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
               model = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+              event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+
+              if event_name == "workflow_dispatch" and not github_token:
+                  print("Skipped: GITHUB_TOKEN is unavailable for workflow_dispatch, so PR metadata cannot be resolved.")
+                  return
 
               ctx = load_pr_context()
               repo = ctx["repo"]
               pr_number = ctx["number"]
 
               if not openai_key:
+                  skip_reason = "the repository secret is not configured"
+                  if ctx.get("is_cross_repo"):
+                      skip_reason = "secrets are typically unavailable for cross-repository pull requests"
                   note = (
                       f"{MARKER}\n"
                       "## GPT Sol PR Bug Review (advisory)\n\n"
                       "Skipped: `OPENAI_API_KEY` is not available in this workflow run. "
-                      "This is expected for forked pull requests or when the repository secret is not configured."
+                      f"This is expected when {skip_reason}."
                   )
                   upsert_pr_comment(github_token, repo, pr_number, note)
                   return
