@@ -63,7 +63,7 @@ being local — it stays on the machine by not being sent.)
   assistant onto the Messages API is the spec's Plan 3, still unbuilt.
 - **On Klaus Plus, one hop is added and nothing else changes** (2026-09-16).
   A subscriber has no provider keys; the same request bodies go to
-  **Klaus's own service** (`service/` in this repo, `klausmate.fly.dev`),
+  **Klaus's own service** (`service/` in this repo, `klausmate.com`),
   which relays them to OpenAI and Anthropic with the operator's keys and
   **stores counters only** — the Stripe customer id, the email Stripe
   reports, the licence key's SHA-256 hash, the subscription status and
@@ -73,10 +73,10 @@ being local — it stays on the machine by not being sent.)
   8-character key-hash prefix, latency and the metered amount — a service
   test asserts it). Nothing about WHAT you study is retained. The service's
   own statement of this is `<PUBLIC_BASE_URL>/privacy` — on the built-in
-  base, <https://klausmate.fly.dev/privacy> — and the
+  base, <https://klausmate.com/privacy> — and the
   add-on's cache of the verdict never leaves the machine. Still no
   telemetry: a free-tier profile makes exactly the calls above and never
-  contacts `klausmate.fly.dev` on its own — with no `klaus_plus_key`,
+  contacts `klausmate.com` on its own — with no `klaus_plus_key`,
   `plus.key` is `""`, `plus.active` is False and no Plus code path opens a
   socket. (Pressing **Subscribe…** opens that URL in your browser; that is
   you, not Klaus reporting anything.) Scope, today: **three of the four
@@ -523,7 +523,7 @@ every other key, none of them ever in the repo:
   service is asked again; an active verdict is honoured until the
   service refuses it — nothing here re-checks on a timer.
 - `klaus_plus_base` (`""`) — empty means the built-in
-  `plus.DEFAULT_BASE` (`https://klausmate.fly.dev`), which is what the
+  `plus.DEFAULT_BASE` (`https://klausmate.com`), which is what the
   field shows as its placeholder. A General row, there only for a
   staging or self-hosted service.
 

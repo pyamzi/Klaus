@@ -107,7 +107,9 @@ unmetered, unchanged. **Klaus Plus** is $12/month or $99/year (Pouya
 chose Fly.io and pays the AI bills; the orchestrator set the price and
 the quotas) for one `kp_` licence key instead of provider keys: Klaus
 sends the same request bodies to **its own service** — `service/` in
-this repo, FastAPI on one Fly Machine at `https://klausmate.fly.dev`,
+this repo, FastAPI on one Fly Machine at `https://klausmate.com` (Pouya's
+domain, everything on the apex since 2026-09-17; `klausmate.fly.dev` is
+the same Machine),
 SQLite on a volume, Stripe for billing, Resend for the one welcome
 email — which holds Pouya's provider keys, relays to OpenAI and
 Anthropic, and counts. Per UTC month, no rollover: 30 lecture hours of
@@ -1083,7 +1085,16 @@ same reason.
   re-indexing a PDF cannot erase a transcript. `digest12` is a SHA-256
   over the file's path, size and mtime (moved here from the deleted
   `page_ocr.py`), so a REPLACED file gets a fresh directory rather than
-  silently inheriting another PDF's pages. Writes are atomic
+  silently inheriting another PDF's pages. Identity is settled in ONE
+  place, `document_identity` (K-268, Copilot on PR #3): `text_digest`
+  (the page text) for a document with any text, and a SHA-256 of the
+  PRISTINE ORIGINAL's bytes (`pdf_originals/<base>.pdf`, captured by
+  `pdf_handler`'s own capture if no bake has made one yet) for a
+  TEXT-LESS one, whose pages say nothing and would otherwise hash on
+  page count alone and let two scans of equal length share a
+  directory; a bake never writes that file, so the digest survives
+  bakes and moves and still separates two scans, and any failure
+  falls back to `text_digest` with one log line. Writes are atomic
   (tmp + `os.replace`); a corrupt record reads as empty and is logged.
   `render_page_png` (QtPdf, 1400px long edge) is the one Qt import, below
   the divider. `subscribe(cb)` is `viewer_context`'s shape — synchronous,

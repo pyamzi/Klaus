@@ -78,7 +78,8 @@ service and one add-on mode; it changes no feature.
   uvicorn, the official `stripe` and `httpx` packages (third-party
   dependencies are fine server-side; only the add-on is stdlib-only).
   Deployed as one Fly Machine at `klausmate.fly.dev`, a custom domain
-  later. SQLite on a 1 GB Fly volume, WAL mode, Fly's daily volume
+  later (amended 2026-09-17: `https://klausmate.com`, everything on the
+  apex, is the address; the fly.dev name is the same Machine). SQLite on a 1 GB Fly volume, WAL mode, Fly's daily volume
   snapshots as the backup. `/healthz` for Fly's checks.
 - **Endpoints mirror the providers**, so the add-on's request bodies do
   not change:
@@ -201,7 +202,7 @@ service and one add-on mode; it changes no feature.
   greyed, the free tier is one deletion away. No `exec()`, theme tokens only, `mark_dirty`
   discipline unchanged.
 - **Config keys**: `klaus_plus_key` (`""`), `klaus_plus_cache` (`{}`),
-  `klaus_plus_base` (`"https://klausmate.fly.dev"`, a free-text row
+  `klaus_plus_base` (`"https://klausmate.com"` since 2026-09-17, was `klausmate.fly.dev``, a free-text row
   under General for a self-hoster or a staging service — the only
   reason the URL is config at all). Documented in `config.md`.
 - **Errors the user sees**: `401` → "Klaus Plus key not recognised —
@@ -305,6 +306,8 @@ provides before launch (see "What Pouya provides").
 5. For the legal pages: the operator's name, a contact email, and the
    country whose law governs.
 6. A domain later, if wanted; `klausmate.fly.dev` is the launch address.
+   (Amended 2026-09-17: `klausmate.com` from the first build — Pouya owns
+   it; the runbook's step 2b sets it up.)
 
 ## Out of scope
 
