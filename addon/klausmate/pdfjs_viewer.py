@@ -878,6 +878,18 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._highlights: list[dict] = []
         self._page_count = 0
         self._scroll_pos = 0
+        # Transcript strip (Plan 2 D6, K-258; fix round 1, I1): kept as
+        # instance state, the SAME shape _highlights/state.annots use to
+        # survive openDocument's load-order race — klausPdfLoad fires
+        # window.klausPdfLoad() without awaiting it, so a transcript
+        # pushed right after load_path() can arrive while teardown() has
+        # already emptied the page and buildPlaceholders() hasn't run
+        # yet, and is silently dropped with nothing to replay. Storing
+        # the last (page_index, text) here and re-pushing it from
+        # _bridge_ready — right next to _push_annotations() — closes
+        # that race exactly the way annotations already close it.
+        self._transcript_page = 0
+        self._transcript_text = ""
         self.on_count: Optional[Callable[[int], None]] = None
         # Task 10 (K-196): set by PdfSidebar, same shape as on_count —
         # fired from _bridge_sel whenever the page's own debounced
@@ -1044,6 +1056,10 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # openDocument's teardown() wiped page state — (re)push whatever
         # records we hold so annotations survive load order races.
         self._push_annotations()
+        # Fix round 1 (I1): the transcript's own copy of the same
+        # re-push-on-ready pattern — see the comment on
+        # self._transcript_page/_transcript_text in __init__.
+        self._push_transcript()
         if self._scroll_pos:
             self._eval(f"window.klausScrollTo && window.klausScrollTo({int(self._scroll_pos)});")
 
@@ -1623,6 +1639,35 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
     def toggle_thumbnails(self) -> None:
         self._eval("window.klausToggleThumbs && window.klausToggleThumbs();")
+
+    def set_transcript(self, page_index: int, text: str) -> None:
+        """Record this page's transcript and push it into the page
+        (Plan 2 D6, K-258). The value is kept on ``self`` first (fix
+        round 1, I1) precisely so :meth:`_bridge_ready` can replay it
+        after a fresh load's race — see the attributes' own comment in
+        ``__init__``."""
+        try:
+            self._transcript_page = int(page_index)
+        except (TypeError, ValueError):
+            self._transcript_page = 0
+        self._transcript_text = str(text or "")
+        self._push_transcript()
+
+    def _push_transcript(self) -> None:
+        """Push the STORED transcript into the page — same eval/bridge
+        shape as ``_push_annotations``: both values are JSON-encoded,
+        never interpolated raw into the eval string, so a transcript
+        containing a quote or a ``</script>`` cannot break out of the
+        call. Called from ``set_transcript`` on every update and from
+        ``_bridge_ready`` to replay across a fresh load (fix round 1,
+        I1) — the annotations' own re-push-on-ready pattern."""
+        self._eval(
+            "window.klausSetTranscript && window.klausSetTranscript("
+            + json.dumps(self._transcript_page)
+            + ", "
+            + json.dumps(self._transcript_text)
+            + ");"
+        )
 
     def cleanup(self) -> None:
         """Unregister the webview from Anki's global hooks BEFORE its

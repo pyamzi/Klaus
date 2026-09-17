@@ -1,0 +1,283 @@
+"""Offscreen tests for the transcript strip (Plan 2 Task 6, K-258).
+
+Covers klausmate.pdf_viewer.PdfSidebar's native-renderer transcript
+strip: set_transcript's visibility/label contract (the brief's Step 1
+acceptance), the page_store integration (append_segment then a page
+change shows it; an untouched page stays hidden), the LIVE
+page_store.subscribe wiring, the chevron's collapse/expand, and that
+cleanup() actually unsubscribes. The pdf.js side (the bridge call,
+the in-page JS) is tests/test_pdfjs_viewer.py's job; the QSS tokens
+are test_theme.py's.
+
+Real offscreen PyQt6 (tests/test_drive.py's K-117 section and the
+klaus-test skill): this machine's system python3 has its own PyQt6,
+so a genuine QPdfView/QScrollArea/QToolButton renders and can be
+inspected offscreen, even though Anki's own bundled Python cannot be
+imported here at all.
+
+Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_transcript_strip.py
+"""
+from __future__ import annotations
+
+import importlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import types
+
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+from anki_stubs import check, install, report, section
+
+install()
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PyQt6 import QtCore as _QtC
+    from PyQt6 import QtGui as _QtG
+    from PyQt6 import QtWidgets as _QtW
+
+    _HAVE_QT = True
+except Exception as _qt_e:  # noqa: BLE001
+    _HAVE_QT = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — this "
+          "whole suite is widget-shaped, nothing else to fall back to")
+
+if _HAVE_QT:
+    # Real PyQt6 behind aqt.qt (test_drive.py's K-117 pattern): klausmate
+    # imports QScrollArea/QFrame/QToolButton/QPdfView/... by name from
+    # aqt.qt (and PyQt6.QtPdf* directly), and only a genuine Qt can
+    # construct, lay out and report .isVisible() on them.
+    _qt_shim = types.ModuleType("aqt.qt")
+
+    def _qt_getattr(name, _mods=(_QtW, _QtC, _QtG)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
+
+    _qt_shim.__getattr__ = _qt_getattr
+    sys.modules["aqt.qt"] = _qt_shim
+
+    pkg = sys.modules["klausmate"]
+    app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
+
+    theme = importlib.import_module("klausmate.theme")
+    page_store = importlib.import_module("klausmate.page_store")
+    pdf_handler = importlib.import_module("klausmate.pdf_handler")
+    drive_store = importlib.import_module("klausmate.drive_store")
+    pdf_viewer = importlib.import_module("klausmate.pdf_viewer")
+
+    def _one_page_pdf(path: str) -> None:
+        """One page, real content — test_drive.py's K-173 `_proof_pdf`
+        shape, reused verbatim (a proven-loadable minimal PDF) rather
+        than inventing a leaner one that might trip some pdfium edge
+        case this card has no reason to go looking for."""
+        objs = [
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        ]
+        stream = (b"0 0 0 rg 72 400 468 300 re f\n"
+                  b"BT /F1 36 Tf 72 200 Td (KLAUS TRANSCRIPT PROOF) Tj ET\n")
+        objs.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream
+                    + b"endstream")
+        objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont "
+                    b"/Helvetica >>")
+        out, offs = bytearray(b"%PDF-1.4\n"), []
+        for i, body in enumerate(objs, start=1):
+            offs.append(len(out))
+            out += b"%d 0 obj\n" % i + body + b"\nendobj\n"
+        xref = len(out)
+        out += b"xref\n0 %d\n" % (len(objs) + 1)
+        out += b"0000000000 65535 f \n"
+        for off in offs:
+            out += b"%010d 00000 n \n" % off
+        out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n"
+                b"%%%%EOF\n" % (len(objs) + 1, xref))
+        with open(path, "wb") as fh:
+            fh.write(bytes(out))
+
+    uf = tempfile.mkdtemp(prefix="klaus_transcript_uf_")
+    os.makedirs(os.path.join(uf, "contexts"), exist_ok=True)
+    os.makedirs(os.path.join(uf, "pdfs"), exist_ok=True)
+    _one_page_pdf(os.path.join(uf, "pdfs", "Sample.pdf"))
+    with open(os.path.join(uf, "contexts", "Sample.json"), "w",
+              encoding="utf-8") as _fh:
+        json.dump({"pages": ["Slide one text"]}, _fh)
+    drive_store.record_import(uf, "Sample", "Sample Lecture.pdf")
+    _one_page_pdf(os.path.join(uf, "pdfs", "Quiet.pdf"))
+    with open(os.path.join(uf, "contexts", "Quiet.json"), "w",
+              encoding="utf-8") as _fh:
+        json.dump({"pages": ["Other slide"]}, _fh)
+    drive_store.record_import(uf, "Quiet", "Quiet Lecture.pdf")
+    pkg.USER_FILES = uf
+
+    section("PdfSidebar.set_transcript — visibility/label contract (brief Step 1)")
+    sb = pdf_viewer.PdfSidebar(None, parent=None)
+    sb.show()
+    for _ in range(3):
+        app.processEvents()
+    check("no config -> native renderer (the brief's acceptance path)",
+          sb._renderer == "native")
+    check("the strip exists and starts hidden",
+          sb._transcript is not None and not sb._transcript.isVisible())
+    _NoFocus = _QtC.Qt.FocusPolicy.NoFocus
+    check("fix round 1 (M1): the chevron declares NoFocus explicitly, "
+          "not just Qt's own default — this file's established pattern "
+          "for 'don't let an ancillary widget steal the viewer's "
+          "shortcuts' (CLAUDE.md: Host-window shortcut ambiguity)",
+          sb._transcript_chevron.focusPolicy() == _NoFocus)
+    check("...the scroll area too",
+          sb._transcript_scroll.focusPolicy() == _NoFocus)
+    check("...and the label",
+          sb._transcript_label.focusPolicy() == _NoFocus)
+    sb.set_transcript(0, "hello transcript")
+    check("set_transcript shows the strip with the given text",
+          sb._transcript.isVisible()
+          and sb._transcript_label.text() == "hello transcript")
+    sb.set_transcript(1, "")
+    check("set_transcript(..., '') hides it again",
+          not sb._transcript.isVisible())
+    sb.cleanup()
+    sb.close()
+
+    section("PdfSidebar — page_store integration: append_segment then load")
+    path_sample = pdf_handler.pdf_path_for(uf, "Sample")
+    check("the scratch PDF resolves through pdf_handler's own choke point",
+          path_sample is not None)
+    page_store.ensure_records(uf, "Sample", path_sample, ["Slide one text"])
+    page_store.append_segment(uf, "Sample", path_sample, 0, 0.0, 5.0,
+                               "the professor said something")
+    sb2 = pdf_viewer.PdfSidebar(None, parent=None)
+    sb2.show()
+    for _ in range(5):
+        app.processEvents()
+    sb2.load_pdf("Sample")
+    for _ in range(10):
+        app.processEvents()
+    check("after append_segment, loading the PDF shows page 0's transcript",
+          sb2._transcript.isVisible()
+          and sb2._transcript_label.text() == "the professor said something")
+    check("...and it is the SPOKEN text, never the slide text",
+          "Slide one text" not in sb2._transcript_label.text())
+
+    section("PdfSidebar — a page with no segments never shows the strip")
+    sb3 = pdf_viewer.PdfSidebar(None, parent=None)
+    sb3.show()
+    for _ in range(5):
+        app.processEvents()
+    sb3.load_pdf("Quiet")
+    for _ in range(10):
+        app.processEvents()
+    check("an empty page_store record hides the strip",
+          not sb3._transcript.isVisible())
+    sb3.cleanup()
+    sb3.close()
+
+    section("PdfSidebar — page_store.subscribe wires a LIVE update in")
+    page_store.append_segment(uf, "Sample", path_sample, 0, 5.0, 9.0,
+                               "and then something else")
+    for _ in range(5):
+        app.processEvents()
+    check("appending a segment to the CURRENT page updates the strip with "
+          "no explicit refresh call from this test — subscribe did it",
+          sb2._transcript_label.text()
+          == "the professor said something\nand then something else")
+    # Fix round 1 (M3): checking the resulting TEXT alone (as this pin
+    # used to) cannot tell "the filter blocked the notification" apart
+    # from "the filter let it through, but _refresh_transcript recomputed
+    # the SAME value anyway" — it always reads from sb2's OWN self._name,
+    # never from the notification's pdf_safe argument, so a silently
+    # broken filter would still show the right text by coincidence. Count
+    # _refresh_transcript calls instead: that is what the filter actually
+    # gates, so this pin fails if the `pdf_safe == self._name` guard is
+    # ever dropped, even though the label would still read correctly.
+    _refresh_calls: list[int] = []
+    _orig_refresh = sb2._refresh_transcript
+    sb2._refresh_transcript = lambda: (
+        _refresh_calls.append(1), _orig_refresh()
+    )[-1]
+    page_store.append_segment(
+        uf, "Quiet", pdf_handler.pdf_path_for(uf, "Quiet"),
+        0, 0.0, 1.0, "irrelevant to sb2")
+    for _ in range(5):
+        app.processEvents()
+    check("a segment for a DIFFERENT pdf_safe never even calls "
+          "_refresh_transcript — the subscriber's filter really gates "
+          "the refresh, not just the text that happens to come out",
+          _refresh_calls == [])
+    page_store.append_segment(uf, "Sample", path_sample, 0, 6.0, 7.0,
+                               "own pdf tick")
+    for _ in range(5):
+        app.processEvents()
+    check("...but a notification for ITS OWN pdf_safe (same page) does",
+          _refresh_calls == [1])
+    sb2._refresh_transcript = _orig_refresh
+    check("and the label reflects that real refresh",
+          sb2._transcript_label.text()
+          == "the professor said something\nand then something else"
+             "\nown pdf tick")
+
+    section("PdfSidebar — the chevron collapses and expands the strip")
+    check("starts expanded", sb2._transcript_scroll.isVisible())
+    sb2._transcript_chevron.setChecked(False)
+    check("collapsing hides the scroll area but keeps the strip (and its "
+          "header) visible — only the body is what collapses",
+          not sb2._transcript_scroll.isVisible()
+          and sb2._transcript.isVisible())
+    sb2._transcript_chevron.setChecked(True)
+    check("expanding shows the body again", sb2._transcript_scroll.isVisible())
+
+    section("PdfSidebar — fix round 1 (M2): the no-native-viewer fallback "
+            "also refreshes the transcript")
+    # The strip is built whenever the renderer isn't pdfjs, independent
+    # of PDF_VIEWER_AVAILABLE — so on a hypothetical Anki build without
+    # QtPdf/QtPdfWidgets, load_pdf's "no native viewer at all" branch used
+    # to leave a previous PDF's transcript on screen forever, since it
+    # never called _on_page_changed (the ONLY other call site) either.
+    _orig_pdf_avail = pdf_viewer.PDF_VIEWER_AVAILABLE
+    pdf_viewer.PDF_VIEWER_AVAILABLE = False
+    try:
+        sb4 = pdf_viewer.PdfSidebar(None, parent=None)
+        sb4.show()
+        for _ in range(3):
+            app.processEvents()
+        check("the fallback branch is really the one under test — no "
+              "real viewer, the label-only fallback instead",
+              sb4._viewer is None and sb4._fallback_label is not None)
+        sb4.load_pdf("Sample")
+        for _ in range(5):
+            app.processEvents()
+        check("...and it still shows page 0's transcript via "
+              "_refresh_transcript, not just the fallback label",
+              sb4._transcript is not None and sb4._transcript.isVisible()
+              and "professor" in sb4._transcript_label.text())
+        sb4.cleanup()
+        sb4.close()
+    finally:
+        pdf_viewer.PDF_VIEWER_AVAILABLE = _orig_pdf_avail
+
+    section("PdfSidebar.cleanup() unsubscribes from page_store")
+    sb2.cleanup()
+    _before = sb2._transcript_label.text()
+    page_store.append_segment(uf, "Sample", path_sample, 0, 9.0, 12.0,
+                               "after cleanup this must not land")
+    for _ in range(5):
+        app.processEvents()
+    check("a cleaned-up sidebar's subscription is gone — a later "
+          "append_segment leaves its label frozen",
+          sb2._transcript_label.text() == _before)
+    sb2.close()
+
+    shutil.rmtree(uf, ignore_errors=True)
+else:
+    print("  SKIP: PyQt6 unavailable — no source-only fallback is "
+          "meaningful for a widget-shaped card")
+
+raise SystemExit(report())

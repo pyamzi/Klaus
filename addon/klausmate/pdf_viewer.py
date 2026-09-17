@@ -18,6 +18,7 @@ from aqt.qt import (
     QAbstractItemView,
     QApplication,
     QEvent,
+    QFrame,
     QHBoxLayout,
     QInputDialog,
     QKeySequence,
@@ -31,6 +32,7 @@ from aqt.qt import (
     QPointF,
     QRect,
     QRectF,
+    QScrollArea,
     QShortcut,
     QSize,
     QSizePolicy,
@@ -4330,6 +4332,149 @@ class PdfSidebar(QWidget):
             self._fallback_label.setWordWrap(True)
             outer.addWidget(self._fallback_label, 1)
 
+        # Transcript strip (Plan 2 D6, K-258): a Qt widget under the page
+        # for the native renderer; pdf.js draws its own copy of this same
+        # strip INSIDE the page via the bridge instead (set_transcript
+        # below dispatches on which one applies). Every attribute exists
+        # — as None — even when the strip cannot be built, matching this
+        # file's own convention for optional UI (the find bar, the
+        # thumbnail strip above).
+        self._transcript: QWidget | None = None
+        self._transcript_chevron: QToolButton | None = None
+        self._transcript_scroll: QScrollArea | None = None
+        self._transcript_label: QLabel | None = None
+        self._transcript_unsubscribe: Callable[[], None] | None = None
+        if self._renderer != "pdfjs":
+            try:
+                self._build_transcript_strip(outer)
+            except Exception as exc:
+                print(f"[klausmate] transcript strip unavailable: {exc}")
+        try:
+            from . import page_store as _page_store
+
+            self._transcript_unsubscribe = _page_store.subscribe(
+                self._on_page_store_notify
+            )
+        except Exception as exc:
+            print(f"[klausmate] transcript subscribe failed: {exc}")
+
+    def _build_transcript_strip(self, outer: QVBoxLayout) -> None:
+        """Build the collapsible native-renderer transcript strip
+        (hidden until ``set_transcript`` has text to show): a
+        "Transcript" chevron over a capped-height ``QScrollArea``
+        holding the page's spoken-over text. Steals no focus and binds
+        no shortcut of its own — a plain checkable button and a plain
+        label."""
+        from . import theme as _theme
+
+        strip = QWidget(self)
+        strip.setObjectName("KlausTranscriptStrip")
+        strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        strip.setStyleSheet(_theme.transcript_strip_qss(_theme.night_mode()))
+        lay = QVBoxLayout(strip)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(2)
+
+        chevron = QToolButton(strip)
+        chevron.setCheckable(True)
+        chevron.setChecked(True)
+        chevron.setText("▾ Transcript")
+        chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+        chevron.setAutoRaise(True)
+        # Fix round 1 (M1): DECLARED, not just defaulted — Qt's own
+        # QToolButton default (TabFocus, no click-focus bit) already
+        # keeps a mouse click here off the viewer's focus chain, but a
+        # default is not an invariant. This file's own established
+        # pattern for exactly this "don't let an ancillary widget steal
+        # the viewer's shortcuts" concern (see the thumbnail list at
+        # `lst.setFocusPolicy(Qt.FocusPolicy.NoFocus)`).
+        chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        chevron.toggled.connect(self._on_transcript_chevron_toggled)
+        lay.addWidget(chevron)
+
+        scroll = QScrollArea(strip)
+        scroll.setWidgetResizable(True)
+        scroll.setMaximumHeight(120)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
+        label = QLabel("", scroll)
+        label.setWordWrap(True)
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
+        scroll.setWidget(label)
+        lay.addWidget(scroll)
+
+        strip.setVisible(False)
+        outer.addWidget(strip)
+        self._transcript = strip
+        self._transcript_chevron = chevron
+        self._transcript_scroll = scroll
+        self._transcript_label = label
+
+    def _on_transcript_chevron_toggled(self, checked: bool) -> None:
+        if self._transcript_scroll is not None:
+            self._transcript_scroll.setVisible(checked)
+        if self._transcript_chevron is not None:
+            self._transcript_chevron.setText(
+                "▾ Transcript" if checked else "▸ Transcript"
+            )
+
+    def set_transcript(self, page_index: int, text: str) -> None:
+        """Show *text* as *page_index*'s transcript: the native strip
+        when this sidebar built one, or (pdf.js) push it into the page
+        itself over the bridge — the ``klausSetTranscript`` call.
+        ``page_index`` mirrors that bridge call's own signature;
+        callers (``_refresh_transcript``, the page_store subscription)
+        already only reach this for the sidebar's own current page.
+        """
+        text = str(text or "").strip()
+        if self._transcript is not None and self._transcript_label is not None:
+            self._transcript_label.setText(text)
+            self._transcript.setVisible(bool(text))
+            return
+        if self._renderer == "pdfjs" and self._viewer is not None:
+            try:
+                self._viewer.set_transcript(page_index, text)
+            except Exception as exc:
+                print(f"[klausmate] pdfjs transcript push failed: {exc}")
+
+    def _refresh_transcript(self) -> None:
+        """Pull the current page's transcript out of page_store and
+        show it (or hide the strip when there is none) — the one path
+        both a page change and a page_store notification for this
+        PDF funnel through. The SLIDE text is deliberately excluded:
+        this strip is what was SAID over the page, not the page itself."""
+        text = ""
+        if self._name is not None:
+            try:
+                from . import page_store as _page_store
+                from . import pdf_handler as _pdf_handler
+                from . import USER_FILES  # type: ignore
+
+                path = _pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
+                rec = _page_store.load_record(
+                    USER_FILES, self._name, path, self._current_page
+                )
+                text = "\n".join(
+                    str(seg.get("text") or "").strip()
+                    for seg in rec.get("segments") or []
+                    if str(seg.get("text") or "").strip()
+                )
+            except Exception as exc:
+                print(f"[klausmate] transcript refresh failed: {exc}")
+                text = ""
+        self.set_transcript(self._current_page, text)
+
+    def _on_page_store_notify(self, pdf_safe: str, page_index: int) -> None:
+        """page_store.subscribe callback: refresh only for THIS
+        sidebar's own PDF and only while the notified page is the one
+        actually on screen — a recorder appending a segment to a page
+        the user has since scrolled past must not repaint over it."""
+        if pdf_safe == self._name and page_index == self._current_page:
+            self._refresh_transcript()
+
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
 
@@ -4369,6 +4514,7 @@ class PdfSidebar(QWidget):
             self._name = None
             self._file_stat = None
             self._set_active(None)
+            self._refresh_transcript()
             return
         self._file_stat = _stat_of(path)
 
@@ -4403,6 +4549,7 @@ class PdfSidebar(QWidget):
             self._page_count = len(pages)
             if self._page_count > 0:
                 self._set_active((name, (0, min(2, self._page_count - 1))))
+            self._refresh_transcript()  # fix round 1 (M2)
             self._notify_loaded(name)
             return
 
@@ -4613,6 +4760,12 @@ class PdfSidebar(QWidget):
                 fn()
             except Exception as exc:
                 print(f"[klausmate] viewer cleanup failed: {exc}")
+        unsub, self._transcript_unsubscribe = self._transcript_unsubscribe, None
+        if unsub is not None:
+            try:
+                unsub()
+            except Exception as exc:
+                print(f"[klausmate] transcript unsubscribe failed: {exc}")
         try:
             from . import viewer_context
 
@@ -4632,6 +4785,7 @@ class PdfSidebar(QWidget):
             except Exception:
                 pass
         self._set_active(None)
+        self._refresh_transcript()
         try:
             from . import viewer_context
 
@@ -4651,6 +4805,7 @@ class PdfSidebar(QWidget):
         end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
         self._set_active((self._name, (start, end)))
+        self._refresh_transcript()
         try:
             from . import viewer_context
 

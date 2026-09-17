@@ -174,7 +174,7 @@ section("duck-typed viewer surface")
 for attr in ("load_path", "set_page_texts", "load_annotations",
              "set_document", "clear_document", "go_to_page",
              "scroll_position", "restore_scroll_position",
-             "toggle_thumbnails", "_apply_mirror",
+             "toggle_thumbnails", "set_transcript", "_apply_mirror",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))
 
@@ -1790,5 +1790,169 @@ check("nothing sets the renderer to anything but 'native' outside an "
       "build site downstream tests only the flag it sets: %s"
       % ([(ln, v) for ln, v, g in _assigns164 if v != "'native'" and not g],),
       not [1 for _ln, _v, _g in _assigns164 if _v != "'native'" and not _g])
+
+section("K-258: transcript strip bridge (Plan 2 D6)")
+# The strip under the page in both renderers. This file covers the
+# pdf.js half: the in-page JS function, and that the Python side
+# (both here and pdf_viewer.py's PdfSidebar, which owns WHEN to call
+# it) reaches it on a page change and on a page_store notification.
+# The native-renderer Qt widget itself is tests/test_transcript_strip.py's
+# job; the QSS tokens are test_theme.py's.
+_HTML258 = _src(os.path.join("web", "pdfjs_viewer.html"))
+check("the page defines klausSetTranscript",
+      "window.klausSetTranscript = function" in _HTML258)
+check("it is collapsible via its own chevron, not a plain show/hide",
+      "ktHead" in _HTML258 and 'classList.toggle("collapsed")' in _HTML258)
+check("hidden when the text is empty",
+      'classList.toggle("visible", !!text)' in _HTML258)
+check("the transcript text lands as textContent, never innerHTML — a "
+      "lecture transcript is untrusted content and must carry no "
+      "markup of its own",
+      '.textContent = text' in _HTML258)
+
+section("K-258 fix round 1 (C1): the strip is OUT of the page flow")
+# The original shape appended .klaus-transcript INSIDE
+# state.pageDivs[pageIndex] — an in-flow child of a .page div whose
+# width/height are pinned to the exact rendered PDF size with no
+# reserved margin. Verified in a REAL Chromium browser (task-6-review.md
+# Finding C1, not just reasoned about): the next page's own canvas,
+# only #pages' 12px gap away, painted directly over it — 100% covered
+# for any single-line transcript on any page but the last. No headless
+# pixel check can reach this (PyQt6-WebEngine isn't installed for
+# system python3), so this section pins every structural fact a source
+# read CAN verify: the function no longer touches a per-page div at
+# all, the strip is static markup living as a SIBLING of #pages inside
+# #scroll (never a descendant of any .page), and its CSS takes it out
+# of normal flow with a z-index — the geometry a real browser would
+# need to actually paint it above the next page.
+import re as _re258
+
+_KST_FN = _HTML258.split("window.klausSetTranscript = function", 1)
+check("klausSetTranscript exists as a real function to inspect",
+      len(_KST_FN) == 2)
+_KST_BODY = _KST_FN[1].split("};", 1)[0] if len(_KST_FN) == 2 else ""
+check("...and it NEVER reaches into state.pageDivs any more — the whole "
+      "bug was keying this per rendered page",
+      "pageDivs" not in _KST_BODY)
+check("the strip is ONE static element in the markup, a sibling of "
+      "#pages (never created inside buildPlaceholders/renderPage, "
+      "which is what made it a .page descendant before)",
+      'id="klausTranscript"' in _HTML258
+      and _HTML258.index('id="klausTranscript"')
+      > _HTML258.index('id="pages"')
+      and _HTML258.index('id="klausTranscript"')
+      < _HTML258.index("<script>"))
+_TSTRIP_CSS = _re258.search(r"#klausTranscript \{(.*?)\}", _HTML258, _re258.S)
+check("its CSS takes it OUT of normal flow — fixed or sticky — with a "
+      "z-index above the canvases (which carry none of their own, so "
+      "any positive value wins the paint order rather than relying on "
+      "DOM order alone)",
+      _TSTRIP_CSS is not None
+      and _re258.search(r"position:\s*(fixed|sticky)", _TSTRIP_CSS.group(1))
+      and "z-index" in _TSTRIP_CSS.group(1))
+check("#pages' own width rule is untouched by this — width:max-content; "
+      "min-width:100%, same as before the strip existed",
+      "width: max-content; min-width: 100%;" in _HTML258)
+check(".page's per-page inline sizing (renderPage's own "
+      "div.style.width/height) is never touched by the transcript code",
+      "pageDivs" not in _KST_BODY
+      and ".style.width" not in _KST_BODY
+      and ".style.height" not in _KST_BODY)
+
+_PJ_SRC258 = _src("pdfjs_viewer.py")
+_ST258 = _PJ_SRC258.split("def set_transcript(self, page_index", 1)
+check("PdfJsViewer.set_transcript exists", len(_ST258) == 2)
+_ST258_BODY = _ST258[1].split("\n\n    def ", 1)[0] if len(_ST258) == 2 else ""
+check("...and it stores the page/text on self rather than only "
+      "evaluating them (fix round 1, I1: needed so _bridge_ready can "
+      "replay across a fresh load's race)",
+      "self._transcript_page" in _ST258_BODY
+      and "self._transcript_text" in _ST258_BODY)
+
+section("K-258 fix round 1 (I1): the transcript survives a fresh load's race")
+# klausPdfLoad fires window.klausPdfLoad() without awaiting it, so a
+# transcript pushed right after load_path() can arrive while
+# openDocument's teardown() has already wiped the page and
+# buildPlaceholders() hasn't refilled it yet — dropped with nothing to
+# replay, unlike annotations (state.annots persists and _bridge_ready
+# explicitly re-pushes it). Fix: PdfJsViewer keeps the last
+# (page_index, text) on self and _bridge_ready replays it too, right
+# next to _push_annotations() — proven here with a real _bridge_ready
+# call against a fake webview, not just by reading the source.
+_PT258 = _PJ_SRC258.split("def _push_transcript(self)", 1)
+_PT258_BODY = _PT258[1].split("\n\n    def ", 1)[0] if len(_PT258) == 2 else ""
+check("_push_transcript exists and JSON-encodes both values — never "
+      "interpolated raw into the eval string, so a quote or a "
+      "</script> in a transcript cannot break out of the call",
+      len(_PT258) == 2 and _PT258_BODY.count("json.dumps(") >= 2)
+_BR258 = _PJ_SRC258.split("def _bridge_ready(self, _payload: str)", 1)
+_BR258_BODY = _BR258[1].split("\n\n    def ", 1)[0] if len(_BR258) == 2 else ""
+check("_bridge_ready calls _push_transcript() right next to "
+      "_push_annotations() — the annotations' own re-push-on-ready "
+      "pattern, not a second mechanism",
+      "self._push_annotations()" in _BR258_BODY
+      and "self._push_transcript()" in _BR258_BODY
+      and _BR258_BODY.index("self._push_annotations()")
+      < _BR258_BODY.index("self._push_transcript()"))
+
+
+class _FakeWeb258:
+    """Records every eval() call — no real webview needed to prove the
+    replay, just like the file's existing 'webview cleanup' fake."""
+
+    def __init__(self) -> None:
+        self.evals: list[str] = []
+
+    def eval(self, js: str) -> None:
+        self.evals.append(js)
+
+
+_viewer258 = pv.PdfJsViewer.__new__(pv.PdfJsViewer)
+_viewer258._web = _FakeWeb258()
+_viewer258._page_loaded = True
+_viewer258._highlights = []
+_viewer258._annotations_name = None
+_viewer258._scroll_pos = 0
+_viewer258._transcript_page = 0
+_viewer258._transcript_text = ""
+_viewer258.set_transcript(3, "the recorded lecture text")
+_viewer258._web.evals.clear()  # drop the push set_transcript itself made
+_viewer258._bridge_ready("")
+check("a simulated 'ready' signal re-issues klausSetTranscript with the "
+      "STORED text, exactly as _push_annotations() replays _highlights — "
+      "a fresh load's race can no longer drop it silently",
+      any("klausSetTranscript(" in e and "the recorded lecture text" in e
+          for e in _viewer258._web.evals))
+
+_PV_SRC258 = _src("pdf_viewer.py")
+_OPC258 = _PV_SRC258.split("def _on_page_changed(self, page: int)", 1)
+check("PdfSidebar refreshes the transcript on every page change",
+      len(_OPC258) == 2
+      and "self._refresh_transcript()" in _OPC258[1].split("\n    def ", 1)[0])
+check("the sidebar subscribes to page_store for live updates (the "
+      "lecture recorder's append_segment reaching a page in view)",
+      "_page_store.subscribe(" in _PV_SRC258
+      and "self._on_page_store_notify" in _PV_SRC258)
+check("...and unsubscribes on cleanup — page_store's subscriber list "
+      "is a module global that would otherwise outlive a torn-down "
+      "sidebar",
+      "self._transcript_unsubscribe" in _PV_SRC258
+      and "unsub()" in _PV_SRC258)
+_NOTIFY258 = _PV_SRC258.split(
+    "def _on_page_store_notify(self, pdf_safe: str, page_index: int)", 1)
+_NOTIFY258_BODY = _NOTIFY258[1] if len(_NOTIFY258) == 2 else ""
+check("the notification handler only reacts to THIS sidebar's own PDF "
+      "and its current page — a background write for a page the user "
+      "has since left must not repaint it",
+      "pdf_safe == self._name" in _NOTIFY258_BODY
+      and "page_index == self._current_page" in _NOTIFY258_BODY)
+_REFRESH258 = _PV_SRC258.split("def _refresh_transcript(self)", 1)
+_REFRESH258_BODY = (
+    _REFRESH258[1].split("\n    def ", 1)[0] if len(_REFRESH258) == 2 else ""
+)
+check("_refresh_transcript reads page_store.load_record, not the "
+      "slide text — the strip is what was SAID over the page",
+      "page_store.load_record(" in _REFRESH258_BODY
+      and 'seg.get("text")' in _REFRESH258_BODY)
 
 raise SystemExit(report())

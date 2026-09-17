@@ -35,6 +35,7 @@ builders = [
     ("pdf_panel_qss", theme.pdf_panel_qss),
     ("library_qss", theme.library_qss),
     ("thumb_strip_qss", theme.thumb_strip_qss),
+    ("transcript_strip_qss", theme.transcript_strip_qss),
     ("assistant_dock_qss", theme.assistant_dock_qss),
     # The Anki-window builders (window_chrome consumers) join here so
     # every audit below — tokens substituted, background present, the
@@ -572,6 +573,37 @@ check("accent_rgba dark = bright dark-mode accent",
 m = theme.muted_label_qss(False, 10)
 check("muted label carries text_muted + size",
       theme.LIGHT["text_muted"] in m and "font-size: 10px" in m)
+
+section("transcript strip (Plan 2 D6, K-258): tokens only")
+# The strip under the page in both PDF renderers — this is the NATIVE
+# viewer's half (a QWidget#KlausTranscriptStrip); the pdf.js half is
+# plain CSS in web/pdfjs_viewer.html, off theme.css_vars, pinned in
+# test_pdfjs_viewer.py instead.
+for _night in (False, True):
+    ts = theme.transcript_strip_qss(_night)
+    _c = theme.palette(_night)
+    check(f"transcript_strip_qss(night={_night}) names the strip id",
+          "QWidget#KlausTranscriptStrip" in ts)
+    check(f"transcript_strip_qss(night={_night}) grounds the strip on "
+          "chrome — the same surface the top/bottom bars wear",
+          f"background-color: {_c['chrome']}" in ts)
+    check(f"transcript_strip_qss(night={_night}) carries a grey_light "
+          "hairline on top — the RowSeparator/ButtonBarLine seam "
+          "language, not a border it invents",
+          f"border-top: 1px solid {_c['grey_light']}" in ts)
+    check(f"transcript_strip_qss(night={_night}): the chevron and the "
+          "transcript text are both text_muted — a caption under the "
+          "page, not body copy competing with it",
+          ts.count(_c['text_muted']) >= 2)
+    # Every hex literal the builder emits must be a value FROM this
+    # palette — never a hand-spelled colour (CLAUDE.md: UI files must
+    # not hardcode colours).
+    _hexes = set(re.findall(r"#[0-9A-Fa-f]{6}\b", ts))
+    _palette_hexes = {v for v in _c.values()
+                       if isinstance(v, str) and v.startswith("#")}
+    check(f"transcript_strip_qss(night={_night}) has no literal hex "
+          f"outside the palette (found: {sorted(_hexes - _palette_hexes)})",
+          _hexes <= _palette_hexes)
 
 section("webview vars (css_vars): the palette mirrored into :root")
 # The one surface that reads theme tokens as CSS instead of QSS —
