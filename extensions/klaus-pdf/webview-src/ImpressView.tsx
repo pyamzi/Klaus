@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import NotesSidebar from "./NotesSidebar";
 import PdfPage from "./PdfPage";
 import { fetchPdfBytes } from "./core";
 
@@ -154,7 +155,7 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
           />
         </div>
       </div>
-      <div className="impress-sidebar-slot" data-pdf-id={pdfId} data-page={current} />
+      <NotesSidebar pdfId={pdfId} page={current} />
     </div>
   );
 }

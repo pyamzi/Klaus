@@ -32,3 +32,24 @@ export async function fetchPdfBytes(id: string): Promise<ArrayBuffer> {
   const res = await request(`/pdf/${id}`);
   return res.arrayBuffer();
 }
+
+export interface NotesDoc {
+  version: number;
+  pages: Record<string, { md: string }>;
+}
+
+export async function fetchNotes(id: string): Promise<NotesDoc> {
+  const res = await request(`/notes/${id}`);
+  return res.json();
+}
+
+export async function saveNotes(id: string, doc: NotesDoc): Promise<void> {
+  const res = await fetch(`${BASE}/notes/${id}`, {
+    method: "PUT",
+    headers: { "X-Klaus-Token": TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify(doc),
+  });
+  if (!res.ok) {
+    throw new Error(`klaus-core PUT /notes/${id} failed: ${res.status}`);
+  }
+}
