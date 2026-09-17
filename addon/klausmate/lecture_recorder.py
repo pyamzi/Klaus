@@ -46,6 +46,11 @@ from typing import Callable, NamedTuple
 from . import openai_client, page_store, plus
 
 CHUNK_S = 30.0
+# How long stop() waits for the worker to put down whatever chunk it is
+# holding. Bounded because stop() runs on the MAIN thread at profile
+# close: a wedged provider call must cost a two-second pause, never a
+# frozen Anki (PR #4 second re-review).
+STOP_JOIN_S = 2.0
 
 
 class Chunk(NamedTuple):
@@ -165,8 +170,15 @@ class Uploader:
         self._last_text: dict[str, str] = {}
         self._seeded: set[str] = set()
         self._thread: threading.Thread | None = None
+        # Set by stop() BEFORE the sentinel goes in, so a chunk already in
+        # flight can tell that the profile it belongs to is gone.
+        self._closed = False
 
     def enqueue(self, pdf_safe: str, pdf_path: str, chunk: Chunk, wav_path: str) -> None:
+        # New work re-opens a stopped uploader, the same way _ensure_thread
+        # revives its dead worker — otherwise the restarted worker would
+        # transcribe (a paid call) and then throw the result away.
+        self._closed = False
         self._q.put((pdf_safe, pdf_path, chunk, wav_path))
         self._ensure_thread()
 
@@ -281,6 +293,18 @@ class Uploader:
             print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)} "
                   f"({exc.__class__.__name__})")
             return
+        if self._closed:
+            # Torn down while this chunk was in flight (PR #4 second
+            # re-review). Appending now would write a page record behind a
+            # profile that is already closing, and unlinking would destroy
+            # the only copy of this audio just as the NEXT profile's
+            # requeue_leftovers scans the same directory — the same chunk
+            # landing twice, or racing that new worker's own unlink. Keep
+            # the WAV instead: one re-upload is cheap, a duplicate segment
+            # is not.
+            print(f"[klausmate] lecture recorder: uploader closed mid-upload, "
+                  f"keeping {os.path.basename(wav_path)}")
+            return
         if text.strip():
             self._ensure_page(pdf_safe, pdf_path)
             page_store.append_segment(self._user_files, pdf_safe, pdf_path, chunk.page - 1, chunk.t0, chunk.t1, text.strip())
@@ -312,7 +336,20 @@ class Uploader:
         return len(matches)
 
     def stop(self) -> None:
+        """Close the uploader and wait, briefly, for the worker to let go.
+
+        ``_closed`` is set BEFORE the sentinel so a chunk already inside
+        ``_one()`` sees it the moment its transcription returns; the join
+        then makes "the uploader is stopped" true for the caller as well,
+        not merely scheduled — ``_stop_lecture_uploader`` drops the
+        singleton the instant this returns. Bounded by ``STOP_JOIN_S``:
+        this runs on the main thread at profile close.
+        """
+        self._closed = True
         self._q.put(None)
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(STOP_JOIN_S)
 
 
 # ---- Qt glue ----------------------------------------------------------
@@ -372,7 +409,14 @@ class Recorder:
 
     @property
     def queued(self) -> int:
-        return self._uploader.queued()
+        """How many chunks still owe a transcript — the uploader's
+        ``pending()``, NOT its ``queued()`` (PR #4 second re-review). The
+        worker ``get()``s a chunk before transcribing it, so the queue
+        length is already 0 while an upload is running, and the bar read
+        "0 to transcribe" for the whole of it while
+        ``_request_index_when_idle`` was still waiting on that same chunk.
+        One number, one meaning."""
+        return self._uploader.pending()
 
     def _now(self) -> float:
         return self._epoch0 + (time.monotonic() - self._start_mono)
@@ -467,7 +511,7 @@ class Recorder:
             self._flush(chunk)
         if self._on_status:
             try:
-                self._on_status(self.elapsed, self._uploader.queued())
+                self._on_status(self.elapsed, self.queued)
             except Exception as exc:
                 print(f"[klausmate] lecture recorder: on_status failed: {exc}")
 

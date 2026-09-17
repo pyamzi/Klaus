@@ -376,14 +376,22 @@ def ensure_judged(
 
     cfg = _cfg()
     display = display_name(pdf_name)
-    if not plus.active(cfg) and not str(cfg.get("api_key_anthropic") or "").strip():
-        print(f"[klausmate] pertinence: no Anthropic key and Klaus Plus is not active "
-              f"— “{display}” stays unjudged.")
-        on_done(set())
-        return
-
     user_files = _user_files()
     safe = pdf_handler._safe_basename(pdf_name)
+    if not plus.active(cfg) and not str(cfg.get("api_key_anthropic") or "").strip():
+        # The verdicts already on disk STAND, so this path reports them
+        # rather than set() (PR #4 second re-review): they were paid for,
+        # each one is keyed on its card's and its page's own text hashes,
+        # and `retention.priority_rows`/`tag_sync.doubtful_members` read
+        # that same store whatever this phase answers. Reporting nothing
+        # would not un-doubt a card — it would only make this phase
+        # disagree with every other reader of judged.json, and pulling a
+        # key must never silently move a card either way.
+        print(f"[klausmate] pertinence: no Anthropic key and Klaus Plus is not active "
+              f"— “{display}” stays unjudged; earlier verdicts stand.")
+        on_done(rejected_nids(load_judged(user_files, safe)))
+        return
+
     path = pdf_handler.pdf_path_for(user_files, safe) or ""
     threshold = retention.get_threshold(pdf_name, cfg)
     pages = _matched_pages(pdf_name)

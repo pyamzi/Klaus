@@ -1310,7 +1310,9 @@ same reason.
     no Anthropic key at all** (`Client.complete(..., purpose="judge")`,
     quota refreshed from the response's own headers); off Plus with no
     key the phase is SKIPPED with one log line and no prompt — a paid
-    confirm nobody can pay for is worse than silence. The prompt itself
+    confirm nobody can pay for is worse than silence — and verdicts from
+    an earlier judged run STAND until their card or page changes: a
+    removed key never un-doubts a card (Copilot on PR #4, 2026-09-17). The prompt itself
     prices the free tier through `cost.estimate_judge`, and because
     `reasoning_model` is a free-text field with no picker, a model
     outside `cost.PRICES` is priced as Sonnet and SAYS SO rather than

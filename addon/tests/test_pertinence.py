@@ -554,13 +554,33 @@ with contextlib.redirect_stdout(_nokey_log):
     )
 check(
     "no Anthropic key and not on Klaus Plus: do not ask, do not judge — "
-    "one [klausmate] line and on_done(set()), even though 12 is really "
-    "rejected on disk from the earlier run (ruling 3: this call reports "
-    "nothing judged, it does not consult the cache)",
-    _nokey_log.getvalue().count("[klausmate]") == 1 and ask_must_not_run_log == [] and _done == [set()],
+    "one [klausmate] line, and on_done reports the verdicts ALREADY ON "
+    "DISK (PR #4 second re-review): card 12 was judged and paid for in "
+    "the earlier run, and its entry is keyed on that card's and that "
+    "page's own text hashes, so pulling the key must never silently "
+    "un-doubt it — retention and tag_sync go on reading the same store "
+    "whatever this phase answers",
+    _nokey_log.getvalue().count("[klausmate]") == 1 and ask_must_not_run_log == [] and _done == [{12}],
     _nokey_log.getvalue(),
 )
+check("...and the log says the earlier verdicts stand, rather than implying "
+      "every match now counts",
+      "stays unjudged; earlier verdicts stand" in _nokey_log.getvalue(),
+      _nokey_log.getvalue())
 check("...and never touches the client either", len(_client_calls) == _calls_before_nokey)
+
+# The other half: nothing on disk really does mean nothing rejected — the
+# fix must read the store, not invent members for it.
+_done.clear()
+_nokey_log2 = io.StringIO()
+with contextlib.redirect_stdout(_nokey_log2):
+    pt.ensure_judged(
+        _nokey_mw, "lec2", [(11, 0.9), (12, 0.85)],
+        on_done=_done.append, on_error=_errors.append, cancel=None,
+        on_progress=lambda *a: None, ask=ask_must_not_run,
+    )
+check("a PDF nobody has ever judged still reports nothing rejected on the "
+      "same keyless path", _done == [set()], repr(_done))
 check("no on_error ever fired across the whole glue section", _errors == [])
 
 section("ensure_judged: fix round 1, C1 — an un-priced reasoning_model never wedges the phase")

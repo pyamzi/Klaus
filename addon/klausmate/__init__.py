@@ -2072,7 +2072,15 @@ def _stop_lecture_uploader() -> None:
     the queue it is watching dies with the profile, but its daemon worker
     may still finish the chunk it holds, and a poll that then saw
     ``pending() == 0`` would request a re-index by display name in
-    whatever profile opened next."""
+    whatever profile opened next.
+
+    Dropping the singleton right after ``stop()`` is only safe because
+    ``Uploader.stop`` now closes the uploader before it enqueues its
+    sentinel and then waits (bounded, ``STOP_JOIN_S``) for the worker: a
+    chunk still mid-transcription appends nothing and keeps its WAV for
+    the next profile's ``requeue_leftovers`` instead of writing a page
+    record behind a profile that is already gone (PR #4 second
+    re-review)."""
     global _uploader, _index_when_idle_gen
     for rec in list(_active_recorders):
         try:

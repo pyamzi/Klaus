@@ -18,9 +18,10 @@ standard for Anki add-ons) and never in the repo.
   exactly one thing: the **pertinence check** at the end of indexing (see
   **Doubtful cards** below), which asks Claude whether each matched card
   is really about the lecture page it matched. Without it, indexing still
-  works — the check is skipped and every match counts, as it did before.
-  The assistant does not read this key; it runs on your own Claude Code
-  login instead (see **Assistant** below).
+  works — the check is skipped for new matches and every match counts, as
+  it did before; verdicts from an earlier judged run stay until that card
+  or page changes. The assistant does not read this key; it runs on your
+  own Claude Code login instead (see **Assistant** below).
 - **reasoning_model**: Free text, default `"claude-sonnet-5"`. Two uses,
   one live: it is the model the **pertinence check** asks, and it is what
   a future release (Plan 3) will move the assistant onto. The assistant's

@@ -576,6 +576,13 @@ class _TickUploader:
         self.calls.append((pdf_safe, chunk, wav_path))
 
     def queued(self) -> int:
+        # The queue LENGTH, which the worker drops to 0 the moment it
+        # picks a chunk up: the number the bar must NOT show (PR #4
+        # second re-review). Deliberately different from pending() here,
+        # so the status pins below can tell the two apart.
+        return 0
+
+    def pending(self) -> int:
         return 3
 
 
@@ -610,7 +617,8 @@ try:
           first is not None and os.path.getsize(first[2]) == 44 + len(tick_pcm),
           repr(first))
     check("...and _tick reports elapsed seconds and the uploader's own "
-          "queue depth through on_status (the D6 status text's feed)",
+          "PENDING count through on_status (the D6 status text's feed) — "
+          "not queued(), which is already 0 for a chunk in flight",
           tick_status == [(5.0, 3)], repr(tick_status))
     tick_clock.t = 1005.0 + lr.CHUNK_S  # a full chunk later, same page
     tick_rec._tick()
@@ -706,5 +714,135 @@ leak_txt2 = leak_log2.getvalue()
 check("the generic except is the same rule — class only, no message",
       MARKER not in leak_txt2 and "RuntimeError" in leak_txt2 and os.path.exists(p_leak2),
       leak_txt2)
+
+# ---------------------------------------------------------------------
+# PR #4 second re-review (Copilot), finding 1: `_stop_lecture_uploader`
+# drops the uploader singleton the moment `stop()` has enqueued its
+# sentinel — but the worker may be inside `_one()`, still transcribing.
+# Appending then writes a page record behind a profile that is already
+# closing, and unlinking the WAV destroys the only copy of that audio
+# while the NEXT profile's requeue_leftovers is scanning the same
+# directory: the same chunk can land twice, or race the new worker's own
+# unlink. A stopped uploader must mutate nothing.
+# ---------------------------------------------------------------------
+section("PR #4 re-review: a stopped uploader appends nothing and keeps the WAV of the chunk in flight")
+_close_gate = threading.Event()
+_close_seen = threading.Event()
+
+
+def fake_transcribe_gated(key, wav, model, language="en", prompt="", timeout=None):
+    _close_seen.set()
+    _close_gate.wait(5.0)
+    return "text that only came back after the profile had closed"
+
+
+lr._transcribe = fake_transcribe_gated
+close_segs: list = []
+close_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+                       on_segment=lambda safe, page: close_segs.append((safe, page)))
+p_close = lr.chunk_path(root, "closetest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(p_close), exist_ok=True)
+open(p_close, "wb").write(b"RIFF OK")
+close_up.enqueue("closetest", os.path.join(root, "closetest.pdf"), lr.Chunk(1, 0.0, 30.0), p_close)
+check("the worker really is inside the transcription when the teardown starts "
+      "(the pins below are about a chunk in flight, not one still queued)",
+      _close_seen.wait(2.0))
+# The network call comes back AFTER stop() has run, which is the whole race.
+threading.Timer(0.05, _close_gate.set).start()
+_close_t0 = time.monotonic()
+_close_returned = _returns_within(close_up.stop, 4.0)
+_close_elapsed = time.monotonic() - _close_t0
+check("stop() returns instead of leaving profile close hanging", _close_returned)
+check("...and it WAITED for the in-flight chunk rather than racing it away",
+      _close_elapsed >= 0.04, f"{_close_elapsed:.3f}s")
+check("a transcription that lands after stop() appends nothing",
+      close_segs == [], repr(close_segs))
+check("...and its WAV is kept, so the next profile's requeue_leftovers re-uploads "
+      "it exactly once — one re-upload is cheap, a duplicate segment is not",
+      os.path.exists(p_close))
+
+section("PR #4 re-review: stop()'s wait is bounded — a wedged upload cannot freeze profile close")
+_hang_gate = threading.Event()
+_hang_seen = threading.Event()
+
+
+def fake_transcribe_wedged(key, wav, model, language="en", prompt="", timeout=None):
+    _hang_seen.set()
+    _hang_gate.wait(30.0)
+    return ""
+
+
+lr._transcribe = fake_transcribe_wedged
+hang_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+p_hang = lr.chunk_path(root, "hangtest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(p_hang), exist_ok=True)
+open(p_hang, "wb").write(b"RIFF")
+hang_up.enqueue("hangtest", os.path.join(root, "hangtest.pdf"), lr.Chunk(1, 0.0, 30.0), p_hang)
+check("the worker is wedged in the network call", _hang_seen.wait(2.0))
+check("stop() gives up on it within STOP_JOIN_S rather than blocking the main "
+      "thread for as long as the provider feels like taking",
+      _returns_within(hang_up.stop, lr.STOP_JOIN_S + 1.5))
+_hang_gate.set()  # let the leaked worker die instead of idling for 30 s
+
+section("PR #4 re-review: a normal stop still drains — a chunk that finished is kept, not discarded")
+lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: "landed"
+norm_segs: list = []
+norm_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+                      on_segment=lambda safe, page: norm_segs.append((safe, page)))
+p_norm = lr.chunk_path(root, "normtest", lr.Chunk(2, 0.0, 30.0))
+os.makedirs(os.path.dirname(p_norm), exist_ok=True)
+open(p_norm, "wb").write(b"RIFF OK")
+norm_up.enqueue("normtest", os.path.join(root, "normtest.pdf"), lr.Chunk(2, 0.0, 30.0), p_norm)
+norm_up.drain()
+check("stop() returns promptly when nothing is in flight", _returns_within(norm_up.stop, 2.0))
+check("...and the chunk that completed BEFORE it is appended and its WAV removed",
+      norm_segs == [("normtest", 1)] and not os.path.exists(p_norm), repr(norm_segs))
+
+# ---------------------------------------------------------------------
+# PR #4 second re-review, finding 3: the "· n to transcribe" number on
+# both docks came from the uploader's queued() — the queue LENGTH — and
+# the worker get()s a chunk BEFORE transcribing it. So through the whole
+# of a slow upload the bar read "0 to transcribe" while the drain-aware
+# re-index poll was still waiting on pending() == 1. One number, one
+# meaning: what is still owed a transcript.
+# ---------------------------------------------------------------------
+section("PR #4 re-review: the '· n to transcribe' number counts pending(), not the queue length")
+_bar_gate = threading.Event()
+_bar_seen = threading.Event()
+
+
+def fake_transcribe_bar(key, wav, model, language="en", prompt="", timeout=None):
+    _bar_seen.set()
+    _bar_gate.wait(5.0)
+    return ""
+
+
+lr._transcribe = fake_transcribe_bar
+bar_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+p_bar = lr.chunk_path(root, "bartest", lr.Chunk(1, 0.0, 30.0))
+os.makedirs(os.path.dirname(p_bar), exist_ok=True)
+open(p_bar, "wb").write(b"RIFF")
+bar_up.enqueue("bartest", os.path.join(root, "bartest.pdf"), lr.Chunk(1, 0.0, 30.0), p_bar)
+check("the chunk is off the queue and in flight (queued() already reads 0)",
+      _bar_seen.wait(2.0) and bar_up.queued() == 0, f"queued={bar_up.queued()}")
+bar_status: list = []
+bar_rec = lr.Recorder(root, "bartest", os.path.join(root, "bartest.pdf"),
+                      get_page=lambda: 1,
+                      on_status=lambda s, q: bar_status.append(q),
+                      uploader=bar_up)
+bar_rec._io = _FakeIO(b"")
+bar_rec._recording = True
+bar_rec._epoch0 = 9000.0
+bar_rec._start_mono = time.monotonic()
+bar_rec._chunker.start(1, 9000.0)
+bar_rec._tick()
+check("the bar is told 1, not 0, while that chunk is mid-upload — the same "
+      "number _request_index_when_idle waits on before re-indexing",
+      bar_status == [1], f"{bar_status} (queued={bar_up.queued()})")
+check("...and Recorder.queued is that one number's single source",
+      bar_rec.queued == 1, repr(bar_rec.queued))
+_bar_gate.set()
+bar_up.drain()
+check("...and it drops to 0 once the upload really finished", bar_rec.queued == 0)
 
 raise SystemExit(report())
