@@ -310,6 +310,54 @@ if _HAVE_QT:
           sb2._transcript_label.text() == _before)
     sb2.close()
 
+    section("PdfSidebar — a FAILED native load clears the strip "
+            "(PR #4 fifth re-review)")
+    # The missing-PDF branch and the no-native-viewer fallback both
+    # refresh the strip; QPdfDocument.load() blowing up only called
+    # _set_active(None) and returned — so switching from a lecture with a
+    # transcript to an unloadable PDF left the previous PDF's spoken text
+    # on screen over a blank viewer.
+    sb6 = pdf_viewer.PdfSidebar(None, parent=None)
+    sb6.show()
+    for _ in range(5):
+        app.processEvents()
+    sb6.load_pdf("Sample")
+    for _ in range(10):
+        app.processEvents()
+    check("the sidebar really is showing a transcript before the bad load",
+          sb6._transcript.isVisible()
+          and "professor" in sb6._transcript_label.text())
+
+    class _UnloadableDoc:
+        """Both load() overloads raise — the exact double-except path
+        (str first, then QUrl.fromLocalFile) load_pdf falls through."""
+
+        def load(self, *_a, **_k):
+            raise RuntimeError("pdfium said no")
+
+    sb6._doc = _UnloadableDoc()
+    sb6.load_pdf("Quiet")
+    for _ in range(5):
+        app.processEvents()
+    check("a load that fails leaves no stale transcript behind",
+          not sb6._transcript.isVisible()
+          and sb6._transcript_label.text() == "",
+          repr(sb6._transcript_label.text()))
+    # K-276 review: clearing the strip was not enough — the sidebar still
+    # NAMED the old PDF, so the next page_store notify or page change for
+    # that name re-read its record and put the transcript straight back.
+    # The failed load must forget the document, like the no-path branch.
+    check("...and the sidebar no longer names the PDF that loaded before it",
+          sb6._name is None, repr(sb6._name))
+    sb6._refresh_transcript()
+    for _ in range(3):
+        app.processEvents()
+    check("...so a later refresh cannot bring the old transcript back",
+          not sb6._transcript.isVisible() and sb6._transcript_label.text() == "",
+          repr(sb6._transcript_label.text()))
+    sb6.cleanup()
+    sb6.close()
+
     section("PdfSidebar._on_page_store_notify marshals through "
             "_run_on_main (K-257 fix round 1, cross-task)")
     # page_store.append_segment calls _notify (hence
@@ -363,6 +411,60 @@ if _HAVE_QT:
               "hop) applies the refresh, picking up the segment the "
               "worker thread appended",
               sb5._transcript_label.text() == _before5 + "\ncross thread segment")
+
+        # PR #4 fifth re-review: that deferred closure can still be in
+        # Qt's event queue when the dock tears the sidebar down — the
+        # uploader's notification then runs _refresh_transcript against
+        # widgets whose C++ side is gone (RuntimeError, raised out of
+        # taskman). cleanup() latches a liveness flag BEFORE it
+        # unsubscribes, and the closure checks it.
+        _after5 = sb5._transcript_label.text()
+        _recorded_cbs.clear()
+        t2 = threading.Thread(target=lambda: page_store.append_segment(
+            uf, "Sample", path_sample, 0, 30.0, 31.0, "after teardown"),
+            name="Klaus-Uploader-Probe-2")
+        t2.start()
+        t2.join()
+        check("the post-teardown notification was deferred as well",
+              len(_recorded_cbs) == 1)
+        sb5.cleanup()
+        _torn_ok = True
+        try:
+            _recorded_cbs[0]()
+        except Exception as _exc:  # noqa: BLE001
+            _torn_ok = False
+            print(f"    (raised: {_exc.__class__.__name__}: {_exc})")
+        check("a closure that lands AFTER cleanup() raises nothing and "
+              "refreshes nothing",
+              _torn_ok and sb5._transcript_label.text() == _after5,
+              repr(sb5._transcript_label.text()))
+
+        # Belt and braces behind that flag: a widget torn down by Qt
+        # itself (deleteLater, a parent going away) makes the refresh
+        # raise RuntimeError even while the sidebar still looks live.
+        # Swallow it with one log line rather than let it out of the
+        # uploader's notify chain.
+        sb5._torn_down = False
+
+        def _raise_deleted():
+            raise RuntimeError("wrapped C/C++ object of type QLabel has been deleted")
+
+        sb5._refresh_transcript = _raise_deleted
+        _recorded_cbs.clear()
+        # Called straight on the subscriber — cleanup() above already
+        # unsubscribed it from page_store, and this pin is about what the
+        # deferred closure does with a raising refresh, not about how the
+        # notification reached it.
+        sb5._on_page_store_notify("Sample", 0)
+        _deleted_ok = True
+        try:
+            _recorded_cbs[0]()
+        except Exception as _exc:  # noqa: BLE001
+            _deleted_ok = False
+            print(f"    (raised: {_exc.__class__.__name__}: {_exc})")
+        check("a deleted-widget RuntimeError inside the refresh is "
+              "swallowed, never propagated into the notification chain",
+              _deleted_ok)
     finally:
         pdf_viewer._run_on_main = _orig_run_on_main
     sb5.cleanup()

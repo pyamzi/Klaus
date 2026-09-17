@@ -4348,6 +4348,12 @@ class PdfSidebar(QWidget):
         self._transcript_scroll: QScrollArea | None = None
         self._transcript_label: QLabel | None = None
         self._transcript_unsubscribe: Callable[[], None] | None = None
+        # Latched by cleanup() before it unsubscribes: a page_store
+        # notification deferred through _run_on_main can still be sitting
+        # in Qt's event queue when this sidebar is torn down (PR #4 fifth
+        # re-review). One-way, like the uploader's own _closed — every
+        # teardown path here is final.
+        self._torn_down = False
         if self._renderer != "pdfjs":
             try:
                 self._build_transcript_strip(outer)
@@ -4497,8 +4503,19 @@ class PdfSidebar(QWidget):
         they were on the worker thread a moment earlier.
         """
         def _apply() -> None:
+            # Deferred means "later", and later can be after cleanup():
+            # the dock closes, the widgets die, and this closure then
+            # refreshes a QLabel whose C++ half is gone — a RuntimeError
+            # raised out of the uploader's notify chain (PR #4 fifth
+            # re-review). The latch is the answer; the try is for the
+            # widget Qt deletes without anyone calling cleanup().
+            if self._torn_down:
+                return
             if pdf_safe == self._name and page_index == self._current_page:
-                self._refresh_transcript()
+                try:
+                    self._refresh_transcript()
+                except RuntimeError as exc:
+                    print(f"[klausmate] transcript notify skipped: {exc}")
 
         _run_on_main(_apply)
 
@@ -4586,7 +4603,17 @@ class PdfSidebar(QWidget):
             try:
                 self._doc.load(QUrl.fromLocalFile(path))
             except Exception:
+                # ...and drop the previous PDF with it (PR #4 fifth re-review):
+                # self._name still named the PDF that loaded FINE a moment
+                # ago, so clearing the strip alone was not enough — the next
+                # page_store notify or page change for that name re-read its
+                # record and put the stale text straight back on screen
+                # (K-276 review, measured). Same shape as the no-path branch
+                # above: forget the document, THEN refresh.
+                self._name = None
+                self._file_stat = None
                 self._set_active(None)
+                self._refresh_transcript()
                 return
 
         self._name = name
@@ -4780,6 +4807,10 @@ class PdfSidebar(QWidget):
         owns an AnkiWebView, which must be unregistered from Anki's
         global hooks — see PdfJsViewer.cleanup); QPdfView has nothing
         to release. Call from every path that tears a sidebar down."""
+        # Before the unsubscribe, not after: a notification that already
+        # made it through subscribe() may be waiting its main-thread turn
+        # (see _on_page_store_notify).
+        self._torn_down = True
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
         if fn is not None:

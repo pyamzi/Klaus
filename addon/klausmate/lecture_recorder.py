@@ -171,14 +171,30 @@ class Uploader:
         self._seeded: set[str] = set()
         self._thread: threading.Thread | None = None
         # Set by stop() BEFORE the sentinel goes in, so a chunk already in
-        # flight can tell that the profile it belongs to is gone.
-        self._closed = False
+        # flight can tell that the profile it belongs to is gone. ONE-WAY:
+        # nothing clears it again (see enqueue); K-276's verify greps
+        # this file for the assignment that used to reopen it.
+        self._closed: bool = False
 
     def enqueue(self, pdf_safe: str, pdf_path: str, chunk: Chunk, wav_path: str) -> None:
-        # New work re-opens a stopped uploader, the same way _ensure_thread
-        # revives its dead worker — otherwise the restarted worker would
-        # transcribe (a paid call) and then throw the result away.
-        self._closed = False
+        """Queue a closed chunk — unless this uploader is stopped, in
+        which case the WAV simply stays on disk for the NEXT uploader's
+        ``requeue_leftovers``.
+
+        ``_closed`` is a one-way latch (PR #4 fifth re-review). Clearing
+        it here reopened an uploader whose old worker could still be
+        inside ``_one()``, past ``stop()``'s bounded join: that worker
+        then read ``_closed`` as False when its transcription returned
+        and appended + unlinked — while the requeued copy of the same
+        WAV was processed too. Production never reopens one anyway
+        (``_stop_lecture_uploader`` drops the singleton; ``uploader()``
+        builds a fresh instance), so refusing is both the safe answer
+        and the real one.
+        """
+        if self._closed:
+            print(f"[klausmate] lecture recorder: uploader stopped, "
+                  f"keeping {os.path.basename(wav_path)} for the next one")
+            return
         self._q.put((pdf_safe, pdf_path, chunk, wav_path))
         self._ensure_thread()
 
@@ -213,17 +229,12 @@ class Uploader:
                 # must get its own task_done() (fix round 1, C1), or the
                 # unfinished-task count `drain()`/`join()` waits on never
                 # reaches zero and every future drain() hangs forever.
+                # Nothing can be queued BEHIND it: `_closed` is latched
+                # before the sentinel goes in and `enqueue` refuses from
+                # then on (PR #4 fifth re-review), so the sentinel is
+                # always a real exit order.
                 self._q.task_done()
-                if self._closed:
-                    return
-                # STALE sentinel (PR #4 fourth re-review): an enqueue
-                # reopened the uploader while this worker was still busy,
-                # so `_ensure_thread` saw a live thread and started none.
-                # Exiting now would strand everything queued behind the
-                # sentinel until some later enqueue happened to revive a
-                # worker. `_closed` is the order; the sentinel is only
-                # how it gets delivered.
-                continue
+                return
             try:
                 self._one(*item)
             except Exception as exc:

@@ -319,7 +319,7 @@ check("the SECOND chunk still transcribed after the first chunk's on_segment rai
       ("B", "c1test", 0) in c1_events)
 check("drain() itself returns promptly (not just the queue idling)", _returns_within(c1_up.drain, 2.0))
 
-section("C1: the stop() sentinel gets task_done() too, so a later enqueue restarts cleanly")
+section("C1: the stop() sentinel gets task_done() too, so a NEW uploader restarts cleanly")
 lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: ""
 stop_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
 pS = lr.chunk_path(root, "stoptest", lr.Chunk(1, 0.0, 30.0))
@@ -330,9 +330,19 @@ stop_up.stop()
 check("the stop sentinel itself is drained (task_done for None too)", _returns_within(stop_up.drain, 2.0))
 pS2 = lr.chunk_path(root, "stoptest", lr.Chunk(1, 30.0, 60.0))
 open(pS2, "wb").write(b"y")
+# PR #4 FIFTH re-review: the restart is a NEW Uploader, never a reopened
+# one. Production never reopens either -- _stop_lecture_uploader drops
+# the singleton and uploader() builds a fresh instance -- so enqueue on a
+# stopped uploader is refused outright (the WAV stays for the next
+# uploader's requeue_leftovers) rather than reviving a worker whose
+# predecessor may still be inside _one().
 stop_up.enqueue("stoptest", os.path.join(root, "stoptest.pdf"), lr.Chunk(1, 30.0, 60.0), pS2)
-check("a later enqueue restarts the (now-dead) worker thread and still processes it",
-      _returns_within(stop_up.drain, 2.0) and not os.path.exists(pS2))
+check("an enqueue on the stopped uploader queues nothing and keeps the WAV",
+      stop_up.queued() == 0 and stop_up._closed and os.path.exists(pS2))
+fresh_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+fresh_up.enqueue("stoptest", os.path.join(root, "stoptest.pdf"), lr.Chunk(1, 30.0, 60.0), pS2)
+check("a NEW Uploader processes that same chunk",
+      _returns_within(fresh_up.drain, 2.0) and not os.path.exists(pS2))
 
 # ---------------------------------------------------------------------
 # I1: Recorder._flush must write nothing for an empty buffer.
@@ -902,19 +912,24 @@ check("...with nothing appended behind the closing profile", q_segs == [], repr(
 # =======================================================================
 
 # ---------------------------------------------------------------------
-# (2) enqueue() clears _closed while the OLD worker may still be alive
-# with stop()'s sentinel already on the queue. _ensure_thread sees a live
-# thread and starts nothing; the old worker then eats the stale sentinel
-# and returns, leaving the freshly enqueued chunk pending until some
-# later enqueue happens to revive a worker. A sentinel is only an exit
-# order while _closed is STILL True.
+# (2) enqueue() used to clear _closed, reopening an uploader whose OLD
+# worker may still be inside _one() after stop()'s bounded join timed
+# out. That worker then read _closed as False once its transcription
+# returned and appended + unlinked the WAV -- while the very same WAV,
+# re-queued, was processed a second time. _closed is a ONE-WAY LATCH now
+# (PR #4 fifth re-review): a stopped uploader stays stopped, enqueue is
+# refused with one log line, and the WAV waits for the NEXT uploader's
+# requeue_leftovers -- which is what production does anyway, since
+# _stop_lecture_uploader drops the singleton and uploader() rebuilds it.
 # ---------------------------------------------------------------------
-section("PR #4 fourth re-review: an enqueue that reopens the uploader is never stranded")
+section("PR #4 fifth re-review: a stopped uploader stays stopped")
 _ro_gate = threading.Event()
 _ro_seen = threading.Event()
+_ro_models: list = []
 
 
 def fake_transcribe_held(key, wav, model, language="en", prompt="", timeout=None):
+    _ro_models.append(model)
     _ro_seen.set()
     _ro_gate.wait(5.0)
     return "held text"
@@ -922,10 +937,11 @@ def fake_transcribe_held(key, wav, model, language="en", prompt="", timeout=None
 
 lr._transcribe = fake_transcribe_held
 ro_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+_ro_pdf = os.path.join(root, "reopentest.pdf")
 _ro_p1 = lr.chunk_path(root, "reopentest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(_ro_p1), exist_ok=True)
 open(_ro_p1, "wb").write(b"RIFF 1")
-ro_up.enqueue("reopentest", os.path.join(root, "reopentest.pdf"), lr.Chunk(1, 0.0, 30.0), _ro_p1)
+ro_up.enqueue("reopentest", _ro_pdf, lr.Chunk(1, 0.0, 30.0), _ro_p1)
 check("the worker is parked inside a transcription, so stop()'s sentinel "
       "queues BEHIND it rather than being consumed immediately",
       _ro_seen.wait(2.0))
@@ -940,15 +956,35 @@ check("stop() left the parked worker alive with its sentinel unconsumed",
       _ro_thread is not None and _ro_thread.is_alive() and ro_up._closed)
 _ro_p2 = lr.chunk_path(root, "reopentest", lr.Chunk(2, 30.0, 60.0))
 open(_ro_p2, "wb").write(b"RIFF 2")
-ro_up.enqueue("reopentest", os.path.join(root, "reopentest.pdf"), lr.Chunk(2, 30.0, 60.0), _ro_p2)
-check("the reopening enqueue starts no SECOND worker (the first is alive)",
-      ro_up._thread is _ro_thread and not ro_up._closed)
-_ro_gate.set()
-check("the reopened chunk is processed rather than stranded behind the "
-      "stale sentinel — drain() returns and the WAV is gone",
-      _returns_within(ro_up.drain, 4.0) and not os.path.exists(_ro_p2))
-check("...and it was the same worker thread throughout (no respawn)",
+# The parked worker has not reached stop()'s sentinel yet, so that
+# sentinel is what is still on the queue — the pin is that the refused
+# enqueue adds nothing to it.
+_ro_qsize = ro_up.queued()
+ro_up.enqueue("reopentest", _ro_pdf, lr.Chunk(2, 30.0, 60.0), _ro_p2)
+check("an enqueue after stop() queues NOTHING and leaves the uploader "
+      "closed (no reopening behind the parked worker)",
+      ro_up.queued() == _ro_qsize and ro_up._closed,
+      f"{ro_up.queued()} vs {_ro_qsize}")
+check("...and starts no worker of its own",
       ro_up._thread is _ro_thread)
+_ro_gate.set()
+check("the parked worker finishes its own chunk and exits on the "
+      "sentinel — drain() returns",
+      _returns_within(ro_up.drain, 4.0))
+check("the old worker never transcribed the refused chunk",
+      _ro_models == ["gpt-4o-mini-transcribe"], repr(_ro_models))
+check("both WAVs are kept: the parked one (closed mid-upload) and the "
+      "refused one",
+      os.path.exists(_ro_p1) and os.path.exists(_ro_p2))
+# The restart production actually performs: a brand-new Uploader, which
+# finds both leftovers on disk.
+lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: ""
+ro_fresh = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+check("a fresh Uploader's requeue_leftovers picks up both",
+      ro_fresh.requeue_leftovers("reopentest", _ro_pdf) == 2)
+check("...and processes them (each WAV handled exactly once)",
+      _returns_within(ro_fresh.drain, 4.0)
+      and not os.path.exists(_ro_p1) and not os.path.exists(_ro_p2))
 
 # ---------------------------------------------------------------------
 # (3) append_segment is DURABLE; on_segment is only a notification. With
