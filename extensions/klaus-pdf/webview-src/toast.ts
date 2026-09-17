@@ -1,5 +1,12 @@
-// The editor's only feedback channel: a transient toast, every message
-// prefixed "Klaus: " (parity spec, "Voice"). Never a modal, never inline text.
+// The channel for transient feedback — an action's outcome — as a toast with
+// every message prefixed "Klaus: " (parity spec, "Voice"). Never a modal,
+// never inline text.
+//
+// Persistent state is NOT feedback and does not belong here: the notes
+// sidebar's save status and "Notes unavailable: …", and the stage's
+// "Opening …" / "Could not open …", describe a condition that stays on
+// screen, and a 2.2s toast would lose it. Whether those should also adopt
+// the Klaus voice is KB-018.
 
 const DISMISS_MS = 2200;
 
