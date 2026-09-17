@@ -138,6 +138,10 @@ AUDIT_MODULES = (
     "cost",
     "openai_client",
     "anthropic_client",
+    # Klaus Plus on the add-on side (2026-09-16, K-249). Aqt-free, stdlib
+    # urllib above one _urlopen tests/test_plus.py replaces -- the same
+    # shape as the rest of this roster.
+    "plus",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

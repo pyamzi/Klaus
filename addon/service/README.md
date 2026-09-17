@@ -135,6 +135,7 @@ Every knob, with its default from `klausplus/config.py`:
 | `MIN_CLIENT_VERSION` | `0.2.0` | Add-on version floor. Anything older gets `426` and "update Klaus". |
 | `DATABASE_PATH` | `/data/klausplus.sqlite3` | Set by the Dockerfile. Leave it — anywhere off `/data` is wiped on redeploy. |
 | `KLAUS_PLUS_PAUSED` | unset | **The kill switch.** `1` refuses every proxied call `503` — "Klaus Plus is paused for maintenance — try again later, or use your own API key." — checked before auth, so it costs nothing. See step 8. |
+| `KLAUS_PLUS_FAKE_UPSTREAM` | unset | **Local development only.** `1` makes `create_app` use the canned `FakeUpstream` instead of the providers, so the service runs offline with no provider key (`tests/test_upstream_fake.py`, the offline end-to-end). Never set it on Fly — nothing in `fly.toml` or the Dockerfile does. |
 | `KLAUS_PLUS_ALLOWED_MODELS` | unset | Optional, comma-separated. When set, a request naming any other model is refused `400` **before any provider call**. Unset, the caller's model is forwarded as-is and the provider spend caps are the only backstop. The quotas are priced against Sonnet-class and `text-embedding-3-large` costs, so a hand-crafted body asking for an Opus-class model spends several times the quota it debits — this is the lever that closes that without a redeploy. |
 
 Reading them back is safe (`fly secrets list` shows names and digests, never

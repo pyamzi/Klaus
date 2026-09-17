@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any, Callable
 
@@ -10,9 +11,9 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import billing, pages, proxy
-from .config import Settings
+from .config import Settings, _truthy
 from .db import Store, connect
-from .upstream import Upstream
+from .upstream import FakeUpstream, Upstream
 
 
 def create_app(settings: Settings | None = None, upstream: Any = None, now: Callable[[], float] = time.time) -> FastAPI:
@@ -20,7 +21,16 @@ def create_app(settings: Settings | None = None, upstream: Any = None, now: Call
     app = FastAPI(title="Klaus Plus", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.store = Store(connect(settings.database_path))
-    app.state.upstream = upstream or Upstream(settings)
+    # K-249: KLAUS_PLUS_FAKE_UPSTREAM=1 runs the whole service with no
+    # provider key — local dev and the offline end-to-end. Only when
+    # nothing was injected: a test (or a future caller) handing its own
+    # upstream must always win over the environment.
+    if upstream is not None:
+        app.state.upstream = upstream
+    elif _truthy(os.environ.get("KLAUS_PLUS_FAKE_UPSTREAM")):
+        app.state.upstream = FakeUpstream()
+    else:
+        app.state.upstream = Upstream(settings)
     app.state.now = now
     app.state.limiter = proxy.RateLimiter(settings.rate_per_minute)
     app.state.log = logging.getLogger("klausplus")

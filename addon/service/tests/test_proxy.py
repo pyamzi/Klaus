@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from klausplus import email, keys
 from klausplus.app import create_app
 from klausplus.db import next_month_start
+from klausplus.upstream import FakeUpstream
 
 
 def _wav(seconds: float, rate: int = 16000) -> bytes:
@@ -17,35 +18,6 @@ def _wav(seconds: float, rate: int = 16000) -> bytes:
     data = b"\x00\x00" * n
     hdr = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
     return hdr + b"data" + struct.pack("<I", len(data)) + data
-
-
-class FakeUpstream:
-    def __init__(self):
-        self.calls = []
-
-    async def openai_json(self, path, body):
-        self.calls.append(("openai_json", path, body))
-        n = len(body.get("input") or [])
-        return httpx.Response(200, json={"data": [{"index": i, "embedding": [0.1, 0.2]} for i in range(n)],
-                                         "usage": {"total_tokens": 7 * n}})
-
-    async def openai_multipart(self, path, fields, filename, content, content_type):
-        self.calls.append(("openai_multipart", path, fields, filename, len(content), content_type))
-        return httpx.Response(200, json={"text": "hello lecture"})
-
-    async def anthropic(self, body, stream):
-        self.calls.append(("anthropic", body, stream))
-        if not stream:
-            return httpx.Response(200, json={"id": "m", "content": [{"type": "text", "text": "ok"}],
-                                             "usage": {"input_tokens": 100, "output_tokens": 20}})
-        events = [
-            'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":1}}}\n\n',
-            'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}\n\n',
-            'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":25}}\n\n',
-            'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-        ]
-        return httpx.Response(200, headers={"content-type": "text/event-stream"},
-                              content=b"".join(e.encode() for e in events))
 
 
 @pytest.fixture

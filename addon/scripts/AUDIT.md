@@ -726,3 +726,66 @@ whoever next diffs this table against the tree: `anthropic_client.py`'s
 sha256 no longer matches the `5f0dc5a1175d` row above — this same task
 (K-228 fix round 2) touched a comment in that file (Finding 9), which
 changes the file's hash without changing any executable line.
+
+---
+
+# Fourth lane — `klausmate/plus.py` (K-249, 2026-09-16)
+
+Klaus Plus on the add-on side landed with Task 8 (`klausmate/plus.py`:
+the key, the endpoint every tagged call carries, the cached verdict) and
+Task 10 (this task) registered it in `AUDIT_MODULES` — aqt-free, stdlib
+`urllib` above one `_urlopen` its own test file replaces, the same shape
+as the rest of this roster, so nearly every function is reachable
+headless.
+
+    python3 scripts/mutation_audit.py --modules plus
+
+| module | sha256 | test file | checks | runtime |
+|---|---|---|---:|---:|
+| `klausmate/plus.py` | `132a43e61d97` | `tests/test_plus.py` (`a7ad723b1063`) | 22 | 0.04s |
+
+| operator | mutations | caught | crash | survived |
+|---|---:|---:|---:|---:|
+| `gut` | 14 | 7 | 7 | **0** |
+| `const` | 8 | 2 | 2 | 4 |
+| `const-loud` | 8 | 2 | 2 | 4 |
+| `boolflip` | 2 | 2 | 0 | 0 |
+| **total** | **32** | **13** | **11** | **8** |
+
+**No `gut` survivor.** Every function body in `plus.py` — `key`, `base`,
+`active`, `endpoint`, `parse_quota`, `remember`, `note_refusal`, `_call`,
+`refresh`, `portal_url`, `status_line`, `_day`, `client_version`,
+`_cache` — is behaviourally pinned; emptying any of them fails
+`test_plus.py`. Both booleans (`active`'s `status.startswith("refused")`
+branch and `verdict`'s grace check at `:60,63`) are pinned too.
+
+All 8 survivors are module-level constants, and none is worth a card:
+
+* `DEFAULT_BASE` (`:21`) — self-referential, the K-135 shape in
+  miniature: `test_plus.py:13` compares `plus.base({}) ==
+  plus.DEFAULT_BASE`. Harmless — the fallback *path* (a bare key falls
+  back to the shipped host) is pinned; the literal fly.dev hostname is
+  not something a test should hardcode either.
+* `TOKENS_PER_CARD`, `TOKENS_PER_TURN` (`:22,23`) — not merely
+  self-referential but **unreferenced anywhere else in the file**, and
+  the module's own comment says why: "the service's own constants
+  (spec D1); shown, never enforced, here." `status_line`'s card/turn
+  counts come from the server's pre-computed `human` snapshot
+  (`meter.py`'s own copy of these same two numbers), never from this
+  mirror. Genuinely free of runtime consequence today — decorative
+  documentation of the service's units for a reader of this file, not
+  dead code reachable from a real call.
+* `TIMEOUT_S` (`:27`) — a request timeout, invisible headless against a
+  fake `urlopen` that never blocks. Same "Timeouts" category as
+  `EMBED_TIMEOUT_S`/`DEFAULT_TIMEOUT_S` in the third lane above.
+
+## Bottom line for this lane
+
+22 checks, and the tool cannot falsify a single function body. The only
+survivors are two self-referential/decorative constants and one timeout
+duration — the same shape this document keeps finding, and, as with the
+third lane, none of it is in the code that spends money or handles a
+key. `plus.py` never logs or reprints the licence key in any check
+output either, consistent with the house rule the service side enforces
+on its end.
+
