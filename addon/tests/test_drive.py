@@ -3388,5 +3388,76 @@ else:
     print("  SKIP: PyQt6 unavailable — the fake-window pins above still ran")
 
 
+print("== a theme flip re-styles every live Library, hidden or not ==")
+# Pouya, live screenshot: the embedded Library stayed dark after Anki
+# switched to light — it is built ONCE per session (library_tab caches
+# the tab) and its stylesheet was only ever applied at construction.
+# gui_hooks.theme_did_change now walks the same roster refresh_open_
+# library uses and re-paints each window's own chrome, its status/map
+# labels, and the drop zone against theme.night_mode() as it is NOW.
+if _HAVE_QT:
+    # Fetched fresh, not the `theme` bound earlier in this file: pdf_drive
+    # gets reloaded (del sys.modules + re-import) between here and there,
+    # and mutating a stale module object would silently never reach the
+    # `theme` THIS pdf_drive resolves internally via `from . import theme`.
+    theme = importlib.import_module("klausmate.theme")
+    _prev_uft = pkg.USER_FILES
+    _prev_night = theme.night_mode
+    _uft = tempfile.mkdtemp(prefix="klaus_theme_refresh_uf_")
+    _wint = None
+    try:
+        os.makedirs(os.path.join(_uft, "contexts"), exist_ok=True)
+        pkg.USER_FILES = _uft
+        pdf_drive._embedded_windows.clear()
+        pdf_drive._instance = None
+
+        theme.night_mode = lambda: False
+        _wint = pdf_drive.DriveWindow(embedded=True)
+        _wint._sidebar_arming = 1
+        _day_sheet = _wint.styleSheet()
+        _day_drop = _wint.drop_zone.styleSheet()
+        _wint.hide()  # library_tab's resting state — a flip must still land
+
+        theme.night_mode = lambda: True
+        pdf_drive._restyle_live_libraries()
+        check("the window's own chrome repaints to the NEW theme, exactly "
+              "what library_qss(True) builds — not just something "
+              "different from before",
+              _wint.styleSheet() == theme.library_qss(True))
+        check("...the drop zone repaints too — it carries its own "
+              "independent sheet, never covered by the window's",
+              _wint.drop_zone.styleSheet() == theme.drop_zone_qss(
+                  True, "klausmateLibraryDropZone"))
+        check("...and it happened while HIDDEN — a flip must reach the "
+              "tab whether or not the user is looking at it right now",
+              not _wint.isVisible())
+        check("...genuinely repainted, not coincidentally identical: the "
+              "day and night sheets actually differ",
+              _wint.styleSheet() != _day_sheet
+              and _wint.drop_zone.styleSheet() != _day_drop)
+
+        theme.night_mode = lambda: False
+        pdf_drive._on_theme_change()
+        app.processEvents()
+        check("the module hook (what theme_did_change actually calls) "
+              "reaches the same window one tick later",
+              _wint.styleSheet() == theme.library_qss(False))
+    except Exception as _e_theme:  # noqa: BLE001
+        check(f"theme-refresh offscreen checks ran ({_e_theme})", False)
+    finally:
+        theme.night_mode = _prev_night
+        try:
+            if _wint is not None:
+                _wint.shutdown()
+        except Exception as _e_sd2:  # noqa: BLE001
+            print(f"  (theme-test window shutdown raised: {_e_sd2})")
+        pdf_drive._embedded_windows.clear()
+        pdf_drive._instance = None
+        pkg.USER_FILES = _prev_uft
+        shutil.rmtree(_uft, ignore_errors=True)
+else:
+    print("  SKIP: PyQt6 unavailable — the theme-refresh checks above still ran")
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

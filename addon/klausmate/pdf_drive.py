@@ -816,7 +816,7 @@ class _LibraryDropZone(QWidget):
         lay.setContentsMargins(14, 8, 14, 8)
         lay.setSpacing(10)
 
-        label = QLabel(self._IDLE_TEXT, self)
+        self._label = label = QLabel(self._IDLE_TEXT, self)
         label.setWordWrap(True)
         label.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -838,6 +838,17 @@ class _LibraryDropZone(QWidget):
         browse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         browse_btn.clicked.connect(self._browse)
         lay.addWidget(browse_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def apply_theme(self) -> None:
+        """Re-run construction's two theme calls against the CURRENT
+        theme. Only the refresh path uses this (see DriveWindow._apply_
+        theme) — construction applies both itself, with its own
+        exception-specific fallbacks, which this does not repeat."""
+        from . import theme as _theme
+
+        night = _theme.night_mode()
+        self.setStyleSheet(_theme.drop_zone_qss(night, "klausmateLibraryDropZone"))
+        self._label.setStyleSheet(_theme.muted_label_qss(night, 13))
 
     def _browse(self) -> None:
         from aqt.qt import QFileDialog
@@ -1332,6 +1343,39 @@ class DriveWindow(QWidget):
             QTimer.singleShot(0, self._on_shown)
         except Exception as e:
             print(f"[klausmate] settle scheduling failed: {e}")
+
+    def _apply_theme(self) -> None:
+        """Re-paint every widget this window styled once at construction,
+        against whatever theme.night_mode() says NOW.
+
+        Construction applies each of these itself, in the order it needs
+        them built — this exists only for the refresh path (see module
+        function _restyle_live_libraries): the embedded screen is built
+        ONCE per session and then only shown/hidden, so a night-mode flip
+        made while Anki runs never reached it before this existed, and
+        the tab stayed on whichever theme was active at first mount.
+        Separate try/except per widget: a torn-down child between the
+        flip and this deferred tick must not cost the others theirs.
+        """
+        from . import theme as _theme
+
+        night = _theme.night_mode()
+        try:
+            self.setStyleSheet(_theme.library_qss(night))
+        except Exception as e:
+            print(f"[klausmate] library theme refresh failed: {e}")
+        try:
+            self.status.setStyleSheet(_theme.muted_label_qss(night, 11))
+        except Exception as e:
+            print(f"[klausmate] library status theme refresh failed: {e}")
+        try:
+            self.map_status.setStyleSheet(_theme.muted_label_qss(night, 12))
+        except Exception as e:
+            print(f"[klausmate] map status theme refresh failed: {e}")
+        try:
+            self.drop_zone.apply_theme()
+        except Exception as e:
+            print(f"[klausmate] drop zone theme refresh failed: {e}")
 
     @guarded
     def _on_shown(self) -> None:
@@ -2977,6 +3021,29 @@ def _refresh_live_libraries(why: str) -> int:
     return refreshed
 
 
+@guarded
+def _restyle_live_libraries() -> None:
+    """Every live Library re-paints itself against the current theme.
+
+    Deferred one tick from ``_on_theme_change`` — Anki toggles its
+    night-mode CSS classes via JS, same tick, same pattern top_bar.py and
+    window_chrome.py both defer around; restyling immediately can race
+    that flip and read the old state.
+    """
+    for win in _live_libraries():
+        try:
+            win._apply_theme()
+        except Exception as e:
+            print(f"[klausmate] library theme refresh {win} failed: {e}")
+
+
+def _on_theme_change() -> None:
+    try:
+        QTimer.singleShot(0, _restyle_live_libraries)
+    except Exception as e:
+        print(f"[klausmate] library theme-change scheduling failed: {e}")
+
+
 def refresh_open_library() -> None:
     """Re-aggregate every live Library — the screen and the window.
 
@@ -3105,6 +3172,14 @@ def setup() -> None:
         gui_hooks.top_toolbar_did_init_links.append(_on_toolbar_links)
     except Exception as e:
         print(f"[klausmate] drive toolbar hook failed: {e}")
+    try:
+        # K-117 built the Library's chrome once at construction; the
+        # embedded screen then lives for the whole session (built once,
+        # shown/hidden thereafter), so a later day/night flip never
+        # reached it without this.
+        gui_hooks.theme_did_change.append(_on_theme_change)
+    except Exception as e:
+        print(f"[klausmate] drive theme hook failed: {e}")
     try:
         gui_hooks.profile_will_close.append(_close_drive)
         gui_hooks.profile_will_close.append(_release_embedded_viewers)
