@@ -101,7 +101,18 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: Copied into the sandbox.  ``klausmate/user_files`` (real PDFs, the
 #: card index, annotations) and ``meta.json`` (API keys) are excluded —
 #: they are half a gigabyte and none of it is ours to duplicate.
-SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"))
+#: ``service/klausplus`` joined the list in K-259, for exactly one file:
+#: ``tests/test_lecture_recorder.py`` lifts the service's own
+#: ``wav_seconds`` out of ``proxy.py`` BY AST (never importing it) so its
+#: WAV-header pin proves interop with the real metering code rather than a
+#: retyped copy of the formula.  Without the tree in the sandbox that
+#: test's module-level ``_load_wav_seconds()`` raises FileNotFoundError and
+#: the baseline is red, which aborts the whole run.  Nothing here is ever a
+#: mutation target — targets come from ``klausmate/<module>.py`` alone —
+#: and the tree is hashed before and after like every other, so the audit
+#: still cannot write to it.
+SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"),
+                 os.path.join("service", "klausplus"))
 _COPY_SKIP_DIRS = {"user_files", "__pycache__", ".git"}
 _COPY_SKIP_NAMES = {"meta.json", "meta.json.bak"}
 
@@ -142,6 +153,15 @@ AUDIT_MODULES = (
     # urllib above one _urlopen tests/test_plus.py replaces -- the same
     # shape as the rest of this roster.
     "plus",
+    # Plan 2 (2026-09-17, K-259).  pertinence is aqt-free above its own
+    # glue divider (the pure judge: the strict tool, the parser, the
+    # judged.json store); lecture_recorder is aqt-free above its "Qt
+    # glue" divider (Chunker, wav_bytes, chunk_path, Uploader), and its
+    # test file drives the Recorder's non-Qt internals directly.  Both
+    # reach the network only through a seam their tests replace
+    # (`client.complete`, `lecture_recorder._transcribe`).
+    "pertinence",
+    "lecture_recorder",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

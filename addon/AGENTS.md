@@ -1,12 +1,17 @@
 # Klausmate — Agent Guide
 
-Klausmate ("Klaus") is an **Anki 2.1 add-on**. It has one AI-powered
-capability — semantic search over your notes and lecture PDFs — which
-powers the **Library**: a window over your imported lecture PDFs where each
+Klausmate ("Klaus") is an **Anki 2.1 add-on** built around the
+**Library**: a window over your imported lecture PDFs where each
 one is indexed, the cards it covers are tagged with its own `!Library` tag,
 and a per-PDF retention/study-priority score says how well you still recall
-them. Copying a set of those cards into a new deck is a separate, manual
-Browse action. A
+them. Semantic search over notes and lecture pages is what finds those
+cards; since 2026-09-17 two more AI capabilities sit on the same seam —
+**lecture transcription** (● Record on either PDF dock writes what you
+say into the page record you said it over) and the **pertinence judge**
+(Claude re-checks each shortlisted card against the page it matched, and
+the ones it rejects get `!Library::Doubtful` and drop out of the
+retention score). Copying a set of matched cards into a new deck is a
+separate, manual Browse action. A
 native PDF viewer (selection, highlights, sticky notes baked in as real
 annotations) and an image-crop dialog round out the add-on. There is no
 autocomplete and no chat panel — both were removed in 2026-08, along with
@@ -27,20 +32,35 @@ being local — it stays on the machine by not being sent.)
 - **Embeddings** (the search index): **OpenAI**, through your own
   `api_key_openai`. Card text and lecture-page text (the slide's text
   plus any transcript stored with it) are sent to OpenAI's embeddings
-  API when indexing and when searching. This is the only thing that key
-  is used for today.
+  API when indexing and when searching.
+- **Lecture transcription**, and only while you record: pressing ●
+  Record captures your microphone and sends each closed 30-second (or
+  page-change) chunk as a WAV to **OpenAI**, through the same
+  `api_key_openai` and `transcription_model` (`lecture_recorder.py`,
+  2026-09-17). Nothing is recorded or sent unless you press the button,
+  and a chunk that fails to upload stays on disk under
+  `user_files/recordings/` rather than being retried into the void.
+- **The pertinence judge**, and only while indexing: phase four of the
+  index chain sends each shortlisted card's text plus the ONE lecture
+  page it matched best to **Anthropic**, through your own
+  `api_key_anthropic` and `reasoning_model` (`pertinence.py`,
+  2026-09-17). It never runs unpaid-for and never runs silently: the
+  runner shows a **Judge / Skip** confirm with the estimated cost first,
+  with **Skip** as the default button, and with no Anthropic key and no
+  Klaus Plus the phase is skipped with one log line and no prompt at
+  all.
 - **The assistant**, and only while you use it: each turn you send goes
   to **Anthropic**, through the `claude` binary running under your own
   Claude Code login — Klaus stores no key for it. A turn carries your
   message plus the page you are viewing: its text, its image, and any
   text you have selected. Nothing is sent when the Assistant dock is
   closed or unused.
-- **`api_key_anthropic` is stored and unused.** No Klaus code calls the
-  Anthropic API directly: `anthropic_client.py` exists but has no
-  caller, and the assistant reaches Anthropic only the indirect way
-  above. The key is there for the spec's Plan 2 (the pertinence phase)
-  and Plan 3 (the assistant on the Messages API), neither of which is
-  built. When one of them lands, this paragraph is what has to change.
+- **`api_key_anthropic` pays for the judge, and only the judge.** Since
+  2026-09-17 `anthropic_client.Client.complete` has exactly one caller —
+  `pertinence.ensure_judged` — and `stream()` still has none. The
+  assistant does NOT read this key: it reaches Anthropic only the
+  indirect way above, through your own Claude Code login. Moving the
+  assistant onto the Messages API is the spec's Plan 3, still unbuilt.
 - **On Klaus Plus, one hop is added and nothing else changes** (2026-09-16).
   A subscriber has no provider keys; the same request bodies go to
   **Klaus's own service** (`service/` in this repo, `klausmate.fly.dev`),
@@ -59,11 +79,14 @@ being local — it stays on the machine by not being sent.)
   contacts `klausmate.fly.dev` on its own — with no `klaus_plus_key`,
   `plus.key` is `""`, `plus.active` is False and no Plus code path opens a
   socket. (Pressing **Subscribe…** opens that URL in your browser; that is
-  you, not Klaus reporting anything.) Scope, today: **indexing is the only
-  call that actually takes this hop** — `embeddings.py` is the one caller of
-  `plus.endpoint`; `openai_client.transcribe` and `anthropic_client.Client`
-  have no caller in the add-on at all, so the `transcribe`/`judge`/
-  `assistant` purposes are plumbing for Plans 2 and 3, not traffic. Two
+  you, not Klaus reporting anything.) Scope, today: **three of the four
+  purposes take this hop** — `embed` (`embeddings.py`), `transcribe`
+  (`lecture_recorder.Uploader`) and `judge` (`pertinence.ensure_judged`),
+  each with no provider key, each metered; only `assistant` is still
+  plumbing without a caller, and it stays that way until Plan 3 lands. A
+  metered 2xx also carries `X-Klaus-Quota`, which the clients hand back
+  through `on_headers` so the Preferences readout refreshes from real
+  traffic rather than only from **Check**. Two
   calls to the service carry no lecture content at all and are the
   subscription talking about itself: `plus.refresh` → `GET /v1/me` (the
   **Check** button and the verdict cache) and `plus.portal_url` →
@@ -97,11 +120,13 @@ Addons/                       # Git repo root
     ├── __init__.py             # Bootstrap, gui_hooks, JS bridge, Tools→Klaus menu, PDF tab/window management, image-crop context menu
     ├── embeddings.py           # Embeddings: OpenAI only, unit-normalized vectors, the index signature (aqt-free)
     ├── openai_client.py        # Stdlib HTTP to OpenAI: embed() and transcribe(), one retry (aqt-free)
-    ├── anthropic_client.py     # Stdlib HTTP to the Anthropic Messages API — built for Plans 2/3, no caller yet (aqt-free)
+    ├── anthropic_client.py     # Stdlib HTTP to the Anthropic Messages API — complete() judges; stream() still has no caller (aqt-free)
     ├── plus.py                 # Klaus Plus: the licence key, the per-call Endpoint both clients take, the cached verdict (aqt-free)
     ├── LICENSE                 # The same AGPL v3 text, shipped inside the package
     ├── cost.py                 # Dated prices + estimates shown before any paid pass (pure)
     ├── page_store.py           # One record per (PDF, page): slide text + transcript segments; the API-first seam
+    ├── lecture_recorder.py     # ● Record: Chunker (30 s / page change), WAV chunks, the upload worker that writes segments (aqt-free above its Qt glue)
+    ├── pertinence.py           # Index phase four: Claude judges each matched card against its best page; judged.json (aqt-free above its glue)
     ├── card_index.py           # Persistent embedding index over the user's notes (aqt-free)
     ├── curation.py             # Card index build (ensure_index) + the undoable Browse deck copier
     ├── pdf_drop.py             # PDF drop square + MainWebView.dropEvent wrap on the deck list / overview screens
@@ -130,7 +155,8 @@ Addons/                       # Git repo root
         ├── pdf_tabs.json        # Open tabs, placement (dock left/right/bottom/float), thumbs, last_used
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
-        ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) for retention scoring
+        ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) + judged.json (pertinence verdicts)
+        ├── recordings/          # <pdf_safe>/<t0>-p<page>.wav — chunks awaiting transcription; empty once they land
         └── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text + transcript segments (page_store.py)
 ```
 
@@ -148,8 +174,9 @@ Addons/                       # Git repo root
 Library row → right-click → "Add to Search Index" / "Update Search Index"
         │
         ▼
-pdf_drive.py :: _on_embed(safe) — FOUR phases, one cancel token threaded
-        │        through all of them (K-146)
+index_queue.py :: _run(job) — FIVE phases, one cancel token threaded
+        │        through all of them (K-146, K-152, K-255). The Library's
+        │        _on_embed is now just one request_pdf() call into this.
         ▼
 curation.py :: ensure_index() — sync the card index (only new/edited notes
         │        re-embed; text-hash diffed). This is the only user-facing
@@ -168,9 +195,18 @@ retention.py :: ensure_pdf_index() → ensure_matches() — embed the PDF's
         │        indexed note (max cosine, cached in matches.json with the
         │        winning page)
         ▼
+pertinence.py :: ensure_judged() — Claude judges each candidate against
+        │        that winning page, 8 per request, through a strict forced
+        │        tool; verdicts cached in pdf_index/<safe>/judged.json.
+        │        Paid, so it asks first (Judge / Skip, Skip the default) —
+        │        and skips itself silently with no Anthropic key and no
+        │        Klaus Plus. A card it does not answer for is UNJUDGED,
+        │        which counts as confirmed, never as doubtful.
+        ▼
 tag_sync.py :: sync_after_matches() — the notes at/above this PDF's
           sensitivity threshold become the members of its one
-          "!Library::<folder>::<leaf>" tag
+          "!Library::<folder>::<leaf>" tag; the rejected nids across
+          EVERY PDF become the members of "!Library::Doubtful"
 ```
 
 Copying matches into a deck is a SEPARATE, manual action with no PDF and no
@@ -190,14 +226,26 @@ pdf_drive.py — the Library window: a tree of virtual folders (drive_store.py,
         ▼
 retention.py — per PDF: embed its pages (pdf_index.py, one vector each) →
         │       score every indexed note against those pages (max cosine,
-        │       cached in matches.json) → pull FSRS retrievability for
-        │       matched cards → aggregate into a study-priority score
+        │       cached in matches.json) → drop the nids pertinence
+        │       rejected (confirmed = matched − rejected; an unjudged card
+        │       counts as confirmed) → pull FSRS retrievability for the
+        │       confirmed cards → aggregate into a study-priority score
         ▼
-Library row shows the score; right-click can index/re-index, adjust match
+Library row shows the score, and "n · m doubtful" in its Cards cell when
+any of its cards were rejected; right-click can index/re-index, adjust match
 sensitivity, show matches in Browse (it hops to the PDF's own !Library tag —
-the "!Library::Matching" preview tag was retired in K-055), suspend or
+the "!Library::Matching" preview tag was retired in K-055), open Doubtful
+cards… (that tag intersected with !Library::Doubtful), suspend or
 unsuspend its cards, or chart its retention history
 ```
+
+Everything that shows that number passes the same `rejected` set —
+`priority_rows`, Match Sensitivity's live preview, and the embedding
+map's retention fill — or two surfaces describe one PDF differently.
+`!Library::Doubtful` is the one **global** tag here (the union across
+every `judged.json`), so a card rejected for lecture A but confirmed for
+B stays Doubtful; that is the spec's rule, and the per-card overrule
+that would resolve it is a board card, not this design.
 
 ### PDF viewer (`pdf_viewer.py`)
 
@@ -206,6 +254,7 @@ unsuspend its cards, or chart its retention history
 - Text selection: viewport `eventFilter` drags map to `(page, QPointF)` via `_viewport_to_page_point`; `QPdfDocument.getSelection()` is called per page (multi-page drags supported); highlights painted by `_SelectionOverlay` using `QPdfSelection.bounds()`.
 - **Cmd+C** / right-click **Copy** copy selected text; **Cmd/Ctrl-double-click** a page, or right-click **Copy slide as image**, copies it as an image (there is no toolbar button for this — it was removed).
 - Highlights and sticky notes are baked into the stored PDF as real annotations by `pdf_handler.bake_annotations` (vendored `pypdf`).
+- **Transcript strip** (2026-09-17): a collapsible readout under the page showing what was *said* over it (the page record's `segments`, never its slide text). Native = a NoFocus Qt strip; pdf.js = a docked footer outside `#pages`, pushed as `klausSetTranscript` and re-pushed on the page's ready signal. It refreshes on a page change and on `page_store.subscribe` — and that notification arrives on the uploader's worker thread, so `_on_page_store_notify` defers its whole body through `_run_on_main`.
 
 ### Editor-side PDF panel
 
@@ -311,6 +360,9 @@ dashboard.setup()                                                   # Control-Ce
 window_chrome.setup()                                               # KlausBook chrome for Add/Browse/Stats/reviewer-bar (independent try/except)
 assistant_dock.setup()                                              # Ctrl+Shift+K QAction on mw; registers _teardown + reopen_if_configured
 gui_hooks.profile_will_close.append(_stop_assistant_on_profile_close)  # MUST stay after assistant_dock.setup() — see below
+lecture_view.setup()                                                # review-time Lecture dock (independent try/except)
+gui_hooks.profile_did_open.append(_start_lecture_uploader)          # the profile's one lecture_recorder.Uploader
+gui_hooks.profile_will_close.append(_stop_lecture_uploader)         # stops every _active_recorders entry FIRST, then the uploader
 ```
 
 `assistant_dock.setup()` adds two of its own:
@@ -321,6 +373,10 @@ and `profile_did_open` (`reopen_if_configured` — honours
 `profile_will_close` listeners in append order, and that function stops
 the endpoint the child talks to, so `setup()`'s own `_teardown` has to be
 registered first or a turn still in flight could hit a refused socket.
+
+`_stop_lecture_uploader` stops every live `Recorder` before it stops the
+uploader, not after: a recorder mid-chunk enqueues into that worker, so
+tearing the queue down first orphans the WAV it was about to hand over.
 
 `heatmap.setup()` adds four of its own:
 `deck_browser_will_render_content` (the panel HTML into `content.stats`),
@@ -438,8 +494,11 @@ model names, no provider anywhere**: `api_key_openai` and
 `api_key_anthropic` (both empty by default, both entered in Preferences
 → API keys & models, both living in `meta.json` and never in the repo),
 `embedding_model` (`text-embedding-3-large`), `embedding_dimensions`
-(`1024`), `reasoning_model` (`claude-sonnet-5`), `transcription_model`
-(`gpt-4o-mini-transcribe`), `pdf_match_threshold`, `image_crop_enabled`,
+(`1024`), `reasoning_model` (`claude-sonnet-5` — the pertinence judge's
+model since 2026-09-17, and Plan 3's when it lands; never the Claude
+Code assistant's), `transcription_model`
+(`gpt-4o-mini-transcribe` — the lecture recorder's, also since
+2026-09-17), `pdf_match_threshold`, `image_crop_enabled`,
 `klausbook_design` (default false — master switch for the design
 layer: toolbar/bottombar restyle, backgrounds, frosted panels,
 dashboard editing; tools always work),
@@ -503,7 +562,7 @@ takes its default. Scrubbed beside it —
 | `pypdf` 6.11.0 | Vendored under `klausmate/vendor/` — the **sole** third-party dependency *of the add-on* (the `service/` rows below are a separate program) |
 | `PyQt6.QtPdf` / `PyQt6.QtPdfWidgets` | Anki's PyQt6 (PDF viewer; graceful fallback if missing) |
 | OpenAI embeddings API | Required for indexing — `openai_client.py` behind `embeddings.py`, with the user's own `api_key_openai` (or, on Klaus Plus, relayed by the service) |
-| Anthropic Messages API | `anthropic_client.py`, written for the spec's Plans 2 and 3 — no caller yet |
+| Anthropic Messages API | `anthropic_client.py` — since Plan 2 (2026-09-17) called by `pertinence.ensure_judged` (the judge, `purpose="judge"`, with the user's own `api_key_anthropic` or relayed by the Klaus Plus service); Plan 3, the assistant on this API, is still unbuilt |
 | Claude Code CLI (`claude`) | Optional — the assistant's engine; the user installs and logs into it themselves |
 | **Fly.io** | **`service/` only** — one Machine + a 1 GB volume hosts Klaus Plus. Not a dependency of the add-on; nothing in `klausmate/` knows about Fly beyond a default URL string. |
 | **Stripe** (`stripe` SDK, API `2024-06-20`) | **`service/` only** — Checkout, the Customer Portal and the webhooks that drive entitlement. No payment code, no price constant and no Stripe id ships in the add-on. |
@@ -573,7 +632,7 @@ mypy klausmate
 ## Code conventions (this project)
 
 - Prefer **gui_hooks** over monkey-patching.
-- Background work: always `QueryOp` / `without_collection()` for network calls (OpenAI today, Anthropic when Plans 2/3 land); UI updates via `mw.taskman.run_on_main` when needed.
+- Background work: always `QueryOp` / `without_collection()` for network calls (OpenAI for embeddings and transcription, Anthropic for the pertinence judge); UI updates via `mw.taskman.run_on_main` when needed. The lecture recorder's uploader is the one exception and a deliberate one — a plain daemon thread with a FIFO queue, because it must outlive any single dialog or dock and survive a failed chunk; anything it hands back to Qt (`on_segment`, `page_store.subscribe`) is the CONSUMER's job to marshal.
 - Import Qt from `aqt.qt`; QtPdf from `PyQt6.QtPdf` behind try/except (`pdf_viewer.py`).
 - Editor-attached state via attributes — see "Editor-attached state" above.
 - When adding config keys: update `config.json`, `config.md`, and the relevant section of `manage_models.py`.
@@ -627,7 +686,9 @@ plus the page image, replace it. Chunk-level matching inside a page went
 too: one page, one vector. Don't resurrect provider-choice,
 local-install or OCR language; `openai_client.py`, `page_store.py`,
 `cost.py` and `anthropic_client.py` are what arrived in their place —
-the first three wired, the last one waiting for the plan that calls it.
+all four wired now — `anthropic_client.py` got its caller in Plan 2
+(`pertinence.ensure_judged`, 2026-09-17); Plan 3, the assistant on the
+Messages API, is the one still waiting.
 
 ---
 

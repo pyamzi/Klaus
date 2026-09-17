@@ -789,3 +789,175 @@ key. `plus.py` never logs or reprints the licence key in any check
 output either, consistent with the house rule the service side enforces
 on its end.
 
+
+# Fifth lane — Plan 2: `pertinence.py` and `lecture_recorder.py` (K-259, 2026-09-17)
+
+Plan 2 added the two modules this lane covers — the pertinence judge
+(index phase four) and the lecture recorder — and Task 7 registered both
+in `AUDIT_MODULES`. Both are aqt-free above their own dividers and reach
+the network only through a seam their tests replace (`client.complete`
+for the judge, `lecture_recorder._transcribe` for the uploader), which is
+the condition this audit needs.
+
+One tool change came with them. `tests/test_lecture_recorder.py` lifts
+the Klaus Plus service's own `wav_seconds` out of
+`service/klausplus/proxy.py` **by AST** — never importing it — so its
+WAV-header pin proves interop with the real metering code instead of a
+retyped formula. The sandbox copied only `klausmate`, `tests` and the
+klaus-test skill, so that read raised `FileNotFoundError` at module level
+and the baseline was red, which aborts the run. `service/klausplus`
+joined `SANDBOX_TREES` for exactly that one file: it is never a mutation
+target (targets come from `klausmate/<module>.py` alone) and it is hashed
+before and after like every other tree.
+
+    python3 scripts/mutation_audit.py --modules pertinence,lecture_recorder
+
+| module | sha256 | test files | checks | mutations |
+|---|---|---|---|---:|
+| `klausmate/pertinence.py` | `a0ade11b60f1` | `tests/test_pertinence.py` (`ad33f4ae04df`), `tests/test_index_queue.py` (`4ed85f023ce7`) | 55 + 162 | 39 |
+| `klausmate/lecture_recorder.py` | `53f4e4d63149` | `tests/test_lecture_recorder.py` (`e0263c7d2e57`) | 41 | 48 |
+
+Whole run: 106 test-file runs, 5,224 s — of which 1,200 s is four
+300-second timeouts (see the recorder lane below) and the rest was
+measured on a machine also running the full test loop, so treat the wall
+clock as an upper bound, not a benchmark. The tree-integrity check
+reported one changed repo file, `klausmate/config.md`, correctly
+classified as "another session is editing the checkout" — it was this
+same task's own doc edit landing mid-run, not a sandbox leak.
+
+## `pertinence.py` — 39 mutations, **no `gut` survivor**
+
+| operator | mutations | caught | crash | survived |
+|---|---:|---:|---:|---:|
+| `gut` | 18 | 6 | 12 | **0** |
+| `const` | 7 | 1 | 1 | 5 |
+| `const-loud` | 7 | 5 | 1 | 1 |
+| `boolflip` | 7 | 3 | 1 | 3 |
+| **total** | **39** | **15** | **15** | **9** |
+
+Every function body — `build_request`, `parse_verdicts`, `judge`,
+`judged_path`, `load_judged`, `save_judged`, `is_stale`, `entry_for`,
+`rejected_nids`, `all_rejected`, `candidates` and the glue helpers —
+is behaviourally pinned: emptying any of them fails the suite. The nine
+survivors:
+
+* **`MAX_TOKENS`, `MAX_CARD_CHARS`, `MAX_PAGE_CHARS` (`:20–22`)** — the
+  `const` operator moves each by one (2048→2049, 4000→4001,
+  12000→12001). The caps themselves ARE pinned, but by reading the
+  constant, and a slice bound one character further along is invisible
+  on any fixture short of the cap. `MAX_TOKENS` is worse off still: it
+  is a request budget only the real API could reject. The "Timeouts"
+  category of the third lane in miniature — a number whose consequence
+  lives at the other end of a socket.
+* **`JUDGED_FILE` (`:23`)** — survives BOTH `const` and `const-loud`,
+  and it is the purest K-135 shape in this document: every read and
+  every write goes through `judged_path`, so a test that saves and
+  loads through this module can never observe the filename. The real
+  consequence is real (renaming it orphans every existing user's
+  verdicts) but it is not a consequence a test can see without
+  hardcoding the literal, which is what the original vacuity bug was.
+  Same category as `matches.json` and `layout.bin` elsewhere in the
+  add-on; not worth a card.
+* **`SYSTEM` (`:27`)** — `const` appends to the prompt and nothing
+  notices; `const-loud` (which replaces it outright) IS caught. Exactly
+  right: the prompt must exist and must be sent, and pinning its prose
+  would be a text pin on wording that is meant to be tuned.
+* **`bool@85:107` and `bool@196:42`** — `ensure_ascii=False` in
+  `build_request`'s `json.dumps` and in `save_judged`'s `json.dump`.
+  Flipping either changes byte-level escaping and nothing else; the
+  judged.json round-trip is lossless with either setting, and the
+  request stays valid JSON. Genuinely free of runtime consequence.
+* **`bool@74:44` — the one real gap.** This is the INNER
+  `"additionalProperties": False`, on each verdict object inside the
+  `verdicts` array. `tests/test_pertinence.py:75` pins `strict`, the
+  tool name, the forced `tool_choice` and the OUTER
+  `input_schema.additionalProperties` — but not this one, so a flip to
+  `True` would loosen the per-verdict object while every check still
+  passes. The global constraint for this plan spells out all three
+  halves of the strictness ("`strict: true`, `additionalProperties:
+  false`, all fields `required`"); two are pinned, one is not. One
+  clause added to that existing check closes it. Flagged for the final
+  fix wave rather than fixed here — `tests/test_pertinence.py` is
+  outside this task's file set.
+
+## `lecture_recorder.py` — 48 mutations, **nine `gut` survivors**, and why
+
+| operator | mutations | caught (incl. crash) | inconclusive | survived |
+|---|---:|---:|---:|---:|
+| `gut` | 28 | 19 | 2 | 7 |
+| `const` | 2 | 1 | 0 | 1 |
+| `const-loud` | 2 | 1 | 0 | 1 |
+| `boolflip` | 16 | 3 | 2 | 11 |
+| **total** | **48** | **24** (21 caught + 3 crash) | **4** | **20** |
+
+The per-operator caught/crash split is not broken out here: the run's
+JSON was not captured and re-running for that one column costs another
+87 minutes of hung-timeout wall clock. The totals row carries the split.
+
+**The pure half is solid.** Every `Chunker` transition, `wav_bytes`,
+`chunk_path`, `Uploader._one` (including the Klaus Plus routing, the
+quota readout and the refusal path), `_ensure_page` and
+`requeue_leftovers` are caught. That is the half the spec calls "pinned
+without Qt", and it is.
+
+**The survivors are one cluster and two footnotes.** The cluster is the
+Qt-side `Recorder`, which `tests/test_lecture_recorder.py` scopes out in
+its own docstring — "this file never opens a real microphone":
+
+* **`Recorder._tick` (`:419`, gut)** — the glue that actually reads the
+  device, steps the chunker and flushes a closed chunk. The state
+  machine under it is pinned exhaustively; the code that drives it, on a
+  real `QTimer`, is not pinned anywhere headless. This is the most
+  consequential survivor in the lane and it is a genuine gap, not a
+  vacuity: nothing in the suite would notice `_tick` doing nothing.
+  Live-checklist items 3, 4 and 11 on K-259 are what covers it today.
+* **`start()`'s failure and success tails (`:364, :369, :395, :398, :409`
+  → `return False`; `:415, :417` → the success pair; `:468` in `stop()`)**
+  — every `return False` flipped to `True` claims a microphone that
+  never opened, and the success tail flipped the other way claims none
+  that did. Unreachable headless for the same reason (the one failure
+  path a test CAN reach, PyQt6 being unimportable, is pinned and is
+  caught).
+* **`Recorder.is_recording`, `elapsed`, `queued` (`:339, :343, :347`)
+  and `Uploader.queued` (`:164`)** — one-expression readouts. Their
+  values do reach a user, through the dock's `m:ss · n to transcribe`
+  label, and that label IS pinned — in `tests/test_pdf_dock.py`, which
+  is not in `AUDIT_MODULES` and so is outside this lane's reach. Pinned
+  elsewhere, invisible here.
+* **`Chunker.__init__` (`:64`, gut) and `self.active = False` (`:67`,
+  boolflip)** — `start()` assigns all three attributes unconditionally
+  and every caller starts before ticking, so the constructor's values
+  are dead on every real path. Not worth a card.
+* **`Uploader.stop` (`:287`, gut)** — the sentinel is never queued, so
+  the worker keeps waiting. It is a daemon thread and dies with the
+  process either way; nothing observable is lost.
+* **`TICK_MS` (`:293`, both const operators)** — a timer interval, the
+  "Timeouts" category again.
+* **`exist_ok=True` → `False` (`:458`)** — `_flush`'s `makedirs`. This
+  one has a real consequence (the second chunk into an existing
+  recordings folder would raise, be swallowed by `_flush`'s own
+  `except Exception`, and be dropped) and it survives because the tests
+  flush into a fresh directory. Small, real, and the cheapest of the
+  lot to pin.
+
+**The four inconclusive results are hangs, not survivors.**
+`Uploader._ensure_thread` (`:167`), `Uploader._loop` (`:176`),
+`daemon=True` (`:173`) and `while True` (`:177`) all mutate to "no
+worker ever drains the queue", and the test file's `drain()` is
+`Queue.join()`, which then blocks forever — 300 s each, twice each
+(`gut` then `gut-cut`), which is the 1,200 s above. The harness is
+right to refuse to score them: an unapplied or unfinished mutation
+scored as "caught" is the exact failure this tool exists to detect. What
+they do tell us is that the worker plumbing's failure mode under test is
+a hang rather than a red check — worth knowing before anyone adds a
+mutation-audit gate to CI on this module.
+
+## Bottom line for this lane
+
+The judge is pinned through and through — 39 mutations, not one function
+body falsifiable, and the only finding is one missing clause on an
+existing check (the inner `additionalProperties`). The recorder splits
+cleanly in two: its pure half is as well pinned as the judge, and its Qt
+half is pinned nowhere headless, by its own test file's stated scope.
+Neither is a defect in the shipped code; both are honest statements of
+where the evidence stops, and where Pouya's live checklist starts.

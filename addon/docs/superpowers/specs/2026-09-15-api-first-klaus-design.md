@@ -200,7 +200,7 @@ choke point between scoring and tagging.
   for that PDF (behind the sweep's cost prompt) so the changed pages
   re-embed. A **transcript strip** under the page in `PdfSidebar` (both
   renderers; pdf.js receives the text through the existing bridge as a
-  `klausTranscript` call) shows the current page's segments, collapsible,
+  `klausSetTranscript` call, the `klausSetAnnotations` shape) shows the current page's segments, collapsible,
   live via `page_store.subscribe`. Colours through `theme` tokens only.
 
 ### D7 — The assistant on the Messages API (`klausmate/agent_host.py` rewritten)

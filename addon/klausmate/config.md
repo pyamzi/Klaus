@@ -14,18 +14,22 @@ standard for Anki add-ons) and never in the repo.
   PDF embeddings (see **Card embeddings** below) and lecture
   transcription. Without it nothing indexes, and Klaus says so rather
   than failing quietly.
-- **api_key_anthropic**: Your Anthropic API key. Default `""`. Stored for
-  a future release (the spec's Plan 2 pertinence phase and Plan 3) — no
-  Klaus code calls the Anthropic API today, and the assistant does not
-  read this key; it runs on your own Claude Code login instead (see
-  **Assistant** below).
-- **reasoning_model**: Free text, default `"claude-sonnet-5"`. Written
-  here but **not yet wired** — the assistant's Claude Code child does
-  not read it; a future release (Plan 3) will.
-- **transcription_model**: Which OpenAI model would transcribe recorded
-  lecture audio. Default `"gpt-4o-mini-transcribe"`. Written here but
-  **not yet wired**, like `reasoning_model` above — there is no lecture
-  recorder yet; it arrives with the spec's Plan 2.
+- **api_key_anthropic**: Your Anthropic API key. Default `""`. Used for
+  exactly one thing: the **pertinence check** at the end of indexing (see
+  **Doubtful cards** below), which asks Claude whether each matched card
+  is really about the lecture page it matched. Without it, indexing still
+  works — the check is skipped and every match counts, as it did before.
+  The assistant does not read this key; it runs on your own Claude Code
+  login instead (see **Assistant** below).
+- **reasoning_model**: Free text, default `"claude-sonnet-5"`. Two uses,
+  one live: it is the model the **pertinence check** asks, and it is what
+  a future release (Plan 3) will move the assistant onto. The assistant's
+  Claude Code child does not read it today. Because the field is free
+  text, a model Klaus has no price for is estimated as Sonnet and the
+  confirm says so.
+- **transcription_model**: Which OpenAI model transcribes recorded
+  lecture audio. Default `"gpt-4o-mini-transcribe"`. Used whenever a
+  recorded chunk is uploaded (see **Recording a lecture** below).
 - **_embed_key_setup_declined**: Written automatically when you dismiss
   the "needs an API key" nudge, so Klaus stops re-prompting at startup.
   Delete it to see the nudge again. Cleared ONCE by the 2026-09-15
@@ -79,6 +83,61 @@ tag and aggregates into its retention score.
 opens the PDF's own `!Library` tag, which holds exactly its matches at or
 above that PDF's sensitivity. Indexing writes that tag; nothing extra is
 needed to produce it.
+
+### Doubtful cards (the pertinence check)
+
+Matching by similarity finds cards about the same *subject*; it cannot
+tell "this slide's actual content" from "the same organ system". So the
+last step of indexing asks Claude, card by card, whether studying that
+card would really be reasonable preparation for the one lecture page it
+matched best. Cards it says no to are tagged **`!Library::Doubtful`**,
+are left out of that PDF's retention score, and show up in the Library
+row's Cards cell as "n · m doubtful". Right-click → **Doubtful cards…**
+opens Browse on them.
+
+- It **always asks first**. Before the first paid request of a job, a
+  dialog says how many cards it would judge and roughly what that costs
+  (on Klaus Plus, what it uses of your monthly allowance instead).
+  **Skip** is the default button; skipping leaves those cards simply
+  matched, exactly as before, and the index finishes normally.
+- It needs `api_key_anthropic` (or a Klaus Plus key). With neither, the
+  step is skipped silently — no dialog, nothing to decline.
+- **A card Claude does not answer for is never doubtful.** Unjudged
+  counts as confirmed; only an explicit "no" rejects a card.
+- Verdicts are cached per PDF and re-used until the card's text, the
+  page's text, or the model changes — editing a note re-judges just that
+  card on the next index, not the whole lecture.
+- `!Library::Doubtful` is **one tag for your whole collection**, not one
+  per PDF: its members are every card rejected by any lecture. So a card
+  rejected for lecture A but confirmed for lecture B still carries the
+  tag. **Doubtful cards…** narrows it to the lecture you clicked by
+  searching for both tags at once.
+- Nothing is ever suspended, deleted or untagged by this check. It only
+  adds a tag and changes what the retention score counts.
+
+### Recording a lecture
+
+The **●** button on the PDF panel's title bar (and on the Lecture panel
+during review) records your microphone while you follow along in the
+slides. Every 30 seconds — or the moment you turn the page, whichever
+comes first — the recording is cut and sent to OpenAI for transcription,
+and the text is stored **on the page you were looking at when you said
+it**. Press **■** to stop; the bar shows elapsed time and how many pieces
+are still waiting to be transcribed. Stopping re-indexes that PDF, so the
+pages you spoke over are searchable by what was said on them, and the
+assistant reads them too.
+
+- Only one recording at a time, across every panel. Klaus says so rather
+  than quietly opening a second microphone.
+- Nothing is recorded until you press ●, and there is no recording
+  without a PDF open.
+- A piece that cannot be uploaded — no key, no network, a subscription
+  refusal — **keeps its audio** in the add-on's
+  `user_files/recordings/<pdf>/` folder and is retried the next time you
+  record that lecture. Once uploaded, the audio file is deleted; only the
+  text is kept. Silence transcribes to nothing and is dropped.
+- The transcript for the page you are on shows in a collapsible strip
+  under the PDF, filling in live as pieces come back.
 
 **Copying cards into a new deck**: select notes in Browse — the tag above
 is one good way to find them — then **Notes → KlausMate: Create Curated
@@ -143,10 +202,13 @@ is sent to OpenAI's embeddings API when indexing and searching.
 ### PDF study priorities
 
 The Library shows a per-PDF retention score — the share of that PDF's
-matched cards (at or above its sensitivity, see `pdf_match_threshold`
-above) you'd currently recall — so you know what to study first. It reads
-the same match cache the `!Library` tags do; nothing here embeds anything
-indexing wouldn't already need.
+**confirmed** cards (at or above its sensitivity, see
+`pdf_match_threshold` above, minus anything the pertinence check
+rejected) you'd currently recall — so you know what to study first. It
+reads the same match cache the `!Library` tags do; nothing here embeds
+anything indexing wouldn't already need. The Cards count and the
+sensitivity slider's live preview use the same confirmed-only figure, so
+the number never changes just because you opened a dialog.
 
 ### Lecture view (review screen)
 
@@ -170,8 +232,9 @@ reaching it as the page record Klaus keeps for it — the slide's own text
 plus any transcript of what was said over it — together with the page
 image. It runs on your own Claude Code login today — the `claude` CLI,
 launched as a child process, not a Klaus-held key. `api_key_anthropic`
-and `reasoning_model` (see **API keys & models** above) are stored for a
-future release and are not read by the assistant yet.
+and `reasoning_model` (see **API keys & models** above) belong to the
+pertinence check, not to the assistant — it does not read either of them
+yet; a future release will move it onto them.
 
 - **assistant_reopen**: Default `false`. Reopen the Assistant dock
   where you left it the next time Anki starts — the same idea as
@@ -205,9 +268,12 @@ touches your notes, PDFs, or highlights.
   matched at or above its sensitivity — see `pdf_match_threshold` above)
   created, renamed, and pruned automatically as you index, re-sensitize,
   rename, or delete PDFs. Turn off and Klaus stops creating or updating
-  those tags entirely; **Show Matched Cards in Browse** then has no tag
-  to open, so it is the one feature this switch costs you. Retention
-  scores and the deck copier are unaffected.
+  those tags entirely — including `!Library::Doubtful` — so **Show
+  Matched Cards in Browse** and **Doubtful cards…** have no tag to open.
+  That is all this switch costs you: retention scores (confirmed-only
+  included), the doubtful counts in the Library, and the deck copier are
+  unaffected, and the pertinence check still runs and still caches its
+  verdicts.
 
 - **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
   viewer panel and Library. `"native"` is Qt's built-in QPdfView;
