@@ -1,0 +1,5 @@
+{"id": "msg_v", "role": "assistant", "stop_reason": "tool_use",
+ "content": [{"type": "tool_use", "id": "toolu_v", "name": "record_verdicts",
+   "input": {"verdicts": [
+     {"nid": 11, "pertinent": true, "reason": "the card asks for the mechanism this slide states"},
+     {"nid": 12, "pertinent": false, "reason": "same organ, different disease; the slide never mentions it"}]}}]}
