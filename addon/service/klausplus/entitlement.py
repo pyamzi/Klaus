@@ -7,12 +7,17 @@ canceled works to its period end, everything else is refused.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from .db import Store
 
 ACTIVE, TRIALING, PAST_DUE, CANCELED = "active", "trialing", "past_due", "canceled"
+SUBSCRIPTION_EVENTS = ("customer.subscription.created", "customer.subscription.updated",
+                       "customer.subscription.deleted")
+_log = logging.getLogger("klausplus")
+_warned_no_created = False
 _PERIOD_LAG_DAYS = 3  # how long an "active" row may outlive its period_end before we stop trusting a missed webhook
 
 
@@ -22,6 +27,23 @@ def period_end_of(sub: dict) -> int:
         items = ((sub.get("items") or {}).get("data") or [])
         pe = items[0].get("current_period_end") if items else 0
     return int(pe or 0)
+
+
+def _in_order(store: Store, cus: str, created: Any) -> bool:
+    """K-263: False when this subscription event is OLDER than the last one applied
+    to the row. Stripe does not guarantee delivery order, so a delayed
+    `customer.subscription.updated` arriving after the cancellation would otherwise
+    put the row back to active. A missing `created` applies — logged once, because a
+    malformed feed must not fill the log."""
+    global _warned_no_created
+    try:
+        stamp = int(created)
+    except (TypeError, ValueError):
+        if not _warned_no_created:
+            _warned_no_created = True
+            _log.warning("subscription event carries no usable `created` — applying in arrival order")
+        return True
+    return store.claim_event_created(cus, stamp)
 
 
 def apply_event(store: Store, event: dict, now: float) -> bool:
@@ -36,8 +58,10 @@ def apply_event(store: Store, event: dict, now: float) -> bool:
     if etype == "checkout.session.completed":
         email = ((obj.get("customer_details") or {}).get("email")) or obj.get("customer_email") or ""
         store.upsert_customer(cus, str(email), now)
-    elif etype in ("customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"):
+    elif etype in SUBSCRIPTION_EVENTS:
         store.upsert_customer(cus, "", now)
+        if not _in_order(store, cus, event.get("created")):
+            return True  # a newer subscription event already landed on this row
         store.set_subscription(cus, str(obj.get("status") or "incomplete"), period_end_of(obj),
                                bool(obj.get("cancel_at_period_end")), now)
     elif etype == "invoice.payment_failed":

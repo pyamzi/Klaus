@@ -10,6 +10,8 @@ check("no key → not active", plus.active({}) is False and plus.key({}) == "")
 check("a key alone is active (optimistic until the service says otherwise)", plus.active({"klaus_plus_key": "kp_" + "a" * 32}))
 check("whitespace is stripped and a non-key string is not a key", plus.key({"klaus_plus_key": "  kp_" + "b" * 32 + " "}) == "kp_" + "b" * 32
       and plus.key({"klaus_plus_key": "sk-abc"}) == "")
+check("K-262: kp_ + 32 chars is not enough — the suffix must be hex, the service's own looks_like_key contract",
+      plus.key({"klaus_plus_key": "kp_" + "z" * 32}) == "" and plus.key({"klaus_plus_key": "kp_" + "0123456789abcdef" * 2}) == "kp_" + "0123456789abcdef" * 2)
 check("base defaults and strips a trailing slash", plus.base({}) == plus.DEFAULT_BASE and plus.base({"klaus_plus_base": "https://x.test/"}) == "https://x.test")
 check("client_version reads manifest.json's human_version", plus.client_version() == json.load(open("klausmate/manifest.json"))["human_version"])
 

@@ -240,6 +240,22 @@ def test_webhook_oversized_body_is_413_before_verification(world, monkeypatch):
     assert called == []
 
 
+def test_webhook_chunked_oversized_body_is_413_before_verification(world, monkeypatch):
+    """K-262: a chunked webhook declares no Content-Length, so only a capped stream read
+    can refuse it -- still before the payload is buffered or the signature looked at."""
+    called = []
+    monkeypatch.setattr(billing, "_construct_event",
+                        lambda *a: called.append(1) or {"id": "x", "type": "invoice.paid", "data": {"object": {}}})
+
+    def body():
+        for _ in range(6):
+            yield b"x" * (1024 * 1024)
+
+    r = world["client"].post("/stripe/webhook", content=body(), headers={"stripe-signature": "t=1,v1=x"})
+    assert r.status_code == 413
+    assert called == []
+
+
 def test_recover_oversized_body_is_413_before_reading(world):
     """I-2: same cap on /recover's form body."""
     async def probe():

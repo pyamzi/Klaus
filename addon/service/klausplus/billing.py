@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import email, entitlement, keys, templates
 from .config import STRIPE_API_VERSION, Settings
-from .proxy import RateLimiter, _declared_length, _err, authenticate
+from .proxy import RateLimiter, _declared_length, _err, _read_capped, authenticate
 
 router = APIRouter()
 WEBHOOK_EVENTS = ("checkout.session.completed", "customer.subscription.created", "customer.subscription.updated",
@@ -88,7 +88,9 @@ async def webhook(request: Request) -> JSONResponse:
     st = request.app.state
     if _declared_length(request) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
-    payload = await request.body()
+    # K-262: this route is public and unauthenticated — the cap has to survive a body
+    # that declares no length at all, and it has to land before the signature check.
+    payload = await _read_capped(request, st.settings.max_json_bytes)
     try:
         event = _construct_event(payload, request.headers.get("stripe-signature", ""), st.settings.stripe_webhook_secret)
     except Exception:
@@ -129,9 +131,11 @@ def _recover_limiter(st: Any) -> RateLimiter:
 @router.post("/recover", response_class=HTMLResponse)
 async def recover(request: Request) -> str:
     st = request.app.state
-    # I-2: refuse an oversized body before it is ever buffered.
+    # I-2: refuse an oversized body before it is ever buffered. K-262: the declared
+    # length is only the cheap half of that — a chunked form declares none.
     if _declared_length(request) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
+    await _read_capped(request, st.settings.max_json_bytes)
     form = await request.form()
     email_addr = str(form.get("email") or "").strip()
     now = st.now()

@@ -76,3 +76,28 @@ def test_mint_key_refuses_an_unknown_customer_and_prints_no_key(settings, monkey
     rc = _load_mint_key().main(["cus_ghost"])
     assert rc != 0
     assert "kp_" not in capsys.readouterr().out
+
+
+def test_claim_event_created_refuses_older_and_takes_equal_or_newer(store, now):
+    """K-263: the compare-and-set behind entitlement's ordering guard."""
+    store.upsert_customer("cus_1", "", now)
+    assert store.customer_by_stripe_id("cus_1")["last_event_created"] is None
+    assert store.claim_event_created("cus_1", 500) is True
+    assert store.claim_event_created("cus_1", 499) is False
+    assert store.claim_event_created("cus_1", 500) is True   # equal applies (a replay of the same stamp)
+    assert store.claim_event_created("cus_1", 501) is True
+    assert store.customer_by_stripe_id("cus_1")["last_event_created"] == 501
+
+
+def test_last_event_created_migrates_onto_a_database_created_without_it(settings, now):
+    """K-263: the volume already holds a database from an earlier deploy."""
+    conn = db.connect(settings.database_path)
+    conn.execute("INSERT INTO customers (stripe_customer_id, email, created_at, updated_at) "
+                 "VALUES ('cus_old', 'a@b.c', 1, 1)")
+    conn.execute("ALTER TABLE customers DROP COLUMN last_event_created")
+    conn.close()
+
+    store = db.Store(db.connect(settings.database_path))  # reopening runs the migration
+    row = store.customer_by_stripe_id("cus_old")
+    assert row["email"] == "a@b.c" and row["last_event_created"] is None
+    assert store.claim_event_created("cus_old", 100) is True
