@@ -195,15 +195,57 @@ def chunk_path(user_files: str, pdf_safe: str, chunk: Chunk) -> str:
     bounce, or Stop then Record on the same page — and a truncated t0
     gave them ONE filename, so the second _flush overwrote the first's
     audio and the asynchronous upload then unlinked a WAV holding bytes
-    it had never transcribed."""
-    name = f"{chunk.t0:.3f}-p{chunk.page:04d}.wav"
+    it had never transcribed.
+
+    The END time is in the name too (K-280, Copilot on PR #4): the
+    Chunker closes a chunk early on a page change and on Stop, so
+    rebuilding a leftover's end as ``t0 + CHUNK_S`` — the only thing
+    ``requeue_leftovers`` could do without it — filed a 7-second chunk
+    as 30 seconds of speech running past the page it was actually said
+    over. This is the ONE place a name is minted."""
+    name = f"{chunk.t0:.3f}-{chunk.t1:.3f}-p{chunk.page:04d}.wav"
     return os.path.join(user_files, "recordings", pdf_safe, name)
 
 
-# The decimal is optional so a leftover written by an older Klaus ("12-p0001.wav")
-# still parses and still uploads — a name this regex misses is a foreign file,
-# i.e. an orphaned lecture.
-_LEFTOVER_RE = re.compile(r"(\d+(?:\.\d+)?)-p(\d{4})\.wav$")
+# Three shapes, newest first: "<t0>-<t1>-p0001.wav", the two-field
+# millisecond name that predates the end time, and an older Klaus's
+# whole-second "12-p0001.wav" — both of the older two still parse and
+# still upload, falling back to t0 + CHUNK_S for the end they do not
+# carry. Matched with fullmatch: a name this regex misses is a foreign
+# file (an orphaned lecture), and — the point of anchoring BOTH ends —
+# so is a spent chunk's retired "....wav.spent" marker.
+_LEFTOVER_RE = re.compile(r"(\d+(?:\.\d+)?)(?:-(\d+(?:\.\d+)?))?-p(\d{4})\.wav")
+
+# What _spend renames a WAV to when it cannot delete it. Anything
+# _LEFTOVER_RE cannot match would do; a suffix keeps the original name
+# readable for anyone looking at the directory.
+_SPENT_SUFFIX = ".spent"
+
+
+def _spend(wav_path: str) -> None:
+    """Retire a chunk whose transcript is already durably stored.
+
+    Unlinking is the normal end of a chunk's life. When it FAILS (a
+    locked file, a permission blip, a vanished mount) the audio must
+    become unrequeueable anyway (K-280, Copilot on PR #4): the append
+    that just happened is durable, so a surviving WAV is transcribed
+    again — a paid call — by the next Record's ``requeue_leftovers``,
+    which then appends the SAME segment a second time. Renaming it out
+    of the requeue namespace is the fallback, and ``requeue_leftovers``
+    unlinks any marker it walks past so they cannot pile up. If even
+    that fails, say so once: a duplicated segment is the worst outcome
+    here and it should not be silent."""
+    try:
+        os.unlink(wav_path)
+        return
+    except OSError:
+        pass
+    try:
+        os.replace(wav_path, wav_path + _SPENT_SUFFIX)
+    except OSError as exc:
+        print(f"[klausmate] lecture recorder: could not retire spent "
+              f"{os.path.basename(wav_path)} ({exc.__class__.__name__}); "
+              f"it may be transcribed and appended again")
 
 # Module-level indirection so tests can swap the network call for a fake
 # without touching openai_client itself (the house pattern — see
@@ -403,16 +445,15 @@ class Uploader:
             self._ensure_page(pdf_safe, pdf_path)
             page_store.append_segment(self._user_files, pdf_safe, pdf_path, chunk.page - 1, chunk.t0, chunk.t1, text)
             self._last_text[pdf_safe] = text
-        try:
-            os.unlink(wav_path)
-        except OSError:
-            pass
+        _spend(wav_path)
         # AFTER the unlink, and never fatal (PR #4 fourth re-review). The
         # append above is the durable write; `on_segment` is only a
         # notification to Qt. With it inside the block above, a raising
         # consumer reached `_loop`, which keeps the WAV for retry — so
         # the next `requeue_leftovers` transcribed (a paid call) and
-        # appended the SAME segment a second time.
+        # appended the SAME segment a second time. `_spend` closes the
+        # other half of that hole: a failed unlink must not leave the
+        # WAV requeueable either (K-280).
         if text and self._on_segment:
             try:
                 self._on_segment(pdf_safe, chunk.page - 1)
@@ -431,12 +472,26 @@ class Uploader:
         # isn't zero-padded.
         matches = []
         for name in os.listdir(d):
-            m = _LEFTOVER_RE.match(name)
+            if name.endswith(_SPENT_SUFFIX):
+                # A chunk `_spend` could not delete. Its transcript is
+                # already stored, so the file is pure garbage — take the
+                # free chance to clear it, and never mind if that fails
+                # too (the next walk tries again).
+                try:
+                    os.unlink(os.path.join(d, name))
+                except OSError:
+                    pass
+                continue
+            m = _LEFTOVER_RE.fullmatch(name)
             if m:
-                matches.append((float(m.group(1)), int(m.group(2)), name))
+                t0 = float(m.group(1))
+                # Only a name written before the end time was carried
+                # (or by an older Klaus) has to be guessed at.
+                t1 = float(m.group(2)) if m.group(2) else t0 + CHUNK_S
+                matches.append((t0, t1, int(m.group(3)), name))
         matches.sort(key=lambda row: row[0])
-        for t0, page, name in matches:
-            self.enqueue(pdf_safe, pdf_path, Chunk(page, t0, t0 + CHUNK_S), os.path.join(d, name))
+        for t0, t1, page, name in matches:
+            self.enqueue(pdf_safe, pdf_path, Chunk(page, t0, t1), os.path.join(d, name))
         return len(matches)
 
     def stop(self) -> None:

@@ -1120,8 +1120,14 @@ same reason.
   are EPOCH seconds (`_epoch0` at Record, advanced by monotonic deltas),
   so two lectures a day apart still sort against each other while a
   mid-recording NTP jump can't run one chunk backwards. WAVs land in
-  `user_files/recordings/<safe>/<t0>-p<page:04d>.wav`, headered with the
-  rate and channel count actually NEGOTIATED with the device — ideal
+  `user_files/recordings/<safe>/<t0>-<t1>-p<page:04d>.wav` — the REAL end
+  time is in the name (K-280, Copilot on PR #4) because the Chunker closes
+  a chunk early on a page change and on Stop, and `requeue_leftovers` would
+  otherwise refile a 7-second chunk as 30 seconds running past the page it
+  was said over; the two older name shapes still parse and fall back to
+  `t0 + CHUNK_S`, and the match is anchored at both ends so a backup or a
+  copy of a well-formed name is never requeued — headered with the rate and
+  channel count actually NEGOTIATED with the device — ideal
   16 kHz mono Int16 first, then `device.preferredFormat()` as it is, both
   checked against `isFormatSupported` — because the Klaus Plus service
   meters lecture minutes by reading that header back. **The width is
@@ -1134,7 +1140,12 @@ same reason.
   neither format, or whose sample type Klaus cannot read, refuses to
   record with one log line naming it — never a silent dead button. The `Uploader` is one daemon worker, FIFO: transcribe, append to
   the page record, unlink. **A failed upload keeps its WAV** — network
-  error, missing key, a Plus refusal — and the next Record on that PDF
+  error, missing key, a Plus refusal — but a SPENT one never survives as a
+  leftover: once `append_segment` has happened, `_spend` unlinks the WAV and,
+  if that fails, renames it out of `_LEFTOVER_RE`'s namespace (`.spent`, which
+  the next `requeue_leftovers` sweeps away), because a swallowed unlink failure
+  meant the next Record transcribed and appended that same segment a second
+  time (K-280) — and the next Record on that PDF
   re-queues leftovers (numerically by `t0`, not by filename); an empty
   transcript is dropped. Nothing a single chunk throws may kill the
   worker, or one bad chunk stops transcription for the session, which is

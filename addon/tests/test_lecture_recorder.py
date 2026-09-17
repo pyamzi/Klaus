@@ -177,8 +177,8 @@ check("callers that pass only pcm/rate still get mono 16-bit (unchanged default)
 section("chunk_path and the uploader")
 root = tempfile.mkdtemp()
 p = lr.chunk_path(root, "lec", lr.Chunk(3, 100.0, 130.0))
-check("recordings/<safe>/<t0 to the millisecond>-p<page:04d>.wav",
-      p.endswith(os.path.join("recordings", "lec", "100.000-p0003.wav")), p)
+check("recordings/<safe>/<t0>-<t1>-p<page:04d>.wav, both to the millisecond",
+      p.endswith(os.path.join("recordings", "lec", "100.000-130.000-p0003.wav")), p)
 segs = []
 calls = []
 def fake_transcribe(key, wav, model, language="en", prompt="", timeout=None):
@@ -406,6 +406,13 @@ foreign_dir = os.path.join(root, "recordings", "foreign")
 os.makedirs(foreign_dir, exist_ok=True)
 open(os.path.join(foreign_dir, "notes.txt"), "w").write("not audio")
 open(os.path.join(foreign_dir, "100-p03.wav"), "wb").write(b"only 2 page digits, not a match")
+# K-280 review: the match is anchored at BOTH ends (fullmatch), and nothing
+# proved it. A name that merely CONTAINS a well-formed one — an editor
+# backup, a copy, a spent marker — must not be requeued, or a stray file
+# gets transcribed (a paid call) and its segment appended under a page it
+# was never said over.
+open(os.path.join(foreign_dir, "12.000-30.000-p0001.wav.bak"), "wb").write(b"trailing junk")
+open(os.path.join(foreign_dir, "copy-of-12.000-30.000-p0001.wav"), "wb").write(b"leading junk")
 for t0 in (90, 1000, 100):  # deliberately NOT in lexicographic filename order
     open(os.path.join(foreign_dir, f"{t0}-p0001.wav"), "wb").write(f"RIFF-{t0}".encode())
 seen_order = []
@@ -416,8 +423,9 @@ lr._transcribe = fake_transcribe_order
 foreign_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
 n_foreign = foreign_up.requeue_leftovers("foreign", os.path.join(root, "foreign.pdf"))
 foreign_up.drain()
-check("exactly the 3 well-formed leftovers are requeued (the .txt and the 2-digit page name are ignored)",
-      n_foreign == 3)
+check("exactly the 3 well-formed leftovers are requeued (the .txt, the 2-digit page name "
+      "and the two names that merely CONTAIN a well-formed one are ignored)",
+      n_foreign == 3, n_foreign)
 check("they transcribe in NUMERIC t0 order (90, 100, 1000), not lexicographic (100, 1000, 90)",
       seen_order == ["RIFF-90", "RIFF-100", "RIFF-1000"])
 
@@ -622,7 +630,7 @@ try:
           "own time, and hands its WAV to the uploader",
           len(tick_up.calls) == 1 and first[0] == "ticktest"
           and first[1] == lr.Chunk(1, 5000.0, 5005.0)
-          and os.path.basename(first[2]) == "5000.000-p0001.wav",
+          and os.path.basename(first[2]) == "5000.000-5005.000-p0001.wav",
           repr(tick_up.calls))
     check("...and that WAV carries the bytes this tick read off the "
           "device (44-byte header + the 16 PCM bytes), not just a header",
@@ -640,7 +648,7 @@ try:
           "exist_ok, so the second write is not swallowed by its except",
           len(tick_up.calls) == 2 and first is not None
           and second[1] == lr.Chunk(2, 5005.0, 5035.0)
-          and os.path.basename(second[2]) == "5005.000-p0002.wav"
+          and os.path.basename(second[2]) == "5005.000-5035.000-p0002.wav"
           and os.path.dirname(second[2]) == os.path.dirname(first[2])
           and os.path.getsize(second[2]) == 44 + len(tick_pcm),
           repr(tick_up.calls))
@@ -663,8 +671,8 @@ check("two chunks 0.2 s apart on the same page get DIFFERENT paths "
       "(whole-second names collided and the loser's audio was lost)",
       sub_a != sub_b, f"{os.path.basename(sub_a)} vs {os.path.basename(sub_b)}")
 check("...and the millisecond is what distinguishes them",
-      os.path.basename(sub_a) == "12.250-p0001.wav"
-      and os.path.basename(sub_b) == "12.450-p0001.wav",
+      os.path.basename(sub_a) == "12.250-42.250-p0001.wav"
+      and os.path.basename(sub_b) == "12.450-42.450-p0001.wav",
       f"{os.path.basename(sub_a)} / {os.path.basename(sub_b)}")
 
 sub_dir = os.path.join(root, "recordings", "subsec")
@@ -1256,5 +1264,122 @@ check("a torn read converts only its whole samples", bytes(tail_rec._buffer) == 
 tail_rec._ingest(_whole[6:])
 check("...and the carried tail completes the next one, in phase",
       bytes(tail_rec._buffer) == _i16(16383, -16383), repr(bytes(tail_rec._buffer)))
+
+# ---------------------------------------------------------------------
+# K-280 (1) (Copilot on PR #4): append_segment SUCCEEDED but os.unlink
+# raised -- a locked file, a permission blip, a vanished mount. The
+# exception was swallowed and the WAV stayed eligible for
+# requeue_leftovers, so the next Record transcribed it again (a paid
+# call) and appended the SAME segment a second time. Once the durable
+# append has happened the chunk is SPENT and must be unappendable even
+# when the file itself survives.
+# ---------------------------------------------------------------------
+section("K-280: a spent WAV is unappendable even when its unlink fails")
+
+
+class _OsProxy:
+    """`lecture_recorder`'s own `os`, with ONE call replaced. Patching
+    the real `os.unlink` would reach page_store, tempfile and this test
+    file too; this confines the failure to the module under test."""
+
+    def __init__(self, real, unlink):
+        self._real, self.unlink = real, unlink
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+_sp_wavs: list = []
+
+
+def fake_transcribe_spend(key, wav, model, language="en", prompt="", timeout=None):
+    _sp_wavs.append(wav)
+    return "said over the slide"
+
+
+def _unlink_denied(path):
+    raise OSError(13, "Permission denied")
+
+
+lr._transcribe = fake_transcribe_spend
+_sp_pdf = os.path.join(root, "spendtest.pdf")
+_sp_chunk = lr.Chunk(1, 0.0, 30.0)
+_sp_p = lr.chunk_path(root, "spendtest", _sp_chunk)
+_sp_dir = os.path.dirname(_sp_p)
+os.makedirs(_sp_dir, exist_ok=True)
+open(_sp_p, "wb").write(b"RIFF S")
+sp_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+lr.os = _OsProxy(os, _unlink_denied)
+try:
+    sp_up.enqueue("spendtest", _sp_pdf, _sp_chunk, _sp_p)
+    check("drain() returns — a failed unlink is not fatal to the worker",
+          _returns_within(sp_up.drain, 3.0))
+finally:
+    lr.os = os
+_sp_rec = page_store.load_record(root, "spendtest", _sp_pdf, 0)
+check("the segment was appended (the durable write happens before the unlink)",
+      len(_sp_rec.get("segments") or []) == 1, repr(_sp_rec.get("segments")))
+check("the file survived the failed unlink — but no longer under its own, requeueable name",
+      not os.path.exists(_sp_p) and len(os.listdir(_sp_dir)) == 1, repr(os.listdir(_sp_dir)))
+sp_fresh = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+check("a SECOND uploader over the same directory requeues nothing",
+      sp_fresh.requeue_leftovers("spendtest", _sp_pdf) == 0, repr(os.listdir(_sp_dir)))
+sp_fresh.drain()
+_sp_rec2 = page_store.load_record(root, "spendtest", _sp_pdf, 0)
+check("...so the segment is in the page record exactly ONCE, with no second paid transcription",
+      len(_sp_rec2.get("segments") or []) == 1 and len(_sp_wavs) == 1,
+      repr((_sp_rec2.get("segments"), len(_sp_wavs))))
+check("...and that same walk unlinked the spent marker, so markers cannot pile up",
+      os.listdir(_sp_dir) == [], repr(os.listdir(_sp_dir)))
+_sp_chunk2 = lr.Chunk(1, 30.0, 60.0)
+_sp_p2 = lr.chunk_path(root, "spendtest", _sp_chunk2)
+open(_sp_p2, "wb").write(b"RIFF S2")
+sp_up.enqueue("spendtest", _sp_pdf, _sp_chunk2, _sp_p2)
+sp_up.drain()
+check("the ORDINARY path still plain-unlinks — no marker is left behind at all",
+      not os.path.exists(_sp_p2) and os.listdir(_sp_dir) == [], repr(os.listdir(_sp_dir)))
+
+# ---------------------------------------------------------------------
+# K-280 (2) (Copilot on PR #4): requeue_leftovers rebuilt every chunk's
+# end as t0 + CHUNK_S, but the Chunker closes a chunk EARLY on a page
+# change and on Stop -- so a leftover from such a chunk was stored with
+# a fabricated t1 running up to 30 s past the real page boundary, unlike
+# the Chunk.t1 the first attempt used. The filename carries the real end
+# now; the two older shapes still parse, and only THEY fall back.
+# ---------------------------------------------------------------------
+section("K-280: a requeued leftover keeps its real end time")
+_e_pdf = os.path.join(root, "earlytest.pdf")
+_e_chunk = lr.Chunk(2, 500.0, 507.0)  # closed after 7 s by a page change
+_e_p = lr.chunk_path(root, "earlytest", _e_chunk)
+check("chunk_path mints <t0>-<t1>-p<page>.wav, so the real end survives on disk",
+      os.path.basename(_e_p) == "500.000-507.000-p0002.wav", os.path.basename(_e_p))
+os.makedirs(os.path.dirname(_e_p), exist_ok=True)
+open(_e_p, "wb").write(b"RIFF E")
+lr._transcribe = (lambda key, wav, model, language="en", prompt="", timeout=None:
+                  "seven seconds of it")
+e_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+check("the leftover is requeued", e_up.requeue_leftovers("earlytest", _e_pdf) == 1)
+e_up.drain()
+_e_seg = (page_store.load_record(root, "earlytest", _e_pdf, 1).get("segments") or [None])[0]
+check("...and lands with the chunk's REAL end (507.0), not a fabricated t0 + CHUNK_S (530.0) "
+      "running 23 s past the page boundary",
+      _e_seg is not None and _e_seg.get("t0") == 500.0 and _e_seg.get("t1") == 507.0,
+      repr(_e_seg))
+
+_m_dir = os.path.join(root, "recordings", "mixtest")
+os.makedirs(_m_dir, exist_ok=True)
+open(os.path.join(_m_dir, "20.000-27.000-p0001.wav"), "wb").write(b"RIFF new")
+open(os.path.join(_m_dir, "12.250-p0001.wav"), "wb").write(b"RIFF ms")
+open(os.path.join(_m_dir, "5-p0001.wav"), "wb").write(b"RIFF legacy")
+m_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+m_seen: list = []
+m_up.enqueue = lambda safe, path, chunk, wav: m_seen.append(chunk)
+n_mix = m_up.requeue_leftovers("mixtest", os.path.join(root, "mixtest.pdf"))
+check("all three name shapes parse — neither older one may become a foreign file",
+      n_mix == 3, n_mix)
+check("...ordering is by t0 ALONE across mixed shapes, and only the names carrying no end "
+      "time fall back to t0 + CHUNK_S",
+      m_seen == [lr.Chunk(1, 5.0, 35.0), lr.Chunk(1, 12.25, 42.25), lr.Chunk(1, 20.0, 27.0)],
+      repr(m_seen))
 
 raise SystemExit(report())
