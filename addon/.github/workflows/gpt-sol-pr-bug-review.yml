@@ -161,7 +161,7 @@ jobs:
           def get_patch(repo: str, pr_number: int, base_sha: str, head_sha: str, token: str) -> str:
               # Use only the PR delta, never full repository context.
               result = subprocess.run(
-                  ["git", "diff", "--no-color", "--unified=3", f"{base_sha}...{head_sha}"],
+                  ["git", "diff", "--no-color", "--unified=3", base_sha, head_sha],
                   text=True,
                   capture_output=True,
                   check=False,
@@ -242,35 +242,38 @@ jobs:
 
               # First file is larger than max_chars: include complete hunks only.
               first = blocks[0]
-              out = []
-              out_len = 0
-              hunk = []
+              header_lines = []
+              hunks = []
+              current_hunk = []
               in_hunk = False
-
               for line in first.splitlines(keepends=True):
                   if line.startswith("@@ "):
-                      if in_hunk and hunk:
-                          hunk_text = "".join(hunk)
-                          if out_len + len(hunk_text) <= max_chars:
-                              out.append(hunk_text)
-                              out_len += len(hunk_text)
-                          else:
-                              break
-                      elif not in_hunk and out_len + len(line) <= max_chars:
-                          out.append(line)
-                          out_len += len(line)
-                      hunk = [line]
+                      if in_hunk and current_hunk:
+                          hunks.append("".join(current_hunk))
                       in_hunk = True
+                      current_hunk = [line]
                   elif in_hunk:
-                      hunk.append(line)
+                      current_hunk.append(line)
                   else:
-                      if out_len + len(line) <= max_chars:
-                          out.append(line)
-                          out_len += len(line)
-                      else:
-                          break
-              if in_hunk and hunk and out_len + len("".join(hunk)) <= max_chars:
-                  out.append("".join(hunk))
+                      header_lines.append(line)
+              if in_hunk and current_hunk:
+                  hunks.append("".join(current_hunk))
+
+              out = []
+              out_len = 0
+              for line in header_lines:
+                  if out_len + len(line) <= max_chars:
+                      out.append(line)
+                      out_len += len(line)
+                  else:
+                      break
+
+              for hunk_text in hunks:
+                  if out_len + len(hunk_text) <= max_chars:
+                      out.append(hunk_text)
+                      out_len += len(hunk_text)
+                  else:
+                      break
 
               safe = "".join(out)
               if not safe:
@@ -397,13 +400,13 @@ jobs:
               try:
                   review = call_openai(model, openai_key, prompt)
               except error.HTTPError as e:
-                  details = e.read().decode("utf-8", errors="replace")
+                  _ = e.read()
                   review = (
                       "Unable to complete GPT review in this run. "
                       "OpenAI API returned an error; please rerun the workflow.\n\n"
                       f"`HTTP {e.code}`"
                   )
-                  print(f"OpenAI HTTP error: {details}", file=sys.stderr)
+                  print(f"OpenAI HTTP error: HTTP {e.code}", file=sys.stderr)
               except Exception as e:
                   review = (
                       "Unable to complete GPT review in this run due to an unexpected error; "
