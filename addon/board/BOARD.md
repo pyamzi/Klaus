@@ -411,6 +411,26 @@ files: tests/test_live_api.py
 verify: test -e tests/test_live_api.py
 created: 2026-09-16
 
+### K-265: pertinence: snapshot candidate note text in a background op before the Judge/Skip prompt (main-thread get_note loop on big lectures)
+owner: -
+priority: P3
+tags: plan-2,perf,needs-measure
+files: klausmate/pertinence.py,tests/test_pertinence.py
+verify: grep -q 'snapshot' klausmate/pertinence.py
+created: 2026-09-17
+
+Copilot (PR #4 second re-review, suppressed): ensure_judged builds candidates on the main thread — one col.get_note per matched card before the prompt. Measure first (a 2,000-candidate lecture: how many ms?); if it blocks noticeably, snapshot note text + page rows in a QueryOp and marshal only the prompt to the main thread.
+
+### K-274: tag_sync.apply_membership: the membership search still builds on _escape_tag, not tag_query
+owner: -
+priority: P3
+tags: plan-2,follow-up
+files: klausmate/tag_sync.py,tests/test_tag_migrate.py,tests/test_klausmate.py
+verify: grep -q 'tag_query' klausmate/tag_sync.py && ! grep -q '_escape_tag(' klausmate/tag_sync.py
+created: 2026-09-17
+
+K-272 (2026-09-17) moved the three Browse/suspend search sites in pdf_drive onto tag_sync.tag_query (Anki's escaping: \ " * _). tag_sync.apply_membership — the membership diff itself — still searches with the older _escape_tag, which escapes only quotes; a PDF name carrying * or _ widens that search. Pinned by tests/test_tag_migrate.py, outside K-272's files, hence its own card: move it onto tag_query, re-baseline that pin, and prove a name with a wildcard character no longer widens membership.
+
 ## Ready
 
 ## Doing
@@ -1312,3 +1332,246 @@ Final whole-plan review (final-review.md, fable): I-2 (Uploader.pending() = unfi
 - [2026-09-17 claude-p2fixB] Fix wave B done, left in Doing. I-2: Uploader.pending() -> unfinished_tasks (lecture_recorder.py:167); __init__._request_index_when_idle(name) at :929 (500ms QTimer.singleShot re-arm, de-duped per name via _index_when_idle, 20min cap then requests anyway with one [klausmate] line, no uploader -> immediate); stop branch :861 now calls it. M-9(2)/(3): QTimer-free Recorder._tick pin in test_lecture_recorder.py (page-change close, on_status, exist_ok) + a pending()-vs-queued() pin. verify: exit 1 before, exit 0 after. test_pdf_dock 96->100/0, test_lecture_recorder 41->49/0; lecture_view 122, transcript_strip 24, bridge_reentrancy 80 all 0 failed. Whole loop 48 files: only test_index_queue non-zero (161/1, the Doubtful global-rejected-set pin) = worker A's I-3 in flight, not touched. 6 mutations all RED, all restored byte-identical (md5 re-checked after each). Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/fix-wave-B-report.md
 - [2026-09-17 claude-p2fixB] Fix round 1 (coordinator's one item) done, still in Doing. _index_when_idle_gen added at __init__.py:931; _request_index_when_idle captures it at arm time (:966) and _poll returns without re-arming or requesting when it no longer matches (:969); _stop_lecture_uploader bumps it and clears _index_when_idle (:2074-2075). Pin: test_pdf_dock.py:817 new section — arm a poll, _stop_lecture_uploader(), the dead profile's queue THEN reports drained, assert no request and the set empty. test_pdf_dock 100->103/0; lecture_view 122/0, bridge_reentrancy 80/0, lecture_recorder 49/0. Mutation (generation check deleted) 102/1 on that pin, restored byte-identical (md5 2ded3ea072444f534ad75d3a50c2c77f both sides). Compile through the symlink clean. lecture_recorder.py untouched this round.
 - [2026-09-17 orchestrator] Scoped re-review (opus): APPROVED — no regressions, five mutations red. Committed as e82d64f with the docs.
+
+### K-264: PR #4 Copilot+Codex batch (Plan 2): stale verdicts retired before Skip; chunk filenames collision-proof; teardown re-indexes; transcription log hygiene; Match Sensitivity recomputes the counts
+owner: claude-p2-bots
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/pertinence.py,klausmate/lecture_recorder.py,klausmate/__init__.py,klausmate/pdf_drive.py,tests/test_pertinence.py,tests/test_lecture_recorder.py,tests/test_pdf_dock.py,tests/test_drive.py
+verify: grep -q 'card_queues' klausmate/pdf_drive.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pertinence.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_recorder.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot re-review (suppressed, moderate) + Codex on stacked PR #4, 2026-09-17: (1) pertinence: a stale negative verdict (card/page/model changed) stays in judged.json when the user Skips or a batch fails, so the card stays Doubtful though unjudged — retire stale entries the moment staleness is detected; (2) lecture_recorder.chunk_path drops fractional t0 — two chunks within a second collide and the async upload deletes the wrong WAV; (3) __init__._release_recorder flushes the last chunk on host close/dock shutdown but never schedules _request_index_when_idle; (4) lecture_recorder:263 logs the full OpenAIError (up to 300 bytes of the provider's error body) — class and status only, like the judge; (5) pdf_drive Match Sensitivity OK recomputes pdf_retention but leaves note/card/suspended/doubtful counts at the old threshold — keep card_queues beside card_r and recompute note_card_counts.
+
+#### Comments
+- [2026-09-17 claude-p2-bots] All five findings fixed TDD (RED/GREEN/mutation each; the four sources restored byte-identical after every mutation). verify: FAILED before (exit 1 — no card_queues in pdf_drive.py), PASSES after (exit 0). Whole loop: 48/48 test files pass. Compiled through the Anki symlink. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch-report.md. Deviation worth flagging: tests/test_lecture_recorder.py's Klaus Plus fixture used a non-hex placeholder ('kp_' + 'z'*32); the concurrent K-262 work on klausmate/plus.py now requires the service's hex alphabet, so three pre-existing Plus checks in THIS card's file failed. Changed the fixture to 'f'*32 — that file is claimed by K-264 so no other session could fix it, and the card's verify runs it. klausmate/plus.py and tests/test_plus.py untouched.
+- [2026-09-17 orchestrator] Scoped review (opus): APPROVED, no regressions, four mutations red. Committed as c9bf26d; PR #4 threads answered and resolved; re-review requested.
+
+### K-262: PR #3 Copilot batch (Klaus Plus): bounded body reads on the webhook and the three proxy routes; hex licence-key check; estimate-based pre-check on /v1/messages
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review,money
+files: service/klausplus/proxy.py,service/klausplus/billing.py,service/klausplus/meter.py,service/tests/test_app.py,service/tests/test_billing.py,service/tests/test_meter.py,klausmate/plus.py,tests/test_plus.py
+verify: grep -q '_read_capped' service/klausplus/proxy.py && grep -q '_HEX\|hexdigits\|isalnum' klausmate/plus.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot review of stacked PR #3 (2026-09-17): (1) billing.py webhook and (2) proxy.py routes check only the declared Content-Length, then request.body() buffers a chunked body without the cap — read through a bounded stream reader, 413 once over max_json_bytes, before any parsing or signature check; (3) plus.key() accepts a non-hex 35-char string — require the 32-char hex suffix like the service's keys.looks_like_key; (4) /v1/messages pre-checks amount=1 — pre-check with an estimate (len(raw)//4 + max_tokens) the way /v1/embeddings guesses; concurrency overshoot stays bounded and accepted (KP final review ruling).
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] All four Copilot findings plus the mid-task Codex P1 reservation are built, TDD (RED, GREEN, one mutation each, every file restored byte-identical). Scoped service suite: 79 passed, exit 0; tests/test_plus.py 30 passed; index_queue 165; setup_crop_theme 34; addon compiles through the symlink. The card's verify: pytest leg is currently red ONLY on K-263's in-flight files (test_lifecycle.py, test_db.py, test_entitlement.py -- purge_expired / last_event_created / app.purge_once do not exist yet); ignoring those three, the full verify passes. meter.reserve/settle replace check-then-charge in all three proxy routes; meter.charge survives as a one-line settle(reserved=0) alias. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/copilot-batch-report.md. Left in Doing.
+- [2026-09-17 claude-kp-copilot] Update: K-263's implementation landed while I was finishing, so the card's verify: now passes end to end -- exit 0, 105 passed. My four source files are byte-identical to what I recorded (proxy 44559a8e, billing d21b376e, meter c4db88f5, klausmate/plus ac72299d).
+- [2026-09-17 claude-kp-copilot] Fix round 1 done: R1 (every path from reserve to settle releases -- /v1/messages is one try/finally with a settled flag, so a raising resp.aread() on a streamed non-200 no longer charges the estimate forever), R2 (reserve hands back Reservation(ok, before, at); settle keys month_key(at)/day_key(at), so a UTC month or audio-day straddle bills the period that admitted the request -- no more negative counters), R3 (a StreamingResponse cannot carry a post-settle header -- no trailer support in Starlette/uvicorn -- so the streamed X-Klaus-Quota now sends the admission reading, never the reservation; the non-stream branches still send the settled figure), plus note N1 taken with a pin. 110 passed, verify exit 0; addon suites green (plus 30, index_queue 165, setup_crop_theme 34, lecture_recorder 56) and compiles through the symlink. 5 new pins, 5 mutations, proxy.py 9598bcfa and meter.py 14544aae restored byte-identical. Report section appended. Still in Doing.
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED after one fix round on the settle wiring. Landed on stack/klaus-plus as f2cd9ef, merged forward as d105b94; PR #3 threads answered and resolved; re-review requested.
+
+### K-263: PR #3 Codex batch (Klaus Plus): the data-retention purge the privacy policy promises; stale Stripe subscription events ignored
+owner: claude-kp-codex
+priority: P1
+tags: klaus-plus,pr-review,money
+files: service/klausplus/db.py,service/klausplus/entitlement.py,service/klausplus/app.py,service/klausplus/config.py,service/tests/test_entitlement.py,service/tests/test_db.py,service/tests/test_lifecycle.py
+verify: grep -q 'def purge_expired' service/klausplus/db.py && grep -q 'last_event_created\|event_created' service/klausplus/entitlement.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Codex review of stacked PR #3 (2026-09-17): (1) templates.py's privacy policy promises usage kept 13 months and customer records deleted 30 days after subscription end, but nothing in service/ deletes anything — implement the purge (Store.purge_expired(now) + a periodic asyncio task in app.py's lifespan, run at startup and every 24 h; settings for the two windows); (2) entitlement.apply_event applies every unseen subscription event unconditionally — Stripe delivers out of order, so a delayed older customer.subscription.updated can revive a cancelled row: persist the last applied event's created timestamp per customer and ignore older events.
+
+#### Comments
+- [2026-09-17 claude-kp-codex] Both fixes built, RED->GREEN->mutation. verify: exit 1 before (the purge_expired grep failed), exit 0 after; suite 105 passed (baseline 88). db.py: purge_expired + _ENDED_BEFORE, last_event_created column with a guarded ALTER migration in connect(), claim_event_created. entitlement.py: the _in_order ordering guard (missing created applies, logged once). app.py: PURGE_INTERVAL_S, purge_once, _purge_loop, _lifespan. config.py: retention_usage_days=395, retention_customer_grace_days=30, env-overridable. New pins in tests/test_lifecycle.py (8) plus 2 each in test_db.py and test_entitlement.py. Report at .superpowers/sdd/2026-09-16-klaus-plus-subscription/codex-batch-report.md, carrying the two README sentences for the orchestrator. Touched none of K-262's files; the service suite was green on every run I made. Card stays in Doing.
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED after one fix round on the settle wiring. Landed on stack/klaus-plus as f2cd9ef, merged forward as d105b94; PR #3 threads answered and resolved; re-review requested.
+
+### K-266: PR #4 second re-review batch (Plan 2): the old uploader never mutates after teardown; the no-key path keeps existing verdicts (docs agree); the bar counts pending, not queued
+owner: claude-p2-bots2
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/lecture_recorder.py,klausmate/pertinence.py,klausmate/__init__.py,klausmate/config.md,tests/test_lecture_recorder.py,tests/test_pertinence.py,tests/test_pdf_dock.py
+verify: grep -q '_closed' klausmate/lecture_recorder.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_recorder.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot second re-review of stacked PR #4 (2026-09-17): (1) _stop_lecture_uploader drops the singleton after Uploader.stop() enqueues its sentinel without waiting for the in-flight _one(); the next profile's requeue_leftovers can double-submit that chunk (duplicate segment / unlink race) — a _closed flag re-checked after the transcription returns (skip append+unlink, keep the WAV) plus a bounded join in stop(); (2) the no-key/no-Plus path returns set() and config.md:21 says every match counts, but retention/tag_sync still read old verdicts — ruling: existing fresh verdicts STAND (paid for; a removed key must not un-doubt cards), on_done reports rejected_nids(judged), config.md reworded; (3) the bar's 'n to transcribe' uses queued() (queue length) so it reads 0 during a long upload — use pending().
+
+#### Comments
+- [2026-09-17 claude-p2-bots2] All three findings landed. verify: exit 1 before (no _closed), exit 0 after. Whole loop 48 files / 5050 checks / 0 failed; py_compile through the symlink clean. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch2-report.md. Deviation: Uploader.enqueue() also clears _closed (one line) so the existing C1 restart pin stays meaningful — production never enqueues into a stopped uploader. __init__.py edit is docstring-only; test_pdf_dock.py needed no change. Card left in Doing.
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED, no regressions, three mutations red. Committed as 751fbb9; PR #4 threads answered and resolved; re-review requested.
+
+### K-267: PR #3 re-review (service): the daily audio cap decided inside the reservation lock; a streamed relay never entered releases its reservation
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review,money
+files: service/klausplus/meter.py,service/klausplus/proxy.py,service/tests/test_meter.py,service/tests/test_proxy.py
+verify: grep -q 'daily' service/klausplus/meter.py && grep -q 'class _SettlingStream\|never entered\|iterator was never' service/klausplus/proxy.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot re-review of stacked PR #3 (2026-09-17): (1) meter.py:66 / proxy.py:294 — check_daily_audio runs outside the reservation lock and reserve() increments daily_audio without rechecking, so two concurrent uploads can both pass the 240-minute daily cap; decide the daily cap inside reserve() for purpose transcribe (a distinct refusal reason so the route keeps its daily message); (2) proxy.py:418 (suppressed) — settled=True before the StreamingResponse starts strands the reservation when http.response.start fails or the relay is never entered; a StreamingResponse subclass that releases when its iterator was never entered (the reviewer's ~6-line shape; a Starlette background task runs AFTER the stream and cannot do it).
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] Both items done. (1) The daily audio ceiling is decided inside reserve()'s lock, first, with Reservation.reason ('day'/'month'/''); the route's own pre-check is gone and res.reason == 'day' raises the existing daily message -- two 7,260s reservations against the 14,400s day: the second is now refused and records nothing. (2) _SettlingStream(StreamingResponse) releases the reservation when the relay was never entered (a box the relay flips as its first statement, so exactly one of the two settles); the RED reproduced the reviewer's 4,124 stranded tokens at the ASGI level. verify: exit 1 before, exit 0 after -- 112 passed. Addon: plus 30, index_queue 165, lecture_recorder 69, compiles through the symlink. 2 new pins, 4 mutations, proxy.py c6f3282b and meter.py 3502445d restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED; the upstream-close note taken by the orchestrator (aclose on the never-entered path, pinned). Landed 99ee5bd on stack/klaus-plus, merged forward; both daily-cap threads answered and resolved.
+
+### K-268: page_store: a text-less (scanned) document gets a bake-stable content identity instead of its page count
+owner: claude-pagestore
+priority: P2
+tags: plan-1,pr-review
+files: klausmate/page_store.py,tests/test_page_store.py
+verify: grep -q 'textless\|text-less' klausmate/page_store.py && grep -c 'textless\|text-less' tests/test_page_store.py | grep -qv '^0$' && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_page_store.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot re-review of stacked PR #3 (2026-09-17), page_store.py:63: text_digest hashes only the page count for a text-less document, so two scanned PDFs of the same length replaced under one safe name share a directory and inherit each other's transcript segments. Ruling: when every page is text-less, the identity is a SHA-256 of the pristine original's bytes (pdf_originals/<base>.pdf — capture it at this point if it does not exist yet, the way the first bake does), so it is stable across bakes and moves and differs between two scans; text-bearing documents keep text_digest. _same_text must NOT adopt an all-empty directory for a text-less document whose content identity differs.
+
+#### Comments
+- [2026-09-17 claude-pagestore] document_identity() in page_store.py is now the one identity decision — text_digest for a text-bearing document, sha256 of the pristine original's bytes (pdf_originals/<base>.pdf, captured via pdf_handler._capture_pristine_stripped when absent, never a second copy) for a text-less one; _same_text gains same_file and refuses an all-empty adoption for a text-less document unless the directory is the legacy one digest12(path) names. RED: verify exit 1 (no text-less pin in tests) then 2 FAILs + AttributeError with the new pins. GREEN: test_page_store 45 -> 57 passed, 0 failed; verify exit 0. Mutation (if not _textless -> if True) killed 2 pins; restored byte-identical, md5 7990bcd6374c1b0d8491a4d139cf6f54. Whole loop: 48 files, all rc=0, 0 failed. Compiled through the symlink. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/pagestore-identity-report.md. Left in Doing.
+- [2026-09-17 orchestrator] Review (opus) APPROVED in substance; doc corrections (save_pdf, the accepted edge, the fallback pin) applied by the orchestrator. Landed 303c5e0 on stack/klaus-plus, merged forward; thread answered and resolved; #3 re-review requested.
+
+### K-269: PR #4 third re-review batch (Plan 2): plain-text transcript label; a closed uploader never transcribes; the no-key path retires stale verdicts; aria-expanded on the pdf.js toggle
+owner: claude-p2-bots3
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/pdf_viewer.py,klausmate/lecture_recorder.py,klausmate/pertinence.py,klausmate/web/pdfjs_viewer.html,tests/test_transcript_strip.py,tests/test_lecture_recorder.py,tests/test_pertinence.py,tests/test_pdfjs_viewer.py
+verify: grep -q 'PlainText' klausmate/pdf_viewer.py && grep -q 'aria-expanded' klausmate/web/pdfjs_viewer.html && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_transcript_strip.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot third review of stacked PR #4 (2026-09-17): (1) pdf_viewer.set_transcript: QLabel.setText in AutoText mode renders markup in untrusted transcript text — setTextFormat(PlainText); (2) lecture_recorder._one still transcribes chunks queued ahead of the stop sentinel (paid, then discarded) — bail out at the top when _closed, keeping the loop's task_done(); (3) pertinence's no-key path reports every stored rejection without is_stale — move the gate below the staleness retirement so the keyless path retires stale entries (and saves) before reporting; (4) pdfjs_viewer.html ktHead toggle: aria-expanded set on toggle and initially.
+
+#### Comments
+- [2026-09-17 claude-p2-bots3] All four findings fixed, TDD RED->GREEN->mutation each (mutations restored byte-identical, md5s in the report). verify: exit 1 before, exit 0 after. Loop: 48 files, 5078 checks passed, 0 failed. Compile through the symlink OK. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch3-report.md. page_store.py/test_page_store.py untouched (other worker's hunk). Left in Doing for the orchestrator's commit.
+- [2026-09-17 orchestrator] Scoped review (opus): APPROVED after the aria source pin was hardened against a commented-out line (orchestrator). Committed as 83e5fa3; thread answered and resolved; re-review requested.
+
+### K-271: PR #3 re-review (service): the recovery window claimed atomically per customer; the upstream client closed on shutdown
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review
+files: service/klausplus/billing.py,service/klausplus/db.py,service/klausplus/app.py,service/tests/test_billing.py,service/tests/test_db.py,service/tests/test_lifecycle.py
+verify: grep -q 'claim_recovery' service/klausplus/db.py && grep -q 'aclose' service/klausplus/app.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot re-review of stacked PR #3 (2026-09-17): (1) billing.py:158 — /recover's cooldown check and key rotation are not atomic: two concurrent requests can both pass the one-hour cooldown, both mint and send different keys, the last set_key_hash wins and the first email is invalid — claim the recovery window with ONE conditional UPDATE (key_rotated_at = now WHERE id = ? AND (key_rotated_at IS NULL OR key_rotated_at < now - cooldown)) inside the store's lock, mint and send only when the claim succeeded, and release the claim if delivery fails; (2) app.py:54 (suppressed) — the lifespan cancels the purge task but never closes Upstream's httpx.AsyncClient — await upstream.aclose() on teardown when it exposes one (the fake has none).
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] Both items done. (1) Store.claim_recovery(customer_id, now, cooldown_s) is one conditional UPDATE under the store lock (rowcount == 1 wins); /recover claims as the last term of its existing and-chain, mints and sends only on a win, keeps 'delivered before rotated', and calls the new release_recovery(id, row['key_rotated_at']) when delivery fails. RED reproduced the defect exactly: two keys minted and emailed, the first dead (the second request issued from inside send_key_email on its own loop). (2) The lifespan now awaits app.state.upstream.aclose() when the object exposes one, so Upstream's pooled httpx.AsyncClient closes; FakeUpstream and the bare object() sentinels still boot and shut down. verify: exit 1 before, exit 0 after -- 116 passed (also clean under -W error::DeprecationWarning). 4 new pins, 4 mutations, billing.py d8fd0c9e, db.py 1fc39574, app.py 8094c186 restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED; both notes taken by the orchestrator (release guarded by the claim's stamp; guarded upstream close). Landed e4a68e8 on stack/klaus-plus, merged forward; thread answered and resolved.
+
+### K-270: The new Klaus logo: the impossible star (klaus-logo.svg) on the toolbar and the Preferences sidebar, in the accent colour
+owner: claude-logo
+priority: P1
+tags: design,logo
+files: klausmate/top_bar.py,klausmate/manage_models.py,klausmate/web/klaus-logo.svg,tests/test_top_bar.py,tests/test_manage_models_assistant.py,tests/test_setup_crop_theme.py
+verify: grep -q 'star_polygons' klausmate/top_bar.py && test -f klausmate/web/klaus-logo.svg && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_top_bar.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Pouya, 2026-09-17: use /Users/pyamzi/Downloads/klaus-logo.svg (five filled paths, viewBox 0 0 1254 1254, the 'impossible star') as the new logo. Consumers: top_bar.logo_html (inline SVG, today a stroked _STAR_PATH in var(--klaus-accent, currentColor)) and the Preferences sidebar pixmap in manage_models (today strokes top_bar.star_points()). Keep ONE source of truth in top_bar (the five path strings), fill in the accent colour (no stroke), star_polygons() replacing star_points(); the sidebar draws filled QPolygonF paths; the original SVG copied unchanged into klausmate/web/. Offscreen pixel proof that the sidebar mark renders in the accent.
+
+#### Comments
+- [2026-09-17 claude-logo] Built. verify: exit 1 before, exit 0 after. Asset copied byte-identical (md5 9dc3197f26ce3ef759f8356d57dcef3e). _STAR_PATHS + STAR_VIEWBOX=1254 + star_polygons() in top_bar; star_points() deleted; logo_html fills five paths, no stroke. Sidebar pixmap fills one QPainterPath on WindingFill at the label's own dpr. Offscreen pixel proof: 20.6% opaque, 0 off-accent px, 0 corner ink. 6 mutations all bit, all restored byte-identical. Full loop 47/48 clean. ONE BLOCKER for the orchestrator: tests/test_dialog_logic.py:547 pins the old name '_top_bar.star_points()' and is OUTSIDE this card's files list, so I left it red — one-line fix and the full report are in .superpowers/sdd/2026-09-16-klaus-plus-subscription/logo-report.md, which also carries the two CLAUDE.md sentences. Left in Doing.
+- [2026-09-17 orchestrator] Scoped review (sonnet) APPROVED — asset/code equality, five filled paths, no stroke, accent fill on the sidebar, both mutations red. Committed as 48ce884.
+
+### K-273: Klaus Plus: invoice events obey the same created-order guard as subscription events
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review
+files: service/klausplus/entitlement.py,service/tests/test_entitlement.py
+verify: grep -c 'claim_event_created' service/klausplus/entitlement.py | grep -qv '^1$' && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot on stacked PR #3 (2026-09-17), entitlement.py:72: the created-order guard covers subscription events only; invoice.payment_failed and invoice.paid still mutate the customer's status unordered, so a delayed payment_failed delivered after a successful payment moves an active customer back to past_due. One per-customer stamp for EVERY entitlement-mutating event: claim the created stamp before any invoice mutation too; an older invoice event is ignored; idempotency by event id unchanged.
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] Done. ORDERED_EVENTS = the three subscription events plus invoice.payment_failed and invoice.paid; apply_event upserts once and takes _in_order ahead of all of them, then dispatches, so the invoice pair claims the same single per-customer stamp. checkout.session.completed stays outside it on purpose (it only creates the row; spending the stamp there would make a legitimately older subscription event look stale). An ignored event gets one debug line (type + cus id, no payload); idempotency by event id and the missing-created warning are unchanged, so the existing unstamped test_payment_failed_then_paid still passes untouched. Note for whoever reads the verify: grep -c 'claim_event_created' is 2 because the rewritten _in_order docstring NAMES Store.claim_event_created -- there is still exactly one call site, as the ruling requires. verify: exit 1 before, exit 0 after -- 119 passed. 3 new pins, 1 mutation (guard back to subscription-only -> 3 failed), entitlement.py bd32eac7 restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED across eleven probes; the ORDERED_EVENTS comment clause added by the orchestrator. Landed b305c8f on stack/klaus-plus, merged forward; thread answered and resolved.
+
+### K-272: PR #4 fourth re-review batch (Plan 2): tag searches escaped for Anki's query syntax; a reopened uploader is never stranded; a raising on_segment never re-transcribes; the pdf.js strip comment
+owner: claude-p2-bots4
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/tag_sync.py,klausmate/pdf_drive.py,klausmate/lecture_recorder.py,klausmate/pdf_viewer.py,tests/test_klausmate.py,tests/test_drive.py,tests/test_lecture_recorder.py
+verify: grep -q 'def tag_query' klausmate/tag_sync.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_drive.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot fourth review of stacked PR #4 (2026-09-17): (1) pdf_drive:2341 'Doubtful cards…' (and the older Show-matches action) interpolate the raw lecture tag into Anki's search — a quote, backslash, * or _ in a PDF name breaks or widens the query; ONE aqt-free tag_sync.tag_query(tag) helper quoting and escaping for Anki's syntax, used by both; (2) lecture_recorder.enqueue clears _closed while the old worker may still hold its sentinel: the worker must only exit on a sentinel when _closed is still True; (3) a raising on_segment after a durable append_segment kept the WAV and re-transcribed the same segment: notify after the unlink, non-fatal; (4) pdf_viewer:4338 comment says the pdf.js strip is INSIDE the page — it is a docked sibling footer.
+
+#### Comments
+- [2026-09-17 claude-p2-bots4] RED baseline recorded before any edit.
+- [2026-09-17 claude-p2-bots4] All four findings fixed, TDD with one mutation per fix (restored byte-identical). verify RED exit=1 (no def tag_query) -> GREEN exit=0 (366/0). Whole loop 5112 passed, 0 failed across 48 files; py_compile through the symlink OK. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch4-report.md. One deviation: pdf_drive's THIRD tag: site (_set_suspended_cards, Suspend/Unsuspend) also went onto tag_query - same defect, worse consequence (suspends another PDF's cards). tag_sync.apply_membership deliberately left on _escape_tag (membership, not search; pinned by tests/test_tag_migrate.py, outside this card).
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED — rslib's escaping rules re-implemented against tag_query's real output; three mutations red. Committed as 2480812; thread answered and resolved; re-review requested.
+
+### K-275: Klaus Plus: a 2xx whose usage block is missing or malformed settles the reserved estimate, never zero
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review,money
+files: service/klausplus/proxy.py,service/tests/test_proxy.py
+verify: grep -q 'usage absent\|no usage\|usage missing' service/klausplus/proxy.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot on stacked PR #3 (2026-09-17), proxy.py:406 and :431 (suppressed): a successful non-streaming response with no usage object (or an unparseable one) is metered 0, releasing the whole reservation; the streaming path with no usage events settles 0 too — a provider or proxy that omits usage makes judge/assistant turns free. Ruling: on a 2xx, absent or malformed usage settles the RESERVED estimate (the admission figure), both branches; a present usage still settles the actual figure; one log line names the fallback.
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] Done. _usage_fallback(request, purpose, reserved) logs one line (purpose and the figure, never the payload) and returns the reservation; three sites take it with the same one-liner after their existing parse -- /v1/embeddings, the non-stream /v1/messages branch, and the SSE relay's finally. A present parseable usage still settles the actual figure; a non-2xx still releases in full (the fallback is inside the 200 branch, and the relay only runs on a 200). /v1/embeddings already fell back to the guess in all five malformed shapes I checked (usage missing, usage a string, total_tokens non-numeric, total_tokens zero, a non-JSON body) -- unchanged behaviour, but routed through the same helper so it is no longer the only one that falls back silently. verify: exit 1 before, exit 0 after -- 122 passed. 3 new pins, 3 mutations (each branch back to 0; the embeddings one also kills the pre-existing usage_null pin), proxy.py 45256ac7 restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED, 22 probes; zero-usage ruling: right as built. Landed 83970a0 on stack/klaus-plus, merged forward.
+
+### K-277: Klaus Plus: /welcome seeds the subscription only while the row is still unset; a newer webhook state is never overwritten
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review
+files: service/klausplus/billing.py,service/klausplus/db.py,service/tests/test_billing.py,service/tests/test_db.py
+verify: grep -q 'seed_subscription_if_unset\|if_unset' service/klausplus/billing.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot on stacked PR #3 (2026-09-17), billing.py:73: /welcome calls set_subscription unconditionally from the checkout session, so a page opened after a newer webhook already applied a cancellation or a payment failure overwrites that state with the session's older status and revives a lapsed subscription. Ruling: seed from the session only while the customer row has no subscription state yet (one conditional UPDATE in the store, the claim_recovery shape); a row a webhook has already written is left alone; the key is still minted once either way.
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] Done. Store.seed_subscription_if_unset(cid, status, period_end, now) is one conditional UPDATE under the store lock (the claim_recovery shape); /welcome seeds through it and, when the row already carries state, logs one debug line and leaves the webhook's state alone -- the key is still minted and shown once on both paths, and neither the webhook path nor the created stamp is touched. TWO THINGS TO KNOW: (a) the card's own verify passed BEFORE the work -- its 'if_unset' alternative already matched the pre-existing set_key_hash_if_unset at billing.py:80; the strict grep for seed_subscription_if_unset is exit 1 before, exit 0 after, and both are recorded in the report. (b) The ruling's suggested predicate (status IS NULL OR status = '') would have been silently dead: the column is NOT NULL DEFAULT 'incomplete', so upsert_customer leaves exactly 'incomplete' and that WHERE matches nothing -- the seed would never have fired and every new row would have stayed incomplete, which verdict() refuses. The exact test is status = UNSET_STATUS = 'incomplete', named beside the schema default. 125 passed. 3 new pins, 2 mutations, billing.py bd841279 and db.py c628f2bb restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED, nine probes, the race both ways. Landed e1e8ff3 on stack/klaus-plus, merged forward; thread answered and resolved.
+
+### K-276: PR #4 fifth re-review batch (Plan 2): a stopped uploader stays stopped; the deferred transcript callback survives teardown; a failed native load clears the strip
+owner: claude-p2-bots5
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/lecture_recorder.py,klausmate/pdf_viewer.py,tests/test_lecture_recorder.py,tests/test_transcript_strip.py
+verify: ! grep -q 'self._closed = False' klausmate/lecture_recorder.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_recorder.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot fifth review of stacked PR #4 (2026-09-17): (1) lecture_recorder.enqueue resets _closed, reopening an uploader whose old worker may still be inside _one() after a timed-out stop() join — the post-transcription guard then sees _closed False and appends/unlinks while a requeued copy is processed too; production never reopens (the singleton is dropped and rebuilt) — remove the reset: a stopped uploader stays stopped, and the restart pin builds a NEW Uploader; (2) pdf_viewer._on_page_store_notify's deferred _apply can run after cleanup() destroyed the widgets → RuntimeError from the uploader's notification — guard on liveness (a flag cleanup sets; a deleted-widget RuntimeError swallowed); (3) the native QPdfDocument.load() failure path only calls _set_active(None) and leaves the previous transcript visible — clear the strip there too.
+
+#### Comments
+- [2026-09-17 orchestrator] Scoped review (opus): items 1–2 approved, item 3 PARTIAL — the failed-load branch now forgets the document (orchestrator, pinned). Committed as cb45222; thread answered and resolved; re-review requested.
+
+### K-278: Klaus Plus: every non-empty request reserves at least one token; audio seconds round up; a malformed cache timestamp reads as no verdict
+owner: claude-kp-copilot
+priority: P1
+tags: klaus-plus,pr-review,money
+files: service/klausplus/proxy.py,service/tests/test_proxy.py,klausmate/plus.py,tests/test_plus.py
+verify: grep -q 'max(1' service/klausplus/proxy.py && grep -q 'checked_at' tests/test_plus.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot on stacked PR #3 (2026-09-17): (1) proxy.py:254 and :393 — the estimate (chars // 4, len(raw) // 4) is 0 for a short input, so a request is admitted with no quota left and the K-275 fallback meters 0: unlimited short requests bypass the ceiling — reserve max(1, estimate) for any non-empty input; (2) proxy.py:306 (suppressed) — int(round(wav_seconds)) rounds a WAV under 0.5 s to 0 seconds, forwarded free — max(1, ceil(seconds)); (3) klausmate/plus.py:73 (suppressed) — a malformed persisted klaus_plus_cache (checked_at 'unknown') reaches float() and raises ValueError inside active(), crashing every index attempt at the key gate — an unparseable checked_at reads as an absent verdict.
+
+#### Comments
+- [2026-09-17 claude-kp-copilot] All three done. (1) guess = max(1, chars // 4) if chars else 0 for embeddings (an empty input still reserves 0, per the ruling) and reserved = max(1, len(raw) // 4) + want for messages -- a one-char input and a two-byte {} body are both refused 402 against a spent ceiling now, with no upstream call. (2) seconds = max(1, math.ceil(wav_seconds(content))); a zero-length WAV never reaches that line because wav_seconds raises on data_len == 0 and the route answers its existing 400, so the junk pin still holds and max(1,...) cannot dress junk up as a billable second. (3) plus.active guards the float(checked_at) -- an unparseable stamp reads as an absent verdict (key decides, service has the last word); the RED did not fail, it raised ValueError and took the whole test file down, which is the reported 'every index attempt dies at the key gate'. Checked the siblings too: _day is already guarded and the other float() calls are write paths, so active() was the only unguarded read. A parseable missing stamp still honours a fresh refusal -- pinned, so the guard cannot degenerate into 'always True'. Service 127 passed; test_plus 31 passed; index_queue 165, lecture_recorder 92, setup_crop_theme 34; compiles through the symlink. verify: exit 1 before, exit 0 after. 3 new pins, 4 mutations, proxy.py 0994e05c and plus.py 0df3f45a restored byte-identical. Report section appended. Left in Doing.
+- [2026-09-17 claude-kp-copilot] Fix round 1 done. The re-check was right and my sweep claim was wrong: remember() reads period_end FROM THE CACHE whenever the caller passes none, which note_refusal always does, so the same damage raised on every refusal, every metered call and in refresh. One _num(value, default=0.0) helper is now the single place a persisted number is parsed, used at all three sites (active, remember, refresh) -- active's bespoke try/except from round one is gone, same behaviour, one rule. This time the sweep is CHECKED not claimed: the only float(/int( left in plus.py are inside _num, inside the already-guarded _day, and the HTTP statuses from the caller/urllib. status_line builds the status word and renewal day first and wraps ONLY the quota clause, so a torn block costs the counts and never the line. Item 1's carve-out narrowed to 'if inputs' -- keyed on chars, ['',''] and a missing key were admitted against a spent ceiling and forwarded. One pin needed fixing before it counted: the first ['',''] pin passed under its own mutation because the counter sat 7 tokens OVER the ceiling (where even a 0-token reservation is refused); it now sets the counter exactly ON the cap and asserts it. Service 127 passed; test_plus 39 passed; index_queue 165, lecture_recorder 92, manage_models_assistant 129; compiles. 5 mutations, plus.py 0090883a and proxy.py 8598090e restored byte-identical.
+- [2026-09-17 orchestrator] Re-check (opus) APPROVED after one fix round; the two status_line notes taken by the orchestrator (KeyError in the tuple; a raw non-dict cache normalised). Landed 9f28ae1 on stack/klaus-plus, merged forward; thread answered and resolved.
+
+### K-279: Recorder: a device whose only format is Float32 still records (converted to Int16 PCM); the transcript strip's scroll viewport is transparent in dark mode
+owner: claude-p2-bots6
+priority: P2
+tags: plan-2,pr-review
+files: klausmate/lecture_recorder.py,klausmate/pdf_viewer.py,klausmate/theme.py,tests/test_lecture_recorder.py,tests/test_transcript_strip.py,tests/test_theme.py
+verify: grep -q 'def pcm_to_int16' klausmate/lecture_recorder.py && grep -q 'viewport().setAutoFillBackground(False)' klausmate/pdf_viewer.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_recorder.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_transcript_strip.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot sixth review of stacked PR #4 (2026-09-17), suppressed: (1) lecture_recorder ~:499 — the fallback forces Int16 onto device.preferredFormat() without isFormatSupported(); a device whose only format is Float32 makes QAudioSource fail to start and Record silently unavailable — negotiate: ideal 16 kHz mono Int16 if supported, else the preferred format if supported, converting Float32 (and Int32) PCM to Int16 before wav_bytes; an unsupported result refuses to start with one log line; (2) theme.py ~:1366 / pdf_viewer strip — the QSS makes the QScrollArea transparent but Qt paints its viewport child from the palette, so in dark mode the transcript body can be an opaque default rectangle over the chrome surface — clear the viewport's background at construction (setAutoFillBackground(False) or a viewport rule) and prove it with an offscreen dark-mode pixel read.
+
+#### Comments
+- [2026-09-17 claude-p2-bots6] Implemented. The card's verify AS WRITTEN passed BEFORE the work — 'isFormatSupported' already matched lecture_recorder.py:495 (the ideal-format check from K-256) and 'viewport()' matched four pre-existing QPdfView lines in pdf_viewer.py — so it was not a gate (recorded run: VERIFY_EXIT=0, 92 passed). Rewrote it via board.py edit to name the two symbols this card adds ('def pcm_to_int16', 'viewport().setAutoFillBackground(False)') plus both touched test files; RED proven at HEAD (git show HEAD:... | grep -c -> 0 for both), GREEN now (110 + 38 passed, VERIFY_EXIT=0). Finding 1 (a Float32-only device could not record) was real and is fixed, with mutation evidence (forcing Int16 back: 6 fails; dropping the conversion: 3 fails). Finding 2 (opaque viewport) does NOT reproduce: the existing 'QScrollArea { background: transparent }' rule already clears the viewport's palette fill — measured offscreen under a loud dark palette before any edit. The ruled setAutoFillBackground(False) is added anyway as defence in depth; the new dark-mode pixel pin fails only when BOTH guards are removed (35 passed, 3 failed) and passes with either. Whole loop: 48 files, rc=0, 0 failed; compile OK through the symlink. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch6-report.md
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED — conversion math byte for byte, the tail carry over 300 randomised splits; the viewport call is defence-in-depth. Committed as 8507b46; re-review requested.
