@@ -165,6 +165,13 @@ check(
     iq.status_line(iq.RunnerState(active=True, label="Embedding cards…"))
     == "Card index — Embedding cards…",
 )
+check(
+    "the judge phase counts cards, not a rounded percent — 'judging "
+    "12/40' says how much work is left in a way a percentage would flatten",
+    "judging 12/40" in iq.status_line(
+        iq.RunnerState(active=True, name="Lec", label="judging", phase="judge", done=12, total=40)
+    ),
+)
 
 msg = iq.sweep_message(2, 30000, "text-embedding-3-large",
                        "~1,000 tokens · about $0.01")
@@ -316,6 +323,8 @@ class Pipeline:
         self.pending = {}
         self.cancels = []
         self._busy = False  # curation's shared re-entrancy token
+        self.rejected_global = set()  # what all_rejected() hands back
+        self._judge_raises = None  # one-shot exception for ensure_judged (fix round 1, C1)
 
     # -- curation ------------------------------------------------------
     def ensure_index(self, _parent, *, on_progress=None, on_done=None, on_error=None, cancel=None):
@@ -336,6 +345,17 @@ class Pipeline:
     def sync_after_matches(self, _mw, name, matches, **_k):
         self.calls.append(("tag_sync", name))
 
+    # -- pertinence ------------------------------------------------------
+    def ensure_judged(self, _parent, name, _matches, *, on_done=None, on_error=None, cancel=None, on_progress=None, ask=None):
+        self.calls.append(("ensure_judged", name))
+        if self._judge_raises is not None:
+            exc, self._judge_raises = self._judge_raises, None
+            raise exc
+        self.pending["judge"] = (on_done, on_error, on_progress)
+
+    def all_rejected(self, _user_files):
+        return self.rejected_global
+
     # -- drivers -------------------------------------------------------
     def finish_cards(self, completed=True):
         self.pending.pop("cards")[0](FakeIndex(), completed)
@@ -345,6 +365,9 @@ class Pipeline:
 
     def finish_matches(self, matches=((1, 0.9),)):
         self.pending.pop("matches")[0](list(matches))
+
+    def finish_judge(self, rejected=frozenset()):
+        self.pending.pop("judge")[0](set(rejected))
 
     def raise_in(self, phase, exc):
         self.pending.pop(phase)[1](exc)
@@ -368,6 +391,7 @@ def new_world(cfg=None, names=("a", "b", "c")):
         ("klausmate.curation", pipe),
         ("klausmate.retention", pipe),
         ("klausmate.tag_sync", pipe),
+        ("klausmate.pertinence", pipe),
     ):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
@@ -393,6 +417,7 @@ def run_one(pipe, name):
     pipe.finish_cards()
     pipe.finish_pdf()
     pipe.finish_matches()
+    pipe.finish_judge()
 
 
 # ----------------------------------------------------------------- the chain
@@ -409,11 +434,13 @@ check("phase 2 is the PDF's own index", pipe.calls[-1] == ("ensure_pdf_index", "
 pipe.finish_pdf()
 check("phase 3 is matching", pipe.calls[-1] == ("ensure_matches", "a"))
 pipe.finish_matches()
-check("phase 4 writes the PDF's !Library tag", pipe.calls[-1] == ("tag_sync", "a"))
+check("phase 4 judges pertinence", pipe.calls[-1] == ("ensure_judged", "a"))
+pipe.finish_judge()
+check("phase 5 writes the PDF's !Library tag", pipe.calls[-1] == ("tag_sync", "a"))
 check(
-    "the whole K-146 chain, in order, once",
+    "the whole chain, in order, once",
     [c[0] for c in pipe.calls]
-    == ["ensure_index", "ensure_pdf_index", "ensure_matches", "tag_sync"],
+    == ["ensure_index", "ensure_pdf_index", "ensure_matches", "ensure_judged", "tag_sync"],
 )
 check("a completed job publishes its name so the Library can re-aggregate", iq.state().finished == "a")
 check("...and reads as idle", not iq.state().active)
@@ -426,6 +453,35 @@ check(
     "a card-index job stops after phase 1 — there is no PDF to index",
     [c[0] for c in pipe.calls] == ["ensure_index"],
 )
+
+section("fix round 1, C1 — a pertinence-phase exception never wedges the queue")
+
+tmp, pipe = new_world()
+pipe._judge_raises = KeyError("claude-sonnet-4-5")
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+pipe.finish_cards()
+pipe.finish_pdf()
+pipe.finish_matches()
+check(
+    "ensure_judged raising reaches after_matches' own try/except, not the "
+    "caller's QueryOp — pipe.calls sees the attempt",
+    pipe.calls[-2] == ("ensure_judged", "a"),
+)
+check(
+    "...and the PDF is STILL tagged — an untagged pertinence phase beats a "
+    "wedged queue, the next index pass can always re-judge. The tag write "
+    "goes through the SAME after_judged the normal path uses (source/AST-"
+    "pinned above), so it still passes doubtful=pertinence.all_rejected(...)",
+    pipe.calls[-1] == ("tag_sync", "a"),
+)
+check(
+    "...and _current actually clears — the next queued job is free to run "
+    "(this is the wedge C1 found: a bare raise never reaches _job_done)",
+    iq._current is None,
+)
+FakeTimer.drain()
+check("...the run really did finish, idle, not stuck mid-job", not iq.state().active)
 
 
 # ------------------------------------------------------------------ the queue
@@ -550,6 +606,11 @@ check(
     "PARTIAL ranking and tagging on it would silently shrink the PDF's "
     "!Library membership",
     ("tag_sync", "a") not in pipe.calls,
+)
+check(
+    "...and never reaches the judge phase either — a cancelled matches "
+    "pass has nothing worth paying to judge",
+    ("ensure_judged", "a") not in pipe.calls,
 )
 FakeTimer.drain()
 check("...and nothing new starts", [c for c in pipe.calls if c[1] == "b"] == [])
@@ -875,7 +936,8 @@ check(
 
 section("one chain, one copy")
 
-_iq_src = code_only(open(os.path.join(ADDON, "index_queue.py")).read())
+_iq_raw = open(os.path.join(ADDON, "index_queue.py")).read()  # docstrings are STRING tokens — code_only strips them
+_iq_src = code_only(_iq_raw)
 _drive_src = code_only(open(os.path.join(ADDON, "pdf_drive.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
@@ -892,6 +954,40 @@ check(
     _iq_src.count("curation.ensure_index(") == 1
     and _iq_src.count("retention.ensure_pdf_index(") == 1
     and _iq_src.count("retention.ensure_matches(") == 1,
+)
+check(
+    "the Doubtful tag's membership is passed through as the GLOBAL "
+    "rejected set — never a hand-picked subset of this one job's matches",
+    "doubtful=pertinence.all_rejected(" in _iq_src,
+)
+check(
+    "ask_judge is window-modal (.open(), never .exec()) with Skip as the "
+    "default button — the same K-114 rule and Enter-safety "
+    "offer_model_sweep's own confirm follows",
+    "box.open()" in _iq_src
+    and "box.setDefaultButton(skip_btn)" in _iq_src
+    and ".exec(" not in _iq_src,
+)
+check(
+    "...offering Judge and Skip as real buttons, not a Yes/No stand-in",
+    'box.addButton("Judge", QMessageBox.ButtonRole.AcceptRole)' in _iq_raw
+    and 'box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)' in _iq_raw,
+)
+check(
+    "fix round 1, I2 — the module docstring's chain names all five phases, "
+    "pertinence.ensure_judged included, in order",
+    "``curation.ensure_index`` → ``retention.ensure_pdf_index`` →\n"
+    "``retention.ensure_matches`` → ``pertinence.ensure_judged`` →\n"
+    "``tag_sync.sync_after_matches``" in _iq_raw,
+)
+check(
+    "fix round 1, I1 — the docstring names phase four as the ONE exception "
+    "to 'each phase takes curation._busy in turn', and says why (K-255 "
+    "review): holding the token across the Judge/Skip dialog would "
+    "re-create the exact K-146 leak the same paragraph warns about",
+    "with ONE exception: phase four" in _iq_raw
+    and "never touches it at all" in _iq_raw
+    and "Judge/Skip dialog" in _iq_raw,
 )
 check(
     "offer_model_sweep routes the Plus flag from plus.active — a hand-"
@@ -1008,6 +1104,42 @@ check(
     "same function — the dock has no wording of its own",
     _iq_src.count("status_line(snapshot)") >= 1
     and "dock_button_label(snapshot)" in _iq_src,
+)
+
+_after_matches_fn = _fn(os.path.join(ADDON, "index_queue.py"), "after_matches")
+_after_matches_calls = {
+    ast.unparse(n.func) if hasattr(ast, "unparse") else ""
+    for n in ast.walk(_after_matches_fn)
+    if isinstance(n, ast.Call)
+} if _after_matches_fn else set()
+check("after_matches exists to pin", _after_matches_fn is not None)
+check(
+    "phase four (pertinence) runs from INSIDE phase three's own "
+    "completion handler — the judge pass must see the freshly matched set",
+    "pertinence.ensure_judged" in _after_matches_calls,
+)
+
+_after_judged_fn = _fn(os.path.join(ADDON, "index_queue.py"), "after_judged")
+_after_judged_calls = {
+    ast.unparse(n.func) if hasattr(ast, "unparse") else ""
+    for n in ast.walk(_after_judged_fn)
+    if isinstance(n, ast.Call)
+} if _after_judged_fn else set()
+check("after_judged exists to pin", _after_judged_fn is not None)
+
+_run_fn = _fn(os.path.join(ADDON, "index_queue.py"), "_run")
+check(
+    "fix round 1, I2 — _run's OWN docstring names the new phase too, not "
+    "just the module docstring's chain",
+    _run_fn is not None and "pertinence.ensure_judged" in (ast.get_docstring(_run_fn) or ""),
+)
+check(
+    "...and the tag write happens from inside the JUDGE phase's own "
+    "completion handler, never straight from after_matches — the tag "
+    "write must see whatever the judge pass actually rejected, not run "
+    "concurrently with it",
+    "tag_sync.sync_after_matches" in _after_judged_calls
+    and "tag_sync.sync_after_matches" not in _after_matches_calls,
 )
 
 raise SystemExit(report())

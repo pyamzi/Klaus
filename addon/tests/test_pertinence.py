@@ -49,6 +49,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
@@ -143,6 +144,25 @@ def _msg0_content(payload):
 check("20 cards → 3 requests of at most BATCH", len(calls) == 3 and all(len(json.JSONDecoder().raw_decode(_msg0_content(c).split("CARDS_JSON=")[1])[0]) <= pt.BATCH for c in calls) if "CARDS_JSON=" in _msg0_content(calls[0]) else len(calls) == 3)
 check("judge calls client.complete with purpose='judge' (Klaus Plus routing)", purposes == ["judge"] * len(calls))
 
+section("judge forwards on_headers to client.complete (Task 3: Klaus Plus quota readout)")
+_oh_seen = []
+
+
+class OHClient:
+    def complete(self, payload, timeout=None, **kw):
+        # "MISSING" (fix round 1, M1): kw.get("on_headers") alone reads
+        # back None whether the kwarg was forwarded as None or dropped
+        # entirely — this sentinel default is what tells those two apart.
+        _oh_seen.append(kw.get("on_headers", "MISSING"))
+        return resp
+
+
+_oh_sentinel = lambda h: None  # noqa: E731 — identity is all this checks
+pt.judge(OHClient(), "claude-sonnet-5", cards[:1], page, "Lec", on_headers=_oh_sentinel)
+check("judge() forwards on_headers straight through to client.complete", _oh_seen == [_oh_sentinel])
+pt.judge(OHClient(), "claude-sonnet-5", cards[:1], page, "Lec")
+check("...and omitting it forwards None rather than dropping the kwarg", _oh_seen[-1] is None)
+
 section("judge: a failed batch is skipped, logged safely, and never fatal")
 
 
@@ -202,6 +222,274 @@ pt.save_judged(root, "other", {"version": 1, "model": "m", "verdicts": {"7": {"p
 pt.save_judged(root, "lec", j)
 check("all_rejected unions every PDF's rejections", pt.all_rejected(root) == {12, 7})
 check("candidates = nids at/above threshold, in score order", pt.candidates([(1, 0.9), (2, 0.5), (3, 0.75)], 0.75) == [1, 3])
+
+section("ensure_judged: the aqt glue (fake mw/col/client; real, disk-backed retention/page_store)")
+
+retention = importlib.import_module("klausmate.retention")
+pdf_handler = importlib.import_module("klausmate.pdf_handler")
+page_store = importlib.import_module("klausmate.page_store")
+iq = importlib.import_module("klausmate.index_queue")
+plus = importlib.import_module("klausmate.plus")
+cost = importlib.import_module("klausmate.cost")
+
+
+class SyncOp:
+    """QueryOp stand-in that runs `op` synchronously. anki_stubs' own
+    aqt.operations.QueryOp (_AnyOp) is chainable but NEVER calls `op` or
+    `success` at all — right for tests that don't care what background
+    work computes, wrong for this one, which has to see judged.json
+    actually written (test_klausmate.py's _SyncOp is the same idea, for
+    the same reason)."""
+
+    def __init__(self, parent=None, op=None, success=None):
+        self._op = op
+        self._success = success
+        self._failure = None
+
+    def failure(self, fn):
+        self._failure = fn
+        return self
+
+    def without_collection(self):
+        return self
+
+    def run_in_background(self):
+        try:
+            result = self._op(None)
+        except Exception as exc:  # noqa: BLE001
+            if self._failure:
+                self._failure(exc)
+            return
+        if self._success:
+            self._success(result)
+
+
+class GlueCol:
+    def __init__(self, fields_by_nid):
+        self._fields = fields_by_nid
+
+    def get_note(self, nid):
+        return types.SimpleNamespace(fields=self._fields[nid])
+
+
+class GlueAddonManager:
+    def __init__(self, cfg):
+        self.cfg = cfg
+
+    def getConfig(self, _pkg):
+        return self.cfg
+
+
+class GlueMw:
+    def __init__(self, cfg, fields_by_nid):
+        self.col = GlueCol(fields_by_nid)
+        self.taskman = types.SimpleNamespace(run_on_main=lambda fn: fn())
+        self.addonManager = GlueAddonManager(cfg)
+
+
+class GlueAnthropicClient:
+    def __init__(self, _get_config):
+        pass
+
+    def complete(self, payload, timeout=None, purpose="assistant", *, on_headers=None, **kw):
+        _client_calls.append((payload, purpose, on_headers))
+        if on_headers is not None:
+            # Mirrors the real Client: invoke it with something that has
+            # .items(), the shape plus.parse_quota expects (fix round 1, M2).
+            on_headers({"X-Klaus-Quota": json.dumps({"human": {"cards": [412, 3000]}})})
+        return resp  # the verdicts_turn.json fixture: nid 11 pertinent, 12 not
+
+
+def make_ask(respond):
+    """A fake `ask` — records the text it was shown and, unless *respond*
+    is None (the "must not even be asked" cases), answers synchronously."""
+    log = []
+
+    def ask_fn(_parent, text, go):
+        log.append(text)
+        if respond is not None:
+            go(respond)
+
+    return ask_fn, log
+
+
+_client_calls = []
+_fake_anthropic = types.ModuleType("klausmate.anthropic_client")
+_fake_anthropic.Client = GlueAnthropicClient
+sys.modules["klausmate.anthropic_client"] = _fake_anthropic
+pkg = sys.modules["klausmate"]
+pkg.anthropic_client = _fake_anthropic
+# anki_stubs' package stub is a bare types.ModuleType — the real __init__.py
+# (and its _strip_html) never runs under it. _pkg()._strip_html (curation.py's
+# own pattern, reused here) needs SOMETHING there; the test's card fields
+# carry no HTML anyway, so identity is faithful enough.
+pkg._strip_html = lambda s: s
+
+_root = tempfile.mkdtemp(prefix="klaus-pertinence-")
+retention.USER_FILES = _root
+pkg.USER_FILES = _root
+pt.QueryOp = SyncOp
+
+_fields = {11: ["Q: mechanism of X?", "A: Y"], 12: ["Q: Z?", "A: W"], 13: ["Q: unjudged"]}
+_cfg_no_plus = {"api_key_anthropic": "sk-ant-fake", "pdf_match_threshold": 0.75}
+iq.mw = GlueMw(_cfg_no_plus, _fields)
+
+page_store.ensure_records(_root, "lec", "", ["", "", "", "Slide 4: X works by Y."])
+os.makedirs(os.path.dirname(retention._matches_path("lec")), exist_ok=True)
+with open(retention._matches_path("lec"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"11": 4, "12": 4, "13": 4}}, f)
+
+_done, _errors = [], []
+ask_yes, ask_yes_log = make_ask(True)
+pt.ensure_judged(
+    iq.mw, "lec", [(11, 0.9), (12, 0.85), (13, 0.5)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_yes,
+)
+check("no on_error fired", _errors == [])
+check("threshold .75: 11 and 12 are candidates, 13 (0.5) never sent — the "
+      "confirm counts exactly 2 cards", "2 matched cards" in ask_yes_log[-1])
+check("off Plus, the estimate is spelled in dollars and billed to the "
+      "user's own key", "billed to your Anthropic key" in ask_yes_log[-1] and "Klaus Plus" not in ask_yes_log[-1])
+check("one client call for one batch of 2 cards", len(_client_calls) == 1 and _client_calls[0][1] == "judge")
+check("on_done reports card 12 rejected (the fixture's own verdict), 11 confirmed by omission", _done == [{12}])
+_saved = pt.load_judged(_root, "lec")
+check("judged.json carries entries for 11 and 12 only — 13 was never a candidate",
+      set(_saved["verdicts"].keys()) == {"11", "12"})
+check("...11 pertinent, 12 not, per the fixture", _saved["verdicts"]["11"]["pertinent"] is True and _saved["verdicts"]["12"]["pertinent"] is False)
+
+_done.clear()
+ask_should_skip, ask_should_skip_log = make_ask(None)
+pt.ensure_judged(
+    iq.mw, "lec", [(11, 0.9), (12, 0.85), (13, 0.5)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_should_skip,
+)
+check("a second call with unchanged hashes makes NO client call — everything is cached",
+      len(_client_calls) == 1)
+check("...and never even shows the paid-pass prompt — nothing new to pay for", ask_should_skip_log == [])
+check("...still reports the same rejection, read back from judged.json", _done == [{12}])
+
+# is_stale is what decides "cached" above — mutation-tests that its actual
+# comparison, not just its EFFECT, has teeth: a hardcoded `is_stale ->
+# False` would still pass every check so far (nothing has changed yet, so
+# "no client call" reads the same whether staleness is computed or faked).
+# Only a card whose text really moved can catch that.
+_fields[11] = ["Q: mechanism of X, revised?", "A: Y, still"]
+_done.clear()
+_calls_before_rejudge = len(_client_calls)
+ask_yes2, ask_yes2_log = make_ask(True)
+pt.ensure_judged(
+    iq.mw, "lec", [(11, 0.9), (12, 0.85), (13, 0.5)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_yes2,
+)
+check("a changed card hash re-judges — only card 11 moved, so only it is "
+      "sent (card 12's own cache entry is untouched)",
+      len(_client_calls) == _calls_before_rejudge + 1 and "1 matched cards" in ask_yes2_log[-1])
+check("...and the fresh verdict lands in judged.json same as before",
+      pt.load_judged(_root, "lec")["verdicts"]["11"]["pertinent"] is True)
+
+page_store.ensure_records(_root, "lec2", "", ["", "", "", "Slide 4 of a different lecture."])
+os.makedirs(os.path.dirname(retention._matches_path("lec2")), exist_ok=True)
+with open(retention._matches_path("lec2"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"11": 4, "12": 4}}, f)
+_done.clear()
+_calls_before_skip = len(_client_calls)
+ask_no, ask_no_log = make_ask(False)
+pt.ensure_judged(
+    iq.mw, "lec2", [(11, 0.9), (12, 0.85)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_no,
+)
+check("Skip is honoured — no client call for the declined job", len(_client_calls) == _calls_before_skip)
+check("...and every candidate stays unjudged: on_done(set())", _done == [set()])
+check("...judged.json for THIS pdf stays empty too", pt.load_judged(_root, "lec2")["verdicts"] == {})
+
+_done.clear()
+_calls_before_nokey = len(_client_calls)
+ask_must_not_run, ask_must_not_run_log = make_ask(None)
+# _cfg() (borrowed from index_queue) reads index_queue's OWN mw global, not
+# whatever `parent` a caller hands ensure_judged — true in production too,
+# where `parent` passed to ensure_judged always IS index_queue's mw. So the
+# no-key config has to be armed on iq.mw itself, not just passed as parent.
+_nokey_mw = GlueMw({"pdf_match_threshold": 0.75}, _fields)
+iq.mw = _nokey_mw
+_nokey_log = io.StringIO()
+with contextlib.redirect_stdout(_nokey_log):
+    pt.ensure_judged(
+        _nokey_mw, "lec", [(11, 0.9), (12, 0.85), (13, 0.5)],
+        on_done=_done.append, on_error=_errors.append, cancel=None,
+        on_progress=lambda *a: None, ask=ask_must_not_run,
+    )
+check(
+    "no Anthropic key and not on Klaus Plus: do not ask, do not judge — "
+    "one [klausmate] line and on_done(set()), even though 12 is really "
+    "rejected on disk from the earlier run (ruling 3: this call reports "
+    "nothing judged, it does not consult the cache)",
+    _nokey_log.getvalue().count("[klausmate]") == 1 and ask_must_not_run_log == [] and _done == [set()],
+    _nokey_log.getvalue(),
+)
+check("...and never touches the client either", len(_client_calls) == _calls_before_nokey)
+check("no on_error ever fired across the whole glue section", _errors == [])
+
+section("ensure_judged: fix round 1, C1 — an un-priced reasoning_model never wedges the phase")
+check("claude-sonnet-4-5 really is absent from cost.PRICES (or this pin proves nothing)",
+      "claude-sonnet-4-5" not in cost.PRICES)
+page_store.ensure_records(_root, "lec_unpriced", "", ["", "", "", "Slide 4 of an unpriced-model lecture."])
+os.makedirs(os.path.dirname(retention._matches_path("lec_unpriced")), exist_ok=True)
+with open(retention._matches_path("lec_unpriced"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"21": 4}}, f)
+_unpriced_mw = GlueMw(
+    {"api_key_anthropic": "sk-ant-fake", "pdf_match_threshold": 0.75, "reasoning_model": "claude-sonnet-4-5"},
+    {21: ["Q: unpriced model?", "A: still judged"]},
+)
+iq.mw = _unpriced_mw
+_done.clear()
+ask_unpriced, ask_unpriced_log = make_ask(True)
+pt.ensure_judged(
+    _unpriced_mw, "lec_unpriced", [(21, 0.9)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_unpriced,
+)
+check("a model with no published price never raises cost.estimate_judge's KeyError out of ensure_judged",
+      bool(ask_unpriced_log))
+check("...the off-Plus prompt still appears, priced as Sonnet and saying so",
+      ask_unpriced_log and "priced as Sonnet" in ask_unpriced_log[-1] and "billed to your Anthropic key" in ask_unpriced_log[-1])
+check("...and the job completes normally: on_done fires, nothing raised", _done == [set()] and _errors == [])
+
+section("ensure_judged: fix round 1, M2 — the Klaus Plus branch")
+_patch_calls = []
+pkg.patch_config = lambda updates: _patch_calls.append(updates)
+page_store.ensure_records(_root, "lec_plus", "", ["", "", "", "Slide 4 of a Plus lecture."])
+os.makedirs(os.path.dirname(retention._matches_path("lec_plus")), exist_ok=True)
+with open(retention._matches_path("lec_plus"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"31": 4, "32": 4}}, f)
+_plus_cfg = {
+    plus.KEY: "kp_" + "f" * 32,
+    plus.CACHE: {"status": "active", "checked_at": 0.0, "quota": {"human": {"cards": [412, 3000]}}},
+}
+_plus_mw = GlueMw(_plus_cfg, {31: ["Q: Plus mechanism?", "A: Plus answer"], 32: ["Q: Plus Z?", "A: Plus W"]})
+iq.mw = _plus_mw
+_done.clear()
+_calls_before_plus = len(_client_calls)
+ask_plus, ask_plus_log = make_ask(True)
+pt.ensure_judged(
+    _plus_mw, "lec_plus", [(31, 0.9), (32, 0.85)],
+    on_done=_done.append, on_error=_errors.append, cancel=None,
+    on_progress=lambda *a: None, ask=ask_plus,
+)
+check("no Anthropic key is present in the Plus cfg at all, and none is asked for", "api_key_anthropic" not in _plus_cfg)
+check("the Plus prompt reads in quota terms — no dollar sign, the live cache's usage named",
+      ask_plus_log and "Klaus Plus" in ask_plus_log[-1] and "$" not in ask_plus_log[-1]
+      and "412" in ask_plus_log[-1] and "3,000" in ask_plus_log[-1])
+check("Plus is metered, not free — one client call still happens", len(_client_calls) == _calls_before_plus + 1)
+check("...and on_headers reached judge/client.complete non-None (the fake client recorded it)",
+      _client_calls[-1][2] is not None)
+check("...which the fake client used exactly like the real one would, routing through "
+      "plus.note_quota into patch_config as a PATCH, never a config replace",
+      len(_patch_calls) == 1 and _patch_calls[0].get(plus.CACHE, {}).get("status") == "active")
+check("no on_error fired on the Plus path either", _errors == [])
 
 section("module hygiene")
 check("the module docstring no longer claims a divider that was never drawn (fix round 1, Finding 8)",

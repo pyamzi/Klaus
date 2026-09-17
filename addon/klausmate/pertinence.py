@@ -7,14 +7,14 @@ the model did not answer for is UNJUDGED (counted, tagged as matched),
 never doubtful. Verdicts persist in judged.json beside matches.json and go
 stale when the card's text, the page's text, or the model changes.
 
-The module is aqt-free throughout (Task 3 adds the glue below a divider
-it will draw).
+The pure section stays aqt-free; Task 3 adds the aqt glue — ``ensure_judged``,
+the index chain's fourth phase — below the divider it draws.
 """
 from __future__ import annotations
 
 import json
 import os
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 BATCH = 8
 MAX_TOKENS = 2048
@@ -136,19 +136,26 @@ def parse_verdicts(response: dict, cards: list[CardText], page: PageText, model:
     return out
 
 
-def judge(client: Any, model: str, cards: list[CardText], page: PageText, lecture_display: str) -> list[Verdict]:
+def judge(client: Any, model: str, cards: list[CardText], page: PageText, lecture_display: str, *,
+          on_headers: Callable[[Any], None] | None = None) -> list[Verdict]:
     """A batch that fails leaves only ITS cards unjudged (fix round 1,
     Finding 2) — one failed `client.complete` must not take an
     already-paid-for earlier batch's verdicts down with it, and the job
     still finishes and tags whatever it did manage to judge. The log line
     names the exception's class (and status, if it carries one) only —
     never the request payload, which holds card and lecture-page text.
+
+    ``on_headers`` (Task 3, Klaus Plus postdates this module's original
+    brief) forwards straight to ``client.complete`` — a metered Plus call's
+    own response IS a fresh quota reading, and this is the one place every
+    judge request actually leaves the process.
     """
     out: list[Verdict] = []
     for i in range(0, len(cards), BATCH):
         batch = cards[i:i + BATCH]
         try:
-            resp = client.complete(build_request(batch, page, lecture_display, model), purpose="judge")
+            resp = client.complete(build_request(batch, page, lecture_display, model), purpose="judge",
+                                   on_headers=on_headers)
         except Exception as exc:  # noqa: BLE001 — one batch, not the job
             status = getattr(exc, "status", None)
             detail = f"{type(exc).__name__}" + (f" status={status}" if status is not None else "")
@@ -242,3 +249,182 @@ def all_rejected(user_files: str) -> set[int]:
 
 def candidates(matches: list[tuple[int, float]], threshold: float) -> list[int]:
     return [nid for nid, score in sorted(matches, key=lambda m: -m[1]) if score >= threshold]
+
+
+# ---------------------------------------------------------------------------
+# Below this line: aqt glue (Task 3) — the index chain's fourth phase (spec
+# D4). Everything above stays pure and importable without Qt.
+# ---------------------------------------------------------------------------
+
+try:
+    from aqt.operations import QueryOp
+except Exception:  # headless tests / partial environments
+    QueryOp = None  # type: ignore[assignment]
+
+
+def _pkg():
+    import importlib
+
+    return importlib.import_module(__package__)
+
+
+def _matched_pages(pdf_name: str) -> dict[int, int]:
+    """Best-matching page per candidate nid, read straight from the
+    matches.json cache ``ensure_matches`` just wrote for this job.
+
+    A bare read of the same file rather than a re-validated
+    ``retention.load_matches`` call — the freshness check already
+    happened this pass, one phase back. Any failure (missing/corrupt
+    cache, a PDF whose match pass never ran) reads as "no pages", which
+    leaves every candidate with nowhere to be judged against — the safe
+    default, never a crash.
+    """
+    from . import retention
+
+    try:
+        with open(retention._matches_path(pdf_name), encoding="utf-8") as f:
+            m = json.load(f)
+        return {int(k): int(v) for k, v in (m.get("pages") or {}).items()}
+    except (OSError, ValueError, AttributeError, TypeError, json.JSONDecodeError) as exc:
+        print(f"[klausmate] pertinence: no page cache for {pdf_name!r}: {exc}")
+        return {}
+
+
+def _card_text(col: Any, nid: int, strip: Callable[[str], str]) -> tuple[str, str]:
+    """(text, text_hash) for one note, empty on any read failure (a
+    deleted note between matching and judging is not this phase's job to
+    report — it just leaves that candidate with no text, so it is never
+    added to a batch)."""
+    from . import card_index
+
+    try:
+        fields = col.get_note(nid).fields
+    except Exception as exc:
+        print(f"[klausmate] pertinence: note {nid} unreadable: {exc}")
+        return "", ""
+    text = card_index.note_text(fields, strip, cap=MAX_CARD_CHARS)
+    return (text, card_index.text_hash(text)) if text else ("", "")
+
+
+def ensure_judged(
+    parent: Any,
+    pdf_name: str,
+    matches: list[tuple[int, float]] | None,
+    *,
+    on_done: Callable[[set[int]], None],
+    on_error: Callable[[Exception], None],
+    cancel: Any,
+    on_progress: Callable[[str, int, int], None] | None,
+    ask: Callable[[Any, str, Callable[[bool], None]], None],
+) -> None:
+    """Index chain phase four (spec D4): judge every candidate at/above
+    threshold against its best-matching page, batched and cached in
+    judged.json. ``on_done(rejected_nids)`` fires exactly once, whatever
+    path gets there.
+
+    Klaus Plus subscribers need no Anthropic key; everyone else without
+    one is told once and left unjudged rather than shown a paid-pass
+    prompt they have no way to pay for — Klaus Plus postdates the spec
+    this module was built from, so this gate is a ruling, not the brief.
+    """
+    from . import anthropic_client, cost, page_store, pdf_handler, plus, retention
+    from .index_queue import _cfg, _user_files, display_name
+
+    cfg = _cfg()
+    display = display_name(pdf_name)
+    if not plus.active(cfg) and not str(cfg.get("api_key_anthropic") or "").strip():
+        print(f"[klausmate] pertinence: no Anthropic key and Klaus Plus is not active "
+              f"— “{display}” stays unjudged.")
+        on_done(set())
+        return
+
+    user_files = _user_files()
+    safe = pdf_handler._safe_basename(pdf_name)
+    path = pdf_handler.pdf_path_for(user_files, safe) or ""
+    threshold = retention.get_threshold(pdf_name, cfg)
+    pages = _matched_pages(pdf_name)
+    cands = candidates(matches or [], threshold)
+    model = str(cfg.get("reasoning_model") or "claude-sonnet-5")
+    judged = load_judged(user_files, safe)
+    strip = _pkg()._strip_html
+
+    page_rows: dict[int, tuple[str, str]] = {}  # page -> (page_hash, combined_text)
+    todo: dict[int, list[CardText]] = {}
+    for nid in cands:
+        page = pages.get(nid) or 0
+        if page <= 0:
+            continue  # no known best page — nothing to judge this card against
+        if page not in page_rows:
+            rec = page_store.load_record(user_files, safe, path, page - 1)
+            page_rows[page] = (page_store.text_hash(rec), page_store.combined_text(rec))
+        text, h = _card_text(parent.col, nid, strip)
+        if not text:
+            continue
+        entry = judged["verdicts"].get(str(nid))
+        if entry is not None and not is_stale(entry, h, page_rows[page][0], model):
+            continue  # cached and fresh
+        todo.setdefault(page, []).append(CardText(nid, text, h))
+
+    if not todo:
+        on_done(rejected_nids(judged))
+        return
+
+    n_cards = sum(len(v) for v in todo.values())
+    mean_card = int(sum(len(c.text) for cards in todo.values() for c in cards) / max(1, n_cards))
+    mean_page = int(sum(len(page_rows[p][1]) for p in todo) / max(1, len(todo)))
+
+    if plus.active(cfg):
+        # Unmetered-in-dollars from the user's own side (Plus is metered in
+        # cards, not tokens), so no reason to touch cost.estimate_judge at
+        # all here — never compute a number this branch will never show.
+        human = ((cfg.get(plus.CACHE) or {}).get("quota") or {}).get("human") or {}
+        used_total = human.get("cards")
+        quota_note = (
+            f" (you've used {used_total[0]:,} of {used_total[1]:,} cards this month)"
+            if isinstance(used_total, (list, tuple)) and len(used_total) == 2 else ""
+        )
+        text = f"Judge {n_cards} cards against their lecture pages?\n\nIncluded in Klaus Plus{quota_note}."
+    else:
+        # reasoning_model is free text (no picker, CLAUDE.md's own rule), so
+        # cost.PRICES — exactly two entries — has no guarantee of covering
+        # it. Price an unpriced model as Sonnet and SAY SO rather than let
+        # cost.estimate_judge's KeyError escape this phase (fix round 1,
+        # C1): a raise here reaches ensure_matches' QueryOp callback, which
+        # skips the tag write and never clears index_queue._current —
+        # wedging the whole queue for the session.
+        priced_model = model if model in cost.PRICES else "claude-sonnet-5"
+        est = cost.estimate_judge(n_cards, mean_page, card_chars_mean=mean_card, batch=BATCH, model=priced_model)
+        priced_note = "" if priced_model == model else " (priced as Sonnet)"
+        text = (f"Ask Claude which of {n_cards} matched cards are truly about "
+                f"“{display}”?\n\n{cost.format_estimate(est)}{priced_note}, billed to your "
+                "Anthropic key. Skipped cards stay tagged as matched.")
+
+    def go(yes: bool) -> None:
+        if not yes:
+            on_done(rejected_nids(judged))
+            return
+        client = anthropic_client.Client(_cfg)
+        on_headers = (lambda h: plus.note_quota(cfg, h, _pkg().patch_config)) if plus.active(cfg) else None
+
+        def work(_col: Any = None) -> set[int]:
+            done = 0
+            for page, cards in todo.items():
+                if cancel is not None and cancel.is_set():
+                    break
+                page_hash, page_text = page_rows[page]
+                verdicts = judge(client, model, cards, PageText(page, page_hash, page_text), display,
+                                 on_headers=on_headers)
+                for v in verdicts:
+                    judged["verdicts"][str(v.nid)] = entry_for(v)
+                done += len(cards)
+                if on_progress:
+                    parent.taskman.run_on_main(lambda d=done: on_progress("judging", d, n_cards))
+            judged["model"] = model
+            save_judged(user_files, safe, judged)
+            return rejected_nids(judged)
+
+        op = QueryOp(parent=parent, op=lambda _col: work(), success=on_done)
+        op.failure(on_error)
+        op.without_collection().run_in_background()
+
+    ask(parent, text, go)
