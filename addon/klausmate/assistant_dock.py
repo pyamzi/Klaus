@@ -444,7 +444,13 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         # Cached for the profile session (spec §4.1): the lookup's third
         # step spawns the user's login shell with a 3 s timeout, and this
         # runs on the main thread. Re-check clears the cache first.
-        binary = agent_host.find_claude_cached(str(cfg.get("claude_binary") or ""))
+        #
+        # No override is passed: the config key that used to hold a
+        # hand-picked path went with the Preferences row that wrote it
+        # (2026-09-15, the API-first turn), so reading it only ever
+        # produced "" — dead code that read as configurable. Discovery
+        # is which → login shell → known paths, full stop.
+        binary = agent_host.find_claude_cached()
         if not binary:
             raise FileNotFoundError("claude binary not found on PATH or in config")
         port, token = 0, ""
@@ -459,7 +465,17 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
             token=str(token or ""),
             library_root=cfg.get("library_root") or None,
             system_prompt_path=sp_path,
-            model=str(cfg.get("assistant_model") or ""),
+            # NO model (K-235). The child is the user's own `claude`
+            # login and subscription, so which model it runs is their
+            # choice, made in their own Claude Code config — Klaus has
+            # no authority over it and no UI for it. `reasoning_model`
+            # is not a stand-in: that is the pertinence judge's
+            # Anthropic-API model, paid for by api_key_anthropic, which
+            # buys this dock nothing. The per-dock key that used to feed
+            # this line was scrubbed by the same API-first turn, so it
+            # has read "" ever since. AgentHost takes the argument and
+            # omits --model when it is empty.
+            model="",
             log_path=log_path,
             callbacks=callbacks,
         )

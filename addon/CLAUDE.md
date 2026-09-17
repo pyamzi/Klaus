@@ -1498,10 +1498,19 @@ same reason.
     while stale manifests remain; this profile-open call is the
     once-per-profile one, gated by `_v2_index_sweep_offered`. No
     provider branch, no local-server probe and no runtime offer survive;
-    `_embedding_ready` is `bool(cfg["api_key_openai"]) or
-    bool(plus.key(cfg))` — a Klaus Plus key satisfies it on its own
-    (K-246), since a subscriber has no provider key to nudge for
-    (naming both keys while checking one is a known gap — board K-231).
+    readiness is `missing_keys(cfg)` — the provider keys not set, `[]`
+    when a Klaus Plus key covers both (K-246) — and `keys_missing_copy(cfg)`
+    narrows `KEYS_COPY` to exactly those, so the welcome dialog and the
+    profile-open nudge NAME WHAT WAS ACTUALLY CHECKED (K-231, 2026-09-17:
+    the copy named both keys while readiness tested one, so a user who
+    pasted only the OpenAI key was told setup was done and met the first
+    failure at the judge). `_embedding_ready` survives as the EMBEDDING
+    half and still gates the v2 sweep alone; `KEYS_COPY` is built from the
+    `KEY_COPY` table rather than written out, and `_offer_v2_index_sweep`
+    returns whether it asked, so the sweep confirm and the key nudge cannot
+    stack on one profile open. Still ONE nudge and ONE
+    `_embed_key_setup_declined` flag for both keys, and it is a WORDING
+    gate, never an entitlement check.
   - `openai_client.py` (aqt-free, stdlib): the ONE place Klaus talks to
     OpenAI — `embed(key, texts, model, dims)` and `transcribe(key,
     wav_bytes, model, …)` (multipart with a hand-built boundary), one
@@ -1596,7 +1605,15 @@ same reason.
   child process rather than running a loop of its own (that spec's D1:
   no assistant key in Klaus, the user's own login and subscription —
   `api_key_anthropic` pays for the pertinence judge and Plan 3, and
-  buys this dock nothing).
+  buys this dock nothing). **The dock passes the child NO `--model`**
+  (K-235, 2026-09-17): `assistant_model` was scrubbed by the API-first
+  migration and the read was dead, `reasoning_model` is the JUDGE's
+  Anthropic-API id with no authority over the user's own Claude Code
+  subscription (a Claude Code alias is not a Messages-API id — the
+  migration itself says so), and there is no assistant-model UI anywhere,
+  so the model is whatever the user's own `claude` resolves;
+  `command_line` omits the flag entirely rather than passing an empty one.
+  `find_claude_cached()` is likewise called with no argument now.
   Design:
   `docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`.
   **Still true today**, and the 2026-09-15 spec's Plan 3 — which moves

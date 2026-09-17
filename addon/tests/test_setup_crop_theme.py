@@ -201,4 +201,164 @@ check("neither key: still not ready", setup_flow._embedding_ready({}) is False)
 check("KEYS_COPY itself — not some comment elsewhere in the file — names Klaus Plus",
       "Klaus Plus" in setup_flow.KEYS_COPY)
 
+section("K-231: the nudge names the keys it actually checked "
+        "(it listed both while readiness tested only the OpenAI one, so a "
+        "user who pasted that key alone was told setup was done and met "
+        "the first surprise at the judge)")
+
+_OPENAI = {"api_key_openai": "sk-" + "o" * 24}
+_ANTHROPIC = {"api_key_anthropic": "sk-ant-" + "a" * 24}
+_BOTH = dict(_OPENAI, **_ANTHROPIC)
+_PLUS = {"klaus_plus_key": "kp_" + "a" * 32}
+
+check("neither key: both are reported missing",
+      setup_flow.missing_keys({}) == ["api_key_openai", "api_key_anthropic"])
+check("only OpenAI set: ONLY the Anthropic key is reported missing "
+      "(the whole K-231 bug — this state used to read as 'ready')",
+      setup_flow.missing_keys(_OPENAI) == ["api_key_anthropic"])
+check("only Anthropic set: ONLY the OpenAI key is reported missing",
+      setup_flow.missing_keys(_ANTHROPIC) == ["api_key_openai"])
+check("both set: nothing is missing", setup_flow.missing_keys(_BOTH) == [])
+check("a Klaus Plus key alone satisfies BOTH halves — the service holds "
+      "the provider keys, so a subscriber has nothing to paste (K-246)",
+      setup_flow.missing_keys(_PLUS) == []
+      and setup_flow.keys_missing_copy(_PLUS) == "")
+check("whitespace is not a key",
+      setup_flow.missing_keys({"api_key_openai": "  ",
+                               "api_key_anthropic": "\t"})
+      == ["api_key_openai", "api_key_anthropic"])
+
+# Four states, four sentences — and every clause of every one of them is
+# lifted from KEYS_COPY itself, never re-worded in a second copy.
+_STATES = (
+    ("neither", {}, ("OpenAI", "Anthropic")),
+    ("only OpenAI set", _OPENAI, ("Anthropic",)),
+    ("only Anthropic set", _ANTHROPIC, ("OpenAI",)),
+    ("both set", _BOTH, ()),
+)
+for _label, _cfg, _named in _STATES:
+    _sentence = setup_flow.keys_missing_copy(_cfg)
+    check(f"{_label}: the sentence names exactly the missing provider(s)",
+          all(n in _sentence for n in _named)
+          and not any(n in _sentence for n in ("OpenAI", "Anthropic")
+                      if n not in _named),
+          repr(_sentence))
+    check(f"{_label}: every clause of it comes from KEYS_COPY itself",
+          _sentence == "" or all(
+              part and part in setup_flow.KEYS_COPY
+              for part in _sentence.split(". ")),
+          repr(_sentence))
+check("KEYS_COPY is the both-missing case in full — the fresh-install "
+      "wording, with every narrower case a subset of it",
+      setup_flow.keys_missing_copy({}) == setup_flow.KEYS_COPY)
+
+# The nudge itself: drive _readiness_check_body with the dialog builder
+# and the config accessor replaced, and read back what it would show.
+class _FakeBtn:
+    def __init__(self):
+        self.object_name = ""
+
+    def setObjectName(self, name):
+        self.object_name = name
+
+
+class _FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, fn):
+        self.slots.append(fn)
+
+
+class _FakeMsg:
+    def __init__(self, title):
+        self.title, self.text, self.info = title, "", ""
+        self.opened = False
+        self.finished = _FakeSignal()
+
+    def setText(self, text):
+        self.text = text
+
+    def setInformativeText(self, text):
+        self.info = text
+
+    def addButton(self, *_a):
+        return _FakeBtn()
+
+    def clickedButton(self):
+        return None
+
+    def deleteLater(self):
+        pass
+
+    def open(self):
+        self.opened = True
+
+
+def _nudge_for(cfg):
+    """(title, text, informative) the readiness nudge would show, or None
+    when it shows nothing at all."""
+    shown = []
+    saved = (setup_flow._themed_message_box, setup_flow._pkg,
+             setup_flow._offer_v2_index_sweep)
+
+    def _fake_box(_parent, title, _icon):
+        msg = _FakeMsg(title)
+        shown.append(msg)
+        return msg
+
+    setup_flow._themed_message_box = _fake_box
+    setup_flow._pkg = lambda: type(
+        "P", (), {"get_config": staticmethod(lambda: dict(cfg)),
+                  "write_config": staticmethod(lambda _c: None)})
+    # The v2 sweep is K-236's own gate and is exercised by its own pins;
+    # neutralised here so this reads the nudge alone.
+    setup_flow._offer_v2_index_sweep = lambda _cfg: False
+    try:
+        setup_flow._readiness_check_body()
+    finally:
+        (setup_flow._themed_message_box, setup_flow._pkg,
+         setup_flow._offer_v2_index_sweep) = saved
+    if not shown:
+        return None
+    return (shown[0].title, shown[0].text, shown[0].info)
+
+
+_n_neither = _nudge_for({})
+_n_openai = _nudge_for(_OPENAI)
+_n_anthropic = _nudge_for(_ANTHROPIC)
+
+check("neither key: the nudge opens, titled for semantic search",
+      _n_neither is not None
+      and _n_neither[0] == "KlausMate: semantic search needs an API key")
+check("neither key: its text is KEYS_COPY in full",
+      _n_neither is not None and _n_neither[1] == setup_flow.KEYS_COPY)
+check("only OpenAI set: the nudge STILL opens — and says Anthropic, "
+      "never OpenAI",
+      _n_openai is not None
+      and "Anthropic" in _n_openai[1] and "OpenAI" not in _n_openai[1])
+check("only OpenAI set: its title names what is actually missing, not "
+      "semantic search (which is set up)",
+      _n_openai is not None
+      and _n_openai[0] != "KlausMate: semantic search needs an API key"
+      and _n_openai[0].startswith("KlausMate: "))
+check("only OpenAI set: the consequence line is the judge's, not the "
+      "embedder's",
+      _n_openai is not None
+      and "study priorities" not in _n_openai[2]
+      and _n_openai[2].startswith("Until then, "))
+check("only Anthropic set: the OpenAI nudge, with the embedder's own "
+      "consequence line kept verbatim",
+      _n_anthropic is not None
+      and _n_anthropic[0] == "KlausMate: semantic search needs an API key"
+      and _n_anthropic[2] == ("Until then, semantic search and PDF study "
+                              "priorities won't produce results."))
+check("both keys set: no nudge at all", _nudge_for(_BOTH) is None)
+check("a Klaus Plus key alone: no nudge at all", _nudge_for(_PLUS) is None)
+check("'Later' is still honoured for every state — one nudge, one flag, "
+      "no second config key (K-231's own constraint)",
+      _nudge_for({"_embed_key_setup_declined": True}) is None
+      and _nudge_for(dict(_OPENAI, _embed_key_setup_declined=True)) is None)
+
+
 raise SystemExit(report())

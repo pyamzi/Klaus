@@ -219,6 +219,109 @@ check("...and the same holds in light mode",
           for hexval in re.findall(r"#[0-9A-Fa-f]{3,8}", theme.assistant_dock_qss(False))))
 
 
+section("K-235: no scrubbed config key is read, and the child runs on the "
+        "user's OWN Claude Code login — Klaus passes it no model")
+
+# NOT a `"..." not in _CODE` pin: code_only strips STRING LITERALS as well
+# as comments, and a config read IS a string literal — that pin would
+# pass with the bug fully present. Read the keys out of the AST instead:
+# a live `cfg.get("x")` or `cfg["x"]` is caught, while a comment or a
+# commented-out line is not in the tree at all and cannot satisfy it.
+# Read the scrub list out of __init__.py's own source: under the stubs
+# `klausmate` is an empty stand-in module (install() puts it in
+# sys.modules before the real __init__ can import aqt), so the attribute
+# is simply not there to read — and an empty list would make the pin
+# below pass no matter what. Hence the guard right after it.
+_SCRUBBED = set()
+for _node in ast.parse(open(os.path.join(ADDON, "__init__.py")).read()).body:
+    if isinstance(_node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_LEGACY_KEYS_DROPPED"
+            for t in _node.targets):
+        _SCRUBBED = set(ast.literal_eval(_node.value))
+check("guard the guard: the scrub list is real and non-empty, so the pin "
+      "below can actually fail", len(_SCRUBBED) > 10)
+
+
+def _literal_key_reads(src: str) -> set:
+    """Every literal dict key the module reads — `.get("x")` and `["x"]`."""
+    found = set()
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and node.args):
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                found.add(arg.value)
+        elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)):
+            found.add(node.slice.value)
+    return found
+
+
+check("the key reader sees a live read and ignores a commented-out one",
+      _literal_key_reads('cfg.get("live")\n# cfg.get("dead")\n') == {"live"})
+_dead_reads = _literal_key_reads(_SRC) & _SCRUBBED
+check("the dock reads NO key _migrate_config scrubs — a key it drops is "
+      "always the empty string, so such a read is dead code that LOOKS "
+      "configurable (K-235: the API-first rename left two here)",
+      not _dead_reads, f"still read: {sorted(_dead_reads)}")
+
+# What the dock passes is pinned by BEHAVIOUR — the argv the host would
+# actually build — never by the name of a config key.
+_agent_host = importlib.import_module("klausmate.agent_host")
+
+
+class _RecordingHost:
+    last: dict = {}
+
+    def __init__(self, binary, **kw):
+        _RecordingHost.last = dict(kw, binary=binary)
+
+
+_discovery_args = []
+_saved_host = (_agent_host.AgentHost, _agent_host.find_claude_cached)
+_agent_host.AgentHost = _RecordingHost
+_agent_host.find_claude_cached = lambda *a, **k: (
+    _discovery_args.append((a, k)) or "/usr/local/bin/claude")
+_fake_dock = types.SimpleNamespace(
+    # A config carrying BOTH the scrubbed per-dock key and the judge's
+    # own model, so wiring either one back in fails these pins.
+    _config=lambda: {"assistant_model": "sonnet",
+                     "reasoning_model": "claude-sonnet-4-5-20250929",
+                     "claude_binary": "/somewhere/else/claude",
+                     "library_root": "/tmp/klaus-lib"},
+    _endpoint_info=lambda: (18765, "tok"),
+    _sessions=types.SimpleNamespace(
+        ensure_system_prompt=lambda uf: os.path.join(uf, "system_prompt.md")),
+    _user_files=tempfile.mkdtemp(prefix="klaus_k235_"),
+)
+try:
+    assistant_dock.AssistantDock._default_host_factory(_fake_dock, {})
+finally:
+    _agent_host.AgentHost, _agent_host.find_claude_cached = _saved_host
+
+_spawned_argv = _agent_host.command_line(
+    _RecordingHost.last.get("binary", ""),
+    port=int(_RecordingHost.last.get("port") or 0),
+    library_root=_RecordingHost.last.get("library_root"),
+    system_prompt_path=str(_RecordingHost.last.get("system_prompt_path") or ""),
+    model=str(_RecordingHost.last.get("model") or ""),
+)
+check("the dock built a host at all (guard the guard — an empty recording "
+      "would make every pin below vacuous)",
+      _RecordingHost.last.get("binary") == "/usr/local/bin/claude")
+check("the argv it would spawn carries NO --model: the child is the user's "
+      "own `claude` login and subscription, so the model is THEIR choice — "
+      "and the judge's reasoning_model is an Anthropic-API setting with no "
+      "authority over it (K-235)",
+      "--model" not in _spawned_argv, " ".join(_spawned_argv))
+check("...and binary discovery is handed no config override either — the "
+      "key that fed it was scrubbed with the same turn",
+      _discovery_args and all(
+          not any(str(a) for a in args) and not kwargs
+          for args, kwargs in _discovery_args),
+      repr(_discovery_args))
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Real offscreen Qt — construction, header/session following, streaming,
 # tool lines, Send/Stop, empty state, the slash completer, and the

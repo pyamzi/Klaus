@@ -4,12 +4,13 @@ Extracted verbatim from __init__.py (K-025, slice 3 of the K-006 file
 split). Backs the one-time "Welcome to Klaus" dialog and the readiness
 nudge that runs on every profile open thereafter.
 
-Klaus is API-first since 2026-09-15 (K-226, spec D1): semantic search
-runs on OpenAI and the assistant on Anthropic, both through the user's
-own API keys. There is no local runtime to start, probe, download or
-update any more, so readiness is one question — is the key there — and
-the only other thing worth surfacing on profile open is the Library
-folder.
+Klaus is API-first since 2026-09-15 (K-226, spec D1): indexing runs on
+OpenAI and the pertinence judge on Anthropic, both through the user's
+own API keys (or one Klaus Plus key in place of both). The assistant is
+the user's own Claude Code login and needs no key at all. There is no
+local runtime to start, probe, download or update any more, so readiness
+is one question — are those keys there — and the only other thing worth
+surfacing on profile open is the Library folder.
 
 This module is imported by __init__.py at package load time, so it must
 never import __init__ (this package) at module load — only from inside a
@@ -31,15 +32,42 @@ from aqt.utils import showWarning, tooltip
 from . import plus
 from .manage_models import manage_models_dialog
 
-# The one place the two keys are named for the user. Both readiness
-# surfaces below quote it, so the welcome dialog and the profile-open
-# nudge can never describe setup two ways.
-KEYS_COPY = (
-    "Indexing your cards and lecture pages uses OpenAI through your own "
-    "API key. Add it in KlausMate Preferences → API keys & models, or "
-    "subscribe to Klaus Plus there and skip the key. The assistant uses "
+# The two provider keys, each described to the user in exactly ONE
+# place: what it buys, what stays dark without it, and the window title
+# of the nudge that names it. KEYS_COPY and the per-case nudge are both
+# built from this table, so the welcome dialog and the profile-open
+# nudge can never describe setup two ways — and the nudge can never name
+# a key it did not actually check (K-231: it listed both while readiness
+# tested only the OpenAI one, so a user who pasted that key alone was
+# told setup was done and met the first surprise at the judge).
+KEY_COPY = {
+    "api_key_openai": {
+        "buys": "Indexing your cards and lecture pages uses OpenAI "
+                "through your own API key.",
+        "without": "semantic search and PDF study priorities won't "
+                   "produce results",
+        "title": "KlausMate: semantic search needs an API key",
+    },
+    "api_key_anthropic": {
+        "buys": "Judging which of the matched cards a lecture page "
+                "really covers uses Anthropic through your own API key.",
+        "without": "Klaus indexes without the judging pass, so no card "
+                   "is marked doubtful",
+        "title": "KlausMate: judging lecture matches needs an API key",
+    },
+}
+
+# One action sentence for every case — it never has to agree with how
+# many keys are missing.
+KEYS_ACTION = (
+    "Add what's missing in KlausMate Preferences → API keys & models, or "
+    "subscribe to Klaus Plus there and skip both keys. The assistant uses "
     "your own Claude Code login and needs no key."
 )
+
+# The fresh-install wording: both keys named. Every narrower case is
+# this same copy with the keys that ARE set left out.
+KEYS_COPY = " ".join([v["buys"] for v in KEY_COPY.values()] + [KEYS_ACTION])
 
 
 def _pkg():
@@ -74,11 +102,42 @@ def _themed_message_box(parent: Any, title: str, icon: Any) -> QMessageBox:
 _first_run_dialog_shown_this_session: bool = False
 
 
+def missing_keys(cfg: dict) -> list[str]:
+    """Which provider keys are not set — ``[]`` when none is.
+
+    A Klaus Plus key covers BOTH (K-246): the service holds the provider
+    keys, so a subscriber has nothing to paste. Order follows KEY_COPY,
+    which is the order the nudge names them in.
+
+    This is a WORDING gate, never an entitlement check — nothing in
+    Klaus is blocked on what it answers, and the service and the
+    providers have the last word. It exists so the nudge says what it
+    checked, nothing more.
+    """
+    if plus.key(cfg):
+        return []
+    return [k for k in KEY_COPY if not str((cfg or {}).get(k) or "").strip()]
+
+
+def keys_missing_copy(cfg: dict) -> str:
+    """KEYS_COPY narrowed to the keys actually missing; "" when none is.
+
+    Derived from the same clauses KEYS_COPY is built from — never a
+    second copy of the wording.
+    """
+    names = missing_keys(cfg)
+    if not names:
+        return ""
+    return " ".join([KEY_COPY[n]["buys"] for n in names] + [KEYS_ACTION])
+
+
 def _embedding_ready(cfg: dict) -> bool:
     """True if semantic search can actually run right now — the OpenAI
-    key or a Klaus Plus subscription is present. Nothing to probe: a
-    key is a string in config."""
-    return bool(str(cfg.get("api_key_openai") or "").strip()) or bool(plus.key(cfg))
+    key or a Klaus Plus subscription is present. Nothing to probe: a key
+    is a string in config. The EMBEDDING half of readiness only; the
+    judge's Anthropic key is reported by ``missing_keys`` and gates
+    nothing here."""
+    return "api_key_openai" not in missing_keys(cfg)
 
 
 def first_run_check() -> None:
@@ -97,7 +156,10 @@ def first_run_check() -> None:
         return
     _first_run_dialog_shown_this_session = True
 
-    ready = _embedding_ready(cfg)
+    # The same derived sentence the profile-open nudge shows, so the two
+    # surfaces cannot describe setup two ways (K-231).
+    missing_copy = keys_missing_copy(cfg)
+    ready = not missing_copy
 
     body_lines = [
         "Klaus adds a PDF workspace and semantic search to Anki.",
@@ -109,9 +171,9 @@ def first_run_check() -> None:
         "",
     ]
     body_lines.append(
-        "Semantic search runs on your OpenAI key — you're ready to go."
+        "Everything Klaus needs is set up — you're ready to go."
         if ready
-        else KEYS_COPY
+        else missing_copy
     )
 
     msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
@@ -296,9 +358,9 @@ def _readiness_after_library_root() -> None:
     _readiness_check_body()
 
 
-def _offer_v2_index_sweep(cfg: dict) -> None:
+def _offer_v2_index_sweep(cfg: dict) -> bool:
     """One-time upgrade offer: rebuild the PDF indexes pdf_index v2 left
-    unreadable (K-236).
+    unreadable (K-236). True when it actually opened its confirm.
 
     A profile whose indexes predate v2 reads as having NO indexes at all
     — every Library row blank, the Lecture panel silent, every PDF
@@ -316,48 +378,56 @@ def _offer_v2_index_sweep(cfg: dict) -> None:
     here, so this never doubles as a model-change prompt.
     """
     if cfg.get("_v2_index_sweep_offered"):
-        return
+        return False
     try:
         from . import embeddings, index_queue
 
         if not index_queue.stale_index_names():
-            return  # nothing to upgrade — ask later if that changes
+            return False  # nothing to upgrade — ask later if that changes
         if not index_queue.offer_model_sweep(
             mw, embeddings.index_signature(cfg)
         ):
-            return  # never asked (no profile, refused trigger) — no flag
+            return False  # never asked (no profile, refused trigger) — no flag
     except Exception as exc:
         print(f"[klausmate] v2 index sweep offer failed: {exc}")
-        return
+        return False
     cfg2 = _pkg().get_config()
     cfg2["_v2_index_sweep_offered"] = True
     _pkg().write_config(cfg2)
+    return True
 
 
 def _readiness_check_body() -> None:
-    """The readiness dialog: one nudge when the OpenAI key is missing.
+    """The readiness dialog: one nudge, naming the keys that are missing.
 
-    Silent when the key is set, and silent again once the user has said
-    "Later" — an API key is a one-time errand, not something to re-ask
-    on every profile open (unlike the Library folder above, which has no
-    such flag on purpose).
+    Silent when both are set (or one Klaus Plus key covers them), and
+    silent again once the user has said "Later" — an API key is a
+    one-time errand, not something to re-ask on every profile open
+    (unlike the Library folder above, which has no such flag on
+    purpose). One nudge and one flag for both keys, deliberately: a
+    second dialog for the second key is a second thing to dismiss.
+
+    It names WHAT IT CHECKED (K-231) and blocks nothing: readiness is a
+    wording gate, and the service and the providers have the last word.
     """
     cfg = _pkg().get_config()
-    if _embedding_ready(cfg):
-        # Set up, but possibly carrying pre-v2 indexes that now read as
-        # absent — the one thing left worth asking about.
-        _offer_v2_index_sweep(cfg)
+    if _embedding_ready(cfg) and _offer_v2_index_sweep(cfg):
+        # Set up to embed, but carrying pre-v2 indexes that read as
+        # absent — that confirm is now on screen, so the key nudge waits
+        # for the next profile open rather than stacking on top of it.
         return
-    if cfg.get("_embed_key_setup_declined"):
+    missing = missing_keys(cfg)
+    if not missing or cfg.get("_embed_key_setup_declined"):
         return
 
     msg = _themed_message_box(
-        mw, "KlausMate: semantic search needs an API key", QMessageBox.Icon.Warning
+        mw, KEY_COPY[missing[0]]["title"], QMessageBox.Icon.Warning
     )
-    msg.setText(KEYS_COPY)
+    msg.setText(keys_missing_copy(cfg))
     msg.setInformativeText(
-        "Until then, semantic search and PDF study priorities won't "
-        "produce results."
+        "Until then, "
+        + "; ".join(KEY_COPY[name]["without"] for name in missing)
+        + "."
     )
     manage_btn = msg.addButton(
         "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
