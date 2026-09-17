@@ -144,7 +144,11 @@ body,
 /* The page indicator is the page field: "{n} / {total}" where n is typed
    into. Chrome-free until focused, so the toolbar reads as a label. */
 .page-input {
-  width: 3ch;
+  /* --page-digits comes from doc.numPages, so a 1,000-page PDF still shows
+     its page number in full. content-box keeps the padding out of the width. */
+  box-sizing: content-box;
+  width: calc(var(--page-digits, 3) * 1ch);
+  min-width: 2ch;
   padding: 1px 2px;
   border: none;
   border-radius: 4px;

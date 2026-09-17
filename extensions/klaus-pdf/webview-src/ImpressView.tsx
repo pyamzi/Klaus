@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import FindBar from "./FindBar";
@@ -6,6 +7,7 @@ import NotesSidebar from "./NotesSidebar";
 import PdfPage from "./PdfPage";
 import { fetchPdfBytes } from "./core";
 import {
+  clampZoom,
   isTypingTarget,
   matchShortcut,
   type Action,
@@ -52,11 +54,13 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     setMatchIndex(-1);
   }, []);
 
+  // Fit obeys the same 0.25-5.0 ladder as the zoom keys, so Cmd+0 can never
+  // land outside it. A slide that would need less than 0.25 to fit therefore
+  // overflows the stage and scrolls, rather than shrinking off the ladder.
   const fitScale = useCallback((size: { w: number; h: number }) => {
     const stage = stageRef.current;
     if (!stage) return 1;
-    return Math.max(
-      0.1,
+    return clampZoom(
       Math.min(
         (stage.clientWidth - STAGE_PADDING * 2) / size.w,
         (stage.clientHeight - STAGE_PADDING * 2) / size.h,
@@ -348,6 +352,7 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
             <input
               ref={pageInputRef}
               className="page-input"
+              style={{ "--page-digits": String(doc.numPages).length } as CSSProperties}
               value={pageDraft}
               aria-label="Page number"
               title="Go to page (Cmd+Alt+G)"
