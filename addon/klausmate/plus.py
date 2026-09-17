@@ -62,6 +62,21 @@ def _cache(cfg: dict) -> dict:
     return c if isinstance(c, dict) else {}
 
 
+def _num(value: Any, default: float = 0.0) -> float:
+    """EVERY numeric read of the persisted cache goes through here (K-278 fix1).
+
+    `klaus_plus_cache` lives in Anki's addon config, where a hand edit or a torn write can
+    leave any field as any shape. A bare `float()` on one of those raised inside `active()`
+    (the key gate of every index attempt), inside `remember` — and so inside `note_refusal`,
+    which every 401/402/426 from the service runs, and `note_quota`, which every successful
+    metered call runs — and inside `refresh`. Damage is not a verdict: it reads as the
+    default, and the service still has the last word on the next call."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def active(cfg: dict, now: float | None = None) -> bool:
     if not key(cfg):
         return False
@@ -69,7 +84,10 @@ def active(cfg: dict, now: float | None = None) -> bool:
     if not c:
         return True
     now = time.time() if now is None else now
-    age = now - float(c.get("checked_at") or 0)
+    # K-278: a torn `checked_at` reads as epoch 0 — an age past any TTL, so a refusal is
+    # re-asked and anything else was honoured anyway. Damage is never a verdict, and this
+    # line must never raise: it is the key gate of every index attempt.
+    age = now - _num(c.get("checked_at"))
     status = str(c.get("status") or "")
     if status.startswith("refused"):
         return age > CACHE_TTL_S  # ask again after the TTL; the service decides
@@ -133,7 +151,7 @@ def remember(cfg: dict, snapshot: dict | None, status: str, write_config: Callab
     ``patch_config``.
     """
     now = time.time() if now is None else now
-    c = {"status": status, "checked_at": now, "period_end": float(period_end or _cache(cfg).get("period_end") or 0)}
+    c = {"status": status, "checked_at": now, "period_end": _num(period_end or _cache(cfg).get("period_end"))}
     if snapshot is not None:
         c["quota"] = snapshot
     elif _cache(cfg).get("quota"):
@@ -175,7 +193,7 @@ def refresh(get_config: Callable[[], dict], write_config: Callable[[dict], None]
         return _cache(cfg)
     if status == 200 and isinstance(body, dict):
         return remember(cfg, body.get("quota") if isinstance(body.get("quota"), dict) else None,
-                        str(body.get("status") or "active"), write_config, period_end=float(body.get("period_end") or 0))
+                        str(body.get("status") or "active"), write_config, period_end=_num(body.get("period_end")))
     if status >= 500 or (200 <= status < 300 and not isinstance(body, dict)):
         print(f"[klausmate] Klaus Plus check failed: HTTP {status}")
         return _cache(cfg)
@@ -189,6 +207,8 @@ def portal_url(cfg: dict, urlopen=None) -> str:
 
 
 def status_line(cache: dict) -> str:
+    if not isinstance(cache, dict):
+        cache = {}  # K-278 review: a caller may hand over the raw persisted value
     if not cache:
         return "Klaus Plus: not checked yet — press Check."
     status = str(cache.get("status") or "")
@@ -196,11 +216,17 @@ def status_line(cache: dict) -> str:
         return f"Klaus Plus: {cache.get('message') or 'refused by the service'} (checked {_day(cache.get('checked_at'))})."
     if status == "past_due":
         return "Klaus Plus: past due — fix your card under Manage subscription…"
-    q = (cache.get("quota") or {}).get("human") or {}
-    h, c, t = q.get("lecture_hours") or [0, 0], q.get("cards") or [0, 0], q.get("turns") or [0, 0]
     word = "ends" if status == "canceled" else "trial ends" if status == "trialing" else "renews"
     when = f" · {word} {_day(cache.get('period_end'))}" if cache.get("period_end") else ""
-    return (f"Plus{when} · {h[0]} of {h[1]:g} lecture hours, {c[0]:,} of {c[1]:,} cards, {t[0]} of {t[1]} turns this month")
+    try:
+        q = (cache.get("quota") or {}).get("human") or {}
+        h, c, t = q.get("lecture_hours") or [0, 0], q.get("cards") or [0, 0], q.get("turns") or [0, 0]
+        counts = f" · {h[0]} of {h[1]:g} lecture hours, {c[0]:,} of {c[1]:,} cards, {t[0]} of {t[1]} turns this month"
+    except (ValueError, TypeError, IndexError, AttributeError, KeyError):
+        # K-278 fix1: a torn or foreign-shaped `quota` block costs the COUNTS, never the
+        # line. This is the Preferences readout — it still has to say whether Plus is on.
+        counts = ""
+    return f"Plus{when}{counts}"
 
 
 def _day(ts: Any) -> str:

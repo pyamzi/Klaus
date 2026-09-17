@@ -12,6 +12,10 @@ check("whitespace is stripped and a non-key string is not a key", plus.key({"kla
       and plus.key({"klaus_plus_key": "sk-abc"}) == "")
 check("K-262: kp_ + 32 chars is not enough — the suffix must be hex, the service's own looks_like_key contract",
       plus.key({"klaus_plus_key": "kp_" + "z" * 32}) == "" and plus.key({"klaus_plus_key": "kp_" + "0123456789abcdef" * 2}) == "kp_" + "0123456789abcdef" * 2)
+check("K-278: an unreadable cache never raises — a torn `checked_at` is no verdict, the key decides",
+      plus.active({"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_cache": {"status": "refused:402", "checked_at": "unknown"}}) is True
+      and plus.active({"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_cache": "not a dict"}) is True
+      and plus.active({"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_cache": {"status": "refused:402", "checked_at": None}}, now=0.0) is False)
 check("base defaults and strips a trailing slash", plus.base({}) == plus.DEFAULT_BASE and plus.base({"klaus_plus_base": "https://x.test/"}) == "https://x.test")
 check("client_version reads manifest.json's human_version", plus.client_version() == json.load(open("klausmate/manifest.json"))["human_version"])
 
@@ -50,6 +54,29 @@ cfg3 = dict(cfg, klaus_plus_cache=written["klaus_plus_cache"])
 check("a 402 marks the cache refused and active() is False while fresh", written["klaus_plus_cache"]["status"] == "refused:402"
       and plus.active(cfg3, now=now + 20) is False)
 check("a refused verdict expires after the TTL so the service gets asked again", plus.active(cfg3, now=now + 7 * 3600))
+
+section("K-278 fix1: a torn persisted cache never raises, anywhere")
+torn = dict(cfg, klaus_plus_cache={"status": "active", "checked_at": now, "period_end": "soon", "quota": "not a dict"})
+rec = {}
+plus.note_refusal(torn, 402, rec.update, now=now)
+check("note_refusal survives a torn period_end and still records the refusal (every 401/402/426 runs this)",
+      rec["klaus_plus_cache"]["status"] == "refused:402" and rec["klaus_plus_cache"]["period_end"] == 0.0)
+rec.clear()
+check("note_quota survives it too (every successful metered call on Plus runs this)",
+      plus.note_quota(torn, {"X-Klaus-Quota": json.dumps(snap)}, rec.update) == snap
+      and rec["klaus_plus_cache"]["status"] == "active")
+rec.clear()
+def _torn_me(req, timeout=None):
+    return io.BytesIO(json.dumps({"status": "active", "period_end": "whenever", "quota": snap}).encode())
+out = plus.refresh(lambda: dict(torn), rec.update, urlopen=_torn_me)
+check("refresh survives a non-numeric period_end from the service and still records active",
+      out["status"] == "active" and out["period_end"] == 0.0 and rec["klaus_plus_cache"]["status"] == "active")
+for bad in ("not a dict", {"human": "junk"}, {"human": {"lecture_hours": [1], "cards": "x", "turns": None}},
+            {"human": {"lecture_hours": ["a", "b"], "cards": [1, 2], "turns": [3, 4]}}):
+    line = plus.status_line({"status": "active", "period_end": now, "quota": bad})
+    check("a torn quota block costs the COUNTS, never the line: %r" % (bad,), isinstance(line, str) and line.startswith("Plus"), line)
+check("a torn period_end in status_line degrades to ? rather than raising",
+      plus.status_line({"status": "active", "period_end": "soon", "quota": snap}).startswith("Plus · renews ?"))
 
 section("status_line and parse_quota")
 line = plus.status_line({"status": "active", "period_end": now + 15 * 86400, "quota": snap})
@@ -129,4 +156,11 @@ def fake503(req, timeout=None):
 out = plus.refresh(lambda: dict(cfg4), written.update, urlopen=fake503)
 check("a 5xx on refresh keeps the old cached verdict (a restart isn't a refusal), nothing rewritten, still active",
       out.get("status") == "active" and out.get("checked_at") == old_checked_at and written == {} and plus.active(cfg4, now=now))
+# K-278 review notes: the readout must survive a raw non-dict cache (the
+# Preferences call site hands over the persisted value unwrapped) and a
+# dict-shaped counter entry (KeyError, not just the other four).
+check("status_line survives a raw non-dict cache", isinstance(plus.status_line("garbage"), str))
+check("status_line survives a dict-shaped counter entry",
+      "Plus" in plus.status_line({"status": "active", "quota": {"human": {"lecture_hours": {"x": 1}}}}))
+
 raise SystemExit(report())
