@@ -6,6 +6,7 @@ Auth is a shared-secret header for now: X-Klaus-Token must equal
 KLAUS_CORE_TOKEN (default "dev"). The service binds localhost only.
 """
 
+import json
 import os
 
 from fastapi import FastAPI, HTTPException, Request
@@ -64,6 +65,27 @@ def get_pdf(pdf_id: str):
 _IMAGE_EXT = {"image/png": "png", "image/jpeg": "jpg",
               "image/gif": "gif", "image/webp": "webp"}
 MAX_ASSET_BYTES = 8 * 1024 * 1024
+MAX_NOTES_BYTES = 4 * 1024 * 1024
+
+
+async def _read_limited(request: Request, max_bytes: int) -> bytes:
+    """Read the request body without ever buffering more than max_bytes.
+
+    Rejects an oversized declared Content-Length before reading anything,
+    and enforces the same cap while streaming (chunked bodies declare no
+    length).
+    """
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > max_bytes:
+        raise HTTPException(status_code=413, detail="body exceeds %d bytes" % max_bytes)
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(status_code=413, detail="body exceeds %d bytes" % max_bytes)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.get("/notes/{pdf_id}")
@@ -76,8 +98,13 @@ def get_notes(pdf_id: str):
 
 @app.put("/notes/{pdf_id}")
 async def put_notes(pdf_id: str, request: Request):
+    body = await _read_limited(request, MAX_NOTES_BYTES)
     try:
-        notes.save_notes(pdf_id, await request.json())
+        doc = json.loads(body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="body must be valid JSON")
+    try:
+        notes.save_notes(pdf_id, doc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"ok": True}
@@ -88,9 +115,9 @@ async def post_asset(pdf_id: str, request: Request):
     ext = _IMAGE_EXT.get(request.headers.get("content-type", ""))
     if ext is None:
         raise HTTPException(status_code=415, detail="content-type must be png/jpeg/gif/webp")
-    data = await request.body()
-    if not data or len(data) > MAX_ASSET_BYTES:
-        raise HTTPException(status_code=413, detail="empty or oversized image")
+    data = await _read_limited(request, MAX_ASSET_BYTES)
+    if not data:
+        raise HTTPException(status_code=413, detail="empty image")
     try:
         return {"name": notes.save_asset(pdf_id, data, ext)}
     except ValueError as exc:

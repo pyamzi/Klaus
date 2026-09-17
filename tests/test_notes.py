@@ -54,6 +54,17 @@ check("bad doc shape rejected",
       raises_value_error(lambda: notes.save_notes(PDF_ID, {"pages": "nope"})))
 check("non-dict doc rejected",
       raises_value_error(lambda: notes.save_notes(PDF_ID, ["x"])))
+check("bad version rejected",
+      raises_value_error(lambda: notes.save_notes(PDF_ID, {"version": 2, "pages": {}})))
+check("non-numeric page key rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, {"version": 1, "pages": {"x": {"md": "a"}}})))
+check("page key 0 rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, {"version": 1, "pages": {"0": {"md": "a"}}})))
+check("non-string md rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, {"version": 1, "pages": {"1": {"md": 123}}})))
 
 print("== assets ==")
 name = notes.save_asset(PDF_ID, b"\x89PNGfake", "png")

@@ -48,6 +48,13 @@ def load_notes(pdf_id: str) -> dict:
 def save_notes(pdf_id: str, doc: dict) -> None:
     if not isinstance(doc, dict) or not isinstance(doc.get("pages"), dict):
         raise ValueError("notes doc must be a dict with a 'pages' dict")
+    if doc.get("version") != 1:
+        raise ValueError("notes doc version must be 1")
+    for key, page in doc["pages"].items():
+        if not (isinstance(key, str) and key.isdigit() and int(key) >= 1):
+            raise ValueError("page keys must be 1-based numeric strings: %r" % (key,))
+        if not isinstance(page, dict) or not isinstance(page.get("md"), str):
+            raise ValueError("page %s must be {'md': <str>}" % key)
     path = _notes_path(pdf_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
