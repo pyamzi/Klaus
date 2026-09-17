@@ -128,6 +128,14 @@ The session fixing these was deleted before landing. (1) core/klaus_core/library
 #### Comments
 - [2026-09-17 orchestrator] Same rename fallout hit core/.venv: script shebangs pointed at the old klausbook/ path (bad interpreter). Rebuilt 2026-09-17; card's README sweep should add a note that any repo rename requires rm -rf core/.venv + recreate.
 
+### KB-018: Persistent state vs the Klaus voice in the editor
+owner: -
+priority: P3
+tags: design
+created: 2026-09-17
+
+Raised by review on PR #2 (KB-016). The parity spec says every piece of feedback is a transient toast prefixed "Klaus: ", never inline text. Three places still speak inline, all of them persistent state rather than feedback: NotesSidebar's save status ("Saving…" / "Saved" / "Save failed"), its "Notes unavailable: {error}", and the stage's "Opening {name}…" / "Could not open {name}: {error}" panels. A 2.2s toast would lose a condition that should stay on screen, so KB-016 narrowed the invariant in toast.ts instead of rerouting them. Decide the rule: does persistent state get the Klaus prefix and a quiet inline treatment, or stay voiceless? klausmate's own answer is worth checking first - its degraded states have exact copy (see docs/reference/klausmate-viewer-parity.md, "Voice") and are inline, which suggests inline is right and only the wording needs aligning. Needs a decision before anyone edits NotesSidebar.tsx.
+
 ## Ready
 
 ## Doing
@@ -163,6 +171,7 @@ Acceptance criteria:
 #### Comments
 - [2026-09-17 orchestrator] Implemented on branch kb-016-shortcuts (b5212f5, branched off impress-editor so it carries the unmerged Obsidian retheme dbc6544). verify exits 0 (5 node:test cases + tsc --noEmit); it exited 1 on the pre-card tree. node build.mjs bundles clean. Divergence from the card, deliberate: Cmd+Alt+G focuses an inline page field in the toolbar instead of klausmate's getInt dialog - a webview has no prompt() and the voice rule forbids modals; the page indicator became the field, format '{n} / {total}' kept. Double/triple-click selection is native pdf.js text-layer behaviour and nothing in viewer.css blocks it - not machine-verified. NEEDS A REAL-WINDOW CHECK before Done: VS Code binds Cmd+= / Cmd+- / Cmd+0 at the workbench level, so confirm the webview's preventDefault wins and the shell does not also zoom.
 - [2026-09-17 orchestrator] PR #2 open: https://github.com/pyamzi/KlausBook-Context/pull/2 (1 commit, based on the merged retheme). Stays in Review until the real-window shortcut check.
+- [2026-09-17 orchestrator] PR #2 review addressed in ca8d776: fitScale now goes through clampZoom so Cmd+0 and the initial/resize fits cannot leave the 0.25-5.0 ladder; the page field sizes from the digit count of doc.numPages (content-box) instead of a fixed 3ch that clipped at 1000+ pages; toast.ts's 'only feedback channel' claim narrowed to transient feedback, with KB-018 filed for whether persistent state (notes save status, loading/error panels) adopts the Klaus voice. Three threads replied to and resolved. Gate still green; kb-016-shortcuts merged forward into kb-014-find-bar so PR #3 carries the fixes.
 
 ### KB-014: Find bar (Cmd+F) in the PDF editor
 owner: orchestrator
