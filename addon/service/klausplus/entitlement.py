@@ -16,6 +16,15 @@ from .db import Store
 ACTIVE, TRIALING, PAST_DUE, CANCELED = "active", "trialing", "past_due", "canceled"
 SUBSCRIPTION_EVENTS = ("customer.subscription.created", "customer.subscription.updated",
                        "customer.subscription.deleted")
+# K-273: every event that moves a customer's ENTITLEMENT, and so every event that has to
+# claim the ordering stamp. `checkout.session.completed` is deliberately absent: it only
+# creates the row (the /welcome page sets the subscription), and letting it spend the
+# stamp would make a legitimately older subscription event look stale. One stamp for
+# both families means an invoice CAN suppress a subscription event created a second
+# earlier — acceptable: equal stamps apply (Stripe's signup pair shares a second), and
+# /welcome writes set_subscription directly, outside the stamp, so a subscriber who
+# reached the key page is never left without a subscription row (K-273 review).
+ORDERED_EVENTS = SUBSCRIPTION_EVENTS + ("invoice.payment_failed", "invoice.paid")
 _log = logging.getLogger("klausplus")
 _warned_no_created = False
 _PERIOD_LAG_DAYS = 3  # how long an "active" row may outlive its period_end before we stop trusting a missed webhook
@@ -30,10 +39,18 @@ def period_end_of(sub: dict) -> int:
 
 
 def _in_order(store: Store, cus: str, created: Any) -> bool:
-    """K-263: False when this subscription event is OLDER than the last one applied
-    to the row. Stripe does not guarantee delivery order, so a delayed
-    `customer.subscription.updated` arriving after the cancellation would otherwise
-    put the row back to active. A missing `created` applies — logged once, because a
+    """False when this event is OLDER than the last one already applied to the row.
+
+    K-263 introduced this for the three subscription events, because Stripe does not
+    guarantee delivery order and a delayed `customer.subscription.updated` arriving after
+    the cancellation put the row back to active. K-273 put the invoice pair behind the
+    same guard: a delayed `invoice.payment_failed` landing after the `invoice.paid` that
+    settled the account — or after a newer subscription event — moved an active customer
+    back to past_due just the same.
+
+    ONE stamp per customer, `Store.claim_event_created`, shared by every branch: a second
+    column per event family would simply let an invoice and a subscription event reorder
+    against each other instead. A missing `created` applies — logged once, because a
     malformed feed must not fill the log."""
     global _warned_no_created
     try:
@@ -58,17 +75,20 @@ def apply_event(store: Store, event: dict, now: float) -> bool:
     if etype == "checkout.session.completed":
         email = ((obj.get("customer_details") or {}).get("email")) or obj.get("customer_email") or ""
         store.upsert_customer(cus, str(email), now)
-    elif etype in SUBSCRIPTION_EVENTS:
-        store.upsert_customer(cus, "", now)
-        if not _in_order(store, cus, event.get("created")):
-            return True  # a newer subscription event already landed on this row
+        return True
+    if etype not in ORDERED_EVENTS:
+        return True
+    store.upsert_customer(cus, "", now)
+    # K-273: the guard is ahead of ALL of them now, not just the subscription three.
+    if not _in_order(store, cus, event.get("created")):
+        _log.debug("ignoring out-of-order %s for %s", etype, cus)
+        return True  # a newer entitlement event already landed on this row
+    if etype in SUBSCRIPTION_EVENTS:
         store.set_subscription(cus, str(obj.get("status") or "incomplete"), period_end_of(obj),
                                bool(obj.get("cancel_at_period_end")), now)
     elif etype == "invoice.payment_failed":
-        store.upsert_customer(cus, "", now)
         store.mark_past_due(cus, now)
     elif etype == "invoice.paid":
-        store.upsert_customer(cus, "", now)
         store.clear_past_due(cus, now)
     return True
 

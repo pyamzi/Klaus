@@ -100,3 +100,46 @@ def test_an_event_without_a_created_stamp_still_applies(store, now):
                                   _sub("active", int(now) + 86400), created=5000), now)
     ent.apply_event(store, _event("e2", "customer.subscription.deleted", _sub("canceled", int(now))), now)
     assert store.customer_by_stripe_id("cus_1")["status"] == "canceled"
+
+
+# --- K-273: the created-order guard covers the invoice pair too ---------------
+
+
+def test_a_stale_invoice_payment_failed_never_reopens_a_settled_account(store, now):
+    """K-273: the guard covered the three subscription events only, so the delayed retry
+    notice — created before the payment that settled the account, delivered after it —
+    put an active customer back to past_due."""
+    store.upsert_customer("cus_1", "", now)
+    assert ent.apply_event(store, _event("e1", "customer.subscription.updated",
+                                         _sub("active", int(now) + 30 * 86400), created=1000), now)
+    assert ent.apply_event(store, _event("e2", "invoice.payment_failed", {"customer": "cus_1"}, created=2000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "past_due"
+    assert ent.apply_event(store, _event("e3", "invoice.paid", {"customer": "cus_1"}, created=3000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "active"
+    assert ent.apply_event(store, _event("e4", "invoice.payment_failed", {"customer": "cus_1"}, created=2500), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "active"
+
+
+def test_an_older_invoice_failure_after_a_newer_subscription_event_is_ignored(store, now):
+    """One stamp per customer, shared by both families — an invoice event and a
+    subscription event must order against each other, not each within its own kind."""
+    store.upsert_customer("cus_1", "", now)
+    assert ent.apply_event(store, _event("e1", "customer.subscription.updated",
+                                         _sub("active", int(now) + 30 * 86400), created=5000), now)
+    assert ent.apply_event(store, _event("e2", "invoice.payment_failed", {"customer": "cus_1"}, created=4000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "active"
+    # and one that really is newer still bites: this guard refuses staleness, not invoices
+    assert ent.apply_event(store, _event("e3", "invoice.payment_failed", {"customer": "cus_1"}, created=6000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "past_due"
+
+
+def test_a_stale_invoice_paid_does_not_clear_a_newer_past_due(store, now):
+    """The other direction: an old success must not un-refuse an account a newer failure
+    just suspended."""
+    store.upsert_customer("cus_1", "", now)
+    ent.apply_event(store, _event("e1", "customer.subscription.updated",
+                                  _sub("active", int(now) + 30 * 86400), created=1000), now)
+    assert ent.apply_event(store, _event("e2", "invoice.payment_failed", {"customer": "cus_1"}, created=9000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "past_due"
+    assert ent.apply_event(store, _event("e3", "invoice.paid", {"customer": "cus_1"}, created=8000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "past_due"
