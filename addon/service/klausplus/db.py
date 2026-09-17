@@ -76,7 +76,10 @@ def next_month_start(now: float) -> float:
 class Store:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._c = conn
-        self._lock = threading.Lock()
+        # M-3: RLock, not Lock -- add_daily_audio (below) takes the lock and then
+        # calls daily_audio(), which now takes it too; a plain Lock would deadlock
+        # the very first call from the same thread.
+        self._lock = threading.RLock()
 
     # -- events -----------------------------------------------------------
     def record_event(self, event_id: str, now: float) -> bool:
@@ -138,20 +141,25 @@ class Store:
             return cur.rowcount == 1
 
     def customer_by_hash(self, key_hash: str) -> Any:
-        return self._c.execute("SELECT * FROM customers WHERE key_hash = ?", (key_hash,)).fetchone()
+        with self._lock:
+            return self._c.execute("SELECT * FROM customers WHERE key_hash = ?", (key_hash,)).fetchone()
 
     def customer_by_stripe_id(self, stripe_customer_id: str) -> Any:
-        return self._c.execute("SELECT * FROM customers WHERE stripe_customer_id = ?", (stripe_customer_id,)).fetchone()
+        with self._lock:
+            return self._c.execute("SELECT * FROM customers WHERE stripe_customer_id = ?", (stripe_customer_id,)).fetchone()
 
     def customer_by_email(self, email: str) -> Any:
-        return self._c.execute("SELECT * FROM customers WHERE lower(email) = lower(?) ORDER BY id DESC", (email,)).fetchone()
+        with self._lock:
+            return self._c.execute("SELECT * FROM customers WHERE lower(email) = lower(?) ORDER BY id DESC", (email,)).fetchone()
 
     def customer_by_id(self, customer_id: int) -> Any:
-        return self._c.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+        with self._lock:
+            return self._c.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
 
     # -- usage ------------------------------------------------------------
     def usage(self, customer_id: int, month: str) -> dict:
-        row = self._c.execute("SELECT * FROM usage WHERE customer_id = ? AND month = ?", (customer_id, month)).fetchone()
+        with self._lock:
+            row = self._c.execute("SELECT * FROM usage WHERE customer_id = ? AND month = ?", (customer_id, month)).fetchone()
         return {c: int(row[c]) for c in USAGE_COLUMNS} if row else {c: 0 for c in USAGE_COLUMNS}
 
     def add_usage(self, customer_id: int, month: str, column: str, amount: int) -> int:
@@ -165,7 +173,8 @@ class Store:
                                        (customer_id, month)).fetchone()[0])
 
     def daily_audio(self, customer_id: int, day: str) -> int:
-        row = self._c.execute("SELECT seconds FROM daily_audio WHERE customer_id = ? AND day = ?", (customer_id, day)).fetchone()
+        with self._lock:
+            row = self._c.execute("SELECT seconds FROM daily_audio WHERE customer_id = ? AND day = ?", (customer_id, day)).fetchone()
         return int(row[0]) if row else 0
 
     def add_daily_audio(self, customer_id: int, day: str, seconds: int) -> int:

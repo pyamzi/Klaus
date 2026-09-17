@@ -67,9 +67,10 @@ service and one add-on mode; it changes no feature.
   service and one place in the add-on.
 - **Grace.** A subscription Stripe marks `past_due` keeps working for 3
   days, then refuses. A cancelled subscription works until its period
-  end. The add-on caches the last verdict for 6 hours and honours a
-  cached "active" for 7 days when the service cannot be reached, so a
-  flaky week never punishes a paying user (the revived entitlement rule).
+  end. The add-on never expires a good verdict: a key is used until the
+  service refuses it, and a refusal is remembered for 6 hours before the
+  service is asked again — the service is the only gate, so an idle
+  week can never route a paying user back to a keyless provider path.
 
 ### D2 — The service
 
@@ -93,7 +94,7 @@ service and one add-on mode; it changes no feature.
     without an extra request.
   - `POST /stripe/webhook`, `GET /subscribe` (creates a Checkout
     Session and redirects), `GET /welcome` (the success page: mints and
-    shows the key), `GET /portal` (a Customer Portal session for a key
+    shows the key), `POST /v1/portal` (a Customer Portal session for a key
     holder), `POST /recover` (emails the key to the address that paid),
     `GET /terms`, `GET /privacy`.
 - **Auth.** `Authorization: Bearer kp_<32 hex>`. Keys are stored only as
@@ -112,7 +113,9 @@ service and one add-on mode; it changes no feature.
   text, audio and page images pass through and are gone. Logs carry
   method, path, status, key-hash prefix, latency and the metered amount,
   nothing else.
-- **Abuse limits, per key**: 60 requests a minute; 240 audio minutes a
+- **Abuse limits, per key**: 600 requests a minute (the add-on indexes 64
+  notes per request back to back — the money bound is the quotas and the
+  embed ceiling, this only guards CPU); 240 audio minutes a
   day; bodies capped (4 MB JSON, 25 MB audio); a revoked or unknown key
   is `401` with no detail. `KLAUS_PLUS_PAUSED=1` in secrets refuses every
   proxied call with a maintenance message — the kill switch for a runaway
@@ -135,11 +138,14 @@ service and one add-on mode; it changes no feature.
   mints the key, shows it once, and sends it by email.
 - **Webhooks** drive entitlement: `checkout.session.completed` (create),
   `customer.subscription.updated` and `.deleted` (status, period end),
-  `invoice.paid` (period rolls, counters reset), `invoice.payment_failed`
+  `invoice.paid` (clears `past_due`; the period end itself arrives on the
+  `.updated` event Stripe sends with every renewal, and the counters
+  reset by the UTC month, not by the invoice), `invoice.payment_failed`
   (`past_due`, the 3-day grace starts). Signatures verified with the
   webhook secret; events are idempotent by event id.
 - **Customer Portal** for cancel, card and invoice history, reached
-  from Preferences' "Manage subscription…" through `/portal`. Any
+  from Preferences' "Manage subscription…" through `POST /v1/portal` (the licence key in the
+  header, the portal URL in the body). Any
   RECOGNISED key opens it — a lapsed or cancelled subscriber is exactly
   who needs to fix a card or resubscribe, so the portal skips the
   entitlement verdict (identity, the version floor and the rate limit
@@ -168,7 +174,8 @@ service and one add-on mode; it changes no feature.
   service with the bearer key when Plus, else the provider with the
   user's key), `parse_quota(headers)`, and the verdict cache
   (`klaus_plus_cache` in config: status, period end, counters,
-  checked-at; 6-hour TTL, 7-day grace — `entitlement.py`'s rules).
+  checked-at; a refusal is honoured for 6 hours, an active verdict until
+  the service says otherwise).
 - **The clients take an endpoint, not a key.** `openai_client.embed`
   and `transcribe` and `anthropic_client.Client` gain an `Endpoint`
   argument (base URL + a headers builder) with the provider as the

@@ -706,6 +706,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
     plus_status = QLabel()
     plus_status.setWordWrap(True)
+    plus_status.setOpenExternalLinks(True)
     plus_btns = QHBoxLayout()
     plus_subscribe_btn = QPushButton("Subscribe…")
     plus_manage_btn = QPushButton("Manage subscription…")
@@ -1725,9 +1726,18 @@ def manage_models_dialog(*_args: Any) -> None:
         setReadOnly."""
         cfg = _plus_cfg()
         has = bool(plus.key(cfg))
-        plus_status.setText(
+        base_line = (
             plus.status_line(cfg.get(plus.CACHE) or {}) if has
             else "Klaus Plus: $12/month or $99/year — no API keys needed."
+        )
+        # Terms/Privacy live on the GROUP row's status text (never the
+        # licence-key field's row above it) so they survive every repaint
+        # this function does (M-11: spec D5 promised a link from
+        # Preferences and nothing built it).
+        service_base = plus.base(cfg)
+        plus_status.setText(
+            f'{base_line}<br><a href="{service_base}/terms">Terms</a> · '
+            f'<a href="{service_base}/privacy">Privacy</a>'
         )
         # Both are calls the service answers 401 to without a key; a
         # button that can only fail is worse than no button. Subscribe
@@ -1869,9 +1879,10 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg["embedding_model"] = embed_model_edit.text().strip()
         cfg["klaus_plus_key"] = plus_key_edit.text().strip()
         if cfg["klaus_plus_key"] != prev_plus:
-            # The cached verdict describes the OLD subscription. Left
-            # behind, a revoked or swapped key reads as active for the
-            # whole 7-day grace window.
+            # The cached verdict describes the OLD subscription, and a
+            # non-refused verdict is honoured with no expiry of its own
+            # (I-3). Left behind, a swapped key would show the previous
+            # subscription's status and quota until the next real Check.
             cfg["klaus_plus_cache"] = {}
         _pkg().write_config(cfg)
         update_embed_status()

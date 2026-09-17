@@ -2,9 +2,13 @@
 
 Nothing here can gate anything (spec: the add-on is readable Python); the
 service refusing the key is the gate. What this module CAN do is be
-generous — a cached "active" is honoured for a week when the service is
-unreachable — and be honest: a 401/402/426 is remembered so the UI can
-say why, and the key never appears in any message or log.
+generous — a non-refused verdict is honoured with no expiry of its own
+(I-3: nothing here ever re-asks the service on a timer, so a timed-out
+"active" could only misroute a paying subscriber to the keyless provider
+path; routing the NEXT call to the service is what re-asks it) — and be
+honest: a 401/402/426 is remembered for CACHE_TTL_S so the UI can say
+why, then forgotten so the next call tries the service again. The key
+never appears in any message or log.
 """
 from __future__ import annotations
 
@@ -22,7 +26,6 @@ DEFAULT_BASE = "https://klausmate.fly.dev"
 TOKENS_PER_CARD = 250   # the service's own constants (spec D1); shown, never enforced, here
 TOKENS_PER_TURN = 6000
 CACHE_TTL_S = 6 * 3600
-GRACE_S = 7 * 86400
 PURPOSES = ("embed", "transcribe", "judge", "assistant")
 TIMEOUT_S = 15.0
 _urlopen = urllib.request.urlopen
@@ -66,7 +69,7 @@ def active(cfg: dict, now: float | None = None) -> bool:
     status = str(c.get("status") or "")
     if status.startswith("refused"):
         return age > CACHE_TTL_S  # ask again after the TTL; the service decides
-    return age <= GRACE_S
+    return True  # not a refusal: honoured until the service says otherwise (I-3)
 
 
 def endpoint(cfg: dict, purpose: str) -> Endpoint:
@@ -160,10 +163,13 @@ def status_line(cache: dict) -> str:
     status = str(cache.get("status") or "")
     if status.startswith("refused"):
         return f"Klaus Plus: {cache.get('message') or 'refused by the service'} (checked {_day(cache.get('checked_at'))})."
+    if status == "past_due":
+        return "Klaus Plus: past due — fix your card under Manage subscription…"
     q = (cache.get("quota") or {}).get("human") or {}
     h, c, t = q.get("lecture_hours") or [0, 0], q.get("cards") or [0, 0], q.get("turns") or [0, 0]
-    renews = f" · renews {_day(cache.get('period_end'))}" if cache.get("period_end") else ""
-    return (f"Plus{renews} · {h[0]} of {h[1]:g} lecture hours, {c[0]:,} of {c[1]:,} cards, {t[0]} of {t[1]} turns this month")
+    word = "ends" if status == "canceled" else "trial ends" if status == "trialing" else "renews"
+    when = f" · {word} {_day(cache.get('period_end'))}" if cache.get("period_end") else ""
+    return (f"Plus{when} · {h[0]} of {h[1]:g} lecture hours, {c[0]:,} of {c[1]:,} cards, {t[0]} of {t[1]} turns this month")
 
 
 def _day(ts: Any) -> str:

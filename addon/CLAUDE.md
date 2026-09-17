@@ -1270,20 +1270,25 @@ same reason.
     both clients take (`Authorization: Bearer …`, `X-Klaus-Purpose` from
     `PURPOSES`, `X-Klaus-Client` = manifest `human_version`, which is
     what a `426` refuses), `parse_quota`, `refresh`, `portal_url`,
-    `status_line`, and the verdict cache. **Its one non-obvious rule:
-    the cache is GENEROUS BY DESIGN, and deliberately more generous than
-    the spec's own one-line summary of it.** `active()` is true with a
-    key and NO cache at all (nothing has refused yet); a cached "active"
-    is honoured for `GRACE_S` — 7 days — long past its 6-hour
-    `CACHE_TTL_S` freshness; a `refused:` verdict EXPIRES after that
-    same TTL so the service gets asked again; and `refresh()` keeps the
-    old cache untouched on a 5xx, a timeout or an unparseable body,
-    recording a refusal only for an answer the service actually meant
-    (4xx). That is correct precisely BECAUSE the add-on is not the gate:
-    a flight, an outage or a Fly restart must never cost a paying user
-    the month they bought, and nothing is lost by being wrong for a week
-    — the service refuses the very next call it does answer. **Every
-    `plus.*` sink is `patch_config`, never `write_config`** (see the
+    `status_line`, and the verdict cache. **Its one non-obvious rule
+    (2026-09-16, I-3): the SERVICE is the gate, so nothing here may
+    expire an active verdict on a timer of its own.** `active()` is true
+    with a key and no cache at all (nothing has refused yet), and stays
+    true for any cached status that is not `refused:*` — there is no
+    grace window and no separate offline fallback, because nothing here
+    ever re-asks the service on a schedule; the only thing that DOES ask
+    again is routing the next real call there, so a timed-out "active"
+    could only ever misroute a paying subscriber onto the keyless
+    provider path (idle a week, add a PDF, told to go paste an OpenAI
+    key — the bug this rule replaced). A `refused:` verdict is the one
+    thing that expires: after `CACHE_TTL_S` (6 hours) it is ignored and
+    the next call simply routes to the service again, which either
+    refuses afresh (re-caching) or succeeds. `refresh()` (Preferences'
+    Check, the only caller) keeps the old cache untouched on a 5xx, a
+    timeout or an unparseable body, recording a refusal only for an
+    answer the service actually meant (4xx) — a restart or an outage is
+    never mistaken for a refusal. **Every `plus.*` sink is
+    `patch_config`, never `write_config`** (see the
     `__init__.py` entry): `remember`'s parameter is *named*
     `write_config` and handing it the package's actual `write_config`
     wipes every other setting on the first refusal. The key is never

@@ -57,10 +57,9 @@ puts you straight back on them.
   verdict the service gave (active, past due, refused) with the date it
   was checked, the renewal date, and the quota readout Preferences shows.
   Default `{}`. Safe to clear: the next **Check** (or the next call that
-  needs it) fills it in again. Klaus re-checks every 6 hours, and honours
-  a cached "active" for up to 7 days when the service cannot be reached,
-  so a flight or an outage does not cost you the subscription you paid
-  for.
+  needs it) fills it in again. A refusal is remembered for 6 hours, then
+  the service is asked again; an active verdict is honoured until the
+  service refuses it.
 - **klaus_plus_base**: The Klaus Plus service URL. Default `""`, which
   falls back to the built-in service, `https://klausmate.fly.dev`
   (`plus.DEFAULT_BASE`) — editable under **KlausMate Preferences →

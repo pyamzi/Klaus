@@ -68,7 +68,7 @@ def authenticate(request: Request, purpose_required: bool = True, require_active
         if state != "active":
             raise _err(402, f"Klaus Plus is not active ({reason}) — manage your subscription under KlausMate Preferences.")
     if not st.limiter.allow(int(row["id"]), now):
-        raise _err(429, "Too many requests — Klaus Plus allows 60 a minute; wait a moment.")
+        raise _err(429, f"Too many requests — Klaus Plus allows {settings.rate_per_minute} a minute; wait a moment.")
     purpose = request.headers.get("X-Klaus-Purpose", "")
     if purpose_required and purpose not in meter.PURPOSES:
         raise _err(400, "Missing or unknown X-Klaus-Purpose header.")
@@ -80,6 +80,18 @@ def authenticate(request: Request, purpose_required: bool = True, require_active
 def _quota_header(request: Request, customer_id: int) -> dict:
     st = request.app.state
     return {"X-Klaus-Quota": json.dumps(meter.snapshot(st.store, st.settings, customer_id, st.now()))}
+
+
+def _json_body(raw: bytes) -> dict:
+    """M-1: a malformed or non-object JSON body must land as a klaus_plus 400,
+    never a bare 500 (JSONDecodeError / AttributeError from `.get` on a list)."""
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        raise _err(400, "Malformed JSON body.")
+    if not isinstance(body, dict):
+        raise _err(400, "Malformed JSON body.")
+    return body
 
 
 def _declared_length(request: Request) -> int:
@@ -95,6 +107,23 @@ def _log(request: Request, status: int, metered: int, started: float) -> None:
     prefix = (row["key_hash"] or "")[:8] if row is not None else "-"
     request.app.state.log.info("%s %s %d key=%s ms=%d metered=%d", request.method, request.url.path, status, prefix,
                                int((time.time() - started) * 1000), metered)
+
+
+async def _check_upstream_auth(request: Request, resp: Any) -> None:
+    """I-2: never relay a provider's own 401/403 as the subscriber's -- the
+    operator's key trouble is not the subscriber's fault, and the provider's
+    error text (which can carry a redacted fragment of the OPERATOR's own key)
+    must never be cached into a subscriber's meta.json. Status only, logged;
+    never the upstream body."""
+    if resp.status_code in (401, 403):
+        request.app.state.log.info("upstream auth failure status=%d", resp.status_code)
+        # A streamed response was never read: close it here or the pooled
+        # connection leaks (httpx has no finalizer for it).
+        try:
+            await resp.aclose()
+        except Exception:  # noqa: BLE001 - closing is best effort on the way out
+            pass
+        raise _err(502, "Klaus Plus could not reach the provider — try again later, or use your own API key.")
 
 
 def _safe_send_quota_notice(st: Any, to: str, purpose: str, human_line: str) -> None:
@@ -148,6 +177,8 @@ def wav_seconds(data: bytes) -> float:
         pos += 8 + size + (size & 1)
     if not (rate and channels and bits and data_len):
         raise ValueError("WAVE header incomplete")
+    if bits < 8:
+        raise ValueError("unsupported WAVE bit depth")  # M-2: not a ZeroDivisionError from bits // 8
     return data_len / float(rate * channels * (bits // 8))
 
 
@@ -176,7 +207,7 @@ async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Res
     raw = await request.body()
     if len(raw) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
-    body = json.loads(raw or b"{}")
+    body = _json_body(raw)
     if st.settings.allowed_models and body.get("model") not in st.settings.allowed_models:
         raise _err(400, "That model is not available on Klaus Plus.")
     inputs = body.get("input") if isinstance(body.get("input"), list) else [body.get("input") or ""]
@@ -185,6 +216,7 @@ async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Res
     if not ok:
         raise _err(402, meter.quota_message("embed", meter.snapshot(st.store, st.settings, int(row["id"]), st.now())["resets_at"]))
     resp = await st.upstream.openai_json("/embeddings", body)
+    await _check_upstream_auth(request, resp)
     metered = 0
     if resp.status_code == 200:
         try:
@@ -229,6 +261,7 @@ async def transcriptions(request: Request, background_tasks: BackgroundTasks) ->
     fields = {k: str(v) for k, v in form.items() if k != "file" and isinstance(v, str)}
     resp = await st.upstream.openai_multipart("/audio/transcriptions", fields, getattr(upload, "filename", "chunk.wav") or "chunk.wav",
                                               content, getattr(upload, "content_type", "audio/wav") or "audio/wav")
+    await _check_upstream_auth(request, resp)
     metered = 0
     if resp.status_code == 200:
         metered = seconds
@@ -246,7 +279,12 @@ def _usage_from_sse_line(line: bytes, acc: dict) -> None:
     except ValueError:
         return
     if obj.get("type") == "message_start":
-        acc["in"] = int(((obj.get("message") or {}).get("usage") or {}).get("input_tokens") or 0)
+        usage = (obj.get("message") or {}).get("usage") or {}
+        acc["in"] = int(usage.get("input_tokens") or 0)
+        # I-1: a cached request is billed on these two fields too -- they ride
+        # message_start's usage block alongside input_tokens.
+        acc["cache_creation"] = int(usage.get("cache_creation_input_tokens") or 0)
+        acc["cache_read"] = int(usage.get("cache_read_input_tokens") or 0)
     elif obj.get("type") == "message_delta":
         acc["out"] = int((obj.get("usage") or {}).get("output_tokens") or 0)
 
@@ -264,7 +302,7 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
     raw = await request.body()
     if len(raw) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
-    body = json.loads(raw or b"{}")
+    body = _json_body(raw)
     if st.settings.allowed_models and body.get("model") not in st.settings.allowed_models:
         raise _err(400, "That model is not available on Klaus Plus.")
     cid = int(row["id"])
@@ -273,13 +311,16 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
         raise _err(402, meter.quota_message(purpose, meter.snapshot(st.store, st.settings, cid, st.now())["resets_at"]))
     stream = bool(body.get("stream"))
     resp = await st.upstream.anthropic(body, stream)
+    await _check_upstream_auth(request, resp)
     if not stream or resp.status_code != 200:
         content = await resp.aread() if hasattr(resp, "aread") else resp.content
         metered = 0
         if resp.status_code == 200:
             try:
                 u = json.loads(content).get("usage") or {}
-                metered = int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
+                # I-1: cache fields are billed by the provider like any other token.
+                metered = (int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
+                          + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0))
             except (ValueError, AttributeError, TypeError):
                 metered = 0
             snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
@@ -287,7 +328,7 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
         _log(request, resp.status_code, metered, started)
         return Response(content, status_code=resp.status_code, media_type="application/json", headers=_quota_header(request, cid))
 
-    acc = {"in": 0, "out": 0}
+    acc = {"in": 0, "out": 0, "cache_creation": 0, "cache_read": 0}
 
     async def relay():
         buf = b""
@@ -300,7 +341,7 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
                     _usage_from_sse_line(line.rstrip(b"\r"), acc)
         finally:
             try:
-                metered = acc["in"] + acc["out"]
+                metered = acc["in"] + acc["cache_creation"] + acc["cache_read"] + acc["out"]
                 snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
                 _log(request, 200, metered, started)
                 _notify_quota_fire_and_forget(st, row, snap)

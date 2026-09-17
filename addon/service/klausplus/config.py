@@ -43,7 +43,10 @@ class Settings:
     quota_assistant_tokens: int = 200 * TOKENS_PER_TURN
     embed_ceiling_tokens: int = 20_000_000
     grace_days: int = 3
-    rate_per_minute: int = 60
+    # C-1: the add-on indexes 64 notes per request back to back; 60/min refused
+    # every collection above ~3,800 notes on its first index. The money bound is
+    # the quotas and the embed ceiling — this limiter only guards CPU.
+    rate_per_minute: int = 600
     audio_day_seconds: int = 240 * 60
     max_json_bytes: int = 4 * 1024 * 1024
     max_audio_bytes: int = 25 * 1024 * 1024

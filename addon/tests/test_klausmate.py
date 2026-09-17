@@ -361,6 +361,40 @@ except embeddings.EmbeddingError as e:
 finally:
     openai_client._urlopen = _orig_openai_urlopen
 
+_refusals.clear()
+_write_calls.clear()
+
+# A connection-level failure never reaches the service at all — status is
+# None, openai_client's own message says "Could not reach OpenAI ..."
+# (it has no idea it was talking to Klaus Plus) — so on the Plus path that
+# message must be renamed, or a service outage reads as an OpenAI outage
+# (M-10). _SLEEP is patched out for this one case only: _request retries
+# once on a URLError with a real 2s time.sleep, which every other Plus
+# fake here avoids by raising a status the retry branch doesn't cover.
+_orig_openai_sleep = openai_client._SLEEP
+openai_client._SLEEP = lambda *a, **k: None
+
+
+def _plus_network_urlopen(req, timeout=None):
+    raise urllib.error.URLError("connection refused")
+
+
+openai_client._urlopen = _plus_network_urlopen
+try:
+    embeddings.OpenAIEmbeddings(
+        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
+    ).embed(["a"])
+    check("a connection error on Plus raises EmbeddingError", False)
+except embeddings.EmbeddingError as e:
+    check("a connection error on Plus names the service, not just 'Could not reach "
+          "OpenAI ...' (M-10)",
+          e.status is None and e.user_message().startswith("Klaus Plus: "), e.user_message())
+    check("a connection error (no status at all) is never cached as a refusal",
+          _refusals == [])
+finally:
+    openai_client._urlopen = _orig_openai_urlopen
+    openai_client._SLEEP = _orig_openai_sleep
+
 del pkg.patch_config
 del pkg.write_config
 

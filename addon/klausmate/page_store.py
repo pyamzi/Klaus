@@ -51,7 +51,14 @@ def text_digest(pages: list[str]) -> str:
     not the file carrying them — stable across a bake's os.replace or a
     move, since neither touches the text layer. Whitespace is collapsed
     per page before hashing so re-extracting the same text with
-    different line-wrapping still resolves to the same directory."""
+    different line-wrapping still resolves to the same directory.
+
+    Known limit: a text-less document (a scanned deck with no text
+    layer) hashes purely on its PAGE COUNT, since every page normalizes
+    to "". Two different scanned PDFs of the same length, re-imported
+    under the same safe name, share this digest and therefore each
+    other's directory — no worse than sharing a slide deck's identity,
+    but worth knowing before debugging a mismatched transcript."""
     normalized = "\x1f".join(" ".join(str(p or "").split()) for p in pages)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
@@ -137,16 +144,30 @@ def _atomic_json(p: str, rec: dict) -> None:
 
 
 def _same_text(rec_dir: str, pages: list[str]) -> bool:
-    """True when the records already in *rec_dir* say what *pages* say
-    (every page's slide_text, whitespace-collapsed) — the same document
-    under another directory name."""
+    """True when the records already in *rec_dir* are compatible with
+    what *pages* say — the same document under another directory name.
+
+    A page with no record file yet (FileNotFoundError, or any other
+    unreadable/corrupt record — same tolerance load_record gives them),
+    or a record whose stored slide_text is "", has nothing to disagree
+    with and is skipped rather than counted as a mismatch: a transcript
+    recorder can append segments to a page (M-15) before the first index
+    run ever seeds that page's slide_text, and a legacy directory seeded
+    only that way — every record empty or missing — has nothing to
+    disprove sameness with, so it is treated as the same document rather
+    than orphaned. Only a stored NON-EMPTY slide_text that disagrees
+    with the new text proves a different document.
+    """
     for i, text in enumerate(pages):
         try:
             with open(os.path.join(rec_dir, f"{int(i):04d}.json"), encoding="utf-8") as f:
                 rec = json.load(f)
         except (OSError, ValueError):
-            return False
-        if " ".join(str((rec or {}).get("slide_text") or "").split()) != " ".join(str(text or "").split()):
+            continue
+        stored = " ".join(str((rec or {}).get("slide_text") or "").split())
+        if not stored:
+            continue
+        if stored != " ".join(str(text or "").split()):
             return False
     return True
 
@@ -179,12 +200,25 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
         # directory whose slide text differs is a replaced document and is
         # left behind for delete_context.
         old_dir = os.path.join(base, pointer)
+        td_dir = os.path.join(base, td)
         if os.path.isdir(old_dir) and _same_text(old_dir, pages):
-            try:
-                os.replace(old_dir, os.path.join(base, td))
-            except OSError as exc:
-                print(f"[klausmate] page records migrate failed for {pdf_safe}: {exc}")
-        _write_pointer(user_files, pdf_safe, td)
+            if os.path.isdir(td_dir):
+                # td already has its own directory on disk, and old_dir's
+                # content matches too — it is a valid home as-is (M-15).
+                # os.replace onto an existing non-empty directory raises;
+                # repointing anyway (the old bug) moved the pointer onto
+                # td regardless, orphaning old_dir's segments. Simplest
+                # correct move: touch neither directory nor the pointer.
+                pass
+            else:
+                try:
+                    os.replace(old_dir, td_dir)
+                except OSError as exc:
+                    print(f"[klausmate] page records migrate failed for {pdf_safe}: {exc}")
+                else:
+                    _write_pointer(user_files, pdf_safe, td)
+        else:
+            _write_pointer(user_files, pdf_safe, td)
     n = 0
     for i, text in enumerate(pages):
         rec = load_record(user_files, pdf_safe, path, i)

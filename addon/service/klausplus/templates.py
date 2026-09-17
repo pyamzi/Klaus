@@ -34,14 +34,26 @@ def welcome(operator: str, key: str | None, emailed: bool, already: bool) -> str
     return _frame("Welcome to Klaus Plus", body, operator)
 
 
-def recover_form(operator: str) -> str:
+def _recovery_by_email_line(operator_email: str) -> str:
+    # M-6: the one line both recovery pages fall back to when email is off --
+    # never promise a send that cannot happen.
+    return f"<p>Key recovery is by email to {escape(operator_email)} — write from the address you paid with.</p>"
+
+
+def recover_form(operator: str, email_enabled: bool, operator_email: str) -> str:
+    if not email_enabled:
+        body = f"<h1>Recover your key</h1>{_recovery_by_email_line(operator_email)}"
+        return _frame("Recover your Klaus Plus key", body, operator)
     body = ("<h1>Recover your key</h1><p>Enter the email you paid with. A new key will be sent and the old one stops working.</p>"
             "<form method=\"post\" action=\"/recover\"><input type=\"email\" name=\"email\" required placeholder=\"you@example.com\"> "
             "<button class=\"btn\" type=\"submit\">Send a new key</button></form>")
     return _frame("Recover your Klaus Plus key", body, operator)
 
 
-def recover_done(operator: str) -> str:
+def recover_done(operator: str, email_enabled: bool, operator_email: str) -> str:
+    if not email_enabled:
+        body = f"<h1>Recover your key</h1>{_recovery_by_email_line(operator_email)}"
+        return _frame("Recover your Klaus Plus key", body, operator)
     return _frame("Recover your Klaus Plus key", "<h1>Check your inbox</h1><p>If that address has a subscription, a new key is on its way.</p>", operator)
 
 

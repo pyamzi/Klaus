@@ -271,4 +271,65 @@ check("the previous document's records are left on disk for delete_context",
       os.path.isdir(os.path.join(_uf, ps.SUBDIR, "lec", ps.text_digest(_pages))))
 shutil.rmtree(_uf, ignore_errors=True)
 
+section("an empty-slide_text legacy record (a transcript before the first index run) migrates, not orphaned (M-15)")
+_uf2 = tempfile.mkdtemp(prefix="klaus-pages-emptytext-")
+_pdf2 = os.path.join(_uf2, "lec.pdf")
+with open(_pdf2, "wb") as _f:
+    _f.write(b"%PDF-1.4 emptytext")
+_pages2 = ["Real slide one", "Real slide two"]
+_legacy_dir2 = os.path.join(_uf2, ps.SUBDIR, "lec", ps.digest12(_pdf2))
+os.makedirs(_legacy_dir2)
+# Only page 1 has a record at all — as if a Plan 2 recorder had appended a
+# transcript segment to it before ANY index run ever seeded slide_text.
+# Page 0 has no record file yet. Both must be treated as "nothing to
+# disagree with", not a mismatch, or the segment is orphaned.
+with open(os.path.join(_legacy_dir2, "0001.json"), "w", encoding="utf-8") as _f:
+    json.dump({"version": 1, "slide_text": "",
+               "segments": [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}],
+               "updated_at": 0.0}, _f)
+ps.ensure_records(_uf2, "lec", _pdf2, _pages2)
+check("the legacy directory migrated onto the text digest, not left orphaned",
+      not os.path.isdir(_legacy_dir2) and ps._read_pointer(_uf2, "lec") == ps.text_digest(_pages2))
+check("the segment recorded before the first index run survived the migration",
+      ps.load_record(_uf2, "lec", _pdf2, 1)["segments"]
+      == [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}])
+check("the real slide text from the index run is there too, on both pages",
+      ps.load_record(_uf2, "lec", _pdf2, 0)["slide_text"] == "Real slide one"
+      and ps.load_record(_uf2, "lec", _pdf2, 1)["slide_text"] == "Real slide two")
+shutil.rmtree(_uf2, ignore_errors=True)
+
+section("ensure_records leaves the pointer alone when the destination directory already exists (M-15)")
+_uf3 = tempfile.mkdtemp(prefix="klaus-pages-collision-")
+_pdf3 = os.path.join(_uf3, "lec.pdf")
+with open(_pdf3, "wb") as _f:
+    _f.write(b"%PDF-1.4 collision")
+_pages3 = ["Collision slide one", "Collision slide two"]
+_td3 = ps.text_digest(_pages3)
+_base3 = os.path.join(_uf3, ps.SUBDIR, "lec3")
+_old_dir3 = os.path.join(_base3, "oldhome0001")
+os.makedirs(_old_dir3)
+for _i, _text in enumerate(_pages3):
+    with open(os.path.join(_old_dir3, f"{_i:04d}.json"), "w", encoding="utf-8") as _f:
+        json.dump({"slide_text": _text, "segments": []}, _f)
+ps._write_pointer(_uf3, "lec3", "oldhome0001")
+# The migration target already has its OWN directory on disk (independent
+# content) — os.replace onto it would raise, and the old bug repointed
+# there anyway, orphaning old_dir's segments behind an unreachable pointer.
+_td_dir3 = os.path.join(_base3, _td3)
+os.makedirs(_td_dir3)
+with open(os.path.join(_td_dir3, "0000.json"), "w", encoding="utf-8") as _f:
+    json.dump({"slide_text": _pages3[0],
+               "segments": [{"t0": 0.0, "t1": 1.0, "text": "already here"}]}, _f)
+ps.ensure_records(_uf3, "lec3", _pdf3, _pages3)
+check("the pointer stays on the current directory, not moved onto the pre-existing target",
+      ps._read_pointer(_uf3, "lec3") == "oldhome0001")
+check("the current directory is untouched, not renamed away",
+      os.path.isdir(_old_dir3))
+check("the pre-existing target directory's own record is untouched (no merge, no overwrite)",
+      json.load(open(os.path.join(_td_dir3, "0000.json")))["segments"]
+      == [{"t0": 0.0, "t1": 1.0, "text": "already here"}])
+check("reads still resolve through the (unmoved) pointer, seeing the old directory's own content",
+      ps.load_record(_uf3, "lec3", _pdf3, 0)["slide_text"] == _pages3[0])
+shutil.rmtree(_uf3, ignore_errors=True)
+
 raise SystemExit(report())

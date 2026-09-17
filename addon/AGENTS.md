@@ -460,8 +460,9 @@ every other key, none of them ever in the repo:
   answering 401/402/426 is the only gate.
 - `klaus_plus_cache` (`{}`) — not a setting but state Klaus writes:
   `status`, `checked_at`, `period_end`, the quota snapshot and the
-  service's own message. 6-hour freshness, and a cached "active" is
-  honoured for 7 days when the service cannot be reached.
+  service's own message. A refusal is remembered for 6 hours, then the
+  service is asked again; an active verdict is honoured until the
+  service refuses it — nothing here re-checks on a timer.
 - `klaus_plus_base` (`""`) — empty means the built-in
   `plus.DEFAULT_BASE` (`https://klausmate.fly.dev`), which is what the
   field shows as its placeholder. A General row, there only for a

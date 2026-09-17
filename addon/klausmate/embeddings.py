@@ -178,8 +178,15 @@ class OpenAIEmbeddings:
                         print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
                     else:
                         plus.note_refusal(cfg, e.status, wc, message=str(e))
+                # e.status is None for a connection-level failure (no HTTP
+                # response at all — openai_client never learned it was
+                # talking to Klaus Plus) — its message says "Could not
+                # reach OpenAI ...", which on THIS path names the wrong
+                # thing to blame (M-10). A real status means the service
+                # itself answered, in its own words: verbatim, unprefixed.
                 raise EmbeddingError(
-                    str(e), provider="Klaus Plus", status=e.status, retry_after=e.retry_after
+                    str(e) if e.status is not None else f"Klaus Plus: {e}",
+                    provider="Klaus Plus", status=e.status, retry_after=e.retry_after,
                 ) from e
 
         key = str(cfg.get("api_key_openai") or "").strip()

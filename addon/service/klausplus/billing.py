@@ -111,7 +111,8 @@ def portal(request: Request) -> JSONResponse:
 
 @router.get("/recover", response_class=HTMLResponse)
 def recover_form(request: Request) -> str:
-    return templates.recover_form(_operator(request.app.state.settings))
+    s = request.app.state.settings
+    return templates.recover_form(_operator(s), email.enabled(s), s.operator_email)
 
 
 def _recover_limiter(st: Any) -> RateLimiter:
@@ -139,7 +140,7 @@ async def recover(request: Request) -> str:
     # doing no work at all when they trip, so nothing becomes enumerable either way —
     # a per-caller-IP burst limit, and (below) a per-customer rotation cooldown.
     if not _recover_limiter(st).allow(client_ip, now):
-        return templates.recover_done(_operator(st.settings))
+        return templates.recover_done(_operator(st.settings), email.enabled(st.settings), st.settings.operator_email)
     row = st.store.customer_by_email(email_addr)
     if (row is not None
             and entitlement.verdict(row, now, st.settings.grace_days)[0] == "active"
@@ -151,4 +152,4 @@ async def recover(request: Request) -> str:
         # loop, or an in-flight /recover stalls every other request on this process.
         if await run_in_threadpool(email.send_key_email, st.settings, str(row["email"]), key):
             st.store.set_key_hash(int(row["id"]), keys.hash_key(key), now)
-    return templates.recover_done(_operator(st.settings))
+    return templates.recover_done(_operator(st.settings), email.enabled(st.settings), st.settings.operator_email)

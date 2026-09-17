@@ -186,6 +186,12 @@ Klaus Plus key**, Save, then press **Check**. The status line fills in with
 the plan, the renewal date and the month's usage. Run one index and watch it
 move.
 
+With email off (or a redirect back from Stripe that never landed), a customer
+can pay and reach neither the welcome page nor `/recover`. Issue their key by
+hand from the Stripe customer id (Stripe dashboard, or `fly logs`):
+`fly ssh console -C "python scripts/mint_key.py cus_…"` — it prints the key
+once and nothing else; give it to the customer, it replaces any earlier key.
+
 > With `MIN_CLIENT_VERSION=0.2.0` and the add-on's shipped `human_version`
 > below that, every call is refused `426` **on purpose** — that is the
 > rollout's own safety catch (nothing live can reach the service while it is

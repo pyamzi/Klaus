@@ -26,7 +26,7 @@ try:
 except ValueError:
     check("an unknown purpose raises ValueError", True)
 
-section("the verdict cache: fresh, stale-with-grace, refused")
+section("the verdict cache: fresh, honoured until refused, refusals expire")
 now = 1_800_000_000.0
 written = {}
 snap = {"month": "2026-09", "resets_at": now + 86400, "counters": {}, "human": {"lecture_hours": [4.0, 30.0], "cards": [812, 3000], "turns": [31, 200]}}
@@ -37,8 +37,11 @@ check("remember writes klaus_plus_cache with the snapshot, status and checked_at
       and written["klaus_plus_cache"]["quota"]["human"]["cards"] == [812, 3000])
 cfg2 = dict(cfg, klaus_plus_cache=cache)
 check("fresh active → active", plus.active(cfg2, now=now + 3600))
-check("stale but within 7-day grace → active", plus.active(cfg2, now=now + 3 * 86400))
-check("older than 7 days → not active", plus.active(cfg2, now=now + 8 * 86400) is False)
+check("stale (the old 7-day grace boundary) → still active", plus.active(cfg2, now=now + 3 * 86400))
+check("older than 7 days → still active — the service is the gate, not a timer "
+      "(I-3: nothing here ever re-asks the service on its own, so an expiring cache "
+      "could only misroute a paying subscriber to the keyless provider path)",
+      plus.active(cfg2, now=now + 8 * 86400))
 plus.note_refusal(cfg2, 402, written.update, now=now + 10)
 _keys_note_refusal = set(written.keys())
 cfg3 = dict(cfg, klaus_plus_cache=written["klaus_plus_cache"])
@@ -48,8 +51,18 @@ check("a refused verdict expires after the TTL so the service gets asked again",
 
 section("status_line and parse_quota")
 line = plus.status_line({"status": "active", "period_end": now + 15 * 86400, "quota": snap})
-check("status line names the plan, the renewal day and the three counters",
+check("active status line names the plan, the renewal day and the three counters",
       line.startswith("Plus · renews 2027-01-30") and "4.0 of 30 lecture hours" in line and "812 of 3,000 cards" in line and "31 of 200 turns" in line, line)
+canceled_line = plus.status_line({"status": "canceled", "period_end": now + 15 * 86400, "quota": snap})
+check("canceled status line says it ENDS, never 'renews' (M-7)",
+      canceled_line.startswith("Plus · ends 2027-01-30") and "renews" not in canceled_line, canceled_line)
+trialing_line = plus.status_line({"status": "trialing", "period_end": now + 15 * 86400, "quota": snap})
+check("trialing status line says the trial ends",
+      trialing_line.startswith("Plus · trial ends 2027-01-30"), trialing_line)
+past_due_line = plus.status_line({"status": "past_due", "period_end": now + 15 * 86400, "quota": snap})
+check("past_due status line tells the subscriber to fix their card, never 'renews' (M-7)",
+      "past due" in past_due_line.lower() and "fix your card" in past_due_line.lower()
+      and "renews" not in past_due_line, past_due_line)
 check("no cache → an honest line", "not checked yet" in plus.status_line({}).lower())
 check("parse_quota reads the header and tolerates absence/junk",
       plus.parse_quota({"X-Klaus-Quota": json.dumps(snap)})["human"]["turns"] == [31, 200]

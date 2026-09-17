@@ -142,6 +142,18 @@ def test_email_disabled_without_sender(settings):
     assert email.send(settings, "a@b.c", "s", "<p>x</p>") is False
 
 
+def test_recover_pages_never_promise_an_email_that_cannot_be_sent(world, settings):
+    # M-6: with email off, the form and done pages must say recovery is by email
+    # to the operator, and must never say "sent" or "inbox" -- nothing is sent.
+    assert not settings.email_enabled
+    form = world["client"].get("/recover").text
+    assert "sent" not in form.lower() and "inbox" not in form.lower()
+    assert settings.operator_email in form
+    done = world["client"].post("/recover", data={"email": "nobody@x.y"}).text
+    assert "sent" not in done.lower() and "inbox" not in done.lower() and "on its way" not in done.lower()
+    assert settings.operator_email in done
+
+
 # --- fix round 1 (K-243) -----------------------------------------------------
 
 

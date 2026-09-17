@@ -1167,8 +1167,9 @@ _save_embed_src2 = _fn_src("save_embed")
 _save_general_src2 = _fn_src("save_general")
 check("save_embed writes the Klaus Plus key", '"klaus_plus_key"' in _save_embed_src2)
 check("...and clears the cached verdict in the SAME write when the key "
-      "moved — a cache describing the old subscription would let a "
-      "revoked or swapped key read as active for the whole grace week",
+      "moved — an active verdict is honoured with no expiry of its own "
+      "(I-3), so left behind, a swapped key would show the previous "
+      "subscription's status indefinitely",
       '"klaus_plus_cache"' in _save_embed_src2)
 check("save_general writes the service URL, and NOT the key — one key, "
       "one writer, or Save's two halves race to spell it",
@@ -1261,6 +1262,26 @@ check("the card-index status line names Klaus Plus as the other way to "
 check("the UI reads its status text from plus.status_line, never its "
       "own re-spelling of the quota — the wording lives once",
       "plus.status_line(" in _src2 and _src2.count("plus.status_line(") == 1)
+
+_refresh_plus_src2 = _fn_src("refresh_plus_status")
+check("refresh_plus_status was found", bool(_refresh_plus_src2))
+check("the Plus GROUP row's description links Terms and Privacy, built "
+      "from the configured base (M-11: spec D5 promised a link from "
+      "Preferences and nothing built one)",
+      "/terms" in _refresh_plus_src2 and "/privacy" in _refresh_plus_src2
+      and "plus.base(" in _refresh_plus_src2)
+check("the label renders those as real, clickable links",
+      "plus_status.setOpenExternalLinks(True)" in _src2)
+check("...and it repaints them on every refresh, not just once at "
+      "construction — plus_status.setText fully replaces the label's "
+      "text, so a link added only at construction would vanish on the "
+      "first status change",
+      "setOpenExternalLinks" not in _refresh_plus_src2
+      and "plus_status.setText" in _refresh_plus_src2)
+_plus_key_row_desc = _src2.split('"Klaus Plus key",', 1)[1].split("plus_key_edit,", 1)[0]
+check("the links sit in the Plus GROUP row, never the licence-key "
+      "field's own row above it",
+      "/terms" not in _plus_key_row_desc and "/privacy" not in _plus_key_row_desc)
 
 print("== Check Keys does not contradict a Plus subscriber (K-247 fix 3) ==")
 # test_connection (General -> Connection) used to warn "No API key is
