@@ -922,5 +922,169 @@ for _bad, _card in sorted(_SWEEP_ALLOWED.items()):
           bool(_guarded_bases(_bad)))
 
 
+section("record button: a real LectureDock header, offscreen (K-257)")
+# LectureDock is not built for dependency injection like PdfDock: it
+# hardcodes the package-level aqt.mw as its own Qt parent and constructs
+# a real PdfSidebar itself, so a real button test needs real Qt classes
+# bound into aqt.qt, a real widget standing in for aqt.mw, and
+# pdf_viewer.PdfSidebar swapped for a lightweight fake first — never a
+# real PDF renderer or microphone. The shared start_or_stop_recording
+# (klausmate/__init__.py) is exercised for real in test_pdf_dock.py,
+# which already has to run the whole package for PdfDock; here it is
+# faked, so this section only proves LectureDock's OWN wiring (the
+# button, enable/disable, the click reaching the shared function with
+# this dock and its own sidebar) without re-proving Recorder/Uploader
+# behaviour a second time.
+import types  # noqa: E402
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6 import QtCore as _lv_QtC  # noqa: E402
+from PyQt6 import QtGui as _lv_QtG  # noqa: E402
+from PyQt6 import QtWidgets as _lv_QtW  # noqa: E402
+
+_lv_shim = types.ModuleType("aqt.qt")
+for _lv_qmod in (_lv_QtC, _lv_QtG, _lv_QtW):
+    for _lv_name in dir(_lv_qmod):
+        if not _lv_name.startswith("_"):
+            setattr(_lv_shim, _lv_name, getattr(_lv_qmod, _lv_name))
+_lv_shim.qconnect = lambda sig, fn: sig.connect(fn)
+sys.modules["aqt.qt"] = _lv_shim
+
+_lv_app = _lv_QtW.QApplication.instance() or _lv_QtW.QApplication(["klaus-test"])
+_orig_stub_mw = sys.modules["aqt"].mw
+sys.modules["aqt"].mw = _lv_QtW.QMainWindow()
+
+sys.modules.pop("klausmate.pdf_viewer", None)
+sys.modules.pop("klausmate.lecture_view", None)
+_pv_rt = importlib.import_module("klausmate.pdf_viewer")
+
+
+class _FakeSidebar(_lv_QtW.QWidget):
+    """What LectureDock reads off PdfSidebar, nothing else — never a
+    real QPdfView/pdf.js renderer offscreen."""
+
+    def __init__(self, editor=None, parent=None):
+        super().__init__(parent)
+        self._name = None
+        self._current_page = 0
+
+    def load_pdf(self, name):
+        self._name = name
+
+    def clear(self):
+        self._name = None
+
+    def cleanup(self):
+        pass
+
+
+_orig_pdfsidebar, _pv_rt.PdfSidebar = _pv_rt.PdfSidebar, _FakeSidebar
+try:
+    lv_rt = importlib.import_module("klausmate.lecture_view")
+    _lv_scratch = tempfile.mkdtemp(prefix="klaus-lecture-dock-")
+    lv_rt._user_files = lambda: _lv_scratch
+
+    dock = lv_rt.LectureDock()
+    # isVisible() reflects the WHOLE ancestor chain — show the stand-in
+    # aqt.mw too, or every descendant reports invisible regardless of
+    # its own setVisible() call.
+    sys.modules["aqt"].mw.show()
+    dock.show()
+    _lv_app.processEvents()
+    check("record_btn is a QToolButton with the record glyph and a "
+          "tooltip naming a lecture",
+          isinstance(dock.record_btn, _lv_QtW.QToolButton)
+          and dock.record_btn.text() == "●"
+          and "lecture" in dock.record_btn.toolTip().lower())
+    check("disabled while the empty state is showing (no PDF in view)",
+          not dock.record_btn.isEnabled())
+
+    dock.sidebar.load_pdf("lec")
+    dock.stack.setCurrentWidget(dock.sidebar)
+    dock._update_record_enabled()
+    check("enabled once a PDF is actually in view",
+          dock.record_btn.isEnabled())
+
+    dock.stack.setCurrentWidget(dock.empty_label)
+    dock._update_record_enabled()
+    check("disabled again once the view goes back to empty — _show_empty "
+          "never unloads the sidebar's own _name, so the stack (not just "
+          "the sidebar) decides whether a document is IN VIEW",
+          not dock.record_btn.isEnabled())
+
+    dock._recorder = types.SimpleNamespace(is_recording=True)
+    dock._update_record_enabled()
+    check("...but NOT disabled while a recording is in flight, even with "
+          "the empty state showing — never START a recording without a "
+          "PDF in view is not the same rule as force-disabling Stop the "
+          "instant follow_card's auto-follow moves to an unmatched card",
+          dock.record_btn.isEnabled())
+    dock._recorder = None
+
+    dock.set_recording(True, "0:05 · 2 to transcribe")
+    check("set_recording(True, …) flips the glyph to Stop, updates the "
+          "tooltip, and shows the status text",
+          dock.record_btn.text() == "■"
+          and "stop" in dock.record_btn.toolTip().lower()
+          and dock.record_status.text() == "0:05 · 2 to transcribe"
+          and dock.record_status.isVisible())
+    dock.set_recording(False, "")
+    check("set_recording(False, \"\") flips back and hides the status",
+          dock.record_btn.text() == "●" and not dock.record_status.isVisible())
+
+    # _show_match/_show_empty must really call _update_record_enabled,
+    # not just have a method that would work if invoked.
+    dock.sidebar.clear()
+    dock._show_match(lv_rt.LectureMatch("lec", 1, 0.9, True, False))
+    check("_show_match enables Record for real (not just in isolation)",
+          dock.record_btn.isEnabled())
+    dock._show_empty(lv_rt.R_NO_TAGS)
+    check("_show_empty disables it again for real",
+          not dock.record_btn.isEnabled())
+
+    # A disabled QToolButton's click() is a no-op — re-enable it (via the
+    # real _show_match, not a raw setEnabled) before proving the click.
+    dock._show_match(lv_rt.LectureMatch("lec", 1, 0.9, True, False))
+    _calls = []
+    sys.modules["klausmate"].start_or_stop_recording = (
+        lambda owner, sidebar: _calls.append((owner, sidebar)))
+    try:
+        dock.record_btn.click()
+    finally:
+        del sys.modules["klausmate"].start_or_stop_recording
+    check("clicking Record calls the shared start_or_stop_recording "
+          "(klausmate/__init__.py) with this dock and its own sidebar — "
+          "the same wiring PdfDock uses, proven for real in "
+          "test_pdf_dock.py",
+          _calls == [(dock, dock.sidebar)])
+
+    # I1 (fix round 1): shutdown() must release a live recorder BEFORE
+    # tearing down the sidebar, or a Browse-style host closing (here,
+    # this dock's own profile-close teardown) mid-lecture leaves the
+    # microphone hot with nothing left to stop it. _release_recorder's
+    # own logic (stop the Recorder, drop it from _active_recorders) is
+    # proven for real via PdfDock._on_host_closing in test_pdf_dock.py;
+    # this only has to prove shutdown() calls it, before cleanup().
+    _teardown_order: list = []
+    dock._recorder = types.SimpleNamespace(is_recording=True)
+    sys.modules["klausmate"]._release_recorder = (
+        lambda owner: _teardown_order.append("release"))
+    _orig_sidebar_cleanup = dock.sidebar.cleanup
+    dock.sidebar.cleanup = lambda: _teardown_order.append("cleanup")
+    try:
+        dock.shutdown()
+    finally:
+        del sys.modules["klausmate"]._release_recorder
+        dock.sidebar.cleanup = _orig_sidebar_cleanup
+        dock._recorder = None
+    check("I1: shutdown() releases the recorder strictly before the "
+          "sidebar's own cleanup()",
+          _teardown_order == ["release", "cleanup"])
+finally:
+    _pv_rt.PdfSidebar = _orig_pdfsidebar
+    sys.modules["aqt"].mw = _orig_stub_mw
+    shutil.rmtree(_lv_scratch, ignore_errors=True)  # m5 (fix round 1)
+
+
 shutil.rmtree(TMP, ignore_errors=True)
 raise SystemExit(report())

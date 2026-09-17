@@ -454,6 +454,317 @@ check("...and calling _on_host_closing again (the destroyed backstop can "
       "cleanup() never runs twice (F3, review round 1)",
       sb.cleanups == 1, f"cleanups={sb.cleanups}")
 
+section("record button: disabled without a document, enabled once one loads")
+win, editor, sb, d = _dock("right")
+d.panel_show()
+_app.processEvents()
+bar = d._bar
+check("record_btn is a QToolButton with the record glyph and a tooltip "
+      "naming a lecture",
+      isinstance(bar.record_btn, _QtW.QToolButton)
+      and bar.record_btn.text() == "●"
+      and "lecture" in bar.record_btn.toolTip().lower())
+check("disabled with no document loaded", not bar.record_btn.isEnabled())
+sb.load_pdf("lec.pdf")
+_app.processEvents()
+check("enabled once a PDF is loaded", bar.record_btn.isEnabled())
+
+section("record button: click starts/stops a recorder (K-257)")
+# Starting a recording needs a REAL file at pdf_path_for's resolved path
+# (never just a tab/context entry) — "lec.pdf" has neither yet.
+_os.makedirs(_os.path.join(_scratch, "pdfs"), exist_ok=True)
+with open(_os.path.join(_scratch, "pdfs", "lec.pdf"), "wb") as _fh:
+    _fh.write(b"%PDF-1.4 fake\n")
+
+K.lecture_recorder = importlib.import_module("klausmate.lecture_recorder")
+K.index_queue = importlib.import_module("klausmate.index_queue")
+_call_order = []
+
+
+class _FakeRecorder:
+    instances = []
+
+    def __init__(self, user_files, pdf_safe, pdf_path, get_page,
+                 on_status=None, uploader=None):
+        self.user_files = user_files
+        self.pdf_safe = pdf_safe
+        self.pdf_path = pdf_path
+        self.get_page = get_page
+        self.on_status = on_status
+        self.uploader = uploader
+        self.is_recording = True
+        self.stopped = False
+        _FakeRecorder.instances.append(self)
+
+    def start(self):
+        _call_order.append("start")
+        return True
+
+    def stop(self):
+        _call_order.append("stop")
+        self.stopped = True
+        self.is_recording = False
+
+
+class _FakeUploader:
+    def __init__(self):
+        self.requeued = []
+
+    def requeue_leftovers(self, pdf_safe, pdf_path):
+        _call_order.append("requeue")
+        self.requeued.append((pdf_safe, pdf_path))
+        return 0
+
+
+_real_recorder_cls = K.lecture_recorder.Recorder
+_real_uploader_fn = K.uploader
+_real_request_pdf = K.index_queue.request_pdf
+_fake_uploader = _FakeUploader()
+_requested = []
+K.lecture_recorder.Recorder = _FakeRecorder
+K.uploader = lambda: _fake_uploader
+
+
+def _fake_request_pdf(name, **kw):
+    _call_order.append("request_pdf")
+    _requested.append(name)
+
+
+K.index_queue.request_pdf = _fake_request_pdf
+try:
+    bar.record_btn.click()
+    _app.processEvents()
+    _safe = K.pdf_handler._safe_basename("lec.pdf")
+    check("clicking Record builds a Recorder scoped to the loaded PDF's "
+          "safe name and real path, sharing the module uploader",
+          len(_FakeRecorder.instances) == 1
+          and _FakeRecorder.instances[0].pdf_safe == _safe
+          and _FakeRecorder.instances[0].pdf_path
+          == _os.path.join(_scratch, "pdfs", "lec.pdf")
+          and _FakeRecorder.instances[0].uploader is _fake_uploader)
+    check("...and requeues that PDF's leftover WAVs BEFORE starting it "
+          "(Notes for Task 5, item 6)",
+          _fake_uploader.requeued == [
+              (_safe, _os.path.join(_scratch, "pdfs", "lec.pdf"))]
+          and _call_order == ["requeue", "start"])
+    sb._current_page = 4
+    check("get_page is scoped to THIS sidebar and reads it live, "
+          "1-based (Notes for Task 5, items 3/4 — on_segment's page is "
+          "0-based, so get_page must not be)",
+          _FakeRecorder.instances[0].get_page() == 5)
+    check("the button flips to Stop", bar.record_btn.text() == "■")
+
+    # C1 (fix round 1): the sidebar is REUSED across documents (a tab
+    # switch here; LectureDock._show_match on every reviewed card there)
+    # — get_page must stop reporting a page at all once the sidebar has
+    # moved on to a DIFFERENT document, or the recorder keeps filing
+    # segments under the wrong PDF's page numbers.
+    sb._name = "other.pdf"
+    check("C1: switching the sidebar to a different document mid-"
+          "recording freezes get_page at 0 (Recorder._tick's own "
+          "`int(get_page() or chunker.page)` then holds the chunker's "
+          "last known page instead of mis-filing under the new document)",
+          _FakeRecorder.instances[0].get_page() == 0)
+    sb._name = "lec.pdf"
+    check("...and switching back to THIS recording's own PDF resumes "
+          "reporting the live page",
+          _FakeRecorder.instances[0].get_page() == 5)
+
+    # I3 (fix round 1): D6's "elapsed time / n to transcribe" text —
+    # on_status is the Recorder's own main-thread QTimer callback
+    # (Task 4 note 2), safe to drive directly here.
+    _FakeRecorder.instances[0].on_status(65.0, 2)
+    check("I3: on_status drives the bar's status label in D6's exact "
+          "format",
+          bar.status_label.text() == "1:05 · 2 to transcribe"
+          and bar.status_label.isVisible())
+
+    bar.record_btn.click()
+    _app.processEvents()
+    check("clicking again stops the recorder and schedules a re-index "
+          "for that PDF (stopping -> index_queue.request_pdf)",
+          _FakeRecorder.instances[0].stopped
+          and not _FakeRecorder.instances[0].is_recording
+          and _requested == ["lec.pdf"])
+    check("m3: the FULL call order proves stop happens strictly before "
+          "request_pdf, not just that both happened somewhere",
+          _call_order == ["requeue", "start", "stop", "request_pdf"])
+    check("the button flips back to Record", bar.record_btn.text() == "●")
+    check("I3: the status label hides again once stopped",
+          not bar.status_label.isVisible())
+finally:
+    K.lecture_recorder.Recorder = _real_recorder_cls
+    K.uploader = _real_uploader_fn
+    K.index_queue.request_pdf = _real_request_pdf
+
+section("record button: closing the host stops a live recording, "
+        "before sidebar.cleanup() (I1, fix round 1)")
+_FakeRecorder.instances.clear()
+_call_order.clear()
+win4, editor4, sb4, d4 = _dock("right")
+sb4.load_pdf("lec.pdf")
+d4.panel_show()
+_app.processEvents()
+K.lecture_recorder.Recorder = _FakeRecorder
+K.uploader = lambda: _fake_uploader
+try:
+    d4._bar.record_btn.click()
+    _app.processEvents()
+    check("a recording is in flight before the host closes",
+          d4._recorder is not None and d4._recorder.is_recording
+          and d4._recorder in K._active_recorders)
+    _call_order.clear()  # isolate the teardown order from requeue/start noise
+    _orig_cleanup4 = sb4.cleanup
+
+    def _tracked_cleanup4():
+        _call_order.append("cleanup")
+        return _orig_cleanup4()
+
+    sb4.cleanup = _tracked_cleanup4
+    d4._on_host_closing()
+    check("I1: the microphone is released — stopped, dropped from the "
+          "active set, and the dock forgets it — and that happened "
+          "BEFORE sidebar.cleanup() (never after, which is what let a "
+          "closed Browse window's capture outlive the button that could "
+          "stop it)",
+          _FakeRecorder.instances[0].stopped
+          and not _FakeRecorder.instances[0].is_recording
+          and d4._recorder is None
+          and _FakeRecorder.instances[0] not in K._active_recorders
+          and _call_order == ["stop", "cleanup"])
+finally:
+    K.lecture_recorder.Recorder = _real_recorder_cls
+    K.uploader = _real_uploader_fn
+
+section("record button: two docks refuse a second concurrent recording "
+        "(I4, fix round 1)")
+_FakeRecorder.instances.clear()
+_call_order.clear()
+with open(_os.path.join(_scratch, "pdfs", "lec2.pdf"), "wb") as _fh:
+    _fh.write(b"%PDF-1.4 fake two\n")
+win5, editor5, sb5, d5 = _dock("right")
+sb5.load_pdf("lec.pdf")
+d5.panel_show()
+_app.processEvents()
+win6, editor6, sb6, d6 = _dock("right")
+sb6.load_pdf("lec2.pdf")
+d6.panel_show()
+_app.processEvents()
+_tooltips_i4 = []
+_real_tooltip = K.tooltip
+K.lecture_recorder.Recorder = _FakeRecorder
+K.uploader = lambda: _fake_uploader
+K.index_queue.request_pdf = _fake_request_pdf
+K.tooltip = lambda msg, *a, **kw: _tooltips_i4.append(msg)
+try:
+    d5._bar.record_btn.click()
+    _app.processEvents()
+    check("dock A (Browse-shaped) starts recording",
+          d5._recorder is not None and len(_FakeRecorder.instances) == 1)
+    d6._bar.record_btn.click()
+    _app.processEvents()
+    check("I4: dock B (a second, differently-loaded dock — Add Cards, "
+          "say) refuses to start a second recording while A's is still "
+          "active, with no second Recorder ever constructed, its own "
+          "button unchanged, and a tooltip naming what's already "
+          "recording",
+          d6._recorder is None
+          and len(_FakeRecorder.instances) == 1
+          and d6._bar.record_btn.text() == "●"
+          and any("Already recording" in m and "lec.pdf" in m
+                  for m in _tooltips_i4))
+    d5._bar.record_btn.click()
+    _app.processEvents()
+    check("stopping A frees the slot for a later Record elsewhere",
+          not K._active_recorders and d5._recorder is None)
+finally:
+    K.lecture_recorder.Recorder = _real_recorder_cls
+    K.uploader = _real_uploader_fn
+    K.index_queue.request_pdf = _real_request_pdf
+    K.tooltip = _real_tooltip
+
+section("record button: no microphone leaves the button unchanged "
+        "(m2, fix round 1)")
+_FakeRecorder.instances.clear()
+_call_order.clear()
+
+
+class _FakeRecorderNoMic(_FakeRecorder):
+    def start(self):
+        _call_order.append("start")
+        return False
+
+
+win7, editor7, sb7, d7 = _dock("right")
+sb7.load_pdf("lec.pdf")
+d7.panel_show()
+_app.processEvents()
+_tooltips_m2 = []
+_real_tooltip = K.tooltip
+K.lecture_recorder.Recorder = _FakeRecorderNoMic
+K.uploader = lambda: _fake_uploader
+K.tooltip = lambda msg, *a, **kw: _tooltips_m2.append(msg)
+try:
+    d7._bar.record_btn.click()
+    _app.processEvents()
+    check("m2: a Recorder whose start() returns False leaves _recorder "
+          "None, the glyph unchanged, nothing added to the active set, "
+          "and a tooltip explaining why",
+          d7._recorder is None
+          and d7._bar.record_btn.text() == "●"
+          and len(K._active_recorders) == 0
+          and _tooltips_m2 == ["No microphone available"])
+finally:
+    K.lecture_recorder.Recorder = _real_recorder_cls
+    K.uploader = _real_uploader_fn
+    K.tooltip = _real_tooltip
+
+section("_stop_lecture_uploader: recorders released before the "
+        "uploader; both profile hooks registered (I2, fix round 1)")
+_teardown_calls: list = []
+
+
+class _FakeTeardownRecorder:
+    def __init__(self):
+        self.is_recording = True
+
+    def stop(self):
+        _teardown_calls.append("recorder")
+        self.is_recording = False
+
+
+class _FakeTeardownUploader:
+    def stop(self):
+        _teardown_calls.append("uploader")
+
+
+_fake_td_rec = _FakeTeardownRecorder()
+K._active_recorders.add(_fake_td_rec)
+_orig_internal_uploader = K._uploader
+K._uploader = _FakeTeardownUploader()
+K._stop_lecture_uploader()
+check("I2: every _active_recorders member is stopped BEFORE the "
+      "uploader, the set is cleared, and the module singleton is reset",
+      _teardown_calls == ["recorder", "uploader"]
+      and K._active_recorders == set()
+      and K._uploader is None)
+K._uploader = _orig_internal_uploader
+
+_init_src = open(_os.path.join(
+    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+    "klausmate", "__init__.py"), encoding="utf-8").read()
+# The newline anchors on both sides (not just a substring test) so a
+# mutation that just COMMENTS the line out ("# ...gui_hooks...") cannot
+# satisfy this pin by leaving the text present but inert.
+check("I2: the uploader is created for real at profile_did_open "
+      "(ruling 4) — a standalone, uncommented registration line",
+      "\ngui_hooks.profile_did_open.append(_start_lecture_uploader)\n"
+      in _init_src)
+check("I2: ...and stopped for real at profile_will_close — likewise "
+      "uncommented",
+      "\ngui_hooks.profile_will_close.append(_stop_lecture_uploader)\n"
+      in _init_src)
+
 section("the deleted machinery is gone")
 _src = open(_os.path.join(
     _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),

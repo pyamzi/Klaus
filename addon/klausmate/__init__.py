@@ -26,6 +26,7 @@ from aqt.qt import (
     QEvent,
     QHBoxLayout,
     QImage,
+    QLabel,
     QMenu,
     QRect,
     QTabBar,
@@ -801,8 +802,139 @@ PANEL_AREAS = {
 AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
 
+# ---------------------------- lecture recording ----------------------------
+# D6 (2026-09-15 spec): ● Record / ■ Stop on the PDF dock's _PanelBar and on
+# the Lecture dock's header. One Uploader per profile (module-level,
+# lazily created here and by _start_lecture_uploader below); both docks
+# share the Record/Stop slot body so Recorder/Uploader wiring exists once.
+
+_uploader: Any = None
+# Main thread only (fix round 1, m4): touched at exactly four sites — a
+# Record/Stop click, a teardown path, and the two profile hooks — never
+# from the uploader's worker thread. No lock; if a future caller ever
+# reaches this from a worker thread, that call needs its own
+# mw.taskman.run_on_main, not a lock here.
+_active_recorders: set = set()
+
+
+def uploader() -> Any:
+    """The profile's one lecture_recorder.Uploader — created at profile
+    open (_start_lecture_uploader, registered near the other profile
+    hooks) and reused by every recording start/stop; never recreated
+    mid-profile (lecture_recorder's own fix-round-1 C1: a fresh Uploader
+    per Record would drop whatever the old one still had queued). Lazy
+    here too, so a caller before profile_did_open — or a test driving
+    this module directly — still gets a working instance.
+    """
+    global _uploader
+    if _uploader is None:
+        from . import lecture_recorder
+
+        _uploader = lecture_recorder.Uploader(USER_FILES, get_config)
+    return _uploader
+
+
+def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
+    """Shared Record/Stop slot body for ``PdfDock`` and the Lecture dock.
+
+    Both keep ``_recorder`` (``None`` or a ``lecture_recorder.Recorder``)
+    and expose ``set_recording(on, status)`` for their button/status text.
+    ``sidebar`` is read live through closures (``get_page``), never
+    snapshotted, so it must be the one PdfSidebar this recording is
+    scoped to (Notes for Task 5, item 4) — never
+    ``viewer_context.current()``, which follows whichever viewer was
+    activated last and could drift to a different PDF mid-lecture.
+    """
+    from . import index_queue, lecture_recorder
+
+    if owner._recorder is not None and owner._recorder.is_recording:
+        rec = owner._recorder
+        name = rec.pdf_name
+        rec.stop()
+        _active_recorders.discard(rec)
+        owner._recorder = None
+        owner.set_recording(False, "")
+        try:
+            owner._update_record_enabled()
+        except Exception as exc:
+            print(f"[klausmate] record button refresh failed: {exc}")
+        index_queue.request_pdf(name)
+        return
+    if _active_recorders:
+        # I4 (fix round 1): each dock only ever checks its OWN
+        # _recorder, so nothing stopped Browse's dock, Add Cards' dock
+        # and the Lecture dock from each opening a second QAudioSource on
+        # the same microphone — two chunk streams appended to the same
+        # page records, and double the metered Klaus Plus minutes. One
+        # recording at a time, full stop, regardless of which dock owns
+        # it.
+        other = next(iter(_active_recorders))
+        tooltip(f"Already recording {getattr(other, 'pdf_name', 'a lecture')}")
+        return
+    name = getattr(sidebar, "_name", None)
+    path = (
+        pdf_handler.pdf_path_for(USER_FILES, pdf_handler._safe_basename(name))
+        if name else None
+    )
+    if not name or not path:
+        tooltip("Open a PDF first")
+        return
+    safe = pdf_handler._safe_basename(name)
+
+    def _get_page() -> int:
+        # C1 (fix round 1): a PdfSidebar is REUSED across documents (a
+        # PdfDock tab change; LectureDock._show_match auto-following the
+        # next reviewed card) — closing over the sidebar alone means a
+        # document switch mid-recording silently starts reporting the
+        # NEW document's page while the Recorder keeps writing chunks
+        # under the OLD one's pdf_safe. Returning 0 here is not "page
+        # zero": Recorder._tick's own `int(self._get_page() or
+        # self._chunker.page)` treats a falsy return as "no page update
+        # this tick", which freezes the chunker on its last known page
+        # instead of mis-filing the next segment under the wrong PDF.
+        if pdf_handler._safe_basename(getattr(sidebar, "_name", "") or "") != safe:
+            return 0
+        return int(getattr(sidebar, "_current_page", 0)) + 1
+
+    rec = lecture_recorder.Recorder(
+        USER_FILES, safe, path,
+        get_page=_get_page,
+        on_status=lambda s, q: owner.set_recording(
+            True, f"{int(s) // 60}:{int(s) % 60:02d} · {q} to transcribe"
+        ),
+        uploader=uploader(),
+    )
+    rec.pdf_name = name
+    # Notes for Task 5, item 6/2: once, when Record starts for THIS PDF,
+    # before Recorder.start() — never mid-recording, or a leftover WAV
+    # the live recorder is about to write over gets re-enqueued out from
+    # under it.
+    uploader().requeue_leftovers(safe, path)
+    if rec.start():
+        owner._recorder = rec
+        _active_recorders.add(rec)
+        owner.set_recording(True, "0:00")
+    else:
+        tooltip("No microphone available")
+
+
+def _release_recorder(owner: Any) -> None:
+    """Teardown-only stop (fix round 1, I1): releases *owner*'s recorder,
+    if one is running, without touching any UI or scheduling a re-index —
+    the widgets calling this may be mid-destruction (a Browse/Add Cards
+    window closing, a dock's own shutdown). Never call this from the
+    Record/Stop button itself; that path is start_or_stop_recording,
+    which also updates the button and requests a re-index.
+    """
+    rec = owner._recorder
+    if rec is not None and rec.is_recording:
+        rec.stop()
+        _active_recorders.discard(rec)
+        owner._recorder = None
+
+
 class _PanelBar(QWidget):
-    """The dock's title bar: ``[◫] [＋] [tabs]  …  [page n/m] [⧉] [✕]``.
+    """The dock's title bar: ``[◫] [＋] [●] [tabs]  …  [page n/m] [⧉] [✕]``.
 
     Presses the bar does not handle are IGNORED so they reach the
     QDockWidget, which moves, docks and floats from them — Qt's
@@ -856,6 +988,22 @@ class _PanelBar(QWidget):
         self.add_btn.setToolTip("Open another PDF in a new tab")
         row.addWidget(self.add_btn)
 
+        # Record/Stop (D6). Disabled until a document is actually showing
+        # (ruling 5: never record without a PDF in view) — PdfDock flips
+        # this on _on_sidebar_loaded / a tab close, so the initial value
+        # here only has to be right for the dock's very first paint.
+        self.record_btn = QToolButton(self)
+        self.record_btn.setText("●")
+        self.record_btn.setAutoRaise(True)
+        _has_doc = getattr(sidebar, "_name", None) is not None
+        # m1 (fix round 1): the disabled tooltip says WHY, matching
+        # PdfDock._update_record_enabled's later updates.
+        self.record_btn.setToolTip(
+            "Record this lecture" if _has_doc else "Open a PDF to record this lecture"
+        )
+        self.record_btn.setEnabled(_has_doc)
+        row.addWidget(self.record_btn)
+
         self.tabs = QTabBar(self)
         self.tabs.setDocumentMode(True)
         self.tabs.setDrawBase(False)
@@ -868,6 +1016,22 @@ class _PanelBar(QWidget):
         # which is the surface Qt drags the dock by.
         row.addWidget(self.tabs, 0)
         row.addStretch(1)
+
+        # Elapsed time / "n to transcribe" while recording, beside the
+        # page indicator — same label style as it (theme.muted_label_qss;
+        # the try/except fallback is that label's own established idiom,
+        # not a new one).
+        self.status_label = QLabel("", self)
+        try:
+            self.status_label.setStyleSheet(
+                _theme.muted_label_qss(_theme.night_mode(), 10)
+            )
+        except Exception:
+            self.status_label.setStyleSheet(
+                "color: rgba(100,100,100,0.95); font-size: 10px;"
+            )
+        self.status_label.setVisible(False)
+        row.addWidget(self.status_label)
 
         # The viewer's page indicator sits at the right end of the bar.
         page_label = (
@@ -890,15 +1054,24 @@ class _PanelBar(QWidget):
         row.addWidget(self.hide_btn)
 
         # First layout, before any resizeEvent fires: keep the cap right
-        # from the very first paint (F1, review round 1). 220, not the
-        # review's suggested 200: measured at a real 450px bar with four
-        # saturated tabs, 200 caps the tab bar at 250px and leaves only a
-        # 53px strip — 7px short of the >= 60px this is meant to
-        # guarantee (fixed chrome — the two icon buttons each side, the
-        # bar's own margins and inter-widget spacing — measures 147px
-        # regardless of the cap, so strip = bar_width - 147 - cap; 200
-        # does not clear 60 at this width, 220 clears it with margin).
-        self.tabs.setMaximumWidth(max(80, self.width() - 220))
+        # from the very first paint (F1, review round 1). 250, not the
+        # original 220: measured at a real 450px bar with four saturated
+        # tabs, 220 left only a 36px strip once the Record button (K-257)
+        # joined the left-side chrome — short of the >= 60px this is
+        # meant to guarantee (fixed chrome, now three icon buttons on the
+        # left and two on the right plus margins/spacing, measures wider
+        # than the pre-Record 147px regardless of the cap, so strip =
+        # bar_width - chrome - cap; 250 clears 60 again with margin).
+        self.tabs.setMaximumWidth(max(80, self.width() - 250))
+
+    def set_recording(self, on: bool, status: str) -> None:
+        """Flip the Record/Stop glyph and update the elapsed-time label."""
+        self.record_btn.setText("■" if on else "●")
+        self.record_btn.setToolTip(
+            "Stop recording this lecture" if on else "Record this lecture"
+        )
+        self.status_label.setText(status)
+        self.status_label.setVisible(bool(status))
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
         # Cap the tab bar so a drag strip always survives between it and
@@ -907,7 +1080,7 @@ class _PanelBar(QWidget):
         # round 1) — with the placement menu gone, dragging this bar is
         # the only way to move the panel between areas.
         super().resizeEvent(ev)
-        self.tabs.setMaximumWidth(max(80, self.width() - 220))
+        self.tabs.setMaximumWidth(max(80, self.width() - 250))
 
     # Ignore, never accept: the dock handles these (drag, double-click).
     def mousePressEvent(self, ev) -> None:  # noqa: N802
@@ -959,6 +1132,7 @@ class PdfDock(QDockWidget):
         self._syncing = False
         self._last_page: dict[str, int] = {}
         self._closed = False
+        self._recorder: Any = None
         # _placed means the remembered placement has been applied this
         # session; until then panel_show() applies it.
         self._placed = False
@@ -985,7 +1159,9 @@ class PdfDock(QDockWidget):
         self._bar = _PanelBar(self, sidebar)
         self._tabs = self._bar.tabs
         self._add_btn = self._bar.add_btn
+        self.record_btn = self._bar.record_btn
         self._bar.add_btn.clicked.connect(self._show_add_menu)
+        self._bar.record_btn.clicked.connect(self._toggle_record)
         self._bar.float_btn.clicked.connect(self._toggle_float)
         self._bar.hide_btn.clicked.connect(self.panel_hide)
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -1125,6 +1301,31 @@ class PdfDock(QDockWidget):
         except Exception as exc:
             print(f"[klausmate] pdf dock float toggle failed: {exc}")
 
+    @_guarded
+    def _toggle_record(self, *_args) -> None:
+        # *_args: a `clicked` bool, same reason as every other guarded
+        # slot on this bar (panel_hide's comment explains the TypeError
+        # this avoids).
+        start_or_stop_recording(self, self._sidebar)
+
+    def set_recording(self, on: bool, status: str) -> None:
+        self._bar.set_recording(on, status)
+
+    def _update_record_enabled(self) -> None:
+        has_doc = getattr(self._sidebar, "_name", None) is not None
+        recording = self._recorder is not None and self._recorder.is_recording
+        try:
+            self._bar.record_btn.setEnabled(has_doc or recording)
+            # m1 (fix round 1): say WHY it's disabled, not just repeat the
+            # enabled tooltip. Left alone while recording, or this would
+            # stomp set_recording's "Stop recording this lecture".
+            if not recording:
+                self._bar.record_btn.setToolTip(
+                    "Record this lecture" if has_doc else "Open a PDF to record this lecture"
+                )
+        except Exception as exc:
+            print(f"[klausmate] record button refresh failed: {exc}")
+
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
         try:
@@ -1239,10 +1440,20 @@ class PdfDock(QDockWidget):
         renderer's webview while its C++ object still exists
         (PdfSidebar.cleanup — a webview destroyed without it crashes
         Anki's next theme change), drop the back-references. The dock
-        itself is the host's child and dies with it."""
+        itself is the host's child and dies with it.
+
+        Stops a live recorder FIRST (fix round 1, I1) — before this
+        method existed a Browse window closing mid-lecture left the
+        microphone hot with no way to stop it short of profile close,
+        and reopening Browse built a fresh PdfDock whose new _recorder
+        started a SECOND simultaneous capture of the same lecture."""
         if self._closed:
             return
         self._closed = True
+        try:
+            _release_recorder(self)
+        except Exception as exc:
+            print(f"[klausmate] pdf dock recorder release on host close failed: {exc}")
         try:
             self._persist_state()
         except Exception:
@@ -1349,6 +1560,7 @@ class PdfDock(QDockWidget):
             self._syncing = False
         self._persist()
         self._set_active_pointer(name)
+        self._update_record_enabled()
 
     @_guarded
     def _on_tab_changed(self, idx: int) -> None:
@@ -1390,6 +1602,7 @@ class PdfDock(QDockWidget):
                 pdf_handler.clear_active_pdf(USER_FILES)
             except Exception:
                 pass
+            self._update_record_enabled()
             self.panel_hide()
 
     def close_tab(self, name: str) -> None:
@@ -1748,6 +1961,41 @@ try:
     _lecture_view.setup()
 except Exception as _e:
     print(f"[klausmate] lecture view setup failed: {type(_e).__name__}: {_e}")
+
+
+def _start_lecture_uploader() -> None:
+    try:
+        uploader()
+    except Exception as exc:
+        print(f"[klausmate] lecture uploader start failed: {type(exc).__name__}: {exc}")
+
+
+gui_hooks.profile_did_open.append(_start_lecture_uploader)
+
+
+def _stop_lecture_uploader() -> None:
+    """Ruling 4: stop any in-flight recorder BEFORE the uploader — a
+    Recorder mid-chunk enqueues into it, so tearing the queue down first
+    would orphan that chunk's WAV against a dead worker. ``_active_recorders``
+    covers every dock (PdfDock instances close over their own; the Lecture
+    dock's singleton is one more), not just whichever one this profile
+    happens to remember."""
+    global _uploader
+    for rec in list(_active_recorders):
+        try:
+            rec.stop()
+        except Exception as exc:
+            print(f"[klausmate] recorder stop at profile close failed: {type(exc).__name__}: {exc}")
+    _active_recorders.clear()
+    if _uploader is not None:
+        try:
+            _uploader.stop()
+        except Exception as exc:
+            print(f"[klausmate] lecture uploader stop failed: {type(exc).__name__}: {exc}")
+        _uploader = None
+
+
+gui_hooks.profile_will_close.append(_stop_lecture_uploader)
 
 try:
     from . import top_bar as _top_bar

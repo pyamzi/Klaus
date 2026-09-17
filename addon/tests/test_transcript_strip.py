@@ -66,6 +66,20 @@ if _HAVE_QT:
     pkg = sys.modules["klausmate"]
     app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
 
+    # K-257 fix round 1 (cross-task): pdf_viewer._on_page_store_notify now
+    # marshals through _run_on_main, which (with a real aqt.mw) posts to
+    # mw.taskman.run_on_main — anki_stubs' permissive aqt.mw is a _Dummy
+    # whose "run_on_main(cb)" auto-vivifies and never calls cb at all, so
+    # every live-update check in this file would silently stop seeing any
+    # notification. A real deferred post (QTimer.singleShot(0, ...)) is
+    # what actually behaves like Anki's own taskman and is what this
+    # file's existing app.processEvents() loops are already built to pump.
+    class _FakeTaskman:
+        def run_on_main(self, cb):
+            _QtC.QTimer.singleShot(0, cb)
+
+    sys.modules["aqt"].mw.taskman = _FakeTaskman()
+
     theme = importlib.import_module("klausmate.theme")
     page_store = importlib.import_module("klausmate.page_store")
     pdf_handler = importlib.import_module("klausmate.pdf_handler")
@@ -274,6 +288,64 @@ if _HAVE_QT:
           "append_segment leaves its label frozen",
           sb2._transcript_label.text() == _before)
     sb2.close()
+
+    section("PdfSidebar._on_page_store_notify marshals through "
+            "_run_on_main (K-257 fix round 1, cross-task)")
+    # page_store.append_segment calls _notify (hence
+    # _on_page_store_notify) SYNCHRONOUSLY, on whatever thread calls it —
+    # and the lecture recorder's Uploader calls append_segment from its
+    # own daemon worker thread. Every OTHER section in this file calls
+    # append_segment from the main thread (the test script itself), so
+    # none of them would ever catch a missing marshal. Faking
+    # pdf_viewer._run_on_main to just RECORD the closure (never running
+    # it) is what proves the widget touch is deferred rather than
+    # applied inline on the calling thread. Run LAST, after every other
+    # sidebar (sb2/sb3/sb4) is already cleaned up/closed, so sb5 is the
+    # only live subscriber and _recorded_cbs can't pick up a second
+    # sidebar's own notification for the same segment.
+    import threading
+
+    sb5 = pdf_viewer.PdfSidebar(None, parent=None)
+    sb5.show()
+    for _ in range(5):
+        app.processEvents()
+    sb5.load_pdf("Sample")
+    for _ in range(10):
+        app.processEvents()
+    _before5 = sb5._transcript_label.text()
+
+    _recorded_cbs: list = []
+    _orig_run_on_main = pdf_viewer._run_on_main
+    pdf_viewer._run_on_main = lambda cb: _recorded_cbs.append(cb)
+    try:
+        _thread_names: list = []
+
+        def _bg_append():
+            _thread_names.append(threading.current_thread().name)
+            page_store.append_segment(uf, "Sample", path_sample, 0,
+                                       20.0, 21.0, "cross thread segment")
+
+        t = threading.Thread(target=_bg_append, name="Klaus-Uploader-Probe")
+        t.start()
+        t.join()
+        for _ in range(5):
+            app.processEvents()
+        check("the notification really ran on a background thread — "
+              "the exact shape of Uploader._one calling append_segment",
+              _thread_names == ["Klaus-Uploader-Probe"])
+        check("the widget is untouched immediately after — only the "
+              "closure was recorded, never applied inline on that thread",
+              len(_recorded_cbs) == 1
+              and sb5._transcript_label.text() == _before5)
+        _recorded_cbs[0]()
+        check("running the recorded closure (simulating the main-thread "
+              "hop) applies the refresh, picking up the segment the "
+              "worker thread appended",
+              sb5._transcript_label.text() == _before5 + "\ncross thread segment")
+    finally:
+        pdf_viewer._run_on_main = _orig_run_on_main
+    sb5.cleanup()
+    sb5.close()
 
     shutil.rmtree(uf, ignore_errors=True)
 else:

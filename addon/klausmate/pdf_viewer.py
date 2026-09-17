@@ -4471,9 +4471,24 @@ class PdfSidebar(QWidget):
         """page_store.subscribe callback: refresh only for THIS
         sidebar's own PDF and only while the notified page is the one
         actually on screen — a recorder appending a segment to a page
-        the user has since scrolled past must not repaint over it."""
-        if pdf_safe == self._name and page_index == self._current_page:
-            self._refresh_transcript()
+        the user has since scrolled past must not repaint over it.
+
+        Marshalled through _run_on_main (K-257 fix round 1, cross-task):
+        page_store.append_segment calls this synchronously, and the
+        lecture recorder's Uploader calls append_segment from its own
+        daemon worker thread — so, once Task 5 wired a recorder that
+        actually appends segments, this callback started touching
+        self._transcript/_transcript_label off the main thread. The
+        whole body is deferred (not just the widget touch) so the
+        pdf_safe/page_index check itself reads the freshest self._name/
+        self._current_page at the moment it actually runs, not whatever
+        they were on the worker thread a moment earlier.
+        """
+        def _apply() -> None:
+            if pdf_safe == self._name and page_index == self._current_page:
+                self._refresh_transcript()
+
+        _run_on_main(_apply)
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
