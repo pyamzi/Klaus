@@ -822,6 +822,68 @@ check(
     "never asked, while every PDF reads as absent in the Library",
     iq.offer_model_sweep(None, embeddings.index_signature({})) is True,
 )
+# --- :943 — the sweep confirm's Yes branch passes announce=False ------------
+# K-166 review: this site is NOT Qt-widget-only, which is why it survived on
+# a false premise. The user has just answered a PRICED dialog; announcing the
+# same queue again talks over the answer they just gave. iq.QMessageBox is a
+# constructible stub and offer_model_sweep already reaches
+# `box.finished.connect(answered)`, so a fake box that reports a Yes click is
+# the whole seam: pristine the accepted sweep tooltips nothing, flipped to
+# announce=True it tooltips once.
+class _FakeSignal:
+    def __init__(self):
+        self.cbs = []
+
+    def connect(self, cb):
+        self.cbs.append(cb)
+
+
+_RealBox = iq.QMessageBox
+
+
+class _YesBox:
+    """Just enough QMessageBox for offer_model_sweep, answering Yes."""
+
+    last = None
+    Icon = _RealBox.Icon
+    StandardButton = _RealBox.StandardButton
+
+    def __init__(self, _parent=None):
+        self.finished = _FakeSignal()
+        _YesBox.last = self
+
+    def clickedButton(self):
+        return "the-yes-button"
+
+    def standardButton(self, _b):
+        return _YesBox.StandardButton.Yes
+
+    def button(self, _b):
+        return None
+
+    def __getattr__(self, _name):          # setText/setIcon/open/deleteLater…
+        return lambda *_a, **_k: None
+
+
+iq.QMessageBox = _YesBox
+_sweep_tips: list = []                      # self-contained: _tips() is defined further down
+_sweep_orig_tooltip = iq.tooltip
+iq.tooltip = lambda text="", **_k: _sweep_tips.append(text)
+_sweep_asked = iq.offer_model_sweep(None, embeddings.index_signature({}))
+_pending_before = iq._queue.pending()
+for _cb in (_YesBox.last.finished.cbs if _YesBox.last else []):
+    _cb(0)
+_pending_after = iq._queue.pending()
+iq.QMessageBox = _RealBox
+iq.tooltip = _sweep_orig_tooltip
+check(
+    "accepting the priced sweep queues the jobs but tooltips NOTHING — the "
+    "user just answered the dialog, so announce=False is the whole point of "
+    "that call, and announcing over their answer is the regression",
+    _sweep_asked is True and _pending_after > _pending_before and _sweep_tips == [],
+    f"asked={_sweep_asked} pending {_pending_before}->{_pending_after} tips={_sweep_tips!r}",
+)
+
 check(
     "...and a closed profile offers nothing either",
     (setattr(iq.mw, "col", None), iq.offer_model_sweep(None, ("openai", "x", 0)))[1]
@@ -960,6 +1022,220 @@ check(
     _captured_estimate.get("estimate") == "cost unknown for this model",
     f"got {_captured_estimate!r}",
 )
+
+
+# ------------------------------------------------- K-166: the boolean edges
+
+section("K-166: the boolean edges the vacuity audit found")
+# scripts/mutation_audit.py --modules index_queue flips one boolean literal at
+# a time and re-runs this file. Eight sites flipped with nothing noticing,
+# every one of them an edge with a documented intent. Each pin below is
+# BEHAVIOURAL on purpose: never `iq.request.__defaults__`, never a message
+# compared against the constant that produced it (AUDIT.md's "one source of
+# truth, read twice"), always the thing a user would see — a tooltip that
+# fired or did not, a chain that started or parked, status_line/
+# dock_button_label off the published snapshot.
+
+
+class _Tips:
+    """Records what index_queue actually tooltipped. `tooltip` is a module
+    global there (the aqt import, or its own headless fallback), so this is
+    the one seam that makes "nothing is ever started silently" observable."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __call__(self, text="", **_k):
+        self.seen.append(text)
+
+
+def _tips():
+    tips = _Tips()
+    iq.tooltip = tips
+    return tips
+
+
+_orig_tooltip = iq.tooltip
+
+# --- :386 / :424 — the `announce: bool = True` defaults ---------------------
+# The module docstring's own invariant: nothing is ever started silently.
+# Every OTHER call in this file passes announce=False, which is exactly why
+# both defaults used to flip undetected; these three calls are bare.
+tmp, pipe = new_world()
+tips = _tips()
+_added = iq.request([(iq.JOB_PDF, "a")])
+check(
+    "request(jobs) with no announce= tooltips the add — the default is True, "
+    "and a queued job the user never hears about is the bug the docstring's "
+    "'nothing is ever started silently' forbids",
+    _added == 1 and len(tips.seen) == 1 and "a" in tips.seen[0],
+    repr(tips.seen),
+)
+
+tmp, pipe = new_world()
+tips = _tips()
+check("request_pdf(name) bare queues it", iq.request_pdf("a") is True)
+check(
+    "...and tooltips too: the Library's Update/Add to Search Index announces "
+    "by default, so request_pdf's own default must be True as well",
+    len(tips.seen) == 1 and "a" in tips.seen[0],
+    repr(tips.seen),
+)
+
+tmp, pipe = new_world()
+tips = _tips()
+check("on_pdf_imported — the funnel EVERY import surface returns through — "
+      "calls request_pdf bare, so a silent import is a silent index",
+      iq.on_pdf_imported("a") is True and len(tips.seen) == 1, repr(tips.seen))
+
+tmp, pipe = new_world()
+tips = _tips()
+iq.request_pdf("a", announce=False)
+check("...and announce=False is still silent, so the pins above are about the "
+      "DEFAULT and not about announcing at all", tips.seen == [], repr(tips.seen))
+
+# --- :401 — `_key_warned = True` -------------------------------------------
+tmp, pipe = new_world(cfg={"api_key_openai": ""})
+tips = _tips()
+iq.request_pdf("a", announce=False)
+iq.request_pdf("b", announce=False)
+iq.request_pdf("c", announce=False)
+check(
+    "three keyless drops raise ONE tooltip, not three — the latch in "
+    "request() is what stops ten dropped PDFs stacking ten identical "
+    "tooltips over Anki (its RESET is pinned in cancel/new_world; this is "
+    "its SET)",
+    len(tips.seen) == 1 and "API key" in tips.seen[0],
+    repr(tips.seen),
+)
+check("...and every one of the three still published the refusal, so the "
+      "surfaces say why even when the tooltip is suppressed",
+      "API key" in iq.state().message)
+
+iq.tooltip = _orig_tooltip
+
+
+# --- :499 — `_busy_elsewhere`'s except arm returns False --------------------
+class _Proxy:
+    """A stand-in module whose ONE named attribute raises; everything else
+    is the real object behind it. The shape each except arm below exists
+    for — a deferred import or a callee that blows up mid-bookkeeping."""
+
+    def __init__(self, inner, boom, exc):
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_boom", boom)
+        object.__setattr__(self, "_exc", exc)
+
+    def __getattr__(self, name):
+        if name == object.__getattribute__(self, "_boom"):
+            raise object.__getattribute__(self, "_exc")
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+
+def _swap(dotted, obj):
+    pkg = sys.modules["klausmate"]
+    short = dotted.split(".")[1]
+    prev = sys.modules.get(dotted), getattr(pkg, short, None)
+    sys.modules[dotted] = obj
+    setattr(pkg, short, obj)
+    return dotted, short, prev
+
+
+def _unswap(saved):
+    dotted, short, (mod, attr) = saved
+    pkg = sys.modules["klausmate"]
+    if mod is not None:
+        sys.modules[dotted] = mod
+    setattr(pkg, short, attr)
+
+
+tmp, pipe = new_world()
+_saved = _swap("klausmate.curation", _Proxy(pipe, "_busy", RuntimeError("token unreadable")))
+iq.request_pdf("a", announce=False)
+FakeTimer.drain(limit=1)
+_unswap(_saved)
+check(
+    "a curation._busy read that RAISES reads as 'not busy' and the job "
+    "RUNS — fail-closed here would park every future job behind a token "
+    "nobody can prove is free, and the queue would look wedged for the "
+    "session",
+    pipe.calls == [("ensure_index", "")] and iq.state().message != iq.BUSY_WAIT_TEXT,
+    f"{pipe.calls!r} / {iq.state().message!r}",
+)
+
+# --- :513 — `_pdf_present`'s except arm returns True ------------------------
+tmp, pipe = new_world()
+pdf_index_mod = importlib.import_module("klausmate.pdf_index")
+_saved = _swap("klausmate.pdf_index",
+               _Proxy(pdf_index_mod, "source_signature", OSError("disk hiccup")))
+iq.request_pdf("a", announce=False)
+FakeTimer.drain(limit=1)
+_unswap(_saved)
+check(
+    "a presence check that RAISES still runs the job — never lose a job to "
+    "a bookkeeping hiccup; the other polarity would silently DROP a PDF the "
+    "user asked to index and say nothing at all",
+    pipe.calls == [("ensure_index", "")],
+    repr(pipe.calls),
+)
+
+# --- :842 — `signature_changed`'s except arm returns False ------------------
+tmp, pipe = new_world()
+_emb = iq.embeddings
+
+
+class _RaisingEmbeddings:
+    signature_matches = staticmethod(
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("signature unreadable")))
+
+
+iq.embeddings = _RaisingEmbeddings()
+_raised = iq.signature_changed(("openai", "m", 1024), ("openai", "m2", 1024))
+iq.embeddings = _emb
+check(
+    "signature_matches raising reads as 'nothing moved' — this gate's whole "
+    "docstring is about not re-embedding the collection on a paid API "
+    "silently, so a bookkeeping error must never be allowed to answer 'yes, "
+    "everything is stale'",
+    _raised is False,
+    repr(_raised),
+)
+check(
+    "...and a malformed `previous` (None, or too short to index) is the same "
+    "answer, not a TypeError escaping into Preferences' Save",
+    iq.signature_changed(None, ("openai", "m", 1024)) is False
+    and iq.signature_changed((), ("openai", "m", 1024)) is False,
+)
+
+# --- :534 / :541 — the two `active=False` publishes in _pump ----------------
+# status_line and dock_button_label both branch on `active`, so a flip puts a
+# live progress line and a Stop button on the bar while NOTHING is running.
+tmp, pipe = new_world()
+pipe._busy = True  # Preferences' Index Now holds the token
+iq.request_pdf("a", announce=False)
+FakeTimer.drain(limit=1)
+check(
+    "while WAITING for the token the bar reads the waiting message and "
+    "offers Dismiss — published active=False, because nothing of ours is "
+    "running; active=True would render a progress head ('Card index') and a "
+    "Stop button for a job that has not started",
+    iq.status_line(iq.state()) == iq.BUSY_WAIT_TEXT
+    and iq.dock_button_label(iq.state()) == "Dismiss",
+    f"{iq.status_line(iq.state())!r} / {iq.dock_button_label(iq.state())!r}",
+)
+
+for _ in range(iq.BUSY_WAIT_POLLS + 2):
+    FakeTimer.drain(limit=1)
+_gave_up = iq.status_line(iq.state())
+check(
+    "and when it GIVES UP polling the bar still reads its own sentence with "
+    "a Dismiss button — the work is kept, but there is no run to Stop",
+    "Another indexing run is still going" in _gave_up
+    and "still waiting" in _gave_up
+    and iq.dock_button_label(iq.state()) == "Dismiss",
+    f"{_gave_up!r} / {iq.dock_button_label(iq.state())!r}",
+)
+pipe._busy = False
 
 
 # ------------------------------------------------------------- source pins

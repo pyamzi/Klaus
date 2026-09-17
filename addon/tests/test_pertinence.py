@@ -49,6 +49,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
@@ -839,6 +840,91 @@ check("...and the obsolete rejection is off disk, so retention and "
       pt.load_judged(_root, "lec_stale")["verdicts"] == {},
       repr(pt.load_judged(_root, "lec_stale")["verdicts"]))
 check("no on_error fired across the retirement section", _errors == [])
+
+section("K-265 measured: the candidate loop's main-thread cost (no snapshot was built)")
+# Copilot on PR #4 asked whether ensure_judged's per-candidate col.get_note
+# loop freezes the UI on a big lecture: it runs inside ensure_matches'
+# QueryOp success callback — the main thread — and reads, strips and hashes
+# every matched note BEFORE the paid Judge/Skip prompt appears.
+#
+# Measured 2026-09-17 on this machine, against REAL note fields (a read-only
+# immutable read of the live collection; median field blob 1,439 chars) and
+# the real worst case in this library — the library's own matches.json files
+# put the biggest lecture at 2,087 candidates at its threshold, median 183
+# across 9 PDFs: 87 ms median at 2,087 candidates / 150 pages. cProfile puts
+# 55 ms of that in _strip_html's regexes and only 14 ms in the per-note
+# collection read; load_record costs 7 ms for 150 distinct pages. For the
+# whole loop to reach 250 ms, col.get_note would have to cost ~100 us MORE
+# per call than an indexed SQLite point read. The ruling was therefore NO
+# CHANGE: a background snapshot would move one sub-100 ms hitch off a thread
+# that is about to open a modal dialog anyway, at the price of restructuring
+# every path this function already gets right (staleness retirement and its
+# save, the no-key return, the Plus wording, cancel, the fatal refusal).
+#
+# This check IS that decision's gate, and the card's verify greps for the
+# line it prints. It re-measures the same loop with the package's OWN
+# _strip_html, since the identity stub above halves the real cost. Be exact
+# about what it can and cannot catch (K-166/K-265 review measured both):
+# it fires when the loop crosses back into MATERIALLY BLOCKING, which is the
+# only question the card was closed on. A modest constant-factor regression
+# stays green by design and should: load_record moved inside the candidate
+# loop measures 134 ms and a per-card file read 84 ms, both still far under
+# the 250 ms the decision called blocking. What turns it red is the shape
+# that actually hurts — a quadratic pass, or per-candidate I/O with real
+# latency behind it.
+_K265_N = 2000
+_K265_PAGES = 40
+_K265_CEILING_MS = 750.0  # ~12x the measured ~60 ms here: a regression, not jitter
+
+_src = open(os.path.join(os.path.dirname(__file__), "..", "klausmate", "__init__.py"), encoding="utf-8").read()
+_s = _src.index("def _strip_html")
+_ns = {"re": importlib.import_module("re")}
+exec(compile(_src[_s:_src.index("\ndef ", _s + 10)], "<klausmate._strip_html>", "exec"), _ns)  # noqa: S102
+_real_strip, pkg._strip_html = pkg._strip_html, _ns["_strip_html"]
+
+# One realistic note (~1,400 chars over two fields, with the HTML _strip_html
+# actually has to walk), reused for every nid — the loop's cost per candidate
+# is in the stripping and hashing, not in the text being distinct.
+_K265_FIELDS = [
+    "<div>Which enzyme step does <b>hydroxyurea</b> inhibit in the "
+    "<i>ribonucleotide&nbsp;reductase</i> pathway?</div>" + "<div>context line</div>" * 12,
+    "<div>It quenches the tyrosyl radical of the R2 subunit.</div>"
+    "<ul><li>dNTP pool falls</li><li>S phase stalls</li></ul>" + "<p>detail sentence here</p>" * 14,
+]
+
+
+class _K265Col:
+    def get_note(self, nid):
+        return types.SimpleNamespace(fields=list(_K265_FIELDS))
+
+
+_k265_root = tempfile.mkdtemp(prefix="klaus-k265-")
+retention.USER_FILES = _k265_root
+pkg.USER_FILES = _k265_root
+page_store.ensure_records(_k265_root, "big", "", [f"Slide {i + 1}. " + "lecture body text. " * 45
+                                                  for i in range(_K265_PAGES)])
+os.makedirs(os.path.dirname(retention._matches_path("big")), exist_ok=True)
+with open(retention._matches_path("big"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {str(n): (n % _K265_PAGES) + 1 for n in range(_K265_N)}}, f)
+
+_k265_mw = GlueMw({"api_key_anthropic": "", "pdf_match_threshold": 0.5}, {})
+_k265_mw.col = _K265Col()
+iq.mw = _k265_mw  # _cfg() reads index_queue's module mw, never the `parent` argument
+_k265_done = []
+_k265_matches = [(n, 0.9) for n in range(_K265_N)]
+with contextlib.redirect_stdout(io.StringIO()):  # the no-key branch prints
+    _t0 = time.perf_counter()
+    pt.ensure_judged(_k265_mw, "big", _k265_matches, on_done=_k265_done.append,
+                     on_error=_errors.append, cancel=None, on_progress=None,
+                     ask=lambda *a: check("K-265: the no-key path must not reach the prompt", False))
+    _k265_ms = (time.perf_counter() - _t0) * 1000.0
+
+check(f"K-265 measured: {_K265_N} candidates over {_K265_PAGES} pages in {_k265_ms:.0f} ms "
+      f"(ceiling {_K265_CEILING_MS:.0f} ms) — not materially blocking, so no snapshot was built",
+      _k265_ms < _K265_CEILING_MS, f"{_k265_ms:.0f} ms")
+check("K-265: the measurement really walked every candidate (real _strip_html, real hashing)",
+      _k265_done == [set()] and _errors == [], repr(_k265_done))
+pkg._strip_html = _real_strip
 
 section("module hygiene")
 check("the module docstring no longer claims a divider that was never drawn (fix round 1, Finding 8)",
