@@ -24,6 +24,9 @@ export type Action =
   | "zoom-fit"
   | "select-page"
   | "go-to-page"
+  | "find"
+  | "find-next"
+  | "find-prev"
   | "page-next"
   | "page-prev"
   | "page-first"
@@ -58,8 +61,8 @@ export function isTypingTarget(target: TargetLike | null | undefined): boolean {
 
 /**
  * Map a keystroke to an editor action, or null when the key is not ours.
- * Cmd and Ctrl are interchangeable; Shift with a modifier is reserved for
- * the highlight (KB-003) and find (KB-014) shortcuts and yields nothing here.
+ * Cmd and Ctrl are interchangeable. Cmd+Shift+H stays unclaimed — it is the
+ * highlight shortcut (KB-003).
  */
 export function matchShortcut(event: KeyLike): Action | null {
   const mod = Boolean(event.metaKey || event.ctrlKey);
@@ -67,7 +70,7 @@ export function matchShortcut(event: KeyLike): Action | null {
   const shift = Boolean(event.shiftKey);
 
   if (mod && shift) {
-    return null;
+    return event.key.toLowerCase() === "g" ? "find-prev" : null;
   }
   if (mod && alt) {
     return event.key.toLowerCase() === "g" ? "go-to-page" : null;
@@ -84,6 +87,12 @@ export function matchShortcut(event: KeyLike): Action | null {
       case "a":
       case "A":
         return "select-page";
+      case "f":
+      case "F":
+        return "find";
+      case "g":
+      case "G":
+        return "find-next";
       default:
         return null;
     }
