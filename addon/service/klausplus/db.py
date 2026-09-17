@@ -166,6 +166,27 @@ class Store:
             self._c.execute("UPDATE customers SET key_hash = ?, key_rotated_at = ? WHERE id = ?",
                             (key_hash, now, customer_id))
 
+    def claim_recovery(self, customer_id: int, now: float, cooldown_s: float) -> bool:
+        """K-271: win the right to rotate this customer's key, or lose it — ONE conditional
+        UPDATE, so two `/recover` requests in flight cannot both pass the cooldown, both mint
+        and both send, leaving the loser's emailed key dead the moment the winner's landed.
+        True iff this caller claimed the window; a loser writes nothing at all."""
+        with self._lock:
+            cur = self._c.execute(
+                "UPDATE customers SET key_rotated_at = ? WHERE id = ? AND (key_rotated_at IS NULL OR key_rotated_at < ?)",
+                (now, customer_id, now - cooldown_s))
+            return cur.rowcount == 1
+
+    def release_recovery(self, customer_id: int, previous: Any, claimed_at: float) -> None:
+        """Give a claimed window back when the email never went out, so the customer can try
+        again now instead of in an hour. `previous` is the `key_rotated_at` the claim
+        overwrote — None restores 'never rotated'. Guarded by `claimed_at`, the stamp the
+        claim wrote: a release whose send outlived a NEWER claim must not roll that claim
+        back (K-271 review), so it writes only while the row still carries its own stamp."""
+        with self._lock:
+            self._c.execute("UPDATE customers SET key_rotated_at = ? WHERE id = ? AND key_rotated_at = ?",
+                            (previous, customer_id, claimed_at))
+
     def set_key_hash_if_unset(self, customer_id: int, key_hash: str, now: float) -> bool:
         """Atomic mint (fix1/K-243, I-3): only writes when no key exists yet.
         True iff this call won the race and the hash now stored is this one."""

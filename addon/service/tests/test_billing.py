@@ -182,6 +182,53 @@ def test_recover_does_not_rotate_when_the_email_send_fails(world, settings, now,
     assert world["store"].customer_by_id(cid)["key_hash"] == old
 
 
+def _recoverable(world, settings, now, rotated_at=None):
+    """An active customer with a key older than the cooldown, on a world that can send email."""
+    world["app"].state.settings = settings.__class__(
+        **{**settings.__dict__, "resend_api_key": "re_x", "resend_from": "Klaus <plus@klaus.test>"})
+    cid = world["store"].upsert_customer("cus_1", "a@b.c", now)
+    world["store"].set_key_hash(cid, "old" * 21 + "x",
+                                now - billing.RECOVER_COOLDOWN_S - 1 if rotated_at is None else rotated_at)
+    world["store"].set_subscription("cus_1", "active", int(now) + 86400, False, now)
+    return cid
+
+
+def test_two_recovers_in_flight_rotate_once_and_the_emailed_key_is_the_live_one(world, settings, now, monkeypatch):
+    """K-271: the second request arrives while the first is still inside `send_key_email`
+    (a real window — the send runs off the event loop). Both used to pass the cooldown,
+    both minted, and the LAST `set_key_hash` won: the key in the first email was dead."""
+    cid = _recoverable(world, settings, now)
+    sent = []
+
+    def send(s, to, key):
+        sent.append(key)
+        if len(sent) == 1:  # a second request, on its own loop and thread, lands mid-send
+            TestClient(world["app"]).post("/recover", data={"email": "a@b.c"})
+        return True
+
+    monkeypatch.setattr(email, "send_key_email", send)
+    r = TestClient(world["app"]).post("/recover", data={"email": "a@b.c"})
+    assert r.status_code == 200 and "on its way" in r.text.lower()
+    assert len(sent) == 1, "the loser must mint nothing and send nothing"
+    assert world["store"].customer_by_id(cid)["key_hash"] == keys.hash_key(sent[0])
+
+
+def test_a_failed_delivery_releases_the_recovery_window(world, settings, now, monkeypatch):
+    """K-271: the window is claimed BEFORE the send (that is what makes it atomic), so a
+    send that fails must hand it back — or an email that never arrived costs the customer
+    an hour. The 'delivered before rotated' rule is unchanged: the old key still works."""
+    cid = _recoverable(world, settings, now)
+    old = world["store"].customer_by_id(cid)["key_hash"]
+    monkeypatch.setattr(email, "send_key_email", lambda *a, **k: False)
+    world["client"].post("/recover", data={"email": "a@b.c"})
+    assert world["store"].customer_by_id(cid)["key_hash"] == old
+    sent = []
+    monkeypatch.setattr(email, "send_key_email", lambda s, to, key: sent.append(key) or True)
+    world["client"].post("/recover", data={"email": "a@b.c"})  # immediately, not an hour later
+    assert len(sent) == 1
+    assert world["store"].customer_by_id(cid)["key_hash"] == keys.hash_key(sent[0])
+
+
 def test_recover_throttled_by_ip_rotates_the_key_at_most_once(world, settings, now):
     """C-2: 25 POSTs for one known active email must still rotate exactly once."""
     world["app"].state.settings = settings.__class__(

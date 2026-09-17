@@ -12,6 +12,7 @@ import asyncio
 import logging
 
 import pytest
+from fastapi.testclient import TestClient
 
 from klausplus import app as app_mod
 from klausplus.app import create_app
@@ -139,3 +140,22 @@ def test_purge_once_logs_the_counts_and_a_failure_never_raises(settings, now, ca
 
     app.state.store = Boom()
     app_mod.purge_once(app)  # a broken purge must never take the service down
+
+
+def test_the_upstream_client_is_closed_exactly_once_on_shutdown(settings, now):
+    """K-271: `Upstream` owns a pooled `httpx.AsyncClient`; the lifespan cancelled the purge
+    task and left that open. An injected sentinel without `aclose` must still boot and shut
+    down — `FakeUpstream` has none, and half the suite passes a bare `object()`."""
+    class Up:
+        def __init__(self):
+            self.closed = 0
+
+        async def aclose(self):
+            self.closed += 1
+
+    up = Up()
+    with TestClient(create_app(settings, upstream=up, now=lambda: now)) as c:
+        assert c.get("/healthz").json() == {"ok": True}
+    assert up.closed == 1
+    with TestClient(create_app(settings, upstream=object(), now=lambda: now)) as c:
+        assert c.get("/healthz").status_code == 200

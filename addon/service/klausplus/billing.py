@@ -146,14 +146,22 @@ async def recover(request: Request) -> str:
     if not _recover_limiter(st).allow(client_ip, now):
         return templates.recover_done(_operator(st.settings), email.enabled(st.settings), st.settings.operator_email)
     row = st.store.customer_by_email(email_addr)
+    # K-271: the cooldown is CLAIMED, not read — reading it and rotating were two statements
+    # with a whole email send between them, so two requests in flight both passed, both
+    # minted, and the loser's emailed key was dead the moment the winner's landed. The claim
+    # is last in the chain, so nothing is written for an unknown or inactive address.
     if (row is not None
             and entitlement.verdict(row, now, st.settings.grace_days)[0] == "active"
             and email.enabled(st.settings)
-            and now - float(row["key_rotated_at"] or 0) > RECOVER_COOLDOWN_S):
+            and st.store.claim_recovery(int(row["id"]), now, RECOVER_COOLDOWN_S)):
         key = keys.mint()
         # I-4: only retire the old key once the new one is confirmed delivered.
         # round2: recover() is async now — run the blocking Resend POST off the event
         # loop, or an in-flight /recover stalls every other request on this process.
         if await run_in_threadpool(email.send_key_email, st.settings, str(row["email"]), key):
             st.store.set_key_hash(int(row["id"]), keys.hash_key(key), now)
+        else:
+            # Nothing was delivered, so nothing was rotated: hand the window back rather than
+            # charging the customer an hour for an email that never arrived.
+            st.store.release_recovery(int(row["id"]), row["key_rotated_at"], now)
     return templates.recover_done(_operator(st.settings), email.enabled(st.settings), st.settings.operator_email)

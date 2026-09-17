@@ -52,6 +52,15 @@ async def _lifespan(app: FastAPI):
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task  # let it process the cancellation, or the closing loop warns
+        # K-271: `Upstream` owns a pooled httpx.AsyncClient — leave it open and its
+        # connections leak and warn on the way out. An injected fake (or the bare
+        # `object()` half the suite passes) has no aclose, and must still shut down.
+        closer = getattr(app.state.upstream, "aclose", None)
+        if closer is not None:
+            try:
+                await closer()
+            except Exception as exc:  # a failing close must not turn shutdown into a crash
+                print(f"[klausplus] upstream close failed: {type(exc).__name__}")
 
 
 def create_app(settings: Settings | None = None, upstream: Any = None, now: Callable[[], float] = time.time) -> FastAPI:
