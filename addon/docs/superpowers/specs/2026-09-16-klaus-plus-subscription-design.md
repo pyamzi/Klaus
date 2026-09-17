@@ -202,7 +202,7 @@ service and one add-on mode; it changes no feature.
   greyed, the free tier is one deletion away. No `exec()`, theme tokens only, `mark_dirty`
   discipline unchanged.
 - **Config keys**: `klaus_plus_key` (`""`), `klaus_plus_cache` (`{}`),
-  `klaus_plus_base` (`"https://klausmate.com"` since 2026-09-17, was `klausmate.fly.dev``, a free-text row
+  `klaus_plus_base` (`"https://klausmate.com"` since 2026-09-17, was `klausmate.fly.dev`; a free-text row
   under General for a self-hoster or a staging service — the only
   reason the URL is config at all). Documented in `config.md`.
 - **Errors the user sees**: `401` → "Klaus Plus key not recognised —
