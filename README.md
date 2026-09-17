@@ -16,7 +16,7 @@ changes stay limited to branding/product.json so upstream merges stay
 cheap.
 
 ```
-klausbook/        this repo — the product
+KlausBook-Context/  this repo — the product
   core/             klaus-core: local Python service (FastAPI). PDF library now;
                     annotations, embeddings/semantic search, chat agent, and the
                     podcast pipeline later. Stays free of GUI imports.
@@ -26,7 +26,7 @@ klausbook/        this repo — the product
   context/          agent-tier docs: ROLES.md, PROJECT.md, prompts/
   tests/            headless suites (python3 tests/test_*.py)
 
-klausbook-code/   sibling repo — the VS Code fork (branch `klaus`, remote
+KlausBook-Code/   sibling repo — the VS Code fork (branch `klaus`, remote
                   `upstream` = microsoft/vscode). Branding + product.json only.
 ```
 
@@ -35,7 +35,7 @@ shared secret in the `X-Klaus-Token` header (`KLAUS_CORE_TOKEN`, default
 `dev`).
 
 Milestone 1 (done): read-only library + viewer. Core lists PDFs from the
-existing klausmate library (`…/Addons/klausmate/user_files/{pdfs,pdf_originals}`,
+existing klausmate library (`…/KlausMate-Context/klausmate/user_files/{pdfs,pdf_originals}`,
 baked copies shadow pristine originals) and never writes there. Override the
 library location with `KLAUS_LIBRARY_DIR`.
 
@@ -47,13 +47,13 @@ Core:
 cd core && .venv/bin/uvicorn klaus_core.app:app --host 127.0.0.1 --port 7863
 ```
 
-(First time: `python3 -m venv core/.venv && core/.venv/bin/pip install fastapi 'uvicorn[standard]'`.)
+(First time: `python3 -m venv core/.venv && core/.venv/bin/pip install fastapi 'uvicorn[standard]'`. Renaming a repo breaks the venv's shebangs — delete and recreate it after any rename.)
 
 Fork (Node pinned by its `.nvmrc` — 24.18.0 via fnm):
 
 ```bash
-cd ../klausbook-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
-  --extensionDevelopmentPath="$PWD/../klausbook/extensions/klaus-pdf"
+cd ../KlausBook-Code && fnm exec --using=v24.18.0 ./scripts/code.sh \
+  --extensionDevelopmentPath="$PWD/../KlausBook-Context/extensions/klaus-pdf"
 ```
 
 ## The PDF editor

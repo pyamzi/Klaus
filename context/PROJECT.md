@@ -21,8 +21,8 @@ This file is orientation only. The real references are:
 | `board/` | the kanban board, its CLI, and the dashboard |
 | `context/` | this file, roles, and the tier prompts |
 | `tests/` | headless suites; run with `python3 tests/test_*.py` |
-| `../klausbook-code/` | the VS Code fork (branch `klaus`, remote `upstream`). Branding/product.json only — features live in extensions. |
-| `../Addons/klausmate/user_files/` | the human's real PDF library. klaus-core reads it **read-only**; never write there. |
+| `../KlausBook-Code/` | the VS Code fork (branch `klaus`, remote `upstream`). Branding/product.json only — features live in extensions. |
+| `../KlausMate-Context/klausmate/user_files/` | the human's real PDF library. klaus-core reads it **read-only**; never write there. |
 
 ## Working here
 
@@ -31,8 +31,8 @@ python3 board/board.py list                       # the board
 python3 board/serve.py                            # dashboard → 127.0.0.1:8765
 for t in tests/test_*.py; do python3 "$t" || break; done   # all suites
 cd core && .venv/bin/uvicorn klaus_core.app:app --host 127.0.0.1 --port 7863
-cd ../klausbook-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
-  --extensionDevelopmentPath="$PWD/../klausbook/extensions/klaus-pdf"
+cd ../KlausBook-Code && fnm exec --using=v24.18.0 ./scripts/code.sh \
+  --extensionDevelopmentPath="$PWD/../KlausBook-Context/extensions/klaus-pdf"
 ```
 
 The fork's Node is pinned by its `.nvmrc` (24.18.0, via fnm); the system

@@ -4,7 +4,7 @@ You are a worker on the Klausbook board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
 
-Repo root: `/Users/pyamzi/Documents/Github/klausbook`
+Repo root: `/Users/pyamzi/Documents/Github/KlausBook-Context`
 
 ## Success predicate
 
@@ -31,7 +31,7 @@ should not return claiming success on any of them:
 **1. Claim.**
 
 ```bash
-cd /Users/pyamzi/Documents/Github/klausbook
+cd /Users/pyamzi/Documents/Github/KlausBook-Context
 python3 board/board.py claim <CARD-ID> --owner <your-name>
 ```
 
@@ -120,14 +120,14 @@ These hold for every card in this repo:
   fastapi/uvicorn (already in `core/.venv`); nothing else without a card
   that says so.
 - **Never write to the klausmate library** at
-  `/Users/pyamzi/Documents/Github/Addons/klausmate/user_files/`. It holds
+  `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/user_files/`. It holds
   the human's real lecture PDFs and indexes; klaus-core reads it read-only.
   Tests use `tempfile.mkdtemp()`.
 - **Extension work** (`extensions/klaus-pdf/`): build with `npm run build`,
   typecheck with `npx tsc --noEmit`, both from the extension directory.
   Webviews run under a strict CSP — no external resources, workers via
   `blob:` only.
-- **Fork work** (`../klausbook-code/`) is minimal-patch: branding and
+- **Fork work** (`../KlausBook-Code/`) is minimal-patch: branding and
   product.json only; Klausbook features belong in extensions. Never
   regenerate `.build/electron/` while a window launched from it is running —
   it crashes the live instance.

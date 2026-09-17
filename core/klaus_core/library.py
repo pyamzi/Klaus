@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-DEFAULT_USER_FILES = Path.home() / "Documents/Github/Addons/klausmate/user_files"
+DEFAULT_USER_FILES = Path.home() / "Documents/Github/KlausMate-Context/klausmate/user_files"
 
 
 def _roots() -> List[Path]:
