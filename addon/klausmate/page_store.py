@@ -4,9 +4,17 @@ The page is the seam every API-first capability keys on (spec D2): the
 index embeds combined_text per page, the pertinence phase judges a card
 against one page, the assistant reads one page, the recorder appends
 transcript segments to one page. Records live at
-user_files/pages/<pdf_safe>/<digest12>/<page:04d>.json; digest12 is over
-the file's path, size and mtime, so a replaced PDF gets a fresh directory
-rather than another file's stale transcript.
+user_files/pages/<pdf_safe>/<digest>/<page:04d>.json. <digest> is resolved
+through a pointer file, pages/<pdf_safe>/current: normally text_digest
+(pages), a hash of the document's own TEXT, so a bake
+(pdf_handler.bake_annotations rewrites the file with os.replace) or a
+move inside the Library — neither changes what the page says — cannot
+orphan the records; a legacy digest12(path) directory found with no
+pointer yet (a profile indexed before this scheme existed) is adopted in
+place rather than abandoned. Only genuinely different text — a different
+PDF re-imported under the same safe name — repoints at a fresh directory
+(see ensure_records); the old one is left on disk until delete_context
+removes it.
 
 aqt-free above the divider; render_page_png (QtPdf) sits below it.
 """
@@ -26,6 +34,10 @@ _subscribers: list[Callable[[str, int], None]] = []
 
 
 def digest12(path: str, stat=os.stat) -> str:
+    """Legacy identity: path+size+mtime. A bake or a move changes all
+    three, which is exactly why record_dir no longer resolves on this —
+    kept only to recognize and adopt a directory seeded before the
+    pointer scheme existed."""
     try:
         st = stat(path)
         key = f"{path}|{st.st_size}|{int(st.st_mtime)}"
@@ -34,8 +46,59 @@ def digest12(path: str, stat=os.stat) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+def text_digest(pages: list[str]) -> str:
+    """The document's identity: a hash of what the pages actually SAY,
+    not the file carrying them — stable across a bake's os.replace or a
+    move, since neither touches the text layer. Whitespace is collapsed
+    per page before hashing so re-extracting the same text with
+    different line-wrapping still resolves to the same directory."""
+    normalized = "\x1f".join(" ".join(str(p or "").split()) for p in pages)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def _pointer_path(user_files: str, pdf_safe: str) -> str:
+    return os.path.join(user_files, SUBDIR, pdf_safe, "current")
+
+
+def _read_pointer(user_files: str, pdf_safe: str) -> str | None:
+    try:
+        with open(_pointer_path(user_files, pdf_safe), encoding="utf-8") as f:
+            digest = f.read().strip()
+        return digest or None
+    except OSError:
+        return None
+
+
+def _write_pointer(user_files: str, pdf_safe: str, digest: str) -> None:
+    p = _pointer_path(user_files, pdf_safe)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(digest)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
 def record_dir(user_files: str, pdf_safe: str, path: str) -> str:
-    return os.path.join(user_files, SUBDIR, pdf_safe, digest12(path))
+    """Where this PDF's page records live. The pointer file decides it
+    when one exists; otherwise an on-disk legacy (path-digest) directory
+    is adopted — written into the pointer so it doesn't have to be
+    rediscovered next time — and failing that this is a never-seeded
+    PDF, so the (not yet existing) legacy path is returned exactly as
+    before."""
+    base = os.path.join(user_files, SUBDIR, pdf_safe)
+    pointer = _read_pointer(user_files, pdf_safe)
+    if pointer:
+        return os.path.join(base, pointer)
+    legacy = digest12(path)
+    legacy_dir = os.path.join(base, legacy)
+    if os.path.isdir(legacy_dir):
+        try:
+            _write_pointer(user_files, pdf_safe, legacy)
+        except OSError as exc:
+            print(f"[klausmate] page pointer adopt failed for {pdf_safe}: {exc}")
+    return legacy_dir
 
 
 def record_path(user_files: str, pdf_safe: str, path: str, page_index: int) -> str:
@@ -73,8 +136,55 @@ def _atomic_json(p: str, rec: dict) -> None:
     os.replace(tmp, p)
 
 
+def _same_text(rec_dir: str, pages: list[str]) -> bool:
+    """True when the records already in *rec_dir* say what *pages* say
+    (every page's slide_text, whitespace-collapsed) — the same document
+    under another directory name."""
+    for i, text in enumerate(pages):
+        try:
+            with open(os.path.join(rec_dir, f"{int(i):04d}.json"), encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            return False
+        if " ".join(str((rec or {}).get("slide_text") or "").split()) != " ".join(str(text or "").split()):
+            return False
+    return True
+
+
 def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) -> int:
-    """Write slide_text for every page; existing segments survive. Idempotent."""
+    """Write slide_text for every page; existing segments survive. Idempotent.
+
+    Settles the identity pointer before seeding: adopt an on-disk legacy
+    (path-digest) directory the first time one is found — a profile that
+    already indexed under Plan 1 keeps its records — otherwise key on
+    text_digest(pages). A pointer that already names a DIFFERENT text
+    digest means the PDF itself was replaced (a different document
+    re-imported under the same safe name): records move to a fresh
+    directory, and the old one is left on disk until delete_context
+    removes it.
+    """
+    td = text_digest(pages)
+    base = os.path.join(user_files, SUBDIR, pdf_safe)
+    pointer = _read_pointer(user_files, pdf_safe)
+    if pointer is None:
+        legacy = digest12(path)
+        pointer = legacy if os.path.isdir(os.path.join(base, legacy)) else td
+        _write_pointer(user_files, pdf_safe, pointer)
+    if pointer != td:
+        # The pointer names a directory that is not this text's own. Two
+        # cases, told apart by CONTENT, never by name: a legacy
+        # (path-digest) directory holding this same document — a record's
+        # segments may already live there (a transcript taken before the
+        # first index run) — is renamed onto the text digest and kept; a
+        # directory whose slide text differs is a replaced document and is
+        # left behind for delete_context.
+        old_dir = os.path.join(base, pointer)
+        if os.path.isdir(old_dir) and _same_text(old_dir, pages):
+            try:
+                os.replace(old_dir, os.path.join(base, td))
+            except OSError as exc:
+                print(f"[klausmate] page records migrate failed for {pdf_safe}: {exc}")
+        _write_pointer(user_files, pdf_safe, td)
     n = 0
     for i, text in enumerate(pages):
         rec = load_record(user_files, pdf_safe, path, i)

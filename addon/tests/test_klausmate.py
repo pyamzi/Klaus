@@ -487,8 +487,18 @@ d2 = pdf_index.index_dir(tmp, "Lecture 1")
 os.makedirs(d2, exist_ok=True)
 with open(os.path.join(d2, "manifest.json"), "w") as f:
     f.write("{}")
+# PR1 review fix: user_files/pages/<safe>/ (page_store.py) is a sibling
+# that delete_context never touched — a re-import under this same safe
+# basename would silently inherit a stranger's slide text and transcript.
+_dc_page_store = importlib.import_module("klausmate.page_store")
+_dc_page_store.ensure_records(tmp, "Lecture_1", os.path.join(tmp, "Lecture 1.pdf"),
+                               ["slide text"])
+d3 = os.path.join(tmp, _dc_page_store.SUBDIR, "Lecture_1")
+check("pages dir exists before delete (sanity — the pin below must exercise something)",
+      os.path.isdir(d3))
 pdf_handler.delete_context(tmp, "Lecture 1")
 check("delete_context removes pdf_index dir", not os.path.isdir(d2))
+check("delete_context removes the pages dir too", not os.path.isdir(d3))
 
 # ------------------------------------- pdf_handler: atomic writes + recency
 

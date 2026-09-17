@@ -2502,6 +2502,18 @@ def delete_context(user_files_dir: str, name: str) -> None:
         pdf_index.delete(user_files_dir, base)
     except Exception as exc:
         print(f"[klausmate] pdf_index cleanup failed for {base}: {exc}")
+    # user_files/pages/<safe>/ is a sibling too (page_store.py) — the
+    # PR1 review fix re-keys it onto a text digest so a bake or a move
+    # cannot orphan it, but an actual delete must still remove it, or a
+    # re-import under this safe basename would inherit a stranger's
+    # slide text and transcript. Lazy import: avoids a module cycle,
+    # matching the pdf_index import just above.
+    try:
+        from . import page_store
+
+        shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
+    except Exception as exc:
+        print(f"[klausmate] page record cleanup failed for {base}: {exc}")
     try:
         from . import drive_store
 

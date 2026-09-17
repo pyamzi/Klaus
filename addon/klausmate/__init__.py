@@ -677,6 +677,18 @@ def import_pdf_file(path: str) -> str | None:
     except Exception as e:
         showWarning(f"Could not read PDF: {e}")
         return None
+    # PR1 review fix: seed page records right after the page text is
+    # extracted and saved to contexts, not only inside the paid index run
+    # (retention.do_build's ensure_pdf_index) — so the assistant has
+    # slide text even with auto-index off, no OpenAI key, or a failed
+    # index. Every import surface returns through this one funnel.
+    try:
+        from . import page_store
+
+        pages = pdf_handler.load_pages(USER_FILES, info["name"]) or []
+        page_store.ensure_records(USER_FILES, info["name"], path, pages)
+    except Exception as e:
+        print(f"[klausmate] page record seeding on import failed: {e}")
     if info["page_count"] == 0:
         showWarning(
             "No text extracted from this PDF.\n"

@@ -542,6 +542,33 @@ if _HAVE_QT:
           "USER_FILES — a test must never touch the user's own library",
           _d3b._user_files == _uf_root)
 
+    # -- empty record falls back to contexts/<safe>.json (PR1 review fix) ---
+    # Records are only SEEDED by an import or an index run — with auto-index
+    # off, no key, or a failed run there may be none, although the plain
+    # extracted text from save_pdf is sitting right there in contexts/.
+
+    pdf_handler = importlib.import_module("klausmate.pdf_handler")
+    _ctx_dir = os.path.join(_uf_root, "contexts")
+    os.makedirs(_ctx_dir, exist_ok=True)
+    with open(os.path.join(_ctx_dir, "pdfCtxOnly.json"), "w", encoding="utf-8") as _f:
+        json.dump({"pages": ["plain extracted slide text"], "page_count": 1}, _f)
+
+    class _CtxOnlyView:
+        pdf_safe = "pdfCtxOnly"
+        path = os.path.join(_uf_root, "never-indexed.pdf")  # no page record seeded
+        page_index = 0
+        display = "CtxOnly.pdf"
+        page_count = 1
+        selection = ""
+
+    _ctx_fallback = _d3b._page_context(_CtxOnlyView())
+    check("an empty page record (no index run yet) falls back to the plain "
+          "extracted text in contexts/<safe>.json (pdf_handler.load_pages), "
+          "mirroring anki_tools' own lecture-search fallback",
+          _ctx_fallback.get("text") == "plain extracted slide text")
+    check("...and text_source says so — 'contexts', not 'page-record'",
+          _ctx_fallback.get("text_source") == "contexts")
+
     # -- sending via the REAL Enter key path (eventFilter) ------------------
 
     viewer_context.reset()

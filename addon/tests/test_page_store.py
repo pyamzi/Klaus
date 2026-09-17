@@ -29,7 +29,7 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
-import os, tempfile, json
+import os, tempfile, json, shutil
 ps = importlib.import_module("klausmate.page_store")
 root = tempfile.mkdtemp(prefix="klaus-pages-")
 pdf = os.path.join(root, "lec.pdf"); open(pdf, "wb").write(b"%PDF-1.4 fake")
@@ -49,14 +49,14 @@ rec = ps.load_record(root, "lec", pdf, 0)
 check("slide_text stored, no segments, version 1",
       rec["slide_text"] == "Slide one text" and rec["segments"] == [] and rec["version"] == 1)
 ps.append_segment(root, "lec", pdf, 0, 0.0, 30.0, "the lecturer said this")
-n2 = ps.ensure_records(root, "lec", pdf, ["Slide one text CHANGED", "", "Slide three"])
+n2 = ps.ensure_records(root, "lec", pdf, ["Slide one text", "", "Slide three"])
 rec = ps.load_record(root, "lec", pdf, 0)
-check("ensure_records is idempotent for segments and refreshes slide_text",
-      rec["slide_text"] == "Slide one text CHANGED" and len(rec["segments"]) == 1)
+check("ensure_records is idempotent for unchanged text — no rewrite, segment survives",
+      n2 == 0 and rec["slide_text"] == "Slide one text" and len(rec["segments"]) == 1)
 
 section("combined_text and text_hash")
 check("combined_text is slide text, blank line, segments in time order",
-      ps.combined_text(rec) == "Slide one text CHANGED\n\nthe lecturer said this")
+      ps.combined_text(rec) == "Slide one text\n\nthe lecturer said this")
 h1 = ps.text_hash(rec)
 ps.append_segment(root, "lec", pdf, 0, 30.0, 60.0, "and then this")
 rec2 = ps.load_record(root, "lec", pdf, 0)
@@ -85,6 +85,73 @@ ps.subscribe(_boom)
 ps.append_segment(root, "lec", pdf, 1, 2.0, 3.0, "z")
 check("a raising subscriber is logged, never breaks the append",
       len(ps.load_record(root, "lec", pdf, 1)["segments"]) == 3)
+
+section("text_digest: the document's own identity (PR1 review fix)")
+check("12 hex chars, like digest12",
+      len(ps.text_digest(["a", "b"])) == 12
+      and all(c in "0123456789abcdef" for c in ps.text_digest(["a", "b"])))
+check("whitespace differences collapse to the same digest",
+      ps.text_digest(["a   b\nc"]) == ps.text_digest(["a b c"]))
+check("different text is a different digest",
+      ps.text_digest(["a"]) != ps.text_digest(["b"]))
+
+section("identity survives a bake (size/mtime change) and a move")
+id_root = tempfile.mkdtemp(prefix="klaus-pages-identity-")
+id_pdf = os.path.join(id_root, "orig.pdf")
+open(id_pdf, "wb").write(b"%PDF-1.4 original bytes")
+ps.ensure_records(id_root, "idpdf", id_pdf, ["Only page text"])
+ps.append_segment(id_root, "idpdf", id_pdf, 0, 0.0, 5.0, "spoken over it")
+dir_before = ps.record_dir(id_root, "idpdf", id_pdf)
+digest_before = ps.digest12(id_pdf)
+
+# Simulate bake_annotations' os.replace: same path, different bytes/size/mtime.
+with open(id_pdf, "ab") as f:
+    f.write(b"MORE-BYTES-FROM-A-BAKE")
+os.utime(id_pdf, (1000, 1000))
+check("a bake changes the legacy path-digest (so the pin actually exercises the fix)",
+      ps.digest12(id_pdf) != digest_before)
+check("...but record_dir still resolves to the SAME directory",
+      ps.record_dir(id_root, "idpdf", id_pdf) == dir_before)
+check("...and the segment written before the bake is still there",
+      len(ps.load_record(id_root, "idpdf", id_pdf, 0)["segments"]) == 1)
+
+moved_pdf = os.path.join(id_root, "moved.pdf")
+os.rename(id_pdf, moved_pdf)
+check("a move (new path) resolves to the same directory too",
+      ps.record_dir(id_root, "idpdf", moved_pdf) == dir_before)
+check("...segment still there under the new path",
+      len(ps.load_record(id_root, "idpdf", moved_pdf, 0)["segments"]) == 1)
+
+section("a different pages list is a replaced document, not a refresh")
+n_replaced = ps.ensure_records(id_root, "idpdf", moved_pdf, ["Totally different content"])
+check("ensure_records wrote the one page of the new document", n_replaced == 1)
+new_dir = ps.record_dir(id_root, "idpdf", moved_pdf)
+check("...resolves to a FRESH directory (not the bake/move survivor above)",
+      new_dir != dir_before)
+new_rec = ps.load_record(id_root, "idpdf", moved_pdf, 0)
+check("...whose page 0 has no segments — a different document, not a correction",
+      new_rec["segments"] == [] and new_rec["slide_text"] == "Totally different content")
+check("...and the OLD directory is left on disk, not deleted (delete_context's job)",
+      os.path.isdir(dir_before))
+
+section("a legacy digest12(path) directory with no pointer is adopted")
+leg_root = tempfile.mkdtemp(prefix="klaus-pages-legacy-")
+leg_pdf = os.path.join(leg_root, "legacy.pdf")
+open(leg_pdf, "wb").write(b"%PDF-1.4 legacy")
+leg_digest = ps.digest12(leg_pdf)
+leg_dir = os.path.join(leg_root, "pages", "legpdf", leg_digest)
+os.makedirs(leg_dir, exist_ok=True)
+with open(os.path.join(leg_dir, "0000.json"), "w", encoding="utf-8") as f:
+    json.dump({"version": 1, "slide_text": "pre-existing Plan 1 text",
+               "segments": [], "updated_at": 0.0}, f)
+pointer_path = os.path.join(leg_root, "pages", "legpdf", "current")
+check("no pointer exists yet", not os.path.isfile(pointer_path))
+rec_legacy = ps.load_record(leg_root, "legpdf", leg_pdf, 0)
+check("the legacy record is visible through the new resolution",
+      rec_legacy["slide_text"] == "pre-existing Plan 1 text")
+check("...and reading it adopted the legacy dir: the pointer is now written",
+      os.path.isfile(pointer_path)
+      and open(pointer_path, encoding="utf-8").read().strip() == leg_digest)
 
 section("render (real QtPdf, offscreen)")
 
@@ -139,5 +206,69 @@ try:
         check("a page past the end raises rather than returning junk", "6" in str(exc))
 except ImportError as exc:
     print(f"  SKIP real render: {exc}")
+
+section("__init__.import_pdf_file seeds page records at import (PR1 review fix)")
+# The only production ensure_records call used to live inside
+# retention.ensure_pdf_index (the paid index run) — with auto-index off,
+# no OpenAI key, or a failed index, the assistant got no slide text even
+# though contexts/<safe>.json already had it. import_pdf_file is
+# __init__.py's own funnel (every import surface — editor drop bar,
+# deck-screen drop, drive window — returns through it), so this needs
+# the REAL __init__.py loaded under real (offscreen) Qt — anki_stubs'
+# own exec_klausmate_under_qt, the same recipe test_slot_guards.py and
+# test_bridge_reentrancy.py hand-rolled before the helper existed. This
+# runs last in this FILE (not shared with test_klausmate.py's own much
+# larger process, which by this point has already imported half the
+# addon under its own bootstrap — exec_klausmate_under_qt needs a clean
+# sys.modules to bind curation/tag_sync/etc. to the fresh stubs it just
+# installed, and only a small, single-purpose file like this one gives
+# it that).
+_ipf_uf = tempfile.mkdtemp(prefix="klaus_test_importpdf_")
+_ipf_raw = os.path.join(_ipf_uf, "Lecture One.pdf")
+with open(_ipf_raw, "wb") as _f:
+    _f.write(b"%PDF-1.4\n%%EOF")
+_ipf_module = None
+try:
+    from anki_stubs import exec_klausmate_under_qt
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    _ipf_module = exec_klausmate_under_qt(_ipf_uf)
+except Exception as exc:
+    print(f"  SKIP import_pdf_file (needs real offscreen Qt): {exc}")
+if _ipf_module is not None:
+    _ipf_module.pdf_handler.extract_pages = lambda p: ["page one text", "page two text"]
+    _ipf_name = _ipf_module.import_pdf_file(_ipf_raw)
+    check("import_pdf_file returns the safe name", _ipf_name == "Lecture_One", str(_ipf_name))
+    _ipf_rec0 = ps.load_record(_ipf_uf, _ipf_name, _ipf_raw, 0)
+    _ipf_rec1 = ps.load_record(_ipf_uf, _ipf_name, _ipf_raw, 1)
+    check("a page record exists for every page right after import — no "
+          "index run needed for the assistant to have slide text",
+          _ipf_rec0["slide_text"] == "page one text"
+          and _ipf_rec1["slide_text"] == "page two text",
+          f"{_ipf_rec0}, {_ipf_rec1}")
+
+
+section("a legacy directory holding the SAME document migrates with its segments; a different document does not")
+_uf = tempfile.mkdtemp(prefix="klaus-pages-migrate-")
+_pdf = os.path.join(_uf, "lec.pdf")
+with open(_pdf, "wb") as _f:
+    _f.write(b"%PDF-1.4 legacy")
+_pages = ["Slide one", "Slide  two"]
+_legacy_dir = os.path.join(_uf, ps.SUBDIR, "lec", ps.digest12(_pdf))
+os.makedirs(_legacy_dir)
+for _i, _text in enumerate(_pages):
+    with open(os.path.join(_legacy_dir, f"{_i:04d}.json"), "w", encoding="utf-8") as _f:
+        json.dump({"slide_text": _text, "segments": [{"t0": 0.0, "t1": 1.0, "text": "said on slide"}] if _i == 0 else []}, _f)
+ps.ensure_records(_uf, "lec", _pdf, ["Slide one", "Slide two"])  # same text, other whitespace
+check("the pointer now names the text digest", ps._read_pointer(_uf, "lec") == ps.text_digest(_pages))
+check("the legacy directory was renamed, not abandoned", not os.path.isdir(_legacy_dir))
+check("the segment recorded under the legacy name survives",
+      ps.load_record(_uf, "lec", _pdf, 0)["segments"] == [{"t0": 0.0, "t1": 1.0, "text": "said on slide"}])
+ps.ensure_records(_uf, "lec", _pdf, ["A different deck", "Entirely"])
+check("a different document repoints to a fresh directory with no inherited segments",
+      ps.load_record(_uf, "lec", _pdf, 0)["segments"] == [] and ps._read_pointer(_uf, "lec") == ps.text_digest(["A different deck", "Entirely"]))
+check("the previous document's records are left on disk for delete_context",
+      os.path.isdir(os.path.join(_uf, ps.SUBDIR, "lec", ps.text_digest(_pages))))
+shutil.rmtree(_uf, ignore_errors=True)
 
 raise SystemExit(report())

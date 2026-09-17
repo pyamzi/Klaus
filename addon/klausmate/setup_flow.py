@@ -35,9 +35,10 @@ from .manage_models import manage_models_dialog
 # surfaces below quote it, so the welcome dialog and the profile-open
 # nudge can never describe setup two ways.
 KEYS_COPY = (
-    "Semantic search and the assistant use OpenAI and Anthropic through "
-    "your own API keys. Add them in KlausMate Preferences → API keys & "
-    "models. Or subscribe to Klaus Plus there and skip the keys."
+    "Indexing your cards and lecture pages uses OpenAI through your own "
+    "API key. Add it in KlausMate Preferences → API keys & models, or "
+    "subscribe to Klaus Plus there and skip the key. The assistant uses "
+    "your own Claude Code login and needs no key."
 )
 
 

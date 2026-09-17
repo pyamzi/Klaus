@@ -45,15 +45,19 @@ no external PDF reader, no manual triage of what to study next.
 
 ## Positioning
 
-Everything runs inside Anki against the user's own collection, and the
-one AI capability is embeddings-only semantic search (Voyage cloud by
-default; Ollama fully local as the private option; OpenAI as a second
-cloud option). No chat, no generation, no autocomplete — those were
-built and deliberately deleted (2026-08). A neighboring addon could not
-truthfully claim: per-PDF retention scoring joined to FSRS, semantic
-matching of the collection against the user's own lecture PDFs, and a
-native annotation viewer, in one addon with no mandatory cloud
-dependency.
+Everything runs inside Anki against the user's own collection. Two AI
+capabilities, both API-first since 2026-09-15: semantic search over the
+collection and the lecture pages (OpenAI embeddings, one vector per
+page — the local Ollama and Voyage paths were removed), and an
+assistant docked on Anki's main window that rides the Claude Code CLI
+under the user's own login, reading the page in view. No autocomplete,
+no chat panel of Klaus's own — those were built and deliberately
+deleted (2026-08). The AI is paid for either with the user's own keys
+or through Klaus Plus, a metered subscription relayed by Klaus's own
+service (2026-09-16). A neighboring addon could not truthfully claim:
+per-PDF retention scoring joined to FSRS, semantic matching of the
+collection against the user's own lecture PDFs, and a native annotation
+viewer, in one addon.
 
 ## Operating Context
 
@@ -129,9 +133,13 @@ Volunteered and binding from the owner:
 
 1. **The collection is sacred.** The deck copier copies, never moves; every
    mutation is undoable; tags are owned and reconciled, not sprayed.
-2. **Local-first privacy is a feature.** Cloud embeddings are the
-   convenient default, but a fully-local path (Ollama) must always
-   exist and never degrade to mandatory cloud.
+2. **Privacy by disclosure, not by locality.** Since the API-first turn
+   (2026-09-15) the AI is cloud: OpenAI embeds the cards and lecture pages,
+   the assistant runs on the user's own Claude Code login, and Klaus Plus
+   relays through Klaus's own service. What leaves the machine, and to
+   whom, is stated in the README's privacy block and the service's
+   `/privacy` page; nothing is sent that those pages do not name, and
+   no telemetry ever. Every paid pass is priced before it runs.
 3. **Restyle, never rebuild, Anki.** Klaus lives inside Anki's own
    surfaces (toolbar restyled in place, Browse extended, stock
    multi-window). Attempts to replace Anki's shell failed twice and

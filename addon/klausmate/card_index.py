@@ -444,6 +444,8 @@ def load_row_map(dir_path: str) -> RowMap | None:
     try:
         with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
             m = json.load(f)
+        if not isinstance(m, dict):
+            return None
         if m.get("version") != INDEX_VERSION:
             return None
         nids = [int(n) for n in m["nids"]]

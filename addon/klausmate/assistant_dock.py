@@ -390,11 +390,17 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         Neither half can fail the turn: a missing or unreadable record is
         empty text, an unrenderable page is no image, and the turn still
         goes out on whatever the other half produced (spec D1 — there is
-        no OCR round-trip in front of a send any more).
+        no OCR round-trip in front of a send any more). Records are only
+        SEEDED by an import or an index run (page_store.ensure_records) —
+        with auto-index off, no key, or a failed run there may be none
+        yet, so an empty combined_text falls back to the plain extracted
+        text in contexts/<safe>.json (pdf_handler.load_pages) — the same
+        fallback anki_tools' lecture search already uses for a page with
+        no record.
         """
         from . import page_store
 
-        text, png = "", None
+        text, text_source, png = "", "page-record", None
         if view is not None and getattr(view, "pdf_safe", ""):
             try:
                 rec = page_store.load_record(
@@ -403,11 +409,21 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
                 text = page_store.combined_text(rec)
             except Exception as exc:
                 print(f"[klausmate] page record for the assistant failed: {exc}")
+            if not text:
+                try:
+                    from . import pdf_handler
+
+                    pages = pdf_handler.load_pages(self._user_files, view.pdf_safe) or []
+                    if 0 <= view.page_index < len(pages):
+                        text = pages[view.page_index]
+                        text_source = "contexts"
+                except Exception as exc:
+                    print(f"[klausmate] contexts fallback for the assistant failed: {exc}")
             try:
                 png = page_store.render_page_png(view.path, view.page_index)
             except Exception as exc:
                 print(f"[klausmate] page render for the assistant failed: {exc}")
-        return {"text": text, "text_source": "page-record", "png": png}
+        return {"text": text, "text_source": text_source, "png": png}
 
     def _default_endpoint_info(self):
         try:
