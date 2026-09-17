@@ -136,11 +136,23 @@ created: 2026-09-17
 
 Raised by review on PR #2 (KB-016). The parity spec says every piece of feedback is a transient toast prefixed "Klaus: ", never inline text. Three places still speak inline, all of them persistent state rather than feedback: NotesSidebar's save status ("Saving…" / "Saved" / "Save failed"), its "Notes unavailable: {error}", and the stage's "Opening {name}…" / "Could not open {name}: {error}" panels. A 2.2s toast would lose a condition that should stay on screen, so KB-016 narrowed the invariant in toast.ts instead of rerouting them. Decide the rule: does persistent state get the Klaus prefix and a quiet inline treatment, or stay voiceless? klausmate's own answer is worth checking first - its degraded states have exact copy (see docs/reference/klausmate-viewer-parity.md, "Voice") and are inline, which suggests inline is right and only the wording needs aligning. Needs a decision before anyone edits NotesSidebar.tsx.
 
+### KB-019: Confirm the editor's Cmd shortcuts survive the workbench
+owner: -
+priority: P2
+tags: parity,needs-human
+created: 2026-09-17
+
+KB-016 and KB-014 shipped keyboard parity that cannot be verified headless: VS Code binds Cmd+= / Cmd+- / Cmd+0 (workbench zoom) and Cmd+F at the workbench level, and whether the webview's preventDefault wins is only observable in a running window. Static evidence so far: createWebviewPanel in extensions/klaus-pdf/src/extension.ts never sets enableFindWidget, so VS Code's own find widget is off for this panel and Cmd+F should reach the webview; the zoom keys have no such argument either way.
+
+Check in a running Klausbook window, with a PDF open on the stage: Cmd+= / Cmd+- step the slide by 1.25x with no shell zoom; Cmd+0 fits; Cmd+F opens the Klaus find strip and not VS Code's; Cmd+A selects only the slide's text; Cmd+Alt+G focuses the page field; double- and triple-click select a word and a paragraph on the slide. If any key is swallowed by the workbench, the fix is a keybinding contribution in package.json with a 'when' clause scoped to the webview - not more preventDefault.
+
 ## Ready
 
 ## Doing
 
 ## Review
+
+## Done
 
 ### KB-016: Shortcut + toast parity in the PDF editor
 owner: orchestrator
@@ -172,6 +184,7 @@ Acceptance criteria:
 - [2026-09-17 orchestrator] Implemented on branch kb-016-shortcuts (b5212f5, branched off impress-editor so it carries the unmerged Obsidian retheme dbc6544). verify exits 0 (5 node:test cases + tsc --noEmit); it exited 1 on the pre-card tree. node build.mjs bundles clean. Divergence from the card, deliberate: Cmd+Alt+G focuses an inline page field in the toolbar instead of klausmate's getInt dialog - a webview has no prompt() and the voice rule forbids modals; the page indicator became the field, format '{n} / {total}' kept. Double/triple-click selection is native pdf.js text-layer behaviour and nothing in viewer.css blocks it - not machine-verified. NEEDS A REAL-WINDOW CHECK before Done: VS Code binds Cmd+= / Cmd+- / Cmd+0 at the workbench level, so confirm the webview's preventDefault wins and the shell does not also zoom.
 - [2026-09-17 orchestrator] PR #2 open: https://github.com/pyamzi/KlausBook-Context/pull/2 (1 commit, based on the merged retheme). Stays in Review until the real-window shortcut check.
 - [2026-09-17 orchestrator] PR #2 review addressed in ca8d776: fitScale now goes through clampZoom so Cmd+0 and the initial/resize fits cannot leave the 0.25-5.0 ladder; the page field sizes from the digit count of doc.numPages (content-box) instead of a fixed 3ch that clipped at 1000+ pages; toast.ts's 'only feedback channel' claim narrowed to transient feedback, with KB-018 filed for whether persistent state (notes save status, loading/error panels) adopts the Klaus voice. Three threads replied to and resolved. Gate still green; kb-016-shortcuts merged forward into kb-014-find-bar so PR #3 carries the fixes.
+- [2026-09-17 orchestrator] Merged: PR #2 -> main (6b4e371). Signed off by Pouya. The in-app shortcut check moved to KB-019 rather than being dropped.
 
 ### KB-014: Find bar (Cmd+F) in the PDF editor
 owner: orchestrator
@@ -204,5 +217,4 @@ Acceptance criteria:
 #### Comments
 - [2026-09-17 orchestrator] Implemented on kb-014-find-bar (7d87e12), PR #3 stacked on PR #2 (it extends shortcuts.ts and updates KB-016's gate; retarget to main once #2 lands). verify exits 0 (9 node:test cases + tsc), exited 1 before. Two deliberate calls, both narrower than the card: (1) a fresh query selects no match - the label reads '{n} matches' until Enter/Cmd+G moves to one, so live typing never yanks the stage, and all four label forms stay reachable; (2) the current match is shown by selecting its range in the text layer (which already tints ::selection) rather than via the CSS Custom Highlight API - no new API, no extra CSS, and it degrades to plain navigation when offsets do not map. NEEDS A REAL-WINDOW CHECK: whether VS Code passes Cmd+F to the webview instead of opening its own find widget; also the 250ms debounce and the offset mapping onto the rendered text layer.
 - [2026-09-17 orchestrator] PR #3 review addressed in d64b523; 7 threads replied to and resolved. Five distinct findings, all real: (1) case folding is not length-preserving ('Istanbul'-style dotted capital I lowercases to two UTF-16 units), so folded offsets selected the wrong characters - find.ts now folds per code point with a map back to the original string and reports original-text offsets, with a regression test that fails on the old code; (2) the 120ms reveal delay raced PdfPage's async render, so a match on a slow page navigated but was never selected - a MutationObserver waits for that page's text layer with a 4s give-up; (3) that fix exposed a worse bug of mine - the reveal effect runs before the slide swap commits, so an unpinned '.textLayer' matched the page being LEFT, which is populated, and would have selected against the wrong text; the query is now pinned to [data-page]; (4) Enter/Cmd+G inside the 250ms debounce acted on the previous query's matches - cycling flushes the pending search first; (5) Esc only worked from the input, and the glyph buttons had no accessible names. Gate now 10 cases, green. Still unverified in a window: whether VS Code passes Cmd+F through (enableFindWidget is unset, which suggests yes).
-
-## Done
+- [2026-09-17 orchestrator] Merged: PR #3 -> main (d8f5bc1), retargeted from kb-016-shortcuts once #2 landed. Signed off by Pouya. Gate green on merged main (10 cases) and the bundle builds. In-app Cmd+F check is KB-019.
