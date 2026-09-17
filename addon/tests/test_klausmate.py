@@ -1331,6 +1331,21 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         check("the union across PDFs is untouched by the narrowing (a card rejected for A "
               "and confirmed for B is still Doubtful — spec rule, known design debt)",
               _pert.all_rejected(_dbt_tmp) == {2, 5, 7})
+        # Copilot review of PR #4 (2026-09-17): a judged.json that EXISTS but
+        # is unreadable used to read as EMPTY here, so that PDF contributed
+        # nothing and the full recompute stripped its Doubtful members —
+        # the opposite of the fail-safe above. It must raise instead; every
+        # sink catches that and passes doubtful=None (tag untouched).
+        with open(_pert.judged_path(_dbt_tmp, "cardio"), "w", encoding="utf-8") as _f:
+            _f.write("{torn")
+        _raised = False
+        try:
+            tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
+        except ValueError:
+            _raised = True
+        check("a judged.json that exists but cannot be read makes doubtful_members RAISE "
+              "(the sinks turn that into doubtful=None) rather than strip that PDF's members",
+              _raised)
         shutil.rmtree(os.path.join(_dbt_tmp, "pdf_index"), ignore_errors=True)
 
         # K-254 review Important 2 + 3: sync_after_threshold's own guard

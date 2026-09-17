@@ -333,6 +333,15 @@ check("entry_for mints a full entry (including \"model\") that round-trips throu
       pt.entry_for(vs[0]).get("model") == vs[0].model and not pt.is_stale(pt.entry_for(vs[0]), vs[0].card_hash, vs[0].page_hash, vs[0].model))
 open(pt.judged_path(root, "lec"), "w").write("{bad")
 check("a corrupt judged.json reads as empty", pt.load_judged(root, "lec")["verdicts"] == {})
+_strict_raised = False
+try:
+    pt.load_judged(root, "lec", strict=True)
+except ValueError:
+    _strict_raised = True
+check("...but strict=True raises on it (tag_sync.doubtful_members reads strictly so an"
+      " unreadable store can never read as 'nobody rejected')", _strict_raised)
+check("strict=True still reads a MISSING store as empty — absent is not corrupt",
+      pt.load_judged(root, "never-judged", strict=True)["verdicts"] == {})
 pt.save_judged(root, "verold", {"version": 99, "model": "m", "verdicts": {"5": {"pertinent": True, "reason": "", "page": 1, "page_hash": "", "card_hash": "", "model": "m"}}})
 check("a judged.json with version != VERSION reads as empty (K-167 rule, fix round 1 Finding 3)",
       pt.load_judged(root, "verold")["verdicts"] == {})

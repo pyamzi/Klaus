@@ -203,7 +203,17 @@ def _empty() -> dict:
     return {"version": VERSION, "model": "", "verdicts": {}}
 
 
-def load_judged(user_files: str, safe: str) -> dict:
+def load_judged(user_files: str, safe: str, *, strict: bool = False) -> dict:
+    """The judged store, or an empty one when the file is missing.
+
+    A file that EXISTS but cannot be read as a store (torn write, hand
+    edit, an older version) reads as empty too — the judge rewrites it on
+    the next index of that PDF — unless ``strict`` is set, in which case it
+    raises ``ValueError``: `tag_sync.doubtful_members` reads strictly,
+    because "empty" there would compute an empty rejected set and STRIP
+    that PDF's Doubtful members, and unreadable data must never strip a
+    tag (Copilot review of PR #4, 2026-09-17).
+    """
     p = judged_path(user_files, safe)
     try:
         with open(p, encoding="utf-8") as f:
@@ -214,6 +224,8 @@ def load_judged(user_files: str, safe: str) -> dict:
     except FileNotFoundError:
         return _empty()
     except (OSError, ValueError) as exc:
+        if strict:
+            raise ValueError(f"judged.json unreadable: {p}: {exc}") from exc
         print(f"[klausmate] judged.json unreadable, treating as empty: {p}: {exc}")
         return _empty()
 

@@ -501,9 +501,13 @@ def doubtful_members(cfg: dict) -> set[int]:
     per-card overrule is a board card), not something this narrowing
     touches.
 
-    Never raises for one bad PDF, and never strips on missing data: a PDF
-    whose matches.json is absent or unreadable keeps its whole rejected
-    set.
+    Never strips on missing data: a PDF whose matches.json is absent or
+    unreadable keeps its whole rejected set, and a judged.json that EXISTS
+    but cannot be read RAISES (``load_judged(strict=True)``) rather than
+    reading as "nobody rejected" — every sink catches that and passes
+    ``doubtful=None``, which leaves the tag untouched until the judge
+    rewrites the store on that PDF's next index (Copilot review of PR #4,
+    2026-09-17: the empty read was stripping members after a torn write).
     """
     import os
 
@@ -518,7 +522,7 @@ def doubtful_members(cfg: dict) -> set[int]:
     for safe in names:
         if not os.path.isfile(pertinence.judged_path(user_files, safe)):
             continue
-        rejected = pertinence.rejected_nids(pertinence.load_judged(user_files, safe))
+        rejected = pertinence.rejected_nids(pertinence.load_judged(user_files, safe, strict=True))
         if not rejected:
             continue
         at_threshold = _at_threshold_nids(safe, cfg)
