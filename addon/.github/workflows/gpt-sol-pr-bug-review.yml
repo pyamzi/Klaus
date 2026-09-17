@@ -158,7 +158,7 @@ jobs:
 
               raise RuntimeError(f"Unsupported event: {event_name}")
 
-          def get_patch(base_sha: str, head_sha: str) -> str:
+          def get_patch(repo: str, pr_number: int, base_sha: str, head_sha: str, token: str) -> str:
               # Use only the PR delta, never full repository context.
               result = subprocess.run(
                   ["git", "diff", "--no-color", "--unified=3", f"{base_sha}...{head_sha}"],
@@ -166,9 +166,44 @@ jobs:
                   capture_output=True,
                   check=False,
               )
-              if result.returncode != 0:
-                  raise RuntimeError(f"git diff failed: {result.stderr.strip()}")
-              return result.stdout
+              if result.returncode == 0:
+                  return result.stdout
+
+              print(f"git diff failed; falling back to PR files API: {result.stderr.strip()}")
+              if not token:
+                  raise RuntimeError("git diff failed and GITHUB_TOKEN is unavailable for API fallback")
+
+              lines = []
+              page = 1
+              while True:
+                  files_url = (
+                      f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files"
+                      f"?per_page=100&page={page}"
+                  )
+                  files = gh_request("GET", files_url, token)
+                  if not files:
+                      break
+                  for f in files:
+                      filename = f.get("filename", "unknown")
+                      status = f.get("status", "modified")
+                      prev = f.get("previous_filename", filename)
+                      a_path = prev if status == "renamed" else filename
+                      b_path = filename
+                      lines.append(f"diff --git a/{a_path} b/{b_path}\n")
+                      lines.append(f"--- a/{a_path}\n")
+                      lines.append(f"+++ b/{b_path}\n")
+                      patch = f.get("patch")
+                      if patch:
+                          lines.append(patch)
+                          if not patch.endswith("\n"):
+                              lines.append("\n")
+                      else:
+                          lines.append("@@ -0,0 +0,0 @@\n")
+                          lines.append(f"[{status} file; textual patch not available]\n")
+                  if len(files) < 100:
+                      break
+                  page += 1
+              return "".join(lines)
 
           def truncate_patch_safely(patch: str, max_chars: int):
               if len(patch) <= max_chars:
@@ -323,7 +358,7 @@ jobs:
                   upsert_pr_comment(github_token, repo, pr_number, note)
                   return
 
-              patch = get_patch(ctx["base_sha"], ctx["head_sha"])
+              patch = get_patch(repo, pr_number, ctx["base_sha"], ctx["head_sha"], github_token)
               patch, truncated, truncation_details = truncate_patch_safely(patch, MAX_PATCH_CHARS)
 
               if not patch.strip():
