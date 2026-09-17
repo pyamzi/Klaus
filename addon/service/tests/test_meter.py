@@ -104,3 +104,20 @@ def test_a_reservation_settles_into_the_period_that_admitted_it(store, settings,
     meter.settle(store, settings, cid, "transcribe", 300, 30, res.at)
     assert store.daily_audio(cid, day_key(eve)) == 30
     assert store.daily_audio(cid, day_key(eve + 61)) == 0
+
+
+def test_the_daily_audio_ceiling_is_decided_inside_the_reservation(store, settings, now):
+    """K-267: `check_daily_audio` ran outside the lock and `reserve` added to the daily
+    counter without re-checking it, so two concurrent uploads could read the same daily
+    total, both reserve, and push past the 240-minute ceiling. It is decided in the same
+    lock as the monthly one now, and the reservation says WHICH ceiling refused."""
+    cid = store.upsert_customer("cus_1", "", now)
+    half = settings.audio_day_seconds // 2 + 60  # two of these fit the day alone, not together
+    first = meter.reserve(store, settings, cid, "transcribe", half, now)
+    second = meter.reserve(store, settings, cid, "transcribe", half, now)
+    assert first.ok and first.reason == ""
+    assert not second.ok and second.reason == "day"
+    assert store.daily_audio(cid, day_key(now)) == half          # the refusal recorded nothing
+    assert store.usage(cid, month_key(now))["audio_seconds"] == half
+    store.add_usage(cid, month_key(now), "judge_tokens", settings.quota_judge_tokens)
+    assert meter.reserve(store, settings, cid, "judge", 1, now).reason == "month"
