@@ -13,15 +13,75 @@ body,
 
 #root {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: #46484f;
 }
 
-.viewer {
+.impress {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+.filmstrip {
+  width: 168px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: 10px;
+  background: #35373d;
+}
+
+.thumb {
+  position: relative;
+  padding: 3px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.thumb.selected {
+  border-color: #5b8def;
+}
+
+.thumb .pdf-page {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.thumb-num {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #d7d8dd;
+  font-size: 11px;
+}
+
+.stage-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stage {
+  flex: 1;
   min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 32px;
+}
+
+.impress-sidebar-slot {
+  flex-shrink: 0;
 }
 
 .viewer-toolbar {
@@ -72,18 +132,6 @@ body,
 
 .viewer-zoom button:hover {
   background: #3f414a;
-}
-
-.viewer-scroll {
-  flex: 1;
-  overflow: auto;
-  padding: 24px;
-}
-
-.viewer-pages-column {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
 .viewer-message {
