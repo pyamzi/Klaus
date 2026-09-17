@@ -27,6 +27,7 @@ TOKENS_PER_CARD = 250   # the service's own constants (spec D1); shown, never en
 TOKENS_PER_TURN = 6000
 CACHE_TTL_S = 6 * 3600
 PURPOSES = ("embed", "transcribe", "judge", "assistant")
+_HEX = set("0123456789abcdef")  # the service's own keys.looks_like_key alphabet
 TIMEOUT_S = 15.0
 _urlopen = urllib.request.urlopen
 
@@ -45,8 +46,11 @@ def client_version() -> str:
 
 
 def key(cfg: dict) -> str:
+    """K-262: exactly the service's `keys.looks_like_key` contract — `kp_` plus 32 lowercase
+    hex, since `keys.mint()` is `token_hex(16)`. A 35-character string that is not one of
+    those can only ever earn a 401, so it reads as no key at all."""
     k = str((cfg or {}).get(KEY) or "").strip()
-    return k if k.startswith("kp_") and len(k) == 35 else ""
+    return k if k.startswith("kp_") and len(k) == 35 and set(k[3:]) <= _HEX else ""
 
 
 def base(cfg: dict) -> str:

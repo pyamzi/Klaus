@@ -10,8 +10,11 @@ def _sub(status, period_end, cancel=False, items_only=False):
     return sub
 
 
-def _event(eid, etype, obj):
-    return {"id": eid, "type": etype, "data": {"object": obj}}
+def _event(eid, etype, obj, created=None):
+    e = {"id": eid, "type": etype, "data": {"object": obj}}
+    if created is not None:
+        e["created"] = created  # K-263: Stripe's own ordering stamp
+    return e
 
 
 def test_period_end_reads_subscription_then_items():
@@ -70,3 +73,30 @@ def test_trialing_is_active(store, now):
     assert ent.verdict(store.customer_by_stripe_id("cus_1"), now, 3)[0] == "active"
     ent.apply_event(store, _event("e2", "customer.subscription.updated", _sub("trialing", int(now) + 7 * 86400)), now)
     assert ent.verdict(store.customer_by_stripe_id("cus_1"), now + 6 * 86400, 3)[0] == "active"
+
+
+def test_a_stale_update_after_a_cancellation_does_not_revive_the_row(store, now):
+    """K-263: Stripe delivers out of order. A delayed older `updated` arriving
+    after the cancellation must not put the row back to active."""
+    store.upsert_customer("cus_1", "", now)
+    assert ent.apply_event(store, _event("e1", "customer.subscription.deleted",
+                                         _sub("canceled", int(now)), created=2000), now)
+    assert ent.apply_event(store, _event("e2", "customer.subscription.updated",
+                                         _sub("active", int(now) + 30 * 86400), created=1000), now)
+    row = store.customer_by_stripe_id("cus_1")
+    assert row["status"] == "canceled" and row["period_end"] == int(now)
+    # the same event id is still the idempotency key, and a NEWER event still applies
+    assert ent.apply_event(store, _event("e3", "customer.subscription.updated",
+                                         _sub("active", int(now) + 30 * 86400), created=2000), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "active"
+    assert ent.apply_event(store, _event("e4", "customer.subscription.deleted",
+                                         _sub("canceled", int(now)), created=2001), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "canceled"
+
+
+def test_an_event_without_a_created_stamp_still_applies(store, now):
+    store.upsert_customer("cus_1", "", now)
+    ent.apply_event(store, _event("e1", "customer.subscription.updated",
+                                  _sub("active", int(now) + 86400), created=5000), now)
+    ent.apply_event(store, _event("e2", "customer.subscription.deleted", _sub("canceled", int(now))), now)
+    assert store.customer_by_stripe_id("cus_1")["status"] == "canceled"

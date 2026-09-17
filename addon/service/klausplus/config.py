@@ -19,6 +19,14 @@ def _truthy(v: str | None) -> bool:
     return (v or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _int(v: str | None, default: int) -> int:
+    """A garbage value in the environment must not stop the Machine booting."""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     database_path: str = "/data/klausplus.sqlite3"
@@ -43,6 +51,10 @@ class Settings:
     quota_assistant_tokens: int = 200 * TOKENS_PER_TURN
     embed_ceiling_tokens: int = 20_000_000
     grace_days: int = 3
+    # K-263 — what /privacy promises: usage counters kept 13 months, the customer
+    # record deleted 30 days after the subscription ends. `app.purge_once` enforces it.
+    retention_usage_days: int = 395
+    retention_customer_grace_days: int = 30
     # C-1: the add-on indexes 64 notes per request back to back; 60/min refused
     # every collection above ~3,800 notes on its first index. The money bound is
     # the quotas and the embed ceiling — this limiter only guards CPU.
@@ -72,6 +84,8 @@ class Settings:
             operator_name=e("OPERATOR_NAME") or d.operator_name,
             operator_email=e("OPERATOR_EMAIL") or "",
             operator_country=e("OPERATOR_COUNTRY") or "",
+            retention_usage_days=_int(e("RETENTION_USAGE_DAYS"), d.retention_usage_days),
+            retention_customer_grace_days=_int(e("RETENTION_CUSTOMER_GRACE_DAYS"), d.retention_customer_grace_days),
             allowed_models=tuple(m.strip() for m in (e("KLAUS_PLUS_ALLOWED_MODELS") or "").split(",") if m.strip()),
         )
 

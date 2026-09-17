@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS customers (
   cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
   past_due_since INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  last_event_created INTEGER
 );
 CREATE TABLE IF NOT EXISTS usage (
   customer_id INTEGER NOT NULL,
@@ -49,6 +50,15 @@ CREATE TABLE IF NOT EXISTS events (
 
 USAGE_COLUMNS = ("embed_tokens", "audio_seconds", "judge_tokens", "assistant_tokens")
 
+# K-263. A subscription has ENDED at its period end; with no period end, when it
+# went past due; failing both, when the row was created (paid page never reached,
+# never subscribed). `active`/`trialing` rows are never ended by us — only Stripe
+# ends those — so a past_due row inside its 3-day grace is safe here too: the
+# customer window is 30 days.
+_ENDED_BEFORE = ("status NOT IN ('active', 'trialing') AND "
+                 "(CASE WHEN MAX(period_end, past_due_since) > 0 THEN MAX(period_end, past_due_since) "
+                 "ELSE created_at END) < ?")
+
 
 def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
@@ -56,7 +66,17 @@ def connect(path: str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Columns added after the first deploy. The volume already holds a database,
+    and `CREATE TABLE IF NOT EXISTS` never revisits an existing table — so each
+    later column needs its own guarded ALTER."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(customers)")}
+    if "last_event_created" not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN last_event_created INTEGER")
 
 
 def month_key(now: float) -> str:
@@ -89,6 +109,21 @@ class Store:
                 return True
             except sqlite3.IntegrityError:
                 return False
+
+    def claim_event_created(self, stripe_customer_id: str, created: int) -> bool:
+        """K-263: compare-and-set on the last applied subscription event's `created`.
+        False — and nothing written — when a NEWER event already landed on this row;
+        equal or newer applies. Stripe does not promise delivery order, and a
+        delayed older `customer.subscription.updated` must not revive a cancelled row."""
+        with self._lock:
+            row = self._c.execute("SELECT last_event_created FROM customers WHERE stripe_customer_id = ?",
+                                  (stripe_customer_id,)).fetchone()
+            prev = row["last_event_created"] if row else None
+            if prev is not None and int(created) < int(prev):
+                return False
+            self._c.execute("UPDATE customers SET last_event_created = ? WHERE stripe_customer_id = ?",
+                            (int(created), stripe_customer_id))
+            return True
 
     # -- customers --------------------------------------------------------
     def upsert_customer(self, stripe_customer_id: str, email: str, now: float) -> int:
@@ -183,3 +218,28 @@ class Store:
             self._c.execute("UPDATE daily_audio SET seconds = seconds + ? WHERE customer_id = ? AND day = ?",
                             (int(seconds), customer_id, day))
             return self.daily_audio(customer_id, day)
+
+    # -- retention --------------------------------------------------------
+    def purge_expired(self, now: float, *, usage_days: int, customer_grace_days: int) -> dict:
+        """K-263: the promise `/privacy` publishes, enforced. Usage counters, daily
+        audio and the Stripe event ledger are kept `usage_days`; a customer record
+        is deleted `customer_grace_days` after its subscription ended, together with
+        its usage, audio and its licence-key hash (a column on the row). Counts per
+        table, so the one log line can say what went.
+
+        ponytail: plain DELETEs under the store's single writer lock, once a day on
+        one machine's SQLite file. Batch them only if that ever stops being true.
+        """
+        cutoff = now - usage_days * 86400
+        ended = now - customer_grace_days * 86400
+        doomed = "SELECT id FROM customers WHERE " + _ENDED_BEFORE
+        with self._lock:
+            usage = self._c.execute("DELETE FROM usage WHERE month < ?", (month_key(cutoff),)).rowcount
+            audio = self._c.execute("DELETE FROM daily_audio WHERE day < ?", (day_key(cutoff),)).rowcount
+            # the events table is the Stripe idempotency ledger -- same window as usage,
+            # never shorter, or a replayed old webhook would apply a second time.
+            events = self._c.execute("DELETE FROM events WHERE received_at < ?", (int(cutoff),)).rowcount
+            usage += self._c.execute("DELETE FROM usage WHERE customer_id IN (%s)" % doomed, (int(ended),)).rowcount
+            audio += self._c.execute("DELETE FROM daily_audio WHERE customer_id IN (%s)" % doomed, (int(ended),)).rowcount
+            customers = self._c.execute("DELETE FROM customers WHERE " + _ENDED_BEFORE, (int(ended),)).rowcount
+        return {"usage": usage, "daily_audio": audio, "events": events, "customers": customers}

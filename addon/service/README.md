@@ -26,6 +26,15 @@ stored or logged** — lecture text, audio and page images pass through and are
 gone. A log line is `METHOD /path STATUS key=<8 hex of the hash> ms=… metered=…`
 and nothing more; `service/tests/` asserts that.
 
+**Retention.** A purge runs at startup and every 24 hours inside the app
+itself — there is no cron on the one Machine: usage, daily-audio and
+Stripe-event rows older than `RETENTION_USAGE_DAYS` (395, the 13 months
+`/privacy` promises) are deleted, and a customer record is deleted
+`RETENTION_CUSTOMER_GRACE_DAYS` (30) after its subscription ended, together
+with its counters and its licence-key hash — never while it is `active`,
+`trialing` or `past_due` inside its grace. Added 2026-09-17 after a Codex
+review found the policy promised a purge the code did not have.
+
 ## Routes
 
 | Route | What it does |
@@ -36,7 +45,7 @@ and nothing more; `service/tests/` asserts that.
 | `GET /v1/me` | Plan, period end, the counters and their caps. Also returned on every proxied call as the `X-Klaus-Quota` header. |
 | `POST /v1/portal` | A Stripe Customer Portal link for a key holder (this is what Preferences' **Manage subscription…** opens). |
 | `GET /`, `/subscribe`, `/welcome`, `/recover` | The landing page, Checkout, the success page that mints and shows the key once, and key recovery by email. |
-| `POST /stripe/webhook` | Entitlement from Stripe events, idempotent by event id. |
+| `POST /stripe/webhook` | Entitlement from Stripe events, idempotent by event id. Stripe does not guarantee delivery order, so each customer row remembers the `created` stamp of the last subscription event applied to it and an older one is ignored — a delayed `customer.subscription.updated` can no longer revive a cancelled subscription. The body is read through a bounded reader (a chunked request cannot buffer past the cap) before the signature is checked. |
 | `GET /terms` | The terms of service, as HTML. Unauthenticated — anyone can read it — and rendered from the operator settings (`OPERATOR_NAME`, `OPERATOR_EMAIL`, `OPERATOR_COUNTRY`). |
 | `GET /privacy` | The privacy statement, same shape: HTML, unauthenticated, rendered from the same operator settings. This is the page the add-on's own privacy note points at. |
 | `GET /healthz` | `{"ok":true}` — what Fly's health check hits. |
@@ -137,6 +146,8 @@ Every knob, with its default from `klausplus/config.py`:
 | `KLAUS_PLUS_PAUSED` | unset | **The kill switch.** `1` refuses every proxied call `503` — "Klaus Plus is paused for maintenance — try again later, or use your own API key." — checked before auth, so it costs nothing. See step 8. |
 | `KLAUS_PLUS_FAKE_UPSTREAM` | unset | **Local development only.** `1` makes `create_app` use the canned `FakeUpstream` instead of the providers, so the service runs offline with no provider key (`tests/test_upstream_fake.py`, the offline end-to-end). Never set it on Fly — nothing in `fly.toml` or the Dockerfile does. |
 | `KLAUS_PLUS_ALLOWED_MODELS` | unset | Optional, comma-separated. When set, a request naming any other model is refused `400` **before any provider call**. Unset, the caller's model is forwarded as-is and the provider spend caps are the only backstop. The quotas are priced against Sonnet-class and `text-embedding-3-large` costs, so a hand-crafted body asking for an Opus-class model spends several times the quota it debits — this is the lever that closes that without a redeploy. |
+| `RETENTION_USAGE_DAYS` | `395` | How long usage, daily-audio and Stripe-event rows are kept before the in-app purge deletes them — the 13 months `/privacy` promises. |
+| `RETENTION_CUSTOMER_GRACE_DAYS` | `30` | How long after a subscription ends a customer record (and its counters and key hash) is kept before the purge deletes it. |
 
 Reading them back is safe (`fly secrets list` shows names and digests, never
 values); there is no command that prints a secret.

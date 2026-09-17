@@ -77,9 +77,13 @@ def authenticate(request: Request, purpose_required: bool = True, require_active
     return row
 
 
+def _quota_header_from(snap: dict) -> dict:
+    return {"X-Klaus-Quota": json.dumps(snap)}
+
+
 def _quota_header(request: Request, customer_id: int) -> dict:
     st = request.app.state
-    return {"X-Klaus-Quota": json.dumps(meter.snapshot(st.store, st.settings, customer_id, st.now()))}
+    return _quota_header_from(meter.snapshot(st.store, st.settings, customer_id, st.now()))
 
 
 def _json_body(raw: bytes) -> dict:
@@ -100,6 +104,31 @@ def _declared_length(request: Request) -> int:
         return int(request.headers.get("content-length") or 0)
     except ValueError:
         return 0
+
+
+async def _read_capped(request: Request, cap: int) -> bytes:
+    """K-262: the declared length guards nothing on its own — a CHUNKED request declares
+    no length at all, and `request.body()` buffers the whole thing before any check can
+    fire (on the public webhook, that is memory exhaustion for the asking). Read through
+    the stream and refuse the moment the running total passes `cap`, before the next
+    chunk is pulled. The bytes are cached where Starlette's own `body()` keeps them, so a
+    later `.body()`/`.form()` on this request reads them back instead of finding the
+    stream consumed."""
+    if hasattr(request, "_body"):
+        # N1: whoever cached it did not necessarily answer to THIS cap (nothing in this app
+        # reads a body before us today; a future middleware would).
+        if len(request._body) > cap:
+            raise _err(413, "Request too large.")
+        return request._body
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > cap:
+            raise _err(413, "Request too large.")
+        chunks.append(chunk)
+    request._body = b"".join(chunks)
+    return request._body
 
 
 def _log(request: Request, status: int, metered: int, started: float) -> None:
@@ -204,26 +233,29 @@ async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Res
         raise _err(400, "X-Klaus-Purpose must be 'embed' for /v1/embeddings.")
     if _declared_length(request) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
-    raw = await request.body()
-    if len(raw) > st.settings.max_json_bytes:
-        raise _err(413, "Request too large.")
+    raw = await _read_capped(request, st.settings.max_json_bytes)
     body = _json_body(raw)
     if st.settings.allowed_models and body.get("model") not in st.settings.allowed_models:
         raise _err(400, "That model is not available on Klaus Plus.")
     inputs = body.get("input") if isinstance(body.get("input"), list) else [body.get("input") or ""]
     guess = sum(len(str(t)) for t in inputs) // 4
-    ok, _ = meter.check(st.store, st.settings, int(row["id"]), "embed", guess, st.now())
-    if not ok:
-        raise _err(402, meter.quota_message("embed", meter.snapshot(st.store, st.settings, int(row["id"]), st.now())["resets_at"]))
-    resp = await st.upstream.openai_json("/embeddings", body)
-    await _check_upstream_auth(request, resp)
+    res = meter.reserve(st.store, st.settings, int(row["id"]), "embed", guess, st.now())
+    if not res.ok:
+        raise _err(402, meter.quota_message("embed", res.before["resets_at"]))
+    # The reservation is spent until settled, so every way out of here — the 502 below,
+    # a network error, any non-200 — goes through the `finally` that hands it back.
     metered = 0
+    try:
+        resp = await st.upstream.openai_json("/embeddings", body)
+        await _check_upstream_auth(request, resp)
+        if resp.status_code == 200:
+            try:
+                metered = int((resp.json().get("usage") or {}).get("total_tokens") or guess)
+            except (ValueError, AttributeError, TypeError):
+                metered = guess
+    finally:
+        snap = meter.settle(st.store, st.settings, int(row["id"]), "embed", guess, metered, res.at)
     if resp.status_code == 200:
-        try:
-            metered = int((resp.json().get("usage") or {}).get("total_tokens") or guess)
-        except (ValueError, AttributeError, TypeError):
-            metered = guess
-        snap = meter.charge(st.store, st.settings, int(row["id"]), "embed", metered, st.now())
         _notify_quota(background_tasks, st, row, snap)
     _log(request, resp.status_code, metered, started)
     return Response(resp.content, status_code=resp.status_code, media_type="application/json",
@@ -239,6 +271,9 @@ async def transcriptions(request: Request, background_tasks: BackgroundTasks) ->
         raise _err(400, "X-Klaus-Purpose must be 'transcribe' for /v1/audio/transcriptions.")
     if _declared_length(request) > st.settings.max_audio_bytes + 65536:
         raise _err(413, "Audio chunk too large (25 MB max).")
+    # The multipart wrapper costs a little over the audio itself; cap the whole body,
+    # then let the parser read it back out of the cache _read_capped left behind.
+    await _read_capped(request, st.settings.max_audio_bytes + 65536)
     form = await request.form()
     upload = form.get("file")
     if upload is None or not hasattr(upload, "read"):
@@ -255,17 +290,20 @@ async def transcriptions(request: Request, background_tasks: BackgroundTasks) ->
     cid = int(row["id"])
     if not meter.check_daily_audio(st.store, st.settings, cid, seconds, st.now()):
         raise _err(402, "Klaus Plus transcribes at most 240 minutes a day and you have reached today's limit; more tomorrow.")
-    ok, _ = meter.check(st.store, st.settings, cid, "transcribe", seconds, st.now())
-    if not ok:
-        raise _err(402, meter.quota_message("transcribe", meter.snapshot(st.store, st.settings, cid, st.now())["resets_at"]))
+    res = meter.reserve(st.store, st.settings, cid, "transcribe", seconds, st.now())
+    if not res.ok:
+        raise _err(402, meter.quota_message("transcribe", res.before["resets_at"]))
     fields = {k: str(v) for k, v in form.items() if k != "file" and isinstance(v, str)}
-    resp = await st.upstream.openai_multipart("/audio/transcriptions", fields, getattr(upload, "filename", "chunk.wav") or "chunk.wav",
-                                              content, getattr(upload, "content_type", "audio/wav") or "audio/wav")
-    await _check_upstream_auth(request, resp)
     metered = 0
+    try:
+        resp = await st.upstream.openai_multipart("/audio/transcriptions", fields, getattr(upload, "filename", "chunk.wav") or "chunk.wav",
+                                                  content, getattr(upload, "content_type", "audio/wav") or "audio/wav")
+        await _check_upstream_auth(request, resp)
+        if resp.status_code == 200:
+            metered = seconds
+    finally:
+        snap = meter.settle(st.store, st.settings, cid, "transcribe", seconds, metered, res.at)
     if resp.status_code == 200:
-        metered = seconds
-        snap = meter.charge(st.store, st.settings, cid, "transcribe", seconds, st.now())
         _notify_quota(background_tasks, st, row, snap)
     _log(request, resp.status_code, metered, started)
     return Response(resp.content, status_code=resp.status_code, media_type="application/json", headers=_quota_header(request, cid))
@@ -299,53 +337,82 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
         raise _err(400, "X-Klaus-Purpose must be 'judge' or 'assistant' for /v1/messages.")
     if _declared_length(request) > st.settings.max_json_bytes:
         raise _err(413, "Request too large.")
-    raw = await request.body()
-    if len(raw) > st.settings.max_json_bytes:
-        raise _err(413, "Request too large.")
+    raw = await _read_capped(request, st.settings.max_json_bytes)
     body = _json_body(raw)
     if st.settings.allowed_models and body.get("model") not in st.settings.allowed_models:
         raise _err(400, "That model is not available on Klaus Plus.")
     cid = int(row["id"])
-    ok, _ = meter.check(st.store, st.settings, cid, purpose, 1, st.now())
-    if not ok:
-        raise _err(402, meter.quota_message(purpose, meter.snapshot(st.store, st.settings, cid, st.now())["resets_at"]))
+    # K-262: pre-check on an ESTIMATE, the way /v1/embeddings guesses — a bare `1` let a
+    # turn through on the last remaining token and charged the real usage afterwards.
+    # A non-integer max_tokens counts as 0 (the provider will refuse it anyway; a bare
+    # int() on it would be a 500). The concurrency overshoot — two requests passing the
+    # check at once — stays bounded and accepted (Klaus Plus final review); no locking.
+    try:
+        want = max(0, int(body.get("max_tokens") or 0))
+    except (TypeError, ValueError):
+        want = 0
+    reserved = len(raw) // 4 + want
+    res = meter.reserve(st.store, st.settings, cid, purpose, reserved, st.now())
+    if not res.ok:
+        raise _err(402, meter.quota_message(purpose, res.before["resets_at"]))
     stream = bool(body.get("stream"))
-    resp = await st.upstream.anthropic(body, stream)
-    await _check_upstream_auth(request, resp)
-    if not stream or resp.status_code != 200:
-        content = await resp.aread() if hasattr(resp, "aread") else resp.content
-        metered = 0
-        if resp.status_code == 200:
-            try:
-                u = json.loads(content).get("usage") or {}
-                # I-1: cache fields are billed by the provider like any other token.
-                metered = (int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
-                          + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0))
-            except (ValueError, AttributeError, TypeError):
-                metered = 0
-            snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
-            _notify_quota(background_tasks, st, row, snap)
-        _log(request, resp.status_code, metered, started)
-        return Response(content, status_code=resp.status_code, media_type="application/json", headers=_quota_header(request, cid))
+    # R1: EVERY path from here to a settle hands the reservation back, not just the upstream
+    # call — `resp.aread()` below is a real network read whenever a STREAMED response comes
+    # back non-200, and a read timeout there charged the estimate forever with no recovery.
+    settled = False
+    try:
+        resp = await st.upstream.anthropic(body, stream)
+        await _check_upstream_auth(request, resp)
+        if not stream or resp.status_code != 200:
+            content = await resp.aread() if hasattr(resp, "aread") else resp.content
+            metered = 0
+            if resp.status_code == 200:
+                try:
+                    u = json.loads(content).get("usage") or {}
+                    # I-1: cache fields are billed by the provider like any other token.
+                    metered = (int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
+                              + int(u.get("cache_creation_input_tokens") or 0) + int(u.get("cache_read_input_tokens") or 0))
+                except (ValueError, AttributeError, TypeError):
+                    metered = 0
+            snap = meter.settle(st.store, st.settings, cid, purpose, reserved, metered, res.at)
+            settled = True
+            if resp.status_code == 200:
+                _notify_quota(background_tasks, st, row, snap)
+            _log(request, resp.status_code, metered, started)
+            return Response(content, status_code=resp.status_code, media_type="application/json",
+                            headers=_quota_header(request, cid))
 
-    acc = {"in": 0, "out": 0, "cache_creation": 0, "cache_read": 0}
+        acc = {"in": 0, "out": 0, "cache_creation": 0, "cache_read": 0}
 
-    async def relay():
-        buf = b""
-        try:
-            async for chunk in resp.aiter_bytes():
-                yield chunk
-                buf += chunk
-                while b"\n" in buf:
-                    line, buf = buf.split(b"\n", 1)
-                    _usage_from_sse_line(line.rstrip(b"\r"), acc)
-        finally:
+        async def relay():
+            buf = b""
             try:
-                metered = acc["in"] + acc["cache_creation"] + acc["cache_read"] + acc["out"]
-                snap = meter.charge(st.store, st.settings, cid, purpose, metered, st.now())
-                _log(request, 200, metered, started)
-                _notify_quota_fire_and_forget(st, row, snap)
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        _usage_from_sse_line(line.rstrip(b"\r"), acc)
             finally:
-                await resp.aclose()
+                try:
+                    metered = acc["in"] + acc["cache_creation"] + acc["cache_read"] + acc["out"]
+                    snap = meter.settle(st.store, st.settings, cid, purpose, reserved, metered, res.at)
+                    _log(request, 200, metered, started)
+                    _notify_quota_fire_and_forget(st, row, snap)
+                finally:
+                    await resp.aclose()
 
-    return StreamingResponse(relay(), media_type="text/event-stream", headers=_quota_header(request, cid))
+        # R3: a StreamingResponse writes its headers before its body and neither Starlette nor
+        # uvicorn does response trailers, so the settled figure cannot reach this one. Send the
+        # reading the request was ADMITTED on instead — never the inflated reservation, which
+        # `plus.note_quota` caches on the add-on as quota the subscriber never spent.
+        response = StreamingResponse(relay(), media_type="text/event-stream", headers=_quota_header_from(res.before))
+        settled = True  # from here the relay's own `finally` owns the settle — EXCEPT when the ASGI
+        # layer fails `http.response.start` before ever entering `relay()`: that generator's `finally`
+        # never runs and the reservation stands until the month rolls over (over-charges, never leaks;
+        # a Starlette `background` task would not close it either, it runs after the stream). Nothing
+        # streams before Plan 3; its card names this window.
+        return response
+    finally:
+        if not settled:
+            meter.settle(st.store, st.settings, cid, purpose, reserved, 0, res.at)

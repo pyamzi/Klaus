@@ -156,6 +156,67 @@ def test_messages_402_when_judge_quota_spent(world, settings):
     assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 402
 
 
+def test_a_raising_body_read_on_a_streamed_non_200_leaves_usage_unchanged(world, monkeypatch):
+    """R1 (fix round 1): `await resp.aread()` is a REAL network read for a streamed non-200 —
+    it sat between the reservation and the settle with nothing releasing it, so a read
+    timeout there charged the whole estimate forever, with no recovery path."""
+    class Boom(httpx.Response):
+        async def aread(self):
+            raise httpx.ReadTimeout("upstream went away mid-body")
+
+    async def half_dead(body, stream):
+        return Boom(500, json={"error": {"message": "upstream"}})
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", half_dead)
+    body = {"model": "claude-sonnet-5", "max_tokens": 4096, "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+    with pytest.raises(httpx.ReadTimeout):
+        world["client"].post("/v1/messages", json=body, headers=_h(world, "judge"))
+    assert world["store"].usage(world["cid"], "2026-09")["judge_tokens"] == 0
+
+
+def test_a_month_straddle_bills_the_month_that_admitted_the_request(world, monkeypatch):
+    """R2 (fix round 1): reserve and settle are up to one upstream timeout apart. Settling on
+    its own clock charged September and released out of October — a negative counter there,
+    which `meter.check` reads as spendable quota."""
+    async def slow(body, stream):
+        world["clock"]["t"] = next_month_start(world["clock"]["t"]) + 1  # crossed UTC midnight mid-call
+        return httpx.Response(200, json={"id": "m", "content": [{"type": "text", "text": "ok"}],
+                                         "usage": {"input_tokens": 100, "output_tokens": 25}})
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", slow)
+    body = {"model": "claude-sonnet-5", "max_tokens": 4096, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 200
+    assert world["store"].usage(world["cid"], "2026-09")["judge_tokens"] == 125
+    assert world["store"].usage(world["cid"], "2026-10")["judge_tokens"] == 0
+
+
+def test_the_streamed_quota_header_never_advertises_the_reservation(world):
+    """R3 (fix round 1): a StreamingResponse's headers go out before its body, and neither
+    Starlette nor uvicorn does response trailers — so the settled figure CANNOT reach the
+    streamed header. It must then read the usage the request was admitted on, never the
+    inflated reservation (`plus.note_quota` caches whatever it says). The non-stream branch,
+    where a post-settle header is possible, does report the settled figure."""
+    body = {"model": "claude-sonnet-5", "max_tokens": 40_000, "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+    with world["client"].stream("POST", "/v1/messages", json=body, headers=_h(world, "assistant")) as r:
+        streamed = json.loads(r.headers["X-Klaus-Quota"])
+        b"".join(r.iter_bytes())
+    assert streamed["counters"]["assistant"]["used"] == 0
+    assert world["store"].usage(world["cid"], "2026-09")["assistant_tokens"] == 125
+    r = world["client"].post("/v1/messages", json={**body, "stream": False}, headers=_h(world, "assistant"))
+    assert json.loads(r.headers["X-Klaus-Quota"])["counters"]["assistant"]["used"] == 245
+
+
+def test_messages_402_when_max_tokens_cannot_fit_the_remaining_quota(world, settings):
+    """K-262: the pre-check is an estimate (body chars/4 + max_tokens), not a bare 1 --
+    a turn that cannot possibly fit in what is left is refused before the provider call."""
+    world["store"].add_usage(world["cid"], "2026-09", "judge_tokens", settings.quota_judge_tokens - 1000)
+    big = {"model": "claude-sonnet-5", "max_tokens": 50_000, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=big, headers=_h(world, "judge")).status_code == 402
+    assert world["up"].calls == []
+    small = {"model": "claude-sonnet-5", "max_tokens": 10, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=small, headers=_h(world, "judge")).status_code == 200
+
+
 def test_refused_subscription_402_with_reason(world):
     world["store"].set_subscription("cus_1", "unpaid", 0, False, world["clock"]["t"])
     r = world["client"].get("/v1/me", headers=_h(world, "embed"))
@@ -209,6 +270,28 @@ def test_upstream_error_passes_through_unmetered(world, monkeypatch):
     monkeypatch.setattr(world["app"].state.upstream, "openai_json", boom)
     r = world["client"].post("/v1/embeddings", json={"input": ["abcd"]}, headers=_h(world, "embed"))
     assert r.status_code == 500
+    # K-262: the pre-flight reservation is released again — a failed call bills nothing.
+    assert world["store"].usage(world["cid"], "2026-09")["embed_tokens"] == 0
+
+
+def test_upstream_500_on_messages_and_transcription_leaves_usage_unchanged(world, monkeypatch):
+    """K-262: every route now reserves its estimate before calling the provider, so every
+    route has to hand it back when the provider answers anything but a 200."""
+    async def boom_msg(body, stream):
+        return httpx.Response(500, json={"error": {"message": "upstream"}})
+
+    async def boom_audio(path, fields, filename, content, content_type):
+        return httpx.Response(500, json={"error": {"message": "upstream"}})
+
+    monkeypatch.setattr(world["app"].state.upstream, "anthropic", boom_msg)
+    monkeypatch.setattr(world["app"].state.upstream, "openai_multipart", boom_audio)
+    body = {"model": "claude-sonnet-5", "max_tokens": 4096, "messages": [{"role": "user", "content": "hi"}]}
+    assert world["client"].post("/v1/messages", json=body, headers=_h(world, "judge")).status_code == 500
+    assert world["client"].post("/v1/audio/transcriptions", data={"model": "x"}, files={"file": ("c.wav", _wav(30.0), "audio/wav")},
+                                headers=_h(world, "transcribe")).status_code == 500
+    usage = world["store"].usage(world["cid"], "2026-09")
+    assert usage["judge_tokens"] == 0 and usage["audio_seconds"] == 0
+    assert world["store"].daily_audio(world["cid"], "2026-09-16") == 0
 
 
 # --- I-2: an upstream 401/403 must never become the subscriber's own 401 ----
@@ -311,6 +394,50 @@ def test_bad_content_length_header_never_500s(world):
     r = asyncio.run(probe())
     assert r.status_code == 200
     assert "X-Klaus-Quota" in r.headers
+
+
+def test_chunked_oversized_body_is_413_without_ever_buffering_it(world, settings):
+    """K-262: a chunked body carries no Content-Length, so the declared-length check
+    cannot fire. The read must refuse the moment the running total passes the cap --
+    never pull the whole 16MB in first. Driven as raw ASGI because every HTTP client
+    here (TestClient, ASGITransport) coalesces the chunks before the app sees them."""
+    chunk = b"x" * (256 * 1024)
+    fed = {"n": 0}
+    sent = []
+
+    async def receive():
+        if fed["n"] >= 16 * 1024 * 1024:
+            return {"type": "http.request", "body": b"", "more_body": False}
+        fed["n"] += len(chunk)
+        return {"type": "http.request", "body": chunk, "more_body": True}
+
+    async def send(message):
+        sent.append(message)
+
+    headers = dict(_h(world, "embed"), host="test", **{"content-type": "application/json", "transfer-encoding": "chunked"})
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+             "path": "/v1/embeddings", "raw_path": b"/v1/embeddings", "query_string": b"", "root_path": "",
+             "scheme": "http", "server": ("test", 80), "client": ("1.2.3.4", 5000),
+             "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]}
+    asyncio.run(world["app"](scope, receive, send))
+    assert next(m["status"] for m in sent if m["type"] == "http.response.start") == 413
+    assert fed["n"] <= settings.max_json_bytes + len(chunk)
+    assert world["up"].calls == []
+
+
+def test_read_capped_answers_the_cap_on_a_body_someone_else_cached():
+    """N1: the cached fast path has to answer the cap too. Nothing in this app reads a body
+    before `_read_capped` today — there is no middleware and both `request.form()` calls come
+    after it — so only a future middleware can reach this, which is exactly the point: the
+    helper's contract is 'this answers the cap', with no condition attached."""
+    import types
+    from fastapi import HTTPException
+    from klausplus.proxy import _read_capped
+    req = types.SimpleNamespace(_body=b"x" * 100)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_read_capped(req, 10))
+    assert exc.value.status_code == 413
+    assert asyncio.run(_read_capped(req, 1000)) == b"x" * 100
 
 
 def test_transcription_model_allow_list_when_configured(world, settings):
