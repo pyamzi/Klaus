@@ -23,6 +23,15 @@ MAX_PAGE_CHARS = 12000
 JUDGED_FILE = "judged.json"
 VERSION = 1
 
+# A REFUSAL, not a hiccup (I-1): a rejected key, an exhausted Klaus Plus
+# quota, a forbidden licence, an out-of-date client — every one of these
+# answers the next batch exactly the way it answered this one, so re-sending
+# the remaining batches only burns time and (off Plus) money on a request
+# that cannot succeed. Everything else — 5xx, a dropped connection, a
+# malformed tool result — keeps D4's per-batch rule: that batch is unjudged
+# and the loop goes on.
+FATAL_STATUS = (401, 402, 403, 426)
+
 SYSTEM = (
     "You judge whether flashcards are pertinent to ONE lecture slide. For each card, "
     "answer pertinent=true only if studying that card would be reasonable preparation "
@@ -137,7 +146,9 @@ def parse_verdicts(response: dict, cards: list[CardText], page: PageText, model:
 
 
 def judge(client: Any, model: str, cards: list[CardText], page: PageText, lecture_display: str, *,
-          on_headers: Callable[[Any], None] | None = None) -> list[Verdict]:
+          on_headers: Callable[[Any], None] | None = None,
+          cancel: Any = None,
+          on_fatal: Callable[[Exception], None] | None = None) -> list[Verdict]:
     """A batch that fails leaves only ITS cards unjudged (fix round 1,
     Finding 2) — one failed `client.complete` must not take an
     already-paid-for earlier batch's verdicts down with it, and the job
@@ -149,9 +160,21 @@ def judge(client: Any, model: str, cards: list[CardText], page: PageText, lectur
     brief) forwards straight to ``client.complete`` — a metered Plus call's
     own response IS a fresh quota reading, and this is the one place every
     judge request actually leaves the process.
+
+    ``on_fatal`` + the FATAL_STATUS break (I-1) are the exception to the
+    per-batch rule: a refusal is not a hiccup, so the FIRST one ends this
+    call and is reported ONCE — before this, an exhausted Plus quota sent
+    and lost every remaining batch in silence, and a rejected key made
+    Judge indistinguishable from Skip. A raising ``on_fatal`` is logged,
+    never propagated: reporting a refusal must not itself become one.
+
+    ``cancel`` is checked before EVERY batch (M-1), not only between pages
+    — Stop mid-page used to keep paying for that page's remaining batches.
     """
     out: list[Verdict] = []
     for i in range(0, len(cards), BATCH):
+        if cancel is not None and cancel.is_set():
+            break
         batch = cards[i:i + BATCH]
         try:
             resp = client.complete(build_request(batch, page, lecture_display, model), purpose="judge",
@@ -160,6 +183,13 @@ def judge(client: Any, model: str, cards: list[CardText], page: PageText, lectur
             status = getattr(exc, "status", None)
             detail = f"{type(exc).__name__}" + (f" status={status}" if status is not None else "")
             print(f"[klausmate] pertinence: batch of {len(batch)} left unjudged ({detail})")
+            if status in FATAL_STATUS:
+                if on_fatal is not None:
+                    try:
+                        on_fatal(exc)
+                    except Exception as cb_exc:  # noqa: BLE001
+                        print(f"[klausmate] pertinence: on_fatal failed ({type(cb_exc).__name__})")
+                break
             continue
         out.extend(parse_verdicts(resp, batch, page, model))
     return out
@@ -258,8 +288,10 @@ def candidates(matches: list[tuple[int, float]], threshold: float) -> list[int]:
 
 try:
     from aqt.operations import QueryOp
+    from aqt.utils import tooltip
 except Exception:  # headless tests / partial environments
     QueryOp = None  # type: ignore[assignment]
+    tooltip = None  # type: ignore[assignment]
 
 
 def _pkg():
@@ -386,8 +418,9 @@ def ensure_judged(
         text = f"Judge {n_cards} cards against their lecture pages?\n\nIncluded in Klaus Plus{quota_note}."
     else:
         # reasoning_model is free text (no picker, CLAUDE.md's own rule), so
-        # cost.PRICES — exactly two entries — has no guarantee of covering
-        # it. Price an unpriced model as Sonnet and SAY SO rather than let
+        # cost.PRICES — six entries, only two of them reasoning models — has
+        # no guarantee of covering it. Price an unpriced model as Sonnet and
+        # SAY SO rather than let
         # cost.estimate_judge's KeyError escape this phase (fix round 1,
         # C1): a raise here reaches ensure_matches' QueryOp callback, which
         # skips the tag write and never clears index_queue._current —
@@ -404,16 +437,44 @@ def ensure_judged(
             on_done(rejected_nids(judged))
             return
         client = anthropic_client.Client(_cfg)
-        on_headers = (lambda h: plus.note_quota(cfg, h, _pkg().patch_config)) if plus.active(cfg) else None
+        on_plus = plus.active(cfg)
+        on_headers = (lambda h: plus.note_quota(cfg, h, _pkg().patch_config)) if on_plus else None
+        fatal: list[Exception] = []
+
+        def on_fatal(exc: Exception) -> None:
+            """A refused key or licence answers every page the same way, so
+            this stops the WHOLE job (the page loop below reads `fatal`),
+            remembers the verdict on Plus, and says so once (I-1).
+
+            Runs on the QueryOp's background thread: the config write hops
+            to the main thread inside `patch_config` — which is the only
+            config writer a background thread may use, since the plain
+            `write_config` REPLACES the whole stored blob — and the tooltip
+            is marshalled explicitly. Whatever gets judged before the
+            refusal is still saved and still tags.
+            """
+            if fatal:
+                return
+            fatal.append(exc)
+            say = getattr(exc, "user_message", None)
+            text = say() if callable(say) else str(exc)
+            if on_plus:
+                sink = getattr(_pkg(), "patch_config", None)
+                if sink is None:
+                    print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
+                else:
+                    plus.note_refusal(cfg, getattr(exc, "status", 0) or 0, sink, message=text)
+            if tooltip is not None:
+                parent.taskman.run_on_main(lambda: tooltip(text, period=6000))
 
         def work(_col: Any = None) -> set[int]:
             done = 0
             for page, cards in todo.items():
-                if cancel is not None and cancel.is_set():
+                if fatal or (cancel is not None and cancel.is_set()):
                     break
                 page_hash, page_text = page_rows[page]
                 verdicts = judge(client, model, cards, PageText(page, page_hash, page_text), display,
-                                 on_headers=on_headers)
+                                 on_headers=on_headers, cancel=cancel, on_fatal=on_fatal)
                 for v in verdicts:
                     judged["verdicts"][str(v.nid)] = entry_for(v)
                 done += len(cards)

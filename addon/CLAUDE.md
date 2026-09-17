@@ -318,8 +318,15 @@ same reason.
   old PDF at the new one's page numbers; and every teardown path
   (`PdfDock._on_host_closing`, `LectureDock.shutdown`) runs
   `_release_recorder(owner)` BEFORE the sidebar's `cleanup()`, or closing
-  Browse leaves the microphone hot. Stopping schedules
-  `index_queue.request_pdf` for that PDF so the grown pages re-embed;
+  Browse leaves the microphone hot. Stopping schedules the
+  re-index through `_request_index_when_idle` (final review,
+  2026-09-17): a 500 ms main-thread poll that calls
+  `index_queue.request_pdf` only once `uploader().pending()` is 0 —
+  the tail chunk is still uploading when ■ is pressed, so a direct
+  request re-embedded every lecture WITHOUT its last 30 seconds —
+  de-duplicated per PDF and capped at about twenty minutes so a hung
+  upload cannot strand the re-index; never an idle callback inside the
+  uploader, whose queue also empties mid-recording;
   Tools menu
   (`install_menu`: ONE entry,
   "KlausMate Preferences…", inserted ahead of Anki's own items — the old
@@ -851,9 +858,14 @@ same reason.
   before/after tag diff on profile open, never a real event). Reserved
   leaves `Curating`/`Curated`/`Matching`/**`Doubtful`** are never
   touched. `DOUBTFUL_TAG` = `!Library::Doubtful` (K-254, spec D5) is
-  the one tag here that is NOT per-PDF: its members are the UNION of
-  pertinence-rejected nids across every `judged.json`
-  (`pertinence.all_rejected`), recomputed in full through the same
+  the one tag here that is NOT per-PDF: its members are the UNION, across
+  every `judged.json`, of the pertinence-rejected nids that are STILL
+  that PDF's candidates — `tag_sync.doubtful_members(cfg)` intersects
+  each PDF's rejected set with its raw `matches.json` at/above the
+  PDF's threshold (final review, 2026-09-17: a card that stops matching
+  a lecture stops being doubtful for it; a PDF whose `matches.json`
+  cannot be read keeps its whole rejected set, since missing data never
+  strips a tag) — recomputed in full through the same
   `apply_membership` diff inside the same `CollectionOp` whenever a
   caller hands `_do_sync_one` a `doubtful` set. `doubtful=None` — the
   default, and what a plain index pass with no judge run uses — leaves
@@ -1113,9 +1125,10 @@ same reason.
   `write_config`. `ensure_records` is seeded once per PDF before the
   first segment ever lands (marked seeded only AFTER it succeeds), so a
   transcript can be the first thing a PDF that nobody has indexed ever
-  grows. `on_segment` — the transcript strip's live feed — **is called
-  on the worker thread**, as is `page_store`'s own notify chain behind
-  it.
+  grows. `on_segment` (no caller in the add-on today — the strip listens on
+  `page_store.subscribe`) **would be called on the worker thread**, as
+  `page_store`'s own notify chain behind it IS — which is why
+  `pdf_viewer._on_page_store_notify` marshals through `_run_on_main`.
 - `md3_switch.py`: `Md3Switch(QCheckBox)` — the MD3 track-and-thumb
   switch used for every settings-row on/off (K-material3 audit;
   replaced bare checkboxes in `manage_models.py`). Pure geometry/colour
@@ -1277,7 +1290,14 @@ same reason.
     One failed batch leaves only ITS cards unjudged — the job still
     finishes and tags what it did judge — and the log line names the
     exception's CLASS and status only, never the payload, which holds
-    card and lecture-page text. Verdicts persist in
+    card and lecture-page text. A REFUSAL is different (final review,
+    2026-09-17): a 401/402/403/426 stops the job's remaining batches —
+    `judge` calls `on_fatal` once and breaks, since re-sending 3,000
+    refused cards one batch at a time was the bug — is remembered on
+    Plus through `plus.note_refusal` → `patch_config` so the status
+    line and the next Judge/Skip prompt say so, and reaches the user as
+    ONE tooltip; `cancel` is checked per batch, so Stop mid-page sends
+    nothing more. Verdicts persist in
     `user_files/pdf_index/<safe>/judged.json` keyed on the card's text
     hash, the page's text hash AND the model; `entry_for(v)` is the one
     place an entry is minted, precisely so a writer cannot forget

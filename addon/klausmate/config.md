@@ -108,9 +108,10 @@ opens Browse on them.
   page's text, or the model changes — editing a note re-judges just that
   card on the next index, not the whole lecture.
 - `!Library::Doubtful` is **one tag for your whole collection**, not one
-  per PDF: its members are every card rejected by any lecture. So a card
-  rejected for lecture A but confirmed for lecture B still carries the
-  tag. **Doubtful cards…** narrows it to the lecture you clicked by
+  per PDF: its members are every card rejected by a lecture it still matches
+  (raise a lecture's sensitivity past a card and that lecture's doubt
+  about it lapses). So a card rejected for lecture A but confirmed for
+  lecture B still carries the tag. **Doubtful cards…** narrows it to the lecture you clicked by
   searching for both tags at once.
 - Nothing is ever suspended, deleted or untagged by this check. It only
   adds a tag and changes what the retention score counts.
@@ -123,9 +124,10 @@ slides. Every 30 seconds — or the moment you turn the page, whichever
 comes first — the recording is cut and sent to OpenAI for transcription,
 and the text is stored **on the page you were looking at when you said
 it**. Press **■** to stop; the bar shows elapsed time and how many pieces
-are still waiting to be transcribed. Stopping re-indexes that PDF, so the
-pages you spoke over are searchable by what was said on them, and the
-assistant reads them too.
+are still waiting to be transcribed. Once the last piece has been transcribed,
+Klaus re-indexes that PDF, so the pages you spoke over are searchable by
+what was said on them, and the assistant reads them too (if an upload
+hangs, the re-index runs anyway after about twenty minutes).
 
 - Only one recording at a time, across every panel. Klaus says so rather
   than quietly opening a second microphone.

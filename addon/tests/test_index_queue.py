@@ -323,7 +323,9 @@ class Pipeline:
         self.pending = {}
         self.cancels = []
         self._busy = False  # curation's shared re-entrancy token
-        self.rejected_global = set()  # what all_rejected() hands back
+        self.rejected_global = set()  # what doubtful_members() hands back
+        self.doubtful_seen = []  # the doubtful= kwarg each tag write actually got
+        self._doubtful_raises = None  # one-shot exception for doubtful_members
         self._judge_raises = None  # one-shot exception for ensure_judged (fix round 1, C1)
 
     # -- curation ------------------------------------------------------
@@ -344,6 +346,13 @@ class Pipeline:
     # -- tag_sync ------------------------------------------------------
     def sync_after_matches(self, _mw, name, matches, **_k):
         self.calls.append(("tag_sync", name))
+        self.doubtful_seen.append(_k.get("doubtful"))
+
+    def doubtful_members(self, _cfg):
+        if self._doubtful_raises is not None:
+            exc, self._doubtful_raises = self._doubtful_raises, None
+            raise exc
+        return self.rejected_global
 
     # -- pertinence ------------------------------------------------------
     def ensure_judged(self, _parent, name, _matches, *, on_done=None, on_error=None, cancel=None, on_progress=None, ask=None):
@@ -352,9 +361,6 @@ class Pipeline:
             exc, self._judge_raises = self._judge_raises, None
             raise exc
         self.pending["judge"] = (on_done, on_error, on_progress)
-
-    def all_rejected(self, _user_files):
-        return self.rejected_global
 
     # -- drivers -------------------------------------------------------
     def finish_cards(self, completed=True):
@@ -445,6 +451,30 @@ check(
 check("a completed job publishes its name so the Library can re-aggregate", iq.state().finished == "a")
 check("...and reads as idle", not iq.state().active)
 
+# Final review I-3: phase five reads Doubtful membership from tag_sync's own
+# doubtful_members and hands it straight to the tag write. The double was inert
+# before (rejected_global was never driven), so the wiring went unexercised.
+tmp, pipe = new_world()
+pipe.rejected_global = {42, 77}
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+run_one(pipe, "a")
+check("the Doubtful set really reaches sync_after_matches' doubtful= kwarg",
+      pipe.doubtful_seen == [{42, 77}], pipe.doubtful_seen)
+
+# ...and its read is guarded ON ITS OWN, like tag_sync's other two sinks: an
+# auxiliary Doubtful failure must never cost this PDF the lecture tag it was
+# just indexed for. doubtful=None leaves the Doubtful tag untouched.
+tmp, pipe = new_world()
+pipe._doubtful_raises = RuntimeError("boom — simulated judged.json corruption")
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+run_one(pipe, "a")
+check("doubtful_members raising still writes the lecture tag, with doubtful=None",
+      pipe.calls[-1] == ("tag_sync", "a") and pipe.doubtful_seen == [None],
+      (pipe.calls[-1], pipe.doubtful_seen))
+check("...and the job still completes and clears", iq.state().finished == "a" and iq._current is None)
+
 tmp, pipe = new_world()
 iq.request([(iq.JOB_CARDS, "")], announce=False)
 FakeTimer.drain()
@@ -472,7 +502,7 @@ check(
     "...and the PDF is STILL tagged — an untagged pertinence phase beats a "
     "wedged queue, the next index pass can always re-judge. The tag write "
     "goes through the SAME after_judged the normal path uses (source/AST-"
-    "pinned above), so it still passes doubtful=pertinence.all_rejected(...)",
+    "pinned above), so it still passes doubtful=tag_sync.doubtful_members(...)",
     pipe.calls[-1] == ("tag_sync", "a"),
 )
 check(
@@ -956,9 +986,12 @@ check(
     and _iq_src.count("retention.ensure_matches(") == 1,
 )
 check(
-    "the Doubtful tag's membership is passed through as the GLOBAL "
-    "rejected set — never a hand-picked subset of this one job's matches",
-    "doubtful=pertinence.all_rejected(" in _iq_src,
+    "the Doubtful tag's membership comes from the ONE reader every sink shares "
+    "(final review I-3: the global rejected set narrowed to each PDF's current "
+    "at-threshold candidates) — never a subset hand-picked from this one job's "
+    "own matches, and never re-derived here",
+    "tag_sync.doubtful_members(" in _iq_src
+    and "pertinence.all_rejected(" not in _iq_src,
 )
 check(
     "ask_judge is window-modal (.open(), never .exec()) with Skip as the "

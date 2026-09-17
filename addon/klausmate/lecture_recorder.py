@@ -164,6 +164,17 @@ class Uploader:
     def queued(self) -> int:
         return self._q.qsize()
 
+    def pending(self) -> int:
+        """Chunks still owed a ``task_done()`` — what ``drain()`` waits on,
+        NOT ``queued()`` (final review, I-2). The worker ``get()``s an item
+        BEFORE transcribing it, so ``qsize()`` is already 0 while the last
+        chunk is still uploading. Stopping a recording schedules that PDF's
+        re-index once this reaches 0 (``__init__._request_index_when_idle``);
+        on ``qsize()`` the re-index would read the page records before the
+        tail chunk's transcript had landed — the end of every lecture
+        unembedded."""
+        return self._q.unfinished_tasks
+
     def _ensure_thread(self) -> None:
         # `not is_alive()` (fix round 1, C1) catches a worker that has
         # already exited — after `stop()`'s sentinel, or after a defect

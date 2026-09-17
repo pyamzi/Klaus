@@ -499,4 +499,131 @@ cap_up.enqueue("captest", os.path.join(root, "captest.pdf"), lr.Chunk(1, 30.0, 6
 check("the prompt for the next chunk is capped to the previous segment's LAST 800 chars",
       cap_calls[-1] == long_text[-800:] and len(cap_calls[-1]) == 800)
 
+# ---------------------------------------------------------------------
+# Final review, I-2: pending() is what "has the uploader drained?" must
+# ask. The worker get()s an item BEFORE transcribing it, so qsize() is
+# already 0 while the last chunk of a lecture is still in flight —
+# scheduling the re-index on qsize() reads the page records before the
+# tail transcript has landed, and the end of every lecture is never
+# embedded.
+# ---------------------------------------------------------------------
+section("I-2: pending() counts the chunk in flight, which queued() does not")
+_pend_gate = threading.Event()
+_pend_seen = threading.Event()
+
+
+def fake_transcribe_blocking(key, wav, model, language="en", prompt="", timeout=None):
+    _pend_seen.set()
+    _pend_gate.wait(5.0)
+    return ""
+
+
+lr._transcribe = fake_transcribe_blocking
+pend_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+pend_chunk = lr.Chunk(1, 0.0, 30.0)
+pend_path = lr.chunk_path(root, "pendtest", pend_chunk)
+os.makedirs(os.path.dirname(pend_path), exist_ok=True)
+open(pend_path, "wb").write(b"RIFF")
+pend_up.enqueue("pendtest", os.path.join(root, "pendtest.pdf"), pend_chunk, pend_path)
+check("the worker really did pick the chunk up (the pin below is about a "
+      "chunk mid-upload, not one still waiting in line)",
+      _pend_seen.wait(2.0))
+check("pending() is 1 while that chunk is mid-upload — and queued() is "
+      "already 0, which is exactly why the drain poll cannot use it",
+      pend_up.pending() == 1 and pend_up.queued() == 0,
+      f"pending={pend_up.pending()} queued={pend_up.queued()}")
+_pend_gate.set()
+pend_up.drain()
+check("...and pending() is back to 0 once the queue has actually drained",
+      pend_up.pending() == 0)
+
+# ---------------------------------------------------------------------
+# M-9 (2)/(3): Recorder._tick, QTimer-free. The real tick is driven by a
+# 250 ms QTimer against a live QAudioSource, neither of which this file
+# opens — but the LOGIC between them (read the device, notice the page
+# changed, close and write that page's chunk, report status) is plain
+# Python and was unpinned. _flush's os.makedirs(..., exist_ok=True) rides
+# along for free: the second chunk lands in the directory the first one
+# created, which without exist_ok raises FileExistsError into _flush's
+# own except and silently enqueues nothing.
+# ---------------------------------------------------------------------
+section("M-9: _tick closes the OLD page's chunk on a page change, reports "
+        "status, and writes a second chunk into the same directory")
+
+
+class _FakeClock:
+    """Swapped in for lecture_recorder's own `time` module, so nothing
+    outside this module sees a frozen clock."""
+
+    def __init__(self, t: float) -> None:
+        self.t = t
+
+    def monotonic(self) -> float:
+        return self.t
+
+    def time(self) -> float:
+        return self.t
+
+
+class _TickUploader:
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def enqueue(self, pdf_safe, pdf_path, chunk, wav_path):
+        self.calls.append((pdf_safe, chunk, wav_path))
+
+    def queued(self) -> int:
+        return 3
+
+
+tick_up = _TickUploader()
+tick_status: list = []
+tick_page = [1]
+tick_rec = lr.Recorder(root, "ticktest", os.path.join(root, "ticktest.pdf"),
+                       get_page=lambda: tick_page[0],
+                       on_status=lambda s, q: tick_status.append((s, q)),
+                       uploader=tick_up)
+tick_pcm = b"\x01\x00" * 8  # 16 bytes = 8 frames at the negotiated width
+tick_rec._io = _FakeIO(tick_pcm)
+tick_rec._recording = True
+tick_rec._epoch0 = 5000.0      # wall-clock at Record
+tick_rec._start_mono = 1000.0  # monotonic at Record
+tick_rec._chunker.start(1, 5000.0)
+_real_lr_time = lr.time
+tick_clock = _FakeClock(1005.0)  # 5 s into the recording
+lr.time = tick_clock
+try:
+    tick_page[0] = 2  # the user turned the page between ticks
+    tick_rec._tick()
+    first = tick_up.calls[0] if tick_up.calls else None
+    check("a page change closes the chunk on the OLD page, at the tick's "
+          "own time, and hands its WAV to the uploader",
+          len(tick_up.calls) == 1 and first[0] == "ticktest"
+          and first[1] == lr.Chunk(1, 5000.0, 5005.0)
+          and os.path.basename(first[2]) == "5000-p0001.wav",
+          repr(tick_up.calls))
+    check("...and that WAV carries the bytes this tick read off the "
+          "device (44-byte header + the 16 PCM bytes), not just a header",
+          first is not None and os.path.getsize(first[2]) == 44 + len(tick_pcm),
+          repr(first))
+    check("...and _tick reports elapsed seconds and the uploader's own "
+          "queue depth through on_status (the D6 status text's feed)",
+          tick_status == [(5.0, 3)], repr(tick_status))
+    tick_clock.t = 1005.0 + lr.CHUNK_S  # a full chunk later, same page
+    tick_rec._tick()
+    second = tick_up.calls[1] if len(tick_up.calls) > 1 else None
+    check("a second tick a full CHUNK_S later closes the new page's chunk "
+          "into the SAME recordings directory — _flush's makedirs is "
+          "exist_ok, so the second write is not swallowed by its except",
+          len(tick_up.calls) == 2 and first is not None
+          and second[1] == lr.Chunk(2, 5005.0, 5035.0)
+          and os.path.basename(second[2]) == "5005-p0002.wav"
+          and os.path.dirname(second[2]) == os.path.dirname(first[2])
+          and os.path.getsize(second[2]) == 44 + len(tick_pcm),
+          repr(tick_up.calls))
+    check("...and status is reported on every tick, not just the first",
+          tick_status == [(5.0, 3), (35.0, 3)], repr(tick_status))
+finally:
+    lr.time = _real_lr_time
+
 raise SystemExit(report())

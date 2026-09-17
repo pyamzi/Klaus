@@ -74,6 +74,17 @@ tool = req["tools"][0]
 # (fix round 1, Finding 9 — check()'s condition is evaluated eagerly).
 check("one strict tool, forced by name", tool.get("name") == "record_verdicts" and tool.get("strict") is True
       and (tool.get("input_schema") or {}).get("additionalProperties") is False and req.get("tool_choice") == {"type": "tool", "name": "record_verdicts"})
+# M-9(1): the OUTER additionalProperties above says nothing about the verdict
+# objects themselves. Closing only the wrapper would let the model return
+# {"nid":…, "pertinent":…, "reason":…, "confidence":…} — or drop "reason"
+# entirely — and still satisfy `strict: true`, which is exactly what this
+# schema exists to forbid. Same .get() discipline: a dropped key FAILs here
+# rather than KeyError-ing the runner.
+_items = (((tool.get("input_schema") or {}).get("properties") or {}).get("verdicts") or {}).get("items") or {}
+check("each verdict object is closed too: additionalProperties false and all three fields required",
+      _items.get("additionalProperties") is False
+      and set(_items.get("required") or []) == {"nid", "pertinent", "reason"}
+      and set((_items.get("properties") or {})) == {"nid", "pertinent", "reason"}, _items)
 check("every card's nid and text and the page text are in the user turn", all(str(c.nid) in req["messages"][0]["content"] and c.text in req["messages"][0]["content"] for c in cards) and page.text in req["messages"][0]["content"])
 check("the system prompt states the test and forbids guessing", "reasonable preparation" in req["system"] and "not merely the same subject" in req["system"] and req["model"] == "claude-sonnet-5" and req["max_tokens"] >= 1024)
 huge_card = pt.CardText(1, "x" * 50_000, "hx")
@@ -195,6 +206,113 @@ check("exactly one [klausmate] log line for the failed batch, naming the excepti
       logged.count("[klausmate]") == 1 and "RuntimeError" in logged
       and "CARDS_JSON" not in logged and "card 8" not in logged and page.text not in logged)
 
+section("judge: a refusal ends the call, a hiccup does not (final review I-1/M-1)")
+
+
+class _Refused(Exception):
+    """anthropic_client.LLMError's shape without importing it — a .status
+    plus a user_message() already phrased for the user."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+    def user_message(self):
+        return str(self)
+
+
+class RefusingClient:
+    def __init__(self, status):
+        self.status = status
+        self.n = 0
+
+    def complete(self, payload, timeout=None, **kw):
+        self.n += 1
+        raise _Refused("Klaus Plus: monthly card quota used up.", self.status)
+
+
+many3 = [pt.CardText(i, f"card {i}", f"h{i}") for i in range(20)]  # three batches
+_fatals = []
+_ref = RefusingClient(402)
+with contextlib.redirect_stdout(io.StringIO()):
+    _out3 = pt.judge(_ref, "m", many3, page, "Lec", on_fatal=_fatals.append)
+check("a 402 on batch 1 of 3 sends NO further batch — an exhausted quota answers "
+      "every remaining batch the same way", _ref.n == 1 and _out3 == [])
+check("...and on_fatal fires exactly once, handed the exception itself",
+      len(_fatals) == 1 and getattr(_fatals[0], "status", None) == 402)
+_each = {}
+for _st in pt.FATAL_STATUS:
+    _c, _f = RefusingClient(_st), []
+    with contextlib.redirect_stdout(io.StringIO()):
+        pt.judge(_c, "m", many3, page, "Lec", on_fatal=_f.append)
+    _each[_st] = (_c.n, len(_f))
+check("every FATAL_STATUS — 401 key, 402 quota, 403 licence, 426 client version — "
+      "breaks after one request and reports once",
+      tuple(pt.FATAL_STATUS) == (401, 402, 403, 426) and all(v == (1, 1) for v in _each.values()), _each)
+_c500, _f500 = RefusingClient(500), []
+with contextlib.redirect_stdout(io.StringIO()):
+    pt.judge(_c500, "m", many3, page, "Lec", on_fatal=_f500.append)
+check("a 500 is NOT a refusal: all three batches are still attempted and on_fatal never "
+      "fires — D4's per-batch rule stands", _c500.n == 3 and _f500 == [])
+_fnet = []
+with contextlib.redirect_stdout(io.StringIO()):
+    _outnet = pt.judge(RaisingOnSecond(), "claude-sonnet-5", many2, page, "Lec", on_fatal=_fnet.append)
+check("a status-less network failure is not a refusal either — batches 1 and 3 still land, "
+      "on_fatal stays silent", {v.nid for v in _outnet} == {0, 16} and _fnet == [])
+
+
+def _boom_fatal(_exc):
+    raise RuntimeError("reporting blew up")
+
+
+_boom_c = RefusingClient(401)
+_boom_log = io.StringIO()
+# Caught here on purpose: without the guard inside judge() this raise would
+# abort the whole file instead of printing one FAIL line, and a mutation that
+# kills the runner is a mutation nobody reads.
+_boom_out, _boom_raised = None, None
+try:
+    with contextlib.redirect_stdout(_boom_log):
+        _boom_out = pt.judge(_boom_c, "m", many3, page, "Lec", on_fatal=_boom_fatal)
+except Exception as _boom_exc:  # noqa: BLE001
+    _boom_raised = _boom_exc
+check("a raising on_fatal is logged and swallowed — reporting a refusal must never become one",
+      _boom_raised is None and _boom_out == [] and _boom_c.n == 1
+      and "on_fatal failed" in _boom_log.getvalue()
+      and "RuntimeError" in _boom_log.getvalue(), (_boom_raised, _boom_log.getvalue()))
+
+
+class _CountingClient:
+    def __init__(self):
+        self.n = 0
+
+    def complete(self, payload, timeout=None, **kw):
+        self.n += 1
+        return _resp_for(0)
+
+
+class _CancelAfter:
+    """Stop landing after `after` requests have gone out — the real cancel
+    token is an Event some other thread sets mid-page."""
+
+    def __init__(self, client, after):
+        self._c, self._after = client, after
+
+    def is_set(self):
+        return self._c.n >= self._after
+
+
+_cc = _CountingClient()
+pt.judge(_cc, "m", many3, page, "Lec", cancel=_CancelAfter(_cc, 1))
+check("M-1: Stop landing mid-page stops the very next batch — one paid request, not the "
+      "page's remaining three", _cc.n == 1)
+_cc2 = _CountingClient()
+pt.judge(_cc2, "m", many3, page, "Lec", cancel=_CancelAfter(_cc2, 0))
+check("...a cancel already set before the first batch sends nothing at all", _cc2.n == 0)
+_cc3 = _CountingClient()
+pt.judge(_cc3, "m", many3, page, "Lec")
+check("...and cancel=None (the default) is never read as cancelled", _cc3.n == 3)
+
 section("judged.json persistence and staleness")
 root = tempfile.mkdtemp()
 j = {"version": 1, "model": "claude-sonnet-5", "verdicts": {}}
@@ -293,6 +411,8 @@ class GlueAnthropicClient:
 
     def complete(self, payload, timeout=None, purpose="assistant", *, on_headers=None, **kw):
         _client_calls.append((payload, purpose, on_headers))
+        if _client_raises:  # I-1: armed per test, popped one refusal per request
+            raise _client_raises.pop(0)
         if on_headers is not None:
             # Mirrors the real Client: invoke it with something that has
             # .items(), the shape plus.parse_quota expects (fix round 1, M2).
@@ -314,6 +434,7 @@ def make_ask(respond):
 
 
 _client_calls = []
+_client_raises: list = []
 _fake_anthropic = types.ModuleType("klausmate.anthropic_client")
 _fake_anthropic.Client = GlueAnthropicClient
 sys.modules["klausmate.anthropic_client"] = _fake_anthropic
@@ -490,6 +611,76 @@ check("...which the fake client used exactly like the real one would, routing th
       "plus.note_quota into patch_config as a PATCH, never a config replace",
       len(_patch_calls) == 1 and _patch_calls[0].get(plus.CACHE, {}).get("status") == "active")
 check("no on_error fired on the Plus path either", _errors == [])
+
+section("ensure_judged: final review I-1 — a refusal is remembered on Plus and always shown")
+_tips = []
+pt.tooltip = lambda text, period=None: _tips.append(text)
+
+# TWO pages, so "the job stopped" is distinguishable from "that page stopped":
+# judge() is called once per page, and only a break in ensure_judged's own page
+# loop keeps the second page's batch off the wire.
+page_store.ensure_records(_root, "lec_refused", "", ["", "", "", "Slide 4 refused.", "Slide 5 refused."])
+os.makedirs(os.path.dirname(retention._matches_path("lec_refused")), exist_ok=True)
+with open(retention._matches_path("lec_refused"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"41": 4, "42": 5}}, f)
+_plus_cfg2 = {plus.KEY: "kp_" + "e" * 32, plus.CACHE: {"status": "active", "checked_at": 0.0}}
+_refuse_mw = GlueMw(_plus_cfg2, {41: ["Q: page four?", "A: yes"], 42: ["Q: page five?", "A: also"]})
+iq.mw = _refuse_mw
+_patch_calls.clear()
+_done.clear()
+_calls_before_refusal = len(_client_calls)
+_client_raises.clear()
+_client_raises.extend([_Refused("Klaus Plus: monthly card quota used up.", 402)] * 2)
+ask_refuse, ask_refuse_log = make_ask(True)
+_refuse_log = io.StringIO()
+with contextlib.redirect_stdout(_refuse_log):
+    pt.ensure_judged(
+        _refuse_mw, "lec_refused", [(41, 0.9), (42, 0.85)],
+        on_done=_done.append, on_error=_errors.append, cancel=None,
+        on_progress=lambda *a: None, ask=ask_refuse,
+    )
+check("a 402 on the first page stops the WHOLE job — the second page's batch is never sent",
+      len(_client_calls) == _calls_before_refusal + 1, len(_client_raises))
+check("...the refusal is cached through patch_config as a PATCH of the ONE cache key, "
+      "never a whole-config replace",
+      len(_patch_calls) == 1 and set(_patch_calls[0]) == {plus.CACHE}
+      and _patch_calls[0][plus.CACHE].get("status") == "refused:402", _patch_calls)
+check("...which really flips plus.active off, so the next index stops claiming an active "
+      "subscription and re-prompting “Included in Klaus Plus”",
+      plus.active(_plus_cfg2) is True and plus.active({**_plus_cfg2, **_patch_calls[0]}) is False)
+check("...the user is told exactly once, in the service's own words",
+      _tips == ["Klaus Plus: monthly card quota used up."], _tips)
+check("...the job still finishes and still reports — Judge stops being indistinguishable "
+      "from Skip, but never becomes an error",
+      _done == [set()] and _errors == [])
+check("...and the licence key is in neither the log nor the tooltip",
+      _plus_cfg2[plus.KEY] not in _refuse_log.getvalue() and _plus_cfg2[plus.KEY] not in "".join(_tips))
+
+_client_raises.clear()
+page_store.ensure_records(_root, "lec_rej_free", "", ["", "", "", "Slide 4 free-tier."])
+os.makedirs(os.path.dirname(retention._matches_path("lec_rej_free")), exist_ok=True)
+with open(retention._matches_path("lec_rej_free"), "w", encoding="utf-8") as f:
+    json.dump({"pages": {"51": 4}}, f)
+_free_mw = GlueMw({"api_key_anthropic": "sk-ant-fake", "pdf_match_threshold": 0.75},
+                  {51: ["Q: expired key?", "A: say so"]})
+iq.mw = _free_mw
+_patch_calls.clear()
+_tips.clear()
+_done.clear()
+_client_raises.append(_Refused("That API key was rejected — check it under KlausMate Preferences.", 401))
+ask_free, _ask_free_log = make_ask(True)
+with contextlib.redirect_stdout(io.StringIO()):
+    pt.ensure_judged(
+        _free_mw, "lec_rej_free", [(51, 0.9)],
+        on_done=_done.append, on_error=_errors.append, cancel=None,
+        on_progress=lambda *a: None, ask=ask_free,
+    )
+check("off Plus an expired Anthropic key is SHOWN too — the free tier's own 401 was the "
+      "other half of the silence", _tips == ["That API key was rejected — check it under KlausMate Preferences."], _tips)
+check("...and NOTHING is written to the Klaus Plus cache for a user who has no licence",
+      _patch_calls == [])
+check("...the job still completes normally", _done == [set()] and _errors == [])
+_client_raises.clear()
 
 section("module hygiene")
 check("the module docstring no longer claims a divider that was never drawn (fix round 1, Finding 8)",

@@ -51,6 +51,7 @@ check("every migrated value is one of them",
 # came back on the right next session.
 import os as _os  # noqa: E402
 import tempfile as _tempfile  # noqa: E402
+import time as _time  # noqa: E402
 
 _ps = _tempfile.mkdtemp(prefix="klaus-panel-state-")
 for _stored, _want in (("bottom", "bottom"), ("notes-left", "left"),
@@ -509,11 +510,25 @@ class _FakeRecorder:
 class _FakeUploader:
     def __init__(self):
         self.requeued = []
+        # I-2 (final review): the scripted answers the drain poll gets,
+        # one per turn — busy first, idle second, so a correct
+        # _request_index_when_idle needs TWO turns before it may request
+        # and a synchronous request_pdf is impossible to miss. Once the
+        # script runs out it stays BUSY forever on purpose: later
+        # sections stop a recorder too, and a poll of theirs that ever
+        # reached the REAL index_queue.request_pdf (restored by their own
+        # finally) would index against the stub collection.
+        self.pending_calls = 0
+        self.pending_left = [1, 0]
 
     def requeue_leftovers(self, pdf_safe, pdf_path):
         _call_order.append("requeue")
         self.requeued.append((pdf_safe, pdf_path))
         return 0
+
+    def pending(self):
+        self.pending_calls += 1
+        return self.pending_left.pop(0) if self.pending_left else 1
 
 
 _real_recorder_cls = K.lecture_recorder.Recorder
@@ -581,17 +596,66 @@ try:
 
     bar.record_btn.click()
     _app.processEvents()
-    check("clicking again stops the recorder and schedules a re-index "
-          "for that PDF (stopping -> index_queue.request_pdf)",
+    check("clicking again stops the recorder",
           _FakeRecorder.instances[0].stopped
-          and not _FakeRecorder.instances[0].is_recording
-          and _requested == ["lec.pdf"])
+          and not _FakeRecorder.instances[0].is_recording)
+    # I-2 (final review): rec.stop() only FLUSHES the tail chunk into the
+    # uploader — its HTTP transcription then takes seconds on the worker
+    # thread. Requesting the re-index here read the page records before
+    # that transcript ever landed, so the last <=30 s of every lecture
+    # (more with a backlog) was never embedded, and nothing re-triggered.
+    check("I-2: ...but does NOT request the re-index yet, while the "
+          "uploader still owes a chunk",
+          _requested == []
+          and _call_order == ["requeue", "start", "stop"],
+          repr(_call_order))
+    _deadline = _time.time() + 5.0
+    while not _requested and _time.time() < _deadline:
+        _app.processEvents()
+        _time.sleep(0.02)
+    check("I-2: ...and once the uploader reports pending() == 0 the poll "
+          "requests it — after at least TWO turns, so it is really "
+          "waiting on the queue and not just deferring one tick",
+          _requested == ["lec.pdf"] and _fake_uploader.pending_calls >= 2,
+          f"requested={_requested} pending_calls={_fake_uploader.pending_calls}")
     check("m3: the FULL call order proves stop happens strictly before "
           "request_pdf, not just that both happened somewhere",
           _call_order == ["requeue", "start", "stop", "request_pdf"])
     check("the button flips back to Record", bar.record_btn.text() == "●")
     check("I3: the status label hides again once stopped",
           not bar.status_label.isVisible())
+
+    # A second Stop for the same PDF while a poll is already armed must
+    # re-use it — two chains would mean two re-index requests (and, on a
+    # judged index, two Judge/Skip dialogs) for one lecture.
+    _requested.clear()
+    _idle_busy = [1]
+
+    class _PendingUploader:
+        def pending(self):
+            return _idle_busy[0]
+
+    _real_poll_ms = K.INDEX_IDLE_POLL_MS
+    K.uploader = lambda: _PendingUploader()
+    K.INDEX_IDLE_POLL_MS = 0  # same poll, no wall-clock wait
+    try:
+        K._request_index_when_idle("lec.pdf")
+        K._request_index_when_idle("lec.pdf")
+        check("I-2: a second Stop for the same PDF while a poll is armed "
+              "arms no second chain",
+              K._index_when_idle == {"lec.pdf"} and _requested == [],
+              repr(K._index_when_idle))
+        _idle_busy[0] = 0
+        for _ in range(8):
+            _app.processEvents()
+        check("I-2: ...so exactly ONE re-index is requested when it "
+              "drains, and the name is released for the next lecture",
+              _requested == ["lec.pdf"]
+              and "lec.pdf" not in K._index_when_idle,
+              repr(_requested))
+    finally:
+        K.INDEX_IDLE_POLL_MS = _real_poll_ms
+        K.uploader = lambda: _fake_uploader
 finally:
     K.lecture_recorder.Recorder = _real_recorder_cls
     K.uploader = _real_uploader_fn
@@ -749,6 +813,50 @@ check("I2: every _active_recorders member is stopped BEFORE the "
       and K._active_recorders == set()
       and K._uploader is None)
 K._uploader = _orig_internal_uploader
+
+# I-2 fix round 1: the queue a drain poll is watching dies with the
+# profile, but its daemon worker can still finish the chunk it holds —
+# pending() then drops to 0 and, without a generation check, the poll
+# requests a re-index by display name in whatever profile opened next.
+section("I-2: a drain poll armed before a profile switch never fires "
+        "into the next profile (fix round 1)")
+_requested.clear()
+_gen_pending = [1]
+
+
+class _GenUploader:
+    def pending(self):
+        return _gen_pending[0]
+
+
+_gen_uploader = _GenUploader()
+_real_poll_ms_gen = K.INDEX_IDLE_POLL_MS
+_orig_internal_uploader_gen = K._uploader
+K.uploader = lambda: _gen_uploader
+K.index_queue.request_pdf = _fake_request_pdf
+K.INDEX_IDLE_POLL_MS = 0  # same poll, no wall-clock wait
+try:
+    K._request_index_when_idle("lec.pdf")
+    check("a poll is armed while that profile's uploader is still busy",
+          K._index_when_idle == {"lec.pdf"} and _requested == [],
+          repr(K._index_when_idle))
+    K._stop_lecture_uploader()
+    check("profile_will_close clears the armed set outright",
+          K._index_when_idle == set(), repr(K._index_when_idle))
+    # The old uploader's worker finishes its last chunk after the profile
+    # is gone — the exact moment the stale poll would have fired.
+    _gen_pending[0] = 0
+    for _ in range(8):
+        _app.processEvents()
+    check("...and the stale poll neither re-arms nor requests a re-index, "
+          "even once the dead profile's queue reports itself drained",
+          _requested == [] and K._index_when_idle == set(),
+          f"requested={_requested} armed={K._index_when_idle}")
+finally:
+    K.INDEX_IDLE_POLL_MS = _real_poll_ms_gen
+    K.uploader = _real_uploader_fn
+    K.index_queue.request_pdf = _real_request_pdf
+    K._uploader = _orig_internal_uploader_gen
 
 _init_src = open(_os.path.join(
     _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),

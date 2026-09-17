@@ -845,7 +845,7 @@ def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
     ``viewer_context.current()``, which follows whichever viewer was
     activated last and could drift to a different PDF mid-lecture.
     """
-    from . import index_queue, lecture_recorder
+    from . import lecture_recorder
 
     if owner._recorder is not None and owner._recorder.is_recording:
         rec = owner._recorder
@@ -858,7 +858,7 @@ def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
             owner._update_record_enabled()
         except Exception as exc:
             print(f"[klausmate] record button refresh failed: {exc}")
-        index_queue.request_pdf(name)
+        _request_index_when_idle(name)
         return
     if _active_recorders:
         # I4 (fix round 1): each dock only ever checks its OWN
@@ -916,6 +916,77 @@ def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
         owner.set_recording(True, "0:00")
     else:
         tooltip("No microphone available")
+
+
+# PDF display names with a drain poll armed (final review, I-2). Main
+# thread only, same rule as _active_recorders above — it is only ever
+# touched by a Stop click and by the poll's own QTimer callback.
+_index_when_idle: set = set()
+# Bumped by _stop_lecture_uploader; a poll captures it at arm time and
+# stops dead once it no longer matches (fix round 1). The queue a poll is
+# waiting on belongs to the profile that was open when Record stopped —
+# and its daemon worker can finish that last chunk AFTER the profile is
+# gone, dropping pending() to 0 and firing a re-index into whatever
+# profile opened next.
+_index_when_idle_gen = 0
+INDEX_IDLE_POLL_MS = 500
+INDEX_IDLE_CAP_S = 20 * 60.0
+
+
+def _request_index_when_idle(name: str) -> None:
+    """Re-index *name* once the lecture uploader has drained (I-2).
+
+    ``Recorder.stop()`` flushes the tail chunk INTO the uploader, whose
+    HTTP transcription then takes seconds on the worker thread — so
+    requesting the re-index in the same breath embeds the page records
+    without the end of the lecture (and without any backlog), and nothing
+    ever re-triggers: ``append_segment`` notifies the transcript strip and
+    no one else.
+
+    A main-thread poll, deliberately NOT an idle callback inside the
+    ``Uploader``: that queue also goes idle BETWEEN chunks mid-recording,
+    and this re-index ends at the Judge/Skip dialog — which must never
+    appear while the lecturer is still talking. De-duplicated per name (a
+    second Stop for the same PDF re-uses the armed poll) and capped, so a
+    hung upload delays the re-index instead of stranding it forever.
+    """
+    from . import index_queue
+
+    try:
+        up = uploader()
+        pending = up.pending
+    except Exception as exc:
+        print(f"[klausmate] lecture uploader unavailable, re-indexing {name} now: {exc}")
+        index_queue.request_pdf(name)
+        return
+    if name in _index_when_idle:
+        return
+    _index_when_idle.add(name)
+    deadline = time.monotonic() + INDEX_IDLE_CAP_S
+    gen = _index_when_idle_gen
+
+    def _poll() -> None:
+        if gen != _index_when_idle_gen:
+            return  # the profile this poll was armed in is gone
+        try:
+            left = int(pending())
+        except Exception as exc:
+            print(f"[klausmate] lecture uploader pending() failed: {exc}")
+            left = 0
+        if left and time.monotonic() < deadline:
+            QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
+            return
+        if left:
+            print(f"[klausmate] lecture recorder: {left} chunk(s) still not "
+                  f"transcribed after {int(INDEX_IDLE_CAP_S // 60)} minutes — "
+                  f"re-indexing {name} anyway")
+        _index_when_idle.discard(name)
+        try:
+            index_queue.request_pdf(name)
+        except Exception as exc:
+            print(f"[klausmate] re-index request failed for {name}: {exc}")
+
+    QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
 
 
 def _release_recorder(owner: Any) -> None:
@@ -1979,8 +2050,15 @@ def _stop_lecture_uploader() -> None:
     would orphan that chunk's WAV against a dead worker. ``_active_recorders``
     covers every dock (PdfDock instances close over their own; the Lecture
     dock's singleton is one more), not just whichever one this profile
-    happens to remember."""
-    global _uploader
+    happens to remember.
+
+    Bumping ``_index_when_idle_gen`` here (fix round 1) is what stops a
+    drain poll armed against THIS profile's uploader from outliving it:
+    the queue it is watching dies with the profile, but its daemon worker
+    may still finish the chunk it holds, and a poll that then saw
+    ``pending() == 0`` would request a re-index by display name in
+    whatever profile opened next."""
+    global _uploader, _index_when_idle_gen
     for rec in list(_active_recorders):
         try:
             rec.stop()
@@ -1993,6 +2071,8 @@ def _stop_lecture_uploader() -> None:
         except Exception as exc:
             print(f"[klausmate] lecture uploader stop failed: {type(exc).__name__}: {exc}")
         _uploader = None
+    _index_when_idle_gen += 1
+    _index_when_idle.clear()
 
 
 gui_hooks.profile_will_close.append(_stop_lecture_uploader)

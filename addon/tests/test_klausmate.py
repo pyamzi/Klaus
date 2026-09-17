@@ -1286,6 +1286,53 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
               "!Library::Doubtful" not in col2._tagmap
               and res2["doubtful_added"] == [] and res2["doubtful_removed"] == [])
 
+        # Final review I-3: membership is the rejected set INTERSECTED with
+        # each PDF's CURRENT at-threshold candidates, not the raw union of
+        # every verdict ever written. judged.json is append-only, so without
+        # the intersection a card that stops matching its lecture (the
+        # sensitivity slider moved, or the note was edited) keeps
+        # !Library::Doubtful forever — invisible inside Klaus, but not to a
+        # user's own search or filtered deck on the bare tag, and with no
+        # self-heal short of becoming that PDF's candidate again.
+        _pert = importlib.import_module("klausmate.pertinence")
+
+        def _seed_judged(safe, rejected, matches=None):
+            _pert.save_judged(_dbt_tmp, safe, {
+                "version": _pert.VERSION, "model": "m",
+                "verdicts": {str(n): {"pertinent": False, "reason": "", "page": 1,
+                                      "page_hash": "", "card_hash": "", "model": "m"}
+                             for n in rejected},
+            })
+            if matches is not None:
+                _mp = retention._matches_path(safe)
+                os.makedirs(os.path.dirname(_mp), exist_ok=True)
+                with open(_mp, "w", encoding="utf-8") as _f:
+                    _f.write(matches if isinstance(matches, str) else json.dumps({"matches": matches}))
+
+        # nid 2 rejected and still matching; nid 5 rejected but has fallen to
+        # 0.10; nid 8 matches but was never rejected. cardio has verdicts and
+        # NO matches.json at all.
+        _seed_judged("renal", [2, 5], matches=[[2, 0.9], [5, 0.10], [8, 0.95]])
+        _seed_judged("cardio", [7])
+        _members = tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
+        check("a rejected nid that has dropped below its PDF's threshold is no longer "
+              "doubtful; one still at/above it is; a matched nid nobody rejected never is",
+              _members == {2, 7}, _members)
+        check("...and a PDF whose matches.json is missing keeps its WHOLE rejected set — "
+              "never strip on missing data",
+              7 in _members and 7 in _pert.rejected_nids(_pert.load_judged(_dbt_tmp, "cardio")))
+        check("raising Match Sensitivity past a rejected card's score self-heals it out of "
+              "the tag on the next sync of any kind (the I-3 scenario)",
+              tag_sync.doubtful_members({"pdf_match_threshold": 0.95}) == {7})
+        _seed_judged("renal", [2, 5], matches="{not json at all")
+        check("a corrupt matches.json is 'don't know', not 'nobody' — renal's rejections "
+              "all stand rather than silently vanishing",
+              tag_sync.doubtful_members({"pdf_match_threshold": 0.5}) == {2, 5, 7})
+        check("the union across PDFs is untouched by the narrowing (a card rejected for A "
+              "and confirmed for B is still Doubtful — spec rule, known design debt)",
+              _pert.all_rejected(_dbt_tmp) == {2, 5, 7})
+        shutil.rmtree(os.path.join(_dbt_tmp, "pdf_index"), ignore_errors=True)
+
         # K-254 review Important 2 + 3: sync_after_threshold's own guard
         # and wiring — mutations 5/7 in the review walked straight
         # through the pure-function pins above because nothing exercised
@@ -1298,7 +1345,7 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         pertinence = importlib.import_module("klausmate.pertinence")
         _orig_folder_display = tag_sync._folder_and_display
         _orig_run_sync_op = tag_sync._run_sync_op
-        _orig_all_rejected = pertinence.all_rejected
+        _orig_doubtful_members = tag_sync.doubtful_members
         pkg.get_config = lambda: {}
         tag_sync._folder_and_display = lambda safe: (None, "Renal")
         _captured: list = []
@@ -1314,15 +1361,15 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             return _captured[0](fcol) if _captured else None
 
         try:
-            def _boom_all_rejected(user_files):
+            def _boom_doubtful(cfg):
                 raise RuntimeError("boom — simulated judged.json corruption")
 
-            pertinence.all_rejected = _boom_all_rejected
+            tag_sync.doubtful_members = _boom_doubtful
             _captured.clear()
             tag_sync.sync_after_threshold(
                 None, "renal", [(1, 0.9), (2, 0.8)], 0.5
             )
-            check("all_rejected raising still reaches _run_sync_op — the "
+            check("doubtful_members raising still reaches _run_sync_op — the "
                   "lecture-tag retag the user just confirmed is never "
                   "cancelled by a Doubtful-side failure",
                   len(_captured) == 1)
@@ -1334,14 +1381,14 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
                   and _gres["doubtful_added"] == [] and _gres["doubtful_removed"] == []
                   and "!Library::Doubtful" not in _fcol._tagmap)
 
-            pertinence.all_rejected = lambda user_files: {2, 5}
+            tag_sync.doubtful_members = lambda cfg: {2, 5}
             _captured.clear()
             tag_sync.sync_after_threshold(
                 None, "renal", [(1, 0.9), (2, 0.8)], 0.5
             )
             _fcol2 = FakeCol()
             _run_captured(_fcol2)
-            check("when all_rejected SUCCEEDS, its set really reaches "
+            check("when doubtful_members SUCCEEDS, its set really reaches "
                   "_do_sync_one's doubtful= — the exact wiring mutation 7 "
                   "(drop doubtful from this call) would break",
                   _fcol2.members("!Library::Doubtful") == {2, 5})
@@ -1355,10 +1402,10 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             _orig_cached_matches = tag_sync._cached_matches
             tag_sync._cached_matches = lambda safe, cfg: [(1, 0.9), (2, 0.8)]
             try:
-                pertinence.all_rejected = _boom_all_rejected
+                tag_sync.doubtful_members = _boom_doubtful
                 _captured.clear()
                 tag_sync.sync_after_clear_overrides(None, ["renal"])
-                check("sync_after_clear_overrides: all_rejected raising "
+                check("sync_after_clear_overrides: doubtful_members raising "
                       "still reaches _run_sync_op for the whole batch",
                       len(_captured) == 1)
                 _fcol3 = FakeCol()
@@ -1367,12 +1414,12 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
                       "— the Doubtful tag is left untouched entirely",
                       "!Library::Doubtful" not in _fcol3._tagmap)
 
-                pertinence.all_rejected = lambda user_files: {7}
+                tag_sync.doubtful_members = lambda cfg: {7}
                 _captured.clear()
                 tag_sync.sync_after_clear_overrides(None, ["renal"])
                 _fcol4 = FakeCol()
                 _run_captured(_fcol4)
-                check("sync_after_clear_overrides: a successful all_rejected "
+                check("sync_after_clear_overrides: a successful doubtful_members "
                       "reaches _do_sync_one's doubtful= here too",
                       _fcol4.members("!Library::Doubtful") == {7})
             finally:
@@ -1380,7 +1427,7 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         finally:
             tag_sync._folder_and_display = _orig_folder_display
             tag_sync._run_sync_op = _orig_run_sync_op
-            pertinence.all_rejected = _orig_all_rejected
+            tag_sync.doubtful_members = _orig_doubtful_members
             del pkg.get_config
     finally:
         retention.USER_FILES = _orig_user_files

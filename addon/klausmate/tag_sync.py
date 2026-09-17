@@ -20,7 +20,8 @@ at the ``!Library`` root; see curation.CURATED_TAG. ``Matching``
 was retention.py's own Browse-preview tag until K-055 retired it — kept
 reserved anyway so a PDF literally named "Matching" can never collide
 with that historical name — and ``Doubtful``, K-254's own root tag, whose
-members are the union of pertinence-rejected nids across every PDF) get
+members are the pertinence-rejected nids each PDF still matches,
+unioned across every PDF) get
 a ``-pdf`` suffix if a display name would otherwise collide with one of
 them at the root.
 
@@ -102,9 +103,11 @@ CONFIG_KEY = "library_tags_enabled"
 # literally named "Doubtful.pdf" can never collide with it either.
 RESERVED_LEAVES = frozenset({"curating", "curated", "matching", "doubtful"})
 
-# The Doubtful tag (K-254, spec D5): membership is the UNION of
-# pertinence-rejected nids across every PDF's judged.json — global, not
-# per-PDF, unlike every other tag this module manages. _do_sync_one
+# The Doubtful tag (K-254, spec D5): membership is the UNION, across
+# every PDF's judged.json, of the pertinence-rejected nids that PDF
+# STILL matches at/above its threshold (`doubtful_members`, final review
+# 2026-09-17) — global, not per-PDF, unlike every other tag this module
+# manages. _do_sync_one
 # recomputes it in full (apply_membership's own diff) whenever a caller
 # hands it a `doubtful` set; passing None leaves it untouched entirely.
 DOUBTFUL_TAG = "!Library::Doubtful"
@@ -453,6 +456,76 @@ def _do_sync_one(
     }
 
 
+def _at_threshold_nids(safe: str, cfg: dict) -> set[int] | None:
+    """Every nid currently at or above `safe`'s sensitivity threshold, read
+    RAW from its matches.json — or None when that file cannot be read.
+
+    Raw on purpose, exactly as `pertinence._matched_pages` reads the same
+    file: the validated `retention.load_matches` answers None for every PDF
+    whose cached ranking is cold after ANY card-index change, so validating
+    here would defeat the intersection below for every PDF except the one
+    just indexed. None is "don't know", never "nobody" — a caller must
+    never strip on it.
+    """
+    import json
+    import os.path
+
+    from . import retention
+
+    try:
+        with open(retention._matches_path(safe), encoding="utf-8") as f:
+            rows = (json.load(f) or {}).get("matches") or []
+        threshold = retention.get_threshold(safe, cfg)
+        return {int(nid) for nid, score in rows if float(score) >= threshold}
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        print(f"[klausmate] tag_sync: no readable matches for {safe!r} ({exc}) — its rejections all stand.")
+        return None
+
+
+def doubtful_members(cfg: dict) -> set[int]:
+    """DOUBTFUL_TAG's membership: every pertinence-rejected nid that is
+    STILL one of its PDF's at-threshold candidates (final review I-3).
+
+    `pertinence.all_rejected` alone unions every verdict ever written, and
+    judged.json is only ever added to — so raising a lecture's Match
+    Sensitivity (or editing a note until it stops matching) left the old
+    rejection in place and the card wearing `!Library::Doubtful` though no
+    PDF doubted it any more, with no path back: it is only re-judged if it
+    becomes that PDF's candidate again. Invisible inside Klaus (the counts
+    and "Doubtful cards…" both re-intersect) but not to a user's own search
+    or filtered deck on the bare tag. Intersecting HERE, at the one reader
+    all the sinks share, self-heals on the next sync of any kind.
+
+    The union across PDFs stays: a card rejected for A but confirmed for B
+    is still Doubtful. That is the spec's rule (and a known design debt —
+    per-card overrule is a board card), not something this narrowing
+    touches.
+
+    Never raises for one bad PDF, and never strips on missing data: a PDF
+    whose matches.json is absent or unreadable keeps its whole rejected
+    set.
+    """
+    import os
+
+    from . import pertinence, retention
+
+    user_files = retention.USER_FILES
+    out: set[int] = set()
+    try:
+        names = os.listdir(os.path.join(user_files, "pdf_index"))
+    except OSError:
+        return out
+    for safe in names:
+        if not os.path.isfile(pertinence.judged_path(user_files, safe)):
+            continue
+        rejected = pertinence.rejected_nids(pertinence.load_judged(user_files, safe))
+        if not rejected:
+            continue
+        at_threshold = _at_threshold_nids(safe, cfg)
+        out |= rejected if at_threshold is None else (rejected & at_threshold)
+    return out
+
+
 # ------------------------------------------------------------- aqt glue
 
 
@@ -544,7 +617,7 @@ def sync_after_matches(
     leaves DOUBTFUL_TAG untouched, so plain indexing never re-derives it
     from a stale or absent judged.json. The judge phase (index_queue's
     phase four, Task 3) is the one caller that passes
-    `pertinence.all_rejected(user_files)` here.
+    `doubtful_members(cfg)` here.
 
     ``on_done`` (K-064) fires exactly once when the event is SETTLED —
     after the sync op succeeds or fails, and immediately on every early
@@ -605,7 +678,7 @@ def sync_after_threshold(
     both places instead of the tag sync silently disagreeing with what
     the dialog just showed.
 
-    Doubtful (K-254) is recomputed from `pertinence.all_rejected` here —
+    Doubtful (K-254) is recomputed from `doubtful_members(cfg)` here —
     never re-judged — so dragging the sensitivity slider can never spend
     a paid pass; it only reflects whatever verdicts already exist. That
     read is its own try/except (K-254 review Important 2): a failure
@@ -624,16 +697,13 @@ def sync_after_threshold(
         folder, display = _folder_and_display(safe)
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
-        from . import retention
 
         # K-254 review Important 2: guarded on its own, same shape as
         # priority_rows — a failure in the AUXILIARY Doubtful read must
         # never take down the PRIMARY retag the user just confirmed by
         # moving the slider.
         try:
-            from . import pertinence
-
-            doubtful = pertinence.all_rejected(retention.USER_FILES)
+            doubtful = doubtful_members(cfg)
         except Exception as exc:
             print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
             doubtful = None
@@ -658,7 +728,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
     matching the folder-rename batching rule below. A PDF whose matches
     cache is cold is skipped individually (never strips that one PDF's
     tag) without blocking the rest of the batch. Doubtful (K-254) is
-    computed ONCE from `pertinence.all_rejected` for the whole batch —
+    computed ONCE from `doubtful_members(cfg)` for the whole batch —
     never re-judged, and never per-PDF, since it is one global tag. That
     computation is its own try/except (K-254 review Important 2,
     mirroring sync_after_threshold above): a failure there is
@@ -675,9 +745,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         # an auxiliary Doubtful-read failure must not cancel the whole
         # batch's retag.
         try:
-            from . import pertinence
-
-            doubtful = pertinence.all_rejected(retention.USER_FILES)
+            doubtful = doubtful_members(cfg)
         except Exception as exc:
             print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
             doubtful = None

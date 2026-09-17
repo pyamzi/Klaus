@@ -607,8 +607,17 @@ def _run(job: tuple[str, str]) -> None:
     def after_judged(rejected: set[int], matches: Any) -> None:
         if not live():
             return
+        # The Doubtful read is guarded ON ITS OWN, the same shape
+        # sync_after_threshold/sync_after_clear_overrides use: an auxiliary
+        # failure there must never cost this PDF the lecture-tag write it
+        # was indexed for. doubtful=None leaves the tag untouched.
         try:
-            tag_sync.sync_after_matches(mw, name, matches, doubtful=pertinence.all_rejected(_user_files()))
+            doubtful = tag_sync.doubtful_members(_cfg())
+        except Exception as exc:
+            print(f"[klausmate] doubtful set unavailable: {exc}")
+            doubtful = None
+        try:
+            tag_sync.sync_after_matches(mw, name, matches, doubtful=doubtful)
         except Exception as exc:
             print(f"[klausmate] tag sync after index failed: {exc}")
         _job_done(f"Indexed “{label}”.", finished=name)
