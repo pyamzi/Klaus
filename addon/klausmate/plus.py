@@ -22,7 +22,7 @@ from typing import Any, Callable, NamedTuple
 KEY = "klaus_plus_key"
 CACHE = "klaus_plus_cache"
 BASE = "klaus_plus_base"
-DEFAULT_BASE = "https://klausmate.fly.dev"
+DEFAULT_BASE = "https://klausmate.com"  # 2026-09-17: Pouya's domain, everything on the apex
 TOKENS_PER_CARD = 250   # the service's own constants (spec D1); shown, never enforced, here
 TOKENS_PER_TURN = 6000
 CACHE_TTL_S = 6 * 3600

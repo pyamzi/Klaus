@@ -30,7 +30,7 @@ def _int(v: str | None, default: int) -> int:
 @dataclass(frozen=True)
 class Settings:
     database_path: str = "/data/klausplus.sqlite3"
-    public_base_url: str = "https://klausmate.fly.dev"
+    public_base_url: str = "https://klausmate.com"
     openai_api_key: str = field(default="", repr=False)
     anthropic_api_key: str = field(default="", repr=False)
     openai_base: str = "https://api.openai.com/v1"

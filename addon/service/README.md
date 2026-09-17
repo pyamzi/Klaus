@@ -98,6 +98,29 @@ Accept the generated app when it asks. The volume **name must be
 (`iad`) — the `[[mounts]]` block matches on that name, and a mismatch means
 the Machine boots with no `/data` and loses every subscriber on restart.
 
+### 2b. The domain — `klausmate.com`, everything on the apex
+
+The service answers on `https://klausmate.com` (2026-09-17, Pouya's call:
+one host for the landing page, Checkout, terms, privacy and the API; the
+`klausmate.fly.dev` hostname keeps working beside it). Nothing here uses
+AWS: the records go into whichever DNS host the domain already uses, and
+the certificate comes from Fly.
+
+```sh
+fly ips list                       # the app's IPv4 (shared is fine) and IPv6
+# at the domain's DNS host, on the apex "@":
+#   A     @   <the IPv4 from fly ips list>
+#   AAAA  @   <the IPv6 from fly ips list>
+fly certs add klausmate.com        # Fly issues the certificate once the records resolve
+fly certs check klausmate.com      # -> "Ready" when it is live
+```
+
+The same DNS host takes Resend's DKIM and SPF records when you verify
+`klausmate.com` there, which is what lets `RESEND_FROM='Klaus
+<plus@klausmate.com>'` below actually send. `PUBLIC_BASE_URL` in step 3
+and the Stripe webhook in step 4 must both say `https://klausmate.com`,
+and the add-on's built-in `plus.DEFAULT_BASE` already does.
+
 ### 3. Secrets
 
 Set the provider **spend caps in each provider's own dashboard first** —
@@ -116,11 +139,11 @@ fly secrets set \
   STRIPE_PRICE_MONTHLY=… \
   STRIPE_PRICE_YEARLY=… \
   RESEND_API_KEY=… \
-  RESEND_FROM='Klaus <plus@yourdomain>' \
+  RESEND_FROM='Klaus <plus@klausmate.com>' \
   OPERATOR_NAME='…' \
   OPERATOR_EMAIL='…' \
   OPERATOR_COUNTRY='…' \
-  PUBLIC_BASE_URL=https://klausmate.fly.dev \
+  PUBLIC_BASE_URL=https://klausmate.com \
   MIN_CLIENT_VERSION=0.2.0
 ```
 
@@ -140,7 +163,7 @@ Every knob, with its default from `klausplus/config.py`:
 | `OPERATOR_NAME` | `Klaus` | Named on the legal pages. |
 | `OPERATOR_EMAIL` | — | The contact address on those pages. |
 | `OPERATOR_COUNTRY` | — | Whose law governs. |
-| `PUBLIC_BASE_URL` | `https://klausmate.fly.dev` | Used to build Checkout's return URLs and the webhook URL. Must match reality or checkout returns nowhere. |
+| `PUBLIC_BASE_URL` | `https://klausmate.com` | Used to build Checkout's return URLs and the webhook URL. Must match reality or checkout returns nowhere. |
 | `MIN_CLIENT_VERSION` | `0.2.0` | Add-on version floor. Anything older gets `426` and "update Klaus". |
 | `DATABASE_PATH` | `/data/klausplus.sqlite3` | Set by the Dockerfile. Leave it — anywhere off `/data` is wiped on redeploy. |
 | `KLAUS_PLUS_PAUSED` | unset | **The kill switch.** `1` refuses every proxied call `503` — "Klaus Plus is paused for maintenance — try again later, or use your own API key." — checked before auth, so it costs nothing. See step 8. |
@@ -157,7 +180,7 @@ values); there is no command that prints a secret.
 Test mode first — use a `sk_test_…` key. From `service/`, with the venv:
 
 ```sh
-STRIPE_SECRET_KEY=sk_test_… PUBLIC_BASE_URL=https://klausmate.fly.dev \
+STRIPE_SECRET_KEY=sk_test_… PUBLIC_BASE_URL=https://klausmate.com \
   .venv/bin/python scripts/stripe_setup.py
 ```
 
@@ -180,8 +203,8 @@ Webhooks** yourself.
 
 ```sh
 fly deploy
-curl https://klausmate.fly.dev/healthz     # -> {"ok":true}
-open https://klausmate.fly.dev
+curl https://klausmate.com/healthz     # -> {"ok":true}
+open https://klausmate.com
 ```
 
 ### 6. Test purchase
