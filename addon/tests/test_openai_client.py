@@ -90,9 +90,15 @@ ep = _plus.Endpoint("https://svc.test", {"Authorization": "Bearer kp_" + "d" * 3
 vecs = oc.embed("", ["a"], "text-embedding-3-large", 1024, endpoint=ep)
 url, headers, data, _ = calls[-1]
 check("the endpoint's base and headers are used, no provider key needed",
-      url == "https://svc.test/embeddings" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
+      url == "https://svc.test/v1/embeddings" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
       and headers.get("X-klaus-purpose", headers.get("X-Klaus-Purpose")) == "embed" and len(vecs) == 1)
 check("the default endpoint is still the provider", oc.API_BASE == "https://api.openai.com/v1")
+ep_t = _plus.Endpoint("https://svc.test", {"Authorization": "Bearer kp_" + "d" * 32, "X-Klaus-Purpose": "transcribe", "X-Klaus-Client": "0.2.0"})
+text = oc.transcribe("", b"RIFF", "gpt-4o-mini-transcribe", endpoint=ep_t)
+url, headers, _, _ = calls[-1]
+check("transcribe routes to the service's /v1/audio/transcriptions with the endpoint's headers",
+      url == "https://svc.test/v1/audio/transcriptions" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
+      and text == "hello lecture")
 
 section("the service's error message reaches the user")
 

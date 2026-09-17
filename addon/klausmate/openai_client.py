@@ -95,7 +95,9 @@ def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EM
     body: dict[str, Any] = {"model": model, "input": list(texts)}
     if dims:
         body["dimensions"] = int(dims)
-    url = (endpoint.base if endpoint else API_BASE) + "/embeddings"
+    # The service mirrors OpenAI's paths under /v1 (API_BASE already ends in it;
+    # plus.base() is the bare host) — the offline e2e caught a 404 without it.
+    url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/embeddings"
     headers = {"Content-Type": "application/json",
               **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
     resp = _request(url, json.dumps(body).encode("utf-8"), headers, timeout, "embeddings")
@@ -130,7 +132,7 @@ def transcribe(key: str, wav_bytes: bytes, model: str, language: str = "en", pro
     if prompt:
         fields.append(("prompt", prompt[:800]))
     data, ct = _multipart(fields, "file", "chunk.wav", "audio/wav", wav_bytes)
-    url = (endpoint.base if endpoint else API_BASE) + "/audio/transcriptions"
+    url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/audio/transcriptions"
     headers = {"Content-Type": ct, **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
     resp = _request(url, data, headers, timeout, "transcription")
     return str(resp.get("text") or "").strip()

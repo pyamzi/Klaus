@@ -256,7 +256,7 @@ try:
     ).embed(["a"])
     url, headers = _plus_calls[-1]
     check("a Plus key routes embeddings to the service, no api_key_openai needed",
-          url == "https://svc.test/embeddings"
+          url == "https://svc.test/v1/embeddings"
           and headers.get("Authorization") == "Bearer kp_" + "a" * 32
           and len(vecs) == 1)
 finally:
