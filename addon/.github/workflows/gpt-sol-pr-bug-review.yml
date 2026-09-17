@@ -62,24 +62,49 @@ jobs:
                   return {}
               return json.loads(raw.decode("utf-8"))
 
+          def find_existing_marker_comment(token: str, repo: str, pr_number: int):
+              page = 1
+              while True:
+                  comments_url = (
+                      f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                      f"?per_page=100&page={page}"
+                  )
+                  comments = gh_request("GET", comments_url, token)
+                  if not comments:
+                      return None
+                  for comment in comments:
+                      author = ((comment.get("user") or {}).get("login") or "").strip()
+                      if MARKER in (comment.get("body") or "") and author == "github-actions[bot]":
+                          return comment
+                  if len(comments) < 100:
+                      return None
+                  page += 1
+
           def upsert_pr_comment(token: str, repo: str, pr_number: int, body: str):
-              comments_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments?per_page=100"
-              comments = gh_request("GET", comments_url, token)
-              existing = None
-              for comment in comments:
-                  author = ((comment.get("user") or {}).get("login") or "").strip()
-                  if MARKER in (comment.get("body") or "") and author == "github-actions[bot]":
-                      existing = comment
-                      break
+              if not token:
+                  print("Skipping PR comment update: GITHUB_TOKEN is unavailable.")
+                  return False
+
+              existing = find_existing_marker_comment(token, repo, pr_number)
 
               if existing:
                   update_url = f"https://api.github.com/repos/{repo}/issues/comments/{existing['id']}"
-                  gh_request("PATCH", update_url, token, {"body": body})
-                  print(f"Updated existing marker comment: {existing['id']}")
+                  try:
+                      gh_request("PATCH", update_url, token, {"body": body})
+                      print(f"Updated existing marker comment: {existing['id']}")
+                      return True
+                  except error.HTTPError as e:
+                      print(f"Skipping PR comment update (HTTP {e.code}): not permitted or unavailable.")
+                      return False
               else:
                   create_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-                  gh_request("POST", create_url, token, {"body": body})
-                  print("Created new marker comment")
+                  try:
+                      gh_request("POST", create_url, token, {"body": body})
+                      print("Created new marker comment")
+                      return True
+                  except error.HTTPError as e:
+                      print(f"Skipping PR comment create (HTTP {e.code}): not permitted or unavailable.")
+                      return False
 
           def load_pr_context():
               event_name = os.environ.get("GITHUB_EVENT_NAME", "")
