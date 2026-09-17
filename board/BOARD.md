@@ -22,17 +22,6 @@ created: 2026-08-24
 
 Highlights + per-slide side notes stored as JSON sidecars in Klausbook's own user_data; bake writes them into the PDF as real annotations from a pristine original (klausmate pdf_handler.bake_annotations model, vendored pypdf). Never incremental; empty JSON = restore.
 
-### KB-003: Viewer: text selection -> highlight + side-note UI
-owner: -
-priority: P1
-tags: design
-created: 2026-08-24
-
-Needs a spec first: selection affordance, highlight palette, per-slide note column, states, theme behavior.
-
-#### Comments
-- [2026-09-17 orchestrator] Spec landed: docs/reference/klausmate-viewer-parity.md (full inventory of klausmate's viewer with exact colors/strings/shortcuts). This card's scope is now the highlight flow: selection -> Cmd+Shift+H / context-menu Highlight, five inks (#FADC50 default, #8AE08C, #7FC6F2, #F79AC8, #F7B267) at 43% alpha, one record per page, stored in the klaus-core notes doc. Sliced follow-ups: KB-013 context menu, KB-014 find bar, KB-015 sticky notes, KB-016 shortcuts+toasts.
-
 ### KB-004: klaus-core: embedding index over the library
 owner: -
 priority: P2
@@ -223,3 +212,19 @@ The session fixing these was deleted before landing. (1) core/klaus_core/library
 - [2026-09-17 orchestrator] Same rename fallout hit core/.venv: script shebangs pointed at the old klausbook/ path (bad interpreter). Rebuilt 2026-09-17; card's README sweep should add a note that any repo rename requires rm -rf core/.venv + recreate.
 - [2026-09-17 fable] Decisions: library default -> ~/Documents/Github/KlausMate-Context/klausmate/user_files (both dirs, pdfs/ still shadows pdf_originals/); docs sweep ordered longest-prefix-first so klausbook-code didn't collide with klausbook. Files: core/klaus_core/library.py, README.md, context/PROJECT.md, context/prompts/worker.md, context/prompts/designer.md. Risks: none — gate asserts 5 pdfs on defaults and zero stale refs; both suites pass. Next: none.
 - [2026-09-17 orchestrator] Sign-off: gate green (5 pdfs on defaults, no stale refs), suites pass. Done.
+
+### KB-003: Highlight flow: selection -> Cmd+Shift+H, stored + rendered
+owner: fable
+priority: P1
+tags: parity
+files: extensions/klaus-pdf/webview-src/highlights.ts,extensions/klaus-pdf/webview-src/notesStore.ts,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/NotesSidebar.tsx,extensions/klaus-pdf/webview-src/PdfPage.tsx,extensions/klaus-pdf/webview-src/core.ts,extensions/klaus-pdf/webview-src/shortcuts.ts,extensions/klaus-pdf/webview-src/viewer.css,tests/highlights_test.mjs,tests/shortcuts_test.mjs,core/klaus_core/notes.py,tests/test_notes.py
+verify: node --test tests/highlights_test.mjs tests/shortcuts_test.mjs && python3 tests/test_notes.py && (cd extensions/klaus-pdf && npx tsc --noEmit)
+created: 2026-08-24
+claimed: 2026-09-17
+
+Per docs/reference/klausmate-viewer-parity.md. Acceptance: (1) selecting text on the stage and pressing Cmd+Shift+H or Cmd+Shift+A creates a highlight on the current slide - default ink #FADC50 painted at alpha 110/255, square corners, rendered between canvas and text layer; (2) no selection -> toast 'Klaus: select text first, then highlight'; after create the selection clears and 'Klaus: highlight added' toasts; (3) records {id, rects:[[x,y,w,h]...] in scale-1 page coords, color} persist in the notes doc under top-level highlights.{page}, validated server-side, one save pipeline shared with notes (doc state lifted to a notesStore hook - no second writer); (4) highlights survive reload and re-project across zoom. Out of scope: delete + ink picker (KB-013 context menu), sticky notes (KB-015), bake (KB-002).
+
+#### Comments
+- [2026-09-17 orchestrator] Spec landed: docs/reference/klausmate-viewer-parity.md (full inventory of klausmate's viewer with exact colors/strings/shortcuts). This card's scope is now the highlight flow: selection -> Cmd+Shift+H / context-menu Highlight, five inks (#FADC50 default, #8AE08C, #7FC6F2, #F79AC8, #F7B267) at 43% alpha, one record per page, stored in the klaus-core notes doc. Sliced follow-ups: KB-013 context menu, KB-014 find bar, KB-015 sticky notes, KB-016 shortcuts+toasts.
+- [2026-09-17 fable] Decisions: doc ownership lifted into notesStore.ts (useNotesDoc) so notes + highlights share ONE serialized save pipeline - no second writer; highlight geometry is a pure module (highlights.ts) node-tested like shortcuts.ts; rects stored scale-1 page coords, clipped/deduped/sliver-dropped. Files: highlights.ts, notesStore.ts, ImpressView.tsx, NotesSidebar.tsx, PdfPage.tsx, core.ts, shortcuts.ts, viewer.css, tests/highlights_test.mjs, tests/shortcuts_test.mjs, core/klaus_core/notes.py, tests/test_notes.py. Risks: none known - E2E verified in browser harness (create at rgba(250,220,80,0.43), both toasts, selection clears, server persists, survives reload, re-projects across zoom). Next: delete + ink picker are KB-013; sticky notes KB-015; bake reads highlights from this store (KB-002).
+- [2026-09-17 orchestrator] Sign-off: gate green (12 node + 28 py checks, tsc clean), E2E verified incl. reload + zoom re-projection. Done.
