@@ -66,6 +66,38 @@ check("non-string md rejected",
       raises_value_error(lambda: notes.save_notes(
           PDF_ID, {"version": 1, "pages": {"1": {"md": 123}}})))
 
+print("== highlights ==")
+good_hl = {"version": 1, "pages": {},
+           "highlights": {"3": [{"id": "abc123", "color": "#FADC50",
+                                 "rects": [[10, 20.5, 100, 12]]}]}}
+notes.save_notes(PDF_ID, good_hl)
+check("highlights round-trip", notes.load_notes(PDF_ID) == good_hl)
+
+
+def with_hl(hl):
+    return {"version": 1, "pages": {}, "highlights": hl}
+
+
+check("non-dict highlights rejected",
+      raises_value_error(lambda: notes.save_notes(PDF_ID, with_hl(["x"]))))
+check("non-numeric highlight page key rejected",
+      raises_value_error(lambda: notes.save_notes(PDF_ID, with_hl({"x": []}))))
+check("empty highlight id rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, with_hl({"1": [{"id": "", "color": "#FADC50", "rects": [[1, 2, 3, 4]]}]}))))
+check("bad highlight color rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, with_hl({"1": [{"id": "a", "color": "yellow", "rects": [[1, 2, 3, 4]]}]}))))
+check("3-number rect rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, with_hl({"1": [{"id": "a", "color": "#FADC50", "rects": [[1, 2, 3]]}]}))))
+check("empty rects rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, with_hl({"1": [{"id": "a", "color": "#FADC50", "rects": []}]}))))
+check("boolean rect value rejected",
+      raises_value_error(lambda: notes.save_notes(
+          PDF_ID, with_hl({"1": [{"id": "a", "color": "#FADC50", "rects": [[1, 2, 3, True]]}]}))))
+
 print("== assets ==")
 name = notes.save_asset(PDF_ID, b"\x89PNGfake", "png")
 check("asset name is content-addressed",

@@ -36,6 +36,7 @@ export async function fetchPdfBytes(id: string): Promise<ArrayBuffer> {
 export interface NotesDoc {
   version: number;
   pages: Record<string, { md: string }>;
+  highlights?: Record<string, import("./highlights").Highlight[]>;
 }
 
 export async function fetchNotes(id: string): Promise<NotesDoc> {

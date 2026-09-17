@@ -445,3 +445,15 @@ body,
 .find-bar button:active {
   background: var(--veil-press);
 }
+
+/* ---------- Highlights (klausmate inks, alpha 110/255) ---------- */
+
+.highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.highlight-rect {
+  position: absolute;
+}

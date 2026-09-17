@@ -106,14 +106,22 @@ test("keys that are not ours yield no action", () => {
       matchShortcut({ key: "=" }),
       matchShortcut({ key: "0" }),
       matchShortcut({ key: "x", metaKey: true }),
-      matchShortcut({ key: "A", metaKey: true, shiftKey: true }),
-      // Cmd+Shift+H stays unclaimed: it is the highlight shortcut (KB-003).
-      matchShortcut({ key: "H", metaKey: true, shiftKey: true }),
       matchShortcut({ key: "f" }),
       matchShortcut({ key: "ArrowRight", shiftKey: true }),
       matchShortcut({ key: "Home", altKey: true }),
     ],
-    [null, null, null, null, null, null, null, null, null],
+    [null, null, null, null, null, null, null],
+  );
+});
+
+test("Cmd+Shift+H and Cmd+Shift+A are klausmate's highlight combos", () => {
+  assert.deepEqual(
+    [
+      matchShortcut({ key: "H", metaKey: true, shiftKey: true }),
+      matchShortcut({ key: "h", ctrlKey: true, shiftKey: true }),
+      matchShortcut({ key: "A", metaKey: true, shiftKey: true }),
+    ],
+    ["highlight", "highlight", "highlight"],
   );
 });
 

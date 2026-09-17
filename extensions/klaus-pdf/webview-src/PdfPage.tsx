@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { HIGHLIGHT_ALPHA, rgba, type Highlight } from "./highlights";
 
 interface PdfPageProps {
   doc: PDFDocumentProxy;
@@ -9,13 +10,14 @@ interface PdfPageProps {
   baseWidth: number;
   baseHeight: number;
   textLayer?: boolean;
+  highlights?: Highlight[];
 }
 
 function isCancelled(e: unknown): boolean {
   return e instanceof Error && e.name === "RenderingCancelledException";
 }
 
-export default function PdfPage({ doc, pageNumber, scale, baseWidth, baseHeight, textLayer = true }: PdfPageProps) {
+export default function PdfPage({ doc, pageNumber, scale, baseWidth, baseHeight, textLayer = true, highlights }: PdfPageProps) {
   const holderRef = useRef<HTMLDivElement>(null);
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -97,6 +99,27 @@ export default function PdfPage({ doc, pageNumber, scale, baseWidth, baseHeight,
       data-page={pageNumber}
     >
       <div ref={canvasHostRef} className="pdf-page-canvas" />
+      {highlights && highlights.length > 0 && (
+        // Between the canvas and the text layer, klausmate's z-order:
+        // fills tint the page, live selection still draws above them.
+        <div className="highlight-layer" aria-hidden="true">
+          {highlights.flatMap((h) =>
+            h.rects.map((r, i) => (
+              <div
+                key={`${h.id}-${i}`}
+                className="highlight-rect"
+                style={{
+                  left: r[0] * scale,
+                  top: r[1] * scale,
+                  width: r[2] * scale,
+                  height: r[3] * scale,
+                  background: rgba(h.color, HIGHLIGHT_ALPHA),
+                }}
+              />
+            )),
+          )}
+        </div>
+      )}
       <div ref={textRef} className="textLayer" />
     </div>
   );

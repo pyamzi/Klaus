@@ -27,6 +27,7 @@ export type Action =
   | "find"
   | "find-next"
   | "find-prev"
+  | "highlight"
   | "page-next"
   | "page-prev"
   | "page-first"
@@ -61,8 +62,7 @@ export function isTypingTarget(target: TargetLike | null | undefined): boolean {
 
 /**
  * Map a keystroke to an editor action, or null when the key is not ours.
- * Cmd and Ctrl are interchangeable. Cmd+Shift+H stays unclaimed — it is the
- * highlight shortcut (KB-003).
+ * Cmd and Ctrl are interchangeable.
  */
 export function matchShortcut(event: KeyLike): Action | null {
   const mod = Boolean(event.metaKey || event.ctrlKey);
@@ -70,7 +70,16 @@ export function matchShortcut(event: KeyLike): Action | null {
   const shift = Boolean(event.shiftKey);
 
   if (mod && shift) {
-    return event.key.toLowerCase() === "g" ? "find-prev" : null;
+    switch (event.key.toLowerCase()) {
+      case "g":
+        return "find-prev";
+      // klausmate binds both Cmd+Shift+H and Cmd+Shift+A to highlight.
+      case "h":
+      case "a":
+        return "highlight";
+      default:
+        return null;
+    }
   }
   if (mod && alt) {
     return event.key.toLowerCase() === "g" ? "go-to-page" : null;

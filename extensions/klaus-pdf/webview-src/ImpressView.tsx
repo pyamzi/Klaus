@@ -18,6 +18,8 @@ import {
 } from "./shortcuts";
 import { toast } from "./toast";
 import { countLabel, cycleIndex, findMatches, type Match, type PageText } from "./find";
+import { DEFAULT_INK, selectionRects, type RectLike } from "./highlights";
+import { useNotesDoc } from "./notesStore";
 
 const THUMB_WIDTH = 140;
 const STAGE_PADDING = 32;
@@ -49,6 +51,8 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   const findInputRef = useRef<HTMLInputElement>(null);
   const [searchedQuery, setSearchedQuery] = useState("");
   const searchTimer = useRef<number | undefined>(undefined);
+  const notes = useNotesDoc(pdfId);
+  const { addHighlight } = notes;
 
   const closeFind = useCallback(() => {
     window.clearTimeout(searchTimer.current);
@@ -137,6 +141,35 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     selection.removeAllRanges();
     selection.addRange(range);
   }, []);
+
+  // Cmd+Shift+H / Cmd+Shift+A: turn the live selection into a highlight on
+  // the current slide (default ink, klausmate flow — the selection clears
+  // because the highlight replaces it).
+  const highlightSelection = useCallback(() => {
+    const stage = stageRef.current;
+    const selection = window.getSelection();
+    const pageEl = stage?.querySelector(`.pdf-page[data-page="${current}"]`);
+    const clientRects: RectLike[] = [];
+    if (selection && !selection.isCollapsed && pageEl) {
+      for (let i = 0; i < selection.rangeCount; i++) {
+        clientRects.push(...Array.from(selection.getRangeAt(i).getClientRects()));
+      }
+    }
+    const rects = pageEl
+      ? selectionRects(clientRects, pageEl.getBoundingClientRect(), scale)
+      : [];
+    if (rects.length === 0) {
+      toast("select text first, then highlight");
+      return;
+    }
+    addHighlight(String(current), {
+      id: crypto.randomUUID().replace(/-/g, ""),
+      rects,
+      color: DEFAULT_INK,
+    });
+    selection?.removeAllRanges();
+    toast("highlight added");
+  }, [current, scale, addHighlight]);
 
   // Page text is only needed once someone searches, and it costs a pass over
   // the whole document — so load it on first open and keep it.
@@ -346,11 +379,14 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
         case "find-prev":
           if (findOpen) cycleMatch(-1);
           break;
+        case "highlight":
+          highlightSelection();
+          break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc, baseSize, fitScale, selectSlideText, openFind, cycleMatch, closeFind, findOpen]);
+  }, [doc, baseSize, fitScale, selectSlideText, openFind, cycleMatch, closeFind, findOpen, highlightSelection]);
 
   const commitPageDraft = () => {
     if (!doc) return;
@@ -448,10 +484,11 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
             baseWidth={baseSize.w}
             baseHeight={baseSize.h}
             textLayer
+            highlights={notes.doc?.highlights?.[String(current)]}
           />
         </div>
       </div>
-      <NotesSidebar pdfId={pdfId} page={current} />
+      <NotesSidebar pdfId={pdfId} page={current} store={notes} />
     </div>
   );
 }
