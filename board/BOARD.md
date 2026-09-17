@@ -125,9 +125,22 @@ created: 2026-09-17
 
 Per-highlight notes per parity spec: Add note.../Edit note... via context menu, box anchored top-right of first rect, rgba(255,245,170,235) fill, 1px rgb(190,170,80) border, rgb(70,60,20) 10px text, <=180px wide, <=4 lines, radius 3. Distinct from the per-slide notes sidebar.
 
+### KB-017: Fix stale repo paths (library default + README run commands)
+owner: -
+priority: P1
+tags: sonnet-safe
+created: 2026-09-17
+
+The session fixing these was deleted before landing. (1) core/klaus_core/library.py DEFAULT_USER_FILES still points at ~/Documents/Github/Addons/klausmate/user_files which no longer exists — the real library is ~/Documents/Github/KlausMate-Context/klausmate/user_files ({pdfs,pdf_originals}); without KLAUS_LIBRARY_DIR the app lists an empty library. (2) README.md Run/Architecture sections still say klausbook-code / ../klausbook — should be KlausBook-Code / KlausBook-Context. Also sweep context/PROJECT.md and context/prompts/*.md for the same stale paths. Verify: curl -s -H 'X-Klaus-Token: dev' localhost:7863/library lists 5 PDFs with no env override; python3 tests/test_notes.py passes.
+
+#### Comments
+- [2026-09-17 orchestrator] Same rename fallout hit core/.venv: script shebangs pointed at the old klausbook/ path (bad interpreter). Rebuilt 2026-09-17; card's README sweep should add a note that any repo rename requires rm -rf core/.venv + recreate.
+
 ## Ready
 
 ## Doing
+
+## Review
 
 ### KB-016: Shortcut + toast parity in the PDF editor
 owner: orchestrator
@@ -155,6 +168,7 @@ Acceptance criteria:
 - npm run typecheck in extensions/klaus-pdf is clean.
 - The verify command fails on the pre-card tree (the module and test do not exist) and passes after.
 
-## Review
+#### Comments
+- [2026-09-17 orchestrator] Implemented on branch kb-016-shortcuts (b5212f5, branched off impress-editor so it carries the unmerged Obsidian retheme dbc6544). verify exits 0 (5 node:test cases + tsc --noEmit); it exited 1 on the pre-card tree. node build.mjs bundles clean. Divergence from the card, deliberate: Cmd+Alt+G focuses an inline page field in the toolbar instead of klausmate's getInt dialog - a webview has no prompt() and the voice rule forbids modals; the page indicator became the field, format '{n} / {total}' kept. Double/triple-click selection is native pdf.js text-layer behaviour and nothing in viewer.css blocks it - not machine-verified. NEEDS A REAL-WINDOW CHECK before Done: VS Code binds Cmd+= / Cmd+- / Cmd+0 at the workbench level, so confirm the webview's preventDefault wins and the shell does not also zoom.
 
 ## Done
