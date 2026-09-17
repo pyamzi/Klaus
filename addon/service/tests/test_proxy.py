@@ -85,6 +85,46 @@ def test_transcription_meters_audio_seconds_and_refuses_non_wav(world):
     assert len(world["up"].calls) == calls_before
 
 
+def test_a_tiny_request_still_costs_a_token(world, settings):
+    """K-278: `chars // 4` and `len(raw) // 4` are 0 for a short input, so the request was
+    ADMITTED against a spent ceiling and — with K-275's fallback metering the reservation —
+    billed nothing. Unlimited short requests walked past the cap."""
+    world["store"].add_usage(world["cid"], "2026-09", "embed_tokens", settings.embed_ceiling_tokens)
+    r = world["client"].post("/v1/embeddings", json={"input": ["a"]}, headers=_h(world, "embed"))
+    assert r.status_code == 402
+    assert world["up"].calls == []
+    world["store"].add_usage(world["cid"], "2026-09", "embed_tokens", -settings.embed_ceiling_tokens)
+    r = world["client"].post("/v1/embeddings", json={"input": ["a"]}, headers=_h(world, "embed"))
+    assert r.status_code == 200 and world["store"].usage(world["cid"], "2026-09")["embed_tokens"] >= 1
+    # fix1: the carve-out is a literally EMPTY input list, not "no characters" — a list of
+    # empty strings was admitted against the spent ceiling and forwarded upstream.
+    # The counter must sit EXACTLY on the ceiling: one token over and even a 0-token
+    # reservation is refused, which would pass this pin with the carve-out still wrong.
+    used = world["store"].usage(world["cid"], "2026-09")["embed_tokens"]
+    world["store"].add_usage(world["cid"], "2026-09", "embed_tokens", settings.embed_ceiling_tokens - used)
+    assert world["store"].usage(world["cid"], "2026-09")["embed_tokens"] == settings.embed_ceiling_tokens
+    calls_before = len(world["up"].calls)  # the 200 above spent a legitimate call
+    r = world["client"].post("/v1/embeddings", json={"input": ["", ""]}, headers=_h(world, "embed"))
+    assert r.status_code == 402 and len(world["up"].calls) == calls_before
+    world["store"].add_usage(world["cid"], "2026-09", "embed_tokens", -settings.embed_ceiling_tokens)
+    # the same on /v1/messages: a two-byte body with no max_tokens reserved nothing at all
+    world["store"].add_usage(world["cid"], "2026-09", "judge_tokens", settings.quota_judge_tokens)
+    r = world["client"].post("/v1/messages", content=b"{}",
+                             headers=dict(_h(world, "judge"), **{"content-type": "application/json"}))
+    assert r.status_code == 402
+
+
+def test_audio_shorter_than_a_second_costs_a_second(world):
+    """K-278: `int(round(...))` billed a sub-half-second chunk as 0 seconds and forwarded it
+    free. Audio rounds UP now — a zero-length WAV is still junk and refused before this."""
+    r = world["client"].post("/v1/audio/transcriptions", data={"model": "x"},
+                             files={"file": ("c.wav", _wav(0.3), "audio/wav")}, headers=_h(world, "transcribe"))
+    assert r.status_code == 200
+    assert world["store"].usage(world["cid"], "2026-09")["audio_seconds"] == 1
+    assert json.loads(r.headers["X-Klaus-Quota"])["counters"]["transcribe"]["used"] == 1
+    assert world["store"].daily_audio(world["cid"], "2026-09-16") == 1
+
+
 def test_transcription_402_at_month_cap_and_daily_cap(world, settings):
     world["store"].add_usage(world["cid"], "2026-09", "audio_seconds", settings.quota_audio_seconds - 10)
     r = world["client"].post("/v1/audio/transcriptions", data={"model": "x"}, files={"file": ("c.wav", _wav(30.0), "audio/wav")},

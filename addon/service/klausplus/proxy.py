@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import struct
 import threading
 import time
@@ -250,7 +251,11 @@ async def embeddings(request: Request, background_tasks: BackgroundTasks) -> Res
     if st.settings.allowed_models and body.get("model") not in st.settings.allowed_models:
         raise _err(400, "That model is not available on Klaus Plus.")
     inputs = body.get("input") if isinstance(body.get("input"), list) else [body.get("input") or ""]
-    guess = sum(len(str(t)) for t in inputs) // 4
+    # K-278: a short input estimated 0 tokens, so the request was ADMITTED against a spent
+    # ceiling and — with K-275's fallback settling the reservation — billed nothing either.
+    # fix1: the carve-out is a literally EMPTY `input` list, not "no characters" — keyed on
+    # chars, a list of empty strings was still admitted and still forwarded upstream.
+    guess = max(1, sum(len(str(t)) for t in inputs) // 4) if inputs else 0
     res = meter.reserve(st.store, st.settings, int(row["id"]), "embed", guess, st.now())
     if not res.ok:
         raise _err(402, meter.quota_message("embed", res.before["resets_at"]))
@@ -297,7 +302,9 @@ async def transcriptions(request: Request, background_tasks: BackgroundTasks) ->
     if len(content) > st.settings.max_audio_bytes:
         raise _err(413, "Audio chunk too large (25 MB max).")
     try:
-        seconds = int(round(wav_seconds(content)))
+        # K-278: rounding sent anything under half a second upstream as 0 seconds, free.
+        # Audio rounds UP — a zero-length WAV never reaches here, `wav_seconds` refuses it.
+        seconds = max(1, math.ceil(wav_seconds(content)))
     except ValueError:
         raise _err(400, "Only WAV audio is accepted.")
     cid = int(row["id"])
@@ -394,7 +401,7 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
         want = max(0, int(body.get("max_tokens") or 0))
     except (TypeError, ValueError):
         want = 0
-    reserved = len(raw) // 4 + want
+    reserved = max(1, len(raw) // 4) + want  # K-278: a tiny body must still cost something
     res = meter.reserve(st.store, st.settings, cid, purpose, reserved, st.now())
     if not res.ok:
         raise _err(402, meter.quota_message(purpose, res.before["resets_at"]))
