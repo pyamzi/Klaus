@@ -67,7 +67,7 @@ jobs:
               while True:
                   comments_url = (
                       f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
-                      f"?per_page=100&page={page}"
+                      f"?per_page=100&page={page}&sort=created&direction=desc"
                   )
                   comments = gh_request("GET", comments_url, token)
                   if not comments:
@@ -160,8 +160,18 @@ jobs:
 
           def get_patch(repo: str, pr_number: int, base_sha: str, head_sha: str, token: str) -> str:
               # Use only the PR delta, never full repository context.
+              merge_base = subprocess.run(
+                  ["git", "merge-base", base_sha, head_sha],
+                  text=True,
+                  capture_output=True,
+                  check=False,
+              )
+              if merge_base.returncode != 0:
+                  raise RuntimeError(f"git merge-base failed: {merge_base.stderr.strip()}")
+              mb_sha = merge_base.stdout.strip()
+
               result = subprocess.run(
-                  ["git", "diff", "--no-color", "--unified=3", base_sha, head_sha],
+                  ["git", "diff", "--no-color", "--unified=3", mb_sha, head_sha],
                   text=True,
                   capture_output=True,
                   check=False,
@@ -187,11 +197,23 @@ jobs:
                       filename = f.get("filename", "unknown")
                       status = f.get("status", "modified")
                       prev = f.get("previous_filename", filename)
-                      a_path = prev if status == "renamed" else filename
-                      b_path = filename
-                      lines.append(f"diff --git a/{a_path} b/{b_path}\n")
-                      lines.append(f"--- a/{a_path}\n")
-                      lines.append(f"+++ b/{b_path}\n")
+                      if status == "added":
+                          a_path = "/dev/null"
+                          b_path = filename
+                      elif status == "removed":
+                          a_path = filename
+                          b_path = "/dev/null"
+                      elif status == "renamed":
+                          a_path = prev
+                          b_path = filename
+                      else:
+                          a_path = filename
+                          b_path = filename
+                      a_label = "/dev/null" if a_path == "/dev/null" else f"a/{a_path}"
+                      b_label = "/dev/null" if b_path == "/dev/null" else f"b/{b_path}"
+                      lines.append(f"diff --git {a_label} {b_label}\n")
+                      lines.append(f"--- {a_label}\n")
+                      lines.append(f"+++ {b_label}\n")
                       patch = f.get("patch")
                       if patch:
                           lines.append(patch)
