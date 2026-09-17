@@ -3300,4 +3300,101 @@ except AttributeError as _exc:
           "full turn's box (the growth a rotation adds is vertical)",
           False, f"no SWAY_AMP yet ({_exc})")
 
+# --------------------------------------------------------- K-199: the cap
+
+section("K-199 — split_cloud bounds the aggregate LINKED point count, "
+        "independent of PDF count")
+
+
+def _many_pdf_graph(num_pdfs, matches_per_pdf=90, total_notes=None):
+    """A synthetic graph with ``num_pdfs`` PDFs, each with its own
+    ``matches_per_pdf`` distinct matched notes (default: exactly
+    SAMPLE_PER_PDF, so an uncapped sample would take every one of them)
+    — enough to exercise split_cloud's aggregate cap the way a real
+    library with many indexed PDFs eventually would."""
+    if total_notes is None:
+        total_notes = max(matches_per_pdf * 4, num_pdfs * 6)
+    notes = [{"nid": i, "xyz": [(i % 7) / 7.0 - 0.5, (i % 11) / 11.0 - 0.5,
+                                 (i % 13) / 13.0 - 0.5]}
+             for i in range(total_notes)]
+    pdfs = [{"safe": f"pdf{k}", "xyz": [0.0, 0.0, 0.0],
+             "match_count": matches_per_pdf} for k in range(num_pdfs)]
+    edges = []
+    for k in range(num_pdfs):
+        start = (k * 17) % total_notes
+        for j in range(matches_per_pdf):
+            edges.append({"pdf": f"pdf{k}",
+                          "nid": (start + j) % total_notes, "score": 0.9})
+    return {"pdfs": pdfs, "notes": notes, "edges": edges}
+
+
+# The bug this card fixes: per_pdf was only ever a ceiling on ONE PDF's
+# own sample, so the SUM across PDFs grew linearly with PDF count and
+# fed straight into spanning_tree's O(n^2) cost. This is the pin that
+# would have failed outright on the pre-fix code, where 10 PDFs already
+# sampled 10 * SAMPLE_PER_PDF = 900 linked points with no aggregate cap.
+_link4 = pdf_map.split_cloud(_many_pdf_graph(4))[1]
+_link10 = pdf_map.split_cloud(_many_pdf_graph(10))[1]
+_link150 = pdf_map.split_cloud(_many_pdf_graph(150))[1]
+_tot4 = sum(len(v) for v in _link4.values())
+_tot10 = sum(len(v) for v in _link10.values())
+_tot150 = sum(len(v) for v in _link150.values())
+check("a normal-sized library (4 PDFs) is UNCHANGED: each keeps its "
+      "full SAMPLE_PER_PDF share, same as before this card",
+      _tot4 == 4 * pdf_map.SAMPLE_PER_PDF
+      and all(len(v) == pdf_map.SAMPLE_PER_PDF for v in _link4.values()),
+      f"total={_tot4}")
+check("...but past the point where pdfs * SAMPLE_PER_PDF would exceed "
+      "LINK_TOTAL_CAP, the aggregate is capped there instead of "
+      "climbing to 900 (10 pdfs) or 13,500 (150 pdfs)",
+      _tot10 == pdf_map.LINK_TOTAL_CAP and _tot150 == pdf_map.LINK_TOTAL_CAP,
+      f"10 pdfs -> {_tot10}, 150 pdfs -> {_tot150} "
+      f"(LINK_TOTAL_CAP={pdf_map.LINK_TOTAL_CAP})")
+check("...and every PDF still keeps at least one linked point at 150 "
+      "PDFs — capping the aggregate must never leave a focused PDF "
+      "connected to nothing",
+      all(len(v) >= 1 for v in _link150.values()),
+      f"min per-pdf = {min(len(v) for v in _link150.values())}")
+
+# per_pdf <= 0 is K-138's explicit "every match" escape hatch and must
+# stay orthogonal to this cap, even with many PDFs in play.
+_link_u = pdf_map.split_cloud(
+    _many_pdf_graph(20, matches_per_pdf=15), per_pdf=0)[1]
+check("per_pdf <= 0 still means EVERY match, uncapped, even at 20 PDFs "
+      "— an explicit opt-out this cap must not touch",
+      all(len(v) == 15 for v in _link_u.values()),
+      str({k: len(v) for k, v in list(_link_u.items())[:3]}))
+
+# The structural bound spanning_tree's input actually depends on: never
+# more than SAMPLE_NOTES (ambient) plus LINK_TOTAL_CAP (linked), no
+# matter how many PDFs are indexed.
+for _n in (4, 10, 30, 80, 150):
+    _amb_n, _link_n, _pos_n, _tot_n, _shown_n = pdf_map.split_cloud(
+        _many_pdf_graph(_n))
+    _flat_n = len(_amb_n) + sum(len(v) for v in _link_n.values())
+    check(f"flat point count at {_n} PDFs stays within "
+          "SAMPLE_NOTES + LINK_TOTAL_CAP",
+          _flat_n <= pdf_map.SAMPLE_NOTES + pdf_map.LINK_TOTAL_CAP,
+          f"flat_n={_flat_n}")
+
+# The wall-clock regression this card exists to fix: split_cloud's own
+# output, fed to spanning_tree exactly as _MapCanvas.__init__ does, must
+# stay fast no matter how many PDFs are indexed. On the pre-fix code, 80
+# PDFs fed spanning_tree about 80 * 90 + ambient =~ 7,600 points, which
+# measures several SECONDS on this machine (see the module comment) — on
+# the GUI thread, inside _MapCanvas.__init__, on every Library open.
+_amb80, _link80, _pos80, _tot80, _shown80 = pdf_map.split_cloud(
+    _many_pdf_graph(80))
+_flat80 = list(_amb80)
+for _v in _link80.values():
+    _flat80.extend(_v)
+_t0 = time.perf_counter()
+pdf_map.spanning_tree(_flat80)
+_dt80 = time.perf_counter() - _t0
+check("80 PDFs (well past the card's ~20-PDF bar) still builds the "
+      "spanning tree in well under a second, not the several seconds "
+      "the uncapped aggregate used to cost",
+      _dt80 < 1.0,
+      f"{_dt80 * 1000:.1f} ms for {len(_flat80)} points")
+
 raise SystemExit(report())

@@ -579,6 +579,40 @@ SAMPLE_PER_PDF = 90
 # random draw: a stride thins a cloud uniformly (so its shape survives),
 # it is deterministic (the map looks the same every time you open it),
 # and it is what projection.py already does to pick its fit rows.
+#
+# K-199 (P1, promoted after the growth turned out to be real, not
+# theoretical): SAMPLE_PER_PDF above is a PER-PDF ceiling only —
+# split_cloud never capped the SUM across PDFs, so the aggregate
+# "linked" point count grows LINEARLY with how many PDFs are indexed,
+# and every one of those points lands in spanning_tree's input
+# (_MapCanvas.__init__ flattens ambient + every PDF's own linked sample
+# into one list before the backbone is built). spanning_tree is O(n^2),
+# so PDF count got squared for free.
+#
+# Measured on this machine (python3.9.6, a throwaway script against the
+# real functions — the sub-millisecond number spanning_tree's own
+# docstring used to carry was wrong by ~25x and is exactly the false
+# premise this card was deferred on once already; re-measure, never
+# trust an old comment here): spanning_tree alone is cleanly quadratic —
+# 520 pts 33 ms, 1,000 118 ms, 2,000 483 ms, 4,000 1.86 s, 8,000 7.55 s.
+# Fed split_cloud's own UNCAPPED aggregate: 4 PDFs is 780 points (71 ms,
+# fine), but 20 PDFs is already 2,220 (573 ms), 50 is 4,920 (2.86 s), 100
+# is 9,000 (10.3 s) — on the GUI thread, in _MapCanvas.__init__, on every
+# Library open/refresh and every Map window open.
+#
+# LINK_TOTAL_CAP bounds the SUM instead of leaving only each PDF's own
+# share bounded: split_cloud shrinks the effective per-PDF sample once
+# ``len(pdfs) * per_pdf`` would exceed it, floored at 1 so a PDF's own
+# focused view is never left connected to nothing. That keeps the worst
+# case — any number of PDFs — at SAMPLE_NOTES plus at most this many
+# points fed to spanning_tree (~1,020 total), ~125 ms by the same
+# measurement: the same ballpark as today's ordinary 4-PDF cost, however
+# large the library grows. It also bounds the per-PDF drawPoints
+# band-grouping cost on the paint path (``_make_bands`` per PDF in
+# ``_MapCanvas.__init__``), which shares this exact growth curve.
+# ``per_pdf <= 0`` still means "every match" and is left alone — an
+# explicit opt-out, same as ``SAMPLE_NOTES = 0``.
+LINK_TOTAL_CAP = 600
 
 # ── K-174: the constellation ────────────────────────────────────────────
 # THE finding, measured off aalampour.com's own canvas rather than
@@ -1498,7 +1532,8 @@ def row_nid(row: object) -> Optional[int]:
 
 
 def split_cloud(
-    graph: dict, cap: int = SAMPLE_NOTES, per_pdf: int = SAMPLE_PER_PDF
+    graph: dict, cap: int = SAMPLE_NOTES, per_pdf: int = SAMPLE_PER_PDF,
+    link_total_cap: int = LINK_TOTAL_CAP,
 ) -> tuple:
     """The drawn cloud: ``(ambient, linked, positions, total, shown)``.
 
@@ -1525,6 +1560,16 @@ def split_cloud(
     what "showing 780" means; the test still has an independent route to
     the same number, by counting the points the canvas actually put in
     its polygons.
+
+    ``per_pdf`` is only a ceiling on ONE PDF's own sample — K-199: nothing
+    capped their SUM, so a library with many PDFs fed spanning_tree a
+    point count growing linearly with PDF count (squared by its O(n^2)
+    cost). ``link_total_cap`` bounds that sum instead: once ``len(pdfs) *
+    per_pdf`` would exceed it, every PDF's own share shrinks together
+    (never below 1, so a PDF's focused view is never left connected to
+    nothing) rather than the aggregate growing without bound.
+    ``per_pdf <= 0`` still means "every match" and is left alone, the
+    same opt-out as ``cap = 0``.
     """
     rows = [n for n in (graph.get("notes") or []) if row_xyz(n) is not None]
     positions: dict = {}
@@ -1533,13 +1578,15 @@ def split_cloud(
         if nid is not None:
             positions[nid] = row_xyz(n)
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
+    pdf_rows = [p for p in (graph.get("pdfs") or []) if isinstance(p, dict)]
+    eff_per_pdf = per_pdf
+    if per_pdf > 0 and pdf_rows and link_total_cap > 0:
+        eff_per_pdf = max(1, min(per_pdf, link_total_cap // len(pdf_rows)))
     linked: dict = {}
     taken: set = set()
-    for p in graph.get("pdfs") or []:
-        if not isinstance(p, dict):
-            continue
+    for p in pdf_rows:
         nids = [n for n in pdf_note_ids(edges, p.get("safe")) if n in positions]
-        picked = [nids[i] for i in sample_indices(len(nids), per_pdf)]
+        picked = [nids[i] for i in sample_indices(len(nids), eff_per_pdf)]
         linked[str(p.get("safe"))] = [positions[n] for n in picked]
         taken.update(picked)
     rest = [row_xyz(n) for n in rows if row_nid(n) not in taken]
@@ -1707,11 +1754,18 @@ def spanning_tree(points: Sequence) -> list:
     constellations rather than one sky; the tree bridges every gap kNN
     leaves open.
 
-    O(n^2) on the sampled cloud (~520 points -> ~270k distances).
-    Measured (final review, 2026-09-02): ~25 ms there, cleanly
-    quadratic — growing 3.7x-4x per doubling, not the sub-millisecond
-    this docstring once claimed; K-199 (P1) is the card that bounds it.
-    Never run this on the full index.
+    O(n^2) on whatever cloud it is handed (~520 points -> ~270k
+    distances) — still true after K-199, which bounds the INPUT rather
+    than touching this algorithm. Measured (python3.9.6, this machine,
+    a throwaway script against the real function): 520 pts 33 ms, 1,000
+    118 ms, 2,000 483 ms, 4,000 1.86 s, 8,000 7.55 s — cleanly
+    quadratic, ~4x per doubling, not the sub-millisecond this docstring
+    once claimed (that false number was the reason this card was
+    deferred once already — re-measure, never trust an old comment
+    here). K-199 (P1) keeps the point count this function ever sees
+    bounded regardless of PDF count via ``split_cloud``'s
+    ``LINK_TOTAL_CAP`` (see its own comment) — this function must still
+    never run on the full, unsampled index.
     Pure and deterministic — no RNG anywhere in it, unlike the kNN/chord
     modes below, which both need a seed.
 
@@ -1787,6 +1841,14 @@ def constellation_links(
     own). The seeded shuffle BEFORE the cap matters — keeping the
     first ``cap`` candidates in index order piles every surviving
     segment into whichever corner of the cloud the sample listed first.
+
+    **Known gap, flagged in K-199's review, not fixed here**: ``cap <=
+    0`` returns ``[]`` before the backbone is even built, so it drops
+    the connectivity guarantee along with the decorative density
+    budget — harmless only because every real caller passes
+    ``LINK_MAX`` (300), never <= 0. Left alone rather than restructured,
+    to avoid changing the ``cap=0`` behaviour tests/test_pdf_map.py
+    already pins for a path nothing in this codebase can reach today.
 
     Returns sorted unique ``(i, j)`` pairs with ``i < j``.
     """
