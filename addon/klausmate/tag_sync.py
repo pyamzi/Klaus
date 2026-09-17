@@ -318,10 +318,6 @@ def plan_reconcile(stored_by_safe: dict[str, str], existing_tags: set[str]) -> d
 # "what tag should this be" resolution the aqt-glue layer below does.
 
 
-def _escape_tag(tag: str) -> str:
-    return tag.replace("\\", "\\\\").replace('"', '\\"')
-
-
 def tag_query(tag: str) -> str:
     """One quoted ``tag:`` operand, escaped for Anki's search syntax.
 
@@ -344,13 +340,18 @@ def tag_query(tag: str) -> str:
     unescape ``\\*_``"). Backslash first, or the escapes we add would be
     escaped again.
 
-    Every caller that puts a tag in front of ``find_notes``,
-    ``find_cards`` or ``Browser.search_for`` uses this. ``_escape_tag``
-    above stays the narrower form ``apply_membership`` has always sent —
-    widening THAT query is a membership change, not a search fix.
+    EVERY caller that puts a tag in front of ``find_notes``,
+    ``find_cards`` or ``Browser.search_for`` uses this — the membership
+    diff below included since K-274. It used to build its own operand
+    with a quote-only escape, on the reasoning that widening that query
+    is a membership change rather than a search fix. It is both: the
+    notes the wildcards drag in come back as ``current``, and everything
+    in ``current`` that is not desired is bulk-REMOVED from the tag. One
+    helper, one escaping.
     """
     return 'tag:"{}"'.format(
-        _escape_tag(tag).replace("*", "\\*").replace("_", "\\_")
+        tag.replace("\\", "\\\\").replace('"', '\\"')
+           .replace("*", "\\*").replace("_", "\\_")
     )
 
 
@@ -358,7 +359,7 @@ def apply_membership(col, tag: str, desired: set[int]) -> tuple[list[int], list[
     """Diff `tag`'s current members against `desired` and bulk add/remove
     the difference. Returns (added, removed) — empty lists if already in
     sync (a real no-op: no bulk_add/bulk_remove call at all)."""
-    current = set(col.find_notes(f'tag:"{_escape_tag(tag)}"'))
+    current = set(col.find_notes(tag_query(tag)))
     to_add, to_remove = diff_membership(set(desired), current)
     if to_add:
         col.tags.bulk_add(to_add, tag)

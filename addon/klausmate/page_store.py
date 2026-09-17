@@ -48,6 +48,35 @@ def digest12(path: str, stat=os.stat) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
 
 
+def _has_path(path) -> bool:
+    return bool(str(path or "").strip())
+
+
+def _require_path(pdf_safe: str, path) -> None:
+    """Refuse a path that cannot name anything (K-238).
+
+    ``path`` is not this store's identity — the pointer file and
+    ``document_identity`` are — but where there is no pointer yet the
+    directory name IS ``digest12(path)``, and ``path == ""`` makes that
+    one constant directory, the same for every caller that has lost
+    track of its file. The empty path is reachable, not theoretical:
+    ``pdf_handler.pdf_path_for`` answers ``""`` for a PDF whose file does
+    not resolve yet, and the recorder seeds a page before the first index
+    run. Segments written to that shared bucket vanish from view the
+    moment the real file resolves and the identity moves on, so the store
+    refuses here rather than trusting its callers.
+
+    Only where the path is what would be CONSULTED: a call the store can
+    still answer from the document itself (a pointer already on disk, or
+    ``ensure_records`` keying on the page text) is well defined without
+    one and is answered.
+    """
+    if path == "" or not _has_path(path):
+        raise ValueError(
+            f"page_store: {pdf_safe!r} has no page-record directory without a PDF path"
+        )
+
+
 def _norm(text) -> str:
     return " ".join(str(text or "").split())
 
@@ -157,11 +186,16 @@ def record_dir(user_files: str, pdf_safe: str, path: str) -> str:
     is adopted — written into the pointer so it doesn't have to be
     rediscovered next time — and failing that this is a never-seeded
     PDF, so the (not yet existing) legacy path is returned exactly as
-    before."""
+    before.
+
+    That last step is the only one that reads ``path``, and it is where
+    an empty one is refused (``_require_path``): ``digest12("")`` is a
+    constant, not a directory this document owns."""
     base = os.path.join(user_files, SUBDIR, pdf_safe)
     pointer = _read_pointer(user_files, pdf_safe)
     if pointer:
         return os.path.join(base, pointer)
+    _require_path(pdf_safe, path)
     legacy = digest12(path)
     legacy_dir = os.path.join(base, legacy)
     if os.path.isdir(legacy_dir):
@@ -181,7 +215,16 @@ def _empty() -> dict:
 
 
 def load_record(user_files: str, pdf_safe: str, path: str, page_index: int) -> dict:
-    p = record_path(user_files, pdf_safe, path, page_index)
+    try:
+        p = record_path(user_files, pdf_safe, path, page_index)
+    except ValueError as exc:
+        # A reader, and its contract already answers the empty record for
+        # data it cannot find (below). A raise would break every reader
+        # that survives an unresolvable PDF today — the assistant's page
+        # context, anki_tools' PDF search, the pertinence judge, the
+        # transcript strip — for no gain: there is nothing to read.
+        print(f"[klausmate] no page record without a path: {exc}")
+        return _empty()
     try:
         with open(p, encoding="utf-8") as f:
             rec = json.load(f)
@@ -260,12 +303,23 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
     directory, and the old one is left on disk until delete_context
     removes it.
     """
+    if not pages:
+        # Nothing to seed, and the identity of "no pages" is the SAME hash a
+        # path-less call would produce (text_digest([]) == digest12("")), so
+        # seeding here would mint the one shared bucket every other entry
+        # point now refuses (K-238 review). A PDF whose text has not been
+        # extracted yet is seeded on the next pass that actually has pages.
+        return 0
     td = document_identity(user_files, pdf_safe, path, pages)
     base = os.path.join(user_files, SUBDIR, pdf_safe)
-    legacy = digest12(path)
+    # No path, no legacy directory to adopt: digest12("") names a shared
+    # bucket, never this document's own records (K-238). The identity
+    # itself needs no path, so seeding still works for a caller whose PDF
+    # does not resolve yet — it just keys on the text, as it always does.
+    legacy = digest12(path) if _has_path(path) else None
     pointer = _read_pointer(user_files, pdf_safe)
     if pointer is None:
-        pointer = legacy if os.path.isdir(os.path.join(base, legacy)) else td
+        pointer = legacy if legacy and os.path.isdir(os.path.join(base, legacy)) else td
         _write_pointer(user_files, pdf_safe, pointer)
     if pointer != td:
         # The pointer names a directory that is not this text's own. Two
@@ -313,11 +367,16 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
 
 def append_segment(user_files: str, pdf_safe: str, path: str, page_index: int,
                    t0: float, t1: float, text: str) -> dict:
+    # Resolved BEFORE the read, so a path that names no directory (K-238)
+    # refuses here — a writer has no empty answer to give, and the caller
+    # keeps its WAV for the next attempt — rather than after load_record
+    # has already logged its own miss for the same reason.
+    p = record_path(user_files, pdf_safe, path, page_index)
     rec = load_record(user_files, pdf_safe, path, page_index)
     rec["segments"].append({"t0": float(t0), "t1": float(t1), "text": str(text)})
     rec["segments"].sort(key=lambda s: (float(s.get("t0", 0.0)), float(s.get("t1", 0.0))))
     rec["updated_at"] = time.time()
-    _atomic_json(record_path(user_files, pdf_safe, path, page_index), rec)
+    _atomic_json(p, rec)
     _notify(pdf_safe, page_index)
     return rec
 

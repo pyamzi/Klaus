@@ -411,4 +411,74 @@ _missing = ps.document_identity(_tmp_ident if '_tmp_ident' in dir() else tempfil
 check('a text-less document whose file is missing falls back to the page-count digest',
       _missing == ps.text_digest(['', '']), _missing)
 
+section("an empty path never names a directory (K-238)")
+# digest12("") is a CONSTANT, so an empty path names ONE legacy directory
+# shared by every caller that has lost track of its file — and the empty
+# path is reachable: pdf_handler.pdf_path_for answers "" for a PDF that
+# does not resolve yet, and the recorder seeds a page before the first
+# index run. Whatever is written there vanishes from view the moment the
+# real file resolves and the identity moves on, so the store refuses at
+# its own boundary rather than trusting its callers.
+_ep = tempfile.mkdtemp(prefix="klaus-pages-emptypath-")
+_shared = os.path.join(_ep, ps.SUBDIR, "ghost", ps.digest12(""))
+
+
+def _refuses(fn, *a):
+    try:
+        fn(*a)
+    except ValueError:
+        return True
+    except Exception as exc:          # any other escape is not a refusal
+        return f"raised {type(exc).__name__}: {exc}"
+    return False
+
+
+for _blank in ("", "   ", "\t\n"):
+    _what = {"": "empty", "   ": "spaces-only"}.get(_blank, "whitespace")
+    check(f"record_dir refuses a {_what} path — it has no directory to name",
+          _refuses(ps.record_dir, _ep, "ghost", _blank))
+    check(f"record_path refuses a {_what} path",
+          _refuses(ps.record_path, _ep, "ghost", _blank, 0))
+    check(f"append_segment refuses a {_what} path — no segment is written",
+          _refuses(ps.append_segment, _ep, "ghost", _blank, 0, 0.0, 1.0, "into the void"))
+    check(f"...and no records directory was produced for a {_what} path — "
+          "least of all the shared digest12(\"\") one",
+          not os.path.isdir(_shared)
+          and not os.path.isdir(os.path.join(_ep, ps.SUBDIR, "ghost")))
+    check(f"load_record answers the EMPTY record for a {_what} path (the shape "
+          "its contract already documents for missing data), never a raise",
+          ps.load_record(_ep, "ghost", _blank, 0) == ps._empty())
+    check(f"page_texts answers empty rows for a {_what} path",
+          [t for _p, _h, t in ps.page_texts(_ep, "ghost", _blank, 2)] == ["", ""])
+
+# The refusal is "an empty path may never NAME a directory", not "a caller
+# without a path is turned away": identity here is the DOCUMENT (the
+# pointer file / document_identity), so a call the store can still answer
+# without consulting the path is answered. pertinence.ensure_judged reads
+# its page through `pdf_path_for(...) or ""` and must keep working.
+_np = tempfile.mkdtemp(prefix="klaus-pages-nopath-")
+ps.ensure_records(_np, "lec", "", ["Slide one text"])
+check("ensure_records with no path keys on the TEXT — never on digest12(\"\")",
+      ps._read_pointer(_np, "lec") == ps.text_digest(["Slide one text"])
+      and not os.path.isdir(os.path.join(_np, ps.SUBDIR, "lec", ps.digest12(""))))
+ps.append_segment(_np, "lec", "", 0, 0.0, 1.0, "appended with no path")
+check("...and once that pointer exists the path is not consulted at all: the "
+      "segment lands in the document's own directory",
+      ps.load_record(_np, "lec", "", 0)["segments"][0]["text"] == "appended with no path"
+      and ps.record_dir(_np, "lec", "")
+      == os.path.join(_np, ps.SUBDIR, "lec", ps.text_digest(["Slide one text"])))
+
+# K-238 review: the deviation left one hole open. ensure_records' own
+# fallback identity for an empty page list is text_digest([]), which is
+# byte-identical to digest12("") — the shared bucket every other entry
+# point refuses — so an empty seed minted exactly what the card abolishes.
+_empty_root = tempfile.mkdtemp(prefix="klaus-empty-pages-")
+_before = sorted(os.listdir(_empty_root))
+check("ensure_records writes nothing at all for a PDF with no extracted pages",
+      ps.ensure_records(_empty_root, "ghost", "/nope/ghost.pdf", []) == 0)
+check("...and mints no directory, least of all the one digest12('') names",
+      sorted(os.listdir(_empty_root)) == _before, os.listdir(_empty_root))
+check("text_digest([]) really is the collision this guards (proof, not assumption)",
+      ps.text_digest([]) == ps.digest12(""), (ps.text_digest([]), ps.digest12("")))
+
 raise SystemExit(report())

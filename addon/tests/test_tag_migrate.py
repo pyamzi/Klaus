@@ -28,6 +28,7 @@ module docstring's own note on that boundary, restated in the tag_sync
 sections below.
 """
 
+import re
 import sys
 import types
 
@@ -177,12 +178,33 @@ class FakeCol:
         return self.changes
 
     def find_notes(self, search: str) -> list[int]:
-        """Only needs to understand the exact `tag:"..."` shape
-        apply_membership builds (see tag_sync._escape_tag)."""
-        if search.startswith('tag:"') and search.endswith('"'):
-            tag = search[5:-1].replace('\\"', '"').replace("\\\\", "\\")
-            return sorted(self.tags.membership.get(tag, set()))
-        return []
+        """Understands the exact quoted ``tag:"…"`` operand
+        ``tag_sync.tag_query`` builds — INCLUDING Anki's wildcards, which
+        is the whole point of the K-274 pin below. In a ``tag:`` search an
+        unescaped ``*`` matches any run and ``_`` any single character,
+        while ``\\*`` and ``\\_`` are literal (rslib ``text.rs``
+        ``to_custom_re``). A double that looked the operand up as a plain
+        dict key could not tell the two escapings apart at all, so
+        ``apply_membership``'s quote-only ``_escape_tag`` — which left both
+        wildcards live and silently swept other tags' notes into the diff —
+        read as correct here for as long as it shipped."""
+        if not (search.startswith('tag:"') and search.endswith('"')):
+            return []
+        body, pat, i = search[5:-1], "", 0
+        while i < len(body):
+            c = body[i]
+            if c == "\\" and i + 1 < len(body):
+                pat += re.escape(body[i + 1])
+                i += 2
+                continue
+            pat += ".*" if c == "*" else "." if c == "_" else re.escape(c)
+            i += 1
+        rx = re.compile(pat + r"\Z")
+        out: set[int] = set()
+        for tag, nids in self.tags.membership.items():
+            if rx.match(tag):
+                out |= set(nids)
+        return sorted(out)
 
 
 print("== plan_renames (pure) ==")
@@ -460,6 +482,43 @@ check("nothing to add", added11 == [])
 check("nothing to remove", removed11 == [])
 check("bulk_add never called", col11.tags.bulk_add_calls == [])
 check("bulk_remove never called", col11.tags.bulk_remove_calls == [])
+
+print("== tag_sync.apply_membership: searches through tag_query (K-274) ==")
+# K-272 moved pdf_drive's three Browse hops onto tag_query; the membership
+# diff itself still built its own operand with the quote-only _escape_tag,
+# so a PDF whose name carries * or _ searched a WIDER set than it owns --
+# and _sanitize_segment mints an _ for every space, so "Week 3" is not an
+# exotic name. A widened search is not a cosmetic bug here: the extra notes
+# come back as `current`, and everything in current that is not desired is
+# BULK-REMOVED from the tag.
+_wild = "!Library::Week_3*"
+col20 = FakeCol(membership={
+    _wild: {1},                  # the PDF's own members
+    "!Library::Week-3x": {2},    # _ matches "-", * matches "x"
+    "!Library::Week_3": {3},     # * matches the empty run
+})
+added20, removed20 = ts.apply_membership(col20, _wild, {1, 4})
+check(
+    "a tag holding * and _ no longer widens membership: the wildcard "
+    "neighbours are not swept into the diff",
+    (added20, removed20) == ([4], []),
+)
+check(
+    "...so nothing is stripped off the tags that merely matched",
+    col20.tags.bulk_remove_calls == []
+    and col20.tags.membership["!Library::Week-3x"] == {2}
+    and col20.tags.membership["!Library::Week_3"] == {3},
+)
+col21 = FakeCol(membership={"!Library::Plain": {1, 2}})
+check(
+    "a plain tag's membership is unchanged by the move onto tag_query",
+    ts.apply_membership(col21, "!Library::Plain", {2, 3}) == ([3], [1]),
+)
+col22 = FakeCol(membership={'!Library::Lec "1"\\a': {7}})
+check(
+    "a tag carrying a quote and a backslash still finds its own members",
+    ts.apply_membership(col22, '!Library::Lec "1"\\a', {7}) == ([], []),
+)
 
 print("== tag_sync.apply_rename: renames the STORED tag, never a derived guess ==")
 col12 = FakeCol(membership={"!Library::OldName": {1, 2}})
