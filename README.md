@@ -56,6 +56,16 @@ cd ../klausbook-code && fnm exec --using=v24.18.0 ./scripts/code.sh \
   --extensionDevelopmentPath="$PWD/../klausbook/extensions/klaus-pdf"
 ```
 
+## The PDF editor
+
+Opening a PDF from the Library shows an Impress-style editor: a filmstrip
+of slide thumbnails (click or Arrow/PageUp/PageDown/Home/End to navigate),
+the current slide on the stage (zoom −/+/Fit), and a notes sidebar on the
+right. Notes are per-slide Markdown with an Edit/Preview toggle; paste or
+drop an image to embed it. Everything autosaves to klaus-core under
+`~/Library/Application Support/Klausbook/` (`KLAUS_DATA_DIR` overrides;
+tests use a scratch dir). The klausmate library itself is never written.
+
 ## The board
 
 All project work is tracked on a kanban board (same system as the klausmate

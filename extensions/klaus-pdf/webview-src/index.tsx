@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import * as pdfjs from "pdfjs-dist";
-import PdfViewer from "./PdfViewer";
+import ImpressView from "./ImpressView";
 import "./viewer.css";
 
 declare global {
@@ -24,7 +24,7 @@ async function main() {
     new Blob([source], { type: "text/javascript" }),
   );
   createRoot(document.getElementById("root")!).render(
-    <PdfViewer pdfId={cfg.pdfId} name={cfg.name} />,
+    <ImpressView pdfId={cfg.pdfId} name={cfg.name} />,
   );
 }
 

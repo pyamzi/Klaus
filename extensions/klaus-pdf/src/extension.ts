@@ -79,7 +79,7 @@ function pdfPanelHtml(webview: vscode.Webview, root: vscode.Uri, pdf: PdfMeta): 
     `script-src 'nonce-${nonce}'`,
     `connect-src ${CORE_URL} ${webview.cspSource}`,
     "worker-src blob:",
-    `img-src ${webview.cspSource} blob: data:`,
+    `img-src ${webview.cspSource} ${CORE_URL} blob: data:`,
   ].join("; ");
   const config = {
     pdfId: pdf.id,
@@ -106,6 +106,7 @@ function pdfPanelHtml(webview: vscode.Webview, root: vscode.Uri, pdf: PdfMeta): 
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const panels = new Map<string, vscode.WebviewPanel>();
   const provider = new LibraryProvider();
   const view = vscode.window.createTreeView("klausLibrary", {
     treeDataProvider: provider,
@@ -122,6 +123,13 @@ export function activate(context: vscode.ExtensionContext): void {
     view,
     vscode.commands.registerCommand("klaus.refreshLibrary", () => provider.refresh()),
     vscode.commands.registerCommand("klaus.openPdf", (pdf: PdfMeta) => {
+      // One panel per PDF: a second panel would hold its own copy of the
+      // notes doc and last-write-wins autosave would clobber edits.
+      const existing = panels.get(pdf.id);
+      if (existing) {
+        existing.reveal(vscode.ViewColumn.Active);
+        return;
+      }
       const root = vscode.Uri.joinPath(context.extensionUri, "out", "webview");
       const panel = vscode.window.createWebviewPanel(
         "klausPdf",
@@ -133,6 +141,8 @@ export function activate(context: vscode.ExtensionContext): void {
           localResourceRoots: [root],
         },
       );
+      panels.set(pdf.id, panel);
+      panel.onDidDispose(() => panels.delete(pdf.id));
       panel.webview.html = pdfPanelHtml(panel.webview, root, pdf);
     }),
   );
