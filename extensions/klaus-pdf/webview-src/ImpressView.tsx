@@ -1,9 +1,20 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import NotesSidebar from "./NotesSidebar";
 import PdfPage from "./PdfPage";
 import { fetchPdfBytes } from "./core";
+import {
+  clampZoom,
+  isTypingTarget,
+  matchShortcut,
+  parsePage,
+  zoomIn,
+  zoomOut,
+  type TargetLike,
+} from "./shortcuts";
+import { toast } from "./toast";
 
 const THUMB_WIDTH = 140;
 const STAGE_PADDING = 32;
@@ -20,12 +31,16 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   const [current, setCurrent] = useState(1);
   const [scale, setScale] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [pageDraft, setPageDraft] = useState("1");
+  const pageInputRef = useRef<HTMLInputElement>(null);
 
+  // Fit obeys the same 0.25-5.0 ladder as the zoom keys, so Cmd+0 can never
+  // land outside it. A slide that would need less than 0.25 to fit therefore
+  // overflows the stage and scrolls, rather than shrinking off the ladder.
   const fitScale = useCallback((size: { w: number; h: number }) => {
     const stage = stageRef.current;
     if (!stage) return 1;
-    return Math.max(
-      0.1,
+    return clampZoom(
       Math.min(
         (stage.clientWidth - STAGE_PADDING * 2) / size.w,
         (stage.clientHeight - STAGE_PADDING * 2) / size.h,
@@ -77,32 +92,80 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     return () => window.removeEventListener("resize", onResize);
   }, [baseSize, fitScale]);
 
-  // Keep a ref of `current` so the keydown handler need not re-bind per slide.
-  const currentRef = useRef(current);
-  currentRef.current = current;
-
-  // Keyboard slide navigation, unless typing in the notes sidebar.
+  // The page field mirrors the slide unless the user is mid-edit.
   useEffect(() => {
-    if (!doc) return;
+    setPageDraft(String(current));
+  }, [current]);
+
+  // Cmd+A: select the slide's own text layer, nothing else on the page.
+  const selectSlideText = useCallback(() => {
+    const layer = stageRef.current?.querySelector(".textLayer");
+    const selection = window.getSelection();
+    if (!layer || !layer.textContent?.trim() || !selection) {
+      toast("no selectable text on this page");
+      return;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(layer);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
+
+  // Shortcut table per docs/reference/klausmate-viewer-parity.md. Keystrokes
+  // aimed at the notes textarea or the page field are left alone.
+  useEffect(() => {
+    if (!doc || !baseSize) return;
+    const last = doc.numPages;
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable) return;
-      const last = doc.numPages;
-      const go = (n: number) => {
-        setCurrent(Math.min(Math.max(n, 1), last));
-        e.preventDefault();
-      };
-      if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown") go(currentRef.current + 1);
-      else if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") go(currentRef.current - 1);
-      else if (e.key === "Home") go(1);
-      else if (e.key === "End") go(last);
+      if (isTypingTarget(e.target as TargetLike | null)) return;
+      const action = matchShortcut(e);
+      if (!action) return;
+      e.preventDefault();
+      switch (action) {
+        case "zoom-in":
+          setScale(zoomIn);
+          break;
+        case "zoom-out":
+          setScale(zoomOut);
+          break;
+        case "zoom-fit":
+          setScale(fitScale(baseSize));
+          break;
+        case "select-page":
+          selectSlideText();
+          break;
+        case "go-to-page":
+          pageInputRef.current?.focus();
+          pageInputRef.current?.select();
+          break;
+        case "page-next":
+          setCurrent((c) => Math.min(c + 1, last));
+          break;
+        case "page-prev":
+          setCurrent((c) => Math.max(c - 1, 1));
+          break;
+        case "page-first":
+          setCurrent(1);
+          break;
+        case "page-last":
+          setCurrent(last);
+          break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc]);
+  }, [doc, baseSize, fitScale, selectSlideText]);
 
-  const zoom = (factor: number) =>
-    setScale((s) => Math.min(6, Math.max(0.1, s * factor)));
+  const commitPageDraft = () => {
+    if (!doc) return;
+    const n = parsePage(pageDraft, doc.numPages);
+    if (n === null) {
+      toast(`page must be between 1 and ${doc.numPages}`);
+      setPageDraft(String(current));
+      return;
+    }
+    setCurrent(n);
+  };
 
   if (error) {
     return <div className="viewer-message">Could not open {name}: {error}</div>;
@@ -139,12 +202,34 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
       <div className="stage-column">
         <div className="viewer-toolbar">
           <span className="viewer-title" title={name}>{name}</span>
-          <span className="viewer-pages">{current} / {doc.numPages}</span>
+          <span className="viewer-pages">
+            <input
+              ref={pageInputRef}
+              className="page-input"
+              style={{ "--page-digits": String(doc.numPages).length } as CSSProperties}
+              value={pageDraft}
+              aria-label="Page number"
+              title="Go to page (Cmd+Alt+G)"
+              onChange={(e) => setPageDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  commitPageDraft();
+                  e.currentTarget.blur();
+                } else if (e.key === "Escape") {
+                  setPageDraft(String(current));
+                  e.currentTarget.blur();
+                }
+              }}
+              onBlur={() => setPageDraft(String(current))}
+            />
+            {" / "}
+            {doc.numPages}
+          </span>
           <div className="viewer-zoom">
-            <button onClick={() => zoom(1 / 1.2)} title="Zoom out">−</button>
+            <button onClick={() => setScale(zoomOut)} title="Zoom out (Cmd+-)">−</button>
             <span>{Math.round(scale * 100)}%</span>
-            <button onClick={() => zoom(1.2)} title="Zoom in">+</button>
-            <button onClick={() => setScale(fitScale(baseSize))} title="Fit slide">Fit</button>
+            <button onClick={() => setScale(zoomIn)} title="Zoom in (Cmd+=)">+</button>
+            <button onClick={() => setScale(fitScale(baseSize))} title="Fit slide (Cmd+0)">Fit</button>
           </div>
         </div>
         <div className="stage" ref={stageRef}>
