@@ -82,7 +82,7 @@ no-op while the bar is hidden. Hides + clears on document change.
 ## Known divergences to keep (deliberate)
 
 - KlausBook's Impress stage (filmstrip + single slide + notes sidebar) vs
-  klausmate's continuous scroll — chosen in the 2026-09-17 plan Q&A; see
-  the open layout question on the board.
+  klausmate's continuous scroll — DECIDED 2026-09-17: KlausBook keeps the
+  Impress layout and ports the interactions (Pouya, after review of this spec).
 - KlausBook has per-slide notes (its own feature); klausmate has none —
   klausmate's transcript strip is lecture transcript, not notes.
