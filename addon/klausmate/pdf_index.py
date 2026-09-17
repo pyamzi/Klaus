@@ -87,13 +87,11 @@ def source_signature(user_files_dir: str, name: str) -> tuple[int, int] | None:
 
 def load(dir_path: str) -> PdfIndex | None:
     """Load one PDF's index; None on missing/corrupt/mismatch (= rebuild)."""
-    manifest_path = os.path.join(dir_path, MANIFEST_FILE)
     vectors_path = os.path.join(dir_path, VECTORS_FILE)
+    m = card_index.read_manifest(dir_path, INDEX_VERSION, MANIFEST_FILE)
+    if m is None:
+        return None
     try:
-        with open(manifest_path, encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            return None
         pages = [(int(p[0]), str(p[1])) for p in m["pages"]]
         dims = int(m["dims"])
         embedded_rows = int(m.get("embedded_rows") or 0)
@@ -120,7 +118,7 @@ def load(dir_path: str) -> PdfIndex | None:
             vectors=vectors,
             updated_at=float(m.get("updated_at") or 0.0),
         )
-    except (OSError, ValueError, KeyError, TypeError, IndexError, json.JSONDecodeError):
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
         return None
 
 
