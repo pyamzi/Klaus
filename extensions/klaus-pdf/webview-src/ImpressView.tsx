@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import NotesSidebar from "./NotesSidebar";
@@ -50,9 +50,7 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
         const first = await loaded.getPage(1);
         const viewport = first.getViewport({ scale: 1 });
         if (cancelled) return;
-        const size = { w: viewport.width, h: viewport.height };
-        setBaseSize(size);
-        setScale(fitScale(size));
+        setBaseSize({ w: viewport.width, h: viewport.height });
         setDoc(loaded);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -64,6 +62,12 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
       task?.destroy();
     };
   }, [pdfId, fitScale]);
+
+  // The initial fit must run after the stage has mounted — during loading
+  // the component renders the "Opening…" branch and stageRef is null.
+  useLayoutEffect(() => {
+    if (doc && baseSize) setScale(fitScale(baseSize));
+  }, [doc, baseSize, fitScale]);
 
   // Refit when the panel resizes.
   useEffect(() => {

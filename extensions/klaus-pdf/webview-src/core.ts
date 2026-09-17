@@ -48,6 +48,8 @@ export async function saveNotes(id: string, doc: NotesDoc): Promise<void> {
     method: "PUT",
     headers: { "X-Klaus-Token": TOKEN, "Content-Type": "application/json" },
     body: JSON.stringify(doc),
+    // Survive webview teardown: the unmount flush may race panel disposal.
+    keepalive: true,
   });
   if (!res.ok) {
     throw new Error(`klaus-core PUT /notes/${id} failed: ${res.status}`);

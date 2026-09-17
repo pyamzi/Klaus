@@ -17,6 +17,8 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
   const [status, setStatus] = useState<SaveState>("saved");
   const [loadError, setLoadError] = useState<string | null>(null);
   const docRef = useRef<NotesDoc | null>(null);
+  const revRef = useRef(0); // bumps on every edit
+  const savingRef = useRef(false); // a PUT is in flight
   const timerRef = useRef<number | undefined>(undefined);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -34,15 +36,24 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
     };
   }, [pdfId]);
 
+  // Saves are serialized: at most one PUT in flight, and a snapshot that is
+  // already stale by the time it lands neither shows "Saved" nor stops the
+  // newer state from being flushed right after.
   const flush = async () => {
     timerRef.current = undefined;
+    if (savingRef.current) return; // the finisher below re-runs flush
     const d = docRef.current;
     if (!d) return;
+    savingRef.current = true;
+    const rev = revRef.current;
     try {
       await saveNotes(pdfId, d);
-      setStatus("saved");
+      if (revRef.current === rev) setStatus("saved");
     } catch {
       setStatus("error");
+    } finally {
+      savingRef.current = false;
+      if (revRef.current !== rev) void flush();
     }
   };
 
@@ -59,13 +70,14 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
 
   const md = doc?.pages[String(page)]?.md ?? "";
 
-  const update = (text: string) => {
+  const updatePage = (key: string, text: string) => {
     if (!docRef.current) return;
     const next: NotesDoc = {
       ...docRef.current,
-      pages: { ...docRef.current.pages, [String(page)]: { md: text } },
+      pages: { ...docRef.current.pages, [key]: { md: text } },
     };
     docRef.current = next;
+    revRef.current += 1;
     setDoc(next);
     setStatus("saving");
     if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
@@ -74,13 +86,18 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
 
   const insertImage = async (file: Blob) => {
     if (!file.type.startsWith("image/")) return;
+    // Capture the target slide and cursor before awaiting: the user may
+    // switch slides or keep typing while the upload is in flight.
+    const targetPage = String(page);
+    const el = textRef.current;
+    const at = el ? el.selectionStart : null;
     setStatus("saving");
     try {
       const name = await uploadAsset(pdfId, file);
       const ref = `![](${assetUrl(pdfId, name)})`;
-      const el = textRef.current;
-      const at = el ? el.selectionStart : md.length;
-      update(md.slice(0, at) + ref + md.slice(at));
+      const latest = docRef.current?.pages[targetPage]?.md ?? "";
+      const pos = at !== null && at <= latest.length ? at : latest.length;
+      updatePage(targetPage, latest.slice(0, pos) + ref + latest.slice(pos));
     } catch {
       setStatus("error");
     }
@@ -120,7 +137,7 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
           placeholder="Notes for this slide… (Markdown)"
           value={md}
           disabled={doc === null}
-          onChange={(e) => update(e.target.value)}
+          onChange={(e) => updatePage(String(page), e.target.value)}
           onPaste={(e) => {
             const file = Array.from(e.clipboardData.items)
               .find((i) => i.type.startsWith("image/"))?.getAsFile();
