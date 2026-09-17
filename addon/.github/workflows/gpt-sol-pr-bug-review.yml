@@ -166,20 +166,20 @@ jobs:
                   capture_output=True,
                   check=False,
               )
-              if merge_base.returncode != 0:
-                  raise RuntimeError(f"git merge-base failed: {merge_base.stderr.strip()}")
-              mb_sha = merge_base.stdout.strip()
+              if merge_base.returncode == 0:
+                  mb_sha = merge_base.stdout.strip()
+                  result = subprocess.run(
+                      ["git", "diff", "--no-color", "--unified=3", mb_sha, head_sha],
+                      text=True,
+                      capture_output=True,
+                      check=False,
+                  )
+                  if result.returncode == 0:
+                      return result.stdout
+                  print(f"git diff failed; falling back to PR files API: {result.stderr.strip()}")
+              else:
+                  print(f"git merge-base failed; falling back to PR files API: {merge_base.stderr.strip()}")
 
-              result = subprocess.run(
-                  ["git", "diff", "--no-color", "--unified=3", mb_sha, head_sha],
-                  text=True,
-                  capture_output=True,
-                  check=False,
-              )
-              if result.returncode == 0:
-                  return result.stdout
-
-              print(f"git diff failed; falling back to PR files API: {result.stderr.strip()}")
               if not token:
                   raise RuntimeError("git diff failed and GITHUB_TOKEN is unavailable for API fallback")
 
@@ -220,8 +220,12 @@ jobs:
                           if not patch.endswith("\n"):
                               lines.append("\n")
                       else:
-                          lines.append("@@ -0,0 +0,0 @@\n")
-                          lines.append(f"[{status} file; textual patch not available]\n")
+                          if status == "renamed":
+                              lines.append(f"rename from {prev}\n")
+                              lines.append(f"rename to {filename}\n")
+                          else:
+                              lines.append("@@ -0,0 +0,0 @@\n")
+                              lines.append(f"[{status} file; textual patch not available]\n")
                   if len(files) < 100:
                       break
                   page += 1
