@@ -470,6 +470,68 @@ if _HAVE_QT:
     sb5.cleanup()
     sb5.close()
 
+    section("PR #4 sixth review: the strip's scroll viewport is the "
+            "strip's own chrome in dark mode, not the palette default")
+    # Copilot: the QSS makes the QScrollArea transparent, but a scroll
+    # area paints its VIEWPORT child, and a viewport left to fill itself
+    # from the palette would render the transcript body as an opaque
+    # default rectangle sitting on top of the strip's chrome surface —
+    # white on a dark strip, in the worst case. Proven the only way it
+    # can be proven: grab the real widget offscreen and read the pixels
+    # inside the viewport's own rect, against an application palette
+    # loud enough that a palette fill could not be mistaken for chrome.
+    _orig_night = theme.night_mode
+    _orig_palette = app.palette()
+    try:
+        theme.night_mode = lambda: True
+        _loud = _QtG.QPalette()
+        for _role in (_QtG.QPalette.ColorRole.Window,
+                      _QtG.QPalette.ColorRole.Base,
+                      _QtG.QPalette.ColorRole.Button):
+            _loud.setColor(_role, _QtG.QColor("#FF00FF"))
+        app.setPalette(_loud)
+        sb7 = pdf_viewer.PdfSidebar(None, parent=None)
+        sb7.resize(420, 500)
+        sb7.show()
+        for _ in range(5):
+            app.processEvents()
+        sb7.set_transcript(0, "the professor said something")
+        for _ in range(5):
+            app.processEvents()
+        check("the strip is showing, so there are real pixels to read",
+              sb7._transcript.isVisible() and sb7._transcript_scroll.isVisible())
+        _vp = sb7._transcript_scroll.viewport()
+        check("the viewport does not fill itself from the palette",
+              _vp.autoFillBackground() is False)
+        _img = sb7._transcript.grab().toImage()
+        _sr, _vr = sb7._transcript_scroll.geometry(), _vp.geometry()
+        _x0, _y0 = _sr.x() + _vr.x(), _sr.y() + _vr.y()
+        _chrome = _QtG.QColor(theme.palette(True)["chrome"]).rgb()
+        _seen: dict = {}
+        for _yy in range(_y0, _y0 + _vr.height()):
+            for _xx in range(_x0, _x0 + _vr.width(), 7):
+                _px = _img.pixel(_xx, _yy)
+                _seen[_px] = _seen.get(_px, 0) + 1
+        _total = sum(_seen.values())
+        _chrome_n = _seen.get(_chrome, 0)
+        check("the viewport really was sampled (a non-empty rect)",
+              _total > 500, repr((_vr.width(), _vr.height(), _total)))
+        # Anti-aliased glyph edges are the only other colours in there;
+        # the body of the viewport must be chrome, never the palette.
+        check("the transcript body reads as the strip's own chrome "
+              "surface, not the application palette's default",
+              _chrome_n > _total * 0.9,
+              repr(sorted(((_QtG.QColor(k).name(), v) for k, v in _seen.items()),
+                          key=lambda kv: -kv[1])[:4]))
+        check("...and not one sampled pixel is the palette colour the "
+              "viewport would have filled with",
+              _seen.get(_QtG.QColor("#FF00FF").rgb(), 0) == 0)
+        sb7.cleanup()
+        sb7.close()
+    finally:
+        theme.night_mode = _orig_night
+        app.setPalette(_orig_palette)
+
     shutil.rmtree(uf, ignore_errors=True)
 else:
     print("  SKIP: PyQt6 unavailable — no source-only fallback is "

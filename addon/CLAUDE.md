@@ -1121,10 +1121,18 @@ same reason.
   so two lectures a day apart still sort against each other while a
   mid-recording NTP jump can't run one chunk backwards. WAVs land in
   `user_files/recordings/<safe>/<t0>-p<page:04d>.wav`, headered with the
-  format actually NEGOTIATED with the device — ideal 16 kHz mono Int16
-  first, then `device.preferredFormat()`, the `aqt.sound` shape — because
-  the Klaus Plus service meters lecture minutes by reading that header
-  back. The `Uploader` is one daemon worker, FIFO: transcribe, append to
+  rate and channel count actually NEGOTIATED with the device — ideal
+  16 kHz mono Int16 first, then `device.preferredFormat()` as it is, both
+  checked against `isFormatSupported` — because the Klaus Plus service
+  meters lecture minutes by reading that header back. **The width is
+  always 2** (K-279, Copilot on PR #4): forcing Int16 onto the preferred
+  format, which is what shipped, meant a device whose only sample format
+  is Float32 never started and Record was a dead button, so `_ingest`
+  converts every captured buffer through the pure `pcm_to_int16`
+  (Float32/Int32/UInt8 → Int16, a 0–3 byte tail carried into the next
+  read so a torn sample cannot desync the stream). A device that supports
+  neither format, or whose sample type Klaus cannot read, refuses to
+  record with one log line naming it — never a silent dead button. The `Uploader` is one daemon worker, FIFO: transcribe, append to
   the page record, unlink. **A failed upload keeps its WAV** — network
   error, missing key, a Plus refusal — and the next Record on that PDF
   re-queues leftovers (numerically by `t0`, not by filename); an empty

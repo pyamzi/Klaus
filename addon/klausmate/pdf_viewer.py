@@ -4407,6 +4407,16 @@ class PdfSidebar(QWidget):
         scroll.setMaximumHeight(120)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
+        # PR #4 sixth review: a scroll area paints its VIEWPORT child,
+        # not itself, so a viewport left filling from the palette would
+        # draw the transcript body as an opaque default rectangle on top
+        # of the strip's chrome. The sheet's own
+        # `QWidget#KlausTranscriptStrip QScrollArea { background:
+        # transparent }` already clears it (pinned by the dark-mode pixel
+        # read in tests/test_transcript_strip.py) — this is the belt to
+        # that sheet's braces, so narrowing the rule later cannot quietly
+        # bring the rectangle back.
+        scroll.viewport().setAutoFillBackground(False)
         label = QLabel("", scroll)
         # PR #4 third re-review: transcript text is UNTRUSTED — a
         # microphone through a transcription API — and QLabel.setText

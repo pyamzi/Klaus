@@ -1345,6 +1345,14 @@ def transcript_strip_qss(night: bool) -> str:
     chevron plus the transcript text both in ``text_muted`` at 12px:
     the lecturer's words are a caption under the page, not body copy
     competing with it.
+
+    The ``QScrollArea`` rule is load-bearing, not tidiness (PR #4 sixth
+    review): a scroll area paints its VIEWPORT child, and Qt clears that
+    viewport's own palette fill only because this rule declares the
+    scroll area transparent. Narrow or delete it and the transcript body
+    comes back as an opaque palette-coloured rectangle over the strip's
+    chrome — a dark-mode pixel read in tests/test_transcript_strip.py
+    fails if it ever does.
     """
     c = palette(night)
     return f"""

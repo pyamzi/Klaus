@@ -25,6 +25,7 @@ labelled by what they cover:
 from __future__ import annotations
 
 import ast
+import contextlib
 import importlib
 import json
 import os
@@ -33,6 +34,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 
 sys.path.insert(
     0,
@@ -1035,5 +1037,224 @@ ns_up.enqueue("notifytest", _ns_pdf, lr.Chunk(2, 30.0, 60.0), _ns_p2)
 check("the worker survives and processes the next chunk",
       _returns_within(ns_up.drain, 3.0) and not os.path.exists(_ns_p2)
       and len(_ns_notified) == 2, repr(_ns_notified))
+
+# ---------------------------------------------------------------------
+# PR #4 sixth review (Copilot): a device whose ONLY sample format is
+# Float32 must still record. The old fallback took device.preferredFormat()
+# and forced Int16 onto it without ever asking isFormatSupported, so
+# QAudioSource never started and Record was a dead button with no message.
+# Negotiate honestly and convert the samples ourselves instead.
+# ---------------------------------------------------------------------
+section("PR #4 sixth review: pcm_to_int16 converts every negotiated sample format")
+
+
+def _i16(*vals: int) -> bytes:
+    return struct.pack("<%dh" % len(vals), *vals)
+
+
+_f32 = struct.pack("<5f", -1.0, 0.0, 0.5, 1.0, 1.5)
+check("Float32 -> clamped to [-1, 1] and scaled by 32767, little-endian",
+      lr.pcm_to_int16(_f32, "Float") == _i16(-32767, 0, 16383, 32767, 32767),
+      repr(lr.pcm_to_int16(_f32, "Float")))
+check("...and Qt's own enum member is accepted, not just its name — the "
+      "helper reads .name off whatever it is handed, so the Qt-free half "
+      "of this module never imports QAudioFormat",
+      lr.pcm_to_int16(_f32, types.SimpleNamespace(name="Float")) == _i16(-32767, 0, 16383, 32767, 32767))
+check("Int32 -> shifted right 16 (a sign-preserving arithmetic shift, so "
+      "the most negative sample stays the most negative)",
+      lr.pcm_to_int16(struct.pack("<5i", 0, 65536, -65536, 2147483647, -2147483648), "Int32")
+      == _i16(0, 1, -1, 32767, -32768))
+check("UInt8 -> centred on 0 and shifted up 8",
+      lr.pcm_to_int16(bytes([0, 128, 255, 64]), "UInt8") == _i16(-32768, 0, 32512, -16384))
+_already = _i16(7, -7, 300)
+check("Int16 passes through byte for byte — no round trip, no rescale",
+      lr.pcm_to_int16(_already, "Int16") == _already)
+_unknown_raised = False
+try:
+    lr.pcm_to_int16(b"\x00\x00", "Unknown")
+except ValueError:
+    _unknown_raised = True
+check("an unknown sample format raises rather than guessing a width — "
+      "start() turns that into a refusal with a log line, never silent "
+      "noise in the WAV",
+      _unknown_raised)
+
+section("PR #4 sixth review: a Float32-ONLY device still records (start() "
+        "picks the preferred format and converts)")
+
+
+class _FakeSampleFormat:
+    """Stands in for a QAudioFormat.SampleFormat enum member: the only
+    thing the code under test reads off it is `.name`."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<SampleFormat {self.name}>"
+
+
+class _FakeSampleFormats:
+    Unknown = _FakeSampleFormat("Unknown")
+    UInt8 = _FakeSampleFormat("UInt8")
+    Int16 = _FakeSampleFormat("Int16")
+    Int32 = _FakeSampleFormat("Int32")
+    Float = _FakeSampleFormat("Float")
+
+
+class _FakeAudioFormat:
+    SampleFormat = _FakeSampleFormats
+
+    def __init__(self, rate: int = 0, channels: int = 0, fmt=None) -> None:
+        self._rate, self._channels, self._fmt = rate, channels, fmt
+
+    def setSampleRate(self, r): self._rate = r
+    def setChannelCount(self, c): self._channels = c
+    def setSampleFormat(self, f): self._fmt = f
+    def sampleRate(self): return self._rate
+    def channelCount(self): return self._channels
+    def sampleFormat(self): return self._fmt
+
+
+class _FakeDevice:
+    """A microphone that supports EXACTLY the formats it is told to."""
+
+    def __init__(self, preferred: _FakeAudioFormat, supported_names) -> None:
+        self._preferred, self._supported = preferred, set(supported_names)
+
+    def isNull(self): return False
+    def description(self): return "Fake Float32 Mic"
+    def preferredFormat(self): return self._preferred
+
+    def isFormatSupported(self, fmt):
+        return getattr(fmt.sampleFormat(), "name", None) in self._supported
+
+
+class _FakeAudioSource:
+    def __init__(self, device, fmt):
+        self.device, self.fmt, self.stopped = device, fmt, False
+        self.io = _FakeIO(b"")
+
+    def start(self): return self.io
+    def stop(self): self.stopped = True
+
+
+class _FakeTimer:
+    def __init__(self):
+        self.interval = None
+        self.started = False
+        self.timeout = types.SimpleNamespace(connect=lambda fn: None)
+
+    def setInterval(self, ms): self.interval = ms
+    def start(self): self.started = True
+    def stop(self): self.started = False
+
+
+def _with_fake_qt(fn):
+    """Run fn() with PyQt6.QtCore/PyQt6.QtMultimedia replaced by the fakes
+    above — never a real QAudioSource, so this suite still opens no
+    microphone (the file's own standing constraint)."""
+    qtc = types.ModuleType("PyQt6.QtCore")
+    qtc.QTimer = _FakeTimer
+    qtm = types.ModuleType("PyQt6.QtMultimedia")
+    qtm.QAudioFormat = _FakeAudioFormat
+    qtm.QAudioSource = _FakeAudioSource
+    saved = {k: sys.modules.get(k) for k in ("PyQt6.QtCore", "PyQt6.QtMultimedia")}
+    sys.modules["PyQt6.QtCore"] = qtc
+    sys.modules["PyQt6.QtMultimedia"] = qtm
+    try:
+        return fn(qtm)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+def _start_against(device, recorder):
+    def run(qtm):
+        class _FakeMediaDevices:
+            @staticmethod
+            def defaultAudioInput():
+                return device
+
+        qtm.QMediaDevices = _FakeMediaDevices
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ok = recorder.start()
+        return ok, out.getvalue()
+
+    return _with_fake_qt(run)
+
+
+f32_up = lr.Uploader(root, lambda: {})
+f32_enqueued = []
+f32_up.enqueue = lambda *a, **k: f32_enqueued.append(a)
+f32_rec = lr.Recorder(root, "f32test", os.path.join(root, "f32test.pdf"),
+                      get_page=lambda: 1, uploader=f32_up)
+f32_device = _FakeDevice(_FakeAudioFormat(48000, 2, _FakeSampleFormats.Float), {"Float"})
+f32_ok, f32_log = _start_against(f32_device, f32_rec)
+check("start() succeeds on a device that offers Float32 and nothing else",
+      f32_ok is True, f32_log)
+check("...because it took the device's preferred format AS IT IS rather "
+      "than forcing Int16 onto a format the device never claimed",
+      f32_rec._sample_format == "Float", repr(f32_rec._sample_format))
+check("...keeping the negotiated rate and channel count in the header",
+      (f32_rec._wav_rate, f32_rec._wav_channels) == (48000, 2),
+      repr((f32_rec._wav_rate, f32_rec._wav_channels)))
+check("...while the header's WIDTH is 2 whatever the mic speaks — the "
+      "Klaus Plus service meters lecture minutes by reading it back",
+      f32_rec._wav_width == 2)
+# Drive one tick with real Float32 bytes from the fake device and read
+# the flushed WAV back: the conversion has to happen on the way INTO the
+# chunk buffer, or the 44-byte header describes 16-bit audio over 32-bit
+# float samples (noise, at half the claimed duration).
+f32_rec._io = _FakeIO(struct.pack("<4f", -1.0, 0.0, 0.5, 1.0))
+f32_rec._start_mono -= (lr.CHUNK_S + 1.0)  # the next tick closes a chunk
+f32_rec._tick()
+check("a tick closed a chunk and flushed it", len(f32_enqueued) == 1, repr(f32_enqueued))
+if f32_enqueued:
+    with wave.open(f32_enqueued[0][3], "rb") as _wf:
+        f32_frames = _wf.readframes(_wf.getnframes())
+        check("the flushed WAV is 16-bit at the negotiated 48 kHz / 2ch",
+              (_wf.getsampwidth(), _wf.getframerate(), _wf.getnchannels()) == (2, 48000, 2),
+              repr((_wf.getsampwidth(), _wf.getframerate(), _wf.getnchannels())))
+    check("...and its samples are the CONVERTED ones, not the raw float bytes",
+          f32_frames == _i16(-32767, 0, 16383, 32767), repr(f32_frames))
+f32_rec.stop()
+
+section("PR #4 sixth review: a device with nothing usable refuses to "
+        "record, with one log line naming the format")
+none_rec = lr.Recorder(root, "nonetest", os.path.join(root, "nonetest.pdf"),
+                       get_page=lambda: 1, uploader=lr.Uploader(root, lambda: {}))
+none_device = _FakeDevice(_FakeAudioFormat(44100, 1, _FakeSampleFormats.Float), set())
+none_ok, none_log = _start_against(none_device, none_rec)
+check("start() returns False when even the preferred format is refused",
+      none_ok is False and not none_rec.is_recording)
+check("...and says so once, naming the format it could not use",
+      none_log.count("[klausmate]") == 1 and "Float" in none_log, repr(none_log))
+unk_rec = lr.Recorder(root, "unktest", os.path.join(root, "unktest.pdf"),
+                      get_page=lambda: 1, uploader=lr.Uploader(root, lambda: {}))
+unk_device = _FakeDevice(_FakeAudioFormat(44100, 1, _FakeSampleFormats.Unknown), {"Unknown"})
+unk_ok, unk_log = _start_against(unk_device, unk_rec)
+check("a supported-but-unreadable sample format is refused too, rather "
+      "than written into a WAV as if it were Int16",
+      unk_ok is False and "Unknown" in unk_log, repr(unk_log))
+
+section("PR #4 sixth review: a device read that ends mid-sample carries "
+        "its tail into the next read")
+# A 4-byte format read 6 bytes at a time would otherwise lose 2 bytes per
+# tick AND start the next read one sample out of phase — permanent
+# desync, i.e. noise, not a dropped millisecond.
+tail_rec = lr.Recorder(root, "tailtest", os.path.join(root, "tailtest.pdf"),
+                       get_page=lambda: 1, uploader=lr.Uploader(root, lambda: {}))
+tail_rec._sample_format, tail_rec._sample_width = "Float", 4
+_whole = struct.pack("<2f", 0.5, -0.5)
+tail_rec._ingest(_whole[:6])
+check("a torn read converts only its whole samples", bytes(tail_rec._buffer) == _i16(16383))
+tail_rec._ingest(_whole[6:])
+check("...and the carried tail completes the next one, in phase",
+      bytes(tail_rec._buffer) == _i16(16383, -16383), repr(bytes(tail_rec._buffer)))
 
 raise SystemExit(report())

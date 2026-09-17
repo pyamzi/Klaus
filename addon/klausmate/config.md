@@ -102,7 +102,10 @@ opens Browse on them.
   **Skip** is the default button; skipping leaves those cards simply
   matched, exactly as before, and the index finishes normally.
 - It needs `api_key_anthropic` (or a Klaus Plus key). With neither, the
-  step is skipped silently — no dialog, nothing to decline.
+  step is skipped silently — no dialog, nothing to decline: new matches
+  stay unjudged (and count), while verdicts from an earlier judged run
+  keep standing until their card or page changes. Removing a key never
+  un-doubts a card by itself.
 - **A card Claude does not answer for is never doubtful.** Unjudged
   counts as confirmed; only an explicit "no" rejects a card.
 - Verdicts are cached per PDF and re-used until the card's text, the

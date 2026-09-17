@@ -34,10 +34,12 @@ appended, so a transcript can land even on a PDF nobody has indexed yet.
 """
 from __future__ import annotations
 
+import array
 import io
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import wave
@@ -126,6 +128,65 @@ def wav_bytes(pcm: bytes, rate: int = 16000, channels: int = 1, width: int = 2) 
         wf.setframerate(rate)
         wf.writeframes(pcm)
     return buf.getvalue()
+
+
+# Every ``QAudioFormat.SampleFormat`` Qt can hand back, by the ``.name``
+# the enum member carries, mapped to the ``array`` type code that reads
+# one such sample. "Float32" is not a Qt spelling — Qt's is plain
+# "Float" — but it is what the format is universally called, so it is
+# kept as an alias rather than refused. A name that is NOT in here
+# (Qt's own "Unknown", or whatever a future Qt adds) is refused at
+# ``Recorder.start()``: silence is better than noise written into a WAV
+# under a header claiming it is 16-bit.
+SAMPLE_FORMAT_CODES = {
+    "UInt8": "B", "Int16": "h", "Int32": "i", "Float": "f", "Float32": "f",
+}
+
+
+def sample_format_name(sample_format) -> str:
+    """The plain name of a ``QAudioFormat.SampleFormat`` — read off the
+    enum member rather than imported, so this half of the module stays
+    Qt-free and a test can hand it the bare string instead."""
+    return str(getattr(sample_format, "name", sample_format))
+
+
+def pcm_to_int16(data: bytes, sample_format) -> bytes:
+    """Whatever the device negotiated -> little-endian Int16 PCM.
+
+    PR #4 sixth review: plenty of inputs expose Float as their ONLY
+    sample format, so demanding Int16 of them means ``QAudioSource``
+    never starts and Record is a dead button. Take the format the device
+    actually offers and convert here instead, on the way into the chunk
+    buffer — which is what keeps ``wav_bytes``' header width at 2
+    whatever the microphone speaks, and the Klaus Plus service (which
+    meters lecture minutes by reading that header back) honest.
+
+    ``data`` must be a whole number of samples; the caller owns the
+    torn-tail carry, since dropping a partial sample would leave every
+    later read one byte out of phase.
+    """
+    name = sample_format_name(sample_format)
+    code = SAMPLE_FORMAT_CODES.get(name)
+    if code is None:
+        raise ValueError(f"unsupported sample format {name!r}")
+    if code == "h" and sys.byteorder == "little":
+        return bytes(data)
+    src = array.array(code)
+    src.frombytes(bytes(data))
+    if code == "f":
+        # Clamp first: a float sample may legitimately overshoot ±1.0,
+        # and an unclamped scale wraps it to the opposite rail — a click.
+        out = array.array(
+            "h", [int(min(1.0, max(-1.0, v)) * 32767.0) for v in src])
+    elif code == "i":
+        out = array.array("h", [v >> 16 for v in src])
+    elif code == "B":
+        out = array.array("h", [(v - 128) << 8 for v in src])
+    else:
+        out = array.array("h", src)
+    if sys.byteorder != "little":
+        out.byteswap()
+    return out.tobytes()
 
 
 def chunk_path(user_files: str, pdf_safe: str, chunk: Chunk) -> str:
@@ -437,10 +498,19 @@ class Recorder:
         self._recording = False
         # The format actually negotiated with the device (fix round 1,
         # I3) — defaults match the old hardcoded assumption, used only if
-        # something reads them before a successful start().
+        # something reads them before a successful start(). `_wav_width`
+        # is 2 for good now (PR #4 sixth review): `_ingest` converts every
+        # captured buffer to Int16, so the header never describes the
+        # device's own sample width.
         self._wav_rate = 16000
         self._wav_channels = 1
         self._wav_width = 2
+        self._sample_format = "Int16"
+        self._sample_width = 2
+        # A device read can end mid-sample; its tail belongs to the next
+        # one. Dropping it would put every later read one byte out of
+        # phase on a 4-byte format — noise, not a lost millisecond.
+        self._pcm_tail = b""
 
     @property
     def is_recording(self) -> bool:
@@ -463,6 +533,24 @@ class Recorder:
 
     def _now(self) -> float:
         return self._epoch0 + (time.monotonic() - self._start_mono)
+
+    def _ingest(self, data: bytes) -> None:
+        """The ONE way captured audio enters the chunk buffer, so that
+        buffer only ever holds little-endian Int16 PCM whatever the
+        device negotiated (PR #4 sixth review) — both readers, the tick
+        and stop()'s final pull, go through here or the two would
+        disagree about what the bytes mean."""
+        if not data:
+            return
+        data = self._pcm_tail + bytes(data)
+        usable = len(data) - (len(data) % self._sample_width)
+        self._pcm_tail, data = data[usable:], data[:usable]
+        if not data:
+            return
+        try:
+            self._buffer.extend(pcm_to_int16(data, self._sample_format))
+        except Exception as exc:
+            print(f"[klausmate] lecture recorder: sample conversion failed: {exc}")
 
     def start(self) -> bool:
         if self._recording:
@@ -495,13 +583,38 @@ class Recorder:
             if device.isFormatSupported(ideal):
                 fmt = ideal
             else:
+                # PR #4 sixth review: forcing Int16 onto the preferred
+                # format asks the device for something it never claimed
+                # to have — plenty of inputs expose Float as their ONLY
+                # sample format, and QAudioSource then simply fails to
+                # start, so Record was silently unavailable with no
+                # message anywhere. Negotiate honestly: take the
+                # preferred format AS IT IS, and convert its samples
+                # ourselves on the way into the chunk buffer
+                # (`pcm_to_int16`), so the WAV header's width stays 2
+                # whatever the microphone speaks.
                 fmt = device.preferredFormat()
-                fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+                if not device.isFormatSupported(fmt):
+                    print("[klausmate] lecture recorder: device supports neither 16 kHz "
+                          "mono Int16 nor its own preferred format "
+                          f"({sample_format_name(fmt.sampleFormat())} @ "
+                          f"{int(fmt.sampleRate())} Hz); recording unavailable")
+                    return False
+            name = sample_format_name(fmt.sampleFormat())
+            if name not in SAMPLE_FORMAT_CODES:
+                print(f"[klausmate] lecture recorder: unreadable sample format {name!r} @ "
+                      f"{int(fmt.sampleRate())} Hz; recording unavailable")
+                return False
+            self._sample_format = name
+            self._sample_width = array.array(SAMPLE_FORMAT_CODES[name]).itemsize
             self._wav_rate = int(fmt.sampleRate())
             self._wav_channels = max(1, int(fmt.channelCount()))
-            self._wav_width = max(1, int(fmt.bytesPerSample()))
+            # Always 2, never the device's own bytesPerSample: every
+            # captured buffer is converted to Int16 before it reaches the
+            # buffer, so the header can never disagree with the bytes.
+            self._wav_width = 2
             print(f"[klausmate] lecture recorder: recording at {self._wav_rate} Hz, "
-                  f"{self._wav_channels}ch, {self._wav_width * 8}-bit on {device.description()}")
+                  f"{self._wav_channels}ch, {name} -> 16-bit on {device.description()}")
             source = QAudioSource(device, fmt)
             io_dev = source.start()
             if io_dev is None:
@@ -523,6 +636,7 @@ class Recorder:
             return False
         self._source, self._io, self._timer = source, io_dev, timer
         self._buffer = bytearray()
+        self._pcm_tail = b""
         self._epoch0 = time.time()
         self._start_mono = time.monotonic()
         self._chunker.start(int(self._get_page() or 1), self._epoch0)
@@ -536,8 +650,7 @@ class Recorder:
         except Exception as exc:
             print(f"[klausmate] lecture recorder: audio read failed: {exc}")
             data = b""
-        if data:
-            self._buffer.extend(data)
+        self._ingest(data)
         now = self._now()
         try:
             page = int(self._get_page() or self._chunker.page)
@@ -586,7 +699,7 @@ class Recorder:
             # which is exactly what made the final chunk of every
             # recording empty (feeding I1).
             if self._io is not None:
-                self._buffer.extend(bytes(self._io.readAll()))
+                self._ingest(bytes(self._io.readAll()))
         except Exception as exc:
             print(f"[klausmate] lecture recorder: final audio read failed: {exc}")
         try:
