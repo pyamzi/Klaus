@@ -130,68 +130,6 @@ Files listed are what the surface will need when it exists (hook + menu registra
 
 Quality bar, from the same conversation: the failure mode to avoid is 'creating a bunch of shitty cards that you're not sure if it's good or not'. card_forge already enforces mandatory slide provenance, drops cards citing unselected slides, dedups against the existing collection before display, and writes nothing without a per-card accept. The surface must not route around any of that.
 
-### K-166: Pin the nine boolean edges the vacuity audit found in index_queue
-owner: -
-priority: P3
-tags: test-integrity,indexing
-files: tests/test_index_queue.py
-verify: J=$(mktemp -t iqaudit) && python3 scripts/mutation_audit.py --modules index_queue --json "$J" >/dev/null 2>&1; python3 -c "
-
-import json,sys
-rows=json.load(open(\"$J\"))
-bad=[r[\"lineno\"] for r in rows if r[\"kind\"]==\"boolflip\" and r[\"verdict\"]==\"survived\" and r[\"lineno\"] not in (298,766,787,824)]
-print(bad); sys.exit(1 if bad else 0)"
-created: 2026-09-01
-
-K-162 pointed scripts/mutation_audit.py at index_queue.py and left the
-findings standing. Under `gut` the module is clean — the only survivors
-are the ten Qt-widget-only functions K-152 predicted. Under `boolflip`
-nine sites flip with nothing noticing, and each one is an edge with a
-documented intent. Full write-up: the "Second lane" section at the end
-of scripts/AUDIT.md.
-
-The nine, in four groups (line numbers are klausmate/index_queue.py at
-sha 9012ecdb11db; the fix is in the TEST file, so they should hold):
-
-1. `:358`, `:396` — the `announce: bool = True` defaults on `request`
-   and `request_pdf`. Every test call passes `announce=False`, so both
-   defaults flip undetected. `on_pdf_imported` (`:408`) — the funnel
-   every import surface returns through — calls `request_pdf(name)`
-   bare, so this is the production path. The module docstring (`:45`)
-   states the invariant: nothing is ever started silently.
-2. `:373` — `_key_warned = True` flips to `False`. Its own comment is
-   the invariant: ten keyless drops must not stack ten tooltips. The
-   flag's RESET is already pinned (test:552); its set is not.
-3. `:471`, `:485`, `:733` — three `except` arms whose polarity is a
-   documented decision: `_pdf_present`'s "never lose a job to a
-   bookkeeping hiccup", `signature_changed`'s fail-closed gate on a
-   whole-library re-embed (its docstring is entirely about not doing
-   that silently on a paid API), and `_busy_elsewhere`'s
-   run-rather-than-stall. Testable by making the deferred import or the
-   callee raise.
-4. `:497`, `:506`, `:513` — every `active=False` publish in `_pump`
-   (drained, busy-wait, give-up). `status_line` (`:205`) and
-   `dock_button_label` (`:221`) both branch on that flag, so a flip puts
-   a live progress line and a Stop button on the bar while nothing runs.
-   The tests already reach all three branches and pin their neighbouring
-   fields (`finished` at test:368, `message` at test:611) — this is an
-   oversight, not a harness limit. A probe confirmed the drained branch
-   executes exactly once in the suite and nothing reads what it
-   published.
-
-ACCEPTANCE: all nine are behaviourally pinned — the check must fail when
-the boolean is flipped and pass when it is not. Do NOT pin them by
-reading the value back from the module (`iq.request.__defaults__`, or
-comparing a message against the constant that produced it): that is the
-self-referential shape AUDIT.md's "one source of truth, read twice"
-section is about, and it would satisfy the letter of this card while
-pinning nothing. Pin the OBSERVABLE — a tooltip stub that counts calls,
-a raising callee, `status_line(state())`/`dock_button_label(state())`
-output. The verify command runs the audit and fails while any of the
-nine still survives; the four remaining boolflip survivors (`:298`
-module default, `:766`/`:787`/`:824` Qt) are excluded by line number
-and are correctly out of reach.
-
 ### K-171: The map reshuffles on every re-index: PC2 and PC3 are not separated by the data
 owner: -
 priority: P2
@@ -347,14 +285,6 @@ files: klausmate/page_store.py,klausmate/assistant_dock.py,tests/test_page_store
 verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_page_store.py
 created: 2026-09-15
 
-### K-231: Readiness nudge names both keys but checks only the OpenAI one; the assistant fails at its first turn without an Anthropic key
-owner: -
-priority: P2
-tags: api-first,plan3
-files: klausmate/setup_flow.py,tests/test_setup_crop_theme.py
-verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_setup_crop_theme.py
-created: 2026-09-15
-
 ### K-232: manage_models.py still runs four K-114-banned blocking dialogs (askUser ~1815; QMessageBox.question ~1933/1949/1960) — convert to window-modal open()+finished
 owner: -
 priority: P2
@@ -379,28 +309,12 @@ files: tests/test_pdf_dock.py
 verify: for i in 1 2 3; do PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdf_dock.py >/dev/null 2>&1 || exit 1; done
 created: 2026-09-15
 
-### K-235: reasoning_model is orphaned: Preferences writes it, assistant_dock.py:446 still passes the scrubbed assistant_model to the Claude Code child (T6 rename regression; Plan 3 deletes the child)
-owner: -
-priority: P2
-tags: api-first,plan3
-files: klausmate/assistant_dock.py,tests/test_assistant_dock.py
-verify: ! grep -n 'assistant_model' klausmate/assistant_dock.py
-created: 2026-09-16
-
 ### K-237: Queue-side priced confirm before any from-scratch card-index embed (declining the Preferences sweep still bills the next PDF add)
 owner: -
 priority: P2
 tags: api-first,money
 files: klausmate/index_queue.py,tests/test_index_queue.py
 verify: grep -q 'card-index confirm' klausmate/index_queue.py
-created: 2026-09-16
-
-### K-238: Plan 2 recorder must refuse path == '' (digest12('') is a constant directory; segments written there vanish once the file resolves)
-owner: -
-priority: P2
-tags: api-first,plan2
-files: klausmate/page_store.py,tests/test_page_store.py
-verify: grep -q 'path == ""' klausmate/page_store.py
 created: 2026-09-16
 
 ### K-239: Paid smokes behind KLAUS_LIVE_API=1 do not exist (spec testing list): embed one string, transcribe a 3 s WAV, one Messages turn
@@ -410,26 +324,6 @@ tags: api-first,tests
 files: tests/test_live_api.py
 verify: test -e tests/test_live_api.py
 created: 2026-09-16
-
-### K-265: pertinence: snapshot candidate note text in a background op before the Judge/Skip prompt (main-thread get_note loop on big lectures)
-owner: -
-priority: P3
-tags: plan-2,perf,needs-measure
-files: klausmate/pertinence.py,tests/test_pertinence.py
-verify: grep -q 'snapshot' klausmate/pertinence.py
-created: 2026-09-17
-
-Copilot (PR #4 second re-review, suppressed): ensure_judged builds candidates on the main thread — one col.get_note per matched card before the prompt. Measure first (a 2,000-candidate lecture: how many ms?); if it blocks noticeably, snapshot note text + page rows in a QueryOp and marshal only the prompt to the main thread.
-
-### K-274: tag_sync.apply_membership: the membership search still builds on _escape_tag, not tag_query
-owner: -
-priority: P3
-tags: plan-2,follow-up
-files: klausmate/tag_sync.py,tests/test_tag_migrate.py,tests/test_klausmate.py
-verify: grep -q 'tag_query' klausmate/tag_sync.py && ! grep -q '_escape_tag(' klausmate/tag_sync.py
-created: 2026-09-17
-
-K-272 (2026-09-17) moved the three Browse/suspend search sites in pdf_drive onto tag_sync.tag_query (Anki's escaping: \ " * _). tag_sync.apply_membership — the membership diff itself — still searches with the older _escape_tag, which escapes only quotes; a PDF name carrying * or _ widens that search. Pinned by tests/test_tag_migrate.py, outside K-272's files, hence its own card: move it onto tag_query, re-baseline that pin, and prove a name with a wildcard character no longer widens membership.
 
 ## Ready
 
@@ -1575,3 +1469,151 @@ Copilot sixth review of stacked PR #4 (2026-09-17), suppressed: (1) lecture_reco
 #### Comments
 - [2026-09-17 claude-p2-bots6] Implemented. The card's verify AS WRITTEN passed BEFORE the work — 'isFormatSupported' already matched lecture_recorder.py:495 (the ideal-format check from K-256) and 'viewport()' matched four pre-existing QPdfView lines in pdf_viewer.py — so it was not a gate (recorded run: VERIFY_EXIT=0, 92 passed). Rewrote it via board.py edit to name the two symbols this card adds ('def pcm_to_int16', 'viewport().setAutoFillBackground(False)') plus both touched test files; RED proven at HEAD (git show HEAD:... | grep -c -> 0 for both), GREEN now (110 + 38 passed, VERIFY_EXIT=0). Finding 1 (a Float32-only device could not record) was real and is fixed, with mutation evidence (forcing Int16 back: 6 fails; dropping the conversion: 3 fails). Finding 2 (opaque viewport) does NOT reproduce: the existing 'QScrollArea { background: transparent }' rule already clears the viewport's palette fill — measured offscreen under a loud dark palette before any edit. The ruled setAutoFillBackground(False) is added anyway as defence in depth; the new dark-mode pixel pin fails only when BOTH guards are removed (35 passed, 3 failed) and passes with either. Whole loop: 48 files, rc=0, 0 failed; compile OK through the symlink. Report: .superpowers/sdd/2026-09-15-pertinence-and-lecture-recorder/pr4-batch6-report.md
 - [2026-09-17 orchestrator] Scoped review (opus) APPROVED — conversion math byte for byte, the tail carry over 300 randomised splits; the viewport call is defence-in-depth. Committed as 8507b46; re-review requested.
+
+### K-280: PR #4 recorder findings: a spent WAV can never be re-appended; a requeued leftover keeps its real end time
+owner: claude-rec-spend
+priority: P1
+tags: plan-2,pr-review
+files: klausmate/lecture_recorder.py,tests/test_lecture_recorder.py
+verify: grep -q 'def _spend' klausmate/lecture_recorder.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_lecture_recorder.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot on stacked PR #4 (2026-09-17), two threads: (1) lecture_recorder.py:~409 — when page_store.append_segment SUCCEEDS but os.unlink(wav_path) fails, the exception is swallowed and the WAV stays eligible for requeue_leftovers, so the next Record transcribes and appends that same segment a second time; a spent chunk must be unappendable even when the file survives. (2) :~439 — requeue_leftovers rebuilds every chunk's end as t0 + CHUNK_S, but a chunk closed early by a page change or by Stop then gets a fabricated t1 stretching past the real page boundary, unlike the Chunk.t1 used on the first attempt; the filename already carries millisecond precision and can carry the end too.
+
+#### Comments
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED. Coverage gap it named (nothing proved _LEFTOVER_RE's anchor load-bearing) closed by the orchestrator: a .bak and a copy-of- name joined the foreign-file pin; un-anchoring now reddens two checks. Committed afd627b with both CLAUDE.md sentences.
+
+### K-231: Readiness nudge names both keys but checks only the OpenAI one; the assistant fails at its first turn without an Anthropic key
+owner: claude-config-seams
+priority: P2
+tags: api-first,plan3
+files: klausmate/setup_flow.py,tests/test_setup_crop_theme.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_setup_crop_theme.py
+created: 2026-09-15
+claimed: 2026-09-17
+
+#### Comments
+- [2026-09-17 claude-config-seams] DONE, staying in Doing. The nudge now names what it checked. setup_flow.py:34-70 KEYS_COPY is built from a KEY_COPY table (per key: buys/without/title) plus one KEYS_ACTION sentence; :105 missing_keys(cfg) (pure, [] when a Klaus Plus key covers both, K-246) and :122 keys_missing_copy(cfg) narrow that same copy — derived, never a second wording; :134 _embedding_ready survives as the EMBEDDING half ('api_key_openai' not in missing_keys) and still gates the v2 sweep alone; :159 the welcome dialog shows the same derived sentence; :397 _readiness_check_body keeps ONE nudge, ONE _embed_key_setup_declined flag, no new config key, and titles/consequence-lines itself per case (the OpenAI-only wording is byte-identical to what shipped). _offer_v2_index_sweep now returns whether it asked, so the sweep confirm and the key nudge cannot stack on one profile open — its gating and _v2_index_sweep_offered are untouched. Module docstring corrected: the assistant does NOT run on the Anthropic key. RED: verify failed (AttributeError, no missing_keys). GREEN 58 passed/0 failed, md5 c978736a143697223e4344c3a991ebfc. Mutation (readiness off the OpenAI key alone again) md5 90f585caef50f2e7dcda1edb2d56d982 -> 48 passed/10 failed; restored byte-identical. 30 new pins in tests/test_setup_crop_theme.py:206-365, including the nudge itself driven through a recorder for all four key states. Whole loop 48 files / 5226 checks / 0 failed; py_compile through the symlink OK. Report: .superpowers/sdd/2026-09-17-post-review-sweep/worker-c-report.md (carries 3 CLAUDE.md sentences for the orchestrator).
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED; the K-235 no-model ruling agreed after reading agent_host.command_line. Committed 6554b77 with the CLAUDE.md sentences.
+
+### K-235: reasoning_model is orphaned: Preferences writes it, assistant_dock.py:446 still passes the scrubbed assistant_model to the Claude Code child (T6 rename regression; Plan 3 deletes the child)
+owner: claude-config-seams
+priority: P2
+tags: api-first,plan3
+files: klausmate/assistant_dock.py,tests/test_assistant_dock.py
+verify: ! grep -n 'assistant_model' klausmate/assistant_dock.py
+created: 2026-09-16
+claimed: 2026-09-17
+
+#### Comments
+- [2026-09-17 claude-config-seams] DONE, staying in Doing. Decision: the dock passes NO model, rather than being re-pointed at reasoning_model. Four reasons from the code — (1) agent_host.command_line only appends --model when non-empty, so passing nothing lets the user's own claude login/subscription resolve the model, which is the correct authority since Klaus pays for none of it; (2) reasoning_model is the pertinence judge's Anthropic Messages-API model, spent on api_key_anthropic or Plus quota, and CLAUDE.md pins that key as buying this dock nothing; (3) __init__.py:145-152 (K-236's own comment) already ruled the two are not interchangeable — the scrubbed value was 'a Claude Code model alias the Messages API would reject'; (4) there is no assistant-model UI anywhere, so a wired model would be unseeable and unsettable. AgentHost takes model as a required kwarg and agent_host.py is not mine to edit, so assistant_dock.py:478 is a literal model="" with the reasoning in the comment. SAME-CLASS DEFECT in the same function, also fixed: :453 passed the OTHER scrubbed key, claude_binary, as find_claude_cached's override — also always "" — now find_claude_cached() with no argument (cache key unchanged). Pins (tests/test_assistant_dock.py:229-311): an AST pin over every literal dict key the module reads, intersected with _LEGACY_KEYS_DROPPED read by literal_eval out of __init__.py's source — NOT a code_only substring, which strips string literals and would have passed with the bug present; plus a behavioural pin that swaps AgentHost/find_claude_cached for recorders, calls _default_host_factory with a config carrying BOTH assistant_model and reasoning_model, and feeds what it passed to the REAL command_line: no --model, no override. RED 3 failures; verify failed before (git show HEAD matches at line 462) and passes now. GREEN 176 passed/0 failed, md5 47c3dfe42c64e86401821e5b502eec81. Mutation 1 written evasively as cfg.get('assistant'+'_model') so the source pin cannot see it — the behavioural pin still fails it (175/1); mutation 2, the literal key as shipped, fails both pins and the card verify; restored byte-identical (176/0). Whole loop 48 files / 5226 checks / 0 failed; py_compile through the symlink OK. Report: .superpowers/sdd/2026-09-17-post-review-sweep/worker-c-report.md — note doc item 3: the CLAUDE.md line 'nothing reads reasoning_model yet (K-235)' is stale twice over (pertinence.py reads it, and the assistant now never will).
+- [2026-09-17 orchestrator] Scoped review (opus) APPROVED; the K-235 no-model ruling agreed after reading agent_host.command_line. Committed 6554b77 with the CLAUDE.md sentences.
+
+### K-238: Plan 2 recorder must refuse path == '' (digest12('') is a constant directory; segments written there vanish once the file resolves)
+owner: claude-store-fixes
+priority: P2
+tags: api-first,plan2
+files: klausmate/page_store.py,tests/test_page_store.py
+verify: grep -q 'path == ""' klausmate/page_store.py
+created: 2026-09-16
+claimed: 2026-09-17
+
+#### Comments
+- [2026-09-17 orchestrator] Scoped review (opus): K-274 APPROVED; K-238 PARTIAL — ensure_records' empty-page fallback still minted digest12('')'s bucket. Fixed by the orchestrator with the reviewer's own smallest fix plus a pin proving the collision. Committed 36f9771.
+
+### K-274: tag_sync.apply_membership: the membership search still builds on _escape_tag, not tag_query
+owner: claude-store-fixes
+priority: P3
+tags: plan-2,follow-up
+files: klausmate/tag_sync.py,tests/test_tag_migrate.py,tests/test_klausmate.py
+verify: grep -q 'tag_query' klausmate/tag_sync.py && ! grep -q '_escape_tag(' klausmate/tag_sync.py
+created: 2026-09-17
+claimed: 2026-09-17
+
+K-272 (2026-09-17) moved the three Browse/suspend search sites in pdf_drive onto tag_sync.tag_query (Anki's escaping: \ " * _). tag_sync.apply_membership — the membership diff itself — still searches with the older _escape_tag, which escapes only quotes; a PDF name carrying * or _ widens that search. Pinned by tests/test_tag_migrate.py, outside K-272's files, hence its own card: move it onto tag_query, re-baseline that pin, and prove a name with a wildcard character no longer widens membership.
+
+#### Comments
+- [2026-09-17 orchestrator] Scoped review (opus): K-274 APPROVED; K-238 PARTIAL — ensure_records' empty-page fallback still minted digest12('')'s bucket. Fixed by the orchestrator with the reviewer's own smallest fix plus a pin proving the collision. Committed 36f9771.
+
+### K-265: pertinence: snapshot candidate note text in a background op before the Judge/Skip prompt (main-thread get_note loop on big lectures)
+owner: claude-measure-pins
+priority: P3
+tags: plan-2,perf,needs-measure
+files: klausmate/pertinence.py,tests/test_pertinence.py
+verify: bash -c 'O=$(mktemp -t k265); PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pertinence.py >"$O" 2>&1 && grep -q "ok  K-265 measured" "$O"'
+created: 2026-09-17
+claimed: 2026-09-17
+
+Copilot (PR #4 second re-review, suppressed): ensure_judged builds candidates on the main thread — one col.get_note per matched card before the prompt. Measure first (a 2,000-candidate lecture: how many ms?); if it blocks noticeably, snapshot note text + page rows in a QueryOp and marshal only the prompt to the main thread.
+
+#### Comments
+- [2026-09-17 claude-measure-pins] MEASURED, decision is NO CHANGE — no snapshot built. Copilot's concern is real in shape (after_matches IS ensure_matches' QueryOp success callback, i.e. Anki's main thread, and the loop does one col.get_note + _strip_html + blake2b per candidate plus one page_store.load_record per distinct page before the prompt), but not in size. Measured 2026-09-17 on this machine against REAL note fields (read-only immutable read of the live collection; median field blob 1,439 chars, mean 1,562) and the REAL worst case in this library — the library's own matches.json files put the biggest lecture at 2,087 candidates at its threshold, median 183 across 9 PDFs, 3,476 in total. ensure_judged timed end to end, stopped at the no-key return that sits directly below the loop (5 runs, median): in-memory get_note 200/2,000/10,000 cands = 8.4 / 56.1 / 290.1 ms; real SQLite point read per note (select flds from notes where id=?, live collection, immutable) = 35.7 / 104.8 / 402.2 ms; the real worst case 2,087 cands at 40/150/300 pages = 72.3 / 75.3 / 87.0 ms. cProfile at 2,087 cands / 150 pages (106 ms traced): _strip_html's regexes 55 ms, note_text 76 ms cumulative, the per-note collection read 14 ms (6.7 us/call amortized), load_record 7 ms for 150 pages. So the collection read is the SMALL half: for the whole loop to reach the card's 250 ms budget, col.get_note would have to cost ~100 us MORE per call than an indexed SQLite point read — a ~16x backend tax. Modelled sweep at 2,087 cands: +0/+25/+50/+100/+200/+500 us per get_note = 87 / 133 / 202 / 296 / 541 / 1168 ms, so break-even sits between +50 and +100 us. HONEST LIMIT: Anki's real col.get_note could not be timed here — app_packages is Python 3.13 bytecode + a 3.13 _rsbridge.so and this machine has only system python3.9, so the SQLite point read is a measured lower bound and the rest is the sweep above. Against that: the hitch happens ONCE per index job, immediately before a modal dialog the user has to answer anyway, and the snapshot would mean a second QueryOp WITH the collection plus re-marshalling staleness retirement and its save, the no-key return, the Plus wording, cancel and the fatal refusal — real risk to five paths that just passed a stacked bot-review round, to move one sub-100 ms hitch. Card verify: rewritten off the `snapshot` grep (it would have gated on code that was deliberately not written) and onto the decision itself — tests/test_pertinence.py now carries a 'K-265 measured' section that re-runs the loop over 2,000 candidates with the package's OWN _strip_html (the file's identity stub halves the real cost) and fails past a 750 ms ceiling, ~12x the 53-58 ms it measures. RED proven in a scratch copy: a get_note costing 500 us/call takes it to 1,064 ms and the named check goes FAIL (exit 1). Reopen this card if anyone ever measures a real col.get_note above ~110 us on a 1.4 KB note — that is the whole decision.
+- [2026-09-17 orchestrator] Scoped review (opus): K-265 'build nothing' upheld; the gate's overclaim corrected. K-166 pins all behavioural and re-proved red, but :943 was excluded on a false premise — pinned here with a fake-box seam and removed from the exclusion list, which is now (326,1031). Committed abbb927.
+
+### K-166: Pin the nine boolean edges the vacuity audit found in index_queue
+owner: claude-measure-pins
+priority: P3
+tags: test-integrity,indexing
+files: tests/test_index_queue.py
+verify: bash -c 'J=$(mktemp -t iqaudit); python3 scripts/mutation_audit.py --modules index_queue --json "$J" >/dev/null 2>&1; IQ="$J" python3 -c "import json,os,sys; bad=[r[\"lineno\"] for r in json.load(open(os.environ[\"IQ\"])) if r[\"kind\"]==\"boolflip\" and r[\"verdict\"]==\"survived\" and r[\"lineno\"] not in (326,1031)]; print(bad); sys.exit(1 if bad else 0)"'
+claimed: 2026-09-17
+
+import json,sys
+rows=json.load(open(\"$J\"))
+bad=[r[\"lineno\"] for r in rows if r[\"kind\"]==\"boolflip\" and r[\"verdict\"]==\"survived\" and r[\"lineno\"] not in (298,766,787,824)]
+print(bad); sys.exit(1 if bad else 0)"
+created: 2026-09-01
+
+K-162 pointed scripts/mutation_audit.py at index_queue.py and left the
+findings standing. Under `gut` the module is clean — the only survivors
+are the ten Qt-widget-only functions K-152 predicted. Under `boolflip`
+nine sites flip with nothing noticing, and each one is an edge with a
+documented intent. Full write-up: the "Second lane" section at the end
+of scripts/AUDIT.md.
+
+The nine, in four groups (line numbers are klausmate/index_queue.py at
+sha 9012ecdb11db; the fix is in the TEST file, so they should hold):
+
+1. `:358`, `:396` — the `announce: bool = True` defaults on `request`
+   and `request_pdf`. Every test call passes `announce=False`, so both
+   defaults flip undetected. `on_pdf_imported` (`:408`) — the funnel
+   every import surface returns through — calls `request_pdf(name)`
+   bare, so this is the production path. The module docstring (`:45`)
+   states the invariant: nothing is ever started silently.
+2. `:373` — `_key_warned = True` flips to `False`. Its own comment is
+   the invariant: ten keyless drops must not stack ten tooltips. The
+   flag's RESET is already pinned (test:552); its set is not.
+3. `:471`, `:485`, `:733` — three `except` arms whose polarity is a
+   documented decision: `_pdf_present`'s "never lose a job to a
+   bookkeeping hiccup", `signature_changed`'s fail-closed gate on a
+   whole-library re-embed (its docstring is entirely about not doing
+   that silently on a paid API), and `_busy_elsewhere`'s
+   run-rather-than-stall. Testable by making the deferred import or the
+   callee raise.
+4. `:497`, `:506`, `:513` — every `active=False` publish in `_pump`
+   (drained, busy-wait, give-up). `status_line` (`:205`) and
+   `dock_button_label` (`:221`) both branch on that flag, so a flip puts
+   a live progress line and a Stop button on the bar while nothing runs.
+   The tests already reach all three branches and pin their neighbouring
+   fields (`finished` at test:368, `message` at test:611) — this is an
+   oversight, not a harness limit. A probe confirmed the drained branch
+   executes exactly once in the suite and nothing reads what it
+   published.
+
+ACCEPTANCE: all nine are behaviourally pinned — the check must fail when
+the boolean is flipped and pass when it is not. Do NOT pin them by
+reading the value back from the module (`iq.request.__defaults__`, or
+comparing a message against the constant that produced it): that is the
+self-referential shape AUDIT.md's "one source of truth, read twice"
+section is about, and it would satisfy the letter of this card while
+pinning nothing. Pin the OBSERVABLE — a tooltip stub that counts calls,
+a raising callee, `status_line(state())`/`dock_button_label(state())`
+output. The verify command runs the audit and fails while any of the
+nine still survives; the four remaining boolflip survivors (`:298`
+module default, `:766`/`:787`/`:824` Qt) are excluded by line number
+and are correctly out of reach.
+
+#### Comments
+- [2026-09-17 claude-measure-pins] DONE — eight boolean edges pinned behaviourally in tests/test_index_queue.py; boolflip survivors 11 -> 3. The card says nine at sha 9012ecdb; the tool's current output is the truth: 11 boolflip survivors, of which 3 are the correctly-out-of-reach ones the card already excluded (renumbered). Group 4's third site — the DRAINED publish, now :525 — has been caught by other work since the card was written, so eight were left to pin, not nine. THE EIGHT, each with the named check the audit reports going RED when the literal is flipped (scripts/mutation_audit.py --modules index_queue, which mutates its own scratch copytree, never the live tree): :386 request's `announce: bool = True` -> RED on 'request(jobs) with no announce= tooltips the add'. :424 request_pdf's default -> RED on '...and tooltips too' AND on 'on_pdf_imported — the funnel EVERY import surface returns through — calls request_pdf bare'. :401 `_key_warned = True` -> RED on 'three keyless drops raise ONE tooltip, not three'. :499 _busy_elsewhere's except arm -> RED on 'a curation._busy read that RAISES reads as not busy and the job RUNS'. :513 _pdf_present's except arm -> RED on 'a presence check that RAISES still runs the job'. :842 signature_changed's except arm -> RED on 'signature_matches raising reads as nothing moved' AND on the malformed-`previous` check. :534 the busy-wait `active=False` -> RED on 'while WAITING for the token the bar reads the waiting message and offers Dismiss'. :541 the give-up `active=False` -> RED on 'and when it GIVES UP polling the bar still reads its own sentence with a Dismiss button'. Every pin is the OBSERVABLE, per the card's ACCEPTANCE: a tooltip recorder swapped over iq.tooltip (so 'nothing is ever started silently' is a thing that either happened or did not), a _Proxy module whose ONE named attribute raises (curation._busy, pdf_index.source_signature, embeddings.signature_matches) so each except arm is entered for real, and status_line(state())/dock_button_label(state()) off the published snapshot for the two active=False publishes. No pin reads a default back off the function, and no pin compares a message against the constant that produced it. STILL SURVIVING, all three correctly out of reach and now excluded BY CURRENT LINE NUMBER in the rewritten verify: :326 `_key_warned = False`, the module default — new_world() resets the flag for every test, so the import-time value is never what any assertion observes, and reaching it would mean a test that reads the module global back, which is the shape the card forbids; :943 `request(jobs, announce=False)` inside offer_model_sweep's QMessageBox callback and :1031 `setAttribute(WA_StyledBackground, True)` in _StatusDock — both Qt-widget-only, the population K-152 predicted. VERIFY REWRITTEN: the old exclusion list (298,766,787,824) was stale — index_queue.py has moved since sha 9012ecdb, so every survivor read as unexcluded and the command could never pass. Now (326,943,1031), and collapsed onto ONE line: the old multi-line verify had already been broken by a `claimed:` line written into the middle of it. Confirmed passing (prints []). KNOWN COSMETIC MESS for the orchestrator (body prose is yours to edit, not a worker's): replacing the first verify line left the old verify's tail — four orphan lines and an inert `created: 2026-09-01` — sitting as body prose at the top of this card. board.py show/list parse it fine and the verify is correct; the card just has no `created` field any more. Production code untouched: klausmate/index_queue.py is byte-identical to HEAD (md5 ed88202fd2bb13a9d9e7e4c24d8d4a94, git diff empty). tests/test_index_queue.py 178 passed, 0 failed.
+- [2026-09-17 orchestrator] Scoped review (opus): K-265 'build nothing' upheld; the gate's overclaim corrected. K-166 pins all behavioural and re-proved red, but :943 was excluded on a false premise — pinned here with a fake-box seam and removed from the exclusion list, which is now (326,1031). Committed abbb927.
