@@ -80,12 +80,39 @@ def endpoint(cfg: dict, purpose: str) -> Endpoint:
 
 
 def parse_quota(headers: Any) -> dict | None:
+    """The ``X-Klaus-Quota`` header as a dict, from an ``HTTPMessage``
+    (case-insensitive by itself) or a plain dict in ANY key casing — a
+    metered call's fake response in a test is rarely spelled the
+    canonical way, and neither is every real header dict."""
     try:
-        raw = headers.get("X-Klaus-Quota") if hasattr(headers, "get") else None
+        items = headers.items() if hasattr(headers, "items") else []
+        raw = next((v for k, v in items if str(k).lower() == "x-klaus-quota"), None)
         obj = json.loads(raw) if raw else None
         return obj if isinstance(obj, dict) else None
     except (ValueError, TypeError):
         return None
+
+
+def note_quota(cfg: dict, headers: Any, patch_config: Callable[[dict], None]) -> dict | None:
+    """A metered call's own response IS a fresh active verdict.
+
+    Parses ``headers`` for the quota snapshot and, when present, remembers
+    it as an active verdict through ``patch_config`` (see ``remember``'s
+    docstring on why that must be a PATCH writer). Absent or garbage
+    headers write nothing and answer None — a call that carries no quota
+    header must not be read as a refusal or silently invent one.
+
+    INVARIANT: call this only from a guaranteed-2xx path — the clients'
+    own ``on_headers`` callback, which fires after a successful response
+    and never on an error. It unconditionally records status "active";
+    handing it an error response's headers would overwrite a real
+    refusal with a false "active" verdict.
+    """
+    snapshot = parse_quota(headers)
+    if snapshot is None:
+        return None
+    remember(cfg, snapshot, "active", patch_config)
+    return snapshot
 
 
 def remember(cfg: dict, snapshot: dict | None, status: str, write_config: Callable[[dict], None],

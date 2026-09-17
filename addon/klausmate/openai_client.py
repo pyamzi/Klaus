@@ -12,7 +12,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from . import plus
 
@@ -45,12 +45,22 @@ class OpenAIError(Exception):
         return str(self)
 
 
-def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, what: str) -> dict:
+def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, what: str,
+             *, on_headers: Callable[[Any], None] | None = None) -> dict:
     last: OpenAIError | None = None
     for attempt in (0, 1):
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with _urlopen(req, timeout=timeout) as resp:
+                if on_headers is not None:
+                    try:
+                        on_headers(resp.headers)
+                    except Exception as exc:
+                        # The caller's callback is not this module's problem to
+                        # fail a successful call over — a quota readout that
+                        # can't refresh must never take the embedding/
+                        # transcription result down with it.
+                        print(f"[klausmate] on_headers raised {exc.__class__.__name__}")
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             retry_after: float | None = None
@@ -89,7 +99,8 @@ def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, wha
 
 
 def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EMBED_TIMEOUT_S,
-         endpoint: plus.Endpoint | None = None) -> list[list[float]]:
+         endpoint: plus.Endpoint | None = None, *,
+         on_headers: Callable[[Any], None] | None = None) -> list[list[float]]:
     if not texts:
         return []
     body: dict[str, Any] = {"model": model, "input": list(texts)}
@@ -100,7 +111,7 @@ def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EM
     url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/embeddings"
     headers = {"Content-Type": "application/json",
               **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
-    resp = _request(url, json.dumps(body).encode("utf-8"), headers, timeout, "embeddings")
+    resp = _request(url, json.dumps(body).encode("utf-8"), headers, timeout, "embeddings", on_headers=on_headers)
     data = resp.get("data")
     if not isinstance(data, list) or len(data) != len(texts):
         raise OpenAIError(f"OpenAI returned {len(data) if isinstance(data, list) else 'no'} embeddings for {len(texts)} inputs")
@@ -127,12 +138,13 @@ def _multipart(fields: list[tuple[str, str]], file_field: str, filename: str, co
 
 
 def transcribe(key: str, wav_bytes: bytes, model: str, language: str = "en", prompt: str = "",
-               timeout: float = TRANSCRIBE_TIMEOUT_S, endpoint: plus.Endpoint | None = None) -> str:
+               timeout: float = TRANSCRIBE_TIMEOUT_S, endpoint: plus.Endpoint | None = None, *,
+               on_headers: Callable[[Any], None] | None = None) -> str:
     fields = [("model", model), ("response_format", "json"), ("language", language)]
     if prompt:
         fields.append(("prompt", prompt[:800]))
     data, ct = _multipart(fields, "file", "chunk.wav", "audio/wav", wav_bytes)
     url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/audio/transcriptions"
     headers = {"Content-Type": ct, **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
-    resp = _request(url, data, headers, timeout, "transcription")
+    resp = _request(url, data, headers, timeout, "transcription", on_headers=on_headers)
     return str(resp.get("text") or "").strip()

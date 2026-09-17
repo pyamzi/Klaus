@@ -11,6 +11,7 @@ every request and returns canned bodies, so no network call is ever made.
 Run: python3 tests/test_openai_client.py
 """
 
+import contextlib
 import importlib
 import io
 import json
@@ -26,6 +27,10 @@ oc = importlib.import_module("klausmate.openai_client")
 
 
 class _Resp(io.BytesIO):
+    def __init__(self, data, headers=None):
+        super().__init__(data)
+        self.headers = headers if headers is not None else {}
+
     def __enter__(self):
         return self
 
@@ -160,5 +165,88 @@ oc._urlopen = flaky
 oc._SLEEP = lambda s: None
 check("429 retries once and succeeds",
       oc.embed("k", ["a"], "m", 0) == [[1.0]] and len(attempts) == 2)
+
+section("on_headers: the response headers reach the callback on success, never on error")
+seen = []
+
+
+def headers_urlopen(req, timeout=None):
+    if req.full_url.endswith("/embeddings"):
+        return _Resp(json.dumps({"data": [{"index": 0, "embedding": [1.0]}]}).encode(),
+                     headers={"X-Klaus-Quota": "embed-quota"})
+    if req.full_url.endswith("/audio/transcriptions"):
+        return _Resp(json.dumps({"text": "hi"}).encode(), headers={"X-Klaus-Quota": "transcribe-quota"})
+    raise AssertionError(req.full_url)
+
+
+oc._urlopen = headers_urlopen
+oc.embed("k", ["a"], "m", 0, on_headers=seen.append)
+check("embed hands the response headers to on_headers on a 2xx",
+      len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "embed-quota")
+seen.clear()
+oc.transcribe("k", b"wav", "m", on_headers=seen.append)
+check("transcribe hands the response headers to on_headers on a 2xx",
+      len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "transcribe-quota")
+seen.clear()
+
+
+def error_urlopen(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"error":{"message":"bad key"}}'))
+
+
+oc._urlopen = error_urlopen
+try:
+    oc.embed("bad", ["a"], "m", 0, on_headers=seen.append)
+except oc.OpenAIError:
+    pass
+try:
+    oc.transcribe("bad", b"wav", "m", on_headers=seen.append)
+except oc.OpenAIError:
+    pass
+check("on_headers is never called on an error (embed or transcribe)", seen == [])
+
+section("on_headers: a raising callback never breaks the call")
+
+
+def boom_headers(_headers):
+    raise ValueError("boom")
+
+
+oc._urlopen = headers_urlopen
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    vecs = oc.embed("k", ["a"], "m", 0, on_headers=boom_headers)
+check("a raising on_headers still yields the parsed embeddings", vecs == [[1.0]])
+check("...and logs exactly one [klausmate] line naming only the exception class",
+      buf.getvalue().count("[klausmate]") == 1 and "ValueError" in buf.getvalue()
+      and "boom" not in buf.getvalue())
+
+buf2 = io.StringIO()
+with contextlib.redirect_stdout(buf2):
+    text = oc.transcribe("k", b"wav", "m", on_headers=boom_headers)
+check("a raising on_headers still yields the transcribed text", text == "hi")
+check("...and logs exactly one [klausmate] line naming only the exception class",
+      buf2.getvalue().count("[klausmate]") == 1 and "ValueError" in buf2.getvalue()
+      and "boom" not in buf2.getvalue())
+
+section("on_headers: called exactly once through a 429-then-200 retry")
+retry_hits = []
+
+
+def flaky_headers(req, timeout=None):
+    retry_hits.append(1)
+    if len(retry_hits) == 1:
+        raise urllib.error.HTTPError(req.full_url, 429, "rate", {"retry-after": "0"}, io.BytesIO(b"{}"))
+    return _Resp(json.dumps({"data": [{"index": 0, "embedding": [1.0]}]}).encode(),
+                 headers={"X-Klaus-Quota": "retry-ok"})
+
+
+oc._urlopen = flaky_headers
+oc._SLEEP = lambda s: None
+seen = []
+result = oc.embed("k", ["a"], "m", 0, on_headers=seen.append)
+check("a 429-then-200 retry calls on_headers exactly once, for the eventual 2xx only",
+      result == [[1.0]] and len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "retry-ok"
+      and len(retry_hits) == 2)
 
 raise SystemExit(report())

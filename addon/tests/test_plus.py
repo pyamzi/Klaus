@@ -1,5 +1,5 @@
 from __future__ import annotations
-import io, json, os, sys, time, urllib.request
+import email.message, io, json, os, sys, time, urllib.request
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, section, report, install
 install()
@@ -67,6 +67,24 @@ check("no cache → an honest line", "not checked yet" in plus.status_line({}).l
 check("parse_quota reads the header and tolerates absence/junk",
       plus.parse_quota({"X-Klaus-Quota": json.dumps(snap)})["human"]["turns"] == [31, 200]
       and plus.parse_quota({}) is None and plus.parse_quota({"X-Klaus-Quota": "{"}) is None)
+_msg = email.message.Message()
+_msg["x-klaus-quota"] = json.dumps(snap)
+check("parse_quota reads an HTTPMessage-style object (email.message.Message)",
+      plus.parse_quota(_msg)["human"]["cards"] == [812, 3000])
+check("parse_quota reads a plain dict keyed in ANY casing, not just the canonical one",
+      plus.parse_quota({"x-klaus-quota": json.dumps(snap)})["human"]["turns"] == [31, 200]
+      and plus.parse_quota({"X-KLAUS-QUOTA": json.dumps(snap)})["human"]["turns"] == [31, 200])
+
+section("note_quota: a successful metered call's headers become an active verdict")
+recorded = {}
+out = plus.note_quota(cfg, {"X-Klaus-Quota": json.dumps(snap)}, recorded.update)
+check("note_quota remembers status active with the snapshot and returns the snapshot",
+      out == snap and recorded["klaus_plus_cache"]["status"] == "active"
+      and recorded["klaus_plus_cache"]["quota"]["human"]["cards"] == [812, 3000])
+recorded.clear()
+check("note_quota returns None and writes nothing on an absent or garbage header",
+      plus.note_quota(cfg, {}, recorded.update) is None and recorded == {}
+      and plus.note_quota(cfg, {"X-Klaus-Quota": "{"}, recorded.update) is None and recorded == {})
 
 section("refresh and portal_url go through the seam, never log the key")
 calls = []

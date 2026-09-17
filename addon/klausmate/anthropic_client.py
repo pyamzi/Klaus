@@ -324,7 +324,8 @@ class Client:
             return ep.base + "/v1/messages", {**ep.headers, "Content-Type": "application/json"}
         return API_BASE + "/v1/messages", self._headers(self._key())
 
-    def stream(self, payload: dict, purpose: str = "assistant", **kw) -> dict:
+    def stream(self, payload: dict, purpose: str = "assistant", *,
+               on_headers: Callable[[Any], None] | None = None, **kw) -> dict:
         """One streaming request, drained into finalized content blocks."""
         url, headers = self._target(purpose)
         body = dict(payload)
@@ -335,15 +336,28 @@ class Client:
             headers,
             float(kw.pop("timeout", DEFAULT_TIMEOUT_S)),
         )
+        if on_headers is not None:
+            try:
+                on_headers(resp.headers)
+            except Exception as exc:
+                # Same rule as openai_client._request: a quota readout that
+                # can't refresh must never take the assistant turn down with it.
+                print(f"[klausmate] on_headers raised {exc.__class__.__name__}")
         return consume_sse(resp, **kw)
 
-    def complete(self, payload: dict, timeout: float = DEFAULT_TIMEOUT_S, purpose: str = "assistant") -> dict:
+    def complete(self, payload: dict, timeout: float = DEFAULT_TIMEOUT_S, purpose: str = "assistant", *,
+                 on_headers: Callable[[Any], None] | None = None) -> dict:
         """One non-streaming request; the parsed response body."""
         url, headers = self._target(purpose)
         body = dict(payload)
         body.pop("stream", None)
         req_data = json.dumps(body).encode("utf-8")
         resp = _open_stream(url, req_data, headers, float(timeout))
+        if on_headers is not None:
+            try:
+                on_headers(resp.headers)
+            except Exception as exc:
+                print(f"[klausmate] on_headers raised {exc.__class__.__name__}")
         try:
             raw = resp.read().decode("utf-8")
         finally:

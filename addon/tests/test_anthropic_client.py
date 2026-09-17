@@ -17,6 +17,7 @@ otherwise, is touched by this file.
 Run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_anthropic_client.py
 """
 
+import contextlib
 import email.message
 import importlib
 import io
@@ -219,6 +220,10 @@ calls = []
 
 
 class _Resp(io.BytesIO):
+    def __init__(self, data, headers=None):
+        super().__init__(data)
+        self.headers = headers if headers is not None else {}
+
     def __enter__(self):
         return self
 
@@ -347,7 +352,15 @@ def flaky_urlopen(req, timeout=None):
         # retry-after keeps the retryable branch's sleep out of the suite's
         # wall clock; a non-retryable status never reads it.
         raise _http_error(http["status"], "0.01")
-    return stream_of("text_turn.sse")
+    if json.loads(req.data).get("stream"):
+        r = stream_of("text_turn.sse")
+        r.headers = {"X-Klaus-Quota": "flaky-quota"}
+        return r
+    r = _Resp(json.dumps(
+        {"id": "msg_f", "content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}
+    ).encode())
+    r.headers = {"X-Klaus-Quota": "flaky-quota"}
+    return r
 
 
 ac._urlopen = flaky_urlopen
@@ -423,6 +436,94 @@ try:
 except ac.LLMError as e:
     _bad_json = e.error_type == "protocol"
 check("complete raises on a non-JSON body rather than returning junk", _bad_json)
+
+section("on_headers: complete and stream report the response headers, never on error")
+
+
+def fake_urlopen_headers(req, timeout=None):
+    if json.loads(req.data).get("stream"):
+        r = stream_of("text_turn.sse")
+        r.headers = {"X-Klaus-Quota": "stream-quota"}
+        return r
+    return _Resp(
+        json.dumps(
+            {"id": "msg_h", "content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"}
+        ).encode(),
+        headers={"X-Klaus-Quota": "complete-quota"},
+    )
+
+
+ac._urlopen = fake_urlopen_headers
+seen = []
+r = c.stream({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+check(
+    "stream hands the response headers to on_headers on a 2xx",
+    len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "stream-quota" and ac.text_of(r) == "Hello",
+)
+seen.clear()
+r2 = c.complete({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+check(
+    "complete hands the response headers to on_headers on a 2xx",
+    len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "complete-quota" and ac.text_of(r2) == "done",
+)
+seen.clear()
+http["status"] = 401
+http["calls"] = 0
+http["fail_first"] = 0
+ac._urlopen = flaky_urlopen
+try:
+    c.stream({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+except ac.LLMError:
+    pass
+try:
+    c.complete({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+except ac.LLMError:
+    pass
+check("on_headers is never called on an error (stream or complete)", seen == [])
+http["status"] = 200
+
+section("on_headers: a raising callback never breaks the call")
+
+
+def boom_headers(_headers):
+    raise ValueError("boom")
+
+
+ac._urlopen = fake_urlopen_headers
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    r = c.stream({"model": "m", "max_tokens": 1, "messages": []}, on_headers=boom_headers)
+check("a raising on_headers still yields the assembled stream result", ac.text_of(r) == "Hello")
+check("...and logs exactly one [klausmate] line naming only the exception class",
+      buf.getvalue().count("[klausmate]") == 1 and "ValueError" in buf.getvalue()
+      and "boom" not in buf.getvalue())
+
+buf2 = io.StringIO()
+with contextlib.redirect_stdout(buf2):
+    r2 = c.complete({"model": "m", "max_tokens": 1, "messages": []}, on_headers=boom_headers)
+check("a raising on_headers still yields the parsed body for complete", ac.text_of(r2) == "done")
+check("...and logs exactly one [klausmate] line naming only the exception class",
+      buf2.getvalue().count("[klausmate]") == 1 and "ValueError" in buf2.getvalue()
+      and "boom" not in buf2.getvalue())
+
+section("on_headers: called exactly once through a 429-then-200 retry")
+http["status"] = 200
+http["calls"] = 0
+http["fail_first"] = 1
+ac._urlopen = flaky_urlopen
+seen = []
+out = c.stream({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+check("a 429-then-200 retry calls on_headers exactly once for stream",
+      ac.text_of(out) == "Hello" and len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "flaky-quota"
+      and http["calls"] == 2)
+
+http["calls"] = 0
+http["fail_first"] = 1
+seen.clear()
+out2 = c.complete({"model": "m", "max_tokens": 1, "messages": []}, on_headers=seen.append)
+check("a 429-then-200 retry calls on_headers exactly once for complete",
+      ac.text_of(out2) == "done" and len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "flaky-quota"
+      and http["calls"] == 2)
 
 section("wire facts and shape")
 _SRC = open("klausmate/anthropic_client.py").read()
