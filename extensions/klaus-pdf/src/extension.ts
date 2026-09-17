@@ -79,7 +79,7 @@ function pdfPanelHtml(webview: vscode.Webview, root: vscode.Uri, pdf: PdfMeta): 
     `script-src 'nonce-${nonce}'`,
     `connect-src ${CORE_URL} ${webview.cspSource}`,
     "worker-src blob:",
-    `img-src ${webview.cspSource} blob: data:`,
+    `img-src ${webview.cspSource} ${CORE_URL} blob: data:`,
   ].join("; ");
   const config = {
     pdfId: pdf.id,

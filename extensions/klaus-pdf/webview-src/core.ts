@@ -53,3 +53,20 @@ export async function saveNotes(id: string, doc: NotesDoc): Promise<void> {
     throw new Error(`klaus-core PUT /notes/${id} failed: ${res.status}`);
   }
 }
+
+export async function uploadAsset(id: string, blob: Blob): Promise<string> {
+  const res = await fetch(`${BASE}/assets/${id}`, {
+    method: "POST",
+    headers: { "X-Klaus-Token": TOKEN, "Content-Type": blob.type },
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error(`klaus-core POST /assets/${id} failed: ${res.status}`);
+  }
+  return (await res.json()).name as string;
+}
+
+export function assetUrl(id: string, name: string): string {
+  // <img> tags cannot send headers, so asset GETs carry the token in the query.
+  return `${BASE}/assets/${id}/${name}?token=${encodeURIComponent(TOKEN)}`;
+}

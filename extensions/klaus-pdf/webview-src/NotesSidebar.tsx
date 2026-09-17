@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { marked } from "marked";
-import { fetchNotes, saveNotes, type NotesDoc } from "./core";
+import { assetUrl, fetchNotes, saveNotes, uploadAsset, type NotesDoc } from "./core";
 
 const SAVE_DEBOUNCE_MS = 800;
 
@@ -72,6 +72,20 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
     timerRef.current = window.setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
   };
 
+  const insertImage = async (file: Blob) => {
+    if (!file.type.startsWith("image/")) return;
+    setStatus("saving");
+    try {
+      const name = await uploadAsset(pdfId, file);
+      const ref = `![](${assetUrl(pdfId, name)})`;
+      const el = textRef.current;
+      const at = el ? el.selectionStart : md.length;
+      update(md.slice(0, at) + ref + md.slice(at));
+    } catch {
+      setStatus("error");
+    }
+  };
+
   if (loadError) {
     return (
       <aside className="notes-sidebar">
@@ -107,6 +121,21 @@ export default function NotesSidebar({ pdfId, page }: NotesSidebarProps) {
           value={md}
           disabled={doc === null}
           onChange={(e) => update(e.target.value)}
+          onPaste={(e) => {
+            const file = Array.from(e.clipboardData.items)
+              .find((i) => i.type.startsWith("image/"))?.getAsFile();
+            if (file) {
+              e.preventDefault();
+              void insertImage(file);
+            }
+          }}
+          onDrop={(e) => {
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith("image/")) {
+              e.preventDefault();
+              void insertImage(file);
+            }
+          }}
         />
       )}
     </aside>
