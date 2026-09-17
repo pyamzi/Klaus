@@ -1,6 +1,6 @@
 """Create the Klaus Plus product, its two prices and the webhook endpoint. Run by the operator:
 
-    STRIPE_SECRET_KEY=sk_test_... PUBLIC_BASE_URL=https://klausmate.fly.dev python scripts/stripe_setup.py
+    STRIPE_SECRET_KEY=sk_test_... PUBLIC_BASE_URL=https://klausmate.com python scripts/stripe_setup.py
 
 Idempotent: finds an existing 'Klaus Plus' product and endpoint by name/URL. Prints the
 `fly secrets set` line for the ids it created. Never prints the secret key."""
@@ -17,7 +17,7 @@ from klausplus.config import STRIPE_API_VERSION
 
 def main() -> int:
     key = os.environ.get("STRIPE_SECRET_KEY", "")
-    base = (os.environ.get("PUBLIC_BASE_URL") or "https://klausmate.fly.dev").rstrip("/")
+    base = (os.environ.get("PUBLIC_BASE_URL") or "https://klausmate.com").rstrip("/")
     if not key:
         print("STRIPE_SECRET_KEY is not set", file=sys.stderr)
         return 2

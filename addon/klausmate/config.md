@@ -61,7 +61,7 @@ puts you straight back on them.
   the service is asked again; an active verdict is honoured until the
   service refuses it.
 - **klaus_plus_base**: The Klaus Plus service URL. Default `""`, which
-  falls back to the built-in service, `https://klausmate.fly.dev`
+  falls back to the built-in service, `https://klausmate.com`
   (`plus.DEFAULT_BASE`) — editable under **KlausMate Preferences →
   General → Klaus Plus service**. Change it only to point at a staging
   or self-hosted service.
