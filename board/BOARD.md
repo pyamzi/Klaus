@@ -132,34 +132,6 @@ The session fixing these was deleted before landing. (1) core/klaus_core/library
 
 ## Doing
 
-### KB-014: Find bar (Cmd+F) in the PDF editor
-owner: orchestrator
-priority: P2
-tags: parity
-files: extensions/klaus-pdf/webview-src/find.ts,extensions/klaus-pdf/webview-src/FindBar.tsx,extensions/klaus-pdf/webview-src/shortcuts.ts,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/viewer.css,tests/find_test.mjs,tests/shortcuts_test.mjs
-verify: node --test tests/find_test.mjs tests/shortcuts_test.mjs && cd extensions/klaus-pdf && npm run typecheck
-created: 2026-09-17
-claimed: 2026-09-17
-
-Top strip in the PDF editor per docs/reference/klausmate-viewer-parity.md, "Find bar".
-
-Behavior:
-- Cmd/Ctrl+F reveals the bar, focuses the input and selects what is in it. Esc hides it, clears the search and returns focus to the slide.
-- Input placeholder "Find in PDF…" with a clear button. Live search debounced 250ms.
-- Count label is exactly one of: "" (empty query) / "0 matches" / "{i+1} of {count}" / "{count} matches" (a query with matches but no current one).
-- Prev (‹, Shift+Enter) and next (›, Enter) cycle with wraparound. Cmd/Ctrl+G and Cmd/Ctrl+Shift+G do the same from anywhere, and are a silent no-op while the bar is hidden.
-- Search spans the whole document over pdf.js text content, not just the visible slide; selecting a match navigates to its page.
-- The current match is highlighted in the slide's text layer via the CSS Custom Highlight API - no DOM mutation - and degrades to plain navigation where unsupported, per the repo's None-guard house style.
-- The bar hides and clears when the document changes.
-
-Note: this card extends shortcuts.ts, which KB-016 owns and which is in Review. Cmd+Shift+G currently asserts as "no action" in tests/shortcuts_test.mjs; this card flips that assertion to "find-prev" and must keep the rest of that gate green. Branch from kb-016-shortcuts (PR #2) so the two do not conflict.
-
-Acceptance criteria:
-- Match finding, count-label formatting and index cycling live in a pure module (no React, no DOM), so the gate needs no browser.
-- tests/find_test.mjs asserts: case-insensitive matching with per-page positions over a fake two-page document; overlapping-candidate and zero-match queries; the four count-label forms verbatim; cycling next/prev wraps at both ends; an empty or whitespace query yields no matches and the empty label.
-- tests/shortcuts_test.mjs still passes with find shortcuts added, and Cmd+Shift+H stays unclaimed for KB-003.
-- npm run typecheck in extensions/klaus-pdf is clean.
-
 ## Review
 
 ### KB-016: Shortcut + toast parity in the PDF editor
@@ -191,5 +163,36 @@ Acceptance criteria:
 #### Comments
 - [2026-09-17 orchestrator] Implemented on branch kb-016-shortcuts (b5212f5, branched off impress-editor so it carries the unmerged Obsidian retheme dbc6544). verify exits 0 (5 node:test cases + tsc --noEmit); it exited 1 on the pre-card tree. node build.mjs bundles clean. Divergence from the card, deliberate: Cmd+Alt+G focuses an inline page field in the toolbar instead of klausmate's getInt dialog - a webview has no prompt() and the voice rule forbids modals; the page indicator became the field, format '{n} / {total}' kept. Double/triple-click selection is native pdf.js text-layer behaviour and nothing in viewer.css blocks it - not machine-verified. NEEDS A REAL-WINDOW CHECK before Done: VS Code binds Cmd+= / Cmd+- / Cmd+0 at the workbench level, so confirm the webview's preventDefault wins and the shell does not also zoom.
 - [2026-09-17 orchestrator] PR #2 open: https://github.com/pyamzi/KlausBook-Context/pull/2 (1 commit, based on the merged retheme). Stays in Review until the real-window shortcut check.
+
+### KB-014: Find bar (Cmd+F) in the PDF editor
+owner: orchestrator
+priority: P2
+tags: parity
+files: extensions/klaus-pdf/webview-src/find.ts,extensions/klaus-pdf/webview-src/FindBar.tsx,extensions/klaus-pdf/webview-src/shortcuts.ts,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/viewer.css,tests/find_test.mjs,tests/shortcuts_test.mjs
+verify: node --test tests/find_test.mjs tests/shortcuts_test.mjs && cd extensions/klaus-pdf && npm run typecheck
+created: 2026-09-17
+claimed: 2026-09-17
+
+Top strip in the PDF editor per docs/reference/klausmate-viewer-parity.md, "Find bar".
+
+Behavior:
+- Cmd/Ctrl+F reveals the bar, focuses the input and selects what is in it. Esc hides it, clears the search and returns focus to the slide.
+- Input placeholder "Find in PDF…" with a clear button. Live search debounced 250ms.
+- Count label is exactly one of: "" (empty query) / "0 matches" / "{i+1} of {count}" / "{count} matches" (a query with matches but no current one).
+- Prev (‹, Shift+Enter) and next (›, Enter) cycle with wraparound. Cmd/Ctrl+G and Cmd/Ctrl+Shift+G do the same from anywhere, and are a silent no-op while the bar is hidden.
+- Search spans the whole document over pdf.js text content, not just the visible slide; selecting a match navigates to its page.
+- The current match is highlighted in the slide's text layer via the CSS Custom Highlight API - no DOM mutation - and degrades to plain navigation where unsupported, per the repo's None-guard house style.
+- The bar hides and clears when the document changes.
+
+Note: this card extends shortcuts.ts, which KB-016 owns and which is in Review. Cmd+Shift+G currently asserts as "no action" in tests/shortcuts_test.mjs; this card flips that assertion to "find-prev" and must keep the rest of that gate green. Branch from kb-016-shortcuts (PR #2) so the two do not conflict.
+
+Acceptance criteria:
+- Match finding, count-label formatting and index cycling live in a pure module (no React, no DOM), so the gate needs no browser.
+- tests/find_test.mjs asserts: case-insensitive matching with per-page positions over a fake two-page document; overlapping-candidate and zero-match queries; the four count-label forms verbatim; cycling next/prev wraps at both ends; an empty or whitespace query yields no matches and the empty label.
+- tests/shortcuts_test.mjs still passes with find shortcuts added, and Cmd+Shift+H stays unclaimed for KB-003.
+- npm run typecheck in extensions/klaus-pdf is clean.
+
+#### Comments
+- [2026-09-17 orchestrator] Implemented on kb-014-find-bar (7d87e12), PR #3 stacked on PR #2 (it extends shortcuts.ts and updates KB-016's gate; retarget to main once #2 lands). verify exits 0 (9 node:test cases + tsc), exited 1 before. Two deliberate calls, both narrower than the card: (1) a fresh query selects no match - the label reads '{n} matches' until Enter/Cmd+G moves to one, so live typing never yanks the stage, and all four label forms stay reachable; (2) the current match is shown by selecting its range in the text layer (which already tints ::selection) rather than via the CSS Custom Highlight API - no new API, no extra CSS, and it degrades to plain navigation when offsets do not map. NEEDS A REAL-WINDOW CHECK: whether VS Code passes Cmd+F to the webview instead of opening its own find widget; also the 250ms debounce and the offset mapping onto the rendered text layer.
 
 ## Done
