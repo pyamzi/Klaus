@@ -117,17 +117,6 @@ created: 2026-09-17
 
 Per-highlight notes per parity spec: Add note.../Edit note... via context menu, box anchored top-right of first rect, rgba(255,245,170,235) fill, 1px rgb(190,170,80) border, rgb(70,60,20) 10px text, <=180px wide, <=4 lines, radius 3. Distinct from the per-slide notes sidebar.
 
-### KB-017: Fix stale repo paths (library default + README run commands)
-owner: -
-priority: P1
-tags: sonnet-safe
-created: 2026-09-17
-
-The session fixing these was deleted before landing. (1) core/klaus_core/library.py DEFAULT_USER_FILES still points at ~/Documents/Github/Addons/klausmate/user_files which no longer exists — the real library is ~/Documents/Github/KlausMate-Context/klausmate/user_files ({pdfs,pdf_originals}); without KLAUS_LIBRARY_DIR the app lists an empty library. (2) README.md Run/Architecture sections still say klausbook-code / ../klausbook — should be KlausBook-Code / KlausBook-Context. Also sweep context/PROJECT.md and context/prompts/*.md for the same stale paths. Verify: curl -s -H 'X-Klaus-Token: dev' localhost:7863/library lists 5 PDFs with no env override; python3 tests/test_notes.py passes.
-
-#### Comments
-- [2026-09-17 orchestrator] Same rename fallout hit core/.venv: script shebangs pointed at the old klausbook/ path (bad interpreter). Rebuilt 2026-09-17; card's README sweep should add a note that any repo rename requires rm -rf core/.venv + recreate.
-
 ### KB-018: Persistent state vs the Klaus voice in the editor
 owner: -
 priority: P3
@@ -218,3 +207,19 @@ Acceptance criteria:
 - [2026-09-17 orchestrator] Implemented on kb-014-find-bar (7d87e12), PR #3 stacked on PR #2 (it extends shortcuts.ts and updates KB-016's gate; retarget to main once #2 lands). verify exits 0 (9 node:test cases + tsc), exited 1 before. Two deliberate calls, both narrower than the card: (1) a fresh query selects no match - the label reads '{n} matches' until Enter/Cmd+G moves to one, so live typing never yanks the stage, and all four label forms stay reachable; (2) the current match is shown by selecting its range in the text layer (which already tints ::selection) rather than via the CSS Custom Highlight API - no new API, no extra CSS, and it degrades to plain navigation when offsets do not map. NEEDS A REAL-WINDOW CHECK: whether VS Code passes Cmd+F to the webview instead of opening its own find widget; also the 250ms debounce and the offset mapping onto the rendered text layer.
 - [2026-09-17 orchestrator] PR #3 review addressed in d64b523; 7 threads replied to and resolved. Five distinct findings, all real: (1) case folding is not length-preserving ('Istanbul'-style dotted capital I lowercases to two UTF-16 units), so folded offsets selected the wrong characters - find.ts now folds per code point with a map back to the original string and reports original-text offsets, with a regression test that fails on the old code; (2) the 120ms reveal delay raced PdfPage's async render, so a match on a slow page navigated but was never selected - a MutationObserver waits for that page's text layer with a 4s give-up; (3) that fix exposed a worse bug of mine - the reveal effect runs before the slide swap commits, so an unpinned '.textLayer' matched the page being LEFT, which is populated, and would have selected against the wrong text; the query is now pinned to [data-page]; (4) Enter/Cmd+G inside the 250ms debounce acted on the previous query's matches - cycling flushes the pending search first; (5) Esc only worked from the input, and the glyph buttons had no accessible names. Gate now 10 cases, green. Still unverified in a window: whether VS Code passes Cmd+F through (enableFindWidget is unset, which suggests yes).
 - [2026-09-17 orchestrator] Merged: PR #3 -> main (d8f5bc1), retargeted from kb-016-shortcuts once #2 landed. Signed off by Pouya. Gate green on merged main (10 cases) and the bundle builds. In-app Cmd+F check is KB-019.
+
+### KB-017: Fix stale repo paths (library default + README run commands)
+owner: fable
+priority: P1
+tags: sonnet-safe
+files: core/klaus_core/library.py,README.md,context/PROJECT.md,context/prompts/worker.md,context/prompts/designer.md
+verify: python3 -c "import sys; sys.path.insert(0,'core'); from klaus_core import library; ps=library.list_pdfs(); assert ps, 'library empty with default paths'; print(len(ps),'pdfs')" && ! grep -rn 'Github/klausbook\|klausbook-code' README.md context/
+created: 2026-09-17
+claimed: 2026-09-17
+
+The session fixing these was deleted before landing. (1) core/klaus_core/library.py DEFAULT_USER_FILES still points at ~/Documents/Github/Addons/klausmate/user_files which no longer exists — the real library is ~/Documents/Github/KlausMate-Context/klausmate/user_files ({pdfs,pdf_originals}); without KLAUS_LIBRARY_DIR the app lists an empty library. (2) README.md Run/Architecture sections still say klausbook-code / ../klausbook — should be KlausBook-Code / KlausBook-Context. Also sweep context/PROJECT.md and context/prompts/*.md for the same stale paths. Verify: curl -s -H 'X-Klaus-Token: dev' localhost:7863/library lists 5 PDFs with no env override; python3 tests/test_notes.py passes.
+
+#### Comments
+- [2026-09-17 orchestrator] Same rename fallout hit core/.venv: script shebangs pointed at the old klausbook/ path (bad interpreter). Rebuilt 2026-09-17; card's README sweep should add a note that any repo rename requires rm -rf core/.venv + recreate.
+- [2026-09-17 fable] Decisions: library default -> ~/Documents/Github/KlausMate-Context/klausmate/user_files (both dirs, pdfs/ still shadows pdf_originals/); docs sweep ordered longest-prefix-first so klausbook-code didn't collide with klausbook. Files: core/klaus_core/library.py, README.md, context/PROJECT.md, context/prompts/worker.md, context/prompts/designer.md. Risks: none — gate asserts 5 pdfs on defaults and zero stale refs; both suites pass. Next: none.
+- [2026-09-17 orchestrator] Sign-off: gate green (5 pdfs on defaults, no stale refs), suites pass. Done.
