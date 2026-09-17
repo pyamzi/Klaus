@@ -288,9 +288,11 @@ async def transcriptions(request: Request, background_tasks: BackgroundTasks) ->
     except ValueError:
         raise _err(400, "Only WAV audio is accepted.")
     cid = int(row["id"])
-    if not meter.check_daily_audio(st.store, st.settings, cid, seconds, st.now()):
-        raise _err(402, "Klaus Plus transcribes at most 240 minutes a day and you have reached today's limit; more tomorrow.")
+    # K-267: both ceilings are decided inside the one reservation lock now — a pre-check out
+    # here was a read two concurrent uploads could pass together. `reason` says which refused.
     res = meter.reserve(st.store, st.settings, cid, "transcribe", seconds, st.now())
+    if res.reason == "day":
+        raise _err(402, "Klaus Plus transcribes at most 240 minutes a day and you have reached today's limit; more tomorrow.")
     if not res.ok:
         raise _err(402, meter.quota_message("transcribe", res.before["resets_at"]))
     fields = {k: str(v) for k, v in form.items() if k != "file" and isinstance(v, str)}
@@ -325,6 +327,34 @@ def _usage_from_sse_line(line: bytes, acc: dict) -> None:
         acc["cache_read"] = int(usage.get("cache_read_input_tokens") or 0)
     elif obj.get("type") == "message_delta":
         acc["out"] = int((obj.get("usage") or {}).get("output_tokens") or 0)
+
+
+class _SettlingStream(StreamingResponse):
+    """A stream that cannot lose its reservation. `stream_response` sends
+    `http.response.start` BEFORE the first iteration, so a failure there — or a server that
+    never drives the body at all — leaves the relay, which owns the settle, never entered:
+    its `finally` does not run and the reservation stands until the month rolls over
+    (K-267; measured at 4,124 tokens). Starlette's own `background` cannot close that
+    window — it runs after `stream_response`, which is precisely what did not run. `entered`
+    is the box the relay flips on its first iteration, so exactly one of the two releases."""
+
+    def __init__(self, *args: Any, entered: dict, release: Any, aclose: Any = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._entered, self._release, self._aclose = entered, release, aclose
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if not self._entered["v"]:
+                self._release()
+                # The relay's own `finally` is also what closes the upstream response; on
+                # this path it never ran, so the pooled connection would leak with the money.
+                if self._aclose is not None:
+                    try:
+                        await self._aclose()
+                    except Exception as exc:
+                        print(f"[klausplus] upstream close after a never-entered relay failed: {type(exc).__name__}")
 
 
 @router.post("/v1/messages")
@@ -383,8 +413,10 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
                             headers=_quota_header(request, cid))
 
         acc = {"in": 0, "out": 0, "cache_creation": 0, "cache_read": 0}
+        entered = {"v": False}
 
         async def relay():
+            entered["v"] = True  # a generator body runs on the FIRST iteration: this is the hand-over
             buf = b""
             try:
                 async for chunk in resp.aiter_bytes():
@@ -406,12 +438,12 @@ async def messages(request: Request, background_tasks: BackgroundTasks) -> Respo
         # uvicorn does response trailers, so the settled figure cannot reach this one. Send the
         # reading the request was ADMITTED on instead — never the inflated reservation, which
         # `plus.note_quota` caches on the add-on as quota the subscriber never spent.
-        response = StreamingResponse(relay(), media_type="text/event-stream", headers=_quota_header_from(res.before))
-        settled = True  # from here the relay's own `finally` owns the settle — EXCEPT when the ASGI
-        # layer fails `http.response.start` before ever entering `relay()`: that generator's `finally`
-        # never runs and the reservation stands until the month rolls over (over-charges, never leaks;
-        # a Starlette `background` task would not close it either, it runs after the stream). Nothing
-        # streams before Plan 3; its card names this window.
+        response = _SettlingStream(
+            relay(), media_type="text/event-stream", headers=_quota_header_from(res.before), entered=entered,
+            release=lambda: meter.settle(st.store, st.settings, cid, purpose, reserved, 0, res.at),
+            aclose=resp.aclose)
+        settled = True  # K-267: the RESPONSE owns the settle from here — the relay's own `finally`
+        # once it is entered, and `_SettlingStream.__call__` when it never is.
         return response
     finally:
         if not settled:

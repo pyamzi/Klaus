@@ -190,6 +190,52 @@ def test_a_month_straddle_bills_the_month_that_admitted_the_request(world, monke
     assert world["store"].usage(world["cid"], "2026-10")["judge_tokens"] == 0
 
 
+def test_a_stream_whose_response_start_fails_releases_its_reservation(world):
+    """K-267: `stream_response` sends `http.response.start` BEFORE the first iteration, so a
+    failure there means the relay — which owns the settle — is never entered at all, and the
+    reservation stands until the month rolls over. Starlette's own `background` cannot cover
+    it: that runs after `stream_response`, which is exactly what did not run. Driven as raw
+    ASGI because no HTTP client can make the send callable fail."""
+    raw = json.dumps({"model": "claude-sonnet-5", "max_tokens": 4096, "stream": True,
+                      "messages": [{"role": "user", "content": "hi"}]}).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    async def send(message):
+        raise RuntimeError("the client vanished before the headers went out")
+
+    headers = dict(_h(world, "assistant"), host="test", **{"content-type": "application/json"})
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "http_version": "1.1",
+             "method": "POST", "path": "/v1/messages", "raw_path": b"/v1/messages", "query_string": b"",
+             "root_path": "", "scheme": "http", "server": ("test", 80), "client": ("1.2.3.4", 5000),
+             "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]}
+    up = world["app"].state.upstream
+    captured: list = []
+    orig_anthropic = up.anthropic
+
+    async def spy(body, stream):
+        r = await orig_anthropic(body, stream)
+        captured.append(r)
+        return r
+
+    up.anthropic = spy
+    try:
+        with pytest.raises(RuntimeError):
+            asyncio.run(world["app"](scope, receive, send))
+    finally:
+        up.anthropic = orig_anthropic
+    assert world["store"].usage(world["cid"], "2026-09")["assistant_tokens"] == 0
+    # ...and the upstream response is closed too: the relay's `finally` normally does that,
+    # and on this path the relay never ran (reviewer's note on K-267)
+    assert captured and captured[0].is_closed
+    # and a stream that does run settles exactly once — not twice, not not at all
+    body = {"model": "claude-sonnet-5", "max_tokens": 4096, "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+    with world["client"].stream("POST", "/v1/messages", json=body, headers=_h(world, "assistant")) as r:
+        b"".join(r.iter_bytes())
+    assert world["store"].usage(world["cid"], "2026-09")["assistant_tokens"] == 125
+
+
 def test_the_streamed_quota_header_never_advertises_the_reservation(world):
     """R3 (fix round 1): a StreamingResponse's headers go out before its body, and neither
     Starlette nor uvicorn does response trailers — so the settled figure CANNOT reach the

@@ -49,22 +49,35 @@ class Reservation(NamedTuple):
     at: float
     """The clock the period keys were taken from. `settle` must be handed THIS, never a
     fresh `now` — see its docstring."""
+    reason: str = ""
+    """Which ceiling refused: "day" for the audio-per-day one, "month" for the monthly
+    quota, "" when granted. The route turns it into that ceiling's own message."""
 
 
 def reserve(store: Store, settings: Settings, customer_id: int, purpose: str, amount: int,
             now: float) -> Reservation:
     """Take `amount` out of the quota up front, or refuse. The estimate is spent the
     moment it is granted, so the next request in flight sees it gone; `settle` gives
-    back whatever was not used. Refusing records nothing."""
+    back whatever was not used. Refusing records nothing.
+
+    K-267: the per-day audio ceiling is decided HERE too, in the same lock and the same
+    breath as the monthly one — `check_daily_audio` outside it let two concurrent uploads
+    read the same daily total, both reserve, and push past the 240-minute cap, because
+    this function then added to that counter without ever re-reading it. It is asked
+    first, so a caller over both ceilings still hears about the one that lifts soonest."""
     amount = max(0, int(amount))
     with _lock:
-        ok, _remaining = check(store, settings, customer_id, purpose, amount, now)
+        if purpose == "transcribe" and not check_daily_audio(store, settings, customer_id, amount, now):
+            ok, reason = False, "day"
+        else:
+            ok, _remaining = check(store, settings, customer_id, purpose, amount, now)
+            reason = "" if ok else "month"
         before = snapshot(store, settings, customer_id, now)
         if ok:
             store.add_usage(customer_id, month_key(now), COLUMN[purpose], amount)
             if purpose == "transcribe":
                 store.add_daily_audio(customer_id, day_key(now), amount)
-    return Reservation(ok, before, now)
+    return Reservation(ok, before, now, reason)
 
 
 def settle(store: Store, settings: Settings, customer_id: int, purpose: str, reserved: int,
