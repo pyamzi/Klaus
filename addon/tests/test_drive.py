@@ -1074,6 +1074,28 @@ check("Match Sensitivity opens window-modal with a callback (K-114: "
       "dlg.open() + accepted, never exec)",
       "dlg.open()" in _PD_FLAT and "dlg.accepted.connect(apply)" in _PD_FLAT)
 
+print("== K-254 review Important 1: Match Sensitivity scores CONFIRMED ==")
+_THRESH_SRC = _PD_SRC.split("def _on_threshold", 1)[1].split(
+    "\n    def _on_browse", 1)[0]
+_THRESH_CODE = code_only(_THRESH_SRC)
+# .find (never .index) throughout: a regression that removes this code
+# entirely must FAIL these checks, not crash the file via ValueError and
+# hide every pin after it.
+_rej_pos = _THRESH_SRC.find("pertinence.rejected_nids")
+_preview_pos = _THRESH_SRC.find("def preview")
+check("the rejected set is read ONCE, at the method's own top level — "
+      "same footing as `matches = self.matches.get(safe)` right above "
+      "it, never inside preview()/apply() (which would mean once per "
+      "keystroke)",
+      _rej_pos != -1 and _preview_pos != -1 and _rej_pos < _preview_pos)
+check("both the live preview AND the OK path score against it, not just "
+      "one",
+      _THRESH_CODE.count("rejected=_rejected") == 2)
+_THRESH_FLAT = _THRESH_CODE.replace(" ", "")
+check("a read failure degrades to nothing-rejected rather than a "
+      "broken dialog",
+      "exceptException" in _THRESH_FLAT and "_rejected=set()" in _THRESH_FLAT)
+
 print("== K-125: the statics that exec() internally are gone too ==")
 # K-100's audit: QInputDialog.getText and QMessageBox.question run an
 # app-modal exec() under the hood — the same macOS 26 + Qt 6.11 crash
@@ -1522,6 +1544,25 @@ if _HAVE_QT:
           "7 matched cards" in _item.toolTip(2)
           and "2 suspended" in _item.toolTip(2)
           and "50% unseen" in _item.toolTip(3))
+
+    print("== K-254: _apply_row — doubtful suffix on the Cards cell ==")
+    _doubt = dict(_full, doubtful_count=3)
+    _apply(_host, _item, _doubt)
+    check("doubtful cards append their count to whatever the Cards cell "
+          "already said",
+          _item.text(2) == "5 · 3 doubtful", repr(_item.text(2)))
+    check("the hover detail names the doubtful count too",
+          "3 doubtful" in _item.toolTip(2))
+    _apply(_host, _item, _full)
+    check("zero (or absent) doubtful_count renders the bare count, "
+          "unchanged from before K-254",
+          _item.text(2) == "5", repr(_item.text(2)))
+    _susp_doubt = dict(_full, card_count=0, suspended_count=6, doubtful_count=2)
+    _apply(_host, _item, _susp_doubt)
+    check("a fully suspended row still appends its doubtful suffix",
+          _item.text(2) == "suspended · 2 doubtful", repr(_item.text(2)))
+    _apply(_host, _item, _full)
+
     _bare = {"indexed": True, "stale": False, "retention": 0.9,
              "matched_cards": 3, "new_pct": 0.0}
     _apply(_host, _item, _bare)
@@ -1734,6 +1775,43 @@ if _HAVE_QT:
           "Add to Search Index" in _l3
           and "Suspend Cards" in _l3 and "Unsuspend Cards" in _l3,
           repr(_l3))
+
+    print("== K-254 review Important 4: 'Doubtful cards…' is UNGATED ==")
+    # DOUBTFUL_TAG is the GLOBAL union across every PDF (spec D5) — this
+    # row's own doubtful_count says nothing about whether OTHER PDFs'
+    # rejections still make the search return something here, so the
+    # item is always offered, exactly like "Show Matched Cards in
+    # Browse" beside it (re-baselined off the review's Important 4).
+    _, _m4 = _build_menu(dict(_menu_row_full, doubtful_count=3))
+    _l4 = [a.text() for a in _m4.actions()]
+    check("doubtful_count > 0 -> still offered",
+          pdf_drive.DOUBTFUL_MENU_LABEL in _l4, repr(_l4))
+    _, _m5 = _build_menu(dict(_menu_row_full, doubtful_count=0))
+    _l5 = [a.text() for a in _m5.actions()]
+    check("doubtful_count == 0 -> STILL offered (the gate was dropped, "
+          "not just its default)",
+          pdf_drive.DOUBTFUL_MENU_LABEL in _l5, repr(_l5))
+    _, _m6 = _build_menu(_menu_row_full)  # no doubtful_count key at all
+    _l6 = [a.text() for a in _m6.actions()]
+    check("no doubtful_count key (row predates K-254 or PDF never judged) "
+          "-> offered too, unconditionally",
+          pdf_drive.DOUBTFUL_MENU_LABEL in _l6, repr(_l6))
+    # Raw source, not code_only: "doubtful_count" in the real gate only
+    # ever appeared as a STRING key (`row.get("doubtful_count")`), which
+    # code_only strips right along with a comment merely naming it —
+    # against either shape that check would be vacuously true. The exact
+    # conditional text is what must be gone.
+    _PDM_SRC = _PD_SRC.split("def _build_pdf_menu", 1)[1].split(
+        "def _build_folder_menu", 1)[0]
+    check("the gate is really gone from the source, not just satisfied "
+          "by a default",
+          'if int(row.get("doubtful_count") or 0) > 0:' not in _PDM_SRC)
+    # Raw source (string literals) on purpose — code_only would strip both.
+    check("DOUBTFUL_MENU_LABEL is the exact ellipsis-suffixed label",
+          'DOUBTFUL_MENU_LABEL = "Doubtful cards…"' in _PD_SRC)
+    check("the Doubtful search intersects the global tag with this PDF's "
+          "own lecture tag",
+          'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"' in _PD_SRC)
 
     shutil.rmtree(_rq_uf, ignore_errors=True)
 

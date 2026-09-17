@@ -2025,6 +2025,12 @@ def _fill_retention(graph: dict) -> None:
     ``pdf_retention`` aggregate fills the number without re-scoring
     anything. Any failure leaves None — the tooltip simply omits the
     line (do NOT redesign retention.py for this).
+
+    K-254 review Minor 10: each PDF's own ``judged.json`` is read here
+    too (guarded — same "never break the map" rule as everything else
+    in this function) so the map's tooltip agrees with the Library's own
+    confirmed score instead of quietly reverting to the pre-K-254
+    unconfirmed one.
     """
     try:
         from aqt import mw
@@ -2036,6 +2042,14 @@ def _fill_retention(graph: dict) -> None:
         # every call below sits inside this try, so that path degrades
         # to the printed failure line rather than a crash.
         from . import retention
+
+        try:
+            from . import pertinence
+
+            user_files = retention.USER_FILES
+        except Exception:
+            pertinence = None
+            user_files = None
 
         edges = [e for e in graph.get("edges") or [] if isinstance(e, dict)]
         nids = {int(e["nid"]) for e in edges if "nid" in e}
@@ -2053,11 +2067,20 @@ def _fill_retention(graph: dict) -> None:
         for p in graph.get("pdfs") or []:
             if not isinstance(p, dict):
                 continue
-            matches = by_pdf.get(str(p.get("safe")))
+            safe = str(p.get("safe"))
+            matches = by_pdf.get(safe)
             if not matches:
                 continue
+            rejected: set = set()
+            if pertinence is not None:
+                try:
+                    rejected = pertinence.rejected_nids(
+                        pertinence.load_judged(user_files, safe)
+                    )
+                except Exception as exc:
+                    print(f"[klausmate] map judged.json unreadable for {safe!r}: {exc}")
             stats = retention.pdf_retention(
-                matches, float(p.get("threshold") or 0.0), card_r
+                matches, float(p.get("threshold") or 0.0), card_r, rejected=rejected
             )
             p["retention"] = stats.get("retention")
     except Exception as exc:

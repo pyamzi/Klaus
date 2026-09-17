@@ -13,6 +13,7 @@ the Library's "Retention History…" menu item calls.
 import ast
 import importlib
 import inspect
+import json
 import os
 import shutil
 import sys
@@ -297,10 +298,31 @@ check("chunked map merges completely and splits queues correctly",
       len(qmap) == 2000 and qmap[3] == [-1] and qmap[4] == [0])
 
 check("note_card_counts skips notes with no cards (deleted since indexing)",
-      retention.note_card_counts([(7, 0.9)], 0.75, {}) == (0, 0, 0))
+      retention.note_card_counts([(7, 0.9)], 0.75, {}) == (0, 0, 0, 0))
 check("buried queues (-2/-3) stay viewable; only -1 suspends",
       retention.note_card_counts([(1, 0.9)], 0.5, {1: [-2, -3, -1, 2]})
-      == (1, 3, 1))
+      == (1, 3, 1, 0))
+
+section("priority_rows — confirmed counts read judged.json (K-254 review Important 3)")
+# The pure-function pins for note_card_counts/pdf_retention (above, and
+# in test_klausmate.py) never proved priority_rows actually WIRES
+# judged.json through — mutation 5 in the K-254 review (drop
+# `rejected=rejected` from both aggregate calls at retention.py:947,949)
+# survived the whole suite green without this.
+_jd = os.path.join(tmp, "pdf_index", "Lecture_1", "judged.json")
+os.makedirs(os.path.dirname(_jd), exist_ok=True)
+with open(_jd, "w", encoding="utf-8") as _f:
+    json.dump({"version": 1, "model": "m", "verdicts": {
+        "2": {"pertinent": False, "reason": "off-topic", "page": 1,
+              "page_hash": "ph", "card_hash": "h2", "model": "m"}}}, _f)
+_out3 = retention.priority_rows(FakeCol(card_rows, queue_rows), cfg)
+_by3 = {r["name"]: r for r in _out3["rows"]}
+check("a rejected nid leaves note/card counts and lands in doubtful_count",
+      (_by3["Lecture_1"]["note_count"], _by3["Lecture_1"]["card_count"],
+       _by3["Lecture_1"]["doubtful_count"]) == (1, 1, 1))
+check("an unjudged/unindexed row still carries doubtful_count 0",
+      _by3["Lecture_2"]["doubtful_count"] == 0)
+os.remove(_jd)
 
 # ------------------------------------------------------ delete cleanup
 

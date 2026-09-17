@@ -223,6 +223,7 @@ def pdf_retention(
     matches: list[tuple[int, float]],
     threshold: float,
     card_r: dict[int, list[tuple[float, bool]]],
+    rejected: set[int] | None = None,
 ) -> dict:
     """Similarity-weighted retention over the matched notes' cards.
 
@@ -230,14 +231,21 @@ def pdf_retention(
     inherit their note's similarity, so multi-card notes weigh more (more
     study material) — intentional. Notes missing from ``card_r`` (deleted
     since indexing) are skipped.
+
+    ``rejected`` (K-254, Plan 2 pertinence): nid set to leave out of the
+    aggregate even though it matched at/above threshold — confirmed =
+    matched − rejected, and an unjudged nid (absent from ``rejected``)
+    counts as confirmed. None (the default) scores every match, exactly
+    the pre-K-254 behaviour.
     """
     weight_sum = 0.0
     weighted_r = 0.0
     matched_cards = 0
     new_cards = 0
     matched_notes = 0
+    rejected = rejected or ()
     for nid, sim in matches:
-        if sim < threshold:
+        if sim < threshold or nid in rejected:
             continue
         cards = card_r.get(nid)
         if not cards:
@@ -268,9 +276,11 @@ def note_card_counts(
     matches: list[tuple[int, float]],
     threshold: float,
     queue_map: dict[int, list[int]],
-) -> tuple[int, int, int]:
-    """(note_count, card_count, suspended_count) over matches at/above
-    ``threshold`` — the Library's Cards/Notes split (K-118).
+    rejected: set[int] | None = None,
+) -> tuple[int, int, int, int]:
+    """(note_count, card_count, suspended_count, doubtful_count) over
+    matches at/above ``threshold`` — the Library's Cards/Notes split
+    (K-118), confirmed-only as of K-254.
 
     ``queue_map``: nid → [queue per card] (card_queues below). A note
     absent from the map (deleted since indexing) is skipped, mirroring
@@ -279,16 +289,36 @@ def note_card_counts(
     cards — queue != -1 — so buried cards (-2/-3, back on their own
     tomorrow) still count as viewable; only suspension (-1) moves a card
     to ``suspended_count``. card_count + suspended_count == pdf_retention's
-    matched_cards by construction.
+    matched_cards by construction, EXCLUDING rejected nids from all three.
+
+    ``rejected`` (K-254): a matched, card-having nid in this set
+    contributes its VIEWABLE cards (queue != -1, ``card_count``'s own
+    rule) to ``doubtful_count`` and nowhere else — never into
+    note/card/suspended — so confirmed = matched − rejected the same way
+    pdf_retention scores it. Counting CARDS rather than notes is
+    deliberate (K-254 review Minor 6): ``doubtful_count`` is read
+    straight into the Cards cell (``"{card_count} · {doubtful_count}
+    doubtful"``), so it must share that cell's unit, not the Notes
+    column's — a two-card note with one rejected note still reads as
+    "2 doubtful", not "1". A rejected note's suspended cards count
+    toward neither side, same as a confirmed note's would not count
+    toward ``suspended_count`` here. None (the default) reports
+    doubtful_count 0 and behaves exactly like the pre-K-254 3-tuple
+    otherwise.
     """
     notes = 0
     viewable = 0
     suspended = 0
+    doubtful = 0
+    rejected = rejected or ()
     for nid, sim in matches:
         if sim < threshold:
             continue
         queues = queue_map.get(nid)
         if not queues:
+            continue
+        if nid in rejected:
+            doubtful += sum(1 for q in queues if q != -1)
             continue
         notes += 1
         for q in queues:
@@ -296,7 +326,7 @@ def note_card_counts(
                 suspended += 1
             else:
                 viewable += 1
-    return notes, viewable, suspended
+    return notes, viewable, suspended, doubtful
 
 
 # ------------------------------------------------------- matches.json cache
@@ -841,6 +871,12 @@ def priority_rows(col, cfg: dict) -> dict:
     of each row's CONFIGURED threshold — a live threshold-slider preview
     that re-aggregates retention via card_r can re-derive counts the same
     way from card_queues, or simply show them as-of-configured.
+    ``doubtful_count`` (K-254) is additive the same way: pertinence's
+    judged.json for this PDF, loaded per row (guarded — a bad or absent
+    file never breaks the pass, it just reads as unjudged), gives the
+    rejected nid set that note_count/card_count/suspended_count now
+    exclude (confirmed = matched − rejected) and that doubtful_count
+    reports on its own; 0 for a PDF never judged.
 
     Right before returning, a retention snapshot per PDF is appended to
     retention_history.json (retention_history.record_rows) — guarded, so
@@ -892,6 +928,7 @@ def priority_rows(col, cfg: dict) -> dict:
             "note_count": 0,
             "card_count": 0,
             "suspended_count": 0,
+            "doubtful_count": 0,
         }
         if matches is not None:
             all_matches[safe] = matches
@@ -900,13 +937,25 @@ def priority_rows(col, cfg: dict) -> dict:
 
     card_r = card_retrievability(col, nid_pool) if nid_pool else {}
     queue_map = card_queues(col, nid_pool) if nid_pool else {}
+    try:
+        from . import pertinence
+    except Exception as exc:
+        print(f"[klausmate] pertinence unavailable, doubtful counts disabled: {exc}")
+        pertinence = None
     for row in rows:
         matches = all_matches.get(row["name"])
         if matches is None:
             continue
-        agg_out = pdf_retention(matches, row["threshold"], card_r)
-        n_notes, n_viewable, n_suspended = note_card_counts(
-            matches, row["threshold"], queue_map
+        rejected: set[int] = set()
+        if pertinence is not None:
+            try:
+                judged = pertinence.load_judged(USER_FILES, row["name"])
+                rejected = pertinence.rejected_nids(judged)
+            except Exception as exc:
+                print(f"[klausmate] judged.json unreadable for {row['name']!r}: {exc}")
+        agg_out = pdf_retention(matches, row["threshold"], card_r, rejected=rejected)
+        n_notes, n_viewable, n_suspended, n_doubtful = note_card_counts(
+            matches, row["threshold"], queue_map, rejected=rejected
         )
         row.update(
             retention=agg_out["retention"],
@@ -916,6 +965,7 @@ def priority_rows(col, cfg: dict) -> dict:
             note_count=n_notes,
             card_count=n_viewable,
             suspended_count=n_suspended,
+            doubtful_count=n_doubtful,
         )
     rows.sort(key=lambda r: (r["retention"] is None, -r["priority"], r["label"]))
     try:

@@ -88,6 +88,12 @@ except Exception:  # noqa: BLE001
     library_explorer = None
 
 DIALOG_NAME = "KlausDrive"
+# K-254: the row context-menu entry that opens Browse on this PDF's
+# pertinence-rejected cards (tag_sync.DOUBTFUL_TAG intersected with the
+# PDF's own lecture tag). A module constant rather than an inline
+# literal because Plan 2's other tasks (index_queue's Judge/Skip prompt)
+# reference the same label.
+DOUBTFUL_MENU_LABEL = "Doubtful cards…"
 _ROLE_SAFE = Qt.ItemDataRole.UserRole
 _ROLE_FOLDER = Qt.ItemDataRole.UserRole + 1
 _ROLE_SORT = Qt.ItemDataRole.UserRole + 2
@@ -1948,12 +1954,19 @@ class DriveWindow(QWidget):
             cards = int(raw_cards) if raw_cards is not None else None
             notes = int(raw_notes) if raw_notes is not None else None
             suspended = int(row.get("suspended_count") or 0)
+            doubtful = int(row.get("doubtful_count") or 0)
             if cards == 0 and suspended > 0:
                 # Every matched card is suspended: say so instead of a
                 # bare 0, and dim the whole row below.
                 item.setText(2, "suspended")
             else:
                 item.setText(2, f"{cards:,}" if cards is not None else "—")
+            if doubtful:
+                # K-254: pertinence rejected some of this PDF's matches —
+                # confirmed counts (above) already exclude them, this just
+                # says so, appended to whichever text the Cards cell just
+                # got ("12 · 3 doubtful", or "suspended · 3 doubtful").
+                item.setText(2, f"{item.text(2)} · {doubtful} doubtful")
             item.setText(3, f"{notes:,}" if notes is not None else "—")
             # The old composite cell's detail survives as hover text.
             matched = int(row.get("matched_cards") or 0)
@@ -1961,6 +1974,8 @@ class DriveWindow(QWidget):
             bits = [f"{matched:,} matched cards"]
             if suspended:
                 bits.append(f"{suspended:,} suspended")
+            if doubtful:
+                bits.append(f"{doubtful:,} doubtful")
             bits.append(f"{round(new_pct * 100)}% unseen")
             tip = " · ".join(bits)
             item.setToolTip(2, tip)
@@ -2216,6 +2231,20 @@ class DriveWindow(QWidget):
         lay.addWidget(slider)
         lay.addWidget(label)
         matches = self.matches.get(safe)
+        # K-254 review Important 1: read once, same as `matches` above —
+        # never per keystroke — so the live preview and the OK path score
+        # exactly what the Library row already excludes (confirmed =
+        # matched - rejected). A read failure degrades to "nothing
+        # rejected" rather than freezing the dialog.
+        try:
+            from . import pertinence
+
+            _rejected = pertinence.rejected_nids(
+                pertinence.load_judged(_user_files(), safe)
+            )
+        except Exception as exc:
+            print(f"[klausmate] sensitivity dialog: doubtful set unavailable: {exc}")
+            _rejected = set()
 
         def preview(value: int) -> None:
             threshold = value / 100.0
@@ -2223,7 +2252,8 @@ class DriveWindow(QWidget):
                 label.setText(f"Threshold {threshold:.2f}")
                 return
             agg = retention.pdf_retention(
-                [(int(n), float(s)) for n, s in matches], threshold, self.card_r
+                [(int(n), float(s)) for n, s in matches], threshold, self.card_r,
+                rejected=_rejected,
             )
             ret = agg["retention"]
             ret_txt = f"{round(ret * 100)}%" if ret is not None else "—"
@@ -2248,7 +2278,8 @@ class DriveWindow(QWidget):
             row = self.rows.get(safe)
             if row is not None and matches is not None:
                 agg = retention.pdf_retention(
-                    [(int(n), float(s)) for n, s in matches], value, self.card_r
+                    [(int(n), float(s)) for n, s in matches], value, self.card_r,
+                    rejected=_rejected,
                 )
                 row.update(threshold=value, **{
                     k: agg[k] for k in ("retention", "matched_cards", "new_pct", "priority")
@@ -2282,6 +2313,18 @@ class DriveWindow(QWidget):
             return
         browser = aqt.dialogs.open("Browser", mw)
         browser.search_for(f'tag:"{tag}"')
+
+    def _on_doubtful(self, safe: str) -> None:
+        """K-254: "Doubtful cards…" — this PDF's own lecture tag,
+        intersected with the global Doubtful tag. No matches/threshold
+        math needed here (unlike _on_browse): tag membership already IS
+        the confirmed/rejected split, so this is a plain tag search."""
+        tag = tag_sync.get_stored_tag(safe)
+        if not tag:
+            self.status.setText("Re-index this PDF to create its Library tag.")
+            return
+        browser = aqt.dialogs.open("Browser", mw)
+        browser.search_for(f'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"')
 
     def _set_suspended_cards(self, safe: str, suspend: bool) -> None:
         """Suspend or unsuspend every card of this PDF's matched notes
@@ -2513,6 +2556,16 @@ class DriveWindow(QWidget):
         )
         menu.addAction("Show Matched Cards in Browse").triggered.connect(
             lambda: self._on_browse(safe)
+        )
+        # K-254 review Important 4: always offered, exactly like the
+        # neighbouring "Show Matched Cards in Browse" — DOUBTFUL_TAG is
+        # the GLOBAL union across every PDF (spec D5), so gating on this
+        # row's OWN doubtful_count would both hide the item on a PDF
+        # whose search still returns results (another PDF rejected the
+        # same note) and offer it on a PDF whose search can return notes
+        # rejected only by OTHERS. Task 7 documents that divergence.
+        menu.addAction(DOUBTFUL_MENU_LABEL).triggered.connect(
+            lambda: self._on_doubtful(safe)
         )
         if retention_history is not None:
             # K-118's contract: open_history_dialog(parent, safe, label).

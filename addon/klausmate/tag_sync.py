@@ -14,13 +14,15 @@ THE INVARIANT: every indexed PDF owns exactly one collection tag,
 ``!Library::<folder path, / -> ::>::<leaf>``, where ``leaf`` is the PDF's
 display name minus a trailing ``.pdf``/``.txt``, sanitized tag-legal. The
 tag's members are exactly the notes whose cached match score is at or
-above that PDF's sensitivity threshold. The three reserved leaves
+above that PDF's sensitivity threshold. The four reserved leaves
 (``Curating``, ``Curated``, ``Matching`` — the static tags already living
 at the ``!Library`` root; see curation.CURATED_TAG. ``Matching``
 was retention.py's own Browse-preview tag until K-055 retired it — kept
 reserved anyway so a PDF literally named "Matching" can never collide
-with that historical name) get a ``-pdf`` suffix if a display name would
-otherwise collide with one of them at the root.
+with that historical name — and ``Doubtful``, K-254's own root tag, whose
+members are the union of pertinence-rejected nids across every PDF) get
+a ``-pdf`` suffix if a display name would otherwise collide with one of
+them at the root.
 
 State: each PDF's prefs.json entry (the same file retention.py's
 threshold overrides live in) gains a ``"tag"`` key — the last tag name
@@ -95,7 +97,17 @@ CONFIG_KEY = "library_tags_enabled"
 # stub tag_migrate.py already uses, and these three names are exactly as
 # stable as tag_migrate.TAG_RENAME_MAP's old side — they name tags that
 # already exist in shipped collections and must never quietly drift.
-RESERVED_LEAVES = frozenset({"curating", "curated", "matching"})
+# "doubtful" joined them in K-254: DOUBTFUL_TAG below is Klaus's own new
+# root tag (pertinence-rejected cards), reserved the same way so a PDF
+# literally named "Doubtful.pdf" can never collide with it either.
+RESERVED_LEAVES = frozenset({"curating", "curated", "matching", "doubtful"})
+
+# The Doubtful tag (K-254, spec D5): membership is the UNION of
+# pertinence-rejected nids across every PDF's judged.json — global, not
+# per-PDF, unlike every other tag this module manages. _do_sync_one
+# recomputes it in full (apply_membership's own diff) whenever a caller
+# hands it a `doubtful` set; passing None leaves it untouched entirely.
+DOUBTFUL_TAG = "!Library::Doubtful"
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _UNDERSCORE_RUN_RE = re.compile(r"_+")
@@ -151,11 +163,11 @@ def desired_tag(folder: str | None, display: str) -> str:
     carrying its .pdf extension, spaces, whatever the user typed).
 
     Reserved-leaf collision (a display name that sanitizes to "Curating",
-    "Curated", or "Matching" — the last one historical: retention.py's own
-    Browse-preview tag until K-055 retired it) only matters at the
-    !Library ROOT — nested under any folder the full tag path already
-    differs from the reserved one, so only the folder-less case gets the
-    "-pdf" suffix.
+    "Curated", "Matching" — historical: retention.py's own Browse-preview
+    tag until K-055 retired it — or "Doubtful", K-254's own root tag) only
+    matters at the !Library ROOT — nested under any folder the full tag
+    path already differs from the reserved one, so only the folder-less
+    case gets the "-pdf" suffix.
     """
     leaf = _sanitize_segment(strip_pdf_ext(display)) or "PDF"
     segments = [s for s in (_sanitize_segment(p) for p in (folder or "").split("/")) if s]
@@ -405,19 +417,40 @@ def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
     return cached[0] if cached is not None else None
 
 
-def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
+def _do_sync_one(
+    col, safe: str, tag: str, desired_nids: set[int], doubtful: set[int] | None = None
+) -> dict:
     """The membership-diff body shared by sync_after_matches,
     sync_after_threshold, and sync_after_clear_overrides. Self-healing:
     if the stored tag exists but doesn't match the freshly computed
     desired one (should only happen if a rename event was somehow missed
     — see module docstring), carries the old tag's members across before
-    diffing, rather than leaving them orphaned under a dead tag name."""
+    diffing, rather than leaving them orphaned under a dead tag name.
+
+    ``doubtful`` (K-254) is the GLOBAL set of pertinence-rejected nids —
+    not scoped to `safe` — so this recomputes DOUBTFUL_TAG's membership
+    in full via the same apply_membership diff, exactly like every other
+    tag here. None (the default) leaves DOUBTFUL_TAG untouched entirely,
+    which is what lets plain indexing/curating (sync_after_matches with
+    no judge pass yet run) skip it rather than wiping real verdicts.
+    """
     stored = get_stored_tag(safe)
     renamed = apply_rename(col, stored, tag)
     added, removed = apply_membership(col, tag, desired_nids)
     if stored != tag:
         set_stored_tag(safe, tag)
-    return {"tag": tag, "added": added, "removed": removed, "renamed": renamed}
+    doubtful_added: list[int] = []
+    doubtful_removed: list[int] = []
+    if doubtful is not None:
+        doubtful_added, doubtful_removed = apply_membership(col, DOUBTFUL_TAG, doubtful)
+    return {
+        "tag": tag,
+        "added": added,
+        "removed": removed,
+        "renamed": renamed,
+        "doubtful_added": doubtful_added,
+        "doubtful_removed": doubtful_removed,
+    }
 
 
 # ------------------------------------------------------------- aqt glue
@@ -494,6 +527,7 @@ def sync_after_matches(
     pdf_name: str,
     matches: list[tuple[int, float]] | None,
     *,
+    doubtful: set[int] | None = None,
     on_done: Callable[[], None] | None = None,
 ) -> None:
     """Event 1 — indexing/curating a PDF creates or refreshes its tag.
@@ -504,6 +538,13 @@ def sync_after_matches(
     value is never None in practice — ensure_matches raises on failure
     rather than returning None — the guard below is defense in depth only,
     matching every other event's "never strip on missing data" rule.
+
+    ``doubtful`` (K-254) is passed straight through to `_do_sync_one`;
+    None (the default — every call site above except the judge phase)
+    leaves DOUBTFUL_TAG untouched, so plain indexing never re-derives it
+    from a stale or absent judged.json. The judge phase (index_queue's
+    phase four, Task 3) is the one caller that passes
+    `pertinence.all_rejected(user_files)` here.
 
     ``on_done`` (K-064) fires exactly once when the event is SETTLED —
     after the sync op succeeds or fails, and immediately on every early
@@ -544,7 +585,7 @@ def sync_after_matches(
         _run_sync_op(
             parent,
             f"Klaus: tag “{display}” in !Library",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids),
+            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
             on_done=lambda result: _tooltip_membership(parent, display, result),
             on_finished=settled,
         )
@@ -563,6 +604,14 @@ def sync_after_threshold(
     preview already uses, so "no cached matches yet" reads identically in
     both places instead of the tag sync silently disagreeing with what
     the dialog just showed.
+
+    Doubtful (K-254) is recomputed from `pertinence.all_rejected` here —
+    never re-judged — so dragging the sensitivity slider can never spend
+    a paid pass; it only reflects whatever verdicts already exist. That
+    read is its own try/except (K-254 review Important 2): a failure
+    there falls back to `doubtful=None` rather than aborting the retag
+    the user just confirmed — only the primary tag sync's own failure
+    (below) does that.
     """
     try:
         cfg = _cfg()
@@ -575,11 +624,24 @@ def sync_after_threshold(
         folder, display = _folder_and_display(safe)
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
+        from . import retention
+
+        # K-254 review Important 2: guarded on its own, same shape as
+        # priority_rows — a failure in the AUXILIARY Doubtful read must
+        # never take down the PRIMARY retag the user just confirmed by
+        # moving the slider.
+        try:
+            from . import pertinence
+
+            doubtful = pertinence.all_rejected(retention.USER_FILES)
+        except Exception as exc:
+            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
+            doubtful = None
 
         _run_sync_op(
             parent,
             f"Klaus: retag “{display}” for new sensitivity",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids),
+            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
             on_done=lambda result: _tooltip_membership(parent, display, result),
         )
     except Exception as exc:  # noqa: BLE001
@@ -595,7 +657,13 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
     itself only returns a count). One undo entry for the whole batch,
     matching the folder-rename batching rule below. A PDF whose matches
     cache is cold is skipped individually (never strips that one PDF's
-    tag) without blocking the rest of the batch.
+    tag) without blocking the rest of the batch. Doubtful (K-254) is
+    computed ONCE from `pertinence.all_rejected` for the whole batch —
+    never re-judged, and never per-PDF, since it is one global tag. That
+    computation is its own try/except (K-254 review Important 2,
+    mirroring sync_after_threshold above): a failure there is
+    `doubtful=None` for the whole batch, never a reason to skip the
+    retag every cleared PDF is here for.
     """
     try:
         cfg = _cfg()
@@ -603,6 +671,16 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
             return
         from . import retention
 
+        # K-254 review Important 2: same guard as sync_after_threshold —
+        # an auxiliary Doubtful-read failure must not cancel the whole
+        # batch's retag.
+        try:
+            from . import pertinence
+
+            doubtful = pertinence.all_rejected(retention.USER_FILES)
+        except Exception as exc:
+            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
+            doubtful = None
         plans: list[tuple[str, str, set[int]]] = []
         for safe in cleared_safes:
             matches = _cached_matches(safe, cfg)
@@ -619,7 +697,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         def work(col):
             added = removed = 0
             for safe, tag, desired_nids in plans:
-                r = _do_sync_one(col, safe, tag, desired_nids)
+                r = _do_sync_one(col, safe, tag, desired_nids, doubtful)
                 added += len(r["added"])
                 removed += len(r["removed"])
             return {"added": added, "removed": removed, "count": len(plans)}

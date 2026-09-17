@@ -1212,6 +1212,25 @@ check("graph_data() is public too — the dock builds it OFF the main "
       and "_load_graph()" in _func_seg("graph_data")
       and "_fill_retention(" in _func_seg("graph_data"))
 
+# K-254 review Minor 10: _fill_retention's own pdf_retention call must
+# pass `rejected=` (per-PDF judged.json, guarded) or the map's tooltip
+# silently reverts to the pre-K-254 unconfirmed score while the Library
+# cell right next to it shows the confirmed one. _fill_retention is
+# stubbed to a no-op everywhere else in this file (see the "glue smoke"
+# and "real offscreen Qt" sections below) precisely because it needs a
+# real collection, so a source pin — not a live call — is the fit here.
+_fr_seg = _func_seg("_fill_retention")
+_fr_code = code_only(_fr_seg)
+check("a per-PDF rejected set is read via pertinence.load_judged/"
+      "rejected_nids, guarded (never breaks the map)",
+      "pertinence.load_judged" in _fr_code
+      and "pertinence.rejected_nids" in _fr_code
+      and _fr_seg.count("try:") >= 2)
+check("...and it actually reaches pdf_retention's rejected= — the same "
+      "mistake K-254 shipped with at the Match Sensitivity dialog "
+      "(review Important 1) until this round",
+      "rejected=rejected" in _fr_code)
+
 _canvas_defs = [n for n in ast.walk(_TREE)
                 if isinstance(n, ast.ClassDef) and n.name == "_MapCanvas"]
 check("there is exactly ONE canvas class in the file — the dock does "
