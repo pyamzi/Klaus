@@ -462,6 +462,19 @@ Plan 1 Task 9. Last.
 - [2026-09-16 claude-t9] 1. Restart Anki. Open KlausMate Preferences → the page is "API keys & models" with two key fields and three model fields; no Ollama page, no OCR row, no Claude Code binary row. 2. Paste the OpenAI key and Save → the re-index prompt shows note and PDF counts and a token/dollar estimate; accept. 3. The bottom status bar shows "Embedding pages…" per PDF; the Library's rows refresh; a PDF's index directory has `manifest.json` version 2 with `pages`. 4. Right-click a PDF → Show matches in Browse still opens the `!Library` tag search. 5. Open a PDF in Browse's dock, press Ctrl+Shift+K, ask "what is on this slide?" → the answer cites the page text (no OCR); the Preferences page has no OCR switch. 6. Reviewer → Lecture panel still jumps to the matched page. 7. Remove the OpenAI key and Save → drop a PDF onto the deck screen → the refusal names the Preferences page. 8. Paste the OpenAI key for the first time and Save → a priced re-index prompt appears whose DEFAULT button is No (Enter must not start a paid sweep); accept it deliberately with Yes → the sweep runs. (New in this plan: a first key offers the sweep even though nothing changed.) 9. Live API check, embeddings: after the sweep, open the Library → every PDF row shows a retention score; `user_files/pdf_index/<safe>/manifest.json` has `"version": 2` and a `"pages"` list; the bottom status dock read "Embedding pages…" during the run. 10. Live API check, transcription: not reachable from any UI yet (Plan 2's recorder) — skip; only note that Preferences shows the `transcription_model` field with its placeholder. 11. Known gaps, not defects to report: the readiness nudge names both keys but checks only the OpenAI one (K-231); the assistant's page image is re-rendered on every Send, no cache (K-230); the `reasoning_model` field is written but not read by the assistant until Plan 3 (K-235); removing the OpenAI key and Saving does not re-prompt.
 - [2026-09-16 orchestrator] Loop on 4b4841c: 43/43 files, 4505 passed, 0 failed; compile + audit selftest clean; the paid smoke skipped (no key in the session environment). Stays in Review, needs-human: the 11-item live checklist above is Pouya's.
 
+### K-249: Klaus Plus T10: integration — FakeUpstream + env switch, local e2e, loops, the rollout checklist
+owner: claude-kp10
+priority: P2
+tags: klaus-plus,plan-kp,integration,needs-human
+files: service/klausplus/upstream.py,service/klausplus/app.py,service/tests/test_proxy.py,service/tests/test_upstream_fake.py,scripts/mutation_audit.py,scripts/AUDIT.md
+verify: test -e service/tests/test_upstream_fake.py && cd service && .venv/bin/python -m pytest -q
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp10] Step 4: The rollout checklist, posted verbatim on the card for Pouya (needs-human): 1. `brew install flyctl`, `fly auth login`; from `service/`: `fly launch --no-deploy --copy-config --name klausmate`, `fly volumes create klausplus_data --size 1`. 2. Set the Fly secrets from `service/README.md` step 3, with the Stripe TEST key and spend caps set at OpenAI and Anthropic. 3. Run `scripts/stripe_setup.py` in test mode; paste its `fly secrets set` line. `fly deploy`. `/healthz` answers. 4. Open `https://klausmate.fly.dev`, subscribe monthly with card `4242 4242 4242 4242` → the welcome page shows a `kp_` key (and emails it if Resend is configured). 5. In Anki: Preferences → API keys & models → paste the key → Save → Check: the status line reads "Plus · renews … · 0 of 30 lecture hours, 0 of 3,000 cards, 0 of 200 turns"; the OpenAI and Anthropic rows say "Not needed on Klaus Plus". 6. Drop a PDF on the deck screen with no OpenAI key in config → it indexes through the service (`fly logs` shows `POST /v1/embeddings 200` with a hash prefix and a metered amount, never text); the Library row fills in. 7. Manage subscription… opens Stripe's portal; cancel at period end → Check still says active with "renews" replaced by the end date; in the Stripe dashboard, mark the subscription unpaid (or end the test clock) → Check reads refused with the service's message; a drop refuses with the same message and offers the free tier. 8. Set `KLAUS_PLUS_PAUSED=1` → a drop shows the maintenance message; unset it. 9. Going live: the live Stripe key, `MIN_CLIENT_VERSION` = the shipped add-on version, `fly deploy`, ship the add-on.
+- [2026-09-16 orchestrator] Committed 1af5e40: 72 service tests, add-on loop clean, audit logged; review (sonnet) APPROVED. Stays in Review: the checklist above is Pouya's to walk (needs-human). The e2e's /v1 finding is fixed in the following commit.
+
 ## Done
 
 ### K-188: Map: dim by default, lit under the pointer, the chosen PDF exempt
@@ -995,3 +1008,157 @@ claimed: 2026-09-16
 - [2026-09-16 claude-fix] Fix wave DONE. verify: failed before (exit 1), passes after (exit 0). All nine required items landed: C1 (indexed_pdf_names tests the manifest FILE, any version, via a shared _manifest_paths walker), I1 (stale_index_names + third sweep trigger + setup_flow._offer_v2_index_sweep guarded by _v2_index_sweep_offered), I2 (dead provider clears embedding_model), I3 (assistant_model DROPPED not renamed; comment + AGENTS.md + CLAUDE.md corrected; migration re-pinned against a store that merges config.json defaults, and that pin still proves embedding_api_key_openai migrates), I4 (_embed_key_setup_declined popped once), I5 (do_build returns early only when is_fresh AND idx.pages == keys; matches cache gains a pages_digest), I6 (sweep_message says what declining costs), M1/M2 (five stale nav strings incl. browse_toolkit's NO_INDEX_TEXT, not just STALE_INDEX_TEXT), M3/M4 (config.md + AGENTS.md + CLAUDE.md). Every new pin RED first, GREEN after, mutated once and restored byte-identical (md5s in the report). Full loop: 43 test files, 0 failed, 4524 checks; py_compile through the addons21 symlink OK. Three deviations, all in the report: (1) the I1 flag is set on offer_model_sweep's return (True only after box.open()) rather than inside its answered closure, to avoid plumbing a callback through index_queue for one caller; (2) I4's pop hangs on 'changed' rather than being unconditional -- _migrate_config runs every profile open, so a bare pop would re-clear the flag forever and the nudge would never stop; (3) pages_digest is computed INSIDE save_matches/load_matches from the index manifest rather than added as a sixth parameter, because two of the five call sites (pdf_graph.py, tag_sync.py) are outside this card's files and a caller-spelled digest is one more signature to get wrong. CLAUDE.md:~730 left as-is: after I5(a) its sentence is TRUE, and the new pin proves it. Report: .superpowers/sdd/2026-09-15-page-store-and-api-clients/final-fix-report.md. Not filed: K-237 (queue-side priced confirm before a from-scratch card-index embed) is named in the sweep_message comment but creating that card is the orchestrator's.
 - [2026-09-16 claude-fix] Residuals fixed: stale_index_names() now catches AttributeError from a non-dict manifest (pin added, 139/0); setup_flow docstring + CLAUDE.md corrected (Save shares the sweep trigger and may re-offer; the profile-open call is the once-per-profile one). bridge_reentrancy 80/0, py_compile OK.
 - [2026-09-16 orchestrator] Committed d73dcaf; re-review approved (ship); the two residuals folded in and verified by the orchestrator (139/0, 80/0, full loop green).
+
+### K-240: Klaus Plus T1: service skeleton — settings, database, keys
+owner: claude-kp1
+priority: P2
+tags: klaus-plus,plan-kp,haiku-safe
+files: service/pyproject.toml,service/Dockerfile,service/fly.toml,service/klausplus/__init__.py,service/klausplus/config.py,service/klausplus/db.py,service/klausplus/keys.py,service/tests/conftest.py,service/tests/test_keys.py,service/tests/test_db.py,.gitignore
+verify: cd service && test -x .venv/bin/python && .venv/bin/python -m pytest -q tests/test_keys.py tests/test_db.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp1] ✓ All 7 tests pass (TDD: mutation detected and restored, md5 byte-identical). service/.venv/ added to .gitignore. Verify command: 7 passed. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-1-report.md
+- [2026-09-16 orchestrator] Committed 17425c2; review approved (byte-identical to the brief).
+
+### K-241: Klaus Plus T2: entitlement and metering
+owner: claude-kp2
+priority: P2
+tags: klaus-plus,plan-kp
+files: service/klausplus/entitlement.py,service/klausplus/meter.py,service/tests/test_entitlement.py,service/tests/test_meter.py
+verify: cd service && test -x .venv/bin/python && .venv/bin/python -m pytest -q tests/test_entitlement.py tests/test_meter.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp2] DONE. entitlement.py + meter.py implemented per brief verbatim; test_entitlement.py (6) + test_meter.py (6) all green, full service suite 19/19. Both Step-5 mutations (verdict PAST_DUE-always-active; charge crossed_80 drop before<line) confirmed RED then restored byte-identical (md5 verified). No Task 1 files touched. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-2-report.md
+- [2026-09-16 claude-kp2] Test added: test_trialing_is_active covers the gap where status == trialing never reached verdict(). Live run: 7 passed. Mutation test (TRIALING removed from active tuple) fails as expected. md5: 03f0e6ff2e2eec93a79722c91989ddae. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-2-fix1-report.md
+- [2026-09-16 orchestrator] Committed 166bdb9; review approved; the trialing pin added in a one-test completion round.
+
+### K-245: Klaus Plus T6: klausmate/plus.py — key, endpoint, verdict cache, quota readout
+owner: claude-kp6
+priority: P2
+tags: klaus-plus,plan-kp
+files: klausmate/plus.py,tests/test_plus.py
+verify: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plus.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp6] DONE. klausmate/plus.py + tests/test_plus.py written verbatim from task-6-brief.md. RED confirmed (ModuleNotFoundError) before the module existed; GREEN 20 passed/0 failed after; py_compile through the addons21 symlink OK. Mutation A (active() ignoring GRACE_S) broke exactly the 'older than 7 days' pin; mutation B (dropped X-Klaus-Purpose header) broke the headers pin (as an uncaught KeyError, non-zero exit -- still a correct RED). Both restored byte-identical, md5 3fdfe232fd56b62515d89f6592cd74e4 before and after. No deviations from the brief needed. plus.py confirmed aqt-free and free of klausmate cross-imports. Full report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-6-report.md. Left card in Doing per instructions (no column moves by workers).
+- [2026-09-16 claude-kp6] Fix 1 done: refresh() now treats HTTP>=500 and a 2xx-with-non-dict-body like the network-failure branch (print HTTP status only, return _cache(cfg) unchanged) instead of remember()-ing refused:<status>; 4xx (401/402/426/etc) unchanged. Pin added to tests/test_plus.py (one and-chained check, 20->21). RED confirmed (20 passed/1 failed) before the fix, GREEN after (21 passed/0 failed). py_compile OK through the addons21 symlink. Mutation: reverting the 3-line branch reproduces the RED failure and is byte-identical to the pre-fix file (md5 3fdfe232fd56b62515d89f6592cd74e4 both times); restored fix md5 32368d6d9a1bf7bed063bbb6b9963267. tests/test_index_queue.py (145/0) and tests/test_klausmate.py (378/0) both green as they currently stand (git shows them mid-edit by another task; not touched here). Full report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-6-fix1-report.md. Left in Doing.
+- [2026-09-16 orchestrator] Committed 19112d9; review approved; the 5xx-keeps-cache completion round verified by the orchestrator (21/0).
+
+### K-242: Klaus Plus T3: the proxy — upstream, auth, rate limit, the three routes, /v1/me, the app
+owner: claude-kp3
+priority: P2
+tags: klaus-plus,plan-kp
+files: service/klausplus/upstream.py,service/klausplus/proxy.py,service/klausplus/app.py,service/klausplus/main.py,service/klausplus/billing.py,service/klausplus/pages.py,service/tests/test_proxy.py,service/tests/test_app.py
+verify: cd service && test -x .venv/bin/python && .venv/bin/python -m pytest -q tests/test_proxy.py tests/test_app.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp3] DONE. TDD: 14 new tests (test_proxy.py 13, test_app.py 1), RED (ImportError klausplus.app) -> GREEN, full suite 33/33. All 6 source files (upstream.py, proxy.py, app.py, main.py, billing.py stub, pages.py stub) + 2 test files written verbatim from brief; Tasks 1-2 files consumed unmodified. Both Step-5 mutations applied, confirmed RED, restored byte-identical (proxy.py md5 f512b64c13515b4d469875aa6046c85f before/after both). Boot check: uvicorn klausplus.main:app booted with zero provider keys set, /healthz -> {"ok":true}, clean shutdown. No deviations (TestClient.stream() works as brief wrote it, no test adaptation needed). Full report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-3-report.md
+- [2026-09-16 orchestrator] Review (opus): spec PASS, 54 probes, changes required — usage:null 200 → 500 unmetered; no pin that junk/over-quota audio never reaches the provider; no pin that an upstream error is unmetered. Folded in: Content-Length pre-check, KLAUS_PLUS_ALLOWED_MODELS opt-in knob (spec D2 amended), refusal logging, nested aclose, Starlette envelope, repr=False on secrets. Fix round 1 running (sonnet).
+- [2026-09-16 orchestrator] Committed c492974: 41 service tests green; review + scoped re-review + orchestrator-verified round 2 (both named mutations RED). Spec D2 gains KLAUS_PLUS_ALLOWED_MODELS.
+
+### K-247: Klaus Plus T8: Preferences — the Klaus Plus group, config keys, config.md
+owner: claude-kp8
+priority: P2
+tags: klaus-plus,plan-kp
+files: klausmate/manage_models.py,klausmate/config.json,klausmate/config.md,klausmate/__init__.py,tests/test_dialog_logic.py,tests/test_manage_models_assistant.py,tests/test_api_first_config.py
+verify: grep -q 'klaus_plus_key' klausmate/config.json && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_api_first_config.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_dialog_logic.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp8] Done, ready for review. Files: klausmate/{config.json,config.md,manage_models.py} + tests/{test_api_first_config,test_dialog_logic,test_manage_models_assistant}.py — exactly the card's six, disjoint from T6/T7's dirty files, no hunk parked. Built: the Klaus Plus group ABOVE the two provider keys (plus_key_edit EchoMode.Password, plus_status = plus.status_line, three SecondaryButtons), plus_base_edit on General, the three config keys + a '### Klaus Plus' subsection in config.md. Ruling 1 (first Plus key offers the priced sweep), ruling 2 (a changed key clears klaus_plus_cache in the same write), ruling 3 (provider rows stay EDITABLE, caption only), ruling 4 (base on General, save_general), ruling 5 (no exec, theme tokens, password field, key never leaves config) all in. Two calls beyond the brief's literal text, both in the report: update_embed_status's no-key BRANCH now also asks plus.key(cfg) (the old condition told a subscriber to add an OpenAI key two rows under the caption saying it is not needed), and save_embed calls refresh_plus_status() so the captions are not stale until reopen. Tests: test_api_first_config 42/0, test_dialog_logic 165/0, test_manage_models_assistant 119/0. verify: FAILED before (grep + KeyError), exit 0 after. py_compile through the symlink: exit 0. Seven mutations, each red, each restored byte-identical (manage_models.py md5 2a4e35c0554898ffdd29f2a4fa9f7810) — M3 is the one that matters: deleting the Plus half of first_key leaves had_plus assigned, so it needed an AST pin on the keyword argument itself, not a text scan. Offscreen smoke (mw.taskman as a recorder, zero network) reads the live widget tree: status line == plus.status_line, both provider captions swapped, Subscribe opens DEFAULT_BASE + /subscribe, Manage/Check put 2 jobs on taskman and survive an OSError future, Save clears the cache on a changed key and keeps it otherwise. FULL LOOP IS NOT GREEN: 44 files, 38 pass, 6 fail — all six are T6/T7 in flight (openai_client/anthropic_client endpoint arg, index_queue sweep_message(plus=), setup_flow KEYS_COPY, embeddings.embed, test_klausmate). None touches this card's files; test_plus went green while I worked. Re-run the loop after T7 commits before sign-off. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-8-report.md
+- [2026-09-16 orchestrator] Review (opus): CHANGES REQUIRED — Critical: on_plus_check hands plus.refresh the package's REPLACE-semantics write_config, so one Check stores only klaus_plus_cache and wipes both API keys, library_root, theme, the Plus key. Root cause is the plan's plus.py contract (its sink is a patch writer). Ruling: a package-level patch_config (merge on the main thread) used by every plus sink; Check Keys learns Plus; base default empty. Fix round 1 running (sonnet); __init__.py added to this card's files.
+- [2026-09-16 orchestrator] Committed 4933226: 45/168/121 green; review (opus) + fix round 1 + scoped re-review APPROVED (ordering of patch_config's run_on_main vs the done callback is structural FIFO, no stale read).
+
+### K-246: Klaus Plus T7: clients take an Endpoint; gates learn Plus; the sweep says included
+owner: claude-kp7
+priority: P2
+tags: klaus-plus,plan-kp
+files: klausmate/openai_client.py,klausmate/anthropic_client.py,klausmate/embeddings.py,klausmate/index_queue.py,klausmate/setup_flow.py,klausmate/plus.py,tests/test_openai_client.py,tests/test_anthropic_client.py,tests/test_klausmate.py,tests/test_index_queue.py,tests/test_bridge_reentrancy.py,tests/test_setup_crop_theme.py,tests/test_plus.py
+verify: grep -q 'plus=' klausmate/index_queue.py && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_index_queue.py && PYTHONDONTWRITEBYTECODE=1 python3 tests/test_openai_client.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp7] Done: openai_client/anthropic_client take an Endpoint (Plus routes embed/transcribe/messages through plus.endpoint; verbatim user_message for 402/426/503); embeddings.OpenAIEmbeddings.embed branches on plus.active and remembers 401/402/426 refusals via lazy write_config; index_queue.missing_key_provider/missing_key_message/sweep_message/offer_model_sweep and setup_flow._embedding_ready/KEYS_COPY learn about Plus. TDD: RED pins added to the 5 named test files, plus 2 pre-existing pins re-baselined because they directly exercised signatures this task changed (test_anthropic_client's 503 case moved its generic-5xx assertion to 500 and gained a dedicated 503-verbatim pin; test_index_queue's sweep_message test-double gained the plus kwarg) - both documented with reasons in task-7-report.md. GREEN across all touched files; full loop 0 failed; py_compile via symlink OK. All 3 required mutations (_target/sweep_message/missing_key_provider) each: RED then restored byte-identical (md5-verified, re-checked clean at the end). Full report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-7-report.md. Did not touch plus.py, service/, manage_models.py, config.json/config.md (those already carry unrelated uncommitted Task 8 changes).
+- [2026-09-16 orchestrator] Implementer DONE after a stall-resume: 12/43/378/145/83/31 green, full loop clean, 3 mutations caught. Review running (opus) → task-7-review.md.
+- [2026-09-16 orchestrator] Review (opus, 13 mutations): CHANGES REQUIRED — C1 the same config-wipe as K-247 (embeddings.py hands plus.note_refusal the REPLACE-semantics write_config; a lapsed subscription during auto-index wipes every setting); I2 the write runs on the QueryOp worker; I1 EmbeddingError re-cans 401/503 as OpenAI copy; I3 complete() routing unpinned; I4 both setup_flow pins vacuous. Ruling: patch_config (package, merge on main) as every plus sink; verbatim provider='Klaus Plus'; live pins. Fix round 1 running (sonnet); plus.py (docstring) + test_plus.py added to this card.
+- [2026-09-16 orchestrator] Committed d7d9938: 13/45/383/145/80/34/22 green; review (opus) + fix round 1 + scoped re-review APPROVED.
+
+### K-243: Klaus Plus T4: billing — Checkout, welcome/key, webhooks, portal, recovery, email, stripe_setup
+owner: claude-kp4
+priority: P2
+tags: klaus-plus,plan-kp
+files: service/klausplus/billing.py,service/klausplus/email.py,service/klausplus/templates.py,service/scripts/stripe_setup.py,service/tests/test_billing.py,service/klausplus/proxy.py,service/klausplus/db.py,service/tests/test_proxy.py,service/tests/test_db.py
+verify: cd service && test -x .venv/bin/python && .venv/bin/python -m pytest -q tests/test_billing.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp4] Done: billing.py (Checkout /subscribe, /welcome mints+shows+emails-once, /stripe/webhook idempotent, /v1/portal via proxy.authenticate purpose_required=False, /recover never-enumerating rotate), email.py (Resend behind email.enabled seam), templates.py (landing/welcome/recover_form/recover_done/paywall, one _PAGE frame - Task 5 appends terms/privacy), scripts/stripe_setup.py (idempotent product+prices+webhook, never prints STRIPE_SECRET_KEY). TDD: RED first (ImportError, email.py missing) -> GREEN (51 passed = 41 + 10 new in test_billing.py) -> 3 mutations run: (1) welcome's key_hash guard removed -> RED as predicted, restored (md5 3267494791b117f2b7da7bccacb350f6 confirmed); (2) recover's verdict==active clause dropped -> confirmed brief's own prediction that this is UNDETECTED by the suite (10/10 still pass, a real blind spot, documented not hidden), restored; (3) brief's suggested customer_by_email case-mutation targets db.py which is outside my file scope, so simulated it via a temporary monkeypatch inside test_billing.py's recover test (case-sensitive stand-in for customer_by_email) -> RED on the A@B.C pin as predicted, then fully reverted test_billing.py (md5 31a650fb91823ebfb4d4f5c703883b47 confirmed byte-identical). Full report at .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-4-report.md. Verified stripe==15.6.1 in .venv actually exposes every SDK call path billing.py/stripe_setup.py use (checkout.Session, billing_portal.Session, Webhook.construct_event, Product/Price/WebhookEndpoint list+create, auto_paging_iter). py_compile clean. Did not touch app.py/proxy.py/pages.py/db.py (git status confirms only the 5 allowed files + board/BOARD.md changed). Leaving in Doing for review.
+- [2026-09-16 orchestrator] Implementer DONE: suite 41→51, mutations RED/GREEN, md5s in task-4-report.md. Gap: /recover's active-only guard unpinned (plan's own test list) — reviewer adds the pin. Review running (opus).
+- [2026-09-16 orchestrator] Review (opus): CHANGES REQUIRED, all plan-level — /v1/portal 402s exactly the lapsed customers who need it; /recover is an unauthenticated key-rotation + email-flood oracle (25 POSTs = 25 rotations); webhook/recover buffer 8 MB before the signature check; the mint is check-then-set (6 concurrent hits → 4 'shown once' keys); recover rotates before the send succeeds; 80% notice has no caller; three mutations survived. Fix round 1 → task-4-fix1-brief.md (sonnet); proxy.py, db.py + their tests added to this card.
+- [2026-09-16 orchestrator] Fix round 1 DONE (sonnet): suite 51→65; portal for any recognised key; recovery cooldown + IP limiter + identical page + rotate-after-send; body pre-checks; conditional-UPDATE mint; 80% notice wired. Scoped re-review running (opus).
+- [2026-09-16 orchestrator] Committed 84c667e: 66 service tests green; review + fix round + re-review + orchestrator-verified round 2 (both named mutations RED).
+
+### K-244: Klaus Plus T5: terms and privacy pages
+owner: claude-kp5
+priority: P2
+tags: klaus-plus,plan-kp,haiku-safe
+files: service/klausplus/pages.py,service/klausplus/templates.py,service/tests/test_pages.py
+verify: cd service && test -x .venv/bin/python && .venv/bin/python -m pytest -q tests/test_pages.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 orchestrator] Implementer DONE (haiku): suite 66→67, the 14-days mutation RED then restored (md5 pages ab05cd44…, templates 7c9abd33…). Review running (sonnet, copy vs spec D5 + escaping).
+- [2026-09-16 orchestrator] Committed c04976f: 68 service tests green; review + the two required fixes applied by the orchestrator (escaping pin RED on a scratch copy; the automated-use clause).
+
+### K-248: Klaus Plus T9: licence (AGPL3), docs, packaging excludes service/, the deploy runbook
+owner: claude-kp9
+priority: P2
+tags: klaus-plus,plan-kp,docs
+files: LICENSE,klausmate/LICENSE,service/README.md,README.md,CLAUDE.md,AGENTS.md,scripts/package.sh,tests/test_imports.py
+verify: test -e LICENSE && test -e klausmate/LICENSE && grep -q 'Klaus Plus' CLAUDE.md && grep -q 'service/' scripts/package.sh
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 claude-kp9] Done: LICENSE + klausmate/LICENSE (curl'd AGPL v3, byte-identical, md5 eb1e647870add0502f8f010b19de32af, never edited); scripts/package.sh gains --exclude 'service/' + a comment naming the REAL mechanism (only $SRC=klausmate/ is staged; the exclude guards a widened $SRC or a klausmate/service/); README License section = the brief's exact copy, plus the intro/privacy/requirements/step-2/structure blocks that Klaus Plus and the 2026-09-15 deletions made FALSE (they still named Voyage and Ollama); CLAUDE.md gains the 'Klaus Plus, 2026-09-16' intro paragraph, a plus.py module-map entry whose non-obvious rule is the generous cache, __init__.py's write_config-REPLACES / patch_config-merges rule (the Critical two reviewers found), and 3 corrections Plus made necessary (missing_key_provider, the Preferences page, the clients' Endpoint arg); AGENTS.md gains the subscriber privacy path, service/ in the layout, Fly/Stripe/Resend as service-only deps, the three klaus_plus_* keys + the patch_config rule, the never-ship-service/ packaging rule and the service suite command; service/README.md is the 10-step runbook with a full env-knob table (KLAUS_PLUS_ALLOWED_MODELS and KLAUS_PLUS_PAUSED=503 included), read out of config.py/fly.toml/Dockerfile/stripe_setup.py. VERIFY: exit 1 before, exit 0 after (both run). Licence pin lives in tests/test_imports.py (it IS the census of the add-on folder and is in scope): GREEN 55 passed/0 failed (was 51); RED x2 on SCRATCH copies only - (A) the brief's rename -> 0 passed/2 failed 'file not found'; (B) text swapped for MIT -> 2 passed/4 failed on the header tuple, so both halves are load-bearing. Packaging proved on a scratch tree with PLANTED decoys (never the real user_files, 639M, or the real meta.json): unzip -l shows service/ 0 hits (repo-root AND a planted klausmate/service/), meta.json 0, user_files/ only the dir + the TRACKED README.txt (unzip -p confirms it is not the planted stale decoy), __pycache__ 0, .DS_Store 0; the one '.pyc' hit is the substring inside vendor/pypdf/_crypt_providers/_pycryptodome.py. Real klausmate/manifest.json untouched (mod still 1780384218). Full loop 44 files, 0 failed. py_compile through the symlink OK. service suite 51 passed (untouched, sanity only). config.md verified accurate, NOT edited. 8 places the docs follow the CODE over the spec are listed in the report - chiefly: klaus_plus_base defaults to '' not the URL; active() is generous in 4 ways the spec's one-liner does not say; the portal is POST /v1/portal not GET /portal; /terms and /privacy do NOT exist (pages.py has no routes - Task 5); and ONLY embeddings.py actually takes the Plus hop today (openai_client.transcribe and anthropic_client.Client have no caller at all), so the docs say 'indexing goes through the service' and do not promise the other three purposes. Also: the brief's 'fly volumes snapshots list klausplus_data' takes a volume ID not a name, so the runbook gives the honest two-step. No git write command run. Report: .superpowers/sdd/2026-09-16-klaus-plus-subscription/task-9-report.md. Leaving in Doing for review.
+- [2026-09-16 orchestrator] Implementer DONE (opus): licence ×2 canonical, packaging proved with planted decoys, docs written code-over-spec (only indexing takes the Plus hop today; pages pending T5). test_imports 51→55. Review running (sonnet, accuracy against the tree).
+- [2026-09-16 claude-kp9] Fix round 1: the review's six prose corrections, exactly those, nothing else, no git writes. (1) service/README.md:40-41 gains GET /terms and GET /privacy route rows (HTML, unauthenticated, rendered from OPERATOR_NAME/EMAIL/COUNTRY) and :44 replaces the 'not built yet' paragraph with a note that they live in pages.py and the three OPERATOR_* secrets must be set BEFORE taking a payment. (2) AGENTS.md:52 links it now: <PUBLIC_BASE_URL>/privacy, built-in base https://klausmate.fly.dev/privacy. (3) CLAUDE.md:122 'What is NOT built' keeps only Plans 2 and 3. (4) CLAUDE.md:1176 corrected against manage_models.on_plus_subscribe/on_plus_manage/on_plus_check: ONLY Subscribe... is a bare openLink; Manage subscription... fetches plus.portal_url() (POST /v1/portal) on run_in_background and only then opens the returned URL (empty answer = tooltip, never a blank tab), and Check is the other background call - both for the same 15 s plus.TIMEOUT_S reason. (5) CLAUDE.md:1229 now reads bool(cfg['api_key_openai']) or bool(plus.key(cfg)) per setup_flow.py:80 (K-246), K-231 parenthetical kept. (6) README.md:19 'two things - three on Klaus Plus - and nothing else' plus a third bullet naming GET /v1/me (Check) and POST /v1/portal (Manage subscription...), both carrying the licence key and NO content, neither firing without a key. Verified: tests/test_imports.py 55 passed/0 failed; grep for 'not built yet|nothing else|first two' shows ZERO 'not built yet' and ZERO 'first two'. ONE CONCERN needing a ruling, deliberately NOT fixed because the dispatch scoped AGENTS.md to lines 51-52: AGENTS.md:18 still says 'Klaus makes network calls for two things, and nothing else' - the identical defect item 6 just fixed in README, since the Plus bullet at :40-63 never names Check or the portal either. One clause + one sentence mirroring README fixes it; say the word. Report gains a 'Fix round 1' section with the per-item file:line table and the full grep output. Card stays in Doing.
+- [2026-09-16 claude-kp9] Coordinator ruling applied (fix round 1, item 7): AGENTS.md:18 now reads 'network calls for two things - three on Klaus Plus, where the subscription itself is checked against Klaus's own service (GET /v1/me behind Check, POST /v1/portal behind Manage subscription...; both carry the licence key and nothing else, and neither fires without one) - and nothing else', mirroring README:19; and the Plus bullet gains one sentence at AGENTS.md:68 naming plus.refresh -> GET /v1/me and plus.portal_url -> POST /v1/portal as the subscription talking about itself, carrying no lecture content. Nothing else touched. tests/test_imports.py 55 passed/0 failed. The grep's old AGENTS.md:18 hit is gone (that text is now the tail of the corrected sentence at :22). Report's Fix round 1 table gains row 7 and the concern section is marked RESOLVED. Card stays in Doing.
+- [2026-09-16 orchestrator] Review (sonnet): six prose corrections (the pages are present by commit time; Manage fetches the portal URL; _embedding_ready accepts a Plus key; the privacy claims name /v1/me and /v1/portal) — applied by the implementer, verified by the orchestrator. Commit follows T5's.
+- [2026-09-16 orchestrator] Committed 146251a: docs accuracy-reviewed against the tree, six corrections applied; test_imports 55/0; packaging proved.
+
+### K-250: PR #1 bot review (Codex/Copilot on e657490): page-record identity survives bakes and moves, records seeded at import, deleted with the PDF, manifest guard, stale copy
+owner: orchestrator-prfix
+priority: P2
+tags: plan-1,pr-review
+files: klausmate/page_store.py,klausmate/__init__.py,klausmate/assistant_dock.py,klausmate/pdf_handler.py,klausmate/card_index.py,klausmate/setup_flow.py,PRODUCT.md,tests/test_page_store.py,tests/test_card_index.py,tests/test_klausmate.py
+verify: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_page_store.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 orchestrator] Committed 52c5d11 (the four code fixes + two copy fixes; 45 add-on files green) and fea5dbe (the /v1 service path). Replies to the nine threads and the push follow.
+
+### K-251: Klaus Plus fix wave (final review): 600/min, cache tokens metered, upstream 401→502, no 7-day expiry, mint_key.py, email-less recovery copy, envelope 400s, locked reads, status wording, Terms·Privacy links, _same_text rules
+owner: orchestrator-fixwave
+priority: P2
+tags: klaus-plus,plan-kp,fix-wave
+files: service/klausplus/config.py,service/klausplus/proxy.py,service/klausplus/db.py,service/klausplus/templates.py,service/klausplus/billing.py,service/scripts/mint_key.py,service/README.md,service/tests/test_proxy.py,service/tests/test_billing.py,service/tests/test_db.py,service/tests/test_upstream_fake.py,klausmate/plus.py,klausmate/embeddings.py,klausmate/manage_models.py,klausmate/page_store.py,klausmate/config.md,CLAUDE.md,AGENTS.md,tests/test_plus.py,tests/test_klausmate.py,tests/test_page_store.py,tests/test_dialog_logic.py,tests/test_manage_models_assistant.py,docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md
+verify: cd service && .venv/bin/python -m pytest -q && cd .. && PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_plus.py
+created: 2026-09-16
+claimed: 2026-09-16
+
+#### Comments
+- [2026-09-16 orchestrator] Committed b432a20 and pushed: service 85, add-on 45/0; re-review APPROVED after the stream-close fix (pinned).
