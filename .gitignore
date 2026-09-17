@@ -9,3 +9,7 @@ extensions/*/out/
 
 # OS
 .DS_Store
+
+# Local-only: git worktrees and reference clones (large, never ship)
+.worktrees/
+references/
