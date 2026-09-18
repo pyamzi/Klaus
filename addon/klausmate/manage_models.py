@@ -38,6 +38,8 @@ from aqt.operations import QueryOp
 from aqt.qt import (
     QComboBox,
     QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -710,16 +712,18 @@ def manage_models_dialog(*_args: Any) -> None:
     # key is that the two rows under it never need filling in. Nothing
     # here gates anything — the add-on ships as readable Python, and the
     # service answering 401/402 is the only gate there is.
-    plus_key_edit = QLineEdit()
-    plus_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    plus_key_edit.setMinimumWidth(220)
-    plus_key_edit.setPlaceholderText("kp_…  (from your welcome page or email)")
+    plus_signin_status = QLabel("Not signed in")
+    plus_signin_btns = QHBoxLayout()
+    plus_signin_btn = QPushButton("Sign In…")
+    plus_signout_btn = QPushButton("Sign Out")
+    for b in (plus_signin_btn, plus_signout_btn):
+        b.setObjectName("SecondaryButton")
+        plus_signin_btns.addWidget(b)
     _row(
         keys_layout,
-        "Klaus Plus key",
-        "Subscribers paste their licence key here; no other keys are "
-        "needed then.",
-        plus_key_edit,
+        "Klaus Plus account",
+        plus_signin_status,
+        plus_signin_btns,
     )
 
     plus_status = QLabel()
@@ -1766,6 +1770,85 @@ def manage_models_dialog(*_args: Any) -> None:
         note = "Not needed on Klaus Plus; kept for the free tier." if has else None
         for roww in (openai_row, anthropic_row):
             roww.klaus_desc.setText(note or _plus_base_descs[roww])
+        plus_signin_status.setText(f"Signed in as {cfg.get(plus.EMAIL)}" if has and cfg.get(plus.EMAIL) else
+                                   "Signed in" if has else "Not signed in")
+        plus_signin_btn.setEnabled(not has)
+        plus_signout_btn.setEnabled(has)
+
+    def _prompt_plus_credentials() -> tuple[str, str] | None:
+        """Email + password, or None on Cancel. Nothing here reaches the
+        network — the caller does that off the main thread, same as every
+        other Plus call in this dialog."""
+        d = QDialog(dlg)
+        d.setWindowTitle("Sign in to Klaus Plus")
+        form = QFormLayout(d)
+        email_edit = QLineEdit()
+        email_edit.setPlaceholderText("you@example.com")
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Email", email_edit)
+        form.addRow("Password", password_edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(d.accept)
+        buttons.rejected.connect(d.reject)
+        form.addRow(buttons)
+        if d.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return email_edit.text().strip(), password_edit.text()
+
+    def on_plus_sign_in() -> None:
+        creds = _prompt_plus_credentials()
+        if not creds:
+            return
+        email_addr, password = creds
+        if not email_addr or not password:
+            showWarning("Enter an email and password.")
+            return
+        # Captured BEFORE the sign-in, same K-152 rule save_embed follows
+        # for a pasted key: a FIRST Plus key never moves the embedding
+        # signature (nothing was ever embedded with it), and that is
+        # exactly the moment offer_model_sweep is worth asking about.
+        from . import embeddings
+
+        prev_sig = embeddings.index_signature(_plus_cfg())
+        had_plus = bool(plus.key(_plus_cfg()))
+
+        def work() -> str:
+            return plus.login(email_addr, password, _pkg().get_config(), _pkg().patch_config)
+
+        def done(fut) -> None:
+            try:
+                got_key = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] Klaus Plus sign-in failed: {exc.__class__.__name__}")
+                got_key = ""
+            if not got_key:
+                showWarning("Sign in failed — check your email and password.")
+                return
+            refresh_plus_status()
+            try:
+                from . import index_queue
+
+                index_queue.offer_model_sweep(dlg, prev_sig, first_key=not had_plus and bool(plus.key(_plus_cfg())))
+            except Exception as exc:
+                print(f"[klausmate] model-change sweep offer failed: {exc}")
+
+        mw.taskman.run_in_background(work, done)
+
+    def on_plus_sign_out() -> None:
+        cfg = _plus_cfg()
+
+        def work() -> None:
+            plus.logout(cfg, _pkg().patch_config)
+
+        def done(fut) -> None:
+            try:
+                fut.result()
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] Klaus Plus sign-out failed: {exc.__class__.__name__}")
+            refresh_plus_status()
+
+        mw.taskman.run_in_background(work, done)
 
     def on_plus_subscribe() -> None:
         """A URL built from the configured base — no key, no network, so
@@ -1829,7 +1912,6 @@ def manage_models_dialog(*_args: Any) -> None:
             cfg = _pkg().get_config()
             openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            plus_key_edit.setText(str(cfg.get(plus.KEY) or ""))
             plus_base_edit.setText(str(cfg.get(plus.BASE) or ""))
             # INSIDE the guard: load_assistant flips a switch, and a
             # switch that starts out true emits toggled -> mark_dirty,
@@ -1887,21 +1969,8 @@ def manage_models_dialog(*_args: Any) -> None:
         # "did the model move under the index?" (K-152).
         prev_sig = embeddings.index_signature(cfg)
         had_key = bool(str(cfg.get("api_key_openai") or "").strip())
-        # Same capture-before-the-write rule for the subscription: a
-        # FIRST Plus key never moves the signature either (nothing was
-        # ever embedded), and that is exactly the user whose whole
-        # library is unindexed.
-        had_plus = bool(plus.key(cfg))
-        prev_plus = str(cfg.get(plus.KEY) or "").strip()
         cfg["api_key_openai"] = openai_key_edit.text().strip()
         cfg["embedding_model"] = embed_model_edit.text().strip()
-        cfg["klaus_plus_key"] = plus_key_edit.text().strip()
-        if cfg["klaus_plus_key"] != prev_plus:
-            # The cached verdict describes the OLD subscription, and a
-            # non-refused verdict is honoured with no expiry of its own
-            # (I-3). Left behind, a swapped key would show the previous
-            # subscription's status and quota until the next real Check.
-            cfg["klaus_plus_cache"] = {}
         _pkg().write_config(cfg)
         update_embed_status()
         refresh_plus_status()
@@ -1914,17 +1983,13 @@ def manage_models_dialog(*_args: Any) -> None:
         # the offer is most useful. offer_model_sweep does the
         # comparison (via embeddings.signature_matches, never a tuple
         # ==), counts the work, prices it, and asks before spending.
+        # (The Plus-key half of this same offer now lives in
+        # on_plus_sign_in — the key isn't editable through this form
+        # anymore.)
         try:
             from . import index_queue
 
-            index_queue.offer_model_sweep(
-                dlg,
-                prev_sig,
-                first_key=(
-                    (not had_key and bool(cfg["api_key_openai"]))
-                    or (not had_plus and bool(plus.key(cfg)))
-                ),
-            )
+            index_queue.offer_model_sweep(dlg, prev_sig, first_key=not had_key and bool(cfg["api_key_openai"]))
         except Exception as exc:
             print(f"[klausmate] model-change sweep offer failed: {exc}")
 
@@ -2656,13 +2721,14 @@ def manage_models_dialog(*_args: Any) -> None:
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    plus_key_edit.textEdited.connect(lambda _t: mark_dirty())
     plus_base_edit.textEdited.connect(lambda _t: mark_dirty())
-    # The three buttons ACT (open a browser, ask the service) — they do
-    # not edit, so none of them marks the dialog dirty.
+    # These buttons ACT (open a browser, ask the service, sign in/out) —
+    # they do not edit, so none of them marks the dialog dirty.
     plus_subscribe_btn.clicked.connect(on_plus_subscribe)
     plus_manage_btn.clicked.connect(on_plus_manage)
     plus_check_btn.clicked.connect(on_plus_check)
+    plus_signin_btn.clicked.connect(on_plus_sign_in)
+    plus_signout_btn.clicked.connect(on_plus_sign_out)
     openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
     anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())

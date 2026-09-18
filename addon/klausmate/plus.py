@@ -22,6 +22,7 @@ from typing import Any, Callable, NamedTuple
 KEY = "klaus_plus_key"
 CACHE = "klaus_plus_cache"
 BASE = "klaus_plus_base"
+EMAIL = "klaus_plus_email"  # display only (K-288's "Signed in as ..."), never used for auth
 DEFAULT_BASE = "https://klausmate.com"  # 2026-09-17: Pouya's domain, everything on the apex
 TOKENS_PER_CARD = 250   # the service's own constants (spec D1); shown, never enforced, here
 TOKENS_PER_TURN = 6000
@@ -204,6 +205,56 @@ def refresh(get_config: Callable[[], dict], write_config: Callable[[dict], None]
 def portal_url(cfg: dict, urlopen=None) -> str:
     status, body, _ = _call(cfg, "POST", "/v1/portal", urlopen)
     return str(body.get("url") or "") if status == 200 else ""
+
+
+def login(email_addr: str, password: str, cfg: dict, patch_config: Callable[[dict], None], urlopen=None) -> str:
+    """POST /v1/login and, on success, store the returned key via
+    ``patch_config`` — the same PATCH writer ``remember()`` requires (see its
+    docstring): the plain, whole-config-replacing ``write_config`` would wipe
+    every other setting. Storing the key this way means every existing
+    ``plus.key()``/``plus.active()`` caller needs no changes.
+
+    Returns the new key on success, '' on any failure (bad credentials, no
+    network, a malformed response) — never raises. The key itself is per
+    DEVICE (`/v1/login`'s `device` field): signing in here does not touch
+    any other machine's session.
+    """
+    body = json.dumps({"email": email_addr, "password": password, "device": "klausmate"}).encode("utf-8")
+    req = urllib.request.Request(base(cfg) + "/v1/login", data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "X-Klaus-Client": client_version()})
+    try:
+        with (urlopen or _urlopen)(req, timeout=TIMEOUT_S) as resp:
+            got = json.loads(resp.read().decode("utf-8") or "{}")
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+        return ""
+    new_key = str(got.get("key") or "") if isinstance(got, dict) else ""
+    if not new_key:
+        return ""
+    # CACHE too, not just KEY: a stale verdict describes whatever key was
+    # there before (or none) — carried over, it would show the wrong
+    # subscription's status/quota until the next Check (same rule
+    # save_embed applies when a pasted key changes). EMAIL is display-only,
+    # for "Signed in as ..." in Preferences — never read for auth.
+    patch_config({KEY: new_key, CACHE: {}, EMAIL: email_addr})
+    return new_key
+
+
+def logout(cfg: dict, patch_config: Callable[[dict], None], urlopen=None) -> None:
+    """Best-effort revoke on the service, then always forget the key
+    locally — a network failure must not strand the user signed in with a
+    key they can no longer see or manage from this machine. Other devices'
+    keys (klausmate on another computer, KlausBook) are untouched either
+    way; only THIS device's row is revoked."""
+    k = key(cfg)
+    if k:
+        req = urllib.request.Request(base(cfg) + "/v1/logout", data=b"{}", method="POST",
+                                     headers={"Authorization": f"Bearer {k}", "Content-Type": "application/json"})
+        try:
+            with (urlopen or _urlopen)(req, timeout=TIMEOUT_S):
+                pass
+        except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+            pass
+    patch_config({KEY: "", CACHE: {}, EMAIL: ""})
 
 
 def status_line(cache: dict) -> str:

@@ -352,11 +352,11 @@ section("the Klaus Plus group on the keys page (T8, spec D4)")
 _keys_page = _SRC.split('"API keys & models",\n        "API keys & models",', 1)[1]
 _keys_page = _keys_page.split("general_layout = _page(", 1)[0]
 
-for _row_name in ('"Klaus Plus key"', '"Klaus Plus"'):
+for _row_name in ('"Klaus Plus account"', '"Klaus Plus"'):
     check(f"the keys page carries a {_row_name} row", _row_name in _keys_page)
 check("the Klaus Plus rows come FIRST — above the two provider keys, "
       "which is the reading order the offer depends on",
-      _keys_page.index('"Klaus Plus key"') < _keys_page.index('"OpenAI API key"')
+      _keys_page.index('"Klaus Plus account"') < _keys_page.index('"OpenAI API key"')
       and _keys_page.index('"Klaus Plus"') < _keys_page.index('"Anthropic API key"'))
 check('the service URL row is NOT on this page — "Klaus Plus service" '
       "belongs to General",

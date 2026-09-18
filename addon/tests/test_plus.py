@@ -163,4 +163,55 @@ check("status_line survives a raw non-dict cache", isinstance(plus.status_line("
 check("status_line survives a dict-shaped counter entry",
       "Plus" in plus.status_line({"status": "active", "quota": {"human": {"lecture_hours": {"x": 1}}}}))
 
+section("login and logout (K-288)")
+class _LResp(io.BytesIO):
+    def __init__(self, body):
+        super().__init__(body)
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+login_calls = []
+def fake_login_ok(req, timeout=None):
+    login_calls.append((req.full_url, json.loads(req.data.decode("utf-8"))))
+    return _LResp(json.dumps({"key": "kp_" + "d" * 32}).encode())
+written.clear()
+got = plus.login("a@b.c", "hunter2xx", {"klaus_plus_base": "https://svc.test"}, written.update, urlopen=fake_login_ok)
+check("login POSTs email/password/device=klausmate to /v1/login and stores the returned key AND clears the "
+      "stale cache via the patch writer (a leftover verdict would describe whatever key was there before)",
+      got == "kp_" + "d" * 32 and login_calls[0][0] == "https://svc.test/v1/login"
+      and login_calls[0][1] == {"email": "a@b.c", "password": "hunter2xx", "device": "klausmate"}
+      and written == {plus.KEY: "kp_" + "d" * 32, plus.CACHE: {}, plus.EMAIL: "a@b.c"})
+
+def fake_login_401(req, timeout=None):
+    raise urllib.error.HTTPError(req.full_url, 401, "unauthorized", {}, io.BytesIO(b"{}"))
+written.clear()
+check("a rejected login returns '' and writes nothing",
+      plus.login("a@b.c", "wrong", {}, written.update, urlopen=fake_login_401) == "" and written == {})
+
+def fake_login_network_error(req, timeout=None):
+    raise urllib.error.URLError("no route")
+written.clear()
+check("a network failure on login returns '' and writes nothing, never raises",
+      plus.login("a@b.c", "hunter2xx", {}, written.update, urlopen=fake_login_network_error) == "" and written == {})
+
+logout_calls = []
+def fake_logout_ok(req, timeout=None):
+    logout_calls.append((req.full_url, dict(req.headers)))
+    return _LResp(json.dumps({"ok": True}).encode())
+written.clear()
+plus.logout({"klaus_plus_key": "kp_" + "d" * 32, "klaus_plus_base": "https://svc.test"}, written.update, urlopen=fake_logout_ok)
+check("logout POSTs /v1/logout with the current key, then clears the key, cache and email locally",
+      logout_calls[0][0] == "https://svc.test/v1/logout" and logout_calls[0][1].get("Authorization") == "Bearer kp_" + "d" * 32
+      and written == {plus.KEY: "", plus.CACHE: {}, plus.EMAIL: ""})
+
+def fake_logout_network_error(req, timeout=None):
+    raise urllib.error.URLError("no route")
+written.clear()
+plus.logout({"klaus_plus_key": "kp_" + "d" * 32}, written.update, urlopen=fake_logout_network_error)
+check("logout still clears the key locally even when the revoke call fails — never strand a signed-in device",
+      written == {plus.KEY: "", plus.CACHE: {}, plus.EMAIL: ""})
+written.clear()
+plus.logout({}, written.update, urlopen=fake_logout_network_error)
+check("logout with no key stored makes no network call and still clears cleanly",
+      written == {plus.KEY: "", plus.CACHE: {}, plus.EMAIL: ""})
+
 raise SystemExit(report())
