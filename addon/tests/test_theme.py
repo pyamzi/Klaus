@@ -4,6 +4,7 @@ theme.py must stay aqt-free at module top (only night_mode() touches aqt,
 lazily, degrading to light mode) so every QSS builder is testable here.
 """
 import importlib
+import json
 import re
 import sys
 
@@ -870,5 +871,26 @@ check("dialog_qss documents the K-111 install-page ids on-scale",
       and "QLabel#InstallSection {" in theme.dialog_qss(False)
       and "margin-top: 8px"
       in theme.dialog_qss(False).split("QLabel#InstallSection", 1)[1][:80])
+
+section("design-tokens.json sync (shared cross-repo with KlausBook)")
+# The highlight inks are meant to match KlausBook's copy byte-for-byte today
+# (see docs/reference/design-tokens.json's "source_of_truth" note) — unlike
+# the rest of the palette, they deliberately never theme-fork, because they
+# bake into the PDF's own annotation color. The paint alpha (110/255) lives
+# as a literal in pdf_viewer.py's _record_color call, not a theme.py
+# constant, so it isn't asserted here.
+try:
+    with open("docs/reference/design-tokens.json", encoding="utf-8") as _f:
+        _tokens = json.load(_f)
+    _want_inks = [ink["hex"] for ink in _tokens["highlightInks"]]
+    _want_default = next(
+        ink["hex"] for ink in _tokens["highlightInks"] if ink.get("default"))
+    check("HIGHLIGHT_INKS matches docs/reference/design-tokens.json",
+          [hexv for _name, hexv in theme.HIGHLIGHT_INKS] == _want_inks,
+          [hexv for _name, hexv in theme.HIGHLIGHT_INKS])
+    check("HIGHLIGHT_INK_DEFAULT matches design-tokens.json's default ink",
+          theme.HIGHLIGHT_INK_DEFAULT == _want_default)
+except FileNotFoundError:
+    check("docs/reference/design-tokens.json exists", False)
 
 raise SystemExit(report())
