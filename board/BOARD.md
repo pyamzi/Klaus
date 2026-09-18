@@ -126,6 +126,29 @@ Check in a running Klausbook window, with a PDF open on the stage: Cmd+= / Cmd+-
 
 ## Review
 
+### KB-021: klaus-core embeddings: route through Klaus Plus when a key is set
+owner: klausbook-fable
+priority: P1
+tags: shared-subscription,needs-human
+files: core/klaus_core/embeddings.py,tests/test_embeddings.py
+verify: python3 tests/test_embeddings.py
+created: 2026-09-18
+claimed: 2026-09-18
+
+Follow-up to KB-020. klausmate already has a metered, Stripe-billed proxy service (KlausMate-Context/service, klausmate.com) that fronts OpenAI/Anthropic behind a single license key (klausmate/plus.py: key format 'kp_' + 32 lowercase hex, Endpoint(base, headers), active(cfg) gate). Decision 2026-09-18: KlausBook should share this subscription rather than requiring its own separate OpenAI key — one Klaus Plus subscription unlocks AI features in klausmate AND KlausBook.
+
+The service's POST /v1/embeddings is already provider-agnostic (klausmate/service/klausplus/proxy.py:240) and needs no server-side change: Authorization: Bearer <key>, X-Klaus-Purpose: embed, X-Klaus-Client: <version>, same OpenAI-embeddings-shaped body klaus-core's own _embed_http already builds. This card is client-side only.
+
+Acceptance criteria:
+1. core/klaus_core/embeddings.py: when KLAUS_PLUS_KEY is set (format-validated like klausmate's plus.key()), OpenAIEmbeddings.embed() routes through https://klausmate.com/v1/embeddings (configurable via KLAUS_PLUS_BASE, default matches klausmate/plus.py's DEFAULT_BASE) with the three headers above, instead of calling OpenAI directly with KLAUS_OPENAI_KEY.
+2. No KLAUS_PLUS_KEY set (or malformed) -> falls back to the existing KLAUS_OPENAI_KEY direct-OpenAI path unchanged (KB-020's current behavior, not a regression).
+3. A 401/402/426 from the Plus service raises EmbeddingError with a message naming KLAUS_PLUS_KEY, mirroring EmbeddingError.user_message()'s existing status-based branching (add a case, don't duplicate the method).
+4. Tests fake the HTTP layer (same _urlopen seam KB-020 already established) for both the Plus-routed path and the fallback path — no real network calls.
+5. No new third-party dependency.
+
+#### Comments
+- [2026-09-18 klausbook-fable] Decisions: Plus takes priority when both keys are set; malformed Plus key falls through to the OpenAI path rather than attempting a doomed request (mirrors klausmate's plus.key() contract exactly); index_signature() stays 'openai' regardless of which path fetched a vector, matching klausmate's own reasoning (identical model, identical vectors either way -- switching auth paths shouldn't invalidate an index). Files: core/klaus_core/embeddings.py, tests/test_embeddings.py. Risks: same pytest/import-staleness anomaly noted on K-286 in klausmate -- see this commit's message and session memory for the full story; re-verified independently via open()+exec() bypass, high confidence the code is correct, but board discipline says don't self-certify a verify I couldn't get a clean run of myself. Next: KB-004 (pdf_index.py chunking + the /search endpoint) is the natural follow-on; a chat/podcast feature would want the same Plus-vs-direct pattern established here.
+
 ## Done
 
 ### KB-016: Shortcut + toast parity in the PDF editor
