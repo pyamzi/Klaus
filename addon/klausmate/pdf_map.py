@@ -1567,9 +1567,21 @@ def split_cloud(
     cost). ``link_total_cap`` bounds that sum instead: once ``len(pdfs) *
     per_pdf`` would exceed it, every PDF's own share shrinks together
     (never below 1, so a PDF's focused view is never left connected to
-    nothing) rather than the aggregate growing without bound.
-    ``per_pdf <= 0`` still means "every match" and is left alone, the
-    same opt-out as ``cap = 0``.
+    nothing) — UNLESS there are more PDFs than ``link_total_cap`` itself
+    (Codex, PR #5: floor division truncates to 0 there, and the floor of
+    1 then applies to every one of them, so the aggregate becomes the
+    PDF count again — the exact blowup this cap exists to bound). Past
+    that point a floor of 1 EACH cannot fit inside the cap at all, so the
+    cap instead bounds WHICH PDFs get any linked sample: an evenly
+    strided subset of exactly ``link_total_cap`` of them (the same
+    ``sample_indices`` stride used everywhere else in this module, so
+    the excluded PDFs are spread through the library rather than
+    whichever happened to load first), each still floored at 1; the rest
+    get an empty list — present in ``linked`` (every caller keys off
+    every PDF's safe name), just with nothing of their own to connect to
+    until the library shrinks or the cap grows. ``per_pdf <= 0`` still
+    means "every match" and is left alone, the same opt-out as ``cap =
+    0``.
     """
     rows = [n for n in (graph.get("notes") or []) if row_xyz(n) is not None]
     positions: dict = {}
@@ -1580,11 +1592,19 @@ def split_cloud(
     edges = [e for e in (graph.get("edges") or []) if isinstance(e, dict)]
     pdf_rows = [p for p in (graph.get("pdfs") or []) if isinstance(p, dict)]
     eff_per_pdf = per_pdf
+    linked_pdf_idx: "range | set" = range(len(pdf_rows))
     if per_pdf > 0 and pdf_rows and link_total_cap > 0:
-        eff_per_pdf = max(1, min(per_pdf, link_total_cap // len(pdf_rows)))
+        if len(pdf_rows) > link_total_cap:
+            eff_per_pdf = 1
+            linked_pdf_idx = set(sample_indices(len(pdf_rows), link_total_cap))
+        else:
+            eff_per_pdf = max(1, min(per_pdf, link_total_cap // len(pdf_rows)))
     linked: dict = {}
     taken: set = set()
-    for p in pdf_rows:
+    for pdf_i, p in enumerate(pdf_rows):
+        if pdf_i not in linked_pdf_idx:
+            linked[str(p.get("safe"))] = []
+            continue
         nids = [n for n in pdf_note_ids(edges, p.get("safe")) if n in positions]
         picked = [nids[i] for i in sample_indices(len(nids), eff_per_pdf)]
         linked[str(p.get("safe"))] = [positions[n] for n in picked]

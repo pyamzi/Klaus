@@ -3356,6 +3356,28 @@ check("...and every PDF still keeps at least one linked point at 150 "
       all(len(v) >= 1 for v in _link150.values()),
       f"min per-pdf = {min(len(v) for v in _link150.values())}")
 
+# Codex, PR #5: past len(pdfs) > LINK_TOTAL_CAP itself, floor division
+# (LINK_TOTAL_CAP // len(pdf_rows)) truncates to 0, and the max(1, ...)
+# floor above then applies to EVERY pdf — the aggregate becomes the PDF
+# count again (800, here), exactly the blowup this card exists to bound.
+# This is the pin that would have failed on the code the review found:
+# 800 PDFs uncapped, one point floored onto each of them.
+_link800 = pdf_map.split_cloud(_many_pdf_graph(800, matches_per_pdf=3))[1]
+_tot800 = sum(len(v) for v in _link800.values())
+check("past LINK_TOTAL_CAP pdfs (800 > 600), the aggregate STILL stays "
+      "at the cap, not the pdf count — the floor of 1 each cannot fit "
+      "800 pdfs into a 600 budget, so only a subset gets any linked "
+      "sample at all",
+      _tot800 <= pdf_map.LINK_TOTAL_CAP,
+      f"800 pdfs -> {_tot800} (LINK_TOTAL_CAP={pdf_map.LINK_TOTAL_CAP})")
+check("...every pdf is still a real key in the dict, sampled or not — "
+      "a caller keying off any pdf's safe name can never KeyError",
+      set(_link800) == {f"pdf{k}" for k in range(800)})
+check("...and the excluded majority get an empty list, not a truncated "
+      "one — split_cloud never LIES about how many points a pdf has",
+      sum(1 for v in _link800.values() if not v) == 800 - pdf_map.LINK_TOTAL_CAP,
+      f"empty pdfs = {sum(1 for v in _link800.values() if not v)}")
+
 # per_pdf <= 0 is K-138's explicit "every match" escape hatch and must
 # stay orthogonal to this cap, even with many PDFs in play.
 _link_u = pdf_map.split_cloud(
