@@ -159,6 +159,23 @@ holds API keys) stay ignored — never stage those.
   without ever being compiled or loaded.
 - Commits and diffs for addon work are now expected.
 
+## Commands
+
+- **Run the whole test suite**:
+  `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+- **Run one test file**: `python3 tests/test_klausmate.py` — some need
+  `QT_QPA_PLATFORM=offscreen` for real PyQt6 widgets (see "Anki runtime &
+  testing" below), and a mutation/falsification run should add
+  `PYTHONDONTWRITEBYTECODE=1` to dodge a stale same-second `.pyc`.
+- **Verify syntax through the symlink Anki actually loads** — do this after
+  every `klausmate/*.py` edit (the PostToolUse hook already runs it
+  automatically):
+  `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
+- **Build the shippable package**: `./scripts/package.sh` → `dist/klausmate.ankiaddon`
+- **Board CLI** (see "The agent board" below):
+  `python3 board/board.py {list,show,claim,move,comment,check-disjoint}`
+- No linter is configured in this repo.
+
 ## The agent board
 
 Multi-session work is coordinated through a kanban board:

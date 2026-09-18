@@ -44,22 +44,28 @@ TRANSITIONS = {
 
 FIELD_ORDER = ["owner", "priority", "tags", "files", "verify", "created", "claimed"]
 
-_CARD_RE = re.compile(r"^### (K-\d{3}): (.+)$")
+# Card ids are "<PREFIX>-NNN". New ids are minted with BOARD_PREFIX, but
+# the READ pattern accepts any prefix on purpose: changing the prefix
+# half-way through a project must never orphan the cards already on the
+# board.
+PREFIX = (os.environ.get("BOARD_PREFIX") or "T").strip().upper()
+
+_CARD_RE = re.compile(r"^### ([A-Z]+-\d{3}): (.+)$")
 _FIELD_RE = re.compile(r"^([a-z_]+): ?(.*)$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
 LOCK_TIMEOUT_S = 10.0
 LOCK_STALE_S = 120.0
 
-BOARD_HEADER = """# klausmate board
+BOARD_HEADER = """# Agent board
 
 <!-- Source of truth for all agent work. State changes (claim/move/comment)
-     MUST go through board/board.py so they are serialized by its lockfile.
+     MUST go through board.py so they are serialized by its lockfile.
      Direct edits to this file: card *body* prose only, by the orchestrator
-     or designer. See context/ROLES.md. -->
+     or designer. See ROLES.md. -->
 """
 
-ARCHIVE_HEADER = """# klausmate archive
+ARCHIVE_HEADER = """# Agent board archive
 
 <!-- Durable record of Done cards removed from BOARD.md by `board.py archive`.
      Append-only: each entry is a card's full text (fields, body, comments)
@@ -110,23 +116,46 @@ class Board:
         return None, None
 
     def next_id(self, extra=None) -> str:
-        """Lowest unused K-NNN. ``extra`` folds in ids that must not be
-        reused (e.g. archived ones) without the Board itself knowing where
-        those come from — see ``_archived_ids`` / ``add``."""
-        nums = [int(c.id[2:]) for _col, c in self.all_cards()]
+        """Lowest unused <PREFIX>-NNN. ``extra`` folds in ids that must not
+        be reused (e.g. archived ones) without the Board itself knowing
+        where those come from — see ``_archived_ids`` / ``add``.
+
+        Split on the hyphen rather than slicing a fixed width: the prefix
+        is configurable, so ``id[2:]`` (right for a one-letter prefix)
+        turns "ACME-001" into "ME-001" and raises on int().
+        """
+        nums = [
+            int(c.id.rsplit("-", 1)[-1]) for _col, c in self.all_cards()
+        ]
         if extra:
             nums.extend(extra)
-        return "K-%03d" % ((max(nums) + 1) if nums else 1)
+        return f"{PREFIX}-%03d" % ((max(nums) + 1) if nums else 1)
 
 
 # ------------------------------------------------------------------ paths
 
 
 def board_dir() -> str:
-    """Overridable so tests can operate on a scratch board."""
-    return os.environ.get(
-        "KLAUS_BOARD_DIR", os.path.dirname(os.path.abspath(__file__))
-    )
+    """Where BOARD.md and ARCHIVE.md live.
+
+    Resolved against the CURRENT PROJECT, never against this file. The
+    skill folder holding these scripts may live outside any one project (a
+    shared skills directory, a cache), so defaulting to their own directory
+    would put a single board there — shared across every project, and lost
+    whenever that folder is replaced.
+
+    Order: an explicit BOARD_DIR wins; then an existing board already in the
+    project (./board/ then ./); otherwise ./board/, which is where `init`
+    creates one.
+    """
+    explicit = os.environ.get("BOARD_DIR")
+    if explicit:
+        return explicit
+    cwd = os.getcwd()
+    for candidate in (os.path.join(cwd, "board"), cwd):
+        if os.path.exists(os.path.join(candidate, "BOARD.md")):
+            return candidate
+    return os.path.join(cwd, "board")
 
 
 def board_path() -> str:
@@ -349,7 +378,7 @@ def _write(board: Board) -> None:
 
 
 def _archived_ids() -> set:
-    """Numeric ids (the int after 'K-') already spent in ARCHIVE.md.
+    """Numeric ids (the int after the prefix) already spent in ARCHIVE.md.
 
     A regex scan over the archive file, not a persisted high-water mark: it
     needs no extra state to keep in sync with reality, matches how
@@ -363,7 +392,9 @@ def _archived_ids() -> set:
             text = f.read()
     except FileNotFoundError:
         return set()
-    return {int(m) for m in re.findall(r"^### K-(\d+):", text, re.MULTILINE)}
+    return {
+        int(m) for m in re.findall(r"^### [A-Z]+-(\d+):", text, re.MULTILINE)
+    }
 
 
 def _append_archive(card: Card) -> None:
@@ -423,7 +454,7 @@ def _norm(path: str) -> str:
 def _paths_conflict(a: str, b: str) -> bool:
     """True when two declared paths could touch the same file.
 
-    Directory-aware: 'klausmate/' conflicts with 'klausmate/pdf_viewer.py'.
+    Directory-aware: 'src/' conflicts with 'src/parser.py'.
     """
     a, b = _norm(a), _norm(b)
     return a == b or a.startswith(b + "/") or b.startswith(a + "/")
@@ -581,11 +612,6 @@ def to_dict(board: Board) -> dict:
                         "tags": c.tag_list(),
                         "files": c.file_list(),
                         "verify": c.fields.get("verify", ""),
-                        # Age is the one thing a supervisor of unattended
-                        # machines cannot infer: a worker wedged for three days
-                        # looked exactly like one that started a minute ago.
-                        "claimed": c.fields.get("claimed", ""),
-                        "created": c.fields.get("created", ""),
                         "body": c.body,
                         "comments": c.comments,
                     }
@@ -594,13 +620,4 @@ def to_dict(board: Board) -> dict:
             }
             for col in COLUMNS
         ]
-        ,
-        # check_disjoint already finds the collision the dashboard could not
-        # draw: two cards, Ready or Doing, whose declared paths overlap. It
-        # was computed for the CLI and never sent, so the map could only ever
-        # colour Ready-blocked-by-Doing and never Doing-against-Doing.
-        "conflicts": [
-            {"a": a_id, "b": b_id, "path": path}
-            for a_id, b_id, path in check_disjoint(board)
-        ],
     }
