@@ -116,6 +116,26 @@ def plus_base(cfg: dict) -> str:
     return (str(cfg.get("plus_base") or "").strip() or DEFAULT_PLUS_BASE).rstrip("/")
 
 
+def config_from_header(plus_key_header: str | None) -> dict:
+    """KB-022: overlay a per-request Klaus Plus key — the klaus-pdf
+    extension's `X-Klaus-Plus-Key` header, sent when the user signed in —
+    onto the env-var defaults `default_config()` reads.
+
+    Per-request, not per-process: the extension doesn't spawn klaus-core
+    (it's started out-of-band, see app.py's docstring) and a user can sign
+    in or out while it keeps running, so a static env var can't carry this.
+    Falls through to `default_config()` unchanged when the header is
+    absent — env vars stay the fallback for running klaus-core headless.
+
+    No route calls `.embed()` yet (KB-004's /search is still Backlog) —
+    this is the plug point that endpoint will use, not itself wired to one.
+    """
+    cfg = default_config()
+    if plus_key_header:
+        cfg = {**cfg, "plus_key": plus_key_header}
+    return cfg
+
+
 def embedding_model(cfg: dict) -> str:
     model = str(cfg.get("embedding_model") or "").strip()
     return model or DEFAULT_MODEL

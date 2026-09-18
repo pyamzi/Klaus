@@ -196,6 +196,17 @@ check("default base is klausmate.com", embeddings.plus_base({}) == "https://klau
 check("configured base overrides, trailing slash stripped",
       embeddings.plus_base({"plus_base": "https://example.test/"}) == "https://example.test")
 
+print("== config_from_header (KB-022: the klaus-pdf extension's per-request key) ==")
+os.environ.pop("KLAUS_PLUS_KEY", None)
+check("no header falls through to default_config() unchanged",
+      embeddings.config_from_header(None) == embeddings.default_config())
+check("a header overlays plus_key onto the env-var defaults, nothing else",
+      embeddings.config_from_header(GOOD_PLUS_KEY) == {**embeddings.default_config(), "plus_key": GOOD_PLUS_KEY})
+check("the overlaid config round-trips through plus_key() same as any other",
+      embeddings.plus_key(embeddings.config_from_header(GOOD_PLUS_KEY)) == GOOD_PLUS_KEY)
+check("an empty header string is treated as absent, not as an empty key",
+      embeddings.config_from_header("") == embeddings.default_config())
+
 print("== OpenAIEmbeddings.embed routes through Klaus Plus when a key is set ==")
 orig_urlopen = embeddings._urlopen
 try:

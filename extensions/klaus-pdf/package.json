@@ -39,6 +39,14 @@
       {
         "command": "klaus.openPdf",
         "title": "Klaus: Open PDF"
+      },
+      {
+        "command": "klaus.signIn",
+        "title": "Klaus: Sign In to Klaus Plus"
+      },
+      {
+        "command": "klaus.signOut",
+        "title": "Klaus: Sign Out of Klaus Plus"
       }
     ],
     "menus": {
