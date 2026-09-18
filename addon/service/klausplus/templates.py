@@ -1,17 +1,59 @@
-"""HTML pages the service serves. Plain, no framework, one frame."""
+"""HTML pages the service serves. Plain, no framework, one frame.
+
+The frame's colors come from docs/reference/design-tokens.json (canonical
+in KlausBook-Context, byte-synced here — scripts/check-token-sync.sh) so
+this website, klausmate's own UI, and KlausBook read the same palette.
+tests/test_brand.py asserts the emitted CSS actually matches that file.
+"""
 from __future__ import annotations
 
 from html import escape
 
+# The impossible-star mark (docs/reference/brand/klaus-logo.svg), inlined so
+# it recolors via currentColor like every other Klaus surface rather than
+# shipping as a separate asset request.
+_LOGO_SVG = """<svg class="klaus-logo" viewBox="0 0 1254 1254" role="img" aria-label="Klaus"><g fill="currentColor">
+<path d="M 724 578 L 719 582 L 718 588 L 728 619 L 744 651 L 769 731 L 791 780 L 794 797 L 835 893 L 859 963 L 853 970 L 846 968 L 754 897 L 747 896 L 638 972 L 634 979 L 637 984 L 659 996 L 698 1026 L 824 1098 L 896 1120 L 912 1119 L 944 1110 L 973 1094 L 1002 1057 L 1009 1032 L 1010 997 L 992 936 L 982 920 L 980 906 L 962 855 L 945 825 L 941 806 L 931 789 L 905 715 L 886 674 L 852 577 L 845 566 L 836 565 Z"/>
+<path d="M 658 131 L 610 131 L 576 144 L 543 171 L 522 203 L 506 244 L 496 260 L 475 320 L 467 333 L 462 361 L 455 373 L 443 421 L 420 485 L 419 499 L 403 535 L 402 550 L 379 616 L 381 624 L 485 692 L 492 690 L 509 631 L 521 604 L 532 567 L 532 557 L 568 449 L 575 415 L 590 379 L 612 309 L 620 297 L 627 297 L 634 307 L 642 340 L 674 428 L 711 428 L 760 421 L 794 422 L 803 414 L 802 405 L 790 383 L 783 355 L 775 342 L 754 273 L 739 246 L 734 227 L 718 195 L 692 153 Z"/>
+<path d="M 753 731 L 749 727 L 740 729 L 679 775 L 638 799 L 607 824 L 570 846 L 472 916 L 399 960 L 393 959 L 389 952 L 424 837 L 321 765 L 316 766 L 305 789 L 299 816 L 289 834 L 281 866 L 268 894 L 266 911 L 256 931 L 254 947 L 246 967 L 238 1005 L 238 1034 L 247 1064 L 273 1093 L 298 1109 L 314 1114 L 353 1111 L 380 1103 L 521 1030 L 547 1009 L 654 941 L 792 841 L 776 790 L 760 758 Z"/>
+<path d="M 1159 507 L 1147 473 L 1127 449 L 1110 437 L 1072 421 L 1026 418 L 973 425 L 902 427 L 884 432 L 803 434 L 733 443 L 694 443 L 673 448 L 589 451 L 584 455 L 570 496 L 549 571 L 555 576 L 613 574 L 717 558 L 849 545 L 872 546 L 889 542 L 913 543 L 963 538 L 993 540 L 999 545 L 999 551 L 992 559 L 891 634 L 891 642 L 934 744 L 941 745 L 1022 684 L 1042 673 L 1067 648 L 1084 637 L 1138 590 L 1156 557 Z"/>
+<path d="M 107 469 L 97 502 L 94 530 L 99 557 L 116 587 L 187 647 L 211 661 L 232 683 L 273 711 L 286 724 L 426 814 L 503 869 L 512 869 L 605 800 L 605 794 L 532 740 L 494 719 L 339 617 L 264 562 L 256 553 L 260 546 L 267 543 L 378 541 L 385 538 L 421 429 L 417 422 L 376 424 L 358 421 L 340 424 L 279 419 L 245 422 L 220 418 L 184 421 L 153 431 L 132 443 Z"/>
+</g></svg>"""
+
+# Values below are hand-transcribed from design-tokens.json's colors.dark /
+# colors.light — tests/test_brand.py re-parses this block and fails if it
+# drifts from that file, same discipline as KlausBook-Context's
+# tests/design_tokens_test.mjs applied to a third (Python) consumer.
 _PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title><style>body{{font:16px/1.5 -apple-system,system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;color:#222}}
-code{{background:#f2f2f2;padding:.2em .4em;border-radius:4px}} a{{color:#0a58ca}} .btn{{display:inline-block;padding:.6em 1em;border:1px solid #0a58ca;border-radius:6px;margin-right:.5em}}
-footer{{margin-top:3rem;font-size:.9em;color:#666}}</style></head><body>{body}
+<title>{title}</title><style>
+:root {{
+  --bg-primary: #1e1e1e; --bg-secondary: #262626; --border: #363636;
+  --text-normal: #dadada; --text-muted: #9e9e9e; --text-faint: #6e6e6e;
+  --accent: #7f6df2; --veil-hover: rgba(255, 255, 255, 0.055); --veil-press: rgba(255, 255, 255, 0.1);
+}}
+@media (prefers-color-scheme: light) {{
+  :root {{
+    --bg-primary: #ffffff; --bg-secondary: #f6f6f6; --border: #e0e0e0;
+    --text-normal: #222222; --text-muted: #808080; --text-faint: #b3b3b3;
+    --accent: #705dcf; --veil-hover: rgba(0, 0, 0, 0.05); --veil-press: rgba(0, 0, 0, 0.09);
+  }}
+}}
+body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;background:var(--bg-primary);color:var(--text-normal)}}
+.klaus-logo{{width:28px;height:28px;display:block;margin-bottom:1.5rem;color:var(--accent)}}
+h1,h2{{color:var(--text-normal)}}
+code{{background:var(--bg-secondary);border:1px solid var(--border);padding:.2em .4em;border-radius:6px}}
+a{{color:var(--accent)}}
+.btn{{display:inline-block;padding:.6em 1em;border:1px solid var(--accent);border-radius:8px;margin-right:.5em;color:var(--accent);text-decoration:none}}
+.btn:hover{{background:var(--veil-hover)}}
+.btn:active{{background:var(--veil-press)}}
+form input{{background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:.5em .7em;color:var(--text-normal);font:inherit}}
+footer{{margin-top:3rem;font-size:.9em;color:var(--text-muted);border-top:1px solid var(--border);padding-top:1rem}}
+</style></head><body>{logo}{body}
 <footer><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · {operator}</footer></body></html>"""
 
 
 def _frame(title: str, body: str, operator: str) -> str:
-    return _PAGE.format(title=escape(title), body=body, operator=escape(operator))
+    return _PAGE.format(title=escape(title), body=body, operator=escape(operator), logo=_LOGO_SVG)
 
 
 def landing(operator: str, monthly: str, yearly: str) -> str:
