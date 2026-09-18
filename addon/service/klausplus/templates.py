@@ -84,6 +84,13 @@ def _recovery_by_email_line(operator_email: str) -> str:
     return f"<p>Key recovery is by email to {escape(operator_email)} — write from the address you paid with.</p>"
 
 
+def _password_by_email_line(operator_email: str) -> str:
+    # Same M-6 rule, worded for the account flow rather than key recovery --
+    # caught in browser testing (K-287): the two pages read confusingly
+    # alike but are different actions and must not share the same sentence.
+    return f"<p>Setting a password is by email to {escape(operator_email)} — write from the address you paid with.</p>"
+
+
 def recover_form(operator: str, email_enabled: bool, operator_email: str) -> str:
     if not email_enabled:
         body = f"<h1>Recover your key</h1>{_recovery_by_email_line(operator_email)}"
@@ -103,7 +110,7 @@ def recover_done(operator: str, email_enabled: bool, operator_email: str) -> str
 
 def forgot_password_form(operator: str, email_enabled: bool, operator_email: str) -> str:
     if not email_enabled:
-        body = f"<h1>Set a password</h1>{_recovery_by_email_line(operator_email)}"
+        body = f"<h1>Set a password</h1>{_password_by_email_line(operator_email)}"
         return _frame("Set your Klaus Plus password", body, operator)
     body = ("<h1>Set a password</h1><p>Enter the email you subscribed with. We'll send a link to set a "
             "password, so you can sign in from the app instead of pasting a key.</p>"
@@ -114,7 +121,7 @@ def forgot_password_form(operator: str, email_enabled: bool, operator_email: str
 
 def forgot_password_done(operator: str, email_enabled: bool, operator_email: str) -> str:
     if not email_enabled:
-        body = f"<h1>Set a password</h1>{_recovery_by_email_line(operator_email)}"
+        body = f"<h1>Set a password</h1>{_password_by_email_line(operator_email)}"
         return _frame("Set your Klaus Plus password", body, operator)
     return _frame("Set your Klaus Plus password",
                   "<h1>Check your inbox</h1><p>If that address has a subscription, a link is on its way.</p>", operator)
