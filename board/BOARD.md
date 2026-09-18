@@ -124,30 +124,6 @@ Check in a running Klausbook window, with a PDF open on the stage: Cmd+= / Cmd+-
 
 ## Doing
 
-### KB-013: Context menu parity in the PDF editor
-owner: worker-kb013
-priority: P2
-tags: parity
-files: extensions/klaus-pdf/webview-src/ContextMenu.tsx,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/highlights.ts,extensions/klaus-pdf/webview-src/notesStore.ts,extensions/klaus-pdf/webview-src/viewer.css,tests/highlights_test.mjs
-verify: node --test tests/highlights_test.mjs tests/shortcuts_test.mjs && python3 tests/test_notes.py && (cd extensions/klaus-pdf && npx tsc --noEmit)
-created: 2026-09-17
-claimed: 2026-09-18
-
-Per docs/reference/klausmate-viewer-parity.md's 'Context menu (exact order)' section. Scope, deliberately narrowed to what's buildable without new infrastructure (see Out of scope below):
-
-Menu, right-click on the stage (not the filmstrip): Copy · Highlight · [ink swatch row: five klausmate inks, klicking recolors the highlight under the cursor if any] · Remove Highlight · ─── · Zoom In (Cmd+=) · Zoom Out (Cmd+-) · Actual Size (Cmd+0).
-
-Acceptance criteria:
-1. Right-click on the stage opens a floating menu at the cursor (16px shadow per parity spec's sanctioned exception), closes on Escape / click-outside / an item firing.
-2. 'Copy' disabled when there is no live selection, else copies selected text (execCommand or Clipboard API) and closes the menu.
-3. 'Highlight' disabled when there is no live selection; when enabled, does exactly what Cmd+Shift+H already does (reuse ImpressView's highlightSelection, do not duplicate it).
-4. Right-clicking ON an existing highlight (hit-test its rects) enables 'Remove Highlight' and shows the five-ink swatch row (klausmate's HIGHLIGHT_INKS via highlights.ts) with the highlight's current ink marked selected; clicking a swatch updates that highlight's color in place. Right-clicking elsewhere disables both and hides the swatch row.
-5. 'Remove Highlight' deletes the highlight from the notes store (new notesStore.removeHighlight / updateHighlightColor, alongside the existing addHighlight) and re-renders without it.
-6. Zoom In / Zoom Out / Actual Size call the same handlers the toolbar buttons already use (reuse, do not duplicate the zoom ladder in shortcuts.ts).
-7. Items disable rather than disappear (parity spec rule) — verify by right-clicking with no selection and confirming Copy/Highlight render greyed-out, not absent.
-
-Out of scope (do not attempt): 'Copy Selection as Image' / 'Copy Page Text' / 'Copy Slide as Image' (klausmate's marquee-select and page-image-capture do not exist in KlausBook yet); 'Add note…/Edit note…' (KB-015, sticky notes, not built yet). Leave these out of the menu entirely rather than adding disabled placeholders for unbuilt features.
-
 ## Review
 
 ## Done
@@ -272,3 +248,31 @@ Explicitly out of scope (separate seams, do not attempt): pdf_index.py's chunkin
 #### Comments
 - [2026-09-18 worker-kb020] Decisions: ported OpenAIEmbeddings/normalize()/embed_batches()/index_signature()/signature_matches()/EmbeddingError from klausmate/embeddings.py, plus the embed() HTTP call from klausmate/openai_client.py, inlined into one module since file scope is just embeddings.py+test (no separate openai_client.py). Dropped the Klaus Plus (plus.py) branch and multi-provider DEFAULT_MODELS dict as out of scope/nonexistent in klaus-core — OpenAI is the only provider here, matching KB-020's acceptance criteria. API key env var: KLAUS_OPENAI_KEY (read in default_config(), unset is valid at import and only errors on .embed() with status=401). HTTP call uses a module-level _urlopen = urllib.request.urlopen alias (same seam openai_client.py used) so tests monkeypatch it instead of hitting the network; GetConfig stays a plain injected callable per the source's pattern. Files: core/klaus_core/embeddings.py (new), tests/test_embeddings.py (new). Risks: check the one-retry-on-429/5xx logic in _post_json and the dimensions-gating in _dimensions_for (DIMENSION_CAPABLE_MODELS) hardest — both are faithful ports of openai_client._request/embed but now live inlined in this file, so a future openai_client.py upstream change won't auto-sync here. Next: KB-004 wires this into app.py/an endpoint and covers pdf_index.py chunking — not attempted here, out of scope.
 - [2026-09-18 orchestrator] Sign-off: verified independently, not just the worker's self-report — re-ran python3 tests/test_embeddings.py (0 failures), AST-scanned embeddings.py to confirm stdlib-only imports, re-ran test_notes.py/test_board.py to confirm no regression, and diffed the port against klausmate/embeddings.py + openai_client.py line-by-line. normalize()/embed_batches()/index_signature()/signature_matches() are faithful ports; the Klaus-Plus branch (plus.active/patch_config/alternate endpoints) was correctly dropped as out of scope rather than half-ported; API key is env-var only, never logged. One note for later, not filed as a card: the HTTP retry logic (_post_json) is now a second copy of openai_client.py's _request — if klausmate's retry/backoff behavior changes, this port won't follow automatically. Done.
+
+### KB-013: Context menu parity in the PDF editor
+owner: worker-kb013
+priority: P2
+tags: parity
+files: extensions/klaus-pdf/webview-src/ContextMenu.tsx,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/highlights.ts,extensions/klaus-pdf/webview-src/notesStore.ts,extensions/klaus-pdf/webview-src/viewer.css,tests/highlights_test.mjs
+verify: node --test tests/highlights_test.mjs tests/shortcuts_test.mjs && python3 tests/test_notes.py && (cd extensions/klaus-pdf && npx tsc --noEmit)
+created: 2026-09-17
+claimed: 2026-09-18
+
+Per docs/reference/klausmate-viewer-parity.md's 'Context menu (exact order)' section. Scope, deliberately narrowed to what's buildable without new infrastructure (see Out of scope below):
+
+Menu, right-click on the stage (not the filmstrip): Copy · Highlight · [ink swatch row: five klausmate inks, klicking recolors the highlight under the cursor if any] · Remove Highlight · ─── · Zoom In (Cmd+=) · Zoom Out (Cmd+-) · Actual Size (Cmd+0).
+
+Acceptance criteria:
+1. Right-click on the stage opens a floating menu at the cursor (16px shadow per parity spec's sanctioned exception), closes on Escape / click-outside / an item firing.
+2. 'Copy' disabled when there is no live selection, else copies selected text (execCommand or Clipboard API) and closes the menu.
+3. 'Highlight' disabled when there is no live selection; when enabled, does exactly what Cmd+Shift+H already does (reuse ImpressView's highlightSelection, do not duplicate it).
+4. Right-clicking ON an existing highlight (hit-test its rects) enables 'Remove Highlight' and shows the five-ink swatch row (klausmate's HIGHLIGHT_INKS via highlights.ts) with the highlight's current ink marked selected; clicking a swatch updates that highlight's color in place. Right-clicking elsewhere disables both and hides the swatch row.
+5. 'Remove Highlight' deletes the highlight from the notes store (new notesStore.removeHighlight / updateHighlightColor, alongside the existing addHighlight) and re-renders without it.
+6. Zoom In / Zoom Out / Actual Size call the same handlers the toolbar buttons already use (reuse, do not duplicate the zoom ladder in shortcuts.ts).
+7. Items disable rather than disappear (parity spec rule) — verify by right-clicking with no selection and confirming Copy/Highlight render greyed-out, not absent.
+
+Out of scope (do not attempt): 'Copy Selection as Image' / 'Copy Page Text' / 'Copy Slide as Image' (klausmate's marquee-select and page-image-capture do not exist in KlausBook yet); 'Add note…/Edit note…' (KB-015, sticky notes, not built yet). Leave these out of the menu entirely rather than adding disabled placeholders for unbuilt features.
+
+#### Comments
+- [2026-09-18 worker-kb013] Decisions: added highlightAt(highlights, x, y) as a pure hit-test in highlights.ts (unit-tested in tests/highlights_test.mjs) rather than inlining DOM hit-testing in ImpressView, so it's testable under node:test like selectionRects. Copy uses document.execCommand('copy') on the live selection. ContextMenu.tsx is self-contained (owns its own outside-click/Escape close and viewport-clamping via useLayoutEffect) rather than routing Escape through ImpressView's global keydown switch, since the menu isn't a typing target FindBar's pattern was built for. Menu closes on doc change and on page navigation (hit-test is only valid for the slide it was opened on). Zoom In/Out/Actual Size and the toolbar buttons now share zoomInHandler/zoomOutHandler/actualSizeHandler consts in ImpressView so there's one zoom-ladder call site, not two. Files: extensions/klaus-pdf/webview-src/ContextMenu.tsx (new), ImpressView.tsx (contextMenu state, handleContextMenu hit-test, shared zoom handlers, stage onContextMenu wiring), highlights.ts (highlightAt), notesStore.ts (removeHighlight, updateHighlightColor mirroring addHighlight's commit()/docRef discipline), viewer.css (.context-menu/.context-menu-swatch rules, existing tokens only), tests/highlights_test.mjs (highlightAt test). Risks: onMouseDown={e.preventDefault()} on the menu root is load-bearing for Copy/Highlight — without it a click on the menu collapses the window selection before onClick fires, so check that first if either regresses; CSS specificity note left in viewer.css explaining why swatch rules are qualified '.context-menu button.context-menu-swatch' (a plain .context-menu-swatch would lose to the button base rule and render as bars, not dots). Next: none — out-of-scope items (Copy Selection as Image / Copy Page Text / Copy Slide as Image / Add-Edit note) were left out of the menu entirely, per the card, not added as disabled placeholders.
+- [2026-09-18 orchestrator] Sign-off: verified independently — re-ran node --test (13/13), test_notes.py (0 failures), tsc --noEmit (clean), plus test_board.py and test_embeddings.py to confirm zero regression elsewhere. Reviewed the full diff: hit-test coordinate conversion matches highlightSelection's established scale-1 pattern exactly; highlightAt iterates in reverse to correctly match PdfPage's paint order (last-added renders on top); the onMouseDown preventDefault claim is real, verified DOM behavior (prevents the default selection-collapse without stopping propagation, so outside-click-close via contains() still works correctly); zoom handlers are genuinely shared between toolbar and menu, not duplicated; removeHighlight/updateHighlightColor mirror addHighlight's exact commit()/docRef discipline; every new CSS rule uses existing --tokens, the one raw rgba() is the parity spec's own sanctioned second shadow exception, correctly cited in a comment. Confirmed the excluded items (copy-as-image, copy-page-text, add/edit-note) are genuinely absent, not disabled placeholders. FYI, not blocking: onCopy uses document.execCommand('copy') (deprecated API) rather than the Clipboard API — reasonable choice given webview clipboard-permission constraints, worth knowing if it ever needs revisiting. Done.
