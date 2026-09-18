@@ -161,6 +161,44 @@ for _label, _payload in (("a version-mismatched manifest", _sfd_stale_payload),
           "with every key intact",
           *_failure_exit(card_index.stats_from_disk, _sfd_dir, _sfd_ok,
                          payload=_payload, manifest=card_index.MANIFEST_FILE))
+
+# card_index.load and load_row_map answer None on failure, not a stats
+# dict — same shared bug class (K-181), different exit shape, so a
+# separate helper: ok iff the call returned None rather than raising.
+def _none_on_corrupt(fn, path, payload, manifest) -> tuple[bool, str]:
+    with open(os.path.join(path, manifest), "w", encoding="utf-8") as f:
+        f.write(payload)
+    try:
+        result = fn(path)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"RAISED {exc!r}"
+    return result is None, repr(result)
+
+
+# The stats_from_disk loop above leaves _sfd_dir's manifest corrupted
+# (each case overwrites it, and the loop never restores one) — rebuild it
+# for real before using it as a positive-path fixture here.
+card_index.save(_sfd_ix, _sfd_dir)
+_rm_ok = card_index.load_row_map(_sfd_dir)
+check("load_row_map: a real manifest reports the same rows as the index "
+      "it was built from",
+      _rm_ok is not None and set(_rm_ok.rows) == set(_sfd_ix.nids)
+      and _rm_ok.dims == _sfd_ix.dims, repr(_rm_ok))
+for _fn, _label2 in ((card_index.load, "card_index.load"),
+                     (card_index.load_row_map, "load_row_map")):
+    for _corrupt_label, _corrupt_payload in (
+        ("a version-mismatched manifest", _sfd_stale_payload),
+        ("a CORRUPT (non-JSON) manifest", "{not json"),
+        ("a manifest of null", "null"),
+        ("a manifest of []", "[]"),
+        ("a manifest of a bare string", '"str"'),
+    ):
+        check(f"{_label2}: {_corrupt_label} returns None rather than "
+              "raising — a truncated write can leave null/[]/a bare "
+              "string, and m.get(...) on that used to raise AttributeError "
+              "straight through",
+              *_none_on_corrupt(_fn, _sfd_dir, _corrupt_payload,
+                                card_index.MANIFEST_FILE))
 shutil.rmtree(_sfd_tmp, ignore_errors=True)
 
 # Widening index_signature from (provider, model) to (provider, model,
@@ -421,6 +459,16 @@ with open(os.path.join(_pi_tmp, "manifest.json"), "w") as f:
     f.write(json.dumps({"version": 1, "chunks": [], "dims": 2, "provider": "x", "model": "y"}))
 check("a version-1 (chunk) manifest reads as absent → rebuild",
       pdf_index.load(_pi_tmp) is None)
+for _pi_label, _pi_payload in (
+    ("a manifest of null", "null"),
+    ("a manifest of []", "[]"),
+    ("a manifest of a bare string", '"str"'),
+):
+    check(f"pdf_index.load: {_pi_label} returns None rather than raising "
+          "— m.get(...) on a non-dict manifest used to raise AttributeError "
+          "straight through (K-181)",
+          *_none_on_corrupt(pdf_index.load, _pi_tmp, _pi_payload,
+                            pdf_index.MANIFEST_FILE))
 check("best_page is the argmax row's page, 1-based",
       pdf_index.best_page(_pi_back, [0.0, 1.0]) == (2, 1.0))
 check("a zero vector never wins best_page",
@@ -762,6 +810,19 @@ if HAVE_RETENTION:
         json.dump(_v1_payload, f)
     check("a stored v1 matches.json now reads as absent/stale, not valid",
           retention.load_matches("Lecture 1", sig2, 2, src2, "digest1") is None)
+    for _lm_label, _lm_payload in (
+        ("a manifest of null", "null"),
+        ("a manifest of []", "[]"),
+        ("a manifest of a bare string", '"str"'),
+    ):
+        check(f"retention.load_matches: {_lm_label} returns None rather than "
+              "raising — m.get(...) on a non-dict matches.json used to raise "
+              "AttributeError straight through (K-181)",
+              *_none_on_corrupt(
+                  lambda _p: retention.load_matches(
+                      "Lecture 1", sig2, 2, src2, "digest1"),
+                  os.path.dirname(_v1_path), _lm_payload,
+                  os.path.basename(_v1_path)))
 
     print("== ensure_pdf_index: do_build's hash-reuse (mutation harness) ==")
     # Exercises do_build's REAL body end to end — _AnyOp above never calls

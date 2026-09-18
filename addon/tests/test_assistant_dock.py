@@ -424,8 +424,13 @@ if _HAVE_QT:
             self.interrupts = 0
             self.reaps = 0
             self.closed = 0
+            # Mirrors AgentHost.generation (K-211): bumped by every
+            # start(), so a fake exited(rc, gen) can model a SUPERSEDED
+            # child's belated exit arriving after a newer one has begun.
+            self.generation = 0
 
         def start(self, session_id=None, resume=None):
+            self.generation += 1
             self.started.append({"session_id": session_id, "resume": resume})
             self.session_id = resume or session_id or "fake-sid"
             self.running = False
@@ -839,7 +844,7 @@ if _HAVE_QT:
     _d6c.input.setPlainText("first")
     _d6c._do_send()
     _d6c._host.alive = False
-    _d6c._host.callbacks["exited"](1)
+    _d6c._host.callbacks["exited"](1, _d6c._host.generation)
     app.processEvents()
     _starts_after_exit = len(_d6c._host.started)
     _d6c.input.setPlainText("after the crash")
@@ -1098,7 +1103,7 @@ if _HAVE_QT:
     check("the send resumed the stored id", _d_n2._host.started[-1]["resume"] == "good-sid")
     _d_n2._host.callbacks["init"]({"session_id": "good-sid", "mcp_ok": True})
     _d_n2._host.alive = False
-    _d_n2._host.callbacks["exited"](-9)  # SIGKILL, not a rejected resume
+    _d_n2._host.callbacks["exited"](-9, _d_n2._host.generation)  # SIGKILL, not a rejected resume
     app.processEvents()
     check("a hard kill AFTER init keeps the session — the resume had been accepted",
           _sessions_n2.forgotten == [] and _sessions_n2.stored.get(None) == "good-sid")
@@ -1114,7 +1119,7 @@ if _HAVE_QT:
     _d_n2b.input.setPlainText("q")
     _d_n2b._do_send()
     _d_n2b._host.alive = False
-    _d_n2b._host.callbacks["exited"](1)  # died before any init
+    _d_n2b._host.callbacks["exited"](1, _d_n2b._host.generation)  # died before any init
     app.processEvents()
     check("an exit BEFORE init during a resume still forgets — that IS the real failure",
           _sessions_n2b.forgotten and _sessions_n2b.forgotten[-1] is None
@@ -1179,6 +1184,138 @@ if _HAVE_QT:
     _txt_n4b = _d_n4.transcript.toPlainText()
     check("an ordinary turn's deltas still render",
           "F answer" in _txt_n4b and "lecture-f.md" in _txt_n4b)
+
+    # -- K-211 bug 1: a delta buffered from the OUTGOING turn must be
+    # DISCARDED on switch, never flushed into the incoming transcript.
+    # NEW-4 above proves deltas arriving AFTER the switch are dropped by
+    # _is_stale_turn(); this is the OTHER half — text that was already
+    # open and rendered BEFORE the switch. _switch_session's own
+    # transcript.clear() is followed by _append_muted_line("New session
+    # for ..."), which calls _close_assistant_block() internally — and
+    # until this is fixed, that runs against the just-cleared document
+    # at the OLD block's stale start position, reinserting the outgoing
+    # PDF's partial answer ABOVE the new header instead of dropping it.
+
+    viewer_context.reset()
+    _d_leak = _make_dock()
+    viewer_context.report_document(60, "pdfLeak1", "PDF Leak1.pdf", "/x/Leak1.pdf", 3)
+    viewer_context.activate(60)
+    app.processEvents()
+    _d_leak.input.setPlainText("about Leak1")
+    _d_leak._do_send()
+    _d_leak._host.callbacks["delta"]("half-formed answer from Leak1")
+    app.processEvents()
+    check("the delta really did open a live assistant block before the switch",
+          _d_leak._assistant_block_open
+          and "half-formed answer from Leak1" in _d_leak.transcript.toPlainText())
+    viewer_context.report_document(61, "pdfLeak2", "PDF Leak2.pdf", "/x/Leak2.pdf", 3)
+    viewer_context.activate(61)
+    app.processEvents()
+    check("the switch discards the open block instead of leaving it to be "
+          "flushed later", not _d_leak._assistant_block_open and _d_leak._assistant_raw_text == "")
+    _txt_leak = _d_leak.transcript.toPlainText()
+    check("the outgoing PDF's already-rendered partial answer is gone from the "
+          "transcript after the switch, not reinserted above the new header",
+          "half-formed answer from Leak1" not in _txt_leak)
+    check("the incoming PDF's own announcement is there instead",
+          "New session for PDF Leak2.pdf" in _txt_leak)
+
+    # The identical shape via the New Session button (same PDF, not a
+    # switch — the card's own "New Session path" callout: _sending_pdf_safe
+    # is cleared there, but that guard never reached _close_assistant_block
+    # in the first place, so clearing it alone did not fix this).
+    viewer_context.reset()
+    _d_leak2 = _make_dock()
+    _d_leak2.input.setPlainText("about it")
+    _d_leak2._do_send()
+    _d_leak2._host.callbacks["delta"]("half-formed answer before New Session")
+    app.processEvents()
+    check("New Session's own delta is open before the click",
+          _d_leak2._assistant_block_open)
+    _d_leak2._on_new_session_clicked()
+    check("New Session discards the open block too — the same fix, the same call",
+          not _d_leak2._assistant_block_open and _d_leak2._assistant_raw_text == "")
+    check("the pre-click partial answer never reappears above New Session's own line",
+          "half-formed answer before New Session" not in _d_leak2.transcript.toPlainText()
+          and "New session" in _d_leak2.transcript.toPlainText())
+
+    # -- K-211 bug 2: a dying OUTGOING child's DELAYED exit must not
+    # clobber the NEW, live turn. In the real host, AgentHost._read's
+    # `finally` ALWAYS fires the exited callback, but _drain_stderr joins
+    # the SUCCESSOR's stderr thread (its own having been overwritten by
+    # the new start()) — so the outgoing child's exit can land well after
+    # the new one is already live. _on_exited needs a generation guard to
+    # tell the two apart.
+
+    def _fire_exited(dock, rc, gen):
+        """Fires the exited callback exactly as a real AgentHost's reader
+        thread eventually would. Wrapped so a signature mismatch (the
+        pre-fix single-argument _on_exited/callback) reports as one
+        failed check rather than aborting the rest of this file."""
+        try:
+            dock._host.callbacks["exited"](rc, gen)
+            return True
+        except Exception as exc:
+            print(f"  (exited callback raised: {exc})")
+            return False
+
+    viewer_context.reset()
+    _sessions_g2 = _FakeSessions()
+    _d_g2 = _make_dock(sessions=_sessions_g2)
+    viewer_context.report_document(70, "pdfK", "PDF K.pdf", "/x/K.pdf", 3)
+    viewer_context.activate(70)
+    app.processEvents()
+    _d_g2.input.setPlainText("about K")
+    _d_g2._do_send()
+    _host_g2 = _d_g2._host
+    _stale_generation = _host_g2.generation
+    check("the first send spawned generation 1", _stale_generation == 1 and _host_g2.alive)
+
+    # Switch mid-turn, then ask a question on the NEW pdf right away —
+    # _ensure_child spawns generation 2 on the SAME (fake) host object,
+    # exactly like a real AgentHost reuses its own start(). THIS is the
+    # live turn the outgoing child's belated exit must not touch.
+    viewer_context.report_document(71, "pdfL", "PDF L.pdf", "/x/L.pdf", 3)
+    viewer_context.activate(71)
+    app.processEvents()
+    _d_g2.input.setPlainText("about L")
+    _d_g2._do_send()
+    check("the send on the new PDF spawned generation 2 and it is running",
+          _host_g2.generation == 2 and _host_g2.running)
+
+    # NOW the outgoing (generation 1) child's delayed exit finally
+    # arrives — delayed, in the real host, by _drain_stderr joining the
+    # successor's stderr thread.
+    check("firing the stale generation's exit does not raise",
+          _fire_exited(_d_g2, -2, _stale_generation))
+    app.processEvents()
+    check("a stale generation's exit is dropped entirely: the live turn's "
+          "running state survives", _d_g2._running is True)
+    check("...the live child's PDF association survives (no false respawn "
+          "on the next send)", _d_g2._host_pdf_safe == "pdfL")
+    check("...and the in-flight turn's bookkeeping key survives, so its "
+          "result will still be remembered",
+          _d_g2._sending_pdf_safe == "pdfL")
+    check("no bogus 'Claude Code exited' line pollutes the live PDF's transcript",
+          "exited" not in _d_g2.transcript.toPlainText().lower())
+
+    # The live turn's own (generation 2) result must still land normally —
+    # proving the guard did not just accidentally leave everything alone.
+    _d_g2._host.callbacks["result"]({"session_id": "sid-L", "is_error": False,
+                                     "duration_ms": 1, "total_cost_usd": 0.0,
+                                     "text": "ok", "errors": []})
+    app.processEvents()
+    check("the live turn's result is NOT dropped — its session id is remembered",
+          _sessions_g2.stored.get("pdfL") == "sid-L")
+
+    # A genuine CURRENT-generation exit must still be handled normally —
+    # the guard must be precise, not a way to swallow every exit.
+    _d_g2._host.alive = False
+    check("firing the current generation's exit does not raise",
+          _fire_exited(_d_g2, 1, _host_g2.generation))
+    app.processEvents()
+    check("a CURRENT-generation exit is still processed normally",
+          "exited (code 1)" in _d_g2.transcript.toPlainText())
 
     # -- empty state: no claude binary ---------------------------------------
 

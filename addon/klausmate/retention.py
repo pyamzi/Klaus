@@ -378,11 +378,12 @@ def load_matches(
 ) -> tuple[list[tuple[int, float]], dict[int, int]] | None:
     """Cached ([(nid, score)], {nid: best page}) when every invalidation key
     matches, else None."""
+    m = card_index.read_manifest(
+        pdf_index.index_dir(USER_FILES, name), MATCHES_VERSION, MATCHES_FILE
+    )
+    if m is None:
+        return None
     try:
-        with open(_matches_path(name), encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != MATCHES_VERSION:
-            return None
         if not embeddings.signature_matches(
             str(m["provider"]), str(m["model"]), int(m["dims"]), signature
         ):
@@ -406,7 +407,7 @@ def load_matches(
         matches = [(int(nid), float(score)) for nid, score in m["matches"]]
         pages = {int(k): int(v) for k, v in (m.get("pages") or {}).items()}
         return matches, pages
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (ValueError, KeyError, TypeError):
         return None
 
 

@@ -107,13 +107,11 @@ def note_text(fields: Iterable[str], strip_fn: Callable[[str], str], cap: int = 
 
 def load(dir_path: str) -> CardIndex | None:
     """Load the index; None on missing/corrupt/mismatched files (= rebuild)."""
-    manifest_path = os.path.join(dir_path, MANIFEST_FILE)
     vectors_path = os.path.join(dir_path, VECTORS_FILE)
+    m = read_manifest(dir_path)
+    if m is None:
+        return None
     try:
-        with open(manifest_path, encoding="utf-8") as f:
-            m = json.load(f)
-        if m.get("version") != INDEX_VERSION:
-            return None
         nids = [int(n) for n in m["nids"]]
         mods = [int(x) for x in m["mods"]]
         hashes = [str(h) for h in m["hashes"]]
@@ -144,7 +142,7 @@ def load(dir_path: str) -> CardIndex | None:
             vectors=vectors,
             updated_at=float(m.get("updated_at") or 0.0),
         )
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, KeyError, TypeError):
         return None
 
 
@@ -441,13 +439,10 @@ class RowMap:
 def load_row_map(dir_path: str) -> RowMap | None:
     """Manifest-only view of the index; None on missing/corrupt
     (load()'s tolerance, minus the vector read)."""
+    m = read_manifest(dir_path)
+    if m is None:
+        return None
     try:
-        with open(os.path.join(dir_path, MANIFEST_FILE), encoding="utf-8") as f:
-            m = json.load(f)
-        if not isinstance(m, dict):
-            return None
-        if m.get("version") != INDEX_VERSION:
-            return None
         nids = [int(n) for n in m["nids"]]
         mods = m["mods"]
         hashes = m["hashes"]
@@ -464,7 +459,7 @@ def load_row_map(dir_path: str) -> RowMap | None:
             skipped={int(k) for k in (m.get("skipped") or {})},
             updated_at=float(m.get("updated_at") or 0.0),
         )
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (ValueError, KeyError, TypeError):
         return None
 
 

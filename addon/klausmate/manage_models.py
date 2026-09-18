@@ -53,7 +53,7 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import askUser, openLink, showInfo, showWarning, tooltip
+from aqt.utils import openLink, showInfo, showWarning, tooltip
 
 from . import plus
 from .md3_switch import Md3Switch
@@ -1569,7 +1569,7 @@ def manage_models_dialog(*_args: Any) -> None:
     def clear_assistant_sessions() -> None:
         # Hand-built QMessageBox + open() + finished (K-125), same
         # pattern as pdf_drive._delete_pdf — never the blocking
-        # QMessageBox.question() static (its internal exec() is the
+        # question() static (its internal exec() is the
         # K-114 segfault class).
         msg = QMessageBox(dlg)
         msg.setWindowTitle("Clear Sessions")
@@ -1985,6 +1985,19 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg["pdf_match_threshold"] = value
         cfg["_threshold_user_set"] = True
         _pkg().write_config(cfg)
+
+        def _refresh_library() -> None:
+            # An open Library window shows retention/cards computed at
+            # the old numbers — push the change there immediately
+            # rather than waiting for a reopen (K-052 rework: looked
+            # like it did nothing).
+            try:
+                from . import pdf_drive
+
+                pdf_drive.refresh_open_library()
+            except Exception as e:
+                print(f"[klausmate] library refresh after sensitivity save failed: {e}")
+
         # A per-PDF override always beats the default, so a user whose
         # PDFs are all individually tuned sees NOTHING move when this
         # slider changes — which reads as the setting being broken
@@ -1997,33 +2010,66 @@ def manage_models_dialog(*_args: Any) -> None:
 
             names = retention.threshold_override_names()
             n = len(names)
-            if n and askUser(
-                f"Apply this sensitivity to "
-                f"{'the ' + str(n) + ' PDFs' if n > 1 else 'the one PDF'} "
-                "with their own setting too?\n\n"
-                "Their individual sensitivities will be cleared so they "
-                "follow this default. You can still tune any single PDF "
-                "afterwards in the Library.",
-                parent=dlg,
-            ):
-                retention.clear_threshold_overrides()
-                try:
-                    from . import tag_sync
-
-                    tag_sync.sync_after_clear_overrides(dlg, names)
-                except Exception as e:
-                    print(f"[klausmate] retagging cleared-override PDFs failed: {e}")
         except Exception as e:
             print(f"[klausmate] applying sensitivity to tuned PDFs failed: {e}")
-        # An open Library window shows retention/cards computed at the
-        # old numbers — push the change there immediately rather than
-        # waiting for a reopen (K-052 rework: looked like it did nothing).
-        try:
-            from . import pdf_drive
+            _refresh_library()
+            return
+        if not n:
+            _refresh_library()
+            return
 
-            pdf_drive.refresh_open_library()
-        except Exception as e:
-            print(f"[klausmate] library refresh after sensitivity save failed: {e}")
+        # K-114: hand-built QMessageBox + open() + finished, same shape
+        # as clear_assistant_sessions above — never a blocking static
+        # confirm (its internal exec() is the K-114 segfault class).
+        # Confirm-dialog parity: default Yes (the replaced call carried
+        # no "default no" flag), Esc/close land on No.
+        msg = QMessageBox(dlg)
+        msg.setWindowTitle("Apply to individually tuned PDFs?")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(
+            f"Apply this sensitivity to "
+            f"{'the ' + str(n) + ' PDFs' if n > 1 else 'the one PDF'} "
+            "with their own setting too?\n\n"
+            "Their individual sensitivities will be cleared so they "
+            "follow this default. You can still tune any single PDF "
+            "afterwards in the Library."
+        )
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        no_btn = msg.button(QMessageBox.StandardButton.No)
+        if no_btn is not None:
+            no_btn.setObjectName("SecondaryButton")
+        try:
+            from . import theme as _theme
+
+            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+        except Exception as exc:
+            print(f"[klausmate] sensitivity-override dialog theme failed: {exc}")
+
+        def _on_answered(_r: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = (
+                clicked is not None
+                and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+            )
+            msg.deleteLater()
+            if confirmed:
+                try:
+                    retention.clear_threshold_overrides()
+                    try:
+                        from . import tag_sync
+
+                        tag_sync.sync_after_clear_overrides(dlg, names)
+                    except Exception as e:
+                        print(f"[klausmate] retagging cleared-override PDFs failed: {e}")
+                except Exception as e:
+                    print(f"[klausmate] applying sensitivity to tuned PDFs failed: {e}")
+            _refresh_library()
+
+        msg.finished.connect(_on_answered)
+        msg.open()
 
     def cancel_index() -> None:
         ev = op_state.get("cancel")
@@ -2115,46 +2161,151 @@ def manage_models_dialog(*_args: Any) -> None:
             # than one click away. A matching signature (fresh build or
             # incremental update) skips this prompt entirely.
             note_count = mw.col.note_count() if mw.col else 0
-            ok = QMessageBox.question(
-                dlg,
-                "Re-index from scratch?",
+            # K-114: hand-built QMessageBox + open() + finished, same
+            # shape as clear_assistant_sessions above — never a
+            # blocking question() static (its internal exec() is the
+            # K-114 segfault class). Yes/No with No default, matching
+            # that static's own fallback.
+            msg = QMessageBox(dlg)
+            msg.setWindowTitle("Re-index from scratch?")
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setText(
                 f"Re-index all {note_count:,} cards from scratch? The "
                 f"existing index was built with {st['model']} and the "
-                f"current setting is {sig[1]}.",
+                f"current setting is {sig[1]}."
             )
-            if ok != QMessageBox.StandardButton.Yes:
-                return
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            yes_btn = msg.button(QMessageBox.StandardButton.Yes)
+            if yes_btn is not None:
+                yes_btn.setObjectName("DangerButton")
+            no_btn = msg.button(QMessageBox.StandardButton.No)
+            if no_btn is not None:
+                no_btn.setObjectName("SecondaryButton")
+            try:
+                from . import theme as _theme
+
+                msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+            except Exception as exc:
+                print(f"[klausmate] re-index dialog theme failed: {exc}")
+
+            def _on_answered(_r: int) -> None:
+                clicked = msg.clickedButton()
+                confirmed = (
+                    clicked is not None
+                    and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+                )
+                msg.deleteLater()
+                if confirmed:
+                    _run_index()
+
+            msg.finished.connect(_on_answered)
+            msg.open()
+            return
         _run_index()
 
     def confirm_close() -> None:
         # Checked BEFORE the running-operation branches: several of those
         # accept() straight away, and unsaved edits must not slip out
         # through one of them unmentioned.
+        def _after_dirty_check() -> None:
+            if op_state["active"]:
+                # Indexing is the one long operation left in this
+                # window. K-114: hand-built QMessageBox + open() +
+                # finished, same shape as clear_assistant_sessions
+                # above — never a blocking question() static. Chained
+                # off the discard confirm below (via a plain function
+                # call, not a nested dialog) so the two can never stack.
+                msg2 = QMessageBox(dlg)
+                msg2.setWindowTitle("Stop indexing?")
+                msg2.setIcon(QMessageBox.Icon.Question)
+                msg2.setText(
+                    "Card indexing is still running.\n\n"
+                    "Stop it and close? Progress is saved — indexing "
+                    "resumes where it stopped next time."
+                )
+                msg2.setStandardButtons(
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                msg2.setDefaultButton(QMessageBox.StandardButton.No)
+                no_btn2 = msg2.button(QMessageBox.StandardButton.No)
+                if no_btn2 is not None:
+                    no_btn2.setObjectName("SecondaryButton")
+                try:
+                    from . import theme as _theme
+
+                    msg2.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+                except Exception as exc:
+                    print(f"[klausmate] stop-indexing dialog theme failed: {exc}")
+
+                def _on_stop_answered(_r: int) -> None:
+                    clicked = msg2.clickedButton()
+                    confirmed = (
+                        clicked is not None
+                        and msg2.standardButton(clicked)
+                        == QMessageBox.StandardButton.Yes
+                    )
+                    msg2.deleteLater()
+                    if not confirmed:
+                        return
+                    ev = op_state.get("cancel")
+                    if ev is not None:
+                        ev.set()
+                    dlg.accept()
+
+                msg2.finished.connect(_on_stop_answered)
+                msg2.open()
+            else:
+                dlg.accept()
+
         if ui_state["dirty"]:
-            ok = QMessageBox.question(
-                dlg,
-                "Discard changes?",
+            # K-114: hand-built QMessageBox + open() + finished, same
+            # shape as clear_assistant_sessions above — never a
+            # blocking question() static (its internal exec() is the
+            # K-114 segfault class).
+            msg1 = QMessageBox(dlg)
+            msg1.setWindowTitle("Discard changes?")
+            msg1.setIcon(QMessageBox.Icon.Question)
+            msg1.setText(
                 "You have unsaved preference changes.\n\n"
-                "Close without saving them?",
+                "Close without saving them?"
             )
-            if ok != QMessageBox.StandardButton.Yes:
-                return
-            clear_dirty()
-        if op_state["active"]:
-            # Indexing is the one long operation left in this window.
-            ok = QMessageBox.question(
-                dlg,
-                "Stop indexing?",
-                "Card indexing is still running.\n\n"
-                "Stop it and close? Progress is saved — indexing resumes "
-                "where it stopped next time.",
+            msg1.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
-            if ok != QMessageBox.StandardButton.Yes:
-                return
-            ev = op_state.get("cancel")
-            if ev is not None:
-                ev.set()
-        dlg.accept()
+            msg1.setDefaultButton(QMessageBox.StandardButton.No)
+            yes_btn1 = msg1.button(QMessageBox.StandardButton.Yes)
+            if yes_btn1 is not None:
+                yes_btn1.setObjectName("DangerButton")
+            no_btn1 = msg1.button(QMessageBox.StandardButton.No)
+            if no_btn1 is not None:
+                no_btn1.setObjectName("SecondaryButton")
+            try:
+                from . import theme as _theme
+
+                msg1.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
+            except Exception as exc:
+                print(f"[klausmate] discard-changes dialog theme failed: {exc}")
+
+            def _on_discard_answered(_r: int) -> None:
+                clicked = msg1.clickedButton()
+                confirmed = (
+                    clicked is not None
+                    and msg1.standardButton(clicked)
+                    == QMessageBox.StandardButton.Yes
+                )
+                msg1.deleteLater()
+                if not confirmed:
+                    return
+                clear_dirty()
+                _after_dirty_check()
+
+            msg1.finished.connect(_on_discard_answered)
+            msg1.open()
+        else:
+            _after_dirty_check()
 
     def save_general() -> None:
         cfg = _pkg().get_config()

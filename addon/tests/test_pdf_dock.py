@@ -83,6 +83,28 @@ _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
 _scratch = _tempfile.mkdtemp(prefix="klaus-dock-")
 K = exec_klausmate_under_qt(_scratch)
 
+# K-234: every (win, dock) _dock() ever builds is recorded here so the
+# cleanup pass at the end of the file (right before report()) can tear
+# ALL of them down before the interpreter starts finalizing. Root cause:
+# this file constructs ~20 real QMainWindow/PdfDock pairs and, without
+# this, most stay live (never closed — a failed `check()` doesn't raise,
+# so nothing here ever forced a teardown, and several sections bind
+# throwaway docks to one-off names like _d0/d4/d5/d6/d7 that are never
+# reassigned or released, which pins them for the rest of the file same
+# as a leak would). PyQt6's own exit-time cleanup — QtCore's
+# cleanup_on_exit, called from Py_FinalizeEx, walking every remaining
+# live sip wrapper via sip_api_visit_wrappers — SIGBUS-es under a big
+# enough pile of those. Caught via a macOS crash report
+# (Python-2026-09-17-164442.ips) whose stack is exactly
+# Py_FinalizeEx -> ... -> cleanup_on_exit -> sip_api_visit_wrappers,
+# reproduced only under real concurrent load (several full test suites
+# racing on one machine, as a busy multi-agent box does) — a lone
+# standalone run is fast and light enough that sip's walk never trips,
+# which is why this looked like a 1-in-3 ordering flake (and every
+# check() genuinely still passes — report() prints 0 failed — right up
+# until the interpreter crashes on the way out, after main() returns).
+_all_docks: list = []
+
 # load_open_tabs filters the stored tab set against contexts/ — a name
 # with no ingested text is not in the store and never comes back as a tab.
 _os.makedirs(_os.path.join(_scratch, "contexts"), exist_ok=True)
@@ -155,6 +177,7 @@ def _dock(placement=None, geom=None, tabs=()):
     win._klausmate_pdf_container = d  # F2 (review round 1): makes the
     # host-lifetime pin's "is None" clause real — _install_panel sets this
     # same attribute on the real host, _dock() is standing in for it.
+    _all_docks.append((win, d))  # K-234: torn down at end-of-file, see above
     return win, editor, sb, d
 
 
@@ -912,5 +935,33 @@ for name in ("NOTES_PLACEMENTS", "_ZONE_CAPTIONS", "_defer_placement",
              "_ensure_notes_split", "_wrap_pane", "_dock_into", "_drag_tick",
              "_load_browse_placement", "_PdfTabContainer"):
     check(f"{name} no longer appears in __init__.py", name not in _src)
+
+section("cleanup: every dock/window this file opened is torn down before "
+        "interpreter exit (K-234 — sip's own exit-time wrapper walk, "
+        "QtCore's cleanup_on_exit called from Py_FinalizeEx, SIGBUS-es "
+        "under a big enough pile of un-torn-down top-level Qt objects; "
+        "confirmed by a macOS crash report pinning the fault to exactly "
+        "that walk, reproduced only under real concurrent load)")
+for _win, _d in _all_docks:
+    try:
+        _d._on_host_closing()  # idempotent — guarded by _d._closed
+    except Exception:
+        pass
+    try:
+        _win.close()
+    except Exception:
+        pass
+    try:
+        _win.deleteLater()
+    except Exception:
+        pass
+for _ in range(4):
+    _app.processEvents()
+import gc as _gc  # noqa: E402
+_gc.collect()
+check(f"all {len(_all_docks)} docks this file created are torn down — "
+      "none left live for sip's exit-time cleanup to walk",
+      all(_d._closed for _, _d in _all_docks),
+      f"{sum(1 for _, _d in _all_docks if not _d._closed)} still open")
 
 raise SystemExit(report())

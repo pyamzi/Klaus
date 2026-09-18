@@ -389,10 +389,22 @@ class AgentHost:
         self._running = False
         self._cmd: list[str] = []
         self.session_id: str | None = None
+        # Bumped by every start() (K-211): identifies which spawned child
+        # a later `exited` callback belongs to. `_read`'s reader thread
+        # captures this LOCALLY at the top, exactly like `proc`, so a
+        # child superseded by a later start() while its own thread was
+        # still winding down (see `_drain_stderr`'s join on the
+        # SUCCESSOR's stderr thread, which delays that stale exit by up
+        # to STOP_GRACE_S) can be told apart from the current, live one.
+        self._generation = 0
 
     @property
     def running(self) -> bool:
         return self._running
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     @property
     def alive(self) -> bool:
@@ -422,6 +434,7 @@ class AgentHost:
 
     def start(self, session_id: str | None = None, resume: str | None = None) -> str:
         self.close()
+        self._generation += 1
         self.session_id = resume or session_id or str(uuid.uuid4())
         sid = self.session_id  # local: a fast reader thread (fake procs never block on
         # stdout) can race ahead and overwrite self.session_id from an "init"/"result"
@@ -489,6 +502,7 @@ class AgentHost:
 
     def _read(self) -> None:
         proc = self._proc
+        generation = self._generation
         try:
             for raw in proc.stdout:
                 ev = parse_line(raw)
@@ -533,7 +547,7 @@ class AgentHost:
                 rc = proc.poll()
             except Exception:
                 pass
-            self._cb["exited"](rc)
+            self._cb["exited"](rc, generation)
 
     def _read_stderr(self) -> None:
         """Drains stderr one line at a time for the whole life of the child

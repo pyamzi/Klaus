@@ -1311,5 +1311,82 @@ check("Preferences' own Index Now still calls curation directly — it "
       "the shared token rather than racing it",
       "curation.ensure_index(" in code_only(_mm_src))
 
+
+print("== K-232: the four remaining blocking dialogs go window-modal ==")
+# askUser (save_threshold's tuned-PDFs offer) and three QMessageBox.question
+# statics (start_index's re-index confirm; confirm_close's discard-changes
+# and stop-indexing confirms) each opened a nested app-modal event loop —
+# the exact K-114 segfault class clear_assistant_sessions and pdf_drive's
+# _delete_pdf were already converted away from. Same shape here: a
+# hand-built QMessageBox, themed, shown via open(), with the Yes/No
+# decision read from clickedButton() inside a finished handler.
+check("K-232: no blocking askUser or QMessageBox.question anywhere in "
+      "this file — the board card's own verify condition, pinned so a "
+      "regression fails a real test and not just the board gate",
+      "askUser" not in _src2 and "QMessageBox.question" not in _src2)
+
+_save_threshold_src = _fn_src("save_threshold")
+check("save_threshold was found", bool(_save_threshold_src))
+check("the tuned-PDFs confirm is window-modal — hand-built QMessageBox, "
+      "open() + finished, never a blocking call",
+      "msg = QMessageBox(dlg)" in _save_threshold_src
+      and "msg.finished.connect(_on_answered)" in _save_threshold_src
+      and "msg.open()" in _save_threshold_src
+      and ".exec()" not in _save_threshold_src)
+check("...defaults Yes, matching the replaced call's own no-defaultno "
+      "default (setup_flow's askUser conversions set the same precedent)",
+      "setDefaultButton(QMessageBox.StandardButton.Yes)" in _save_threshold_src)
+check("...and the Library refresh runs from every exit path (the error "
+      "branch, the nothing-to-offer branch, and the finished handler) "
+      "since it depends on the value already written to config, not on "
+      "whether the user cleared the per-PDF overrides",
+      _save_threshold_src.count("_refresh_library()") == 4)
+_st_on_answered = _save_threshold_src.split("def _on_answered", 1)[1]
+check("...clear_threshold_overrides only runs from the finished handler, "
+      "gated on confirmed — never unconditionally once the dialog is up",
+      "if confirmed:" in _st_on_answered
+      and _st_on_answered.index("if confirmed:")
+      < _st_on_answered.index("retention.clear_threshold_overrides()"))
+
+_start_index_src = _fn_src("start_index")
+check("start_index was found", bool(_start_index_src))
+check("the re-index-from-scratch confirm is window-modal — hand-built "
+      "QMessageBox, open() + finished, never a blocking call",
+      "msg = QMessageBox(dlg)" in _start_index_src
+      and "msg.finished.connect(_on_answered)" in _start_index_src
+      and "msg.open()" in _start_index_src
+      and ".exec()" not in _start_index_src)
+check("...No default (matching the replaced static's own fallback), Yes "
+      "wears DangerButton for a destructive rebuild-from-scratch",
+      "setDefaultButton(QMessageBox.StandardButton.No)" in _start_index_src
+      and 'yes_btn.setObjectName("DangerButton")' in _start_index_src)
+check("...and _run_index runs unconditionally only when the signature "
+      "already matches (no prompt needed); once the dialog is shown it "
+      "runs ONLY from the finished handler's Yes",
+      _start_index_src.count("_run_index()") == 2
+      and "return\n        _run_index()" in _start_index_src)
+
+_confirm_close_src = _fn_src("confirm_close")
+check("confirm_close was found", bool(_confirm_close_src))
+check("both confirms (discard changes, stop indexing) are window-modal "
+      "— two hand-built QMessageBoxes, open() + finished, never a "
+      "blocking call",
+      _confirm_close_src.count("QMessageBox(dlg)") == 2
+      and "msg1.finished.connect(_on_discard_answered)" in _confirm_close_src
+      and "msg2.finished.connect(_on_stop_answered)" in _confirm_close_src
+      and _confirm_close_src.count(".open()") == 2
+      and ".exec()" not in _confirm_close_src)
+check("...chained by a plain continuation call rather than a nested "
+      "dialog, so the discard confirm and the stop-indexing confirm can "
+      "never stack — the continuation is defined before it is used",
+      "_after_dirty_check()" in _confirm_close_src
+      and _confirm_close_src.index("def _after_dirty_check")
+      < _confirm_close_src.index('if ui_state["dirty"]:'))
+check("...and dlg.accept() only fires from a Yes/skip path — the "
+      "no-dialog-needed fallthrough and the stop-confirm's Yes — never "
+      "unconditionally once a confirm is showing",
+      _confirm_close_src.count("dlg.accept()") == 2)
+
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
