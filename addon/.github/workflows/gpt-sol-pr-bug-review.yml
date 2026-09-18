@@ -1,0 +1,458 @@
+name: GPT Sol PR Bug Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (for manual runs)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+jobs:
+  review-pr-diff:
+    runs-on: ubuntu-latest
+    env:
+      # Required setup: add OPENAI_API_KEY as a repository secret.
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # Optional setup: set OPENAI_MODEL as a repository variable to override default.
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.6-sol' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WORKFLOW_PR_NUMBER: ${{ github.event.inputs.pr_number || '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Review PR diff for likely bugs (advisory)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from urllib import error, request
+
+          MARKER = "<!-- gpt-sol-pr-bug-review -->"
+          MAX_PATCH_CHARS = 120000
+
+          def gh_request(method: str, url: str, token: str, payload=None):
+              headers = {
+                  "Authorization": "token " + token,
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "gpt-sol-pr-bug-review-workflow",
+              }
+              body = None
+              if payload is not None:
+                  headers["Content-Type"] = "application/json"
+                  body = json.dumps(payload).encode("utf-8")
+              req = request.Request(url, data=body, headers=headers, method=method)
+              with request.urlopen(req, timeout=60) as resp:
+                  raw = resp.read()
+              if not raw:
+                  return {}
+              return json.loads(raw.decode("utf-8"))
+
+          def find_existing_marker_comment(token: str, repo: str, pr_number: int):
+              page = 1
+              while True:
+                  comments_url = (
+                      f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                      f"?per_page=100&page={page}&sort=created&direction=desc"
+                  )
+                  comments = gh_request("GET", comments_url, token)
+                  if not comments:
+                      return None
+                  for comment in comments:
+                      author = ((comment.get("user") or {}).get("login") or "").strip()
+                      if MARKER in (comment.get("body") or "") and author == "github-actions[bot]":
+                          return comment
+                  if len(comments) < 100:
+                      return None
+                  page += 1
+
+          def upsert_pr_comment(token: str, repo: str, pr_number: int, body: str):
+              if not token:
+                  print("Skipping PR comment update: GITHUB_TOKEN is unavailable.")
+                  return False
+
+              existing = find_existing_marker_comment(token, repo, pr_number)
+
+              if existing:
+                  update_url = f"https://api.github.com/repos/{repo}/issues/comments/{existing['id']}"
+                  try:
+                      gh_request("PATCH", update_url, token, {"body": body})
+                      print(f"Updated existing marker comment: {existing['id']}")
+                      return True
+                  except error.HTTPError as e:
+                      print(f"Skipping PR comment update (HTTP {e.code}): not permitted or unavailable.")
+                      return False
+              else:
+                  create_url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+                  try:
+                      gh_request("POST", create_url, token, {"body": body})
+                      print("Created new marker comment")
+                      return True
+                  except error.HTTPError as e:
+                      print(f"Skipping PR comment create (HTTP {e.code}): not permitted or unavailable.")
+                      return False
+
+          def load_pr_context():
+              event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+              event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+              repo = os.environ.get("GITHUB_REPOSITORY", "")
+              token = os.environ.get("GITHUB_TOKEN", "")
+
+              with open(event_path, "r", encoding="utf-8") as f:
+                  payload = json.load(f)
+
+              if event_name == "pull_request":
+                  pr = payload["pull_request"]
+                  head_repo_full_name = (pr["head"].get("repo") or {}).get("full_name", "")
+                  base_repo_full_name = (pr["base"].get("repo") or {}).get("full_name", "")
+                  return {
+                      "repo": repo,
+                      "number": int(pr["number"]),
+                      "title": pr.get("title", ""),
+                      "body": pr.get("body") or "",
+                      "base_sha": pr["base"]["sha"],
+                      "head_sha": pr["head"]["sha"],
+                      "head_ref": pr["head"].get("ref", ""),
+                      "head_repo_full_name": head_repo_full_name,
+                      "base_repo_full_name": base_repo_full_name,
+                      "is_cross_repo": bool(head_repo_full_name and base_repo_full_name and head_repo_full_name != base_repo_full_name),
+                  }
+
+              if event_name == "workflow_dispatch":
+                  pr_number_raw = os.environ.get("WORKFLOW_PR_NUMBER", "").strip()
+                  if not pr_number_raw:
+                      raise RuntimeError("workflow_dispatch requires pr_number input")
+                  if not token:
+                      raise RuntimeError("workflow_dispatch requires GITHUB_TOKEN to resolve PR metadata")
+                  pr_number = int(pr_number_raw)
+                  pr_url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+                  pr = gh_request("GET", pr_url, token)
+                  head_repo_full_name = (pr["head"].get("repo") or {}).get("full_name", "")
+                  base_repo_full_name = (pr["base"].get("repo") or {}).get("full_name", "")
+                  return {
+                      "repo": repo,
+                      "number": int(pr["number"]),
+                      "title": pr.get("title", ""),
+                      "body": pr.get("body") or "",
+                      "base_sha": pr["base"]["sha"],
+                      "head_sha": pr["head"]["sha"],
+                      "head_ref": pr["head"].get("ref", ""),
+                      "head_repo_full_name": head_repo_full_name,
+                      "base_repo_full_name": base_repo_full_name,
+                      "is_cross_repo": bool(head_repo_full_name and base_repo_full_name and head_repo_full_name != base_repo_full_name),
+                  }
+
+              raise RuntimeError(f"Unsupported event: {event_name}")
+
+          def get_patch(repo: str, pr_number: int, base_sha: str, head_sha: str, token: str) -> str:
+              # Use only the PR delta, never full repository context.
+              merge_base = subprocess.run(
+                  ["git", "merge-base", base_sha, head_sha],
+                  text=True,
+                  capture_output=True,
+                  check=False,
+              )
+              if merge_base.returncode == 0:
+                  mb_sha = merge_base.stdout.strip()
+                  result = subprocess.run(
+                      ["git", "diff", "--no-color", "--unified=3", mb_sha, head_sha],
+                      text=True,
+                      capture_output=True,
+                      check=False,
+                  )
+                  if result.returncode == 0:
+                      return result.stdout
+                  print(f"git diff failed; falling back to PR files API: {result.stderr.strip()}")
+              else:
+                  print(f"git merge-base failed; falling back to PR files API: {merge_base.stderr.strip()}")
+
+              if not token:
+                  raise RuntimeError("git diff failed and GITHUB_TOKEN is unavailable for API fallback")
+
+              lines = []
+              page = 1
+              while True:
+                  files_url = (
+                      f"https://api.github.com/repos/{repo}/pulls/{pr_number}/files"
+                      f"?per_page=100&page={page}"
+                  )
+                  files = gh_request("GET", files_url, token)
+                  if not files:
+                      break
+                  for f in files:
+                      filename = f.get("filename", "unknown")
+                      status = f.get("status", "modified")
+                      prev = f.get("previous_filename", filename)
+                      if status == "added":
+                          a_path = "/dev/null"
+                          b_path = filename
+                      elif status == "removed":
+                          a_path = filename
+                          b_path = "/dev/null"
+                      elif status == "renamed":
+                          a_path = prev
+                          b_path = filename
+                      else:
+                          a_path = filename
+                          b_path = filename
+                      a_label = "/dev/null" if a_path == "/dev/null" else f"a/{a_path}"
+                      b_label = "/dev/null" if b_path == "/dev/null" else f"b/{b_path}"
+                      lines.append(f"diff --git {a_label} {b_label}\n")
+                      lines.append(f"--- {a_label}\n")
+                      lines.append(f"+++ {b_label}\n")
+                      patch = f.get("patch")
+                      if patch:
+                          lines.append(patch)
+                          if not patch.endswith("\n"):
+                              lines.append("\n")
+                      else:
+                          if status == "renamed":
+                              lines.append(f"rename from {prev}\n")
+                              lines.append(f"rename to {filename}\n")
+                          else:
+                              lines.append("@@ -0,0 +0,0 @@\n")
+                              lines.append(f"[{status} file; textual patch not available]\n")
+                  if len(files) < 100:
+                      break
+                  page += 1
+              return "".join(lines)
+
+          def truncate_patch_safely(patch: str, max_chars: int):
+              if len(patch) <= max_chars:
+                  return patch, False, ""
+
+              lines = patch.splitlines(keepends=True)
+              blocks = []
+              current = []
+              for line in lines:
+                  if line.startswith("diff --git "):
+                      if current:
+                          blocks.append("".join(current))
+                      current = [line]
+                  else:
+                      current.append(line)
+              if current:
+                  blocks.append("".join(current))
+
+              if not blocks:
+                  return patch[:max_chars], True, "Unable to detect file boundaries; applied hard truncation."
+
+              included = []
+              total = 0
+              for block in blocks:
+                  if total + len(block) <= max_chars:
+                      included.append(block)
+                      total += len(block)
+                  else:
+                      break
+
+              if included:
+                  kept = len(included)
+                  omitted = len(blocks) - kept
+                  note = f"Included {kept} of {len(blocks)} file diffs; omitted {omitted}."
+                  return "".join(included), True, note
+
+              # First file is larger than max_chars: include complete hunks only.
+              first = blocks[0]
+              header_lines = []
+              hunks = []
+              current_hunk = []
+              in_hunk = False
+              for line in first.splitlines(keepends=True):
+                  if line.startswith("@@ "):
+                      if in_hunk and current_hunk:
+                          hunks.append("".join(current_hunk))
+                      in_hunk = True
+                      current_hunk = [line]
+                  elif in_hunk:
+                      current_hunk.append(line)
+                  else:
+                      header_lines.append(line)
+              if in_hunk and current_hunk:
+                  hunks.append("".join(current_hunk))
+
+              out = []
+              out_len = 0
+              for line in header_lines:
+                  if out_len + len(line) <= max_chars:
+                      out.append(line)
+                      out_len += len(line)
+                  else:
+                      break
+
+              for hunk_text in hunks:
+                  if out_len + len(hunk_text) <= max_chars:
+                      out.append(hunk_text)
+                      out_len += len(hunk_text)
+                  else:
+                      break
+
+              safe = "".join(out)
+              if not safe:
+                  safe = first[:max_chars]
+              note = "Included only part of the first file diff on hunk boundaries; remaining diff omitted."
+              return safe, True, note
+
+          def extract_output_text(response_obj: dict) -> str:
+              if isinstance(response_obj.get("output_text"), str) and response_obj["output_text"].strip():
+                  return response_obj["output_text"].strip()
+
+              chunks = []
+              for item in response_obj.get("output", []):
+                  for part in item.get("content", []):
+                      txt = part.get("text")
+                      if isinstance(txt, str):
+                          chunks.append(txt)
+              return "\n".join(chunks).strip()
+
+          def call_openai(model: str, api_key: str, prompt: str) -> str:
+              url = "https://api.openai.com/v1/responses"
+              payload = {
+                  "model": model,
+                  "input": [
+                      {
+                          "role": "system",
+                          "content": [
+                              {
+                                  "type": "input_text",
+                                  "text": (
+                                      "You are a senior code reviewer focused strictly on likely bugs and regressions. "
+                                      "Review only the provided PR metadata and unified diff. "
+                                      "Ignore style/nit concerns unless they hide a correctness issue. "
+                                      "Look for runtime errors, edge cases, data loss, security-sensitive mistakes, "
+                                      "broken API contracts, async/race issues, and test gaps that indicate real bugs. "
+                                      "Return concise markdown."
+                                  ),
+                              }
+                          ],
+                      },
+                      {
+                          "role": "user",
+                          "content": [{"type": "input_text", "text": prompt}],
+                      },
+                  ],
+              }
+              req = request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  method="POST",
+                  headers={
+                      "Authorization": "Bearer" + " " + api_key,
+                      "Content-Type": "application/json",
+                  },
+              )
+              with request.urlopen(req, timeout=120) as resp:
+                  data = json.loads(resp.read().decode("utf-8"))
+              text = extract_output_text(data)
+              return text or "No substantive bugs found."
+
+          def main():
+              github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+              openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+              model = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+              event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+
+              if event_name == "workflow_dispatch" and not github_token:
+                  print("Skipped: GITHUB_TOKEN is unavailable for workflow_dispatch, so PR metadata cannot be resolved.")
+                  return
+
+              ctx = load_pr_context()
+              repo = ctx["repo"]
+              pr_number = ctx["number"]
+
+              if not openai_key:
+                  skip_reason = "the repository secret is not configured"
+                  if ctx.get("is_cross_repo"):
+                      skip_reason = "secrets are typically unavailable for cross-repository pull requests"
+                  note = (
+                      f"{MARKER}\n"
+                      "## GPT Sol PR Bug Review (advisory)\n\n"
+                      "Skipped: `OPENAI_API_KEY` is not available in this workflow run. "
+                      f"This is expected when {skip_reason}."
+                  )
+                  upsert_pr_comment(github_token, repo, pr_number, note)
+                  return
+
+              patch = get_patch(repo, pr_number, ctx["base_sha"], ctx["head_sha"], github_token)
+              patch, truncated, truncation_details = truncate_patch_safely(patch, MAX_PATCH_CHARS)
+
+              if not patch.strip():
+                  message = (
+                      f"{MARKER}\n"
+                      "## GPT Sol PR Bug Review (advisory)\n\n"
+                      "No substantive bugs found. Diff between base/head was empty."
+                  )
+                  upsert_pr_comment(github_token, repo, pr_number, message)
+                  return
+
+              truncation_note = ""
+              if truncated:
+                  truncation_note = (
+                      f"\n\n> Note: Diff exceeded {MAX_PATCH_CHARS} characters and was truncated "
+                      f"for safe processing. {truncation_details}"
+                  )
+
+              prompt = (
+                  "Review this pull request diff and report only likely bugs/regressions with actionable fixes.\n\n"
+                  "Output format:\n"
+                  "- If bugs found: bullet list where each item includes **Severity**, **File/Area**, **Problem**, **Suggested fix**.\n"
+                  "- If none found: exactly `No substantive bugs found.`\n"
+                  "- Keep the response concise and in markdown.\n\n"
+                  f"PR Title: {ctx['title']}\n"
+                  f"PR Body:\n{ctx['body'] or '(empty)'}\n\n"
+                  f"Base SHA: {ctx['base_sha']}\n"
+                  f"Head SHA: {ctx['head_sha']}\n\n"
+                  "Unified diff:\n"
+                  "```diff\n"
+                  f"{patch}\n"
+                  "```"
+                  f"{truncation_note}"
+              )
+
+              try:
+                  review = call_openai(model, openai_key, prompt)
+              except error.HTTPError as e:
+                  _ = e.read()
+                  review = (
+                      "Unable to complete GPT review in this run. "
+                      "OpenAI API returned an error; please rerun the workflow.\n\n"
+                      f"`HTTP {e.code}`"
+                  )
+                  print(f"OpenAI HTTP error: HTTP {e.code}", file=sys.stderr)
+              except Exception as e:
+                  review = (
+                      "Unable to complete GPT review in this run due to an unexpected error; "
+                      "please rerun the workflow."
+                  )
+                  print(f"OpenAI call failed: {e}", file=sys.stderr)
+
+              body = (
+                  f"{MARKER}\n"
+                  "## GPT Sol PR Bug Review (advisory)\n\n"
+                  f"Model: `{model}`\n\n"
+                  f"{review}"
+              )
+              upsert_pr_comment(github_token, repo, pr_number, body)
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except Exception as exc:
+                  # Advisory workflow: never block a PR solely due to review tooling failures.
+                  print(f"Fatal error in bug review workflow: {exc}", file=sys.stderr)
+                  sys.exit(0)
+          PY
