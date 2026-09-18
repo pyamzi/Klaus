@@ -22,12 +22,12 @@ created: 2026-08-24
 
 Highlights + per-slide side notes stored as JSON sidecars in Klausbook's own user_data; bake writes them into the PDF as real annotations from a pristine original (klausmate pdf_handler.bake_annotations model, vendored pypdf). Never incremental; empty JSON = restore.
 
-### KB-004: klaus-core: embedding index over the library
+### KB-004: klaus-core: pdf_index.py chunking + /search endpoint
 owner: -
 priority: P2
 created: 2026-08-24
 
-Port embeddings.py + pdf_index.py (aqt-free already): Voyage default, unit-normalized vectors, packed array storage. Expose /search over chunks of all PDFs.
+Remainder of the original KB-004 after slicing out the embeddings.py port (see the new embeddings card — this depends on it landing first, since /search needs both the embedding client and the chunk/index storage). Port klausmate/pdf_index.py's chunking + packed-array index storage, and expose GET /search over chunks of all PDFs in the library.
 
 ### KB-005: Anki bridge: slim klausmate addon serving HTTP
 owner: -
@@ -94,14 +94,6 @@ Pouya wants klausmate (inside Anki) and KlausBook to look almost identical, with
 #### Comments
 - [2026-09-18 orchestrator] Shared tokens file landed 2026-09-18: docs/reference/design-tokens.json (canonical here, byte-identical copy at the same path in KlausMate-Context — run scripts/check-token-sync.sh after editing either). This card's job is now literal: make theme.py's palette() emit tokens.colors.{dark,light} exactly, rewrite DESIGN.md's frontmatter to match, and update test_theme.py's scale checks to the new hex values. HIGHLIGHT_INKS is already synced and now has a real test (tests/test_theme.py 'design-tokens.json sync' section) instead of being two independent hand-copies.
 
-### KB-013: Context menu parity in the PDF editor
-owner: -
-priority: P2
-tags: parity
-created: 2026-09-17
-
-Custom context menu per docs/reference/klausmate-viewer-parity.md: Copy / Copy Selection as Image / Highlight / note items / Remove Highlight / Copy Page Text / Copy Slide as Image / separator / Zoom In-Out-Actual with key hints. Items disable rather than hide; floats on the sanctioned 16px shadow.
-
 ### KB-015: Sticky notes on highlights
 owner: -
 priority: P3
@@ -131,6 +123,30 @@ Check in a running Klausbook window, with a PDF open on the stage: Cmd+= / Cmd+-
 ## Ready
 
 ## Doing
+
+### KB-013: Context menu parity in the PDF editor
+owner: worker-kb013
+priority: P2
+tags: parity
+files: extensions/klaus-pdf/webview-src/ContextMenu.tsx,extensions/klaus-pdf/webview-src/ImpressView.tsx,extensions/klaus-pdf/webview-src/highlights.ts,extensions/klaus-pdf/webview-src/notesStore.ts,extensions/klaus-pdf/webview-src/viewer.css,tests/highlights_test.mjs
+verify: node --test tests/highlights_test.mjs tests/shortcuts_test.mjs && python3 tests/test_notes.py && (cd extensions/klaus-pdf && npx tsc --noEmit)
+created: 2026-09-17
+claimed: 2026-09-18
+
+Per docs/reference/klausmate-viewer-parity.md's 'Context menu (exact order)' section. Scope, deliberately narrowed to what's buildable without new infrastructure (see Out of scope below):
+
+Menu, right-click on the stage (not the filmstrip): Copy · Highlight · [ink swatch row: five klausmate inks, klicking recolors the highlight under the cursor if any] · Remove Highlight · ─── · Zoom In (Cmd+=) · Zoom Out (Cmd+-) · Actual Size (Cmd+0).
+
+Acceptance criteria:
+1. Right-click on the stage opens a floating menu at the cursor (16px shadow per parity spec's sanctioned exception), closes on Escape / click-outside / an item firing.
+2. 'Copy' disabled when there is no live selection, else copies selected text (execCommand or Clipboard API) and closes the menu.
+3. 'Highlight' disabled when there is no live selection; when enabled, does exactly what Cmd+Shift+H already does (reuse ImpressView's highlightSelection, do not duplicate it).
+4. Right-clicking ON an existing highlight (hit-test its rects) enables 'Remove Highlight' and shows the five-ink swatch row (klausmate's HIGHLIGHT_INKS via highlights.ts) with the highlight's current ink marked selected; clicking a swatch updates that highlight's color in place. Right-clicking elsewhere disables both and hides the swatch row.
+5. 'Remove Highlight' deletes the highlight from the notes store (new notesStore.removeHighlight / updateHighlightColor, alongside the existing addHighlight) and re-renders without it.
+6. Zoom In / Zoom Out / Actual Size call the same handlers the toolbar buttons already use (reuse, do not duplicate the zoom ladder in shortcuts.ts).
+7. Items disable rather than disappear (parity spec rule) — verify by right-clicking with no selection and confirming Copy/Highlight render greyed-out, not absent.
+
+Out of scope (do not attempt): 'Copy Selection as Image' / 'Copy Page Text' / 'Copy Slide as Image' (klausmate's marquee-select and page-image-capture do not exist in KlausBook yet); 'Add note…/Edit note…' (KB-015, sticky notes, not built yet). Leave these out of the menu entirely rather than adding disabled placeholders for unbuilt features.
 
 ## Review
 
@@ -232,3 +248,27 @@ Per docs/reference/klausmate-viewer-parity.md. Acceptance: (1) selecting text on
 - [2026-09-17 orchestrator] Spec landed: docs/reference/klausmate-viewer-parity.md (full inventory of klausmate's viewer with exact colors/strings/shortcuts). This card's scope is now the highlight flow: selection -> Cmd+Shift+H / context-menu Highlight, five inks (#FADC50 default, #8AE08C, #7FC6F2, #F79AC8, #F7B267) at 43% alpha, one record per page, stored in the klaus-core notes doc. Sliced follow-ups: KB-013 context menu, KB-014 find bar, KB-015 sticky notes, KB-016 shortcuts+toasts.
 - [2026-09-17 fable] Decisions: doc ownership lifted into notesStore.ts (useNotesDoc) so notes + highlights share ONE serialized save pipeline - no second writer; highlight geometry is a pure module (highlights.ts) node-tested like shortcuts.ts; rects stored scale-1 page coords, clipped/deduped/sliver-dropped. Files: highlights.ts, notesStore.ts, ImpressView.tsx, NotesSidebar.tsx, PdfPage.tsx, core.ts, shortcuts.ts, viewer.css, tests/highlights_test.mjs, tests/shortcuts_test.mjs, core/klaus_core/notes.py, tests/test_notes.py. Risks: none known - E2E verified in browser harness (create at rgba(250,220,80,0.43), both toasts, selection clears, server persists, survives reload, re-projects across zoom). Next: delete + ink picker are KB-013; sticky notes KB-015; bake reads highlights from this store (KB-002).
 - [2026-09-17 orchestrator] Sign-off: gate green (12 node + 28 py checks, tsc clean), E2E verified incl. reload + zoom re-projection. Done.
+
+### KB-020: klaus-core: port embeddings.py (OpenAI provider, aqt-free)
+owner: worker-kb020
+priority: P2
+tags: sonnet-safe
+files: core/klaus_core/embeddings.py,tests/test_embeddings.py
+verify: python3 tests/test_embeddings.py
+created: 2026-09-18
+claimed: 2026-09-18
+
+Slice of KB-004 (first real seam — see grooming note there). Port klausmate/embeddings.py verbatim-in-spirit into core/klaus_core/embeddings.py: OpenAIEmbeddings class, normalize(), embed_batches(), index_signature()/signature_matches(), EmbeddingError. Source is aqt-free and stdlib-only already (confirmed 2026-09-18: only imports math/threading/array/typing at module level; the actual HTTP call is injected, not imported at top) — port its shape faithfully rather than redesigning it. It needs an HTTP call to OpenAI's embeddings endpoint (see klausmate/openai_client.py's embed() function, ~line 101, stdlib urllib — port only what embeddings.py actually calls, not the whole file's transcribe() half).
+
+Acceptance criteria:
+1. core/klaus_core/embeddings.py exports the same public shape as klausmate's version (OpenAIEmbeddings, normalize, embed_batches, index_signature, signature_matches, EmbeddingError) with klaus-core's existing conventions (from __future__ import annotations, no aqt/PyQt import anywhere).
+2. API key comes from an env var (KLAUS_OPENAI_KEY or similar — pick one and document it in the module docstring), not hardcoded, not required to be set for the module to import cleanly.
+3. embed_batches() produces unit-normalized vectors (dot product = cosine similarity) — port normalize()'s exact math, don't reimplement.
+4. Tests use a fake/injected HTTP layer (mirror the GetConfig-callable pattern already in the source — do NOT make real network calls in tests).
+5. No new third-party dependency — stdlib urllib only, matching the source.
+
+Explicitly out of scope (separate seams, do not attempt): pdf_index.py's chunking/packed-array storage, the /search HTTP endpoint, wiring this into app.py. KB-004 (edited) now covers only that remainder, depends on this card.
+
+#### Comments
+- [2026-09-18 worker-kb020] Decisions: ported OpenAIEmbeddings/normalize()/embed_batches()/index_signature()/signature_matches()/EmbeddingError from klausmate/embeddings.py, plus the embed() HTTP call from klausmate/openai_client.py, inlined into one module since file scope is just embeddings.py+test (no separate openai_client.py). Dropped the Klaus Plus (plus.py) branch and multi-provider DEFAULT_MODELS dict as out of scope/nonexistent in klaus-core — OpenAI is the only provider here, matching KB-020's acceptance criteria. API key env var: KLAUS_OPENAI_KEY (read in default_config(), unset is valid at import and only errors on .embed() with status=401). HTTP call uses a module-level _urlopen = urllib.request.urlopen alias (same seam openai_client.py used) so tests monkeypatch it instead of hitting the network; GetConfig stays a plain injected callable per the source's pattern. Files: core/klaus_core/embeddings.py (new), tests/test_embeddings.py (new). Risks: check the one-retry-on-429/5xx logic in _post_json and the dimensions-gating in _dimensions_for (DIMENSION_CAPABLE_MODELS) hardest — both are faithful ports of openai_client._request/embed but now live inlined in this file, so a future openai_client.py upstream change won't auto-sync here. Next: KB-004 wires this into app.py/an endpoint and covers pdf_index.py chunking — not attempted here, out of scope.
+- [2026-09-18 orchestrator] Sign-off: verified independently, not just the worker's self-report — re-ran python3 tests/test_embeddings.py (0 failures), AST-scanned embeddings.py to confirm stdlib-only imports, re-ran test_notes.py/test_board.py to confirm no regression, and diffed the port against klausmate/embeddings.py + openai_client.py line-by-line. normalize()/embed_batches()/index_signature()/signature_matches() are faithful ports; the Klaus-Plus branch (plus.active/patch_config/alternate endpoints) was correctly dropped as out of scope rather than half-ported; API key is env-var only, never logged. One note for later, not filed as a card: the HTTP retry logic (_post_json) is now a second copy of openai_client.py's _request — if klausmate's retry/backoff behavior changes, this port won't follow automatically. Done.
