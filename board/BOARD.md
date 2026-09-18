@@ -86,9 +86,13 @@ viewer.css uses a fixed dark palette; key it off --vscode-editor-background/-for
 owner: -
 priority: P2
 tags: design,needs-human
+files: klausmate/theme.py,DESIGN.md,tests/test_theme.py,docs/reference/design-tokens.json
 created: 2026-09-17
 
 Pouya wants klausmate (inside Anki) and KlausBook to look almost identical, with Obsidian as the shared north star (dark-first, sidebar file-tree feel, quiet chrome, one accent family). klausmate's Quiet Clinic palette (KlausMate-Context/DESIGN.md) keeps its token discipline but the palette direction is superseded. This is addon-side work in the klausmate repo: theme.py palette swap + DESIGN.md rewrite + test_theme.py scale updates. Coordinate tokens with KlausBook's extensions/klaus-pdf/webview-src/viewer.css so the two stay in lockstep.
+
+#### Comments
+- [2026-09-18 orchestrator] Shared tokens file landed 2026-09-18: docs/reference/design-tokens.json (canonical here, byte-identical copy at the same path in KlausMate-Context — run scripts/check-token-sync.sh after editing either). This card's job is now literal: make theme.py's palette() emit tokens.colors.{dark,light} exactly, rewrite DESIGN.md's frontmatter to match, and update test_theme.py's scale checks to the new hex values. HIGHLIGHT_INKS is already synced and now has a real test (tests/test_theme.py 'design-tokens.json sync' section) instead of being two independent hand-copies.
 
 ### KB-013: Context menu parity in the PDF editor
 owner: -
