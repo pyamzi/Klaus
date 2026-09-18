@@ -8,6 +8,7 @@ import {
   DEFAULT_INK,
   HIGHLIGHT_ALPHA,
   HIGHLIGHT_INKS,
+  highlightAt,
   rgba,
   selectionRects,
 } from "../extensions/klaus-pdf/webview-src/highlights.ts";
@@ -64,4 +65,12 @@ test("rgba paints an ink at the klausmate alpha", () => {
   assert.equal(rgba("#FADC50", 110 / 255), `rgba(250, 220, 80, ${110 / 255})`);
   // Bad hex falls back to the default ink instead of an invalid color string.
   assert.equal(rgba("nope", 0.5), "rgba(250, 220, 80, 0.5)");
+});
+
+test("highlightAt hit-tests page-space points, topmost (last) wins on overlap", () => {
+  const a = { id: "a", rects: [[0, 0, 100, 20]], color: DEFAULT_INK };
+  const b = { id: "b", rects: [[10, 5, 50, 10]], color: DEFAULT_INK };
+  assert.equal(highlightAt([a, b], 20, 8)?.id, "b"); // inside both: b renders on top
+  assert.equal(highlightAt([a, b], 5, 2)?.id, "a"); // only a covers this point
+  assert.equal(highlightAt([a, b], 500, 500), undefined);
 });

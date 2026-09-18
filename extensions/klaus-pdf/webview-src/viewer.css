@@ -457,3 +457,73 @@ body,
 .highlight-rect {
   position: absolute;
 }
+
+/* ---------- Context menu (stage right-click) ---------- */
+
+/* The parity spec's second sanctioned shadow exception (the paper shadow
+   above is the first) — a floating menu, not chrome, so it gets one. */
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+}
+
+.context-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-normal);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu button:hover:not(:disabled) {
+  background: var(--veil-hover);
+}
+
+.context-menu button:active:not(:disabled) {
+  background: var(--veil-press);
+}
+
+.context-menu button:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.context-menu-separator {
+  margin: 4px 6px;
+  border-top: 1px solid var(--border);
+}
+
+.context-menu-swatches {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+/* Specificity has to beat ".context-menu button" (width/padding/radius),
+   which would otherwise stretch these into bars instead of dots. */
+.context-menu button.context-menu-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.context-menu button.context-menu-swatch.selected {
+  border-color: var(--accent);
+}

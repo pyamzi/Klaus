@@ -75,3 +75,22 @@ export function rgba(hex: string, alpha: number): string {
   const v = parseInt(m ? m[1] : DEFAULT_INK.slice(1), 16);
   return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`;
 }
+
+function containsPoint(rect: Rect, x: number, y: number): boolean {
+  const [rx, ry, rw, rh] = rect;
+  return x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
+}
+
+/**
+ * The highlight under a scale-1 page-space point (as the context menu's
+ * right-click hit-test uses), or undefined. Later entries render on top of
+ * earlier ones (see PdfPage's flatMap), so overlap resolves last-wins.
+ */
+export function highlightAt(highlights: Highlight[], x: number, y: number): Highlight | undefined {
+  for (let i = highlights.length - 1; i >= 0; i--) {
+    if (highlights[i].rects.some((r) => containsPoint(r, x, y))) {
+      return highlights[i];
+    }
+  }
+  return undefined;
+}

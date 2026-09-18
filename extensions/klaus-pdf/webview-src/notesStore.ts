@@ -14,6 +14,8 @@ export interface NotesStore {
   getDoc: () => NotesDoc | null;
   updatePage: (key: string, text: string) => void;
   addHighlight: (key: string, highlight: Highlight) => void;
+  removeHighlight: (key: string, id: string) => void;
+  updateHighlightColor: (key: string, id: string, color: string) => void;
 }
 
 /**
@@ -110,7 +112,36 @@ export function useNotesDoc(pdfId: string): NotesStore {
     [commit],
   );
 
+  const removeHighlight = useCallback(
+    (key: string, id: string) => {
+      const cur = docRef.current;
+      if (!cur) return;
+      const existing = cur.highlights ?? {};
+      commit({
+        ...cur,
+        highlights: { ...existing, [key]: (existing[key] ?? []).filter((h) => h.id !== id) },
+      });
+    },
+    [commit],
+  );
+
+  const updateHighlightColor = useCallback(
+    (key: string, id: string, color: string) => {
+      const cur = docRef.current;
+      if (!cur) return;
+      const existing = cur.highlights ?? {};
+      commit({
+        ...cur,
+        highlights: {
+          ...existing,
+          [key]: (existing[key] ?? []).map((h) => (h.id === id ? { ...h, color } : h)),
+        },
+      });
+    },
+    [commit],
+  );
+
   const getDoc = useCallback(() => docRef.current, []);
 
-  return { doc, loadError, status, getDoc, updatePage, addHighlight };
+  return { doc, loadError, status, getDoc, updatePage, addHighlight, removeHighlight, updateHighlightColor };
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import ContextMenu from "./ContextMenu";
 import FindBar from "./FindBar";
 import NotesSidebar from "./NotesSidebar";
 import PdfPage from "./PdfPage";
@@ -18,7 +19,7 @@ import {
 } from "./shortcuts";
 import { toast } from "./toast";
 import { countLabel, cycleIndex, findMatches, type Match, type PageText } from "./find";
-import { DEFAULT_INK, selectionRects, type RectLike } from "./highlights";
+import { DEFAULT_INK, highlightAt, selectionRects, type Highlight, type RectLike } from "./highlights";
 import { useNotesDoc } from "./notesStore";
 
 const THUMB_WIDTH = 140;
@@ -44,6 +45,9 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   const [pageDraft, setPageDraft] = useState("1");
   const pageInputRef = useRef<HTMLInputElement>(null);
   const [findOpen, setFindOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<
+    { x: number; y: number; hit: Highlight | null; hasSelection: boolean } | null
+  >(null);
   const [query, setQuery] = useState("");
   const [pageText, setPageText] = useState<PageText[] | null>(null);
   const [matches, setMatches] = useState<Match[]>([]);
@@ -85,6 +89,7 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     setError(null);
     setCurrent(1);
     closeFind();
+    setContextMenu(null);
     setPageText(null);
 
     (async () => {
@@ -126,6 +131,11 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   // The page field mirrors the slide unless the user is mid-edit.
   useEffect(() => {
     setPageDraft(String(current));
+  }, [current]);
+
+  // A context menu's hit-test is only valid for the slide it was opened on.
+  useEffect(() => {
+    setContextMenu(null);
   }, [current]);
 
   // Cmd+A: select the slide's own text layer, nothing else on the page.
@@ -170,6 +180,27 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
     selection?.removeAllRanges();
     toast("highlight added");
   }, [current, scale, addHighlight]);
+
+  // Right-click on the stage (not the filmstrip): open the context menu at
+  // the cursor, hit-testing the current slide's highlights to decide which
+  // variant to show (parity spec's "Context menu" section, narrowed — KB-013).
+  const handleContextMenu = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const stage = stageRef.current;
+      const pageEl = stage?.querySelector(`.pdf-page[data-page="${current}"]`);
+      let hit: Highlight | null = null;
+      if (pageEl) {
+        const pageRect = pageEl.getBoundingClientRect();
+        const highlights = notes.doc?.highlights?.[String(current)] ?? [];
+        hit = highlightAt(highlights, (e.clientX - pageRect.left) / scale, (e.clientY - pageRect.top) / scale) ?? null;
+      }
+      const selection = window.getSelection();
+      const hasSelection = Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
+      setContextMenu({ x: e.clientX, y: e.clientY, hit, hasSelection });
+    },
+    [current, scale, notes.doc],
+  );
 
   // Page text is only needed once someone searches, and it costs a pass over
   // the whole document — so load it on first open and keep it.
@@ -407,6 +438,11 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
   }
 
   const thumbScale = THUMB_WIDTH / baseSize.w;
+  // Shared by the toolbar buttons and the context menu's Zoom In/Out/Actual
+  // Size items, so both call the exact same zoom ladder — no duplicate copy.
+  const zoomInHandler = () => setScale(zoomIn);
+  const zoomOutHandler = () => setScale(zoomOut);
+  const actualSizeHandler = () => setScale(fitScale(baseSize));
   return (
     <div className="impress">
       <div className="filmstrip">
@@ -469,13 +505,13 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
             {doc.numPages}
           </span>
           <div className="viewer-zoom">
-            <button onClick={() => setScale(zoomOut)} title="Zoom out (Cmd+-)">−</button>
+            <button onClick={zoomOutHandler} title="Zoom out (Cmd+-)">−</button>
             <span>{Math.round(scale * 100)}%</span>
-            <button onClick={() => setScale(zoomIn)} title="Zoom in (Cmd+=)">+</button>
-            <button onClick={() => setScale(fitScale(baseSize))} title="Fit slide (Cmd+0)">Fit</button>
+            <button onClick={zoomInHandler} title="Zoom in (Cmd+=)">+</button>
+            <button onClick={actualSizeHandler} title="Fit slide (Cmd+0)">Fit</button>
           </div>
         </div>
-        <div className="stage" ref={stageRef}>
+        <div className="stage" ref={stageRef} onContextMenu={handleContextMenu}>
           <PdfPage
             key={`stage-${current}`}
             doc={doc}
@@ -487,6 +523,26 @@ export default function ImpressView({ pdfId, name }: ImpressViewProps) {
             highlights={notes.doc?.highlights?.[String(current)]}
           />
         </div>
+        {contextMenu && (
+          <ContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            hit={contextMenu.hit}
+            hasSelection={contextMenu.hasSelection}
+            onCopy={() => document.execCommand("copy")}
+            onHighlight={highlightSelection}
+            onRemoveHighlight={() => {
+              if (contextMenu.hit) notes.removeHighlight(String(current), contextMenu.hit.id);
+            }}
+            onSetColor={(color) => {
+              if (contextMenu.hit) notes.updateHighlightColor(String(current), contextMenu.hit.id, color);
+            }}
+            onZoomIn={zoomInHandler}
+            onZoomOut={zoomOutHandler}
+            onActualSize={actualSizeHandler}
+            onClose={() => setContextMenu(null)}
+          />
+        )}
       </div>
       <NotesSidebar pdfId={pdfId} page={current} store={notes} />
     </div>
