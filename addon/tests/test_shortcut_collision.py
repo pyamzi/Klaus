@@ -1,14 +1,21 @@
 """The assistant's shortcut must survive a focused PDF pane — and why
 Ctrl+Shift+A could not.
 
-Offscreen, on REAL widgets (the K-117 recipe: genuine PyQt6 behind an
-aqt.qt shim): a native PdfSidebar in a QDockWidget and one in the central
-layout of a QMainWindow — the Lecture-dock and Library-screen shapes — the
-real ``assistant_dock.setup()`` action installed on that window, and every
-chord sent through QTest so Qt's shortcut map runs BEFORE delivery, the
-order a platform key takes.
+Two halves. The SOURCE PINS run on every interpreter: the chord is read from
+``assistant_dock._ASSISTANT_SHORTCUT`` (importable under the aqt stubs
+alone) and its key is checked against both viewers' ShortcutOverride claim
+tables, so a rebind onto a pane-claimed chord, or ``Key_K`` joining a claim
+table, fails here even where PyQt6 is missing. The BEHAVIOURAL half needs
+genuine PyQt6 (the K-117 recipe: real widgets behind an aqt.qt shim) and
+SKIPs loudly without it, the way test_drive/test_assistant_dock/test_pdf_map
+do — never silently, and never as a no-op, since the pins above still gate.
 
-What it pins (the 2026-09-02 collision session; rulings ca2d30c, f0543b4):
+What the behavioural half pins (the 2026-09-02 collision session; rulings
+ca2d30c, f0543b4): a native PdfSidebar in a QDockWidget and one in the
+central layout of a QMainWindow — the Lecture-dock and Library-screen
+shapes — the real ``assistant_dock.setup()`` action installed on that
+window, every chord sent through QTest so Qt's shortcut map runs BEFORE
+delivery, the order a platform key takes.
 
 - Two live bindings on one chord go AMBIGUOUS: neither ``activated`` fires
   (the CLAUDE.md "host-window shortcut ambiguity" gotcha, pinned as Qt
@@ -20,11 +27,9 @@ What it pins (the 2026-09-02 collision session; rulings ca2d30c, f0543b4):
   runs instead. Not ambiguity, pre-emption; from the assistant's side the
   two look identical (silence).
 - The assistant's real action fires once with the pane focused and leaves
-  the viewer untouched. The press is DERIVED from ``_ASSISTANT_SHORTCUT``,
-  so a rebind is tested as itself: rebinding onto a pane-claimed chord, or
-  ``Key_K`` joining a viewer's claim table, fails here and nowhere else
-  (``test_assistant_dock`` pins the key's value and the QAction's shape,
-  not the behaviour).
+  the viewer untouched. The press is DERIVED from the constant, so a rebind
+  is tested as itself (``test_assistant_dock`` pins the key's value and the
+  QAction's shape, not the behaviour).
 
 Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_shortcut_collision.py
 """
@@ -41,12 +46,39 @@ from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
 
+# ---------------------------------------------------------------- source pins
+section("S. source pins — every interpreter, PyQt6 or not")
+assistant_dock = importlib.import_module("klausmate.assistant_dock")  # aqt stubs suffice
+CHORD = assistant_dock._ASSISTANT_SHORTCUT
+LETTER = CHORD.rsplit("+", 1)[-1]
+print(f"    assistant chord = {CHORD}")
+
+
+def _src(name):
+    with open(os.path.join(ROOT, "klausmate", name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+_native_src, _pdfjs_src = _src("pdf_viewer.py"), _src("pdfjs_viewer.py")
+check("the native viewer claims Ctrl+Shift+A in _match_shortcut_combo — the collision this suite exists for",
+      "Qt.Key.Key_A and shift" in _native_src)
+check(f"...and never names Key_{LETTER}: the assistant's chord is not in the native claim table",
+      re.search(rf"\bKey_{LETTER}\b", _native_src) is None)
+check("pdfjs_viewer claims Ctrl+Shift+A through ShortcutOverride exactly like the native viewer",
+      "(K.Key_A, ctrl | shift)" in _pdfjs_src)
+check(f"...and never names Key_{LETTER}: live over the pdf.js pane too (PyQt6-WebEngine cannot run "
+      "offscreen here, so the pdf.js side is source-pinned only)",
+      re.search(rf"\bKey_{LETTER}\b", _pdfjs_src) is None)
+
+# ---------------------------------------------------------------- real Qt
 try:
     from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
     from PyQt6.QtTest import QTest  # noqa: E402
-except Exception as exc:  # noqa: BLE001
-    print(f"SKIP: PyQt6 unavailable under this python ({exc}) — nothing here runs without widgets")
-    raise SystemExit(0)
+except Exception as _qt_e:  # noqa: BLE001
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — sections A–C, the behavioural "
+          "checks (ambiguity pin, both pane shapes, the control), did NOT run; only the source pins "
+          "above gate this suite here. Install PyQt6 for python3 to run them.")
+    raise SystemExit(report())
 
 # aqt.qt shim backed by the REAL PyQt6 (tests/test_drive.py's K-117 recipe).
 _shim = types.ModuleType("aqt.qt")
@@ -73,12 +105,10 @@ Qt = QtCore.Qt
 QShortcut = QtGui.QShortcut
 QKeySequence = QtGui.QKeySequence
 CTRL_SHIFT = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-
-CHORD = assistant_dock._ASSISTANT_SHORTCUT
 _combo = QKeySequence(CHORD)[0]
 CHORD_KEY, CHORD_MODS = _combo.key(), _combo.keyboardModifiers()
-print(f"PyQt6 {QtCore.PYQT_VERSION_STR} / Qt {QtCore.QT_VERSION_STR}; "
-      f"PDF_VIEWER_AVAILABLE={pdf_viewer.PDF_VIEWER_AVAILABLE}; assistant chord={CHORD}")
+print(f"    PyQt6 {QtCore.PYQT_VERSION_STR} / Qt {QtCore.QT_VERSION_STR}; "
+      f"PDF_VIEWER_AVAILABLE={pdf_viewer.PDF_VIEWER_AVAILABLE}")
 
 
 def pump(n=3):
@@ -165,6 +195,11 @@ pump()
 
 # ---------------------------------------------------------------- Part B
 section("B. real PdfSidebar in an mw-shaped host; the real assistant action on that host")
+if not pdf_viewer.PDF_VIEWER_AVAILABLE:
+    print("  SKIP: QtPdf/QtPdfWidgets missing from this PyQt6 — PdfSidebar builds no native viewer, "
+          "so sections B and C (the pane probes and the control) did NOT run.")
+    raise SystemExit(report())
+
 win = QtWidgets.QMainWindow()
 central = QtWidgets.QWidget()
 lay = QtWidgets.QVBoxLayout(central)
@@ -210,9 +245,11 @@ try:
           action is not None and action.shortcut() == QKeySequence(CHORD))
 
     def probe(sidebar, label):
-        viewer = sidebar._viewer
-        view = viewer._pdf_view
+        viewer = getattr(sidebar, "_viewer", None)
+        view = getattr(viewer, "_pdf_view", None)
         check(f"{label}: native QPdfView present", view is not None)
+        if view is None:
+            return
         hl = [s for s in view.findChildren(QShortcut) if s.key() == QKeySequence("Ctrl+Shift+A")]
         check(f"{label}: the viewer owns one WidgetWithChildren Ctrl+Shift+A QShortcut",
               len(hl) == 1 and hl[0].context() == Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -265,14 +302,5 @@ finally:
             print(f"    cleanup: {exc}")
     win.close()
     pump()
-
-# ---------------------------------------------------------------- Part D
-section("D. the pdf.js renderer's claim table (WebEngine cannot run offscreen here)")
-_letter = CHORD.rsplit("+", 1)[-1]
-_pdfjs_src = open(os.path.join(ROOT, "klausmate", "pdfjs_viewer.py"), encoding="utf-8").read()
-check("pdfjs_viewer claims Ctrl+Shift+A through ShortcutOverride exactly like the native viewer",
-      "(K.Key_A, ctrl | shift)" in _pdfjs_src)
-check(f"...and does not claim Key_{_letter} — the assistant's chord stays live over the pdf.js pane too",
-      re.search(rf"\bKey_{_letter}\b", _pdfjs_src) is None)
 
 raise SystemExit(report())
