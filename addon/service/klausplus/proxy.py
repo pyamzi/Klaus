@@ -61,7 +61,19 @@ def authenticate(request: Request, purpose_required: bool = True, require_active
         raise _err(426, "This Klaus is too old for Klaus Plus — update it from Tools → Add-ons.")
     auth = request.headers.get("Authorization", "")
     token = auth[7:].strip() if auth.startswith("Bearer ") else ""
-    row = store.customer_by_hash(keys.hash_key(token)) if keys.looks_like_key(token) else None
+    row = None
+    if keys.looks_like_key(token):
+        hashed = keys.hash_key(token)
+        # K-287: a key now comes from one of two places — the single legacy
+        # key_hash column on customers (/welcome, /recover — unchanged), or a
+        # per-device row in api_keys (issued by /v1/login, one per signed-in
+        # app so signing in on klausmate can't revoke KlausBook's session).
+        # Legacy is checked first since it's the hot path for existing users.
+        row = store.customer_by_hash(hashed)
+        if row is None:
+            row = store.customer_by_api_key_hash(hashed)
+            if row is not None:
+                store.touch_api_key(hashed, now)
     if row is None:
         raise _err(401, "Klaus Plus key not recognised — check it under KlausMate Preferences.")
     if require_active:

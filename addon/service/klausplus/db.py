@@ -46,6 +46,23 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   received_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  customer_id INTEGER UNIQUE NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  password_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_keys (
+  id INTEGER PRIMARY KEY,
+  customer_id INTEGER NOT NULL,
+  key_hash TEXT UNIQUE NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER,
+  revoked_at INTEGER
+);
 """
 
 USAGE_COLUMNS = ("embed_tokens", "audio_seconds", "judge_tokens", "assistant_tokens")
@@ -81,6 +98,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(customers)")}
     if "last_event_created" not in cols:
         conn.execute("ALTER TABLE customers ADD COLUMN last_event_created INTEGER")
+    if "reset_token_hash" not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN reset_token_hash TEXT")
+    if "reset_requested_at" not in cols:
+        conn.execute("ALTER TABLE customers ADD COLUMN reset_requested_at REAL")
 
 
 def month_key(now: float) -> str:
@@ -231,6 +252,86 @@ class Store:
         with self._lock:
             return self._c.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
 
+    # -- password reset (K-287) -------------------------------------------
+    # Same shape as claim_recovery/release_recovery/set_key_hash above, just
+    # aimed at the reset_requested_at/reset_token_hash columns instead of
+    # key_rotated_at/key_hash — one atomic claim so two /forgot-password
+    # requests in flight can't both pass the cooldown and both email a link.
+
+    def claim_password_reset(self, customer_id: int, now: float, cooldown_s: float) -> bool:
+        with self._lock:
+            cur = self._c.execute(
+                "UPDATE customers SET reset_requested_at = ? WHERE id = ? AND "
+                "(reset_requested_at IS NULL OR reset_requested_at < ?)",
+                (now, customer_id, now - cooldown_s))
+            return cur.rowcount == 1
+
+    def release_password_reset(self, customer_id: int, previous: Any, claimed_at: float) -> None:
+        with self._lock:
+            self._c.execute("UPDATE customers SET reset_requested_at = ? WHERE id = ? AND reset_requested_at = ?",
+                            (previous, customer_id, claimed_at))
+
+    def set_password_reset_token(self, customer_id: int, token_hash: str, now: float) -> None:
+        with self._lock:
+            self._c.execute("UPDATE customers SET reset_token_hash = ?, reset_requested_at = ? WHERE id = ?",
+                            (token_hash, now, customer_id))
+
+    def clear_password_reset(self, customer_id: int) -> None:
+        with self._lock:
+            self._c.execute("UPDATE customers SET reset_token_hash = NULL WHERE id = ?", (customer_id,))
+
+    def customer_by_reset_token_hash(self, token_hash: str, now: float, ttl_s: float) -> Any:
+        with self._lock:
+            return self._c.execute(
+                "SELECT * FROM customers WHERE reset_token_hash = ? AND reset_requested_at > ?",
+                (token_hash, now - ttl_s)).fetchone()
+
+    # -- accounts (K-287) ---------------------------------------------------
+    # One `users` row per customer (password set via the reset-token flow,
+    # never by bare email match — that path was a caught account-takeover
+    # hole). `api_keys` is one row per signed-in device/app, all pointing at
+    # the same customer, so klausmate signing in doesn't revoke KlausBook's
+    # session or vice versa — the entire point of a shared subscription.
+
+    def create_or_update_user(self, customer_id: int, email: str, password_hash: str, now: float) -> int:
+        # `cur.lastrowid` after ON CONFLICT DO UPDATE isn't trustworthy across
+        # sqlite3 driver versions -- read the row id back explicitly instead.
+        with self._lock:
+            self._c.execute(
+                "INSERT INTO users (customer_id, email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(customer_id) DO UPDATE SET email = excluded.email, password_hash = excluded.password_hash, "
+                "updated_at = excluded.updated_at",
+                (customer_id, email, password_hash, int(now), int(now)))
+            return int(self._c.execute("SELECT id FROM users WHERE customer_id = ?", (customer_id,)).fetchone()["id"])
+
+    def user_by_email(self, email: str) -> Any:
+        with self._lock:
+            return self._c.execute("SELECT * FROM users WHERE lower(email) = lower(?) ORDER BY id DESC", (email,)).fetchone()
+
+    def insert_api_key(self, customer_id: int, key_hash: str, label: str, now: float) -> int:
+        with self._lock:
+            cur = self._c.execute(
+                "INSERT INTO api_keys (customer_id, key_hash, label, created_at) VALUES (?, ?, ?, ?)",
+                (customer_id, key_hash, label, int(now)))
+            return int(cur.lastrowid)
+
+    def customer_by_api_key_hash(self, key_hash: str) -> Any:
+        with self._lock:
+            return self._c.execute(
+                "SELECT customers.* FROM api_keys JOIN customers ON api_keys.customer_id = customers.id "
+                "WHERE api_keys.key_hash = ? AND api_keys.revoked_at IS NULL", (key_hash,)).fetchone()
+
+    def touch_api_key(self, key_hash: str, now: float) -> None:
+        with self._lock:
+            self._c.execute("UPDATE api_keys SET last_used_at = ? WHERE key_hash = ? AND revoked_at IS NULL",
+                            (int(now), key_hash))
+
+    def revoke_api_key(self, key_hash: str, now: float) -> bool:
+        with self._lock:
+            cur = self._c.execute("UPDATE api_keys SET revoked_at = ? WHERE key_hash = ? AND revoked_at IS NULL",
+                                  (int(now), key_hash))
+            return cur.rowcount == 1
+
     # -- usage ------------------------------------------------------------
     def usage(self, customer_id: int, month: str) -> dict:
         with self._lock:
@@ -281,5 +382,10 @@ class Store:
             events = self._c.execute("DELETE FROM events WHERE received_at < ?", (int(cutoff),)).rowcount
             usage += self._c.execute("DELETE FROM usage WHERE customer_id IN (%s)" % doomed, (int(ended),)).rowcount
             audio += self._c.execute("DELETE FROM daily_audio WHERE customer_id IN (%s)" % doomed, (int(ended),)).rowcount
+            # K-287: users/api_keys reference customers.id with no FK cascade (SQLite
+            # FKs aren't enforced here) -- clear them before the customers row itself
+            # goes, or they'd orphan silently.
+            self._c.execute("DELETE FROM api_keys WHERE customer_id IN (%s)" % doomed, (int(ended),))
+            self._c.execute("DELETE FROM users WHERE customer_id IN (%s)" % doomed, (int(ended),))
             customers = self._c.execute("DELETE FROM customers WHERE " + _ENDED_BEFORE, (int(ended),)).rowcount
         return {"usage": usage, "daily_audio": audio, "events": events, "customers": customers}

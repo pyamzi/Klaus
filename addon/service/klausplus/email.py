@@ -34,6 +34,13 @@ def send_key_email(settings: Settings, to: str, key: str) -> bool:
     return send(settings, to, "Your Klaus Plus key", html)
 
 
+def send_reset_email(settings: Settings, to: str, url: str) -> bool:
+    html = (f"<p>Set a password for Klaus Plus so you can sign in from the app instead of pasting a key.</p>"
+            f"<p><a href=\"{url}\">Set your password</a></p>"
+            f"<p>This link works once and expires in an hour. If you didn't request it, ignore this email.</p>")
+    return send(settings, to, "Set your Klaus Plus password", html)
+
+
 def send_quota_notice(settings: Settings, to: str, purpose: str, human_line: str) -> bool:
     """I-5/spec D3: the 80%-of-quota notice. `purpose` and `human_line` are always
     fixed, code-controlled strings (a klausplus.meter purpose key and its human

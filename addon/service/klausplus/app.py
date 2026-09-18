@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import billing, pages, proxy
+from . import auth, billing, pages, proxy
 from .config import Settings, _truthy
 from .db import Store, connect
 from .upstream import FakeUpstream, Upstream
@@ -96,5 +96,6 @@ def create_app(settings: Settings | None = None, upstream: Any = None, now: Call
 
     app.include_router(proxy.router)
     app.include_router(billing.router)
+    app.include_router(auth.router)
     app.include_router(pages.router)
     return app

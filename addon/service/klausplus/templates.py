@@ -61,7 +61,8 @@ def landing(operator: str, monthly: str, yearly: str) -> str:
             f"<p>30 lecture hours, 3,000 judged cards and 200 assistant turns a month; embeddings included.</p>"
             f"<p><a class=\"btn\" href=\"/subscribe?plan=monthly\">{escape(monthly)} a month</a>"
             f"<a class=\"btn\" href=\"/subscribe?plan=yearly\">{escape(yearly)} a year</a></p>"
-            f"<p>Lost your key? <a href=\"/recover\">Recover it</a>.</p>")
+            f"<p>Lost your key? <a href=\"/recover\">Recover it</a>. "
+            f"Prefer signing in from the app? <a href=\"/forgot-password\">Set a password</a>.</p>")
     return _frame("Klaus Plus", body, operator)
 
 
@@ -72,7 +73,8 @@ def welcome(operator: str, key: str | None, emailed: bool, already: bool) -> str
     else:
         note = ("It was also emailed to you." if emailed else "No email was sent — save it now; it is shown only once.")
         body = (f"<h1>Welcome to Klaus Plus</h1><p>Your licence key:</p><p><code style=\"font-size:1.3em\">{escape(key or '')}</code></p>"
-                f"<p>{note}</p><p>Paste it in Anki under Tools → KlausMate Preferences → API keys &amp; models → Klaus Plus, then Save.</p>")
+                f"<p>{note}</p><p>Paste it in Anki under Tools → KlausMate Preferences → API keys &amp; models → Klaus Plus, then Save.</p>"
+                f"<p>Prefer signing in from the app instead? <a href=\"/forgot-password\">Set a password</a>.</p>")
     return _frame("Welcome to Klaus Plus", body, operator)
 
 
@@ -97,6 +99,40 @@ def recover_done(operator: str, email_enabled: bool, operator_email: str) -> str
         body = f"<h1>Recover your key</h1>{_recovery_by_email_line(operator_email)}"
         return _frame("Recover your Klaus Plus key", body, operator)
     return _frame("Recover your Klaus Plus key", "<h1>Check your inbox</h1><p>If that address has a subscription, a new key is on its way.</p>", operator)
+
+
+def forgot_password_form(operator: str, email_enabled: bool, operator_email: str) -> str:
+    if not email_enabled:
+        body = f"<h1>Set a password</h1>{_recovery_by_email_line(operator_email)}"
+        return _frame("Set your Klaus Plus password", body, operator)
+    body = ("<h1>Set a password</h1><p>Enter the email you subscribed with. We'll send a link to set a "
+            "password, so you can sign in from the app instead of pasting a key.</p>"
+            "<form method=\"post\" action=\"/forgot-password\"><input type=\"email\" name=\"email\" required "
+            "placeholder=\"you@example.com\"> <button class=\"btn\" type=\"submit\">Send the link</button></form>")
+    return _frame("Set your Klaus Plus password", body, operator)
+
+
+def forgot_password_done(operator: str, email_enabled: bool, operator_email: str) -> str:
+    if not email_enabled:
+        body = f"<h1>Set a password</h1>{_recovery_by_email_line(operator_email)}"
+        return _frame("Set your Klaus Plus password", body, operator)
+    return _frame("Set your Klaus Plus password",
+                  "<h1>Check your inbox</h1><p>If that address has a subscription, a link is on its way.</p>", operator)
+
+
+def reset_password_form(operator: str, token: str, error: str | None = None) -> str:
+    note = f"<p style=\"color:var(--accent)\">{escape(error)}</p>" if error else ""
+    body = (f"<h1>Set a password</h1>{note}"
+            f"<form method=\"post\" action=\"/reset-password\">"
+            f"<input type=\"hidden\" name=\"token\" value=\"{escape(token)}\">"
+            f"<input type=\"password\" name=\"password\" required minlength=\"8\" placeholder=\"New password\"> "
+            f"<button class=\"btn\" type=\"submit\">Set password</button></form>")
+    return _frame("Set your Klaus Plus password", body, operator)
+
+
+def reset_password_done(operator: str) -> str:
+    body = "<h1>Password set</h1><p>Sign in from the app with your email and new password.</p>"
+    return _frame("Klaus Plus", body, operator)
 
 
 def paywall(operator: str, message: str) -> str:
