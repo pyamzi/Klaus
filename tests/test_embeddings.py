@@ -177,6 +177,74 @@ check("5xx mentions overloaded",
       "overloaded" in embeddings.EmbeddingError("x", provider="OpenAI", status=503).user_message())
 check("no status falls back to the raw message",
       embeddings.EmbeddingError("just the message").user_message() == "just the message")
+check("402 mentions quota and the OpenAI-key fallback",
+      "quota" in embeddings.EmbeddingError("x", provider="Klaus Plus", status=402).user_message()
+      and "KLAUS_OPENAI_KEY" in embeddings.EmbeddingError("x", provider="Klaus Plus", status=402).user_message())
+check("426 mentions updating",
+      "update" in embeddings.EmbeddingError("x", provider="Klaus Plus", status=426).user_message())
+check("Klaus Plus 401 names KLAUS_PLUS_KEY, not the OpenAI var",
+      "KLAUS_PLUS_KEY" in embeddings.EmbeddingError("x", provider="Klaus Plus", status=401).user_message())
+
+print("== plus_key / plus_base ==")
+GOOD_PLUS_KEY = "kp_" + "a" * 32
+check("well-formed key accepted", embeddings.plus_key({"plus_key": GOOD_PLUS_KEY}) == GOOD_PLUS_KEY)
+check("missing key reads as empty", embeddings.plus_key({}) == "")
+check("wrong prefix rejected", embeddings.plus_key({"plus_key": "xx_" + "a" * 32}) == "")
+check("wrong length rejected", embeddings.plus_key({"plus_key": "kp_" + "a" * 31}) == "")
+check("uppercase hex rejected", embeddings.plus_key({"plus_key": "kp_" + "A" * 32}) == "")
+check("default base is klausmate.com", embeddings.plus_base({}) == "https://klausmate.com")
+check("configured base overrides, trailing slash stripped",
+      embeddings.plus_base({"plus_base": "https://example.test/"}) == "https://example.test")
+
+print("== OpenAIEmbeddings.embed routes through Klaus Plus when a key is set ==")
+orig_urlopen = embeddings._urlopen
+try:
+    captured = {}
+
+    def fake_plus_ok(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["auth"] = req.headers.get("Authorization")
+        captured["purpose"] = req.headers.get("X-klaus-purpose")  # urllib lower-cases header keys
+        captured["client"] = req.headers.get("X-klaus-client")
+        return FakeResponse({"data": [{"index": 0, "embedding": [1.0]}]})
+
+    embeddings._urlopen = fake_plus_ok
+    plus_provider = embeddings.OpenAIEmbeddings(lambda: {
+        "plus_key": GOOD_PLUS_KEY, "api_key_openai": "sk-should-not-be-used",
+    })
+    vectors = plus_provider.embed(["a"])
+    check("Plus-routed embed() returns the vector", vectors == [[1.0]])
+    check("posts to klausmate.com/v1/embeddings", captured.get("url") == "https://klausmate.com/v1/embeddings")
+    check("carries the Plus bearer key", captured.get("auth") == f"Bearer {GOOD_PLUS_KEY}")
+    check("X-Klaus-Purpose is embed", captured.get("purpose") == "embed")
+    check("X-Klaus-Client is klaus_core's own version", captured.get("client") == embeddings.__version__)
+
+    def fake_plus_401(req, timeout=None):
+        raise http_error(401, "bad key")
+
+    embeddings._urlopen = fake_plus_401
+    err3 = None
+    try:
+        plus_provider.embed(["a"])
+    except embeddings.EmbeddingError as e:
+        err3 = e
+    check("a rejected Plus key raises with provider=Klaus Plus",
+          err3 is not None and err3.provider == "Klaus Plus" and err3.status == 401)
+
+    check("a malformed Plus key falls through to the OpenAI path, not a doomed Plus request",
+          embeddings.plus_key({"plus_key": "not-a-real-key", "api_key_openai": ""}) == "")
+    fallback_provider = embeddings.OpenAIEmbeddings(lambda: {
+        "plus_key": "not-a-real-key", "api_key_openai": "",
+    })
+    err4 = None
+    try:
+        fallback_provider.embed(["a"])
+    except embeddings.EmbeddingError as e:
+        err4 = e
+    check("malformed Plus key + no OpenAI key -> the no-key error, not a network call",
+          err4 is not None and err4.status == 401 and "KLAUS_PLUS_KEY" in str(err4))
+finally:
+    embeddings._urlopen = orig_urlopen
 
 print("\n%d failures" % failures)
 sys.exit(1 if failures else 0)

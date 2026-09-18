@@ -1,15 +1,17 @@
 """Embedding provider for Klaus semantic search.
 
-Turns note/PDF text into unit vectors via OpenAI's embeddings API — the
-sole provider (ported from klausmate/embeddings.py, which also carries an
-unused Ollama/Voyage/Klaus-Plus history this port drops as out of scope).
+Turns note/PDF text into unit vectors via OpenAI's embeddings API. Two
+ways to reach it: a Klaus Plus subscription (KLAUS_PLUS_KEY) — the same
+metered, Stripe-billed proxy klausmate's plus.py talks to, so one
+subscription unlocks AI features in both apps — or your own OpenAI key
+(KLAUS_OPENAI_KEY) direct. A Plus key, when present, takes priority.
 
-aqt-free and stdlib-only: the API key comes from the KLAUS_OPENAI_KEY env
-var (never hardcoded, never required for the module to import cleanly),
-and the HTTP call goes through urllib only. ``_urlopen`` is a module-level
-alias — the same seam klausmate's openai_client.py used — that tests
-monkeypatch in place of hitting the network. Vectors are unit-normalized
-at creation time so downstream similarity is a plain dot product.
+aqt-free and stdlib-only: neither key is ever required for the module to
+import cleanly, and the HTTP call goes through urllib only. ``_urlopen``
+is a module-level alias — the same seam klausmate's openai_client.py used
+— that tests monkeypatch in place of hitting the network. Vectors are
+unit-normalized at creation time so downstream similarity is a plain dot
+product.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -24,7 +27,13 @@ import urllib.request
 from array import array
 from typing import Any, Callable, Iterator
 
+from . import __version__
+
 DEFAULT_MODEL = "text-embedding-3-large"
+# klausmate/plus.py's DEFAULT_BASE and key() contract, verbatim: keys.mint()
+# on the service is token_hex(16), so a well-formed key is always this shape.
+DEFAULT_PLUS_BASE = "https://klausmate.com"
+_PLUS_KEY_RE = re.compile(r"^kp_[0-9a-f]{32}$")
 
 # OpenAI's v3 embedding models are trained with Matryoshka Representation
 # Learning: the most significant components sit at the FRONT of the vector,
@@ -64,7 +73,12 @@ class EmbeddingError(Exception):
     def user_message(self) -> str:
         name = self.provider or "the embedding provider"
         if self.status in (401, 403):
-            return f"{name} rejected the embedding API key — check KLAUS_OPENAI_KEY."
+            env_var = "KLAUS_PLUS_KEY" if self.provider == "Klaus Plus" else "KLAUS_OPENAI_KEY"
+            return f"{name} rejected the embedding API key — check {env_var}."
+        if self.status == 402:
+            return "Klaus Plus quota reached for this month — set KLAUS_OPENAI_KEY to use your own key instead."
+        if self.status == 426:
+            return "This klaus-core is too old for Klaus Plus — update it."
         if self.status == 429:
             wait = f" in {int(self.retry_after)}s" if self.retry_after else " shortly"
             return f"{name} rate-limited the embedding request — try again{wait}."
@@ -76,15 +90,30 @@ class EmbeddingError(Exception):
 def default_config() -> dict:
     """The config `OpenAIEmbeddings` reads when no `get_config` is injected.
 
-    The API key comes from KLAUS_OPENAI_KEY — unset is valid (the module
+    Both keys come from env vars — unset is valid for either (the module
     still imports fine); it only becomes an error once `.embed()` is
-    actually called.
+    actually called and finds neither.
     """
     return {
         "api_key_openai": os.environ.get("KLAUS_OPENAI_KEY", ""),
+        "plus_key": os.environ.get("KLAUS_PLUS_KEY", ""),
+        "plus_base": os.environ.get("KLAUS_PLUS_BASE", "") or DEFAULT_PLUS_BASE,
         "embedding_model": DEFAULT_MODEL,
         "embedding_dimensions": DEFAULT_DIMENSIONS,
     }
+
+
+def plus_key(cfg: dict) -> str:
+    """A well-formed Klaus Plus key from `cfg`, or "" (klausmate/plus.py's
+    key() contract, verbatim: 'kp_' + 32 lowercase hex — keys.mint() on the
+    service is token_hex(16)). Anything else can only ever earn a 401, so
+    it reads as no key at all rather than a doomed request."""
+    k = str(cfg.get("plus_key") or "").strip()
+    return k if _PLUS_KEY_RE.match(k) else ""
+
+
+def plus_base(cfg: dict) -> str:
+    return (str(cfg.get("plus_base") or "").strip() or DEFAULT_PLUS_BASE).rstrip("/")
 
 
 def embedding_model(cfg: dict) -> str:
@@ -129,7 +158,8 @@ def signature_matches(provider: str, model: str, dims: int, signature: tuple) ->
 # --------------------------------------------------------------- HTTP call
 
 
-def _post_json(url: str, body: dict, headers: dict, timeout: float, what: str) -> dict:
+def _post_json(url: str, body: dict, headers: dict, timeout: float, what: str,
+                provider: str = "OpenAI") -> dict:
     """POST `body` as JSON, one retry on 429/5xx or a network blip."""
     data = json.dumps(body).encode("utf-8")
     last: EmbeddingError | None = None
@@ -156,46 +186,72 @@ def _post_json(url: str, body: dict, headers: dict, timeout: float, what: str) -
                 service_message = str((parsed.get("error") or {}).get("message") or "")
             except (ValueError, AttributeError):
                 service_message = ""
-            message = service_message or f"OpenAI {what} failed (HTTP {e.code}): {raw[:300] or e.reason}"
-            last = EmbeddingError(message, provider="OpenAI", status=e.code, retry_after=retry_after)
+            message = service_message or f"{provider} {what} failed (HTTP {e.code}): {raw[:300] or e.reason}"
+            last = EmbeddingError(message, provider=provider, status=e.code, retry_after=retry_after)
             if attempt == 0 and (e.code == 429 or e.code >= 500):
                 _sleep(min(retry_after or 2.0, 10.0))
                 continue
             raise last from e
         except urllib.error.URLError as e:
-            last = EmbeddingError(f"Could not reach OpenAI {what}: {e.reason}", provider="OpenAI")
+            last = EmbeddingError(f"Could not reach {provider} {what}: {e.reason}", provider=provider)
             if attempt == 0:
                 _sleep(2.0)
                 continue
             raise last from e
         except json.JSONDecodeError as e:
-            raise EmbeddingError(f"Invalid JSON from OpenAI {what}", provider="OpenAI") from e
+            raise EmbeddingError(f"Invalid JSON from {provider} {what}", provider=provider) from e
     raise last  # type: ignore[misc]
 
 
-def _embed_http(key: str, texts: list[str], model: str, dims: int,
-                 timeout: float = EMBED_TIMEOUT_S) -> list[list[float]]:
+def _embeddings_body(model: str, texts: list[str], dims: int) -> dict[str, Any]:
     body: dict[str, Any] = {"model": model, "input": list(texts)}
     if dims:
         body["dimensions"] = int(dims)
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
-    resp = _post_json(API_BASE + "/embeddings", body, headers, timeout, "embeddings")
+    return body
+
+
+def _parse_embeddings_response(resp: dict, texts: list[str], provider: str) -> list[list[float]]:
     data = resp.get("data")
     if not isinstance(data, list) or len(data) != len(texts):
         raise EmbeddingError(
-            f"OpenAI returned {len(data) if isinstance(data, list) else 'no'} embeddings "
+            f"{provider} returned {len(data) if isinstance(data, list) else 'no'} embeddings "
             f"for {len(texts)} inputs",
-            provider="OpenAI",
+            provider=provider,
         )
     out: list[list[float] | None] = [None] * len(texts)
     for item in data:
         i, vec = item.get("index"), item.get("embedding")
         if not isinstance(i, int) or not (0 <= i < len(texts)) or not isinstance(vec, list):
-            raise EmbeddingError("Malformed embedding item from OpenAI", provider="OpenAI")
+            raise EmbeddingError(f"Malformed embedding item from {provider}", provider=provider)
         out[i] = vec
     if any(v is None for v in out):
-        raise EmbeddingError("OpenAI response is missing embedding indices", provider="OpenAI")
+        raise EmbeddingError(f"{provider} response is missing embedding indices", provider=provider)
     return out  # type: ignore[return-value]
+
+
+def _embed_http(key: str, texts: list[str], model: str, dims: int,
+                 timeout: float = EMBED_TIMEOUT_S) -> list[list[float]]:
+    """Direct to OpenAI with the caller's own key."""
+    body = _embeddings_body(model, texts, dims)
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+    resp = _post_json(API_BASE + "/embeddings", body, headers, timeout, "embeddings", provider="OpenAI")
+    return _parse_embeddings_response(resp, texts, "OpenAI")
+
+
+def _embed_via_plus(key: str, base: str, texts: list[str], model: str, dims: int,
+                     timeout: float = EMBED_TIMEOUT_S) -> list[list[float]]:
+    """Through klausmate's Klaus Plus proxy — same request/response shape as
+    OpenAI's own API (klausplus/proxy.py's /v1/embeddings is a passthrough),
+    plus the three headers that route, authorize and version-gate the call."""
+    body = _embeddings_body(model, texts, dims)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {key}",
+        "X-Klaus-Purpose": "embed",
+        "X-Klaus-Client": __version__,
+    }
+    resp = _post_json(base + "/v1/embeddings", body, headers, timeout, "embeddings", provider="Klaus Plus")
+    return _parse_embeddings_response(resp, texts, "Klaus Plus")
 
 
 # --------------------------------------------------------------- providers
@@ -211,14 +267,21 @@ class OpenAIEmbeddings:
         if not texts:
             return []
         cfg = self._get_config() or {}
+        model, dims = embedding_model(cfg), _dimensions_for(cfg)
+
+        pkey = plus_key(cfg)
+        if pkey:
+            return _embed_via_plus(pkey, plus_base(cfg), texts, model, dims)
+
         key = str(cfg.get("api_key_openai") or "").strip()
         if not key:
             raise EmbeddingError(
-                "OpenAI API key is not set — set the KLAUS_OPENAI_KEY environment variable.",
+                "No embedding key is set — set KLAUS_PLUS_KEY for a Klaus Plus "
+                "subscription, or KLAUS_OPENAI_KEY for your own OpenAI key.",
                 provider="OpenAI",
                 status=401,
             )
-        return _embed_http(key, texts, embedding_model(cfg), _dimensions_for(cfg))
+        return _embed_http(key, texts, model, dims)
 
 
 def provider_from_config(get_config: GetConfig = default_config) -> OpenAIEmbeddings:
