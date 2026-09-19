@@ -29,7 +29,7 @@ transcription) are separate plans that build on this one's clean tree.
   concurrent worker's `verify:` at once. One session, one task after
   another, in the order below.
 - **Full test suite green between every task**, not just at the end:
-  `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+  `status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"`
   from the repo root (`/Users/pyamzi/Documents/Github/Klaus/KlausMate-Context`).
 - **After every `klausmate/*.py` edit**, verify syntax through the
   symlink Anki actually loads: `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`.
@@ -178,7 +178,7 @@ Expected: no output, exit 0.
 
 - [ ] **Step 4: Run the full suite**
 
-Run: `cd klausmate/.. && for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+Run: `cd klausmate/.. && status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"`
 Expected: every test passes. (`tests/test_api_first_config.py` may still
 reference `plus.py` itself, not just this file's use of it — if it fails
 here, note the failure and continue; Task 8 of this cluster fixes every
@@ -717,12 +717,15 @@ git commit -m "config: retire the klaus_plus_* keys through the standard migrati
 - Modify: `tests/test_index_queue.py`
 - Modify: `tests/test_lecture_recorder.py`
 - Modify: `tests/test_openai_client.py` (if it references `plus.Endpoint`)
+- Modify: `tests/test_setup_crop_theme.py`
+- Modify: `tests/test_klausmate.py`
+- Modify: `scripts/mutation_audit.py` (remove the deleted service sandbox input)
 
 **Interfaces:**
 - Consumes: Tasks 1-7's finished state.
-- Produces: a fully green test suite with zero references to `plus`,
-  `klaus_plus_*`, or Klaus-Plus-specific behavior anywhere under
-  `tests/`.
+- Produces: a fully green test suite with no obsolete Plus routing assertions.
+  Keep retirement/migration coverage, and keep `test_plus.py` and
+  `test_anthropic_client.py` until their modules are removed in Task 14.
 
 - [ ] **Step 1: Find every remaining reference**
 
@@ -746,9 +749,14 @@ appear:
 Do not guess which shape a given hit is — read the test body before
 deciding.
 
+Preserve migration tests that prove retired keys are scrubbed. Replace the
+recorder test's AST extraction of deleted `service/klausplus/proxy.py`
+with stdlib `wave` assertions for the real generated WAV header and
+duration. Remove the deleted service tree from the mutation sandbox inputs.
+
 - [ ] **Step 3: Run the full suite until it's fully green**
 
-Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done'`
+Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"'`
 
 Expected: every test file prints its section header and no failure output;
 the loop reaches the last file.
@@ -1283,7 +1291,7 @@ trim one fixture line that happens to set an now-removed field.
 
 - [ ] **Step 3: Run the full suite until fully green**
 
-Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done'`
+Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"'`
 
 - [ ] **Step 4: Compile the whole package one more time**
 
@@ -1654,7 +1662,7 @@ test.
 
 - [ ] **Step 5: Run the full suite until fully green**
 
-Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done'`
+Run: `PYTHONDONTWRITEBYTECODE=1 bash -c 'status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"'`
 
 Expected: every test file passes, loop reaches the end with no break.
 
