@@ -622,15 +622,6 @@ def install_menu() -> None:
     already populated menuTools by the time main_window_did_init fires,
     so insertAction against its current first action is what puts us
     ahead of Anki's own items rather than appending after them.
-
-    Task 11: the assistant's Tools entry is inserted right after
-    Preferences, reusing assistant_dock's OWN QAction
-    (assistant_dock.menu_action()) rather than building a second one —
-    that action already carries the Ctrl+Shift+K shortcut
-    (assistant_dock.setup(), called at import time below, alongside
-    _pdf_drive.setup()), so this never registers a second shortcut for
-    the same chord. menu_action() answers None if setup() has not run
-    (or Qt is unavailable) — skipped rather than forcing a stub action.
     """
     menu = mw.form.menuTools
     action = QAction("KlausMate Preferences…", mw)
@@ -640,18 +631,6 @@ def install_menu() -> None:
         menu.insertAction(existing_actions[0], action)
     else:
         menu.addAction(action)
-    try:
-        from . import assistant_dock
-
-        assistant_action = assistant_dock.menu_action()
-    except Exception as exc:
-        print(f"[klausmate] assistant menu action unavailable: {exc}")
-        assistant_action = None
-    if assistant_action is not None:
-        if existing_actions:
-            menu.insertAction(existing_actions[0], assistant_action)
-        else:
-            menu.addAction(assistant_action)
 
 
 # ------------------------------ PDF import -------------------------------
@@ -847,9 +826,9 @@ def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
     and expose ``set_recording(on, status)`` for their button/status text.
     ``sidebar`` is read live through closures (``get_page``), never
     snapshotted, so it must be the one PdfSidebar this recording is
-    scoped to (Notes for Task 5, item 4) — never
-    ``viewer_context.current()``, which follows whichever viewer was
-    activated last and could drift to a different PDF mid-lecture.
+    scoped to (Notes for Task 5, item 4). The endpoint's
+    ``viewer_context.current()`` follows the last activated viewer and
+    could drift to a different PDF mid-lecture.
     """
     from . import lecture_recorder
 
@@ -1860,41 +1839,8 @@ except Exception as _e:
     print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 
 
-def _stop_assistant_on_profile_close() -> None:
-    """Mirror of _start_assistant_endpoint (registered on profile_did_open,
-    below) — but ORDER matters here in a way it doesn't there: the dock's
-    own host (the child `claude` process) must close BEFORE the endpoint
-    it talks to goes down, never after, or a turn still in flight could
-    have its MCP tool call hit a connection that is already refused.
-
-    Registration order is the primary fix (gui_hooks fires listeners in
-    append order): this function's own .append() call, further down this
-    file, is deliberately placed AFTER assistant_dock.setup() — which
-    registers assistant_dock._teardown (the function that actually calls
-    dock.shutdown() -> self._host.close()) on this SAME hook — so
-    _teardown always fires first in the real profile-close pass.
-
-    This body is belt-and-braces on top of that, in case setup() itself
-    never ran (a guarded import failure at import time, say) or some
-    future edit reorders the two .append() calls again without noticing:
-    it calls _teardown() explicitly FIRST — the exact function setup()
-    would otherwise register, safe to call twice since it is a no-op once
-    _dock_instance is already None — then close_assistant() (a no-op by
-    then too, in the common case; kept as its own independent guarded
-    step), then stops the endpoint LAST, always.
-    """
-    try:
-        from . import assistant_dock
-
-        assistant_dock._teardown()
-    except Exception as exc:
-        print(f"[klausmate] assistant dock teardown (belt-and-braces) failed: {type(exc).__name__}: {exc}")
-    try:
-        from . import assistant_dock
-
-        assistant_dock.close_assistant()
-    except Exception as exc:
-        print(f"[klausmate] assistant dock close failed: {type(exc).__name__}: {exc}")
+def _stop_endpoint_on_profile_close() -> None:
+    """Stop Klaus's MCP/AnkiConnect endpoint when the profile closes."""
     try:
         from . import anki_endpoint
 
@@ -1971,15 +1917,11 @@ gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
 
 
-def _start_assistant_endpoint() -> None:
-    """Klaus's own AnkiConnect/MCP endpoint (anki_endpoint.py), bound for
-    the life of this profile — mw.col only exists once profile_did_open
-    fires, which is why this is a profile hook rather than the top-level
-    setup() call below (that one only needs mw, which exists earlier).
-    Guarded: a failed bind must not cost the rest of profile_did_open,
-    and the assistant dock already copes with anki_endpoint.current()
-    being None (chat still works, just without Anki tools — see
-    assistant_dock._on_init's mcp_ok branch)."""
+def _start_klaus_endpoint() -> None:
+    """Start Klaus's AnkiConnect/MCP endpoint (anki_endpoint.py), bound for
+    the life of this profile. mw.col only exists once profile_did_open
+    fires, which is why this is a profile hook.
+    Guarded: a failed bind must not cost the rest of profile_did_open."""
     try:
         from . import anki_endpoint
 
@@ -1988,7 +1930,7 @@ def _start_assistant_endpoint() -> None:
         print(f"[klausmate] assistant endpoint start failed: {type(exc).__name__}: {exc}")
 
 
-gui_hooks.profile_did_open.append(_start_assistant_endpoint)
+gui_hooks.profile_did_open.append(_start_klaus_endpoint)
 gui_hooks.editor_did_init.append(on_editor_did_init)
 if hasattr(gui_hooks, "browser_will_show"):
     gui_hooks.browser_will_show.append(on_browser_will_show)
@@ -2012,30 +1954,7 @@ try:
 except Exception as _e:
     print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
 
-# The assistant dock's Tools-menu action + Ctrl+Shift+K shortcut: a plain
-# QAction on mw, live regardless of profile state (see assistant_dock.setup's
-# own docstring), so — like _pdf_drive.setup() just above — this runs once
-# at import time rather than waiting on a profile hook. install_menu() is
-# only REGISTERED against main_window_did_init above (it fires later, once
-# Anki finishes constructing the main window) — so this synchronous call,
-# reached during the same module import, always completes first and
-# menu_action() already answers the real QAction by the time install_menu()
-# actually runs.
-try:
-    from . import assistant_dock
-
-    assistant_dock.setup()
-except Exception as _e:
-    print(f"[klausmate] assistant dock setup failed: {type(_e).__name__}: {_e}")
-
-# Registered here — AFTER assistant_dock.setup() above, not beside
-# _stop_assistant_on_profile_close's own definition further up this file
-# — on purpose: gui_hooks fires profile_will_close listeners in append
-# order, and setup() is what registers assistant_dock._teardown (closes
-# the child claude process) on this same hook. This ordering is what
-# makes the dock's host close before _stop_assistant_on_profile_close
-# stops the endpoint it talks to; see that function's own docstring.
-gui_hooks.profile_will_close.append(_stop_assistant_on_profile_close)
+gui_hooks.profile_will_close.append(_stop_endpoint_on_profile_close)
 
 # The index runner: profile teardown only. Everything else about it is
 # demand-driven (an import, the Library's button, a model change), so
