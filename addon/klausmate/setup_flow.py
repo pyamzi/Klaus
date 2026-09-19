@@ -29,7 +29,6 @@ from aqt.operations import QueryOp
 from aqt.qt import QMessageBox, QTimer
 from aqt.utils import showWarning, tooltip
 
-from . import plus
 from .manage_models import manage_models_dialog
 
 # The two provider keys, each described to the user in exactly ONE
@@ -114,8 +113,6 @@ def missing_keys(cfg: dict) -> list[str]:
     providers have the last word. It exists so the nudge says what it
     checked, nothing more.
     """
-    if plus.key(cfg):
-        return []
     return [k for k in KEY_COPY if not str((cfg or {}).get(k) or "").strip()]
 
 
