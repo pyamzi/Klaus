@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import threading
+import tempfile
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -514,9 +515,11 @@ def preview_sections(action: str, params: dict, similar: str | list | None = Non
 
 class Endpoint:
     def __init__(self, *, col_getter, run_on_main, approver, ctx_factory, version: str,
-                 approval_timeout: float = APPROVAL_TIMEOUT_S, read_timeout: float = READ_TIMEOUT_S) -> None:
+                 approval_timeout: float = APPROVAL_TIMEOUT_S, read_timeout: float = READ_TIMEOUT_S,
+                 discovery_path: str | None = None) -> None:
         self._col, self._main, self._approve, self._ctx = col_getter, run_on_main, approver, ctx_factory
         self.version = version
+        self._discovery_path = discovery_path
         self._approval_timeout, self._read_timeout = approval_timeout, read_timeout
         self._srv: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -525,14 +528,55 @@ class Endpoint:
         self.sessions: set[str] = set()
 
     def start(self) -> tuple[str, int, str]:
+        if self._srv is not None:
+            self.stop()
+        self.sessions.clear()
         self.token = secrets.token_hex(32)
         srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
         srv.daemon_threads = True
         self._srv = srv
         self.port = srv.server_address[1]
-        self._thread = threading.Thread(target=srv.serve_forever, name="klaus-endpoint", daemon=True)
-        self._thread.start()
+        try:
+            self._publish_discovery()
+            self._thread = threading.Thread(target=srv.serve_forever, name="klaus-endpoint", daemon=True)
+            self._thread.start()
+        except Exception:
+            srv.server_close()
+            self._srv = None
+            self._remove_discovery()
+            raise
         return "127.0.0.1", self.port, self.token
+
+    def _identity(self) -> dict:
+        return {"host": "127.0.0.1", "port": self.port, "token": self.token}
+
+    def _publish_discovery(self) -> None:
+        if self._discovery_path is None:
+            return
+        parent = os.path.dirname(os.path.abspath(self._discovery_path))
+        os.makedirs(parent, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix=".mcp-", dir=parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                json.dump(self._identity(), stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._discovery_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def _remove_discovery(self) -> None:
+        if self._discovery_path is None:
+            return
+        try:
+            with open(self._discovery_path, encoding="utf-8") as stream:
+                owned = json.load(stream) == self._identity()
+            if owned:
+                os.unlink(self._discovery_path)
+        except (OSError, ValueError):
+            pass
 
     def stop(self) -> None:
         if self._srv is not None:
@@ -542,6 +586,7 @@ class Endpoint:
             except Exception as exc:
                 print(f"[klausmate] endpoint stop: {exc}")
             self._srv = None
+        self._remove_discovery()
 
     def handle(self, action: str, params: dict, agent: bool) -> dict:
         from . import anki_tools
@@ -929,7 +974,7 @@ def _open_browse(query: str) -> None:
 def start_for_profile() -> Endpoint | None:
     global _LIVE
     from aqt import mw
-    from . import anki_tools
+    from . import anki_tools, USER_FILES
     stop_for_profile()
     try:
         version = str((mw.addonManager.addon_meta(__package__.split(".")[0]) or {}).get("human_version") or "")
@@ -939,7 +984,8 @@ def start_for_profile() -> Endpoint | None:
         c = anki_tools.default_ctx()
         c["open_browse"] = lambda q: mw.taskman.run_on_main(lambda: _open_browse(q))
         return c
-    end = Endpoint(col_getter=lambda: mw.col, run_on_main=_run_on_main_sync, approver=qt_approver, ctx_factory=ctx_factory, version=version)
+    end = Endpoint(col_getter=lambda: mw.col, run_on_main=_run_on_main_sync, approver=qt_approver, ctx_factory=ctx_factory, version=version,
+                   discovery_path=os.path.join(USER_FILES, "mcp_connection.json"))
     end.start()
     _LIVE = end
     print(f"[klausmate] endpoint on 127.0.0.1:{end.port}")

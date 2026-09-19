@@ -884,4 +884,43 @@ check("the viewer_context read happens inside a run_on_main hop, not on the HTTP
 check("the token is compared with hmac.compare_digest, not ==",
       "hmac.compare_digest" in _CODE and "import hmac" in _CODE)
 
+section("private discovery lifecycle")
+from pathlib import Path
+from unittest.mock import patch
+import stat
+
+with tempfile.TemporaryDirectory(prefix="klaus discovery ") as scratch:
+    discovery = Path(scratch) / "nested" / "connection.json"
+    def make_endpoint():
+        return ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main,
+                           approver=approver, ctx_factory=ctx_factory,
+                           version="test", discovery_path=str(discovery))
+    first = make_endpoint()
+    host1, port1, token1 = first.start()
+    check("discovery matches bound endpoint", json.loads(discovery.read_text()) ==
+          {"host": host1, "port": port1, "token": token1})
+    check("discovery mode is private", stat.S_IMODE(discovery.stat().st_mode) == 0o600)
+    second = make_endpoint()
+    second.start()
+    check("concurrent launch has fresh port and token", second.port != port1 and second.token != token1)
+    first.stop()
+    check("old stop preserves newer discovery", json.loads(discovery.read_text())["token"] == second.token)
+    previous_token = second.token
+    second.stop()
+    check("owner stop removes discovery", not discovery.exists())
+    second.start()
+    check("restart rotates token", second.token != previous_token)
+    second.stop()
+    failed = make_endpoint()
+    with patch.object(ep.os, "replace", side_effect=OSError("injected write failure")):
+        try:
+            failed.start()
+            check("publication failure propagates", False)
+        except OSError:
+            check("publication failure propagates", True)
+    check("failure leaves no partial discovery", not discovery.exists() and not list(discovery.parent.iterdir()))
+    with socket.socket() as probe:
+        check("publication failure closes bound socket", probe.connect_ex(("127.0.0.1", failed.port)) != 0)
+    failed.stop()
+
 raise SystemExit(report())
