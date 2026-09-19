@@ -162,6 +162,7 @@ check(
 _retired = ("assistant_reopen", "assistant_dock_width", "assistant_dock_open", "reasoning_model")
 _migration_store = _profile(**dict.fromkeys(_retired, "old-value"))
 _migration_store["library_root"] = "/fixture/library"
+_migration_store["_embed_key_setup_declined"] = True
 _migration_writes = []
 K.get_config = lambda: dict(_migration_store)
 def _save_migration(value):
@@ -173,7 +174,8 @@ K._migrate_config()
 check("all retired dock keys are absent from defaults and migrated profiles",
       all(k not in cfg and k not in _migration_store for k in _retired))
 check("migration preserves unrelated configuration",
-      _migration_store == dict(cfg, library_root="/fixture/library"))
+      _migration_store == dict(cfg, library_root="/fixture/library",
+                               _embed_key_setup_declined=True))
 check("retired keys cause exactly one migration write", len(_migration_writes) == 1)
 K._migrate_config()
 check("a second migration performs no write", len(_migration_writes) == 1)

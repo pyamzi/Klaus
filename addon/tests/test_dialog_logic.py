@@ -910,6 +910,26 @@ check("every one of the four fields is written by exactly one save_*",
       and _src2.count('cfg["api_key_anthropic"] = ') == 1
       and _src2.count('cfg["embedding_model"] = ') == 1
       and _src2.count('cfg["transcription_model"] = ') == 1)
+# Execute the actual closures with small widget/config fixtures.
+import textwrap as _textwrap
+import types as _types
+_api_fixture = {"api_key_anthropic": "fixture-key", "transcription_model": "fixture-model"}
+_api_writes = []
+_api_widgets = {"anthropic_key_edit": LineEdit(), "transcription_model_edit": LineEdit()}
+_api_namespace = dict(_api_widgets, _pkg=lambda: _types.SimpleNamespace(
+    get_config=lambda: dict(_api_fixture), write_config=lambda cfg: _api_writes.append(cfg)))
+exec(_textwrap.dedent(_fn_src("load_api_key_settings")), _api_namespace)
+exec(_textwrap.dedent(_save_api_key_settings_src), _api_namespace)
+_api_namespace["load_api_key_settings"]()
+check("API settings loads the saved Anthropic key into its field",
+      _api_widgets["anthropic_key_edit"].text() == "fixture-key")
+check("API settings loads the saved transcription model into its field",
+      _api_widgets["transcription_model_edit"].text() == "fixture-model")
+_api_widgets["anthropic_key_edit"].setText(" updated-key ")
+_api_widgets["transcription_model_edit"].setText(" updated-model ")
+_api_namespace["save_api_key_settings"]()
+check("API settings persists the edited fields through write_config",
+      _api_writes == [{"api_key_anthropic": "updated-key", "transcription_model": "updated-model"}])
 _sync_embed_src = _fn_src("sync_embed_widgets")
 check("load_api_key_settings runs INSIDE sync_embed_widgets' syncing guard — "
       "seeding a switch that is already true emits toggled, and outside "

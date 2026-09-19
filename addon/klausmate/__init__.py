@@ -175,7 +175,9 @@ def _migrate_config() -> None:
         if old in cfg:
             cfg.pop(old)
             changed = True
-            if old not in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email"):
+            if old not in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
+                           "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
+                           "reasoning_model"):
                 reset_embed_decline = True
     if changed:
         # 2026-09-16 (K-236): a profile that carried ANY retired key comes
@@ -184,7 +186,7 @@ def _migrate_config() -> None:
         # "no thanks" to an OPTIONAL key, and leaving it set silences the
         # ONE profile-open message saying Klaus now REQUIRES one — the
         # user's next signal would be a refusal tooltip on a drop. Klaus
-        # Plus retirement alone does not change the embedding-key regime,
+        # Plus or dock retirement alone does not change the embedding-key regime,
         # so it must preserve a decline made under the API-first regime.
         if reset_embed_decline:
             cfg.pop("_embed_key_setup_declined", None)
