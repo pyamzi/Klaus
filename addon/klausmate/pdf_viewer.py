@@ -4578,7 +4578,7 @@ class PdfSidebar(QWidget):
         return True
 
     def load_pdf(self, name: str) -> None:
-        from . import pdf_handler
+        from . import pdf_handler, viewer_context
         from . import USER_FILES  # type: ignore
 
         path = pdf_handler.pdf_path_for(USER_FILES, name)
@@ -4588,6 +4588,7 @@ class PdfSidebar(QWidget):
                     f"The raw PDF for '{name}' is not stored.\n"
                     "Re-add it via the editor's PDF panel or the Library to enable the viewer."
                 )
+            viewer_context.forget(id(self))
             self._name = None
             self._file_stat = None
             self._set_active(None)
@@ -4643,6 +4644,7 @@ class PdfSidebar(QWidget):
                 # record and put the stale text straight back on screen
                 # (K-276 review, measured). Same shape as the no-path branch
                 # above: forget the document, THEN refresh.
+                viewer_context.forget(id(self))
                 self._name = None
                 self._file_stat = None
                 self._set_active(None)

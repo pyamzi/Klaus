@@ -27,7 +27,8 @@ Prior counts above are historical ledger evidence, not additional final runs.
 
 ## Final verification
 
-Code revision tested: `63e11ce` plus the existing unstaged logo work in
+Code revision tested after K-297: base `aeef166` plus the failure-context fix
+and its new regression, together with the existing unstaged logo work in
 `klausmate/manage_models.py`, `klausmate/top_bar.py`, `klausmate/web/klaus-logo.svg`
 and `tests/test_top_bar.py`. Existing board changes and the brand SVG deletion
 also remained in the checkout. This is a combined working-tree result, not a
@@ -36,10 +37,10 @@ claim that the package exactly represents a clean committed tree.
 Ran every `tests/test_*.py` independently, without early break:
 
 ```sh
-env -u KLAUS_LIVE_API PYTHONDONTWRITEBYTECODE=1 python3 .superpowers/sdd/2026-09-19-local-model-integration/run_suite.py .superpowers/sdd/2026-09-19-local-model-integration/final-full
+env -u KLAUS_LIVE_API PYTHONDONTWRITEBYTECODE=1 python3 .superpowers/sdd/2026-09-19-local-model-integration/run_suite.py .superpowers/sdd/2026-09-19-local-model-integration/final-full-post-review
 ```
 
-Result: **50 files reached, 50 exit zero, 4,858 custom checks plus 35 unittest
+Result: **51 files reached, 51 exit zero, 4,880 custom checks plus 35 unittest
 cases, zero failures**. No test skip markers were emitted in this final run.
 The removed paid API smoke is not a current test file; paid APIs were not run.
 The runner supplies `QT_QPA_PLATFORM=offscreen`. No full-suite repeat followed
@@ -51,14 +52,16 @@ warnings appear, together with deliberately exercised failure diagnostics
 closed/deleted widgets, bad search and synthetic indexing failures). Existing
 incomplete-stub diagnostics include missing `get_config`, `addonManager` and
 `run_on_main` in the drive suite. These did not produce failed checks. Full logs
-remain under the ignored final-full directory; this report preserves counts.
+remain under the ignored final-full-post-review directory; this report preserves counts.
+The new Qt test also emitted the platform font-alias substitution warning.
 
 ```sh
 env PYTHONDONTWRITEBYTECODE=1 python3 scripts/mutation_audit.py --selftest
 ```
 
-Mutation **selftest** passed all three cases, 6 test-file executions; 198 working
-tree files hashed unchanged. This is not a full all-module mutation campaign.
+Before K-297, mutation **selftest** passed all three cases, 6 test-file executions; 198 working
+tree files hashed unchanged. This is not a full all-module mutation campaign. K-297 leaves the audit roster
+unchanged, so that selftest was not repeated.
 Recursive `py_compile` passed **105 Python files per path**, including vendored
 Python and `scripts/mcp_stdio_bridge.py`, for both the direct `klausmate/` tree
 and `/Users/pyamzi/Library/Application Support/Anki2/addons21/klausmate` symlink.
@@ -66,6 +69,26 @@ The symlink resolved to the current checkout. All bytecode went to a disposable
 temporary directory; `user_files/` was excluded. `git diff --check` is the final
 whitespace gate. The K-296 missing-report gate was observed RED (exit 1) before
 this report existed, then GREEN (`test -s`); no feature code changed in Task 2.
+
+### K-297 final review correction
+
+Both failed-load exits in [PdfSidebar.load_pdf](../../../klausmate/pdf_viewer.py)
+now forget only that sidebar in viewer_context. Previously, a missing PDF or
+two native load exceptions cleared sidebar state while current_page could
+still return the previous PDF text and image.
+[The new offscreen regression](../../../tests/test_current_page_load_failure.py)
+loads real scratch PDFs through the actual sidebar and calls the real MCP tool.
+It covers each failure both alone and with another healthy viewer: no previous
+text/image escapes, no remaining viewer yields `No active page`, and the other
+viewer remains readable. Behavioral RED was **9 passed, 12 failed**, exit 1;
+GREEN was **21 passed, 0 failed**, exit 0. Focused current_page and pdfjs_viewer
+gates also passed **11** and **340** checks. Only then was the aggregate above run.
+
+The preceding K-296 aggregate at `63e11ce` plus logo work remains historical
+evidence: **50 files, 4,858 custom checks and 35 unittest cases**, zero failures.
+The current aggregate adds 21 regression checks and one existing per-test-file
+bootstrap check in test_klausmate.py. Both recursive compile paths were repeated
+after the fix, with **105 Python files each** and scratch bytecode only.
 
 ### Per-file final results
 
@@ -85,6 +108,7 @@ this report existed, then GREEN (`test -s`); no feature code changed in Task 2.
 | `test_card_forge.py` | 60 checks passed |
 | `test_card_index.py` | 3 checks passed |
 | `test_current_page.py` | 11 checks passed |
+| `test_current_page_load_failure.py` | 21 checks passed |
 | `test_dashboard.py` | 58 checks passed |
 | `test_dialog_logic.py` | 128 checks passed |
 | `test_drive.py` | 361 checks passed |
@@ -93,7 +117,7 @@ this report existed, then GREEN (`test -s`); no feature code changed in Task 2.
 | `test_heatmap.py` | 142 checks passed |
 | `test_imports.py` | 53 checks passed |
 | `test_index_queue.py` | 150 checks passed |
-| `test_klausmate.py` | 405 checks passed |
+| `test_klausmate.py` | 406 checks passed |
 | `test_lecture_recorder.py` | 123 checks passed |
 | `test_lecture_view.py` | 122 checks passed |
 | `test_library_explorer.py` | 83 checks passed |
@@ -150,22 +174,24 @@ requested, still unstaged logo changes. Those source changes are not staged or
 committed by K-296.
 
 - Path: [dist/klausmate.ankiaddon](../../../dist/klausmate.ankiaddon)
-- Bytes: **1,406,834**
-- SHA256: `bf29d1c8ccb9afde90e3bfcd445005bfa42924312a9ef037856a5ffb302ccff4`
+- Bytes: **1,406,851**
+- SHA256: `36eec131bc98124800a5212ec9e05a3b0da94bb2d95dc4d4aa0afb29d4a75389`
 - Archive entries: **147**
-- Manifest `mod`: `1789854521`; `human_version`: `0.1.3`.
+- Manifest `mod`: `1789855021`; `human_version`: `0.1.3`.
 
-After the Task 2 punctuation review fix, the archive was rebuilt and its hash,
-size and manifest timestamp above refreshed. The full suite, compiles and audit
-were not repeated for this documentation-only change.
+After K-297, the archive was rebuilt and its hash, size and manifest timestamp
+above refreshed. The preceding punctuation-only build remains historical evidence:
+1,406,834 bytes, mod 1789854521, SHA256
+`bf29d1c8ccb9afde90e3bfcd445005bfa42924312a9ef037856a5ffb302ccff4`.
+That documentation-only rebuild did not repeat the full suite, compiles or audit.
 
 Independent `zipfile` inspection passed every required assertion: bridge,
 local_transcription and ollama_runtime present; all basename `meta.json*` excluded;
 `user_files/` contains only its directory entry and README; plus, pertinence,
 agent_host, assistant_dock, assistant_sessions, openai_client and anthropic_client
 absent. Also checked root `__init__.py`, no wrapper folder or bytecode, and byte
-identity of key modules, current logo files, packaged README/config and the storage
-README template. No package is uploaded or published.
+identity of all **133 archive files** against current source, including the fixed
+viewer, current logo files, packaged README/config and the storage README template. No package is uploaded or published.
 
 ## Documentation and link checks
 
@@ -289,4 +315,7 @@ Ignored workspaces retained under `.superpowers/sdd/`:
 holds `final-full/summary.json`, individual test logs, `final-audit.log`,
 `final-compile.json`, `final-package-build.log`, `final-package.json` and
 `task-2-report.md`. The tracked report preserves the results even when those
-local logs are unavailable to another checkout.
+local logs are unavailable to another checkout. K-297 adds
+`final-full-post-review/summary.json`, `final-review-red.log`,
+`final-compile-post-review.json`, `final-package-build-post-review.log`,
+`final-package-post-review.json` and `final-review-fix-report.md`.
