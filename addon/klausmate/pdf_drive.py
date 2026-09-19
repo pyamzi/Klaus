@@ -1031,21 +1031,6 @@ class DriveWindow(QWidget):
             map_btn.setToolTip(map_tip)
         map_btn.clicked.connect(self._open_map)
         header_row.addWidget(map_btn)
-        assistant_tip = "Klaus Assistant (Ctrl+Shift+K)"
-        # No "assistant" entry in library_explorer.KINDS today (that module
-        # belongs to another plan) — _glyph_action would only ever log a
-        # failure and fall back, so the check below skips straight to the
-        # K-117 text button rather than calling a path known to always
-        # fail. Written as a live capability check, not a version note, so
-        # this picks up a real glyph automatically the day one lands there.
-        assistant_btn = None
-        if library_explorer is not None and "assistant" in library_explorer.KINDS:
-            assistant_btn = self._glyph_action("assistant", assistant_tip, left)
-        if assistant_btn is None:
-            assistant_btn = QPushButton("Assistant", left)
-            assistant_btn.setToolTip(assistant_tip)
-        assistant_btn.clicked.connect(self._open_assistant)
-        header_row.addWidget(assistant_btn)
         lay.addLayout(header_row)
 
         self.tree = _LibraryTree(self, left)
@@ -2895,19 +2880,6 @@ class DriveWindow(QWidget):
             pdf_map.open_map_window(self)
         except Exception as exc:
             print(f"[klausmate] map open failed: {exc}")
-
-    def _open_assistant(self) -> None:
-        """Task 11: toggle the Claude Code assistant dock, same guarded-
-        import shape as _open_map above — a broken/missing assistant
-        module costs a log line, never the Library. The dock lives on
-        mw, not here, so this never builds or owns a widget; it only
-        asks assistant_dock to show or hide the one it manages."""
-        try:
-            from . import assistant_dock
-
-            assistant_dock.toggle_assistant()
-        except Exception as exc:
-            print(f"[klausmate] assistant open failed: {exc}")
 
     # --------------------------------------------------------- lifecycle
 
