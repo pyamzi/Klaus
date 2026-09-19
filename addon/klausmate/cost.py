@@ -13,14 +13,10 @@ from typing import NamedTuple
 PRICES: dict[str, tuple[float, float | None]] = {
     "text-embedding-3-large": (0.13, None),
     "text-embedding-3-small": (0.02, None),
-    "claude-sonnet-5": (2.0, 10.0),
-    "claude-opus-5": (5.0, 25.0),
     "gpt-4o-mini-transcribe": (0.003, None),   # per minute
     "gpt-4o-transcribe": (0.006, None),        # per minute
 }
 CHARS_PER_TOKEN = 4
-JUDGE_PROMPT_OVERHEAD_TOKENS = 350
-JUDGE_OUTPUT_TOKENS_PER_CARD = 40
 
 
 class Estimate(NamedTuple):
@@ -36,16 +32,6 @@ def estimate_embed(chars: int, model: str = "text-embedding-3-large") -> Estimat
     price_in, _ = PRICES[model]
     t = _tokens(chars)
     return Estimate(t, t / 1_000_000 * price_in)
-
-
-def estimate_judge(n_cards: int, page_chars_mean: int, card_chars_mean: int = 600,
-                   batch: int = 8, model: str = "claude-sonnet-5") -> Estimate:
-    price_in, price_out = PRICES[model]
-    n_batches = -(-max(0, int(n_cards)) // max(1, int(batch)))
-    per_batch_in = JUDGE_PROMPT_OVERHEAD_TOKENS + _tokens(page_chars_mean) + batch * _tokens(card_chars_mean)
-    tokens_in = n_batches * per_batch_in
-    tokens_out = max(0, int(n_cards)) * JUDGE_OUTPUT_TOKENS_PER_CARD
-    return Estimate(tokens_in + tokens_out, tokens_in / 1_000_000 * price_in + tokens_out / 1_000_000 * (price_out or 0.0))
 
 
 def estimate_transcribe(seconds: float, model: str = "gpt-4o-mini-transcribe") -> Estimate:
