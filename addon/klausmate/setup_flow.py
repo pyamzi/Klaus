@@ -275,11 +275,40 @@ def setup_readiness_check() -> None:
 import threading
 _profile_generation = 0
 _runtime_worker_lock = threading.Lock()
+_profile_runtime_cancel = threading.Event()
+
+
+def runtime_lifetime() -> tuple[int, threading.Event]:
+    """Capture on the main thread before scheduling profile-owned work."""
+    return _profile_generation, _profile_runtime_cancel
+
+
+def run_profile_runtime(
+    lifetime: tuple[int, threading.Event],
+    operation: Callable[[threading.Event], Any],
+) -> Any:
+    """Serialize startup and stale-worker cleanup across profile switches."""
+    generation, cancel = lifetime
+    with _runtime_worker_lock:
+        if cancel.is_set() or generation != _profile_generation:
+            return None
+        try:
+            result = operation(cancel)
+        finally:
+            # A helper can finish spawning while profile close sets cancel.
+            # Clean up before releasing the lock to the next profile, also
+            # when the old operation raises after starting its process.
+            if generation != _profile_generation:
+                from . import ollama_runtime
+                ollama_runtime.server_manager.stop()
+        return result if generation == _profile_generation else None
 
 
 def stop_local_runtime() -> None:
-    global _profile_generation
+    global _profile_generation, _profile_runtime_cancel
+    _profile_runtime_cancel.set()
     _profile_generation += 1
+    _profile_runtime_cancel = threading.Event()
     from . import ollama_runtime
     ollama_runtime.server_manager.stop()
 
@@ -287,7 +316,8 @@ def stop_local_runtime() -> None:
 def _readiness_after_library_root() -> None:
     from . import ollama_runtime
     cfg = _pkg().get_config()
-    generation = _profile_generation
+    lifetime = runtime_lifetime()
+    generation, _cancel = lifetime
 
     def save_endpoint(updated: dict) -> None:
         endpoint = updated["endpoint"]
@@ -296,22 +326,17 @@ def _readiness_after_library_root() -> None:
                 _pkg().patch_config({"endpoint": endpoint})
         mw.taskman.run_on_main(apply)
 
+    def start(_cancel: threading.Event) -> Any:
+        if cfg.get("runtime_auto_setup", True):
+            return ollama_runtime.ensure_server(dict(cfg), save_config=save_endpoint)
+        from .ollama_setup import ollama_reachable
+        return ollama_runtime.EnsureResult(
+            "reachable" if ollama_reachable(str(cfg.get("endpoint") or "http://127.0.0.1:11434")) else "failed",
+            str(cfg.get("endpoint") or "http://127.0.0.1:11434"),
+        )
+
     def work(_col: Any) -> Any:
-        with _runtime_worker_lock:
-            if generation != _profile_generation:
-                return None
-            if cfg.get("runtime_auto_setup", True):
-                result = ollama_runtime.ensure_server(dict(cfg), save_config=save_endpoint)
-            else:
-                from .ollama_setup import ollama_reachable
-                result = ollama_runtime.EnsureResult(
-                    "reachable" if ollama_reachable(str(cfg.get("endpoint") or "http://127.0.0.1:11434")) else "failed",
-                    str(cfg.get("endpoint") or "http://127.0.0.1:11434"),
-                )
-            if generation != _profile_generation:
-                ollama_runtime.server_manager.stop()
-                return None
-            return result
+        return run_profile_runtime(lifetime, start)
 
     def done(result: Any) -> None:
         if generation != _profile_generation or result is None:

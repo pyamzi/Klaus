@@ -29,7 +29,9 @@ embedding model. Enter a name under **Download model** and click **Pull** to
 download it; **Download progress** reports runtime and model transfers.
 **Delete** asks for confirmation. Models are stored by the configured Ollama
 server. Closing Preferences allows an active local operation to finish in the
-background. If starting the runtime chooses a free port, **Ollama endpoint**
+background. Closing the Anki profile cancels its runtime work and stops owned
+servers; the next profile waits for any late startup to be cleaned up.
+If starting the runtime chooses a free port, **Ollama endpoint**
 shows the new address; click **Save** to use it for subsequent indexing.
 
 - **embedding_model**: The model name in **Embedding model**, initially

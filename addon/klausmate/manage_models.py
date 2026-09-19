@@ -335,6 +335,9 @@ def manage_models_dialog(*_args: Any) -> None:
             pass  # a dead/half-torn-down window: fall through and rebuild
         _OPEN_DLG = None
 
+    from . import setup_flow
+    profile_lifetime = setup_flow.runtime_lifetime()
+    _generation, profile_cancel = profile_lifetime
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("KlausMate Preferences")
     dlg.setMinimumWidth(480)
@@ -2342,7 +2345,7 @@ def manage_models_dialog(*_args: Any) -> None:
         op.without_collection().run_in_background()
 
     def local_alive() -> bool:
-        return _OPEN_DLG is dlg and _dlg_alive()
+        return not profile_cancel.is_set() and _OPEN_DLG is dlg and _dlg_alive()
 
     def runtime_snapshot(endpoint: str) -> dict:
         from .ollama_client import OllamaClient
@@ -2385,14 +2388,14 @@ def manage_models_dialog(*_args: Any) -> None:
         runtime_status.setText(f"{action}… You can close Preferences; the operation continues.")
         runtime_progress.setRange(0, 0)
 
-        def work(_col: Any) -> tuple:
+        def perform(cancel_flag: threading.Event | None = None) -> tuple:
             from .ollama_client import OllamaClient
 
             result = None
             if action == "Install/start":
-                result = ollama_runtime.full_setup(cfg, on_progress=local_progress)
+                result = ollama_runtime.full_setup(cfg, on_progress=local_progress, cancel_flag=cancel_flag)
             elif action == "Update runtime":
-                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress)
+                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress, cancel_flag=cancel_flag)
             elif action == "Stop managed server":
                 if not ollama_runtime.server_manager.spawned_or_adopted():
                     raise RuntimeError("This server is external. Stop it in the application that started it.")
@@ -2406,8 +2409,15 @@ def manage_models_dialog(*_args: Any) -> None:
             actual_endpoint = result.endpoint if result is not None else endpoint
             return runtime_snapshot(actual_endpoint), actual_endpoint
 
-        def done(result: tuple) -> None:
-            if not local_alive():
+        def work(_col: Any) -> Any:
+            if profile_cancel.is_set():
+                return None
+            if action in ("Install/start", "Update runtime", "Stop managed server"):
+                return setup_flow.run_profile_runtime(profile_lifetime, perform)
+            return perform()
+
+        def done(result: tuple | None) -> None:
+            if result is None or not local_alive():
                 return
             snapshot, actual_endpoint = result
             runtime_state.update(owned=snapshot["owned"], update=snapshot["update"])

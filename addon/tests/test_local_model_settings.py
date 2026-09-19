@@ -114,7 +114,7 @@ def drain():
     while pending:
         pending.pop(0)()
     app.processEvents()
-def work():
+def launch_work():
     op = operations.pop(0)
     def run():
         try:
@@ -125,7 +125,9 @@ def work():
             pending.append(lambda: op.success(result))
     t = threading.Thread(target=run)
     t.start()
-    t.join()
+    return t
+def work():
+    launch_work().join()
 def button(text):
     return next((b for b in dlg.findChildren(QtWidgets.QPushButton) if b.text() == text), None)
 def save_preferences():
@@ -241,5 +243,94 @@ previous = (late_status.text(), late_progress.value())
 dlg.accept()
 drain()
 check('closed dialog ignores queued progress and failure', mm._OPEN_DLG is None and previous == (late_status.text(), late_progress.value()))
+# Runtime lifetime is profile scoped, including operations launched from
+# dialogs that have already closed. Exercise the real profile stop hook and
+# readiness coordinator with blocked fake runtime workers.
+sf = importlib.import_module('klausmate.setup_flow')
+sf.mw = mw
+sf.QueryOp = Op
+sf._first_run_dialog_shown_this_session = True
+sys.modules['aqt.gui_hooks'].profile_will_close = []
+store['runtime_auto_setup'] = True
+state['setup_error'] = False
+state['error'] = False
+
+def close_profile():
+    sf.stop_local_runtime()
+    for hook in list(sys.modules['aqt.gui_hooks'].profile_will_close):
+        if getattr(hook, '__name__', '') == '_on_profile_will_close':
+            hook()
+    drain()
+
+for action, helper, raises in [('Install/start', 'full_setup', False),
+                                ('Update runtime', 'update_runtime', False),
+                                ('Install/start', 'full_setup', True),
+                                ('Update runtime', 'update_runtime', True)]:
+    case = action + (' exception' if raises else '')
+    state.update(owned=True, version='old')
+    mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+    button('Refresh').click(); work(); drain()
+    entered, release, next_entered = threading.Event(), threading.Event(), threading.Event()
+    lifetime_events, cancellation = [], []
+    def stop():
+        lifetime_events.append('stop')
+        state['owned'] = False
+    rt.server_manager.stop = stop
+    original = getattr(rt, helper)
+    def delayed(cfg, cancel_flag=None, **kwargs):
+        cancellation.append(cancel_flag)
+        entered.set()
+        if not release.wait(3):
+            raise RuntimeError('test worker release timed out')
+        # Simulate a cancellation checkpoint racing with the final spawn.
+        lifetime_events.append('old spawn')
+        state['owned'] = True
+        if raises:
+            raise RuntimeError('Synthetic failure after late spawn')
+        return rt.EnsureResult('started', cfg['endpoint'])
+    setattr(rt, helper, delayed)
+    button(action).click()
+    old_worker = launch_work()
+    check(case + ' fake worker entered', entered.wait(2))
+    close_profile()
+    check(case + ' receives profile cancellation', bool(cancellation and cancellation[0] is not None and cancellation[0].is_set()))
+    def next_ensure(cfg, **kwargs):
+        lifetime_events.append('new spawn')
+        state['owned'] = True
+        next_entered.set()
+        return rt.EnsureResult('started', cfg['endpoint'])
+    rt.ensure_server = next_ensure
+    sf._readiness_after_library_root()
+    new_worker = launch_work()
+    check(case + ' next profile waits for old startup cleanup', not next_entered.wait(0.05))
+    release.set()
+    old_worker.join(3); new_worker.join(3)
+    drain()
+    check(case + ' late server cleaned before new profile starts',
+          lifetime_events == ['stop', 'old spawn', 'stop', 'new spawn'] and state['owned'])
+    setattr(rt, helper, original)
+
+# A queued old operation must never start after the next profile is active.
+for action in ('Install/start', 'Stop managed server', 'Update runtime'):
+    state.update(owned=True, version='old')
+    mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+    button('Refresh').click(); work(); drain()
+    button(action).click()
+    old_op = operations.pop(0)
+    close_profile()
+    sf._readiness_after_library_root(); work(); drain()
+    before = list(calls), list(lifetime_events)
+    operations.append(old_op)
+    work(); drain()
+    check('queued old ' + action + ' cannot affect next profile runtime',
+          before == (calls, lifetime_events) and state['owned'])
+
+# Ordinary dialog close does not invalidate this profile's install consent.
+state.update(owned=False, setup_error=False)
+mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+button('Install/start').click()
+dlg.accept()
+work(); drain()
+check('ordinary dialog close still permits same-profile background install', state['owned'])
 mw.close()
 raise SystemExit(report())
