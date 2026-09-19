@@ -2125,14 +2125,6 @@ def _fill_retention(graph: dict) -> None:
         # to the printed failure line rather than a crash.
         from . import retention
 
-        try:
-            from . import pertinence
-
-            user_files = retention.USER_FILES
-        except Exception:
-            pertinence = None
-            user_files = None
-
         edges = [e for e in graph.get("edges") or [] if isinstance(e, dict)]
         nids = {int(e["nid"]) for e in edges if "nid" in e}
         if not nids:
@@ -2153,16 +2145,8 @@ def _fill_retention(graph: dict) -> None:
             matches = by_pdf.get(safe)
             if not matches:
                 continue
-            rejected: set = set()
-            if pertinence is not None:
-                try:
-                    rejected = pertinence.rejected_nids(
-                        pertinence.load_judged(user_files, safe)
-                    )
-                except Exception as exc:
-                    print(f"[klausmate] map judged.json unreadable for {safe!r}: {exc}")
             stats = retention.pdf_retention(
-                matches, float(p.get("threshold") or 0.0), card_r, rejected=rejected
+                matches, float(p.get("threshold") or 0.0), card_r
             )
             p["retention"] = stats.get("retention")
     except Exception as exc:
