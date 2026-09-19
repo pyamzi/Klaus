@@ -769,7 +769,7 @@ Run: `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausm
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/
+git add tests/ scripts/mutation_audit.py
 git commit -m "tests: remove every Klaus Plus fixture and assertion — D1 clean"
 ```
 
