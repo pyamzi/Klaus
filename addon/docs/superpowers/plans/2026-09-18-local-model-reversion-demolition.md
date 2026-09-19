@@ -1578,6 +1578,7 @@ git commit -m "manage_models: delete the Assistant page and reasoning_model, kee
 - Delete: `tests/test_agent_host.py`
 - Delete: `tests/test_assistant_dock.py`
 - Delete: `tests/test_assistant_sessions.py`
+- Delete: `scripts/agent_spike.py` (orphaned development probe of the removed host)
 
 - Modify: `scripts/mutation_audit.py` (remove deleted module names from the audit roster)
 
