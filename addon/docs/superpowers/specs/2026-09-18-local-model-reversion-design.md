@@ -104,11 +104,14 @@ assistant-key entries (already-dead scrubbing, leave as-is). Delete the
 was already orphaned once D2 lands — remove it too, nothing reads it
 after the judge is gone).
 
-**`viewer_context.py` is kept, not deleted.** Its only consumer today is
-the dock being removed, but "what page is the user looking at" is
-exactly the kind of tool an external MCP client benefits from. D5 wires
-it into `anki_endpoint.py` as a new read-only tool (`get_current_page` or
-similar) rather than leaving it orphaned.
+**`viewer_context.py` is kept, not deleted.** The existing `current_view`
+tool in `anki_endpoint.py` already consumes it for PDF/page/selection
+metadata. D5 adds a read-only page-content tool (`get_current_page` or
+similar) for an external MCP client.
+
+**Identifier correction, 2026-09-19:** the existing class is `Endpoint`,
+not `AnkiEndpoint`; `current_view` already consumes `viewer_context`.
+Verified in [the retained endpoint](../../../klausmate/anki_endpoint.py).
 
 `page_store.py`'s `render_page_png`/page-text plumbing stays — D5's new
 tool reads through it the same way `assistant_dock._page_context` used
@@ -176,7 +179,7 @@ field at all for the local provider.
 
 Today: `ThreadingHTTPServer(("127.0.0.1", 0), ...)` binds an ephemeral
 port and mints a fresh 32-byte token on every Anki launch
-(`AnkiEndpoint.start()`). That's correct for a child process Klaus
+(`Endpoint.start()`). That's correct for a child process Klaus
 itself spawns and can hand the live values to on the command line — it
 is unusable for a static `claude_desktop_config.json` entry, which is
 written once and expected to keep working across restarts.

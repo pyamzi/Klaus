@@ -1,3 +1,5 @@
+> Superseded by [Local-model reversion](2026-09-18-local-model-reversion-design.md). Retained as historical design, not current implementation guidance.
+
 # API-first Klaus — design
 
 **Date:** 2026-09-15. **Asked by Pouya:** "forget about the local-only

@@ -1,5 +1,17 @@
 # CLAUDE.md — Addons repo / Klaus (klausmate)
 
+## Current architecture: local-model reversion
+
+The approved architecture is [the local-model reversion](docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
+As of 2026-09-19, D1-D3 have removed Klaus Plus, the pertinence judge and
+the embedded assistant. D4-D6 are approved and planned, not implemented:
+[local transcription](docs/superpowers/plans/2026-09-19-local-transcription.md),
+[managed Ollama embeddings](docs/superpowers/plans/2026-09-19-ollama-restoration.md),
+then [the external MCP bridge](docs/superpowers/plans/2026-09-19-external-mcp-bridge.md).
+Follow those plans for the rebuild. Older cloud-only designs are historical.
+The intermediate embedding and recording adapters still call OpenAI;
+do not describe the local replacements as available until implemented.
+
 The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
 matching (indexing a PDF tags every card it covers), a native
@@ -20,140 +32,24 @@ Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
 capability was semantic search, which defaulted then to the **Voyage**
 cloud embedding API, with a local Ollama alternative and OpenAI as a
 second cloud option — history as of 2026-09-15, when the API-first turn
-below cut that to OpenAI alone. Autocomplete, ⌘K Ask, the Klaus chat
+cut that to OpenAI alone. Autocomplete, ⌘K Ask, the Klaus chat
 panel, the Settings dialog, and the original Claude/Anthropic
 integration were all deleted then — if you find docs, comments, or
 instincts that assume THOSE surfaces still exist, they're stale. See
 AGENTS.md's "What used to be here".
 
-**Klaus grew a second AI capability starting 2026-09-01** (Pouya, that
-evening: "Wrap the Claude Code CLI, exactly like Claudian"), landing as
-six new modules overnight into 2026-09-02. One assistant, docked on
-Anki's main window (`assistant_dock.py`, shortcut `Ctrl+Shift+K`), whose
-engine is the **Claude Code CLI** running as a child process
-(`agent_host.py`) — no loop of Klaus's own, no assistant API key in
-Klaus's config, the user's own `claude` login and subscription pay for
-it. Its context
-is whatever the user is viewing in a Klaus PDF viewer — the current
-page's own record (`page_store.py`: the slide's text plus any transcript
-said over it) rendered to a PNG, and any selected text, tracked
-by `viewer_context.py` — attached to every turn. It reads the lecture
-library, searches and reads the user's notes, and can draft cards, every
-write behind Klaus's own approval dialog, all reached through Klaus's
-own localhost AnkiConnect-and-MCP server (`anki_endpoint.py`) rather
-than a dependency on the separate AnkiConnect add-on. Sessions persist
-per PDF (`assistant_sessions.py`). Design:
-`docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`;
-each module's one non-obvious rule is in the module map below.
-
-Pouya's original 2026-09-01 shape for that reversal — two assistants
-(one to query notes and the lecture-PDF index, one to draft cards from
-lecture material) behind a free/hosted split, four aqt-light layers, and
-**a deliberately undecided UI surface** — didn't ship: that same evening
-he converged it (Pouya: "remove the podcast multiple choice, just have
-the assistant, and make it work like Claudian, and it is basically
-viewing whatever we're viewing on the PDF viewer"). Deleted in the
-convergence, 2026-09-02: `llm_client.py` (`a494f2d`, the streaming
-transport), `entitlement.py` (`f1b330b`, the advisory tier check),
-`podcast.py` (`026eb36`, built and cut inside the same window), the
-Library's short-lived third-pane assistant-panel module this reversal's
-dock replaces (`fed3a33`, slot-guard patch `451a753`) — and its session
-store `assistant_session.py` (`1fcdba2`). Two of the original four
-layers survive, now WIRED rather than dormant:
-`card_forge.py` (`120293f`) stays available for batch card drafting
-outside the dock, and `anki_tools.py` (`e1c023c`, the collection tool
-layer, restored from `30847b9^`) is what `anki_endpoint.py` calls
-straight into for every read and write — its handlers untouched, only
-reused. Don't resurrect the two-assistant/hosted-tier language, and
-don't invent a second UI surface — this dock is the decided one.
-
-**Klaus went API-first on 2026-09-15** (Pouya: "forget about the
-local-only approach … an API-first approach to simplify everything").
-Two keys, both the user's own, both in Anki's addon config:
-`api_key_openai` embeds cards and lecture pages, `api_key_anthropic` is
-the reasoning key. There is no local engine left to install, start or
-update — `ollama_client.py`, `ollama_runtime.py`, `ollama_setup.py` and
-`page_ocr.py` were deleted that day, along with the Voyage and Ollama
-embedding providers, the "Local model library (Ollama)" Preferences
-page, and slide OCR (the PDF's own text layer plus the page image
-replace it). **The seam is the page**: one record per (PDF, page)
-holding the slide's text and what was said over it (`page_store.py`),
-ONE embedding vector per page (`pdf_index.py` v2 — no chunker inside a
-page any more), and the assistant reading that same record. Design:
-`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md`. **Plans 1
-and 2 of that spec are built; Plan 3 is not** — Plan 1 landed
-2026-09-15 (D1/D2/D3/D8: the page store, the two API clients,
-page-level vectors, cost estimates, Preferences, the config migration)
-and Plan 2 on 2026-09-17 (see the next paragraph). Plan 3 (the
-assistant moved onto the Anthropic Messages API, deleting
-`anki_endpoint.py` and the Claude Code child) is DESIGNED, NOT BUILT:
-don't document it as present and don't code against it. Today the
-assistant is still the Claude Code child described above — the only
-thing `api_key_anthropic` buys is the pertinence judge, never the
-assistant.
-
-**Plan 2 landed 2026-09-17** (K-252..K-259, spec D4/D5/D6): the page
-record grew a WRITER and the matching stack grew a JUDGE. Two new
-modules — `pertinence.py` (Claude decides whether a cosine-matched card
-is really about the page it matched) and `lecture_recorder.py` (mic
-audio in, transcript segments out) — plus phase four of the index
-chain, the `!Library::Doubtful` tag, confirmed-only retention and
-counts, ● Record on both docks, and a transcript strip under the page
-in both renderers. Each module's own entry is in the map below; the
-one shape to carry: **the page record is now written from two ends** —
-`pdf_handler.load_pages` seeds `slide_text` at import, the recorder
-appends `segments` as you speak — and everything downstream (the page
-vector, the assistant's context, the strip) reads that one record. The
-spec's D7 stays unbuilt, so `agent_host.py` is untouched by any of it.
-
-**Klaus Plus, 2026-09-16** (Pouya: "Instead of APIs, would it be
-possible to create a subscription system?"): a SECOND way to pay for the
-AI, not a second Klaus. **Free** is exactly the API-first turn above —
-the user's own `api_key_openai`/`api_key_anthropic`, their own bill,
-unmetered, unchanged. **Klaus Plus** is $12/month or $99/year (Pouya
-chose Fly.io and pays the AI bills; the orchestrator set the price and
-the quotas) for one `kp_` licence key instead of provider keys: Klaus
-sends the same request bodies to **its own service** — `service/` in
-this repo, FastAPI on one Fly Machine at `https://klausmate.com` (Pouya's
-domain, everything on the apex since 2026-09-17; `klausmate.fly.dev` is
-the same Machine),
-SQLite on a volume, Stripe for billing, Resend for the one welcome
-email — which holds Pouya's provider keys, relays to OpenAI and
-Anthropic, and counts. Per UTC month, no rollover: 30 lecture hours of
-audio, 3,000 judged cards (750,000 `judge` tokens at 250 a card),
-200 assistant turns (1,200,000 `assistant` tokens at 6,000 a turn),
-embeddings unmetered under a 20,000,000-token abuse ceiling; `past_due`
-works 3 days, `canceled` to `period_end`. Design:
-`docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md`.
-**The add-on holds no secret and gates nothing** — it ships as readable
-Python, so the ONLY gate is the service answering 401/402/426, and
-every "am I on Plus?" answer in `klausmate/` is a hint for wording, not
-an entitlement check. Three config keys, all in Anki's addon config and
-never in the repo: `klaus_plus_key`, `klaus_plus_cache` (the verdict
-cache) and `klaus_plus_base` (default `""` = the built-in
-`plus.DEFAULT_BASE`, shown as the field's placeholder, for a staging or
-self-hosted service). The surface is Preferences → **API keys & models**,
-where a "Klaus Plus" group sits ABOVE the keys — licence key
-(`EchoMode.Password`), a `plus.status_line` readout, and Subscribe… /
-Manage subscription… / **Check** (which refreshes the verdict on a
-background task) — and the provider-key rows are RECAPTIONED "not
-needed on Klaus Plus" while staying EDITABLE: never dimmed, never
-disabled, because the free tier has to be one deletion away. `service/`
-is a separate program, never shipped (`scripts/package.sh` stages only
-`klausmate/`, plus an explicit `--exclude 'service/'`); its deploy
-runbook is `service/README.md` and nothing in it belongs in the
-add-on. **Three of the four purposes are live since Plan 2**
-(2026-09-17): `embed` from `embeddings.py`, `transcribe` from
-`lecture_recorder.Uploader._one`, and `judge` from
-`pertinence.ensure_judged` — each reaching the service through
-`plus.endpoint(cfg, <purpose>)` with no provider key. Only `assistant`
-is still plumbing without a caller, and it stays that way until the
-API-first spec's Plan 3 lands. A metered call's own 2xx response is
-also a fresh quota reading: both clients take an `on_headers` callback
-(K-252), and the two metered callers pass
-`plus.note_quota(cfg, h, patch_config)` on the Plus path, so
-Preferences' `status_line` catches up from real traffic rather than
-only from **Check**.
+**Historical architecture, updated 2026-09-19:** the 2026-09-01 assistant
+became a Claude Code dock on 2026-09-02. The API-first turn on 2026-09-15
+introduced cloud embeddings and page records; its second plan added
+recording and a pertinence judge on 2026-09-17. Klaus Plus was a separate
+billing/proxy service. Those designs are superseded by the local-model
+reversion linked above. D1-D3 have removed the service, judge, dock,
+process host and session store. Page records, recording, collection tools,
+`anki_endpoint.py` and `viewer_context.py` remain. The cloud assistant
+Plan 3 was never built and is not pending work. Historical specs:
+[assistant](docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md),
+[API-first](docs/superpowers/specs/2026-09-15-api-first-klaus-design.md),
+[Plus](docs/superpowers/specs/2026-09-16-klaus-plus-subscription-design.md).
 
 **`klausmate/` is tracked in git** as of 2026-08-23. Its `user_files/`
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
@@ -186,12 +82,6 @@ holds API keys) stay ignored — never stage those.
   automatically):
   `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
 - **Build the shippable package**: `./scripts/package.sh` → `dist/klausmate.ankiaddon`
-- **The service is a separate program with its own suite**, never part of the
-  add-on loop above: `service/.venv/bin/python -m pytest -q`, and
-  `DATABASE_PATH=./dev.sqlite3 service/.venv/bin/uvicorn klausplus.main:app
-  --reload --port 8080` to run it locally — the default `DATABASE_PATH` is
-  the Fly volume mount, so a bare `uvicorn` fails on import. Setup, secrets
-  and deploy: `service/README.md`.
 - **The vacuity gate**: `python3 scripts/mutation_audit.py --modules <module>`
   breaks the code on purpose to find pins that cannot fail (`--list <module>`
   shows the mutations, `--selftest` checks the tool). It never touches the
@@ -864,16 +754,8 @@ same reason.
   PDF/Retention/Cards/Notes (Cards =
   VIEWABLE cards only, counts from priority_rows' K-118 keys via
   .get; a fully suspended PDF renders dimmed with "suspended" in its
-  Cards cell; since K-254 that same cell appends
-  `· m doubtful` when pertinence rejected any of the PDF's cards — in
-  CARDS, the cell's own unit, so "suspended · 3 doubtful" is a real
-  state); the context menu gains Suspend/Unsuspend Cards
+  Cards cell); the context menu includes Suspend/Unsuspend Cards
   (stored-tag-first membership, ONE CollectionOp, undoable),
-  **Doubtful cards…** (`tag:!Library::Doubtful "tag:<this PDF's lecture
-  tag>"` — tag membership already IS the confirmed/rejected split, so no
-  threshold math; offered on EVERY row, never gated on that row's own
-  `doubtful_count`, because `DOUBTFUL_TAG` is the global union and a
-  per-row gate would disagree with the search in both directions),
   Retention History… (guarded retention_history import, omitted when
   absent), and the clarity renames Update/Add to Search Index with
   setToolTipsVisible tooltips; the folder TREE also accepts external
@@ -906,26 +788,8 @@ same reason.
   Anki's tag sidebar renames the PDF, K-054 — INFERENCE from a
   before/after tag diff on profile open, never a real event). Reserved
   leaves `Curating`/`Curated`/`Matching`/**`Doubtful`** are never
-  touched. `DOUBTFUL_TAG` = `!Library::Doubtful` (K-254, spec D5) is
-  the one tag here that is NOT per-PDF: its members are the UNION, across
-  every `judged.json`, of the pertinence-rejected nids that are STILL
-  that PDF's candidates — `tag_sync.doubtful_members(cfg)` intersects
-  each PDF's rejected set with its raw `matches.json` at/above the
-  PDF's threshold (final review, 2026-09-17: a card that stops matching
-  a lecture stops being doubtful for it; a PDF whose `matches.json`
-  cannot be read keeps its whole rejected set, since missing data never
-  strips a tag) — recomputed in full through the same
-  `apply_membership` diff inside the same `CollectionOp` whenever a
-  caller hands `_do_sync_one` a `doubtful` set. `doubtful=None` — the
-  default, and what a plain index pass with no judge run uses — leaves
-  it untouched rather than wiping real verdicts. **The union is the
-  spec's rule and it has a consequence worth knowing**: a card rejected
-  for lecture A but confirmed for B is still Doubtful, because
-  membership is global. That is why "Doubtful cards…" in the Library
-  intersects with the PDF's own lecture tag, and why the menu item is
-  offered on every row (a per-row `doubtful_count` gate would disagree
-  with the tag both ways). Pouya's design debt, unresolved on purpose:
-  per-card overrule is a board card, not this design.
+  touched. Historical note, 2026-09-19: D2 removed doubtful-membership
+  computation while preserving reserved historical names and existing tags.
 - `retention.py`: per-PDF retention/study-priority score shown in the
   Library — embed the PDF's PAGES (`pdf_index.py`, one vector each) →
   score every indexed note against them (max cosine, cached in
@@ -944,20 +808,7 @@ same reason.
   900/chunk for SQLite's parameter cap), the return dict adds
   `card_queues` beside `card_r` for col-free re-aggregation, and a
   guarded `retention_history.record_rows` snapshot fires right before
-  return. **Since K-254 the score and the counts are CONFIRMED-ONLY**:
-  `pdf_retention` and `note_card_counts` take a `rejected` nid set
-  (pertinence's verdicts for that PDF, loaded per row inside
-  `priority_rows`, guarded — an unreadable `judged.json` reads as
-  "nothing rejected" and never breaks the pass), and confirmed =
-  matched − rejected, with an UNJUDGED nid counting as confirmed. Every
-  other reader of the same number passes the same set, or the Library
-  and the thing beside it would disagree: Match Sensitivity's live
-  preview and its OK path (read once, not per keystroke), and
-  `pdf_map`'s retention fill. A fifth row key, `doubtful_count`, is
-  reported on its own — and it counts **CARDS, not notes**, because it
-  is read straight into the Cards cell (`"{card_count} · {doubtful_count}
-  doubtful"`) and must share that cell's unit; a rejected note's
-  suspended cards count toward neither side.
+  return. D2 removed the judge filter; scores and counts use matched cards.
 - `retention_history.py` (aqt-free above its aqt-glue divider; K-118):
   per-PDF retention snapshots — `user_files/retention_history.json`,
   `{safe: [[YYYY-MM-DD, r], ...]}` local-time chronological, one entry
@@ -1083,10 +934,8 @@ same reason.
   emits [-1,1] per axis. Entry point: the Library caption row's **Map**
   button (`pdf_drive._open_map`, guarded import). Retention fills in
   lazily from the open collection; headless it stays None and the
-  tooltip omits the line. That fill passes pertinence's `rejected` set
-  per PDF (K-254, guarded per PDF), so the map's number is the same
-  confirmed-only score the Library row shows — a second reader of
-  `pdf_retention` that forgot it would quietly disagree with the tree.
+  tooltip omits the line. The map uses the same matched-card retention
+  calculation as the Library after D2 removed judge filtering.
 - `pdf_notes.py` (stdlib-only above a "pypdf glue" divider; K-134): the
   per-PDF notes foundation — K-079's storage and layout, built as its
   own module so it needed nothing from `pdf_handler.py` (another
@@ -1121,7 +970,7 @@ same reason.
   `page_store.page_texts` (slide text plus transcript), never from a
   chunker here.
 - `page_store.py` (aqt-free above its divider; 2026-09-15, spec D2):
-  **the seam every API-first capability keys on** — one JSON record per
+  **the shared page record for indexing and transcripts**; one JSON record per
   (PDF, page) at `user_files/pages/<safe>/<digest12>/<page:04d>.json`,
   holding the slide's own `slide_text` plus `segments` (what was said
   over it, `{t0,t1,text}`). `combined_text` is slide text then the
@@ -1173,8 +1022,7 @@ same reason.
   copy of a well-formed name is never requeued — headered with the rate and
   channel count actually NEGOTIATED with the device — ideal
   16 kHz mono Int16 first, then `device.preferredFormat()` as it is, both
-  checked against `isFormatSupported` — because the Klaus Plus service
-  meters lecture minutes by reading that header back. **The width is
+  checked against `isFormatSupported`, so the WAV header describes its audio. **The width is
   always 2** (K-279, Copilot on PR #4): forcing Int16 onto the preferred
   format, which is what shipped, meant a device whose only sample format
   is Float32 never started and Record was a dead button, so `_ingest`
@@ -1184,7 +1032,7 @@ same reason.
   neither format, or whose sample type Klaus cannot read, refuses to
   record with one log line naming it — never a silent dead button. The `Uploader` is one daemon worker, FIFO: transcribe, append to
   the page record, unlink. **A failed upload keeps its WAV** — network
-  error, missing key, a Plus refusal — but a SPENT one never survives as a
+  error or a missing transcription dependency; but a SPENT one never survives as a
   leftover: once `append_segment` has happened, `_spend` unlinks the WAV and,
   if that fails, renames it out of `_LEFTOVER_RE`'s namespace (`.spent`, which
   the next `requeue_leftovers` sweeps away), because a swallowed unlink failure
@@ -1220,24 +1068,14 @@ same reason.
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick
   trigger.
-- **Semantic matching stack** (the per-PDF `!Library` tags + the Library's
-  retention score — the embedding side of Klaus's AI, with
-  `pertinence.py` the reasoning phase bolted onto its end since
-  2026-09-17; the assistant,
-  Claude Code hosted as a child process, is the other one — see
-  "The assistant (Claude Code)" below):
-  - `embeddings.py` (aqt-free): **OpenAI only** since 2026-09-15 —
-    `provider_name` answers `"openai"` whatever the config says,
-    `DEFAULT_MODELS` has one entry (`text-embedding-3-large`), the key is
-    `api_key_openai`, and the HTTP lives in `openai_client.py` (this
-    module no longer opens a socket, so the old `OPENAI_API_BASE`/
-    `VOYAGE_API_BASE` monkeypatch globals are gone — point
-    `openai_client._urlopen` at a fake instead). `embedding_dimensions`
-    (default 1024) is sent only for the Matryoshka-trained v3 models
-    (`DIMENSION_CAPABLE_MODELS`), so a future model can't be handed a
-    width it will reject. Vectors are **unit-normalized at write time**,
-    and `index_signature`/`signature_matches` stay the ONE way any cache
-    compares provider/model/dims.
+- **Semantic matching stack**: per-PDF `!Library` tags and retention
+  scores use cosine matching after D2 removed the reasoning judge.
+  - `embeddings.py` (aqt-free): intermediate OpenAI adapter; D4 plans
+    replacement with managed Ollama. Preserve unit-normalized vectors and
+    `index_signature`/`signature_matches` as the one cache identity check.
+  - Planned D4 modules, not yet restored: `ollama_client.py`,
+    `ollama_runtime.py`, `ollama_setup.py`. Follow the restoration plan
+    linked above, preserving the current page-store and index-v2 machinery.
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
     detector; `note.mod` only a pre-filter** — the Browse-preview tag bumps
@@ -1269,29 +1107,11 @@ same reason.
     them, the `!Library::Curating` temp tag K-064 retired — CLAUDE.md
     and config.md both went on documenting it until K-146).
   - `index_queue.py` (aqt-free above its "aqt glue" divider; K-152): the
-    **index runner** — the ONE copy of the chain, FIVE phases since
-    K-255 (`curation.ensure_index` → `retention.ensure_pdf_index` →
-    `ensure_matches` → **`pertinence.ensure_judged`** →
-    `tag_sync.sync_after_matches`, cancel token
-    threaded through, each phase taking `curation._busy` in its own
-    turn per K-146 — **except phase four, which never takes it at
-    all**: its wait is a Judge/Skip dialog plus however long the
-    Anthropic batches run, and holding the token across an interactive
-    dialog is exactly K-146's leak. The one visible consequence is
-    documented in the module docstring — Preferences' Index Now can
-    start a concurrent card-index embed for that stretch). Phase four's
-    progress is the ONLY one that counts things rather than percent:
-    `RunnerState.phase` is `"judge"`, so `status_line` renders
-    "judging 12/40" instead of a rounded percentage, and `ask_judge` is
-    the paid-pass confirm the phase calls back into — window-modal
-    `open()` (K-114), **Judge** and **Skip** with **Skip the
-    default**, because a stray Enter must never start a paid batch (the
-    same rule `offer_model_sweep`'s confirm follows). The phase itself
-    composes the text: dollars off Plus, quota terms on it. Whatever
-    escapes `pertinence`'s own defences is caught here and turned into
-    `after_judged(set(), matches)` — untagged pertinence beats a wedged
-    queue, since a raise would skip the tag write AND leave `_current`
-    set forever. It exists
+    **index runner**: four phases, `curation.ensure_index` →
+    `retention.ensure_pdf_index` → `ensure_matches` →
+    `tag_sync.sync_after_matches`. Cancellation spans the chain; each
+    embedding phase respects `curation._busy`. D2 removed the judge phase,
+    its prompt and progress state. It exists
     because that chain was a METHOD on the Library window
     (`DriveWindow._on_embed`) and a PDF added from the deck screen has
     no Library window: `_on_embed` now just calls `request_pdf`, and
@@ -1312,13 +1132,9 @@ same reason.
     `lecture_view` pattern; an overlay child over the central webview
     is a z-order gamble) carrying the same text and a Stop button,
     visible on the deck screen, the overview and mid-review — cannot
-    describe one job differently. Gates: no profile, no OpenAI key
-    (`missing_key_provider` reads `api_key_openai` — one provider, so
-    the name it returns is a constant — but answers `""` for a
-    `plus.key` too, since a Klaus Plus subscriber needs no provider key;
-    that is a wording gate, not an entitlement one, and the service
-    still has the last word), no run (the refusal is a
-    MESSAGE, not a shrug). A PDF deleted
+    describe one job differently. No profile means no run. Intermediate
+    provider-key gates remain until D4 replaces them with local readiness.
+    Report readiness failures rather than silently dropping work. A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
     never fails the batch behind it. Cancel bumps `_seq`, which is what
     stops `after_matches` tagging on the PARTIAL ranking
@@ -1328,76 +1144,15 @@ same reason.
     from `manage_models.save_embed` with the signature captured BEFORE
     the widgets overwrite config, re-indexes the card index plus every
     PDF with an index on disk — announced first, counted in notes and
-    PDFs, and **priced**: `sweep_message` carries
-    `cost.format_estimate(sweep_estimate(names))` (note text plus page
-    text, falling back to the stored slide text), and the confirm's
-    DEFAULT BUTTON IS NO, because it is the one dialog in Klaus that can
-    spend money — and says so, including what declining does NOT buy
-    (the card index still rebuilds unpriced on the next PDF add).
-    `first_key` exists because pasting the first key does
-    NOT move the signature — nothing was ever embedded — yet that is
-    exactly when the offer is worth making; rotating a key is not a
-    first key, those vectors are still valid. The THIRD trigger is
-    `stale_index_names()` (K-236) — manifests whose `version !=
-    pdf_index.INDEX_VERSION` — because an upgrade moves no signature
-    either, yet every one of those indexes reads as absent; that is
-    also why `indexed_pdf_names` tests for the manifest FILE and never
-    `stats_from_disk`, which answers None for any version but the
-    current one and so hid the whole upgrade population from the sweep.
+    PDFs. The intermediate implementation still has cloud estimates and
+    first-key handling; D4 replaces those with an explicit local-work
+    confirmation, preserving the default No and stale-index upgrade trigger.
+    `indexed_pdf_names` must inspect manifest files rather than hide old
+    versions through `stats_from_disk`.
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
     and re-embeds the collection on a paid API, silently (the exact bug
     eight call sites shipped when the signature grew a third element).
-  - `pertinence.py` (aqt-free above its own "aqt glue" divider;
-    K-253/K-255, spec D4): **the judge** — cosine shortlists, Claude
-    decides. Phase four of the chain above scores nothing: for every
-    candidate at/above threshold it asks whether that card is really
-    about the ONE page it matched best, `BATCH = 8` cards per Messages
-    request, card text capped at `MAX_CARD_CHARS` and page text at
-    `MAX_PAGE_CHARS` so eight cards can't assemble a 400 KB body. The
-    answer is a **strict forced tool**: `record_verdicts`, declared
-    `strict: true` with `additionalProperties: false` and every field
-    required, `tool_choice` pinned to it. **A card the tool input does
-    not name is UNJUDGED, never doubtful** — and so is every card in a
-    batch whose tool input is malformed, since `parse_verdicts` returns
-    `[]` rather than guess at a shape (a `null` body from a proxy must
-    not crash the phase). A duplicate nid inside one call keeps the
-    FIRST verdict: `strict` cannot forbid array duplicates, so the rule
-    lives here rather than in whichever writer reads the store next.
-    One failed batch leaves only ITS cards unjudged — the job still
-    finishes and tags what it did judge — and the log line names the
-    exception's CLASS and status only, never the payload, which holds
-    card and lecture-page text. A REFUSAL is different (final review,
-    2026-09-17): a 401/402/403/426 stops the job's remaining batches —
-    `judge` calls `on_fatal` once and breaks, since re-sending 3,000
-    refused cards one batch at a time was the bug — is remembered on
-    Plus through `plus.note_refusal` → `patch_config` so the status
-    line and the next Judge/Skip prompt say so, and reaches the user as
-    ONE tooltip; `cancel` is checked per batch, so Stop mid-page sends
-    nothing more. Verdicts persist in
-    `user_files/pdf_index/<safe>/judged.json` keyed on the card's text
-    hash, the page's text hash AND the model; `entry_for(v)` is the one
-    place an entry is minted, precisely so a writer cannot forget
-    `"model"` and make `is_stale`'s model check vacuously true (a
-    model-less entry reads as STALE). **`judged_path` takes a
-    pre-safened name** — it joins `safe` straight onto `pdf_index/`,
-    the same as `retention`'s own paths; hand it a display name and you
-    get a second, empty store. Below the divider, `ensure_judged` is
-    the glue: **on Klaus Plus the judge is metered by cards and needs
-    no Anthropic key at all** (`Client.complete(..., purpose="judge")`,
-    quota refreshed from the response's own headers); off Plus with no
-    key the phase is SKIPPED with one log line and no prompt — a paid
-    confirm nobody can pay for is worse than silence — and verdicts from
-    an earlier judged run STAND until their card or page changes: a
-    removed key never un-doubts a card (Copilot on PR #4, 2026-09-17). The prompt itself
-    prices the free tier through `cost.estimate_judge`, and because
-    `reasoning_model` is a free-text field with no picker, a model
-    outside `cost.PRICES` is priced as Sonnet and SAYS SO rather than
-    letting a `KeyError` escape into the runner's callback. The best
-    page per candidate is read straight out of the `matches.json` the
-    previous phase just wrote (`_matched_pages`) — the freshness check
-    already happened one phase back, and any failure reads as "no
-    pages", which judges nothing rather than crashing.
   - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
     curated nothing): the deck-screen **PDF import** surface — the
     `MainWebView.dropEvent` wrap (the only thing stopping Anki's own
@@ -1476,45 +1231,13 @@ same reason.
     `_bg_preview_cfg` carries that key from STORED config live per
     tick. Image-only rows disable WHOLE (`bg_fit_row`/`bg_blur_row`/
     `bg_wash_row`) so labels dim with their controls.
-    Pages, in `_finish_nav` order: **General** (`image_crop_enabled`
-    and `pdf_renderer` — no other UI touches these keys; the pdf.js
-    checkbox maps "native"/"pdfjs" and needs a restart — plus the
-    library folder and **Check Keys**, which since 2026-09-15 is a
-    PRESENCE check on the two keys, not a probe of a local server),
-    **Appearance**, **Assistant** (free-text `reasoning_model` lives on
-    the keys page; here it is `assistant_reopen` and a Clear Sessions
-    button that wipes `assistant_sessions.json` behind a window-modal
-    confirm — notes, PDFs, and highlights are never touched by it), and
-    **API keys & models** (2026-09-15, replacing "Semantic Search" and
-    the deleted "Local model library (Ollama)" page): a **Klaus Plus**
-    group ABOVE the keys (2026-09-16) — the licence key as a third
-    password field, a `plus.status_line` readout, and Subscribe… /
-    Manage subscription… / Check. Only **Subscribe…** is a bare
-    `openLink` (`base + "/subscribe"` — a browser hop is the ONLY way
-    Klaus touches payment). The other two are NETWORK calls, and both
-    run `run_in_background` for the same reason: `plus.TIMEOUT_S` is
-    15 s, and a `urlopen` that long on the click handler freezes Anki's
-    whole UI. **Manage subscription…** fetches `plus.portal_url()`
-    (`POST /v1/portal`) on that task and only THEN opens the URL it
-    returns — an empty answer is a tooltip, never a blank browser tab —
-    and **Check** runs `plus.refresh` with `patch_config` as its sink —
-    then both keys as
-    `EchoMode.Password` line edits, RECAPTIONED "Not needed on Klaus
-    Plus; kept for the free tier." while a licence key is present and
-    **still editable** (never disabled: the free tier is one deletion
-    away), the embedding / reasoning /
-    transcription model fields, the global sensitivity slider, the card
-    index's status line with **Index Now**, and **Stop Indexing**. There
-    is no provider combo — there is one provider — and no OCR row, no
-    model-pull table and no Claude-binary picker. Changing the licence
-    key CLEARS `klaus_plus_cache` on save, so a new key is never judged
-    by the old key's verdict; `klaus_plus_base` is a General row whose
-    placeholder is `plus.DEFAULT_BASE`. `save_embed` captures
-    `index_signature` BEFORE the widgets overwrite config and hands it to
-    `index_queue.offer_model_sweep(..., first_key=…)`, so a first OpenAI
-    key (which does not move the signature) offers the sweep too; the
-    sweep's confirm carries a `cost` estimate and **defaults to No** —
-    it is the one dialog that can spend money. **Preferences are deferred-save**: widgets only
+    D3 removed the Assistant page and Plus controls. General and Appearance
+    remain; cloud key/model controls are intermediate and must be replaced
+    under D4/D6, with external MCP configuration added under D5. Preserve
+    the current sidebar/CardFrame shell and free-text embedding model field.
+    `save_embed` captures `index_signature` before saving and offers a
+    confirmed index sweep when appropriate; D4 removes price/key semantics.
+    **Preferences are deferred-save**: widgets only
     call `mark_dirty()`; `save_all()` behind the **Save** button is the
     single writer of preference keys, closing dirty prompts to discard,
     and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
@@ -1527,34 +1250,10 @@ same reason.
     key and model fields for, and `ui_state["shown_provider"]` went with
     it; what `save_embed` compares is `embeddings.index_signature`
     before and after.
-  - `setup_flow.py`: first-run "Welcome to Klaus" dialog + per-profile-open
-    readiness checks. Two steps since 2026-09-15: the library-root
-    pick, then ONE missing-key nudge whose wording is the module-level
-    `KEYS_COPY` constant — the welcome dialog and the profile-open nudge
-    quote the same string so setup can never be described two ways.
-    When the key IS set, that second step instead runs
-    `_offer_v2_index_sweep` (K-236): once per profile, and only while
-    `index_queue.stale_index_names()` finds pre-v2 manifests, it opens
-    the priced sweep confirm and writes `_v2_index_sweep_offered`
-    whether the answer was yes or no — a refused whole-collection
-    re-embed is an answer, not a snooze. Preferences' Save shares this
-    same trigger (`index_queue.offer_model_sweep`) and MAY re-offer
-    while stale manifests remain; this profile-open call is the
-    once-per-profile one, gated by `_v2_index_sweep_offered`. No
-    provider branch, no local-server probe and no runtime offer survive;
-    readiness is `missing_keys(cfg)` — the provider keys not set, `[]`
-    when a Klaus Plus key covers both (K-246) — and `keys_missing_copy(cfg)`
-    narrows `KEYS_COPY` to exactly those, so the welcome dialog and the
-    profile-open nudge NAME WHAT WAS ACTUALLY CHECKED (K-231, 2026-09-17:
-    the copy named both keys while readiness tested one, so a user who
-    pasted only the OpenAI key was told setup was done and met the first
-    failure at the judge). `_embedding_ready` survives as the EMBEDDING
-    half and still gates the v2 sweep alone; `KEYS_COPY` is built from the
-    `KEY_COPY` table rather than written out, and `_offer_v2_index_sweep`
-    returns whether it asked, so the sweep confirm and the key nudge cannot
-    stack on one profile open. Still ONE nudge and ONE
-    `_embed_key_setup_declined` flag for both keys, and it is a WORDING
-    gate, never an entitlement check.
+  - `setup_flow.py`: first-run library setup and profile-open readiness.
+    Intermediate key checks await D4's local-runtime readiness. Preserve
+    one clear nudge, consistent readiness wording and the once-per-profile
+    stale-index sweep offer. A declined sweep is an answer, not a snooze.
   - `openai_client.py` (aqt-free, stdlib): the ONE place Klaus talks to
     OpenAI — `embed(key, texts, model, dims)` and `transcribe(key,
     wav_bytes, model, …)` (multipart with a hand-built boundary), one
@@ -1562,166 +1261,13 @@ same reason.
     stdlib `urllib` because the official SDK needs compiled wheels an
     AnkiWeb add-on cannot vendor. **The key is passed in by the caller
     and NEVER logged** — no config read here, no key in an exception
-    string. Tests point `_urlopen` at a fake. Since 2026-09-16 both
-    functions take an optional `endpoint: plus.Endpoint` — None means
-    OpenAI with the caller's own key, an Endpoint means the Klaus Plus
-    service with its bearer and purpose headers — so every existing
-    test stands unchanged; `anthropic_client.Client._target(purpose)`
-    is the same seam on the Anthropic side. `transcribe` HAS a caller
-    since 2026-09-17 — `lecture_recorder.Uploader._one` — and both
-    functions also take `on_headers` (K-252), called with the response's
-    headers on a 2xx and only a 2xx, since `plus.note_quota` records an
-    "active" verdict unconditionally and must never see an error's
-    headers; a raising `on_headers` is logged and never fails the call.
-  - `anthropic_client.py` (aqt-free, stdlib): the Anthropic Messages
-    client, revived on 2026-09-15 from the `llm_client.py` deleted in the
-    2026-09-02 convergence (`a494f2d`) — without the second backend, its
-    token, and the hosted-tier copy. `Client(get_config).stream(payload)`
-    over `POST /v1/messages` with `anthropic-version: 2023-06-01`, plus
-    one non-streaming `complete()`;
-    `consume_sse` **finalises a `tool_use` block from its partial JSON
-    when the stream drops**, which is what stops a cut connection turning
-    a half-received tool call into a silent no-op. **Its one caller is
-    the pertinence judge** (`complete(payload, purpose="judge")`, since
-    2026-09-17); `stream()` still has none, and the assistant does NOT
-    run on this client — that is Plan 3, unbuilt. Both entry points take
-    `on_headers` (K-252) on the same 2xx-only contract as
-    `openai_client`.
-  - `cost.py` (pure): what a paid pass would cost, before Klaus spends
-    anything — `PRICES` (dollars per million tokens, or per minute for
-    audio, **dated in a comment: edit them when they change**),
-    `estimate_embed`/`estimate_judge`/`estimate_transcribe` →
-    `Estimate(tokens, dollars)`, and `format_estimate` → "~12,400 tokens
-    · about $0.04". Tokens are chars ÷ 4: an estimate, shown as one,
-    never a bill. Two callers: `index_queue`'s model sweep
-    (`estimate_embed`) and `pertinence.ensure_judged`'s Judge/Skip
-    confirm (`estimate_judge`). Still the FREE
-    tier's number only — on Plus both prompts say "included in Klaus
-    Plus" (the judge's in quota terms, cards used of cards allowed) and
-    no estimate is computed. `PRICES` has exactly two REASONING entries
-    (Sonnet and Opus, beside two embedding and two transcription rows) and
-    `reasoning_model` is a free-text field, so a caller pricing a
-    reasoning model **must** handle a model that isn't in it —
-    `ensure_judged` prices it as Sonnet and says so; a bare `PRICES[…]`
-    raises into the runner.
-  - `plus.py` (aqt-free, stdlib): the **Klaus Plus seam** — `key(cfg)`
-    (a `kp_` prefix and 35 chars, nothing else; there is no secret to
-    check against), `base(cfg)` (`klaus_plus_base` or `DEFAULT_BASE`),
-    `endpoint(cfg, purpose)` → the `Endpoint(base, headers)` NamedTuple
-    both clients take (`Authorization: Bearer …`, `X-Klaus-Purpose` from
-    `PURPOSES`, `X-Klaus-Client` = manifest `human_version`, which is
-    what a `426` refuses), `parse_quota`, `refresh`, `portal_url`,
-    `status_line`, and the verdict cache. **Its one non-obvious rule
-    (2026-09-16, I-3): the SERVICE is the gate, so nothing here may
-    expire an active verdict on a timer of its own.** `active()` is true
-    with a key and no cache at all (nothing has refused yet), and stays
-    true for any cached status that is not `refused:*` — there is no
-    grace window and no separate offline fallback, because nothing here
-    ever re-asks the service on a schedule; the only thing that DOES ask
-    again is routing the next real call there, so a timed-out "active"
-    could only ever misroute a paying subscriber onto the keyless
-    provider path (idle a week, add a PDF, told to go paste an OpenAI
-    key — the bug this rule replaced). A `refused:` verdict is the one
-    thing that expires: after `CACHE_TTL_S` (6 hours) it is ignored and
-    the next call simply routes to the service again, which either
-    refuses afresh (re-caching) or succeeds. `refresh()` (Preferences'
-    Check, the only caller) keeps the old cache untouched on a 5xx, a
-    timeout or an unparseable body, recording a refusal only for an
-    answer the service actually meant (4xx) — a restart or an outage is
-    never mistaken for a refusal. `note_quota(cfg, headers, patch_config)`
-    (K-252) is the other direction: a metered call's own 2xx response IS
-    a fresh active verdict, so the two metered callers
-    (`lecture_recorder`, `pertinence`) hand it the response headers
-    through the clients' `on_headers` seam and the Preferences readout
-    catches up without anyone pressing Check. **Call it only from a
-    guaranteed-2xx path** — it records "active" unconditionally, so an
-    error's headers would overwrite a real refusal. `parse_quota` reads
-    `X-Klaus-Quota` case-insensitively out of an `HTTPMessage` or a
-    plain dict in any casing, and answers None (writing nothing) for an
-    absent or garbage header rather than inventing a verdict.
-    **Every `plus.*` sink is
-    `patch_config`, never `write_config`** (see the
-    `__init__.py` entry): `remember`'s parameter is *named*
-    `write_config` and handing it the package's actual `write_config`
-    wipes every other setting on the first refusal. The key is never
-    logged, never in an exception message, never in a URL.
-- **The assistant (Claude Code)** — Klaus hosts the `claude` binary as a
-  child process rather than running a loop of its own (that spec's D1:
-  no assistant key in Klaus, the user's own login and subscription —
-  `api_key_anthropic` pays for the pertinence judge and Plan 3, and
-  buys this dock nothing). **The dock passes the child NO `--model`**
-  (K-235, 2026-09-17): `assistant_model` was scrubbed by the API-first
-  migration and the read was dead, `reasoning_model` is the JUDGE's
-  Anthropic-API id with no authority over the user's own Claude Code
-  subscription (a Claude Code alias is not a Messages-API id — the
-  migration itself says so), and there is no assistant-model UI anywhere,
-  so the model is whatever the user's own `claude` resolves;
-  `command_line` omits the flag entirely rather than passing an empty one.
-  `find_claude_cached()` is likewise called with no argument now.
-  Design:
-  `docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md`.
-  **Still true today**, and the 2026-09-15 spec's Plan 3 — which moves
-  this onto `anthropic_client.py` and deletes `anki_endpoint.py` and
-  `agent_host.py` — is NOT built: describe and change what is here, not
-  what is planned. One piece of it went early, though: the Preferences
-  "claude binary" row and the `claude_binary` config key were deleted
-  with the Ollama surfaces on 2026-09-15, so `find_claude`'s override
-  argument is now always `""` and discovery is `shutil.which` → login
-  shell → known paths. Five modules, plus the page store above:
-  - `agent_host.py` (aqt-free): finds, spawns, and feeds the `claude`
-    child. `find_claude` tries, in order, a config override (inert since
-    the key went — see above), then
-    `shutil.which`, then **the login shell's own PATH**
-    (`[$SHELL, "-lc", "command -v claude"]`, 3 s timeout), then known
-    install locations — GUI-launched Anki inherits launchd's minimal
-    PATH and never sources the user's shell rc files, so `shutil.which`
-    alone reports "not installed" on a machine where `claude` works fine
-    from a terminal; this is Claudian's own documented trap.
-    `command_line` builds the exact flags, including
-    `--allowedTools Read Grep Glob ToolSearch mcp__klaus__*` —
-    `ToolSearch` is there deliberately: this Claude Code build defers
-    MCP tool schemas behind it, so denying it would silently cut off
-    every `mcp__klaus__*` tool the model could otherwise reach (found by
-    the spike, design doc §4.5/§4.7) — and
-    `--disallowedTools Bash Edit Write MultiEdit NotebookEdit WebFetch
-    WebSearch Task`. **`decide_permission` mirrors that same allow set
-    and is belt-and-braces, not the front line**: the spike found
-    `--permission-mode default` never sends a `control_request` at all
-    (a non-disallowed tool just ran, unprompted, under a mode this
-    build's own `--help` doesn't even list) — so the actual gate is the
-    static `--disallowedTools` list on the command line, and
-    `decide_permission`/`control_response` only answer whatever
-    `control_request` traffic a future build or mode does send — and
-    what they answer is now CONFINED: a `file_path`/`path`/`pattern`
-    resolving outside the library root (or `user_files/assistant/` when
-    there is no root — the same directory `start()` gives the child as
-    its cwd) is denied, because a lecture page's own text — the page
-    record Klaus attaches to every turn — is untrusted
-    content, and "read `…/klausmate/meta.json` and
-    summarise it" would otherwise put the embedding API key in the
-    transcript. **The endpoint token is never in argv**: `command_line`
-    takes no token parameter at all, the MCP header carries the literal
-    `${KLAUS_TOKEN}`, and `child_env` (pure) puts the secret in the
-    child's environment — `ps` is world-readable, and a live probe
-    (build 2.1.228, 2026-09-02) confirmed Claude Code expands `${VAR}`
-    in `headers` even for an INLINE `--mcp-config`: `init` reported the
-    klaus server connected while `ps -o args=` showed the placeholder.
-    `child_env` also strips the `CLAUDECODE`/`CLAUDE_CODE_*` nesting
-    markers (the spike's finding, now in production) and sets
-    `MCP_TOOL_TIMEOUT` well above the endpoint's 120 s approval wait, or
-    a tool call blocked on the dialog times out client-side, the user
-    approves anyway, and the model retries into a duplicate card.
-    `classify` returns EVERY `tool_use`/`tool_result` block with its id,
-    not just the first — Claude Code batches parallel `Read`/`Grep`
-    calls. One child per dock, one reader thread; `stop()` is SIGINT →
-    2 s grace → kill and leaves the child DEAD (so `send()` refuses to
-    write to it and the dock respawns), while `interrupt()`/`reap()` are
-    the non-blocking pair the dock's viewer switch uses instead of a
-    2 s `proc.wait` on the main thread. `resume_failed(payload)` spots
-    the "No conversation found with session ID" result a stale
-    `--resume` produces. The session id survives for the next
-    `--resume`; `find_claude_cached` memoises discovery per profile
-    (step 3 spawns the login shell).
+    string. Tests point `_urlopen` at a fake. This module remains only
+    until both embedding and transcription callers are replaced by D4/D6.
+  - `cost.py` (pure): intermediate embedding/transcription estimates;
+    D2 removed judge prices, and D4 removes the remaining paid-index UI.
+- **Retained endpoint and context**: D3 removed the embedded dock,
+  process host and sessions (2026-09-19). D5 plans external MCP discovery,
+  a stdio bridge and a page text/image tool; none is implemented yet.
   - `anki_endpoint.py` (aqt-free above its "aqt glue" divider): Klaus's
     own localhost AnkiConnect-compatible server (`/`) plus MCP-over-HTTP
     (`/mcp`), from ONE shared `ACTIONS` registry so the two routes
@@ -1772,8 +1318,7 @@ same reason.
     `search_notes`/`search_lecture_pdfs` rather than a second
     implementation — which is exactly why **`klausSearchNotes` is
     LEXICAL, not semantic**: `_h_search_notes` is `col.find_notes`, so
-    its description (and `assistant_sessions`' system prompt, and the
-    spec) must say "Anki search syntax" and send the model to
+    its description must say "Anki search syntax" and send the model to
     `search_lecture_pdfs` for meaning. Advertising it as semantic had
     the model asking natural-language questions of a substring-AND
     search and reading the empty result as "no notes on this"; a real
@@ -1789,77 +1334,14 @@ same reason.
     recently opened one or the one under the mouse — an activation-order
     list, most recent last, filtered to viewers that still have a
     document — so a background PDF window that never regained focus
-    can't steal the assistant's attention from the one the user is
+    can't replace the active context from the one the user is
     actually looking at. `subscribe` callbacks run synchronously on the
     caller's thread; a raising subscriber is logged, never left to break
     the reporter.
-  - the page in view as text and image is `page_store.py`'s job (its
-    own entry above): `assistant_dock._page_context` loads that page's
-    record for the text (`text_source` is always `"page-record"` now)
-    and calls `render_page_png` for the image. **Neither half can fail
-    the turn** — a missing record is empty text, an unrenderable page is
-    no image, and the send goes out on whatever the other half produced.
-    The 2026-09-15 API-first turn deleted `page_ocr.py` and with it the
-    OCR scheduler, so there is no debounce, no prefetch and no model
-    round-trip in front of a send; the PNG is re-rendered on every Send
-    and is not cached yet (board K-230).
-  - `assistant_sessions.py` (aqt-free, stdlib-only): three stores under
-    `user_files/assistant/` — `sessions.json` (**one Claude Code session
-    id per PDF**, plus one "global" slot for no-PDF chats, so switching
-    the followed PDF resumes THAT PDF's own conversation instead of
-    dragging an unrelated one along), `prompts/<name>.md` (the slash
-    commands, seeded with `explain`/`cards`/`quiz` only the FIRST time
-    the folder is looked at — never re-seeded once a user has edited or
-    deleted one), and `system_prompt.md` (versioned by a leading
-    `<!-- klaus-system-prompt vN -->` comment so a later Klaus release
-    can ship a revised prompt to an already-set-up profile). All three
-    are atomic-written (tmp + `os.replace`); a missing file reads back
-    as the ordinary empty case, a corrupt one is logged and STILL reads
-    back empty — a torn store must never take session resume down with
-    it.
-  - `assistant_dock.py` (Qt): the `QDockWidget` UI — header, transcript,
-    input, Send/Stop, New Session, a `/`-triggered `QCompleter` over the
-    slash commands. Opens via a Library toolbar button, Tools → "Klaus
-    Assistant", or **`Ctrl+Shift+K`** — deliberately not `Ctrl+Shift+A`,
-    the spec's original binding: an offscreen repro found the native PDF
-    viewer's OWN `Ctrl+Shift+A` (`pdf_viewer.py`, "highlight the current
-    selection", a `WidgetWithChildrenShortcut`) claims that chord first
-    via `ShortcutOverride` whenever a PDF pane has focus — exactly the
-    two places (the Lecture dock, the embedded Library) this assistant
-    is meant to be used from, so `Ctrl+Shift+A` would never have reached
-    the dock at all. The shortcut is ONE window-scoped `QAction` added
-    to `mw` at import time (`assistant_dock.setup()`), not the
-    `state_shortcuts_will_change` mechanism `lecture_view.py` uses for
-    its own "l" key — that hook fires only from `Overview.show`/
-    `Reviewer.show`, never the deck browser and never
-    `library_tab.mount()`'s embedded screen; `install_menu`'s Tools
-    entry reuses this SAME `QAction` (`menu_action()`) rather than
-    registering a second one on the same chord. **`AgentHost`'s
-    callbacks reach Qt only through `_Bridge`, a `QObject` of
-    `pyqtSignal`s** — the reader thread only ever calls `.emit()`, and
-    Qt's auto-connection queues that onto the main thread when the
-    emitting thread differs from the slot's (a real `AgentHost`) and
-    calls directly when it doesn't (a synchronous fake host in tests),
-    so no widget is ever touched off the main thread either way. The
-    dock follows `viewer_context` (session switches; the page record and
-    its PNG are read at Send time by `_page_context`, not scheduled
-    ahead) and
-    resumes the right `assistant_sessions` entry on every switch.
-    **The child is spawned LAZILY, by `_ensure_child` on Send** — never
-    at construction, never on a viewer switch (which only signals the
-    old child and polls `reap()` on a QTimer, so the main thread never
-    waits): an idle Claude Code emits nothing until the first message,
-    so eager spawning bought a Node process and a blocking kill per PDF
-    glanced at during review. `_ensure_child` also RESPAWNS after a
-    Stop, a crash, or a PDF change — without it every Send after the
-    first Stop wrote into a dead pipe and showed "stdin write failed"
-    until New Session. The session id is remembered on `result`, keyed
-    by `_sending_pdf_safe` (the PDF the turn was SENT for, captured at
-    send time): `init` arrives a second later through `_Bridge`, so
-    remembering there under whatever PDF was current stored A's id
-    against B and made B resume A's conversation forever. A `--resume`
-    Claude Code rejects (`agent_host.resume_failed`) drops that PDF's
-    mapping, says so, and the next Send starts fresh.
+  - `current_view` in `anki_endpoint.py` already consumes `viewer_context`
+    for PDF/page/selection metadata. D5 plans `current_page` to also read
+    page text/transcripts and PNG content through `page_store.py`.
+    Keep these retained modules; do not restore assistant session storage.
 - Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`,
   `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
   `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
@@ -1880,35 +1362,20 @@ same reason.
   reshaping either), `entitlement.py` (`f1b330b`), `podcast.py`
   (`026eb36`), `assistant_session.py` (`1fcdba2`), and the Library's
   short-lived third-pane assistant-panel module (`fed3a33`, guarded
-  `451a753`) that `assistant_dock.py` replaces.
+  `451a753`) that the later dock replaced (itself removed in D3).
   `card_forge.py` (`120293f`) and `anki_tools.py` (`e1c023c`) survive
-  from the same plan, now wired rather than dormant — see "The
-  assistant" above. `_LEGACY_KEYS_DROPPED` in `__init__.py` scrubs
+  from the same plan; the retained endpoint still uses `anki_tools`.
+  `_LEGACY_KEYS_DROPPED` in `__init__.py` scrubs
   `assistant_api_key`/`assistant_backend`/`assistant_token` (retired
   2026-09-01): there was never a separate assistant credential to keep;
-  the user's own `claude` login is it.
-  Deleted a third time, **2026-09-15**, by the API-first turn
-  (`docs/superpowers/specs/2026-09-15-api-first-klaus-design.md`, D1 —
-  "forget about the local-only approach"): `page_ocr.py` with
-  `tests/test_page_ocr.py` (removed in `1198041`, K-226 — slide OCR is replaced by
-  the PDF's own text layer in the page record plus the page image), and
-  `ollama_client.py`, `ollama_runtime.py`, `ollama_setup.py`
-  (removed in `1b6fccd`, K-227 — with the Ollama and Voyage embedding providers,
-  the "Local model library (Ollama)" Preferences page and the Assistant
-  page's OCR rows). There is no local engine and no managed runtime any
-  more; `user_files/runtime/` and `user_files/ocr/` are dead directories
-  a user may simply delete. `_migrate_config` renames
-  `embedding_api_key_openai` → `api_key_openai` (`assistant_model` is
-  DROPPED, not renamed — Anki's `getConfig` merges `config.json`'s
-  defaults under the user's keys, so `reasoning_model` is never empty
-  and takes its default), clears `embedding_model` when the scrubbed
-  `embedding_provider` was not OpenAI (the model belonged to the
-  provider), drops `_embed_key_setup_declined` once so the API-first
-  regime gets one fresh key nudge, and scrubs `embedding_provider`,
-  `embedding_api_key_voyage`, `ocr_enabled`, `ocr_model`,
-  `runtime_auto_setup`, `claude_binary`, `endpoint`,
-  `pdf_index_max_chunks` and `pdf_match_agg` — those names in
-  `__init__.py` are the migration, not a surviving feature.
+  D3 removed the subsequent Claude Code host as well.
+  Historical note, 2026-09-15: API-first removed `page_ocr.py` and the
+  Ollama client/runtime/setup modules, and retired local-runtime config.
+  The 2026-09-18 reversion authorizes D4 to restore managed Ollama and
+  migrate its keys back. OCR and Voyage remain out of scope. D1-D3 have
+  also retired Plus, judge and assistant settings. Consult the active
+  plans before changing migrations; the cloud defaults still in the
+  intermediate code are not the target configuration.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1976,26 +1443,17 @@ same reason.
   `_alltext_bounds_cache` keyed (generation, page); `_probe_selection_at`
   has a `fast=True` mode for per-mouse-move callers. Rewiring selection
   code must respect these or drag/scroll jank returns.
-- **A GUI-launched app inherits a minimal PATH — check the login shell,
-  not just `PATH`**: `shutil.which("claude")` reports "not found" on a
-  machine where `claude` works fine from a terminal, because Anki
-  launched from the Dock/Finder never sources `~/.zshrc` and friends.
-  `agent_host.find_claude` falls back to
-  `[$SHELL, "-lc", "command -v claude"]` (3 s timeout) before trying
-  known install paths — Claudian's own documented trap, and worth
-  remembering for any future external-binary discovery in this add-on,
-  not just this one.
-- **Claude Code defers MCP tool schemas behind its own `ToolSearch`
-  tool — never drop it from `--allowedTools`**: with `mcp__klaus__*`
-  allowed but `ToolSearch` denied, the model can see the tools exist but
-  can never fetch their schemas, so every `mcp__klaus__*` call becomes
-  unreachable — found by the assistant's spike when a real run went
-  silent on Klaus's own tools. The same spike found
-  `--permission-mode default` never sends a `control_request` at all (a
-  non-disallowed tool just ran, unprompted): the actual gate is the
-  static `--allowedTools`/`--disallowedTools` list on the command line,
-  not `agent_host.decide_permission`, which only answers whatever
-  `control_request` traffic a future build or mode does send.
+- **A GUI-launched app inherits a minimal PATH**: binary discovery must
+  account for GUI launch environments. The removed `agent_host.find_claude`
+  used `shutil.which`, a bounded login-shell lookup, then known paths.
+  D6 plans the analogous local transcription discovery; do not import
+  the deleted module.
+- **Historical Claude Code permission lesson (2026-09-02):** the removed
+  host needed `ToolSearch` in its allowed tools to expose MCP schemas,
+  and static allow/deny lists provided its actual permission boundary.
+  Its `control_request` callback alone did not enforce that boundary.
+  For the planned external bridge, preserve endpoint authentication and
+  explicit write approvals; client-side permissions are additional gates.
 
 ## Conventions
 
@@ -2014,9 +1472,9 @@ same reason.
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has
   `pypdf.annotations`); no other third-party deps, no native code.
-- There is no model PICKER anywhere any more — no preset list, no pull
-  table, no provider combo. Every model is a free-text field on
-  Preferences → API keys & models (`embedding_model`, `reasoning_model`,
-  `transcription_model`), each with the default as its placeholder, so a
-  model released tomorrow needs no code change. Defaults live in
+- D4 keeps the embedding model name free-text and restores a local model
+  library with pull progress in the existing Preferences shell. No provider
+  combo is needed for the single Ollama provider. D6 adds a local model-file
+  path for transcription. See the approved plans above; cloud-key fields
+  and reasoning-model controls are not the future design. Defaults live in
   `config.json` and, for embeddings, `embeddings.DEFAULT_MODELS`.
