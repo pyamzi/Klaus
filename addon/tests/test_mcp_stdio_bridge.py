@@ -35,11 +35,11 @@ with tempfile.TemporaryDirectory(prefix="klaus bridge spaces ") as scratch:
     check("HTTP timeout exceeds approval window", bridge["HTTP_TIMEOUT_S"] == 180 > ep.APPROVAL_TIMEOUT_S)
     discovery = root / "connection with spaces.json"
     env = dict(os.environ, HTTP_PROXY="http://127.0.0.1:1", HTTPS_PROXY="http://127.0.0.1:1",
-               ALL_PROXY="http://127.0.0.1:1", NO_PROXY="", no_proxy="")
-    proc = subprocess.Popen([sys.executable, "-I", str(script), "--discovery", str(discovery)],
+               ALL_PROXY="http://127.0.0.1:1", NO_PROXY="", no_proxy="", PYTHONIOENCODING="cp1252")
+    proc = subprocess.Popen([sys.executable, str(script), "--discovery", str(discovery)],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     def send(value):
-        proc.stdin.write((json.dumps(value) + "\n").encode()); proc.stdin.flush()
+        proc.stdin.write((json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")); proc.stdin.flush()
     def receive():
         if not select.select([proc.stdout], [], [], 5)[0]:
             raise AssertionError("bridge response timed out")
@@ -85,6 +85,8 @@ with tempfile.TemporaryDirectory(prefix="klaus bridge spaces ") as scratch:
         check("image content preserved", image["result"]["content"][0]["data"] == "YWJj")
         exchange(request(5, "tools/list"))
         check("session and token forwarded", calls[-1][0].get("Mcp-Session-Id") == "session-one" and calls[-1][0].get("X-Klaus-Token") == "one")
+        exchange(request(51, "unicode_read", text="café"))
+        check("literal UTF-8 request preserved", calls[-1][1]["params"]["text"] == "café")
         send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         check("notification has no response", not select.select([proc.stdout], [], [], .2)[0])
         second_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -122,7 +124,7 @@ with tempfile.TemporaryDirectory(prefix="klaus bridge spaces ") as scratch:
             check("read tool", not exchange(request(11, "tools/call", name="current_view"))["result"].get("isError"))
             check("write denied", exchange(request(12, "tools/call", name="add_tags", arguments={"note_ids": [1], "tags": "test"}))["result"]["isError"] and not writes)
             answer[0] = True
-            check("write accepted", not exchange(request(13, "tools/call", name="add_tags", arguments={"note_ids": [1], "tags": "test"}))["result"].get("isError") and writes == [([1], "test")] and len(approvals) == 2)
+            check("write accepted with literal UTF-8", not exchange(request(13, "tools/call", name="add_tags", arguments={"note_ids": [1], "tags": "café"}))["result"].get("isError") and writes == [([1], "café")] and len(approvals) == 2)
         finally: endpoint.stop()
     finally:
         proc.stdin.close()

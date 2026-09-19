@@ -72,7 +72,7 @@ def main():
     args = parser.parse_args()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     identity, session = None, None
-    for line in sys.stdin:
+    for line in sys.stdin.buffer:
         try:
             body = json.loads(line)
         except ValueError:

@@ -602,7 +602,10 @@ class Endpoint:
         fd, temporary = tempfile.mkstemp(prefix=".mcp-", dir=parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                os.fchmod(stream.fileno(), 0o600)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(stream.fileno(), 0o600)
+                else:
+                    os.chmod(temporary, 0o600)
                 json.dump(self._identity(), stream)
                 stream.flush()
                 os.fsync(stream.fileno())

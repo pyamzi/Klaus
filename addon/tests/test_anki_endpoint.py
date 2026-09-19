@@ -959,5 +959,17 @@ with tempfile.TemporaryDirectory(prefix="klaus discovery ") as scratch:
     with socket.socket() as probe:
         check("publication failure closes bound socket", probe.connect_ex(("127.0.0.1", failed.port)) != 0)
     failed.stop()
+    original_fchmod = getattr(ep.os, "fchmod", None)
+    if original_fchmod is not None:
+        del ep.os.fchmod
+    try:
+        portable = make_endpoint()
+        portable.start()
+        check("missing fchmod still publishes discovery", json.loads(discovery.read_text())["token"] == portable.token)
+        check("missing fchmod keeps discovery private", stat.S_IMODE(discovery.stat().st_mode) == 0o600)
+        portable.stop()
+    finally:
+        if original_fchmod is not None:
+            ep.os.fchmod = original_fchmod
 
 raise SystemExit(report())
