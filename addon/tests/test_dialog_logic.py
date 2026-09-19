@@ -1,5 +1,5 @@
-"""State-machine tests for the Preferences dialog's "API keys & models"
-page (openai_key_edit / embed_model_edit) and its default-sensitivity
+"""State-machine tests for the Preferences dialog's "Local models"
+page (endpoint_edit / embed_model_edit) and its default-sensitivity
 slider.
 
 PyQt6 cannot be imported here (its sip is 3.13-only), so this reimplements
@@ -40,12 +40,12 @@ class LineEdit:
         self._text = t
 
 
-_DEFAULT_EMBED_MODEL = "text-embedding-3-large"
+_DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 
 class World:
-    """manage_models_dialog's "API keys & models" closure, transcribed:
-    openai_key_edit / embed_model_edit, the ui_state['syncing'] and
+    """manage_models_dialog's "Local models" closure, transcribed:
+    endpoint_edit / embed_model_edit, the ui_state['syncing'] and
     ['dirty'] guards, sync_embed_widgets and save_embed. There is ONE
     embedding provider now (OpenAI), so the provider combo, the
     per-provider key fan-out and the Ollama resolver are gone — what is
@@ -59,7 +59,7 @@ class World:
         self.ui_state = {"syncing": False, "dirty": False}
         self.saves = 0
         self.sweeps = []
-        self.openai_key_edit = LineEdit()
+        self.endpoint_edit = LineEdit()
         self.embed_model_edit = LineEdit()
         self.sync_embed_widgets()
 
@@ -69,7 +69,7 @@ class World:
         return str(self.cfg.get("embedding_model") or "").strip() or _DEFAULT_EMBED_MODEL
 
     def _index_signature(self):
-        return "openai", self._embedding_model(), 0
+        return "ollama", self._embedding_model(), 0
 
     # --- transcribed from manage_models_dialog ---
 
@@ -83,13 +83,13 @@ class World:
             return
         self.ui_state["syncing"] = True
         try:
-            self.openai_key_edit.setText(str(self.cfg.get("api_key_openai") or ""))
+            self.endpoint_edit.setText(str(self.cfg.get("endpoint") or ""))
             self.embed_model_edit.setText(str(self.cfg.get("embedding_model") or ""))
         finally:
             self.ui_state["syncing"] = False
 
     def type_key(self, text):
-        self.openai_key_edit.setText(text)
+        self.endpoint_edit.setText(text)
         self.mark_dirty()
 
     def type_model(self, text):
@@ -100,23 +100,22 @@ class World:
         if self.ui_state["syncing"]:
             return
         prev_sig = self._index_signature()
-        had_key = bool(str(self.cfg.get("api_key_openai") or "").strip())
-        self.cfg["api_key_openai"] = self.openai_key_edit.text().strip()
+        self.cfg["endpoint"] = self.endpoint_edit.text().strip()
         self.cfg["embedding_model"] = self.embed_model_edit.text().strip()
         self.saves += 1
         self.sweeps.append(
-            (prev_sig, self._index_signature(), not had_key and bool(self.cfg["api_key_openai"]))
+            (prev_sig, self._index_signature())
         )
 
     def save_all(self):
         self.ui_state["dirty"] = False
         self.save_embed()
 
-BASE = {"api_key_openai": "", "embedding_model": ""}
+BASE = {"endpoint": "", "embedding_model": ""}
 
 print("== opening the page writes nothing ==")
 w = World(BASE)
-check("the key field seeds from config", w.openai_key_edit.text() == "")
+check("the key field seeds from config", w.endpoint_edit.text() == "")
 check("opening the dialog saves nothing", w.saves == 0)
 before = w.saves
 w.sync_embed_widgets()
@@ -126,55 +125,43 @@ print("== deferred save: edits do not reach config until Save ==")
 w = World(BASE)
 w.type_key("sk-new-key")
 check("typing a key marks dirty but writes nothing",
-      w.ui_state["dirty"] is True and w.cfg["api_key_openai"] == "")
+      w.ui_state["dirty"] is True and w.cfg["endpoint"] == "")
 w.save_all()
-check("Save persists the key", w.cfg["api_key_openai"] == "sk-new-key")
+check("Save persists the key", w.cfg["endpoint"] == "sk-new-key")
 check("Save clears dirty", w.ui_state["dirty"] is False)
 
-w = World({"api_key_openai": "sk", "embedding_model": ""})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": ""})
+w.type_model("custom-local")
 check("typing a model writes nothing yet", w.cfg["embedding_model"] == "")
 w.save_all()
-check("Save persists the model", w.cfg["embedding_model"] == "text-embedding-3-small")
+check("Save persists the model", w.cfg["embedding_model"] == "custom-local")
 
 print("== a refresh while dirty must not clobber unsaved edits ==")
-w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
+w.type_model("custom-local")
 w.sync_embed_widgets()          # what refresh() does
 check("unsaved edit survives a refresh",
-      w.embed_model_edit.text() == "text-embedding-3-small")
+      w.embed_model_edit.text() == "custom-local")
 w.save_all()
 check("and still saves correctly afterwards",
-      w.cfg["embedding_model"] == "text-embedding-3-small")
+      w.cfg["embedding_model"] == "custom-local")
 
 print("== the sweep offer: a model change, or a first key ==")
-w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
+w.type_model("custom-local")
 w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
+_prev, _cur = w.sweeps[-1]
 check("the PREVIOUS signature is the one the stored vectors were made "
       "with, captured before the widgets overwrite config",
-      _prev == ("openai", "text-embedding-3-large", 0))
+      _prev == ("ollama", "nomic-embed-text", 0))
 check("...and the current one is what was just saved",
-      _cur == ("openai", "text-embedding-3-small", 0))
-check("a model change is not a first key", _first is False)
+      _cur == ("ollama", "custom-local", 0))
 
 w = World(BASE)
-w.type_key("sk-first")
+w.type_key("http://localhost:12345")
 w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
-check("an empty key filled in for the first time IS a first key — the "
-      "signature never moved, but nothing has ever been embedded",
-      _first is True and _prev == _cur)
-
-w = World({"api_key_openai": "sk-old", "embedding_model": "text-embedding-3-large"})
-w.type_key("sk-rotated")
-w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
-check("rotating an existing key is NOT a first key — the vectors on "
-      "disk are still valid, and re-embedding the collection on a key "
-      "change would be a bill for nothing",
-      _first is False and _prev == _cur)
+_prev, _cur = w.sweeps[-1]
+check("changing endpoint preserves model signature", _prev == _cur)
 
 
 print("== default-sensitivity slider: migration-side bail (K-052) ==")
@@ -486,7 +473,7 @@ check("every section is a page with a sidebar pill and a big title",
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
-      '_finish_nav("General", "Appearance", "API keys & models")' in _src2)
+      '_finish_nav("General", "Appearance", "Local models")' in _src2)
 check("settings are SynapsePro rows — name + desc left, control right, "
       "hairline separated",
       'setObjectName("SettingName")' in _src2
@@ -807,149 +794,17 @@ check("the background paint seam honours the preview",
       "background.resolve(background.effective_cfg(_config()))" in _tb_src)
 
 print("== the API-first page list and its two save_* writers (D1) ==")
-# One page replaces two: the provider combo, the per-provider key fan-out
-# and the whole "Local model library (Ollama)" page are gone, and the two
-# API keys plus the three model names live together where the money is
-# spent. RAW source throughout — an absence pin against code_only() is
-# vacuous, because code_only strips the string literals these keys ARE.
-check("the page is called \"API keys & models\", as a nav label and a title",
-      '"API keys & models",\n        "API keys & models",' in _src2)
-check("...and neither page it replaces survives",
-      '"Semantic Search"' not in _src2 and '"Local Models"' not in _src2)
-check("the four fields the spec names are all constructed",
-      all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
-                               "embed_model_edit",
-                               "transcription_model_path_edit")))
-check("both provider key fields are password masked",
-      _src2.count("EchoMode.Password") == 2
-      and "openai_key_edit.setEchoMode" in _src2
-      and "anthropic_key_edit.setEchoMode" in _src2)
+check("Local models has endpoint and model fields", '"Local models", "Local models"' in _src2 and "endpoint_edit" in _src2 and "embed_model_edit" in _src2)
+check("credential widgets and saves are removed", "api_key_" not in _src2 and "key_edit" not in _src2)
 _ast_tree = __import__("ast").parse(_src2)
-
-
-def _key_edit_leaks(tree) -> bool:
-    """True if a print/tooltip/setText/showWarning/showInfo call has a
-    ``*_key_edit.text()`` call anywhere inside its arguments.
-
-    An AST walk, not a same-line text scan: the old pin only rejected
-    ``print(`` and ``_key_edit.text()`` sharing one physical line, so a
-    leak split across two lines (a value assigned on one line, printed
-    on the next) would have passed it clean.
-    """
-    import ast as _a
-
-    sinks = {"print", "tooltip", "setText", "showWarning", "showInfo"}
-
-    def _callee_name(call):
-        f = call.func
-        if isinstance(f, _a.Name):
-            return f.id
-        if isinstance(f, _a.Attribute):
-            return f.attr
-        return None
-
-    def _owner_name(node):
-        if isinstance(node, _a.Name):
-            return node.id
-        if isinstance(node, _a.Attribute):
-            return node.attr
-        return None
-
-    def _is_key_edit_text_call(node):
-        return (
-            isinstance(node, _a.Call)
-            and isinstance(node.func, _a.Attribute)
-            and node.func.attr == "text"
-            and (_owner_name(node.func.value) or "").endswith("_key_edit")
-        )
-
-    for node in _a.walk(tree):
-        if isinstance(node, _a.Call) and _callee_name(node) in sinks:
-            args_and_kwargs = list(node.args) + [kw.value for kw in node.keywords]
-            for part in args_and_kwargs:
-                if any(_is_key_edit_text_call(sub) for sub in _a.walk(part)):
-                    return True
-    return False
-
-
-check("a key's VALUE is read only to be saved — never into a print, a "
-      "tooltip or a status label — an AST walk over every sink call's "
-      "arguments, so a leak split across two lines cannot slip past",
-      "openai_key_edit.text()" in _src2 and not _key_edit_leaks(_ast_tree))
-
-
 def _fn_src(name):
     import ast as _a
     for node in _a.walk(_ast_tree):
         if isinstance(node, _a.FunctionDef) and node.name == name:
             return _a.get_source_segment(_src2, node) or ""
     return ""
-
-
-_save_embed_src = _fn_src("save_embed")
-check("save_embed was found", bool(_save_embed_src))
-check("save_embed writes the OpenAI key and the embedding model...",
-      '"api_key_openai"' in _save_embed_src
-      and '"embedding_model"' in _save_embed_src)
-check("...and never the retired provider key — one provider now, so a "
-      "stored embedding_provider would be a value nothing reads",
-      "embedding_provider" not in _save_embed_src
-      and "embedding_api_key_" not in _save_embed_src)
-
-_save_api_key_settings_src = _fn_src("save_api_key_settings")
-check("save_api_key_settings was found", bool(_save_api_key_settings_src))
-for _k in ("api_key_anthropic", "transcription_model_path"):
-    check(f'save_api_key_settings writes "{_k}"', f'"{_k}"' in _save_api_key_settings_src)
-check("...and never the Ollama/Claude-Code era keys",
-      "claude_binary" not in _save_api_key_settings_src
-      and "ocr_model" not in _save_api_key_settings_src
-      and "ocr_enabled" not in _save_api_key_settings_src
-      and "assistant_model" not in _save_api_key_settings_src)
-check("every one of the four fields is written by exactly one save_*",
-      _src2.count('cfg["api_key_openai"] = ') == 1
-      and _src2.count('cfg["api_key_anthropic"] = ') == 1
-      and _src2.count('cfg["embedding_model"] = ') == 1
-      and _src2.count('cfg["transcription_model_path"] = ') == 1)
-# Execute the actual closures with small widget/config fixtures.
-import textwrap as _textwrap
-import types as _types
-_api_fixture = {"api_key_anthropic": "fixture-key", "transcription_model_path": "fixture-model", "transcription_binary": "", "transcription_language": "en"}
-_api_writes = []
-_api_widgets = {"anthropic_key_edit": LineEdit(), "transcription_model_path_edit": LineEdit(), "transcription_binary_edit": LineEdit(), "transcription_language_edit": LineEdit()}
-_api_namespace = dict(_api_widgets, _pkg=lambda: _types.SimpleNamespace(
-    get_config=lambda: dict(_api_fixture), write_config=lambda cfg: _api_writes.append(cfg)))
-exec(_textwrap.dedent(_fn_src("load_api_key_settings")), _api_namespace)
-exec(_textwrap.dedent(_save_api_key_settings_src), _api_namespace)
-_api_namespace["load_api_key_settings"]()
-check("API settings loads the saved Anthropic key into its field",
-      _api_widgets["anthropic_key_edit"].text() == "fixture-key")
-check("API settings loads the saved transcription model into its field",
-      _api_widgets["transcription_model_path_edit"].text() == "fixture-model")
-_api_widgets["anthropic_key_edit"].setText(" updated-key ")
-_api_widgets["transcription_model_path_edit"].setText(" updated-model ")
-_api_namespace["save_api_key_settings"]()
-check("API settings persists the edited fields through write_config",
-      _api_writes == [{"api_key_anthropic": "updated-key", "transcription_model_path": "updated-model", "transcription_binary": "", "transcription_language": "en"}])
-_sync_embed_src = _fn_src("sync_embed_widgets")
-check("load_api_key_settings runs INSIDE sync_embed_widgets' syncing guard — "
-      "seeding a switch that is already true emits toggled, and outside "
-      "the guard that marks a dialog nobody has touched as dirty",
-      "load_api_key_settings()" in _sync_embed_src
-      and _sync_embed_src.index("load_api_key_settings()")
-      < _sync_embed_src.index('ui_state["syncing"] = False'))
-check("all API fields connect to dirty tracking after mark_dirty is defined",
-      all(_src2.index("def mark_dirty() -> None:")
-          < _src2.index(f"{name}.textEdited.connect")
-          for name in ("openai_key_edit", "anthropic_key_edit",
-                       "embed_model_edit", "transcription_model_path_edit")))
-check("Save applies the surviving API key and transcription settings",
-      "save_api_key_settings()" in _fn_src("save_all"))
-check("General no longer offers to manage a local runtime",
-      "runtime_auto_cb" not in _src2 and "runtime_auto_setup" not in _src2)
-check("and no module-top import of the deleted runtime modules survives",
-      "ollama_client" not in _src2 and "ollama_runtime" not in _src2
-      and "ollama_setup" not in _src2)
-
+check("Save preserves transcription settings", "save_transcription_settings()" in _fn_src("save_all"))
+check("connection check runs without collection", "without_collection().run_in_background()" in _fn_src("test_connection"))
 
 print("== changing the model re-indexes everything (K-152) ==")
 # save_embed is the ONE writer of the embedding keys, so it is also the
@@ -985,7 +840,7 @@ def _stmt_index(fn, needle):
 
 
 _sig_line = _stmt_index(_save_embed, "index_signature(cfg)")
-_mut_line = _stmt_index(_save_embed, "cfg['api_key_openai'] =")
+_mut_line = _stmt_index(_save_embed, "cfg['endpoint'] =")
 _write_line = _stmt_index(_save_embed, "write_config(cfg)")
 _offer_line = _stmt_index(_save_embed, "offer_model_sweep")
 check("the previous signature is captured off STORED config",
@@ -997,23 +852,6 @@ check("...and the sweep is offered AFTER the write, so a decline still "
       "leaves the new settings saved",
       _offer_line is not None and _write_line is not None
       and _write_line < _offer_line)
-_had_key_line = _stmt_index(_save_embed, "had_key =")
-check("the had_key flag is captured off STORED config too, BEFORE the "
-      "write — reading it afterwards would make every first key look "
-      "like a key that was already there",
-      _had_key_line is not None and _mut_line is not None
-      and _had_key_line < _mut_line)
-_first_key_arg = None
-for _n in ast.walk(_save_embed):
-    if isinstance(_n, ast.Call) and "offer_model_sweep" in ast.unparse(_n.func):
-        for _kw in _n.keywords:
-            if _kw.arg == "first_key":
-                _first_key_arg = ast.unparse(_kw.value)
-check("save_embed asks for the sweep on a FIRST key as well as a moved "
-      "signature — a hard False here makes the offer unreachable for "
-      "the one user who most needs it, and nothing else would notice",
-      _first_key_arg is not None and "had_key" in _first_key_arg,
-      f"got {_first_key_arg!r}")
 check("save_embed delegates the sweep comparison to index_queue",
       "index_queue.offer_model_sweep(" in code_only(_mm_src)
       and code_only(_mm_src).count("prev_sig") == 2)
@@ -1026,8 +864,8 @@ check("the sweep offer is raised window-modal — open() and a finished "
       "box.open()" in _iq_code and ".exec()" not in _iq_code)
 
 _test_conn_src = _fn_src("test_connection")
-check("test_connection reads the current saved configuration",
-      bool(_test_conn_src) and "_pkg().get_config()" in _test_conn_src)
+check("test_connection probes the endpoint currently shown",
+      bool(_test_conn_src) and "endpoint_edit.text()" in _test_conn_src)
 
 check("Preferences' own Index Now still calls curation directly — it "
       "has its own progress bar and cancel, and the runner WAITS for "

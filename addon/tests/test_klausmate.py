@@ -70,23 +70,9 @@ def check(name, cond, detail=""):
 # ---------------------------------------------------------------- providers
 
 print("== provider selection ==")
-# OpenAI is the only embedding provider now (K-222/Task 2) — Voyage and
-# Ollama are gone from embeddings.py entirely, and provider_name is a
-# constant function kept only so existing callers still compile and run.
-check("openai is the only provider, for any cfg",
-      embeddings.provider_name({}) == "openai")
-check("an unrecognized/legacy provider key changes nothing — always openai",
-      embeddings.provider_name({"embedding_provider": "banana"}) == "openai")
-check("an explicit ollama/voyage request is ignored too — always openai",
-      embeddings.provider_name({"embedding_provider": "ollama"}) == "openai")
-check("openai default model is text-embedding-3-large",
-      embeddings.embedding_model({}) == "text-embedding-3-large")
-check("signature carries dims, so a width change invalidates the index",
-      embeddings.index_signature({}) == ("openai", "text-embedding-3-large", 0))
-check("dims ARE sent for text-embedding-3-large — it's Matryoshka/dimension-capable",
-      embeddings.index_signature(
-          {"embedding_provider": "openai", "embedding_dimensions": 1024}
-      )[2] == 1024)
+check("Ollama is the only provider", embeddings.provider_name({}) == "ollama")
+check("default local model", embeddings.embedding_model({}) == "nomic-embed-text")
+check("native dimension signature", embeddings.index_signature({"embedding_dimensions": 1024}) == ("ollama", "nomic-embed-text", 0))
 # An index built at one width cannot be ranked against another, so the
 # width has to reach check_signature — not merely be recorded.
 _ix = card_index.empty_index("openai", "text-embedding-3-large")
@@ -221,29 +207,6 @@ for _name in ("card_index.py", "pdf_index.py", "retention.py",
           "never by hand",
           _SIG_SPELLINGS.search(_src) is None)
 
-check("...and sent for OpenAI's v3 models, which are MRL-trained",
-      embeddings.index_signature(
-          {"embedding_provider": "openai",
-           "embedding_model": "text-embedding-3-large",
-           "embedding_dimensions": 1024}
-      ) == ("openai", "text-embedding-3-large", 1024))
-
-print("== missing key ==")
-try:
-    embeddings.OpenAIEmbeddings(lambda: {}).embed(["hi"])
-    check("openai no key raises", False)
-except embeddings.EmbeddingError as e:
-    check("openai no key raises 401", e.status == 401)
-    # K-236: the old copy sent the user to "Tools → Klaus → Manage models",
-    # a menu K-045 folded away and K-227 finished off — a dead address on a
-    # message that only ever appears when something needs fixing.
-    check("401 message names the page that actually holds the key",
-          "KlausMate Preferences → API keys & models" in e.user_message())
-
-# The HTTP-level behavior (auth header, retries, dims field, batching) now
-# lives entirely in openai_client.py and is covered by
-# tests/test_openai_client.py — OpenAIEmbeddings.embed is a thin
-# translation shim over it (see embeddings.py), so it isn't re-mocked here.
 # embed_batches itself is still this module's own — provider-agnostic
 # batching with no clamp (the old Voyage-specific 128 clamp is gone with
 # Voyage): a fake provider is enough to pin the loop, no HTTP involved.
@@ -684,7 +647,7 @@ if HAVE_RETENTION:
                 self._success(result)
 
     class _CountingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self):
             self.calls = []
@@ -793,7 +756,7 @@ if HAVE_RETENTION:
               len(_hr_provider.calls) == 3, str(_hr_provider.calls[2:]))
 
         # -- the matches cache follows the same pages (K-236 / I5b) -----
-        _m_sig = ("openai", "text-embedding-3-large")
+        _m_sig = ("ollama", "text-embedding-3-large")
         _m_src = pdf_index.source_signature(_hr_tmp, "HR")
         retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
                                [(1, 0.9)], {1: 3})
@@ -836,7 +799,7 @@ if HAVE_RETENTION:
     # embed_batches BATCH_SIZE of 64) so a cancel mid-first-batch leaves a
     # real, provable gap: batch one (rows 0-63) lands, batch two never runs.
     class _CancelingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self, cancel_event):
             self.calls = []
@@ -889,7 +852,7 @@ if HAVE_RETENTION:
               None if _c1_reloaded is None else _c1_reloaded.embedded_rows)
         check("cancel pin: reloaded index is not complete",
               _c1_reloaded is not None and not _c1_reloaded.is_complete())
-        _c1_sig = ("openai", "text-embedding-3-large", 0)
+        _c1_sig = ("ollama", "text-embedding-3-large", 0)
         _c1_src = pdf_index.source_signature(_c1_tmp, "C1")
         check("cancel pin: reloaded index is not fresh (so the next run "
               "won't short-circuit and skip resuming)",
@@ -931,7 +894,7 @@ if HAVE_RETENTION:
     # (no slide text layer, no transcript) — page_store.combined_text("") for
     # that page, exactly the image-only-slide case the review reproduced.
     class _RecordingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self):
             self.calls = []

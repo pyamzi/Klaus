@@ -386,7 +386,7 @@ check("setup_flow: the library-root offer threads a continuation so "
       "free); K-226 deleted the runtime-update offer this used to "
       "chain beside",
       "def _library_root_check(then" in _MODULES["setup_flow"]
-      and "_library_root_check(_readiness_after_library_root)"
+      and "_library_root_check(after_library)"
       in _K114["setup_flow"]
       and _K114["setup_flow"].count("then()") >= 4)
 check("setup_flow: the native folder sheet is deferred a tick past the "
@@ -404,8 +404,8 @@ check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
       "Lecture panel). Asked once per profile off the stale-manifest "
       "scan, and the flag is written whether the answer was yes or NO: "
       "a refused whole-collection re-embed is an answer, not a snooze",
-      "_offer_v2_index_sweep(cfg)"
-      in _func_src("setup_flow", "_readiness_check_body")
+      "_offer_v2_index_sweep(_pkg().get_config())"
+      in _func_src("setup_flow", "_readiness_after_library_root")
       and '_v2_index_sweep_offered' in _V2_SWEEP_SRC
       and "index_queue.stale_index_names()" in _V2_SWEEP_SRC
       and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC

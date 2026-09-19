@@ -68,7 +68,10 @@ def patch_config(updates: dict[str, Any]) -> None:
     every other setting. This is the one config writer a background thread
     may use, and the writer every ``plus.*`` sink must be.
     """
+    profile = getattr(mw, "col", None)
     def _apply() -> None:
+        if getattr(mw, "col", None) is not profile:
+            return
         try:
             cfg = get_config()
             cfg.update(updates)
@@ -114,16 +117,11 @@ _LEGACY_KEYS_DROPPED = (
     # (D1) — there is no separate assistant API key/backend/token to
     # store, the user's own `claude` login is the credential.
     "assistant_api_key", "assistant_backend", "assistant_token",
-    # Retired 2026-09-15 (K-226, spec D1/D8): Klaus went API-first. The
-    # local Ollama runtime and the vision-model OCR path are gone, so
-    # every key that only ever addressed them goes with them; the two
-    # one key that carried a VALUE worth keeping (embedding_api_key_openai)
-    # is renamed in _migrate_config BEFORE this loop runs, and only its
-    # spent old name is dropped here. assistant_model is a plain drop:
-    # see _migrate_config for why a rename could never have fired.
-    "embedding_provider", "embedding_api_key_voyage", "embedding_api_key_openai",
-    "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
-    "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
+    # Retired provider credentials and OCR settings.
+    "embedding_api_key_voyage", "embedding_api_key_openai",
+    "api_key_openai", "api_key_anthropic", "_embed_key_setup_declined",
+    "ocr_enabled", "ocr_model", "claude_binary",
+    "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
     "_embed_default_migrated",
     # Retired 2026-09-18: Klaus Plus subscription service removed.
     "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
@@ -143,53 +141,15 @@ def _migrate_config() -> None:
     """
     cfg = get_config()
     changed = False
-    reset_embed_decline = False
-    # 2026-09-15 (K-226): ONE retired key carried a VALUE the user set and
-    # would have to re-enter, so it is RENAMED before the drop loop below
-    # spends its old name. An empty destination only — a profile that
-    # already holds the new key keeps what it holds.
-    #
-    # assistant_model is NOT in here (K-236): Anki's getConfig returns
-    # config.json's defaults merged UNDER the profile's keys, so
-    # reasoning_model is never empty and the copy could never fire. It is
-    # dropped below, which is the better outcome anyway — the stored value
-    # is a Claude Code model alias the Messages API would reject, and
-    # nothing reads reasoning_model yet (K-235).
-    for old, new in (("embedding_api_key_openai", "api_key_openai"),):
-        if old in cfg:
-            if not str(cfg.get(new) or "").strip():
-                cfg[new] = cfg[old]
-            cfg.pop(old)
-            changed = True
-            reset_embed_decline = True
-    # 2026-09-16 (K-236): the embedding MODEL belonged to the provider
-    # being scrubbed — the pre-plan dialog wrote the resolved Ollama model
-    # into this key, and "nomic-embed-text" in an OpenAI-only world prices
-    # as a KeyError in cost.PRICES and embeds as an HTTP 404. "" resolves
-    # to embeddings.DEFAULT_MODELS' OpenAI default.
-    if str(cfg.get("embedding_provider") or "openai") != "openai":
-        cfg["embedding_model"] = ""
+    if not cfg.get("_local_embeddings_migrated"):
+        cfg.update(embedding_provider="ollama", embedding_model="nomic-embed-text",
+                   embedding_dimensions=0, _local_embeddings_migrated=True)
         changed = True
-        reset_embed_decline = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
-            if old not in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
-                           "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
-                           "reasoning_model", "transcription_model"):
-                reset_embed_decline = True
     if changed:
-        # 2026-09-16 (K-236): a profile that carried ANY retired key comes
-        # from the pre-API-first world, where an embedding key was optional
-        # because a local engine existed. `_embed_key_setup_declined` was a
-        # "no thanks" to an OPTIONAL key, and leaving it set silences the
-        # ONE profile-open message saying Klaus now REQUIRES one — the
-        # user's next signal would be a refusal tooltip on a drop. Klaus
-        # Plus or dock retirement alone does not change the embedding-key regime,
-        # so it must preserve a decline made under the API-first regime.
-        if reset_embed_decline:
-            cfg.pop("_embed_key_setup_declined", None)
         write_config(cfg)
 
 
@@ -1928,6 +1888,8 @@ gui_hooks.profile_did_open.append(_library_rescan_on_profile_open)
 gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
+from .setup_flow import stop_local_runtime
+gui_hooks.profile_will_close.append(stop_local_runtime)
 
 
 def _start_klaus_endpoint() -> None:

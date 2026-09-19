@@ -128,12 +128,11 @@ AUDIT_MODULES = (
     # status rendering are all aqt-free above its glue divider, so the
     # 122 checks in tests/test_index_queue.py reach nearly all of it.
     "index_queue",
-    # The API-first modules (2026-09-15, added by K-228).  page_store
-    # and cost are pure; openai_client is pure above one _urlopen the
-    # tests replace, so nearly every function is reachable from its test.
+    # Local storage and Ollama runtime modules.
     "page_store",
-    "cost",
-    "openai_client",
+    "ollama_client",
+    "ollama_runtime",
+    "ollama_setup",
     # Lecture recording is aqt-free above its "Qt glue" divider
     # (Chunker, wav_bytes, chunk_path, Uploader). Its test drives the
     # Recorder's non-Qt internals and replaces the network seam.

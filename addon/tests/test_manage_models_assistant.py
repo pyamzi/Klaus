@@ -44,7 +44,7 @@ section("the local-runtime era is gone from this module (spec D1)")
 # add-on loading — and the pull/classify/preset machinery they fed goes
 # with them. RAW source: code_only() strips string literals, which is
 # exactly what an absence pin must still be able to see.
-for _gone in ("ollama_client", "ollama_runtime", "ollama_setup", "page_ocr",
+for _gone in ("ollama_runtime", "ollama_setup", "page_ocr",
               "OllamaError", "InstallMethod", "install_methods",
               "ollama_reachable", "run_install_method", "full_setup"):
     check(f"{_gone} is not referenced anywhere in manage_models.py",
@@ -61,8 +61,7 @@ check("no pull / delete / install machinery survives — there is nothing "
       "start_pull" not in _SRC and "delete_selected" not in _SRC
       and "start_install" not in _SRC and "start_auto_setup" not in _SRC
       and "pull_missing" not in _SRC)
-check('the "endpoint" config key is gone with the local server',
-      "endpoint_url" not in _SRC and '"endpoint"' not in _SRC)
+check("local endpoint is configurable", 'cfg["endpoint"] = endpoint_edit.text()' in _SRC)
 
 
 # =====================================================================

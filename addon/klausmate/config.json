@@ -1,10 +1,8 @@
 {
   "image_crop_enabled": true,
   "browse_highlight_default": true,
-  "embedding_dimensions": 1024,
-  "embedding_model": "text-embedding-3-large",
-  "api_key_openai": "",
-  "api_key_anthropic": "",
+  "embedding_dimensions": 0,
+  "embedding_model": "nomic-embed-text",
   "transcription_model_path": "",
   "transcription_binary": "",
   "transcription_language": "en",
@@ -38,5 +36,8 @@
   "dashboard_order": [
     "decks",
     "heatmap"
-  ]
+  ],
+  "embedding_provider": "ollama",
+  "endpoint": "http://127.0.0.1:11434",
+  "runtime_auto_setup": true
 }

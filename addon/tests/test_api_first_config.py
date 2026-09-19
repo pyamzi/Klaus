@@ -47,251 +47,35 @@ K = exec_klausmate_under_qt(_SCRATCH)
 _real_get_config, _real_write_config = K.get_config, K.write_config
 
 
-# ------------------------------------------------- deletions
-
-section("2026-09-15: the local runtime, OCR and their config are gone")
-
-for name in ("ollama_client", "ollama_runtime", "ollama_setup", "page_ocr"):
-    check(
-        f"klausmate/{name}.py is deleted",
-        not os.path.exists(os.path.join(ROOT, "klausmate", f"{name}.py")),
-    )
-
-_src = open(os.path.join(ROOT, "klausmate", "__init__.py"), encoding="utf-8").read()
-check(
-    "__init__ imports none of them",
-    not re.search(r"ollama_(client|runtime|setup)|page_ocr", _src),
-)
-
-
-# ------------------------------------------------- config.json
-
-section("config.json is the API-first key set")
-
+section("local defaults and one-time migration")
 cfg = json.load(open(os.path.join(ROOT, "klausmate", "config.json"), encoding="utf-8"))
-
-for k in (
-    "embedding_provider",
-    "embedding_api_key_openai",
-    "embedding_api_key_voyage",
-    "ocr_enabled",
-    "ocr_model",
-    "runtime_auto_setup",
-    "claude_binary",
-    "endpoint",
-    "pdf_index_max_chunks",
-    "pdf_match_agg",
-    "assistant_model",
-):
-    check(f"config.json no longer defines {k}", k not in cfg)
-
-for k, v in (
-    ("api_key_openai", ""),
-    ("api_key_anthropic", ""),
-    ("transcription_model_path", ""),
-    ("transcription_binary", ""),
-    ("transcription_language", "en"),
-    ("embedding_model", "text-embedding-3-large"),
-):
-    check(f"config.json defines {k} = {v!r}", cfg.get(k) == v)
-
-check(
-    "embedding_dimensions survives at 1024 — the width is still part of "
-    "the index signature, so dropping it would silently re-embed",
-    cfg.get("embedding_dimensions") == 1024,
-)
-
-
-section("local transcription migration preserves saved paths and embedding decline")
-for overrides in ({}, {"transcription_model_path": "/saved model.bin", "transcription_binary": "/custom cli", "transcription_language": "fa"}):
-    store = dict(cfg, transcription_model="gpt-4o-mini-transcribe", _embed_key_setup_declined=True, **overrides)
-    writes = []
-    K.get_config = lambda: dict(store)
-    def save_local(value):
-        store.clear()
-        store.update(value)
-        writes.append(dict(value))
-    K.write_config = save_local
-    K._migrate_config()
-    check("cloud model retired", "transcription_model" not in store)
-    check("local values preserved", all(store.get(k) == overrides.get(k, default) for k, default in
-          (("transcription_model_path", ""), ("transcription_binary", ""), ("transcription_language", "en"))))
-    check("transcription retirement preserves embedding decline", store.get("_embed_key_setup_declined") is True)
-    first = dict(store)
-    K._migrate_config()
-    check("local migration idempotent", store == first and len(writes) == 1)
-
-# ------------------------------------------------- _migrate_config
-
-section("_migrate_config: one rename, and what an Ollama-era profile loses")
-
-# Model Anki's merge of defaults under profile overrides.
-def _profile(**user_keys) -> dict:
-    merged = dict(cfg)
-    merged.update(user_keys)
-    return merged
-
-
-_store = _profile(
-    embedding_api_key_openai="sk-old",
-    assistant_model="claude-x",
-    embedding_provider="ollama",
-    embedding_model="nomic-embed-text",
-    ocr_model="glm-ocr",
-    _embed_default_migrated=True,
-    _embed_key_setup_declined=True,
-)
-_written: dict = {}
-K.get_config = lambda: dict(_store)
-K.write_config = lambda c: _written.update(c)
+check("marker is never a default", "_local_embeddings_migrated" not in cfg)
+for key, value in (("embedding_provider", "ollama"), ("embedding_model", "nomic-embed-text"),
+                   ("embedding_dimensions", 0), ("runtime_auto_setup", True)):
+    check(f"local default {key}", cfg.get(key) == value)
+credentials = ("api_key_openai", "api_key_anthropic", "embedding_api_key_openai", "embedding_api_key_voyage", "klaus_plus_key")
+check("no default credentials", not any(key in cfg for key in credentials))
+store = dict(cfg, embedding_provider="openai", embedding_model="text-embedding-3-large",
+             embedding_dimensions=1024, library_root="/fixture/library", color_theme="rose",
+             transcription_binary="/custom cli", transcription_model_path="/saved model.bin",
+             transcription_language="fa", transcription_model="old-cloud-model",
+             _embed_key_setup_declined=True, assistant_model="old", ocr_model="old",
+             **dict.fromkeys(credentials, "old-secret"))
+writes = []
+K.get_config = lambda: dict(store)
+def save(value):
+    store.clear()
+    store.update(value)
+    writes.append(dict(value))
+K.write_config = save
 K._migrate_config()
-
-check(
-    "the API key is renamed — its destination default IS \"\", so this "
-    "one really does migrate a value the user would otherwise re-enter",
-    _written.get("api_key_openai") == "sk-old"
-    and "embedding_api_key_openai" not in _written,
-)
-check(
-    "retired model aliases are removed without replacement",
-    "reasoning_model" not in _written
-    and "assistant_model" not in _written,
-)
-check(
-    "a dead provider takes its model with it — the pre-plan dialog wrote "
-    "the resolved Ollama model into embedding_model, and carrying "
-    '"nomic-embed-text" into an OpenAI-only world prices as a KeyError '
-    'and embeds as an HTTP 404. "" resolves to the OpenAI default',
-    _written.get("embedding_model") == "",
-)
-check(
-    "the declined-key flag goes with them: it was a 'no thanks' to an "
-    "OPTIONAL key (a local engine existed then) and would otherwise "
-    "silence the only profile-open message saying Klaus now REQUIRES "
-    "one — the API-first regime gets exactly one fresh nudge",
-    "_embed_key_setup_declined" not in _written,
-)
-check(
-    "...and the rest of the Ollama era is scrubbed, nothing invented",
-    not any(
-        k in _written
-        for k in ("embedding_provider", "ocr_model", "_embed_default_migrated")
-    ),
-)
-
-# Retired dock keys are removed from existing profiles in one write.
-_retired = ("assistant_reopen", "assistant_dock_width", "assistant_dock_open", "reasoning_model")
-_migration_store = _profile(**dict.fromkeys(_retired, "old-value"))
-_migration_store["library_root"] = "/fixture/library"
-_migration_store["_embed_key_setup_declined"] = True
-_migration_writes = []
-K.get_config = lambda: dict(_migration_store)
-def _save_migration(value):
-    _migration_store.clear()
-    _migration_store.update(value)
-    _migration_writes.append(dict(value))
-K.write_config = _save_migration
+check("cloud profile changes to local native model", (store.get("embedding_provider"), store.get("embedding_model"), store.get("embedding_dimensions")) == ("ollama", "nomic-embed-text", 0))
+check("credentials and obsolete fields removed", not any(key in store for key in credentials + ("_embed_key_setup_declined", "assistant_model", "ocr_model", "transcription_model")))
+check("appearance library and D6 choices survive", all(store[k] == v for k, v in (("library_root", "/fixture/library"), ("color_theme", "rose"), ("transcription_binary", "/custom cli"), ("transcription_model_path", "/saved model.bin"), ("transcription_language", "fa"))))
+store["embedding_model"] = "custom-local"
+store["endpoint"] = "http://localhost:12345"
 K._migrate_config()
-check("all retired dock keys are absent from defaults and migrated profiles",
-      all(k not in cfg and k not in _migration_store for k in _retired))
-check("migration preserves unrelated configuration",
-      _migration_store == dict(cfg, library_root="/fixture/library",
-                               _embed_key_setup_declined=True))
-check("retired keys cause exactly one migration write", len(_migration_writes) == 1)
-K._migrate_config()
-check("a second migration performs no write", len(_migration_writes) == 1)
-
-# An OpenAI-era profile keeps the model it actually chose.
-_storeO = _profile(embedding_provider="openai", embedding_model="text-embedding-3-small")
-_writtenO: dict = {}
-K.get_config = lambda: dict(_storeO)
-K.write_config = lambda c: _writtenO.update(c)
-K._migrate_config()
-check(
-    "an OpenAI-era profile's embedding model SURVIVES — only a dead "
-    "provider's model is cleared, never a valid choice the user made",
-    _writtenO.get("embedding_model") == "text-embedding-3-small",
-)
-
-# A profile that carried no retired key at all is not touched: a decline
-# recorded AFTER the migration is honoured forever.
-_storeD = _profile(api_key_openai="", _embed_key_setup_declined=True)
-_wroteD = []
-K.get_config = lambda: dict(_storeD)
-K.write_config = lambda c: _wroteD.append(c)
-K._migrate_config()
-check(
-    "a decline made in the API-first regime is NOT re-cleared — the "
-    "fresh nudge is one-time, tied to the retired keys actually present, "
-    "not a prompt that returns every launch",
-    _wroteD == [],
-)
-
-# Retiring Klaus Plus storage does not make an API-first embedding key newly
-# required, so it must not re-open a prompt the user already declined.
-_storeP = _profile(
-    klaus_plus_key="kp-retired",
-    klaus_plus_cache={"old": "value"},
-    klaus_plus_base="https://retired.example",
-    klaus_plus_email="former@example.invalid",
-    _embed_key_setup_declined=True,
-)
-_writtenP: dict = {}
-K.get_config = lambda: dict(_storeP)
-K.write_config = lambda c: _writtenP.update(c)
-K._migrate_config()
-check(
-    "Plus-only migration drops all retired keys but preserves an API-first setup decline",
-    bool(_writtenP)
-    and all(
-        k not in _writtenP
-        for k in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email")
-    )
-    and _writtenP.get("_embed_key_setup_declined") is True,
-)
-
-# A profile that already holds the new names must not have them clobbered
-# by a stale old one: the rename only fills an EMPTY destination.
-_store2 = _profile(embedding_api_key_openai="sk-old", api_key_openai="sk-new")
-_written2: dict = {}
-K.get_config = lambda: dict(_store2)
-K.write_config = lambda c: _written2.update(c)
-K._migrate_config()
-check(
-    "a rename never overwrites a destination the user has already set",
-    _written2.get("api_key_openai") == "sk-new"
-    and "embedding_api_key_openai" not in _written2,
-)
-
-# Idempotence: a profile already migrated writes nothing at all.
-_store3 = _profile(api_key_openai="sk")
-_wrote_any = []
-K.get_config = lambda: dict(_store3)
-K.write_config = lambda c: _wrote_any.append(c)
-K._migrate_config()
-check("an already-migrated profile is a no-op (no write)", _wrote_any == [])
-
-check(
-    "the retired keys are all named in _LEGACY_KEYS_DROPPED, so an old "
-    "profile's meta.json loses them on the next open",
-    set(
-        (
-            "embedding_provider",
-            "embedding_api_key_voyage",
-            "ocr_enabled",
-            "ocr_model",
-            "runtime_auto_setup",
-            "claude_binary",
-            "endpoint",
-            "pdf_index_max_chunks",
-            "pdf_match_agg",
-            "_embed_default_migrated",
-            "embedding_api_key_openai",
-            "assistant_model",
-        )
-    )
-    <= set(K._LEGACY_KEYS_DROPPED),
-)
+check("later migration preserves local choices and writes nothing", len(writes) == 1 and store["embedding_model"] == "custom-local" and store["endpoint"] == "http://localhost:12345")
 
 
 # ------------------------------------------------- patch_config (K-247 fix 1)
@@ -359,6 +143,12 @@ try:
     )
     check("...with the patched key itself applied",
           _after.get("image_crop_enabled") is True)
+    _fake_tm.queued.clear()
+    K.mw.col = object()
+    K.patch_config({"endpoint": "http://localhost:9999"})
+    K.mw.col = object()
+    _fake_tm.queued.pop()()
+    check("queued patch cannot write to another profile", "endpoint" not in _fake_mgr._cfg)
 finally:
     K.mw = _orig_mw
     K.get_config, K.write_config = _real_get_config, _real_write_config

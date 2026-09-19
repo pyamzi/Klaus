@@ -1,31 +1,4 @@
-"""KlausMate Preferences dialog: the two API keys and the three model
-names, the Library folder, and the KlausBook appearance layer.
-
-Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
-split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
-point (K-045 folded the old 'Klaus' submenu's three items in here).
-
-Since the API-first reversal (2026-09-15, spec D1) Klaus talks to exactly
-two services with the user's own keys — OpenAI for embeddings and lecture
-transcription, and Anthropic, whose key is STORED for the spec's Plans 2
-and 3 (card pertinence, the assistant on the Messages API) and read by
-nothing today: the assistant still runs on the user's own Claude Code
-login. So the
-old Semantic Search page (a provider combo fanned out over three
-per-provider key slots) and the whole "Local model library (Ollama)" page
-with its install / pull / delete / classify machinery are gone, together
-with the runtime they managed. One page, "API keys & models", holds what
-is left, and it is also where a changed embedding model or a first OpenAI
-key offers the whole-collection re-embed sweep, priced by cost.py before
-anything is spent.
-
-This module is imported by __init__.py at package load time, so it must
-never import __init__ (this package) at module load — only from inside a
-function, after the package has finished loading. _pkg() below is that
-lazy accessor (same pattern as curation.py's _pkg()); it reaches config
-and helpers that live in __init__.py: get_config, write_config,
-open_config.
-"""
+"""KlausMate Preferences for local models, general settings and appearance."""
 
 from __future__ import annotations
 
@@ -202,7 +175,7 @@ class _KlausManageDialog(QDialog):
     Esc triggers QDialog.reject() and the title-bar ✕ triggers closeEvent —
     neither hits a Close button's clicked signal. Without routing them
     through confirm_close, a running card-index build would keep
-    embedding — and billing — invisibly after the dialog vanishes, and
+    embedding invisibly after the dialog vanishes, and
     unsaved preference edits would be discarded without a word.
     """
 
@@ -695,43 +668,20 @@ def manage_models_dialog(*_args: Any) -> None:
     search_edit.textChanged.connect(_apply_search)
 
     keys_layout = _page(
-        "API keys & models",
-        "API keys & models",
-        "Lecture transcription runs locally with whisper.cpp. Klaus talks to OpenAI (embeddings) and "
-        "Anthropic (the assistant, and judging which cards a lecture "
-        "really covers) with your own keys. Both are stored in this "
-        "add-on's config on your machine and never sent anywhere else.",
+        "Local models", "Local models",
+        "Semantic search runs locally with Ollama. Lecture transcription uses whisper.cpp.",
     )
-
-    openai_key_edit = QLineEdit()
-    openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    openai_key_edit.setMinimumWidth(220)
-    openai_key_edit.setPlaceholderText("sk-…  (platform.openai.com)")
-    openai_row = _row(
-        keys_layout,
-        "OpenAI API key",
-        "Card and PDF embeddings.",
-        openai_key_edit,
-    )
-
-    anthropic_key_edit = QLineEdit()
-    anthropic_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    anthropic_key_edit.setMinimumWidth(220)
-    anthropic_key_edit.setPlaceholderText("sk-ant-…  (console.anthropic.com)")
-    anthropic_row = _row(
-        keys_layout,
-        "Anthropic API key",
-        "The assistant and card pertinence.",
-        anthropic_key_edit,
-    )
+    endpoint_edit = QLineEdit()
+    endpoint_edit.setMinimumWidth(220)
+    endpoint_edit.setPlaceholderText("http://127.0.0.1:11434")
+    _row(keys_layout, "Ollama endpoint", "Local HTTP address for Ollama.", endpoint_edit)
     embed_model_edit = QLineEdit()
     embed_model_edit.setMinimumWidth(220)
-    embed_model_edit.setPlaceholderText("text-embedding-3-large")
+    embed_model_edit.setPlaceholderText("nomic-embed-text")
     _row(
         keys_layout,
         "Embedding model",
-        "Changing it re-embeds everything (Klaus asks first, with an "
-        "estimate).",
+        "Changing it offers to re-index your cards and PDFs locally.",
         embed_model_edit,
     )
 
@@ -845,12 +795,12 @@ def manage_models_dialog(*_args: Any) -> None:
 
     # Maintenance — the connection check that used to live in the
     # Tools > Klaus submenu (K-045).
-    test_conn_btn = QPushButton("Check Keys")
+    test_conn_btn = QPushButton("Check Connection")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
         general_layout,
         "Connection",
-        "Check that both API keys are set.",
+        "Check the local Ollama connection.",
         test_conn_btn,
     )
 
@@ -1486,9 +1436,8 @@ def manage_models_dialog(*_args: Any) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    def load_api_key_settings() -> None:
+    def load_transcription_settings() -> None:
         cfg = _pkg().get_config()
-        anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
         transcription_model_path_edit.setText(
             str(cfg.get("transcription_model_path") or "")
         )
@@ -1496,15 +1445,14 @@ def manage_models_dialog(*_args: Any) -> None:
         transcription_binary_edit.setText(str(cfg.get("transcription_binary") or ""))
         transcription_language_edit.setText(str(cfg.get("transcription_language") or "en"))
 
-    def save_api_key_settings() -> None:
+    def save_transcription_settings() -> None:
         cfg = _pkg().get_config()
-        cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
         cfg["transcription_model_path"] = transcription_model_path_edit.text().strip()
         cfg["transcription_binary"] = transcription_binary_edit.text().strip()
         cfg["transcription_language"] = transcription_language_edit.text().strip() or "en"
         _pkg().write_config(cfg)
 
-    _finish_nav("General", "Appearance", "API keys & models")
+    _finish_nav("General", "Appearance", "Local models")
 
     outer.addWidget(models_page, 1)
 
@@ -1566,7 +1514,7 @@ def manage_models_dialog(*_args: Any) -> None:
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
         for w in (
-            openai_key_edit, anthropic_key_edit, embed_model_edit,
+            endpoint_edit, embed_model_edit,
             transcription_model_path_edit, transcription_binary_edit, transcription_language_edit,
             *transcription_browse_buttons,
             index_btn, test_conn_btn,
@@ -1577,30 +1525,22 @@ def manage_models_dialog(*_args: Any) -> None:
         progress_lbl.setVisible(busy)
 
     def refresh() -> None:
-        """Reload every deferred-save widget from stored config. The one
-        entry point that used to probe a local server and rebuild a model
-        inventory; with two cloud keys there is nothing to probe."""
+        """Reload deferred-save widgets from the current configuration."""
         sync_embed_widgets()
         sync_threshold_widget()
 
-    # ----- API keys & models handlers --------------------------------------
+    # ----- Local models handlers --------------------------------------
 
     def sync_embed_widgets() -> None:
-        """Seed the five fields from stored config.
-
-        Never while dirty: a refresh landing mid-edit must not overwrite
-        unsaved values with the stored ones. The key fields are seeded
-        here and read only by save_embed / save_api_key_settings — a key's value
-        never reaches a print, a tooltip or a status label.
-        """
+        """Seed local settings unless the user has pending edits."""
         if ui_state["dirty"]:
             return
         ui_state["syncing"] = True
         try:
             cfg = _pkg().get_config()
-            openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
+            endpoint_edit.setText(str(cfg.get("endpoint") or "http://127.0.0.1:11434"))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            load_api_key_settings()
+            load_transcription_settings()
         finally:
             ui_state["syncing"] = False
         update_embed_status()
@@ -1621,9 +1561,7 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
-        if not str(cfg.get("api_key_openai") or "").strip():
-            txt = "Add your OpenAI API key above to enable semantic search."
-        elif not st["exists"]:
+        if not st["exists"]:
             txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
@@ -1644,27 +1582,15 @@ def manage_models_dialog(*_args: Any) -> None:
         # what config holds after the write is the only honest way to ask
         # "did the model move under the index?" (K-152).
         prev_sig = embeddings.index_signature(cfg)
-        had_key = bool(str(cfg.get("api_key_openai") or "").strip())
-        cfg["api_key_openai"] = openai_key_edit.text().strip()
+        cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
         cfg["embedding_model"] = embed_model_edit.text().strip()
         _pkg().write_config(cfg)
         update_embed_status()
-        # K-152: a changed model or width invalidates EVERY stored
-        # vector, and PDF indexes rebuild only lazily — one at a time,
-        # whenever you next happen to touch that PDF — so without this
-        # the whole Library goes quietly stale until each is opened by
-        # hand. A FIRST key is the other half: the signature never moves
-        # (nothing was ever embedded), and that is exactly the moment
-        # the offer is most useful. offer_model_sweep does the
-        # comparison (via embeddings.signature_matches, never a tuple
-        # ==), counts the work, prices it, and asks before spending.
-        # (The Plus-key half of this same offer now lives in
-        # on_plus_sign_in — the key isn't editable through this form
-        # anymore.)
+        # Offer a local rebuild when the stored signature changes.
         try:
             from . import index_queue
 
-            index_queue.offer_model_sweep(dlg, prev_sig, first_key=not had_key and bool(cfg["api_key_openai"]))
+            index_queue.offer_model_sweep(dlg, prev_sig)
         except Exception as exc:
             print(f"[klausmate] model-change sweep offer failed: {exc}")
 
@@ -1889,9 +1815,6 @@ def manage_models_dialog(*_args: Any) -> None:
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        if not str(cfg.get("api_key_openai") or "").strip():
-            showWarning("Enter your OpenAI API key above before indexing.")
-            return
         st = curation.index_stats()
         if st["exists"] and not embeddings.signature_matches(
             st["provider"], st["model"], st.get("dims", 0), sig
@@ -2284,7 +2207,7 @@ def manage_models_dialog(*_args: Any) -> None:
         save_embed()
         save_threshold()
         save_general()
-        save_api_key_settings()
+        save_transcription_settings()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
@@ -2352,26 +2275,22 @@ def manage_models_dialog(*_args: Any) -> None:
         op.without_collection().run_in_background()
 
     def test_connection() -> None:
-        """Moved from the old Tools > Klaus > Test connection (K-045).
-
-        A key-PRESENCE check, not a network probe: a live call would
-        cost money to answer a question the user did not ask, and the
-        only failure it could report that this cannot is a wrong key —
-        which the first real request reports anyway, with its own
-        message.
-        """
-        cfg = _pkg().get_config()
-        pairs = (("OpenAI", "api_key_openai"), ("Anthropic", "api_key_anthropic"))
-        missing = [label for label, key in pairs if not str(cfg.get(key) or "").strip()]
-        if missing:
-            showWarning(
-                "No API key is set for: "
-                + ", ".join(missing)
-                + ".\n\nAdd one in KlausMate Preferences → API keys & models.",
-                parent=dlg,
-            )
-        else:
-            showInfo("Both API keys are set.", parent=dlg)
+        if op_state["active"]:
+            return
+        from .ollama_client import OllamaClient
+        endpoint = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
+        set_busy(True)
+        def done(reachable: bool) -> None:
+            if _OPEN_DLG is not dlg:
+                return
+            set_busy(False)
+            if reachable:
+                showInfo("Local Ollama is reachable.", parent=dlg)
+            else:
+                showWarning("Cannot connect to Ollama. Check the endpoint and start Ollama.", parent=dlg)
+        op = QueryOp(parent=dlg, op=lambda _col: OllamaClient(endpoint, timeout=5).health(), success=done)
+        op.failure(lambda _exc: done(False))
+        op.without_collection().run_in_background()
 
     cancel_btn.clicked.connect(cancel_index)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
@@ -2380,9 +2299,8 @@ def manage_models_dialog(*_args: Any) -> None:
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    endpoint_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
     transcription_model_path_edit.textEdited.connect(lambda _t: mark_dirty())
     transcription_binary_edit.textEdited.connect(lambda _t: mark_dirty())
     transcription_language_edit.textEdited.connect(lambda _t: mark_dirty())

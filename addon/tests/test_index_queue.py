@@ -64,28 +64,6 @@ check(
     and iq.auto_index_enabled(None),
 )
 
-check(
-    "no OpenAI key is refused, by name (2026-09-15: OpenAI is the only "
-    "embedding provider, so the name is a constant, not a lookup)",
-    iq.missing_key_provider({"api_key_openai": ""}) == "OpenAI",
-)
-check(
-    "an OpenAI key passes",
-    iq.missing_key_provider({"api_key_openai": "sk-1"}) == "",
-)
-check(
-    "a whitespace-only key is no key",
-    iq.missing_key_provider({"api_key_openai": "   "}) == "OpenAI",
-)
-check(
-    "an empty config is judged missing — the key is absent, not blank",
-    iq.missing_key_provider({}) == "OpenAI",
-)
-check(
-    "a non-dict is never key-gated (the callers' defensive shape)",
-    iq.missing_key_provider(None) == "",
-)
-
 # -------------------------------------------------------------- the queue
 
 section("JobQueue")
@@ -141,44 +119,16 @@ check(
     iq.status_line(iq.RunnerState(active=True, label="Embedding cards…"))
     == "Card index — Embedding cards…",
 )
-msg = iq.sweep_message(2, 30000, "text-embedding-3-large",
-                       "~1,000 tokens · about $0.01")
-check("the sweep names the model", "text-embedding-3-large" in msg)
-check("...counts both kinds of work", "30,000 notes" in msg and "2 PDFs" in msg)
-check(
-    "...and carries the cost estimate VERBATIM, plus whose key pays it — "
-    "a from-scratch re-embed of the whole collection is a paid API call, "
-    "and a confirm that hides the price is not a confirm",
-    "~1,000 tokens · about $0.01" in msg and "OpenAI" in msg,
-)
-check(
-    "...and still says the run can be stopped from the bottom bar",
-    "stop it" in msg.lower(),
-)
-check(
-    "...and says what declining actually COSTS — the next PDF add runs "
-    "the card index from scratch as phase one, unpriced and unconfirmed, "
-    "so a bare No reads as 'not now, and free' when it means 'not now, "
-    "and without being asked again'",
-    "If you decline, the card index is still rebuilt — unpriced — the "
-    "first time a PDF is indexed." in msg,
-)
-_one = iq.sweep_message(1, 1, "m", "~0 tokens · under $0.01")
-# "1 PDF" is a SUBSTRING of "1 PDFs", so the obvious form of this check
-# passes against a message that never learned the singular at all — it
-# did, until the falsification pass made it fail and it didn't. The
-# absence of the plural is the half with teeth.
-check(
-    "...singular when it is one, with the plural really gone",
-    "1 PDF" in _one and "1 note" in _one
-    and "1 PDFs" not in _one and "1 notes" not in _one,
-)
+msg = iq.sweep_message(2, 30000, "nomic-embed-text")
+check("local sweep names model and amount of work", "nomic-embed-text" in msg and "30,000 notes" in msg and "2 PDFs" in msg)
+check("one note and PDF use singular labels", "1 note and 1 PDF will" in iq.sweep_message(1, 1, "m"))
+check("local sweep describes time and cancellation", "locally" in msg and "stop it" in msg and "$" not in msg)
+check("declining sweep explains later confirmation", "If you decline" in msg and "with confirmation" in msg)
 check(
     "the add tooltip distinguishes running from queued",
     iq.queued_message("A", 0).startswith("KlausMate: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
-check("the key refusal names the provider and where to fix it", "OpenAI" in iq.missing_key_message("OpenAI") and "API keys & models" in iq.missing_key_message("OpenAI"))
 check(
     "the bar's one button stops a run and clears a finished one",
     iq.dock_button_label(iq.RunnerState(active=True)) == "Stop"
@@ -299,8 +249,8 @@ class Pipeline:
         # straight through, with no confirm in the way.
         self._index_stats = {
             "exists": True,
-            "provider": "openai",
-            "model": "text-embedding-3-large",
+            "provider": "ollama",
+            "model": "nomic-embed-text",
             "dims": 0,
         }
 
@@ -374,7 +324,6 @@ def new_world(cfg=None, names=("a", "b", "c")):
     iq._waits = 0
     iq._state = iq.RunnerState()
     iq._listeners = []
-    iq._key_warned = False
     iq._dock = None
     return tmp, pipe
 
@@ -585,14 +534,12 @@ check("...and only its own", iq._queue.pending() == 2)
 
 tmp, pipe = new_world()
 iq.request_pdf("a", announce=False)
-iq._key_warned = True
 iq._on_profile_close()
 check(
     "a profile close stops everything — the phases read the collection "
     "and write into user_files, and both are about to go away",
     iq._queue.pending() == 0 and iq._current is None,
 )
-check("...and the once-per-session key warning re-arms for the next profile", iq._key_warned is False)
 
 
 # -------------------------------------------------------------------- errors
@@ -619,15 +566,10 @@ iq.mw.col = None
 check("no profile, no job", iq.request_pdf("a", announce=False) is False)
 check("...and nothing queued to leak into the next profile", iq._queue.pending() == 0)
 
-tmp, pipe = new_world(cfg={"api_key_openai": ""})
-check("no API key, no job", iq.request_pdf("a", announce=False) is False)
-check(
-    "...and the refusal is a MESSAGE, not a shrug — a silent no-op on "
-    "every drop would be worse than the button this replaces",
-    "API key" in iq.state().message,
-)
+tmp, pipe = new_world(cfg={})
+check("local indexing requires no API key", iq.request_pdf("a", announce=False) is True)
 FakeTimer.drain()
-check("...nothing ran", pipe.calls == [])
+check("keyless local job runs", bool(pipe.calls))
 
 tmp, pipe = new_world(cfg={"api_key_openai": "sk", "auto_index_on_add": False})
 check("auto-index off: an import does not queue", iq.on_pdf_imported("a") is False)
@@ -675,7 +617,7 @@ embeddings = importlib.import_module("klausmate.embeddings")
 os.makedirs(pdf_index.index_dir(tmp, "a"))
 with open(os.path.join(pdf_index.index_dir(tmp, "a"), "manifest.json"), "w") as f:
     f.write('{"version": %d, "pages": [[0,"h0"]], "embedded_rows": 1, '
-            '"provider": "openai", "model": "text-embedding-3-large", "dims": 1024}'
+            '"provider": "ollama", "model": "nomic-embed-text", "dims": 1024}'
             % pdf_index.INDEX_VERSION)
 names = iq.indexed_pdf_names()
 check("a PDF with an index on disk is swept", "a" in names)
@@ -809,118 +751,10 @@ check(
 )
 
 
-# ------------------------------------------------------- what the sweep costs
-
-section("the sweep estimate")
-
+section("local sweep avoids paid estimates")
 tmp, pipe = new_world(names=("a",))
-page_store = importlib.import_module("klausmate.page_store")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
-
-iq.mw.col.db.total = 40_000
-_est = iq.sweep_estimate([])
-check(
-    "the estimate counts the whole collection's note text — one scalar "
-    "over notes.flds, at cost.py's four-chars-a-token",
-    _est.tokens == 10_000 and _est.dollars > 0,
-    f"got {_est!r}",
-)
-
-import json as _json  # noqa: E402
-
-with open(os.path.join(tmp, "contexts", "a.json"), "w") as f:
-    _json.dump({"pages": ["x", "y"]}, f)
-_path = pdf_handler.pdf_path_for(tmp, "a") or ""
-page_store.ensure_records(tmp, "a", _path, ["a" * 4000, "b" * 4000])
-_est2 = iq.sweep_estimate(["a"])
-check(
-    "...plus every PAGE of every swept PDF — the page store is what gets "
-    "re-embedded now, not a chunking of the raw text file",
-    _est2.tokens == _est.tokens + 2000,
-    f"got {_est2!r} vs {_est!r}",
-)
-
-with open(os.path.join(tmp, "contexts", "d.json"), "w") as f:
-    _json.dump({"pages": ["p" * 2000, "q" * 2000]}, f)
-_est3 = iq.sweep_estimate(["d"])
-check(
-    "...and a PDF with stored slide text but NO page-store records yet "
-    "(no ensure_records call at all) is counted at its slide-text "
-    "length, not skipped as zero — every PDF on every existing profile "
-    "is in exactly this state the first time this ships",
-    _est3.tokens == _est.tokens + 1000,
-    f"got {_est3!r} vs {_est!r}",
-)
-
-check(
-    "a PDF with no pages on disk contributes nothing and never raises",
-    iq.sweep_estimate(["b"]).tokens == _est.tokens,
-)
-
-check(
-    "a FIRST key offers the sweep even though the signature never moved "
-    "— nothing was ever embedded, so there is nothing for the comparison "
-    "to see, and that is exactly the moment the offer matters",
-    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()),
-                         first_key=True) is True,
-)
-check(
-    "...and without it that same unchanged signature still offers nothing",
-    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()))
-    is False,
-)
-
-iq.mw.addonManager.cfg["embedding_model"] = "surprise-model-9"
-_raised = False
-try:
-    iq.sweep_estimate([])
-except Exception:
-    _raised = True
-iq.mw.addonManager.cfg.pop("embedding_model")
-check(
-    "a hand-typed model with no published price RAISES rather than "
-    "silently pricing itself as some other model...",
-    _raised,
-)
-check(
-    "...and offer_model_sweep catches that and says the cost is unknown, "
-    "so the confirm still appears (the re-embed is the user's to refuse)",
-    "cost unknown" in open(os.path.join(ADDON, "index_queue.py")).read(),
-)
-
-
-class _RaisingDb:
-    def scalar(self, _sql, *_a):
-        raise RuntimeError("notes scalar boom")
-
-
-_captured_estimate: dict = {}
-_orig_sweep_message = iq.sweep_message
-
-
-def _capture_sweep_message(n_pdfs, n_notes, model, estimate):
-    _captured_estimate["estimate"] = estimate
-    return _orig_sweep_message(n_pdfs, n_notes, model, estimate)
-
-
-_orig_notes_db = iq.mw.col.db
-iq.mw.col.db = _RaisingDb()
-iq.sweep_message = _capture_sweep_message
-try:
-    iq.offer_model_sweep(
-        None, embeddings.index_signature(iq._cfg()), first_key=True
-    )
-finally:
-    iq.mw.col.db = _orig_notes_db
-    iq.sweep_message = _orig_sweep_message
-check(
-    "a failed notes scalar does NOT degrade to a cheap estimate — the "
-    "confirm must read cost unknown, never price a real re-embed at "
-    "~0 tokens because one SQL call happened to fail",
-    _captured_estimate.get("estimate") == "cost unknown for this model",
-    f"got {_captured_estimate!r}",
-)
-
+check("unchanged model offers no sweep", iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg())) is False)
+check("changed local model offers sweep", iq.offer_model_sweep(None, ("ollama", "previous", 0)) is True)
 
 # ----------------------------------------------------- K-237: the card-index
 # ------------------------------------------------------------ confirm gate
@@ -1151,23 +985,11 @@ iq.request_pdf("a", announce=False)
 check("...and announce=False is still silent, so the pins above are about the "
       "DEFAULT and not about announcing at all", tips.seen == [], repr(tips.seen))
 
-# --- :401 — `_key_warned = True` -------------------------------------------
-tmp, pipe = new_world(cfg={"api_key_openai": ""})
+tmp, pipe = new_world(cfg={})
 tips = _tips()
-iq.request_pdf("a", announce=False)
-iq.request_pdf("b", announce=False)
-iq.request_pdf("c", announce=False)
-check(
-    "three keyless drops raise ONE tooltip, not three — the latch in "
-    "request() is what stops ten dropped PDFs stacking ten identical "
-    "tooltips over Anki (its RESET is pinned in cancel/new_world; this is "
-    "its SET)",
-    len(tips.seen) == 1 and "API key" in tips.seen[0],
-    repr(tips.seen),
-)
-check("...and every one of the three still published the refusal, so the "
-      "surfaces say why even when the tooltip is suppressed",
-      "API key" in iq.state().message)
+for name in ("a", "b", "c"):
+    iq.request_pdf(name, announce=False)
+check("keyless local jobs do not show key warnings", tips.seen == [])
 
 iq.tooltip = _orig_tooltip
 

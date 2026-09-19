@@ -788,7 +788,7 @@ def ensure_matches(
         if cidx is None or not card_index.check_signature(cidx, sig):
             raise RuntimeError(
                 "The card index needs a rebuild — press Index Now in "
-                "KlausMate Preferences → API keys & models first."
+                "KlausMate Preferences → Local models first."
             )
         digest = card_index_digest(cidx)
         cached = load_matches(pdf_name, sig, cidx.dims, src_sig, digest)

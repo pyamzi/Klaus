@@ -1,79 +1,33 @@
 # KlausMate Configuration
 
-## API keys & models
+## Local models
 
-Semantic search currently runs on OpenAI, through **your own**
-`api_key_openai`. The assistant is separate — it runs on your own Claude
-Code login (the `claude` CLI, launched as a child process), not on a key
-stored here. Lecture transcription uses a user-installed whisper.cpp executable
-and model. Set keys in **KlausMate Preferences → API keys & models**;
-they are stored in this add-on's config (`meta.json`, plain text —
-standard for Anki add-ons) and never in the repo.
+Semantic search uses local Ollama embeddings, configured in
+**KlausMate Preferences → Local models**. Provider credentials are removed
+from existing profiles during migration.
 
-- **api_key_openai**: Your OpenAI API key. Default `""`. Powers card and
-  PDF embeddings (see **Card embeddings** below). Without it nothing indexes,
-  and Klaus says so rather than failing quietly.
-- **api_key_anthropic**: Your Anthropic API key. Default `""`. Used for
-  exactly one thing: the **pertinence check** at the end of indexing (see
-  **Doubtful cards** below), which asks Claude whether each matched card
-  is really about the lecture page it matched. Without it, indexing still
-  works — the check is skipped for new matches and every match counts, as
-  it did before; verdicts from an earlier judged run stay until that card
-  or page changes. The assistant does not read this key; it runs on your
-  own Claude Code login instead (see **Assistant** below).
-- **reasoning_model**: Free text, default `"claude-sonnet-5"`. Two uses,
-  one live: it is the model the **pertinence check** asks, and it is what
-  a future release (Plan 3) will move the assistant onto. The assistant's
-  Claude Code child does not read it today. Because the field is free
-  text, a model Klaus has no price for is estimated as Sonnet and the
-  confirm says so.
+- **embedding_provider**: `"ollama"`, the only embedding provider.
+- **endpoint**: Local Ollama HTTP address. Default `"http://127.0.0.1:11434"`.
+- **runtime_auto_setup**: Default `true`. On profile open Klaus checks for
+  an existing Ollama server or starts an installed runtime in the background.
+  This does not install a runtime or download models. Set `false` to manage
+  the server yourself.
+- **_local_embeddings_migrated**: Internal one-time migration marker. The first
+  migration selects `nomic-embed-text` with native dimensions and removes old
+  credentials. Later migrations preserve your local model selection.
+
 - **transcription_model_path**: Local whisper.cpp model file. Default `""`.
   Install whisper.cpp and download a compatible model using the
   [official setup instructions](https://github.com/ggml-org/whisper.cpp#quick-start).
-  Select the model in **Preferences > API keys & models > Transcription model**.
+  Select the model in **Preferences > Local models > Transcription model**.
 - **transcription_binary**: Optional path to the whisper.cpp executable.
   Default `""` uses automatic discovery. Use Browse for a custom installation.
 - **transcription_language**: Language code for recorded lectures, default `"en"`.
   Transcription runs locally. Failed audio stays on disk for the next attempt.
-- **_embed_key_setup_declined**: Written automatically when you dismiss
-  the "needs an API key" nudge, so Klaus stops re-prompting at startup.
-  Delete it to see the nudge again. Cleared ONCE by the 2026-09-15
-  migration: it was a "no thanks" to an optional key, back when a local
-  engine existed, and the API-first release genuinely requires one — so
-  an upgrading profile gets exactly one fresh nudge.
 - **_v2_index_sweep_offered**: Written automatically after Klaus offers,
   once per profile, to rebuild PDF indexes written before the one-vector-
   per-page format (those read as no index at all). Set whether you accept
   or decline. Delete it to be asked again.
-
-### Klaus Plus
-
-Klaus Plus is the alternative to the two keys above: one subscription,
-one key, and Klaus talks to its own service instead of to OpenAI and
-Anthropic directly. Bring-your-own-keys stays free and unchanged — a
-Plus key simply makes the provider keys unnecessary, and deleting it
-puts you straight back on them.
-
-- **klaus_plus_key**: Your Klaus Plus licence key — the `kp_…` string
-  from the welcome page after you subscribe, or from the email that
-  follows it. Default `""`. With it set, `api_key_openai` and
-  `api_key_anthropic` are not needed; the provider-key rows in
-  Preferences stay editable anyway, so the free tier is one deletion
-  away. Stored like every other key, in this add-on's config
-  (`meta.json`, plain text), and never sent anywhere but the Klaus Plus
-  service.
-- **klaus_plus_cache**: Not a setting — state Klaus writes: the last
-  verdict the service gave (active, past due, refused) with the date it
-  was checked, the renewal date, and the quota readout Preferences shows.
-  Default `{}`. Safe to clear: the next **Check** (or the next call that
-  needs it) fills it in again. A refusal is remembered for 6 hours, then
-  the service is asked again; an active verdict is honoured until the
-  service refuses it.
-- **klaus_plus_base**: The Klaus Plus service URL. Default `""`, which
-  falls back to the built-in service, `https://klausmate.com`
-  (`plus.DEFAULT_BASE`) — editable under **KlausMate Preferences →
-  General → Klaus Plus service**. Change it only to point at a staging
-  or self-hosted service.
 
 ## Semantic library (matching + retention)
 
@@ -167,8 +121,8 @@ anything. Ten PDFs at once queue ten jobs and run them one at a time, in
 the order you added them. Whatever the job was started from, a thin bar
 appears at the bottom of the main window with what is running, how far
 along it is, and a **Stop** button; the Library shows the same line in
-its own status area. Nothing starts before a profile is open, or while a
-cloud provider has no API key (the bar says so). Stopping or failing
+its own status area. Nothing starts before a profile is open. Ollama connection or model errors
+are reported by the indexing operation. Stopping or failing
 mid-way is always safe: partial work is saved as partial and the next
 run resumes from it, and a PDF's `!Library` tag is only ever written by
 a run that finished.
@@ -181,7 +135,7 @@ a run that finished.
 
 **Changing the embedding model re-indexes everything.** Vectors made by
 one model cannot be compared with another's, so when you change
-model or `embedding_dimensions` in KlausMate Preferences,
+the model in KlausMate Preferences,
 saving offers to re-embed your notes and every indexed PDF from scratch.
 It tells you how many of each first, and you can decline and keep
 working on stale vectors, or stop the sweep part-way from the same bar.
@@ -194,20 +148,15 @@ working on stale vectors, or stop the sweep part-way from the same bar.
 
 ### Card embeddings
 
-Semantic search needs a one-time index of your cards (then it updates
-incrementally — only new/edited notes are re-embedded). Configure and
-build it in **KlausMate Preferences → API keys & models**; the index
-itself lives in the add-on's `user_files/card_index/` folder. Card text
-is sent to OpenAI's embeddings API when indexing and searching.
+Semantic search indexes your cards once and then updates changed notes.
+Configure and build the index in **KlausMate Preferences → Local models**.
+Vectors are stored in `user_files/card_index/`. Card and page text are sent
+only to the configured local Ollama endpoint.
 
-- **embedding_model**: Embedding model ID. Default
-  `"text-embedding-3-large"`. Changing it rebuilds the index.
-- **embedding_dimensions**: output width for OpenAI's v3 embedding
-  models, which are MRL-trained so a shorter vector keeps the most
-  significant components. `1024` is the default: better retrieval than
-  `text-embedding-3-small` at 1536, while being cheaper to rank and
-  smaller on disk. `0` means the model's own width (3072 for -large).
-  Changing it forces a full re-index.
+- **embedding_model**: Default `"nomic-embed-text"`. The model must be
+  available in Ollama. Changing it offers a full local re-index.
+- **embedding_dimensions**: `0`, using the model's native output width.
+  Other values are ignored by the local adapter.
 
 ### PDF study priorities
 
