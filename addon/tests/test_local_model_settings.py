@@ -62,6 +62,7 @@ class Op:
         operations.append(self)
 mm.QueryOp = Op
 rt = importlib.import_module('klausmate.ollama_runtime')
+real_setup, real_update, real_ensure = rt.full_setup, rt.update_runtime, rt.ensure_server
 state = {'owned': False, 'version': 'old', 'error': False}
 rt.runtime_download_size_hint = lambda: '~123 MB'
 rt.find_managed_runtime = lambda: (state['version'], '/fake/ollama')
@@ -332,5 +333,86 @@ button('Install/start').click()
 dlg.accept()
 work(); drain()
 check('ordinary dialog close still permits same-profile background install', state['owned'])
+# Exercise the real occupied-port decision ladder without native processes.
+rt.full_setup, rt.update_runtime, rt.ensure_server = real_setup, real_update, real_ensure
+rt.provision_runtime = lambda *args: None
+rt.cleanup_old_runtimes = lambda **kwargs: None
+rt._port_in_use = lambda *args: True
+rt._free_port = lambda: 11435
+running = {'endpoint': None}
+rt.ollama_reachable = lambda endpoint: endpoint == running['endpoint']
+def spawn(binary, host):
+    running['endpoint'] = 'http://' + host
+    state['owned'] = True
+rt.server_manager = types.SimpleNamespace(
+    active_binary=lambda: '/fake/ollama',
+    spawned_or_adopted=lambda: state['owned'],
+    spawn=spawn, poll_ready=lambda endpoint: (True, ''),
+    adopt_orphan_if_any=lambda endpoint: None,
+    stop=lambda: (state.update(owned=False), running.update(endpoint=None)))
+embed_calls = []
+Client.embed = lambda self, model, texts: (embed_calls.append((self.endpoint, model)) or [[3, 4]])
+provider = importlib.import_module('klausmate.embeddings').provider_from_config(K.get_config)
+main_ident = threading.get_ident()
+write_threads = []
+def traced_write(cfg):
+    write_threads.append(threading.get_ident())
+    write(cfg)
+K.write_config = traced_write
+for action in ('Install/start', 'Update runtime'):
+    for variant in ('close', 'new endpoint', 'unsaved endpoint', 'stale profile', 'open'):
+        case = action + ' relocation ' + variant
+        store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model', color_theme='rose')
+        state.update(owned=False, version='old')
+        running['endpoint'] = None
+        mm.manage_models_dialog(); dlg = mm._OPEN_DLG
+        if action == 'Update runtime':
+            state['owned'] = True
+            button('Refresh').click(); work(); drain()
+        field('embedding_model').setText('unsaved-model')
+        if variant == 'unsaved endpoint':
+            field('endpoint').setText('http://127.0.0.1:11436')
+        button(action).click()
+        work()
+        check(case + ' worker never writes config', store['endpoint'].endswith(':11434'))
+        store['color_theme'] = 'ocean'
+        if variant == 'new endpoint':
+            store['endpoint'] = 'http://127.0.0.1:11437'
+        if variant == 'stale profile':
+            sf.stop_local_runtime()
+        if variant != 'open':
+            dlg.accept()
+        drain()
+        expected = ('http://127.0.0.1:11437' if variant == 'new endpoint' else
+                    'http://127.0.0.1:11434' if variant in ('unsaved endpoint', 'stale profile') else
+                    'http://127.0.0.1:11435')
+        check(case + ' endpoint delivery respects ownership', store['endpoint'] == expected)
+        check(case + ' preserves unrelated and unsaved settings',
+              store['color_theme'] == 'ocean' and store['embedding_model'] == 'saved-model')
+        if variant in ('close', 'open'):
+            result = rt.ensure_server(K.get_config())
+            check(case + ' subsequent startup reaches running server', result.ok and result.endpoint == running['endpoint'])
+            provider.embed(['test'])
+            check(case + ' provider uses saved relocation', embed_calls[-1] == (running['endpoint'], 'saved-model'))
+        if variant == 'open':
+            check(case + ' visible endpoint follows saved relocation', field('endpoint').text() == expected)
+            dlg.accept()
+check('relocation config writes all execute on main thread', bool(write_threads) and set(write_threads) == {main_ident})
+# Welcome retains its actual primary and secondary actions after dead-code removal.
+store['_first_run_done'] = False
+sf.QMessageBox = QtWidgets.QMessageBox
+welcome_boxes = []
+original_box = sf._themed_message_box
+def capture_box(*args):
+    box = original_box(*args)
+    welcome_boxes.append(box)
+    return box
+sf._themed_message_box = capture_box
+sf.first_run_check()
+welcome = welcome_boxes[-1]
+check('welcome shows local model guidance and Preferences plus Later',
+      sf.LOCAL_MODELS_COPY in welcome.text() and sorted(b.text() for b in welcome.buttons()) == ['KlausMate Preferences', 'Later']
+      and welcome.defaultButton().text() == 'KlausMate Preferences')
+welcome.accept()
 mw.close()
 raise SystemExit(report())

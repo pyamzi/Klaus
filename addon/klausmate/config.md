@@ -31,8 +31,10 @@ download it; **Download progress** reports runtime and model transfers.
 server. Closing Preferences allows an active local operation to finish in the
 background. Closing the Anki profile cancels its runtime work and stops owned
 servers; the next profile waits for any late startup to be cleaned up.
-If starting the runtime chooses a free port, **Ollama endpoint**
-shows the new address; click **Save** to use it for subsequent indexing.
+If starting or updating the runtime chooses a free port for the saved endpoint,
+the new address is saved automatically, even after Preferences closes. A newer
+saved endpoint edit takes precedence. Manual unsaved endpoint and model choices
+still require **Save**; starting from an unsaved endpoint does not apply it.
 
 - **embedding_model**: The model name in **Embedding model**, initially
   `"nomic-embed-text"`. It must be installed on the configured Ollama server.

@@ -64,10 +64,6 @@ def first_run_check() -> None:
         return
     _first_run_dialog_shown_this_session = True
 
-    # The same derived sentence the profile-open nudge shows, so the two
-    # surfaces cannot describe setup two ways (K-231).
-    ready = False
-
     body_lines = [
         "Klaus adds a PDF workspace and semantic search to Anki.",
         "",
@@ -77,29 +73,17 @@ def first_run_check() -> None:
         "them, and scores how well you still recall them.",
         "",
     ]
-    body_lines.append(
-        "Everything Klaus needs is set up — you're ready to go."
-        if ready
-        else LOCAL_MODELS_COPY
-    )
+    body_lines.append(LOCAL_MODELS_COPY)
 
     msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
     msg.setText("\n".join(body_lines))
-    if ready:
-        # "OK" is the primary/dismissive action here — stays default blue.
-        msg.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-        manage_btn = msg.addButton(
-            "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
-        )
-        manage_btn.setObjectName("SecondaryButton")
-    else:
-        manage_btn = msg.addButton(
-            "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
-        )
-        msg.addButton(
-            "Later", QMessageBox.ButtonRole.AcceptRole
-        ).setObjectName("SecondaryButton")
-        msg.setDefaultButton(manage_btn)
+    manage_btn = msg.addButton(
+        "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
+    )
+    msg.addButton(
+        "Later", QMessageBox.ButtonRole.AcceptRole
+    ).setObjectName("SecondaryButton")
+    msg.setDefaultButton(manage_btn)
 
     def _on_welcome_finished(_r: int) -> None:
         if generation != _profile_generation:
@@ -313,18 +297,38 @@ def stop_local_runtime() -> None:
     ollama_runtime.server_manager.stop()
 
 
+def runtime_endpoint_saver(
+    lifetime: tuple[int, threading.Event], starting_endpoint: Any,
+) -> Callable[[dict], None]:
+    """Persist automatic relocation only while its profile and endpoint match."""
+    generation, cancel = lifetime
+
+    def save_endpoint(updated: dict) -> None:
+        endpoint = updated["endpoint"]
+
+        def apply() -> None:
+            if cancel.is_set() or generation != _profile_generation:
+                return
+            cfg = _pkg().get_config()
+            if cfg.get("endpoint") != starting_endpoint:
+                return
+            # Read, compare and merge in this single main-thread callback.
+            # patch_config queues again, leaving a gap for newer endpoint edits.
+            cfg["endpoint"] = endpoint
+            _pkg().write_config(cfg)
+
+        mw.taskman.run_on_main(apply)
+
+    return save_endpoint
+
+
 def _readiness_after_library_root() -> None:
     from . import ollama_runtime
     cfg = _pkg().get_config()
     lifetime = runtime_lifetime()
     generation, _cancel = lifetime
 
-    def save_endpoint(updated: dict) -> None:
-        endpoint = updated["endpoint"]
-        def apply() -> None:
-            if generation == _profile_generation:
-                _pkg().patch_config({"endpoint": endpoint})
-        mw.taskman.run_on_main(apply)
+    save_endpoint = runtime_endpoint_saver(lifetime, cfg.get("endpoint"))
 
     def start(_cancel: threading.Event) -> Any:
         if cfg.get("runtime_auto_setup", True):

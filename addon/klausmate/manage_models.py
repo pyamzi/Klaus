@@ -2381,8 +2381,14 @@ def manage_models_dialog(*_args: Any) -> None:
         if op_state["active"] or not local_alive():
             return
         cfg = _pkg().get_config()
+        starting_endpoint = cfg.get("endpoint")
         cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
         endpoint = cfg["endpoint"]
+        # Manual unsaved endpoints remain owned by Save, including relocation.
+        save_endpoint = (
+            setup_flow.runtime_endpoint_saver(profile_lifetime, starting_endpoint)
+            if endpoint == (starting_endpoint or "http://127.0.0.1:11434") else None
+        )
         op_state["kind"] = "local"
         set_busy(True)
         runtime_status.setText(f"{action}… You can close Preferences; the operation continues.")
@@ -2393,9 +2399,9 @@ def manage_models_dialog(*_args: Any) -> None:
 
             result = None
             if action == "Install/start":
-                result = ollama_runtime.full_setup(cfg, on_progress=local_progress, cancel_flag=cancel_flag)
+                result = ollama_runtime.full_setup(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
             elif action == "Update runtime":
-                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress, cancel_flag=cancel_flag)
+                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
             elif action == "Stop managed server":
                 if not ollama_runtime.server_manager.spawned_or_adopted():
                     raise RuntimeError("This server is external. Stop it in the application that started it.")
@@ -2426,9 +2432,10 @@ def manage_models_dialog(*_args: Any) -> None:
             installed_models.clear()
             installed_models.addItems(snapshot["models"])
             installed_models.blockSignals(False)
-            if actual_endpoint != endpoint:
+            if actual_endpoint != endpoint and endpoint_edit.text().strip() == endpoint:
                 endpoint_edit.setText(actual_endpoint)
-                mark_dirty()
+                if _pkg().get_config().get("endpoint") != actual_endpoint:
+                    mark_dirty()
             if snapshot["reachable"]:
                 status = "Ollama is running (managed by Klaus)." if snapshot["owned"] else (
                     "Ollama is running (external). Stop it in the application that started it."
@@ -2436,7 +2443,11 @@ def manage_models_dialog(*_args: Any) -> None:
             else:
                 status = "Ollama is not reachable. Check the endpoint and click Install/start."
             if actual_endpoint != endpoint:
-                status += " The runtime chose another port. Save to use the new endpoint."
+                status += (
+                    " The runtime chose another port; its endpoint was saved."
+                    if _pkg().get_config().get("endpoint") == actual_endpoint else
+                    " The runtime chose another port. Save to use the new endpoint."
+                )
             runtime_status.setText(status)
             runtime_progress.setRange(0, 100)
             runtime_progress.setValue(100 if action in ("Pull", "Install/start", "Update runtime") else 0)

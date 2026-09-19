@@ -52,7 +52,10 @@ class Op:
     def without_collection(self): self.collection_free = True; return self
     def run_in_background(self): pass
 config = {'endpoint': 'http://localhost:12345', 'runtime_auto_setup': True, 'color_theme': 'rose'}
-pkg = SimpleNamespace(get_config=lambda: dict(config), patch_config=lambda value: patches.append(value))
+def write_config(value):
+    patches.append({key: value[key] for key in value if value[key] != config.get(key)})
+    config.update(value)
+pkg = SimpleNamespace(get_config=lambda: dict(config), write_config=write_config)
 def ensure(cfg, save_config):
     events.append('ensure')
     cfg['endpoint'] = 'http://127.0.0.1:12346'
