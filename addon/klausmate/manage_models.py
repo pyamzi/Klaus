@@ -38,8 +38,6 @@ from aqt.operations import QueryOp
 from aqt.qt import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -55,9 +53,8 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import openLink, showInfo, showWarning, tooltip
+from aqt.utils import showInfo, showWarning, tooltip
 
-from . import plus
 from .md3_switch import Md3Switch
 
 
@@ -703,48 +700,13 @@ def manage_models_dialog(*_args: Any) -> None:
         "Klaus talks to OpenAI (embeddings, lecture transcription) and "
         "Anthropic (the assistant, and judging which cards a lecture "
         "really covers) with your own keys. Both are stored in this "
-        "add-on's config on your machine and never sent anywhere else. "
-        "Or subscribe to Klaus Plus and skip the keys.",
+        "add-on's config on your machine and never sent anywhere else.",
     )
-
-    # ----- Klaus Plus ---------------------------------------------------
-    # ABOVE the provider keys on purpose: the whole point of a licence
-    # key is that the two rows under it never need filling in. Nothing
-    # here gates anything — the add-on ships as readable Python, and the
-    # service answering 401/402 is the only gate there is.
-    plus_signin_status = QLabel("Not signed in")
-    plus_signin_btns = QHBoxLayout()
-    plus_signin_btn = QPushButton("Sign In…")
-    plus_signout_btn = QPushButton("Sign Out")
-    for b in (plus_signin_btn, plus_signout_btn):
-        b.setObjectName("SecondaryButton")
-        plus_signin_btns.addWidget(b)
-    _row(
-        keys_layout,
-        "Klaus Plus account",
-        plus_signin_status,
-        plus_signin_btns,
-    )
-
-    plus_status = QLabel()
-    plus_status.setWordWrap(True)
-    plus_status.setOpenExternalLinks(True)
-    plus_btns = QHBoxLayout()
-    plus_subscribe_btn = QPushButton("Subscribe…")
-    plus_manage_btn = QPushButton("Manage subscription…")
-    plus_check_btn = QPushButton("Check")
-    for b in (plus_subscribe_btn, plus_manage_btn, plus_check_btn):
-        b.setObjectName("SecondaryButton")
-        plus_btns.addWidget(b)
-    _row(keys_layout, "Klaus Plus", plus_status, plus_btns)
 
     openai_key_edit = QLineEdit()
     openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
     openai_key_edit.setMinimumWidth(220)
     openai_key_edit.setPlaceholderText("sk-…  (platform.openai.com)")
-    # Both provider rows are CAPTURED: refresh_plus_status repaints their
-    # descriptions when a Plus key is present. They stay editable — the
-    # free tier is one deletion away.
     openai_row = _row(
         keys_layout,
         "OpenAI API key",
@@ -762,14 +724,6 @@ def manage_models_dialog(*_args: Any) -> None:
         "The assistant and card pertinence.",
         anthropic_key_edit,
     )
-    # Captured HERE, not re-spelled in refresh_plus_status: the two
-    # descriptions above are the only place they're authored, so editing
-    # one cannot silently revert on the next repaint (K-247 fix 4).
-    _plus_base_descs = {
-        openai_row: openai_row.klaus_desc.text(),
-        anthropic_row: anthropic_row.klaus_desc.text(),
-    }
-
     embed_model_edit = QLineEdit()
     embed_model_edit.setMinimumWidth(220)
     embed_model_edit.setPlaceholderText("text-embedding-3-large")
@@ -881,21 +835,6 @@ def manage_models_dialog(*_args: Any) -> None:
         "Connection",
         "Check that both API keys are set.",
         test_conn_btn,
-    )
-
-    # The ONE reason the service URL is config at all: a self-hoster or a
-    # staging run. Deliberately NOT beside the licence key — nobody
-    # pasting a key should be invited to retarget the endpoint at the
-    # same time.
-    plus_base_edit = QLineEdit()
-    plus_base_edit.setMinimumWidth(220)
-    plus_base_edit.setPlaceholderText(plus.DEFAULT_BASE)
-    _row(
-        general_layout,
-        "Klaus Plus service",
-        "Where the Klaus Plus subscription is checked. Leave it empty "
-        "unless you run your own or a staging service.",
-        plus_base_edit,
     )
 
     # ---- Appearance: custom background + the deck-screen panels ----
@@ -1736,167 +1675,6 @@ def manage_models_dialog(*_args: Any) -> None:
 
     # ----- API keys & models handlers --------------------------------------
 
-    def _plus_cfg() -> dict:
-        return _pkg().get_config() or {}
-
-    def refresh_plus_status() -> None:
-        """Repaint the Plus row and the two provider captions from STORED
-        config. Presence is read through plus.key(), which validates the
-        kp_ shape, so a half-pasted key cannot light the group up as a
-        working subscription. The provider rows stay EDITABLE — the free
-        tier is one deletion away — so the note is a caption, never a
-        setReadOnly."""
-        cfg = _plus_cfg()
-        has = bool(plus.key(cfg))
-        base_line = (
-            plus.status_line(cfg.get(plus.CACHE) or {}) if has
-            else "Klaus Plus: $12/month or $99/year — no API keys needed."
-        )
-        # Terms/Privacy live on the GROUP row's status text (never the
-        # licence-key field's row above it) so they survive every repaint
-        # this function does (M-11: spec D5 promised a link from
-        # Preferences and nothing built it).
-        service_base = plus.base(cfg)
-        plus_status.setText(
-            f'{base_line}<br><a href="{service_base}/terms">Terms</a> · '
-            f'<a href="{service_base}/privacy">Privacy</a>'
-        )
-        # Both are calls the service answers 401 to without a key; a
-        # button that can only fail is worse than no button. Subscribe
-        # stays live — it is the one thing a user without a key is here
-        # to press.
-        plus_manage_btn.setEnabled(has)
-        plus_check_btn.setEnabled(has)
-        note = "Not needed on Klaus Plus; kept for the free tier." if has else None
-        for roww in (openai_row, anthropic_row):
-            roww.klaus_desc.setText(note or _plus_base_descs[roww])
-        plus_signin_status.setText(f"Signed in as {cfg.get(plus.EMAIL)}" if has and cfg.get(plus.EMAIL) else
-                                   "Signed in" if has else "Not signed in")
-        plus_signin_btn.setEnabled(not has)
-        plus_signout_btn.setEnabled(has)
-
-    def _prompt_plus_credentials() -> tuple[str, str] | None:
-        """Email + password, or None on Cancel. Nothing here reaches the
-        network — the caller does that off the main thread, same as every
-        other Plus call in this dialog."""
-        d = QDialog(dlg)
-        d.setWindowTitle("Sign in to Klaus Plus")
-        form = QFormLayout(d)
-        email_edit = QLineEdit()
-        email_edit.setPlaceholderText("you@example.com")
-        password_edit = QLineEdit()
-        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("Email", email_edit)
-        form.addRow("Password", password_edit)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(d.accept)
-        buttons.rejected.connect(d.reject)
-        form.addRow(buttons)
-        if d.exec() != QDialog.DialogCode.Accepted:
-            return None
-        return email_edit.text().strip(), password_edit.text()
-
-    def on_plus_sign_in() -> None:
-        creds = _prompt_plus_credentials()
-        if not creds:
-            return
-        email_addr, password = creds
-        if not email_addr or not password:
-            showWarning("Enter an email and password.")
-            return
-        # Captured BEFORE the sign-in, same K-152 rule save_embed follows
-        # for a pasted key: a FIRST Plus key never moves the embedding
-        # signature (nothing was ever embedded with it), and that is
-        # exactly the moment offer_model_sweep is worth asking about.
-        from . import embeddings
-
-        prev_sig = embeddings.index_signature(_plus_cfg())
-        had_plus = bool(plus.key(_plus_cfg()))
-
-        def work() -> str:
-            return plus.login(email_addr, password, _pkg().get_config(), _pkg().patch_config)
-
-        def done(fut) -> None:
-            try:
-                got_key = fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus sign-in failed: {exc.__class__.__name__}")
-                got_key = ""
-            if not got_key:
-                showWarning("Sign in failed — check your email and password.")
-                return
-            refresh_plus_status()
-            try:
-                from . import index_queue
-
-                index_queue.offer_model_sweep(dlg, prev_sig, first_key=not had_plus and bool(plus.key(_plus_cfg())))
-            except Exception as exc:
-                print(f"[klausmate] model-change sweep offer failed: {exc}")
-
-        mw.taskman.run_in_background(work, done)
-
-    def on_plus_sign_out() -> None:
-        cfg = _plus_cfg()
-
-        def work() -> None:
-            plus.logout(cfg, _pkg().patch_config)
-
-        def done(fut) -> None:
-            try:
-                fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus sign-out failed: {exc.__class__.__name__}")
-            refresh_plus_status()
-
-        mw.taskman.run_in_background(work, done)
-
-    def on_plus_subscribe() -> None:
-        """A URL built from the configured base — no key, no network, so
-        a user with nothing configured can still reach the page that
-        sells them one. A browser hop is the ONLY way Klaus touches
-        payment: nothing to enter inside Anki."""
-        openLink(plus.base(_plus_cfg()) + "/subscribe")
-
-    def on_plus_manage() -> None:
-        cfg = _plus_cfg()
-
-        def work() -> str:
-            return plus.portal_url(cfg)
-
-        def done(fut) -> None:
-            try:
-                url = fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus portal failed: {exc.__class__.__name__}")
-                url = ""
-            if url:
-                openLink(url)
-            else:
-                tooltip("Could not open the subscription portal — check the key and try again.")
-
-        # taskman, not the click handler: plus.TIMEOUT_S is 15 s, and a
-        # urlopen that long on the main thread freezes Anki's whole UI.
-        mw.taskman.run_in_background(work, done)
-
-    def on_plus_check() -> None:
-        def work() -> dict:
-            # patch_config, not the raw replacing writer: this runs on
-            # the worker thread, and handing plus.refresh's patch sink a
-            # REPLACE would zero every other setting on one Check
-            # (K-247 fix 1). patch_config merges into a fresh read and
-            # hops back to the main thread itself, so the worker thread
-            # never touches meta.json directly.
-            return plus.refresh(_pkg().get_config, _pkg().patch_config)
-
-        def done(fut) -> None:
-            try:
-                fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus check failed: {exc.__class__.__name__}")
-            refresh_plus_status()
-
-        mw.taskman.run_in_background(work, done)
-
     def sync_embed_widgets() -> None:
         """Seed the five fields from stored config.
 
@@ -1912,7 +1690,6 @@ def manage_models_dialog(*_args: Any) -> None:
             cfg = _pkg().get_config()
             openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            plus_base_edit.setText(str(cfg.get(plus.BASE) or ""))
             # INSIDE the guard: load_assistant flips a switch, and a
             # switch that starts out true emits toggled -> mark_dirty,
             # which would light up "Unsaved changes" on a dialog nobody
@@ -1921,7 +1698,6 @@ def manage_models_dialog(*_args: Any) -> None:
         finally:
             ui_state["syncing"] = False
         update_embed_status()
-        refresh_plus_status()
 
     def _fmt_ago(ts: float) -> str:
         secs = max(0, int(time.time() - ts))
@@ -1939,14 +1715,8 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
-        # A Plus key counts: telling a paying subscriber to add an OpenAI
-        # key is the exact contradiction the provider-row caption two
-        # rows up exists to prevent.
-        if not str(cfg.get("api_key_openai") or "").strip() and not plus.key(cfg):
-            txt = (
-                "Add your OpenAI API key above — or a Klaus Plus key — "
-                "to enable semantic search."
-            )
+        if not str(cfg.get("api_key_openai") or "").strip():
+            txt = "Add your OpenAI API key above to enable semantic search."
         elif not st["exists"]:
             txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
@@ -1973,7 +1743,6 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg["embedding_model"] = embed_model_edit.text().strip()
         _pkg().write_config(cfg)
         update_embed_status()
-        refresh_plus_status()
         # K-152: a changed model or width invalidates EVERY stored
         # vector, and PDF indexes rebuild only lazily — one at a time,
         # whenever you next happen to touch that PDF — so without this
@@ -2376,9 +2145,6 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
-        # The service URL only. The licence key belongs to save_embed —
-        # one key, one writer, or Save's two halves race to spell it.
-        cfg["klaus_plus_base"] = plus_base_edit.text().strip()
         spec = _bg_state["spec"]
         cfg["background_mode"] = spec["mode"]
         cfg["background_color"] = spec["color"]
@@ -2690,19 +2456,6 @@ def manage_models_dialog(*_args: Any) -> None:
         """
         cfg = _pkg().get_config()
         pairs = (("OpenAI", "api_key_openai"), ("Anthropic", "api_key_anthropic"))
-        if plus.key(cfg):
-            # A subscriber's provider keys are empty BY DESIGN — the
-            # "No API key is set for" warning below is the exact
-            # contradiction judgement call 1 already removed from
-            # update_embed_status, one page over.
-            present = [label for label, k in pairs if str(cfg.get(k) or "").strip()]
-            lines = [
-                "Klaus Plus key set — the OpenAI and Anthropic keys are "
-                "optional while Plus is active."
-            ]
-            lines += [f"{label} API key is also set." for label in present]
-            showInfo("\n".join(lines), parent=dlg)
-            return
         missing = [label for label, key in pairs if not str(cfg.get(key) or "").strip()]
         if missing:
             showWarning(
@@ -2721,14 +2474,6 @@ def manage_models_dialog(*_args: Any) -> None:
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    plus_base_edit.textEdited.connect(lambda _t: mark_dirty())
-    # These buttons ACT (open a browser, ask the service, sign in/out) —
-    # they do not edit, so none of them marks the dialog dirty.
-    plus_subscribe_btn.clicked.connect(on_plus_subscribe)
-    plus_manage_btn.clicked.connect(on_plus_manage)
-    plus_check_btn.clicked.connect(on_plus_check)
-    plus_signin_btn.clicked.connect(on_plus_sign_in)
-    plus_signout_btn.clicked.connect(on_plus_sign_out)
     openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
     anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
