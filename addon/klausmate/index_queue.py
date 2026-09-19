@@ -13,28 +13,17 @@ flag, status label, ``_on_progress`` and Cancel button. A PDF dropped on
 the deck screen has no Library window, so none of that is reachable from
 where most PDFs now arrive. So the phase chain moved here whole —
 ``curation.ensure_index`` → ``retention.ensure_pdf_index`` →
-``retention.ensure_matches`` → ``pertinence.ensure_judged`` →
-``tag_sync.sync_after_matches``, with the
+``retention.ensure_matches`` → ``tag_sync.sync_after_matches``, with the
 cancel token threaded through exactly as K-146 left it — and the Library
 became one more CALLER. There is exactly one copy of that sequence in
 the addon; a second one would drift (K-143's two-renderer lesson).
 
-**Each phase still takes ``curation._busy`` in turn** rather than one
-held token across the run — with ONE exception: phase four
-(``pertinence.ensure_judged``) never touches it at all (K-255's review,
-finding I1). That is K-146's finding, not an oversight: the
+**Each indexing phase takes ``curation._busy`` in turn** rather than one
+held token across the run. That is K-146's finding, not an oversight: the
 cancellation branches return without releasing, so a caller-held token
 would leak and brick indexing for the rest of the session.
 Serialisation across jobs is the queue below, not the token. Phase
-four's own wait — the Judge/Skip dialog, then however long the
-Anthropic batches take — runs at the user's own pace and can sit open
-for minutes; holding the token across an interactive dialog is exactly
-the shape of leak the previous sentence warns about, so it is left
-free for that stretch instead. The one visible consequence: Preferences'
-**Index Now** can start a concurrent card-index embed where every other
-phase would have refused it — different files, different resources, no
-data corruption, just a documented gap in the "each phase takes it in
-turn" rule above.
+four writes the tags after matching.
 
 **A queue, not a race.** Ten dropped PDFs are ten legitimate requests.
 ``curation._busy`` REFUSES a concurrent run — correct for a user
@@ -201,7 +190,7 @@ class RunnerState(NamedTuple):
     kind: str = ""
     name: str = ""  # display label of the running job
     label: str = ""  # phase label from the pipeline ("Embedding PDF…")
-    phase: str = ""  # "" for the K-146 chain phases; "judge" for pertinence
+    phase: str = ""  # no separate phase value in the four-phase chain
     done: int = 0
     total: int = 0
     pending: int = 0  # jobs still waiting behind this one
@@ -217,10 +206,7 @@ def status_line(state: RunnerState) -> str:
     if state.label:
         head = f"{head} — {state.label}"
     if state.total:
-        # The judge phase counts cards, not percent complete — "judging
-        # 12/40" says something a rounded percentage would flatten (how
-        # much work, not just how far along).
-        progress = f"{state.done}/{state.total}" if state.phase == "judge" else f"{round(state.done * 100 / state.total)}%"
+        progress = f"{round(state.done * 100 / state.total)}%"
         head = f"{head} {progress}"
     if state.pending:
         head = f"{head}  ·  {state.pending} more queued"
@@ -455,7 +441,7 @@ def cancel_all() -> None:
     Bumping ``_seq`` is what makes this safe rather than merely
     requested: every continuation below checks it first, so the phase
     already in flight finishes into a discarded callback. That matters
-    most at ``after_matches`` — ``ensure_matches`` hands back a PARTIAL
+    most at the match callback — ``ensure_matches`` hands back a PARTIAL
     ranking when cancelled (deliberately uncached), and tagging on it
     would silently shrink the PDF's ``!Library`` tag.
     """
@@ -585,13 +571,12 @@ def _run(job: tuple[str, str]) -> None:
     refreshes the CARD index, and everything that matches notes against
     a PDF reads it: skip it and every note written since the last pass
     is invisible to ``ensure_matches``, and the PDF's tag under-covers
-    with no error at all (K-146's whole point). Five phases now, not
-    four: ``pertinence.ensure_judged`` runs between ``ensure_matches``
-    and the tag write (module docstring's chain; I1 in K-255's review
-    is why it does not take ``curation._busy`` like the other three).
+    with no error at all (K-146's whole point). The four phases are
+    ``ensure_index``, ``ensure_pdf_index``, ``ensure_matches``, and
+    ``tag_sync.sync_after_matches``.
     """
     global _cancel, _seq
-    from . import curation, pertinence, retention, tag_sync
+    from . import curation, retention, tag_sync
 
     kind, name = job
     _seq += 1
@@ -617,46 +602,14 @@ def _run(job: tuple[str, str]) -> None:
             return
         _fail(exc)
 
-    def after_judged(rejected: set[int], matches: Any) -> None:
-        if not live():
-            return
-        # The Doubtful read is guarded ON ITS OWN, the same shape
-        # sync_after_threshold/sync_after_clear_overrides use: an auxiliary
-        # failure there must never cost this PDF the lecture-tag write it
-        # was indexed for. doubtful=None leaves the tag untouched.
-        try:
-            doubtful = tag_sync.doubtful_members(_cfg())
-        except Exception as exc:
-            print(f"[klausmate] doubtful set unavailable: {exc}")
-            doubtful = None
-        try:
-            tag_sync.sync_after_matches(mw, name, matches, doubtful=doubtful)
-        except Exception as exc:
-            print(f"[klausmate] tag sync after index failed: {exc}")
-        _job_done(f"Indexed “{label}”.", finished=name)
-
     def after_matches(matches: Any) -> None:
         if not live():
             return
         try:
-            pertinence.ensure_judged(
-                mw,
-                name,
-                matches,
-                on_done=lambda rejected: after_judged(rejected, matches),
-                on_error=on_error,
-                cancel=cancel,
-                on_progress=lambda text, d, t: _publish(_state._replace(phase="judge", label=text, done=d, total=t)) if live() else None,
-                ask=ask_judge,
-            )
+            tag_sync.sync_after_matches(mw, name, matches)
         except Exception as exc:
-            # Belt to pertinence's own defenses (fix round 1, C1): whatever
-            # got past them must not skip the tag write or leave _current
-            # set forever — every queued and future PDF would silently stop
-            # indexing until Stop or a restart. Untagged pertinence beats a
-            # wedged queue; the next index pass re-judges from scratch.
-            print(f"[klausmate] pertinence phase failed, cards left unjudged: {type(exc).__name__}: {exc}")
-            after_judged(set(), matches)
+            print(f"[klausmate] tag sync after index failed: {exc}")
+        _job_done(f"Indexed “{label}”.", finished=name)
 
     def after_pdf_index(idx: Any) -> None:
         if not live():
@@ -711,8 +664,8 @@ def _run(job: tuple[str, str]) -> None:
         if embed:
             start_card_index()
             return
-        # K-237's decline behaviour: mirror pertinence's own Skip, not an
-        # abort. The rest of the chain still runs, against whatever card
+        # K-237's decline behaviour: continue without the embed. The rest
+        # of the chain still runs, against whatever card
         # index already exists on disk (stale or empty) rather than the
         # fresh one the user just declined to pay for — matching this PDF
         # against recently added/edited cards is degraded until the index
@@ -1048,40 +1001,9 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
     return True
 
 
-def ask_judge(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
-    """The pertinence phase's own paid-pass confirm (spec D4): Judge or
-    Skip, Skip the default — a stray Enter reaching this window-modal
-    dialog must not start a paid batch, the same rule ``offer_model_sweep``
-    follows for its own confirm. Window-modal via ``open()`` (K-114);
-    ``answer`` fires from ``finished`` rather than a return value.
-    """
-    box = QMessageBox(parent)
-    box.setWindowTitle("Judge matched cards?")
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setText(text)
-    judge_btn = box.addButton("Judge", QMessageBox.ButtonRole.AcceptRole)
-    skip_btn = box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
-    box.setDefaultButton(skip_btn)
-    try:
-        from . import theme
-
-        box.setStyleSheet(theme.dialog_qss(theme.night_mode()))
-    except Exception as exc:
-        print(f"[klausmate] judge dialog theme failed: {exc}")
-
-    def finished(_result: int) -> None:
-        clicked = box.clickedButton()
-        box.deleteLater()
-        answer(clicked is judge_btn)
-
-    box.finished.connect(finished)
-    box.open()
-
-
 def ask_card_index_confirm(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
     """K-237's own paid-pass confirm: a from-scratch card-index embed
-    about to run as phase one of an autonomous, silent PDF add. Same
-    shape as ``ask_judge`` above, not ``offer_model_sweep``'s: this fires
+    about to run as phase one of an autonomous, silent PDF add. This fires
     deep inside the queue's async chain, never from an open Preferences
     window with a real parent to anchor on, so it is Embed/Skip,
     window-modal via ``open()`` (K-114), with Skip the default button — a
