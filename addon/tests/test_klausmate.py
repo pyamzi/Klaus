@@ -1077,7 +1077,7 @@ shutil.rmtree(tmp, ignore_errors=True)
 # ------------------------------------------------- K-254: Doubtful tag +
 # ------------------------------------------------- confirmed-only counts
 
-print("== K-254: Doubtful tag membership (tag_sync) ==")
+print("== Lecture tag synchronization ==")
 
 try:
     tag_sync = importlib.import_module("klausmate.tag_sync")
@@ -1087,27 +1087,6 @@ except Exception as e:
     print(f" SKIP tag_sync import failed: {type(e).__name__}: {e}")
 
 if HAVE_TAG_SYNC:
-    check("the Doubtful tag is reserved and named",
-          tag_sync.DOUBTFUL_TAG == "!Library::Doubtful"
-          and "doubtful" in tag_sync.RESERVED_LEAVES)
-
-    # K-254 review Minor 5: the constant-only pin above never exercises
-    # what "reserved" actually buys — plan_reconcile (K-054's reverse
-    # sync) treats any !Library::<reserved leaf> tag as ineligible for
-    # the "this PDF got renamed in the sidebar" inference. Without the
-    # reserve, a lone missing PDF plus the freshly-created global
-    # Doubtful tag looks EXACTLY like a PDF renamed to "Doubtful" —
-    # profile-open reconcile would then rename the PDF and hand it that
-    # tag. With the reserve, the same inputs plan a safe "reapply"
-    # instead, touching Doubtful not at all.
-    _plan = tag_sync.plan_reconcile(
-        {"renal": "!Library::Renal"}, {"!Library::Doubtful"}
-    )
-    check("!Library::Doubtful is never a reconcile-rename candidate",
-          _plan["candidates"] == [] and _plan["action"] == "reapply"
-          and _plan["rename"] is None,
-          _plan)
-
     # PR #4 fourth review (1): a stored lecture tag is user-derived and
     # lands inside Anki's QUERY LANGUAGE. desired_tag's sanitizer only
     # strips whitespace and "::", so a PDF named 'Lec "1" 100%_a*b\c'
@@ -1135,10 +1114,6 @@ if HAVE_TAG_SYNC:
     check("a plain tag round-trips unchanged inside tag:\"…\"",
           tag_sync.tag_query("!Library::Renal") == 'tag:"!Library::Renal"',
           tag_sync.tag_query("!Library::Renal"))
-    check("the Doubtful tag itself is quoted the same way (no bare "
-          "operand left anywhere)",
-          tag_sync.tag_query(tag_sync.DOUBTFUL_TAG)
-          == 'tag:"!Library::Doubtful"')
 
 if HAVE_TAG_SYNC and HAVE_RETENTION:
     # _do_sync_one reaches retention._load_prefs()/_prefs_path() for
@@ -1180,243 +1155,46 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             def members(self, tag):
                 return set(self._tagmap.get(tag, set()))
 
-        col = FakeCol(tags={"!Library::Renal": {1, 2, 3}, "!Library::Doubtful": {9}})
-        res = tag_sync._do_sync_one(
-            col, "renal", "!Library::Renal", desired_nids={1, 2, 3}, doubtful={2, 5}
-        )
-        check("the lecture tag keeps every match; Doubtful becomes exactly "
-              "the rejected set across PDFs",
-              col.members("!Library::Renal") == {1, 2, 3}
-              and col.members("!Library::Doubtful") == {2, 5},
-              (col.members("!Library::Renal"), col.members("!Library::Doubtful")))
-        check("both diffs are reported back",
-              res["doubtful_added"] == [2, 5] and res["doubtful_removed"] == [9],
-              res)
-
-        col2 = FakeCol(tags={"!Library::Renal": {1, 2, 3}})
-        res2 = tag_sync._do_sync_one(
-            col2, "renal", "!Library::Renal", desired_nids={1, 2, 3}
-        )
-        check("doubtful=None (plain indexing, no judge pass yet) never "
-              "invents or touches the Doubtful tag",
-              "!Library::Doubtful" not in col2._tagmap
-              and res2["doubtful_added"] == [] and res2["doubtful_removed"] == [])
-
-        # Final review I-3: membership is the rejected set INTERSECTED with
-        # each PDF's CURRENT at-threshold candidates, not the raw union of
-        # every verdict ever written. judged.json is append-only, so without
-        # the intersection a card that stops matching its lecture (the
-        # sensitivity slider moved, or the note was edited) keeps
-        # !Library::Doubtful forever — invisible inside Klaus, but not to a
-        # user's own search or filtered deck on the bare tag, and with no
-        # self-heal short of becoming that PDF's candidate again.
-        _pert = importlib.import_module("klausmate.pertinence")
-
-        def _seed_judged(safe, rejected, matches=None):
-            _pert.save_judged(_dbt_tmp, safe, {
-                "version": _pert.VERSION, "model": "m",
-                "verdicts": {str(n): {"pertinent": False, "reason": "", "page": 1,
-                                      "page_hash": "", "card_hash": "", "model": "m"}
-                             for n in rejected},
-            })
-            if matches is not None:
-                _mp = retention._matches_path(safe)
-                os.makedirs(os.path.dirname(_mp), exist_ok=True)
-                with open(_mp, "w", encoding="utf-8") as _f:
-                    _f.write(matches if isinstance(matches, str) else json.dumps({"matches": matches}))
-
-        # nid 2 rejected and still matching; nid 5 rejected but has fallen to
-        # 0.10; nid 8 matches but was never rejected. cardio has verdicts and
-        # NO matches.json at all.
-        _seed_judged("renal", [2, 5], matches=[[2, 0.9], [5, 0.10], [8, 0.95]])
-        _seed_judged("cardio", [7])
-        _members = tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
-        check("a rejected nid that has dropped below its PDF's threshold is no longer "
-              "doubtful; one still at/above it is; a matched nid nobody rejected never is",
-              _members == {2, 7}, _members)
-        check("...and a PDF whose matches.json is missing keeps its WHOLE rejected set — "
-              "never strip on missing data",
-              7 in _members and 7 in _pert.rejected_nids(_pert.load_judged(_dbt_tmp, "cardio")))
-        check("raising Match Sensitivity past a rejected card's score self-heals it out of "
-              "the tag on the next sync of any kind (the I-3 scenario)",
-              tag_sync.doubtful_members({"pdf_match_threshold": 0.95}) == {7})
-        _seed_judged("renal", [2, 5], matches="{not json at all")
-        check("a corrupt matches.json is 'don't know', not 'nobody' — renal's rejections "
-              "all stand rather than silently vanishing",
-              tag_sync.doubtful_members({"pdf_match_threshold": 0.5}) == {2, 5, 7})
-        check("the union across PDFs is untouched by the narrowing (a card rejected for A "
-              "and confirmed for B is still Doubtful — spec rule, known design debt)",
-              _pert.all_rejected(_dbt_tmp) == {2, 5, 7})
-        # Copilot review of PR #4 (2026-09-17): a judged.json that EXISTS but
-        # is unreadable used to read as EMPTY here, so that PDF contributed
-        # nothing and the full recompute stripped its Doubtful members —
-        # the opposite of the fail-safe above. It must raise instead; every
-        # sink catches that and passes doubtful=None (tag untouched).
-        with open(_pert.judged_path(_dbt_tmp, "cardio"), "w", encoding="utf-8") as _f:
-            _f.write("{torn")
-        _raised = False
-        try:
-            tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
-        except ValueError:
-            _raised = True
-        check("a judged.json that exists but cannot be read makes doubtful_members RAISE "
-              "(the sinks turn that into doubtful=None) rather than strip that PDF's members",
-              _raised)
-        shutil.rmtree(os.path.join(_dbt_tmp, "pdf_index"), ignore_errors=True)
-
-        # K-254 review Important 2 + 3: sync_after_threshold's own guard
-        # and wiring — mutations 5/7 in the review walked straight
-        # through the pure-function pins above because nothing exercised
-        # the GLUE. `_run_sync_op` is stubbed to run `work` synchronously
-        # instead of queuing a CollectionOp (this file's aqt.operations
-        # stub is a pure no-op — see the module docstring above — so the
-        # real op would never fire at all), and `_folder_and_display` is
-        # stubbed to skip curation/drive_store, which is not what this
-        # pin is about.
-        pertinence = importlib.import_module("klausmate.pertinence")
+        col = FakeCol(tags={"!Library::Renal": {1, 3}})
+        tag_sync._do_sync_one(col, "renal", "!Library::Renal", desired_nids={1, 2})
+        check("lecture membership adds and removes notes", col.members("!Library::Renal") == {1, 2})
         _orig_folder_display = tag_sync._folder_and_display
         _orig_run_sync_op = tag_sync._run_sync_op
-        _orig_doubtful_members = tag_sync.doubtful_members
-        pkg.get_config = lambda: {}
+        _orig_cached_matches = tag_sync._cached_matches
+        pkg.get_config = lambda: {"pdf_match_threshold": 0.5}
         tag_sync._folder_and_display = lambda safe: (None, "Renal")
-        _captured: list = []
-        tag_sync._run_sync_op = (
-            lambda parent, label, work, on_done=None, on_finished=None:
-            _captured.append(work)
-        )
-        def _run_captured(fcol):
-            """`_captured[0](fcol)` if the guard under test actually let
-            work reach `_run_sync_op`, else None — so a regression in
-            the guard FAILS the check below instead of crashing this
-            whole test file via IndexError and hiding every later pin."""
-            return _captured[0](fcol) if _captured else None
-
+        _captured = []
+        tag_sync._run_sync_op = lambda parent, label, work, **kwargs: _captured.append(work)
         try:
-            def _boom_doubtful(cfg):
-                raise RuntimeError("boom — simulated judged.json corruption")
-
-            tag_sync.doubtful_members = _boom_doubtful
-            _captured.clear()
-            tag_sync.sync_after_threshold(
-                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
-            )
-            check("doubtful_members raising still reaches _run_sync_op — the "
-                  "lecture-tag retag the user just confirmed is never "
-                  "cancelled by a Doubtful-side failure",
-                  len(_captured) == 1)
-            _fcol = FakeCol()
-            _gres = _run_captured(_fcol)
-            check("...and doubtful safely becomes None (_do_sync_one's own "
-                  "contract), not a crash and not an invented tag",
-                  _gres is not None
-                  and _gres["doubtful_added"] == [] and _gres["doubtful_removed"] == []
-                  and "!Library::Doubtful" not in _fcol._tagmap)
-
-            tag_sync.doubtful_members = lambda cfg: {2, 5}
-            _captured.clear()
-            tag_sync.sync_after_threshold(
-                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
-            )
-            _fcol2 = FakeCol()
-            _run_captured(_fcol2)
-            check("when doubtful_members SUCCEEDS, its set really reaches "
-                  "_do_sync_one's doubtful= — the exact wiring mutation 7 "
-                  "(drop doubtful from this call) would break",
-                  _fcol2.members("!Library::Doubtful") == {2, 5})
-
-            # sync_after_clear_overrides — same two guarantees, batch
-            # path. `_cached_matches` is stubbed too: with a cold
-            # card_index (nothing seeded on this scratch USER_FILES) it
-            # would return None for every PDF and the function would
-            # return before ever reaching _run_sync_op, which is not
-            # what either pin below is about.
-            _orig_cached_matches = tag_sync._cached_matches
+            tag_sync.sync_after_threshold(None, "renal", [(1, 0.9), (2, 0.4)], 0.5)
+            check("threshold sync schedules one collection operation", len(_captured) == 1)
+            if _captured:
+                _captured.pop()(col)
+            check("threshold sync removes the below-threshold note", col.members("!Library::Renal") == {1})
             tag_sync._cached_matches = lambda safe, cfg: [(1, 0.9), (2, 0.8)]
-            try:
-                tag_sync.doubtful_members = _boom_doubtful
-                _captured.clear()
-                tag_sync.sync_after_clear_overrides(None, ["renal"])
-                check("sync_after_clear_overrides: doubtful_members raising "
-                      "still reaches _run_sync_op for the whole batch",
-                      len(_captured) == 1)
-                _fcol3 = FakeCol()
-                _run_captured(_fcol3)  # work(col) — {"added","removed","count"} shape, not _do_sync_one's
-                check("...doubtful is None, not a crash, for the batch too "
-                      "— the Doubtful tag is left untouched entirely",
-                      "!Library::Doubtful" not in _fcol3._tagmap)
-
-                tag_sync.doubtful_members = lambda cfg: {7}
-                _captured.clear()
-                tag_sync.sync_after_clear_overrides(None, ["renal"])
-                _fcol4 = FakeCol()
-                _run_captured(_fcol4)
-                check("sync_after_clear_overrides: a successful doubtful_members "
-                      "reaches _do_sync_one's doubtful= here too",
-                      _fcol4.members("!Library::Doubtful") == {7})
-            finally:
-                tag_sync._cached_matches = _orig_cached_matches
+            tag_sync.sync_after_clear_overrides(None, ["renal"])
+            check("clearing overrides schedules one collection operation", len(_captured) == 1)
+            if _captured:
+                _captured.pop()(col)
+            check("clearing overrides restores matching notes", col.members("!Library::Renal") == {1, 2})
         finally:
             tag_sync._folder_and_display = _orig_folder_display
             tag_sync._run_sync_op = _orig_run_sync_op
-            tag_sync.doubtful_members = _orig_doubtful_members
+            tag_sync._cached_matches = _orig_cached_matches
             del pkg.get_config
     finally:
         retention.USER_FILES = _orig_user_files
         shutil.rmtree(_dbt_tmp, ignore_errors=True)
 
-print("== K-254: retention counts confirmed cards only ==")
-
 if HAVE_RETENTION:
-    # note_card_counts: matches at/above threshold are nid 1 (.9) and
-    # nid 2 (.8); nid 3 (.7) is already below threshold. nid 2 is
-    # rejected, so it moves entirely out of notes/cards/suspended and
-    # into doubtful_count — confirmed = matched - rejected. nid 2 also
-    # has THREE cards (two viewable queues, one suspended -1), which is
-    # the point of this fixture (K-254 review Minor 6): doubtful_count
-    # is a CARD count sharing card_count's own unit — the Cards cell
-    # renders it as "{card_count} · {doubtful_count} doubtful" — not a
-    # note count, so a single rejected note with multiple viewable cards
-    # must report more than 1.
-    n, c, s, d = retention.note_card_counts(
-        [(1, 0.9), (2, 0.8), (3, 0.7)], 0.75,
-        {1: [0], 2: [0, 2, -1]}, rejected={2},
-    )
-    check("note_count excludes rejected; doubtful_count reports the "
-          "rejected note's VIEWABLE cards (2), not the note (1)",
-          n == 1 and d == 2, (n, c, s, d))
-    check("a rejected note's cards are never counted as viewable or "
-          "suspended either — not even its suspended one",
-          c == 1 and s == 0, (n, c, s, d))
-
-    n0, c0, s0, d0 = retention.note_card_counts(
-        [(1, 0.9), (2, 0.8)], 0.75, {1: [0], 2: [0]}
-    )
-    check("rejected=None (the default) matches the pre-K-254 3-tuple "
-          "contract with doubtful_count 0",
-          (n0, c0, s0, d0) == (2, 2, 0, 0))
-
-    # pdf_retention: same two notes, nid 2's card barely retained (0.1).
-    # Excluding it as rejected should RAISE the confirmed score, not
-    # lower it — the rejected card was dragging the average down.
-    _card_r_254 = {1: [(0.9, False)], 2: [(0.1, False)]}
-    r_all = retention.pdf_retention([(1, 0.9), (2, 0.8)], 0.75, _card_r_254)
-    r_conf = retention.pdf_retention(
-        [(1, 0.9), (2, 0.8)], 0.75, _card_r_254, rejected={2}
-    )
-    check("the score ignores rejected cards",
-          r_conf["retention"] > r_all["retention"],
-          (r_all["retention"], r_conf["retention"]))
-    # K-254 review Minor 7: this used to compare the SAME call to
-    # itself ("retention.pdf_retention(...) == r_all"), which can only
-    # ever prove determinism — mutation-tested to survive a real
-    # divergence (rejected=None silently dropping the weakest match).
-    # Concrete values instead: both notes matched, both single-card, and
-    # the exact pre-K-254 aggregate (0.9*0.9 + 0.8*0.1 over 0.9+0.8).
-    check("rejected=None reproduces the pre-K-254 aggregate exactly — "
-          "concrete values, not a call compared to its own result",
+    check("threshold counts include viewable and suspended cards",
+          retention.note_card_counts([(1, .9), (2, .8), (3, .7)], .75,
+                                     {1: [0], 2: [0, 2, -1], 3: [0]}) == (2, 3, 1))
+    _card_r = {1: [(0.9, False)], 2: [(0.1, False)]}
+    r_all = retention.pdf_retention([(1, .9), (2, .8)], .75, _card_r)
+    check("retention includes every note above threshold with similarity weighting",
           r_all["matched_notes"] == 2 and r_all["matched_cards"] == 2
-          and abs(r_all["retention"] - 0.5235294117647059) < 1e-9,
-          r_all)
+          and abs(r_all["retention"] - 0.5235294117647059) < 1e-9, r_all)
 
 print("== threshold default migration (retention._migrate_default_threshold) ==")
 

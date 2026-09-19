@@ -630,8 +630,7 @@ check("...and orders them NUMERICALLY by t0: 12 < 12.250 < 12.500 (a decimal par
 # PR #4 F4: openai_client._request folds up to 300 bytes of the
 # PROVIDER'S error body into the OpenAIError's message, and that body can
 # echo request-derived text -- here, the continuity prompt, which is the
-# previous segment's transcript. Log the class and status only, the way
-# pertinence's judge does.
+# previous segment's transcript. Log the class and status only.
 # ---------------------------------------------------------------------
 section("PR #4 F4: a failed transcription logs class and status, never the message")
 import contextlib  # noqa: E402 -- local to this section

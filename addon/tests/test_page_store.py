@@ -454,8 +454,7 @@ for _blank in ("", "   ", "\t\n"):
 # The refusal is "an empty path may never NAME a directory", not "a caller
 # without a path is turned away": identity here is the DOCUMENT (the
 # pointer file / document_identity), so a call the store can still answer
-# without consulting the path is answered. pertinence.ensure_judged reads
-# its page through `pdf_path_for(...) or ""` and must keep working.
+# without consulting the path is answered using the stored document identity.
 _np = tempfile.mkdtemp(prefix="klaus-pages-nopath-")
 ps.ensure_records(_np, "lec", "", ["Slide one text"])
 check("ensure_records with no path keys on the TEXT — never on digest12(\"\")",

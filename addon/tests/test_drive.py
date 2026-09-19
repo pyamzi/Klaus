@@ -1074,31 +1074,6 @@ check("Match Sensitivity opens window-modal with a callback (K-114: "
       "dlg.open() + accepted, never exec)",
       "dlg.open()" in _PD_FLAT and "dlg.accepted.connect(apply)" in _PD_FLAT)
 
-print("== K-254 review Important 1: Match Sensitivity scores CONFIRMED ==")
-_THRESH_SRC = _PD_SRC.split("def _on_threshold", 1)[1].split(
-    "\n    def _on_browse", 1)[0]
-_THRESH_CODE = code_only(_THRESH_SRC)
-# .find (never .index) throughout: a regression that removes this code
-# entirely must FAIL these checks, not crash the file via ValueError and
-# hide every pin after it.
-_rej_pos = _THRESH_SRC.find("pertinence.rejected_nids")
-_preview_pos = _THRESH_SRC.find("def preview")
-check("the rejected set is read ONCE, at the method's own top level — "
-      "same footing as `matches = self.matches.get(safe)` right above "
-      "it, never inside preview()/apply() (which would mean once per "
-      "keystroke)",
-      _rej_pos != -1 and _preview_pos != -1 and _rej_pos < _preview_pos)
-check("every rejected-aware call in the method uses it: preview's "
-      "pdf_retention, apply's pdf_retention, and (PR #4 F5) apply's "
-      "note_card_counts — a count computed without it would disagree "
-      "with the score printed beside it",
-      _THRESH_CODE.count("rejected=_rejected") == 3,
-      _THRESH_CODE.count("rejected=_rejected"))
-_THRESH_FLAT = _THRESH_CODE.replace(" ", "")
-check("a read failure degrades to nothing-rejected rather than a "
-      "broken dialog",
-      "exceptException" in _THRESH_FLAT and "_rejected=set()" in _THRESH_FLAT)
-
 print("== K-125: the statics that exec() internally are gone too ==")
 # K-100's audit: QInputDialog.getText and QMessageBox.question run an
 # app-modal exec() under the hood — the same macOS 26 + Qt 6.11 crash
@@ -1548,24 +1523,6 @@ if _HAVE_QT:
           and "2 suspended" in _item.toolTip(2)
           and "50% unseen" in _item.toolTip(3))
 
-    print("== K-254: _apply_row — doubtful suffix on the Cards cell ==")
-    _doubt = dict(_full, doubtful_count=3)
-    _apply(_host, _item, _doubt)
-    check("doubtful cards append their count to whatever the Cards cell "
-          "already said",
-          _item.text(2) == "5 · 3 doubtful", repr(_item.text(2)))
-    check("the hover detail names the doubtful count too",
-          "3 doubtful" in _item.toolTip(2))
-    _apply(_host, _item, _full)
-    check("zero (or absent) doubtful_count renders the bare count, "
-          "unchanged from before K-254",
-          _item.text(2) == "5", repr(_item.text(2)))
-    _susp_doubt = dict(_full, card_count=0, suspended_count=6, doubtful_count=2)
-    _apply(_host, _item, _susp_doubt)
-    check("a fully suspended row still appends its doubtful suffix",
-          _item.text(2) == "suspended · 2 doubtful", repr(_item.text(2)))
-    _apply(_host, _item, _full)
-
     _bare = {"indexed": True, "stale": False, "retention": 0.9,
              "matched_cards": 3, "new_pct": 0.0}
     _apply(_host, _item, _bare)
@@ -1725,24 +1682,9 @@ if _HAVE_QT:
         _run_now_col[:] = []
 
     print("== PR #4 F5: Match Sensitivity OK recomputes the COUNTS too ==")
-    # Copilot on stacked PR #4: apply() refreshed pdf_retention but left
-    # note/card/suspended/doubtful at the OLD threshold, so the Cards
-    # cell showed a confirmed score for the new threshold beside a stale
-    # "· n doubtful" — two numbers from two different thresholds in one
-    # row. priority_rows already hands card_queues back beside card_r
-    # for exactly this col-free re-aggregation.
-    _th_pt = importlib.import_module("klausmate.pertinence")
     _th_uf = tempfile.mkdtemp(prefix="klaus_thresh_uf_")
     _th_prev_uf = pkg.USER_FILES
     pkg.USER_FILES = _th_uf
-    # A REAL judged.json: nid 102 rejected, minted through the module's
-    # own entry_for so a shape change here cannot silently stop matching.
-    _th_pt.save_judged(_th_uf, "Thr", {
-        "version": _th_pt.VERSION, "model": "m",
-        "verdicts": {"102": _th_pt.entry_for(
-            _th_pt.Verdict(102, False, "not this slide", 1, "ph", "ch", "m"))},
-    })
-
     class _ThreshHost(_QtW.QWidget):
         _on_threshold = pdf_drive.DriveWindow._on_threshold
         _apply_row = pdf_drive.DriveWindow._apply_row
@@ -1758,8 +1700,7 @@ if _HAVE_QT:
     _th_item = pdf_drive._LibraryItem(_th_tree, ["Thr.pdf"])
     _th_item.setData(0, pdf_drive._ROLE_SAFE, "Thr")
     _th_host.items = [_th_item]
-    # 101 confirmed (2 cards), 102 REJECTED (2 cards), 103 confirmed
-    # (1 card) — and 103 is the one the slider drops below threshold.
+    # 101 and 102 have two cards each; 103 has one below the new threshold.
     _th_host.matches = {"Thr": [(101, 0.90), (102, 0.72), (103, 0.62)]}
     _th_host.card_r = {101: [(0.9, False), (0.8, False)],
                        102: [(0.7, False), (0.7, False)],
@@ -1767,8 +1708,8 @@ if _HAVE_QT:
     _th_host.card_queues = {101: [0, 0], 102: [0, 0], 103: [0]}
     _th_host.rows = {"Thr": {"indexed": True, "stale": False, "retention": 0.9,
                              "matched_cards": 3, "new_pct": 0.0, "priority": 0.0,
-                             "note_count": 2, "card_count": 3,
-                             "suspended_count": 0, "doubtful_count": 2}}
+                             "note_count": 3, "card_count": 5,
+                             "suspended_count": 0}}
 
     _th_stored = {}
     _th_synced = []
@@ -1793,26 +1734,20 @@ if _HAVE_QT:
         _th_row = _th_host.rows["Thr"]
         check("PR #4 F5: OK recomputes the COUNTS against the new "
               "threshold, not just the score — 103 drops out, so one "
-              "confirmed note and its card go with it",
+              "matching note and its card go with it",
               (_th_row["note_count"], _th_row["card_count"],
-               _th_row["suspended_count"]) == (1, 2, 0),
+               _th_row["suspended_count"]) == (2, 4, 0),
               repr({k: _th_row[k] for k in
                     ("note_count", "card_count", "suspended_count")}))
-        check("...and the doubtful count is confirmed-only arithmetic on "
-              "the SAME threshold: 102's two cards, counted in CARDS "
-              "because the Cards cell is where they are read",
-              _th_row["doubtful_count"] == 2, _th_row["doubtful_count"])
         check("...the retention score agrees with them — it was already "
-              "recomputed, and 102 is excluded from both",
-              _th_row["matched_cards"] == 2
-              and abs(_th_row["retention"] - 0.85) < 1e-9,
+              "recomputed with both matching notes",
+              _th_row["matched_cards"] == 4
+              and abs(_th_row["retention"] - (0.90 * 1.7 + 0.72 * 1.4) / (2 * (0.90 + 0.72))) < 1e-9,
               repr((_th_row["matched_cards"], _th_row["retention"])))
         check("...and the row reaches the tree: the Cards cell now reads "
               "the new pair, not the pre-OK one",
-              _th_item.text(2) == "2 · 2 doubtful", repr(_th_item.text(2)))
+              _th_item.text(2) == "4", repr(_th_item.text(2)))
 
-        # Raise it past 102 as well: the doubtful count must FALL, which
-        # a stale-counts regression could never do.
         _th_slider2_dlg_before = len(_th_host.findChildren(_QtW.QDialog))
         _th_host._on_threshold("Thr")
         _th_dlg2 = _th_host.findChildren(_QtW.QDialog)[-1]
@@ -1824,10 +1759,11 @@ if _HAVE_QT:
         _th_dlg2.accept()
         app.processEvents()
         _th_row2 = _th_host.rows["Thr"]
-        check("PR #4 F5: raising past the rejected card's own score drops "
-              "it out of doubtful too — the suffix disappears with it",
-              _th_row2["doubtful_count"] == 0
-              and _th_item.text(2) == "2", repr(_th_item.text(2)))
+        check("raising the threshold removes 102 from both counts and score",
+              (_th_row2["note_count"], _th_row2["card_count"]) == (1, 2)
+              and _th_row2["matched_cards"] == 2
+              and abs(_th_row2["retention"] - 0.85) < 1e-9
+              and _th_item.text(2) == "2")
     finally:
         (pdf_drive.retention._cfg, pdf_drive.retention.get_threshold,
          pdf_drive.retention.set_threshold,
@@ -1896,40 +1832,7 @@ if _HAVE_QT:
           and "Suspend Cards" in _l3 and "Unsuspend Cards" in _l3,
           repr(_l3))
 
-    print("== K-254 review Important 4: 'Doubtful cards…' is UNGATED ==")
-    # DOUBTFUL_TAG is the GLOBAL union across every PDF (spec D5) — this
-    # row's own doubtful_count says nothing about whether OTHER PDFs'
-    # rejections still make the search return something here, so the
-    # item is always offered, exactly like "Show Matched Cards in
-    # Browse" beside it (re-baselined off the review's Important 4).
-    _, _m4 = _build_menu(dict(_menu_row_full, doubtful_count=3))
-    _l4 = [a.text() for a in _m4.actions()]
-    check("doubtful_count > 0 -> still offered",
-          pdf_drive.DOUBTFUL_MENU_LABEL in _l4, repr(_l4))
-    _, _m5 = _build_menu(dict(_menu_row_full, doubtful_count=0))
-    _l5 = [a.text() for a in _m5.actions()]
-    check("doubtful_count == 0 -> STILL offered (the gate was dropped, "
-          "not just its default)",
-          pdf_drive.DOUBTFUL_MENU_LABEL in _l5, repr(_l5))
-    _, _m6 = _build_menu(_menu_row_full)  # no doubtful_count key at all
-    _l6 = [a.text() for a in _m6.actions()]
-    check("no doubtful_count key (row predates K-254 or PDF never judged) "
-          "-> offered too, unconditionally",
-          pdf_drive.DOUBTFUL_MENU_LABEL in _l6, repr(_l6))
-    # Raw source, not code_only: "doubtful_count" in the real gate only
-    # ever appeared as a STRING key (`row.get("doubtful_count")`), which
-    # code_only strips right along with a comment merely naming it —
-    # against either shape that check would be vacuously true. The exact
-    # conditional text is what must be gone.
-    _PDM_SRC = _PD_SRC.split("def _build_pdf_menu", 1)[1].split(
-        "def _build_folder_menu", 1)[0]
-    check("the gate is really gone from the source, not just satisfied "
-          "by a default",
-          'if int(row.get("doubtful_count") or 0) > 0:' not in _PDM_SRC)
-    # Raw source (string literals) on purpose — code_only would strip both.
-    check("DOUBTFUL_MENU_LABEL is the exact ellipsis-suffixed label",
-          'DOUBTFUL_MENU_LABEL = "Doubtful cards…"' in _PD_SRC)
-    print("== PR #4 fourth review (1): both Browse hops escape the tag ==")
+    print("== PR #4 fourth review (1): Browse escapes the tag ==")
     # Copilot's fourth review: the stored lecture tag was interpolated
     # raw into Anki's query language by BOTH hops. A quote terminates
     # the operand, a backslash escapes what follows, and in a tag:
@@ -1952,7 +1855,6 @@ if _HAVE_QT:
     _hop_tag = '!Library::Renal_"Phys"_1_2*'
     _hop_ts = types.SimpleNamespace(
         get_stored_tag=lambda safe: _hop_tag,
-        DOUBTFUL_TAG=_real_ts.DOUBTFUL_TAG,
         tag_query=_real_ts.tag_query,
     )
     _hop_ret = types.SimpleNamespace(get_threshold=lambda safe, cfg: 0.5,
@@ -1973,13 +1875,6 @@ if _HAVE_QT:
               _fb.searches
               and 'Renal\\_\\"Phys\\"\\_1\\_2\\*' in _fb.searches[0],
               repr(_fb.searches))
-        _fb.searches.clear()
-        pdf_drive.DriveWindow._on_doubtful(_bh, "renal")
-        check("the Doubtful search intersects the global tag with this "
-              "PDF's own lecture tag — both through tag_query",
-              _fb.searches == [_real_ts.tag_query(_real_ts.DOUBTFUL_TAG)
-                               + " " + _real_ts.tag_query(_hop_tag)],
-              repr(_fb.searches))
     finally:
         pdf_drive.aqt = _o_aqt
         pdf_drive.tag_sync, pdf_drive.retention = _o_ts_hop, _o_ret_hop
@@ -1987,7 +1882,6 @@ if _HAVE_QT:
     # strip these string literals, so this reads the raw source).
     check("no hop interpolates a bare tag into the query any more",
           'f\'tag:"{tag}"\'' not in _PD_SRC
-          and 'tag:{tag_sync.DOUBTFUL_TAG} "tag:{tag}"' not in _PD_SRC
           and "_escape_tag" not in _PD_SRC)
 
     shutil.rmtree(_rq_uf, ignore_errors=True)
