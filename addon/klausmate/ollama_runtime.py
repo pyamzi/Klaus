@@ -28,6 +28,7 @@ import socket
 import stat
 import subprocess
 import tarfile
+import tempfile
 import threading
 import time
 import urllib.error
@@ -258,6 +259,8 @@ def fetch_expected_sha(version: str, asset_name: str, timeout: float = 30.0) -> 
 
 def check_disk_space(target_dir: str, asset: RuntimeAsset) -> None:
     needed = asset.archive_bytes + asset.extracted_bytes + _DISK_HEADROOM
+    if asset.kind == "tzst":
+        needed += asset.extracted_bytes  # temporary uncompressed tar
     os.makedirs(target_dir, exist_ok=True)
     free = shutil.disk_usage(target_dir).free
     if free < needed:
@@ -343,20 +346,27 @@ def _check_member_path(name: str, dest_dir: str) -> None:
         raise RuntimeProvisionError("extract", f"Unsafe archive member: {name}")
 
 
-def _extract_tgz(archive: str, dest_dir: str) -> None:
-    with tarfile.open(archive, mode="r:gz") as tf:
+def _check_tar_member(member: tarfile.TarInfo, dest_dir: str) -> None:
+    _check_member_path(member.name, dest_dir)
+    if member.issym():
+        _check_member_path(os.path.join(os.path.dirname(member.name), member.linkname), dest_dir)
+    elif member.islnk():
+        _check_member_path(member.linkname, dest_dir)
+    elif not (member.isfile() or member.isdir()):
+        raise RuntimeProvisionError("extract", f"Unsafe archive member: {member.name}")
+
+
+def _extract_tar(archive: str, dest_dir: str) -> None:
+    with tarfile.open(archive, mode="r:*") as tf:
         for member in tf.getmembers():
-            _check_member_path(member.name, dest_dir)
-            if member.issym():
-                _check_member_path(os.path.join(os.path.dirname(member.name), member.linkname), dest_dir)
-            elif member.islnk():
-                _check_member_path(member.linkname, dest_dir)
-            elif not (member.isfile() or member.isdir()):
-                raise RuntimeProvisionError("extract", f"Unsafe archive member: {member.name}")
+            _check_tar_member(member, dest_dir)
         try:
-            tf.extractall(dest_dir, filter="data")  # 3.12+: also silences
+            tf.extractall(dest_dir, filter="data")
         except TypeError:  # older Python without the filter kwarg
-            tf.extractall(dest_dir)
+            for member in tf.getmembers():
+                # Earlier members may have created symlinks in this path.
+                _check_tar_member(member, dest_dir)
+                tf.extract(member, dest_dir)
 
 
 def _extract_zip(archive: str, dest_dir: str) -> None:
@@ -367,20 +377,17 @@ def _extract_zip(archive: str, dest_dir: str) -> None:
 
 
 def linux_extract_strategy() -> list[str] | None:
-    """Return an argv template for extracting .tar.zst, or None.
+    """Return a command that writes an uncompressed tar to stdout.
 
-    Probed BEFORE downloading ~1.3 GB so unsupported systems fail fast.
-    GNU tar shells out to the ``zstd`` program for --zstd, so zstd/unzstd
-    on PATH is the primary path; bsdtar links libarchive and usually
-    decodes zstd natively. ``{archive}`` / ``{dest}`` are placeholders.
+    Probe before download. These tools only decode or transcode the archive;
+    Python validates and extracts its members. No tool extracts to disk.
     """
-    if shutil.which("unzstd") or shutil.which("zstd"):
-        prog = "unzstd" if shutil.which("unzstd") else "zstd -d"
-        return [
-            "tar", f"--use-compress-program={prog}", "-xf", "{archive}", "-C", "{dest}"
-        ]
+    if shutil.which("unzstd"):
+        return ["unzstd", "-c", "{archive}"]
+    if shutil.which("zstd"):
+        return ["zstd", "-d", "-c", "{archive}"]
     if shutil.which("bsdtar"):
-        return ["bsdtar", "-xf", "{archive}", "-C", "{dest}"]
+        return ["bsdtar", "-cf", "-", "--format=pax", "@{archive}"]
     return None
 
 
@@ -392,14 +399,19 @@ def _extract_tzst(archive: str, dest_dir: str) -> None:
             "Extracting the Linux runtime needs the 'zstd' tool "
             "(e.g. sudo apt install zstd), or install Ollama manually.",
         )
-    argv = [a.format(archive=archive, dest=dest_dir) for a in argv_tpl]
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=1800)
-    if result.returncode != 0:
-        raise RuntimeProvisionError(
-            "extract",
-            f"Archive extraction failed ({' '.join(argv[:2])} exited "
-            f"{result.returncode}):\n{(result.stderr or '')[-500:]}",
+    argv = [a.format(archive=archive) for a in argv_tpl]
+    with tempfile.NamedTemporaryFile(dir=dest_dir, suffix=".tar") as unpacked:
+        result = subprocess.run(
+            argv, stdout=unpacked, stderr=subprocess.PIPE, text=True, timeout=1800,
         )
+        if result.returncode != 0:
+            raise RuntimeProvisionError(
+                "extract",
+                f"Archive conversion failed ({argv[0]} exited "
+                f"{result.returncode}):\n{(result.stderr or '')[-500:]}",
+            )
+        unpacked.flush()
+        _extract_tar(unpacked.name, dest_dir)
 
 
 def extract_asset(archive: str, asset: RuntimeAsset, dest_dir: str) -> str:
@@ -407,7 +419,7 @@ def extract_asset(archive: str, asset: RuntimeAsset, dest_dir: str) -> str:
     os.makedirs(dest_dir, exist_ok=True)
     try:
         if asset.kind == "tgz":
-            _extract_tgz(archive, dest_dir)
+            _extract_tar(archive, dest_dir)
         elif asset.kind == "zip":
             _extract_zip(archive, dest_dir)
         else:
@@ -489,11 +501,20 @@ def _provision_runtime_locked(
     url = RELEASE_URL.format(version=version, asset=asset.name)
     download_asset(url, archive, expected_sha, on_progress, cancel_flag)
 
-    if on_progress is not None:
-        on_progress({"status": "Extracting runtime"})
-    binary = extract_asset(archive, asset, vdir)
-    with open(_complete_marker(vdir), "w", encoding="utf-8") as f:
-        f.write(expected_sha + "\n")
+    try:
+        if on_progress is not None:
+            on_progress({"status": "Extracting runtime"})
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise RuntimeProvisionError("cancelled", "Setup cancelled.")
+        binary = extract_asset(archive, asset, vdir)
+        if cancel_flag is not None and cancel_flag.is_set():
+            raise RuntimeProvisionError("cancelled", "Setup cancelled.")
+        with open(_complete_marker(vdir), "w", encoding="utf-8") as f:
+            f.write(expected_sha + "\n")
+    except (RuntimeProvisionError, OSError):
+        shutil.rmtree(vdir, ignore_errors=True)
+        _remove_quiet(archive)
+        raise
     print(f"[klausmate] provisioned managed Ollama {version} at {binary}")
     return binary
 

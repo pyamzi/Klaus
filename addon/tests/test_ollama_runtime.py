@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import gzip
 import importlib
 import io
 import json
@@ -144,11 +145,11 @@ class RuntimeTests(unittest.TestCase):
                 tf.addfile(entry, io.BytesIO(b'fake'))
         return data.getvalue()
 
-    def provision(self, data, sha=None, cancel=None):
+    def provision(self, data, sha=None, cancel=None, progress=None):
         asset = runtime.RuntimeAsset('fake.tgz', 'tgz', 10, 10)
         self.network.side_effect = lambda *a, **k: Response(data)
         with patch.object(runtime, 'asset_for_platform', return_value=asset), patch.object(runtime, 'platform_kind', return_value='linux'), patch.object(runtime, 'fetch_expected_sha', return_value=sha or hashlib.sha256(data).hexdigest()):
-            return runtime.provision_runtime(cancel_flag=cancel)
+            return runtime.provision_runtime(cancel_flag=cancel, on_progress=progress)
 
     def test_successful_archive(self):
         binary = self.provision(self.archive())
@@ -206,6 +207,112 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(exc.exception.kind, 'cancelled')
         self.assertFalse(os.path.exists(os.path.join(runtime.runtime_root(), 'fake.tgz.part')))
         self.assertFalse(os.path.exists(runtime._complete_marker(runtime.runtime_dir(runtime.OLLAMA_VERSION))))
+
+    def test_cancellation_before_extraction(self):
+        cancel = threading.Event()
+        def progress(event):
+            if event['status'] == 'Extracting runtime':
+                cancel.set()
+        with patch.object(runtime, 'extract_asset', wraps=runtime.extract_asset) as extract:
+            with self.assertRaises(runtime.RuntimeProvisionError) as exc:
+                self.provision(self.archive(), cancel=cancel, progress=progress)
+            self.assertEqual(exc.exception.kind, 'cancelled')
+            extract.assert_not_called()
+        self.assertFalse(os.path.exists(runtime.runtime_dir(runtime.OLLAMA_VERSION)))
+        self.assertFalse(os.path.exists(os.path.join(runtime.runtime_root(), 'fake.tgz')))
+
+    def test_cancellation_during_extraction(self):
+        cancel = threading.Event()
+        original = runtime.extract_asset
+        def extract(*args):
+            result = original(*args)
+            cancel.set()
+            return result
+        with patch.object(runtime, 'extract_asset', side_effect=extract):
+            with self.assertRaises(runtime.RuntimeProvisionError) as exc:
+                self.provision(self.archive(), cancel=cancel)
+            self.assertEqual(exc.exception.kind, 'cancelled')
+        self.assertFalse(os.path.exists(runtime.runtime_dir(runtime.OLLAMA_VERSION)))
+        self.assertIsNone(runtime.find_managed_runtime())
+
+    def convert_zstd_fixture(self, data, destination, tool='zstd', returncode=0):
+        def convert(argv, **kwargs):
+            # Only simulate a converter's stdout. Never extract with a tool.
+            if kwargs.get('stdout') is not None:
+                kwargs['stdout'].write(data)
+            return Mock(returncode=returncode, stderr='conversion failed' if returncode else '')
+        with patch.object(runtime.shutil, 'which', side_effect=lambda name: '/fake/' + tool if name == tool else None), patch.object(runtime.subprocess, 'run', side_effect=convert):
+            runtime._extract_tzst('/scratch/fake.tar.zst', destination)
+
+    def test_zstd_traversal_and_links_rejected_before_extraction(self):
+        destination = os.path.join(self.tmp.name, 'zstd')
+        os.mkdir(destination)
+        for member, link in (('../escaped', None), ('link', '../../escaped')):
+            with self.subTest(member=member):
+                with self.assertRaises(runtime.RuntimeProvisionError) as exc:
+                    self.convert_zstd_fixture(gzip.decompress(self.archive(member, link)), destination)
+                self.assertEqual(exc.exception.kind, 'extract')
+                self.assertEqual(os.listdir(destination), [])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, 'escaped')))
+
+    def test_zstd_tools_preserve_legitimate_symlinks(self):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w') as tf:
+            entry = tarfile.TarInfo('bin/ollama')
+            entry.size = 4
+            tf.addfile(entry, io.BytesIO(b'fake'))
+            link = tarfile.TarInfo('bin/alias')
+            link.type = tarfile.SYMTYPE
+            link.linkname = 'ollama'
+            tf.addfile(link)
+        for tool in ('zstd', 'unzstd', 'bsdtar'):
+            destination = os.path.join(self.tmp.name, tool)
+            os.mkdir(destination)
+            with self.subTest(tool=tool):
+                self.convert_zstd_fixture(data.getvalue(), destination, tool)
+                with open(os.path.join(destination, 'bin/alias'), 'rb') as f:
+                    self.assertEqual(f.read(), b'fake')
+                self.assertTrue(os.path.islink(os.path.join(destination, 'bin/alias')))
+                self.assertEqual(os.listdir(destination), ['bin'])
+
+    def test_tar_legacy_rechecks_paths_after_symlinks(self):
+        destination = os.path.join(self.tmp.name, 'linked')
+        os.mkdir(destination)
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode='w') as tf:
+            directory = tarfile.TarInfo('target')
+            directory.type = tarfile.DIRTYPE
+            tf.addfile(directory)
+            link = tarfile.TarInfo('a/link')
+            link.type = tarfile.SYMTYPE
+            link.linkname = '../target'
+            tf.addfile(link)
+            entry = tarfile.TarInfo('a/link/../../escaped')
+            entry.size = 4
+            tf.addfile(entry, io.BytesIO(b'fake'))
+        original = tarfile.TarFile.extractall
+        def legacy(tf, destination, **kwargs):
+            if 'filter' in kwargs:
+                raise TypeError('unsupported filter')
+            return original(tf, destination)
+        with patch.object(tarfile.TarFile, 'extractall', legacy):
+            with self.assertRaises(runtime.RuntimeProvisionError):
+                self.convert_zstd_fixture(data.getvalue(), destination)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, 'escaped')))
+
+    def test_zstd_conversion_failure_cleans_temporary_tar(self):
+        destination = os.path.join(self.tmp.name, 'zstd')
+        os.mkdir(destination)
+        with self.assertRaises(runtime.RuntimeProvisionError):
+            self.convert_zstd_fixture(b'partial', destination, returncode=1)
+        self.assertEqual(os.listdir(destination), [])
+
+    def test_zstd_disk_preflight_includes_uncompressed_tar(self):
+        asset = runtime.RuntimeAsset('fixture.tar.zst', 'tzst', 10, 20)
+        with patch.object(runtime.shutil, 'disk_usage', return_value=Mock(free=runtime._DISK_HEADROOM + 40)):
+            with self.assertRaises(runtime.RuntimeProvisionError) as exc:
+                runtime.check_disk_space(self.tmp.name, asset)
+        self.assertEqual(exc.exception.kind, 'disk')
 
     def test_platform_selection(self):
         for kind, machine, asset in (('macos', 'arm64', 'ollama-darwin.tgz'), ('windows', 'AMD64', 'ollama-windows-amd64.zip'), ('linux', 'aarch64', 'ollama-linux-arm64.tar.zst')):
