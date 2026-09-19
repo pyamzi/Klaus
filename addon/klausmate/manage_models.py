@@ -735,16 +735,6 @@ def manage_models_dialog(*_args: Any) -> None:
         embed_model_edit,
     )
 
-    reasoning_model_edit = QLineEdit()
-    reasoning_model_edit.setMinimumWidth(220)
-    reasoning_model_edit.setPlaceholderText("claude-sonnet-5")
-    _row(
-        keys_layout,
-        "Reasoning model",
-        "Judges cards against lecture pages and powers the assistant.",
-        reasoning_model_edit,
-    )
-
     transcription_model_edit = QLineEdit()
     transcription_model_edit.setMinimumWidth(220)
     transcription_model_edit.setPlaceholderText("gpt-4o-mini-transcribe")
@@ -1469,133 +1459,20 @@ def manage_models_dialog(*_args: Any) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    # ---- Assistant --------------------------------------------------
-    # The assistant runs on the Anthropic key on the keys page —
-    # `api_key_anthropic` and `reasoning_model`, both edited there
-    # because that is where every paid model name lives now. What is
-    # left here is the dock's own behaviour and its stored history: the
-    # OCR switch, the OCR model picker and the Claude Code binary row
-    # all went with the local runtime and the CLI child (spec D1).
-    assistant_layout = _page(
-        "Assistant",
-        "Assistant",
-        "Answers about the lecture page you are viewing — its slide "
-        "text, any transcript of what was said over it, and the page "
-        "image. It runs on Anthropic with the key above.",
-    )
-
-    assistant_reopen_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        assistant_layout,
-        "Reopen on start",
-        "Reopen the Assistant dock where you left it the next time Anki "
-        "starts.",
-        assistant_reopen_cb,
-    )
-
-    def _clear_sessions_confirmed() -> None:
-        """The destructive back half, run only from the confirm's Yes.
-        assistant_sessions is Task 7's module, imported lazily for the
-        same reason agent_host is above."""
-        try:
-            from . import USER_FILES, assistant_sessions
-        except Exception as exc:
-            print(f"[klausmate] assistant_sessions unavailable: {exc}")
-            return
-        try:
-            assistant_sessions.clear_all(USER_FILES)
-        except Exception as exc:
-            print(f"[klausmate] assistant_sessions.clear_all failed: {exc}")
-            return
-        tooltip("Klaus: assistant sessions cleared", parent=dlg)
-
-    def clear_assistant_sessions() -> None:
-        # Hand-built QMessageBox + open() + finished (K-125), same
-        # pattern as pdf_drive._delete_pdf — never the blocking
-        # question() static (its internal exec() is the
-        # K-114 segfault class).
-        msg = QMessageBox(dlg)
-        msg.setWindowTitle("Clear Sessions")
-        msg.setIcon(QMessageBox.Icon.Question)
-        msg.setText(
-            "Clear every saved Assistant conversation?\n\n"
-            "This removes the session history the Assistant keeps per "
-            "PDF. Notes, PDFs, and highlights are never touched."
-        )
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        msg.setDefaultButton(QMessageBox.StandardButton.No)
-        yes_btn = msg.button(QMessageBox.StandardButton.Yes)
-        if yes_btn is not None:
-            yes_btn.setObjectName("DangerButton")
-        no_btn = msg.button(QMessageBox.StandardButton.No)
-        if no_btn is not None:
-            no_btn.setObjectName("SecondaryButton")
-        try:
-            from . import theme as _theme
-
-            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
-        except Exception as exc:
-            print(f"[klausmate] clear-sessions dialog theme failed: {exc}")
-
-        def _on_answered(_r: int) -> None:
-            clicked = msg.clickedButton()
-            confirmed = (
-                clicked is not None
-                and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
-            )
-            msg.deleteLater()
-            if confirmed:
-                _clear_sessions_confirmed()
-
-        msg.finished.connect(_on_answered)
-        msg.open()
-
-    clear_sessions_btn = QPushButton("Clear Sessions")
-    clear_sessions_btn.setObjectName("SecondaryButton")
-    _row(
-        assistant_layout,
-        "Sessions",
-        "Deletes the saved Assistant conversation history for every "
-        "PDF. Notes, PDFs, and highlights are never touched.",
-        clear_sessions_btn,
-    )
-
-    def load_assistant() -> None:
+    def load_api_key_settings() -> None:
         cfg = _pkg().get_config()
         anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
-        reasoning_model_edit.setText(str(cfg.get("reasoning_model") or ""))
         transcription_model_edit.setText(
             str(cfg.get("transcription_model") or "")
         )
-        assistant_reopen_cb.setChecked(bool(cfg.get("assistant_reopen", False)))
 
-    def save_assistant() -> None:
-        """The Anthropic key and the two model names it pays for, plus
-        the dock's own state. They are EDITED on the keys page (that is
-        where every paid model name lives) and written here, so the
-        Assistant's settings still have exactly one writer."""
+    def save_api_key_settings() -> None:
         cfg = _pkg().get_config()
         cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
-        cfg["reasoning_model"] = reasoning_model_edit.text().strip()
         cfg["transcription_model"] = transcription_model_edit.text().strip()
-        cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
-        # No Preferences row for these two — they're dock state, set by
-        # dragging the Assistant dock and by opening/closing it.
-        # Round-tripped so this save never wipes them back to defaults.
-        # int() is guarded because meta.json is hand-editable and a
-        # non-numeric width must not break the Save button for every
-        # other setting on the page (parked T8 finding).
-        try:
-            cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
-        except (TypeError, ValueError):
-            cfg["assistant_dock_width"] = 420
-        cfg["assistant_dock_open"] = bool(cfg.get("assistant_dock_open", False))
         _pkg().write_config(cfg)
 
-    _finish_nav("General", "Appearance", "Assistant",
-                "API keys & models")
+    _finish_nav("General", "Appearance", "API keys & models")
 
     outer.addWidget(models_page, 1)
 
@@ -1658,7 +1535,7 @@ def manage_models_dialog(*_args: Any) -> None:
         op_state["active"] = busy
         for w in (
             openai_key_edit, anthropic_key_edit, embed_model_edit,
-            reasoning_model_edit, transcription_model_edit,
+            transcription_model_edit,
             index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
@@ -1680,7 +1557,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
         Never while dirty: a refresh landing mid-edit must not overwrite
         unsaved values with the stored ones. The key fields are seeded
-        here and read only by save_embed / save_assistant — a key's value
+        here and read only by save_embed / save_api_key_settings — a key's value
         never reaches a print, a tooltip or a status label.
         """
         if ui_state["dirty"]:
@@ -1690,11 +1567,7 @@ def manage_models_dialog(*_args: Any) -> None:
             cfg = _pkg().get_config()
             openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            # INSIDE the guard: load_assistant flips a switch, and a
-            # switch that starts out true emits toggled -> mark_dirty,
-            # which would light up "Unsaved changes" on a dialog nobody
-            # has touched.
-            load_assistant()
+            load_api_key_settings()
         finally:
             ui_state["syncing"] = False
         update_embed_status()
@@ -2378,7 +2251,7 @@ def manage_models_dialog(*_args: Any) -> None:
         save_embed()
         save_threshold()
         save_general()
-        save_assistant()
+        save_api_key_settings()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
@@ -2477,10 +2350,7 @@ def manage_models_dialog(*_args: Any) -> None:
     openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
     anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
-    reasoning_model_edit.textEdited.connect(lambda _t: mark_dirty())
     transcription_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
-    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
