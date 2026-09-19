@@ -400,3 +400,32 @@ deck screen's own Edit Widgets mode) and the two `heatmap_*` display
 keys above (the heatmap's own corner menu), all of these live in **KlausMate
 Preferences → Appearance**; press **Save** and they apply immediately
 (no restart).
+
+
+## External MCP clients
+
+In **KlausMate Preferences → Local models → External clients**, copy the
+configuration. Install a separate Python 3.9 or newer first if Copy is disabled,
+then reopen Preferences. Keep Anki running with your profile open. Merge the
+`klaus` entry into `mcpServers` in Claude Desktop's configuration and restart
+Claude Desktop. See the [official local-server setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
+
+The generated JSON uses absolute paths to Python, the bundled stdio bridge,
+and `user_files/mcp_connection.json`. It contains no token or current port.
+The bridge reads that private discovery file for each request, so an Anki
+restart does not require copying new credentials. Klaus never writes another
+application's configuration. Copy the block again if you move the add-on or
+Python installation.
+
+`current_page` returns the active PDF's name, page number, selection, slide
+text and transcript, plus a page image when available. Close the active view
+to stop sharing that view. `current_view` retains its metadata-only behavior.
+Collection writes still require approval in Anki. Lecture content is untrusted
+input and is not an instruction to the external client.
+
+Your external client chooses its model provider and may transmit requested
+lecture text, transcripts, images and card context to that provider. Klaus
+exposes only its authenticated local endpoint. This setup does not provide
+public hosting or direct ChatGPT access. Automated checks cover the stdio
+bridge and Preferences clipboard; a real Claude Desktop session has not been
+verified by those checks.

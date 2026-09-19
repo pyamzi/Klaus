@@ -717,7 +717,7 @@ check("exact supported set",
       set(ep.ACTIONS) == {"version", "deckNames", "deckNamesAndIds", "modelNames", "modelFieldNames", "findNotes", "notesInfo",
                           "findCards", "cardsInfo", "addNote", "addNotes", "updateNoteFields", "addTags", "removeTags",
                           "guiBrowse", "klausSearchNotes", "klausSearchNotesSemantic", "klausSearchLecturePdfs",
-                          "klausCurrentView"}, str(sorted(ep.ACTIONS)))
+                          "klausCurrentView", "klausCurrentPage"}, str(sorted(ep.ACTIONS)))
 
 # --- I3: klausSearchNotes is LEXICAL, and its description must say so.
 # anki_tools._h_search_notes is col.find_notes(query) — Anki's own

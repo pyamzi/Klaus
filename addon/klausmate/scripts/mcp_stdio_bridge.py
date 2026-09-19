@@ -4,10 +4,43 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
+import shutil
+import subprocess
 import sys
 import urllib.request
 
 HTTP_TIMEOUT_S = 180
+
+
+def external_python():
+    """Find a separate Python 3 executable without launching Anki."""
+    candidates = [shutil.which("python3"), shutil.which("python"),
+                  "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        candidate = os.path.abspath(candidate)
+        resolved = os.path.realpath(candidate)
+        if not os.path.basename(resolved).lower().startswith("python") or not os.path.isfile(candidate):
+            continue
+        try:
+            result = subprocess.run([candidate, "-I", "-c", "import sys; print(3 if sys.version_info >= (3, 9) else 0)"],
+                                    capture_output=True, text=True, timeout=2)
+            if result.returncode == 0 and result.stdout.strip() == "3":
+                return candidate
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
+def client_config(interpreter, script, discovery):
+    return json.dumps({"mcpServers": {"klaus": {
+        "command": os.path.abspath(interpreter),
+        "args": [os.path.abspath(script), "--discovery", os.path.abspath(discovery)],
+    }}}, indent=2)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

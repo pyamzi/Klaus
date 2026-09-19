@@ -790,6 +790,44 @@ def manage_models_dialog(*_args: Any) -> None:
     index_btn = QPushButton("Index Now")
     _row(keys_layout, "Card index", embed_status, index_btn)
 
+    from pathlib import Path
+    from aqt.qt import QApplication, QPlainTextEdit
+    from .scripts.mcp_stdio_bridge import client_config, external_python
+
+    external_controls = QVBoxLayout()
+    external_json = QPlainTextEdit()
+    external_json.setObjectName("external_client_config")
+    external_json.setReadOnly(True)
+    external_json.setMinimumWidth(260)
+    external_json.setMaximumHeight(180)
+    external_copy = QPushButton("Copy configuration")
+    external_copy.setObjectName("copy_external_client_config")
+    external_copy.setEnabled(False)
+    external_status = QLabel("Checking for external Python 3.9 or newer…")
+    external_status.setWordWrap(True)
+    external_status.setTextFormat(Qt.TextFormat.PlainText)
+    external_copy.clicked.connect(lambda: QApplication.clipboard().setText(external_json.toPlainText()))
+    external_controls.addWidget(external_json)
+    external_controls.addWidget(external_copy)
+    _row(keys_layout, "External clients", external_status, external_controls)
+
+    def external_ready(interpreter: str | None) -> None:
+        if _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        if interpreter:
+            external_json.setPlainText(client_config(
+                interpreter, str(Path(__file__).resolve().parent / "scripts" / "mcp_stdio_bridge.py"),
+                str(Path(_pkg().USER_FILES) / "mcp_connection.json"),
+            ))
+            external_copy.setEnabled(True)
+            external_status.setText(
+                "Keep Anki running. Add the klaus entry under mcpServers in Claude Desktop's "
+                "configuration, then restart the client. Requires external Python 3.9 or newer. "
+                "The client may send requested page text and images to its model provider."
+            )
+        else:
+            external_status.setText("Install Python 3.9 or newer and reopen Preferences to copy the client configuration.")
+
     # ----- Default match sensitivity -----------------------------------
     # The global starting point for retention._migrate_default_threshold /
     # pdf_match_threshold. Same 20-80 range and live numeric readout as
@@ -2736,6 +2774,9 @@ def manage_models_dialog(*_args: Any) -> None:
     # already callback-driven (confirm_close / save_all).
     _OPEN_DLG = dlg
     dlg.show()
+    external_op = QueryOp(parent=dlg, op=lambda _col: external_python(), success=external_ready)
+    external_op.failure(lambda _exc: external_ready(None))
+    external_op.without_collection().run_in_background()
     # Plant the gradient drag handles right away when a gradient is
     # already configured (arming an edge colour later plants them via
     # that edit's own live-preview refresh). After show(), so the one

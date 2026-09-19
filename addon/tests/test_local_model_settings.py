@@ -59,6 +59,10 @@ class Op:
         return self
     def run_in_background(self):
         check('operation has no collection access', self.free)
+        if self.success.__name__ == 'external_ready':
+            # External-client discovery has its own real Preferences suite.
+            self.success(None)
+            return
         operations.append(self)
 mm.QueryOp = Op
 rt = importlib.import_module('klausmate.ollama_runtime')

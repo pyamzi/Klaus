@@ -303,6 +303,42 @@ def _a_klaus_current_view(col, p, ctx):
     return {"pdf": v.pdf_safe, "display": v.display, "page": v.page_index + 1, "count": v.page_count, "selection": v.selection}
 
 
+def _a_klaus_current_page(col, p, ctx):
+    import base64
+    from dataclasses import replace
+    from . import page_store, pdf_handler, viewer_context
+
+    current = viewer_context.current()
+    if current is None or current.page_count <= 0 or current.page_index >= current.page_count:
+        return {"content": [{"type": "text", "text": "No active page. Open a PDF in Klaus."}]}
+    view = replace(current)
+    user_files = ctx["user_files"]
+    record = page_store.load_record(user_files, view.pdf_safe, view.path, view.page_index)
+    slide_text = record.get("slide_text") or ""
+    if not slide_text:
+        try:
+            pages = pdf_handler.extract_pages(view.path)
+            slide_text = pages[view.page_index] if view.page_index < len(pages) else ""
+        except Exception:
+            pass
+    text = {"pdf": view.pdf_safe, "display": view.display,
+            "page": view.page_index + 1, "count": view.page_count,
+            "selection": view.selection, "slide_text": slide_text,
+            "transcript": "\n".join(str(segment.get("text") or "") for segment in record.get("segments", []))}
+    png = page_store.cached_page_png(user_files, view.pdf_safe, view.path, view.page_index)
+    if not png:
+        try:
+            png = page_store.render_page_png(view.path, view.page_index)
+        except Exception:
+            png = None
+    if not png:
+        text["image_status"] = "Page image unavailable."
+    content = [{"type": "text", "text": json.dumps(text)}]
+    if png:
+        content.append({"type": "image", "mimeType": "image/png", "data": base64.b64encode(png).decode("ascii")})
+    return {"content": content}
+
+
 def _obj(props: dict, required: tuple = ()) -> dict:
     return {"type": "object", "properties": props, "required": list(required)}
 
@@ -353,6 +389,7 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "different embedding model. For exact text / Anki search syntax (deck:, tag:, "
            "\"quoted phrases\") use klausSearchNotes instead.",
            _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes_semantic),
+    Action("klausCurrentPage", "current_page", "Read the active PDF page, selection, slide text, transcript and page image.", _obj({}), False, _a_klaus_current_page),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
 )}
 
@@ -433,6 +470,8 @@ def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, 
             r = end.handle(action, mcp_args_to_params(action, params.get("arguments") or {}), agent=True)
             if r.get("error"):
                 out = {"content": [{"type": "text", "text": str(r["error"])}], "isError": True}
+            elif action == "klausCurrentPage":
+                out = dict(r["result"], isError=False)
             else:
                 out = {"content": [{"type": "text", "text": json.dumps(r.get("result"))}], "isError": False}
         return 200, {"jsonrpc": "2.0", "id": rid, "result": out}, {}
