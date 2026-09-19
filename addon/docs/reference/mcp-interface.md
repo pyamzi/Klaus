@@ -68,6 +68,11 @@ apply to both transports.
 
 ## Connection diagnostic
 
+Preferences exposes **Local models → MCP → Test connection** beside Copy.
+Interpreter discovery and testing run in a collection-free QueryOp; the button
+is disabled until Python is found and while testing. Completion callbacks ignore
+closed dialogs and cancelled profiles. The existing theme supplies its styling.
+
 `test_connection(interpreter, script, discovery)` starts the actual configured
 stdio bridge, sends initialization and tool discovery, and validates the server
 identity, protocol and tool list. It does not call collection or page tools.
@@ -101,3 +106,12 @@ negotiation, schema validation, explicit page reads, an approved fake batch and
 reconnection after restart. This establishes SDK interoperability, not a live
 Claude Desktop or Codex application session. No tests use a real Anki collection
 or the user's `user_files`.
+
+Verification on 2026-09-19: 40 new contract checks, 117 endpoint checks,
+37 bridge/diagnostic checks, 11 current-page checks and 30 Preferences checks
+passed. The official SDK gate passed all 10 checks. All 53 repository test files
+passed after the backend changes; after adding the Preferences button, its
+focused test plus dialog logic, local models, transcription settings, switches,
+retired-assistant settings and Apple design regressions passed again. Syntax
+checks used the installed Anki symlink. A running Anki must be restarted to load
+these source changes.

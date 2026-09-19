@@ -826,8 +826,12 @@ def manage_models_dialog(*_args: Any) -> None:
 
     from pathlib import Path
     from aqt.qt import QApplication, QPlainTextEdit
+    from .scripts import mcp_stdio_bridge
     from .scripts.mcp_stdio_bridge import client_config, external_python
 
+    external_interpreter = None
+    external_script = str(Path(__file__).resolve().parent / "scripts" / "mcp_stdio_bridge.py")
+    external_discovery = str(Path(_pkg().USER_FILES) / "mcp_connection.json")
     external_controls = QVBoxLayout()
     external_json = QPlainTextEdit()
     external_json.setObjectName("external_client_config")
@@ -837,23 +841,49 @@ def manage_models_dialog(*_args: Any) -> None:
     external_copy = QPushButton("Copy configuration")
     external_copy.setObjectName("copy_external_client_config")
     external_copy.setEnabled(False)
+    external_test = QPushButton("Test connection")
+    external_test.setObjectName("test_external_client_connection")
+    external_test.setEnabled(False)
     external_status = QLabel("Checking for external Python 3.9 or newer…")
+    external_status.setProperty("mcp_status", True)
     external_status.setWordWrap(True)
     external_status.setTextFormat(Qt.TextFormat.PlainText)
     external_copy.clicked.connect(lambda: QApplication.clipboard().setText(external_json.toPlainText()))
     _row(advanced_layout, "MCP configuration", "Full configuration for an external assistant.", external_json)
     external_controls.addWidget(external_copy)
+    external_controls.addWidget(external_test)
     _row(keys_layout, "MCP", external_status, external_controls)
 
-    def external_ready(interpreter: str | None) -> None:
+    def connection_ready(result: dict) -> None:
         if _OPEN_DLG is not dlg or profile_cancel.is_set():
             return
+        external_test.setEnabled(True)
+        external_status.setText(result["message"])
+
+    def check_external_connection(*_args) -> None:
+        if not external_interpreter or _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        external_test.setEnabled(False)
+        external_status.setText("Testing connection…")
+        op = QueryOp(parent=dlg, op=lambda _col: mcp_stdio_bridge.test_connection(
+            external_interpreter, external_script, external_discovery), success=connection_ready)
+        op.failure(lambda _exc: connection_ready({"ok": False,
+            "message": "Connection test failed. Restart Anki and try again."}))
+        op.without_collection().run_in_background()
+
+    external_test.clicked.connect(check_external_connection)
+
+    def external_ready(interpreter: str | None) -> None:
+        nonlocal external_interpreter
+        if _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        external_interpreter = interpreter
         if interpreter:
             external_json.setPlainText(client_config(
-                interpreter, str(Path(__file__).resolve().parent / "scripts" / "mcp_stdio_bridge.py"),
-                str(Path(_pkg().USER_FILES) / "mcp_connection.json"),
+                interpreter, external_script, external_discovery,
             ))
             external_copy.setEnabled(True)
+            external_test.setEnabled(True)
             external_status.setText(
                 "Connect an external assistant while Anki is open. Copy this configuration "
                 "into your client. The client may send requested page text and images to its model provider."

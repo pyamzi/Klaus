@@ -73,6 +73,32 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     check('actual runtime paths absolute', all(os.path.isabs(p) for p in (actual['command'],actual['args'][0],actual['args'][2])))
     check('discovery belongs to scratch user files', actual['args'][2] == str(Path(K.USER_FILES)/'mcp_connection.json'))
     check('no configuration writes', not writes and before == sorted(str(p.relative_to(root)) for p in Path(root).rglob('*')))
+    tester = dlg.findChild(QtWidgets.QPushButton, 'test_external_client_connection')
+    status = next((label for label in dlg.findChildren(QtWidgets.QLabel) if label.property('mcp_status')), None)
+    check('connection test available after interpreter discovery', tester is not None and tester.isEnabled())
+    if tester is not None:
+        # The UI only queues work. The actual subprocess handshake is covered
+        # by test_mcp_stdio_bridge and the official-client integration gate.
+        tester.click()
+        check('connection test disables repeat clicks while running', not tester.isEnabled() and 'Testing' in status.text())
+        op = pending_ops.pop()
+        with patch.object(bridge, 'test_connection', return_value={'ok':True,'message':'Connected to Klaus. 17 tools available.','tool_count':17}) as diagnostic:
+            op.success(op.op(None))
+        check('diagnostic uses copied interpreter and paths', diagnostic.call_args.args == (actual['command'], actual['args'][0], actual['args'][2]))
+        check('connection success restores button and shows status', tester.isEnabled() and '17 tools' in status.text())
+        tester.click()
+        op = pending_ops.pop()
+        op.success({'ok':False, 'message':'Open Anki with your profile, then test again.'})
+        check('diagnostic failure is actionable and retryable', tester.isEnabled() and 'profile' in status.text())
+        tester.click()
+        op = pending_ops.pop()
+        op.fail(RuntimeError('sensitive exception text'))
+        check('unexpected diagnostic failure is sanitized', tester.isEnabled() and 'sensitive' not in status.text() and 'again' in status.text())
+        tester.click()
+        late_test = pending_ops.pop()
+        dlg.close(); app.processEvents()
+        late_test.success({'ok':True,'message':'SHOULD NOT APPEAR'})
+        check('late connection result ignores closed dialog', status.text() != 'SHOULD NOT APPEAR')
     dlg.close(); app.processEvents()
     with patch.object(bridge, 'external_python', return_value=None):
         mm.manage_models_dialog()
@@ -82,6 +108,8 @@ with tempfile.TemporaryDirectory(prefix='external clients ') as root:
     button = dlg.findChild(QtWidgets.QPushButton, 'copy_external_client_config')
     check('missing interpreter disables copy', not button.isEnabled())
     check('missing interpreter actionable', any('Install Python 3' in label.text() for label in dlg.findChildren(QtWidgets.QLabel)))
+    tester = dlg.findChild(QtWidgets.QPushButton, 'test_external_client_connection')
+    check('missing interpreter disables connection test', tester is not None and not tester.isEnabled())
     dlg.close(); app.processEvents()
     with patch.object(bridge, 'external_python', return_value=interpreter):
         mm.manage_models_dialog()

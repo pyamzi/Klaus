@@ -357,6 +357,12 @@ then reopen Preferences. Keep Anki running with your profile open. Merge the
 `klaus` entry into `mcpServers` in Claude Desktop's configuration and restart
 Claude Desktop. See the [official local-server setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
+Use **Test connection** beside **Copy configuration** to check that the bridge
+can start, connect to Klaus and discover its tools. It reads no lecture or card
+content. The status explains how to recover if the profile is closed, the
+connection is unavailable or Python cannot launch. The full JSON is also shown
+under **Advanced settings → MCP configuration**.
+
 The generated JSON uses absolute paths to Python, the bundled stdio bridge,
 and `user_files/mcp_connection.json`. It contains no token or current port.
 The bridge reads that private discovery file for each request, so an Anki
