@@ -567,49 +567,89 @@ git commit -m "manage_models: delete the Klaus Plus preferences group and its ha
 
 ---
 
-### Task 6: Delete `plus.py`, its test, and `service/`
+### Task 6: Delete `service/`; sever `openai_client.py`'s dependency on `plus`
+
+> **Amended during execution (ruling recorded in the SDD ledger,
+> 2026-09-19):** `plus.py` itself is NOT deleted by this task, despite
+> the original title. `anthropic_client.py` still legitimately calls
+> `plus.active(cfg)` (it isn't deleted until Task 14) and
+> `openai_client.py` — which is NOT deleted by this plan at all, only by
+> a separate future plan — still type-hints `plus.Endpoint`. Deleting
+> `plus.py` here would break both. This task instead deletes only
+> `service/` (zero dependents, safe regardless) and strips
+> `openai_client.py`'s now-dead Plus-endpoint parameters (Tasks 1 and 3
+> already removed the only two call sites that ever passed a real
+> `endpoint=` argument). `plus.py`/`tests/test_plus.py` move to Task 14,
+> which is what actually removes their last real caller.
 
 **Files:**
-- Delete: `klausmate/plus.py`
-- Delete: `tests/test_plus.py`
 - Delete: `service/` (entire directory — the FastAPI billing service)
+- Modify: `klausmate/openai_client.py` (drop the `plus` import and the
+  `endpoint: plus.Endpoint | None = None` parameter from `embed()` and
+  `transcribe()`, plus whatever branch inside each function reads it —
+  read the live function bodies first, this plan's earlier research
+  pass captured them before Tasks 1-5 landed so exact current line
+  numbers will differ)
 
 **Interfaces:**
-- Consumes: Tasks 1-5 must be complete (every caller stripped) before this
-  task runs, or the suite will fail on import errors for reasons this
-  task can't fix.
-- Produces: nothing — this is pure deletion. No other file imports these
-  paths after Tasks 1-5.
+- Consumes: nothing new.
+- Produces: `openai_client.embed()`/`transcribe()` no longer accept an
+  `endpoint` argument at all — any future caller (including a later,
+  separate plan) calls them with just a key. `on_headers` is unrelated
+  to Plus and stays untouched — confirm this from the actual code
+  before assuming, don't guess from this note.
 
-- [ ] **Step 1: Grep-confirm no remaining importer**
+- [ ] **Step 1: Confirm `service/` has zero klausmate/ dependents**
 
-Run: `grep -rln "import plus\|from \. import plus\|from klausmate import plus" klausmate/*.py`
-Expected: no output. If anything prints, stop and fix that file before
-continuing — it means an earlier task in this cluster missed a reference.
+Run: `grep -rln "service\." klausmate/*.py` and `grep -rln "from service\|import service" klausmate/*.py tests/*.py`.
+Expected: no output — `service/` is a separate FastAPI program, never
+imported by the add-on (per CLAUDE.md's packaging rules). If anything
+prints, stop and report BLOCKED with what you found.
 
-- [ ] **Step 2: Delete the files**
+- [ ] **Step 2: Delete `service/`**
 
 ```bash
-git rm klausmate/plus.py tests/test_plus.py
 git rm -r service/
 ```
 
-- [ ] **Step 3: Compile check on the whole package**
+- [ ] **Step 3: Grep-confirm no remaining caller passes `endpoint=` to `openai_client`**
+
+Run: `grep -rn "openai_client\.\(embed\|transcribe\)(" klausmate/*.py`
+and read each call site. Expected: none of them pass an `endpoint=`
+keyword argument (Tasks 1 and 3 already removed the only two that did).
+If you find one that still does, STOP and report BLOCKED — do not edit
+`openai_client.py`'s signatures out from under a real caller.
+
+- [ ] **Step 4: Strip the dead Plus-endpoint parameter from `openai_client.py`**
+
+Read the current `embed()` and `transcribe()` function bodies in full
+first (`sed -n '1,160p' klausmate/openai_client.py` or similar — the
+file is short). Remove `from . import plus` from the imports. Remove
+the `endpoint: plus.Endpoint | None = None` parameter from both
+signatures, and whatever code inside each function branches on
+`endpoint` being non-`None` (e.g. choosing between the caller's own key
+vs. an `Endpoint`'s bearer headers) — collapse each function to the
+single remaining (key-based) path. Leave `on_headers` exactly as it is.
+
+- [ ] **Step 5: Compile check**
 
 Run: `python3 -m py_compile klausmate/*.py`
 
-- [ ] **Step 4: Run the full suite**
+- [ ] **Step 6: Run the full suite**
 
-Same command as Task 1 Step 4.
+Same command as Task 1 Step 4, without an early break (see this plan's
+Global Constraints and the Task 4 ledger note on why `|| break` hides
+downstream failures). `tests/test_openai_client.py` may newly fail if
+it has tests that pass `endpoint=` and assert Plus-specific behavior —
+that's expected; a later, separate plan finishes cleaning up
+`openai_client.py` fully. Note exactly what you see.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git commit -m "Delete plus.py, its test, and the never-shipped Klaus Plus service"
+git add service klausmate/openai_client.py
+git commit -m "Delete the never-shipped Klaus Plus service; drop openai_client's now-dead Plus-endpoint params"
 ```
-
-(The `git rm` commands already staged the deletions — this commit has
-nothing left to `git add`.)
 
 ---
 
@@ -1145,32 +1185,44 @@ git commit -m "cost: drop the judge pricing — reasoning-model rows and estimat
 
 ---
 
-### Task 14: Delete `pertinence.py`, `anthropic_client.py`, and their tests
+### Task 14: Delete `pertinence.py`, `anthropic_client.py`, and their tests; delete `plus.py`
+
+> **Amended during Task 6's execution (ruling recorded in the SDD
+> ledger, 2026-09-19):** `plus.py` and `tests/test_plus.py` also die
+> here, not in Task 6. `anthropic_client.py` is `plus.py`'s last real
+> caller (`plus.active(cfg)`) — deleting them together is the point in
+> the sequence where `plus.py` genuinely has zero importers.
 
 **Files:**
 - Delete: `klausmate/pertinence.py`
 - Delete: `klausmate/anthropic_client.py`
+- Delete: `klausmate/plus.py`
 - Delete: `tests/test_pertinence.py`
 - Delete: `tests/test_anthropic_client.py`
+- Delete: `tests/test_plus.py`
 - Modify: `tests/test_live_api.py` (trim, not delete — it covers more than
   just the Anthropic smoke test)
 
 **Interfaces:**
 - Consumes: Tasks 9-13's finished state (every real caller of
-  `pertinence`/`anthropic_client` already stripped or collapsed).
+  `pertinence`/`anthropic_client` already stripped or collapsed) and
+  Task 6's finished state (`openai_client.py` no longer depends on
+  `plus`, and `service/` is already gone).
 - Produces: nothing — pure deletion plus one trim.
 
-- [ ] **Step 1: Grep-confirm no remaining importer of either module**
+- [ ] **Step 1: Grep-confirm no remaining importer of any of the three modules**
 
-Run: `grep -rln "import pertinence\|from \. import pertinence\|import anthropic_client\|from \. import anthropic_client" klausmate/*.py`
+Run: `grep -rln "import pertinence\|from \. import pertinence\|import anthropic_client\|from \. import anthropic_client\|import plus\b\|from \. import plus\b" klausmate/*.py`
 Expected: no output. If anything prints, stop and fix it before
-continuing.
+continuing — if it's `plus` still referenced somewhere other than
+`anthropic_client.py` itself, that's a real gap Task 6 should have
+caught; investigate before deleting.
 
-- [ ] **Step 2: Delete the two modules and two of their three test files**
+- [ ] **Step 2: Delete the three modules and three of their four test files**
 
 ```bash
-git rm klausmate/pertinence.py klausmate/anthropic_client.py
-git rm tests/test_pertinence.py tests/test_anthropic_client.py
+git rm klausmate/pertinence.py klausmate/anthropic_client.py klausmate/plus.py
+git rm tests/test_pertinence.py tests/test_anthropic_client.py tests/test_plus.py
 ```
 
 - [ ] **Step 3: Trim `tests/test_live_api.py`**
