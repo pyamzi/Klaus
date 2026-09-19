@@ -36,7 +36,12 @@ def find_binary(configured: str = "") -> str | None:
         path = shutil.which(name)
         if path and _executable(path):
             return path
-    shell = "/bin/zsh" if os.path.isfile("/bin/zsh") else "/bin/sh"
+    configured_shell = os.environ.get("SHELL", "")
+    shell = configured_shell if (
+        os.path.isabs(configured_shell)
+        and Path(configured_shell).name in ("bash", "fish", "zsh", "sh", "ksh")
+        and _executable(configured_shell)
+    ) else ("/bin/zsh" if _executable("/bin/zsh") else "/bin/sh")
     try:
         result = subprocess.run(
             [shell, "-lc", "command -v whisper-cli || command -v whisper-cpp"],

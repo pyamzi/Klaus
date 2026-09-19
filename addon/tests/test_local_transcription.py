@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -105,6 +106,15 @@ with tempfile.TemporaryDirectory(prefix="local transcription tests ") as directo
         args, kwargs = run.call_args
         check("fixed login shell command", args[0][-2:] == ['-lc', 'command -v whisper-cli || command -v whisper-cpp'])
         check("shell discovery is bounded", 0 < kwargs['timeout'] <= 5)
+    with patch.dict(os.environ, {"SHELL": "/bin/bash"}), patch.object(lt.shutil, "which", return_value=None), patch.object(lt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, str(fake) + '\n', '')) as run:
+        check("configured login shell discovery", lt.find_binary() == str(fake) and run.call_args.args[0][0] == "/bin/bash")
+    fish = root / "fish"
+    fish.write_text("#!/bin/sh\nexit 0\n")
+    fish.chmod(0o755)
+    with patch.dict(os.environ, {"SHELL": str(fish)}), patch.object(lt.shutil, "which", return_value=None), patch.object(lt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, str(fake) + '\n', '')) as run:
+        check("configured fish shell discovery", lt.find_binary() == str(fake) and run.call_args.args[0][0] == str(fish))
+    with patch.dict(os.environ, {"SHELL": str(root / 'missing-shell')}), patch.object(lt.shutil, "which", return_value=None), patch.object(lt.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, str(fake) + '\n', '')) as run:
+        check("invalid configured shell uses system fallback", lt.find_binary() == str(fake) and run.call_args.args[0][0] in ("/bin/zsh", "/bin/sh"))
     with patch.object(lt.shutil, "which", return_value=None), patch.object(lt.subprocess, "run", side_effect=subprocess.TimeoutExpired('shell', 3)), patch.object(lt, "_KNOWN_PATHS", (str(fake),)):
         check("known path after shell timeout", lt.find_binary() == str(fake))
     with patch.object(lt.shutil, "which", return_value=None) as which, patch.object(lt.subprocess, "run", side_effect=OSError()), patch.object(lt, "_KNOWN_PATHS", ()):
