@@ -1,11 +1,15 @@
 """Real offscreen Preferences and profile notification checks, using scratch storage."""
 from __future__ import annotations
 
+import contextlib
+from enum import IntEnum
 import importlib
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
+import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '.claude/skills/klaus-test/scripts'))
 from anki_stubs import install, exec_klausmate_under_qt, check, report
@@ -33,13 +37,35 @@ class Taskman:
         raise AssertionError('Settings must not start background processing')
 mw = QtWidgets.QMainWindow()
 mw.taskman = Taskman()
+mw.reset = lambda: None
+mw.addonManager = types.SimpleNamespace(getConfig=lambda _package: dict(store))
+mw.col = types.SimpleNamespace(note_count=lambda: 0,
+                               db=types.SimpleNamespace(scalar=lambda _query: 0))
+class Theme(IntEnum):
+    SYSTEM = 0
+    LIGHT = 1
+    DARK = 2
+theme_module = types.ModuleType('aqt.theme')
+theme_module.Theme = Theme
+theme_module.theme_manager = types.SimpleNamespace(night_mode=False)
+sys.modules['aqt.theme'] = theme_module
+mw.pm = types.SimpleNamespace(theme=lambda: Theme.SYSTEM)
 K.mw = mw
 sys.modules['aqt'].mw = mw
 mm = importlib.import_module('klausmate.manage_models')
 mm.mw = mw
+index_queue = importlib.import_module('klausmate.index_queue')
+index_queue.mw = mw
 # Index status is synthetic; the dialog still runs its real load/save closures.
 curation = importlib.import_module('klausmate.curation')
 curation.index_stats = lambda: {'exists': False}
+def click_save(button):
+    diagnostics = io.StringIO()
+    with contextlib.redirect_stdout(diagnostics):
+        button.click()
+    check('Save emits no application diagnostics', not diagnostics.getvalue().strip(),
+          diagnostics.getvalue())
+
 mm.manage_models_dialog()
 dlg = mm._OPEN_DLG
 fields = {key: dlg.findChild(QtWidgets.QLineEdit, key) for key in
@@ -53,7 +79,7 @@ if all(fields.values()):
         fields[key].setText(value)
         fields[key].textEdited.emit(value)
     check('editing marks dialog dirty', save.isEnabled() and not writes)
-    save.click()
+    click_save(save)
     check('Save persists local fields and unrelated setting', store['transcription_model_path'] == '/new model.bin'
           and store['transcription_binary'] == '/new cli' and store['transcription_language'] == 'de'
           and store['preserved_fixture'] == 'untouched')
@@ -70,7 +96,7 @@ if all(fields.values()):
         picker.fileSelected.emit('/picked model.bin')
         picker.reject()
         check('Browse selection updates model field', dlg.findChild(QtWidgets.QLineEdit, 'transcription_model_path').text() == '/picked model.bin')
-        next(b for b in dlg.findChildren(QtWidgets.QPushButton) if b.text() == 'Save').click()
+        click_save(next(b for b in dlg.findChildren(QtWidgets.QPushButton) if b.text() == 'Save'))
     dlg.close()
 
 shown = []
