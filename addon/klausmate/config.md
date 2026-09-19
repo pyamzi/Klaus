@@ -351,7 +351,7 @@ Preferences → Appearance**; press **Save** and they apply immediately
 
 ## External MCP clients
 
-In **KlausMate Preferences → Local models → External clients**, copy the
+In **KlausMate Preferences → Local models → MCP**, copy the
 configuration. Install a separate Python 3.9 or newer first if Copy is disabled,
 then reopen Preferences. Keep Anki running with your profile open. Merge the
 `klaus` entry into `mcpServers` in Claude Desktop's configuration and restart
@@ -364,9 +364,23 @@ restart does not require copying new credentials. Klaus never writes another
 application's configuration. Copy the block again if you move the add-on or
 Python installation.
 
-`current_page` returns the active PDF's name, page number, selection, slide
-text and transcript, plus a page image when available. Close the active view
-to stop sharing that view. `current_view` retains its metadata-only behavior.
+`current_page` returns the active PDF's ID, name, page number, selection, slide
+text and transcript, plus a page image when available. Set `include_image: false`
+for text only. `get_page` accepts `pdf_id` and a one-based `page` for any imported
+lecture, without changing the viewer; set `include_image: true` to request its
+image. Lecture search now returns a `pdf` ID alongside its existing `source`.
+Closing the viewer clears `current_page`; other imported lectures remain
+accessible through `get_page`. `current_view` retains its metadata-only behavior.
+
+MCP `add_note` now requires both `source_pdf` and `source_page`. Use the `pdf`
+and `page` returned by a page or lecture-search tool. A missing source is rejected
+before approval, rather than attributed to whichever PDF is currently open.
+Reconnect the external client after upgrading so it refreshes the tool schemas.
+`add_notes` accepts 1-20 notes with those same fields, shows one approval, and
+returns a zero-based `index`, `note_id` and `error` for each note. A batch can
+partially succeed. Check its outcomes and Anki before retrying a failed or
+interrupted request; requests are never automatically replayed.
+
 Collection writes still require approval in Anki. Lecture content is untrusted
 input and is not an instruction to the external client.
 
@@ -374,8 +388,9 @@ Your external client chooses its model provider and may transmit requested
 lecture text, transcripts, images and card context to that provider. Klaus
 exposes only its authenticated local endpoint. This setup does not provide
 public hosting or direct ChatGPT access. Automated checks cover the stdio
-bridge and Preferences clipboard; a real Claude Desktop session has not been
-verified by those checks.
+bridge and Preferences clipboard. The official MCP Python client is also tested
+against a scratch endpoint; a real Claude Desktop session has not been verified
+by those checks. See [MCP interface and verification](../docs/reference/mcp-interface.md).
 
 ## Stored state and optional overrides
 

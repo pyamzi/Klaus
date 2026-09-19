@@ -1,6 +1,7 @@
 """anki_endpoint — the AnkiConnect-compatible server, hit over real HTTP."""
 import json, os, shutil, socket, sys, tempfile, threading, time, urllib.request, urllib.error
 from array import array
+from pathlib import Path
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section
@@ -717,7 +718,7 @@ check("exact supported set",
       set(ep.ACTIONS) == {"version", "deckNames", "deckNamesAndIds", "modelNames", "modelFieldNames", "findNotes", "notesInfo",
                           "findCards", "cardsInfo", "addNote", "addNotes", "updateNoteFields", "addTags", "removeTags",
                           "guiBrowse", "klausSearchNotes", "klausSearchNotesSemantic", "klausSearchLecturePdfs",
-                          "klausCurrentView", "klausCurrentPage"}, str(sorted(ep.ACTIONS)))
+                          "klausCurrentView", "klausCurrentPage", "klausGetPage"}, str(sorted(ep.ACTIONS)))
 
 # --- I3: klausSearchNotes is LEXICAL, and its description must say so.
 # anki_tools._h_search_notes is col.find_notes(query) — Anki's own
@@ -790,10 +791,15 @@ st, r, _ = rpc("tools/call", {"name": "add_note", "arguments": {"deck": "Default
 check("add_note without source_page → isError with the message, not a JSON-RPC error",
       "error" not in r and r["result"]["isError"] is True and "source" in r["result"]["content"][0]["text"].lower())
 n_before = len(approvals)
-st, r, _ = rpc("tools/call", {"name": "add_note", "arguments": {"deck": "Default", "model": "Basic", "fields": {"Front": "M", "Back": "m"}, "source_page": 9}}, rid=6)
-check("add_note with source_page → approval dialog, then a note id", len(approvals) == n_before + 1 and r["result"]["isError"] is False)
+for folder in ('contexts', 'pdfs'):
+    Path(_uf_dir, folder).mkdir(exist_ok=True)
+Path(_uf_dir, 'contexts', 'lecture.txt').write_text('slide')
+Path(_uf_dir, 'contexts', 'lecture.json').write_text(json.dumps({'pages': ['slide'] * 9}))
+Path(_uf_dir, 'pdfs', 'lecture.pdf').write_bytes(b'%PDF-1.4 fixture')
+st, r, _ = rpc("tools/call", {"name": "add_note", "arguments": {"deck": "Default", "model": "Basic", "fields": {"Front": "M", "Back": "m"}, "source_pdf": "lecture", "source_page": 9}}, rid=6)
+check("add_note with explicit source reaches approval and returns a note id", len(approvals) == n_before + 1 and r["result"]["isError"] is False)
 st, r, _ = rpc("tools/call", {"name": "nope", "arguments": {}}, rid=7)
-check("unknown tool → isError", r["result"]["isError"] is True)
+check("unknown tool is a protocol error", r["error"]["code"] == -32602)
 st, r, _ = rpc("zzz/method", rid=8)
 check("unknown method → -32601", r["error"]["code"] == -32601)
 st, r, _ = post("/mcp", None, raw=b"{bad")

@@ -8,9 +8,61 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 HTTP_TIMEOUT_S = 180
+PROTOCOL_VERSION = "2025-06-18"
+MISSING_PROFILE = "Open Anki with your profile, then test again."
+INVALID_DISCOVERY = "Connection information is invalid; restart Anki and test again."
+UNAVAILABLE = "Klaus is unavailable; restart Anki with your profile open and test again."
+AUTH_REJECTED = "Connection credentials were rejected; restart Anki and test again."
+
+
+def test_connection(interpreter, script, discovery):
+    """Exercise the configured stdio process without reading or changing user data."""
+    def failed(message):
+        return {"ok": False, "message": message}
+    try:
+        connection(discovery)
+    except FileNotFoundError:
+        return failed(MISSING_PROFILE)
+    except Exception:
+        return failed(INVALID_DISCOVERY)
+    frames = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+            "clientInfo": {"name": "klaus-connection-check", "version": "1"}}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    try:
+        result = subprocess.run([interpreter, script, "--discovery", discovery],
+                                input="".join(json.dumps(f) + "\n" for f in frames),
+                                capture_output=True, text=True, encoding="utf-8", timeout=10)
+    except subprocess.TimeoutExpired:
+        return failed("Connection test timed out; restart Anki and test again.")
+    except OSError:
+        return failed("Could not launch the bridge. Check your Python installation and reopen Preferences.")
+    try:
+        replies = [json.loads(line) for line in result.stdout.splitlines()]
+        if result.returncode != 0 or len(replies) != 2:
+            raise ValueError()
+        for reply in replies:
+            if "error" in reply:
+                message = reply["error"].get("message")
+                return failed(message if message in (MISSING_PROFILE, INVALID_DISCOVERY, UNAVAILABLE, AUTH_REJECTED) else UNAVAILABLE)
+        initialized, listed = replies
+        if (initialized["id"] != 1 or listed["id"] != 2
+                or initialized["result"]["serverInfo"]["name"] != "klaus"
+                or initialized["result"]["protocolVersion"] != PROTOCOL_VERSION):
+            raise ValueError()
+        names = [tool["name"] for tool in listed["result"]["tools"]]
+        if not all(isinstance(name, str) for name in names) or "current_page" not in names:
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        return failed("The bridge returned an unexpected response. Update Klaus, restart Anki and copy the configuration again.")
+    return {"ok": True, "tool_count": len(names), "message": f"Connected to Klaus. {len(names)} tools available."}
 
 
 def external_python():
@@ -99,10 +151,18 @@ def main():
                         raw = response.read()
                     if "id" in body:
                         output = json.loads(raw) if raw else error(body["id"], -32000, "empty endpoint response")
-                except Exception:
+                except Exception as exc:
                     identity, session = None, None
                     if "id" in body:
-                        output = error(body["id"], -32000, "Klaus endpoint unavailable or invalid response")
+                        if isinstance(exc, FileNotFoundError):
+                            message = MISSING_PROFILE
+                        elif isinstance(exc, urllib.error.HTTPError) and exc.code == 403:
+                            message = AUTH_REJECTED
+                        elif isinstance(exc, (ValueError, KeyError, TypeError)):
+                            message = INVALID_DISCOVERY
+                        else:
+                            message = UNAVAILABLE
+                        output = error(body["id"], -32000, message)
         if output is not None:
             print(json.dumps(output), flush=True)
 

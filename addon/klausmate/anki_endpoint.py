@@ -153,8 +153,9 @@ def _create_one(col, note: dict, ctx: dict, agent: bool) -> int:
     if agent:
         page = (note.get("options") or {}).get("sourcePage")
         tags += list(AGENT_TAGS)
-        if ctx.get("pdf_safe"):
-            tags.append(f"klaus::from::{ctx['pdf_safe']}")
+        source_pdf = (note.get("options") or {}).get("sourcePdf") or ctx.get("pdf_safe")
+        if source_pdf:
+            tags.append(f"klaus::from::{source_pdf}")
         # The source page is shown in the approval dialog and was then
         # thrown away, so provenance died with the dialog (M11). Same
         # tag shape anki_tools.add_reviewed_cards already uses.
@@ -181,18 +182,25 @@ def _a_add_note(col, p, ctx):
     return _create_one(col, p.get("note") or {}, ctx, bool(ctx.get("agent")))
 
 def _a_add_notes(col, p, ctx):
+    from . import anki_tools
     # Each note is tried on its own so one bad note (unknown deck/model/
     # field, raised as anki_tools.ToolError by the reused create_note
     # handler) cannot sink notes on either side of it — AnkiConnect's own
     # addNotes documents exactly this result shape, list[noteId or null],
     # never one error for the whole call.
     out = []
-    for n in (p.get("notes") or []):
+    detailed = p.get("_mcp_results", False)
+    for i, n in enumerate(p.get("notes") or []):
         try:
-            out.append(_create_one(col, n, ctx, bool(ctx.get("agent"))))
+            nid = _create_one(col, n, ctx, bool(ctx.get("agent")))
+            out.append({"index": i, "note_id": nid, "error": None} if detailed else nid)
         except Exception as exc:
-            print(f"[klausmate] endpoint addNotes: {exc}")
-            out.append(None)
+            if detailed:
+                message = str(exc) if isinstance(exc, (ActionError, anki_tools.ToolError)) else "Note creation failed; inspect Anki before retrying."
+                out.append({"index": i, "note_id": None, "error": message})
+            else:
+                print(f"[klausmate] endpoint addNotes: {exc}")
+                out.append(None)
     return out
 
 def _a_update_note_fields(col, p, ctx):
@@ -229,11 +237,12 @@ def _a_klaus_search_notes(col, p, ctx):
     return anki_tools._HANDLERS["search_notes"](col, args, ctx).get("notes", [])
 
 def _a_klaus_search_pdfs(col, p, ctx):
-    from . import anki_tools
+    from . import anki_tools, pdf_handler
     args = _tool_args("search_lecture_pdfs", {("query",): str(p.get("query") or ""), ("limit", "top_k", "k"): int(p.get("limit") or 10)})
     # Same unwrap as _a_klaus_search_notes above: _h_search_lecture_pdfs
     # returns {"chunks": [...]}; this action's result is the list itself.
-    return anki_tools._HANDLERS["search_lecture_pdfs"](col, args, ctx).get("chunks", [])
+    chunks = anki_tools._HANDLERS["search_lecture_pdfs"](col, args, ctx).get("chunks", [])
+    return [dict(chunk, pdf=pdf_handler._safe_basename(chunk["source"])) for chunk in chunks]
 
 def _a_klaus_search_notes_semantic(col, p, ctx):
     """Real semantic note search (K-207): embed the query exactly the way
@@ -304,20 +313,52 @@ def _a_klaus_current_view(col, p, ctx):
 
 
 def _a_klaus_current_page(col, p, ctx):
-    import base64
     from dataclasses import replace
-    from . import page_store, pdf_handler, viewer_context
+    from . import viewer_context
 
     current = viewer_context.current()
     if current is None or current.page_count <= 0 or current.page_index >= current.page_count:
         return {"content": [{"type": "text", "text": "No active page. Open a PDF in Klaus."}]}
-    view = replace(current)
+    return _page_content(replace(current), ctx, p.get("include_image", True))
+
+
+def _resolve_page(ctx, pdf_id, page):
+    """Resolve only exact imported IDs, never a client-supplied path."""
+    from . import pdf_handler, drive_store, viewer_context
+    user_files = ctx["user_files"]
+    if not isinstance(pdf_id, str) or not pdf_id or "/" in pdf_id or "\\" in pdf_id or pdf_id in (".", ".."):
+        raise ActionError("Invalid PDF id. Use the pdf field returned by current_page or lecture search.")
+    if pdf_id + ".txt" not in pdf_handler.list_contexts(user_files):
+        raise ActionError("PDF is not in the Klaus Library.")
+    path = pdf_handler.pdf_path_for(user_files, pdf_id)
+    if not path:
+        raise ActionError("PDF file is unavailable. Restore it in the Klaus Library.")
+    pages = pdf_handler.load_pages(user_files, pdf_id)
+    if pages is None:
+        pages = pdf_handler.extract_pages(path)
+    if type(page) is not int or not 1 <= page <= len(pages):
+        raise ActionError(f"Source page must be between 1 and {len(pages)}.")
+    return viewer_context.ViewState(0, pdf_id, drive_store.display_name(user_files, pdf_id),
+                                    path, page - 1, len(pages)), pages
+
+
+def _a_klaus_get_page(col, p, ctx):
+    view, pages = _resolve_page(ctx, p["pdf_id"], p["page"])
+    return _page_content(view, ctx, p.get("include_image", False), pages)
+
+
+def _page_content(view, ctx, include_image, pages=None):
+    import base64
+    from . import page_store, pdf_handler
     user_files = ctx["user_files"]
     record = page_store.load_record(user_files, view.pdf_safe, view.path, view.page_index)
     slide_text = record.get("slide_text") or ""
     if not slide_text:
         try:
-            pages = pdf_handler.extract_pages(view.path)
+            if pages is None:
+                pages = pdf_handler.load_pages(user_files, view.pdf_safe)
+            if pages is None:
+                pages = pdf_handler.extract_pages(view.path)
             slide_text = pages[view.page_index] if view.page_index < len(pages) else ""
         except Exception:
             pass
@@ -325,26 +366,33 @@ def _a_klaus_current_page(col, p, ctx):
             "page": view.page_index + 1, "count": view.page_count,
             "selection": view.selection, "slide_text": slide_text,
             "transcript": "\n".join(str(segment.get("text") or "") for segment in record.get("segments", []))}
-    png = page_store.cached_page_png(user_files, view.pdf_safe, view.path, view.page_index)
-    if not png:
+    png = None
+    if include_image:
+        png = page_store.cached_page_png(user_files, view.pdf_safe, view.path, view.page_index)
+    if include_image and not png:
         try:
             png = page_store.render_page_png(view.path, view.page_index)
         except Exception:
             png = None
-    if not png:
+    if include_image and not png:
         text["image_status"] = "Page image unavailable."
     content = [{"type": "text", "text": json.dumps(text)}]
     if png:
         content.append({"type": "image", "mimeType": "image/png", "data": base64.b64encode(png).decode("ascii")})
-    return {"content": content}
+    return {"content": content, "structuredContent": {"result": text}}
 
 
 def _obj(props: dict, required: tuple = ()) -> dict:
-    return {"type": "object", "properties": props, "required": list(required)}
+    return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
 
-NOTE_SCHEMA = _obj({"deck": {"type": "string"}, "model": {"type": "string"}, "fields": {"type": "object"},
-                    "tags": {"type": "array", "items": {"type": "string"}}, "source_page": {"type": "integer", "minimum": 1}},
-                   ("deck", "model", "fields", "source_page"))
+ID_LIST_SCHEMA = {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 1000}
+FIELDS_SCHEMA = {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string"}}
+LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "maximum": 100}
+NOTE_SCHEMA = _obj({"deck": {"type": "string", "minLength": 1}, "model": {"type": "string", "minLength": 1}, "fields": FIELDS_SCHEMA,
+                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+                    "source_pdf": {"type": "string", "minLength": 1, "description": "The pdf ID returned by current_page, get_page or lecture search."},
+                    "source_page": {"type": "integer", "minimum": 1}},
+                   ("deck", "model", "fields", "source_pdf", "source_page"))
 
 ACTIONS: dict[str, Action] = {a.name: a for a in (
     Action("version", "", "API version", _obj({}), False, _a_version),
@@ -353,14 +401,14 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
     Action("modelNames", "list_models", "List the user's note types.", _obj({}), False, _a_model_names),
     Action("modelFieldNames", "model_fields", "Field names of a note type.", _obj({"model": {"type": "string"}}, ("model",)), False, _a_model_field_names),
     Action("findNotes", "find_notes", "Note ids matching an Anki search.", _obj({"query": {"type": "string"}}, ("query",)), False, _a_find_notes),
-    Action("notesInfo", "get_notes", "Fields, tags and cards of notes by id.", _obj({"note_ids": {"type": "array", "items": {"type": "integer"}}}, ("note_ids",)), False, _a_notes_info),
+    Action("notesInfo", "get_notes", "Fields, tags and cards of notes by id.", _obj({"note_ids": ID_LIST_SCHEMA}, ("note_ids",)), False, _a_notes_info),
     Action("findCards", "", "Card ids matching an Anki search.", _obj({"query": {"type": "string"}}, ("query",)), False, _a_find_cards),
     Action("cardsInfo", "", "Card info by id.", _obj({"cards": {"type": "array"}}, ("cards",)), False, _a_cards_info),
-    Action("addNote", "add_note", "Add ONE note; the user approves a preview. Requires source_page.", NOTE_SCHEMA, True, _a_add_note),
-    Action("addNotes", "", "Add several notes behind one approval.", _obj({"notes": {"type": "array"}}, ("notes",)), True, _a_add_notes),
-    Action("updateNoteFields", "update_note_fields", "Update fields of a note; approved by the user.", _obj({"note_id": {"type": "integer"}, "fields": {"type": "object"}}, ("note_id", "fields")), True, _a_update_note_fields),
-    Action("addTags", "add_tags", "Add tags to notes; approved.", _obj({"note_ids": {"type": "array"}, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_add_tags),
-    Action("removeTags", "remove_tags", "Remove tags from notes; approved.", _obj({"note_ids": {"type": "array"}, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_remove_tags),
+    Action("addNote", "add_note", "Add ONE note after approval. Requires source_pdf and source_page. Do not retry after a transport failure without checking Anki.", NOTE_SCHEMA, True, _a_add_note),
+    Action("addNotes", "add_notes", "Add 1-20 notes behind one approval, each with its own source_pdf and source_page. Returns zero-based index, note_id and error per note. Partial success is possible; never retry the whole batch blindly.", _obj({"notes": {"type": "array", "items": NOTE_SCHEMA, "minItems": 1, "maxItems": 20}}, ("notes",)), True, _a_add_notes),
+    Action("updateNoteFields", "update_note_fields", "Update fields of a note; approved by the user.", _obj({"note_id": {"type": "integer", "minimum": 1}, "fields": FIELDS_SCHEMA}, ("note_id", "fields")), True, _a_update_note_fields),
+    Action("addTags", "add_tags", "Add tags to notes; approved.", _obj({"note_ids": ID_LIST_SCHEMA, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_add_tags),
+    Action("removeTags", "remove_tags", "Remove tags from notes; approved.", _obj({"note_ids": ID_LIST_SCHEMA, "tags": {"type": "string"}}, ("note_ids", "tags")), True, _a_remove_tags),
     Action("guiBrowse", "open_in_browse", "Open Anki's Browse on a search.", _obj({"query": {"type": "string"}}, ("query",)), False, _a_gui_browse),
     # NOT semantic (final review I3): the handler behind this is
     # anki_tools._h_search_notes, which is col.find_notes(query) — Anki's
@@ -373,8 +421,8 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "Search the user's notes with ANKI SEARCH SYNTAX (matches text, and supports deck:, tag:, "
            "\"quoted phrases\" — every term must match). NOT semantic: use search_lecture_pdfs for "
            "meaning-based search over the lecture material.",
-           _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes),
-    Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_pdfs),
+           _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes),
+    Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_pdfs),
     # K-207: the real semantic note search klausSearchNotes's description
     # points at search_lecture_pdfs for meaning-based search only because
     # this tool did not exist yet. It embeds the query and ranks the CARD
@@ -388,8 +436,9 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "Returns an empty list if the card index has not been built yet, or was built with a "
            "different embedding model. For exact text / Anki search syntax (deck:, tag:, "
            "\"quoted phrases\") use klausSearchNotes instead.",
-           _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes_semantic),
-    Action("klausCurrentPage", "current_page", "Read the active PDF page, selection, slide text, transcript and page image.", _obj({}), False, _a_klaus_current_page),
+           _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes_semantic),
+    Action("klausCurrentPage", "current_page", "Read the active PDF page, selection, slide text and transcript. Set include_image=false for text only. Use the returned pdf and page for card sources.", _obj({"include_image": {"type": "boolean", "default": True}}), False, _a_klaus_current_page),
+    Action("klausGetPage", "get_page", "Read a specific imported lecture page without changing the viewer. Images are opt-in. Use pdf IDs from current_page or lecture search, not filesystem paths.", _obj({"pdf_id": {"type": "string", "minLength": 1}, "page": {"type": "integer", "minimum": 1}, "include_image": {"type": "boolean", "default": False}}, ("pdf_id", "page")), False, _a_klaus_get_page),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
 )}
 
@@ -401,7 +450,9 @@ def mcp_args_to_params(action: str, args: dict) -> dict:
     a = dict(args or {})
     if action in ("addNote",):
         return {"note": {"deckName": a.get("deck"), "modelName": a.get("model"), "fields": a.get("fields") or {},
-                         "tags": a.get("tags") or [], "options": {"sourcePage": a.get("source_page")}}}
+                         "tags": a.get("tags") or [], "options": {"sourcePage": a.get("source_page"), "sourcePdf": a.get("source_pdf")}}}
+    if action == "addNotes":
+        return {"notes": [mcp_args_to_params("addNote", n)["note"] for n in a["notes"]], "_mcp_results": True}
     if action == "updateNoteFields":
         return {"note": {"id": a.get("note_id"), "fields": a.get("fields") or {}}}
     if action in ("addTags", "removeTags"):
@@ -418,14 +469,58 @@ def mcp_args_to_params(action: str, args: dict) -> dict:
 PROTOCOL_VERSION = "2025-06-18"
 
 def mcp_tools() -> list[dict]:
-    return [{"name": a.mcp_name, "description": a.description, "inputSchema": a.schema}
+    return [{"name": a.mcp_name, "description": a.description, "inputSchema": a.schema,
+             "outputSchema": {"type": "object", "properties": {"result": {}}, "required": ["result"]},
+             "annotations": {"readOnlyHint": not a.write and a.name != "guiBrowse",
+                             "destructiveHint": a.name in ("updateNoteFields", "removeTags"),
+                             "idempotentHint": a.name not in ("addNote", "addNotes"),
+                             "openWorldHint": False}}
             for a in ACTIONS.values() if a.mcp_name]
+
+
+def _validate_args(value, schema, path="arguments"):
+    """Validate the JSON Schema subset used by our registry, without a dependency."""
+    kind = schema.get("type")
+    valid = {"object": isinstance(value, dict), "array": isinstance(value, list),
+             "string": isinstance(value, str), "integer": type(value) is int,
+             "boolean": type(value) is bool}
+    if kind and not valid.get(kind, False):
+        raise ActionError(f"{path}: expected {kind}.")
+    if kind == "object":
+        for key in schema.get("required", []):
+            if key not in value:
+                raise ActionError(f"{path}.{key}: required.")
+        if len(value) < schema.get("minProperties", 0):
+            raise ActionError(f"{path}: at least one field is required.")
+        properties = schema.get("properties", {})
+        extra = schema.get("additionalProperties", True)
+        for key, item in value.items():
+            if key in properties:
+                _validate_args(item, properties[key], f"{path}.{key}")
+            elif extra is False:
+                raise ActionError(f"{path}: unknown argument {key}.")
+            elif isinstance(extra, dict):
+                _validate_args(item, extra, f"{path}.{key}")
+    elif kind == "array":
+        if not schema.get("minItems", 0) <= len(value) <= schema.get("maxItems", BODY_CAP):
+            raise ActionError(f"{path}: array length is outside the allowed range.")
+        for i, item in enumerate(value):
+            _validate_args(item, schema.get("items", {}), f"{path}[{i}]")
+    elif kind == "integer":
+        if ("minimum" in schema and value < schema["minimum"]) or ("maximum" in schema and value > schema["maximum"]):
+            raise ActionError(f"{path}: value is outside the allowed range.")
+    elif kind == "string" and len(value) < schema.get("minLength", 0):
+        raise ActionError(f"{path}: must not be empty.")
 
 
 def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, Any, dict]:
     """One JSON-RPC message → (http status, json body or None, extra headers)."""
-    if not isinstance(body, dict):
+    if (not isinstance(body, dict) or body.get("jsonrpc") != "2.0"
+            or not isinstance(body.get("method"), str)
+            or ("id" in body and type(body["id"]) not in (str, int))):
         return 200, {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}}, {}
+    if "id" not in body:
+        return 202, None, {}
     rid = body.get("id")
     method = str(body.get("method") or "")
     params = body.get("params")
@@ -454,7 +549,7 @@ def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, 
         if len(end.sessions) >= MAX_SESSIONS:
             end.sessions.clear()  # bounded, never unbounded (M10)
         end.sessions.add(sid)
-        res = {"protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
+        res = {"protocolVersion": PROTOCOL_VERSION,
                "capabilities": {"tools": {}}, "serverInfo": {"name": "klaus", "version": end.version}}
         return 200, {"jsonrpc": "2.0", "id": rid, "result": res}, {"Mcp-Session-Id": sid}
     if method == "ping":
@@ -462,18 +557,28 @@ def mcp_dispatch(end: "Endpoint", body: Any, session: str | None) -> tuple[int, 
     if method == "tools/list":
         return 200, {"jsonrpc": "2.0", "id": rid, "result": {"tools": mcp_tools()}}, {}
     if method == "tools/call":
-        name = str(params.get("name") or "")
+        name = params.get("name")
+        args = params.get("arguments", {})
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "tools/call requires a tool name and object arguments"}}, {}
         action = MCP_TO_ACTION.get(name)
         if action is None:
-            out = {"content": [{"type": "text", "text": f"unknown tool {name}"}], "isError": True}
+            return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"unknown tool {name}"}}, {}
         else:
-            r = end.handle(action, mcp_args_to_params(action, params.get("arguments") or {}), agent=True)
+            try:
+                _validate_args(args, ACTIONS[action].schema)
+            except ActionError as exc:
+                r = {"error": str(exc)}
+            else:
+                r = end.handle(action, mcp_args_to_params(action, args), agent=True)
             if r.get("error"):
                 out = {"content": [{"type": "text", "text": str(r["error"])}], "isError": True}
-            elif action == "klausCurrentPage":
+            elif action in ("klausCurrentPage", "klausGetPage"):
                 out = dict(r["result"], isError=False)
+                out.setdefault("structuredContent", {"result": None})
             else:
-                out = {"content": [{"type": "text", "text": json.dumps(r.get("result"))}], "isError": False}
+                out = {"content": [{"type": "text", "text": json.dumps(r.get("result"))}],
+                       "structuredContent": {"result": r.get("result")}, "isError": False}
         return 200, {"jsonrpc": "2.0", "id": rid, "result": out}, {}
     return 200, {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"unknown method {method}"}}, {}
 
@@ -499,6 +604,7 @@ def similar_existing(col, front: str) -> str | None:
 
 
 def _note_sections(note: dict, similar: str | None, agent: bool, pdf_safe: str | None = None) -> list[tuple[str, str]]:
+    pdf_safe = (note.get("options") or {}).get("sourcePdf") or pdf_safe
     secs = [("Deck", str(note.get("deckName") or "")), ("Note type", str(note.get("modelName") or ""))]
     for k, v in (note.get("fields") or {}).items():
         secs.append((str(k), strip_html(v)))
@@ -657,6 +763,13 @@ class Endpoint:
                 # all. Preview and the actual write must agree on which PDF
                 # a card came from, so this has to happen once, up front.
                 if action in ("addNote", "addNotes"):
+                    notes = [params.get("note") or {}] if action == "addNote" else params.get("notes") or []
+                    # Validate every explicit source before showing any approval.
+                    # Preserve legacy AnkiConnect source inference only when omitted.
+                    for note in notes:
+                        options = note.get("options") or {}
+                        if options.get("sourcePdf") is not None:
+                            self._main(lambda options=options: _resolve_page(ctx, options["sourcePdf"], options.get("sourcePage")), self._read_timeout)
                     # Read on the MAIN thread (M19), not this HTTP one:
                     # viewer_context's dict/list are mutated by the main
                     # thread with no lock, and the worst case of a torn
@@ -669,12 +782,13 @@ class Endpoint:
                             return v.pdf_safe if v is not None else None
                         except Exception:
                             return None
-                    try:
-                        seen = self._main(_viewed, self._read_timeout)
-                        if seen:
-                            ctx["pdf_safe"] = seen
-                    except Exception:
-                        pass
+                    if any(not (note.get("options") or {}).get("sourcePdf") for note in notes):
+                        try:
+                            seen = self._main(_viewed, self._read_timeout)
+                            if seen:
+                                ctx["pdf_safe"] = seen
+                        except Exception:
+                            pass
                 similar = None
                 if action == "addNote":
                     fields = (params.get("note") or {}).get("fields") or {}
