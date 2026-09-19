@@ -150,10 +150,14 @@ requested, still unstaged logo changes. Those source changes are not staged or
 committed by K-296.
 
 - Path: [dist/klausmate.ankiaddon](../../../dist/klausmate.ankiaddon)
-- Bytes: **1,406,836**
-- SHA256: `c2578be84e0117b3aedd96a625646255114c4c226dd727c3a776006d745aa96e`
+- Bytes: **1,406,834**
+- SHA256: `bf29d1c8ccb9afde90e3bfcd445005bfa42924312a9ef037856a5ffb302ccff4`
 - Archive entries: **147**
-- Manifest `mod`: `1789854095`; `human_version`: `0.1.3`.
+- Manifest `mod`: `1789854521`; `human_version`: `0.1.3`.
+
+After the Task 2 punctuation review fix, the archive was rebuilt and its hash,
+size and manifest timestamp above refreshed. The full suite, compiles and audit
+were not repeated for this documentation-only change.
 
 Independent `zipfile` inspection passed every required assertion: bridge,
 local_transcription and ollama_runtime present; all basename `meta.json*` excluded;

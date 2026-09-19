@@ -167,7 +167,7 @@ only to the configured local Ollama endpoint.
 
 The Library shows a per-PDF retention score — the share of that PDF's
 matched cards (at or above its sensitivity, see
-`pdf_match_threshold` above) you'd currently recall ; so you know what to study first. It
+`pdf_match_threshold` above) you'd currently recall, so you know what to study first. It
 reads the same match cache the `!Library` tags do; nothing here embeds
 anything indexing wouldn't already need. The Cards count and the
 sensitivity slider's live preview use the same matched-card figure, so

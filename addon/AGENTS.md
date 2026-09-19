@@ -159,7 +159,7 @@ not deleted by the rebuild. See [tag membership](klausmate/tag_sync.py).
 - Text selection: viewport `eventFilter` drags map to `(page, QPointF)` via `_viewport_to_page_point`; `QPdfDocument.getSelection()` is called per page (multi-page drags supported); highlights painted by `_SelectionOverlay` using `QPdfSelection.bounds()`.
 - **Cmd+C** / right-click **Copy** copy selected text; **Cmd/Ctrl-double-click** a page, or right-click **Copy slide as image**, copies it as an image (there is no toolbar button for this — it was removed).
 - Highlights and sticky notes are baked into the stored PDF as real annotations by `pdf_handler.bake_annotations` (vendored `pypdf`).
-- **Transcript strip** (2026-09-17): a collapsible readout under the page showing what was *said* over it (the page record's `segments`, never its slide text). Native = a NoFocus Qt strip; pdf.js = a docked footer outside `#pages`, pushed as `klausSetTranscript` and re-pushed on the page's ready signal. It refreshes on a page change and on `page_store.subscribe` — and that notification arrives on the transcription worker thread, so `_on_page_store_notify` defers its whole body through `_run_on_main`.
+- **Transcript strip** (2026-09-17): a collapsible readout under the page showing what was *said* over it (the page record's `segments`, never its slide text). Native = a NoFocus Qt strip; pdf.js = a docked footer outside `#pages`, pushed as `klausSetTranscript` and re-pushed on the page's ready signal. It refreshes on a page change and on `page_store.subscribe`; that notification arrives on the transcription worker thread, so `_on_page_store_notify` defers its whole body through `_run_on_main`.
 
 ### Editor-side PDF panel
 
@@ -400,7 +400,7 @@ Produces `dist/klausmate.ankiaddon`. The script stages files to a tempdir, bumps
 
 ### Tests
 
-Headless logic tests stub `aqt`/`anki`; selected suites also construct real Qt widgets offscreen — see `.claude/skills/klaus-test/` and `tests/README.md`. Run them all:
+Headless logic tests stub `aqt`/`anki`; selected suites also construct real Qt widgets offscreen; see `.claude/skills/klaus-test/` and `tests/README.md`. Run them all:
 
 ```sh
 failed=0
