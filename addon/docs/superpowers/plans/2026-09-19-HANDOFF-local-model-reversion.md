@@ -27,7 +27,9 @@ remain outside the final documentation commit.
   UTF-8 fixes, through `63e11ce`.
 - Integration: guidance inversion `e84663d` and `93bd7b1`; final actual-state
   user/agent documentation, aggregate checks and local package are documented in
-  the completion report. Final integration review is owned by the controller.
+  the completion report. Whole-project review and scoped re-review approved final
+  feature code `eff3f9e`, including failed-PDF viewer-context cleanup; no blocking
+  findings remain. Only review-status documentation changed afterward.
 
 ## Installation verification next
 

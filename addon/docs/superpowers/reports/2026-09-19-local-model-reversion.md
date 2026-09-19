@@ -1,10 +1,11 @@
 # Local-model reversion: completion and verification
 
-2026-09-19. D1-D6 implementation is complete locally through `63e11ce`.
-Their task and whole-plan reviews are recorded as complete in the source ledgers.
-Integration Task 2 updates actual-state documentation and builds a local package;
-its final independent review is controller-owned. Nothing here establishes a push,
-merge, publication, live Anki session or working Claude Desktop connection.
+2026-09-19. D1-D6 implementation and final integration are complete locally.
+The whole-project review and scoped re-review approved the final feature code at
+`eff3f9e`, including the failed-PDF context correction. All review findings are
+addressed, with no blocking residuals. Documentation and package reviews are also
+complete. The branch remains local. Nothing here establishes a push, merge,
+publication, live Anki session or working Claude Desktop connection.
 
 ## Deliverables and commits
 
