@@ -2800,14 +2800,6 @@ else:
     shutil.rmtree(_da_uf, ignore_errors=True)
 
 print("== Task 11: the dead in-house assistant-loop modules are gone ==")
-# D6 (docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
-# section 2/11): llm_client, entitlement, assistant_session, podcast and
-# assistant_panel were the whole in-house chat/practice/podcast loop the
-# Claude Code assistant (agent_host + anki_endpoint + assistant_dock)
-# replaces. Both the modules and their tests must be gone, and — the part
-# a plain `rm` cannot verify by itself — no SURVIVING test's own bootstrap
-# may still try to import one, or that test would fail at collection time
-# with an ImportError instead of a clean, honest "file not found" here.
 _DEL_MODS = ("llm_client", "entitlement", "assistant_session", "podcast",
              "assistant_panel")
 for _dm in _DEL_MODS:
@@ -2820,13 +2812,6 @@ for _dt in _DEL_TESTS:
     check(f"tests/{_dt} no longer exists",
           not os.path.exists(os.path.join(_TESTS_DIR, _dt)))
 
-# Real import shapes only — never a bare substring — so this cannot
-# misfire on unrelated prose that merely mentions the word: a raw-source
-# check for the retired "podcast" copy in manage_models.py (present-day,
-# in test_manage_models_assistant.py), or the SURVIVING assistant_sessions
-# (plural — Task 7's per-PDF session store), whose name is a superstring
-# of the deleted assistant_session.py (singular) and must never trip a
-# bare `in` test. \b word boundaries are what keep the two apart.
 _IMPORT_SHAPES = {
     _dm: _re.compile(
         r'import_module\(\s*["\']klausmate\.' + _re.escape(_dm) + r'["\']\s*\)'

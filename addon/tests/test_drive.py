@@ -1923,13 +1923,7 @@ check("...and the arithmetic is pinned against the REAL column widths, "
       "so widening a numeric column re-runs this check",
       _numeric135 == 84 + 88 + 88, f"numeric total {_numeric135}")
 
-print("== Task 11: the third-pane assistant is gone; a toolbar button "
-      "replaces it ==")
-# K-198/K-202 landed the real assistant (assistant_dock.py, anki_endpoint.py)
-# as a QDockWidget on mw, not a Library splitter pane — this section pins
-# the third pane's removal and the caption-row button that opens the dock
-# instead, where the old "assistant pane: a third splitter child" section
-# used to pin the pane itself.
+print("== Library retains two panes ==")
 check("the third-pane AssistantPanel mount is gone — no import, no "
       "guard-log string for it, and self.assistant does not exist",
       "assistant_panel" not in _DRIVE
@@ -1945,21 +1939,6 @@ check("the splitter default returns to a plain two-pane [560, 480] — no "
 check("the size guard still sizes itself off the splitter rather than a "
       "hardcoded two — that part of the K-198 guard survives the pane's "
       "removal", "self.splitter.count()" in _DRIVE)
-check("caption row carries an assistant action beside Map, labelled with "
-      "its shortcut for the QPushButton fallback",
-      'QPushButton("Assistant", left)' in _DRIVE
-      and "Klaus Assistant (Ctrl+Shift+K)" in _DRIVE)
-check("the glyph path is a live capability check against "
-      "library_explorer.KINDS, not a call known to always fail today — "
-      "library_explorer has no \"assistant\" entry (another plan owns "
-      "that module), and _glyph_action logs on every failure, so calling "
-      "it unconditionally would spam the console on every Library open",
-      '"assistant" in library_explorer.KINDS' in _DRIVE)
-check("it toggles the dock through a guarded import, exactly like "
-      "_open_map does for the map window",
-      "assistant_dock.toggle_assistant()" in _DRIVE
-      and "assistant open failed" in _DRIVE)
-
 print("== K-136: the name column has a FLOOR, not just a good default ==")
 # K-135 widened the DEFAULT splitter (300 -> 560). That fixed first run,
 # but it moved the cliff edge rather than removing it: the tree reports

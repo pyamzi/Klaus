@@ -12,7 +12,7 @@ Two kinds of check here, and the second is the one that matters:
 
 The behavioural one is load-bearing because the source pass gets it wrong in
 BOTH directions. It misses a handler that delegates its body to a helper
-(assistant_dock._on_send_button does exactly that and reads as unguarded),
+(delegating to a guarded helper can read as unguarded),
 and it passes a handler whose `try` wraps one harmless line while the rest of
 the body is exposed. Only running it settles the question — and it has to be
 a subprocess, because a test that proves an abort by aborting takes the suite
@@ -249,65 +249,6 @@ if _left:
 check("assistant_panel is gone (Task 11's deletions) — its 451a753 "
       "clean-slots guarantee retires with the file, not a stale pass",
       not any(x.startswith("assistant_panel") for x in _left))
-check("assistant_dock succeeds it as this bucket's live example of a "
-      "handler that delegates to an internally-guarded helper and so "
-      "reads as unguarded here (_on_send_button, _on_denied, ...) — "
-      "reported, same as every other lane's file, never enforced",
-      any(x.startswith("assistant_dock.py:") for x in _left), str(_left))
-
-section("Task 11 fix round 1: profile_will_close stops the endpoint LAST, "
-        "after the dock's own teardown has closed the child claude process")
-# Review finding #1: _stop_assistant_on_profile_close used to register on
-# profile_will_close BEFORE assistant_dock.setup() (which registers
-# assistant_dock._teardown on the SAME hook) had even been called — so the
-# fire order (gui_hooks calls listeners in append order) was endpoint-down,
-# THEN dock-teardown, meaning a turn still in flight could have its MCP
-# tool call hit an endpoint that was already closed. Fixed by moving the
-# .append() for _stop_assistant_on_profile_close to after the
-# assistant_dock.setup() call, and by having the handler itself close the
-# host (assistant_dock._teardown(), belt-and-braces — the very function
-# setup() registers, called here explicitly too in case setup() never ran)
-# before assistant_dock.close_assistant() before anki_endpoint.stop_for_
-# profile(). Two independent pins: a source/AST one (cheap, always runs)
-# and a behavioural one against a REAL exec of __init__.py with a
-# real-list gui_hooks fake (proves the fire order, not just the source
-# order — the two could diverge if some THIRD registration landed between
-# them).
-_INIT_SRC_R1 = open("klausmate/__init__.py", encoding="utf-8").read()
-_INIT_TREE_R1 = ast.parse(_INIT_SRC_R1)
-
-
-def _first_call_lineno_r1(match):
-    for node in ast.walk(_INIT_TREE_R1):
-        if isinstance(node, ast.Call) and match(node):
-            return node.lineno
-    return None
-
-
-_setup_call_lineno_r1 = _first_call_lineno_r1(
-    lambda n: isinstance(n.func, ast.Attribute) and n.func.attr == "setup"
-    and isinstance(n.func.value, ast.Name) and n.func.value.id == "assistant_dock"
-)
-_append_call_lineno_r1 = _first_call_lineno_r1(
-    lambda n: isinstance(n.func, ast.Attribute) and n.func.attr == "append"
-    and isinstance(n.func.value, ast.Attribute)
-    and n.func.value.attr == "profile_will_close"
-    and isinstance(n.func.value.value, ast.Name)
-    and n.func.value.value.id == "gui_hooks"
-    and len(n.args) == 1 and isinstance(n.args[0], ast.Name)
-    and n.args[0].id == "_stop_assistant_on_profile_close"
-)
-check("source order: assistant_dock.setup() is called before "
-      "_stop_assistant_on_profile_close is appended to profile_will_close "
-      "— gui_hooks fires listeners in append order, so this is what makes "
-      "assistant_dock._teardown (registered inside setup()) run, and "
-      "close the child claude process, before this handler stops the "
-      "endpoint the process talks to",
-      _setup_call_lineno_r1 is not None and _append_call_lineno_r1 is not None
-      and _setup_call_lineno_r1 < _append_call_lineno_r1,
-      f"setup() call at line {_setup_call_lineno_r1}, "
-      f"append() call at line {_append_call_lineno_r1}")
-
 if HAVE_QT:
     try:
         import importlib.util as _ilu_r1
@@ -350,7 +291,7 @@ if HAVE_QT:
         # stops being anki_stubs' empty package stub. gui_hooks is swapped
         # for the real-list fake ABOVE the exec, so every
         # gui_hooks.<name>.append(...) this module (and every submodule it
-        # imports, assistant_dock included) runs during exec lands in an
+        # imports) runs during exec lands in an
         # inspectable bucket instead of vanishing into the installed Dummy.
         def _qt_getattr_r1(name, _mods=(_QtW_r1, _QtC_r1, _QtG_r1)):
             for _m in _mods:
@@ -375,71 +316,29 @@ if HAVE_QT:
         sys.modules["klausmate"] = _pkg_r1
         _spec_r1.loader.exec_module(_pkg_r1)
 
-        _assistant_dock_r1 = importlib.import_module("klausmate.assistant_dock")
-        _pwc_bucket_r1 = _fake_hooks_r1.buckets.get("profile_will_close")
-        _pwc_calls_r1 = _pwc_bucket_r1.calls if _pwc_bucket_r1 is not None else []
-        _teardown_fn_r1 = _assistant_dock_r1._teardown
-        _stop_fn_r1 = _pkg_r1._stop_assistant_on_profile_close
-        check("behavioural: assistant_dock's own _teardown (which closes "
-              "the child claude process via dock.shutdown()) really is "
-              "registered on profile_will_close by the REAL exec of "
-              "__init__.py — otherwise the ordering check below would "
-              "pass vacuously",
-              _teardown_fn_r1 in _pwc_calls_r1,
-              [getattr(f, "__qualname__", f) for f in _pwc_calls_r1])
-        check("...and __init__._stop_assistant_on_profile_close (which "
-              "stops the endpoint) is registered too",
-              _stop_fn_r1 in _pwc_calls_r1,
-              [getattr(f, "__qualname__", f) for f in _pwc_calls_r1])
-        if _teardown_fn_r1 in _pwc_calls_r1 and _stop_fn_r1 in _pwc_calls_r1:
-            check("...and in the REAL fire order (append order), the "
-                  "dock's teardown runs BEFORE the endpoint stop — a turn "
-                  "still in flight talks to a host that is closing, never "
-                  "to an endpoint that is already down",
-                  _pwc_calls_r1.index(_teardown_fn_r1)
-                  < _pwc_calls_r1.index(_stop_fn_r1),
-                  f"order: {[getattr(f, '__qualname__', f) for f in _pwc_calls_r1]}")
-
-        # The registration-order fix above only proves WHICH CALLBACK fires
-        # first — it says nothing about the order of the three guarded
-        # steps INSIDE _stop_assistant_on_profile_close's own body, which
-        # the fix also changed (endpoint-stop moved from first to last).
-        # Monkeypatch the three functions it calls (already cached in
-        # sys.modules by the exec above, and the SAME objects its own
-        # lazy `from . import X` picks up) with order-recording fakes, call
-        # it directly, and restore before doing anything else with them.
+        _pwc_calls_r1 = _fake_hooks_r1.profile_will_close.calls
+        _pdo_calls_r1 = _fake_hooks_r1.profile_did_open.calls
+        check("endpoint stop is registered on profile close",
+              _pkg_r1._stop_endpoint_on_profile_close in _pwc_calls_r1)
+        check("endpoint start is registered on profile open",
+              _pkg_r1._start_klaus_endpoint in _pdo_calls_r1)
         _anki_endpoint_r1 = importlib.import_module("klausmate.anki_endpoint")
         _order_log_r1 = []
-        _orig_teardown_r1 = _assistant_dock_r1._teardown
-        _orig_close_r1 = _assistant_dock_r1.close_assistant
         _orig_stop_r1 = _anki_endpoint_r1.stop_for_profile
-        _assistant_dock_r1._teardown = lambda: _order_log_r1.append("teardown")
-        _assistant_dock_r1.close_assistant = lambda: _order_log_r1.append("close_assistant")
-        _anki_endpoint_r1.stop_for_profile = lambda: _order_log_r1.append("stop_for_profile")
+        _orig_start_r1 = _anki_endpoint_r1.start_for_profile
+        _anki_endpoint_r1.stop_for_profile = lambda: _order_log_r1.append("stop")
+        _anki_endpoint_r1.start_for_profile = lambda *a, **k: _order_log_r1.append("start")
         try:
-            _pkg_r1._stop_assistant_on_profile_close()
+            _pkg_r1._start_klaus_endpoint()
+            _pkg_r1._stop_endpoint_on_profile_close()
         finally:
-            _assistant_dock_r1._teardown = _orig_teardown_r1
-            _assistant_dock_r1.close_assistant = _orig_close_r1
             _anki_endpoint_r1.stop_for_profile = _orig_stop_r1
-        check("within the handler's OWN body, the three guarded steps "
-              "also run dock-before-endpoint: _teardown belt-and-braces "
-              "first, then close_assistant, then stop_for_profile LAST — "
-              "independent of and in addition to the cross-callback "
-              "registration-order fix above",
-              _order_log_r1 == ["teardown", "close_assistant", "stop_for_profile"],
-              str(_order_log_r1))
+            _anki_endpoint_r1.start_for_profile = _orig_start_r1
+        check("profile callbacks start and stop the endpoint",
+              _order_log_r1 == ["start", "stop"], str(_order_log_r1))
 
         section("Task 11 fix round 1: install_menu() regression test "
                 "(review finding #2 — this function had never had one)")
-        # A real QMenu standing in for mw.form.menuTools, pre-populated with
-        # two Anki-like items so existing_actions[0] is meaningful; a real
-        # QMainWindow standing in for mw (QAction's parent must be a real
-        # QObject, or construction itself raises — a bare
-        # types.SimpleNamespace is not enough); assistant_dock.menu_action
-        # monkeypatched on the SAME module object install_menu()'s own
-        # `from . import assistant_dock` will resolve to (already cached in
-        # sys.modules by the exec above).
         _fake_menu_r1 = _QtW_r1.QMenu()
         _anki_undo_r1 = _QtG_r1.QAction("Undo")
         _anki_redo_r1 = _QtG_r1.QAction("Redo")
@@ -447,31 +346,12 @@ if HAVE_QT:
         _fake_menu_r1.addAction(_anki_redo_r1)
         _fake_mw_r1 = _QtW_r1.QMainWindow()
         _fake_mw_r1.form = _types_r1.SimpleNamespace(menuTools=_fake_menu_r1)
-        _fake_assistant_action_r1 = _QtG_r1.QAction("Klaus Assistant")
-        _fake_assistant_action_r1.setShortcut(_QtG_r1.QKeySequence("Ctrl+Shift+K"))
-        _assistant_dock_r1.menu_action = lambda: _fake_assistant_action_r1
         _pkg_r1.mw = _fake_mw_r1
         _pkg_r1.install_menu()
         _menu_actions_r1 = _fake_menu_r1.actions()
         _texts_r1 = [a.text() for a in _menu_actions_r1]
-        check("Tools-menu order after install_menu(): Preferences, then "
-              "Klaus Assistant, then Anki's own pre-existing items "
-              "untouched and in their original relative order",
-              _texts_r1 == ["KlausMate Preferences…", "Klaus Assistant",
-                            "Undo", "Redo"],
-              str(_texts_r1))
-        check("the assistant action is the SAME object menu_action() "
-              "returned, inserted exactly once — never a second, "
-              "independently-constructed action",
-              sum(1 for a in _menu_actions_r1 if a is _fake_assistant_action_r1)
-              == 1,
-              f"count={sum(1 for a in _menu_actions_r1 if a is _fake_assistant_action_r1)}")
-        check("...and install_menu() never touches the action's own "
-              "shortcut — it still carries Ctrl+Shift+K, unchanged by "
-              "insertion",
-              _fake_assistant_action_r1.shortcut()
-              == _QtG_r1.QKeySequence("Ctrl+Shift+K"),
-              _fake_assistant_action_r1.shortcut().toString())
+        check("Preferences precedes existing Tools actions in their original order",
+              _texts_r1 == ["KlausMate Preferences…", "Undo", "Redo"], str(_texts_r1))
     except Exception as _e_r1:  # noqa: BLE001
         check(f"Task 11 fix round 1 checks ran ({_e_r1})", False)
 else:

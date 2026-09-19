@@ -182,7 +182,7 @@ check("from .md3_switch import Md3Switch",
 _MM_CODE = code_only(_MM)
 _TOGGLES = dict(re.findall(r"(\w+_cb) = (\w+)\(", _MM_CODE))
 check("every Preferences toggle is an Md3Switch, whatever their number",
-      len(_TOGGLES) >= 4
+      bool(_TOGGLES)
       and set(_TOGGLES.values()) == {"Md3Switch"},
       str(sorted(_TOGGLES.items())))
 check("the toggles that predate live appearance preview still only "

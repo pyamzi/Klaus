@@ -481,48 +481,12 @@ check("no-hit pages dim + lose clickability instead of vanishing",
       "Qt.ItemFlag.ItemIsEnabled" in _src2
       and "ForegroundRole" in _src2)
 check("every section is a page with a sidebar pill and a big title",
-      _src2.count("= _page(") == 4
+      _src2.count("= _page(") == 3
       and 'setObjectName("SettingsNav")' in _src2
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
-      '_finish_nav("General", "Appearance", "Assistant",\n'
-      '                "API keys & models")' in _src2)
-# The assistant panel shipped telling users to "add one under KlausMate
-# Preferences" for a key that had nowhere to be typed. This is that surface.
-check("the Assistant page exists, so the panel's own error message points "
-      "somewhere real", '"Assistant",\n        "Assistant",' in _src2)
-# K-194 (Task 8 of the Klaus-assistant-on-Claude-Code plan) rewrote this
-# page: Klaus is not itself the assistant, Claude Code is, so the old
-# provider-key/hosted-token picker (assistant_key_edit, assistant_token_edit,
-# assistant_backend_combo, the klaus_hidden row-sync between them) is gone.
-# The four checks that used to pin those fields are replaced below with
-# their equivalents on the new fields; every other assertion in this
-# section (the sidebar/search/row-shape ones around it) is untouched.
-check("the old provider-key / hosted-token credential fields are gone — "
-      "Claude Code is the engine now, not a provider key",
-      "assistant_key_edit" not in _src2
-      and "assistant_token_edit" not in _src2
-      and "assistant_backend_combo" not in _src2
-      and "_sync_assistant_rows" not in _src2)
-check("the page offers reopen-on-start and Clear Sessions — and no "
-      "OCR row and no Claude Code binary row, both gone with the local "
-      "runtime (spec D1)",
-      "assistant_reopen_cb" in _src2 and "clear_sessions_btn" in _src2
-      and "ocr_enabled_cb" not in _src2 and "ocr_model_combo" not in _src2
-      and "claude_binary_lbl" not in _src2
-      and "claude_override_btn" not in _src2)
-check("save_all writes them — a preference with no line in a save_* is "
-      "exactly how pdf_renderer shipped broken", "save_assistant()" in _src2)
-check("every control marks dirty, or Save would silently skip it",
-      "assistant_reopen_cb.toggled.connect" in _src2
-      and "anthropic_key_edit.textEdited.connect" in _src2
-      and "reasoning_model_edit.textEdited.connect" in _src2
-      and "transcription_model_edit.textEdited.connect" in _src2)
-check("Clear Sessions confirms window-modal — a hand-built QMessageBox, "
-      "open() + finished (K-125) — never the blocking QMessageBox.question()",
-      "msg.open()" in _src2 and "msg.finished.connect(_on_answered)" in _src2)
-
+      '_finish_nav("General", "Appearance", "API keys & models")' in _src2)
 check("settings are SynapsePro rows — name + desc left, control right, "
       "hairline separated",
       'setObjectName("SettingName")' in _src2
@@ -852,9 +816,9 @@ check("the page is called \"API keys & models\", as a nav label and a title",
       '"API keys & models",\n        "API keys & models",' in _src2)
 check("...and neither page it replaces survives",
       '"Semantic Search"' not in _src2 and '"Local Models"' not in _src2)
-check("the five fields the spec names are all constructed",
+check("the four fields the spec names are all constructed",
       all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
-                               "embed_model_edit", "reasoning_model_edit",
+                               "embed_model_edit",
                                "transcription_model_edit")))
 check("both provider key fields are password masked",
       _src2.count("EchoMode.Password") == 2
@@ -932,37 +896,34 @@ check("...and never the retired provider key — one provider now, so a "
       "embedding_provider" not in _save_embed_src
       and "embedding_api_key_" not in _save_embed_src)
 
-_save_assistant_src = _fn_src("save_assistant")
-check("save_assistant was found", bool(_save_assistant_src))
-for _k in ("api_key_anthropic", "reasoning_model", "transcription_model"):
-    check(f'save_assistant writes "{_k}"', f'"{_k}"' in _save_assistant_src)
+_save_api_key_settings_src = _fn_src("save_api_key_settings")
+check("save_api_key_settings was found", bool(_save_api_key_settings_src))
+for _k in ("api_key_anthropic", "transcription_model"):
+    check(f'save_api_key_settings writes "{_k}"', f'"{_k}"' in _save_api_key_settings_src)
 check("...and never the Ollama/Claude-Code era keys",
-      "claude_binary" not in _save_assistant_src
-      and "ocr_model" not in _save_assistant_src
-      and "ocr_enabled" not in _save_assistant_src
-      and "assistant_model" not in _save_assistant_src)
-check("every one of the five fields is written by exactly one save_*",
+      "claude_binary" not in _save_api_key_settings_src
+      and "ocr_model" not in _save_api_key_settings_src
+      and "ocr_enabled" not in _save_api_key_settings_src
+      and "assistant_model" not in _save_api_key_settings_src)
+check("every one of the four fields is written by exactly one save_*",
       _src2.count('cfg["api_key_openai"] = ') == 1
       and _src2.count('cfg["api_key_anthropic"] = ') == 1
       and _src2.count('cfg["embedding_model"] = ') == 1
-      and _src2.count('cfg["reasoning_model"] = ') == 1
       and _src2.count('cfg["transcription_model"] = ') == 1)
 _sync_embed_src = _fn_src("sync_embed_widgets")
-check("load_assistant runs INSIDE sync_embed_widgets' syncing guard — "
+check("load_api_key_settings runs INSIDE sync_embed_widgets' syncing guard — "
       "seeding a switch that is already true emits toggled, and outside "
       "the guard that marks a dialog nobody has touched as dirty",
-      "load_assistant()" in _sync_embed_src
-      and _sync_embed_src.index("load_assistant()")
+      "load_api_key_settings()" in _sync_embed_src
+      and _sync_embed_src.index("load_api_key_settings()")
       < _sync_embed_src.index('ui_state["syncing"] = False'))
-check("every assistant widget connects in the ONE connect block at the "
-      "bottom, after mark_dirty exists — connecting them where the page "
-      "is built put a setChecked(True) ahead of mark_dirty's binding and "
-      "raised NameError out of a Qt signal for anyone with "
-      "assistant_reopen on",
-      _src2.index("def mark_dirty() -> None:")
-      < _src2.index("assistant_reopen_cb.toggled.connect")
-      and _src2.index("def mark_dirty() -> None:")
-      < _src2.index("anthropic_key_edit.textEdited.connect"))
+check("all API fields connect to dirty tracking after mark_dirty is defined",
+      all(_src2.index("def mark_dirty() -> None:")
+          < _src2.index(f"{name}.textEdited.connect")
+          for name in ("openai_key_edit", "anthropic_key_edit",
+                       "embed_model_edit", "transcription_model_edit")))
+check("Save applies the surviving API key and transcription settings",
+      "save_api_key_settings()" in _fn_src("save_all"))
 check("General no longer offers to manage a local runtime",
       "runtime_auto_cb" not in _src2 and "runtime_auto_setup" not in _src2)
 check("and no module-top import of the deleted runtime modules survives",
@@ -1058,8 +1019,8 @@ print("== K-232: the four remaining blocking dialogs go window-modal ==")
 # askUser (save_threshold's tuned-PDFs offer) and three QMessageBox.question
 # statics (start_index's re-index confirm; confirm_close's discard-changes
 # and stop-indexing confirms) each opened a nested app-modal event loop —
-# the exact K-114 segfault class clear_assistant_sessions and pdf_drive's
-# _delete_pdf were already converted away from. Same shape here: a
+# the K-114 segfault class already fixed in pdf_drive._delete_pdf.
+# Same shape here: a
 # hand-built QMessageBox, themed, shown via open(), with the Yes/No
 # decision read from clickedButton() inside a finished handler.
 check("K-232: no blocking askUser or QMessageBox.question anywhere in "

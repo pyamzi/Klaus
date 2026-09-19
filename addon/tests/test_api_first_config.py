@@ -88,7 +88,6 @@ for k in (
 for k, v in (
     ("api_key_openai", ""),
     ("api_key_anthropic", ""),
-    ("reasoning_model", "claude-sonnet-5"),
     ("transcription_model", "gpt-4o-mini-transcribe"),
     ("embedding_model", "text-embedding-3-large"),
 ):
@@ -105,12 +104,7 @@ check(
 
 section("_migrate_config: one rename, and what an Ollama-era profile loses")
 
-# Anki's getConfig returns config.json's DEFAULTS merged under the
-# profile's own keys, so every default is already present in the dict
-# _migrate_config sees. Modelling that is the whole point (I3): with a
-# bare store, reasoning_model reads empty and the old
-# "assistant_model -> reasoning_model" rename looked like it fired. In
-# production it never could.
+# Model Anki's merge of defaults under profile overrides.
 def _profile(**user_keys) -> dict:
     merged = dict(cfg)
     merged.update(user_keys)
@@ -138,12 +132,8 @@ check(
     and "embedding_api_key_openai" not in _written,
 )
 check(
-    "assistant_model is DROPPED, not renamed: reasoning_model already "
-    "holds config.json's default under Anki's merge, so a copy-into-"
-    "empty could never fire — and the old value is a Claude Code alias "
-    "the Messages API would reject anyway. Code, test and docs now say "
-    "the same thing",
-    _written.get("reasoning_model") == cfg["reasoning_model"]
+    "retired model aliases are removed without replacement",
+    "reasoning_model" not in _written
     and "assistant_model" not in _written,
 )
 check(
@@ -167,6 +157,26 @@ check(
         for k in ("embedding_provider", "ocr_model", "_embed_default_migrated")
     ),
 )
+
+# Retired dock keys are removed from existing profiles in one write.
+_retired = ("assistant_reopen", "assistant_dock_width", "assistant_dock_open", "reasoning_model")
+_migration_store = _profile(**dict.fromkeys(_retired, "old-value"))
+_migration_store["library_root"] = "/fixture/library"
+_migration_writes = []
+K.get_config = lambda: dict(_migration_store)
+def _save_migration(value):
+    _migration_store.clear()
+    _migration_store.update(value)
+    _migration_writes.append(dict(value))
+K.write_config = _save_migration
+K._migrate_config()
+check("all retired dock keys are absent from defaults and migrated profiles",
+      all(k not in cfg and k not in _migration_store for k in _retired))
+check("migration preserves unrelated configuration",
+      _migration_store == dict(cfg, library_root="/fixture/library"))
+check("retired keys cause exactly one migration write", len(_migration_writes) == 1)
+K._migrate_config()
+check("a second migration performs no write", len(_migration_writes) == 1)
 
 # An OpenAI-era profile keeps the model it actually chose.
 _storeO = _profile(embedding_provider="openai", embedding_model="text-embedding-3-small")
@@ -301,17 +311,17 @@ class _FakeTaskman:
 _orig_mw = K.mw
 _fake_mgr = _FakeAddonManager(
     {"api_key_openai": "sk-real", "library_root": "/library",
-     "embedding_model": "text-embedding-3-large", "assistant_dock_open": False}
+     "embedding_model": "text-embedding-3-large", "image_crop_enabled": False}
 )
 _fake_tm = _FakeTaskman()
 K.mw = types.SimpleNamespace(addonManager=_fake_mgr, taskman=_fake_tm)
 try:
-    K.patch_config({"assistant_dock_open": True})
+    K.patch_config({"image_crop_enabled": True})
     check(
         "patch_config queues the write through mw.taskman.run_on_main "
         "rather than applying it inline while taskman is there to ask",
         len(_fake_tm.queued) == 1
-        and _fake_mgr._cfg.get("assistant_dock_open") is False,
+        and _fake_mgr._cfg.get("image_crop_enabled") is False,
     )
     _fake_tm.queued[0]()
     _after = K.get_config()
@@ -325,7 +335,7 @@ try:
         and _after.get("embedding_model") == "text-embedding-3-large",
     )
     check("...with the patched key itself applied",
-          _after.get("assistant_dock_open") is True)
+          _after.get("image_crop_enabled") is True)
 finally:
     K.mw = _orig_mw
     K.get_config, K.write_config = _real_get_config, _real_write_config

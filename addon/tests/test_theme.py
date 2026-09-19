@@ -37,7 +37,6 @@ builders = [
     ("library_qss", theme.library_qss),
     ("thumb_strip_qss", theme.thumb_strip_qss),
     ("transcript_strip_qss", theme.transcript_strip_qss),
-    ("assistant_dock_qss", theme.assistant_dock_qss),
     # The Anki-window builders (window_chrome consumers) join here so
     # every audit below — tokens substituted, background present, the
     # K-110 radius/font design scale — applies to them by construction.
@@ -340,18 +339,6 @@ for night in (False, True):
     check(f"library_qss(night={night}): ...focus is the blue_bright ring",
           _glyph[":focus"] is not None
           and c["blue_bright"] in _glyph[":focus"].group(1))
-    # K-198: the third-pane assistant (assistant_panel.AssistantPanel,
-    # styled from THIS window's sheet under #KlausAssistantPanel) is
-    # retired along with the third pane itself — the Claude Code
-    # assistant is a dock now (assistant_dock.py), styled by its own
-    # theme.assistant_dock_qss, never by library_qss. A stale selector
-    # left behind here would be dead weight at best and a silent
-    # "still looks styled" trap at worst if pdf_drive.py ever grew a
-    # same-named widget again by accident.
-    check(f"library_qss(night={night}) carries no trace of the retired "
-          "KlausAssistantPanel third pane (K-198 — replaced by the "
-          "assistant_dock.py dock and its own assistant_dock_qss)",
-          "KlausAssistantPanel" not in lq)
 check("accent_mix's default base is still surface — no other caller moved",
       theme.accent_mix(False, 0.16) == theme.accent_mix(False, 0.16, base="surface"))
 

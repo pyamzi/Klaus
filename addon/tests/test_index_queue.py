@@ -1321,7 +1321,7 @@ check(
     "Enter-default, so Enter in the key field reaches this window-modal "
     "confirm next with keyboard focus; a stray Enter must not start a "
     "paid whole-collection re-embed, the same rule "
-    "clear_assistant_sessions' confirm already follows",
+    "the Library confirmation follows",
     "box.setDefaultButton(QMessageBox.StandardButton.No)" in _iq_src,
 )
 check(

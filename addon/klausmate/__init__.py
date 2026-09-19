@@ -127,6 +127,10 @@ _LEGACY_KEYS_DROPPED = (
     "_embed_default_migrated",
     # Retired 2026-09-18: Klaus Plus subscription service removed.
     "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
+    # 2026-09-18: embedded assistant dock removed (see
+    # docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
+    "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
+    "reasoning_model",
 )
 
 
