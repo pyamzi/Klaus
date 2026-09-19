@@ -12,23 +12,21 @@ is importable and testable without a display. Below the divider,
 The ``Uploader`` is the other half: one daemon worker, FIFO, that
 transcribes a closed chunk's WAV and appends the result to the PDF's page
 record (``page_store.append_segment``) — never blocking the UI thread, and
-never losing audio: a failed upload (network error, no key, a Klaus Plus
-refusal) simply keeps the WAV on disk for the next attempt
+never losing audio: a failed upload (network error, no key, a bad
+response) simply keeps the WAV on disk for the next attempt
 (``requeue_leftovers`` on the next Record). The worker loop itself must
 survive anything a single chunk throws at it (K-256 fix round 1, C1) —
 including ``on_segment``, a callback this module hands to Task 5's Qt-side
 consumer across a thread boundary — or one bad chunk permanently stops
 transcription for the rest of the session.
 
-Klaus Plus (2026-09-16, after this plan was written): when Plus is active
-the uploader calls ``openai_client.transcribe`` exactly the way
-``embeddings.py`` calls ``embed`` on the Plus path — no provider key,
-routed through ``plus.endpoint(cfg, "transcribe")`` — and a 401/402/426
-is remembered via ``plus.note_refusal`` through the package's
-``patch_config`` (a PATCH writer; the plain ``write_config`` replaces the
-whole stored config and must never be the sink for a one-key update). A
-successful metered call's response headers are hashed through
-``plus.note_quota`` the same way. Page records are seeded once per PDF
+Transcription is direct-key only: the uploader calls
+``openai_client.transcribe`` with the user's own ``api_key_openai`` and
+nothing else — no metered routing, no refusal caching, no quota
+bookkeeping. Missing a key is handled exactly like any other failure to
+transcribe (a network error, a bad response): the WAV simply stays on
+disk for the next attempt, and the failure is logged by exception class
+and HTTP status only, never the message. Page records are seeded once per PDF
 (``page_store.ensure_records``) before the first segment is ever
 appended, so a transcript can land even on a PDF nobody has indexed yet.
 """
@@ -45,7 +43,7 @@ import time
 import wave
 from typing import Callable, NamedTuple
 
-from . import openai_client, page_store, plus
+from . import openai_client, page_store
 
 CHUNK_S = 30.0
 # How long stop() waits for the worker to put down whatever chunk it is
@@ -253,16 +251,6 @@ def _spend(wav_path: str) -> None:
 _transcribe = openai_client.transcribe
 
 
-def _patch_config_sink() -> Callable[[dict], None] | None:
-    """The package's ``patch_config``, reached lazily: this module is
-    aqt-free and must not import ``klausmate/__init__.py`` (which imports
-    aqt) at module top. Mirrors embeddings.py's own lazy lookup exactly —
-    one MERGE writer every ``plus.*`` call must use, never the package's
-    plain ``write_config``, which replaces the whole stored config."""
-    pkg = __import__(__package__, fromlist=["patch_config"])
-    return getattr(pkg, "patch_config", None)
-
-
 class Uploader:
     """One daemon worker; FIFO; a failed chunk keeps its WAV."""
 
@@ -397,25 +385,14 @@ class Uploader:
         cfg = self._get_config() or {}
         model = str(cfg.get("transcription_model") or "gpt-4o-mini-transcribe")
         key = str(cfg.get("api_key_openai") or "").strip()
-        on_plus = plus.active(cfg)
-        if not key and not on_plus:
-            print(f"[klausmate] lecture recorder: no OpenAI key and no Klaus Plus, keeping {os.path.basename(wav_path)}")
+        if not key:
+            print(f"[klausmate] lecture recorder: no OpenAI key, keeping {os.path.basename(wav_path)}")
             return
         prompt = self._last_text.get(pdf_safe, "")[-800:]
         try:
             wav = open(wav_path, "rb").read()
-            if on_plus:
-                text = _transcribe("", wav, model, prompt=prompt, endpoint=plus.endpoint(cfg, "transcribe"),
-                                   on_headers=lambda h: plus.note_quota(cfg, h, _patch_config_sink()))
-            else:
-                text = _transcribe(key, wav, model, prompt=prompt)
+            text = _transcribe(key, wav, model, prompt=prompt)
         except openai_client.OpenAIError as exc:
-            if on_plus and exc.status in (401, 402, 426):
-                sink = _patch_config_sink()
-                if sink is None:
-                    print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
-                else:
-                    plus.note_refusal(cfg, exc.status, sink, message=exc.user_message())
             # Class and status ONLY, never the message (PR #4, Codex):
             # openai_client._request folds up to 300 bytes of the provider's
             # error body into it, and that body can echo request-derived
