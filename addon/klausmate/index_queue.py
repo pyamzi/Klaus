@@ -266,6 +266,23 @@ def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str, plus: bo
     )
 
 
+def card_index_confirm_message(pdf_label: str, estimate: str, plus: bool = False) -> str:
+    """K-237: the card-index confirm's own text — the gate ``sweep_message``
+    above says does not exist yet. Declining ``offer_model_sweep`` does not
+    prevent the spend it warned about, only delays it: the very next PDF
+    add still runs ``curation.ensure_index`` as phase one, and a stale or
+    missing card index makes THAT a from-scratch re-embed of every note,
+    unpriced. This is the confirm that closes that gap."""
+    price = "included in Klaus Plus, no charge.\n\n" if plus else f"{estimate}, billed to your OpenAI key.\n\n"
+    return (
+        f"Indexing “{pdf_label}” needs to rebuild your whole card index "
+        f"from scratch first — {price}"
+        "Skip to add this PDF anyway: matching against your cards stays "
+        "degraded until the card index is rebuilt (Preferences' Index Now, "
+        "or the next model sweep, will finish it)."
+    )
+
+
 def queued_message(name: str, ahead: int) -> str:
     """The tooltip an add gets. ``ahead`` is how many jobs run BEFORE
     this one — the part of a ten-PDF drop the user cannot see, and the
@@ -683,6 +700,36 @@ def _run(job: tuple[str, str]) -> None:
             cancel=cancel,
         )
 
+    def start_card_index() -> None:
+        curation.ensure_index(
+            mw,
+            on_progress=prog,
+            on_done=after_card_index,
+            on_error=on_error,
+            cancel=cancel,
+        )
+
+    def card_index_answered(embed: bool) -> None:
+        if not live():
+            return
+        if embed:
+            start_card_index()
+            return
+        # K-237's decline behaviour: mirror pertinence's own Skip, not an
+        # abort. The rest of the chain still runs, against whatever card
+        # index already exists on disk (stale or empty) rather than the
+        # fresh one the user just declined to pay for — matching this PDF
+        # against recently added/edited cards is degraded until the index
+        # is rebuilt, but the PDF still gets its own pages embedded,
+        # matched and tagged. A raise or a silent hang here would be worse
+        # than a documented degradation.
+        _publish(
+            _state._replace(
+                label="Card index embed skipped — matching may miss recent cards."
+            )
+        )
+        after_card_index(None, True)
+
     _publish(
         RunnerState(
             active=True,
@@ -692,13 +739,20 @@ def _run(job: tuple[str, str]) -> None:
             pending=_queue.pending(),
         )
     )
-    curation.ensure_index(
-        mw,
-        on_progress=prog,
-        on_done=after_card_index,
-        on_error=on_error,
-        cancel=cancel,
-    )
+    cfg = _cfg()
+    # The confirm guards only the SILENT auto-index-on-add path (a single
+    # PDF's own phase one) — never a JOB_CARDS entry, which only ever
+    # reaches this queue via offer_model_sweep's OWN priced confirm
+    # (Preferences Save); asking again here would double-prompt for a
+    # spend the user already approved.
+    if kind != JOB_PDF or plus.active(cfg) or not card_index_from_scratch(cfg):
+        start_card_index()
+    else:
+        ask_card_index_confirm(
+            mw,
+            card_index_confirm_message(label, _card_index_estimate(cfg)),
+            card_index_answered,
+        )
 
 
 def _job_done(message: str, finished: str = "") -> None:
@@ -840,6 +894,46 @@ def signature_changed(previous: tuple, current: tuple) -> bool:
         )
     except Exception:
         return False
+
+
+def card_index_from_scratch(cfg: dict) -> bool:
+    """K-237: is ``curation.ensure_index`` about to re-embed the WHOLE card
+    index rather than diff it — no manifest on disk yet, or its stored
+    signature no longer matches the configured provider/model/dims?
+
+    The exact condition ``offer_model_sweep`` already gates its own priced
+    confirm on, read here from ``curation.index_stats()`` (manifest-only,
+    no vector load — cheap enough for the phase-one call site this backs,
+    which runs on every silent auto-index-on-add). Comparison is always
+    ``signature_changed``/``embeddings.signature_matches``, never a
+    hand-spelled tuple check, for the same reason spelled out there.
+    """
+    from . import curation
+
+    try:
+        stats = curation.index_stats()
+    except Exception as exc:
+        print(f"[klausmate] card-index stats unavailable: {exc}")
+        return False  # a bookkeeping hiccup must not manufacture a confirm
+    if not stats.get("exists"):
+        return True
+    current = embeddings.index_signature(cfg)
+    stored = (stats.get("provider", ""), stats.get("model", ""), stats.get("dims", 0))
+    return signature_changed(stored, current)
+
+
+def _card_index_estimate(cfg: dict) -> str:
+    """What the from-scratch card-index embed the confirm is ASKING about
+    would roughly cost — the note half of ``sweep_estimate``, called with
+    no PDFs, since phase one only ever re-embeds notes (a PDF's own pages
+    are phase two, priced nowhere and unaffected by this confirm)."""
+    try:
+        from . import cost
+
+        return cost.format_estimate(sweep_estimate([]))
+    except Exception as exc:
+        print(f"[klausmate] card-index confirm estimate failed: {exc}")
+        return "cost unknown for this model"
 
 
 def sweep_estimate(names: list[str]) -> Any:
@@ -989,6 +1083,38 @@ def ask_judge(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
         clicked = box.clickedButton()
         box.deleteLater()
         answer(clicked is judge_btn)
+
+    box.finished.connect(finished)
+    box.open()
+
+
+def ask_card_index_confirm(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
+    """K-237's own paid-pass confirm: a from-scratch card-index embed
+    about to run as phase one of an autonomous, silent PDF add. Same
+    shape as ``ask_judge`` above, not ``offer_model_sweep``'s: this fires
+    deep inside the queue's async chain, never from an open Preferences
+    window with a real parent to anchor on, so it is Embed/Skip,
+    window-modal via ``open()`` (K-114), with Skip the default button — a
+    stray Enter must never start a paid whole-collection re-embed.
+    """
+    box = QMessageBox(parent)
+    box.setWindowTitle("Rebuild the card index?")
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(text)
+    embed_btn = box.addButton("Embed", QMessageBox.ButtonRole.AcceptRole)
+    skip_btn = box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(skip_btn)
+    try:
+        from . import theme
+
+        box.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+    except Exception as exc:
+        print(f"[klausmate] card-index confirm dialog theme failed: {exc}")
+
+    def finished(_result: int) -> None:
+        clicked = box.clickedButton()
+        box.deleteLater()
+        answer(clicked is embed_btn)
 
     box.finished.connect(finished)
     box.open()

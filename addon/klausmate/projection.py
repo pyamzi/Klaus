@@ -203,6 +203,157 @@ def _deflate(flat: array, row_mv: memoryview, n: int, d: int, s, v) -> None:
             )
 
 
+# ------------------------------------------------------------- alignment
+#
+# K-171. The docstring above already proves the axes are not canonical:
+# refitting the SAME data from a different sample can swap PC2/PC3 outright
+# (no eigengap to separate them). ``align_to`` does not try to fix the fit
+# — it makes the PICTURE continuous instead, by rotating (and, deliberately,
+# reflecting where useful — see below) a fresh layout onto the previous one
+# using whichever notes both layouts share. That is an orthogonal Procrustes
+# problem: given old positions P_old and new P_new (n x 3, rows paired by
+# note id), find the orthogonal R minimising ||P_new @ R - P_old||. The
+# minimiser is the orthogonal polar factor of M = P_new^T @ P_old (a
+# textbook Procrustes result — R = U V^T from M's SVD U*Sigma*V^T), found
+# here by Higham's Newton iteration for the polar decomposition
+# (R_{k+1} = (R_k + R_k^-T) / 2): a few 3x3 inverses, no eigenvalues or SVD
+# routine required, and it converges to that SAME R whether R itself turns
+# out to be a proper rotation (det +1) or a reflection (det -1) — which is
+# exactly the choice below.
+#
+# Reflections ALLOWED, deliberately. A PCA frame has no chirality worth
+# protecting: "this point cloud, mirrored" is not a different embedding, it
+# is the same cosine-similarity structure wearing a coordinate system whose
+# handedness power iteration never fixed in the first place — a start
+# vector converging to -v instead of +v is already a one-axis reflection,
+# and it already happens between runs with nobody noticing. Forbidding
+# reflections (the usual Kabsch fix: flip the sign of the smallest singular
+# vector when det(UV^T) = -1) would force a worse fit whenever the true
+# correspondence between old and new frames is orientation-reversing —
+# which is common here, since a PC2/PC3 swap composed with either axis's
+# sign flip is already an odd permutation. Nothing downstream (pdf_map's
+# camera) cares which way the frame turns, so there is no handedness to
+# spend a worse fit protecting.
+MIN_ALIGN_OVERLAP = 16  # A 3D rotation/reflection has 3 degrees of freedom
+# and needs at least 3 non-collinear correspondences to be determined at
+# all. 16 is comfortably above that floor: with only a handful of shared
+# notes, the 3x3 cross-covariance matrix M is dominated by whichever couple
+# of points happen to be in the overlap rather than by the cloud's real
+# orientation, and aligning to it would be fitting noise, not the picture.
+
+
+def _mat3_transpose(m):
+    return tuple(tuple(m[r][c] for r in range(3)) for c in range(3))
+
+
+def _mat3_det(m):
+    return (
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    )
+
+
+def _mat3_inverse(m):
+    det = _mat3_det(m)
+    if abs(det) < 1e-12:
+        return None
+    inv_det = 1.0 / det
+    return (
+        (
+            (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * inv_det,
+            (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * inv_det,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * inv_det,
+        ),
+        (
+            (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * inv_det,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * inv_det,
+            (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * inv_det,
+        ),
+        (
+            (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * inv_det,
+            (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * inv_det,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * inv_det,
+        ),
+    )
+
+
+def _polar_orthogonal(m, iterations: int = 100, tol: float = 1e-10):
+    """The orthogonal polar factor of a 3x3 matrix ``m`` — the Procrustes
+    ``R`` maximising ``tr(R^T m)`` over ALL orthogonal ``R`` (rotations and
+    reflections alike) — via Higham's Newton iteration. Returns ``None`` on
+    a singular matrix or one that fails to settle within ``iterations``
+    (degenerate correspondence geometry), never a garbage matrix.
+    """
+    r = m
+    for _ in range(iterations):
+        inv = _mat3_inverse(r)
+        if inv is None:
+            return None
+        inv_t = _mat3_transpose(inv)
+        nxt = tuple(
+            tuple((r[i][j] + inv_t[i][j]) / 2.0 for j in range(3))
+            for i in range(3)
+        )
+        diff = max(abs(nxt[i][j] - r[i][j]) for i in range(3) for j in range(3))
+        r = nxt
+        if diff < tol:
+            return r
+    return None
+
+
+def align_to(
+    new_points: Sequence[tuple[float, float, float]],
+    new_ids: Sequence[int],
+    old_points: Sequence[tuple[float, float, float]],
+    old_ids: Sequence[int],
+    *,
+    min_overlap: int = MIN_ALIGN_OVERLAP,
+) -> tuple[list[tuple[float, float, float]], bool]:
+    """Rotate/reflect ``new_points`` onto ``old_points`` by the ids the two
+    layouts share, so a fresh layout settles into the previous one's
+    orientation instead of spinning with every resample (see the module
+    docstring's isotropy finding). ``new_ids``/``old_ids`` pair positionally
+    with ``new_points``/``old_points``.
+
+    Returns ``(points, True)`` on a genuine alignment, or
+    ``(list(new_points), False)`` unchanged when there is no previous
+    layout, the shared overlap is under ``min_overlap``, a point is not
+    3-dimensional, or the Procrustes solve is degenerate — every one of
+    those is "nothing to align to", never an error.
+
+    ``R`` is applied to EVERY point in ``new_points``, not just the
+    overlap — the whole cloud turns together, or it would not be one
+    coherent map. Because ``R`` is orthogonal this changes nothing about
+    what the map shows: every pairwise distance within ``new_points`` is
+    exactly preserved by construction (an orthogonal transform is an
+    isometry), only the frame it is viewed from moves.
+    """
+    old_by_id = dict(zip(old_ids, old_points))
+    pairs = [
+        (p, old_by_id[i])
+        for p, i in zip(new_points, new_ids)
+        if i in old_by_id
+    ]
+    if len(pairs) < min_overlap or any(
+        len(p) != 3 or len(q) != 3 for p, q in pairs
+    ):
+        return list(new_points), False
+    m = [[0.0, 0.0, 0.0] for _ in range(3)]
+    for new_p, old_p in pairs:
+        for i in range(3):
+            for j in range(3):
+                m[i][j] += new_p[i] * old_p[j]
+    r = _polar_orthogonal(tuple(tuple(row) for row in m))
+    if r is None:
+        return list(new_points), False
+    aligned = [
+        tuple(sum(p[i] * r[i][j] for i in range(3)) for j in range(3))
+        for p in new_points
+    ]
+    return aligned, True
+
+
 def _normalize_axis(values: Sequence[float]) -> list[float]:
     """Independently rescale one axis into [-1, 1]; 0.0 everywhere when
     the axis has no spread (never divides by a zero span)."""
@@ -217,11 +368,38 @@ def _normalize_axis(values: Sequence[float]) -> list[float]:
     return [((v - lo) * scale) - 1.0 for v in values]
 
 
+def normalize_points(
+    points: Sequence[Sequence[float]],
+) -> list[tuple[float, ...]]:
+    """Independently rescale every axis of ``points`` into [-1, 1] —
+    ``project``'s own last step, pulled out so ``pdf_graph`` can insert
+    ``align_to`` BEFORE it (K-171).
+
+    Order matters and is the whole point: normalizing first and aligning
+    second compares two boxes each independently squashed to fill
+    [-1, 1] — which axis is 5% wider than which is itself sampling noise,
+    so a rotation fitted between two such boxes inherits that noise and
+    only partly cancels the resample defect (measured: taking a 97px
+    median resample move down to just 67px, nowhere near "a few pixels").
+    Aligning the RAW component scores first and normalizing the aligned
+    result afterward routes around it entirely, because after a good
+    alignment the rotated data is nearly the SAME cloud the old layout
+    normalized from, so independently finding its extents again lands
+    almost exactly where the old normalization did (measured on the same
+    scenario: 1px median, 3px worst) — see ``pdf_graph.build_graph_data``.
+    """
+    if not points:
+        return []
+    cols = list(zip(*points))
+    return list(zip(*(_normalize_axis(c) for c in cols)))
+
+
 def project(
     rows: Sequence,
     *,
     fit_rows: int = DEFAULT_FIT_ROWS,
     seed: int = 0,
+    normalize: bool = True,
 ) -> tuple[list[tuple[float, float, float]], list[int]]:
     """Project EVERY row to 3D via the top-3 principal components.
 
@@ -231,11 +409,17 @@ def project(
     does not require that).
 
     Returns ``(points, indices)``: ``points[k]`` is the ``(x, y, z)``
-    position of ``rows[indices[k]]``, all three axes independently
-    normalized into [-1, 1]. ``indices`` is ``range(len(rows))`` — it
-    stays in the return signature because callers (``pdf_graph``) zip it
-    against ``points`` to recover each row's identity, and because it was
-    a strict subset before K-138 made every row a point.
+    position of ``rows[indices[k]]``. With the default ``normalize=True``
+    (every existing caller) all three axes are independently normalized
+    into [-1, 1], exactly as before this function grew the flag.
+    ``normalize=False`` returns the raw, unnormalized component scores
+    instead — for ``pdf_graph``'s alignment step (K-171) alone, which has
+    to rotate the RAW cloud onto a previous layout before normalizing (see
+    ``normalize_points``'s docstring for why that order is load-bearing).
+    ``indices`` is ``range(len(rows))`` — it stays in the return signature
+    because callers (``pdf_graph``) zip it against ``points`` to recover
+    each row's identity, and because it was a strict subset before K-138
+    made every row a point.
 
     ``fit_rows`` bounds only the even stride sample the two component
     directions are COMPUTED from; rows outside it are still projected
@@ -283,11 +467,15 @@ def project(
             _deflate(flat, row_mv, n, d, s, v)
             row_mv = memoryview(flat)
 
-    return _score_all(rows, d, mean, comps), indices
+    raw = _score_all(rows, d, mean, comps)
+    return (normalize_points(raw) if normalize else raw), indices
 
 
 def _score_all(rows: Sequence, d: int, mean: array, comps: list):
-    """Every row's ``(x, y, z)``, each axis normalized into [-1, 1].
+    """Every row's raw ``(x, y, z)`` component scores — NOT yet normalized
+    into [-1, 1]; ``project`` (or ``pdf_graph``, when it aligns first) owns
+    that step via ``normalize_points`` now, so this stays the one place
+    that reads the fitted directions and nothing else.
 
     One dot product per row per component and no centered copy of the
     data: the sample mean's contribution is a constant per component, so
@@ -332,4 +520,4 @@ def _score_all(rows: Sequence, d: int, mean: array, comps: list):
                 s -= scores[j] * c
             scores.append(s)
             axes[k].append(s)
-    return list(zip(*(_normalize_axis(a) for a in axes)))
+    return list(zip(*axes))

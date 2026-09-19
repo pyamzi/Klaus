@@ -159,7 +159,7 @@ input, textarea { caret-color: var(--accent); }
 /* ── window chrome ─────────────────────────────────────────────────── */
 .app {
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr);
+  grid-template-columns: clamp(200px, 24vw, 252px) minmax(0, 1fr);
   grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
   height: 100dvh;
 }
@@ -187,6 +187,10 @@ input, textarea { caret-color: var(--accent); }
 }
 .tb-icon:hover { background: var(--hover); color: var(--ink); }
 .tb-icon:active { background: var(--hover-2); }
+/* Nothing to toggle at desktop or half-desktop widths — the sidebar
+   is a persistent pane there (see the width tiers below); this button
+   only does anything once the sidebar goes off-canvas. */
+#sidebar-toggle { display: none; }
 #sidebar-toggle[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
 
 /* Counts read as one quiet line, the way Notion states a view's filters —
@@ -285,9 +289,20 @@ input, textarea { caret-color: var(--accent); }
 .meter i { display: block; height: 100%; background: var(--t-orange-dot); }
 .region.contested .meter i { background: var(--t-red-dot); }
 .holds { display: flex; flex-direction: column; gap: 3px; }
-.hold { font-size: 12px; color: var(--ink-2); font-family: var(--mono); display: flex; gap: 6px; }
-.hold span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hold b { font-weight: 500; color: var(--t-orange-ink); flex: none; font-family: var(--font); }
+/* A path stacked over its owner, not squeezed onto one row fighting the
+   owner name for space — a truncated path ("klauspl...") tells you
+   nothing, where a wrapped one still names the exact file. This is what
+   lets the sidebar narrow (down to the point the off-canvas tier takes
+   over) without ever losing that information, rather than clipping it. */
+.hold {
+  font-size: 12px; color: var(--ink-2); font-family: var(--mono);
+  display: flex; flex-direction: column; gap: 1px; padding: 2px 0;
+}
+.hold span { overflow-wrap: anywhere; line-height: 1.35; }
+.hold b {
+  font-weight: 500; color: var(--t-orange-ink); font-family: var(--font);
+  font-size: 11px;
+}
 .hold.clash b { color: var(--t-red-ink); }
 .region-idle { font-size: 12px; color: var(--ink-3); }
 
@@ -508,9 +523,54 @@ input, textarea { caret-color: var(--accent); }
 
 .sidebar-scrim { display: none; }
 
-/* ── iPad: the sidebar becomes a panel, the columns swipe ──────────── */
+/* ── half desktop and narrower: columns stack, cards tile ───────────
+   Four columns at their 210px floor plus the Done rail need ~900px, so
+   side-by-side columns stop fitting well before the window is actually
+   narrow. Below that, each column becomes its own full-width section —
+   Backlog, then Ready, then Doing, stacked top to bottom — and instead
+   of a tall vertical list, a section's OWN cards tile left-to-right in
+   a wrapping grid (repeat(auto-fill, ...) sizes the row itself; no
+   further breakpoint needed as the window keeps narrowing). One
+   continuous vertical scroll down the page is the only navigation:
+   nothing to swipe, nothing to scroll sideways, and no per-section
+   scrollbar competing with the page's own. The sidebar has no such
+   floor problem — it keeps its own two-pane grid slot much further
+   down (see the clamp() above and the narrower tier below it) — so
+   this tier is about the BOARD's columns only. */
 @media (max-width: 1099px) {
+  .board { overflow-y: auto; overflow-x: hidden; scroll-snap-type: none; }
+  .cols {
+    display: block; height: auto;
+  }
+  .col {
+    display: block; min-height: 0; width: 100%;
+  }
+  .col + .col { border-left: none; border-top: 1px solid var(--sep-faint); }
+  .drop {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    align-items: start; gap: 8px;
+    overflow: visible; padding: 4px 10px 18px;
+  }
+  .drop:empty { display: none; }
+  .empty, .quick-add { grid-column: 1 / -1; }
+  .card { width: auto; }
+  /* A collapsed Done still reads as a normal section header, full
+     width — the narrow vertical rail was built for a column sitting in
+     a horizontal strip, which no longer exists at this width. */
+  .col.collapsed { width: auto; }
+  .col.collapsed .col-head { flex-direction: row; height: auto; padding: 12px 12px 8px; }
+  .col.collapsed .col-pill { writing-mode: horizontal-tb; padding: 2px 8px; }
+  .col.collapsed .col-head .spacer { display: flex; }
+  .col.collapsed .drop-hint { display: none; }
+}
+
+/* ── narrow: the sidebar becomes a panel ─────────────────────────────
+   Below this the clamp() above would squeeze the sidebar under ~200px,
+   which is where its own rows start wrapping — that is the real signal
+   to switch shape, not an arbitrary tablet-sized number. */
+@media (max-width: 719px) {
   .app { grid-template-columns: minmax(0, 1fr); }
+  #sidebar-toggle { display: grid; }
   .sidebar {
     position: fixed; top: var(--toolbar-h); left: 0; bottom: 0; width: 292px;
     z-index: 45; background: var(--sidebar);
@@ -521,28 +581,13 @@ input, textarea { caret-color: var(--accent); }
   .sidebar-scrim { display: block; position: fixed; inset: var(--toolbar-h) 0 0; background: rgba(15,15,15,.24); z-index: 44; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
   .sidebar-scrim.open { opacity: 1; pointer-events: auto; }
   @media (prefers-reduced-motion: reduce) { .sidebar, .sidebar-scrim { transition: none; } }
-
-  .board { overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; }
-  .cols {
-    grid-template-columns: none; grid-auto-flow: column;
-    grid-auto-columns: min(318px, 84vw);
-    min-width: 100%;
-  }
-  .cols[data-done="open"] { grid-template-columns: none; }
-  .col { scroll-snap-align: start; }
-  .cols .col.collapsed { width: 60px; }
 }
 
 @media (max-width: 599px) {
-  .board { overflow-y: auto; overflow-x: hidden; scroll-snap-type: none; }
-  .cols { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: minmax(0, 1fr); height: auto; }
-  .col { min-height: auto; }
-  .col + .col { border-left: none; border-top: 1px solid var(--sep-faint); }
-  .drop { overflow: visible; padding-bottom: 14px; }
-  .col.collapsed { width: auto; }
-  .col.collapsed .col-head { flex-direction: row; height: auto; }
-  .col.collapsed .col-pill { writing-mode: horizontal-tb; padding: 2px 8px; }
-  .col.collapsed .drop-hint { display: none; }
+  /* One card per row at phone width — minmax(190px,1fr) already lands
+     there naturally on a ~375px viewport, this just makes it explicit
+     rather than relying on the arithmetic to always work out. */
+  .drop { grid-template-columns: minmax(0, 1fr); }
   .drawer { width: 100%; }
   .dw-body { padding: 20px 18px 40px; }
   .dw-body h3 { font-size: 22px; }
@@ -1349,17 +1394,11 @@ $("refresh").onclick = () => load(true);
 $("filter-human").onclick = () => { humanOnly = !humanOnly; render(); };
 $("toggle-done-vis").onclick = () => { doneOpen = !doneOpen; render(); };
 
-// Two-finger trackpad scroll: `.drop`'s own vertical overflow (a column's
-// card list) sits between the cursor and `.board`'s horizontal one, and a
-// gesture the browser reads as "this element can scroll" does not chain to
-// an ancestor on a DIFFERENT axis by itself. A horizontal-dominant wheel
-// delta is forwarded here explicitly; a vertical-dominant one (scrolling
-// down a long column) is left alone so it keeps working exactly as before.
-$("board").addEventListener("wheel", e => {
-  if (Math.abs(e.deltaX) < Math.abs(e.deltaY)) return;
-  e.preventDefault();
-  e.currentTarget.scrollLeft += e.deltaX;
-}, { passive: false });
+// The two-finger horizontal-scroll forwarder that used to live here was
+// for the swiping-columns tier (columns arranged in a horizontal strip
+// below 1100px). That tier is gone -- columns stack and their cards
+// wrap instead -- so .board never overflows horizontally at any width
+// any more, and the forwarder had nothing left to do.
 
 const sbToggle = $("sidebar-toggle");
 const setSidebar = open => {

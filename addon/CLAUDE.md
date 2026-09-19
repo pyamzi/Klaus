@@ -8,6 +8,13 @@ PDF viewer with highlights/sticky notes, and image cropping. Around it:
 kanban board — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
+`PRODUCT.md` says what Klaus is for; `DESIGN.md` is the design language —
+tokens, surfaces, the "Quiet Clinic" brief — **and its star section is
+stale**: six passages still describe a hand-drawn point-down pentagram and
+name `top_bar._STAR_PATH`, but K-270 replaced that on 2026-09-17 with the
+impossible star's five filled paths (`_STAR_PATHS`, sourced from
+`klausmate/web/klaus-logo.svg`). Trust the code over that section until it
+is rewritten.
 
 Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
 capability was semantic search, which defaulted then to the **Voyage**
@@ -163,15 +170,33 @@ holds API keys) stay ignored — never stage those.
 
 - **Run the whole test suite**:
   `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
-- **Run one test file**: `python3 tests/test_klausmate.py` — some need
-  `QT_QPA_PLATFORM=offscreen` for real PyQt6 widgets (see "Anki runtime &
-  testing" below), and a mutation/falsification run should add
-  `PYTHONDONTWRITEBYTECODE=1` to dodge a stale same-second `.pyc`.
+- **Run one test file**: `python3 tests/test_klausmate.py`. The files that
+  need real PyQt6 widgets set `QT_QPA_PLATFORM=offscreen` themselves (12 of
+  the 49 do), so the bare command is enough — see "Anki runtime & testing".
+- **Add `PYTHONDONTWRITEBYTECODE=1` when you re-run a test after editing the
+  module it covers**, not just on a mutation run. This Mac sets
+  `sys.pycache_prefix` to `~/Library/Caches/com.apple.python`, so stale
+  bytecode is written OUTSIDE the repo — an empty `__pycache__` here proves
+  nothing — and CPython validates a `.pyc` on (mtime, size) alone: a
+  same-size edit inside one mtime second silently executes the OLD code and
+  the test passes on it. `scripts/mutation_audit.py` purges both cache roots
+  and aborts on a stray `.pyc` for exactly this reason.
 - **Verify syntax through the symlink Anki actually loads** — do this after
   every `klausmate/*.py` edit (the PostToolUse hook already runs it
   automatically):
   `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`
 - **Build the shippable package**: `./scripts/package.sh` → `dist/klausmate.ankiaddon`
+- **The service is a separate program with its own suite**, never part of the
+  add-on loop above: `service/.venv/bin/python -m pytest -q`, and
+  `DATABASE_PATH=./dev.sqlite3 service/.venv/bin/uvicorn klausplus.main:app
+  --reload --port 8080` to run it locally — the default `DATABASE_PATH` is
+  the Fly volume mount, so a bare `uvicorn` fails on import. Setup, secrets
+  and deploy: `service/README.md`.
+- **The vacuity gate**: `python3 scripts/mutation_audit.py --modules <module>`
+  breaks the code on purpose to find pins that cannot fail (`--list <module>`
+  shows the mutations, `--selftest` checks the tool). It never touches the
+  working tree — every mutation is applied in a sandbox copy, and the repo is
+  hashed before the run and re-hashed in a `finally`.
 - **Board CLI** (see "The agent board" below):
   `python3 board/board.py {list,show,claim,move,comment,check-disjoint}`
 - No linter is configured in this repo.
@@ -185,7 +210,9 @@ serializes writes behind a lockfile; hand-editing BOARD.md to move a card
 will eventually lose a write (card *body* prose may be hand-edited by the
 orchestrator/designer only). Claiming enforces file-disjointness against
 cards already in Doing, and a card's `verify:` command must fail before
-the work and pass after. Roles, columns, and gates: `context/ROLES.md`.
+the work and pass after. Roles, columns, and gates: `context/ROLES.md`;
+the rules a session must hold to share the board safely are the
+`agent-board` skill (`.claude/skills/agent-board/`).
 Dashboard: `python3 board/serve.py --port 8766` → 127.0.0.1:8766
 (preview config "board-dashboard" in `.claude/launch.json`). **Not
 8765** — an unrelated long-running `stream_server.py` owns that port on

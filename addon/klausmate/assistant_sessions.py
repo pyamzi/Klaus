@@ -67,7 +67,11 @@ SYSTEM_PROMPT_FILE = "system_prompt.md"
 # substring match and read the empty result as "the user has no notes on
 # this". The bump is what carries the corrected prompt to a profile that
 # already has the v1 file on disk.
-SYSTEM_PROMPT_VERSION = 2
+# v3 (K-207): search_notes_semantic is the real semantic note search this
+# relabel promised — it embeds the query and ranks the card index. v2 only
+# pointed the model at search_lecture_pdfs (PDF pages) for anything
+# meaning-based; a note-shaped question now has its own semantic tool.
+SYSTEM_PROMPT_VERSION = 3
 
 DEFAULT_PROMPTS = {
     "explain": (
@@ -103,7 +107,7 @@ _SYSTEM_PROMPT_BODY = (
     "\n"
     "Answer from the page and the library first. Cite pages as (p. N). If the material does not contain the answer, say so.\n"
     "\n"
-    "Your mcp__klaus__* tools reach the user's Anki collection: search_notes/find_notes/get_notes (Anki's own search syntax — plain terms are matched as text and ANDed, so use short keywords, not sentences; deck:, tag: and \"quoted phrases\" work), search_lecture_pdfs (the SEMANTIC one — send it a natural-language question), list_decks, list_models, model_fields, add_note, update_note_fields, add_tags, remove_tags, open_in_browse, current_view.\n"
+    "Your mcp__klaus__* tools reach the user's Anki collection: search_notes/find_notes/get_notes (Anki's own search syntax — plain terms are matched as text and ANDed, so use short keywords, not sentences; deck:, tag: and \"quoted phrases\" work), search_notes_semantic (meaning-based search over notes — send it a natural-language question when keywords would miss a paraphrase; empty result means the card index isn't built yet, not that there's nothing there), search_lecture_pdfs (the SEMANTIC one for lecture PDFs — send it a natural-language question), list_decks, list_models, model_fields, add_note, update_note_fields, add_tags, remove_tags, open_in_browse, current_view.\n"
     "\n"
     "Making cards: propose them in prose first; on the user's go-ahead call add_note ONCE PER CARD with deck, model, fields and source_page (the slide it came from). The user approves each card in a dialog; a tool result that says declined or errored means the card was NOT added — never claim otherwise.\n"
 )

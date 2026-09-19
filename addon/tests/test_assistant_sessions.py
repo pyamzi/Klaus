@@ -245,9 +245,13 @@ section("ensure_system_prompt — first write")
 # "semantic" when the handler behind it is Anki's own lexical
 # col.find_notes, so the model sent natural-language questions to a
 # substring-AND search and read the empty result as "no notes on this".
+# v3 since 2026-09-18 (K-207): a real semantic note search
+# (search_notes_semantic) exists now, so the prompt names it as THE
+# semantic note tool rather than only pointing at search_lecture_pdfs.
 # The BUMP is the delivery mechanism — without it a profile that already
-# has the v1 file on disk never sees the correction.
-check("SYSTEM_PROMPT_VERSION is 2", asess.SYSTEM_PROMPT_VERSION == 2)
+# has an older file on disk never sees the correction.
+check("SYSTEM_PROMPT_VERSION is the current version",
+      asess.SYSTEM_PROMPT_VERSION == 3)
 check("no system prompt file exists yet",
       not os.path.isfile(asess.system_prompt_path(tmp)))
 
@@ -258,8 +262,9 @@ check("the file now exists on disk", os.path.isfile(sp_path))
 
 with open(sp_path, encoding="utf-8") as f:
     sp_text = f.read()
-check("starts with the v2 version marker on its own first line",
-      sp_text.startswith("<!-- klaus-system-prompt v2 -->\n"), repr(sp_text[:60]))
+check("starts with the current version marker on its own first line",
+      sp_text.startswith(f"<!-- klaus-system-prompt v{asess.SYSTEM_PROMPT_VERSION} -->\n"),
+      repr(sp_text[:60]))
 check("names the [Klaus context] block", "[Klaus context]" in sp_text)
 check("tells the model to cite pages as (p. N)", "(p. N)" in sp_text)
 check("tells the model about source_page when adding a card",
@@ -292,7 +297,7 @@ asess.ensure_system_prompt(tmp)
 with open(sp_path, encoding="utf-8") as f:
     rewritten = f.read()
 check("a v0 marker triggers a rewrite up to the current version",
-      rewritten.startswith("<!-- klaus-system-prompt v2 -->\n")
+      rewritten.startswith(f"<!-- klaus-system-prompt v{asess.SYSTEM_PROMPT_VERSION} -->\n")
       and "old stale prompt body" not in rewritten, repr(rewritten[:80]))
 
 _write(sp_path, "no marker at all, just some text a hand edit left behind")
@@ -300,7 +305,8 @@ asess.ensure_system_prompt(tmp)
 with open(sp_path, encoding="utf-8") as f:
     rewritten2 = f.read()
 check("a missing marker also triggers a rewrite",
-      rewritten2.startswith("<!-- klaus-system-prompt v2 -->\n"), repr(rewritten2[:60]))
+      rewritten2.startswith(f"<!-- klaus-system-prompt v{asess.SYSTEM_PROMPT_VERSION} -->\n"),
+      repr(rewritten2[:60]))
 
 shutil.rmtree(tmp, ignore_errors=True)
 raise SystemExit(report())

@@ -61,8 +61,13 @@ cd service
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest -q          # the whole suite
-.venv/bin/uvicorn klausplus.main:app --reload --port 8080
+DATABASE_PATH=./dev.sqlite3 .venv/bin/uvicorn klausplus.main:app --reload --port 8080
 ```
+
+`DATABASE_PATH` defaults to `/data/klausplus.sqlite3` (the Fly volume mount —
+see the env var table below); `main.py` builds the app, and its database
+connection, at import time, so without an override uvicorn fails immediately
+with `sqlite3.OperationalError: unable to open database file`.
 
 The add-on's own headless loop is separate and lives at the repo root; this
 suite is never part of it.

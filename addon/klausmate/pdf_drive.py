@@ -1775,6 +1775,11 @@ class DriveWindow(QWidget):
         An empty graph gets pdf_map's own empty-state line rather than a
         blank card: same policy as the standalone window, decided in one
         place each so neither surface invents its own wording.
+
+        Since K-145 this is also the REFRESH landing spot, not just the
+        first build: ``old`` is dropped before anything else so a second
+        call (``_refresh_map``, below) swaps last session's canvas for
+        the fresh one rather than stacking a second widget on top of it.
         """
         try:
             from . import pdf_map
@@ -1782,12 +1787,22 @@ class DriveWindow(QWidget):
             print(f"[klausmate] map import failed: {e}")
             return
         try:
+            old, self.map_canvas = self.map_canvas, None
+            if old is not None:
+                self.map_box.layout().removeWidget(old)
+                old.setParent(None)
+                old.deleteLater()
+
             if not (graph or {}).get("pdfs"):
                 self.map_status.setText(pdf_map.EMPTY_TEXT)
+                self.map_status.setVisible(True)
+                self.map_fit_btn.setEnabled(False)
                 return
             canvas = pdf_map.map_canvas(self.map_box, graph)
             if canvas is None:
                 self.map_status.setText(pdf_map.CANVAS_FAIL_TEXT)
+                self.map_status.setVisible(True)
+                self.map_fit_btn.setEnabled(False)
                 return
             # The canvas declares no size of its own (K-143) — this is
             # where the dock's deliberate floor is applied.
@@ -1803,6 +1818,47 @@ class DriveWindow(QWidget):
                 self._on_viewer_loaded(self._map_last)
         except Exception as e:
             print(f"[klausmate] map install failed: {e}")
+
+    def _refresh_map(self) -> None:
+        """Rebuild the dock's own graph as part of Refresh (K-145).
+
+        ``_ensure_map`` builds this box's graph ONCE per window and
+        never touches it again — board K-143's own closing comment
+        flagged this as a deliberate omission rather than an oversight:
+        "the dock's graph is a per-window snapshot... this becomes cheap
+        once the Map-button async card lands, and should then be wired."
+        K-167 landed the layout cache that makes a warm call to
+        ``pdf_map.graph_data`` ~0.06s instead of ~17-25s cold, so
+        wiring it here is now cheap — but it still runs off the UI
+        thread, on the SAME QueryOp shape ``_ensure_map`` already uses,
+        rather than assume the cache is always warm.
+
+        A no-op when there is no canvas to update at all — a box that
+        is collapsed or never dragged open in this session has nothing
+        on screen to go stale, and paying for a rebuild nobody can see
+        would be exactly the cost K-143 built ``_ensure_map`` to avoid.
+        """
+        if self.map_canvas is None:
+            return
+        if mw is None or mw.col is None:
+            return
+        try:
+            from . import pdf_map
+        except Exception as e:
+            print(f"[klausmate] map refresh unavailable: {e}")
+            return
+
+        def done(graph: dict) -> None:
+            if not self._alive():
+                return
+            self._install_map(graph)
+
+        def fail(exc: Exception) -> None:
+            print(f"[klausmate] map refresh failed: {exc}")
+
+        op = QueryOp(parent=mw, op=lambda _col: pdf_map.graph_data(), success=done)
+        op.failure(fail)
+        op.run_in_background()
 
     def _on_viewer_loaded(self, safe) -> None:
         """The Library's viewer just put ``safe`` on screen (or cleared,
@@ -2179,6 +2235,12 @@ class DriveWindow(QWidget):
         # rebuild_tree preserves expansion/selection/scroll, so frequent
         # watcher-driven rebuilds are visually stable.
         self.rebuild_tree()
+        # K-145: the tree above is not the only thing this window shows
+        # that can go stale — the map dock's graph (if built) is a
+        # snapshot from whenever _ensure_map first ran it. See
+        # _refresh_map's own docstring for why this is only now safe to
+        # wire (it no-ops instantly when there is no canvas to update).
+        self._refresh_map()
         seq = self.seq
 
         def done(out: dict) -> None:

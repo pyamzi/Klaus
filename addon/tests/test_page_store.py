@@ -481,4 +481,107 @@ check("...and mints no directory, least of all the one digest12('') names",
 check("text_digest([]) really is the collision this guards (proof, not assumption)",
       ps.text_digest([]) == ps.digest12(""), (ps.text_digest([]), ps.digest12("")))
 
+section("cached_page_png / store_page_png: PNG cache beside the record (K-230)")
+_pc_root = tempfile.mkdtemp(prefix="klaus-pages-pngcache-")
+_pc_pdf = os.path.join(_pc_root, "lec.pdf")
+open(_pc_pdf, "wb").write(b"%PDF-1.4 pngcache")
+ps.ensure_records(_pc_root, "pc", _pc_pdf, ["Slide text"])
+check("a cache miss answers None", ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0) is None)
+ps.store_page_png(_pc_root, "pc", _pc_pdf, 0, b"FAKEPNGBYTES")
+check("a stored PNG reads back byte for byte",
+      ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0) == b"FAKEPNGBYTES")
+_pc_expect = os.path.join(ps.record_dir(_pc_root, "pc", _pc_pdf), "0000.png")
+check("the cache lives beside the JSON record, same stem, .png extension",
+      os.path.isfile(_pc_expect)
+      and os.path.isfile(os.path.join(os.path.dirname(_pc_expect), "0000.json")))
+check("the write is atomic — no leftover .tmp file", not os.path.isfile(_pc_expect + ".tmp"))
+check("cached_page_png never raises for an unresolvable path — answers None",
+      ps.cached_page_png(_pc_root, "ghost", "", 5) is None)
+_pc_blocked_base = os.path.join(_pc_root, ps.SUBDIR, "blocked")
+os.makedirs(os.path.dirname(_pc_blocked_base), exist_ok=True)
+open(_pc_blocked_base, "w").write("a file sitting where the record dir needs to be a directory")
+_pc_store_raised = False
+try:
+    ps.store_page_png(_pc_root, "blocked", "/nonexistent/blocked.pdf", 0, b"x")
+except Exception:
+    _pc_store_raised = True
+check("store_page_png never raises into the caller, even when the write fails",
+      not _pc_store_raised)
+
+section("_page_context (assistant_dock) caches render_page_png results (K-230)")
+assistant_dock = importlib.import_module("klausmate.assistant_dock")
+
+
+class _FakeSelf:
+    def __init__(self, user_files):
+        self._user_files = user_files
+
+
+class _FakeView:
+    def __init__(self, pdf_safe, path, page_index=0):
+        self.pdf_safe = pdf_safe
+        self.path = path
+        self.page_index = page_index
+
+
+_ad_root = tempfile.mkdtemp(prefix="klaus-pages-adctx-")
+_ad_pdf = os.path.join(_ad_root, "lec.pdf")
+open(_ad_pdf, "wb").write(b"%PDF-1.4 adctx")
+ps.ensure_records(_ad_root, "ad", _ad_pdf, ["Slide text for the assistant"])
+
+_render_calls: list = []
+_orig_render = ps.render_page_png
+ps.render_page_png = lambda path, page_index: (_render_calls.append((path, page_index)) or b"RENDERED-PNG")
+try:
+    ctx1 = assistant_dock.AssistantDock._page_context(_FakeSelf(_ad_root), _FakeView("ad", _ad_pdf))
+    check("a cache miss renders once and returns the render's bytes",
+          ctx1["png"] == b"RENDERED-PNG" and len(_render_calls) == 1)
+    check("...and the render is now cached on disk beside the page record",
+          ps.cached_page_png(_ad_root, "ad", _ad_pdf, 0) == b"RENDERED-PNG")
+
+    ctx2 = assistant_dock.AssistantDock._page_context(_FakeSelf(_ad_root), _FakeView("ad", _ad_pdf))
+    check("a cache hit returns the cached bytes WITHOUT calling render_page_png again",
+          ctx2["png"] == b"RENDERED-PNG" and len(_render_calls) == 1)
+finally:
+    ps.render_page_png = _orig_render
+
+section("_page_context degrades gracefully on cache-store or cache-read failure (K-230)")
+_ad_root2 = tempfile.mkdtemp(prefix="klaus-pages-adctx2-")
+_ad_pdf2 = os.path.join(_ad_root2, "lec.pdf")
+open(_ad_pdf2, "wb").write(b"%PDF-1.4 adctx2")
+ps.ensure_records(_ad_root2, "ad2", _ad_pdf2, ["Slide text two"])
+
+_orig_store = ps.store_page_png
+
+
+def _boom_store(*a, **k):
+    raise RuntimeError("disk full")
+
+
+ps.store_page_png = _boom_store
+_render_calls2: list = []
+ps.render_page_png = lambda path, page_index: (_render_calls2.append(1) or b"RENDERED-2")
+try:
+    ctx3 = assistant_dock.AssistantDock._page_context(_FakeSelf(_ad_root2), _FakeView("ad2", _ad_pdf2))
+    check("a cache-store failure still returns this turn's freshly rendered PNG — never breaks the send",
+          ctx3["png"] == b"RENDERED-2")
+finally:
+    ps.render_page_png = _orig_render
+    ps.store_page_png = _orig_store
+
+_orig_cached = ps.cached_page_png
+
+
+def _boom_cached(*a, **k):
+    raise RuntimeError("read exploded")
+
+
+ps.cached_page_png = _boom_cached
+try:
+    ctx4 = assistant_dock.AssistantDock._page_context(_FakeSelf(_ad_root2), _FakeView("ad2", _ad_pdf2))
+    check("a cache-read failure never breaks the turn — degrades to no image, text still goes out",
+          ctx4["png"] is None and ctx4["text"] == "Slide text two")
+finally:
+    ps.cached_page_png = _orig_cached
+
 raise SystemExit(report())

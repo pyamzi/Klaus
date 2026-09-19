@@ -318,6 +318,51 @@ check("empty text is 0.0, never a division by zero",
       duplicates.lexical_overlap("", "abc") == 0.0)
 
 
+# ------------------------------------------------------- calibration
+section("calibration: tiers vs. the model that actually made the vectors")
+
+check("DEFAULT_TIERS carries the signature the band edges were read off",
+      duplicates.DEFAULT_TIERS.calibration == duplicates.CALIBRATION_SIGNATURE)
+check("...and that signature names the local model these floors were "
+      "measured under (see the module docstring): ollama/"
+      "nomic-embed-text:latest @ 768 dims",
+      duplicates.CALIBRATION_SIGNATURE
+      == ("ollama", "nomic-embed-text:latest", 768))
+
+calibrated_ix = build_index(n=8, d=768, provider="ollama",
+                            model="nomic-embed-text:latest")
+openai_ix = build_index(n=8, d=1024, provider="openai",
+                        model="text-embedding-3-large")
+check("an index actually built by the calibrated model reports calibrated",
+      duplicates.tiers_calibrated(calibrated_ix))
+check("today's real index — OpenAI text-embedding-3-large at 1024 dims — "
+      "reports UNCALIBRATED, which is the whole point of this card",
+      not duplicates.tiers_calibrated(openai_ix))
+check("no index at all is never calibrated",
+      not duplicates.tiers_calibrated(None))
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    duplicates.duplicates_of(openai_ix, openai_ix.nids[0], threshold=0.0)
+    duplicates.duplicates_of(openai_ix, openai_ix.nids[0], threshold=0.0)
+    duplicates.scan_index(openai_ix, threshold=0.0, hamming_cut=openai_ix.dims)
+out = buf.getvalue()
+check("the mismatch is logged once per distinct index signature, house "
+      "style (print('[klausmate] ...')), not once per call",
+      out.count("[klausmate]") == 1)
+check("...and it names both the calibrated model and the actual one",
+      "nomic-embed-text" in out and "text-embedding-3-large" in out)
+
+buf2 = io.StringIO()
+with contextlib.redirect_stdout(buf2):
+    duplicates.duplicates_of(calibrated_ix, calibrated_ix.nids[0], threshold=0.0)
+check("a calibrated index never logs a mismatch it doesn't have",
+      "[klausmate]" not in buf2.getvalue())
+
+
 # ------------------------------------------------------------ house rules
 section("house rules")
 

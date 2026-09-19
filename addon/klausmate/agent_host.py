@@ -531,7 +531,14 @@ class AgentHost:
                         if behavior == "deny":
                             self._cb["permission_denied"](name)
                     elif kind == "result":
-                        self._running = False
+                        # Same generation compare as the `finally` block
+                        # below (K-282): a respawn (start()) may have bumped
+                        # self._generation past this thread's own captured
+                        # value by the time a "result" line is processed,
+                        # and self._running by then belongs to the NEW
+                        # child, not this one.
+                        if self._generation == generation:
+                            self._running = False
                         if payload["session_id"]:
                             self.session_id = payload["session_id"]
                         self._cb["result"](payload)
@@ -540,7 +547,18 @@ class AgentHost:
         except Exception as exc:
             self._cb["error"](f"stream read failed: {exc}")
         finally:
-            self._running = False
+            # K-282: this reader thread's own captured `generation` (set at
+            # the top of _read) may be stale by now — _drain_stderr, right
+            # below, joins self._stderr_thread, which is the SUCCESSOR's
+            # stderr thread once a respawn has happened (the exact delay
+            # K-211 documented one level up, for the dock's own `exited`
+            # callback). Writing self._running = False here unconditionally
+            # would clear it on the object that now describes the LIVE,
+            # later-generation child — and stop() no-ops once _running is
+            # False, so the live child could never be stopped from the UI
+            # until it exited on its own.
+            if self._generation == generation:
+                self._running = False
             self._drain_stderr()
             rc = None
             try:

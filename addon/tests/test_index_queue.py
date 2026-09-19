@@ -327,12 +327,26 @@ class Pipeline:
         self.doubtful_seen = []  # the doubtful= kwarg each tag write actually got
         self._doubtful_raises = None  # one-shot exception for doubtful_members
         self._judge_raises = None  # one-shot exception for ensure_judged (fix round 1, C1)
+        # K-237: card_index_from_scratch's whole read. Defaults to a FRESH,
+        # matching manifest (the current index_signature() for a bare
+        # {"api_key_openai": "sk"} cfg) so every pre-existing test above —
+        # none of which knows this gate exists — keeps calling ensure_index
+        # straight through, with no confirm in the way.
+        self._index_stats = {
+            "exists": True,
+            "provider": "openai",
+            "model": "text-embedding-3-large",
+            "dims": 0,
+        }
 
     # -- curation ------------------------------------------------------
     def ensure_index(self, _parent, *, on_progress=None, on_done=None, on_error=None, cancel=None):
         self.calls.append(("ensure_index", ""))
         self.cancels.append(cancel)
         self.pending["cards"] = (on_done, on_error, on_progress)
+
+    def index_stats(self):
+        return dict(self._index_stats)
 
     # -- retention -----------------------------------------------------
     def ensure_pdf_index(self, _parent, name, *, on_progress=None, on_done=None, on_error=None, cancel=None):
@@ -1021,6 +1035,184 @@ check(
     "~0 tokens because one SQL call happened to fail",
     _captured_estimate.get("estimate") == "cost unknown for this model",
     f"got {_captured_estimate!r}",
+)
+
+
+# ----------------------------------------------------- K-237: the card-index
+# ------------------------------------------------------------ confirm gate
+#
+# offer_model_sweep's own confirm has no teeth: declining it leaves the card
+# index stale, and the VERY NEXT PDF add runs curation.ensure_index as phase
+# one of this same chain — which has no price gate of its own, so a stale
+# or missing index makes that a from-scratch re-embed of the whole
+# collection, silently. These pins drive that phase-one call site with a
+# fake QMessageBox (the sweep tests' own pattern) so the confirm can be
+# answered without real Qt.
+
+section("K-237: the card-index confirm")
+
+_RealBox2 = iq.QMessageBox
+
+
+class _ConfirmBox:
+    """Stands in for QMessageBox wherever ask_card_index_confirm builds
+    one: records the two buttons `addButton` mints and lets the test fire
+    `finished` as though a specific one were clicked — the shape
+    `ask_card_index_confirm`/`ask_judge` both use (Embed/Skip, Judge/Skip),
+    never a bare Yes/No."""
+
+    Icon = _RealBox2.Icon
+    ButtonRole = _RealBox2.ButtonRole
+    last = None
+
+    def __init__(self, _parent=None):
+        self.finished = _FakeSignal()
+        self.buttons = {}
+        self.clicked = None
+        _ConfirmBox.last = self
+
+    def addButton(self, text, _role):
+        btn = object()
+        self.buttons[text] = btn
+        return btn
+
+    def clickedButton(self):
+        return self.clicked
+
+    def click(self, text):
+        self.clicked = self.buttons[text]
+        for cb in list(self.finished.cbs):
+            cb(0)
+
+    def __getattr__(self, _name):  # setWindowTitle/setIcon/setText/…
+        return lambda *_a, **_k: None
+
+
+def _install_confirm_box():
+    iq.QMessageBox = _ConfirmBox
+    _ConfirmBox.last = None
+
+
+def _restore_confirm_box():
+    iq.QMessageBox = _RealBox2
+
+
+PLUS_CFG = {"api_key_openai": "sk", "klaus_plus_key": "kp_" + "f" * 32}
+
+# -- the gate detection itself, in isolation --------------------------------
+
+tmp, pipe = new_world()
+check(
+    "a fresh, signature-matching manifest is not a from-scratch embed",
+    iq.card_index_from_scratch(iq._cfg()) is False,
+)
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+check(
+    "no manifest on disk at all IS one",
+    iq.card_index_from_scratch(iq._cfg()) is True,
+)
+pipe._index_stats = {"exists": True, "provider": "voyage", "model": "voyage-3-lite", "dims": 0}
+check(
+    "a manifest under the OLD provider/model is one too — the same "
+    "signature comparison offer_model_sweep's own trigger uses, not a "
+    "hand-spelled tuple check",
+    iq.card_index_from_scratch(iq._cfg()) is True,
+)
+
+# -- wired into phase one: the RED case this card exists to fix -------------
+
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+check(
+    "a from-scratch card index asks BEFORE curation.ensure_index ever "
+    "runs — the confirm this card adds, where before there was none",
+    pipe.calls == [] and _ConfirmBox.last is not None,
+    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
+)
+_ConfirmBox.last.click("Skip")
+check(
+    "declining never calls ensure_index — the whole point of the gate: a "
+    "silent PDF add must not spend money nobody was asked about",
+    ("ensure_index", "") not in pipe.calls,
+    repr(pipe.calls),
+)
+check(
+    "...but the rest of the chain still runs, degraded rather than "
+    "aborted — pertinence's own Skip precedent: a declined phase does not "
+    "crash or hang the PDF add, the phases after it still see whatever "
+    "data already exists",
+    pipe.calls == [("ensure_pdf_index", "a")],
+    repr(pipe.calls),
+)
+pipe.finish_pdf()
+pipe.finish_matches()
+pipe.finish_judge()
+check(
+    "...through to completion, PDF tagged and all",
+    pipe.calls[-1] == ("tag_sync", "a") and iq.state().finished == "a",
+    repr(pipe.calls),
+)
+_restore_confirm_box()
+
+# -- accepting the confirm really does embed --------------------------------
+
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+_ConfirmBox.last.click("Embed")
+check(
+    "accepting DOES call ensure_index, exactly as the old unconfirmed "
+    "path used to",
+    pipe.calls == [("ensure_index", "")],
+    repr(pipe.calls),
+)
+run_one(pipe, "a")
+check("...and the chain completes normally", pipe.calls[-1] == ("tag_sync", "a"))
+_restore_confirm_box()
+
+# -- Klaus Plus: unmetered, so no confirm at all -----------------------------
+
+tmp, pipe = new_world(cfg=PLUS_CFG)
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+check(
+    "on Klaus Plus embedding is unmetered — the exact same "
+    "offer_model_sweep skips its own priced estimate for, extended here: "
+    "no confirm, straight to ensure_index",
+    pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None,
+    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
+)
+_restore_confirm_box()
+
+# -- a plain card-index sweep job never double-confirms ----------------------
+
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request([(iq.JOB_CARDS, "")], announce=False)
+FakeTimer.drain()
+check(
+    "a bare JOB_CARDS entry (offer_model_sweep's OWN priced confirm "
+    "already asked, in Preferences, before this ever reaches the queue) "
+    "is never asked a SECOND time here — only a PDF's own silent phase "
+    "one is gated",
+    pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None,
+    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
+)
+_restore_confirm_box()
+
+check(
+    "the phrase this card's verify grep looks for actually names the "
+    "confirm's own purpose in the source, not just satisfies the grep "
+    "by accident",
+    "card-index confirm" in open(os.path.join(ADDON, "index_queue.py")).read(),
 )
 
 

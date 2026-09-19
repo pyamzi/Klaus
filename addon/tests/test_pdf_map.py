@@ -2053,6 +2053,94 @@ if _HAVE_QT:
         _app.processEvents()
         check("hiding it stops the timer dead", not _spin._idle.isActive())
 
+        # ---- K-214: hover must re-track the sway, not just mouseMoveEvent ----
+        # Final review 2026-09-02 M3 (accepted as polish, not fixed): the
+        # sway moves every projected node's screen position every frame,
+        # but hover was only ever recomputed from a mouseMoveEvent — so a
+        # perfectly STILL pointer can be left lit over a node that has
+        # since drifted out from under it (or dark over one that drifted
+        # in). ``_idle_tick`` has to re-hit-test the LAST KNOWN cursor
+        # position on every tick, never just repaint.
+        _hov = pdf_map.map_canvas(None, CLOUD)
+        _hov.show()
+        _hov.resize(700, 460)
+        _hov._reduce_motion = lambda: False
+        _app.processEvents()
+        _hov._ensure_fit(700.0, 460.0)
+        _hx0, _hy0, _ = pdf_map.project_point(
+            _hov._vp, _hov._cam, *_hov._pdf_xyz["lec1"])
+        # Force the cursor onto the node WITHOUT going through a real
+        # QMouseEvent — _update_hover never reads its ``event`` argument,
+        # only px/py, so this reproduces exactly what a real
+        # mouseMoveEvent there would have done, INCLUDING recording
+        # _last_mouse (K-214's own fix), the one thing this test exists
+        # to exercise.
+        _hov._update_hover(_hx0, _hy0, None)
+        _hov._last_mouse = (_hx0, _hy0)
+        check("a still pointer sitting over a node hovers it",
+              _hov._hover == "lec1")
+        # Advance the sway PHASE DIRECTLY (never the widget's own real
+        # QTimer, which runs on wall-clock time and is not reproducible)
+        # until the node's projected position has drifted outside the
+        # canvas's own hit radius of the screen point the pointer never
+        # left.
+        _drifted = False
+        for _ in range(400):
+            _hov._phase = (
+                (_hov._phase + pdf_map.IDLE_TICK_MS) % pdf_map.SWAY_PERIOD_MS
+            )
+            _hov._cam = pdf_map.Camera(
+                pdf_map.sway_angle(_hov._phase), _hov._cam.distance)
+            _hx1, _hy1, _ = pdf_map.project_point(
+                _hov._vp, _hov._cam, *_hov._pdf_xyz["lec1"])
+            if math.hypot(_hx1 - _hx0, _hy1 - _hy0) > _hov._hit_radius + 1.0:
+                _drifted = True
+                break
+        check("(sanity: the sway genuinely carries the node's screen "
+              "position outside a motionless pointer's hit radius — "
+              "otherwise this test would prove nothing)", _drifted)
+        _hov._idle_tick()
+        check("K-214: one sway tick re-hit-tests the LAST KNOWN cursor "
+              "position, so a pointer that never moved un-hovers a node "
+              "that has drifted out from under it",
+              _hov._hover != "lec1", f"hover={_hov._hover!r}")
+        # ...and the reverse: a still pointer sitting where NOTHING was,
+        # over which the sway then carries a node — the lit state must
+        # follow there too, not just clear.
+        _hov2 = pdf_map.map_canvas(None, CLOUD)
+        _hov2.show()
+        _hov2.resize(700, 460)
+        _hov2._reduce_motion = lambda: False
+        _app.processEvents()
+        _hov2._ensure_fit(700.0, 460.0)
+        _hx2, _hy2, _ = pdf_map.project_point(
+            _hov2._vp, _hov2._cam, *_hov2._pdf_xyz["lec1"])
+        # A point just past the hit radius — not hovering yet.
+        _hov2._update_hover(_hx2 + _hov2._hit_radius + 6.0, _hy2, None)
+        _hov2._last_mouse = (_hx2 + _hov2._hit_radius + 6.0, _hy2)
+        check("(sanity: starting position is NOT already a hover)",
+              _hov2._hover is None)
+        _arrived = False
+        for _ in range(400):
+            _hov2._phase = (
+                (_hov2._phase + pdf_map.IDLE_TICK_MS) % pdf_map.SWAY_PERIOD_MS
+            )
+            _hov2._cam = pdf_map.Camera(
+                pdf_map.sway_angle(_hov2._phase), _hov2._cam.distance)
+            _hx3, _hy3, _ = pdf_map.project_point(
+                _hov2._vp, _hov2._cam, *_hov2._pdf_xyz["lec1"])
+            if math.hypot(_hx3 - (_hx2 + _hov2._hit_radius + 6.0),
+                          _hy3 - _hy2) <= _hov2._hit_radius:
+                _arrived = True
+                break
+        check("(sanity: the sway carries the node back under that same "
+              "still point)", _arrived)
+        _hov2._idle_tick()
+        check("...and lights up a node the sway just carried UNDER a "
+              "pointer that never moved, the same way it un-lights one "
+              "the sway carried away",
+              _hov2._hover == "lec1", f"hover={_hov2._hover!r}")
+
         _rm = pdf_map.map_canvas(None, CLOUD)
         _rm.show()
         _rm.resize(400, 300)

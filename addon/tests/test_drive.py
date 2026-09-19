@@ -2259,10 +2259,12 @@ check("a shut box leaves ONLY the splitter handle behind, so the handle "
       "setHandleWidth" in _D143 and "handle.setToolTip(" in _D143)
 check("the 17 s graph build NEVER runs inline — it is a QueryOp op, "
       "mw-parented like _refresh_rows', or the Library would freeze on "
-      "every open",
-      re.search(r"QueryOp\(\s*parent=mw,\s*op=lambda _col: "
-                r"pdf_map\.graph_data\(\)", _D143) is not None
-      and _D143.count("graph_data()") == 1)
+      "every open. K-145 added a SECOND call site (Refresh's own "
+      "rebuild) — both must still be inline as this exact QueryOp "
+      "shape, never a third, bare kind of call to graph_data()",
+      len(re.findall(r"QueryOp\(\s*parent=mw,\s*op=lambda _col: "
+                      r"pdf_map\.graph_data\(\)", _D143)) == 2
+      and _D143.count("graph_data()") == 2)
 
 if _HAVE_QT:
     try:
@@ -2515,6 +2517,151 @@ if _HAVE_QT:
         check(f"K-143 offscreen dock checks ran ({_e143})", False)
 else:
     print("  SKIP: PyQt6 unavailable — K-143 source pins above still ran")
+
+
+print("== K-145 (1): Refresh also rebuilds the dock's OWN map, once built ==")
+# board/ARCHIVE.md, K-143's closing comment: "K-145 (Refresh does not
+# rebuild the dock's graph; collapse is drag-only)". Only the first half
+# is in scope here — the second (a chevron affordance for the drag-only
+# collapse handle) is Pouya's own call to make once he has used it, not
+# something to build. The dock's graph (self.map_canvas, built once by
+# _ensure_map) was a PER-WINDOW SNAPSHOT: a re-index or a match-set edit
+# left it showing a stale picture until the Library was closed and
+# reopened. K-167's layout cache (pdf_graph.py's LAYOUT_SUBDIR/LAYOUT_FILE)
+# already makes a warm graph_data() ~0.06s instead of ~17-25s cold, which
+# is exactly the "becomes cheap" condition the card names — so Refresh
+# now also queues a map rebuild, off the UI thread, the same QueryOp
+# shape _ensure_map already uses, and only when a canvas is actually
+# there to update (a collapsed-and-never-built box costs nothing, same
+# as _ensure_map's own guard).
+_D145 = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+check("_refresh_rows calls a dedicated map-refresh seam",
+      "def _refresh_rows" in _D145 and "_refresh_map()" in _D145
+      and "def _refresh_map" in _D145)
+check("the map refresh is its own QueryOp — never inline on the caller "
+      "of _refresh_rows, or a Refresh click would freeze the Library",
+      re.search(r"def _refresh_map.*?QueryOp\(\s*parent=mw,\s*op=lambda "
+                r"_col: pdf_map\.graph_data\(\)", _D145, re.S) is not None)
+
+if _HAVE_QT:
+    try:
+        _uf145 = tempfile.mkdtemp(prefix="klaus_k145_uf_")
+        os.makedirs(os.path.join(_uf145, "contexts"), exist_ok=True)
+        _prev145 = pkg.USER_FILES
+        pkg.USER_FILES = _uf145
+        pdf_map = importlib.import_module("klausmate.pdf_map")
+
+        def _g145(safe):
+            return {
+                "pdfs": [{"safe": safe, "display": safe, "folder": None,
+                          "threshold": .4, "retention": None,
+                          "xy": [-0.2, 0.1], "match_count": 3}],
+                "notes": [{"nid": i, "xy": [i / 20.0 - 1.0, 0.0]}
+                          for i in range(10)],
+                "edges": [{"pdf": safe, "nid": i, "score": .9}
+                          for i in range(3)],
+            }
+
+        _G145 = _g145("lec1")
+
+        _seen145 = []
+
+        class _RecordQueryOp145:
+            def __init__(self, parent=None, op=None, success=None):
+                self._op, self._success = op, success
+                _seen145.append(self)
+
+            def failure(self, cb):
+                self._failure = cb
+                return self
+
+            def run_in_background(self):
+                pass
+
+        _oldq145, _oldmw145 = pdf_drive.QueryOp, pdf_drive.mw
+        _oldgd145 = pdf_map.graph_data
+        _graph_calls = []
+        pdf_map.graph_data = lambda: (_graph_calls.append(1), _G145)[1]
+
+        def _map_ops_since(mark):
+            """How many QueryOps queued since ``mark`` reach
+            pdf_map.graph_data when actually run — mirrors K-143's own
+            _hits_graph_data/_map_ops helpers, since _refresh_rows queues
+            a retention.priority_rows op too and only one of the two
+            queued here is the map's."""
+            found = 0
+            for rec in _seen145[mark:]:
+                before = len(_graph_calls)
+                try:
+                    result = rec._op(object())
+                except Exception:
+                    continue
+                if len(_graph_calls) > before:
+                    found += 1
+                    if rec._success:
+                        rec._success(result)
+            return found
+
+        try:
+            pdf_drive.QueryOp = _RecordQueryOp145
+            pdf_drive.mw = types.SimpleNamespace(col=object())
+
+            # ---- positive: a window whose map dock is already built ----
+            _w145 = pdf_drive.DriveWindow()
+            app.processEvents()
+            _w145._install_map(_G145)
+            app.processEvents()
+            check("setup: the dock's map is really built before Refresh runs",
+                  _w145.map_canvas is not None
+                  and "lec1" in _w145.map_canvas._pdf_by_safe)
+
+            # The graph now on disk has changed (a re-index dropped lec1
+            # and picked up lec2) — a real rebuild has to notice that,
+            # not just repaint the same stale canvas.
+            pdf_map.graph_data = lambda: (_graph_calls.append(1), _g145("lec2"))[1]
+
+            _mark = len(_seen145)
+            _w145._refresh_rows()
+            app.processEvents()
+            check("RED-then-GREEN: Refresh with an open map queues a "
+                  "graph_data rebuild for the dock too, not just the "
+                  "tree's own retention pass",
+                  _map_ops_since(_mark) == 1,
+                  f"map ops queued by _refresh_rows = {_map_ops_since(_mark)}")
+            check("...and the rebuilt graph actually REPLACES the canvas "
+                  "content (lec2, not last session's lec1) — a real "
+                  "repaint, not just a queued no-op",
+                  _w145.map_canvas is not None
+                  and "lec2" in _w145.map_canvas._pdf_by_safe
+                  and "lec1" not in _w145.map_canvas._pdf_by_safe,
+                  f"pdfs on canvas = {list(_w145.map_canvas._pdf_by_safe)}")
+
+            # ---- negative: no map open yet — Refresh must not crash on
+            # a None canvas, and must not waste a rebuild nobody sees ----
+            _w145b = pdf_drive.DriveWindow()
+            app.processEvents()
+            check("setup: a freshly opened window has no map canvas yet "
+                  "(collapsed by default / not yet built)",
+                  _w145b.map_canvas is None)
+            _mark_b = len(_seen145)
+            _w145b._refresh_rows()
+            app.processEvents()
+            check("Refresh with no map open never touches graph_data — "
+                  "no crash, no wasted rebuild of a picture nobody sees",
+                  _map_ops_since(_mark_b) == 0,
+                  f"map ops queued = {_map_ops_since(_mark_b)}")
+
+            _w145.close()
+            _w145b.close()
+        finally:
+            pdf_drive.QueryOp, pdf_drive.mw = _oldq145, _oldmw145
+            pdf_map.graph_data = _oldgd145
+        pkg.USER_FILES = _prev145
+        shutil.rmtree(_uf145, ignore_errors=True)
+    except Exception as _e145:  # noqa: BLE001
+        check(f"K-145 offscreen dock-refresh checks ran ({_e145})", False)
+else:
+    print("  SKIP: PyQt6 unavailable — K-145 source pins above still ran")
 
 
 print("== K-173: the embedded Library opens a PDF — the viewer came back ==")

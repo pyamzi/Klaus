@@ -1,5 +1,6 @@
 """anki_endpoint — the AnkiConnect-compatible server, hit over real HTTP."""
-import json, socket, sys, threading, time, urllib.request, urllib.error
+import json, os, shutil, socket, sys, tempfile, threading, time, urllib.request, urllib.error
+from array import array
 
 sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, code_only, install, report, section
@@ -10,6 +11,23 @@ ep = importlib.import_module("klausmate.anki_endpoint")
 # Committed separately (Task 5/K-196) but landed by the time this fix round
 # runs; real module, no stub needed — pure dict state, no aqt.
 viewer_context = importlib.import_module("klausmate.viewer_context")
+# K-207: the semantic note search builds a real card_index fixture on disk
+# and stubs the embedding call (same pattern test_anki_tools.py already
+# uses for _semantic_pdf_search) — no network, no API key, no paid call.
+# Patching these module attributes (rather than anything on `ep`) is
+# deliberate: anki_endpoint._a_klaus_search_notes_semantic does `from .
+# import embeddings` INSIDE the handler on every call, which just rebinds
+# to whatever is already in sys.modules — so the real module object,
+# never an `ep.embeddings` attribute (there isn't one), is what has to be
+# patched for the handler to see the fakes.
+card_index = importlib.import_module("klausmate.card_index")
+embeddings = importlib.import_module("klausmate.embeddings")
+# install() gives klausmate a synthetic __init__ (real klausmate/__init__.py
+# is never executed, since importing submodules never needs it) — it has no
+# get_config of its own, same gap test_anki_tools.py fills the same way.
+# _a_klaus_search_notes_semantic calls pkg.get_config() the same way
+# anki_tools._semantic_pdf_search does.
+importlib.import_module("klausmate").get_config = lambda: {}
 
 # The task brief's own plan was to reuse tests/test_anki_tools.py's Col
 # stub (`sys.path.insert(0, "tests"); from test_anki_tools import Col`), but
@@ -203,7 +221,12 @@ def approver(title, sections):
     approvals.append((title, sections)); return approver.answer
 approver.answer = True
 def run_on_main(fn, timeout): return fn()
-def ctx_factory(): return {"strip": lambda s: s, "confirm": lambda *a: True, "user_files": "/tmp/none", "search_pdfs": lambda q, k: []}
+# A real temp dir, not the old placeholder "/tmp/none": K-207's semantic
+# note search reads a real card_index/ off ctx["user_files"] (the exact
+# same seam _semantic_pdf_search already uses), so it needs somewhere
+# real to look — every other action still ignores this path entirely.
+_uf_dir = tempfile.mkdtemp(prefix="klaus-ep-test-")
+def ctx_factory(): return {"strip": lambda s: s, "confirm": lambda *a: True, "user_files": _uf_dir, "search_pdfs": lambda q, k: []}
 end = ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main, approver=approver, ctx_factory=ctx_factory, version="0.1.3")
 host, port, token = end.start()
 
@@ -571,6 +594,110 @@ check("klausCurrentView without a viewer → null result, no error", ac("klausCu
 r = ac("klausSearchNotes", query="renal", limit=5)
 check("klausSearchNotes routes to anki_tools.search_notes", r["error"] is None and isinstance(r["result"], list))
 
+section("K-207: real semantic note search (klausSearchNotesSemantic)")
+# A second note besides Col2's note 1, so ranking has something to prove.
+col.notes[2] = Note2(fields={"Front": "Something about kidneys", "Back": "Renal physiology."}, tags=["renal"])
+col.notes[2].id = 2
+
+_card_index_dir = os.path.join(_uf_dir, "card_index")
+_sem_idx = card_index.CardIndex(provider="openai", model="m", dims=2)
+_sem_idx.nids = [1, 2]
+_sem_idx.mods = [1, 1]
+_sem_idx.hashes = ["h1", "h2"]
+_sem_idx.vectors = array("f", [1.0, 0.0, 0.0, 1.0])  # row 0 -> note 1, row 1 -> note 2
+card_index.save(_sem_idx, _card_index_dir)
+
+_orig_provider_from_config = embeddings.provider_from_config
+_orig_index_signature = embeddings.index_signature
+
+
+class _FakeSemProvider:
+    def __init__(self, vec):
+        self._vec = list(vec)
+
+    def embed(self, texts, kind="query"):
+        return [self._vec]
+
+
+class _FailingSemProvider:
+    def embed(self, texts, kind="query"):
+        raise embeddings.EmbeddingError(
+            "OpenAI API key is not set — add it in KlausMate Preferences "
+            "→ API keys & models.", provider="OpenAI", status=401)
+
+
+try:
+    # The query vector [0, 1] is engineered to match note 2's row exactly
+    # (score 1.0) and note 1's row not at all (score 0.0) — same
+    # engineered-vector trick test_anki_tools.py uses for _semantic_pdf_search.
+    embeddings.provider_from_config = lambda get_config: _FakeSemProvider([0.0, 1.0])
+    embeddings.index_signature = lambda cfg: ("openai", "m", 2)
+    r = ac("klausSearchNotesSemantic", query="tell me about the kidneys", limit=5)
+    check("klausSearchNotesSemantic embeds the query and ranks the CARD index (card_index.top_k), not the PDF one",
+          r["error"] is None and isinstance(r["result"], list) and len(r["result"]) == 2)
+    check("...note 2 (the engineered exact match) is ranked first, with a score",
+          r["result"][0]["note_id"] == 2 and "score" in r["result"][0]
+          and r["result"][0]["score"] > r["result"][1]["score"])
+    check("...result shape is the lexical tool's shape plus a score",
+          set(r["result"][0]) == {"note_id", "note_type", "preview", "tags", "score"}
+          and r["result"][0]["tags"] == ["renal"])
+
+    # "index stale -> skip" rule (same one _semantic_pdf_search and
+    # curation.ensure_index apply): a signature that does not match the
+    # on-disk card index answers an empty list, never a crash or garbage
+    # ranks scored in the wrong embedding space.
+    embeddings.index_signature = lambda cfg: ("openai", "some-other-model", 2)
+    r_stale = ac("klausSearchNotesSemantic", query="tell me about the kidneys")
+    check("a card index built on a different embedding signature is SKIPPED cleanly: empty list, no error",
+          r_stale == {"result": [], "error": None})
+
+    # A missing card index entirely (nothing ever built) is the same clean
+    # "skip" answer, not a FileNotFoundError.
+    embeddings.index_signature = lambda cfg: ("openai", "m", 2)
+    _missing_uf = tempfile.mkdtemp(prefix="klaus-ep-test-noindex-")
+    try:
+        end2 = ep.Endpoint(col_getter=lambda: col, run_on_main=run_on_main, approver=approver,
+                            ctx_factory=lambda: {"strip": lambda s: s, "confirm": lambda *a: True,
+                                                  "user_files": _missing_uf, "search_pdfs": lambda q, k: []},
+                            version="0.1.3")
+        r_missing = end2.handle("klausSearchNotesSemantic", {"query": "anything"}, agent=False)
+        check("no card index on disk at all -> empty list, not a crash",
+              r_missing == {"result": [], "error": None})
+    finally:
+        shutil.rmtree(_missing_uf, ignore_errors=True)
+
+    # Same embed-call pattern as _semantic_pdf_search: a provider failure
+    # (e.g. no API key) surfaces its OWN clean message, unprefixed — the
+    # same treatment ActionError/ToolError already get in Endpoint.handle.
+    embeddings.provider_from_config = lambda get_config: _FailingSemProvider()
+    r_err = ac("klausSearchNotesSemantic", query="tell me about the kidneys")
+    check("an embedding failure (no key) answers the provider's own clean message, no 'EmbeddingError:' prefix",
+          r_err["result"] is None
+          and r_err["error"] == "OpenAI API key is not set — add it in KlausMate Preferences → API keys & models."
+          and "EmbeddingError" not in r_err["error"])
+
+    # A blank query is rejected before any embedding call is made.
+    embeddings.provider_from_config = lambda get_config: _FakeSemProvider([0.0, 1.0])
+    r_blank = ac("klausSearchNotesSemantic", query="  ")
+    check("a blank query is refused with a clean error, no embed call attempted",
+          r_blank["error"] == "query is required")
+finally:
+    embeddings.provider_from_config = _orig_provider_from_config
+    embeddings.index_signature = _orig_index_signature
+
+check("klausSearchNotesSemantic is a NEW, distinct tool name from klausSearchNotes",
+      "klausSearchNotesSemantic" != "klausSearchNotes"
+      and ep.ACTIONS["klausSearchNotesSemantic"].mcp_name != ep.ACTIONS["klausSearchNotes"].mcp_name)
+check("...it is a read tool (no approval dialog)", not ep.ACTIONS["klausSearchNotesSemantic"].write)
+check("...its description says it IS semantic, and still points at klausSearchNotes for exact/Anki-syntax search",
+      "emantic" in ep.ACTIONS["klausSearchNotesSemantic"].description
+      and "klausSearchNotes" in ep.ACTIONS["klausSearchNotesSemantic"].description)
+check("klausSearchNotes itself is untouched by this card — still the same precise lexical framing",
+      "ANKI SEARCH SYNTAX" in ep.ACTIONS["klausSearchNotes"].description)
+check("klausSearchNotesSemantic is exposed over /mcp too, with no drift from the registry's own description",
+      [t for t in ep.mcp_tools() if t["name"] == "search_notes_semantic"][0]["description"]
+      == ep.ACTIONS["klausSearchNotesSemantic"].description)
+
 section("pure helpers")
 # similar_existing(col, "Q changed words here") is invoked AFTER
 # updateNoteFields above changed note 1's Front to "changed" — this is a
@@ -589,7 +716,8 @@ check("writes flagged", all(ep.ACTIONS[n].write for n in ("addNote", "addNotes",
 check("exact supported set",
       set(ep.ACTIONS) == {"version", "deckNames", "deckNamesAndIds", "modelNames", "modelFieldNames", "findNotes", "notesInfo",
                           "findCards", "cardsInfo", "addNote", "addNotes", "updateNoteFields", "addTags", "removeTags",
-                          "guiBrowse", "klausSearchNotes", "klausSearchLecturePdfs", "klausCurrentView"}, str(sorted(ep.ACTIONS)))
+                          "guiBrowse", "klausSearchNotes", "klausSearchNotesSemantic", "klausSearchLecturePdfs",
+                          "klausCurrentView"}, str(sorted(ep.ACTIONS)))
 
 # --- I3: klausSearchNotes is LEXICAL, and its description must say so.
 # anki_tools._h_search_notes is col.find_notes(query) — Anki's own
@@ -698,6 +826,7 @@ check("the MCP route sets the agent flag: the same note without a source page is
 
 end.stop()
 check("stop closes the port", True)
+shutil.rmtree(_uf_dir, ignore_errors=True)
 
 section("what only a running Anki can prove")
 # Same convention as test_anki_tools.py's own tail section: pin the SOURCE

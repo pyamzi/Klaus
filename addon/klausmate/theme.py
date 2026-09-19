@@ -1592,6 +1592,33 @@ def toolbar_css() -> str:
        so the star sits in the SAME spot whether or not this sheet is
        injected — the design gate must never move the mark. Nothing
        mode-specific is left to say about it here. */
+    /* Other add-ons' toolbar items that draw their OWN chip artwork
+       (rather than using .hitem) don't know about this bar's chrome.
+       AMBOSS's `.amboss-indicator` is the case on hand: a baked-SVG
+       toggle it absolutely-positions itself, with no class we can ask
+       it to share. Two fixes, Klaus-side only — never touch the
+       add-on itself: (1) its `top: 0.1em` was tuned for Anki's stock
+       (shorter) toolbar; against this bar's 44px min-height that pins
+       it too high, so re-centre it the same way every .hitem is
+       centred, and give it the same 12px edge gutter as `.header`'s
+       own padding. (2) its day-mode artwork bakes an opaque white
+       pill — a white sticker on any chrome that isn't also white.
+       `multiply` erases pure-white pixels against whatever is
+       actually behind them while leaving the dark wordmark and the
+       accent triangle alone, which is exactly the see-through effect
+       a transparent chip would have had. The night variant ships its
+       own deliberately-coloured badge with WHITE text on a navy fill
+       instead — multiply there would blend that white text into the
+       chrome too and erase the one thing that has to stay legible, so
+       it ships untouched: a coloured badge, not a broken one. */
+    .amboss-indicator {{
+        top: 50% !important;
+        right: 12px !important;
+        transform: translateY(-50%) !important;
+    }}
+    .amboss-indicator.amboss-indicator-day {{
+        mix-blend-mode: multiply;
+    }}
     """
 
 

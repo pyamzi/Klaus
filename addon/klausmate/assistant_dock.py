@@ -397,6 +397,12 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
         text in contexts/<safe>.json (pdf_handler.load_pages) — the same
         fallback anki_tools' lecture search already uses for a page with
         no record.
+
+        The PNG is cached beside the page record (K-230): a cache hit
+        skips render_page_png entirely, and only a miss renders and
+        stores. Neither cache_page_png's read nor store_page_png's write
+        can fail this turn either — both already answer/log rather than
+        raise, and the outer try here is belt-and-braces on top of that.
         """
         from . import page_store
 
@@ -420,7 +426,14 @@ class AssistantDock(_DockBase):  # type: ignore[misc]
                 except Exception as exc:
                     print(f"[klausmate] contexts fallback for the assistant failed: {exc}")
             try:
-                png = page_store.render_page_png(view.path, view.page_index)
+                png = page_store.cached_page_png(
+                    self._user_files, view.pdf_safe, view.path, view.page_index
+                )
+                if png is None:
+                    png = page_store.render_page_png(view.path, view.page_index)
+                    page_store.store_page_png(
+                        self._user_files, view.pdf_safe, view.path, view.page_index, png
+                    )
             except Exception as exc:
                 print(f"[klausmate] page render for the assistant failed: {exc}")
         return {"text": text, "text_source": text_source, "png": png}

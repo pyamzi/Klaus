@@ -867,6 +867,30 @@ check("picking a colour with a live selection highlights it now "
       "(same move as arming Highlight)",
       "if (selectionRectMap()) addHighlightFromSelection();" in _HTML116)
 
+section("K-154: annobar carries a thumbnails toggle — reachable from "
+        "every host, not just the editor panel's own header button")
+# K-153 found the thumbnail toggle lived ONLY in the editor panel
+# (__init__.py's tab-header button); on the pdfjs renderer
+# klausToggleThumbs (below) had no in-page control and no keyboard
+# binding at all, so thumbnails were 100% unreachable from the Library
+# and the Lecture dock. The fix mirrors K-116's own move for
+# Highlight/Add Text: put the affordance INSIDE the already
+# host-agnostic annobar rather than in one host's chrome.
+check("annobar grows an eighth control: Thumbnails (the seven from "
+      "K-116/K-150 plus this one)",
+      'id="annobar"' in _HTML116 and 'id="abThumbs"' in _HTML116)
+check("HIG Title Case tooltip, matching Highlight/Add Text's own "
+      "shortcut-less style",
+      'title="Thumbnails"' in _HTML116)
+_AB_THUMBS_SPLIT = _HTML116.split('("abThumbs").addEventListener(', 1)
+check("clicking it drives the SAME klausToggleThumbs API the editor "
+      "panel's header button already used — no second toggle path",
+      len(_AB_THUMBS_SPLIT) == 2
+      and "klausToggleThumbs()" in _AB_THUMBS_SPLIT[1][:200])
+check("the button lives INSIDE #annobar (the bar every host already "
+      "renders), not a host-specific chrome row",
+      'id="abThumbs"' in _ANNOBAR_MARKUP)
+
 section("K-149: merging happens at MINT time, never in storage")
 # pdf_handler collapses duplicates ONLY for origin=="external" records
 # (Preview autosaves the same box repeatedly while you type), and
@@ -1984,5 +2008,141 @@ check("_refresh_transcript reads page_store.load_record, not the "
       "slide text — the strip is what was SAID over the page",
       "page_store.load_record(" in _REFRESH258_BODY
       and 'seg.get("text")' in _REFRESH258_BODY)
+
+section("K-154: native renderer — a keyboard binding reaches "
+        "toggle_thumbnails, the same way Ctrl+F reaches the find bar")
+# The pdfjs half of K-154 lives above (the annobar button); the native
+# renderer's own affordance is a keyboard shortcut, claimed the same
+# way every other viewer combo already is (_match_shortcut_combo /
+# _dispatch_shortcut_combo, pdf_viewer.py) rather than a new mechanism.
+# This needs REAL Qt.Key/KeyboardModifier enums — the plain aqt stub's
+# Qt is a permissive _Dummy whose attribute lookups all collapse to the
+# same object (see anki_stubs.py), so Key_T and Key_F would compare
+# equal and the test would prove nothing. klausmate.pdf_viewer is
+# therefore imported here with REAL PyQt6 behind aqt.qt (test_drive.py
+# / test_transcript_strip.py's K-117 pattern) — the module is not
+# needed anywhere else in this pdfjs-focused file, so swapping the
+# stub this late costs nothing.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+try:
+    from PyQt6 import QtCore as _QtC154
+    from PyQt6 import QtGui as _QtG154
+    from PyQt6 import QtWidgets as _QtW154
+
+    _HAVE_QT154 = True
+except Exception as _qt_e154:  # noqa: BLE001
+    _HAVE_QT154 = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e154}) — "
+          "the native shortcut binding needs real Qt enums")
+
+if _HAVE_QT154:
+    import types as _types154
+
+    _qt_shim154 = _types154.ModuleType("aqt.qt")
+
+    def _qt_getattr154(name, _mods=(_QtW154, _QtC154, _QtG154)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
+
+    _qt_shim154.__getattr__ = _qt_getattr154
+    sys.modules["aqt.qt"] = _qt_shim154
+    # Line 244 already imported klausmate.pdf_viewer once, under the
+    # plain permissive aqt.qt stub — its cached module (with Qt bound to
+    # that stub's dummy) would otherwise win over this fresh shim, since
+    # Python does not re-execute an already-imported module. Popping it
+    # is safe here (unlike the partial-Qt probe above, which needs a
+    # subprocess instead): nothing after this section reads
+    # klausmate.pdf_viewer again, and the earlier ``pdf_viewer`` name at
+    # line 244 keeps pointing at its own already-bound module object.
+    sys.modules.pop("klausmate.pdf_viewer", None)
+    pv_native154 = importlib.import_module("klausmate.pdf_viewer")
+
+    class _FakeKeyEvent154:
+        """Just enough of a QKeyEvent for _match_shortcut_combo, which
+        only calls .key()/.modifiers() on whatever it's handed."""
+
+        def __init__(self, key, mods):
+            self._key, self._mods = key, mods
+
+        def key(self):
+            return self._key
+
+        def modifiers(self):
+            return self._mods
+
+    class _ShortcutStand154:
+        """Duck-typed self, the _SelStand pattern from above (K-196):
+        _match_shortcut_combo only reads self._find_bar, and
+        _dispatch_shortcut_combo only calls named self methods — no
+        real QWidget construction needed to prove the wiring."""
+
+        def __init__(self):
+            self._find_bar = object()  # non-None -> find combos in play
+            self.calls: list[str] = []
+
+        def toggle_thumbnails(self):
+            self.calls.append("toggle_thumbnails")
+
+        def _show_find_bar(self):
+            self.calls.append("find")
+
+        def _find_next_shortcut(self):
+            self.calls.append("find_next")
+
+        def _find_prev_shortcut(self):
+            self.calls.append("find_prev")
+
+        def _prompt_go_to_page(self):
+            self.calls.append("goto")
+
+        def _add_highlight_from_selection(self):
+            self.calls.append("highlight")
+
+    _Qt154 = _QtC154.Qt
+    _stand154 = _ShortcutStand154()
+    _ev_thumbs154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_T,
+        _Qt154.KeyboardModifier.ControlModifier
+        | _Qt154.KeyboardModifier.ShiftModifier,
+    )
+    _combo154 = pv_native154.PdfViewer._match_shortcut_combo(
+        _stand154, _ev_thumbs154
+    )
+    check("Ctrl+Shift+T resolves to a thumbs combo",
+          _combo154 == "thumbs", repr(_combo154))
+    check("dispatching that combo reaches toggle_thumbnails — exactly "
+          "as dispatching \"find\" reaches _show_find_bar below",
+          pv_native154.PdfViewer._dispatch_shortcut_combo(
+              _stand154, _combo154
+          ) is True
+          and _stand154.calls == ["toggle_thumbnails"])
+
+    _ev_find154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_F, _Qt154.KeyboardModifier.ControlModifier
+    )
+    _stand154.calls.clear()
+    check("...proven against the existing Ctrl+F -> find_bar wiring, "
+          "same mechanism",
+          pv_native154.PdfViewer._match_shortcut_combo(
+              _stand154, _ev_find154
+          ) == "find"
+          and pv_native154.PdfViewer._dispatch_shortcut_combo(
+              _stand154, "find"
+          ) is True
+          and _stand154.calls == ["find"])
+
+    _ev_hl154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_A,
+        _Qt154.KeyboardModifier.ControlModifier
+        | _Qt154.KeyboardModifier.ShiftModifier,
+    )
+    check("Ctrl+Shift+A (highlight) is untouched by the new binding",
+          pv_native154.PdfViewer._match_shortcut_combo(
+              _stand154, _ev_hl154
+          ) == "highlight")
 
 raise SystemExit(report())

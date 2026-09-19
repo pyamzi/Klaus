@@ -964,6 +964,20 @@ class PdfViewer(QWidget):
                 hl_sc.activated.connect(self._add_highlight_from_selection)
             except Exception:
                 pass
+            # Toggle the thumbnails strip (K-154). Same dual mechanism as
+            # highlight above: a QShortcut fallback for conflict-free
+            # hosts, plus the ShortcutOverride/_match_shortcut_combo path
+            # in eventFilter for hosts that already bind Ctrl+Shift+T.
+            try:
+                thumbs_sc = QShortcut(
+                    QKeySequence("Ctrl+Shift+T"), self._pdf_view
+                )
+                thumbs_sc.setContext(
+                    Qt.ShortcutContext.WidgetWithChildrenShortcut
+                )
+                thumbs_sc.activated.connect(self.toggle_thumbnails)
+            except Exception:
+                pass
             # Cmd+F find bar (A9): lives in this widget's own VBox, above
             # the QPdfView. It must NOT touch _page_label — that label is
             # adopted into the dock header by the tab container.
@@ -2686,6 +2700,12 @@ class PdfViewer(QWidget):
             return "highlight"
         if key == Qt.Key.Key_H and shift and not alt:
             return "highlight"
+        # Thumbnails (K-154): the strip's only affordance was the editor
+        # panel's own tab-header button, so the Library and the Lecture
+        # dock had no way to show or dismiss it. A keyboard binding here
+        # reaches every host the same way Cmd+F/Cmd+Shift+A already do.
+        if key == Qt.Key.Key_T and shift and not alt:
+            return "thumbs"
         return None
 
     def _dispatch_shortcut_combo(self, combo: str) -> bool:
@@ -2705,6 +2725,9 @@ class PdfViewer(QWidget):
                 return True
             if combo == "highlight":
                 self._add_highlight_from_selection()
+                return True
+            if combo == "thumbs":
+                self.toggle_thumbnails()
                 return True
         except Exception as exc:
             print(f"[klausmate] shortcut dispatch failed ({combo}): {exc}")

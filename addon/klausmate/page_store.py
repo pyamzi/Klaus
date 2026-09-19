@@ -420,6 +420,49 @@ def _notify(pdf_safe: str, page_index: int) -> None:
             print(f"[klausmate] page_store subscriber failed: {exc}")
 
 
+def _png_path(user_files: str, pdf_safe: str, path: str, page_index: int) -> str:
+    """Where this page's rendered PNG is cached — a sibling of its JSON
+    record, same directory, same stem (K-230). Moves and expires with the
+    record for free: a replaced file gets a fresh record_dir and so a
+    fresh cache, while a changed slide_text or transcript segment never
+    invalidates it — only the rendered IMAGE depends on the file's own
+    bytes, not on what a record stores about it, so this cache's
+    invalidation is simpler than the text_hash-driven re-embed elsewhere
+    in this module and must not be coupled to it."""
+    return os.path.join(record_dir(user_files, pdf_safe, path), f"{int(page_index):04d}.png")
+
+
+def cached_page_png(user_files: str, pdf_safe: str, path: str, page_index: int) -> bytes | None:
+    """The cached render, or None on any miss — no cache yet, no record
+    directory to resolve (an unresolvable path), a removed file, an
+    unreadable one. Mirrors load_record's contract: a reader answers
+    empty (None, here) for data it cannot find, and never raises."""
+    try:
+        with open(_png_path(user_files, pdf_safe, path, page_index), "rb") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def store_page_png(user_files: str, pdf_safe: str, path: str, page_index: int, png: bytes) -> None:
+    """Cache *png* beside the page's JSON record, atomically (tmp +
+    os.replace, matching every other writer here). Never raises into the
+    caller: the caller already has this turn's PNG from the render that
+    just succeeded, so a failed cache write must not break it — log and
+    move on."""
+    try:
+        p = _png_path(user_files, pdf_safe, path, page_index)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(png)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except Exception as exc:
+        print(f"[klausmate] page png cache write failed: {exc}")
+
+
 # ---- QtPdf glue -------------------------------------------------------------
 
 def render_page_png(path: str, page_index: int, long_edge: int = LONG_EDGE) -> bytes:

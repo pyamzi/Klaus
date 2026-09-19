@@ -19,6 +19,7 @@ from __future__ import annotations
 import hmac
 import html
 import json
+import os
 import re
 import secrets
 import threading
@@ -233,6 +234,63 @@ def _a_klaus_search_pdfs(col, p, ctx):
     # returns {"chunks": [...]}; this action's result is the list itself.
     return anki_tools._HANDLERS["search_lecture_pdfs"](col, args, ctx).get("chunks", [])
 
+def _a_klaus_search_notes_semantic(col, p, ctx):
+    """Real semantic note search (K-207): embed the query exactly the way
+    anki_tools._semantic_pdf_search embeds one for PDF search — same
+    provider, same normalize() — then rank it against the CARD index
+    (card_index.top_k), never the per-PDF one. A card index that is
+    missing or built on a different embedding signature is SKIPPED
+    (empty result), the identical "stale index -> skip" rule
+    _semantic_pdf_search applies per-PDF and curation.py applies before
+    a resync — a score from another embedding space is not a smaller
+    number, it is a meaningless one.
+    """
+    from . import card_index, embeddings
+
+    query = str(p.get("query") or "").strip()
+    if not query:
+        raise ActionError("query is required")
+    limit = max(1, min(50, int(p.get("limit") or 20)))
+
+    from aqt import mw
+
+    cfg = mw.addonManager.getConfig(__package__) or {}
+    provider = embeddings.provider_from_config(lambda: cfg)
+    try:
+        raw = provider.embed([query], kind="query")
+    except embeddings.EmbeddingError as exc:
+        # Same clean, unprefixed treatment ActionError/ToolError already
+        # get in Endpoint.handle — "no key" reads as a plain sentence,
+        # never a raw exception repr.
+        raise ActionError(str(exc)) from exc
+    vec = embeddings.normalize(raw[0]) if raw else None
+    if vec is None:
+        return []
+
+    index_dir = os.path.join(str(ctx.get("user_files") or ""), "card_index")
+    index = card_index.load(index_dir)
+    sig = embeddings.index_signature(cfg)
+    if index is None or not card_index.check_signature(index, sig):
+        return []
+
+    strip = ctx.get("strip") or (lambda s: s)
+    out = []
+    for nid, score in card_index.top_k(index, [vec], limit):
+        try:
+            n = col.get_note(int(nid))
+        except Exception:
+            continue
+        first = strip(str(n.fields[0])) if getattr(n, "fields", None) else ""
+        out.append({
+            "note_id": int(nid),
+            "note_type": str(n.note_type()["name"]),
+            "preview": first[:200],
+            "tags": list(n.tags),
+            "score": round(float(score), 4),
+        })
+    return out
+
+
 def _a_klaus_current_view(col, p, ctx):
     try:
         from . import viewer_context
@@ -280,6 +338,20 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "meaning-based search over the lecture material.",
            _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes),
     Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_pdfs),
+    # K-207: the real semantic note search klausSearchNotes's description
+    # points at search_lecture_pdfs for meaning-based search only because
+    # this tool did not exist yet. It embeds the query and ranks the CARD
+    # index (card_index.top_k) — same embedding space as the card index
+    # itself, distinct from klausSearchLecturePdfs's PDF-page index. A
+    # missing/stale card index answers an empty list rather than garbage
+    # ranks or a crash.
+    Action("klausSearchNotesSemantic", "search_notes_semantic",
+           "Semantic (meaning-based) search over the user's notes — send it a natural-language "
+           "question, not keywords. Ranks notes by embedding similarity via the card index. "
+           "Returns an empty list if the card index has not been built yet, or was built with a "
+           "different embedding model. For exact text / Anki search syntax (deck:, tag:, "
+           "\"quoted phrases\") use klausSearchNotes instead.",
+           _obj({"query": {"type": "string"}, "limit": {"type": "integer"}}, ("query",)), False, _a_klaus_search_notes_semantic),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
 )}
 

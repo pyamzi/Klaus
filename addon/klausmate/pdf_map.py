@@ -2344,6 +2344,16 @@ def _canvas_class():
             self._cam = Camera()
             self._did_fit = False
             self._hover = None
+            # The last screen point a real mouseMoveEvent reported —
+            # None once the pointer has left, or before it has ever
+            # entered (K-214). The sway moves every node's PROJECTED
+            # position every tick even with the pointer dead still, so
+            # hover cannot be a function of mouseMoveEvent alone or a
+            # motionless pointer drifts out from under (or into) a node
+            # with nothing ever re-testing it. ``_idle_tick`` re-hits
+            # THIS point on every frame; it is never itself a screen
+            # point that moved.
+            self._last_mouse = None
             self._selected = None
             self._dragging = False
             self._drag_moved = False
@@ -2520,6 +2530,19 @@ def _canvas_class():
                 self._cam = Camera(
                     sway_angle(self._phase), self._cam.distance
                 )
+                # K-214 (final review 2026-09-02 M3, accepted as polish
+                # rather than fixed): hover was computed only from the
+                # last mouseMoveEvent, never re-hit-tested as the sway
+                # carries the projected nodes out from under (or into) a
+                # pointer that never moved. Re-run the same hit-test the
+                # mouse itself would have triggered, against the LAST
+                # KNOWN screen point — skipped mid-drag, where hover is
+                # deliberately frozen (mouseMoveEvent never updates it
+                # there either, see its own comment).
+                if self._last_mouse is not None and not self._dragging:
+                    self._update_hover(
+                        self._last_mouse[0], self._last_mouse[1], None
+                    )
                 self.update()
             except Exception as exc:
                 print(f"[klausmate] map idle tick failed: {exc}")
@@ -3232,6 +3255,11 @@ def _canvas_class():
             try:
                 pos = event.position()
                 px, py = float(pos.x()), float(pos.y())
+                # Recorded on every move, drag included: it is what
+                # _idle_tick re-hit-tests once the sway has moved on
+                # (K-214), and a drag still has a real cursor position
+                # under it even though hover itself is frozen for one.
+                self._last_mouse = (px, py)
                 if self._dragging and self._drag_last is not None:
                     dx = px - self._drag_last[0]
                     dy = py - self._drag_last[1]
@@ -3305,6 +3333,7 @@ def _canvas_class():
 
         def leaveEvent(self, event) -> None:  # noqa: N802
             try:
+                self._last_mouse = None
                 if self._hover is not None:
                     self._hover = None
                     self.update()

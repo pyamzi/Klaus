@@ -643,6 +643,21 @@ try:
             )
             _build()  # settle the cache back at the shipping value
 
+        # K-171: build_graph_data now aligns a freshly-projected layout
+        # onto whatever PRIOR layout it can still read (see
+        # projection.align_to / pdf_graph._read_prior_layout), so its
+        # output is no longer a pure function of the card index alone —
+        # by design, that is exactly what buys continuity across a
+        # resample. Every corruption/removal test below destroys the one
+        # layout file that could have served as that prior, so each of
+        # them independently falls back to the SAME "no prior available"
+        # answer. `good` has to be THAT answer, not whatever the cache
+        # happened to hold a moment ago (which may itself be aligned to
+        # something two builds back) — clearing the file first makes
+        # `good` the deterministic baseline every recovery path below
+        # converges to, so the old bit-identical comparison still means
+        # something.
+        os.remove(_lfile)
         good, _ = _build()
 
         # ---- corrupt / truncated / partial reads as ABSENT ------------
@@ -707,6 +722,47 @@ try:
             os.chmod(_ldir, 0o700)
     finally:
         projection.project = _real_project
+
+    print("== pdf_graph: K-171 alignment is actually WIRED into build_graph_data ==")
+    # The pure-function tests above (projection.align_to / normalize_points)
+    # prove the ALGORITHM works in isolation. They prove nothing about
+    # whether build_graph_data actually CALLS it — a build_graph_data that
+    # silently stopped calling align_to would leave every one of those
+    # tests green while the actual map kept reshuffling for the user, which
+    # is the one thing this card was filed to stop. Spy on align_to itself
+    # (the same counting-spy idiom this file already uses for
+    # projection.project above), rather than re-deriving numeric proof a
+    # second time.
+    if os.path.exists(_lfile):
+        os.remove(_lfile)
+    _mk_index()  # fresh, known-clean state — prior tests left _lfile corrupted/removed variously
+
+    _align_calls: list[int] = []
+    _real_align_to = projection.align_to
+
+    def _counting_align_to(*args, **kwargs):
+        _align_calls.append(1)
+        return _real_align_to(*args, **kwargs)
+
+    projection.align_to = _counting_align_to
+    try:
+        _build()  # cold build: no layout file exists yet
+        check("no prior layout on disk -> build_graph_data never calls align_to",
+              len(_align_calls) == 0, f"calls={len(_align_calls)}")
+
+        # A second "import cycle" over the SAME notes (K-171's actual
+        # scenario: a re-embed, not a collection change) — extra_hash
+        # changes card_index_digest so this does NOT hit the K-167 exact-
+        # digest cache above (which would skip projection, and align_to
+        # with it, entirely); nids/provider/model/dims stay identical so
+        # _read_prior_layout's signature check still accepts the prior.
+        _mk_index(extra_hash="reembed-")
+        _build()
+        check("a prior layout with matching signature and overlapping ids "
+              "-> build_graph_data DOES call align_to",
+              len(_align_calls) == 1, f"calls={len(_align_calls)}")
+    finally:
+        projection.align_to = _real_align_to
 
     print("== pdf_graph: an empty index caches nothing ==")
     _empty2 = tempfile.mkdtemp(prefix="klaus_test_projection_cache_empty_")
@@ -981,6 +1037,157 @@ check(
     "than inventing depth out of the power iteration's residue",
     all(abs(p[2]) < 1e-12 for p in _flat_pts),
     str(_flat_pts),
+)
+
+print("== projection: K-171 alignment fixes the resample reshuffle ==")
+# K-171. The module docstring above (and pdf_graph's LAYOUT CACHE block)
+# already prove the mechanism: with no eigengap between the three
+# components, refitting the SAME data from a different sample can swap
+# PC2/PC3 outright, moving the median note ~150px on a 700px canvas even
+# though not one vector changed. Reproduce it with a synthetic cloud built
+# to have exactly that property — three axes of nearly EQUAL spread
+# (0.20/0.19/0.18) buried in high-dimensional noise — and show align_to
+# takes the median move from "the whole map reshuffled" down to a few
+# pixels, the bar the card itself sets.
+_D_AL = 40
+_N_AL = 2000
+_CAP_AL = 250
+_PX = 350.0  # a 700px canvas spans [-1, 1], so 1 normalized unit = 350px
+
+
+def _make_isotropic_rows(n, d, sigmas, seed, noise=0.02):
+    rng = random.Random(seed)
+    out = []
+    for _ in range(n):
+        row = [rng.gauss(0.0, noise) for _ in range(d)]
+        for k, s in enumerate(sigmas):
+            row[k] = rng.gauss(0.0, s)
+        out.append(array("f", row))
+    return out
+
+
+def _median_worst_px(pts_a, pts_b):
+    dists = sorted(math.dist(p, q) for p, q in zip(pts_a, pts_b))
+    n = len(dists)
+    med = dists[n // 2] if n % 2 else (dists[n // 2 - 1] + dists[n // 2]) / 2
+    return med * _PX, dists[-1] * _PX
+
+
+_al_rows = _make_isotropic_rows(_N_AL, _D_AL, (0.20, 0.19, 0.18), seed=123)
+_al_ids = list(range(_N_AL))
+
+# "the same N vectors, only a different even-stride sample": reordering
+# the SAME rows changes which vectors the stride sample lands on without
+# adding, removing or editing a single one of them — the purest version of
+# K-167's own experiment, and exactly what happens for free whenever the
+# card index's row order shifts (e.g. an add/delete upstream of an
+# otherwise-untouched note).
+_al_order = list(range(_N_AL))
+random.Random(7).shuffle(_al_order)
+_al_rows_b = [_al_rows[i] for i in _al_order]
+_al_ids_b = [_al_ids[i] for i in _al_order]
+
+_pts_a = projection.project(_al_rows, fit_rows=_CAP_AL, seed=0)[0]
+_pts_b = projection.project(_al_rows_b, fit_rows=_CAP_AL, seed=0)[0]
+_by_id_b = dict(zip(_al_ids_b, _pts_b))
+_pts_b_reordered = [_by_id_b[i] for i in _al_ids]
+
+_med_before, _worst_before = _median_worst_px(_pts_a, _pts_b_reordered)
+print(f"  .. unaligned: median={_med_before:.1f}px worst={_worst_before:.1f}px")
+check(
+    "root cause reproduced: resampling the SAME vectors reshuffles the "
+    "map by tens to hundreds of pixels, matching K-167's measured ~150px "
+    "median / ~391px worst on the real 28,670-note index",
+    _med_before > 40.0,
+    f"median={_med_before:.1f}px",
+)
+
+# THE FIX: align_to takes a fresh (unnormalized) layout and rotates it
+# onto a previous one BEFORE normalize_points squashes it to [-1, 1] —
+# doing it the other way around (aligning already-normalized boxes) was
+# tried and measured short of the bar: on this exact scenario it only
+# brought an analogous case from 97px down to 67px median (see
+# normalize_points's docstring for the measurement that ruled it out).
+_raw_a, _ = projection.project(
+    _al_rows, fit_rows=_CAP_AL, seed=0, normalize=False
+)
+_raw_b, _ = projection.project(
+    _al_rows_b, fit_rows=_CAP_AL, seed=0, normalize=False
+)
+_aligned_raw_b, _did_align = projection.align_to(
+    _raw_b, _al_ids_b, _raw_a, _al_ids
+)
+check(
+    "alignment reports it actually ran (enough overlap, solve not "
+    "degenerate)",
+    _did_align,
+)
+
+_norm_a = projection.normalize_points(_raw_a)
+_norm_b_aligned = projection.normalize_points(_aligned_raw_b)
+_by_id_b_aligned = dict(zip(_al_ids_b, _norm_b_aligned))
+_pts_b_aligned_reordered = [_by_id_b_aligned[i] for i in _al_ids]
+
+_med_after, _worst_after = _median_worst_px(_norm_a, _pts_b_aligned_reordered)
+print(f"  .. aligned:   median={_med_after:.1f}px worst={_worst_after:.1f}px")
+check(
+    "THE FIX: aligning onto the previous layout before normalizing takes "
+    "the median move from tens/hundreds of pixels down to a FEW pixels — "
+    "the bar the card itself sets ('if alignment does not take that to a "
+    "few pixels, it has not worked')",
+    _med_after < 5.0 and _worst_after < 15.0,
+    f"median={_med_after:.1f}px worst={_worst_after:.1f}px (before: "
+    f"median={_med_before:.1f}px worst={_worst_before:.1f}px)",
+)
+
+print("== projection: align_to is an isometry (pairwise distances preserved) ==")
+# CONSTRAINT from the card: alignment must not change WHAT is shown, only
+# its orientation. Rotating (or reflecting) the whole cloud is free — an
+# alignment that distorts distances is a bug, not a nicety. Pin it
+# directly: every pairwise distance inside the ALIGNED set must equal the
+# corresponding distance in the PRE-alignment set, to floating-point
+# tolerance, because R is orthogonal by construction (R^T R = I).
+_sample_idx = list(range(0, len(_raw_b), 37))[:40]
+_before_pts = [_raw_b[i] for i in _sample_idx]
+_after_pts = [_aligned_raw_b[i] for i in _sample_idx]
+_max_drift = 0.0
+for _i in range(len(_sample_idx)):
+    for _j in range(_i + 1, len(_sample_idx)):
+        _d_before = math.dist(_before_pts[_i], _before_pts[_j])
+        _d_after = math.dist(_after_pts[_i], _after_pts[_j])
+        _max_drift = max(_max_drift, abs(_d_before - _d_after))
+check(
+    "align_to is an isometry: every pairwise distance survives the "
+    "rotation to floating-point tolerance",
+    _max_drift < 1e-9,
+    f"max drift={_max_drift:.3e}",
+)
+
+print("== projection: align_to degrades to unaligned rather than raising ==")
+check(
+    "no previous layout at all -> unaligned, not an error",
+    projection.align_to([(1.0, 0.0, 0.0)], [1], [], [])
+    == ([(1.0, 0.0, 0.0)], False),
+)
+_few_pts = [(float(k), 0.0, 0.0) for k in range(5)]
+_few_ids = list(range(5))
+_few_old = [(float(k) + 10.0, 0.0, 0.0) for k in range(5)]
+check(
+    "overlap under the floor -> unaligned, not a noise-fitted rotation",
+    projection.align_to(_few_pts, _few_ids, _few_old, _few_ids)
+    == (_few_pts, False),
+)
+# A degenerate correspondence: every old point identical (rank-0 spread),
+# so M = new^T @ old is singular and there is no well-defined rotation.
+_deg_new = [(float(k), float(k) * 2, float(k) * 3) for k in range(20)]
+_deg_old = [(1.0, 1.0, 1.0)] * 20
+_deg_pts, _deg_ok = projection.align_to(
+    _deg_new, list(range(20)), _deg_old, list(range(20))
+)
+check(
+    "a degenerate (singular) correspondence degrades to unaligned rather "
+    "than dividing by a near-zero determinant",
+    _deg_pts == list(_deg_new) and _deg_ok is False,
 )
 
 print(f"\n{PASS} passed, {FAIL} failed")

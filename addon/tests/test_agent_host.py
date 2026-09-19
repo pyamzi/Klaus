@@ -458,4 +458,52 @@ check("a second start() on the SAME host bumps it again, to 2 — close() in "
       "between (tearing down the old child) does not reset it",
       _host_gen.generation == 2)
 
+section("K-282: a stale reader thread must not clear the LIVE child's _running")
+# K-211 guarded the DOCK's exited(rc, generation) callback against a
+# superseded child's belated exit. One level lower, _read() itself still
+# wrote self._running = False (in its finally block AND its "result"
+# branch) with no generation compare at all -- so when the OUTGOING
+# child's reader thread finishes late (it joins the SUCCESSOR's stderr
+# thread first, in _drain_stderr -- the exact delay K-211 documented),
+# it flips _running to False on the object that now describes the LIVE
+# child. Consequence: stop() sees _running False and no-ops, so the
+# live child can't be stopped from the UI until it exits on its own.
+class BlockingProc(FakeProc):
+    """Like FakeProc, but stdout/stderr genuinely block (ManualStream)
+    instead of racing straight to EOF -- needed to hold a reader thread
+    open ACROSS a respawn instead of it finishing before the second
+    start() ever happens."""
+    def __init__(self):
+        super().__init__([])
+        self.stdout = ManualStream()
+        self.stderr = ManualStream()
+got_race = {k: [] for k in got}
+cbs_race = {k: (lambda k: (lambda *a: got_race[k].append(a)))(k) for k in got_race}
+proc_a, proc_b = BlockingProc(), BlockingProc()
+procs_race = [proc_a, proc_b]
+host_race = ah.AgentHost("/bin/claude", port=1, token="t", library_root=tmp, system_prompt_path="/sp", model="",
+                         log_path=os.path.join(tmp, "race.log"), callbacks=cbs_race,
+                         spawn=lambda c, **k: procs_race.pop(0))
+host_race.start()  # generation -> 1, reader thread A blocks on proc_a.stdout
+gen1_reader = host_race._reader
+host_race.start()  # generation -> 2, reader thread B blocks on proc_b.stdout;
+                    # thread A is STILL ALIVE, still blocked on proc_a.stdout
+proc_b.stderr.close()  # let gen-2's stderr thread finish so _drain_stderr's
+                        # join (inside thread A's finally, below) returns fast
+                        # instead of waiting out the full STOP_GRACE_S
+host_race._running = True  # the LIVE gen-2 child is mid-turn
+proc_a.stdout.close()  # thread A hits EOF and unwinds into `finally`
+deadline = time.time() + 5
+while time.time() < deadline and gen1_reader.is_alive():
+    time.sleep(0.02)
+check("the stale (generation-1) reader thread finished",
+      not gen1_reader.is_alive())
+check("its write attempt does NOT clear the LIVE (generation-2) child's "
+      "_running -- stop() must still be able to signal it",
+      host_race._running is True)
+check("the stale thread's own exited callback still fires, carrying ITS generation",
+      got_race["exited"] and got_race["exited"][0][1] == 1)
+proc_b.stdout.close()
+host_race.close()
+
 raise SystemExit(report())
