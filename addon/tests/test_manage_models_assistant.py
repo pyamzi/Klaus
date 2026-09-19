@@ -1,4 +1,4 @@
-"""Preferences runtime retirement checks and sidebar logo rendering."""
+"""Preferences retired-surface checks and sidebar logo rendering."""
 from __future__ import annotations
 
 import ast
@@ -37,16 +37,12 @@ def _func_seg(name: str) -> str:
 
 
 # =====================================================================
-section("the local-runtime era is gone from this module (spec D1)")
-# =====================================================================
-# One provider, no local runtime: the Ollama client/runtime/setup modules
-# are deleted, so a module-top import of any of them would stop the whole
-# add-on loading — and the pull/classify/preset machinery they fed goes
-# with them. RAW source: code_only() strips string literals, which is
-# exactly what an absence pin must still be able to see.
-for _gone in ("ollama_runtime", "ollama_setup", "page_ocr",
-              "OllamaError", "InstallMethod", "install_methods",
-              "ollama_reachable", "run_install_method", "full_setup"):
+section("retired local surfaces stay absent during Ollama restoration")
+# D4 restores the runtime and full_setup. OCR and the old installation
+# chooser remain retired; the real control behavior has offscreen coverage
+# in test_local_model_settings.py.
+for _gone in ("ollama_setup", "page_ocr", "OllamaError", "InstallMethod",
+              "install_methods", "ollama_reachable", "run_install_method"):
     check(f"{_gone} is not referenced anywhere in manage_models.py",
           _gone not in _SRC)
 
@@ -56,8 +52,7 @@ for _gone_attr in ("classify_model", "embedding_candidates",
     check(f"manage_models.{_gone_attr} no longer exists",
           not hasattr(manage_models, _gone_attr) and _gone_attr not in _SRC)
 
-check("no pull / delete / install machinery survives — there is nothing "
-      "local left to manage",
+check("retired runtime dialog handlers remain absent",
       "start_pull" not in _SRC and "delete_selected" not in _SRC
       and "start_install" not in _SRC and "start_auto_setup" not in _SRC
       and "pull_missing" not in _SRC)

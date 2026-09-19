@@ -12,6 +12,31 @@ from existing profiles during migration.
   an existing Ollama server or starts an installed runtime in the background.
   This does not install a runtime or download models. Set `false` to manage
   the server yourself.
+The **Ollama runtime** row shows the estimated runtime download size before
+**Install/start** or **Update runtime** is clicked. These buttons authorize a
+runtime download if needed. **Install/start** reuses or starts an installed
+runtime first. **Update runtime** is enabled after **Refresh** when Klaus owns
+a running managed runtime older than the bundled target version. Runtime files
+live under `user_files/runtime/` in the add-on. **Stop managed server** only
+stops a process Klaus started or adopted; an external Ollama process must be
+stopped in the application that started it.
+
+**Refresh** checks runtime health and reloads **Installed models**. Opening
+Preferences does not start Ollama or download anything. Select a listed model
+to populate **Embedding model**, then **Save** to apply it and receive the
+ordinary re-index offer. Refresh, Pull and Delete never change the saved
+embedding model. Enter a name under **Download model** and click **Pull** to
+download it; **Download progress** reports runtime and model transfers.
+**Delete** asks for confirmation. Models are stored by the configured Ollama
+server. Closing Preferences allows an active local operation to finish in the
+background. If starting the runtime chooses a free port, **Ollama endpoint**
+shows the new address; click **Save** to use it for subsequent indexing.
+
+- **embedding_model**: The model name in **Embedding model**, initially
+  `"nomic-embed-text"`. It must be installed on the configured Ollama server.
+- **runtime_auto_setup** is controlled by **Automatic management**; toggle it
+  and click **Save**. This controls profile-open startup of installed runtimes.
+
 - **_local_embeddings_migrated**: Internal one-time migration marker. The first
   migration selects `nomic-embed-text` with native dimensions and removes old
   credentials. Later migrations preserve your local model selection.

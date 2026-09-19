@@ -672,10 +672,12 @@ def manage_models_dialog(*_args: Any) -> None:
         "Semantic search runs locally with Ollama. Lecture transcription uses whisper.cpp.",
     )
     endpoint_edit = QLineEdit()
+    endpoint_edit.setObjectName("endpoint")
     endpoint_edit.setMinimumWidth(220)
     endpoint_edit.setPlaceholderText("http://127.0.0.1:11434")
     _row(keys_layout, "Ollama endpoint", "Local HTTP address for Ollama.", endpoint_edit)
     embed_model_edit = QLineEdit()
+    embed_model_edit.setObjectName("embedding_model")
     embed_model_edit.setMinimumWidth(220)
     embed_model_edit.setPlaceholderText("nomic-embed-text")
     _row(
@@ -684,6 +686,64 @@ def manage_models_dialog(*_args: Any) -> None:
         "Changing it offers to re-index your cards and PDFs locally.",
         embed_model_edit,
     )
+
+    from . import ollama_runtime
+
+    runtime_auto_cb = Md3Switch()
+    runtime_auto_cb.setObjectName("runtime_auto_setup")
+    _row(keys_layout, "Automatic management",
+         "Start an installed Ollama runtime on profile open. Never downloads automatically.",
+         runtime_auto_cb)
+    runtime_status = QLabel("Not checked. Click Refresh to check Ollama and installed models.")
+    runtime_status.setWordWrap(True)
+    runtime_status.setTextFormat(Qt.TextFormat.PlainText)
+    runtime_controls = QVBoxLayout()
+    install_btn = QPushButton("Install/start")
+    stop_runtime_btn = QPushButton("Stop managed server")
+    update_runtime_btn = QPushButton("Update runtime")
+    stop_runtime_btn.setEnabled(False)
+    update_runtime_btn.setEnabled(False)
+    for button in (install_btn, stop_runtime_btn, update_runtime_btn):
+        button.setObjectName("SecondaryButton")
+        runtime_controls.addWidget(button)
+    runtime_hint = QLabel(
+        "Install/start or Update runtime authorizes a runtime download if needed "
+        f"({ollama_runtime.runtime_download_size_hint()}). Models download separately with Pull."
+    )
+    runtime_hint.setWordWrap(True)
+    _row(keys_layout, "Ollama runtime", runtime_hint, runtime_controls)
+    _row(keys_layout, "Runtime status", runtime_status, None)
+    runtime_status.setObjectName("OllamaStatus")
+    installed_models = QListWidget()
+    installed_models.setObjectName("InstalledModels")
+    installed_models.setMinimumWidth(220)
+    installed_models.setFixedHeight(90)
+    inventory_controls = QVBoxLayout()
+    inventory_controls.addWidget(installed_models)
+    inventory_buttons = QHBoxLayout()
+    refresh_models_btn = QPushButton("Refresh")
+    delete_model_btn = QPushButton("Delete")
+    for button in (refresh_models_btn, delete_model_btn):
+        button.setObjectName("SecondaryButton")
+        inventory_buttons.addWidget(button)
+    inventory_controls.addLayout(inventory_buttons)
+    _row(keys_layout, "Installed models",
+         "Select a model to fill Embedding model. Save applies it and offers to re-index.",
+         inventory_controls)
+    pull_model_edit = QLineEdit()
+    pull_model_edit.setObjectName("pull_model")
+    pull_model_edit.setPlaceholderText("nomic-embed-text")
+    pull_model_edit.setMinimumWidth(140)
+    pull_btn = QPushButton("Pull")
+    pull_controls = QHBoxLayout()
+    pull_controls.addWidget(pull_model_edit)
+    pull_controls.addWidget(pull_btn)
+    _row(keys_layout, "Download model", "Pull downloads this model from Ollama's registry.", pull_controls)
+    runtime_progress = QProgressBar()
+    runtime_progress.setObjectName("OllamaProgress")
+    runtime_progress.setRange(0, 100)
+    runtime_progress.setValue(0)
+    _row(keys_layout, "Download progress", "Runtime and model download progress.", runtime_progress)
 
     transcription_model_path_edit = QLineEdit()
     transcription_binary_edit = QLineEdit()
@@ -1502,27 +1562,32 @@ def manage_models_dialog(*_args: Any) -> None:
     close_row.addWidget(save_btn)
     foot.addLayout(close_row)
 
-    # "kind" is only ever "index" now — the pull / install / runtime-setup
-    # operations went with the local runtime — but it stays a named kind
-    # so confirm_close keeps reading one thing.
+    # One background operation at a time in this dialog.
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
     # "syncing"/"dirty" back the deferred-save model: preference widgets
     # never write on a keystroke or a toggle — Save does. "syncing" is
     # what stops a programmatic repopulation looking like a user edit.
     ui_state: dict[str, Any] = {"syncing": False, "dirty": False}
 
+    runtime_state = {"owned": False, "update": False}
+
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
         for w in (
-            endpoint_edit, embed_model_edit,
+            endpoint_edit, embed_model_edit, runtime_auto_cb,
+            install_btn, refresh_models_btn, pull_btn, pull_model_edit, installed_models,
             transcription_model_path_edit, transcription_binary_edit, transcription_language_edit,
             *transcription_browse_buttons,
             index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
-        progress.setVisible(busy)
-        progress_lbl.setVisible(busy)
+        stop_runtime_btn.setEnabled(not busy and runtime_state["owned"])
+        update_runtime_btn.setEnabled(not busy and runtime_state["update"])
+        delete_model_btn.setEnabled(not busy and installed_models.currentItem() is not None)
+        save_btn.setEnabled(not busy and ui_state["dirty"])
+        progress.setVisible(busy and op_state["kind"] != "local")
+        progress_lbl.setVisible(busy and op_state["kind"] != "local")
 
     def refresh() -> None:
         """Reload deferred-save widgets from the current configuration."""
@@ -1540,6 +1605,7 @@ def manage_models_dialog(*_args: Any) -> None:
             cfg = _pkg().get_config()
             endpoint_edit.setText(str(cfg.get("endpoint") or "http://127.0.0.1:11434"))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
+            runtime_auto_cb.setChecked(bool(cfg.get("runtime_auto_setup", True)))
             load_transcription_settings()
         finally:
             ui_state["syncing"] = False
@@ -1584,6 +1650,7 @@ def manage_models_dialog(*_args: Any) -> None:
         prev_sig = embeddings.index_signature(cfg)
         cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
         cfg["embedding_model"] = embed_model_edit.text().strip()
+        cfg["runtime_auto_setup"] = runtime_auto_cb.isChecked()
         _pkg().write_config(cfg)
         update_embed_status()
         # Offer a local rebuild when the stored signature changes.
@@ -1874,8 +1941,8 @@ def manage_models_dialog(*_args: Any) -> None:
         # accept() straight away, and unsaved edits must not slip out
         # through one of them unmentioned.
         def _after_dirty_check() -> None:
-            if op_state["active"]:
-                # Indexing is the one long operation left in this
+            if op_state["active"] and op_state["kind"] == "index":
+                # Indexing is the cancellable collection operation in this
                 # window. K-114: hand-built QMessageBox + open() +
                 # finished, same shape as clear_assistant_sessions
                 # above — never a blocking question() static. Chained
@@ -2273,6 +2340,156 @@ def manage_models_dialog(*_args: Any) -> None:
         op = QueryOp(parent=dlg, op=do, success=on_done)
         op.failure(on_fail)
         op.without_collection().run_in_background()
+
+    def local_alive() -> bool:
+        return _OPEN_DLG is dlg and _dlg_alive()
+
+    def runtime_snapshot(endpoint: str) -> dict:
+        from .ollama_client import OllamaClient
+
+        client = OllamaClient(endpoint, timeout=5)
+        reachable = client.health()
+        owned = ollama_runtime.server_manager.spawned_or_adopted()
+        managed = ollama_runtime.find_managed_runtime()
+        update = bool(
+            managed and managed[0] != ollama_runtime.OLLAMA_VERSION
+            and owned and ollama_runtime.server_manager.active_binary() == managed[1]
+        )
+        return {"reachable": reachable, "owned": owned, "update": update,
+                "models": client.list_models() if reachable else []}
+
+    def local_progress(event: dict) -> None:
+        # Runtime and HTTP callbacks run on workers. Every Qt access,
+        # including the liveness check, belongs on the main thread.
+        event = dict(event)
+        def apply() -> None:
+            if not local_alive():
+                return
+            runtime_status.setText(str(event.get("status") or "Working…"))
+            total = event.get("total") or 0
+            if total:
+                runtime_progress.setRange(0, 100)
+                runtime_progress.setValue(int(100 * (event.get("completed") or 0) / total))
+            else:
+                runtime_progress.setRange(0, 0)
+        mw.taskman.run_on_main(apply)
+
+    def run_local(action: str, model: str = "") -> None:
+        if op_state["active"] or not local_alive():
+            return
+        cfg = _pkg().get_config()
+        cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
+        endpoint = cfg["endpoint"]
+        op_state["kind"] = "local"
+        set_busy(True)
+        runtime_status.setText(f"{action}… You can close Preferences; the operation continues.")
+        runtime_progress.setRange(0, 0)
+
+        def work(_col: Any) -> tuple:
+            from .ollama_client import OllamaClient
+
+            result = None
+            if action == "Install/start":
+                result = ollama_runtime.full_setup(cfg, on_progress=local_progress)
+            elif action == "Update runtime":
+                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress)
+            elif action == "Stop managed server":
+                if not ollama_runtime.server_manager.spawned_or_adopted():
+                    raise RuntimeError("This server is external. Stop it in the application that started it.")
+                ollama_runtime.server_manager.stop()
+            elif action == "Pull":
+                OllamaClient(endpoint).pull(model, on_event=local_progress)
+            elif action == "Delete":
+                OllamaClient(endpoint).delete(model)
+            if result is not None and not result.ok:
+                raise RuntimeError(result.detail or "Ollama could not start. Check the endpoint and try Install/start again.")
+            actual_endpoint = result.endpoint if result is not None else endpoint
+            return runtime_snapshot(actual_endpoint), actual_endpoint
+
+        def done(result: tuple) -> None:
+            if not local_alive():
+                return
+            snapshot, actual_endpoint = result
+            runtime_state.update(owned=snapshot["owned"], update=snapshot["update"])
+            # Inventory updates never select a different embedding model.
+            installed_models.blockSignals(True)
+            installed_models.clear()
+            installed_models.addItems(snapshot["models"])
+            installed_models.blockSignals(False)
+            if actual_endpoint != endpoint:
+                endpoint_edit.setText(actual_endpoint)
+                mark_dirty()
+            if snapshot["reachable"]:
+                status = "Ollama is running (managed by Klaus)." if snapshot["owned"] else (
+                    "Ollama is running (external). Stop it in the application that started it."
+                )
+            else:
+                status = "Ollama is not reachable. Check the endpoint and click Install/start."
+            if actual_endpoint != endpoint:
+                status += " The runtime chose another port. Save to use the new endpoint."
+            runtime_status.setText(status)
+            runtime_progress.setRange(0, 100)
+            runtime_progress.setValue(100 if action in ("Pull", "Install/start", "Update runtime") else 0)
+            op_state["kind"] = ""
+            set_busy(False)
+
+        def failed(exc: Exception) -> None:
+            if not local_alive():
+                return
+            runtime_status.setText(f"{action} failed: {exc}")
+            runtime_progress.setRange(0, 100)
+            runtime_progress.setValue(0)
+            op_state["kind"] = ""
+            set_busy(False)
+
+        op = QueryOp(parent=dlg, op=work, success=done)
+        op.failure(failed)
+        op.without_collection().run_in_background()
+
+    def select_installed_model() -> None:
+        item = installed_models.currentItem()
+        delete_model_btn.setEnabled(not op_state["active"] and item is not None)
+        if item is not None:
+            embed_model_edit.setText(item.text())
+            mark_dirty()
+
+    def pull_model() -> None:
+        name = pull_model_edit.text().strip()
+        if not name:
+            runtime_status.setText("Enter a model name, such as nomic-embed-text, then click Pull.")
+            return
+        run_local("Pull", name)
+
+    def delete_model() -> None:
+        item = installed_models.currentItem()
+        if item is None or op_state["active"]:
+            return
+        name = item.text()
+        msg = QMessageBox(dlg)
+        msg.setWindowTitle("Delete model?")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(f"Delete {name} from Ollama? You will need to download it again to use it.")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        def answered(_result: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = clicked is not None and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+            msg.deleteLater()
+            if confirmed and local_alive():
+                run_local("Delete", name)
+        msg.finished.connect(answered)
+        msg.open()
+
+    install_btn.clicked.connect(lambda: run_local("Install/start"))
+    stop_runtime_btn.clicked.connect(lambda: run_local("Stop managed server"))
+    update_runtime_btn.clicked.connect(lambda: run_local("Update runtime"))
+    refresh_models_btn.clicked.connect(lambda: run_local("Refresh"))
+    pull_btn.clicked.connect(pull_model)
+    delete_model_btn.clicked.connect(delete_model)
+    delete_model_btn.setEnabled(False)
+    installed_models.currentItemChanged.connect(lambda *_args: select_installed_model())
+    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
 
     def test_connection() -> None:
         if op_state["active"]:
