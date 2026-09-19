@@ -126,7 +126,7 @@ _LEGACY_KEYS_DROPPED = (
     "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
     "_embed_default_migrated",
     # Retired 2026-09-18: Klaus Plus subscription service removed.
-    "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base",
+    "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
 )
 
 
@@ -134,11 +134,12 @@ def _migrate_config() -> None:
     """One-time migration of retired config keys (idempotent).
 
     Scrubs keys owned by removed features (chat_*, autocomplete, Ask,
-    Browse NL search) from old profiles. Once meta.json holds none of them
-    this is a no-op (the defaults no longer define them).
+    Browse NL search, Klaus Plus) from old profiles. Once meta.json holds
+    none of them this is a no-op (the defaults no longer define them).
     """
     cfg = get_config()
     changed = False
+    reset_embed_decline = False
     # 2026-09-15 (K-226): ONE retired key carried a VALUE the user set and
     # would have to re-enter, so it is RENAMED before the drop loop below
     # spends its old name. An empty destination only — a profile that
@@ -156,6 +157,7 @@ def _migrate_config() -> None:
                 cfg[new] = cfg[old]
             cfg.pop(old)
             changed = True
+            reset_embed_decline = True
     # 2026-09-16 (K-236): the embedding MODEL belonged to the provider
     # being scrubbed — the pre-plan dialog wrote the resolved Ollama model
     # into this key, and "nomic-embed-text" in an OpenAI-only world prices
@@ -164,22 +166,24 @@ def _migrate_config() -> None:
     if str(cfg.get("embedding_provider") or "openai") != "openai":
         cfg["embedding_model"] = ""
         changed = True
+        reset_embed_decline = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
+            if old not in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email"):
+                reset_embed_decline = True
     if changed:
         # 2026-09-16 (K-236): a profile that carried ANY retired key comes
         # from the pre-API-first world, where an embedding key was optional
         # because a local engine existed. `_embed_key_setup_declined` was a
         # "no thanks" to an OPTIONAL key, and leaving it set silences the
         # ONE profile-open message saying Klaus now REQUIRES one — the
-        # user's next signal would be a refusal tooltip on a drop. Cleared
-        # here, and only here: `changed` can never be True twice (the keys
-        # that set it are gone after this write), so the new regime gets
-        # exactly one fresh nudge and a decline made AFTER it is honoured
-        # forever.
-        cfg.pop("_embed_key_setup_declined", None)
+        # user's next signal would be a refusal tooltip on a drop. Klaus
+        # Plus retirement alone does not change the embedding-key regime,
+        # so it must preserve a decline made under the API-first regime.
+        if reset_embed_decline:
+            cfg.pop("_embed_key_setup_declined", None)
         write_config(cfg)
 
 

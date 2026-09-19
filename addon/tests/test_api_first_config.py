@@ -194,6 +194,29 @@ check(
     _wroteD == [],
 )
 
+# Retiring Klaus Plus storage does not make an API-first embedding key newly
+# required, so it must not re-open a prompt the user already declined.
+_storeP = _profile(
+    klaus_plus_key="kp-retired",
+    klaus_plus_cache={"old": "value"},
+    klaus_plus_base="https://retired.example",
+    klaus_plus_email="former@example.invalid",
+    _embed_key_setup_declined=True,
+)
+_writtenP: dict = {}
+K.get_config = lambda: dict(_storeP)
+K.write_config = lambda c: _writtenP.update(c)
+K._migrate_config()
+check(
+    "Plus-only migration drops all retired keys but preserves an API-first setup decline",
+    bool(_writtenP)
+    and all(
+        k not in _writtenP
+        for k in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email")
+    )
+    and _writtenP.get("_embed_key_setup_declined") is True,
+)
+
 # A profile that already holds the new names must not have them clobbered
 # by a stale old one: the rename only fills an EMPTY destination.
 _store2 = _profile(embedding_api_key_openai="sk-old", api_key_openai="sk-new")
