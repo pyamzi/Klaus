@@ -45,19 +45,12 @@ no external PDF reader, no manual triage of what to study next.
 
 ## Positioning
 
-Everything runs inside Anki against the user's own collection. Two AI
-capabilities, both API-first since 2026-09-15: semantic search over the
-collection and the lecture pages (OpenAI embeddings, one vector per
-page — the local Ollama and Voyage paths were removed), and an
-assistant docked on Anki's main window that rides the Claude Code CLI
-under the user's own login, reading the page in view. No autocomplete,
-no chat panel of Klaus's own — those were built and deliberately
-deleted (2026-08). The AI is paid for either with the user's own keys
-or through Klaus Plus, a metered subscription relayed by Klaus's own
-service (2026-09-16). A neighboring addon could not truthfully claim:
-per-PDF retention scoring joined to FSRS, semantic matching of the
-collection against the user's own lecture PDFs, and a native annotation
-viewer, in one addon.
+As of 2026-09-19, Klaus uses managed local Ollama embeddings and user-installed
+whisper.cpp for lecture transcription. Cosine thresholds drive card matching,
+duplicates and retention. An external MCP client can request active-page context
+through the authenticated local endpoint, with Anki approval for collection
+writes. The subscription service, reasoning judge and embedded assistant have
+been removed. See [architecture](AGENTS.md) and [configuration](klausmate/config.md).
 
 ## Operating Context
 
@@ -75,14 +68,14 @@ viewer, in one addon.
 
 ## Capabilities and Constraints
 
-- Anki's bundled Python 3.13 is bytecode-only; no venv, no numpy, no
-  native code. Vendored pure-Python only (pypdf 6.11.0 is vendored).
+- Anki's bundled Python 3.13 is bytecode-only; no numpy or bundled native Python extensions. Local Ollama and whisper.cpp
+  run as separate native executables. Vendored pure-Python only (pypdf 6.11.0 is vendored).
 - Headless testing = stubbed `aqt`/`anki` (see `.claude/skills/
-  klaus-test`); Qt widgets are never constructed in tests.
+  klaus-test`); selected suites also exercise real Qt widgets offscreen.
 - The addon package name `klausmate` (lowercase) is load-bearing
   (symlink, URLs, config); user-facing name is "KlausMate".
 - Personal data boundaries: `user_files/` (PDFs, annotations, card
-  index) and `meta.json` (API keys) are never staged, read, or shipped.
+  index) and `meta.json` (private profile configuration) are never staged, read, or shipped.
 - **Licensing (material because of "public later"):**
   `klausmate/browse_highlight.py` is adapted from Glutanimate's
   highlight-search-results under AGPLv3 with header-retention terms —
@@ -133,13 +126,11 @@ Volunteered and binding from the owner:
 
 1. **The collection is sacred.** The deck copier copies, never moves; every
    mutation is undoable; tags are owned and reconciled, not sprayed.
-2. **Privacy by disclosure, not by locality.** Since the API-first turn
-   (2026-09-15) the AI is cloud: OpenAI embeds the cards and lecture pages,
-   the assistant runs on the user's own Claude Code login, and Klaus Plus
-   relays through Klaus's own service. What leaves the machine, and to
-   whom, is stated in the README's privacy block and the service's
-   `/privacy` page; nothing is sent that those pages do not name, and
-   no telemetry ever. Every paid pass is priced before it runs.
+2. **Privacy with explicit boundaries.** Embedding and transcription inference
+   is local. Runtime/model downloads use the network. External clients may send
+   requested context to their chosen provider; disclose that boundary and keep
+   collection write approvals. See [privacy and setup](README.md).
+
 3. **Restyle, never rebuild, Anki.** Klaus lives inside Anki's own
    surfaces (toolbar restyled in place, Browse extended, stock
    multi-window). Attempts to replace Anki's shell failed twice and

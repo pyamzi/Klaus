@@ -2,15 +2,12 @@
 
 ## Current architecture: local-model reversion
 
-The approved architecture is [the local-model reversion](docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
-As of 2026-09-19, D1-D3 have removed Klaus Plus, the pertinence judge and
-the embedded assistant. D4-D6 are approved and planned, not implemented:
-[local transcription](docs/superpowers/plans/2026-09-19-local-transcription.md),
-[managed Ollama embeddings](docs/superpowers/plans/2026-09-19-ollama-restoration.md),
-then [the external MCP bridge](docs/superpowers/plans/2026-09-19-external-mcp-bridge.md).
-Follow those plans for the rebuild. Older cloud-only designs are historical.
-The intermediate embedding and recording adapters still call OpenAI;
-do not describe the local replacements as available until implemented.
+The approved [local-model reversion](docs/superpowers/specs/2026-09-18-local-model-reversion-design.md)
+is implemented locally as of 2026-09-19: D1-D3 removed the subscription service,
+reasoning judge and embedded assistant; D4 restores managed Ollama embeddings,
+D6 supplies whisper.cpp transcription, and D5 exposes context through a local
+stdio MCP bridge. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
+Older API-first and cloud-only designs are dated history, not current guidance.
 
 The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
@@ -55,7 +52,7 @@ Plan 3 was never built and is not pending work. Historical specs:
 (personal PDFs, annotations, card index) and `meta.json*` (live config,
 holds API keys) stay ignored — never stage those.
 
-- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/`,
+- **Always edit the main checkout**, `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/`,
   even though worktrees now contain a copy. Anki loads the addon through a
   symlink to the main checkout only, and the PostToolUse compile hook
   compiles that symlink target — so a worktree edit would report success
@@ -65,10 +62,9 @@ holds API keys) stay ignored — never stage those.
 ## Commands
 
 - **Run the whole test suite**:
-  `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+  `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Run one test file**: `python3 tests/test_klausmate.py`. The files that
-  need real PyQt6 widgets set `QT_QPA_PLATFORM=offscreen` themselves (12 of
-  the 49 do), so the bare command is enough — see "Anki runtime & testing".
+  need real PyQt6 widgets use offscreen rendering; use the offscreen environment explicitly; see "Anki runtime & testing".
 - **Add `PYTHONDONTWRITEBYTECODE=1` when you re-run a test after editing the
   module it covers**, not just on a mutation run. This Mac sets
   `sys.pycache_prefix` to `~/Library/Caches/com.apple.python`, so stale
@@ -131,7 +127,7 @@ same reason.
 ## How Anki loads the addon
 
 - Symlink: `~/Library/Application Support/Anki2/addons21/klausmate` →
-  `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate`. If the repo
+  `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate`. If the repo
   folder is ever renamed, this symlink breaks silently and Anki loads nothing
   — and this file goes stale with it: the repo WAS `Addons/` until the
   2026-08 rename, and both paths here went on naming a dead directory until
@@ -154,7 +150,7 @@ same reason.
   logic only, never Qt widgets**. The harness lives in `tests/` (see its
   README) with the bootstrap documented in the `klaus-test` skill — use
   that skill when adding or changing klausmate modules. Run everything:
-  `for t in tests/test_*.py; do echo "— $t"; python3 "$t" || break; done`
+  `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Offscreen PyQt6 can verify far more than "does it construct"
   (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
   `DriveWindow`/`PdfSidebar`/`MapCanvas` renders to a `grab()` you can
@@ -258,10 +254,10 @@ same reason.
   re-index through `_request_index_when_idle` (final review,
   2026-09-17): a 500 ms main-thread poll that calls
   `index_queue.request_pdf` only once `uploader().pending()` is 0 —
-  the tail chunk is still uploading when ■ is pressed, so a direct
+  the tail chunk is still transcribing when ■ is pressed, so a direct
   request re-embedded every lecture WITHOUT its last 30 seconds —
   de-duplicated per PDF and capped at about twenty minutes so a hung
-  upload cannot strand the re-index; never an idle callback inside the
+  transcription cannot strand the re-index; never an idle callback inside the
   uploader, whose queue also empties mid-recording;
   Tools menu
   (`install_menu`: ONE entry,
@@ -1031,8 +1027,8 @@ same reason.
   read so a torn sample cannot desync the stream). A device that supports
   neither format, or whose sample type Klaus cannot read, refuses to
   record with one log line naming it — never a silent dead button. The `Uploader` is one daemon worker, FIFO: transcribe, append to
-  the page record, unlink. **A failed upload keeps its WAV** — network
-  error or a missing transcription dependency; but a SPENT one never survives as a
+  the page record, unlink. **A failed transcription keeps its WAV**, for example after an
+  executable/model failure or timeout; but a SPENT one never survives as a
   leftover: once `append_segment` has happened, `_spend` unlinks the WAV and,
   if that fails, renames it out of `_LEFTOVER_RE`'s namespace (`.spent`, which
   the next `requeue_leftovers` sweeps away), because a swallowed unlink failure
@@ -1042,8 +1038,8 @@ same reason.
   transcript is dropped. Nothing a single chunk throws may kill the
   worker, or one bad chunk stops transcription for the session, which is
   also why the stop sentinel gets its own `task_done()` and
-  `_ensure_thread` re-checks `is_alive()`. The intermediate uploader uses
-  the user's OpenAI key directly until D6 replaces transcription locally;
+  `_ensure_thread` re-checks `is_alive()`. The worker uses `local_transcription.transcribe` with configured
+  executable, model and language;
   see [Uploader._one](klausmate/lecture_recorder.py).
   `ensure_records` is seeded once per PDF before the
   first segment ever lands (marked seeded only AFTER it succeeds), so a
@@ -1068,12 +1064,20 @@ same reason.
   trigger.
 - **Semantic matching stack**: per-PDF `!Library` tags and retention
   scores use cosine matching after D2 removed the reasoning judge.
-  - `embeddings.py` (aqt-free): intermediate OpenAI adapter; D4 plans
-    replacement with managed Ollama. Preserve unit-normalized vectors and
-    `index_signature`/`signature_matches` as the one cache identity check.
-  - Planned D4 modules, not yet restored: `ollama_client.py`,
-    `ollama_runtime.py`, `ollama_setup.py`. Follow the restoration plan
-    linked above, preserving the current page-store and index-v2 machinery.
+  - `embeddings.py` (aqt-free): local Ollama embeddings with normalized vectors.
+    `index_signature`/`signature_matches` remain the cache identity check.
+  - `ollama_client.py`: local-only endpoint validation, embedding requests,
+    model inventory, streaming pull with explicit terminal success, and deletion.
+  - `ollama_runtime.py` and `ollama_setup.py`: installed runtime discovery,
+    authorized installation/update, archive validation and owned server lifecycle.
+    Profile-open readiness starts installed runtimes without downloading. Preferences
+    operations can finish after dialog close; profile close cancels runtime work.
+    Automatic port relocation uses a profile-fenced endpoint-only compare-and-set;
+    newer saved endpoint edits win, and unsaved endpoint/model choices stay Save-owned.
+  - `local_transcription.py`: whisper.cpp executable discovery via explicit path,
+    PATH, configured login shell and known paths; temporary CLI JSON output,
+    typed failures and cleanup. No Python speech library is bundled.
+
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
     detector; `note.mod` only a pre-filter** — the Browse-preview tag bumps
@@ -1130,26 +1134,25 @@ same reason.
     `lecture_view` pattern; an overlay child over the central webview
     is a z-order gamble) carrying the same text and a Stop button,
     visible on the deck screen, the overview and mid-review — cannot
-    describe one job differently. No profile means no run. Intermediate
-    provider-key gates remain until D4 replaces them with local readiness.
+    describe one job differently. No profile means no run. Local
+    readiness replaces provider-key gates.
     Report readiness failures rather than silently dropping work. A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
     never fails the batch behind it. Cancel bumps `_seq`, which is what
     stops `after_matches` tagging on the PARTIAL ranking
     `ensure_matches` hands back. **Closing the Library no longer
     cancels indexing** (the job may have been started from the deck
-    screen). `offer_model_sweep(parent, prev_sig, first_key=…)`, called
+    screen). `offer_model_sweep(parent, prev_sig)`, called
     from `manage_models.save_embed` with the signature captured BEFORE
     the widgets overwrite config, re-indexes the card index plus every
     PDF with an index on disk — announced first, counted in notes and
-    PDFs. The intermediate implementation still has cloud estimates and
-    first-key handling; D4 replaces those with an explicit local-work
-    confirmation, preserving the default No and stale-index upgrade trigger.
+    PDFs. The offer confirms local work with default No and preserves the
+    stale-index upgrade trigger.
     `indexed_pdf_names` must inspect manifest files rather than hide old
     versions through `stats_from_disk`.
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
-    and re-embeds the collection on a paid API, silently (the exact bug
+    and needlessly re-embeds the collection (the exact bug
     eight call sites shipped when the signature grew a third element).
   - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
     curated nothing): the deck-screen **PDF import** surface — the
@@ -1214,7 +1217,7 @@ same reason.
     background groups (deck + study, one each): ONE mode combo, with
     PROGRESSIVE DISCLOSURE — every other row hides outright unless
     its mode is selected (klaus_hidden + an _apply_search re-walk,
-    the API-key row's pattern; design off hides the whole block).
+    the existing inline Remove-link pattern; design off hides the whole block).
     Image mode shows Choose Image… with a rounded 2× thumbnail
     caption (`_image_thumb`, rendered from the STORED copy; its
     Remove link clears the picture), Fit, Panel Frost (deck only)
@@ -1229,15 +1232,14 @@ same reason.
     `_bg_preview_cfg` carries that key from STORED config live per
     tick. Image-only rows disable WHOLE (`bg_fit_row`/`bg_blur_row`/
     `bg_wash_row`) so labels dim with their controls.
-    D3 removed the Assistant page and Plus controls. General and Appearance
-    remain; cloud key/model controls are intermediate and must be replaced
-    under D4/D6, with external MCP configuration added under D5. Preserve
-    the current sidebar/CardFrame shell and free-text embedding model field.
+    General and Appearance remain alongside Local models: Ollama runtime
+    management, free-text embedding model, whisper.cpp executable/model/language,
+    and External clients configuration. The embedded Assistant page is removed.
     `save_embed` captures `index_signature` before saving and offers a
-    confirmed index sweep when appropriate; D4 removes price/key semantics.
+    confirmed local index sweep when appropriate.
     **Preferences are deferred-save**: widgets only
     call `mark_dirty()`; `save_all()` behind the **Save** button is the
-    single writer of preference keys, closing dirty prompts to discard,
+    writer of user-edited preference keys (runtime relocation separately patches only endpoint), closing dirty prompts to discard,
     and `sync_embed_widgets`/`sync_threshold_widget` bail while dirty so
     a background `refresh()` can't clobber unsaved edits. Adding a
     preference = widget + `mark_dirty` signal + a line in the matching
@@ -1248,24 +1250,19 @@ same reason.
     key and model fields for, and `ui_state["shown_provider"]` went with
     it; what `save_embed` compares is `embeddings.index_signature`
     before and after.
-  - `setup_flow.py`: first-run library setup and profile-open readiness.
-    Intermediate key checks await D4's local-runtime readiness. Preserve
-    one clear nudge, consistent readiness wording and the once-per-profile
-    stale-index sweep offer. A declined sweep is an answer, not a snooze.
-  - `openai_client.py` (aqt-free, stdlib): the ONE place Klaus talks to
-    OpenAI — `embed(key, texts, model, dims)` and `transcribe(key,
-    wav_bytes, model, …)` (multipart with a hand-built boundary), one
-    retry on 429/5xx, `OpenAIError.user_message()` for the dialog copy.
-    stdlib `urllib` because the official SDK needs compiled wheels an
-    AnkiWeb add-on cannot vendor. **The key is passed in by the caller
-    and NEVER logged** — no config read here, no key in an exception
-    string. Tests point `_urlopen` at a fake. This module remains only
-    until both embedding and transcription callers are replaced by D4/D6.
-  - `cost.py` (pure): intermediate embedding/transcription estimates;
-    D2 removed judge prices, and D4 removes the remaining paid-index UI.
-- **Retained endpoint and context**: D3 removed the embedded dock,
-  process host and sessions (2026-09-19). D5 plans external MCP discovery,
-  a stdio bridge and a page text/image tool; none is implemented yet.
+  - `setup_flow.py`: first-run library setup and profile-open local readiness.
+    Preserve one clear nudge and the once-per-profile stale-index sweep offer.
+    A declined sweep is an answer, not a snooze.
+- **External endpoint and context**: as of 2026-09-19, the embedded dock, host
+  and sessions are removed. `scripts/mcp_stdio_bridge.py` is a standalone stdlib
+  process launched by an external client with Python 3.9+. It reads private
+  `user_files/mcp_connection.json` for each request and forwards to local HTTP.
+  Preferences copies token-free absolute-path configuration, never edits another
+  application's config. `current_page` returns slide text/transcripts and optional
+  PNG data. Collection writes still require Anki approval. External providers may
+  receive requested context. POSIX discovery mode 0600 is tested; native Windows
+  ACL privacy, separate-process lifecycle coordination and live Desktop remain limits.
+
   - `anki_endpoint.py` (aqt-free above its "aqt glue" divider): Klaus's
     own localhost AnkiConnect-compatible server (`/`) plus MCP-over-HTTP
     (`/mcp`), from ONE shared `ACTIONS` registry so the two routes
@@ -1337,7 +1334,7 @@ same reason.
     caller's thread; a raising subscriber is logged, never left to break
     the reporter.
   - `current_view` in `anki_endpoint.py` already consumes `viewer_context`
-    for PDF/page/selection metadata. D5 plans `current_page` to also read
+    for PDF/page/selection metadata. `current_page` also reads
     page text/transcripts and PNG content through `page_store.py`.
     Keep these retained modules; do not restore assistant session storage.
 - Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`,
@@ -1369,11 +1366,10 @@ same reason.
   D3 removed the subsequent Claude Code host as well.
   Historical note, 2026-09-15: API-first removed `page_ocr.py` and the
   Ollama client/runtime/setup modules, and retired local-runtime config.
-  The 2026-09-18 reversion authorizes D4 to restore managed Ollama and
-  migrate its keys back. OCR and Voyage remain out of scope. D1-D3 have
-  also retired Plus, judge and assistant settings. Consult the active
-  plans before changing migrations; the cloud defaults still in the
-  intermediate code are not the target configuration.
+  The 2026-09-19 implementation restores managed Ollama and migrates its
+  keys back. OCR and Voyage remain out of scope. D1-D3 retired Plus, judge
+  and assistant settings; D4 removed the final cloud client and cost module.
+  Current defaults are in `config.json`; preserve migration coverage.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1444,13 +1440,13 @@ same reason.
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
   used `shutil.which`, a bounded login-shell lookup, then known paths.
-  D6 plans the analogous local transcription discovery; do not import
+  `local_transcription.find_binary` implements local transcription discovery; do not import
   the deleted module.
 - **Historical Claude Code permission lesson (2026-09-02):** the removed
   host needed `ToolSearch` in its allowed tools to expose MCP schemas,
   and static allow/deny lists provided its actual permission boundary.
   Its `control_request` callback alone did not enforce that boundary.
-  For the planned external bridge, preserve endpoint authentication and
+  For the external bridge, preserve endpoint authentication and
   explicit write approvals; client-side permissions are additional gates.
 
 ## Conventions
@@ -1469,10 +1465,9 @@ same reason.
   `print("[klausmate] ...")`; tooltips only for capture-style actions
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has
-  `pypdf.annotations`); no other third-party deps, no native code.
-- D4 keeps the embedding model name free-text and restores a local model
-  library with pull progress in the existing Preferences shell. No provider
-  combo is needed for the single Ollama provider. D6 adds a local model-file
-  path for transcription. See the approved plans above; cloud-key fields
-  and reasoning-model controls are not the future design. Defaults live in
+  `pypdf.annotations`); no other bundled Python dependencies or native
+  Python extensions. Ollama and whisper.cpp are separate native executables.
+- The embedding model stays free-text with local model inventory and pull
+  progress in Preferences. Ollama is the single provider. Transcription uses
+  local executable/model paths and a language code. Defaults live in
   `config.json` and, for embeddings, `embeddings.DEFAULT_MODELS`.

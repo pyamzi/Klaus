@@ -6,7 +6,7 @@ Paste the body below into the **description** box on the AnkiWeb shared-add-on p
 
 ## Short tagline (page subtitle / GitHub About)
 
-A lecture-PDF library with semantic card matching for Anki. Uses a cloud embedding API by default; a local Ollama model is an alternative.
+A lecture-PDF library with semantic card matching for Anki. Uses local Ollama embeddings and local whisper.cpp transcription.
 
 ---
 
@@ -22,14 +22,18 @@ Features
 • Copy the matches into a deck — select the notes you want in Browse and use Notes → KlausMate: Create Curated Deck from Selection…. One undo step; your originals are untouched.
 • Native PDF viewer — drag-select text (Cmd+C or right-click Copy), highlights with sticky notes that get baked into the PDF as real annotations, thumbnails, find-in-PDF, and page/slide image capture.
 • Image cropping — right-click or double-click any image in a note field to crop it; the crop is saved as a new media file, so the original is untouched.
-• Preferences (Tools → KlausMate Preferences…, or the star in the top toolbar) — choose your embedding provider, build the card index, pull or delete local Ollama models, and set the accent colour and backgrounds.
+• Preferences (Tools → KlausMate Preferences…, or the star in the top toolbar) ; configure local embeddings and transcription, build the card index, pull or delete local Ollama models, and set the accent colour and backgrounds.
 
 Privacy — read before installing
-Klaus's only AI-powered feature is semantic search — it's what powers the card matching and the Library's retention scores. By default that means your card text is sent to Voyage AI's cloud embedding service to build the search index. That's the only thing that leaves your computer, and only for that purpose — there's no other AI feature, and no telemetry. Switch the embedding provider to Ollama in KlausMate Preferences for a fully local alternative: a model running on your machine, no account and no key, at somewhat lower search quality.
+Embeddings and recording transcription run locally. Downloading runtimes and models uses the network. External MCP clients may request lecture text, transcripts, page images and card context and send them to their chosen provider. Collection writes require approval in Anki. Matching uses cosine thresholds. There is no subscription service or embedded assistant.
+
+Setup: Tools → KlausMate Preferences… → Local models. Install/start Ollama, Pull an embedding model, Save, and configure whisper.cpp paths for recording. External clients → Copy configuration provides a token-free bridge configuration for a separate client; Klaus never edits that client's settings.
 
 Requirements
-• Anki 23.10+ (Qt 6.5+ recommended for the PDF viewer)
-• A free Voyage AI key for the default cloud embedding provider — or switch the provider to Ollama (bring your own install, or let Klaus manage one for you) to skip that
+• Anki with Qt PDF support for the native viewer; verify this build on your installation.
+• Ollama with an embedding model; Klaus can manage its runtime.
+• Optional recording: a separately installed whisper.cpp executable and model.
+• Optional external MCP client: Python 3.9 or newer and an open Anki profile.
 
 Support & feedback
 Discord: https://discord.gg/uFRgE8RtDY

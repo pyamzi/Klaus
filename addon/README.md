@@ -1,42 +1,18 @@
-# KlausMate — a lecture-PDF library with semantic card matching for Anki
+# KlausMate: a lecture-PDF library with local card matching for Anki
 
-Klaus gives you a library for your lecture PDFs and finds the cards in your
-collection that each one covers. A native PDF
-viewer, highlights, and image cropping come along for the ride. The AI
-capabilities are semantic search (OpenAI embeddings) and an assistant that
-rides the Claude Code CLI under your own login.
+Klaus organizes lecture PDFs, matches them to cards using local Ollama
+embeddings, and records page-linked transcripts through whisper.cpp. Matching
+and duplicate detection use cosine thresholds. PDF viewing, annotations,
+retention scores and image cropping remain part of the add-on.
+See the [user guide](klausmate/README.md) and [architecture guide](AGENTS.md).
 
-Two ways to pay for the AI: **bring your own keys** (free, your own OpenAI
-and Anthropic keys, your own bill) or **Klaus Plus** ($12/month or $99/year,
-no keys — Klaus's own service holds them and meters what you use). Either
-way the add-on is the same code; see [Klaus Plus](#klaus-plus) below.
-
-For what the add-on does day to day, see [`klausmate/README.md`](klausmate/README.md)
-(the copy that ships inside the package) — this file covers getting the repo
-running and building the package. For internals, see [`AGENTS.md`](AGENTS.md).
-
-> **Privacy — read before installing.** Klaus makes network calls for two
-> things — three on Klaus Plus — and nothing else. No telemetry, ever.
->
-> - **Indexing** sends your card text and your lecture pages' text to
->   OpenAI's embeddings API. On the free tier that goes straight to OpenAI
->   with your own key; on **Klaus Plus** it goes to Klaus's service, which
->   relays it to the same API and keeps usage counters only — never your
->   text, audio or images, and never in a log.
-> - **The assistant**, and only while you use it, sends your message plus the
->   page you are viewing (its text, its image, your selection) to Anthropic
->   through the `claude` CLI under **your own Claude login** — Klaus stores no
->   key for it, and Klaus Plus does not change that today.
-> - **On Klaus Plus only**, two more calls go to Klaus's service, and neither
->   carries any of your content: **Check** in Preferences asks
->   `GET /v1/me` for your plan and this month's usage, and **Manage
->   subscription…** asks `POST /v1/portal` for a one-time Stripe portal link.
->   Both send your licence key and nothing else. Without a licence key
->   neither ever fires.
-
-Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY)
-
----
+**Privacy:** Embeddings run against the configured local Ollama server; recording
+transcription runs through a local whisper.cpp executable. Runtime and model
+downloads use the network. An external MCP client can request lecture text,
+transcripts, images and card context, and its chosen model provider may receive
+that context. Local inference in Klaus does not make external-client processing
+local. See [configuration](klausmate/config.md), [embeddings](klausmate/embeddings.py),
+[transcription](klausmate/local_transcription.py) and [endpoint](klausmate/anki_endpoint.py).
 
 ## What it does
 
@@ -51,108 +27,76 @@ Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY)
 
 ---
 
-## Requirements
+## Installation and requirements
 
-- [Anki](https://apps.ankiweb.net/) **23.10+** (Qt 6.5+ for the PDF viewer; everything else works on earlier 23.10+ builds)
-- **Either** your own [OpenAI](https://platform.openai.com) key (indexing) — plus an [Anthropic](https://console.anthropic.com) key for what Klaus's designed-but-unbuilt Plans 2 and 3 will use — **or** a Klaus Plus licence key, which replaces both
-- `pypdf` — bundled under `klausmate/vendor/`; PDF features are disabled if it's missing
-- (Optional) the [Claude Code CLI](https://claude.com/claude-code) for the assistant dock — it runs under your own login and Klaus stores no key for it
+Use [Anki](https://apps.ankiweb.net/) with Qt PDF support for the native viewer.
+This local build has automated checks; compatibility across native Anki versions
+and operating systems still requires installation verification.
 
----
+Build with `bash scripts/package.sh`, then choose **Tools → Add-ons → Install
+from file…**, select `dist/klausmate.ankiaddon`, and restart Anki. Developers can
+copy or symlink `klausmate/` into `addons21/` instead. Locate that folder using
+**Tools → Add-ons → View Files**. The package includes vendored pypdf.
 
-## Installation
+## Local model setup
 
-### 1. Install the add-on
+Open **Tools → KlausMate Preferences… → Local models** (the toolbar star
+also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
+and embedding model is `nomic-embed-text`.
 
-**From `.ankiaddon`** *(recommended)*: build or download `dist/klausmate.ankiaddon`, then in Anki use **Tools → Add-ons → Install from file…** and select it. Restart Anki.
+1. Use **Install/start** to authorize installation or start a local Ollama
+   runtime, or enter the endpoint of your own local Ollama server. **Automatic
+   management** starts an installed runtime on profile open; it does not download
+   a runtime or model automatically. See [Ollama's official quickstart](https://docs.ollama.com/quickstart).
+2. Use **Refresh** to inspect **Installed models**. Enter `nomic-embed-text`
+   under **Download model** and choose **Pull** if needed. Select a model,
+   check **Embedding model**, then **Save**. Changing models offers a local
+   re-index. **Update runtime**, **Stop managed server** and confirmed
+   **Delete** manage runtime/model resources; progress is shown during downloads.
+3. For recording, separately install a compatible whisper.cpp CLI and model.
+   Set **Transcription model**, optionally **Transcription executable**, and
+   **Transcription language** (default `en`), then **Save**. An empty executable
+   path enables discovery. See the [whisper.cpp CLI instructions](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/README.md).
+   Klaus does not download the transcription executable or model for you.
+4. Optional external client: install a separate Python **3.9 or newer**, then
+   use **External clients → Copy configuration**. Merge the `klaus` entry into
+   Claude Desktop's `mcpServers` configuration and restart that client. Keep
+   Anki open with a profile loaded. The copied block uses absolute Python,
+   bridge and discovery-file paths, without a token or port. Copy again after
+   moving Python or the add-on. Klaus does not modify the client's settings.
+   Follow the [official local MCP setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
-**Manual (dev):** symlink or copy the `klausmate/` folder into your Anki `addons21/` directory, then restart Anki. Find `addons21/` via **Tools → Add-ons → View Files**.
+`current_view` supplies view metadata; `current_page` supplies slide text,
+transcript, selection and an image when available. Collection writes require
+approval in Anki. Treat lecture content as untrusted input. The bridge is local;
+this is not a public endpoint or a direct ChatGPT connector. Real Claude Desktop
+and live Anki integration remain installation checks, not automated-test claims.
 
-To rebuild the package from source:
+The exact defaults and controls are documented in [configuration](klausmate/config.md)
+and implemented by [Preferences](klausmate/manage_models.py).
 
-```sh
-./scripts/package.sh
-```
+## Source and packaging
 
-### 2. Pay for the AI: your own keys, or Klaus Plus
+- [embeddings.py](klausmate/embeddings.py), [ollama_client.py](klausmate/ollama_client.py),
+  [ollama_runtime.py](klausmate/ollama_runtime.py), [ollama_setup.py](klausmate/ollama_setup.py): local embedding/runtime management.
+- [local_transcription.py](klausmate/local_transcription.py) and [lecture_recorder.py](klausmate/lecture_recorder.py): local audio transcription and page attachment.
+- [anki_endpoint.py](klausmate/anki_endpoint.py) and [mcp_stdio_bridge.py](klausmate/scripts/mcp_stdio_bridge.py): authenticated local tools and external-client bridge.
+- [config.json](klausmate/config.json) and [config.md](klausmate/config.md): defaults and reference.
+- [package.sh](scripts/package.sh): stages only `klausmate/`, updates manifest build
+  time, excludes `meta.json*`, bytecode and personal `user_files/`, and adds only
+  the storage README under `user_files/`. The archive has no wrapper directory.
 
-Open **Tools → KlausMate Preferences… → API keys & models** (the star in the top toolbar opens the dialog too). There is one provider, OpenAI, and no provider picker: paste `api_key_openai` (and `api_key_anthropic`, stored for the designed-but-unbuilt Plans 2 and 3) and you are on the free tier, paying OpenAI directly.
-
-<a id="klaus-plus"></a>
-**Klaus Plus** is the alternative: one subscription, one licence key, no provider keys. Press **Subscribe…** in the Klaus Plus group at the top of that page, pay, and paste the `kp_…` key the welcome page shows into the **Klaus Plus key** field; **Check** fills in the status line. Klaus then sends its API calls to Klaus's own service, which relays them to the same providers and counts what you use: per UTC month, 30 lecture hours of audio, 3,000 judged cards, 200 assistant turns, and unmetered embeddings. *Today that means indexing* — it is the only call Klaus actually makes through an API key; transcription, card judging and the assistant-on-the-API are designed and not yet built, and their quotas are waiting for them. The provider-key rows stay editable the whole time — delete the licence key and you are back on your own keys with nothing else to change.
-
-### 3. (Optional) Vendor pypdf yourself
-
-If your copy lacks `klausmate/vendor/pypdf/`:
-
-```sh
-cd klausmate
-pip install --target vendor pypdf
-```
-
-Restart Anki. Without pypdf, PDF import, the viewer, and Library are all disabled; the Browse deck copier over note text still works.
-
----
-
-## Project structure
-
-```
-KlausMate-Context/
-├── README.md                 # This file (repo entry point)
-├── AGENTS.md                 # Architecture & contributor guide
-├── ANKIWEB.md                # Description blurb for the AnkiWeb listing
-├── LICENSE                   # GNU AGPL v3 — the add-on's licence
-├── scripts/package.sh        # Builds dist/klausmate.ankiaddon
-├── service/                  # Klaus Plus: the hosted metered service — a SEPARATE
-│                             # program, never shipped to users (see service/README.md)
-└── klausmate/                # Anki add-on package
-    ├── README.md             # Ships inside the add-on — user-facing usage
-    ├── LICENSE               # The same AGPL v3 text, shipped inside the package
-    ├── __init__.py           # Bootstrap, gui_hooks, JS bridge, menu, PDF tab/window management
-    ├── embeddings.py         # Embeddings (OpenAI) over openai_client.py
-    ├── plus.py               # Klaus Plus on the add-on side: the licence key, the per-call endpoint, the cached verdict
-    ├── card_index.py         # Embedding index over notes
-    ├── curation.py           # Card index build + the Browse deck copier
-    ├── pdf_drop.py           # PDF drop square + drop wrap on the deck list / overview screens
-    ├── retention.py          # Per-PDF retention/study-priority scoring
-    ├── pdf_index.py          # Embedding index over one PDF's text chunks
-    ├── pdf_handler.py        # PDF storage, text extraction, annotation baking
-    ├── pdf_viewer.py         # Native PDF viewer (selection, highlights, find, thumbnails)
-    ├── pdf_drive.py          # The Library window
-    ├── drive_store.py        # Library's virtual folders
-    ├── manage_models.py      # KlausMate Preferences dialog
-    ├── setup_flow.py         # First-run setup + readiness checks
-    ├── tag_migrate.py        # One-time klaus:: -> !Library tag migration
-    ├── openai_client.py      # Stdlib HTTP to OpenAI: embed() and transcribe()
-    ├── anthropic_client.py   # Stdlib HTTP to the Anthropic Messages API (no caller yet)
-    ├── crop_dialog.py        # Image-crop dialog
-    ├── config.json / config.md
-    ├── manifest.json
-    ├── web/copilot.js        # Editor field-focus tracking + image-crop trigger
-    ├── vendor/pypdf/         # Bundled PDF library
-    └── user_files/           # User data (survives upgrades)
-```
-
----
-
-## Building the `.ankiaddon` package
-
-```sh
-./scripts/package.sh
-```
-
-This produces `dist/klausmate.ankiaddon` ready for **Tools → Add-ons → Install from file…** or upload to [ankiweb.net/shared/addons](https://ankiweb.net/shared/addons/). The script stages a copy of `klausmate/` into a tempdir, bumps `manifest.json`'s `mod`, excludes `meta.json*` (per-user config, may hold API keys) and everything in `user_files/` except the placeholder `README.txt`, strips `__pycache__`/`*.pyc`/`.DS_Store`, and zips from inside the staging dir so `__init__.py` sits at the archive root (AnkiWeb rejects archives wrapped in an extra folder). `service/` is never staged — it lives outside `klausmate/` and carries an explicit `--exclude` besides.
-
-The AnkiWeb listing description lives in [`ANKIWEB.md`](ANKIWEB.md) — paste it into the AnkiWeb shared-add-on description box when publishing or updating.
-
----
-
-## Support
-
-- Issues & questions: [Discord](https://discord.gg/uFRgE8RtDY)
-
----
+The [completion report](docs/superpowers/reports/2026-09-19-local-model-reversion.md)
+records commits, verification and the local package hash. This build is not
+published or merged. [ANKIWEB.md](ANKIWEB.md) is listing copy for a future release.
 
 ## License
 
-The add-on (`klausmate/`) is licensed under the GNU AGPL v3 — see `LICENSE`. The Klaus Plus service (`service/`) is a separate program and is not part of the add-on's licence. Third-party: `pypdf` (BSD) in `vendor/`.
+See the existing [repository license](LICENSE), [packaged license](klausmate/LICENSE)
+and [vendored pypdf license](klausmate/vendor/pypdf-6.11.0.dist-info/licenses/LICENSE).
+External runtimes and models have their own license terms; this change does not
+create new license grants.
+
+## Support
+
+Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY).

@@ -2,6 +2,11 @@
 
 ## Local models
 
+Runtime and model downloads use the network. Embedding and transcription
+inference runs locally; external-client processing follows its provider choice.
+Sources: [defaults](config.json), [Preferences](manage_models.py),
+[local adapter](local_transcription.py) and [Ollama runtime](ollama_runtime.py).
+
 Semantic search uses local Ollama embeddings, configured in
 **KlausMate Preferences → Local models**. Provider credentials are removed
 from existing profiles during migration.
@@ -47,7 +52,7 @@ still require **Save**; starting from an unsaved endpoint does not apply it.
 
 - **transcription_model_path**: Local whisper.cpp model file. Default `""`.
   Install whisper.cpp and download a compatible model using the
-  [official setup instructions](https://github.com/ggml-org/whisper.cpp#quick-start).
+  [official setup instructions](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/README.md).
   Select the model in **Preferences > Local models > Transcription model**.
 - **transcription_binary**: Optional path to the whisper.cpp executable.
   Default `""` uses automatic discovery. Use Browse for a custom installation.
@@ -72,40 +77,11 @@ opens the PDF's own `!Library` tag, which holds exactly its matches at or
 above that PDF's sensitivity. Indexing writes that tag; nothing extra is
 needed to produce it.
 
-### Doubtful cards (the pertinence check)
+### Cosine matching
 
-Matching by similarity finds cards about the same *subject*; it cannot
-tell "this slide's actual content" from "the same organ system". So the
-last step of indexing asks Claude, card by card, whether studying that
-card would really be reasonable preparation for the one lecture page it
-matched best. Cards it says no to are tagged **`!Library::Doubtful`**,
-are left out of that PDF's retention score, and show up in the Library
-row's Cards cell as "n · m doubtful". Right-click → **Doubtful cards…**
-opens Browse on them.
-
-- It **always asks first**. Before the first paid request of a job, a
-  dialog says how many cards it would judge and roughly what that costs
-  (on Klaus Plus, what it uses of your monthly allowance instead).
-  **Skip** is the default button; skipping leaves those cards simply
-  matched, exactly as before, and the index finishes normally.
-- It needs `api_key_anthropic` (or a Klaus Plus key). With neither, the
-  step is skipped silently — no dialog, nothing to decline: new matches
-  stay unjudged (and count), while verdicts from an earlier judged run
-  keep standing until their card or page changes. Removing a key never
-  un-doubts a card by itself.
-- **A card Claude does not answer for is never doubtful.** Unjudged
-  counts as confirmed; only an explicit "no" rejects a card.
-- Verdicts are cached per PDF and re-used until the card's text, the
-  page's text, or the model changes — editing a note re-judges just that
-  card on the next index, not the whole lecture.
-- `!Library::Doubtful` is **one tag for your whole collection**, not one
-  per PDF: its members are every card rejected by a lecture it still matches
-  (raise a lecture's sensitivity past a card and that lecture's doubt
-  about it lapses). So a card rejected for lecture A but confirmed for
-  lecture B still carries the tag. **Doubtful cards…** narrows it to the lecture you clicked by
-  searching for both tags at once.
-- Nothing is ever suspended, deleted or untagged by this check. It only
-  adds a tag and changes what the retention score counts.
+Matching and retention use the configured cosine threshold. No reasoning pass
+or Doubtful menu remains. Historical `!Library::Doubtful` tags are reserved and
+preserved, but do not exclude cards from scores. See [tag sync](tag_sync.py).
 
 ### Recording a lecture
 
@@ -117,18 +93,18 @@ and the text is stored **on the page you were looking at when you said
 it**. Press **■** to stop; the bar shows elapsed time and how many pieces
 are still waiting to be transcribed. Once the last piece has been transcribed,
 Klaus re-indexes that PDF, so the pages you spoke over are searchable by
-what was said on them, and the assistant reads them too (if an upload
+what was said on them, and external clients can request them too (if transcription
 hangs, the re-index runs anyway after about twenty minutes).
 
 - Only one recording at a time, across every panel. Klaus says so rather
   than quietly opening a second microphone.
 - Nothing is recorded until you press ●, and there is no recording
   without a PDF open.
-- A piece that cannot be uploaded — no key, no network, a subscription
-  refusal — **keeps its audio** in the add-on's
+- A piece that cannot be transcribed because a local dependency is unavailable
+  or a subprocess fails **keeps its audio** in the add-on's
   `user_files/recordings/<pdf>/` folder and is retried the next time you
-  record that lecture. Once uploaded, the audio file is deleted; only the
-  text is kept. Silence transcribes to nothing and is dropped.
+  record that lecture. Once successfully transcribed, the audio file is deleted; only the
+  text is kept. An empty transcript is dropped.
 - The transcript for the page you are on shows in a collapsible strip
   under the PDF, filling in live as pieces come back.
 
@@ -190,12 +166,11 @@ only to the configured local Ollama endpoint.
 ### PDF study priorities
 
 The Library shows a per-PDF retention score — the share of that PDF's
-**confirmed** cards (at or above its sensitivity, see
-`pdf_match_threshold` above, minus anything the pertinence check
-rejected) you'd currently recall — so you know what to study first. It
+matched cards (at or above its sensitivity, see
+`pdf_match_threshold` above) you'd currently recall ; so you know what to study first. It
 reads the same match cache the `!Library` tags do; nothing here embeds
 anything indexing wouldn't already need. The Cards count and the
-sensitivity slider's live preview use the same confirmed-only figure, so
+sensitivity slider's live preview use the same matched-card figure, so
 the number never changes just because you opened a dialog.
 
 ### Lecture view (review screen)
@@ -213,32 +188,10 @@ the number never changes just because you opened a dialog.
   available for this card." Panel width and open-state live in
   `pdf_tabs.json` (`lecture_view` key) — state, not preferences.
 
-## Assistant
+## Assistant history
 
-The assistant answers about whatever lecture page you are looking at,
-reaching it as the page record Klaus keeps for it — the slide's own text
-plus any transcript of what was said over it — together with the page
-image. It runs on your own Claude Code login today — the `claude` CLI,
-launched as a child process, not a Klaus-held key. `api_key_anthropic`
-and `reasoning_model` (see **API keys & models** above) belong to the
-pertinence check, not to the assistant — it does not read either of them
-yet; a future release will move it onto them.
-
-- **assistant_reopen**: Default `false`. Reopen the Assistant dock
-  where you left it the next time Anki starts — the same idea as
-  `lecture_view_reopen` above. Only reopens it if it was open when you
-  last closed the profile (see `assistant_dock_open`).
-- **assistant_dock_width**: Default `420`. The Assistant dock's last
-  width in pixels, written by dragging the dock itself rather than a
-  Preferences row.
-- **assistant_dock_open**: Default `false`. Whether the Assistant dock
-  was open the last time you opened or closed it. Written by the dock
-  itself, never by a Preferences row; `assistant_reopen` is what decides
-  whether it is acted on.
-
-**Clear Sessions** (KlausMate Preferences → Assistant) deletes the
-saved per-PDF conversation history the Assistant keeps. It never
-touches your notes, PDFs, or highlights.
+As of 2026-09-19 the embedded assistant, its sessions and dock settings are
+removed. Use the external MCP client setup below.
 
 ## Feature toggles
 
@@ -251,17 +204,11 @@ touches your notes, PDFs, or highlights.
   searching, matched terms are highlighted in the editor pane of the
   selected row (View menu → **Highlight Search Results** toggles it per
   window; this config key is only the starting state).
-- **library_tags_enabled**: Default `true`. Keeps every indexed PDF's
-  per-PDF `!Library` tag (one tag per PDF, holding exactly the notes
-  matched at or above its sensitivity — see `pdf_match_threshold` above)
-  created, renamed, and pruned automatically as you index, re-sensitize,
-  rename, or delete PDFs. Turn off and Klaus stops creating or updating
-  those tags entirely — including `!Library::Doubtful` — so **Show
-  Matched Cards in Browse** and **Doubtful cards…** have no tag to open.
-  That is all this switch costs you: retention scores (confirmed-only
-  included), the doubtful counts in the Library, and the deck copier are
-  unaffected, and the pertinence check still runs and still caches its
-  verdicts.
+- **library_tags_enabled**: Optional stored override, read as `true` when
+  absent; not a key in the shipped defaults. Controls creation, renaming and
+  pruning of per-PDF `!Library` tags. Turning it off leaves cosine retention
+  scoring and deck copying available, but stops automatic membership updates.
+  See [tag sync](tag_sync.py).
 
 - **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
   viewer panel and Library. `"native"` is Qt's built-in QPdfView;
@@ -429,3 +376,15 @@ exposes only its authenticated local endpoint. This setup does not provide
 public hosting or direct ChatGPT access. Automated checks cover the stdio
 bridge and Preferences clipboard; a real Claude Desktop session has not been
 verified by those checks.
+
+## Stored state and optional overrides
+
+The shipped defaults are exactly [config.json](config.json). `library_tags_enabled`
+is an optional override with a code fallback, not a shipped default.
+`background_gradients` and `reviewer_background_gradients` are saved sphere lists
+created by Appearance; legacy scalar coordinates supply missing-list fallback.
+`library_root` is written after choosing a library folder.
+`_local_embeddings_migrated`, `_v2_index_sweep_offered` and
+`_library_tag_migrated` are automatic migration/offer state, not user controls.
+The old cloud credential, subscription, judge and dock keys are removed during
+[migration](__init__.py). Other historical keys are not current settings.
