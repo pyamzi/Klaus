@@ -1,13 +1,11 @@
-"""Live smoke tests against the real hosted AI providers. PAID. Opt-in only.
+"""Live smoke tests against the real hosted OpenAI API. PAID. Opt-in only.
 
-K-239: the spec/testing plan calls for three cheap, real smokes proving the
+K-239: the spec/testing plan calls for two cheap, real smokes proving the
 wire-level integration actually works end to end — not correctness of any
 AI output, just "the request left the process and a sane response came
-back" — against the providers klausmate actually talks to today:
-``klausmate.openai_client`` (embeddings + audio transcription) and
-``klausmate.anthropic_client`` (the Messages API). Each hits a real paid
-endpoint, so the whole file is a no-op unless a developer deliberately
-opts in.
+back" — against ``klausmate.openai_client`` (embeddings + audio
+transcription). Each hits a real paid endpoint, so the whole file is a
+no-op unless a developer deliberately opts in.
 
 Gate: nothing below this module's docstring runs a single line of
 klausmate-import or network code unless ``KLAUS_LIVE_API=1`` is set in the
@@ -21,12 +19,11 @@ from klausmate's own ``meta.json`` (this repo's tooling denies reading that
 file on purpose, and a headless test has no business opening a user's live
 Anki config anyway):
 
-    KLAUS_LIVE_API=1 OPENAI_API_KEY=sk-... ANTHROPIC_API_KEY=sk-ant-... \\
+    KLAUS_LIVE_API=1 OPENAI_API_KEY=sk-... \\
         python3 tests/test_live_api.py
 
-Each of the three sections below additionally SKIPs itself (not a FAIL) if
-its own key is missing, so a developer with only one provider's key can
-still exercise the others.
+Each section below additionally SKIPs itself (not a FAIL) if the key is
+missing.
 
 Run: KLAUS_LIVE_API=1 python3 tests/test_live_api.py
 """
@@ -43,16 +40,12 @@ from anki_stubs import check, install_package_stub, report, section  # noqa: E40
 
 if os.environ.get("KLAUS_LIVE_API") != "1":
     print("SKIP tests/test_live_api.py: set KLAUS_LIVE_API=1 to run these "
-          "paid live-API smokes (needs OPENAI_API_KEY / ANTHROPIC_API_KEY too)")
+          "paid live-API smokes (needs OPENAI_API_KEY too)")
     raise SystemExit(0)
 
-# openai_client/anthropic_client/plus are aqt-free at module load time (all
-# stdlib + `from . import plus`, and plus.py itself only imports
-# json/os/time/urllib) — confirmed by reading all three before writing this,
-# per the klaus-test skill's own warning not to assume. No aqt stub needed.
+# openai_client is aqt-free at module load time. No aqt stub needed.
 install_package_stub()
 openai_client = importlib.import_module("klausmate.openai_client")
-anthropic_client = importlib.import_module("klausmate.anthropic_client")
 
 
 def _say_wav(text: str) -> bytes:
@@ -107,27 +100,5 @@ else:
         print("  SKIP macOS `say` not available to synthesize speech audio")
     except openai_client.OpenAIError as e:
         check("transcription call succeeded", False, str(e))
-
-section("smoke: Anthropic Messages API (klausmate.anthropic_client.Client)")
-anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-if not anthropic_key:
-    print("  SKIP no ANTHROPIC_API_KEY in environment")
-else:
-    try:
-        client = anthropic_client.Client(lambda: {"api_key_anthropic": anthropic_key})
-        result = client.complete({
-            "model": "claude-sonnet-5",
-            # Sonnet 5 runs adaptive thinking by default (not opt-in) — a
-            # lowballed max_tokens risks the thinking budget crowding out
-            # the actual reply, which would fail this smoke for a reason
-            # that has nothing to do with the wire integration. 256 is the
-            # documented floor for a simple/classification-shaped task.
-            "max_tokens": 256,
-            "messages": [{"role": "user", "content": "Reply with exactly one word: pong"}],
-        })
-        check("got a non-empty completion",
-              bool(anthropic_client.text_of(result).strip()), repr(result))
-    except anthropic_client.LLMError as e:
-        check("Messages API call succeeded", False, str(e))
 
 raise SystemExit(report())

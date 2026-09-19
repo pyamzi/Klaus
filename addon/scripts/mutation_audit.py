@@ -131,25 +131,14 @@ AUDIT_MODULES = (
     # 122 checks in tests/test_index_queue.py reach nearly all of it.
     "index_queue",
     # The API-first modules (2026-09-15, added by K-228).  page_store
-    # and cost are pure; openai_client and anthropic_client are pure
-    # above one _urlopen the tests replace — so, like the rest of this
-    # roster, nearly every function is reachable from its own test file.
+    # and cost are pure; openai_client is pure above one _urlopen the
+    # tests replace, so nearly every function is reachable from its test.
     "page_store",
     "cost",
     "openai_client",
-    "anthropic_client",
-    # Klaus Plus on the add-on side (2026-09-16, K-249). Aqt-free, stdlib
-    # urllib above one _urlopen tests/test_plus.py replaces -- the same
-    # shape as the rest of this roster.
-    "plus",
-    # Plan 2 (2026-09-17, K-259).  pertinence is aqt-free above its own
-    # glue divider (the pure judge: the strict tool, the parser, the
-    # judged.json store); lecture_recorder is aqt-free above its "Qt
-    # glue" divider (Chunker, wav_bytes, chunk_path, Uploader), and its
-    # test file drives the Recorder's non-Qt internals directly.  Both
-    # reach the network only through a seam their tests replace
-    # (`client.complete`, `lecture_recorder._transcribe`).
-    "pertinence",
+    # Lecture recording is aqt-free above its "Qt glue" divider
+    # (Chunker, wav_bytes, chunk_path, Uploader). Its test drives the
+    # Recorder's non-Qt internals and replaces the network seam.
     "lecture_recorder",
 )
 
