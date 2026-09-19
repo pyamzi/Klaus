@@ -114,25 +114,46 @@ similar) rather than leaving it orphaned.
 tool reads through it the same way `assistant_dock._page_context` used
 to.
 
-## D4 — Restore local (Ollama) embeddings
+## D4 — Restore local (Ollama) embeddings, full runtime management
 
 Two shapes exist in this repo's own history, and they are NOT the same
-size:
+size — a lean, client-only `embeddings.py` branch (`git show
+f74a09e^:klausmate/embeddings.py`, ~220 lines, assumes the user already
+runs `ollama serve` themselves) versus full runtime management
+(`ollama_client.py` 222 lines, `ollama_runtime.py` 1013 lines,
+`ollama_setup.py` 121 lines, deleted at commit `1b6fccd`): Klaus
+detects/installs/starts/stops Ollama itself and offers a "Local model
+library" Preferences page for pulling models with progress bars.
 
-- **Lean, client-only** (`git show f74a09e^:klausmate/embeddings.py`):
-  Ollama's `/api/embed` called inline in `embeddings.py` itself, ~220
-  extra lines total. Assumes the user already has Ollama installed and
-  running (`ollama pull nomic-embed-text`, `ollama serve`) — Klaus
-  doesn't manage that.
-- **Full runtime management** (`ollama_client.py` 222 lines +
-  `ollama_runtime.py` 1013 lines + `ollama_setup.py` 121 lines, deleted
-  at commit `1b6fccd`): Klaus detects/installs/starts/stops Ollama
-  itself and offers a "Local model library" Preferences page for pulling
-  models with progress bars.
+**Decided: restore the full runtime manager.** Bring back all three
+modules from `git show 1b6fccd^:klausmate/<name>.py` — they're aqt-light
+(pure logic + subprocess/urllib, no Qt below their own glue divider) and
+can come back close to verbatim:
 
-**This spec restores the lean shape.** ~1,356 lines of process-
-management code is a second project, not a revert, and nothing in the
-four clarifying rounds asked for Klaus to manage an Ollama install.
+- `ollama_client.py` — stdlib-`urllib` HTTP wrapper (`OllamaClient`,
+  `OllamaError`/`OllamaNotRunning`). No changes expected.
+- `ollama_runtime.py` — the real bulk: per-platform binary download with
+  SHA verification and disk-space checks, archive extraction
+  (tgz/zip/tzst across macOS/Windows/Linux), `find_system_ollama()` vs a
+  Klaus-managed install under `runtime_root()`, `ServerManager`
+  (spawn/adopt-orphan/poll-ready/stop with a pidfile), `full_setup()` as
+  the one entry point Preferences calls.
+- `ollama_setup.py` — package-manager install helpers (`brew install
+  ollama` / `winget install`) plus the `ollama.com/download` browser
+  fallback, `ollama_reachable()` health probe.
+
+**The Preferences UI is NOT a verbatim restore.** `manage_models.py`'s
+old "Local model library" section (see `git show
+1b6fccd^:klausmate/manage_models.py`, its `_resolve_ollama_model` /
+"Local model library (inventory only)" section) was built against the
+PRE-K-106 dialog layout. Preferences has since been rebuilt as the
+SynapsePro settings shell (sidebar + `CardFrame`/`_row()` pages) — the
+old page's logic (list local models, show download progress, offer
+install methods, a health/status line) gets re-wired into that current
+shell as its own page or a group on "API keys & models," not
+copy-pasted wholesale. This is real UI work, not restoration, and
+belongs as its own implementation-plan task.
+
 `DEFAULT_PROVIDER` goes back to `"ollama"`, `DEFAULT_MODELS` gains
 `"ollama": "nomic-embed-text"`, `provider_name`/`embedding_model` regain
 real branching instead of the current hardcoded `"openai"`. Voyage is
@@ -256,10 +277,10 @@ note rather than being deleted outright — CLAUDE.md's own house style is
 to keep dated history, not erase it), and add a one-line "superseded by"
 header to the top of each of the three specs listed above.
 
-## Open question for sign-off before the plan is written
+## Sign-off
 
-D4 assumes the **lean** Ollama restoration (no install/runtime
-management, no "Local model library" page). If a runtime-managed
-experience is actually wanted, that's a materially bigger plan (~1,350
-extra lines) and should be scoped as its own follow-up rather than
-folded into this one.
+D4 was the one open question — resolved: full runtime management,
+not the lean client-only branch. Restoring the ~1,350-line
+`ollama_client.py`/`ollama_runtime.py`/`ollama_setup.py` trio plus a
+rebuilt (not copy-pasted) "Local model library" Preferences page is now
+in scope for this plan, not a follow-up.
