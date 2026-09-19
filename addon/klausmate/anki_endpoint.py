@@ -513,6 +513,11 @@ def preview_sections(action: str, params: dict, similar: str | list | None = Non
 
 # ---- the endpoint --------------------------------------------------------------
 
+# Profile endpoint lifecycles share this process. Keep replacement and the
+# ownership-check/unlink indivisible, including across different Endpoint objects.
+_DISCOVERY_LOCK = threading.Lock()
+
+
 class Endpoint:
     def __init__(self, *, col_getter, run_on_main, approver, ctx_factory, version: str,
                  approval_timeout: float = APPROVAL_TIMEOUT_S, read_timeout: float = READ_TIMEOUT_S,
@@ -562,7 +567,8 @@ class Endpoint:
                 json.dump(self._identity(), stream)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, self._discovery_path)
+            with _DISCOVERY_LOCK:
+                os.replace(temporary, self._discovery_path)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
@@ -571,10 +577,11 @@ class Endpoint:
         if self._discovery_path is None:
             return
         try:
-            with open(self._discovery_path, encoding="utf-8") as stream:
-                owned = json.load(stream) == self._identity()
-            if owned:
-                os.unlink(self._discovery_path)
+            with _DISCOVERY_LOCK:
+                with open(self._discovery_path, encoding="utf-8") as stream:
+                    owned = json.load(stream) == self._identity()
+                if owned:
+                    os.unlink(self._discovery_path)
         except (OSError, ValueError):
             pass
 

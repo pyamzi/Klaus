@@ -911,6 +911,43 @@ with tempfile.TemporaryDirectory(prefix="klaus discovery ") as scratch:
     second.start()
     check("restart rotates token", second.token != previous_token)
     second.stop()
+    first.start()
+    cleanup_read = threading.Event()
+    release_cleanup = threading.Event()
+    publication_ready = threading.Event()
+    publication_done = threading.Event()
+    real_load, real_fsync, real_replace = ep.json.load, ep.os.fsync, ep.os.replace
+    def paused_load(stream):
+        value = real_load(stream)
+        cleanup_read.set()
+        if not release_cleanup.wait(5):
+            raise RuntimeError("cleanup test gate timed out")
+        return value
+    def ready_fsync(fd):
+        real_fsync(fd)
+        publication_ready.set()
+    def tracked_replace(source, destination):
+        real_replace(source, destination)
+        publication_done.set()
+    stopping = threading.Thread(target=first.stop)
+    starting = threading.Thread(target=second.start)
+    with patch.object(ep.json, "load", side_effect=paused_load), \
+         patch.object(ep.os, "fsync", side_effect=ready_fsync), \
+         patch.object(ep.os, "replace", side_effect=tracked_replace):
+        try:
+            stopping.start()
+            check("old cleanup paused after reading identity", cleanup_read.wait(5))
+            starting.start()
+            check("new discovery ready during old cleanup", publication_ready.wait(5))
+            check("publication waits for ownership check and removal", not publication_done.wait(0.2))
+        finally:
+            release_cleanup.set()
+            stopping.join(5)
+            starting.join(5)
+    check("overlapping lifecycle threads finish", not stopping.is_alive() and not starting.is_alive())
+    check("overlapping old stop preserves newly published discovery",
+          discovery.exists() and json.loads(discovery.read_text())["token"] == second.token)
+    second.stop()
     failed = make_endpoint()
     with patch.object(ep.os, "replace", side_effect=OSError("injected write failure")):
         try:
