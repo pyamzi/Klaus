@@ -101,18 +101,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: Copied into the sandbox.  ``klausmate/user_files`` (real PDFs, the
 #: card index, annotations) and ``meta.json`` (API keys) are excluded —
 #: they are half a gigabyte and none of it is ours to duplicate.
-#: ``service/klausplus`` joined the list in K-259, for exactly one file:
-#: ``tests/test_lecture_recorder.py`` lifts the service's own
-#: ``wav_seconds`` out of ``proxy.py`` BY AST (never importing it) so its
-#: WAV-header pin proves interop with the real metering code rather than a
-#: retyped copy of the formula.  Without the tree in the sandbox that
-#: test's module-level ``_load_wav_seconds()`` raises FileNotFoundError and
-#: the baseline is red, which aborts the whole run.  Nothing here is ever a
-#: mutation target — targets come from ``klausmate/<module>.py`` alone —
-#: and the tree is hashed before and after like every other, so the audit
-#: still cannot write to it.
-SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"),
-                 os.path.join("service", "klausplus"))
+SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"))
 _COPY_SKIP_DIRS = {"user_files", "__pycache__", ".git"}
 _COPY_SKIP_NAMES = {"meta.json", "meta.json.bak"}
 

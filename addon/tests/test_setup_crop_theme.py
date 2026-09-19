@@ -192,14 +192,8 @@ check("save-as-new-file encode path intact",
 check("crop dialog title still names the file, not renamed to KlausMate",
       'f"Crop Image — {fname}"' in _CROP_SRC)
 
-section("Klaus Plus: setup_flow readiness and copy (fix1, K-246 review I4 — "
-        "live pins; the two source-only pins this replaced in "
-        "test_bridge_reentrancy.py passed even with the feature deleted)")
-check("a Klaus Plus key alone makes semantic search ready",
-      setup_flow._embedding_ready({"klaus_plus_key": "kp_" + "a" * 32}) is True)
-check("neither key: still not ready", setup_flow._embedding_ready({}) is False)
-check("KEYS_COPY itself — not some comment elsewhere in the file — names Klaus Plus",
-      "Klaus Plus" in setup_flow.KEYS_COPY)
+check("no provider key: semantic search is not ready",
+      setup_flow._embedding_ready({}) is False)
 
 section("K-231: the nudge names the keys it actually checked "
         "(it listed both while readiness tested only the OpenAI one, so a "
@@ -209,7 +203,6 @@ section("K-231: the nudge names the keys it actually checked "
 _OPENAI = {"api_key_openai": "sk-" + "o" * 24}
 _ANTHROPIC = {"api_key_anthropic": "sk-ant-" + "a" * 24}
 _BOTH = dict(_OPENAI, **_ANTHROPIC)
-_PLUS = {"klaus_plus_key": "kp_" + "a" * 32}
 
 check("neither key: both are reported missing",
       setup_flow.missing_keys({}) == ["api_key_openai", "api_key_anthropic"])
@@ -219,10 +212,6 @@ check("only OpenAI set: ONLY the Anthropic key is reported missing "
 check("only Anthropic set: ONLY the OpenAI key is reported missing",
       setup_flow.missing_keys(_ANTHROPIC) == ["api_key_openai"])
 check("both set: nothing is missing", setup_flow.missing_keys(_BOTH) == [])
-check("a Klaus Plus key alone satisfies BOTH halves — the service holds "
-      "the provider keys, so a subscriber has nothing to paste (K-246)",
-      setup_flow.missing_keys(_PLUS) == []
-      and setup_flow.keys_missing_copy(_PLUS) == "")
 check("whitespace is not a key",
       setup_flow.missing_keys({"api_key_openai": "  ",
                                "api_key_anthropic": "\t"})
@@ -354,7 +343,6 @@ check("only Anthropic set: the OpenAI nudge, with the embedder's own "
       and _n_anthropic[2] == ("Until then, semantic search and PDF study "
                               "priorities won't produce results."))
 check("both keys set: no nudge at all", _nudge_for(_BOTH) is None)
-check("a Klaus Plus key alone: no nudge at all", _nudge_for(_PLUS) is None)
 check("'Later' is still honoured for every state — one nudge, one flag, "
       "no second config key (K-231's own constraint)",
       _nudge_for({"_embed_key_setup_declined": True}) is None

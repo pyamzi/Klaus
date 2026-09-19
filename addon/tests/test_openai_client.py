@@ -88,52 +88,6 @@ check("multipart carries file, model, response_format=json, language, prompt, an
       and wav in data)
 check("returns the stripped text", text == "hello lecture")
 
-section("an Endpoint replaces the provider: base URL and headers")
-calls.clear()
-from klausmate import plus as _plus
-ep = _plus.Endpoint("https://svc.test", {"Authorization": "Bearer kp_" + "d" * 32, "X-Klaus-Purpose": "embed", "X-Klaus-Client": "0.2.0"})
-vecs = oc.embed("", ["a"], "text-embedding-3-large", 1024, endpoint=ep)
-url, headers, data, _ = calls[-1]
-check("the endpoint's base and headers are used, no provider key needed",
-      url == "https://svc.test/v1/embeddings" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
-      and headers.get("X-klaus-purpose", headers.get("X-Klaus-Purpose")) == "embed" and len(vecs) == 1)
-check("the default endpoint is still the provider", oc.API_BASE == "https://api.openai.com/v1")
-ep_t = _plus.Endpoint("https://svc.test", {"Authorization": "Bearer kp_" + "d" * 32, "X-Klaus-Purpose": "transcribe", "X-Klaus-Client": "0.2.0"})
-text = oc.transcribe("", b"RIFF", "gpt-4o-mini-transcribe", endpoint=ep_t)
-url, headers, _, _ = calls[-1]
-check("transcribe routes to the service's /v1/audio/transcriptions with the endpoint's headers",
-      url == "https://svc.test/v1/audio/transcriptions" and headers.get("Authorization") == "Bearer kp_" + "d" * 32
-      and text == "hello lecture")
-
-section("the service's error message reaches the user")
-
-
-def quota_urlopen(req, timeout=None):
-    raise urllib.error.HTTPError(req.full_url, 402, "quota", {}, io.BytesIO(json.dumps({"error": {"message": "used up; resets on 2026-10-01"}}).encode()))
-
-
-oc._urlopen = quota_urlopen
-try:
-    oc.embed("", ["a"], "m", 0, endpoint=ep)
-    check("402 raises OpenAIError", False)
-except oc.OpenAIError as e:
-    check("402 raises OpenAIError carrying the service's message verbatim", e.status == 402 and e.user_message() == "used up; resets on 2026-10-01")
-
-
-def maintenance_urlopen(req, timeout=None):
-    raise urllib.error.HTTPError(req.full_url, 503, "maintenance", {}, io.BytesIO(json.dumps(
-        {"error": {"message": "Klaus Plus is paused for maintenance — try again later, or use your own API key."}}).encode()))
-
-
-oc._urlopen = maintenance_urlopen
-try:
-    oc.embed("", ["a"], "m", 0, endpoint=ep)
-    check("503 raises OpenAIError", False)
-except oc.OpenAIError as e:
-    check("503 raises OpenAIError carrying the service's message verbatim too, not 'OpenAI is overloaded'",
-          e.status == 503 and e.user_message() == "Klaus Plus is paused for maintenance — try again later, or use your own API key.")
-oc._urlopen = fake_urlopen
-
 section("errors")
 
 
@@ -173,20 +127,20 @@ seen = []
 def headers_urlopen(req, timeout=None):
     if req.full_url.endswith("/embeddings"):
         return _Resp(json.dumps({"data": [{"index": 0, "embedding": [1.0]}]}).encode(),
-                     headers={"X-Klaus-Quota": "embed-quota"})
+                     headers={"X-Request-Id": "embed-request"})
     if req.full_url.endswith("/audio/transcriptions"):
-        return _Resp(json.dumps({"text": "hi"}).encode(), headers={"X-Klaus-Quota": "transcribe-quota"})
+        return _Resp(json.dumps({"text": "hi"}).encode(), headers={"X-Request-Id": "transcribe-request"})
     raise AssertionError(req.full_url)
 
 
 oc._urlopen = headers_urlopen
 oc.embed("k", ["a"], "m", 0, on_headers=seen.append)
 check("embed hands the response headers to on_headers on a 2xx",
-      len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "embed-quota")
+      len(seen) == 1 and seen[0].get("X-Request-Id") == "embed-request")
 seen.clear()
 oc.transcribe("k", b"wav", "m", on_headers=seen.append)
 check("transcribe hands the response headers to on_headers on a 2xx",
-      len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "transcribe-quota")
+      len(seen) == 1 and seen[0].get("X-Request-Id") == "transcribe-request")
 seen.clear()
 
 
@@ -238,7 +192,7 @@ def flaky_headers(req, timeout=None):
     if len(retry_hits) == 1:
         raise urllib.error.HTTPError(req.full_url, 429, "rate", {"retry-after": "0"}, io.BytesIO(b"{}"))
     return _Resp(json.dumps({"data": [{"index": 0, "embedding": [1.0]}]}).encode(),
-                 headers={"X-Klaus-Quota": "retry-ok"})
+                 headers={"X-Request-Id": "retry-ok"})
 
 
 oc._urlopen = flaky_headers
@@ -246,7 +200,7 @@ oc._SLEEP = lambda s: None
 seen = []
 result = oc.embed("k", ["a"], "m", 0, on_headers=seen.append)
 check("a 429-then-200 retry calls on_headers exactly once, for the eventual 2xx only",
-      result == [[1.0]] and len(seen) == 1 and seen[0].get("X-Klaus-Quota") == "retry-ok"
+      result == [[1.0]] and len(seen) == 1 and seen[0].get("X-Request-Id") == "retry-ok"
       and len(retry_hits) == 2)
 
 raise SystemExit(report())

@@ -86,30 +86,6 @@ check(
     iq.missing_key_provider(None) == "",
 )
 
-section("Klaus Plus: the key gate and the sweep wording")
-check(
-    "a Plus key satisfies the key gate",
-    iq.missing_key_provider({"klaus_plus_key": "kp_" + "f" * 32}) == "",
-)
-check(
-    "no key of either kind still names OpenAI",
-    iq.missing_key_provider({}) == "OpenAI",
-)
-check(
-    "the key message also points at Klaus Plus",
-    "Klaus Plus" in iq.missing_key_message("OpenAI"),
-)
-_plus_msg = iq.sweep_message(2, 100, "text-embedding-3-large", "~1,000 tokens · under $0.01", plus=True)
-check(
-    "on Plus the sweep is 'included', not billed",
-    "included in Klaus Plus" in _plus_msg and "billed to your OpenAI key" not in _plus_msg and "$" not in _plus_msg,
-)
-check(
-    "off Plus the estimate is billed to the key",
-    "billed to your OpenAI key" in iq.sweep_message(2, 100, "m", "~x", plus=False),
-)
-
-
 # -------------------------------------------------------------- the queue
 
 section("JobQueue")
@@ -1010,13 +986,9 @@ _captured_estimate: dict = {}
 _orig_sweep_message = iq.sweep_message
 
 
-def _capture_sweep_message(n_pdfs, n_notes, model, estimate, plus=False):
-    # Task 7 re-baseline: sweep_message grew a `plus` keyword, and
-    # offer_model_sweep now always passes it — this stand-in must accept
-    # (and forward) it too, or the call from offer_model_sweep raises a
-    # TypeError that has nothing to do with what this test checks.
+def _capture_sweep_message(n_pdfs, n_notes, model, estimate):
     _captured_estimate["estimate"] = estimate
-    return _orig_sweep_message(n_pdfs, n_notes, model, estimate, plus=plus)
+    return _orig_sweep_message(n_pdfs, n_notes, model, estimate)
 
 
 _orig_notes_db = iq.mw.col.db
@@ -1097,8 +1069,6 @@ def _restore_confirm_box():
     iq.QMessageBox = _RealBox2
 
 
-PLUS_CFG = {"api_key_openai": "sk", "klaus_plus_key": "kp_" + "f" * 32}
-
 # -- the gate detection itself, in isolation --------------------------------
 
 tmp, pipe = new_world()
@@ -1173,22 +1143,6 @@ check(
 )
 run_one(pipe, "a")
 check("...and the chain completes normally", pipe.calls[-1] == ("tag_sync", "a"))
-_restore_confirm_box()
-
-# -- Klaus Plus: unmetered, so no confirm at all -----------------------------
-
-tmp, pipe = new_world(cfg=PLUS_CFG)
-pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
-_install_confirm_box()
-iq.request_pdf("a", announce=False)
-FakeTimer.drain()
-check(
-    "on Klaus Plus embedding is unmetered — the exact same "
-    "offer_model_sweep skips its own priced estimate for, extended here: "
-    "no confirm, straight to ensure_index",
-    pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None,
-    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
-)
 _restore_confirm_box()
 
 # -- a plain card-index sweep job never double-confirms ----------------------
@@ -1489,12 +1443,6 @@ check(
     "with ONE exception: phase four" in _iq_raw
     and "never touches it at all" in _iq_raw
     and "Judge/Skip dialog" in _iq_raw,
-)
-check(
-    "offer_model_sweep routes the Plus flag from plus.active — a hand-"
-    "computed bool here is how a stale cache or a just-added key would "
-    "silently mis-price the sweep confirm",
-    "plus=plus.active(" in _iq_src,
 )
 check(
     "the Library no longer spells the chain itself — a second copy is "

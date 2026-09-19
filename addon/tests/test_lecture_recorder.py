@@ -15,8 +15,7 @@ verbatim from task-4-brief.md, with ONE authorized insertion (fix round
 before and after it is this task's own addition. Sections are grouped and
 labelled by what they cover:
 
-  - the original dispatch's own additions (Klaus Plus routing/quota/
-    refusal, the no-key gate, the PyQt6-blocked import check);
+  - the no-key gate and the PyQt6-blocked import check;
   - "Fix round 1" sections, one per item in task-4-review.md's Quality
     verdict (C1, I1, I2, I3, f1, f2) plus the minors folded in by the
     coordinator (m1-m5, FIFO order, a foreign leftover file, the 800-char
@@ -24,7 +23,6 @@ labelled by what they cover:
 """
 from __future__ import annotations
 
-import ast
 import contextlib
 import importlib
 import json
@@ -104,25 +102,6 @@ class _FakeIO:
         return self._data
 
 
-def _load_wav_seconds():
-    """Lift `wav_seconds` verbatim (by AST, not retyped) from the Klaus
-    Plus service so the I3 pin proves interop with the REAL metering
-    code, not a reimplementation of its formula that could drift from
-    it. service/ is never imported as a package (heavy FastAPI deps,
-    and it must never ship in the add-on) — just this one pure function,
-    executed in an isolated namespace."""
-    proxy_path = os.path.join(os.path.dirname(__file__), "..", "service", "klausplus", "proxy.py")
-    src = open(proxy_path, encoding="utf-8").read()
-    tree = ast.parse(src)
-    fn_node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "wav_seconds")
-    fn_src = ast.get_source_segment(src, fn_node)
-    ns: dict = {"struct": struct}
-    exec(compile(fn_src, "<wav_seconds>", "exec"), ns)  # noqa: S102 -- test-only, our own source file
-    return ns["wav_seconds"]
-
-
-wav_seconds = _load_wav_seconds()
-
 section("Chunker: 30 s cap, page change closes early, no straddle")
 c = lr.Chunker()
 c.start(page=3, t=100.0)
@@ -156,23 +135,24 @@ import wave, io
 with wave.open(io.BytesIO(w)) as wf:
     check("header fields", wf.getframerate() == 16000 and wf.getnchannels() == 1 and wf.getsampwidth() == 2 and wf.getnframes() == 160)
 
-# ---------------------------------------------------------------------
-# Fix round 1, I3 (the headless-pinnable half): wav_bytes must accept and
-# honour the NEGOTIATED rate/channels/width, and the header it writes
-# must be exactly what the Klaus Plus service's OWN wav_seconds (lifted
-# above) reads back — proving the two sides agree on what the bytes mean,
-# not just that wav_bytes runs.
-# ---------------------------------------------------------------------
-section("I3: wav_bytes honours negotiated rate/channels/width (the service's own wav_seconds agrees)")
+section("I3: WAV header and duration honour the negotiated audio format")
 neg_rate, neg_channels, neg_width = 48000, 2, 2
 neg_frames = neg_rate // 2  # 0.5 s of audio
 neg_pcm = b"\x00" * (neg_frames * neg_channels * neg_width)
 w48 = lr.wav_bytes(neg_pcm, rate=neg_rate, channels=neg_channels, width=neg_width)
-check("a non-default rate/channels/width header round-trips through the service's wav_seconds as 0.5s",
-      abs(wav_seconds(w48) - 0.5) < 1e-9)
-w_default = lr.wav_bytes(b"\x00\x00" * 16000)  # unchanged callers still get the old 16kHz mono default
-check("callers that pass only pcm/rate still get mono 16-bit (unchanged default)",
-      abs(wav_seconds(w_default) - 1.0) < 1e-9)
+with wave.open(io.BytesIO(w48)) as wf:
+    check("negotiated WAV header preserves rate, channels, width and frames",
+          (wf.getframerate(), wf.getnchannels(), wf.getsampwidth(), wf.getnframes())
+          == (48000, 2, 2, 24000))
+    check("negotiated WAV contains half a second of the original PCM",
+          wf.getnframes() / wf.getframerate() == 0.5
+          and wf.readframes(wf.getnframes()) == neg_pcm)
+w_default = lr.wav_bytes(b"\x00\x00" * 16000)
+with wave.open(io.BytesIO(w_default)) as wf:
+    check("default WAV remains one second of 16 kHz mono int16",
+          (wf.getframerate(), wf.getnchannels(), wf.getsampwidth(), wf.getnframes())
+          == (16000, 1, 2, 16000)
+          and wf.getnframes() / wf.getframerate() == 1.0)
 
 section("chunk_path and the uploader")
 root = tempfile.mkdtemp()
@@ -225,60 +205,11 @@ check("the pointer is keyed on the TEXT digest (page_store.text_digest), not a l
       os.path.isfile(lec_pointer_path)
       and open(lec_pointer_path, encoding="utf-8").read().strip() == page_store.text_digest(lec_pages))
 
-# ---------------------------------------------------------------------
-# Klaus Plus: no provider key, routed through plus.endpoint, quota noted.
-# Fix round 1, f1: plus_cfg now carries a REAL api_key_openai, so
-# "key == ''" actually proves the Plus branch never reads it (the
-# review's mutation M3 -- pass key through -- survived the old version,
-# which had no api_key_openai to read in the first place).
-# ---------------------------------------------------------------------
-section("Klaus Plus: no provider key, routed through plus.endpoint, quota noted")
-pkg_mod = sys.modules["klausmate"]
-patches = []
-pkg_mod.patch_config = lambda updates: patches.append(updates)
-
-plus_calls = []
-def fake_transcribe_plus(key, wav, model, language="en", prompt="", timeout=None, endpoint=None, on_headers=None, **kw):
-    plus_calls.append({"key": key, "prompt": prompt, "endpoint": endpoint})
-    if on_headers:
-        on_headers({"X-Klaus-Quota": json.dumps({"human": {"lecture_hours": [1, 30]}})})
-    return "plus transcript"
-lr._transcribe = fake_transcribe_plus
-
-# "f", not "z": plus.key() checks the service's own alphabet (kp_ + 32 lowercase
-# hex), so a non-hex placeholder reads as no licence key at all.
-plus_cfg = {"klaus_plus_key": "kp_" + "f" * 32, "transcription_model": "gpt-4o-mini-transcribe",
-           "api_key_openai": "sk-must-not-be-used"}
-plus_segs = []
-plus_up = lr.Uploader(root, lambda: plus_cfg, on_segment=lambda safe, page: plus_segs.append((safe, page)))
-p4 = lr.chunk_path(root, "lec2", lr.Chunk(1, 0.0, 30.0))
-os.makedirs(os.path.dirname(p4), exist_ok=True); open(p4, "wb").write(b"anything")
-plus_up.enqueue("lec2", os.path.join(root, "lec2.pdf"), lr.Chunk(1, 0.0, 30.0), p4); plus_up.drain()
-check("on Plus the call carries no provider key -- api_key_openai is present in cfg but never read",
-      bool(plus_calls) and plus_calls[-1]["key"] == "" and plus_calls[-1]["endpoint"] == lr.plus.endpoint(plus_cfg, "transcribe"))
-check("the segment still lands (page index 0) and the WAV is deleted", plus_segs == [("lec2", 0)] and not os.path.exists(p4))
-check("a metered call's quota header is noted as an active verdict via patch_config (never write_config)",
-      bool(patches) and patches[-1].get(lr.plus.CACHE, {}).get("status") == "active"
-      and set(patches[-1].keys()) == {lr.plus.CACHE})
-
-section("Klaus Plus: a 402 refusal is remembered and the WAV is kept")
-def fake_transcribe_402(key, wav, model, language="en", prompt="", timeout=None, endpoint=None, on_headers=None, **kw):
-    raise lr.openai_client.OpenAIError("Klaus Plus: quota used up for this period", status=402)
-lr._transcribe = fake_transcribe_402
-patches.clear()
-p6 = lr.chunk_path(root, "lec4", lr.Chunk(2, 0.0, 30.0))
-os.makedirs(os.path.dirname(p6), exist_ok=True); open(p6, "wb").write(b"x")
-plus_up.enqueue("lec4", os.path.join(root, "lec4.pdf"), lr.Chunk(2, 0.0, 30.0), p6); plus_up.drain()
-check("a 402 on Plus is remembered via patch_config with status refused:402",
-      os.path.exists(p6) and bool(patches) and patches[-1].get(lr.plus.CACHE, {}).get("status") == "refused:402")
-
-del pkg_mod.patch_config
-
-section("no OpenAI key and no Klaus Plus: logs once, never calls transcribe, keeps the WAV")
+section("no OpenAI key: logs once, never calls transcribe, keeps the WAV")
 gate_calls = []
 def transcribe_should_not_run(*a, **k):
     gate_calls.append((a, k))
-    raise AssertionError("transcribe must not be called with no key and no Plus")
+    raise AssertionError("transcribe must not be called with no key")
 lr._transcribe = transcribe_should_not_run
 gate_up = lr.Uploader(root, lambda: {}, on_segment=lambda *a: gate_calls.append(("on_segment", a)))
 p7 = lr.chunk_path(root, "lec5", lr.Chunk(1, 0.0, 30.0))
@@ -1211,8 +1142,7 @@ check("...because it took the device's preferred format AS IT IS rather "
 check("...keeping the negotiated rate and channel count in the header",
       (f32_rec._wav_rate, f32_rec._wav_channels) == (48000, 2),
       repr((f32_rec._wav_rate, f32_rec._wav_channels)))
-check("...while the header's WIDTH is 2 whatever the mic speaks — the "
-      "Klaus Plus service meters lecture minutes by reading it back",
+check("...while the header width is 2 for the converted int16 samples",
       f32_rec._wav_width == 2)
 # Drive one tick with real Float32 bytes from the fake device and read
 # the flushed WAV back: the conversion has to happen on the way INTO the
