@@ -2,18 +2,17 @@
 
 ## API keys & models
 
-Klaus is API-first: semantic search runs on OpenAI, through **your own**
+Semantic search currently runs on OpenAI, through **your own**
 `api_key_openai`. The assistant is separate — it runs on your own Claude
 Code login (the `claude` CLI, launched as a child process), not on a key
-stored here. There is no local engine to install, start or update any
-more. Set both keys in **KlausMate Preferences → API keys & models**;
+stored here. Lecture transcription uses a user-installed whisper.cpp executable
+and model. Set keys in **KlausMate Preferences → API keys & models**;
 they are stored in this add-on's config (`meta.json`, plain text —
 standard for Anki add-ons) and never in the repo.
 
 - **api_key_openai**: Your OpenAI API key. Default `""`. Powers card and
-  PDF embeddings (see **Card embeddings** below) and lecture
-  transcription. Without it nothing indexes, and Klaus says so rather
-  than failing quietly.
+  PDF embeddings (see **Card embeddings** below). Without it nothing indexes,
+  and Klaus says so rather than failing quietly.
 - **api_key_anthropic**: Your Anthropic API key. Default `""`. Used for
   exactly one thing: the **pertinence check** at the end of indexing (see
   **Doubtful cards** below), which asks Claude whether each matched card
@@ -28,9 +27,14 @@ standard for Anki add-ons) and never in the repo.
   Claude Code child does not read it today. Because the field is free
   text, a model Klaus has no price for is estimated as Sonnet and the
   confirm says so.
-- **transcription_model**: Which OpenAI model transcribes recorded
-  lecture audio. Default `"gpt-4o-mini-transcribe"`. Used whenever a
-  recorded chunk is uploaded (see **Recording a lecture** below).
+- **transcription_model_path**: Local whisper.cpp model file. Default `""`.
+  Install whisper.cpp and download a compatible model using the
+  [official setup instructions](https://github.com/ggml-org/whisper.cpp#quick-start).
+  Select the model in **Preferences > API keys & models > Transcription model**.
+- **transcription_binary**: Optional path to the whisper.cpp executable.
+  Default `""` uses automatic discovery. Use Browse for a custom installation.
+- **transcription_language**: Language code for recorded lectures, default `"en"`.
+  Transcription runs locally. Failed audio stays on disk for the next attempt.
 - **_embed_key_setup_declined**: Written automatically when you dismiss
   the "needs an API key" nudge, so Klaus stops re-prompting at startup.
   Delete it to see the nudge again. Cleared ONCE by the 2026-09-15
@@ -124,8 +128,8 @@ opens Browse on them.
 
 The **●** button on the PDF panel's title bar (and on the Lecture panel
 during review) records your microphone while you follow along in the
-slides. Every 30 seconds — or the moment you turn the page, whichever
-comes first — the recording is cut and sent to OpenAI for transcription,
+slides. Every 30 seconds or when you turn the page, whichever comes first,
+the recording is cut and processed locally by whisper.cpp,
 and the text is stored **on the page you were looking at when you said
 it**. Press **■** to stop; the bar shows elapsed time and how many pieces
 are still waiting to be transcribed. Once the last piece has been transcribed,

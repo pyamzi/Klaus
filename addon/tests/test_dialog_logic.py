@@ -819,7 +819,7 @@ check("...and neither page it replaces survives",
 check("the four fields the spec names are all constructed",
       all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
                                "embed_model_edit",
-                               "transcription_model_edit")))
+                               "transcription_model_path_edit")))
 check("both provider key fields are password masked",
       _src2.count("EchoMode.Password") == 2
       and "openai_key_edit.setEchoMode" in _src2
@@ -898,7 +898,7 @@ check("...and never the retired provider key — one provider now, so a "
 
 _save_api_key_settings_src = _fn_src("save_api_key_settings")
 check("save_api_key_settings was found", bool(_save_api_key_settings_src))
-for _k in ("api_key_anthropic", "transcription_model"):
+for _k in ("api_key_anthropic", "transcription_model_path"):
     check(f'save_api_key_settings writes "{_k}"', f'"{_k}"' in _save_api_key_settings_src)
 check("...and never the Ollama/Claude-Code era keys",
       "claude_binary" not in _save_api_key_settings_src
@@ -909,13 +909,13 @@ check("every one of the four fields is written by exactly one save_*",
       _src2.count('cfg["api_key_openai"] = ') == 1
       and _src2.count('cfg["api_key_anthropic"] = ') == 1
       and _src2.count('cfg["embedding_model"] = ') == 1
-      and _src2.count('cfg["transcription_model"] = ') == 1)
+      and _src2.count('cfg["transcription_model_path"] = ') == 1)
 # Execute the actual closures with small widget/config fixtures.
 import textwrap as _textwrap
 import types as _types
-_api_fixture = {"api_key_anthropic": "fixture-key", "transcription_model": "fixture-model"}
+_api_fixture = {"api_key_anthropic": "fixture-key", "transcription_model_path": "fixture-model", "transcription_binary": "", "transcription_language": "en"}
 _api_writes = []
-_api_widgets = {"anthropic_key_edit": LineEdit(), "transcription_model_edit": LineEdit()}
+_api_widgets = {"anthropic_key_edit": LineEdit(), "transcription_model_path_edit": LineEdit(), "transcription_binary_edit": LineEdit(), "transcription_language_edit": LineEdit()}
 _api_namespace = dict(_api_widgets, _pkg=lambda: _types.SimpleNamespace(
     get_config=lambda: dict(_api_fixture), write_config=lambda cfg: _api_writes.append(cfg)))
 exec(_textwrap.dedent(_fn_src("load_api_key_settings")), _api_namespace)
@@ -924,12 +924,12 @@ _api_namespace["load_api_key_settings"]()
 check("API settings loads the saved Anthropic key into its field",
       _api_widgets["anthropic_key_edit"].text() == "fixture-key")
 check("API settings loads the saved transcription model into its field",
-      _api_widgets["transcription_model_edit"].text() == "fixture-model")
+      _api_widgets["transcription_model_path_edit"].text() == "fixture-model")
 _api_widgets["anthropic_key_edit"].setText(" updated-key ")
-_api_widgets["transcription_model_edit"].setText(" updated-model ")
+_api_widgets["transcription_model_path_edit"].setText(" updated-model ")
 _api_namespace["save_api_key_settings"]()
 check("API settings persists the edited fields through write_config",
-      _api_writes == [{"api_key_anthropic": "updated-key", "transcription_model": "updated-model"}])
+      _api_writes == [{"api_key_anthropic": "updated-key", "transcription_model_path": "updated-model", "transcription_binary": "", "transcription_language": "en"}])
 _sync_embed_src = _fn_src("sync_embed_widgets")
 check("load_api_key_settings runs INSIDE sync_embed_widgets' syncing guard — "
       "seeding a switch that is already true emits toggled, and outside "
@@ -941,7 +941,7 @@ check("all API fields connect to dirty tracking after mark_dirty is defined",
       all(_src2.index("def mark_dirty() -> None:")
           < _src2.index(f"{name}.textEdited.connect")
           for name in ("openai_key_edit", "anthropic_key_edit",
-                       "embed_model_edit", "transcription_model_edit")))
+                       "embed_model_edit", "transcription_model_path_edit")))
 check("Save applies the surviving API key and transcription settings",
       "save_api_key_settings()" in _fn_src("save_all"))
 check("General no longer offers to manage a local runtime",

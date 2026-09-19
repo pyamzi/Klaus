@@ -697,7 +697,7 @@ def manage_models_dialog(*_args: Any) -> None:
     keys_layout = _page(
         "API keys & models",
         "API keys & models",
-        "Klaus talks to OpenAI (embeddings, lecture transcription) and "
+        "Lecture transcription runs locally with whisper.cpp. Klaus talks to OpenAI (embeddings) and "
         "Anthropic (the assistant, and judging which cards a lecture "
         "really covers) with your own keys. Both are stored in this "
         "add-on's config on your machine and never sent anywhere else.",
@@ -710,7 +710,7 @@ def manage_models_dialog(*_args: Any) -> None:
     openai_row = _row(
         keys_layout,
         "OpenAI API key",
-        "Embeddings and lecture transcription.",
+        "Card and PDF embeddings.",
         openai_key_edit,
     )
 
@@ -735,15 +735,42 @@ def manage_models_dialog(*_args: Any) -> None:
         embed_model_edit,
     )
 
-    transcription_model_edit = QLineEdit()
-    transcription_model_edit.setMinimumWidth(220)
-    transcription_model_edit.setPlaceholderText("gpt-4o-mini-transcribe")
-    _row(
-        keys_layout,
-        "Transcription model",
-        "Turns lecture audio into per-slide notes.",
-        transcription_model_edit,
-    )
+    transcription_model_path_edit = QLineEdit()
+    transcription_binary_edit = QLineEdit()
+    transcription_language_edit = QLineEdit()
+    transcription_browse_buttons = []
+
+    def browse_transcription_file(edit: QLineEdit, title: str) -> None:
+        from aqt.qt import QFileDialog
+        picker = QFileDialog(dlg, title)
+        picker.setFileMode(QFileDialog.FileMode.ExistingFile)
+        picker.fileSelected.connect(lambda path: (edit.setText(path), mark_dirty()))
+        picker.finished.connect(picker.deleteLater)
+        picker.open()
+
+    for edit, key, title, description in (
+        (transcription_model_path_edit, "transcription_model_path", "Transcription model",
+         "Select a downloaded whisper.cpp model file. Lecture audio stays local."),
+        (transcription_binary_edit, "transcription_binary", "Transcription executable",
+         "Optional whisper-cli path. Leave blank for automatic discovery."),
+    ):
+        edit.setObjectName(key)
+        edit.setMinimumWidth(220)
+        control = QWidget()
+        layout = QHBoxLayout(control)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(edit)
+        browse = QPushButton("Browse…")
+        browse.setObjectName(key + "_browse")
+        browse.clicked.connect(lambda _checked=False, field=edit, caption=title:
+                               browse_transcription_file(field, caption))
+        layout.addWidget(browse)
+        transcription_browse_buttons.append(browse)
+        _row(keys_layout, title, description, control)
+    transcription_language_edit.setObjectName("transcription_language")
+    transcription_language_edit.setPlaceholderText("en")
+    _row(keys_layout, "Transcription language", "Language code, such as en or fa.",
+         transcription_language_edit)
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
@@ -1462,14 +1489,19 @@ def manage_models_dialog(*_args: Any) -> None:
     def load_api_key_settings() -> None:
         cfg = _pkg().get_config()
         anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
-        transcription_model_edit.setText(
-            str(cfg.get("transcription_model") or "")
+        transcription_model_path_edit.setText(
+            str(cfg.get("transcription_model_path") or "")
         )
+
+        transcription_binary_edit.setText(str(cfg.get("transcription_binary") or ""))
+        transcription_language_edit.setText(str(cfg.get("transcription_language") or "en"))
 
     def save_api_key_settings() -> None:
         cfg = _pkg().get_config()
         cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
-        cfg["transcription_model"] = transcription_model_edit.text().strip()
+        cfg["transcription_model_path"] = transcription_model_path_edit.text().strip()
+        cfg["transcription_binary"] = transcription_binary_edit.text().strip()
+        cfg["transcription_language"] = transcription_language_edit.text().strip() or "en"
         _pkg().write_config(cfg)
 
     _finish_nav("General", "Appearance", "API keys & models")
@@ -1535,7 +1567,8 @@ def manage_models_dialog(*_args: Any) -> None:
         op_state["active"] = busy
         for w in (
             openai_key_edit, anthropic_key_edit, embed_model_edit,
-            transcription_model_edit,
+            transcription_model_path_edit, transcription_binary_edit, transcription_language_edit,
+            *transcription_browse_buttons,
             index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
@@ -2350,7 +2383,9 @@ def manage_models_dialog(*_args: Any) -> None:
     openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
     anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
-    transcription_model_edit.textEdited.connect(lambda _t: mark_dirty())
+    transcription_model_path_edit.textEdited.connect(lambda _t: mark_dirty())
+    transcription_binary_edit.textEdited.connect(lambda _t: mark_dirty())
+    transcription_language_edit.textEdited.connect(lambda _t: mark_dirty())
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)

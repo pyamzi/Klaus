@@ -138,6 +138,7 @@ AUDIT_MODULES = (
     # (Chunker, wav_bytes, chunk_path, Uploader). Its test drives the
     # Recorder's non-Qt internals and replaces the network seam.
     "lecture_recorder",
+    "local_transcription",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

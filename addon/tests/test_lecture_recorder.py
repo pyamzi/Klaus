@@ -161,10 +161,10 @@ check("recordings/<safe>/<t0>-<t1>-p<page:04d>.wav, both to the millisecond",
       p.endswith(os.path.join("recordings", "lec", "100.000-130.000-p0003.wav")), p)
 segs = []
 calls = []
-def fake_transcribe(key, wav, model, language="en", prompt="", timeout=None):
-    calls.append((key, model, prompt)); return "hello" if b"OK" in wav else ""
+def fake_transcribe(wav, model, binary="", language="en", prompt="", timeout=None):
+    calls.append((wav, model, prompt, binary, language)); return "hello" if b"OK" in wav else ""
 lr._transcribe = fake_transcribe
-up = lr.Uploader(root, lambda: {"api_key_openai": "k", "transcription_model": "gpt-4o-mini-transcribe"}, on_segment=lambda safe, page: segs.append((safe, page)))
+up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin", "transcription_binary": "/whisper-cli", "transcription_language": "fa"}, on_segment=lambda safe, page: segs.append((safe, page)))
 # Fix round 1 (f2): seed real page text BEFORE the first enqueue, so the
 # ensure_records section below can assert on ACTUAL slide_text and the
 # TEXT digest, not merely "a pointer file exists" -- which page_store's
@@ -178,11 +178,11 @@ with open(os.path.join(root, "contexts", "lec.json"), "w", encoding="utf-8") as 
 os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(b"RIFF OK")
 up.enqueue("lec", os.path.join(root, "lec.pdf"), lr.Chunk(3, 100.0, 130.0), p); up.drain()
 check("a chunk transcribes, lands on page index 2 (page 3 is 1-based), and its WAV is deleted",
-      segs == [("lec", 2)] and not os.path.exists(p) and calls[-1][1] == "gpt-4o-mini-transcribe")
+      segs == [("lec", 2)] and not os.path.exists(p) and calls[-1] == (b"RIFF OK", "/model.bin", "", "/whisper-cli", "fa"))
 p2 = lr.chunk_path(root, "lec", lr.Chunk(3, 130.0, 160.0)); open(p2, "wb").write(b"RIFF silence")
 up.enqueue("lec", os.path.join(root, "lec.pdf"), lr.Chunk(3, 130.0, 160.0), p2); up.drain()
 check("an empty transcript is dropped and the WAV still deleted", len(segs) == 1 and not os.path.exists(p2))
-def boom(*a, **k): raise lr.openai_client.OpenAIError("down", status=500)
+def boom(*a, **k): raise lr.local_transcription.TranscriptionError("down")
 lr._transcribe = boom
 p3 = lr.chunk_path(root, "lec", lr.Chunk(4, 160.0, 190.0)); open(p3, "wb").write(b"RIFF OK")
 up.enqueue("lec", os.path.join(root, "lec.pdf"), lr.Chunk(4, 160.0, 190.0), p3); up.drain()
@@ -205,17 +205,22 @@ check("the pointer is keyed on the TEXT digest (page_store.text_digest), not a l
       os.path.isfile(lec_pointer_path)
       and open(lec_pointer_path, encoding="utf-8").read().strip() == page_store.text_digest(lec_pages))
 
-section("no OpenAI key: logs once, never calls transcribe, keeps the WAV")
+section("no local model: never calls transcribe and keeps the WAV")
 gate_calls = []
 def transcribe_should_not_run(*a, **k):
     gate_calls.append((a, k))
-    raise AssertionError("transcribe must not be called with no key")
+    raise AssertionError("transcribe must not be called with no local model")
 lr._transcribe = transcribe_should_not_run
-gate_up = lr.Uploader(root, lambda: {}, on_segment=lambda *a: gate_calls.append(("on_segment", a)))
+gate_errors = []
+gate_up = lr.Uploader(root, lambda: {}, on_segment=lambda *a: gate_calls.append(("on_segment", a)),
+                      on_error=gate_errors.append)
 p7 = lr.chunk_path(root, "lec5", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(p7), exist_ok=True); open(p7, "wb").write(b"x")
 gate_up.enqueue("lec5", os.path.join(root, "lec5.pdf"), lr.Chunk(1, 0.0, 30.0), p7); gate_up.drain()
 check("the WAV is kept and transcribe/on_segment are never reached", os.path.exists(p7) and gate_calls == [])
+gate_up.enqueue("lec5", os.path.join(root, "lec5.pdf"), lr.Chunk(1, 0.0, 30.0), p7); gate_up.drain()
+check("missing local model gives one actionable notification",
+      gate_errors == ["Select a local whisper.cpp model in Preferences."])
 
 # =======================================================================
 # Fix round 1 -- items from task-4-review.md's Quality verdict, folded in
@@ -238,8 +243,8 @@ def on_segment_first_raises(safe, page):
     c1_up._on_segment = on_segment_ok
     raise RuntimeError("boom from on_segment")
 
-lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: "seg text"
-c1_up = lr.Uploader(root, lambda: {"api_key_openai": "k"}, on_segment=on_segment_first_raises)
+lr._transcribe = lambda wav, model, binary="", language="en", prompt="", timeout=None: "seg text"
+c1_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"}, on_segment=on_segment_first_raises)
 pA = lr.chunk_path(root, "c1test", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(pA), exist_ok=True); open(pA, "wb").write(b"A")
 c1_up.enqueue("c1test", os.path.join(root, "c1test.pdf"), lr.Chunk(1, 0.0, 30.0), pA)
@@ -253,8 +258,8 @@ check("the SECOND chunk still transcribed after the first chunk's on_segment rai
 check("drain() itself returns promptly (not just the queue idling)", _returns_within(c1_up.drain, 2.0))
 
 section("C1: the stop() sentinel gets task_done() too, so a NEW uploader restarts cleanly")
-lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: ""
-stop_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+lr._transcribe = lambda wav, model, binary="", language="en", prompt="", timeout=None: ""
+stop_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 pS = lr.chunk_path(root, "stoptest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(pS), exist_ok=True); open(pS, "wb").write(b"x")
 stop_up.enqueue("stoptest", os.path.join(root, "stoptest.pdf"), lr.Chunk(1, 0.0, 30.0), pS)
@@ -272,7 +277,7 @@ open(pS2, "wb").write(b"y")
 stop_up.enqueue("stoptest", os.path.join(root, "stoptest.pdf"), lr.Chunk(1, 30.0, 60.0), pS2)
 check("an enqueue on the stopped uploader queues nothing and keeps the WAV",
       stop_up.queued() == 0 and stop_up._closed and os.path.exists(pS2))
-fresh_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+fresh_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 fresh_up.enqueue("stoptest", os.path.join(root, "stoptest.pdf"), lr.Chunk(1, 30.0, 60.0), pS2)
 check("a NEW Uploader processes that same chunk",
       _returns_within(fresh_up.drain, 2.0) and not os.path.exists(pS2))
@@ -347,11 +352,11 @@ open(os.path.join(foreign_dir, "copy-of-12.000-30.000-p0001.wav"), "wb").write(b
 for t0 in (90, 1000, 100):  # deliberately NOT in lexicographic filename order
     open(os.path.join(foreign_dir, f"{t0}-p0001.wav"), "wb").write(f"RIFF-{t0}".encode())
 seen_order = []
-def fake_transcribe_order(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_order(wav, model, binary="", language="en", prompt="", timeout=None):
     seen_order.append(wav.decode())
     return ""
 lr._transcribe = fake_transcribe_order
-foreign_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+foreign_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 n_foreign = foreign_up.requeue_leftovers("foreign", os.path.join(root, "foreign.pdf"))
 foreign_up.drain()
 check("exactly the 3 well-formed leftovers are requeued (the .txt, the 2-digit page name "
@@ -388,7 +393,7 @@ check("the closed chunk's t0 is a real epoch timestamp (close to time.time()), n
 # of being silently permanent for the life of the Uploader.
 # ---------------------------------------------------------------------
 section("m5: a page is marked seeded only after ensure_records succeeds")
-m5_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+m5_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 seed_attempts = []
 _real_ensure_records = page_store.ensure_records
 def flaky_ensure_records(*a, **k):
@@ -398,7 +403,7 @@ def flaky_ensure_records(*a, **k):
     return _real_ensure_records(*a, **k)
 page_store.ensure_records = flaky_ensure_records
 try:
-    lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: "seg"
+    lr._transcribe = lambda wav, model, binary="", language="en", prompt="", timeout=None: "seg"
     pm5a = lr.chunk_path(root, "m5test", lr.Chunk(1, 0.0, 30.0))
     os.makedirs(os.path.dirname(pm5a), exist_ok=True); open(pm5a, "wb").write(b"a")
     m5_up.enqueue("m5test", os.path.join(root, "m5test.pdf"), lr.Chunk(1, 0.0, 30.0), pm5a); m5_up.drain()
@@ -417,11 +422,11 @@ check("a failed seeding attempt is retried on the next chunk rather than marked 
 # ---------------------------------------------------------------------
 section("f3: the Uploader processes chunks strictly FIFO")
 fifo_order = []
-def fake_transcribe_fifo(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_fifo(wav, model, binary="", language="en", prompt="", timeout=None):
     fifo_order.append(wav)
     return ""
 lr._transcribe = fake_transcribe_fifo
-fifo_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+fifo_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 for i, tag in enumerate((b"AAA", b"BBB", b"CCC")):
     # Indexed by the loop counter, never by len(fifo_order) -- that list
     # only grows once the BACKGROUND thread transcribes, so using it here
@@ -439,11 +444,11 @@ check("three enqueued chunks transcribe strictly in the order they were enqueued
 section("f3: the continuity prompt is capped at 800 chars")
 long_text = "x" * 2000
 cap_calls = []
-def fake_transcribe_long(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_long(wav, model, binary="", language="en", prompt="", timeout=None):
     cap_calls.append(prompt)
     return long_text if wav == b"FIRST" else ""
 lr._transcribe = fake_transcribe_long
-cap_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+cap_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 c1p = lr.chunk_path(root, "captest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(c1p), exist_ok=True); open(c1p, "wb").write(b"FIRST")
 cap_up.enqueue("captest", os.path.join(root, "captest.pdf"), lr.Chunk(1, 0.0, 30.0), c1p); cap_up.drain()
@@ -466,14 +471,14 @@ _pend_gate = threading.Event()
 _pend_seen = threading.Event()
 
 
-def fake_transcribe_blocking(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_blocking(wav, model, binary="", language="en", prompt="", timeout=None):
     _pend_seen.set()
     _pend_gate.wait(5.0)
     return ""
 
 
 lr._transcribe = fake_transcribe_blocking
-pend_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+pend_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 pend_chunk = lr.Chunk(1, 0.0, 30.0)
 pend_path = lr.chunk_path(root, "pendtest", pend_chunk)
 os.makedirs(os.path.dirname(pend_path), exist_ok=True)
@@ -612,11 +617,11 @@ open(os.path.join(sub_dir, "12.500-p0001.wav"), "wb").write(b"RIFF-later")
 open(os.path.join(sub_dir, "12.250-p0001.wav"), "wb").write(b"RIFF-earlier")
 open(os.path.join(sub_dir, "12-p0001.wav"), "wb").write(b"RIFF-legacy")
 sub_order = []
-def fake_transcribe_sub(key, wav, model, language="en", prompt="", timeout=None, **kw):
+def fake_transcribe_sub(wav, model, binary="", language="en", prompt="", timeout=None, **kw):
     sub_order.append(wav.decode())
     return ""
 lr._transcribe = fake_transcribe_sub
-sub_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+sub_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 n_sub = sub_up.requeue_leftovers("subsec", os.path.join(root, "subsec.pdf"))
 sub_up.drain()
 check("requeue_leftovers still reads a legacy whole-second name alongside the new "
@@ -636,10 +641,10 @@ section("PR #4 F4: a failed transcription logs class and status, never the messa
 import contextlib  # noqa: E402 -- local to this section
 
 MARKER = "PATIENT-NAME-FROM-THE-TRANSCRIPT"
-def fake_transcribe_leaky(key, wav, model, language="en", prompt="", timeout=None, **kw):
-    raise lr.openai_client.OpenAIError(f"400 Bad Request: {{\"error\": \"{MARKER}\"}}", status=400)
+def fake_transcribe_leaky(wav, model, binary="", language="en", prompt="", timeout=None, **kw):
+    raise lr.local_transcription.TranscriptionError(MARKER)
 lr._transcribe = fake_transcribe_leaky
-leak_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+leak_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 p_leak = lr.chunk_path(root, "leaktest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(p_leak), exist_ok=True); open(p_leak, "wb").write(b"RIFF OK")
 leak_log = io.StringIO()
@@ -649,9 +654,9 @@ with contextlib.redirect_stdout(leak_log):
 leak_txt = leak_log.getvalue()
 check("the provider's error body never reaches the log", MARKER not in leak_txt, leak_txt)
 check("...but the failure is still reported, by class and status, and the WAV kept",
-      "OpenAIError" in leak_txt and "400" in leak_txt and os.path.exists(p_leak), leak_txt)
+      "TranscriptionError" in leak_txt and os.path.exists(p_leak), leak_txt)
 
-def fake_transcribe_leaky_generic(key, wav, model, language="en", prompt="", timeout=None, **kw):
+def fake_transcribe_leaky_generic(wav, model, binary="", language="en", prompt="", timeout=None, **kw):
     raise RuntimeError(f"unexpected: {MARKER}")
 lr._transcribe = fake_transcribe_leaky_generic
 p_leak2 = lr.chunk_path(root, "leaktest", lr.Chunk(1, 30.0, 60.0))
@@ -680,7 +685,7 @@ _close_gate = threading.Event()
 _close_seen = threading.Event()
 
 
-def fake_transcribe_gated(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_gated(wav, model, binary="", language="en", prompt="", timeout=None):
     _close_seen.set()
     _close_gate.wait(5.0)
     return "text that only came back after the profile had closed"
@@ -688,7 +693,7 @@ def fake_transcribe_gated(key, wav, model, language="en", prompt="", timeout=Non
 
 lr._transcribe = fake_transcribe_gated
 close_segs: list = []
-close_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+close_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"},
                        on_segment=lambda safe, page: close_segs.append((safe, page)))
 p_close = lr.chunk_path(root, "closetest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(p_close), exist_ok=True)
@@ -716,14 +721,14 @@ _hang_gate = threading.Event()
 _hang_seen = threading.Event()
 
 
-def fake_transcribe_wedged(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_wedged(wav, model, binary="", language="en", prompt="", timeout=None):
     _hang_seen.set()
     _hang_gate.wait(30.0)
     return ""
 
 
 lr._transcribe = fake_transcribe_wedged
-hang_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+hang_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 p_hang = lr.chunk_path(root, "hangtest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(p_hang), exist_ok=True)
 open(p_hang, "wb").write(b"RIFF")
@@ -735,9 +740,9 @@ check("stop() gives up on it within STOP_JOIN_S rather than blocking the main "
 _hang_gate.set()  # let the leaked worker die instead of idling for 30 s
 
 section("PR #4 re-review: a normal stop still drains — a chunk that finished is kept, not discarded")
-lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: "landed"
+lr._transcribe = lambda wav, model, binary="", language="en", prompt="", timeout=None: "landed"
 norm_segs: list = []
-norm_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+norm_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"},
                       on_segment=lambda safe, page: norm_segs.append((safe, page)))
 p_norm = lr.chunk_path(root, "normtest", lr.Chunk(2, 0.0, 30.0))
 os.makedirs(os.path.dirname(p_norm), exist_ok=True)
@@ -761,14 +766,14 @@ _bar_gate = threading.Event()
 _bar_seen = threading.Event()
 
 
-def fake_transcribe_bar(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_bar(wav, model, binary="", language="en", prompt="", timeout=None):
     _bar_seen.set()
     _bar_gate.wait(5.0)
     return ""
 
 
 lr._transcribe = fake_transcribe_bar
-bar_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+bar_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 p_bar = lr.chunk_path(root, "bartest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(p_bar), exist_ok=True)
 open(p_bar, "wb").write(b"RIFF")
@@ -810,7 +815,7 @@ _q_seen = threading.Event()
 _q_calls: list = []
 
 
-def fake_transcribe_counting(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_counting(wav, model, binary="", language="en", prompt="", timeout=None):
     _q_calls.append(model)
     _q_seen.set()
     _q_gate.wait(5.0)
@@ -819,7 +824,7 @@ def fake_transcribe_counting(key, wav, model, language="en", prompt="", timeout=
 
 lr._transcribe = fake_transcribe_counting
 q_segs: list = []
-q_up = lr.Uploader(root, lambda: {"api_key_openai": "k"},
+q_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"},
                    on_segment=lambda safe, page: q_segs.append((safe, page)))
 _q_paths = []
 for _i, _ch in enumerate((lr.Chunk(1, 0.0, 30.0), lr.Chunk(1, 30.0, 60.0), lr.Chunk(1, 60.0, 90.0))):
@@ -842,7 +847,7 @@ check("stop() returns instead of hanging", _returns_within(q_up.stop, 4.0))
 check("exactly ONE transcription happened — the barrier that was already in "
       "flight. The two chunks queued behind the sentinel cost nothing: no "
       "config read, no paid call, no result to throw away",
-      _q_calls == ["gpt-4o-mini-transcribe"], repr(_q_calls))
+      _q_calls == ["/model.bin"], repr(_q_calls))
 check("...and both their WAVs are kept for the next Record's requeue_leftovers",
       all(os.path.exists(_p) for _ch, _p in _q_paths[1:]))
 check("...with nothing appended behind the closing profile", q_segs == [], repr(q_segs))
@@ -868,7 +873,7 @@ _ro_seen = threading.Event()
 _ro_models: list = []
 
 
-def fake_transcribe_held(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_held(wav, model, binary="", language="en", prompt="", timeout=None):
     _ro_models.append(model)
     _ro_seen.set()
     _ro_gate.wait(5.0)
@@ -876,7 +881,7 @@ def fake_transcribe_held(key, wav, model, language="en", prompt="", timeout=None
 
 
 lr._transcribe = fake_transcribe_held
-ro_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+ro_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 _ro_pdf = os.path.join(root, "reopentest.pdf")
 _ro_p1 = lr.chunk_path(root, "reopentest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(_ro_p1), exist_ok=True)
@@ -912,14 +917,14 @@ check("the parked worker finishes its own chunk and exits on the "
       "sentinel — drain() returns",
       _returns_within(ro_up.drain, 4.0))
 check("the old worker never transcribed the refused chunk",
-      _ro_models == ["gpt-4o-mini-transcribe"], repr(_ro_models))
+      _ro_models == ["/model.bin"], repr(_ro_models))
 check("both WAVs are kept: the parked one (closed mid-upload) and the "
       "refused one",
       os.path.exists(_ro_p1) and os.path.exists(_ro_p2))
 # The restart production actually performs: a brand-new Uploader, which
 # finds both leftovers on disk.
-lr._transcribe = lambda key, wav, model, language="en", prompt="", timeout=None: ""
-ro_fresh = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+lr._transcribe = lambda wav, model, binary="", language="en", prompt="", timeout=None: ""
+ro_fresh = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 check("a fresh Uploader's requeue_leftovers picks up both",
       ro_fresh.requeue_leftovers("reopentest", _ro_pdf) == 2)
 check("...and processes them (each WAV handled exactly once)",
@@ -938,7 +943,7 @@ _ns_calls: list = []
 _ns_notified: list = []
 
 
-def fake_transcribe_counted(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_counted(wav, model, binary="", language="en", prompt="", timeout=None):
     _ns_calls.append(model)
     return "spoken over the slide"
 
@@ -949,7 +954,7 @@ def on_segment_raises(safe, page):
 
 
 lr._transcribe = fake_transcribe_counted
-ns_up = lr.Uploader(root, lambda: {"api_key_openai": "k"}, on_segment=on_segment_raises)
+ns_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"}, on_segment=on_segment_raises)
 _ns_pdf = os.path.join(root, "notifytest.pdf")
 _ns_p1 = lr.chunk_path(root, "notifytest", lr.Chunk(1, 0.0, 30.0))
 os.makedirs(os.path.dirname(_ns_p1), exist_ok=True)
@@ -1221,7 +1226,7 @@ class _OsProxy:
 _sp_wavs: list = []
 
 
-def fake_transcribe_spend(key, wav, model, language="en", prompt="", timeout=None):
+def fake_transcribe_spend(wav, model, binary="", language="en", prompt="", timeout=None):
     _sp_wavs.append(wav)
     return "said over the slide"
 
@@ -1237,7 +1242,7 @@ _sp_p = lr.chunk_path(root, "spendtest", _sp_chunk)
 _sp_dir = os.path.dirname(_sp_p)
 os.makedirs(_sp_dir, exist_ok=True)
 open(_sp_p, "wb").write(b"RIFF S")
-sp_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+sp_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 lr.os = _OsProxy(os, _unlink_denied)
 try:
     sp_up.enqueue("spendtest", _sp_pdf, _sp_chunk, _sp_p)
@@ -1250,7 +1255,7 @@ check("the segment was appended (the durable write happens before the unlink)",
       len(_sp_rec.get("segments") or []) == 1, repr(_sp_rec.get("segments")))
 check("the file survived the failed unlink — but no longer under its own, requeueable name",
       not os.path.exists(_sp_p) and len(os.listdir(_sp_dir)) == 1, repr(os.listdir(_sp_dir)))
-sp_fresh = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+sp_fresh = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 check("a SECOND uploader over the same directory requeues nothing",
       sp_fresh.requeue_leftovers("spendtest", _sp_pdf) == 0, repr(os.listdir(_sp_dir)))
 sp_fresh.drain()
@@ -1284,9 +1289,9 @@ check("chunk_path mints <t0>-<t1>-p<page>.wav, so the real end survives on disk"
       os.path.basename(_e_p) == "500.000-507.000-p0002.wav", os.path.basename(_e_p))
 os.makedirs(os.path.dirname(_e_p), exist_ok=True)
 open(_e_p, "wb").write(b"RIFF E")
-lr._transcribe = (lambda key, wav, model, language="en", prompt="", timeout=None:
+lr._transcribe = (lambda wav, model, binary="", language="en", prompt="", timeout=None:
                   "seven seconds of it")
-e_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+e_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 check("the leftover is requeued", e_up.requeue_leftovers("earlytest", _e_pdf) == 1)
 e_up.drain()
 _e_seg = (page_store.load_record(root, "earlytest", _e_pdf, 1).get("segments") or [None])[0]
@@ -1300,7 +1305,7 @@ os.makedirs(_m_dir, exist_ok=True)
 open(os.path.join(_m_dir, "20.000-27.000-p0001.wav"), "wb").write(b"RIFF new")
 open(os.path.join(_m_dir, "12.250-p0001.wav"), "wb").write(b"RIFF ms")
 open(os.path.join(_m_dir, "5-p0001.wav"), "wb").write(b"RIFF legacy")
-m_up = lr.Uploader(root, lambda: {"api_key_openai": "k"})
+m_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"})
 m_seen: list = []
 m_up.enqueue = lambda safe, path, chunk, wav: m_seen.append(chunk)
 n_mix = m_up.requeue_leftovers("mixtest", os.path.join(root, "mixtest.pdf"))
@@ -1310,5 +1315,31 @@ check("...ordering is by t0 ALONE across mixed shapes, and only the names carryi
       "time fall back to t0 + CHUNK_S",
       m_seen == [lr.Chunk(1, 5.0, 35.0), lr.Chunk(1, 12.25, 42.25), lr.Chunk(1, 20.0, 27.0)],
       repr(m_seen))
+
+section("local failure notifications are deduplicated and recover after success")
+notifications = []
+local_up = lr.Uploader(root, lambda: {"transcription_model_path": "/model.bin"}, on_error=notifications.append)
+lr._transcribe = boom
+for i in range(2):
+    p = lr.chunk_path(root, "notify", lr.Chunk(1, i * 30, (i + 1) * 30))
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(b"failed")
+    local_up.enqueue("notify", os.path.join(root, "notify.pdf"), lr.Chunk(1, i * 30, (i + 1) * 30), p)
+local_up.drain()
+check("identical failures notify once and append nothing", notifications == ["down"] and
+      not page_store.load_record(root, "notify", os.path.join(root, "notify.pdf"), 0).get("segments"))
+lr._transcribe = lambda *a, **kw: ""
+local_up.requeue_leftovers("notify", os.path.join(root, "notify.pdf")); local_up.drain()
+lr._transcribe = boom
+open(p, "wb").write(b"failed again")
+local_up.enqueue("notify", os.path.join(root, "notify.pdf"), lr.Chunk(1, 30, 60), p); local_up.drain()
+check("success resets suppression", notifications == ["down", "down"] and os.path.exists(p))
+def bad_notification(message):
+    raise RuntimeError("notification fixture")
+local_up._on_error = bad_notification
+local_up._last_error = None
+local_up.requeue_leftovers("notify", os.path.join(root, "notify.pdf")); local_up.drain()
+check("raising notification retains audio and drains queue", os.path.exists(p) and local_up.queued() == 0)
+local_up.stop()
 
 raise SystemExit(report())

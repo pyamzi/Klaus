@@ -20,13 +20,10 @@ including ``on_segment``, a callback this module hands to Task 5's Qt-side
 consumer across a thread boundary — or one bad chunk permanently stops
 transcription for the rest of the session.
 
-Transcription is direct-key only: the uploader calls
-``openai_client.transcribe`` with the user's own ``api_key_openai`` and
-nothing else — no metered routing, no refusal caching, no quota
-bookkeeping. Missing a key is handled exactly like any other failure to
-transcribe (a network error, a bad response): the WAV simply stays on
-disk for the next attempt, and the failure is logged by exception class
-and HTTP status only, never the message. Page records are seeded once per PDF
+Transcription uses ``local_transcription.transcribe`` with a local
+whisper.cpp executable and model file. Missing configuration or a failed
+local process keeps the WAV on disk for the next attempt.
+Failures are logged by exception class only. Page records are seeded once per PDF
 (``page_store.ensure_records``) before the first segment is ever
 appended, so a transcript can land even on a PDF nobody has indexed yet.
 """
@@ -43,7 +40,7 @@ import time
 import wave
 from typing import Callable, NamedTuple
 
-from . import openai_client, page_store
+from . import local_transcription, page_store
 
 CHUNK_S = 30.0
 # How long stop() waits for the worker to put down whatever chunk it is
@@ -245,19 +242,20 @@ def _spend(wav_path: str) -> None:
               f"{os.path.basename(wav_path)} ({exc.__class__.__name__}); "
               f"it may be transcribed and appended again")
 
-# Module-level indirection so tests can swap the network call for a fake
-# without touching openai_client itself (the house pattern — see
-# embeddings.py's own module-level provider hooks).
-_transcribe = openai_client.transcribe
+# Module-level indirection so tests can swap the local adapter for a fake.
+_transcribe = local_transcription.transcribe
 
 
 class Uploader:
     """One daemon worker; FIFO; a failed chunk keeps its WAV."""
 
     def __init__(self, user_files: str, get_config: Callable[[], dict],
-                on_segment: Callable[[str, int], None] | None = None) -> None:
+                on_segment: Callable[[str, int], None] | None = None,
+                on_error: Callable[[str], None] | None = None) -> None:
         self._q: queue.Queue = queue.Queue()
         self._user_files, self._get_config, self._on_segment = user_files, get_config, on_segment
+        self._on_error = on_error
+        self._last_error: str | None = None
         self._last_text: dict[str, str] = {}
         self._seeded: set[str] = set()
         self._thread: threading.Thread | None = None
@@ -369,6 +367,16 @@ class Uploader:
             return
         self._seeded.add(pdf_safe)
 
+    def _notify_error(self, message: str) -> None:
+        if self._closed or message == self._last_error:
+            return
+        self._last_error = message
+        if self._on_error is not None:
+            try:
+                self._on_error(message)
+            except Exception as exc:
+                print(f"[klausmate] transcription notification failed ({exc.__class__.__name__})")
+
     def _one(self, pdf_safe: str, pdf_path: str, chunk: Chunk, wav_path: str) -> None:
         if self._closed:
             # Queued BEHIND stop()'s sentinel (PR #4 third re-review):
@@ -383,23 +391,19 @@ class Uploader:
                   f"keeping queued {os.path.basename(wav_path)}")
             return
         cfg = self._get_config() or {}
-        model = str(cfg.get("transcription_model") or "gpt-4o-mini-transcribe")
-        key = str(cfg.get("api_key_openai") or "").strip()
-        if not key:
-            print(f"[klausmate] lecture recorder: no OpenAI key, keeping {os.path.basename(wav_path)}")
+        if not str(cfg.get("transcription_model_path") or "").strip():
+            self._notify_error("Select a local whisper.cpp model in Preferences.")
             return
         prompt = self._last_text.get(pdf_safe, "")[-800:]
         try:
             wav = open(wav_path, "rb").read()
-            text = _transcribe(key, wav, model, prompt=prompt)
-        except openai_client.OpenAIError as exc:
-            # Class and status ONLY, never the message (PR #4, Codex):
-            # openai_client._request folds up to 300 bytes of the provider's
-            # error body into it, and that body can echo request-derived
-            # text — here the continuity prompt, which IS the previous
-            # segment's transcript. Same rule the judge follows.
+            text = _transcribe(wav, str(cfg.get("transcription_model_path") or ""),
+                               binary=str(cfg.get("transcription_binary") or ""),
+                               language=str(cfg.get("transcription_language") or "en"), prompt=prompt)
+        except local_transcription.TranscriptionError as exc:
             print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)} "
-                  f"(OpenAIError status={exc.status})")
+                  "(TranscriptionError)")
+            self._notify_error(exc.user_message())
             return
         except Exception as exc:
             print(f"[klausmate] transcription failed, keeping {os.path.basename(wav_path)} "
@@ -417,6 +421,7 @@ class Uploader:
             print(f"[klausmate] lecture recorder: uploader closed mid-upload, "
                   f"keeping {os.path.basename(wav_path)}")
             return
+        self._last_error = None
         text = text.strip()
         if text:
             self._ensure_page(pdf_safe, pdf_path)

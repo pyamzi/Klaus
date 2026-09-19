@@ -130,7 +130,7 @@ _LEGACY_KEYS_DROPPED = (
     # 2026-09-18: embedded assistant dock removed (see
     # docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
     "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
-    "reasoning_model",
+    "reasoning_model", "transcription_model",
 )
 
 
@@ -177,7 +177,7 @@ def _migrate_config() -> None:
             changed = True
             if old not in ("klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
                            "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
-                           "reasoning_model"):
+                           "reasoning_model", "transcription_model"):
                 reset_embed_decline = True
     if changed:
         # 2026-09-16 (K-236): a profile that carried ANY retired key comes
@@ -821,7 +821,14 @@ def uploader() -> Any:
     if _uploader is None:
         from . import lecture_recorder
 
-        _uploader = lecture_recorder.Uploader(USER_FILES, get_config)
+        def on_error(message: str) -> None:
+            def show_error() -> None:
+                if _uploader is worker and not worker._closed:
+                    tooltip(message)
+            mw.taskman.run_on_main(show_error)
+
+        worker = lecture_recorder.Uploader(USER_FILES, get_config, on_error=on_error)
+        _uploader = worker
     return _uploader
 
 

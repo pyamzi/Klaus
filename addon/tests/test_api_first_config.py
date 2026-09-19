@@ -88,7 +88,9 @@ for k in (
 for k, v in (
     ("api_key_openai", ""),
     ("api_key_anthropic", ""),
-    ("transcription_model", "gpt-4o-mini-transcribe"),
+    ("transcription_model_path", ""),
+    ("transcription_binary", ""),
+    ("transcription_language", "en"),
     ("embedding_model", "text-embedding-3-large"),
 ):
     check(f"config.json defines {k} = {v!r}", cfg.get(k) == v)
@@ -99,6 +101,25 @@ check(
     cfg.get("embedding_dimensions") == 1024,
 )
 
+
+section("local transcription migration preserves saved paths and embedding decline")
+for overrides in ({}, {"transcription_model_path": "/saved model.bin", "transcription_binary": "/custom cli", "transcription_language": "fa"}):
+    store = dict(cfg, transcription_model="gpt-4o-mini-transcribe", _embed_key_setup_declined=True, **overrides)
+    writes = []
+    K.get_config = lambda: dict(store)
+    def save_local(value):
+        store.clear()
+        store.update(value)
+        writes.append(dict(value))
+    K.write_config = save_local
+    K._migrate_config()
+    check("cloud model retired", "transcription_model" not in store)
+    check("local values preserved", all(store.get(k) == overrides.get(k, default) for k, default in
+          (("transcription_model_path", ""), ("transcription_binary", ""), ("transcription_language", "en"))))
+    check("transcription retirement preserves embedding decline", store.get("_embed_key_setup_declined") is True)
+    first = dict(store)
+    K._migrate_config()
+    check("local migration idempotent", store == first and len(writes) == 1)
 
 # ------------------------------------------------- _migrate_config
 
