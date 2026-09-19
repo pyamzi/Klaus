@@ -31,3 +31,4 @@ __pycache__/
 .claude/worktrees/
 .cursor/
 service/klausplus.egg-info/
+graphify-out/
