@@ -64,7 +64,8 @@ holds API keys) stay ignored — never stage those.
 - **Run the whole test suite**:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Run one test file**: `python3 tests/test_klausmate.py`. The files that
-  need real PyQt6 widgets use offscreen rendering; use the offscreen environment explicitly; see "Anki runtime & testing".
+  need real PyQt6 widgets use offscreen rendering. Set that environment
+  explicitly; see "Anki runtime & testing".
 - **Add `PYTHONDONTWRITEBYTECODE=1` when you re-run a test after editing the
   module it covers**, not just on a mutation run. This Mac sets
   `sys.pycache_prefix` to `~/Library/Caches/com.apple.python`, so stale
@@ -147,7 +148,7 @@ same reason.
   3.9.6: it can `py_compile` every addon file (all use
   `from __future__ import annotations`) but **cannot import `aqt`**.
 - So headless testing = **stub `aqt`/`anki` in `sys.modules` and test
-  logic only, never Qt widgets**. The harness lives in `tests/` (see its
+  logic, with real Qt offscreen where widget behavior matters**. The harness lives in `tests/` (see its
   README) with the bootstrap documented in the `klaus-test` skill — use
   that skill when adding or changing klausmate modules. Run everything:
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
@@ -1217,7 +1218,7 @@ same reason.
     background groups (deck + study, one each): ONE mode combo, with
     PROGRESSIVE DISCLOSURE — every other row hides outright unless
     its mode is selected (klaus_hidden + an _apply_search re-walk,
-    the existing inline Remove-link pattern; design off hides the whole block).
+    the shared row-visibility pattern; design off hides the whole block).
     Image mode shows Choose Image… with a rounded 2× thumbnail
     caption (`_image_thumb`, rendered from the STORED copy; its
     Remove link clears the picture), Fit, Panel Frost (deck only)
