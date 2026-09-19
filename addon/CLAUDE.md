@@ -761,11 +761,11 @@ same reason.
   setToolTipsVisible tooltips; the folder TREE also accepts external
   .pdf drops filed into the hovered folder (internal moves
   byte-equivalent); Match Sensitivity opens window-modal (dlg.open,
-  K-114 — pdf_drive carries an exec-ban pin) and **scores its live
-  preview with the rejected set**, read ONCE beside `matches` rather
-  than per keystroke: without it a confirmed OK rewrote the row from the
-  confirmed-only number to the matched-everything one (90% → 52%) with
-  the user having changed nothing. An empty Library is not
+  K-114; pdf_drive carries an exec-ban pin) and scores its live preview
+  from matched cards at the selected threshold. The OK path uses the same
+  matched-card retention calculation and refreshes counts at that threshold;
+  neither path applies a judge rejection set. See
+  [Match Sensitivity](klausmate/pdf_drive.py). An empty Library is not
   a void (K-132): `_LibraryEmptyState`, owned by `_LibraryTree`, is a
   sibling OVERLAY carrying `LIBRARY_EMPTY_TEXT`/`_HINT` and doubling as
   a drop target — `WA_TransparentForMouseEvents` is what keeps the
@@ -1042,12 +1042,10 @@ same reason.
   transcript is dropped. Nothing a single chunk throws may kill the
   worker, or one bad chunk stops transcription for the session, which is
   also why the stop sentinel gets its own `task_done()` and
-  `_ensure_thread` re-checks `is_alive()`. On Plus it calls
-  `openai_client.transcribe` with no provider key through
-  `plus.endpoint(cfg, "transcribe")`, remembers the quota from the
-  response headers and a 401/402/426 through `plus.note_refusal` — both
-  sinks reached lazily as the package's **`patch_config`**, never
-  `write_config`. `ensure_records` is seeded once per PDF before the
+  `_ensure_thread` re-checks `is_alive()`. The intermediate uploader uses
+  the user's OpenAI key directly until D6 replaces transcription locally;
+  see [Uploader._one](klausmate/lecture_recorder.py).
+  `ensure_records` is seeded once per PDF before the
   first segment ever lands (marked seeded only AFTER it succeeds), so a
   transcript can be the first thing a PDF that nobody has indexed ever
   grows. `on_segment` (no caller in the add-on today — the strip listens on
