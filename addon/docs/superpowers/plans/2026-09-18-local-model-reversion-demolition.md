@@ -1211,6 +1211,8 @@ git commit -m "cost: drop the judge pricing — reasoning-model rows and estimat
 - Modify: `tests/test_live_api.py` (trim, not delete — it covers more than
   just the Anthropic smoke test)
 
+- Modify: `scripts/mutation_audit.py` (remove deleted module names from the audit roster)
+
 **Interfaces:**
 - Consumes: Tasks 9-13's finished state (every real caller of
   `pertinence`/`anthropic_client` already stripped or collapsed) and
@@ -1243,6 +1245,10 @@ in the file untouched. This file's tests only run under `KLAUS_LIVE_API=1`
 per CLAUDE.md's standing rule, so removing the Anthropic section here is
 safe to do without a live key.
 
+Remove `pertinence`, `anthropic_client`, `plus` from `scripts/mutation_audit.py`
+`AUDIT_MODULES` and adjust the adjacent description. Run the audit selftest
+after the final cluster cleanup restores its baseline.
+
 - [ ] **Step 4: Compile check**
 
 Run: `python3 -m py_compile klausmate/*.py`
@@ -1254,7 +1260,7 @@ Same command as before.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tests/test_live_api.py
+git add tests/test_live_api.py scripts/mutation_audit.py
 git commit -m "Delete pertinence.py and anthropic_client.py — no judge, no Anthropic caller left"
 ```
 
@@ -1269,6 +1275,8 @@ up both those deletions and the `test_live_api.py` trim together.)
 - Modify: `tests/test_klausmate.py`
 - Modify: `tests/test_index_queue.py`
 - Modify: `tests/test_drive.py`
+- Modify: `tests/test_cost.py`
+- Modify: other test files only when they still assert deleted judge behavior
 
 **Interfaces:**
 - Consumes: Tasks 9-14's finished state.
@@ -1571,6 +1579,8 @@ git commit -m "manage_models: delete the Assistant page and reasoning_model, kee
 - Delete: `tests/test_assistant_dock.py`
 - Delete: `tests/test_assistant_sessions.py`
 
+- Modify: `scripts/mutation_audit.py` (remove deleted module names from the audit roster)
+
 **Interfaces:**
 - Consumes: Tasks 16-18's finished state (every real caller already
   stripped).
@@ -1597,6 +1607,10 @@ Expected: `pdf_viewer.py` and `anki_endpoint.py` (at minimum) still
 appear — if either is missing, something in Tasks 16-18 accidentally
 touched a live consumer; investigate before proceeding.
 
+Remove `agent_host`, `assistant_sessions` from `scripts/mutation_audit.py`
+`AUDIT_MODULES` and adjust the adjacent description. Run the audit selftest
+after the final cluster cleanup restores its baseline.
+
 - [ ] **Step 4: Compile check**
 
 Run: `python3 -m py_compile klausmate/*.py`
@@ -1608,6 +1622,7 @@ Same command as before.
 - [ ] **Step 6: Commit**
 
 ```bash
+git add scripts/mutation_audit.py
 git commit -m "Delete agent_host.py, assistant_dock.py, assistant_sessions.py — the embedded copilot"
 ```
 
