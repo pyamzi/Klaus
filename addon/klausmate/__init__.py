@@ -125,6 +125,8 @@ _LEGACY_KEYS_DROPPED = (
     "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
     "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
     "_embed_default_migrated",
+    # Retired 2026-09-18: Klaus Plus subscription service removed.
+    "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base",
 )
 
 
