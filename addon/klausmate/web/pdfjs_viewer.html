@@ -337,6 +337,24 @@ origin, matching the native viewer and the bake pipeline exactly
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--grey-mid); border-radius: 4px; }
+
+  /* Floating tools preserve context while keeping text on a readable surface. */
+  #annobar {
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+  }
+  #root button { font-optical-sizing: auto; touch-action: manipulation; }
+  #root button:active { filter: brightness(0.92); }
+  #root button:focus-visible, #root input:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    #annobar { background: var(--surface); backdrop-filter: none; }
+  }
+  @media (prefers-contrast: more) {
+    #annobar, #findbar, #ctxmenu { border: 1px solid var(--text); }
+  }
 </style>
 
 <div id="root">

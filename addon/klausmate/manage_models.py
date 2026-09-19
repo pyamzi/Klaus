@@ -593,6 +593,7 @@ def manage_models_dialog(*_args: Any) -> None:
         desc_lbl.setObjectName("SettingDesc")
         desc_lbl.setWordWrap(True)
         text_col.addWidget(desc_lbl)
+        text_col.setAlignment(Qt.AlignmentFlag.AlignTop)
         row.addLayout(text_col, 1)
         if isinstance(control, QWidget):
             row.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -617,9 +618,11 @@ def manage_models_dialog(*_args: Any) -> None:
         sidebar display order) that has one. Clearing the field
         restores everything except structurally hidden rows."""
         q = str(text).strip().lower()
-        advanced_panel.setVisible(advanced_toggle.isChecked() or bool(q and any(
+        advanced_expanded = advanced_toggle.isChecked() or bool(q and any(
             q in row.klaus_search for row in _rows_by_page.get("Local models", ())
-            if advanced_panel.isAncestorOf(row))))
+            if advanced_panel.isAncestorOf(row)))
+        advanced_panel.setVisible(advanced_expanded)
+        advanced_toggle.setText("▾ Advanced settings" if advanced_expanded else "▸ Advanced settings")
         first_hit = ""
         for label in _nav_order or list(_page_index):
             any_visible = False
@@ -803,7 +806,6 @@ def manage_models_dialog(*_args: Any) -> None:
 
     add_transcription = QPushButton("Choose transcription model…")
     add_transcription.setObjectName("ChooseTranscriptionModel")
-    add_transcription.setProperty("class", "SecondaryButton")
     add_transcription.clicked.connect(lambda: browse_transcription_file(
         transcription_model_path_edit, "Choose a whisper.cpp model"))
     inventory_controls.addWidget(add_transcription)
@@ -883,10 +885,13 @@ def manage_models_dialog(*_args: Any) -> None:
         threshold_ctl,
     )
 
-    advanced_toggle = QPushButton("Advanced settings")
+    advanced_toggle = QPushButton("▸ Advanced settings")
     advanced_toggle.setObjectName("AdvancedModelSettings")
     advanced_toggle.setCheckable(True)
     advanced_toggle.toggled.connect(advanced_panel.setVisible)
+    advanced_toggle.toggled.connect(lambda expanded: advanced_toggle.setText(
+        "▾ Advanced settings" if expanded else "▸ Advanced settings"))
+    advanced_toggle.setAccessibleName("Advanced settings")
     keys_layout.addWidget(advanced_toggle)
     keys_layout.addWidget(advanced_panel)
 

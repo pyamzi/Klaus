@@ -449,8 +449,7 @@ def dialog_qss(night: bool) -> str:
 
     SynapsePro's settings-dialog language: window on ``bg``, every
     QGroupBox a white card (12px radius, 1px ``grey_light`` border),
-    buttons blue-primary by default with rounded 8px corners; a button
-    named ``SecondaryButton`` gets the grey treatment instead.
+    quiet utility buttons with an explicit accented default action.
     """
     c = palette(night)
     return f"""
@@ -475,18 +474,25 @@ def dialog_qss(night: bool) -> str:
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
     QPushButton {{
-        background-color: {c['blue']};
-        color: white;
-        border: {c['blue_border']};
+        background-color: {c['hover_subtle']};
+        color: {c['text']};
+        border: 1px solid transparent;
         border-radius: 8px;
-        padding: 6px 16px;
+        padding: 6px 14px;
         font-weight: 600;
     }}
-    QPushButton:hover {{ background-color: {c['blue_hover']}; }}
-    QPushButton:pressed {{ background-color: {c['blue_pressed']}; }}
-    /* Keyboard focus must be visible (critique P1): a bright-accent
-       ring via border. Buttons whose base border is "none" gain 1px on
-       focus — acceptable jitter; an invisible focus is not. */
+    QPushButton:hover {{ background-color: {c['grey_light']}; }}
+    QPushButton:pressed {{ background-color: {c['grey_mid']}; }}
+    QPushButton:default, QPushButton#PrimaryButton {{
+        background-color: {c['blue']}; color: white;
+    }}
+    QPushButton:default:hover, QPushButton#PrimaryButton:hover {{
+        background-color: {c['blue_hover']};
+    }}
+    QPushButton:default:pressed, QPushButton#PrimaryButton:pressed {{
+        background-color: {c['blue_pressed']};
+    }}
+    /* Reserve the border at rest so keyboard focus never shifts layout. */
     QPushButton:focus {{ border: 1px solid {c['blue_bright']}; }}
     QPushButton:disabled {{
         background-color: {c['grey_light']};
@@ -495,7 +501,7 @@ def dialog_qss(night: bool) -> str:
     QPushButton#SecondaryButton {{
         background-color: {c['grey_light']};
         color: {c['text']};
-        border: none;
+        border: 1px solid transparent;
     }}
     QPushButton#SecondaryButton:hover {{ background-color: {c['grey_mid']}; }}
     QPushButton#SecondaryButton:pressed {{
@@ -510,6 +516,16 @@ def dialog_qss(night: bool) -> str:
         background-color: {c['red']};
         color: white;
     }}
+    QPushButton#AdvancedModelSettings {{
+        background: transparent; color: {c['text_muted']};
+        border: 1px solid transparent; text-align: left;
+        padding: 8px 0; font-weight: 500;
+    }}
+    QPushButton#AdvancedModelSettings:hover {{ color: {c['text']}; }}
+    QPushButton#AdvancedModelSettings:pressed {{ background: {c['hover_subtle']}; }}
+    QPushButton#SecondaryButton:focus,
+    QPushButton#DangerButton:focus,
+    QPushButton#AdvancedModelSettings:focus {{ border: 1px solid {c['blue_bright']}; }}
     QComboBox, QLineEdit {{
         background-color: {c['surface']};
         color: {c['text']};
@@ -633,10 +649,10 @@ def dialog_qss(night: bool) -> str:
         background-color: {accent_rgba(night, 0.16)};
         color: {c['blue']};
     }}
-    QLabel#PageTitle {{ font-size: 24px; font-weight: 800; }}
+    QLabel#PageTitle {{ font-size: 24px; font-weight: 600; }}
     QLabel#PageSubtitle {{ color: {c['text_muted']}; font-size: 12px; }}
     QLabel#SettingName {{ font-size: 13px; font-weight: 600; }}
-    QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 11px; }}
+    QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 12px; }}
     /* K-111 (manage_models's install/setup page): heading + subsection
        typography, sized like SubHeaderLabel/SettingName above so the
        install flow doesn't invent its own scale. */
@@ -791,13 +807,16 @@ def panel_header_qss(night: bool) -> str:
     QWidget#KlausPanelHeader QToolButton {{
         background: transparent;
         color: {c['text_muted']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 6px;
-        padding: 2px 6px;
+        padding: 3px 5px;
     }}
     QWidget#KlausPanelHeader QToolButton:hover {{
         background: {c['hover_subtle']};
         color: {c['text']};
+    }}
+    QWidget#KlausPanelHeader QToolButton:focus {{
+        border: 1px solid {c['blue_bright']};
     }}
     QWidget#KlausPanelHeader QToolButton:pressed {{
         background: {c['grey_mid']};
@@ -894,11 +913,15 @@ def find_bar_qss(night: bool) -> str:
     QWidget#KlausFindBar QToolButton {{
         background: transparent;
         color: {c['text_muted']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 6px;
         padding: 1px 6px;
         font-weight: 600;
     }}
+    QWidget#KlausFindBar QToolButton:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QWidget#KlausFindBar QToolButton:pressed {{ background: {c['grey_mid']}; }}
     QWidget#KlausFindBar QToolButton:hover {{
         background: {c['hover_subtle']};
         color: {c['text']};
@@ -1516,6 +1539,21 @@ def _chip_active_rules() -> str:
     return "background: var(--klaus-press) !important;"
 
 
+def web_control_css(selector: str, accent: str = "var(--klaus-accent)") -> str:
+    """Immediate press feedback and keyboard focus for a chrome control."""
+    return f"""
+    {selector} {{ font-optical-sizing: auto; touch-action: manipulation; }}
+    {selector}:active {{ filter: brightness(0.92); transition: none; }}
+    {selector}:focus-visible {{
+        outline: 2px solid {accent} !important;
+        outline-offset: 2px !important;
+    }}
+    @media (prefers-contrast: more) {{
+        {selector} {{ outline: 1px solid currentColor; outline-offset: -1px; }}
+    }}
+    """
+
+
 def toolbar_css() -> str:
     """Web CSS for Anki's top-toolbar webview (top_bar.py injects it via
     webview_will_set_content). RESTYLE ONLY — nothing is hidden or
@@ -1619,6 +1657,7 @@ def toolbar_css() -> str:
     .amboss-indicator.amboss-indicator-day {{
         mix-blend-mode: multiply;
     }}
+    {web_control_css(".header .hitem")}
     """
 
 
@@ -1662,6 +1701,7 @@ def bottombar_css() -> str:
     #header button:hover {{ {_chip_hover_rules()} }}
     #header button:active {{ {_chip_active_rules()} }}
     #header button:focus {{ outline: 0 !important; }}
+    {web_control_css("#header button")}
     """
 
 
@@ -1877,7 +1917,7 @@ def utility_window_qss(night: bool) -> str:
     QPushButton {{
         background-color: {c['grey_light']};
         color: {c['text']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 8px;
         padding: 5px 14px;
         font-weight: 600;
@@ -1888,13 +1928,15 @@ def utility_window_qss(night: bool) -> str:
     QPushButton:pressed {{
         background-color: {c['grey_dark']};
     }}
+    QPushButton:focus, QPushButton:default:focus {{ border: 1px solid {c['blue_bright']}; }}
+    QPushButton:default:pressed {{ background-color: {c['blue_pressed']}; }}
     QPushButton:disabled {{
         color: {c['text_faint']};
     }}
     QPushButton:default {{
         background-color: {c['blue']};
         color: white;
-        border: {c['blue_border']};
+        border: 1px solid transparent;
     }}
     QPushButton:default:hover {{
         background-color: {c['blue_hover']};
@@ -1997,6 +2039,7 @@ def reviewer_bar_css() -> str:
         outline: 2px solid var(--klaus-accent) !important;
         outline-offset: 1px !important;
     }}
+    {web_control_css("button")}
     """
 
 
@@ -2041,6 +2084,8 @@ def editor_css() -> str:
         color: var(--klaus-text-muted);
         font-size: 11px;
     }}
+    {web_control_css(".editor-toolbar button")}
+    {web_control_css(".button-toolbar button")}
     """
 
 
