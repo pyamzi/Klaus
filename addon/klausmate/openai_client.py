@@ -14,8 +14,6 @@ import urllib.request
 import uuid
 from typing import Any, Callable
 
-from . import plus
-
 API_BASE = "https://api.openai.com/v1"
 EMBED_TIMEOUT_S = 60.0
 TRANSCRIBE_TIMEOUT_S = 120.0
@@ -98,19 +96,16 @@ def _request(url: str, data: bytes, headers: dict[str, str], timeout: float, wha
     raise last  # type: ignore[misc]
 
 
-def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EMBED_TIMEOUT_S,
-         endpoint: plus.Endpoint | None = None, *,
+def embed(key: str, texts: list[str], model: str, dims: int, timeout: float = EMBED_TIMEOUT_S, *,
          on_headers: Callable[[Any], None] | None = None) -> list[list[float]]:
     if not texts:
         return []
     body: dict[str, Any] = {"model": model, "input": list(texts)}
     if dims:
         body["dimensions"] = int(dims)
-    # The service mirrors OpenAI's paths under /v1 (API_BASE already ends in it;
-    # plus.base() is the bare host) — the offline e2e caught a 404 without it.
-    url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/embeddings"
+    url = API_BASE + "/embeddings"
     headers = {"Content-Type": "application/json",
-              **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
+              "Authorization": f"Bearer {key}"}
     resp = _request(url, json.dumps(body).encode("utf-8"), headers, timeout, "embeddings", on_headers=on_headers)
     data = resp.get("data")
     if not isinstance(data, list) or len(data) != len(texts):
@@ -138,13 +133,13 @@ def _multipart(fields: list[tuple[str, str]], file_field: str, filename: str, co
 
 
 def transcribe(key: str, wav_bytes: bytes, model: str, language: str = "en", prompt: str = "",
-               timeout: float = TRANSCRIBE_TIMEOUT_S, endpoint: plus.Endpoint | None = None, *,
+               timeout: float = TRANSCRIBE_TIMEOUT_S, *,
                on_headers: Callable[[Any], None] | None = None) -> str:
     fields = [("model", model), ("response_format", "json"), ("language", language)]
     if prompt:
         fields.append(("prompt", prompt[:800]))
     data, ct = _multipart(fields, "file", "chunk.wav", "audio/wav", wav_bytes)
-    url = (endpoint.base + "/v1" if endpoint else API_BASE) + "/audio/transcriptions"
-    headers = {"Content-Type": ct, **(endpoint.headers if endpoint else {"Authorization": f"Bearer {key}"})}
+    url = API_BASE + "/audio/transcriptions"
+    headers = {"Content-Type": ct, "Authorization": f"Bearer {key}"}
     resp = _request(url, data, headers, timeout, "transcription", on_headers=on_headers)
     return str(resp.get("text") or "").strip()
