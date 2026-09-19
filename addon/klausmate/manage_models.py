@@ -617,6 +617,9 @@ def manage_models_dialog(*_args: Any) -> None:
         sidebar display order) that has one. Clearing the field
         restores everything except structurally hidden rows."""
         q = str(text).strip().lower()
+        advanced_panel.setVisible(advanced_toggle.isChecked() or bool(q and any(
+            q in row.klaus_search for row in _rows_by_page.get("Local models", ())
+            if advanced_panel.isAncestorOf(row))))
         first_hit = ""
         for label in _nav_order or list(_page_index):
             any_visible = False
@@ -672,19 +675,25 @@ def manage_models_dialog(*_args: Any) -> None:
 
     keys_layout = _page(
         "Local models", "Local models",
-        "Semantic search runs locally with Ollama. Lecture transcription uses whisper.cpp.",
+        "Choose models for matching cards and transcribing lectures.",
     )
+    advanced_panel = QWidget()
+    advanced_panel.setObjectName("AdvancedModelPanel")
+    advanced_layout = QVBoxLayout(advanced_panel)
+    advanced_layout.setContentsMargins(0, 0, 0, 0)
+    advanced_layout.klaus_page = "Local models"
+    advanced_panel.hide()
     endpoint_edit = QLineEdit()
     endpoint_edit.setObjectName("endpoint")
     endpoint_edit.setMinimumWidth(220)
     endpoint_edit.setPlaceholderText("http://127.0.0.1:11434")
-    _row(keys_layout, "Ollama endpoint", "Local HTTP address for Ollama.", endpoint_edit)
+    _row(advanced_layout, "Ollama endpoint", "Local HTTP address for Ollama.", endpoint_edit)
     embed_model_edit = QLineEdit()
     embed_model_edit.setObjectName("embedding_model")
     embed_model_edit.setMinimumWidth(220)
     embed_model_edit.setPlaceholderText("nomic-embed-text")
     _row(
-        keys_layout,
+        advanced_layout,
         "Embedding model",
         "Changing it offers to re-index your cards and PDFs locally.",
         embed_model_edit,
@@ -694,7 +703,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
     runtime_auto_cb = Md3Switch()
     runtime_auto_cb.setObjectName("runtime_auto_setup")
-    _row(keys_layout, "Automatic management",
+    _row(advanced_layout, "Automatic management",
          "Start an installed Ollama runtime on profile open. Never downloads automatically.",
          runtime_auto_cb)
     runtime_status = QLabel("Not checked. Click Refresh to check Ollama and installed models.")
@@ -708,19 +717,22 @@ def manage_models_dialog(*_args: Any) -> None:
     update_runtime_btn.setEnabled(False)
     for button in (install_btn, stop_runtime_btn, update_runtime_btn):
         button.setObjectName("SecondaryButton")
-        runtime_controls.addWidget(button)
+        if button is install_btn:
+            runtime_controls.addWidget(button)
+        else:
+            _row(advanced_layout, button.text(), "Manage the Ollama runtime installed by Klaus.", button)
     runtime_hint = QLabel(
-        "Install/start or Update runtime authorizes a runtime download if needed "
-        f"({ollama_runtime.runtime_download_size_hint()}). Models download separately with Pull."
+        "Runs your card-matching model on this computer. "
+        f"First-time installation downloads {ollama_runtime.runtime_download_size_hint()}."
     )
     runtime_hint.setWordWrap(True)
-    _row(keys_layout, "Ollama runtime", runtime_hint, runtime_controls)
-    _row(keys_layout, "Runtime status", runtime_status, None)
+    _row(keys_layout, "Ollama", runtime_hint, runtime_controls)
+    _row(keys_layout, "Ollama status", runtime_status, None)
     runtime_status.setObjectName("OllamaStatus")
     installed_models = QListWidget()
     installed_models.setObjectName("InstalledModels")
     installed_models.setMinimumWidth(220)
-    installed_models.setFixedHeight(90)
+    installed_models.setFixedHeight(108)
     inventory_controls = QVBoxLayout()
     inventory_controls.addWidget(installed_models)
     inventory_buttons = QHBoxLayout()
@@ -730,23 +742,27 @@ def manage_models_dialog(*_args: Any) -> None:
         button.setObjectName("SecondaryButton")
         inventory_buttons.addWidget(button)
     inventory_controls.addLayout(inventory_buttons)
-    _row(keys_layout, "Installed models",
-         "Select a model to fill Embedding model. Save applies it and offers to re-index.",
+    inventory_row = _row(keys_layout, "Installed models",
+         "Select a Card matching model, then Save. Model types appear below each name.",
          inventory_controls)
+    inventory_row.layout().itemAt(0).layout().setAlignment(Qt.AlignmentFlag.AlignTop)
     pull_model_edit = QLineEdit()
     pull_model_edit.setObjectName("pull_model")
     pull_model_edit.setPlaceholderText("nomic-embed-text")
     pull_model_edit.setMinimumWidth(140)
-    pull_btn = QPushButton("Pull")
+    pull_model_edit.setText("nomic-embed-text")
+    pull_btn = QPushButton("Download")
     pull_controls = QHBoxLayout()
     pull_controls.addWidget(pull_model_edit)
     pull_controls.addWidget(pull_btn)
-    _row(keys_layout, "Download model", "Pull downloads this model from Ollama's registry.", pull_controls)
+    download_controls = QVBoxLayout()
+    download_controls.addLayout(pull_controls)
+    _row(keys_layout, "Download model", "For card matching, use nomic-embed-text. Download progress appears below.", download_controls)
     runtime_progress = QProgressBar()
     runtime_progress.setObjectName("OllamaProgress")
     runtime_progress.setRange(0, 100)
     runtime_progress.setValue(0)
-    _row(keys_layout, "Download progress", "Runtime and model download progress.", runtime_progress)
+    download_controls.addWidget(runtime_progress)
 
     transcription_model_path_edit = QLineEdit()
     transcription_binary_edit = QLineEdit()
@@ -779,16 +795,32 @@ def manage_models_dialog(*_args: Any) -> None:
                                browse_transcription_file(field, caption))
         layout.addWidget(browse)
         transcription_browse_buttons.append(browse)
-        _row(keys_layout, title, description, control)
+        _row(advanced_layout, title, description, control)
     transcription_language_edit.setObjectName("transcription_language")
     transcription_language_edit.setPlaceholderText("en")
-    _row(keys_layout, "Transcription language", "Language code, such as en or fa.",
+    _row(advanced_layout, "Transcription language", "Language code, such as en or fa.",
          transcription_language_edit)
+
+    add_transcription = QPushButton("Choose transcription model…")
+    add_transcription.setObjectName("ChooseTranscriptionModel")
+    add_transcription.setProperty("class", "SecondaryButton")
+    add_transcription.clicked.connect(lambda: browse_transcription_file(
+        transcription_model_path_edit, "Choose a whisper.cpp model"))
+    inventory_controls.addWidget(add_transcription)
+    transcription_browse_buttons.append(add_transcription)
+    model_usage = QLabel()
+    model_usage.setWordWrap(True)
+    inventory_controls.addWidget(model_usage)
+
+    def update_model_usage() -> None:
+        model_usage.setText("Card matching: " + (embed_model_edit.text().strip() or "Not selected"))
+
+    embed_model_edit.textChanged.connect(update_model_usage)
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
     index_btn = QPushButton("Index Now")
-    _row(keys_layout, "Card index", embed_status, index_btn)
+    _row(keys_layout, "Index cards", embed_status, index_btn)
 
     from pathlib import Path
     from aqt.qt import QApplication, QPlainTextEdit
@@ -807,9 +839,9 @@ def manage_models_dialog(*_args: Any) -> None:
     external_status.setWordWrap(True)
     external_status.setTextFormat(Qt.TextFormat.PlainText)
     external_copy.clicked.connect(lambda: QApplication.clipboard().setText(external_json.toPlainText()))
-    external_controls.addWidget(external_json)
+    _row(advanced_layout, "MCP configuration", "Full configuration for an external assistant.", external_json)
     external_controls.addWidget(external_copy)
-    _row(keys_layout, "External clients", external_status, external_controls)
+    _row(keys_layout, "MCP", external_status, external_controls)
 
     def external_ready(interpreter: str | None) -> None:
         if _OPEN_DLG is not dlg or profile_cancel.is_set():
@@ -821,9 +853,8 @@ def manage_models_dialog(*_args: Any) -> None:
             ))
             external_copy.setEnabled(True)
             external_status.setText(
-                "Keep Anki running. Add the klaus entry under mcpServers in Claude Desktop's "
-                "configuration, then restart the client. Requires external Python 3.9 or newer. "
-                "The client may send requested page text and images to its model provider."
+                "Connect an external assistant while Anki is open. Copy this configuration "
+                "into your client. The client may send requested page text and images to its model provider."
             )
         else:
             external_status.setText("Install Python 3.9 or newer and reopen Preferences to copy the client configuration.")
@@ -851,6 +882,13 @@ def manage_models_dialog(*_args: Any) -> None:
         "adjusted in the Library (right-click → Match sensitivity).",
         threshold_ctl,
     )
+
+    advanced_toggle = QPushButton("Advanced settings")
+    advanced_toggle.setObjectName("AdvancedModelSettings")
+    advanced_toggle.setCheckable(True)
+    advanced_toggle.toggled.connect(advanced_panel.setVisible)
+    keys_layout.addWidget(advanced_toggle)
+    keys_layout.addWidget(advanced_panel)
 
     # ----- General ------------------------------------------------------
     general_layout = _page(
@@ -899,7 +937,7 @@ def manage_models_dialog(*_args: Any) -> None:
     test_conn_btn = QPushButton("Check Connection")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
-        general_layout,
+        advanced_layout,
         "Connection",
         "Check the local Ollama connection.",
         test_conn_btn,
@@ -1625,7 +1663,8 @@ def manage_models_dialog(*_args: Any) -> None:
             w.setEnabled(not busy)
         stop_runtime_btn.setEnabled(not busy and runtime_state["owned"])
         update_runtime_btn.setEnabled(not busy and runtime_state["update"])
-        delete_model_btn.setEnabled(not busy and installed_models.currentItem() is not None)
+        delete_model_btn.setEnabled(not busy and installed_models.currentItem() is not None
+                                    and installed_models.currentItem().data(Qt.ItemDataRole.UserRole) is not None)
         save_btn.setEnabled(not busy and ui_state["dirty"])
         progress.setVisible(busy and op_state["kind"] != "local")
         progress_lbl.setVisible(busy and op_state["kind"] != "local")
@@ -2396,8 +2435,14 @@ def manage_models_dialog(*_args: Any) -> None:
             managed and managed[0] != ollama_runtime.OLLAMA_VERSION
             and owned and ollama_runtime.server_manager.active_binary() == managed[1]
         )
-        return {"reachable": reachable, "owned": owned, "update": update,
-                "models": client.list_models() if reachable else []}
+        models = []
+        for name in client.list_models() if reachable else []:
+            try:
+                capabilities = client.model_capabilities(name)
+            except Exception:
+                capabilities = []
+            models.append((name, capabilities))
+        return {"reachable": reachable, "owned": owned, "update": update, "models": models}
 
     def local_progress(event: dict) -> None:
         # Runtime and HTTP callbacks run on workers. Every Qt access,
@@ -2468,7 +2513,14 @@ def manage_models_dialog(*_args: Any) -> None:
             # Inventory updates never select a different embedding model.
             installed_models.blockSignals(True)
             installed_models.clear()
-            installed_models.addItems(snapshot["models"])
+            for name, capabilities in snapshot["models"]:
+                purposes = [label for key, label in (
+                    ("embedding", "Card matching"), ("vision", "Images"),
+                    ("completion", "Text generation")) if key in capabilities]
+                item = QListWidgetItem(name + "\n" + (" · ".join(purposes) or "Unknown type"))
+                item.setData(Qt.ItemDataRole.UserRole, (name, capabilities))
+                installed_models.addItem(item)
+            add_transcription_inventory()
             installed_models.blockSignals(False)
             if actual_endpoint != endpoint and endpoint_edit.text().strip() == endpoint:
                 endpoint_edit.setText(actual_endpoint)
@@ -2505,17 +2557,29 @@ def manage_models_dialog(*_args: Any) -> None:
         op.failure(failed)
         op.without_collection().run_in_background()
 
+    def add_transcription_inventory() -> None:
+        for i in reversed(range(installed_models.count())):
+            if installed_models.item(i).data(Qt.ItemDataRole.UserRole) is None:
+                installed_models.takeItem(i)
+        path = Path(transcription_model_path_edit.text().strip())
+        if path.is_file():
+            installed_models.addItem(QListWidgetItem(path.name + "\nLecture transcription · whisper.cpp"))
+
+    transcription_model_path_edit.textChanged.connect(add_transcription_inventory)
+    add_transcription_inventory()
+
     def select_installed_model() -> None:
         item = installed_models.currentItem()
-        delete_model_btn.setEnabled(not op_state["active"] and item is not None)
-        if item is not None:
-            embed_model_edit.setText(item.text())
+        data = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        delete_model_btn.setEnabled(not op_state["active"] and data is not None)
+        if data is not None and "embedding" in data[1]:
+            embed_model_edit.setText(data[0])
             mark_dirty()
 
     def pull_model() -> None:
         name = pull_model_edit.text().strip()
         if not name:
-            runtime_status.setText("Enter a model name, such as nomic-embed-text, then click Pull.")
+            runtime_status.setText("Enter a model name, such as nomic-embed-text, then click Download.")
             return
         run_local("Pull", name)
 
@@ -2523,7 +2587,10 @@ def manage_models_dialog(*_args: Any) -> None:
         item = installed_models.currentItem()
         if item is None or op_state["active"]:
             return
-        name = item.text()
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data is None:
+            return
+        name = data[0]
         msg = QMessageBox(dlg)
         msg.setWindowTitle("Delete model?")
         msg.setIcon(QMessageBox.Icon.Question)

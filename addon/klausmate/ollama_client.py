@@ -124,6 +124,12 @@ class OllamaClient:
         data = self._get("/api/tags")
         return [m["name"] for m in data.get("models", [])]
 
+    def model_capabilities(self, model: str) -> list[str]:
+        """Read capabilities reported by Ollama, without guessing from names."""
+        data = self._post("/api/show", {"model": model})
+        capabilities = data.get("capabilities", [])
+        return [value for value in capabilities if isinstance(value, str)] if isinstance(capabilities, list) else []
+
     def embed(self, model: str, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts via /api/embed.
 

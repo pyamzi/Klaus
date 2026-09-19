@@ -66,6 +66,17 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.client.embed('nomic-embed-text', ['a', 'b']), [[1, 0], [0, 1]])
         self.assertEqual(self.server.requests, [('POST', '/api/embed', {'model': 'nomic-embed-text', 'input': ['a', 'b'], 'truncate': True})])
 
+    def test_model_capabilities(self):
+        self.server.routes['/api/show'] = (200, {'capabilities': ['embedding']})
+        self.assertEqual(self.client.model_capabilities('selected'), ['embedding'])
+        self.assertEqual(self.server.requests[-1], ('POST', '/api/show', {'model': 'selected'}))
+        for value in (None, 'embedding', {}):
+            self.server.routes['/api/show'] = (200, {'capabilities': value})
+            self.assertEqual(self.client.model_capabilities('selected'), [])
+        self.server.routes['/api/show'] = (500, {'error': 'unavailable'})
+        with self.assertRaises(OllamaError):
+            self.client.model_capabilities('selected')
+
     def test_wrong_count(self):
         self.server.routes['/api/embed'] = (200, {'embeddings': [[1, 0]]})
         with self.assertRaises(OllamaError):
