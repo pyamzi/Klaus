@@ -80,7 +80,7 @@ import os
 import threading
 from typing import Any, Callable, NamedTuple
 
-from . import embeddings, plus
+from . import embeddings
 
 # A job is a plain ``(kind, name)`` tuple; name is "" for JOB_CARDS.
 JOB_CARDS = "cards"  # refresh the card index alone (a sweep with no PDFs)
@@ -125,8 +125,6 @@ def missing_key_provider(cfg: dict) -> str:
     constant rather than a per-provider lookup.
     """
     if not isinstance(cfg, dict):
-        return ""
-    if plus.key(cfg):
         return ""
     return "" if str(cfg.get("api_key_openai") or "").strip() else "OpenAI"
 
@@ -236,18 +234,16 @@ def dock_button_label(snapshot: RunnerState) -> str:
     return "Stop" if snapshot.active else "Dismiss"
 
 
-def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str, plus: bool = False) -> str:
+def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str) -> str:
     """The confirm text for a model change. Never start a sweep without
     saying how much work it is AND what it costs: a changed model
     invalidates every stored vector, so this is a from-scratch re-embed
     of the whole collection, billed per token to the user's own OpenAI
     key. ``estimate`` is cost.format_estimate's own string, carried
-    verbatim — this module never formats money itself. On Klaus Plus
-    embeddings are unmetered, so ``estimate`` is ignored and the line
-    says so instead of pricing a call that costs the user nothing."""
+    verbatim — this module never formats money itself."""
     pdfs = "1 PDF" if n_pdfs == 1 else f"{n_pdfs:,} PDFs"
     notes = "1 note" if n_notes == 1 else f"{n_notes:,} notes"
-    price = "included in Klaus Plus, no charge.\n\n" if plus else f"{estimate}, billed to your OpenAI key.\n\n"
+    price = f"{estimate}, billed to your OpenAI key.\n\n"
     return (
         f"Re-index everything with {model}?\n\n"
         f"{notes} and {pdfs} will be embedded again from scratch — "
@@ -266,14 +262,14 @@ def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str, plus: bo
     )
 
 
-def card_index_confirm_message(pdf_label: str, estimate: str, plus: bool = False) -> str:
+def card_index_confirm_message(pdf_label: str, estimate: str) -> str:
     """K-237: the card-index confirm's own text — the gate ``sweep_message``
     above says does not exist yet. Declining ``offer_model_sweep`` does not
     prevent the spend it warned about, only delays it: the very next PDF
     add still runs ``curation.ensure_index`` as phase one, and a stale or
     missing card index makes THAT a from-scratch re-embed of every note,
     unpriced. This is the confirm that closes that gap."""
-    price = "included in Klaus Plus, no charge.\n\n" if plus else f"{estimate}, billed to your OpenAI key.\n\n"
+    price = f"{estimate}, billed to your OpenAI key.\n\n"
     return (
         f"Indexing “{pdf_label}” needs to rebuild your whole card index "
         f"from scratch first — {price}"
@@ -745,7 +741,7 @@ def _run(job: tuple[str, str]) -> None:
     # reaches this queue via offer_model_sweep's OWN priced confirm
     # (Preferences Save); asking again here would double-prompt for a
     # spend the user already approved.
-    if kind != JOB_PDF or plus.active(cfg) or not card_index_from_scratch(cfg):
+    if kind != JOB_PDF or not card_index_from_scratch(cfg):
         start_card_index()
     else:
         ask_card_index_confirm(
@@ -1008,21 +1004,15 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
         note_count = mw.col.note_count()
     except Exception:
         note_count = 0
-    if plus.active(_cfg()):
-        # Unmetered on Plus — skip the priced estimate call entirely
-        # rather than compute a number the confirm will never show.
-        estimate = ""
-    else:
-        try:
-            from . import cost
+    try:
+        from . import cost
 
-            estimate = cost.format_estimate(sweep_estimate(names))
-        except Exception as exc:
-            print(f"[klausmate] sweep estimate failed: {exc}")
-            estimate = "cost unknown for this model"
+        estimate = cost.format_estimate(sweep_estimate(names))
+    except Exception as exc:
+        print(f"[klausmate] sweep estimate failed: {exc}")
+        estimate = "cost unknown for this model"
     text = sweep_message(
         len(names), note_count, current[1] or current[0], estimate,
-        plus=plus.active(_cfg()),
     )
     jobs = sweep_jobs(names)
 
