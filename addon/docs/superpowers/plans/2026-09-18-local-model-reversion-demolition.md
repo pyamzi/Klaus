@@ -30,7 +30,7 @@ transcription) are separate plans that build on this one's clean tree.
   another, in the order below.
 - **Full test suite green between every task**, not just at the end:
   `status=0; for t in tests/test_*.py; do echo "$t"; python3 "$t" || status=1; done; exit "$status"`
-  from the repo root (`/Users/pyamzi/Documents/Github/Klaus/KlausMate-Context`).
+  from the repo root (`/Users/pyamzi/Documents/Github/Klaus/Klaus Addon`).
 - **After every `klausmate/*.py` edit**, verify syntax through the
   symlink Anki actually loads: `python3 -m py_compile ~/Library/Application\ Support/Anki2/addons21/klausmate/*.py`.
   (This symlink was just re-pointed at the repo's new path after a

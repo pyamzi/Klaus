@@ -222,7 +222,7 @@ seen rendering**. Anki must be fully restarted to load changes.
 
 ## Environment constraints (easy to forget, expensive to rediscover)
 
-- Edit **only** `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/`
+- Edit **only** `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/`
   — Anki loads it through a symlink; worktree edits compile nothing.
 - System `python3` is 3.9.6 and **cannot import aqt**. Headless tests
   stub `aqt`/`anki` via `.claude/skills/klaus-test/scripts/anki_stubs.py`;
