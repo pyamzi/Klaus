@@ -4,7 +4,7 @@ You are a worker on the Klausbook board. You take exactly one card, finish
 it, and hand it back. This brief is self-contained — do not assume you have
 plugins, MCP servers, or memory of previous sessions.
 
-Repo root: `/Users/pyamzi/Documents/Github/KlausBook-Context`
+Repo root: `/Users/pyamzi/Documents/Github/Klaus/Klaus App/KlausBook-Context`
 
 ## Success predicate
 
@@ -31,7 +31,7 @@ should not return claiming success on any of them:
 **1. Claim.**
 
 ```bash
-cd /Users/pyamzi/Documents/Github/KlausBook-Context
+cd "/Users/pyamzi/Documents/Github/Klaus/Klaus App/KlausBook-Context"
 python3 board/board.py claim <CARD-ID> --owner <your-name>
 ```
 
@@ -120,7 +120,7 @@ These hold for every card in this repo:
   fastapi/uvicorn (already in `core/.venv`); nothing else without a card
   that says so.
 - **Never write to the klausmate library** at
-  `/Users/pyamzi/Documents/Github/KlausMate-Context/klausmate/user_files/`. It holds
+  `/Users/pyamzi/Documents/Github/Klaus/Klaus Addon/klausmate/user_files/`. It holds
   the human's real lecture PDFs and indexes; klaus-core reads it read-only.
   Tests use `tempfile.mkdtemp()`.
 - **Extension work** (`extensions/klaus-pdf/`): build with `npm run build`,

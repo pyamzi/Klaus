@@ -22,7 +22,7 @@ This file is orientation only. The real references are:
 | `context/` | this file, roles, and the tier prompts |
 | `tests/` | headless suites; run with `python3 tests/test_*.py` |
 | `../KlausBook-Code/` | the VS Code fork (branch `klaus`, remote `upstream`). Branding/product.json only — features live in extensions. |
-| `../KlausMate-Context/klausmate/user_files/` | the human's real PDF library. klaus-core reads it **read-only**; never write there. |
+| `../../Klaus Addon/klausmate/user_files/` | the human's real PDF library. klaus-core reads it **read-only**; never write there. |
 
 ## Working here
 
