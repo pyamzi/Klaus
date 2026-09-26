@@ -147,9 +147,25 @@ working on stale vectors, or stop the sweep part-way from the same bar.
 
 - **pdf_match_threshold**: The single sensitivity control — how closely a
   card must match a PDF to count, for the priorities score and the
-  `!Library` tags alike. Default `0.75`. Each PDF also has its own
-  slider (PDF drive → right-click a PDF → **Match sensitivity…**), which
-  overrides this for that PDF only.
+  `!Library` tags alike. Default `0.45`. Scores are cosine similarity
+  after subtracting your collection's mean embedding (K-302), which keeps
+  cards of the same subject from all scoring alike (needs 10+ indexed
+  notes; smaller collections score raw). On this scale 0.45 keeps most of
+  what 0.75 caught with far fewer wrong-lecture matches; raise it toward
+  0.50 for fewer, surer matches, lower it toward 0.40 for a big review PDF. Each
+  PDF also has its own slider (PDF drive → right-click a PDF → **Match
+  sensitivity…**), which overrides this for that PDF only.
+- **pdf_match_best_delta**: Best-lecture assignment, off by default (`-1`).
+  Set it to e.g. `0.03` and a card counts for a PDF only when its score
+  there is within that much of its best score on any indexed PDF, so a
+  generic card lands on the lecture(s) that fit it best instead of every
+  lecture in the subject. It also moves cards covered by a review lecture
+  (e.g. a Bootcamp deck) off the course lecture, so try it per library.
+- **_threshold_scale**: Written automatically. Records that thresholds are
+  on the centered scale; the one-time switch reset the global sensitivity
+  to the default and cleared per-PDF overrides, since old-scale values
+  (0.75 matched nearly everything before, nearly nothing now) no longer
+  mean the same thing.
 
 ### Card embeddings
 

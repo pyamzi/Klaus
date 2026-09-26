@@ -767,6 +767,27 @@ def stale_index_names() -> list[str]:
     return names
 
 
+def stale_match_names() -> list[str]:
+    """K-302: PDFs whose matches.json was written by an older
+    MATCHES_VERSION (scores on the old raw-cosine scale). Re-matching them
+    costs no embedding when their indexes are current, and it is what
+    re-tags each PDF at the new threshold. A PDF never matched is not
+    stale — there is nothing on disk to refresh."""
+    from . import retention
+
+    names: list[str] = []
+    for name, manifest in _manifest_paths():
+        path = os.path.join(os.path.dirname(manifest), retention.MATCHES_FILE)
+        try:
+            with open(path, encoding="utf-8") as f:
+                version = json.load(f).get("version")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if version != retention.MATCHES_VERSION:
+            names.append(name)
+    return names
+
+
 def signature_changed(previous: tuple, current: tuple) -> bool:
     """Did the embedding settings move under the stored vectors?
 

@@ -339,7 +339,7 @@ try:
     # pattern tests/test_klausmate.py uses to point retention at a scratch
     # dir instead of the real klausmate/user_files.
 
-    matches_a = [(1, 0.90), (2, 0.85), (3, 0.50)]
+    matches_a = [(1, 0.90), (2, 0.85), (3, 0.40)]
     matches_b = [(5, 0.95), (6, 0.20)]
     retention.save_matches("PdfA", sig, cidx.dims, src_a, digest, matches_a, {})
     retention.save_matches("PdfB", sig, cidx.dims, src_b, digest, matches_b, {})
@@ -369,7 +369,7 @@ try:
         str(sorted(pdf_by_safe)),
     )
     check(
-        "PdfA: default threshold (0.75) keeps nid 1 and 2, drops nid 3 (0.50)",
+        "PdfA: default threshold (0.45) keeps nid 1 and 2, drops nid 3 (0.40)",
         pdf_by_safe["PdfA"]["match_count"] == 2,
         str(pdf_by_safe.get("PdfA")),
     )

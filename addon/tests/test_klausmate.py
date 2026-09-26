@@ -586,8 +586,8 @@ if HAVE_RETENTION:
     # the other half is proving a stored v1 payload actually reads as
     # absent now, mirroring how every other invalidation check above calls
     # load_matches.
-    check("MATCHES_VERSION bumped to 2 (payload gained \"pages\", lost \"agg\")",
-          retention.MATCHES_VERSION == 2)
+    check("MATCHES_VERSION bumped past 1 (payload gained \"pages\", lost \"agg\"; 3 = K-302 prefixed space)",
+          retention.MATCHES_VERSION >= 2)
     _v1_path = retention._matches_path("Lecture 1")
     with open(_v1_path, encoding="utf-8") as f:
         _v1_payload = json.load(f)
@@ -1193,7 +1193,7 @@ def _mig(cfg):
 
 _D = _ret_mod.DEFAULT_THRESHOLD
 
-check("current default is 0.75", _D == 0.75)
+check("current default is 0.45 (K-302 centered scale)", _D == 0.45)
 check(
     "a stored 0.35 (first shipped default) moves to the current default",
     _mig({"pdf_match_threshold": 0.35})["pdf_match_threshold"] == _D,

@@ -443,6 +443,38 @@ def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
     return cached[0] if cached is not None else None
 
 
+def _retag_others(col, skip_safe: str, cfg: dict) -> None:
+    """K-302: with best-lecture assignment on, re-matching one PDF can move
+    a card off (or onto) every OTHER PDF, so their tags are re-derived from
+    cache in the same op. Loads the card index once, on the op's worker."""
+    from . import card_index, embeddings, pdf_index, retention
+
+    if retention.best_delta(cfg) is None:
+        return
+    safes = [
+        s for s, e in retention._load_prefs().items()
+        if s != skip_safe and isinstance(e, dict) and e.get("tag")
+    ]
+    if not safes:
+        return
+    sig = embeddings.index_signature(cfg)
+    cidx = card_index.load(retention.INDEX_DIR)
+    if cidx is None or not card_index.check_signature(cidx, sig):
+        return
+    digest = retention.card_index_digest(cidx)
+    for other in safes:
+        src_sig = pdf_index.source_signature(retention.USER_FILES, other)
+        cached = retention.load_matches(other, sig, cidx.dims, src_sig, digest)
+        if cached is None:
+            continue  # cold cache: never strip a tag on missing data
+        threshold = retention.get_threshold(other, cfg)
+        folder, display = _folder_and_display(other)
+        _do_sync_one(
+            col, other, desired_tag(folder, display),
+            {nid for nid, score in cached[0] if score >= threshold},
+        )
+
+
 def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
     """The membership-diff body shared by sync_after_matches,
     sync_after_threshold, and sync_after_clear_overrides. Self-healing:
@@ -586,10 +618,15 @@ def sync_after_matches(
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
 
+        def work(col):
+            result = _do_sync_one(col, safe, tag, desired_nids)
+            _retag_others(col, safe, cfg)
+            return result
+
         _run_sync_op(
             parent,
             f"Klaus: tag “{display}” in !Library",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids),
+            work,
             on_done=lambda result: _tooltip_membership(parent, display, result),
             on_finished=settled,
         )

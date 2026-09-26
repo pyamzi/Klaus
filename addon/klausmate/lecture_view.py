@@ -192,6 +192,7 @@ class LectureResolver:
 
         note(prefs_path(self._ufd))
         note(os.path.join(self._card_dir, card_index.MANIFEST_FILE))
+        note(os.path.join(self._card_dir, card_index.MEAN_FILE))  # K-302 centering
 
         cands = candidates_for_tags(tags, self._inverse())
         if not cands:
@@ -206,6 +207,7 @@ class LectureResolver:
         if vec is None:
             return NoLecture(R_NO_CARD_INDEX), consulted
 
+        mean = card_index.mean_vector(self._card_dir)  # K-302 centering
         best: tuple[float, str, int, Any] | None = None
         for safe in cands:
             note(
@@ -221,7 +223,7 @@ class LectureResolver:
                 continue
             if idx.dims != rm.dims:
                 continue
-            page_1based, score = pdf_index.best_page(idx, vec)
+            page_1based, score = pdf_index.best_page(idx, vec, mean)
             if page_1based < 0:
                 continue
             # Deterministic winner: highest score, then lexical safe.

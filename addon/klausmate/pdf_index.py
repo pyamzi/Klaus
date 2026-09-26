@@ -224,10 +224,12 @@ except ImportError:  # pre-3.12 fallback (Anki bundles 3.13)
         return sum(x * y for x, y in zip(a, b))
 
 
-def best_page(index: PdfIndex, vec) -> tuple[int, float]:
+def best_page(index: PdfIndex, vec, mean=None) -> tuple[int, float]:
     """Argmax-dot row for one unit query vector; (page_1based, score), or
     (-1, 0.0) when the index is empty or the dims disagree. A zero row
-    scores 0.0 and only wins when every row does."""
+    scores 0.0 and only wins when every row does. With ``mean`` (the card
+    index's, K-302) scores are centered exactly as retention.match_scores
+    centers them, so the Lecture panel and the match cache agree."""
     dims, rows = index.dims, index.embedded_rows
     if rows <= 0 or dims <= 0:
         return (-1, 0.0)
@@ -237,9 +239,15 @@ def best_page(index: PdfIndex, vec) -> tuple[int, float]:
     except TypeError:
         return (-1, 0.0)
     mv = memoryview(index.vectors)
+    cen = card_index.Centered(mean) if mean is not None and len(mean) == dims else None
+    vt = cen.terms(vec) if cen else None
     best_i, best = 0, float("-inf")
     for i in range(rows):
-        s = _sumprod(mv[i * dims:(i + 1) * dims], vec)
+        row = mv[i * dims:(i + 1) * dims]
+        s = _sumprod(row, vec)
+        if cen:
+            rt = cen.terms(row)
+            s = -1.0 if vt is None or rt is None else cen.score(s, vt, rt)
         if s > best:
             best_i, best = i, s
     return (index.pages[best_i][0], float(best))

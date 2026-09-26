@@ -43,21 +43,26 @@ INDEX_DIR = curation.INDEX_DIR
 
 MATCHES_FILE = "matches.json"
 PREFS_FILE = "prefs.json"
-MATCHES_VERSION = 2
+MATCHES_VERSION = 3  # 3: K-302 prefixed embeddings; old caches are a different space
 
 # Cache floor for match scores — deliberately far below any usable
 # threshold, so the panel's threshold slider is a pure re-filter of the
 # cached list and never triggers a recompute.
 MATCH_FLOOR = 0.15
 
-DEFAULT_THRESHOLD = 0.75
+# 0.45 on the centered scale (K-302), checked against AnKing's #Bootcamp
+# tags: the Bootcamp Heme/Onc PDF matches 1,126 notes at precision 0.92,
+# recall 0.49 (raw 0.75: 1,939 notes, 0.82 / 0.66), and the B12 lecture's
+# wrong-lesson heme matches drop ~3x at equal recall. 0.50 was the first
+# pick and caught only 30% of the tagged heme cards.
+DEFAULT_THRESHOLD = 0.45
 # Every global default this add-on has ever shipped, oldest first. A stored
 # value equal to ANY of them was inherited, not chosen, so it follows the
 # current default forward; anything else is a deliberate setting and is left
 # alone. Keeping the whole history here (rather than one "previous default"
 # constant) means a user who skipped a version still lands on the current
 # default instead of being stranded on an intermediate one.
-_SHIPPED_DEFAULTS = (0.35, 0.55, 0.75)
+_SHIPPED_DEFAULTS = (0.35, 0.55, 0.75, 0.45)
 # Records the default last applied, so changing DEFAULT_THRESHOLD is the only
 # edit a future bump needs — no new boolean guard per change. Superseded the
 # one-shot _threshold_default_migrated flag, which could not re-run.
@@ -131,13 +136,40 @@ def _migrate_default_threshold(cfg: dict) -> dict:
     return cfg
 
 
+_SCALE_KEY = "_threshold_scale"
+SCORE_SCALE = "centered"  # K-302
+
+
+def _migrate_threshold_scale(cfg: dict) -> dict:
+    """K-302 moved match scores from raw to centered cosine, where a raw
+    0.75 matches almost nothing. A threshold set on the old scale means
+    nothing on the new one, deliberately chosen or not, so ONCE: the
+    global goes back to the default, the user-set mark goes (the value is
+    the default again, and future default bumps should carry it), and
+    every per-PDF override is cleared. The re-match that re-tags each PDF
+    at the new threshold is setup_flow's (MATCHES_VERSION moved too)."""
+    if cfg.get(_SCALE_KEY) == SCORE_SCALE:
+        return cfg
+    cfg = dict(cfg)
+    cfg["pdf_match_threshold"] = DEFAULT_THRESHOLD
+    cfg[_DEFAULT_APPLIED_KEY] = DEFAULT_THRESHOLD
+    cfg[_SCALE_KEY] = SCORE_SCALE
+    cfg.pop(_THRESHOLD_USER_SET_KEY, None)
+    try:
+        clear_threshold_overrides()
+        mw.taskman.run_on_main(lambda c=cfg: curation._pkg().write_config(c))
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] threshold scale migration failed: {e}")
+    return cfg
+
+
 def _cfg() -> dict:
     """The global config, with the one-time threshold-default migration
     applied. This is the canonical config accessor for retention/curation's
     shared, threshold-scoped reads — curation._cfg() itself stays a plain
     pass-through so unrelated config reads (embedding signature, etc.)
     don't carry this side effect."""
-    return _migrate_default_threshold(curation._cfg())
+    return _migrate_default_threshold(_migrate_threshold_scale(curation._cfg()))
 
 
 # ------------------------------------------------------------ pure helpers
@@ -156,6 +188,7 @@ def match_scores(
     floor: float = MATCH_FLOOR,
     cancel: threading.Event | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    mean=None,
 ) -> tuple[list[tuple[int, float]], dict[int, int]]:
     """Score every indexed note against the PDF's pages →
     ([(nid, score)], {nid: best page, 1-based}).
@@ -180,6 +213,10 @@ def match_scores(
     cmv = memoryview(cidx.vectors)
     pmv = memoryview(pdf_idx.vectors)
     page_rows = [pmv[j * d : (j + 1) * d] for j in range(n_pages)]
+    # K-302: centered on the card collection's mean when one is given
+    # (card_index.Centered); raw cosine otherwise.
+    cen = card_index.Centered(mean) if mean is not None and len(mean) == d else None
+    page_terms = [cen.terms(r) for r in page_rows] if cen else []
     out: list[tuple[int, float]] = []
     pages: dict[int, int] = {}
     total = len(cidx.nids)
@@ -190,6 +227,12 @@ def match_scores(
             on_progress(i, total)
         row = cmv[i * d : (i + 1) * d]
         scores = [_sumprod(row, c) for c in page_rows]
+        if cen:
+            ct = cen.terms(row)
+            scores = [
+                -1.0 if ct is None or pt is None else cen.score(x, ct, pt)
+                for x, pt in zip(scores, page_terms)
+            ]
         best = max(range(len(scores)), key=lambda k: scores[k])
         score = scores[best]
         if score >= floor:
@@ -378,7 +421,7 @@ def load_matches(
             return None
         matches = [(int(nid), float(score)) for nid, score in m["matches"]]
         pages = {int(k): int(v) for k, v in (m.get("pages") or {}).items()}
-        return matches, pages
+        return best_lecture_filter(matches, signature, dims, digest), pages
     except (ValueError, KeyError, TypeError):
         return None
 
@@ -407,6 +450,86 @@ def save_matches(
     pdf_handler._atomic_write_json(
         _matches_path(name), payload, separators=(",", ":")
     )
+
+
+# ------------------------------------------ best-lecture assignment (K-302)
+# Cosine answers "is this card about hematology", not "is it about THIS
+# lecture": a generic card scores alike on every lecture of a subject and
+# lands on all of them. So a match on lecture P counts only when P's score
+# is within ``pdf_match_best_delta`` of the card's best score over every
+# indexed lecture. Applied on READ (load_matches / ensure_matches) and never
+# written into matches.json, because it depends on the OTHER PDFs' caches;
+# tag_sync re-tags the other PDFs when one PDF's matches change.
+# Off by default: on the eval it cut 3+-lecture cards 81 -> 11 but also
+# pulled B12 cards onto the Bootcamp review lecture (recall 0.58 -> ~0.48),
+# and keyword labels cannot tell a lost match from a correct reassignment.
+DEFAULT_BEST_DELTA = -1.0
+_best_memo: dict = {"key": None, "best": {}}
+
+
+def best_delta(cfg: dict) -> float | None:
+    """The tolerance, or None when the rule is off (a negative setting)."""
+    try:
+        value = float(cfg.get("pdf_match_best_delta", DEFAULT_BEST_DELTA))
+    except (TypeError, ValueError):
+        value = DEFAULT_BEST_DELTA
+    return value if value >= 0 else None
+
+
+def best_scores(signature: tuple, dims: int, digest: str) -> dict[int, float]:
+    """{nid: best cached score across every PDF's matches.json} built from
+    this card index (``digest``) in this embedding space. Memoised on every cache file's (mtime, size), so it
+    re-reads only after some PDF was re-matched.
+
+    ponytail: parses every matches.json whole (~0.3 s for 9 PDFs x 43k
+    notes); keep a per-PDF best-score sidecar if libraries grow ~10x.
+    """
+    root = os.path.join(USER_FILES, pdf_index.SUBDIR)
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return {}
+    stamp = []
+    for name in names:
+        try:
+            st = os.stat(os.path.join(root, name, MATCHES_FILE))
+        except OSError:
+            continue
+        stamp.append((name, st.st_mtime_ns, st.st_size))
+    key = (tuple(signature), dims, digest, tuple(stamp))
+    if _best_memo["key"] == key:
+        return _best_memo["best"]
+    best: dict[int, float] = {}
+    for name, _mtime, _size in stamp:
+        m = card_index.read_manifest(os.path.join(root, name), MATCHES_VERSION, MATCHES_FILE)
+        try:
+            if m is None or int(m["dims"]) != dims or str(m.get("card_index_digest")) != digest or not embeddings.signature_matches(
+                str(m["provider"]), str(m["model"]), int(m["dims"]), signature
+            ):
+                continue
+            for nid, score in m["matches"]:
+                nid, score = int(nid), float(score)
+                if score > best.get(nid, -2.0):
+                    best[nid] = score
+        except (ValueError, KeyError, TypeError):
+            continue
+    _best_memo.update(key=key, best=best)
+    return best
+
+
+def best_lecture_filter(
+    matches: list[tuple[int, float]], signature: tuple, dims: int, digest: str
+) -> list[tuple[int, float]]:
+    """Drop the matches that some other lecture fits clearly better."""
+    try:
+        cfg = curation._cfg()  # plain read: no threshold migration on a read path
+    except Exception:  # noqa: BLE001 - unreadable config must not hide matches
+        cfg = {}
+    delta = best_delta(cfg)
+    if delta is None or not matches:
+        return matches
+    best = best_scores(signature, dims, digest)
+    return [(nid, s) for nid, s in matches if s >= best.get(nid, s) - delta]
 
 
 # ------------------------------------------------------------- prefs.json
@@ -801,12 +924,15 @@ def ensure_matches(
                     lambda d=done, t=total: on_progress("Matching cards…", d, t)
                 )
 
-        matches, pages = match_scores(pidx, cidx, cancel=cancel, on_progress=prog)
+        matches, pages = match_scores(
+            pidx, cidx, cancel=cancel, on_progress=prog,
+            mean=card_index.mean_vector(INDEX_DIR),
+        )
         if cancel is not None and cancel.is_set():
             return matches, pages  # partial — do not cache
         matches.sort(key=lambda m: m[1], reverse=True)
         save_matches(pdf_name, sig, cidx.dims, src_sig, digest, matches, pages)
-        return matches, pages
+        return best_lecture_filter(matches, sig, cidx.dims, digest), pages
 
     def done(result: tuple[list[tuple[int, float]], dict[int, int]]) -> None:
         release()
