@@ -151,6 +151,17 @@ class OllamaClient:
             )
         return embeddings
 
+    def generate(self, model: str, prompt: str, images: list[str]) -> str:
+        """One non-streaming completion over base64 images (the OCR path)."""
+        resp = self._post(
+            "/api/generate",
+            {"model": model, "prompt": prompt, "images": list(images), "stream": False},
+        )
+        text = resp.get("response")
+        if not isinstance(text, str):
+            raise OllamaError("generate response had no text")
+        return text
+
     # ---- model management ----
 
     def pull(

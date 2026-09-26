@@ -10,6 +10,7 @@ user's current field text, and the top-K most relevant chunks are returned.
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -123,6 +124,88 @@ def extract_pages(path: str) -> list[str]:
             pages.append(page.extract_text() or "")
         except Exception:
             pages.append("")
+    return pages
+
+
+# A font whose ToUnicode CMap maps nothing (Bootcamp Heme/Onc ch. 8: Type0
+# Identity-H TrueType subsets with an empty CMap and no cmap/post table)
+# makes pypdf emit raw glyph IDs — "%RRWFDPS" for "Bootcamp", space as
+# \x03. Small glyph IDs land in C0 controls, which a real text layer
+# almost never holds (tab/newline/CR aside). Measured over 639 stored
+# pages: the 11 garbled ones sit at 0.12-0.24, the worst clean one 0.011.
+# ponytail: misses garbling that maps into printable characters only; add
+# a word-shape signal when a PDF like that turns up.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_GARBLED_SHARE = 0.05
+
+OCR_MODEL = "glm-ocr"
+OCR_TIMEOUT_S = 120.0
+OCR_PROMPT = "Text Recognition:"
+
+
+def looks_garbled(text: str) -> bool:
+    """True when a page's text layer is unmapped glyph IDs, not text."""
+    visible = re.sub(r"[ \t\n\r]", "", text or "")
+    controls = len(_CONTROL_CHARS.findall(visible))
+    return controls >= 3 and controls / len(visible) > _GARBLED_SHARE
+
+
+def _live_endpoint() -> str:
+    try:
+        from aqt import mw
+
+        cfg = mw.addonManager.getConfig(__package__) or {}
+        return str(cfg.get("endpoint") or "http://127.0.0.1:11434")
+    except Exception:
+        return "http://127.0.0.1:11434"
+
+
+def _ocr_model(client) -> str | None:
+    try:
+        return next(
+            (m for m in client.list_models() if m.split(":")[0] == OCR_MODEL), None
+        )
+    except Exception:
+        return None
+
+
+def repair_garbled_pages(
+    path: str, pages: list[str], client=None, render=None
+) -> list[str]:
+    """Garbled pages get OCR through local Ollama (``glm-ocr``); without
+    the runtime or the model they become "" — an empty page embeds as
+    nothing, a garbled one as noise that never matches a card. Ingest
+    only (save_pdf, rescan_root): request-time readers keep the raw layer.
+
+    ponytail: OCR runs synchronously on import and on a rescan of new
+    files, which the Library's folder watcher triggers too (~5 s a page
+    warm, measured); move it to a worker if a whole garbled deck freezes
+    Anki for too long. Blanking is logged, never shown to the user."""
+    flagged = [i for i, text in enumerate(pages) if looks_garbled(text)]
+    if not flagged:
+        return pages
+    if client is None:
+        from .ollama_client import OllamaClient
+
+        client = OllamaClient(_live_endpoint(), timeout=OCR_TIMEOUT_S)
+    if render is None:
+        from .page_store import render_page_png as render
+    model = _ocr_model(client)
+    if model is None:
+        print(
+            f"[klausmate] {len(flagged)} garbled page(s) in {os.path.basename(path)}; "
+            f"no {OCR_MODEL} model in Ollama, leaving them blank"
+        )
+    pages = list(pages)
+    for i in flagged:
+        text = ""
+        if model is not None:
+            try:
+                png = base64.b64encode(render(path, i)).decode("ascii")
+                text = client.generate(model, OCR_PROMPT, [png]).strip()
+            except Exception as exc:  # noqa: BLE001 - one failed page never stops an import
+                print(f"[klausmate] OCR failed on page {i + 1}: {exc}")
+        pages[i] = text
     return pages
 
 
@@ -425,7 +508,7 @@ def save_pdf(
     import falls back to the legacy store with a printed note rather
     than failing — the next migration sweep relocates it.
     """
-    pages = extract_pages(raw_path)
+    pages = repair_garbled_pages(raw_path, extract_pages(raw_path))
     safe = _safe_basename(name)
     ctx_dir = os.path.join(user_files_dir, "contexts")
     pdf_dir = os.path.join(user_files_dir, "pdfs")
@@ -992,7 +1075,7 @@ def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> 
     for rel in plan["ingestable"]:
         full = os.path.join(root, rel)
         try:
-            pages = extract_pages(full)
+            pages = repair_garbled_pages(full, extract_pages(full))
         except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
             print(f"[klausmate] rescan: could not ingest {rel!r}: {exc}")
             ingest_failed.append(rel)
