@@ -73,6 +73,9 @@ class Action:
     schema: dict
     write: bool
     run: Callable[[Any, dict, dict], Any]
+    # Slow reads (an Ollama embed) run in a background QueryOp instead of
+    # on the main thread, which froze Anki for up to the embed timeout.
+    background: bool = False
 
 
 class ActionError(Exception):
@@ -422,7 +425,7 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "\"quoted phrases\" — every term must match). NOT semantic: use search_lecture_pdfs for "
            "meaning-based search over the lecture material.",
            _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes),
-    Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_pdfs),
+    Action("klausSearchLecturePdfs", "search_lecture_pdfs", "Semantic search over the indexed lecture PDFs.", _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_pdfs, background=True),
     # K-207: the real semantic note search klausSearchNotes's description
     # points at search_lecture_pdfs for meaning-based search only because
     # this tool did not exist yet. It embeds the query and ranks the CARD
@@ -436,7 +439,8 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "Returns an empty list if the card index has not been built yet, or was built with a "
            "different embedding model. For exact text / Anki search syntax (deck:, tag:, "
            "\"quoted phrases\") use klausSearchNotes instead.",
-           _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes_semantic),
+           _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes_semantic,
+           background=True),
     Action("klausCurrentPage", "current_page", "Read the active PDF page, selection, slide text and transcript. Set include_image=false for text only. Use the returned pdf and page for card sources.", _obj({"include_image": {"type": "boolean", "default": True}}), False, _a_klaus_current_page),
     Action("klausGetPage", "get_page", "Read a specific imported lecture page without changing the viewer. Images are opt-in. Use pdf IDs from current_page or lecture search, not filesystem paths.", _obj({"pdf_id": {"type": "string", "minLength": 1}, "page": {"type": "integer", "minimum": 1}, "include_image": {"type": "boolean", "default": False}}, ("pdf_id", "page")), False, _a_klaus_get_page),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
@@ -666,8 +670,12 @@ _DISCOVERY_LOCK = threading.Lock()
 class Endpoint:
     def __init__(self, *, col_getter, run_on_main, approver, ctx_factory, version: str,
                  approval_timeout: float = APPROVAL_TIMEOUT_S, read_timeout: float = READ_TIMEOUT_S,
-                 discovery_path: str | None = None) -> None:
+                 discovery_path: str | None = None, run_op=None) -> None:
         self._col, self._main, self._approve, self._ctx = col_getter, run_on_main, approver, ctx_factory
+        # run_op(fn(col), timeout, write, label): writes as ONE undoable
+        # CollectionOp, background reads as a QueryOp. None (tests) keeps
+        # everything on run_on_main.
+        self._run_op = run_op
         self.version = version
         self._discovery_path = discovery_path
         self._approval_timeout, self._read_timeout = approval_timeout, read_timeout
@@ -812,7 +820,11 @@ class Endpoint:
                     return {"result": None, "error": "approval timed out"}
                 if answer is False:
                     return {"result": None, "error": "declined by user"}
-            result = self._main(lambda: a.run(col, params, ctx), self._approval_timeout if a.write else self._read_timeout)
+            timeout = self._approval_timeout if a.write else self._read_timeout
+            if self._run_op is not None and (a.write or a.background):
+                result = self._run_op(lambda c: a.run(c, params, ctx), timeout, a.write, f"Klaus: {action}")
+            else:
+                result = self._main(lambda: a.run(col, params, ctx), timeout)
             return {"result": result, "error": None}
         except ActionError as exc:
             return {"result": None, "error": str(exc)}
@@ -1034,6 +1046,62 @@ def current() -> Endpoint | None:
     return _LIVE
 
 
+def _run_collection_op(fn: Callable, timeout: float, write: bool, label: str):
+    """Run ``fn(col)`` as an Anki op and wait for it from this HTTP thread.
+
+    A write is ONE CollectionOp under one custom undo entry, so Anki's
+    operation_did_execute fires: an editor showing the note reloads
+    instead of later saving its stale copy over Klaus's change, and a
+    20-note addNotes is one undo step. A read is a QueryOp, off the main
+    thread. If the caller gives up first, an op that has not started yet
+    never runs, so a client's retry cannot land the same write twice.
+    """
+    from aqt import mw
+    from aqt.operations import CollectionOp, QueryOp
+
+    box: dict = {}
+    done = threading.Event()
+    abandoned = threading.Event()
+
+    def body(col):
+        if abandoned.is_set():
+            raise TimeoutError("request abandoned before it ran")
+        if not write:
+            return fn(col)
+        pos = col.add_custom_undo_entry(label)
+        try:
+            box["r"] = fn(col)
+        except BaseException as e:  # noqa: BLE001 - reported to the HTTP caller
+            box["e"] = e
+        return col.merge_undo_entries(pos)
+
+    def ok(result):
+        if not write:
+            box["r"] = result
+        done.set()
+
+    def bad(exc):
+        box["e"] = exc
+        done.set()
+
+    def start():
+        try:
+            if write:
+                CollectionOp(parent=mw, op=body).success(ok).failure(bad).run_in_background()
+            else:
+                QueryOp(parent=mw, op=body, success=ok).failure(bad).run_in_background()
+        except BaseException as e:  # noqa: BLE001
+            bad(e)
+
+    mw.taskman.run_on_main(start)
+    if not done.wait(timeout):
+        abandoned.set()
+        raise TimeoutError("Anki did not finish the request in time")
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
 def _run_on_main_sync(fn: Callable, timeout: float):
     from aqt import mw
     box: dict = {}
@@ -1148,6 +1216,7 @@ def start_for_profile() -> Endpoint | None:
         c["open_browse"] = lambda q: mw.taskman.run_on_main(lambda: _open_browse(q))
         return c
     end = Endpoint(col_getter=lambda: mw.col, run_on_main=_run_on_main_sync, approver=qt_approver, ctx_factory=ctx_factory, version=version,
+                   run_op=_run_collection_op,
                    discovery_path=os.path.join(USER_FILES, "mcp_connection.json"))
     end.start()
     _LIVE = end

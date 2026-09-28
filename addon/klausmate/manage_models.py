@@ -309,6 +309,20 @@ def _run_dialog_probe() -> None:
           "backing-store flush did NOT crash")
 
 
+def _close_for_profile(dlg: Any, preview_timer: Any, op_state: dict) -> None:
+    """Close Preferences for a profile switch: no prompts, no late preview."""
+    for step in (
+        preview_timer.stop,  # a pending tick would re-arm the preview
+        lambda: op_state.get("active") and op_state.get("cancel") and op_state["cancel"].set(),
+        lambda: setattr(dlg, "confirm_close_cb", None),
+        dlg.reject,
+    ):
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - never block a profile close
+            print(f"[klausmate] preferences close for profile failed: {exc}")
+
+
 def manage_models_dialog(*_args: Any) -> None:
     """Open (or front) the one Preferences window.
 
@@ -2829,13 +2843,13 @@ def manage_models_dialog(*_args: Any) -> None:
 
     def _on_profile_will_close() -> None:
         # A NON-MODAL window can outlive its profile — close it before
-        # the collection goes away. reject() routes through finished →
-        # revert_appearance_preview, so an armed preview cannot leak
-        # into the next profile either.
-        try:
-            dlg.reject()
-        except Exception:
-            pass
+        # the collection goes away. Forced, never through confirm_close:
+        # its "Discard changes?" / "Stop indexing?" prompts return without
+        # closing, which left the window and its armed appearance preview
+        # open into the next profile. Unsaved edits are dropped with the
+        # collection they were for; a running index stops (it resumes).
+        # reject() then routes through finished → revert_appearance_preview.
+        _close_for_profile(dlg, _preview_timer, op_state)
 
     try:
         from aqt import gui_hooks as _gui_hooks

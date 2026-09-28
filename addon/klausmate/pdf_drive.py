@@ -1744,9 +1744,7 @@ class DriveWindow(QWidget):
             print(f"[klausmate] map graph build failed: {exc}")
             self.map_status.setText(pdf_map.BUILD_FAIL_TEXT)
 
-        op = QueryOp(parent=mw, op=lambda _col: pdf_map.graph_data(), success=done)
-        op.failure(fail)
-        op.run_in_background()
+        pdf_map.start_graph_build(done, fail)
 
     def _install_map(self, graph: dict) -> None:
         """Put the finished graph on screen — main thread only.
@@ -1835,9 +1833,7 @@ class DriveWindow(QWidget):
         def fail(exc: Exception) -> None:
             print(f"[klausmate] map refresh failed: {exc}")
 
-        op = QueryOp(parent=mw, op=lambda _col: pdf_map.graph_data(), success=done)
-        op.failure(fail)
-        op.run_in_background()
+        pdf_map.start_graph_build(done, fail)
 
     def _on_viewer_loaded(self, safe) -> None:
         """The Library's viewer just put ``safe`` on screen (or cleared,

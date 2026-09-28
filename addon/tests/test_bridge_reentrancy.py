@@ -266,11 +266,12 @@ check("a live Preferences window is a singleton (front, don't stack)",
       "_OPEN_DLG.raise_()" in _MM_CODE2
       and "_OPEN_DLG.activateWindow()" in _MM_CODE2
       and "_OPEN_DLG=dlg" in _MM_CODE2.replace(" ", ""))
-check("profile_will_close rejects the open dialog (and the handler is "
-      "removed again on finished)",
+check("profile_will_close closes the open dialog without its prompts "
+      "(K-304; behaviour in tests/test_anki_ops.py) and the handler is "
+      "removed again on finished",
       "profile_will_close.append(_on_profile_will_close)" in _MM_CODE2
       and "profile_will_close.remove(_on_profile_will_close)" in _MM_CODE2
-      and "dlg.reject()" in _MM_CODE2)
+      and "_close_for_profile(dlg, _preview_timer, op_state)" in _MM_CODE2)
 
 section("pdf_drive: the toolbar Library link (third dispatch shape)")
 # open_drive is the Library link's callback — toolbar links are

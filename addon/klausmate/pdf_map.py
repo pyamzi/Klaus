@@ -2169,6 +2169,29 @@ def graph_data() -> dict:
     return graph
 
 
+def start_graph_build(done, fail) -> None:
+    """``graph_data()`` as two ops, for callers with a live ``mw``.
+
+    The layout (``_load_graph``, the ~17 s PCA over the card-index files)
+    runs ``without_collection()``; holding the collection for it stalled
+    every other op, reviewer answers included. Only the retention fill
+    needs the collection, and that second op is short.
+    """
+    from aqt import mw
+    from aqt.operations import QueryOp
+
+    def with_retention(graph: dict) -> None:
+        def fill(_col) -> dict:
+            _fill_retention(graph)
+            return graph
+
+        QueryOp(parent=mw, op=fill, success=done).failure(fail).run_in_background()
+
+    QueryOp(parent=mw, op=lambda _col: _load_graph(), success=with_retention).failure(
+        fail
+    ).without_collection().run_in_background()
+
+
 def _canvas_class():
     """Build and return the canvas class, or None if Qt is unreachable.
 
@@ -3734,9 +3757,7 @@ def _start_build(win) -> None:
         done(graph_data())
         return
     try:
-        op = QueryOp(parent=mw, op=lambda _col: graph_data(), success=done)
-        op.failure(fail)
-        op.run_in_background()
+        start_graph_build(done, fail)
     except Exception as exc:
         print(f"[klausmate] map build could not start: {exc}")
         fail(exc)

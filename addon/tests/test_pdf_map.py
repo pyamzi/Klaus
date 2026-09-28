@@ -1291,14 +1291,16 @@ check("open_map_window does not build the graph inline any more — that "
       "from a hang",
       "graph_data()" not in code_only(_func_seg("open_map_window")))
 _sb = code_only(_func_seg("_start_build"))
-check("it runs on a QueryOp worker, the dock's K-143 pattern rather "
-      "than a second one",
-      "QueryOp(" in _sb and "run_in_background()" in _sb
-      and ".failure(" in _sb)
+_sgb = code_only(_func_seg("start_graph_build"))
+check("it runs on QueryOp workers through start_graph_build, the SAME "
+      "builder the Library dock uses rather than a second one (K-304)",
+      "start_graph_build(done, fail)" in _sb
+      and _sgb.count("QueryOp(") == 2 and _sgb.count("run_in_background()") == 2
+      and _sgb.count(".failure(") == 2)
 check("...parented to mw, NEVER to the window: a QueryOp whose parent "
       "dies takes its callback with it, and a seventeen-second build "
       "is exactly long enough to close the window it belongs to",
-      "parent=mw" in _sb and "parent=win" not in _sb)
+      _sgb.count("parent=mw") == 2 and "parent=win" not in _sb + _sgb)
 check("so the singleton is what guards the callbacks instead — landing "
       "a canvas in a window the reader already closed would resurrect "
       "a dead surface",

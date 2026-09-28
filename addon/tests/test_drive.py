@@ -2130,14 +2130,12 @@ check("a shut box leaves ONLY the splitter handle behind, so the handle "
       "render: at the stock width it is a hairline in the same token as "
       "the chrome around it, and a shut box looks gone, not closed)",
       "setHandleWidth" in _D143 and "handle.setToolTip(" in _D143)
-check("the 17 s graph build NEVER runs inline — it is a QueryOp op, "
-      "mw-parented like _refresh_rows', or the Library would freeze on "
-      "every open. K-145 added a SECOND call site (Refresh's own "
-      "rebuild) — both must still be inline as this exact QueryOp "
-      "shape, never a third, bare kind of call to graph_data()",
-      len(re.findall(r"QueryOp\(\s*parent=mw,\s*op=lambda _col: "
-                      r"pdf_map\.graph_data\(\)", _D143)) == 2
-      and _D143.count("graph_data()") == 2)
+check("the 17 s graph build NEVER runs inline — both call sites (open "
+      "and K-145's Refresh) go through pdf_map.start_graph_build, whose "
+      "ops K-304 moved off the collection (tests/test_anki_ops.py), and "
+      "the Library never calls graph_data() itself",
+      _D143.count("pdf_map.start_graph_build(done, fail)") == 2
+      and "graph_data()" not in _D143)
 
 if _HAVE_QT:
     try:
@@ -2317,6 +2315,9 @@ if _HAVE_QT:
         _boom = []
         _oldgd = pdf_map.graph_data
         pdf_map.graph_data = lambda: _boom.append(1)
+        _builds = []
+        _oldsgb = pdf_map.start_graph_build
+        pdf_map.start_graph_build = lambda done, fail: _builds.append((done, fail))
         try:
             pdf_drive.QueryOp = _RecordQueryOp
             pdf_drive.mw = types.SimpleNamespace(col=object())
@@ -2324,18 +2325,9 @@ if _HAVE_QT:
             app.processEvents()
             _inline = list(_boom)  # must be empty: nothing ran on the GUI
 
-            def _hits_graph_data(op):
-                """_refresh_rows queues a QueryOp too — the map's op is
-                the one that reaches graph_data when you run it."""
-                n = len(_boom)
-                try:
-                    op(object())
-                except Exception:
-                    pass
-                return len(_boom) > n
-
             def _map_ops():
-                return sum(1 for o in _seen if _hits_graph_data(o))
+                """Map builds queued (K-304: all through start_graph_build)."""
+                return len(_builds)
 
             check("opening the Library hands graph_data to a QueryOp and "
                   "never calls it on the GUI thread — 16.9 s inline "
@@ -2381,6 +2373,7 @@ if _HAVE_QT:
         finally:
             pdf_drive.QueryOp, pdf_drive.mw = _oldq, _oldmw
             pdf_map.graph_data = _oldgd
+            pdf_map.start_graph_build = _oldsgb
 
         _w.close()
         pkg.USER_FILES = _prev143
@@ -2411,10 +2404,10 @@ _D145 = open("klausmate/pdf_drive.py", encoding="utf-8").read()
 check("_refresh_rows calls a dedicated map-refresh seam",
       "def _refresh_rows" in _D145 and "_refresh_map()" in _D145
       and "def _refresh_map" in _D145)
-check("the map refresh is its own QueryOp — never inline on the caller "
+check("the map refresh is its own op build — never inline on the caller "
       "of _refresh_rows, or a Refresh click would freeze the Library",
-      re.search(r"def _refresh_map.*?QueryOp\(\s*parent=mw,\s*op=lambda "
-                r"_col: pdf_map\.graph_data\(\)", _D145, re.S) is not None)
+      re.search(r"def _refresh_map.*?pdf_map\.start_graph_build\(done, fail\)",
+                _D145, re.S) is not None)
 
 if _HAVE_QT:
     try:
@@ -2455,25 +2448,16 @@ if _HAVE_QT:
         _oldgd145 = pdf_map.graph_data
         _graph_calls = []
         pdf_map.graph_data = lambda: (_graph_calls.append(1), _G145)[1]
+        _builds145 = []
+        _oldsgb145 = pdf_map.start_graph_build
+        pdf_map.start_graph_build = lambda done, fail: _builds145.append(done)
 
         def _map_ops_since(mark):
-            """How many QueryOps queued since ``mark`` reach
-            pdf_map.graph_data when actually run — mirrors K-143's own
-            _hits_graph_data/_map_ops helpers, since _refresh_rows queues
-            a retention.priority_rows op too and only one of the two
-            queued here is the map's."""
-            found = 0
-            for rec in _seen145[mark:]:
-                before = len(_graph_calls)
-                try:
-                    result = rec._op(object())
-                except Exception:
-                    continue
-                if len(_graph_calls) > before:
-                    found += 1
-                    if rec._success:
-                        rec._success(result)
-            return found
+            """Map builds queued since ``mark`` (K-304: every build goes
+            through start_graph_build), each completed with a graph."""
+            for done in _builds145[mark:]:
+                done(pdf_map.graph_data())
+            return len(_builds145) - mark
 
         try:
             pdf_drive.QueryOp = _RecordQueryOp145
@@ -2493,7 +2477,7 @@ if _HAVE_QT:
             # not just repaint the same stale canvas.
             pdf_map.graph_data = lambda: (_graph_calls.append(1), _g145("lec2"))[1]
 
-            _mark = len(_seen145)
+            _mark = len(_builds145)
             _w145._refresh_rows()
             app.processEvents()
             check("RED-then-GREEN: Refresh with an open map queues a "
@@ -2516,7 +2500,7 @@ if _HAVE_QT:
             check("setup: a freshly opened window has no map canvas yet "
                   "(collapsed by default / not yet built)",
                   _w145b.map_canvas is None)
-            _mark_b = len(_seen145)
+            _mark_b = len(_builds145)
             _w145b._refresh_rows()
             app.processEvents()
             check("Refresh with no map open never touches graph_data — "
@@ -2529,6 +2513,7 @@ if _HAVE_QT:
         finally:
             pdf_drive.QueryOp, pdf_drive.mw = _oldq145, _oldmw145
             pdf_map.graph_data = _oldgd145
+            pdf_map.start_graph_build = _oldsgb145
         pkg.USER_FILES = _prev145
         shutil.rmtree(_uf145, ignore_errors=True)
     except Exception as _e145:  # noqa: BLE001
