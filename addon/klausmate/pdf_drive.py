@@ -32,6 +32,7 @@ the viewer is showing.
 from __future__ import annotations
 
 import os
+import shutil
 import weakref
 from typing import Any, Callable
 
@@ -178,6 +179,87 @@ def apply_folder_change(
     if not drive_store.rename_folder(user_files_dir, old, new):
         return False, "invalid"
     return True, ""
+
+
+def _move_to_trash(path: str) -> None:
+    """The Trash, not a permanent delete (K-306): a deleted tag is one
+    click, so its PDF must be recoverable. Falls back to a real delete
+    where there is no Trash, or the next rescan would re-import the file."""
+    ok = False
+    try:
+        from aqt.qt import QFile
+
+        result = QFile.moveToTrash(path)
+        ok = bool(result[0] if isinstance(result, tuple) else result)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] move to Trash failed for {path!r}: {exc}")
+    if not ok and os.path.exists(path):
+        if os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            os.remove(path)
+
+
+def delete_pdf(safe: str) -> bool:
+    """Delete one PDF from the Library, whichever surface asked: the
+    Library's own Delete…, or a confirmed sidebar tag delete (K-306)."""
+    uf = _user_files()
+    display = drive_store.display_name(uf, safe)
+    for win in _live_libraries():
+        # The ATTRIBUTE, not _ensure_sidebar: deleting a PDF must never
+        # build a viewer that was not wanted.
+        sidebar = win.sidebar
+        try:
+            if sidebar is not None and sidebar.is_loaded(safe):
+                sidebar.clear()
+                # clear() is the one load-path that does NOT fire
+                # on_loaded, so the map would keep a ring on the PDF
+                # the viewer just stopped showing (K-143).
+                win._on_viewer_loaded(None)
+        except Exception as e:  # noqa: BLE001
+            print(f"[klausmate] viewer clear on delete failed: {e}")
+    # Must run BEFORE delete_context: that call chains into
+    # retention.forget_prefs, which wipes this PDF's whole prefs.json
+    # entry (including the stored tag name) — after that, there is no
+    # way left to know what tag to remove.
+    tag_sync.sync_after_delete(mw, safe, display)
+    try:
+        pdf_handler.delete_context(uf, safe, remove_file=_move_to_trash)
+    except Exception as e:  # noqa: BLE001
+        showWarning(f"Could not delete that PDF.\n\n{e}")
+        return False
+    # Drop it from the index queue too (K-152). The runner re-checks
+    # presence before it starts each job, so this is not what makes
+    # a deleted PDF safe — it is what stops the bar advertising work
+    # on a file the user just removed.
+    try:
+        from . import index_queue
+
+        index_queue.forget(safe)
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] index queue forget failed: {e}")
+    for win in _live_libraries():
+        win.rows.pop(safe, None)
+        win.matches.pop(safe, None)
+        win.rebuild_tree()
+    return True
+
+
+def delete_folder(folder: str) -> None:
+    """Drop a folder and its subfolders after their PDFs were deleted,
+    and send the emptied directory to the Trash so a rescan cannot
+    bring the folder back."""
+    uf = _user_files()
+    data = drive_store.load(uf)
+    data["folders"] = [
+        f for f in data.get("folders", []) if not (f == folder or f.startswith(folder + "/"))
+    ]
+    drive_store._save(uf, data)
+    root = pdf_handler._live_library_root()
+    if root and os.path.isdir(root):
+        path = os.path.join(root, *[p for p in folder.split("/") if p])
+        if os.path.isdir(path) and not pdf_handler.walk_root(path):
+            _move_to_trash(path)
 
 
 # ------------------------------------------------------- live watcher
@@ -2774,8 +2856,9 @@ class DriveWindow(QWidget):
         msg.setIcon(QMessageBox.Icon.Question)
         msg.setText(
             f"Delete “{display}”?\n\n"
-            "This removes the PDF, its extracted text, your highlights and "
-            "notes, and its retention index. Cards are not touched."
+            "The PDF goes to the Trash. Its extracted text, your highlights "
+            "and notes, and its retention index are removed. Cards are not "
+            "touched."
         )
         msg.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -2810,48 +2893,8 @@ class DriveWindow(QWidget):
 
     def _delete_pdf_confirmed(self, safe: str, display: str) -> None:
         """The destructive back half, run only from the confirm's Yes."""
-        # The ATTRIBUTE, not _ensure_sidebar: deleting a PDF must never
-        # build a viewer that was not wanted.
-        sidebar = self.sidebar
-        if sidebar is not None:
-            try:
-                if sidebar.is_loaded(safe):
-                    sidebar.clear()
-                    # clear() is the one load-path that does NOT fire
-                    # on_loaded, so the map would keep a ring on the PDF
-                    # the viewer just stopped showing (K-143).
-                    self._on_viewer_loaded(None)
-            except Exception as e:
-                print(f"[klausmate] viewer clear on delete failed: {e}")
-        # Must run BEFORE delete_context: that call chains into
-        # retention.forget_prefs, which wipes this PDF's whole prefs.json
-        # entry (including the stored tag name) — after that, there is no
-        # way left to know what tag to remove.
-        tag_sync.sync_after_delete(mw, safe, display)
-        try:
-            pdf_handler.delete_context(_user_files(), safe)
-        except Exception as e:
-            showWarning(f"Could not delete that PDF.\n\n{e}")
-            return
-        # No disarm call here since K-151: the deck square no longer
-        # names a PDF (arming went with the curate button it staged
-        # for), so there is nothing left for a delete to clear. The
-        # K-146 comment that stood here explained why the call survived
-        # that card; the concept it guarded is now gone entirely.
-        # Drop it from the index queue too (K-152). The runner re-checks
-        # presence before it starts each job, so this is not what makes
-        # a deleted PDF safe — it is what stops the bar advertising work
-        # on a file the user just removed.
-        try:
-            from . import index_queue
-
-            index_queue.forget(safe)
-        except Exception as e:
-            print(f"[klausmate] index queue forget failed: {e}")
-        self.rows.pop(safe, None)
-        self.matches.pop(safe, None)
-        self.rebuild_tree()
-        tooltip(f"Deleted “{display}”.")
+        if delete_pdf(safe):
+            tooltip(f"Deleted “{display}”.")
 
     def _open_map(self) -> None:
         """The K-123 embedding map, guarded like every optional surface

@@ -16,7 +16,7 @@ Style matches the other suites: check()/report, aqt stubbed via
 sys.modules before import. The tag_sync sections below reuse this same
 minimal stub (NOT the heavier anki_stubs.py permissive surface test_
 imports.py uses) — tag_sync.py is deliberately written so its pure/
-col-only layer, its reverse-direction decision core (``plan_reconcile``),
+col-only layer, its reverse-direction decision core (``plan_library_sync``),
 and its public event functions' cold-cache/kill-switch short-circuits
 never need retention.py or curation.py to import successfully, which
 means this file never has to grow the QAction/gui_hooks/AddNoteRequest
@@ -609,7 +609,7 @@ finally:
 # tag_sync (K-054) — reverse !Library tag -> PDF sync
 # =========================================================================
 #
-# Same boundary as the K-053 section above: plan_reconcile and the three
+# Same boundary as the K-053 section above: plan_library_sync and the three
 # small pure helpers it leans on (_is_reserved_tag, _tag_to_folder_display,
 # _display_with_ext) need nothing beyond string/set logic, so they are
 # fully exercised here. reconcile_from_tags's own body (prefs.json load,
@@ -619,7 +619,7 @@ finally:
 # surface — exactly the gap this file's minimal stub does not cover (see
 # module docstring). Only its kill-switch short-circuit (checked BEFORE
 # that import) is exercised directly against reconcile_from_tags below;
-# everything else is proven at the plan_reconcile level, which is where
+# everything else is proven at the plan_library_sync level (tests/test_library_sync.py), which is where
 # the actual ambiguity-rule logic lives.
 
 print("== tag_sync._is_reserved_tag: only the exact !Library-root leaves ==")
@@ -663,88 +663,8 @@ check(
     ts._display_with_ext("Foo", "Foo") == "Foo",
 )
 
-print("== tag_sync.plan_reconcile: stored tag present -> no-op ==")
-check(
-    "tag still exists -> nothing happened, empty plan",
-    ts.plan_reconcile({"safeA": "!Library::A"}, {"!Library::A"})
-    == {"missing": {}, "candidates": [], "action": "noop", "rename": None},
-)
-
-print("== tag_sync.plan_reconcile: no stored tag at all (Pouya's current state) ==")
-check(
-    "empty stored_by_safe -> nothing to reconcile, existing_tags never even matters",
-    ts.plan_reconcile({}, {"!Library::Whatever", "!Library::Curating"})
-    == {"missing": {}, "candidates": [], "action": "noop", "rename": None},
-)
-
-print("== tag_sync.plan_reconcile: clean single-candidate rename ==")
-plan_rename = ts.plan_reconcile(
-    {"safeA": "!Library::OldName"},
-    {"!Library::Anatomy::Week_3::New_Name"},
-)
-check("action is a confident rename", plan_rename["action"] == "rename")
-check(
-    "identifies the right safe, old, and new tag",
-    plan_rename["rename"] == {
-        "safe": "safeA",
-        "old": "!Library::OldName",
-        "new": "!Library::Anatomy::Week_3::New_Name",
-    },
-)
-
-print("== tag_sync.plan_reconcile: multiple stored tags missing -> forward re-apply, no guess ==")
-plan_multi_missing = ts.plan_reconcile(
-    {"safeA": "!Library::A", "safeB": "!Library::B"},
-    {"!Library::NewOne"},
-)
-check("action is reapply, never a guessed rename", plan_multi_missing["action"] == "reapply")
-check("rename is None", plan_multi_missing["rename"] is None)
-check(
-    "both missing PDFs are reported",
-    plan_multi_missing["missing"] == {"safeA": "!Library::A", "safeB": "!Library::B"},
-)
-
-print("== tag_sync.plan_reconcile: multiple unclaimed candidates -> forward re-apply, no guess ==")
-plan_multi_candidates = ts.plan_reconcile(
-    {"safeA": "!Library::A"},
-    {"!Library::NewOne", "!Library::NewTwo"},
-)
-check("action is reapply", plan_multi_candidates["action"] == "reapply")
-check("both candidates are reported", plan_multi_candidates["candidates"] == ["!Library::NewOne", "!Library::NewTwo"])
-
-print("== tag_sync.plan_reconcile: zero candidates (tag just vanished) -> forward re-apply ==")
-plan_zero_candidates = ts.plan_reconcile({"safeA": "!Library::A"}, set())
-check("action is reapply", plan_zero_candidates["action"] == "reapply")
-check("no candidates found", plan_zero_candidates["candidates"] == [])
-
-print("== tag_sync.plan_reconcile: another PDF's stored tag is never claimable ==")
-plan_other_owned = ts.plan_reconcile(
-    {"safeA": "!Library::A", "safeB": "!Library::StillHere"},
-    {"!Library::StillHere"},
-)
-check(
-    "safeB's own still-present tag is excluded from candidates, leaving none -> reapply, not a false rename",
-    plan_other_owned["action"] == "reapply" and plan_other_owned["candidates"] == [],
-)
-
-print("== tag_sync.plan_reconcile: reserved leaves are never claimable ==")
-plan_reserved = ts.plan_reconcile(
-    {"safeA": "!Library::A"},
-    {"!Library::Curating", "!Library::Curated", "!Library::Matching"},
-)
-check(
-    "all three reserved root tags excluded -> zero real candidates -> reapply",
-    plan_reserved["action"] == "reapply" and plan_reserved["candidates"] == [],
-)
-plan_reserved_and_real = ts.plan_reconcile(
-    {"safeA": "!Library::A"},
-    {"!Library::Curating", "!Library::RealCandidate"},
-)
-check(
-    "reserved tag ignored, the one real candidate still wins a confident rename",
-    plan_reserved_and_real["action"] == "rename"
-    and plan_reserved_and_real["rename"]["new"] == "!Library::RealCandidate",
-)
+# The reverse-direction planner (plan_library_sync, K-306, which replaced
+# plan_reconcile) is tested in tests/test_library_sync.py.
 
 print("== tag_sync.reconcile_from_tags: kill switch short-circuits before any deferred import ==")
 _old_get_config2 = pkg.get_config

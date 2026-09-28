@@ -1895,6 +1895,9 @@ def _library_rescan_on_profile_open() -> None:
 
 gui_hooks.profile_did_open.append(_library_rescan_on_profile_open)
 gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
+# K-306: the !Library tag branch is the Library, so a rename, drag or
+# delete in Browse's sidebar reaches the PDF as soon as it happens.
+gui_hooks.operation_did_execute.append(_tag_sync.on_operation_did_execute)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
 from .setup_flow import stop_local_runtime

@@ -1051,12 +1051,12 @@ except Exception as e:
 
 if HAVE_TAG_SYNC:
     # A reserved tag from an existing collection must not rename a PDF.
-    _plan = tag_sync.plan_reconcile(
-        {"renal": "!Library::Renal"}, {"!Library::Doubtful"}
+    _plan = tag_sync.plan_library_sync(
+        {"renal": (None, "Renal.pdf")}, {"renal": "!Library::Renal"},
+        {"!Library::Doubtful"}, nonempty={"renal"},
     )
     check("the legacy reserved tag is never a reconcile-rename candidate",
-          _plan["candidates"] == [] and _plan["action"] == "reapply"
-          and _plan["rename"] is None, _plan)
+          [a["kind"] for a in _plan] == ["delete"], _plan)
 
     # PR #4 fourth review (1): a stored lecture tag is user-derived and
     # lands inside Anki's QUERY LANGUAGE. desired_tag's sanitizer only

@@ -958,7 +958,7 @@ def plan_rescan(mapping: dict, disk_rels: list[str]) -> dict:
 
     The disk is the source of truth for structure, but matching a
     missing mapped file to a newly-appeared one is INFERENCE, so it
-    follows tag_sync.plan_reconcile's confidence philosophy exactly:
+    follows tag_sync.plan_library_sync's confidence philosophy exactly:
 
       1. a missing file whose basename appears exactly once among the
          new files — and no OTHER missing file shares that basename —
@@ -2547,8 +2547,18 @@ def list_contexts(user_files_dir: str) -> list[str]:
     return sorted(f for f in os.listdir(ctx_dir) if f.endswith(".txt"))
 
 
-def delete_context(user_files_dir: str, name: str) -> None:
+def delete_context(user_files_dir: str, name: str, remove_file=os.remove) -> None:
+    """Delete one PDF and everything Klaus derived from it. The PDF
+    itself (library-root copy or legacy ``pdfs/`` copy) goes through
+    ``remove_file`` — the caller passes a move-to-Trash (K-306); the
+    derived files are rebuilt from it and are removed outright."""
     base = _safe_basename(name)
+    source = {
+        os.path.join(user_files_dir, "pdfs", base + ".pdf"),
+        # The pristine pre-bake copy: once highlights are baked into the
+        # library file, this is the only copy without them.
+        os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
+    }
     candidates = [
         os.path.join(user_files_dir, "contexts", base + ".txt"),
         os.path.join(user_files_dir, "contexts", base + ".json"),
@@ -2567,6 +2577,7 @@ def delete_context(user_files_dir: str, name: str) -> None:
         root = _live_library_root()
         if root:
             candidates.append(os.path.join(root, mapped_rel))
+            source.add(os.path.join(root, mapped_rel))
         try:
             save_library_map(user_files_dir, library_map)
         except OSError as exc:
@@ -2574,7 +2585,7 @@ def delete_context(user_files_dir: str, name: str) -> None:
     for path in candidates:
         if os.path.isfile(path):
             try:
-                os.remove(path)
+                (remove_file if path in source else os.remove)(path)
             except OSError:
                 pass
     # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
