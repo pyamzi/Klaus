@@ -1131,7 +1131,7 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         check("lecture membership adds and removes notes", col.members("!Library::Renal") == {1, 2})
         _orig_folder_display = tag_sync._folder_and_display
         _orig_run_sync_op = tag_sync._run_sync_op
-        _orig_cached_matches = tag_sync._cached_matches
+        _orig_cached_matches = tag_sync._cached_matches_many
         pkg.get_config = lambda: {"pdf_match_threshold": 0.5}
         tag_sync._folder_and_display = lambda safe: (None, "Renal")
         _captured = []
@@ -1142,7 +1142,7 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             if _captured:
                 _captured.pop()(col)
             check("threshold sync removes the below-threshold note", col.members("!Library::Renal") == {1})
-            tag_sync._cached_matches = lambda safe, cfg: [(1, 0.9), (2, 0.8)]
+            tag_sync._cached_matches_many = lambda safes, cfg: {s: [(1, 0.9), (2, 0.8)] for s in safes}
             tag_sync.sync_after_clear_overrides(None, ["renal"])
             check("clearing overrides schedules one collection operation", len(_captured) == 1)
             if _captured:
@@ -1151,7 +1151,7 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
         finally:
             tag_sync._folder_and_display = _orig_folder_display
             tag_sync._run_sync_op = _orig_run_sync_op
-            tag_sync._cached_matches = _orig_cached_matches
+            tag_sync._cached_matches_many = _orig_cached_matches
             del pkg.get_config
     finally:
         retention.USER_FILES = _orig_user_files

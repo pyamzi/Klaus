@@ -2836,6 +2836,9 @@ def manage_models_dialog(*_args: Any) -> None:
                 pass
 
     dlg.finished.connect(_disarm_grad_edit)
+    # A control moved within 140 ms of closing left a tick pending that
+    # re-armed the preview after the revert below (K-305): stop it first.
+    dlg.finished.connect(lambda _result: _preview_timer.stop())
     # finished fires on EVERY close path (Save, Cancel, Esc, title-bar ✕),
     # so it is the one place an unsaved preview can be guaranteed not to
     # outlive the dialog. No-op unless a preview is actually armed.

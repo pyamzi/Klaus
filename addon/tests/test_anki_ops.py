@@ -221,4 +221,92 @@ check("profile close skips the prompt and closes", not prompts and closed)
 check("the pending preview tick is stopped", timer.stopped)
 check("a running index is cancelled", cancel.is_set())
 
+section("K-305: smaller audit findings")
+import os  # noqa: E402
+import re  # noqa: E402
+import tempfile  # noqa: E402
+import time  # noqa: E402
+
+_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_pat = re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, re.S).group(1)
+check("an upper-case background extension is served (IMG_1234.JPG was refused)",
+      re.fullmatch(_pat, "user_files/backgrounds/IMG_1234.JPG") is not None
+      and re.fullmatch(_pat, "user_files/backgrounds/x.png") is not None
+      and re.fullmatch(_pat, "user_files/backgrounds/x.exe") is None)
+
+retention = importlib.import_module("klausmate.retention")
+tag_sync = importlib.import_module("klausmate.tag_sync")
+pdf_handler = importlib.import_module("klausmate.pdf_handler")
+retention.USER_FILES = tempfile.mkdtemp(prefix="klaus-k305-")
+_real_write = pdf_handler._atomic_write_json
+
+
+def _slow_write(path, data, **kw):
+    time.sleep(0.02)  # widen the read-modify-write window
+    _real_write(path, data, **kw)
+
+
+pdf_handler._atomic_write_json = _slow_write
+try:
+    a = threading.Thread(target=lambda: retention.set_threshold("A", 0.6))
+    b = threading.Thread(target=lambda: tag_sync.set_stored_tag("B", "!Library::B"))
+    a.start(); time.sleep(0.005); b.start(); a.join(); b.join()
+finally:
+    pdf_handler._atomic_write_json = _real_write
+_prefs = retention._load_prefs()
+check("concurrent prefs writers both survive (the lock serializes them)",
+      _prefs.get("A", {}).get("threshold") == 0.6 and _prefs.get("B", {}).get("tag") == "!Library::B",
+      str(_prefs))
+
+_ci = importlib.import_module("klausmate.card_index")
+_loads = []
+_real_load = _ci.load
+_ci.load = lambda d: (_loads.append(d), None)[1]
+try:
+    out = tag_sync._cached_matches_many(["a", "b", "c"], {})
+finally:
+    _ci.load = _real_load
+check("batch retags load the card index once, not once per PDF",
+      len(_loads) == 1 and out == {"a": None, "b": None, "c": None})
+
+pdf_drive = importlib.import_module("klausmate.pdf_drive")
+_steps = []
+
+
+class _Sidebar:
+    def clear(self):
+        _steps.append("clear")
+        raise RuntimeError("clear failed")
+
+    def cleanup(self):
+        _steps.append("cleanup")
+
+    def setParent(self, p):
+        pass
+
+    def deleteLater(self):
+        pass
+
+
+_holder = type("W", (), {"sidebar": _Sidebar()})()
+pdf_drive.DriveWindow.release_viewer(_holder)
+check("release_viewer still unhooks the webview when clear() raises",
+      _steps == ["clear", "cleanup"] and _holder.sidebar is None)
+
+_bt = open("klausmate/browse_toolkit.py", encoding="utf-8").read()
+check("the duplicate scan runs without the collection; only the row "
+      "texts are fetched with it",
+      "op = QueryOp(parent=mw, op=work, success=with_texts)" in _bt
+      and "op.without_collection().run_in_background()" in _bt
+      and "op2 = QueryOp(parent=mw, op=texts, success=done)" in _bt)
+_mm = open("klausmate/manage_models.py", encoding="utf-8").read()
+check("Preferences stops its preview timer on every close",
+      "dlg.finished.connect(lambda _result: _preview_timer.stop())" in _mm)
+_pd = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+check("the /tmp debug log is gone", "klausmate-debug" not in _pd and "_dbg(" not in _pd)
+check("context menus and the threshold dialog are freed",
+      _pd.count("menu.deleteLater()") == 1 and "dlg.finished.connect(dlg.deleteLater)" in _pd
+      and "menu.deleteLater()" in _init
+      and "menu.deleteLater()" in open("klausmate/pdf_viewer.py", encoding="utf-8").read())
+
 raise SystemExit(report())

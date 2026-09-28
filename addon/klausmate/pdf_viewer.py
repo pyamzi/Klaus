@@ -52,6 +52,9 @@ try:
 except Exception:  # pragma: no cover
     QDrag = None  # type: ignore
 
+# Deliberately PyQt6, not aqt.qt: these types go straight into QtPdf
+# calls (render sizes, images), and QtPdf is not re-exported by aqt.qt,
+# so both halves must come from one binding.
 try:
     from PyQt6.QtCore import QSizeF
     from PyQt6.QtGui import (
@@ -177,7 +180,7 @@ def copy_pdf_page_image_to_clipboard(
     if cb is None:
         return False
     try:
-        from PyQt6.QtCore import QMimeData
+        from aqt.qt import QMimeData
 
         mime = QMimeData()
         mime.setImageData(pixmap.toImage())
@@ -1646,7 +1649,7 @@ class PdfViewer(QWidget):
         if cb is None:
             return False
         try:
-            from PyQt6.QtCore import QMimeData
+            from aqt.qt import QMimeData
 
             mime = QMimeData()
             mime.setImageData(cropped)
@@ -1678,7 +1681,7 @@ class PdfViewer(QWidget):
         if img is None:
             return
         try:
-            from PyQt6.QtCore import QMimeData
+            from aqt.qt import QMimeData
 
             drag = QDrag(self._viewport)
             mime = QMimeData()
@@ -2638,6 +2641,7 @@ class PdfViewer(QWidget):
         zoom_out_act = menu.addAction("Zoom Out\t⌘−")
         zoom_reset_act = menu.addAction("Actual Size\t⌘0")
         chosen = menu.exec(self._pdf_view.mapToGlobal(pos))
+        menu.deleteLater()  # deferred: `chosen` is still compared below
         if chosen is None:
             return
         if chosen == copy_act:

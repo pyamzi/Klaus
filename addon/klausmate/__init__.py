@@ -1695,6 +1695,7 @@ class PdfDock(QDockWidget):
         menu.exec(
             self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft())
         )
+        menu.deleteLater()  # its actions already fired inside exec()
 
 
 def on_editor_did_init(editor: Editor) -> None:
@@ -1757,7 +1758,13 @@ def on_editor_did_init(editor: Editor) -> None:
                     return
 
                 sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
-                container = PdfDock(editor, sidebar, parent_window)
+                try:
+                    container = PdfDock(editor, sidebar, parent_window)
+                except Exception:
+                    # Parentless, it dies with this frame: unhook its
+                    # webview from Anki's theme hook first (K-095).
+                    sidebar.cleanup()
+                    raise
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container
@@ -1785,7 +1792,9 @@ def on_editor_did_init(editor: Editor) -> None:
 # of base64 into every webview.
 mw.addonManager.setWebExports(
     __name__,
-    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(png|jpg|jpeg|webp|gif))",
+    # (?i:...) because store_image keeps the file's own name: IMG_1234.JPG
+    # was stored as-is and then refused by a lower-case-only pattern.
+    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif))",
 )
 mw.addonManager.setConfigAction(__name__, open_config)
 

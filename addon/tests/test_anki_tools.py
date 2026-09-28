@@ -374,45 +374,6 @@ except at.ToolError:
     check("a missing note is a ToolError, not a crash", True)
 check("update_note is a write tool", "update_note" in at.WRITE_TOOLS)
 
-section("the reviewed batch is one undo entry")
-
-
-class _P:
-    def __init__(self, front, back, pages):
-        self.front, self.back, self.pages = front, back, pages
-
-
-_c = Col()
-_props = [_P("F1", "B1", (2,)), _P("F2", "B2", (2, 5))]
-_res = at.add_reviewed_cards(_c, _props, "Epi", "Basic")
-check("every accepted card is written", len(_c.added) == 2)
-check("as ONE undo entry — accepting twelve cards and pressing Ctrl+Z "
-      "eleven times is not an undo", len(_c.undo) == 1)
-check("the entry names the count", "2 cards" in _c.undo[0])
-check("the undo entry is merged, so it is a single step",
-      _res == {"merged": 1})
-check("add_notes was used, not a loop of add_note — a loop leaves one undo "
-      "entry per card", _c.single_adds == 0 and len(_c.added) == 2)
-_tags = _c.minted[1].tags
-check("provenance travels with the card as a page tag, because a source "
-      "that lives only in a closed review window cannot be audited later",
-      "page::3" in _tags and "page::6" in _tags)
-check("...1-based, as a human reads it against the PDF", "page::2" not in _tags)
-check("a drafted tag marks the batch", "!Library::Drafted" in _tags)
-check("an empty batch writes nothing and creates no undo entry",
-      at.add_reviewed_cards(Col(), [], "Epi", "Basic") is None)
-for _nt, _dk, _why in (("Nope", "Epi", "note type"), ("Basic", "Nope", "deck")):
-    try:
-        at.add_reviewed_cards(Col(), _props, _dk, _nt)
-        check(f"an unknown {_why} is refused", False)
-    except at.ToolError:
-        check(f"an unknown {_why} is refused", True)
-try:
-    at.add_reviewed_cards(Col(), _props, "Epi", "Basic", front_field="Nope")
-    check("an unknown field is refused", False)
-except at.ToolError:
-    check("an unknown field is refused", True)
-
 section("run_tool never raises and never leaks a traceback")
 _txt, _err = at.run_tool(Col(), "no_such_tool", {}, ctx())
 check("an unknown tool is an error result, not an exception", _err)
@@ -432,18 +393,12 @@ check("...with no traceback or internals leaked to the model",
 check("results are capped so one query cannot flood the context",
       at.MAX_RESULT_BYTES <= 50_000)
 
-section("what only a running Anki can prove")
-_SRC = open("klausmate/anki_tools.py").read()
-_CODE = code_only(_SRC)
-check("the approval dialog is PLAIN text, so note-field HTML cannot dress a "
-      "destructive change up as something harmless",
-      "QPlainTextEdit" in _CODE and "setPlainText" in _CODE)
-check("Deny is the default button", "deny.setDefault(True)" in _CODE)
-check("writes get a human-scale timeout and reads do not",
-      at.WRITE_TIMEOUT_S >= 60 and at.READ_TIMEOUT_S <= 60)
-check("execute_tool marshals onto the main thread",
-      "_run_on_main_sync" in _CODE)
-check("add_notes takes AddNoteRequest, not bare notes",
-      "AddNoteRequest(note=" in _CODE)
+section("no write without an explicit approval")
+check("default_ctx's confirm refuses: the only writer, anki_endpoint, "
+      "passes its own approval, so a write reached without one must fail "
+      "closed (the app-modal exec() dialog it replaced is gone, K-305)",
+      at.default_ctx()["confirm"]("Klaus wants to create a note", []) is False)
+for _gone in ("execute_tool", "add_reviewed_cards", "_confirm_write_dialog"):
+    check(f"dead {_gone} stays deleted", not hasattr(at, _gone))
 
 raise SystemExit(report())

@@ -413,9 +413,10 @@ def get_stored_tag(safe: str) -> str | None:
 def set_stored_tag(safe: str, tag: str) -> None:
     from . import pdf_handler, retention
 
-    prefs = retention._load_prefs()
-    prefs.setdefault(safe, {})["tag"] = tag
-    pdf_handler._atomic_write_json(retention._prefs_path(), prefs, separators=(",", ":"))
+    with retention.PREFS_LOCK:
+        prefs = retention._load_prefs()
+        prefs.setdefault(safe, {})["tag"] = tag
+        pdf_handler._atomic_write_json(retention._prefs_path(), prefs, separators=(",", ":"))
 
 
 def _folder_and_display(safe: str) -> tuple[str | None, str]:
@@ -426,28 +427,32 @@ def _folder_and_display(safe: str) -> tuple[str | None, str]:
     return entry.get("folder"), (entry.get("display") or safe)
 
 
-def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
-    """The current matches.json cache for `safe`, or None if it's cold,
-    missing, or invalidated (card index not ready, signature mismatch,
-    etc). None here is exactly retention.load_matches' "don't know" —
-    callers must treat it as a no-op, never as "zero matches"."""
+def _cached_matches_many(safes: list[str], cfg: dict) -> dict[str, list | None]:
+    """Each PDF's current matches.json cache, loading the card index ONCE
+    (the batch paths used to reload the whole vectors file per PDF, K-305).
+    None for a PDF whose cache is cold, missing, or invalidated — exactly
+    retention.load_matches' "don't know", which callers must treat as a
+    no-op, never as "zero matches"."""
     from . import card_index, embeddings, pdf_index, retention
 
     cfg_sig = embeddings.index_signature(cfg)
-    src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
     cidx = card_index.load(retention.INDEX_DIR)
     if cidx is None or not card_index.check_signature(cidx, cfg_sig):
-        return None
+        return {safe: None for safe in safes}
     digest = retention.card_index_digest(cidx)
-    cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
-    return cached[0] if cached is not None else None
+    out: dict[str, list | None] = {}
+    for safe in safes:
+        src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
+        cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
+        out[safe] = cached[0] if cached is not None else None
+    return out
 
 
 def _retag_others(col, skip_safe: str, cfg: dict) -> None:
     """K-302: with best-lecture assignment on, re-matching one PDF can move
     a card off (or onto) every OTHER PDF, so their tags are re-derived from
     cache in the same op. Loads the card index once, on the op's worker."""
-    from . import card_index, embeddings, pdf_index, retention
+    from . import retention
 
     if retention.best_delta(cfg) is None:
         return
@@ -457,21 +462,14 @@ def _retag_others(col, skip_safe: str, cfg: dict) -> None:
     ]
     if not safes:
         return
-    sig = embeddings.index_signature(cfg)
-    cidx = card_index.load(retention.INDEX_DIR)
-    if cidx is None or not card_index.check_signature(cidx, sig):
-        return
-    digest = retention.card_index_digest(cidx)
-    for other in safes:
-        src_sig = pdf_index.source_signature(retention.USER_FILES, other)
-        cached = retention.load_matches(other, sig, cidx.dims, src_sig, digest)
-        if cached is None:
+    for other, matches in _cached_matches_many(safes, cfg).items():
+        if matches is None:
             continue  # cold cache: never strip a tag on missing data
         threshold = retention.get_threshold(other, cfg)
         folder, display = _folder_and_display(other)
         _do_sync_one(
             col, other, desired_tag(folder, display),
-            {nid for nid, score in cached[0] if score >= threshold},
+            {nid for nid, score in matches if score >= threshold},
         )
 
 
@@ -687,8 +685,9 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         from . import retention
 
         plans: list[tuple[str, str, set[int]]] = []
+        cached = _cached_matches_many(list(cleared_safes), cfg)
         for safe in cleared_safes:
-            matches = _cached_matches(safe, cfg)
+            matches = cached[safe]
             if matches is None:
                 print(f"[klausmate] tag_sync: no cached matches for {safe!r} — skipped in apply-to-all retag.")
                 continue
@@ -848,8 +847,9 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
     from . import retention
 
     plans: list[tuple[str, str, set[int]]] = []
+    cached = _cached_matches_many(list(missing), cfg)
     for safe in missing:
-        matches = _cached_matches(safe, cfg)
+        matches = cached[safe]
         if matches is None:
             print(f"[klausmate] tag_sync: no cached matches for {safe!r} — cannot restore its !Library tag yet.")
             continue

@@ -1320,7 +1320,10 @@ class _DuplicatesPanel(QWidget):  # type: ignore[misc]
             # the main-thread QTimer above is what reaches the label.
             self._progress = (done, total)
 
-        def work(col: Any) -> dict:
+        def work(_col: Any) -> dict:
+            # No collection held (K-305): the scan is pure Python over the
+            # index files and can run for a long time; holding the
+            # collection for it stalled every edit and answer until done.
             from . import card_index
 
             index = card_index.load(_index_dir())
@@ -1333,14 +1336,27 @@ class _DuplicatesPanel(QWidget):  # type: ignore[misc]
                 cancel=cancel,
                 on_progress=progress,
             )
-            pairs = result.pairs[:DISPLAY_CAP]
-            texts = _note_texts(col, row_nids(build_rows(pairs, {})))
             return {
-                "rows": build_rows(pairs, texts),
+                "pairs": result.pairs[:DISPLAY_CAP],
                 "counts": dict(result.stats.counts or {}),
                 "cancelled": bool(result.stats.cancelled),
                 "tier": tier,
             }
+
+        def with_texts(scanned: dict) -> None:
+            """Second, short op: the note texts for the rows shown."""
+            if scanned.get("error") or seq != self._seq or not self._alive():
+                done(scanned)
+                return
+
+            def texts(col: Any) -> dict:
+                pairs = scanned["pairs"]
+                rows = build_rows(pairs, _note_texts(col, row_nids(build_rows(pairs, {}))))
+                return {k: v for k, v in scanned.items() if k != "pairs"} | {"rows": rows}
+
+            op2 = QueryOp(parent=mw, op=texts, success=done)
+            op2.failure(failed)
+            op2.run_in_background()
 
         def done(payload: dict) -> None:
             if seq != self._seq or not self._alive():
@@ -1358,9 +1374,9 @@ class _DuplicatesPanel(QWidget):  # type: ignore[misc]
             self._finish()
             self.host.set_status(SCAN_FAILED_TEXT)
 
-        op = QueryOp(parent=mw, op=work, success=done)
+        op = QueryOp(parent=mw, op=work, success=with_texts)
         op.failure(failed)
-        op.run_in_background()
+        op.without_collection().run_in_background()
 
     def _on_selected_clicked(self) -> None:
         try:

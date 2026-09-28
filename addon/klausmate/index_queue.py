@@ -968,7 +968,7 @@ class _StatusDock(_DockBase):  # type: ignore[misc]
         lay.addWidget(self.button, 0)
         self.setWidget(body)
 
-    def render(self, snapshot: RunnerState) -> None:
+    def show_state(self, snapshot: RunnerState) -> None:
         self.label.setText(status_line(snapshot))
         self.button.setText(dock_button_label(snapshot))
 
@@ -1004,7 +1004,7 @@ def _render_dock(snapshot: RunnerState) -> None:
     dock = _ensure_dock()
     if dock is None:
         return
-    dock.render(snapshot)
+    dock.show_state(snapshot)
     dock.show()
     _hide_gen += 1
     if not snapshot.active:

@@ -817,5 +817,35 @@ finally:
     else:
         del pkg.write_config
 
+print("== K-305: a second profile still migrates after the first set the flags ==")
+# The flags live in add-on config, which every profile shares. Profile A's
+# completed run used to short-circuit profile B, whose klaus:: tags then
+# never became !Library:: tags. The per-collection pre-flight decides now.
+col9 = FakeCol(["klaus::curated"], membership={"klaus::curated": {5}})
+_orig_get9 = pkg.get_config
+_had_write9 = hasattr(pkg, "write_config")
+_orig_write9 = getattr(pkg, "write_config", None)
+pkg.get_config = lambda: {tm.MIGRATED_FLAG: True, tm.CLEANED_KEY: list(tm.RETIRED_TAGS)}
+pkg.write_config = lambda cfg: None
+tm.mw = _FakeMw(col9)
+try:
+    _b9 = len(RecordingOp.instances)
+    tm.migrate_on_profile_open()
+    check("profile B's legacy tag still gets its migration op although "
+          "profile A already recorded every flag", len(RecordingOp.instances) == _b9 + 1)
+    col10 = FakeCol(["!Library::Renal"], membership={})
+    tm.mw = _FakeMw(col10)
+    _b10 = len(RecordingOp.instances)
+    tm.migrate_on_profile_open()
+    check("...and a collection with nothing to migrate launches no op",
+          len(RecordingOp.instances) == _b10)
+finally:
+    pkg.get_config = _orig_get9
+    tm.mw = _orig_mw
+    if _had_write9:
+        pkg.write_config = _orig_write9
+    else:
+        del pkg.write_config
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

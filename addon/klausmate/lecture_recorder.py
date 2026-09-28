@@ -596,7 +596,7 @@ class Recorder:
             # recording indicator never turns off).
             return True
         try:
-            from PyQt6.QtCore import QTimer
+            from aqt.qt import QTimer
             from PyQt6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
         except Exception as exc:
             print(f"[klausmate] lecture recorder: PyQt6 multimedia unavailable: {exc}")

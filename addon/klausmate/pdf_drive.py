@@ -125,19 +125,6 @@ def _user_files() -> str:
     return USER_FILES
 
 
-def _dbg(msg: str) -> None:
-    """K-075 TEMP DIAGNOSTICS — remove once folder sync is confirmed live.
-    The profile-open rescan silently no-ops on Pouya's machine and stdout
-    is invisible; this localizes where the chain dies."""
-    try:
-        import time as _time
-
-        with open("/tmp/klausmate-debug.txt", "a", encoding="utf-8") as fh:
-            fh.write(f"{_time.strftime('%H:%M:%S')} drive: {msg}\n")
-    except Exception:
-        pass
-
-
 def plan_folder_move(old: str, dest: str | None) -> str | None:
     """Destination path for dropping folder ``old`` into ``dest`` (None =
     root), or None when the drop is a no-op or illegal — a folder cannot
@@ -270,9 +257,7 @@ def rescan_library_root() -> dict | None:
     every Library refresh and must never break either).
     """
     try:
-        _dbg("rescan: entered")
         root = pdf_handler._live_library_root()
-        _dbg(f"rescan: root={root!r} isdir={bool(root and os.path.isdir(root))}")
         if not root or not os.path.isdir(root):
             _rearm_watcher(None)  # root unplugged/unset -> stop watching
             return None
@@ -285,7 +270,6 @@ def rescan_library_root() -> dict | None:
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
         summary = pdf_handler.rescan_root(uf, root, folders)
-        _dbg(f"rescan: summary={summary}")
         # tree_changed, not moved: the tags follow folder+display, and
         # those can change for entries the mapping already knew about
         # (drift repair — see rescan_root's tree loop).
@@ -302,9 +286,6 @@ def rescan_library_root() -> dict | None:
         _rearm_watcher(root)
         return summary
     except Exception as exc:  # noqa: BLE001
-        import traceback as _tb
-
-        _dbg(f"rescan: FAILED {type(exc).__name__}: {exc}\n{_tb.format_exc()}")
         print(f"[klausmate] library rescan failed: {exc}")
         return None
 
@@ -1449,7 +1430,10 @@ class DriveWindow(QWidget):
             return
         try:
             sidebar.clear()
-            sidebar.cleanup()
+        except Exception as e:
+            print(f"[klausmate] viewer release failed: {e}")
+        try:
+            sidebar.cleanup()  # separate: it must run even if clear() raised
         except Exception as e:
             print(f"[klausmate] viewer release failed: {e}")
         try:
@@ -2363,6 +2347,7 @@ class DriveWindow(QWidget):
         # Qt 6.11 + macOS 26 (manage_models' precedent; the reject
         # path simply never fires apply).
         dlg.accepted.connect(apply)
+        dlg.finished.connect(dlg.deleteLater)
         dlg.open()
 
     def _on_browse(self, safe: str) -> None:
@@ -2566,6 +2551,7 @@ class DriveWindow(QWidget):
         else:
             menu.addAction("New Folder…").triggered.connect(lambda: self._new_folder())
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+        menu.deleteLater()  # its actions already fired inside exec()
 
     def _build_pdf_menu(self, menu: QMenu, item: QTreeWidgetItem) -> None:
         safe = item.data(0, _ROLE_SAFE)

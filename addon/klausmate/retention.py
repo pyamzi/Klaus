@@ -564,13 +564,20 @@ def get_threshold(name: str, cfg: dict) -> float:
         return DEFAULT_THRESHOLD
 
 
+# prefs.json is read-modify-written from the main thread (thresholds) and
+# from tag_sync's CollectionOp worker (stored tags); unserialized, one
+# writer's change silently erased the other's (K-305).
+PREFS_LOCK = threading.RLock()
+
+
 def set_threshold(name: str, value: float) -> None:
     safe = pdf_handler._safe_basename(name)
-    prefs = _load_prefs()
-    prefs.setdefault(safe, {})["threshold"] = round(float(value), 3)
-    pdf_handler._atomic_write_json(
-        _prefs_path(), prefs, separators=(",", ":")
-    )
+    with PREFS_LOCK:
+        prefs = _load_prefs()
+        prefs.setdefault(safe, {})["threshold"] = round(float(value), 3)
+        pdf_handler._atomic_write_json(
+            _prefs_path(), prefs, separators=(",", ":")
+        )
 
 
 def threshold_override_names() -> list[str]:
@@ -595,19 +602,20 @@ def clear_threshold_overrides() -> int:
     (e.g. a future per-PDF tag) survives, and entries left empty are
     dropped entirely. Returns how many overrides were cleared.
     """
-    prefs = _load_prefs()
-    cleared = 0
-    for safe in list(prefs):
-        entry = prefs[safe]
-        if isinstance(entry, dict) and "threshold" in entry:
-            del entry["threshold"]
-            cleared += 1
-            if not entry:
-                del prefs[safe]
-    if cleared:
-        pdf_handler._atomic_write_json(
-            _prefs_path(), prefs, separators=(",", ":")
-        )
+    with PREFS_LOCK:
+        prefs = _load_prefs()
+        cleared = 0
+        for safe in list(prefs):
+            entry = prefs[safe]
+            if isinstance(entry, dict) and "threshold" in entry:
+                del entry["threshold"]
+                cleared += 1
+                if not entry:
+                    del prefs[safe]
+        if cleared:
+            pdf_handler._atomic_write_json(
+                _prefs_path(), prefs, separators=(",", ":")
+            )
     return cleared
 
 
@@ -622,12 +630,13 @@ def forget_prefs(name: str) -> None:
     resurface if a PDF with the same safe basename is re-imported.
     """
     safe = pdf_handler._safe_basename(name)
-    prefs = _load_prefs()
-    if safe in prefs:
-        del prefs[safe]
-        pdf_handler._atomic_write_json(
-            _prefs_path(), prefs, separators=(",", ":")
-        )
+    with PREFS_LOCK:
+        prefs = _load_prefs()
+        if safe in prefs:
+            del prefs[safe]
+            pdf_handler._atomic_write_json(
+                _prefs_path(), prefs, separators=(",", ":")
+            )
 
 
 # --------------------------------------------------- FSRS retrievability
