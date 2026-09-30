@@ -186,8 +186,7 @@ def _tick(safe: str) -> None:
         return
     missing = missing + 1 if cur is None else 0
     if missing > MAX_MISSING_TICKS:  # gone for good: the rescan reports it
-        _settling.pop(safe, None)
-        _sync()
+        _settling.pop(safe, None)  # no _sync(): FSEvents still watches it
         return
     _settling[safe] = (cur, missing)
     _arm(safe)
