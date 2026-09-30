@@ -2430,10 +2430,22 @@ def manage_models_dialog(*_args: Any) -> None:
             models.append((name, capabilities))
         return {"reachable": reachable, "owned": owned, "update": update, "models": models}
 
+    def _bar(report) -> None:
+        """Report to the status bar; a report never breaks the op."""
+        try:
+            from . import tasks
+
+            report(tasks)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] Ollama status report failed: {exc}")
+
     def local_progress(event: dict) -> None:
         # Runtime and HTTP callbacks run on workers. Every Qt access,
         # including the liveness check, belongs on the main thread.
+        # The status bar's tracker is thread-safe, so it is fed here.
         event = dict(event)
+        _bar(lambda t: t.update("ollama", done=int(event.get("completed") or 0),
+                                total=int(event.get("total") or 0)))
         def apply() -> None:
             if not local_alive():
                 return
@@ -2460,6 +2472,7 @@ def manage_models_dialog(*_args: Any) -> None:
         )
         op_state["kind"] = "local"
         set_busy(True)
+        _bar(lambda t: t.begin("ollama", f"Ollama: {action}" + (f" {model}" if model else "")))
         runtime_status.setText(f"{action}… You can close Preferences; the operation continues.")
         runtime_progress.setRange(0, 0)
 
@@ -2492,6 +2505,7 @@ def manage_models_dialog(*_args: Any) -> None:
             return perform()
 
         def done(result: tuple | None) -> None:
+            _bar(lambda t: t.end("ollama"))  # before the liveness check: the bar outlives Preferences
             if result is None or not local_alive():
                 return
             snapshot, actual_endpoint = result
@@ -2530,6 +2544,7 @@ def manage_models_dialog(*_args: Any) -> None:
             set_busy(False)
 
         def failed(exc: Exception) -> None:
+            _bar(lambda t: t.end("ollama", f"{action} failed: {exc}"))
             if not local_alive():
                 return
             runtime_status.setText(f"{action} failed: {exc}")

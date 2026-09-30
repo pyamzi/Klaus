@@ -96,10 +96,10 @@ removed. An earlier version of this file also described a temporary
 screen, dropped on the Library tree, or picked through either Browse…
 button — queues it for indexing straight away; you never have to press
 anything. Ten PDFs at once queue ten jobs and run them one at a time, in
-the order you added them. Whatever the job was started from, a thin bar
-appears at the bottom of the main window with what is running, how far
-along it is, and a **Stop** button; the Library shows the same line in
-its own status area. Nothing starts before a profile is open. Ollama connection or model errors
+the order you added them. Whatever the job was started from, the status
+bar at the bottom of the main window and Browse shows what is running
+and how far along it is; click it for the list, where **✕** stops a
+run. Nothing starts before a profile is open. Ollama connection or model errors
 are reported by the indexing operation. Stopping or failing
 mid-way is always safe: partial work is saved as partial and the next
 run resumes from it, and a PDF's `!Library` tag is only ever written by

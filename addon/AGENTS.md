@@ -57,6 +57,8 @@ Addons/                       # Git repo root
     ├── pdf_viewer.py           # PdfViewer (QPdfView + selection/highlight overlay, find, thumbnails) and PdfSidebar
     ├── pdf_drive.py            # The Library's disk half: background folder scan, watcher, delete-to-Trash
     ├── library_sidebar.py      # The Library in Browse's sidebar: real names, retention %, icons, menus, footer
+    ├── tasks.py                # The one list of running processes (aqt-free, thread-safe reports)
+    ├── status_bar.py           # VS Code-style bottom bar: pane toggles, task progress, settings gear
     ├── library_actions.py      # Window-free Library actions the sidebar menus call
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
     ├── manage_models.py        # General, Appearance, Local models and external MCP configuration
@@ -213,10 +215,11 @@ gui_hooks.profile_did_open.append(first_run_check)                  # first-run:
 gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.profile_did_open.append(_start_klaus_endpoint)        # anki_endpoint bind (mw.col must exist)
 gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel + tab container
-gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse toolbar toggles (◧ / ◨)
+gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse layout repair (toggles now in the status bar)
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
 pdf_drop.setup()                                                    # PDF drop square + drop wrap on deck screens (independent try/except)
 library_sidebar.setup()                                             # the Library in Browse's sidebar (independent try/except)
+status_bar.setup()                                                  # status bar: main window + Browse; sync/media hooks (independent try/except)
 gui_hooks.operation_did_execute.append(tag_sync.on_operation_did_execute)  # sidebar tag edits reach the PDFs
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)

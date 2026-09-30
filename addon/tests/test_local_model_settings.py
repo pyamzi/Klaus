@@ -220,11 +220,19 @@ button('Update runtime').click()
 work(); drain()
 check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update runtime').isEnabled())
 field('pull_model').setText('downloaded-model')
+_tasks = importlib.import_module('klausmate.tasks')
+_tasks.run_on_main = lambda fn: fn()
+_tasks.clear()
 button('Download').click()
+check('a download shows in the status bar while it runs',
+      [t.label for t in _tasks.snapshot() if t.key == 'ollama'] == ['Ollama: Pull downloaded-model'], str(_tasks.snapshot()))
 work()
+_o = [t for t in _tasks.snapshot() if t.key == 'ollama']
+check('...with its streamed progress', len(_o) == 1 and _o[0].done == 50 and _o[0].total == 100, str(_o))
 pending.pop(0)()
 check('streamed model progress reaches main-thread widgets', progress.value() == 50 and status.text() == 'Downloading model')
 drain()
+check('...and leaves the bar when it finishes', all(t.key != 'ollama' for t in _tasks.snapshot()), str(_tasks.snapshot()))
 check('pull downloads requested name and refreshes inventory', ('pull', 'downloaded-model') in calls and inventory.count() == 3 and store['embedding_model'] == 'new-model')
 inventory.setCurrentRow(2)
 button('Delete').click(); answer(False)
@@ -240,6 +248,8 @@ state['error'] = True
 field('pull_model').setText('broken-model')
 button('Download').click(); work(); drain()
 check('failure actionable and controls usable', 'Retry Pull' in status.text() and button('Download').isEnabled() and button('Refresh').isEnabled())
+check('a failed download leaves its reason in the bar',
+      [t.message for t in _tasks.snapshot() if t.key == 'ollama'] == ['Pull failed: Download failed. Retry Pull.'], str(_tasks.snapshot()))
 button('Stop managed server').click(); work(); drain()
 check('stop calls owned server manager', 'stop' in calls and not button('Stop managed server').isEnabled())
 state['setup_error'] = True

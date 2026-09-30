@@ -324,8 +324,24 @@ same reason.
   heatmap's, so its body script parses after panel_js's weld. DOM
   behaviour is tested by `tests/dashboard_js_dom_test.js` (node, run
   from test_dashboard.py, honest SKIP without node).
-- `browse_toggles.py`: Browse toolbar toggles (◧ sidebar / ◨ editor column),
-  split out of `__init__.py`.
+- `browse_toggles.py`: the self-painted pane toggle (`_PaneToggle`, ◧
+  sidebar / ◨ editor column) and `_VisibilityWatcher`, placed by the status
+  bar; plus the `browser_will_show` layout repair. Split out of `__init__.py`.
+- `tasks.py` (aqt-free) + `status_bar.py` (pure helpers above its aqt
+  glue; spec [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)):
+  a VS Code-style bar in the main window's own `form.statusbar` (Anki
+  keeps it hidden) and a `QStatusBar` added to Browse. Left (Browse only):
+  the two pane toggles. Right: a progress bar + the newest task's text
+  ("+N more"; click → a `Qt.Popup` list with ✕ where a task can be
+  cancelled), then ONE gear menu (KlausMate Settings…, Anki Settings…).
+  `tasks` is the one list of running processes — `begin`/`update`/`end`
+  from any thread; listeners run only through `run_on_main`
+  (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing
+  (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), the folder
+  scan (`rescan`), the Browse retention % (`retention`), Anki's collection
+  and media sync hooks (`sync`, `media`), and Preferences' Ollama
+  install/pull (`ollama`). An end message lingers `LINGER_S` (4 s).
+  Anki's own "Processing…" popups are deliberately not mirrored.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
   highlighting (K-113), adapted from Glutanimate's
   highlight-search-results (AGPLv3 — its header must stay intact;
@@ -659,7 +675,7 @@ same reason.
     the right-click menus (`browser_sidebar_will_show_context_menu`), a
     click that loads the PDF into Browse's PDF panel only when that panel
     is already showing, a drop filter for PDF files, and a footer under the
-    tree (index status line + ✕, Import PDFs…).
+    tree (Import PDFs…; indexing progress is in the status bar).
   - `library_actions.py`: the window-free actions those menus call; every
     dialog an instance with `open()`. Import COPIES files into the library
     root and lets the background scan read, import and index them.
@@ -964,12 +980,9 @@ same reason.
     Preferences' Index Now, which still calls `ensure_index` directly
     for its own progress bar. Feedback is the shippable part: ONE
     `RunnerState` snapshot is published to every listener and rendered
-    by ONE pure `status_line`, so the Library's status line and
-    `_StatusDock` — a thin bottom dock on `mw` (a QDockWidget, the
-    `lecture_view` pattern; an overlay child over the central webview
-    is a z-order gamble) carrying the same text and a Stop button,
-    visible on the deck screen, the overview and mid-review — cannot
-    describe one job differently. No profile means no run. Local
+    by ONE pure `status_line`, which `_report_task` turns into the status
+    bar's `index` task (✕ = `cancel_all`) — the old `_StatusDock` and the
+    Library footer's status line were removed with the status bar. No profile means no run. Local
     readiness replaces provider-key gates.
     Report readiness failures rather than silently dropping work. A PDF deleted
     before OR during its turn is skipped silently, and a deletion error
