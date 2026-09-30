@@ -232,31 +232,19 @@ check("an empty folder can be renamed and removed here (Anki's own items skip em
       == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])
 check("any other tag gets nothing extra", menu_for("Hematology::Anemia") == ["Anki's own item"])
 
-section("clicking a PDF opens it in the panel only if the panel is showing")
-
-
-class Dock:
-    def __init__(self, visible):
-        self.visible, self.loaded, self.shown = visible, [], 0
-        self._sidebar = types.SimpleNamespace(is_loaded=lambda s: False, load_pdf=self.loaded.append)
-
-    def isVisible(self):
-        return self.visible
-
-    def panel_show(self):
-        self.shown += 1
-        self.visible = True
-
-
+section("a single click only shows the cards; a double-click opens the viewer")
+viewer = importlib.import_module("klausmate.library_viewer")
+calls = []
+viewer.on_sidebar_click = lambda b: calls.append(("click", b))
+viewer.enter = lambda b, safe: calls.append(("enter", safe))
+ls._on_clicked("B", model.index(0, 0))
+ls._on_double_clicked("B", model.index(0, 0))
+ls._on_double_clicked("B", model.index(1, 0))
+check("click: viewer mode steps aside (the search itself is Anki's)", calls[0] == ("click", "B"))
+check("double-click on a PDF enters the viewer with that PDF", calls[1] == ("enter", "Intro_to_CBC"))
+check("double-click on any other tag does nothing", len(calls) == 2, str(calls))
 import klausmate.pdf_handler as _ph  # noqa: E402
 _ph.touch_last_used = lambda uf, safe: None
-hidden, shown = Dock(False), Dock(True)
-ls._on_clicked(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=hidden)), model.index(0, 0))
-ls._on_clicked(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=shown)), model.index(0, 0))
-check("a hidden panel stays hidden", hidden.loaded == [] and hidden.shown == 0)
-check("an open panel follows the click", shown.loaded == ["Intro_to_CBC"])
-act.open_in_panel(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=hidden)), "Intro_to_CBC", force=True)
-check("Open PDF shows the panel", hidden.shown == 1 and hidden.loaded == ["Intro_to_CBC"])
 
 section("drop PDFs on the sidebar")
 imported = []

@@ -68,27 +68,6 @@ def pdfs_under(folder: str) -> list[str]:
 # ------------------------------------------------------------ viewing
 
 
-def open_in_panel(browser, safe: str, force: bool = False) -> bool:
-    """Load ``safe`` into Browse's PDF panel. Without ``force`` only a
-    panel already on screen follows; ``force`` shows a hidden one."""
-    dock = getattr(getattr(browser, "editor", None), "_klausmate_pdf_tabs", None)
-    if dock is None:
-        return False  # the panel is installed one tick after Browse opens
-    try:
-        if not dock.isVisible():
-            if not force:
-                return False
-            dock.panel_show()
-        sidebar = dock._sidebar
-        if not sidebar.is_loaded(safe):
-            sidebar.load_pdf(safe)
-        pdf_handler.touch_last_used(_uf(), safe)
-        return True
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] open {safe!r} in the PDF panel failed: {exc}")
-        return False
-
-
 def show_in_finder(safe: str) -> None:
     path = pdf_handler.pdf_path_for(_uf(), safe)
     if not path or not os.path.exists(path):

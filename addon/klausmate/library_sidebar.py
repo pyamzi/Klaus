@@ -427,6 +427,12 @@ def refresh_status() -> None:
 # ------------------------------------------------------------ menus
 
 
+def _open_viewer(browser, safe: str) -> None:
+    from . import library_viewer
+
+    library_viewer.enter(browser, safe)
+
+
 def _add(menu, text: str, fn: Callable) -> None:
     menu.addAction(text).triggered.connect(lambda *_a: fn())
 
@@ -448,7 +454,7 @@ def on_context_menu(sidebar, menu, item, index) -> None:
     elif key in lib["safes"]:
         safe = lib["safes"][key]
         menu.addSeparator()
-        _add(menu, "Open PDF", lambda: act.open_in_panel(parent, safe, force=True))
+        _add(menu, "Open PDF", lambda: _open_viewer(parent, safe))
         _add(menu, "Rename PDF…", lambda: act.rename_pdf(parent, safe))
         _add(menu, "Match Sensitivity…", lambda: act.sensitivity(parent, safe))
         _add(menu, "Retention History…", lambda: act.history(parent, safe))
@@ -474,16 +480,26 @@ def on_context_menu(sidebar, menu, item, index) -> None:
 
 
 def _on_clicked(browser, index) -> None:
-    """A PDF row: its cards fill the table (Anki's own search), and the
-    PDF panel follows if it is already open."""
+    """One click: Anki's own search fills the table with the row's cards
+    (a PDF's matched cards), and viewer mode, if on, steps aside."""
+    try:
+        from . import library_viewer
+
+        library_viewer.on_sidebar_click(browser)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] library click failed: {exc}")
+
+
+def _on_double_clicked(browser, index) -> None:
+    """Two clicks on a PDF: the PDF viewer takes the cards' place."""
     try:
         safe = library_index()["safes"].get(index.internalPointer().full_name.casefold())
         if safe:
-            from . import library_actions
+            from . import library_viewer
 
-            library_actions.open_in_panel(browser, safe, force=False)
+            library_viewer.enter(browser, safe)
     except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] library click failed: {exc}")
+        print(f"[klausmate] library double-click failed: {exc}")
 
 
 def pdf_paths(mime) -> list[str]:
@@ -597,6 +613,7 @@ def on_browser_will_show(browser) -> None:
         wrap_sidebar(sidebar)
         if not getattr(sidebar, "_klausmate_clicks", False):
             sidebar.clicked.connect(lambda index: _on_clicked(browser, index))
+            sidebar.doubleClicked.connect(lambda index: _on_double_clicked(browser, index))
             sidebar._klausmate_clicks = True
         _sidebars.add(sidebar)
         refresh_status()
