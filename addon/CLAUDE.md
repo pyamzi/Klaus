@@ -4,9 +4,10 @@
 
 The approved [local-model reversion](docs/superpowers/specs/2026-09-18-local-model-reversion-design.md)
 is implemented locally as of 2026-09-19: D1-D3 removed the subscription service,
-reasoning judge and embedded assistant; D4 restores managed Ollama embeddings,
-D6 supplies whisper.cpp transcription, and D5 exposes context through a local
-stdio MCP bridge. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
+reasoning judge and embedded assistant; D4 restores managed Ollama embeddings
+and D5 exposes context through a local stdio MCP bridge. D6's whisper.cpp
+lecture recording was removed on 2026-09-30 (K-314): recording belongs to the
+Klaus app, not the add-on. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
 Older API-first and cloud-only designs are dated history, not current guidance.
 
 The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
@@ -41,7 +42,7 @@ introduced cloud embeddings and page records; its second plan added
 recording and a pertinence judge on 2026-09-17. Klaus Plus was a separate
 billing/proxy service. Those designs are superseded by the local-model
 reversion linked above. D1-D3 have removed the service, judge, dock,
-process host and session store. Page records, recording, collection tools,
+process host and session store. Page records, collection tools,
 `anki_endpoint.py` and `viewer_context.py` remain. The cloud assistant
 Plan 3 was never built and is not pending work. Historical specs:
 [assistant](docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md),
@@ -207,7 +208,7 @@ same reason.
   `write_config`, so read the type, not the name); `PdfDock` (a
   `QDockWidget` of the host window — Browse and Add Cards — since
   2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
-  [＋] [●] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
+  [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
   handle so Qt moves, docks and floats the dock from the empty bar
   (`setTitleBarWidget`'s contract; the tab bar does not stretch over that
   space). Allowed areas: left, right, bottom; floating is Qt's attached
@@ -228,38 +229,7 @@ same reason.
   button only started working with the dock: `@_guarded` zero-argument
   slots connected to `clicked` had been swallowing PyQt's `checked`
   argument as a TypeError since the panel was built (both slots now
-  take `*_args`); image-crop plumbing; **the lecture recorder's wiring**
-  (K-257, spec D6): `_PanelBar.record_btn` is the ● / ■ toggle beside ＋,
-  with a `status_label` reading `m:ss · n to transcribe` while a
-  recording runs, and the Lecture dock's header carries the same pair.
-  Both call ONE body, `start_or_stop_recording(owner, sidebar)` — a dock
-  supplies `_recorder` and `set_recording(on, status)` and nothing else,
-  so the Recorder/Uploader wiring exists once. `uploader()` is the
-  profile's ONE `lecture_recorder.Uploader`, started on
-  `profile_did_open` and stopped on `profile_will_close` **after** every
-  recorder in `_active_recorders` (a recorder mid-chunk enqueues into it;
-  tear the queue down first and that WAV is orphaned against a dead
-  worker). `_active_recorders` is main-thread-only by convention — four
-  call sites, no lock. Three rules the wiring exists to hold: a SECOND
-  concurrent recording is refused with a named tooltip (each dock only
-  ever knew its own `_recorder`, so three docks could open three
-  `QAudioSource`s on one mic and double the metered minutes); `get_page`
-  is scoped to the recording's OWN PDF and returns **0** — which
-  `Recorder._tick` reads as "no page update", freezing on the last known
-  page — once the sidebar has switched documents, because a `PdfSidebar`
-  is reused across PDFs and the alternative is filing segments under the
-  old PDF at the new one's page numbers; and every teardown path
-  (`PdfDock._on_host_closing`, `LectureDock.shutdown`) runs
-  `_release_recorder(owner)` BEFORE the sidebar's `cleanup()`, or closing
-  Browse leaves the microphone hot. Stopping schedules the
-  re-index through `_request_index_when_idle` (final review,
-  2026-09-17): a 500 ms main-thread poll that calls
-  `index_queue.request_pdf` only once `uploader().pending()` is 0 —
-  the tail chunk is still transcribing when ■ is pressed, so a direct
-  request re-embedded every lecture WITHOUT its last 30 seconds —
-  de-duplicated per PDF and capped at about twenty minutes so a hung
-  transcription cannot strand the re-index; never an idle callback inside the
-  uploader, whose queue also empties mid-recording;
+  take `*_args`); image-crop plumbing;
   Tools menu
   (`install_menu`: ONE entry,
   "KlausMate Preferences…", inserted ahead of Anki's own items — the old
@@ -474,33 +444,11 @@ same reason.
   the CSS Custom Highlight API with the whole-span ring as guarded
   fallback. Cutover gate: K-101 (needs-human). The annotations JSON + bake
   pipeline are renderer-independent — parity work must not fork them.
-  **The transcript strip** (K-258, spec D6) is this renderer's own copy
-  of what `pdf_viewer` builds as a Qt widget: a **docked footer, a
-  sibling of `#pages` and outside it**, pushed over the bridge as
-  `klausSetTranscript(pageIndex, text)` and written with `textContent`,
-  never `innerHTML`. In-flow inside the fixed-height `.page` div — the
-  first shape — was painted over by the next page; that is why the
-  footer never touches the pages' geometry. `_push_transcript` re-pushes
-  the STORED text on the page's own ready signal, the same reason
-  annotations re-push: `load_path` returns before `klausPdfLoad`
-  resolves, so a transcript pushed during a fresh load is otherwise
-  dropped on the floor.
 - `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
   overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
   `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"
   button — Cmd/Ctrl-double-click a page, or right-click "Copy slide as
   image", copies it as an image; right-click also offers "Copy page text".
-  `PdfSidebar` owns the **transcript strip** (K-258): for the native
-  renderer a NoFocus collapsible strip under the page — never in the
-  tab order, it is a readout, not a control — and for pdf.js the bridge
-  push above, dispatched inside one `set_transcript`. `_refresh_transcript`
-  shows what was SAID over the current page and deliberately excludes
-  the slide's own text. It is reached two ways: a page change, and
-  `page_store.subscribe` → `_on_page_store_notify`, whose WHOLE body
-  (the pdf_safe/page check included, so it reads the freshest state)
-  goes through `_run_on_main` — the uploader appends segments from its
-  own daemon thread, and touching a QWidget from there is a crash
-  waiting for a busy machine.
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
   pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs, placement,
   thumbs, last_used — all writers MERGE via `_save_tabs_file`). Since K-070/
@@ -747,7 +695,7 @@ same reason.
   best `"pages"` entry) → pull FSRS retrievability for matched cards →
   aggregate. `do_build` embeds `page_store.page_texts` and REUSES any
   page whose `text_hash` is unchanged (the `card_index` hash rule), so a
-  page whose transcript grew re-embeds alone and a cancelled build
+  page whose text changed re-embeds alone and a cancelled build
   resumes from `embedded_rows`; an empty page gets a zero vector and can
   never win `best_page`. The old
   `!Library::Matching` preview tag was retired in K-055 — "Show matches
@@ -789,16 +737,11 @@ same reason.
   posts `count:` before its divs exist); leaving review hides the dock
   (mw.web is shared across states); open-state + width persist under
   `pdf_tabs.json`'s `lecture_view` key; EVERY teardown path runs
-  `sidebar.cleanup()` (K-095) — and, since K-257, `_release_recorder`
-  BEFORE it. Config `lecture_view_reopen`. Shortcut
+  `sidebar.cleanup()` (K-095). Config `lecture_view_reopen`. Shortcut
   "l" via `state_shortcuts_will_change` (collision-scanned) + a
   reviewer context-menu toggle; never activateWindow — answer keys
-  stay on the reviewer. The dock's header was an empty `QWidget` until
-  K-257 gave it a real one: the ● / ■ Record button and a
-  `record_status` label, both driven by `__init__`'s shared
-  `start_or_stop_recording` — the same body the PDF dock's bar calls, so
-  recording a lecture mid-review and recording it from Browse are one
-  code path.
+  stay on the reviewer. The dock's title bar is an empty `QWidget`
+  (K-257's Record button was removed with recording in K-314).
 - `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
   deflation over one packed `array('d')` buffer (`math.sumprod` on
   memoryview slices, strided slices for the transpose — never the d×d
@@ -917,18 +860,17 @@ same reason.
   with one vector per page a note's score simply IS its best-matching
   page, so `retention.match_scores` takes no aggregation argument at
   all (only `floor`), and the row text comes from
-  `page_store.page_texts` (slide text plus transcript), never from a
+  `page_store.page_texts` (slide text), never from a
   chunker here.
 - `page_store.py` (aqt-free above its divider; 2026-09-15, spec D2):
-  **the shared page record for indexing and transcripts**; one JSON record per
+  **the shared page record for indexing**; one JSON record per
   (PDF, page) at `user_files/pages/<safe>/<digest12>/<page:04d>.json`,
-  holding the slide's own `slide_text` plus `segments` (what was said
-  over it, `{t0,t1,text}`). `combined_text` is slide text then the
-  segments in time order; `text_hash` (blake2b, 16 hex) over that is
-  what `pdf_index` stores per row and what decides a re-embed.
+  holding the slide's own `slide_text`. `combined_text` is that text
+  (transcript `segments` were removed with recording in K-314;
+  `load_record` drops a legacy key); `text_hash` (blake2b, 16 hex) over
+  it is what `pdf_index` stores per row and what decides a re-embed.
   `ensure_records` seeds `slide_text` from `pdf_handler.load_pages` and
-  is **idempotent — it never overwrites segments**, so re-importing or
-  re-indexing a PDF cannot erase a transcript. `digest12` is a SHA-256
+  is idempotent. `digest12` is a SHA-256
   over the file's path, size and mtime (moved here from the deleted
   `page_ocr.py`), so a REPLACED file gets a fresh directory rather than
   silently inheriting another PDF's pages. Identity is settled in ONE
@@ -943,65 +885,7 @@ same reason.
   falls back to `text_digest` with one log line. Writes are atomic
   (tmp + `os.replace`); a corrupt record reads as empty and is logged.
   `render_page_png` (QtPdf, 1400px long edge) is the one Qt import, below
-  the divider. `subscribe(cb)` is `viewer_context`'s shape — synchronous,
-  a raising subscriber logged — and since 2026-09-17 it HAS its consumer:
-  `PdfSidebar._on_page_store_notify` repaints the transcript strip. That
-  callback fires **on the uploader's daemon worker thread**, because
-  `append_segment` notifies inline on whatever thread wrote the segment;
-  `pdf_viewer` marshals the whole body through `_run_on_main`, and any
-  future subscriber must do the same rather than assume the main thread.
-- `lecture_recorder.py` (aqt-free above its "Qt glue" divider; K-256,
-  spec D6): **mic audio in, transcript segments out** — the page
-  record's other writer. The `Chunker` is a pure state machine with one
-  open span, closed by whichever of "`CHUNK_S` = 30 seconds elapsed" or
-  "the page changed" comes first, so a segment can never straddle two
-  pages (a page record keys on exactly one). A closed chunk is labelled
-  with the **ACTUAL tick time**, never an idealised `t0 + CHUNK_S`: the
-  WAV holds exactly the audio between the old `t0` and now, so after a
-  stall an idealised boundary would both mislabel the bytes and then
-  chase the schedule with a burst of near-empty catch-up chunks. Times
-  are EPOCH seconds (`_epoch0` at Record, advanced by monotonic deltas),
-  so two lectures a day apart still sort against each other while a
-  mid-recording NTP jump can't run one chunk backwards. WAVs land in
-  `user_files/recordings/<safe>/<t0>-<t1>-p<page:04d>.wav` — the REAL end
-  time is in the name (K-280, Copilot on PR #4) because the Chunker closes
-  a chunk early on a page change and on Stop, and `requeue_leftovers` would
-  otherwise refile a 7-second chunk as 30 seconds running past the page it
-  was said over; the two older name shapes still parse and fall back to
-  `t0 + CHUNK_S`, and the match is anchored at both ends so a backup or a
-  copy of a well-formed name is never requeued — headered with the rate and
-  channel count actually NEGOTIATED with the device — ideal
-  16 kHz mono Int16 first, then `device.preferredFormat()` as it is, both
-  checked against `isFormatSupported`, so the WAV header describes its audio. **The width is
-  always 2** (K-279, Copilot on PR #4): forcing Int16 onto the preferred
-  format, which is what shipped, meant a device whose only sample format
-  is Float32 never started and Record was a dead button, so `_ingest`
-  converts every captured buffer through the pure `pcm_to_int16`
-  (Float32/Int32/UInt8 → Int16, a 0–3 byte tail carried into the next
-  read so a torn sample cannot desync the stream). A device that supports
-  neither format, or whose sample type Klaus cannot read, refuses to
-  record with one log line naming it — never a silent dead button. The `Uploader` is one daemon worker, FIFO: transcribe, append to
-  the page record, unlink. **A failed transcription keeps its WAV**, for example after an
-  executable/model failure or timeout; but a SPENT one never survives as a
-  leftover: once `append_segment` has happened, `_spend` unlinks the WAV and,
-  if that fails, renames it out of `_LEFTOVER_RE`'s namespace (`.spent`, which
-  the next `requeue_leftovers` sweeps away), because a swallowed unlink failure
-  meant the next Record transcribed and appended that same segment a second
-  time (K-280) — and the next Record on that PDF
-  re-queues leftovers (numerically by `t0`, not by filename); an empty
-  transcript is dropped. Nothing a single chunk throws may kill the
-  worker, or one bad chunk stops transcription for the session, which is
-  also why the stop sentinel gets its own `task_done()` and
-  `_ensure_thread` re-checks `is_alive()`. The worker uses `local_transcription.transcribe` with configured
-  executable, model and language;
-  see [Uploader._one](klausmate/lecture_recorder.py).
-  `ensure_records` is seeded once per PDF before the
-  first segment ever lands (marked seeded only AFTER it succeeds), so a
-  transcript can be the first thing a PDF that nobody has indexed ever
-  grows. `on_segment` (no caller in the add-on today — the strip listens on
-  `page_store.subscribe`) **would be called on the worker thread**, as
-  `page_store`'s own notify chain behind it IS — which is why
-  `pdf_viewer._on_page_store_notify` marshals through `_run_on_main`.
+  the divider.
 - `md3_switch.py`: `Md3Switch(QCheckBox)` — the MD3 track-and-thumb
   switch used for every settings-row on/off (K-material3 audit;
   replaced bare checkboxes in `manage_models.py`). Pure geometry/colour
@@ -1028,9 +912,6 @@ same reason.
     operations can finish after dialog close; profile close cancels runtime work.
     Automatic port relocation uses a profile-fenced endpoint-only compare-and-set;
     newer saved endpoint edits win, and unsaved endpoint/model choices stay Save-owned.
-  - `local_transcription.py`: whisper.cpp executable discovery via explicit path,
-    PATH, configured login shell and known paths; temporary CLI JSON output,
-    typed failures and cleanup. No Python speech library is bundled.
 
   - `card_index.py` (aqt-free): `user_files/card_index/` = packed
     `array('f')` vectors + JSON manifest. **Text hash is the change
@@ -1187,8 +1068,7 @@ same reason.
     tick. Image-only rows disable WHOLE (`bg_fit_row`/`bg_blur_row`/
     `bg_wash_row`) so labels dim with their controls.
     General and Appearance remain alongside Local models: Ollama runtime
-    management, free-text embedding model, whisper.cpp executable/model/language,
-    and External clients configuration. The embedded Assistant page is removed.
+    management, free-text embedding model and External clients configuration. The embedded Assistant page is removed.
     `save_embed` captures `index_signature` before saving and offers a
     confirmed local index sweep when appropriate.
     **Preferences are deferred-save**: widgets only
@@ -1212,7 +1092,7 @@ same reason.
   process launched by an external client with Python 3.9+. It reads private
   `user_files/mcp_connection.json` for each request and forwards to local HTTP.
   Preferences copies token-free absolute-path configuration, never edits another
-  application's config. `current_page` returns slide text/transcripts and optional
+  application's config. `current_page` returns slide text and optional
   PNG data. Collection writes still require Anki approval. External providers may
   receive requested context. POSIX discovery mode 0600 is tested; native Windows
   ACL privacy, separate-process lifecycle coordination and live Desktop remain limits.
@@ -1289,7 +1169,7 @@ same reason.
     the reporter.
   - `current_view` in `anki_endpoint.py` already consumes `viewer_context`
     for PDF/page/selection metadata. `current_page` also reads
-    page text/transcripts and PNG content through `page_store.py`.
+    page text and PNG content through `page_store.py`.
     Keep these retained modules; do not restore assistant session storage.
 - Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`,
   `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
@@ -1394,8 +1274,6 @@ same reason.
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
   used `shutil.which`, a bounded login-shell lookup, then known paths.
-  `local_transcription.find_binary` implements local transcription discovery; do not import
-  the deleted module.
 - **Historical Claude Code permission lesson (2026-09-02):** the removed
   host needed `ToolSearch` in its allowed tools to expose MCP schemas,
   and static allow/deny lists provided its actual permission boundary.
@@ -1420,8 +1298,7 @@ same reason.
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has
   `pypdf.annotations`); no other bundled Python dependencies or native
-  Python extensions. Ollama and whisper.cpp are separate native executables.
+  Python extensions. Ollama is a separate native executable.
 - The embedding model stays free-text with local model inventory and pull
-  progress in Preferences. Ollama is the single provider. Transcription uses
-  local executable/model paths and a language code. Defaults live in
+  progress in Preferences. Ollama is the single provider. Defaults live in
   `config.json` and, for embeddings, `embeddings.DEFAULT_MODELS`.

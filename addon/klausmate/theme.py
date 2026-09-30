@@ -1061,52 +1061,6 @@ def thumb_strip_qss(night: bool) -> str:
     """
 
 
-def transcript_strip_qss(night: bool) -> str:
-    """The transcript strip under the page, in BOTH PDF renderers
-    (Plan 2 D6) — objectName ``KlausTranscriptStrip`` for the native
-    viewer's Qt widget (the pdf.js side draws its own copy of this
-    same language straight in CSS, off ``theme.css_vars`` — see
-    ``web/pdfjs_viewer.html``'s ``.klaus-transcript`` rules). A
-    ``chrome`` ground with a ``grey_light`` hairline on top — the same
-    seam ``dialog_qss``'s RowSeparator/ButtonBarLine draw — and the
-    chevron plus the transcript text both in ``text_muted`` at 12px:
-    the lecturer's words are a caption under the page, not body copy
-    competing with it.
-
-    The ``QScrollArea`` rule is load-bearing, not tidiness (PR #4 sixth
-    review): a scroll area paints its VIEWPORT child, and Qt clears that
-    viewport's own palette fill only because this rule declares the
-    scroll area transparent. Narrow or delete it and the transcript body
-    comes back as an opaque palette-coloured rectangle over the strip's
-    chrome — a dark-mode pixel read in tests/test_transcript_strip.py
-    fails if it ever does.
-    """
-    c = palette(night)
-    return f"""
-    QWidget#KlausTranscriptStrip {{
-        background-color: {c['chrome']};
-        border-top: 1px solid {c['grey_light']};
-    }}
-    QWidget#KlausTranscriptStrip QToolButton {{
-        background: transparent;
-        border: none;
-        color: {c['text_muted']};
-        font-size: 12px;
-        font-weight: 600;
-        padding: 2px 0px;
-    }}
-    QWidget#KlausTranscriptStrip QScrollArea {{
-        background: transparent;
-        border: none;
-    }}
-    QWidget#KlausTranscriptStrip QLabel {{
-        background: transparent;
-        color: {c['text_muted']};
-        font-size: 12px;
-    }}
-    """
-
-
 def drop_zone_qss(
     night: bool, object_name: str, idle_border: bool = True
 ) -> str:

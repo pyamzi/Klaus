@@ -2,10 +2,10 @@
 
 ## Local models
 
-Runtime and model downloads use the network. Embedding and transcription
-inference runs locally; external-client processing follows its provider choice.
-Sources: [defaults](config.json), [Preferences](manage_models.py),
-[local adapter](local_transcription.py) and [Ollama runtime](ollama_runtime.py).
+Runtime and model downloads use the network. Embedding inference runs
+locally; external-client processing follows its provider choice.
+Sources: [defaults](config.json), [Preferences](manage_models.py) and
+[Ollama runtime](ollama_runtime.py).
 
 Semantic search uses local Ollama embeddings, configured in
 **KlausMate Preferences → Local models**. Provider credentials are removed
@@ -50,14 +50,6 @@ still require **Save**; starting from an unsaved endpoint does not apply it.
   migration selects `nomic-embed-text` with native dimensions and removes old
   credentials. Later migrations preserve your local model selection.
 
-- **transcription_model_path**: Local whisper.cpp model file. Default `""`.
-  Install whisper.cpp and download a compatible model using the
-  [official setup instructions](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/README.md).
-  Select the model in **Preferences > Local models > Transcription model**.
-- **transcription_binary**: Optional path to the whisper.cpp executable.
-  Default `""` uses automatic discovery. Use Browse for a custom installation.
-- **transcription_language**: Language code for recorded lectures, default `"en"`.
-  Transcription runs locally. Failed audio stays on disk for the next attempt.
 - **_v2_index_sweep_offered**: Written automatically after Klaus offers,
   once per profile, to rebuild PDF indexes written before the one-vector-
   per-page format (those read as no index at all). Set whether you accept
@@ -85,28 +77,9 @@ preserved, but do not exclude cards from scores. See [tag sync](tag_sync.py).
 
 ### Recording a lecture
 
-The **●** button on the PDF panel's title bar (and on the Lecture panel
-during review) records your microphone while you follow along in the
-slides. Every 30 seconds or when you turn the page, whichever comes first,
-the recording is cut and processed locally by whisper.cpp,
-and the text is stored **on the page you were looking at when you said
-it**. Press **■** to stop; the bar shows elapsed time and how many pieces
-are still waiting to be transcribed. Once the last piece has been transcribed,
-Klaus re-indexes that PDF, so the pages you spoke over are searchable by
-what was said on them, and external clients can request them too (if transcription
-hangs, the re-index runs anyway after about twenty minutes).
-
-- Only one recording at a time, across every panel. Klaus says so rather
-  than quietly opening a second microphone.
-- Nothing is recorded until you press ●, and there is no recording
-  without a PDF open.
-- A piece that cannot be transcribed because a local dependency is unavailable
-  or a subprocess fails **keeps its audio** in the add-on's
-  `user_files/recordings/<pdf>/` folder and is retried the next time you
-  record that lecture. Once successfully transcribed, the audio file is deleted; only the
-  text is kept. An empty transcript is dropped.
-- The transcript for the page you are on shows in a collapsible strip
-  under the PDF, filling in live as pieces come back.
+Lecture recording moved to the Klaus app (K-314). The add-on no longer
+records, transcribes or stores transcripts; old `transcription_*` settings
+are removed from profiles automatically.
 
 **Copying cards into a new deck**: select notes in Browse — the tag above
 is one good way to find them — then **Notes → KlausMate: Create Curated
@@ -386,8 +359,8 @@ restart does not require copying new credentials. Klaus never writes another
 application's configuration. Copy the block again if you move the add-on or
 Python installation.
 
-`current_page` returns the active PDF's ID, name, page number, selection, slide
-text and transcript, plus a page image when available. Set `include_image: false`
+`current_page` returns the active PDF's ID, name, page number, selection and slide
+text, plus a page image when available. Set `include_image: false`
 for text only. `get_page` accepts `pdf_id` and a one-based `page` for any imported
 lecture, without changing the viewer; set `include_image: true` to request its
 image. Lecture search now returns a `pdf` ID alongside its existing `source`.
@@ -407,7 +380,7 @@ Collection writes still require approval in Anki. Lecture content is untrusted
 input and is not an instruction to the external client.
 
 Your external client chooses its model provider and may transmit requested
-lecture text, transcripts, images and card context to that provider. Klaus
+lecture text, images and card context to that provider. Klaus
 exposes only its authenticated local endpoint. This setup does not provide
 public hosting or direct ChatGPT access. Automated checks cover the stdio
 bridge and Preferences clipboard. The official MCP Python client is also tested

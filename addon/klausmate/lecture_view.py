@@ -260,18 +260,16 @@ try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
         QDockWidget,
-        QHBoxLayout,
         QLabel,
         QStackedWidget,
         Qt,
         QTimer,
-        QToolButton,
         QVBoxLayout,
         QWidget,
     )
 except Exception:  # headless tests / partial environments
     gui_hooks = mw = None  # type: ignore[assignment]
-    QDockWidget = QHBoxLayout = QLabel = QStackedWidget = Qt = QTimer = QToolButton = QVBoxLayout = QWidget = None  # type: ignore[assignment]
+    QDockWidget = QLabel = QStackedWidget = Qt = QTimer = QVBoxLayout = QWidget = None  # type: ignore[assignment]
 
 from .slot_guard import guarded as _guarded
 
@@ -381,55 +379,20 @@ def _save_state(**updates: Any) -> None:
 
 
 class LectureDock(_DockBase):  # type: ignore[misc]
-    """Right-docked lecture panel on mw. Frameless title bar (no drag/
-    float/close chrome) carrying only the Record button (D6) — the
-    bottom-bar button, the L shortcut, and the reviewer menu are its
-    only OTHER toggles."""
+    """Right-docked lecture panel on mw. Frameless: an empty title bar (no drag/
+    float/close chrome) — the bottom-bar button, the L shortcut, and the
+    reviewer menu are its only toggles."""
 
     def __init__(self) -> None:
         super().__init__(mw)
         from . import theme
         from .pdf_viewer import PdfSidebar
 
-        self._recorder: Any = None
         self.setObjectName("KlausLectureDock")
         try:
             self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
             self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-            header = QWidget(self)
-            header_row = QHBoxLayout(header)
-            header_row.setContentsMargins(6, 2, 6, 0)
-            header_row.setSpacing(4)
-            # Disabled until a document is actually IN VIEW (ruling 5):
-            # _show_match/_show_empty flip this via _update_record_enabled,
-            # which also keeps it enabled through a recording in flight even
-            # if follow_card later switches the stack to the empty state —
-            # otherwise Stop would go unreachable the moment review moves
-            # to a card with no lecture match.
-            self.record_btn = QToolButton(header)
-            self.record_btn.setText("●")
-            self.record_btn.setAutoRaise(True)
-            # m1 (fix round 1): starts disabled (no PDF in view yet), so
-            # the tooltip says why, matching _update_record_enabled below.
-            self.record_btn.setToolTip("Open a PDF to record this lecture")
-            self.record_btn.setEnabled(False)
-            self.record_btn.clicked.connect(self._toggle_record)
-            header_row.addWidget(self.record_btn)
-            # Elapsed time / "n to transcribe" while recording — same label
-            # style as the dock's own match-status label below.
-            self.record_status = QLabel("", header)
-            try:
-                self.record_status.setStyleSheet(
-                    theme.muted_label_qss(theme.night_mode(), 10)
-                )
-            except Exception:
-                self.record_status.setStyleSheet(
-                    "color: rgba(100,100,100,0.95); font-size: 10px;"
-                )
-            self.record_status.setVisible(False)
-            header_row.addWidget(self.record_status)
-            header_row.addStretch(1)
-            self.setTitleBarWidget(header)
+            self.setTitleBarWidget(QWidget(self))
         except Exception as e:
             print(f"[klausmate] lecture dock chrome failed: {e}")
 
@@ -503,7 +466,6 @@ class LectureDock(_DockBase):  # type: ignore[misc]
         except Exception as e:
             print(f"[klausmate] lecture: load failed for {m.safe}: {e}")
             return
-        self._update_record_enabled()
 
         display = m.safe
         try:
@@ -539,7 +501,6 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             self.stack.setCurrentWidget(self.empty_label)
         except Exception:
             pass
-        self._update_record_enabled()
         self._set_status(_STATUS_HINTS.get(reason, ""))
 
     def _set_status(self, text: str) -> None:
@@ -548,53 +509,6 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             self.status.setVisible(bool(text))
         except Exception:
             pass
-
-    # -- recording (D6) ------------------------------------------------
-
-    @_guarded
-    def _toggle_record(self, *_args) -> None:
-        # *_args: `clicked` hands a bool a zero-arg guarded slot would
-        # swallow as a TypeError (see __init__.py's PdfDock.panel_hide).
-        # start_or_stop_recording lives in __init__.py, next to uploader()
-        # — a deferred import since the package root imports aqt and
-        # would deadlock importing this module back at package load.
-        from . import start_or_stop_recording
-
-        start_or_stop_recording(self, self.sidebar)
-
-    def set_recording(self, on: bool, status: str) -> None:
-        self.record_btn.setText("■" if on else "●")
-        self.record_btn.setToolTip(
-            "Stop recording this lecture" if on else "Record this lecture"
-        )
-        self.record_status.setText(status)
-        self.record_status.setVisible(bool(status))
-
-    def _update_record_enabled(self) -> None:
-        """Never record without a PDF in view (ruling 5) — but "in view"
-        here means the sidebar is what the stack is actually showing:
-        _show_empty does not unload the sidebar's last document, only
-        swaps the stack to empty_label, so checking the sidebar alone
-        would leave Record enabled while the empty state is on screen.
-        A recording already in flight stays enabled regardless, or
-        Stop would go unreachable the instant follow_card's auto-follow
-        moves to a card with no lecture match."""
-        has_doc = (
-            self.stack.currentWidget() is self.sidebar
-            and getattr(self.sidebar, "_name", None) is not None
-        )
-        recording = self._recorder is not None and self._recorder.is_recording
-        try:
-            self.record_btn.setEnabled(has_doc or recording)
-            # m1 (fix round 1): say WHY it's disabled — left alone while
-            # recording so this can't stomp set_recording's "Stop
-            # recording this lecture" tooltip.
-            if not recording:
-                self.record_btn.setToolTip(
-                    "Record this lecture" if has_doc else "Open a PDF to record this lecture"
-                )
-        except Exception as e:
-            print(f"[klausmate] lecture record button refresh failed: {e}")
 
     def _arm_jump(self, page0: int) -> None:
         """Generation-stamped retry ladder. pdf.js posts its page count
@@ -634,20 +548,8 @@ class LectureDock(_DockBase):  # type: ignore[misc]
     def shutdown(self) -> None:
         """Sever the webview from Anki's global hooks BEFORE the C++
         object dies (K-095: a PdfJsViewer destroyed without cleanup()
-        crashes the user's next theme switch).
-
-        Releases a live recorder FIRST (fix round 1, I1) — profile close
-        (aboutToQuit) is this dock's only OTHER teardown path (leaving
-        review just hides it, recorder untouched, by design), and without
-        this a live capture outlived the dock with no button left to stop
-        it."""
+        crashes the user's next theme switch)."""
         self._jump_gen += 1
-        try:
-            from . import _release_recorder
-
-            _release_recorder(self)
-        except Exception as e:
-            print(f"[klausmate] lecture recorder release on shutdown failed: {e}")
         try:
             self.sidebar.clear()
         except Exception:

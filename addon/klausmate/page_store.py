@@ -1,9 +1,9 @@
-"""One record per (PDF, page): the slide's text and what was said on it.
+"""One record per (PDF, page): the slide's text.
 
 The page is the seam every API-first capability keys on (spec D2): the
 index embeds combined_text per page, the pertinence phase judges a card
-against one page, the assistant reads one page, the recorder appends
-transcript segments to one page. Records live at
+against one page, the assistant reads one page. (Lecture transcripts
+lived here too until K-314 moved recording to the Klaus app.) Records live at
 user_files/pages/<pdf_safe>/<digest>/<page:04d>.json. <digest> is resolved
 through a pointer file, pages/<pdf_safe>/current, and settled by
 document_identity: normally text_digest(pages), a hash of the document's
@@ -26,14 +26,10 @@ import hashlib
 import json
 import os
 import time
-from typing import Any, Callable
 
 VERSION = 1
 SUBDIR = "pages"
 LONG_EDGE = 1400
-
-_subscribers: list[Callable[[str, int], None]] = []
-
 
 def digest12(path: str, stat=os.stat) -> str:
     """Legacy identity: path+size+mtime. A bake or a move changes all
@@ -61,8 +57,7 @@ def _require_path(pdf_safe: str, path) -> None:
     one constant directory, the same for every caller that has lost
     track of its file. The empty path is reachable, not theoretical:
     ``pdf_handler.pdf_path_for`` answers ``""`` for a PDF whose file does
-    not resolve yet, and the recorder seeds a page before the first index
-    run. Segments written to that shared bucket vanish from view the
+    not resolve yet. Records written to that shared bucket vanish from view the
     moment the real file resolves and the identity moves on, so the store
     refuses here rather than trusting its callers.
 
@@ -129,8 +124,8 @@ def document_identity(user_files: str, pdf_safe: str, path: str, pages: list[str
 
     One edge, accepted (K-268 review): a text-less legacy directory
     (pre-pointer scheme) is recognised as this file's by the legacy
-    path digest, which a bake changes — so a text-less deck that got a
-    transcript before any index run AND was baked before its first
+    path digest, which a bake changes — so a text-less deck that got
+    records before any index run AND was baked before its first
     ensure_records starts a fresh directory; the old one stays on disk
     for delete_context, nothing is deleted.
 
@@ -211,7 +206,7 @@ def record_path(user_files: str, pdf_safe: str, path: str, page_index: int) -> s
 
 
 def _empty() -> dict:
-    return {"version": VERSION, "slide_text": "", "segments": [], "updated_at": 0.0}
+    return {"version": VERSION, "slide_text": "", "updated_at": 0.0}
 
 
 def load_record(user_files: str, pdf_safe: str, path: str, page_index: int) -> dict:
@@ -221,15 +216,16 @@ def load_record(user_files: str, pdf_safe: str, path: str, page_index: int) -> d
         # A reader, and its contract already answers the empty record for
         # data it cannot find (below). A raise would break every reader
         # that survives an unresolvable PDF today — the assistant's page
-        # context, anki_tools' PDF search, the pertinence judge, the
-        # transcript strip — for no gain: there is nothing to read.
+        # context, anki_tools' PDF search, the pertinence judge — for
+        # no gain: there is nothing to read.
         print(f"[klausmate] no page record without a path: {exc}")
         return _empty()
     try:
         with open(p, encoding="utf-8") as f:
             rec = json.load(f)
-        if not isinstance(rec, dict) or not isinstance(rec.get("segments"), list):
+        if not isinstance(rec, dict):
             raise ValueError("not a page record")
+        rec.pop("segments", None)  # transcripts, retired in K-314
         rec.setdefault("slide_text", "")
         rec.setdefault("version", VERSION)
         return rec
@@ -257,8 +253,7 @@ def _same_text(rec_dir: str, pages: list[str], same_file: bool = False) -> bool:
     A TEXT-LESS document is the exception, and it is why *same_file*
     exists (K-268): it has no text to be compatible WITH, so every
     record below is skipped and an all-empty directory belonging to a
-    DIFFERENT scan of the same length would be adopted along with its
-    transcript. For one of those, sameness has to be proved outside the
+    DIFFERENT scan of the same length would be adopted. For one of those, sameness has to be proved outside the
     text — *same_file*, which ensure_records sets only for the LEGACY
     (path-digest) directory, a directory reachable only through
     digest12 of the live file and so minted for this document's own
@@ -267,12 +262,10 @@ def _same_text(rec_dir: str, pages: list[str], same_file: bool = False) -> bool:
     A page with no record file yet (FileNotFoundError, or any other
     unreadable/corrupt record — same tolerance load_record gives them),
     or a record whose stored slide_text is "", has nothing to disagree
-    with and is skipped rather than counted as a mismatch: a transcript
-    recorder can append segments to a page (M-15) before the first index
-    run ever seeds that page's slide_text, and a legacy directory seeded
-    only that way — every record empty or missing — has nothing to
-    disprove sameness with, so it is treated as the same document rather
-    than orphaned. Only a stored NON-EMPTY slide_text that disagrees
+    with and is skipped rather than counted as a mismatch: a directory
+    whose records are all empty or missing has nothing to disprove
+    sameness with, so it is treated as the same document rather than
+    orphaned. Only a stored NON-EMPTY slide_text that disagrees
     with the new text proves a different document.
     """
     if _textless(pages) and not same_file:
@@ -292,7 +285,7 @@ def _same_text(rec_dir: str, pages: list[str], same_file: bool = False) -> bool:
 
 
 def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) -> int:
-    """Write slide_text for every page; existing segments survive. Idempotent.
+    """Write slide_text for every page. Idempotent.
 
     Settles the identity pointer before seeding: adopt an on-disk legacy
     (path-digest) directory the first time one is found — a profile that
@@ -324,9 +317,8 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
     if pointer != td:
         # The pointer names a directory that is not this text's own. Two
         # cases, told apart by CONTENT, never by name: a legacy
-        # (path-digest) directory holding this same document — a record's
-        # segments may already live there (a transcript taken before the
-        # first index run) — is renamed onto the identity and kept; a
+        # (path-digest) directory holding this same document is renamed
+        # onto the identity and kept; a
         # directory whose slide text differs is a replaced document and is
         # left behind for delete_context. A text-less document has no
         # slide text to tell those apart with, so for one of those only
@@ -340,7 +332,7 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
                 # content matches too — it is a valid home as-is (M-15).
                 # os.replace onto an existing non-empty directory raises;
                 # repointing anyway (the old bug) moved the pointer onto
-                # td regardless, orphaning old_dir's segments. Simplest
+                # td regardless, orphaning old_dir's records. Simplest
                 # correct move: touch neither directory nor the pointer.
                 pass
             else:
@@ -365,28 +357,9 @@ def ensure_records(user_files: str, pdf_safe: str, path: str, pages: list[str]) 
     return n
 
 
-def append_segment(user_files: str, pdf_safe: str, path: str, page_index: int,
-                   t0: float, t1: float, text: str) -> dict:
-    # Resolved BEFORE the read, so a path that names no directory (K-238)
-    # refuses here — a writer has no empty answer to give, and the caller
-    # keeps its WAV for the next attempt — rather than after load_record
-    # has already logged its own miss for the same reason.
-    p = record_path(user_files, pdf_safe, path, page_index)
-    rec = load_record(user_files, pdf_safe, path, page_index)
-    rec["segments"].append({"t0": float(t0), "t1": float(t1), "text": str(text)})
-    rec["segments"].sort(key=lambda s: (float(s.get("t0", 0.0)), float(s.get("t1", 0.0))))
-    rec["updated_at"] = time.time()
-    _atomic_json(p, rec)
-    _notify(pdf_safe, page_index)
-    return rec
-
-
 def combined_text(rec: dict) -> str:
-    slide = str(rec.get("slide_text") or "").strip()
-    said = "\n".join(str(s.get("text") or "").strip() for s in rec.get("segments") or [] if str(s.get("text") or "").strip())
-    if slide and said:
-        return f"{slide}\n\n{said}"
-    return slide or said
+    """The text a page is embedded and judged by: its slide text."""
+    return str(rec.get("slide_text") or "").strip()
 
 
 def text_hash(rec: dict) -> str:
@@ -401,30 +374,11 @@ def page_texts(user_files: str, pdf_safe: str, path: str, page_count: int) -> li
     return out
 
 
-def subscribe(cb: Callable[[str, int], None]) -> Callable[[], None]:
-    _subscribers.append(cb)
-
-    def unsubscribe() -> None:
-        try:
-            _subscribers.remove(cb)
-        except ValueError:
-            pass
-    return unsubscribe
-
-
-def _notify(pdf_safe: str, page_index: int) -> None:
-    for cb in list(_subscribers):
-        try:
-            cb(pdf_safe, page_index)
-        except Exception as exc:
-            print(f"[klausmate] page_store subscriber failed: {exc}")
-
-
 def _png_path(user_files: str, pdf_safe: str, path: str, page_index: int) -> str:
     """Where this page's rendered PNG is cached — a sibling of its JSON
     record, same directory, same stem (K-230). Moves and expires with the
     record for free: a replaced file gets a fresh record_dir and so a
-    fresh cache, while a changed slide_text or transcript segment never
+    fresh cache, while a changed slide_text never
     invalidates it — only the rendered IMAGE depends on the file's own
     bytes, not on what a record stores about it, so this cache's
     invalidation is simpler than the text_hash-driven re-embed elsewhere

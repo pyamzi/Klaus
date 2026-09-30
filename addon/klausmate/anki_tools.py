@@ -214,7 +214,7 @@ def _semantic_pdf_search(query: str, top_k: int, user_files: str) -> list[dict]:
     different embedding signature is SKIPPED rather than scored, because a
     score from another embedding space is not a smaller number, it is a
     meaningless one. The hit's text is that page's ``page_store`` record —
-    slide text plus any transcript said over it — falling back to the bare
+    its slide text — falling back to the bare
     slide text when there is no record, or no PDF file to key one on.
     """
     from . import embeddings, page_store, pdf_handler, pdf_index

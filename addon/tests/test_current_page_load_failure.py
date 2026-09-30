@@ -16,7 +16,7 @@ install()
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-# Same real-Qt aqt shim as test_transcript_strip.py.
+# Real-Qt aqt shim.
 shim = types.ModuleType("aqt.qt")
 def qt_getattr(name):
     for module in (QtWidgets, QtCore, QtGui):

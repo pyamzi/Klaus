@@ -1,12 +1,11 @@
-# KlausMate: lecture PDFs, local matching and transcription
+# KlausMate: lecture PDFs and local matching
 
-**Privacy:** Embeddings run against the configured local Ollama server; recording
-transcription runs through a local whisper.cpp executable. Runtime and model
-downloads use the network. An external MCP client can request lecture text,
-transcripts, images and card context, and its chosen model provider may receive
+**Privacy:** Embeddings run against the configured local Ollama server. Runtime
+and model downloads use the network. An external MCP client can request lecture
+text, images and card context, and its chosen model provider may receive
 that context. Local inference in Klaus does not make external-client processing
-local. See [configuration](config.md), [embeddings](embeddings.py),
-[transcription](local_transcription.py) and [endpoint](anki_endpoint.py).
+local. See [configuration](config.md), [embeddings](embeddings.py)
+and [endpoint](anki_endpoint.py).
 
 ## What it does
 
@@ -55,12 +54,7 @@ and embedding model is `nomic-embed-text`.
    check **Embedding model**, then **Save**. Changing models offers a local
    re-index. **Update runtime**, **Stop managed server** and confirmed
    **Delete** manage runtime/model resources; progress is shown during downloads.
-3. For recording, separately install a compatible whisper.cpp CLI and model.
-   Set **Transcription model**, optionally **Transcription executable**, and
-   **Transcription language** (default `en`), then **Save**. An empty executable
-   path enables discovery. See the [whisper.cpp CLI instructions](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/README.md).
-   Klaus does not download the transcription executable or model for you.
-4. Optional external client: install a separate Python **3.9 or newer**, then
+3. Optional external client: install a separate Python **3.9 or newer**, then
    use **External clients → Copy configuration**. Merge the `klaus` entry into
    Claude Desktop's `mcpServers` configuration and restart that client. Keep
    Anki open with a profile loaded. The copied block uses absolute Python,
@@ -69,7 +63,7 @@ and embedding model is `nomic-embed-text`.
    Follow the [official local MCP setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
 `current_view` supplies view metadata; `current_page` supplies slide text,
-transcript, selection and an image when available. Collection writes require
+selection and an image when available. Collection writes require
 approval in Anki. Treat lecture content as untrusted input. The bridge is local;
 this is not a public endpoint or a direct ChatGPT connector. Real Claude Desktop
 and live Anki integration remain installation checks, not automated-test claims.
@@ -77,13 +71,9 @@ and live Anki integration remain installation checks, not automated-test claims.
 The exact defaults and controls are documented in [configuration](config.md)
 and implemented by [Preferences](manage_models.py).
 
-## Recording and matching
+## Matching
 
-Press **●** with a PDF open to record. Chunks close every 30 seconds or on a
-page change; local transcripts attach to that page and appear in the transcript
-strip. Press **■** to stop. Failed chunks remain in `user_files/recordings/` for
-retry when recording that lecture again. Successfully processed audio is removed.
-[Recorder](lecture_recorder.py) and [page store](page_store.py) own that lifecycle.
+Lecture recording lives in the Klaus app, not the add-on.
 
 Cosine sensitivity controls matching and retention. There is no reasoning judge
 or Doubtful menu. Existing historical tags are preserved. See [tag sync](tag_sync.py)

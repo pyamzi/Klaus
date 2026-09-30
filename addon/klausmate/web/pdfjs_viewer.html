@@ -290,44 +290,6 @@ origin, matching the native viewer and the bake pipeline exactly
   }
   #ctxmenu .mi:hover { background: var(--hover-subtle); }
   #ctxmenu .sep { height: 1px; background: var(--grey-light); margin: 4px 6px; }
-  /* ---- transcript strip (Plan 2 D6, K-258; repositioned, fix round 1
-     C1) ----
-     What was said over the CURRENT page. Fix round 1: this used to be
-     appended INSIDE state.pageDivs[pageIndex] — a normal in-flow child
-     of a .page div whose width/height are pinned to the exact rendered
-     PDF size with no reserved margin — so in a real browser it
-     overflowed the page box and the NEXT page's own canvas (12px away,
-     #pages' gap) painted directly over it; every non-empty transcript
-     on any page but the last was 100% covered (verified in a real
-     Chromium browser, not just reasoned about — see task-6-review.md
-     Finding C1). Never again: ONE static element, a SIBLING of #pages
-     inside #scroll (never a child of any .page), taken OUT of normal
-     flow with position:sticky pinned to the bottom of the scrolling
-     VIEWPORT (#scroll has overflow:auto) — the strip rides along
-     whatever page is currently visible instead of living inside one
-     page's own box, so it can never be pushed off-screen by that
-     page's fixed height, and #pages' own width rule
-     (width:max-content; min-width:100%) and every .page's height are
-     completely untouched (this element is not their descendant). A
-     z-index above the canvases (which carry none of their own) keeps
-     it painted on top rather than merely stacked after them by luck of
-     DOM order. */
-  #klausTranscript {
-    display: none; position: sticky; bottom: 0; z-index: 5;
-    max-height: 120px; overflow-y: auto;
-    background: var(--surface); border-top: 1px solid var(--grey-light);
-    font-size: 12px; color: var(--text-muted);
-  }
-  #klausTranscript.visible { display: block; }
-  #klausTranscript .ktHead {
-    display: block; width: 100%; box-sizing: border-box; text-align: left;
-    cursor: pointer; background: transparent; border: none;
-    color: var(--text-muted); font-size: 12px; font-weight: 600;
-    padding: 4px 8px;
-  }
-  #klausTranscript .ktHead:hover { background: var(--hover-subtle); }
-  #klausTranscript .ktBody { padding: 0 8px 8px 8px; white-space: pre-wrap; }
-  #klausTranscript.collapsed .ktBody { display: none; }
   #error {
     display: none; margin: 40px auto; max-width: 420px; padding: 20px;
     background: var(--surface); border: 1px solid var(--grey-light);
@@ -367,7 +329,7 @@ origin, matching the native viewer and the bake pipeline exactly
       <button id="findnext" title="Next match (Enter)">&#8250;</button>
       <button id="findclose" title="Close (Esc)">&#10005;</button>
     </div>
-    <div id="scroll"><div id="pages"></div><div id="error"></div><div id="klausTranscript"><button type="button" id="ktHead" class="ktHead" aria-controls="ktBody" aria-expanded="true">&#9662; Transcript</button><div id="ktBody" class="ktBody"></div></div></div>
+    <div id="scroll"><div id="pages"></div><div id="error"></div></div>
     <div id="annobar">
       <button id="abHl" title="Highlight" aria-pressed="false">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"
@@ -2262,40 +2224,6 @@ window.klausScrollTo = function (y) {
 window.klausScrollPosition = function () {
   return document.getElementById("scroll").scrollTop;
 };
-
-/* Transcript strip (Plan 2 D6, K-258; repositioned, fix round 1 C1):
-   what was said over the CURRENT page (pageIndex, 0-based, kept only
-   for signature parity with the bridge call — this ONE static
-   #klausTranscript element, a sibling of #pages set up in the markup
-   above, is never keyed per page in the DOM; Python is the source of
-   truth for which page's text this is, via _refresh_transcript on
-   every page change and page_store notification). Collapsible, hidden
-   when text is empty. Text lands here JSON-decoded already and is
-   written with textContent (never innerHTML) so a lecture transcript
-   can carry no markup of its own. */
-window.klausSetTranscript = function (pageIndex, text) {
-  const strip = document.getElementById("klausTranscript");
-  if (!strip) return;
-  strip.querySelector(".ktBody").textContent = text || "";
-  strip.classList.toggle("visible", !!text);
-  // Publish the state the FIRST time the strip is shown, not only once
-  // the user has already clicked the chevron (PR #4 third re-review).
-  document.getElementById("ktHead").setAttribute("aria-expanded", strip.classList.contains("collapsed") ? "false" : "true");
-};
-
-/* The chevron is static markup (see #klausTranscript above), so it is
-   wired ONCE here rather than per-call. */
-document.getElementById("ktHead").addEventListener("click", function () {
-  const strip = document.getElementById("klausTranscript");
-  const head = document.getElementById("ktHead");
-  strip.classList.toggle("collapsed");
-  head.textContent =
-    (strip.classList.contains("collapsed") ? "▸" : "▾") + " Transcript";
-  // The glyph alone left the state typographic — invisible to a screen
-  // reader (PR #4 third re-review). Read off the class that actually
-  // decides it, never a second flag that could drift from it.
-  head.setAttribute("aria-expanded", strip.classList.contains("collapsed") ? "false" : "true");
-});
 
 post("boot");
 </script>

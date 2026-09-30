@@ -70,8 +70,10 @@ def save(value):
 K.write_config = save
 K._migrate_config()
 check("cloud profile changes to local native model", (store.get("embedding_provider"), store.get("embedding_model"), store.get("embedding_dimensions")) == ("ollama", "nomic-embed-text", 0))
-check("credentials and obsolete fields removed", not any(key in store for key in credentials + ("_embed_key_setup_declined", "assistant_model", "ocr_model", "transcription_model")))
-check("appearance library and D6 choices survive", all(store[k] == v for k, v in (("library_root", "/fixture/library"), ("color_theme", "rose"), ("transcription_binary", "/custom cli"), ("transcription_model_path", "/saved model.bin"), ("transcription_language", "fa"))))
+_TRANSCRIPTION_KEYS = ("transcription_model_path", "transcription_binary", "transcription_language")
+check("credentials and obsolete fields removed", not any(key in store for key in credentials + ("_embed_key_setup_declined", "assistant_model", "ocr_model", "transcription_model") + _TRANSCRIPTION_KEYS))
+check("K-314: the retired lecture-recording keys are in _LEGACY_KEYS_DROPPED", set(_TRANSCRIPTION_KEYS) <= set(K._LEGACY_KEYS_DROPPED))
+check("appearance and library choices survive", all(store[k] == v for k, v in (("library_root", "/fixture/library"), ("color_theme", "rose"))))
 store["embedding_model"] = "custom-local"
 store["endpoint"] = "http://localhost:12345"
 K._migrate_config()

@@ -355,9 +355,10 @@ def pages_digest(name: str) -> str:
     """blake2b over this PDF index's page hashes, in order — the key that
     ties a cached ranking to the page TEXT it was actually computed from.
 
-    None of the other keys can see a transcript (K-236): ``pdf_source_sig``
-    stamps ``contexts/<safe>.json``, which ``page_store.append_segment``
-    never touches, so a page whose said-text grew re-embeds (do_build's own
+    None of the other keys can see a page RECORD change (K-236):
+    ``pdf_source_sig`` stamps ``contexts/<safe>.json``, which a page record
+    write never touches (lecture transcripts did exactly that until K-314),
+    so a page whose text changed re-embeds (do_build's own
     ``idx.pages != keys`` check) while ``load_matches`` went on serving the
     old ranking against the new vectors.
 
@@ -412,7 +413,7 @@ def load_matches(
             return None
         if str(m.get("pages_digest") or "") != pages_digest(name):
             # The pages themselves moved under this ranking (a re-embed, a
-            # grown transcript, a pre-v2 payload with no digest at all).
+            # changed page record, a pre-v2 payload with no digest at all).
             return None
         if float(m.get("floor", -1.0)) != MATCH_FLOOR:
             # MATCH_FLOOR changed since this cache was written — a cache
@@ -822,12 +823,11 @@ def ensure_pdf_index(
         rows = page_store.page_texts(USER_FILES, safe, path, len(pages))   # (page, hash, text)
         keys = [(p, h) for p, h, _t in rows]
         # is_fresh() is NOT enough on its own (K-236): it stamps
-        # contexts/<safe>.json, and page_store.append_segment writes a page
-        # RECORD and never that file — so after a transcript lands the index
-        # reads as current and the page's stale hash sits there forever,
-        # which made D3's "a page whose transcript grew re-embeds alone"
-        # untrue. ensure_records is idempotent, so reading the page keys
-        # first costs one pass over the records and buys that sentence back.
+        # contexts/<safe>.json, and a page RECORD can change without that
+        # file (lecture transcripts did, until K-314) — the index would read
+        # as current with the page's stale hash. ensure_records is
+        # idempotent, so reading the page keys first costs one pass over
+        # the records.
         if pdf_index.is_fresh(idx, src_sig, sig) and idx.pages == keys:
             return idx
         if not any(t for _p, _h, t in rows):
@@ -841,7 +841,7 @@ def ensure_pdf_index(
                 old[p] = (h, list(mv[i * idx.dims:(i + 1) * idx.dims]))
         new_idx = pdf_index.PdfIndex(provider=sig[0], model=sig[1], pdf_name=safe, source_sig=src_sig, pages=keys,
                                      dims=(idx.dims if idx is not None and old else 0))
-        # Empty combined_text (a slide with no text layer and no transcript)
+        # Empty combined_text (a slide with no text layer)
         # is kept out of the provider entirely — some providers reject ""
         # outright — and gets the spec's zero vector instead (seeded below,
         # once dims is known); best_page's plain dot product then scores it

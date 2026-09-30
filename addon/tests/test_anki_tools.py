@@ -251,12 +251,11 @@ def _sp_make_dotpdf(raw_stem, safe, slide_pages, page_vecs, dims=2):
     return pdf_handler.pdf_path_for(_sp_dir, safe)
 
 
-# Lecture_A: page 2 (index 1) gets a page_store record with a transcript
-# segment, so its combined text differs from the raw slide text — proof
-# the hit's text came from page_store, not just pdf_handler.load_pages.
+# Lecture_A: page 2 (index 1) gets a page_store record whose slide text
+# differs from the context file's — proof the hit's text came from
+# page_store, not just pdf_handler.load_pages.
 _pathA = _sp_make("Lecture_A", ["Slide A1", "Slide A2"], [[1.0, 0.0], [0.0, 1.0]])
-page_store.ensure_records(_sp_dir, "Lecture_A", _pathA, ["Slide A1", "Slide A2"])
-page_store.append_segment(_sp_dir, "Lecture_A", _pathA, 1, 0.0, 1.0, "Said on page two")
+page_store.ensure_records(_sp_dir, "Lecture_A", _pathA, ["Slide A1", "Slide A2 from page_store"])
 # Lecture_B: no page_store record anywhere -> must fall back to slide text.
 _sp_make("Lecture_B", ["Slide B1"], [[0.0, 1.0]])
 # Extra.pdf: neither Lecture_A nor Lecture_B exercises _safe_basename doing
@@ -265,8 +264,7 @@ _sp_make("Lecture_B", ["Slide B1"], [[0.0, 1.0]])
 # discovered stem ("Extra.pdf") differs from its safe basename ("Extra") —
 # a page_store record keyed under the wrong one is silently invisible.
 _pathExtra = _sp_make_dotpdf("Extra.pdf", "Extra", ["Slide E1"], [[0.0, 1.0]])
-page_store.ensure_records(_sp_dir, "Extra", _pathExtra, ["Slide E1"])
-page_store.append_segment(_sp_dir, "Extra", _pathExtra, 0, 0.0, 1.0, "Said on page one")
+page_store.ensure_records(_sp_dir, "Extra", _pathExtra, ["Slide E1 from page_store"])
 
 # Stub the embedding call itself (no network, no API key, no paid call):
 # the query vector [0, 1] is engineered to win row 2 of Lecture_A (its
@@ -295,9 +293,9 @@ check("every fresh per-PDF index is scored and returned",
 _hitA, _hitB = _sp_hits.get("Lecture_A") or {}, _sp_hits.get("Lecture_B") or {}
 check("the hit's page is the argmax row's 1-based page (best_page, not "
       "the deleted best_chunk)", _hitA.get("page") == 2 and _hitB.get("page") == 1)
-check("a page WITH a page_store record returns its COMBINED text (slide + "
-      "transcript) — proves the fix reads page_store, not just slide text",
-      _hitA.get("text") == "Slide A2\n\nSaid on page two")
+check("a page WITH a page_store record returns that record's text — "
+      "proves the fix reads page_store, not the context file's slide text",
+      _hitA.get("text") == "Slide A2 from page_store")
 check("a page with NO page_store record falls back to the raw slide text",
       _hitB.get("text") == "Slide B1")
 
@@ -305,9 +303,9 @@ _hitExtra = _sp_hits.get("Extra.pdf") or {}
 check("Minor 5 fix-round-2 pin: pdf_path_for and page_store.load_record "
       "key off the SAME _safe_basename(name) do_build uses, even when the "
       "discovered stem itself still has a trailing .pdf — the hit's text "
-      "includes the transcript segment, proving load_record found the "
+      "is the page_store record's, proving load_record found the "
       "record under \"Extra\", not the raw \"Extra.pdf\"",
-      _hitExtra.get("text") == "Slide E1\n\nSaid on page one",
+      _hitExtra.get("text") == "Slide E1 from page_store",
       _hitExtra)
 
 section("writes need the human, every time")

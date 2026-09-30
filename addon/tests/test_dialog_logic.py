@@ -803,7 +803,6 @@ def _fn_src(name):
         if isinstance(node, _a.FunctionDef) and node.name == name:
             return _a.get_source_segment(_src2, node) or ""
     return ""
-check("Save preserves transcription settings", "save_transcription_settings()" in _fn_src("save_all"))
 check("connection check runs without collection", "without_collection().run_in_background()" in _fn_src("test_connection"))
 
 print("== changing the model re-indexes everything (K-152) ==")

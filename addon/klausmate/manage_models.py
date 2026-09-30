@@ -692,7 +692,7 @@ def manage_models_dialog(*_args: Any) -> None:
 
     keys_layout = _page(
         "Local models", "Local models",
-        "Choose models for matching cards and transcribing lectures.",
+        "Choose the model for matching cards.",
     )
     advanced_panel = QWidget()
     advanced_panel.setObjectName("AdvancedModelPanel")
@@ -781,49 +781,6 @@ def manage_models_dialog(*_args: Any) -> None:
     runtime_progress.setValue(0)
     download_controls.addWidget(runtime_progress)
 
-    transcription_model_path_edit = QLineEdit()
-    transcription_binary_edit = QLineEdit()
-    transcription_language_edit = QLineEdit()
-    transcription_browse_buttons = []
-
-    def browse_transcription_file(edit: QLineEdit, title: str) -> None:
-        from aqt.qt import QFileDialog
-        picker = QFileDialog(dlg, title)
-        picker.setFileMode(QFileDialog.FileMode.ExistingFile)
-        picker.fileSelected.connect(lambda path: (edit.setText(path), mark_dirty()))
-        picker.finished.connect(picker.deleteLater)
-        picker.open()
-
-    for edit, key, title, description in (
-        (transcription_model_path_edit, "transcription_model_path", "Transcription model",
-         "Select a downloaded whisper.cpp model file. Lecture audio stays local."),
-        (transcription_binary_edit, "transcription_binary", "Transcription executable",
-         "Optional whisper-cli path. Leave blank for automatic discovery."),
-    ):
-        edit.setObjectName(key)
-        edit.setMinimumWidth(220)
-        control = QWidget()
-        layout = QHBoxLayout(control)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(edit)
-        browse = QPushButton("Browse…")
-        browse.setObjectName(key + "_browse")
-        browse.clicked.connect(lambda _checked=False, field=edit, caption=title:
-                               browse_transcription_file(field, caption))
-        layout.addWidget(browse)
-        transcription_browse_buttons.append(browse)
-        _row(advanced_layout, title, description, control)
-    transcription_language_edit.setObjectName("transcription_language")
-    transcription_language_edit.setPlaceholderText("en")
-    _row(advanced_layout, "Transcription language", "Language code, such as en or fa.",
-         transcription_language_edit)
-
-    add_transcription = QPushButton("Choose transcription model…")
-    add_transcription.setObjectName("ChooseTranscriptionModel")
-    add_transcription.clicked.connect(lambda: browse_transcription_file(
-        transcription_model_path_edit, "Choose a whisper.cpp model"))
-    inventory_controls.addWidget(add_transcription)
-    transcription_browse_buttons.append(add_transcription)
     model_usage = QLabel()
     model_usage.setWordWrap(True)
     inventory_controls.addWidget(model_usage)
@@ -1624,22 +1581,6 @@ def manage_models_dialog(*_args: Any) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    def load_transcription_settings() -> None:
-        cfg = _pkg().get_config()
-        transcription_model_path_edit.setText(
-            str(cfg.get("transcription_model_path") or "")
-        )
-
-        transcription_binary_edit.setText(str(cfg.get("transcription_binary") or ""))
-        transcription_language_edit.setText(str(cfg.get("transcription_language") or "en"))
-
-    def save_transcription_settings() -> None:
-        cfg = _pkg().get_config()
-        cfg["transcription_model_path"] = transcription_model_path_edit.text().strip()
-        cfg["transcription_binary"] = transcription_binary_edit.text().strip()
-        cfg["transcription_language"] = transcription_language_edit.text().strip() or "en"
-        _pkg().write_config(cfg)
-
     _finish_nav("General", "Appearance", "Local models")
 
     outer.addWidget(models_page, 1)
@@ -1704,8 +1645,6 @@ def manage_models_dialog(*_args: Any) -> None:
         for w in (
             endpoint_edit, embed_model_edit, runtime_auto_cb,
             install_btn, refresh_models_btn, pull_btn, pull_model_edit, installed_models,
-            transcription_model_path_edit, transcription_binary_edit, transcription_language_edit,
-            *transcription_browse_buttons,
             index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
@@ -1735,7 +1674,6 @@ def manage_models_dialog(*_args: Any) -> None:
             endpoint_edit.setText(str(cfg.get("endpoint") or "http://127.0.0.1:11434"))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
             runtime_auto_cb.setChecked(bool(cfg.get("runtime_auto_setup", True)))
-            load_transcription_settings()
         finally:
             ui_state["syncing"] = False
         update_embed_status()
@@ -2403,7 +2341,6 @@ def manage_models_dialog(*_args: Any) -> None:
         save_embed()
         save_threshold()
         save_general()
-        save_transcription_settings()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
@@ -2569,7 +2506,6 @@ def manage_models_dialog(*_args: Any) -> None:
                 item = QListWidgetItem(name + "\n" + (" · ".join(purposes) or "Unknown type"))
                 item.setData(Qt.ItemDataRole.UserRole, (name, capabilities))
                 installed_models.addItem(item)
-            add_transcription_inventory()
             installed_models.blockSignals(False)
             if actual_endpoint != endpoint and endpoint_edit.text().strip() == endpoint:
                 endpoint_edit.setText(actual_endpoint)
@@ -2605,17 +2541,6 @@ def manage_models_dialog(*_args: Any) -> None:
         op = QueryOp(parent=dlg, op=work, success=done)
         op.failure(failed)
         op.without_collection().run_in_background()
-
-    def add_transcription_inventory() -> None:
-        for i in reversed(range(installed_models.count())):
-            if installed_models.item(i).data(Qt.ItemDataRole.UserRole) is None:
-                installed_models.takeItem(i)
-        path = Path(transcription_model_path_edit.text().strip())
-        if path.is_file():
-            installed_models.addItem(QListWidgetItem(path.name + "\nLecture transcription · whisper.cpp"))
-
-    transcription_model_path_edit.textChanged.connect(add_transcription_inventory)
-    add_transcription_inventory()
 
     def select_installed_model() -> None:
         item = installed_models.currentItem()
@@ -2693,9 +2618,6 @@ def manage_models_dialog(*_args: Any) -> None:
     # button lights up as you type, not only on focus-out.
     endpoint_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    transcription_model_path_edit.textEdited.connect(lambda _t: mark_dirty())
-    transcription_binary_edit.textEdited.connect(lambda _t: mark_dirty())
-    transcription_language_edit.textEdited.connect(lambda _t: mark_dirty())
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)

@@ -1,18 +1,17 @@
 # KlausMate: a lecture-PDF library with local card matching for Anki
 
-Klaus organizes lecture PDFs, matches them to cards using local Ollama
-embeddings, and records page-linked transcripts through whisper.cpp. Matching
+Klaus organizes lecture PDFs and matches them to cards using local Ollama
+embeddings. Lecture recording lives in the Klaus app, not the add-on. Matching
 and duplicate detection use cosine thresholds. PDF viewing, annotations,
 retention scores and image cropping remain part of the add-on.
 See the [user guide](klausmate/README.md) and [architecture guide](AGENTS.md).
 
-**Privacy:** Embeddings run against the configured local Ollama server; recording
-transcription runs through a local whisper.cpp executable. Runtime and model
-downloads use the network. An external MCP client can request lecture text,
-transcripts, images and card context, and its chosen model provider may receive
+**Privacy:** Embeddings run against the configured local Ollama server. Runtime
+and model downloads use the network. An external MCP client can request lecture
+text, images and card context, and its chosen model provider may receive
 that context. Local inference in Klaus does not make external-client processing
-local. See [configuration](klausmate/config.md), [embeddings](klausmate/embeddings.py),
-[transcription](klausmate/local_transcription.py) and [endpoint](klausmate/anki_endpoint.py).
+local. See [configuration](klausmate/config.md), [embeddings](klausmate/embeddings.py)
+and [endpoint](klausmate/anki_endpoint.py).
 
 ## What it does
 
@@ -53,12 +52,7 @@ and embedding model is `nomic-embed-text`.
    check **Embedding model**, then **Save**. Changing models offers a local
    re-index. **Update runtime**, **Stop managed server** and confirmed
    **Delete** manage runtime/model resources; progress is shown during downloads.
-3. For recording, separately install a compatible whisper.cpp CLI and model.
-   Set **Transcription model**, optionally **Transcription executable**, and
-   **Transcription language** (default `en`), then **Save**. An empty executable
-   path enables discovery. See the [whisper.cpp CLI instructions](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/README.md).
-   Klaus does not download the transcription executable or model for you.
-4. Optional external client: install a separate Python **3.9 or newer**, then
+3. Optional external client: install a separate Python **3.9 or newer**, then
    use **External clients → Copy configuration**. Merge the `klaus` entry into
    Claude Desktop's `mcpServers` configuration and restart that client. Keep
    Anki open with a profile loaded. The copied block uses absolute Python,
@@ -67,7 +61,7 @@ and embedding model is `nomic-embed-text`.
    Follow the [official local MCP setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
 `current_view` supplies view metadata; `current_page` supplies slide text,
-transcript, selection and an image when available. Collection writes require
+selection and an image when available. Collection writes require
 approval in Anki. Treat lecture content as untrusted input. The bridge is local;
 this is not a public endpoint or a direct ChatGPT connector. Real Claude Desktop
 and live Anki integration remain installation checks, not automated-test claims.
@@ -79,7 +73,6 @@ and implemented by [Preferences](klausmate/manage_models.py).
 
 - [embeddings.py](klausmate/embeddings.py), [ollama_client.py](klausmate/ollama_client.py),
   [ollama_runtime.py](klausmate/ollama_runtime.py), [ollama_setup.py](klausmate/ollama_setup.py): local embedding/runtime management.
-- [local_transcription.py](klausmate/local_transcription.py) and [lecture_recorder.py](klausmate/lecture_recorder.py): local audio transcription and page attachment.
 - [anki_endpoint.py](klausmate/anki_endpoint.py) and [mcp_stdio_bridge.py](klausmate/scripts/mcp_stdio_bridge.py): authenticated local tools and external-client bridge.
 - [config.json](klausmate/config.json) and [config.md](klausmate/config.md): defaults and reference.
 - [package.sh](scripts/package.sh): stages only `klausmate/`, updates manifest build

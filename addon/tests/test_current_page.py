@@ -18,7 +18,6 @@ with tempfile.TemporaryDirectory() as root:
                'params':{'name':'current_page','arguments':{}}}, None)[1]['result']
     a = str(Path(root) / 'A.pdf')
     ps.ensure_records(root, 'A', a, ['first', 'slide A'])
-    ps.append_segment(root, 'A', a, 1, 0, 1, 'spoken A')
     png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=')
     ps.store_page_png(root, 'A', a, 1, png)
     vc.report_document(1, 'A', 'Lecture A', a, 2)
@@ -26,7 +25,7 @@ with tempfile.TemporaryDirectory() as root:
     out = call()
     check('tool succeeds', not out['isError'])
     text = out['content'][0]['text']
-    check('current metadata and text', all(s in text for s in ('Lecture A', 'slide A', 'spoken A', 'selected A')))
+    check('current metadata and text', all(s in text for s in ('Lecture A', 'slide A', 'selected A')))
     check('native MCP image', any(b.get('type') == 'image' and b.get('mimeType') == 'image/png' and base64.b64decode(b['data']) == png for b in out['content']))
     check('one-based metadata', json.loads(text)['page'] == 2 and json.loads(text)['count'] == 2)
     check('current_view unchanged', end.handle('klausCurrentView', {}, False)['result'] == {'pdf':'A','display':'Lecture A','page':2,'count':2,'selection':'selected A'})
@@ -40,7 +39,7 @@ with tempfile.TemporaryDirectory() as root:
         return png
     ps.render_page_png = render
     out = call(); text = out['content'][0]['text']
-    check('switch has no previous content', 'slide B' in text and 'spoken A' not in text and 'selected A' not in text)
+    check('switch has no previous content', 'slide B' in text and 'slide A' not in text and 'selected A' not in text)
     check('render keeps captured view', 'Lecture B' in text and 'Lecture C' not in text and renders == [(str(Path(root)/'B.pdf'), 0)])
     def failed(*args): raise RuntimeError('render failed')
     ps.render_page_png = failed

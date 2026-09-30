@@ -4,22 +4,21 @@
 
 The approved [local-model reversion](docs/superpowers/specs/2026-09-18-local-model-reversion-design.md)
 is implemented locally as of 2026-09-19: D1-D3 removed the subscription service,
-reasoning judge and embedded assistant; D4 restores managed Ollama embeddings,
-D6 supplies whisper.cpp transcription, and D5 exposes context through a local
-stdio MCP bridge. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
+reasoning judge and embedded assistant; D4 restores managed Ollama embeddings
+and D5 exposes context through a local stdio MCP bridge. D6's whisper.cpp
+lecture recording was removed on 2026-09-30 (K-314): recording belongs to the
+Klaus app, not the add-on. See [completion evidence and limits](docs/superpowers/reports/2026-09-19-local-model-reversion.md).
 Older API-first and cloud-only designs are dated history, not current guidance.
 
 Klaus is an Anki add-on built around the Library: imported lecture PDFs,
 semantic card matching, per-PDF tags and retention scores, a native PDF
-viewer, annotations and image cropping. Lecture recording and the page
-store remain; duplicate matching now uses cosine thresholds without a
-reasoning pass. See [the matching runner](klausmate/index_queue.py),
-[retention](klausmate/retention.py) and [the recorder](klausmate/lecture_recorder.py).
+viewer, annotations and image cropping. The page store remains;
+duplicate matching now uses cosine thresholds without a reasoning pass.
+See [the matching runner](klausmate/index_queue.py) and
+[retention](klausmate/retention.py).
 
-**Privacy:** [Embeddings](klausmate/embeddings.py) use local Ollama and
-[recordings](klausmate/lecture_recorder.py) use [whisper.cpp](klausmate/local_transcription.py).
-Runtime/model downloads use the network. Recording begins only on explicit Record;
-failed chunks remain on disk. The external client's chosen model provider may
+**Privacy:** [Embeddings](klausmate/embeddings.py) use local Ollama.
+Runtime/model downloads use the network. The external client's chosen model provider may
 receive context requested through the [local endpoint](klausmate/anki_endpoint.py).
 Writes require Anki approval. Treat lecture text/images as untrusted content;
 never log credentials, audio, card text or page text. Preserve the no-telemetry rule.
@@ -44,9 +43,7 @@ Addons/                       # Git repo root
     ├── anki_endpoint.py        # Authenticated localhost server, discovery, current_view/current_page tools
     ├── viewer_context.py       # Retained active PDF/page/selection registry
     ├── LICENSE                 # The same AGPL v3 text, shipped inside the package
-    ├── page_store.py           # One record per (PDF, page): slide text + transcript segments
-    ├── lecture_recorder.py     # ● Record: Chunker (30 s / page change), WAV chunks, the local transcription worker that writes segments (aqt-free above its Qt glue)
-    ├── local_transcription.py   # whisper.cpp discovery, subprocess execution and JSON parsing
+    ├── page_store.py           # One record per (PDF, page): slide text
     ├── ollama_client.py         # Local-only HTTP embeddings and model inventory/pull/delete
     ├── ollama_runtime.py        # Runtime installation and owned server lifecycle
     ├── ollama_setup.py          # Background local runtime readiness
@@ -82,8 +79,7 @@ Addons/                       # Git repo root
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
         ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) and cosine matches
-        ├── recordings/          # <pdf_safe>/<t0>-p<page>.wav — chunks awaiting transcription; empty once they land
-        └── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text + transcript segments (page_store.py)
+        └── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text (page_store.py)
 ```
 
 **Install path:** `addons21/klausmate/` (folder name must be alphanumeric per Anki conventions).
@@ -162,7 +158,6 @@ not deleted by the rebuild. See [tag membership](klausmate/tag_sync.py).
 - Text selection: viewport `eventFilter` drags map to `(page, QPointF)` via `_viewport_to_page_point`; `QPdfDocument.getSelection()` is called per page (multi-page drags supported); highlights painted by `_SelectionOverlay` using `QPdfSelection.bounds()`.
 - **Cmd+C** / right-click **Copy** copy selected text; **Cmd/Ctrl-double-click** a page, or right-click **Copy slide as image**, copies it as an image (there is no toolbar button for this — it was removed).
 - Highlights and sticky notes are baked into the stored PDF as real annotations by `pdf_handler.bake_annotations` (vendored `pypdf`).
-- **Transcript strip** (2026-09-17): a collapsible readout under the page showing what was *said* over it (the page record's `segments`, never its slide text). Native = a NoFocus Qt strip; pdf.js = a docked footer outside `#pages`, pushed as `klausSetTranscript` and re-pushed on the page's ready signal. It refreshes on a page change and on `page_store.subscribe`; that notification arrives on the transcription worker thread, so `_on_page_store_notify` defers its whole body through `_run_on_main`.
 
 ### Editor-side PDF panel
 
@@ -192,7 +187,7 @@ The embedded assistant, its process host and session store were removed
 in D3 (2026-09-19). [Endpoint](klausmate/anki_endpoint.py) remains with
 AnkiConnect-compatible actions and MCP over HTTP. Its existing
 `current_view` tool already reads [viewer_context](klausmate/viewer_context.py).
-The page store still owns text, transcripts and rendering. D5 implements `current_page` with text and an image when available, private
+The page store still owns text and rendering. D5 implements `current_page` with text and an image when available, private
 `user_files/mcp_connection.json` discovery and the standalone
 `scripts/mcp_stdio_bridge.py` for an external client. Preferences copies a
 token-free config using a separate Python 3.9+ interpreter. Discovery is published
@@ -231,17 +226,11 @@ dashboard.setup()                                                   # Control-Ce
 window_chrome.setup()                                               # KlausBook chrome for Add/Browse/Stats/reviewer-bar (independent try/except)
 gui_hooks.profile_will_close.append(_stop_endpoint_on_profile_close)  # stop the retained endpoint
 lecture_view.setup()                                                # review-time Lecture dock (independent try/except)
-gui_hooks.profile_did_open.append(_start_lecture_uploader)          # the profile's one lecture_recorder.Uploader
-gui_hooks.profile_will_close.append(_stop_lecture_uploader)         # stops every _active_recorders entry FIRST, then the uploader
 ```
 
 The retained endpoint hooks are `_start_klaus_endpoint` on profile open
 and `_stop_endpoint_on_profile_close` on profile close. There is no
 assistant teardown or reopen hook. See [bootstrap](klausmate/__init__.py).
-
-`_stop_lecture_uploader` stops every live `Recorder` before it stops the
-uploader, not after: a recorder mid-chunk enqueues into that worker, so
-tearing the queue down first orphans the WAV it was about to hand over.
 
 `heatmap.setup()` adds four of its own:
 `deck_browser_will_render_content` (the panel HTML into `content.stats`),
@@ -348,9 +337,8 @@ wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
 - Key docs: `klausmate/config.md`
 
 The current [defaults](klausmate/config.json), [configuration reference](klausmate/config.md)
-and [migration](klausmate/__init__.py) select Ollama, native vector dimensions and
-local transcription paths. Migration removes retired cloud credentials, Plus,
-judge and dock settings. The local migration marker preserves later model choices.
+and [migration](klausmate/__init__.py) select Ollama and native vector dimensions. Migration removes retired cloud credentials, Plus,
+judge, dock and transcription settings. The local migration marker preserves later model choices.
 General and appearance keys retain their existing roles.
 
 Use `patch_config` for narrow config updates and background writers; it
@@ -369,7 +357,6 @@ runtime keys. See [configuration helpers](klausmate/__init__.py).
 | `pypdf` 6.11.0 | Vendored under `klausmate/vendor/`; the sole vendored third-party Python dependency |
 | `PyQt6.QtPdf` / `PyQt6.QtPdfWidgets` | Anki's PyQt6 (PDF viewer; graceful fallback if missing) |
 | Ollama | Managed local runtime; no cloud embedding fallback |
-| whisper.cpp | User-installed local executable and model |
 | External MCP client | Separate client connects through a stdio bridge while Anki runs |
 
 The rebuild uses stdlib HTTP/subprocess code without third-party Python
@@ -426,7 +413,7 @@ mypy klausmate
 ## Code conventions (this project)
 
 - Prefer **gui_hooks** over monkey-patching.
-- Background work: always `QueryOp` / `without_collection()` for network calls (including local Ollama HTTP calls); UI updates via `mw.taskman.run_on_main` when needed. The lecture recorder's uploader is the one exception and a deliberate one; a plain daemon thread with a FIFO queue, because it must outlive any single dialog or dock and survive a failed chunk; anything it hands back to Qt (`on_segment`, `page_store.subscribe`) is the CONSUMER's job to marshal.
+- Background work: always `QueryOp` / `without_collection()` for network calls (including local Ollama HTTP calls); UI updates via `mw.taskman.run_on_main` when needed.
 - Import Qt from `aqt.qt`; QtPdf from `PyQt6.QtPdf` behind try/except (`pdf_viewer.py`).
 - Editor-attached state via attributes — see "Editor-attached state" above.
 - When adding config keys: update `config.json`, `config.md`, and the relevant section of `manage_models.py`.
@@ -459,8 +446,8 @@ embedded assistant that followed was itself removed in D3 on 2026-09-19.
 Historical note, 2026-09-15: the API-first turn removed Ollama and OCR
 and introduced page records, page-level vectors and cloud adapters.
 Reverted by the approved 2026-09-18 local-model design: D1-D3 have removed
-Plus, the judge and assistant; D4 restores managed Ollama, D6 replaces
-transcription, and D5 exposes the retained endpoint. OCR and Voyage are
+Plus, the judge and assistant; D4 restores managed Ollama, D6's local
+transcription came and went (removed in K-314), and D5 exposes the retained endpoint. OCR and Voyage are
 not part of the approved restoration. The superseded specs retain the
 original design history.
 

@@ -367,8 +367,7 @@ def _page_content(view, ctx, include_image, pages=None):
             pass
     text = {"pdf": view.pdf_safe, "display": view.display,
             "page": view.page_index + 1, "count": view.page_count,
-            "selection": view.selection, "slide_text": slide_text,
-            "transcript": "\n".join(str(segment.get("text") or "") for segment in record.get("segments", []))}
+            "selection": view.selection, "slide_text": slide_text}
     png = None
     if include_image:
         png = page_store.cached_page_png(user_files, view.pdf_safe, view.path, view.page_index)
@@ -441,7 +440,7 @@ ACTIONS: dict[str, Action] = {a.name: a for a in (
            "\"quoted phrases\") use klausSearchNotes instead.",
            _obj({"query": {"type": "string"}, "limit": LIMIT_SCHEMA}, ("query",)), False, _a_klaus_search_notes_semantic,
            background=True),
-    Action("klausCurrentPage", "current_page", "Read the active PDF page, selection, slide text and transcript. Set include_image=false for text only. Use the returned pdf and page for card sources.", _obj({"include_image": {"type": "boolean", "default": True}}), False, _a_klaus_current_page),
+    Action("klausCurrentPage", "current_page", "Read the active PDF page, selection and slide text. Set include_image=false for text only. Use the returned pdf and page for card sources.", _obj({"include_image": {"type": "boolean", "default": True}}), False, _a_klaus_current_page),
     Action("klausGetPage", "get_page", "Read a specific imported lecture page without changing the viewer. Images are opt-in. Use pdf IDs from current_page or lecture search, not filesystem paths.", _obj({"pdf_id": {"type": "string", "minLength": 1}, "page": {"type": "integer", "minimum": 1}, "include_image": {"type": "boolean", "default": False}}, ("pdf_id", "page")), False, _a_klaus_get_page),
     Action("klausCurrentView", "current_view", "What the user is viewing right now.", _obj({}), False, _a_klaus_current_view),
 )}

@@ -1,12 +1,10 @@
 """Tests for klausmate.page_store (K-221, Task 1 of the page-store-and-
 api-clients plan).
 
-One record per (PDF, page): slide text plus transcript segments, keyed by
-a path+size+mtime digest so a replaced PDF gets a fresh directory. Covers
-digest/path derivation, ensure_records' idempotent slide-text refresh that
-never touches segments, append_segment's time-ordered merge, combined_text/
-text_hash, page_texts for the index, corrupt-record tolerance, and the
-subscribe/unsubscribe notification contract.
+One record per (PDF, page): its slide text, keyed by the document's
+identity so a replaced PDF gets a fresh directory. Covers digest/path
+derivation, ensure_records' idempotent slide-text refresh, combined_text/
+text_hash, page_texts for the index, and corrupt-record tolerance.
 
 render_page_png (QtPdf, below the module's aqt-free divider) is covered at
 the bottom, against a real one-page PDF. That check moved here from
@@ -42,49 +40,32 @@ check("record_path lands under pages/<safe>/<digest>/<page:04d>.json",
 os.utime(pdf, (1, 1))
 check("a changed mtime is a new directory", ps.digest12(pdf) != d)
 
-section("ensure_records fills slide text once, never touches segments")
+section("ensure_records fills slide text once")
 n = ps.ensure_records(root, "lec", pdf, ["Slide one text", "", "Slide three"])
 check("one record per page, three written", n == 3)
 rec = ps.load_record(root, "lec", pdf, 0)
-check("slide_text stored, no segments, version 1",
-      rec["slide_text"] == "Slide one text" and rec["segments"] == [] and rec["version"] == 1)
-ps.append_segment(root, "lec", pdf, 0, 0.0, 30.0, "the lecturer said this")
+check("slide_text stored, version 1",
+      rec["slide_text"] == "Slide one text" and rec["version"] == 1)
 n2 = ps.ensure_records(root, "lec", pdf, ["Slide one text", "", "Slide three"])
 rec = ps.load_record(root, "lec", pdf, 0)
-check("ensure_records is idempotent for unchanged text — no rewrite, segment survives",
-      n2 == 0 and rec["slide_text"] == "Slide one text" and len(rec["segments"]) == 1)
+check("ensure_records is idempotent for unchanged text — no rewrite",
+      n2 == 0 and rec["slide_text"] == "Slide one text")
 
 section("combined_text and text_hash")
-check("combined_text is slide text, blank line, segments in time order",
-      ps.combined_text(rec) == "Slide one text\n\nthe lecturer said this")
+check("combined_text is the stripped slide text",
+      ps.combined_text({"slide_text": "  Slide one text \n"}) == "Slide one text")
 h1 = ps.text_hash(rec)
-ps.append_segment(root, "lec", pdf, 0, 30.0, 60.0, "and then this")
-rec2 = ps.load_record(root, "lec", pdf, 0)
-check("a new segment changes the hash; 16 hex chars", ps.text_hash(rec2) != h1 and len(h1) == 16)
-check("segments keep time order even when appended out of order",
-      ps.combined_text(ps.append_segment(root, "lec", pdf, 0, 10.0, 20.0, "middle")).split("\n\n")[1]
-      == "the lecturer said this\nmiddle\nand then this")
-rec2 = ps.load_record(root, "lec", pdf, 0)  # refresh: the "middle" append above changed page 0 on disk
+check("text_hash is 16 hex chars and follows the text",
+      len(h1) == 16 and ps.text_hash({"slide_text": "other"}) != h1)
 
 section("page_texts for the index")
 rows = ps.page_texts(root, "lec", pdf, 3)
 check("one row per page, 1-based, (page, hash, text); empty page has empty text",
-      [r[0] for r in rows] == [1, 2, 3] and rows[1][2] == "" and rows[0][1] == ps.text_hash(rec2))
+      [r[0] for r in rows] == [1, 2, 3] and rows[1][2] == "" and rows[0][1] == ps.text_hash(rec))
 
-section("corrupt record reads as empty, subscribe notifies")
+section("corrupt record reads as empty")
 open(ps.record_path(root, "lec", pdf, 2), "w").write("{not json")
 check("corrupt → empty record, no exception", ps.load_record(root, "lec", pdf, 2)["slide_text"] == "")
-seen = []
-unsub = ps.subscribe(lambda safe, page: seen.append((safe, page)))
-ps.append_segment(root, "lec", pdf, 1, 0.0, 1.0, "x")
-unsub()
-ps.append_segment(root, "lec", pdf, 1, 1.0, 2.0, "y")
-check("subscriber saw exactly the one append before unsubscribe", seen == [("lec", 1)])
-def _boom(*a): raise RuntimeError("boom")
-ps.subscribe(_boom)
-ps.append_segment(root, "lec", pdf, 1, 2.0, 3.0, "z")
-check("a raising subscriber is logged, never breaks the append",
-      len(ps.load_record(root, "lec", pdf, 1)["segments"]) == 3)
 
 section("text_digest: the document's own identity (PR1 review fix)")
 check("12 hex chars, like digest12",
@@ -100,7 +81,6 @@ id_root = tempfile.mkdtemp(prefix="klaus-pages-identity-")
 id_pdf = os.path.join(id_root, "orig.pdf")
 open(id_pdf, "wb").write(b"%PDF-1.4 original bytes")
 ps.ensure_records(id_root, "idpdf", id_pdf, ["Only page text"])
-ps.append_segment(id_root, "idpdf", id_pdf, 0, 0.0, 5.0, "spoken over it")
 dir_before = ps.record_dir(id_root, "idpdf", id_pdf)
 digest_before = ps.digest12(id_pdf)
 
@@ -112,15 +92,15 @@ check("a bake changes the legacy path-digest (so the pin actually exercises the 
       ps.digest12(id_pdf) != digest_before)
 check("...but record_dir still resolves to the SAME directory",
       ps.record_dir(id_root, "idpdf", id_pdf) == dir_before)
-check("...and the segment written before the bake is still there",
-      len(ps.load_record(id_root, "idpdf", id_pdf, 0)["segments"]) == 1)
+check("...and the record written before the bake is still there",
+      ps.load_record(id_root, "idpdf", id_pdf, 0)["slide_text"] == "Only page text")
 
 moved_pdf = os.path.join(id_root, "moved.pdf")
 os.rename(id_pdf, moved_pdf)
 check("a move (new path) resolves to the same directory too",
       ps.record_dir(id_root, "idpdf", moved_pdf) == dir_before)
-check("...segment still there under the new path",
-      len(ps.load_record(id_root, "idpdf", moved_pdf, 0)["segments"]) == 1)
+check("...record still there under the new path",
+      ps.load_record(id_root, "idpdf", moved_pdf, 0)["slide_text"] == "Only page text")
 
 section("a different pages list is a replaced document, not a refresh")
 n_replaced = ps.ensure_records(id_root, "idpdf", moved_pdf, ["Totally different content"])
@@ -129,8 +109,8 @@ new_dir = ps.record_dir(id_root, "idpdf", moved_pdf)
 check("...resolves to a FRESH directory (not the bake/move survivor above)",
       new_dir != dir_before)
 new_rec = ps.load_record(id_root, "idpdf", moved_pdf, 0)
-check("...whose page 0 has no segments — a different document, not a correction",
-      new_rec["segments"] == [] and new_rec["slide_text"] == "Totally different content")
+check("...whose page 0 holds the new text — a different document, not a correction",
+      new_rec["slide_text"] == "Totally different content")
 check("...and the OLD directory is left on disk, not deleted (delete_context's job)",
       os.path.isdir(dir_before))
 
@@ -147,8 +127,9 @@ with open(os.path.join(leg_dir, "0000.json"), "w", encoding="utf-8") as f:
 pointer_path = os.path.join(leg_root, "pages", "legpdf", "current")
 check("no pointer exists yet", not os.path.isfile(pointer_path))
 rec_legacy = ps.load_record(leg_root, "legpdf", leg_pdf, 0)
-check("the legacy record is visible through the new resolution",
-      rec_legacy["slide_text"] == "pre-existing Plan 1 text")
+check("the legacy record is visible through the new resolution, its "
+      "retired segments key dropped on read (K-314)",
+      rec_legacy["slide_text"] == "pre-existing Plan 1 text" and "segments" not in rec_legacy)
 check("...and reading it adopted the legacy dir: the pointer is now written",
       os.path.isfile(pointer_path)
       and open(pointer_path, encoding="utf-8").read().strip() == leg_digest)
@@ -248,7 +229,7 @@ if _ipf_module is not None:
           f"{_ipf_rec0}, {_ipf_rec1}")
 
 
-section("a legacy directory holding the SAME document migrates with its segments; a different document does not")
+section("a legacy directory holding the SAME document migrates with its records; a different document does not")
 _uf = tempfile.mkdtemp(prefix="klaus-pages-migrate-")
 _pdf = os.path.join(_uf, "lec.pdf")
 with open(_pdf, "wb") as _f:
@@ -258,20 +239,22 @@ _legacy_dir = os.path.join(_uf, ps.SUBDIR, "lec", ps.digest12(_pdf))
 os.makedirs(_legacy_dir)
 for _i, _text in enumerate(_pages):
     with open(os.path.join(_legacy_dir, f"{_i:04d}.json"), "w", encoding="utf-8") as _f:
-        json.dump({"slide_text": _text, "segments": [{"t0": 0.0, "t1": 1.0, "text": "said on slide"}] if _i == 0 else []}, _f)
+        # updated_at 0.0 marks the file written under the legacy name:
+        # page 0's text is unchanged, so ensure_records never rewrites it.
+        json.dump({"slide_text": _text, "updated_at": 0.0}, _f)
 ps.ensure_records(_uf, "lec", _pdf, ["Slide one", "Slide two"])  # same text, other whitespace
 check("the pointer now names the text digest", ps._read_pointer(_uf, "lec") == ps.text_digest(_pages))
 check("the legacy directory was renamed, not abandoned", not os.path.isdir(_legacy_dir))
-check("the segment recorded under the legacy name survives",
-      ps.load_record(_uf, "lec", _pdf, 0)["segments"] == [{"t0": 0.0, "t1": 1.0, "text": "said on slide"}])
+check("the record written under the legacy name survives, not re-seeded fresh",
+      ps.load_record(_uf, "lec", _pdf, 0) == {"slide_text": "Slide one", "updated_at": 0.0, "version": ps.VERSION})
 ps.ensure_records(_uf, "lec", _pdf, ["A different deck", "Entirely"])
-check("a different document repoints to a fresh directory with no inherited segments",
-      ps.load_record(_uf, "lec", _pdf, 0)["segments"] == [] and ps._read_pointer(_uf, "lec") == ps.text_digest(["A different deck", "Entirely"]))
+check("a different document repoints to a fresh directory",
+      ps.load_record(_uf, "lec", _pdf, 0)["slide_text"] == "A different deck" and ps._read_pointer(_uf, "lec") == ps.text_digest(["A different deck", "Entirely"]))
 check("the previous document's records are left on disk for delete_context",
       os.path.isdir(os.path.join(_uf, ps.SUBDIR, "lec", ps.text_digest(_pages))))
 shutil.rmtree(_uf, ignore_errors=True)
 
-section("an empty-slide_text legacy record (a transcript before the first index run) migrates, not orphaned (M-15)")
+section("an empty-slide_text legacy record migrates, not orphaned (M-15)")
 _uf2 = tempfile.mkdtemp(prefix="klaus-pages-emptytext-")
 _pdf2 = os.path.join(_uf2, "lec.pdf")
 with open(_pdf2, "wb") as _f:
@@ -279,20 +262,15 @@ with open(_pdf2, "wb") as _f:
 _pages2 = ["Real slide one", "Real slide two"]
 _legacy_dir2 = os.path.join(_uf2, ps.SUBDIR, "lec", ps.digest12(_pdf2))
 os.makedirs(_legacy_dir2)
-# Only page 1 has a record at all — as if a Plan 2 recorder had appended a
-# transcript segment to it before ANY index run ever seeded slide_text.
-# Page 0 has no record file yet. Both must be treated as "nothing to
-# disagree with", not a mismatch, or the segment is orphaned.
+# Only page 1 has a record at all, and its slide_text is empty — written
+# before ANY index run ever seeded slide_text. Page 0 has no record file
+# yet. Both must be treated as "nothing to disagree with", not a
+# mismatch, or the directory is orphaned.
 with open(os.path.join(_legacy_dir2, "0001.json"), "w", encoding="utf-8") as _f:
-    json.dump({"version": 1, "slide_text": "",
-               "segments": [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}],
-               "updated_at": 0.0}, _f)
+    json.dump({"version": 1, "slide_text": "", "updated_at": 0.0}, _f)
 ps.ensure_records(_uf2, "lec", _pdf2, _pages2)
 check("the legacy directory migrated onto the text digest, not left orphaned",
       not os.path.isdir(_legacy_dir2) and ps._read_pointer(_uf2, "lec") == ps.text_digest(_pages2))
-check("the segment recorded before the first index run survived the migration",
-      ps.load_record(_uf2, "lec", _pdf2, 1)["segments"]
-      == [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}])
 check("the real slide text from the index run is there too, on both pages",
       ps.load_record(_uf2, "lec", _pdf2, 0)["slide_text"] == "Real slide one"
       and ps.load_record(_uf2, "lec", _pdf2, 1)["slide_text"] == "Real slide two")
@@ -310,24 +288,23 @@ _old_dir3 = os.path.join(_base3, "oldhome0001")
 os.makedirs(_old_dir3)
 for _i, _text in enumerate(_pages3):
     with open(os.path.join(_old_dir3, f"{_i:04d}.json"), "w", encoding="utf-8") as _f:
-        json.dump({"slide_text": _text, "segments": []}, _f)
+        json.dump({"slide_text": _text}, _f)
 ps._write_pointer(_uf3, "lec3", "oldhome0001")
 # The migration target already has its OWN directory on disk (independent
 # content) — os.replace onto it would raise, and the old bug repointed
-# there anyway, orphaning old_dir's segments behind an unreachable pointer.
+# there anyway, orphaning old_dir's records behind an unreachable pointer.
 _td_dir3 = os.path.join(_base3, _td3)
 os.makedirs(_td_dir3)
+_td_rec3 = {"slide_text": "already here", "updated_at": 0.0}
 with open(os.path.join(_td_dir3, "0000.json"), "w", encoding="utf-8") as _f:
-    json.dump({"slide_text": _pages3[0],
-               "segments": [{"t0": 0.0, "t1": 1.0, "text": "already here"}]}, _f)
+    json.dump(_td_rec3, _f)
 ps.ensure_records(_uf3, "lec3", _pdf3, _pages3)
 check("the pointer stays on the current directory, not moved onto the pre-existing target",
       ps._read_pointer(_uf3, "lec3") == "oldhome0001")
 check("the current directory is untouched, not renamed away",
       os.path.isdir(_old_dir3))
 check("the pre-existing target directory's own record is untouched (no merge, no overwrite)",
-      json.load(open(os.path.join(_td_dir3, "0000.json")))["segments"]
-      == [{"t0": 0.0, "t1": 1.0, "text": "already here"}])
+      json.load(open(os.path.join(_td_dir3, "0000.json"))) == _td_rec3)
 check("reads still resolve through the (unmoved) pointer, seeing the old directory's own content",
       ps.load_record(_uf3, "lec3", _pdf3, 0)["slide_text"] == _pages3[0])
 shutil.rmtree(_uf3, ignore_errors=True)
@@ -337,7 +314,7 @@ section("a text-less (scanned) document is identified by its pristine bytes, not
 # Copilot, stacked PR #3: text_digest hashes what the pages SAY, so a deck
 # with no text layer hashes on its PAGE COUNT alone — two different scans
 # of the same length, re-imported under one safe name, shared a directory
-# and inherited each other's transcript. Identity for those is now the
+# and inherited each other's records. Identity for those is now the
 # pristine original's bytes (pdf_originals/<base>.pdf), which a bake never
 # writes and save_pdf drops on a re-ingest.
 _tl = tempfile.mkdtemp(prefix="klaus-pages-textless-")
@@ -347,8 +324,11 @@ _blank = [""]  # one page, no text layer at all
 check("text_digest alone cannot tell two one-page scans apart (the bug)",
       ps.text_digest([""]) == ps.text_digest([" \n "]))
 ps.ensure_records(_tl, "scan", _scan_a, _blank)
-ps.append_segment(_tl, "scan", _scan_a, 0, 0.0, 5.0, "said over scan A")
 _dir_a = ps.record_dir(_tl, "scan", _scan_a)
+# A text-less page has no slide text to recognise it by, so mark scan A's
+# record directly.
+with open(os.path.join(_dir_a, "0000.json"), "w", encoding="utf-8") as _f:
+    json.dump({"version": 1, "slide_text": "marker for scan A", "updated_at": 0.0}, _f)
 _id_a = ps._read_pointer(_tl, "scan")
 check("a text-less document is NOT keyed on its page-count text digest",
       _id_a != ps.text_digest(_blank) and len(_id_a) == 12
@@ -363,8 +343,9 @@ with open(_scan_a, "ab") as _f:
 os.utime(_scan_a, (1000, 1000))
 check("a text-less document keeps its identity after a bake changes its bytes",
       ps.document_identity(_tl, "scan", _scan_a, _blank) == _id_a)
-check("...so record_dir still resolves to the directory holding its transcript",
-      ps.record_dir(_tl, "scan", _scan_a) == _dir_a)
+check("...so record_dir still resolves to the directory holding its records",
+      ps.record_dir(_tl, "scan", _scan_a) == _dir_a
+      and ps.load_record(_tl, "scan", _scan_a, 0)["slide_text"] == "marker for scan A")
 
 # save_pdf drops the stale pristine when a PDF is re-ingested under the
 # same safe name, so the replacing scan is captured fresh.
@@ -375,10 +356,10 @@ check("a DIFFERENT text-less scan of the same page count gets a different identi
       _id_b != _id_a, f"{_id_a} vs {_id_b}")
 check("...its records land in their own directory",
       ps.record_dir(_tl, "scan", _scan_b) != _dir_a)
-check("...inheriting no segment from the scan it replaced",
-      ps.load_record(_tl, "scan", _scan_b, 0)["segments"] == [])
-check("...and the replaced scan's transcript is left on disk for delete_context",
-      json.load(open(os.path.join(_dir_a, "0000.json")))["segments"][0]["text"] == "said over scan A")
+check("...inheriting no record from the scan it replaced",
+      ps.load_record(_tl, "scan", _scan_b, 0)["slide_text"] == "")
+check("...and the replaced scan's record is left on disk for delete_context",
+      json.load(open(os.path.join(_dir_a, "0000.json")))["slide_text"] == "marker for scan A")
 shutil.rmtree(_tl, ignore_errors=True)
 
 section("a legacy path-digest directory of the SAME text-less file is still adopted (K-268)")
@@ -386,19 +367,17 @@ _lg = tempfile.mkdtemp(prefix="klaus-pages-textless-legacy-")
 _scan_c = _blank_pdf(os.path.join(_lg, "scan_c.pdf"), 400, 250)
 _leg_dir = os.path.join(_lg, ps.SUBDIR, "scanc", ps.digest12(_scan_c))
 os.makedirs(_leg_dir)
-# Pre-pointer scheme, and the only record is a transcript taken before any
-# index run — exactly where an early segment lives, and all-empty text.
+# Pre-pointer scheme, and the only record has all-empty text. Its
+# updated_at 0.0 marks it: the text is unchanged, so ensure_records never
+# rewrites it, and a freshly seeded record would carry the current time.
 with open(os.path.join(_leg_dir, "0000.json"), "w", encoding="utf-8") as _f:
-    json.dump({"version": 1, "slide_text": "",
-               "segments": [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}],
-               "updated_at": 0.0}, _f)
+    json.dump({"version": 1, "slide_text": "", "updated_at": 0.0}, _f)
 ps.ensure_records(_lg, "scanc", _scan_c, [""])
 check("the legacy directory migrated onto the pristine-bytes identity, not orphaned",
       not os.path.isdir(_leg_dir)
       and ps._read_pointer(_lg, "scanc") == ps.document_identity(_lg, "scanc", _scan_c, [""]))
-check("...carrying the transcript taken before the first index run",
-      ps.load_record(_lg, "scanc", _scan_c, 0)["segments"]
-      == [{"t0": 0.0, "t1": 2.0, "text": "spoken before indexing"}])
+check("...carrying the record written before the first index run",
+      ps.load_record(_lg, "scanc", _scan_c, 0)["updated_at"] == 0.0)
 check("a text-bearing document's identity is still exactly text_digest",
       ps.document_identity(_lg, "scanc", _scan_c, ["Real slide text"])
       == ps.text_digest(["Real slide text"]))
@@ -439,8 +418,6 @@ for _blank in ("", "   ", "\t\n"):
           _refuses(ps.record_dir, _ep, "ghost", _blank))
     check(f"record_path refuses a {_what} path",
           _refuses(ps.record_path, _ep, "ghost", _blank, 0))
-    check(f"append_segment refuses a {_what} path — no segment is written",
-          _refuses(ps.append_segment, _ep, "ghost", _blank, 0, 0.0, 1.0, "into the void"))
     check(f"...and no records directory was produced for a {_what} path — "
           "least of all the shared digest12(\"\") one",
           not os.path.isdir(_shared)
@@ -460,10 +437,9 @@ ps.ensure_records(_np, "lec", "", ["Slide one text"])
 check("ensure_records with no path keys on the TEXT — never on digest12(\"\")",
       ps._read_pointer(_np, "lec") == ps.text_digest(["Slide one text"])
       and not os.path.isdir(os.path.join(_np, ps.SUBDIR, "lec", ps.digest12(""))))
-ps.append_segment(_np, "lec", "", 0, 0.0, 1.0, "appended with no path")
 check("...and once that pointer exists the path is not consulted at all: the "
-      "segment lands in the document's own directory",
-      ps.load_record(_np, "lec", "", 0)["segments"][0]["text"] == "appended with no path"
+      "record is read from the document's own directory",
+      ps.load_record(_np, "lec", "", 0)["slide_text"] == "Slide one text"
       and ps.record_dir(_np, "lec", "")
       == os.path.join(_np, ps.SUBDIR, "lec", ps.text_digest(["Slide one text"])))
 

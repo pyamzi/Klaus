@@ -359,7 +359,7 @@ with open(os.path.join(d2, "manifest.json"), "w") as f:
     f.write("{}")
 # PR1 review fix: user_files/pages/<safe>/ (page_store.py) is a sibling
 # that delete_context never touched — a re-import under this same safe
-# basename would silently inherit a stranger's slide text and transcript.
+# basename would silently inherit a stranger's slide text.
 _dc_page_store = importlib.import_module("klausmate.page_store")
 _dc_page_store.ensure_records(tmp, "Lecture_1", os.path.join(tmp, "Lecture 1.pdf"),
                                ["slide text"])
@@ -712,50 +712,14 @@ if HAVE_RETENTION:
               "idx2" in _hr_built and _hr_built["idx2"].embedded_rows == 3
               and [p for p, _h in _hr_built["idx2"].pages] == [1, 2, 3])
 
-        # -- a TRANSCRIPT grows (K-236 / I5) ---------------------------
-        # page_store.append_segment writes the page RECORD and never
-        # contexts/<safe>.json, so the source signature — the only thing
-        # is_fresh() can see — does not move. do_build used to return at
-        # is_fresh before any hash was compared, which made D3's "a page
-        # whose transcript grew re-embeds alone" untrue: the new text was
-        # never embedded and the stale hash stayed on disk forever.
-        page_store = importlib.import_module("klausmate.page_store")
-        pdf_handler = importlib.import_module("klausmate.pdf_handler")
-        _hr_safe = pdf_handler._safe_basename("HR")
-        _hr_path = pdf_handler.pdf_path_for(_hr_tmp, _hr_safe) or ""
-        _hr_src_before = pdf_index.source_signature(_hr_tmp, "HR")
-        _hr_hash_before = dict(_hr_built["idx2"].pages)[3]
-        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 2, 0.0, 5.0,
-                                  "and this is what the lecturer said")
-        check("a transcript append does not move the context file's "
-              "signature — is_fresh() alone cannot see it",
-              pdf_index.source_signature(_hr_tmp, "HR") == _hr_src_before)
         retention.ensure_pdf_index(
             None, "HR",
             on_done=lambda idx: _hr_built.setdefault("idx3", idx),
             on_error=lambda e: _hr_errors.append(e),
         )
-        check("do_build harness: transcript build hit no error",
-              _hr_errors == [], str(_hr_errors))
-        check("a page whose TRANSCRIPT grew re-embeds ALONE — exactly one "
-              "text reaches the provider, and it is the page that changed",
-              len(_hr_provider.calls) == 3
-              and len(_hr_provider.calls[2]) == 1
-              and "lecturer said" in _hr_provider.calls[2][0],
-              str(_hr_provider.calls[2:]))
-        check("...and the index's stored hash for that page moves with it, "
-              "so the next build sees the page as current",
-              "idx3" in _hr_built
-              and dict(_hr_built["idx3"].pages)[3] != _hr_hash_before
-              and _hr_built["idx3"].embedded_rows == 3)
-        retention.ensure_pdf_index(
-            None, "HR",
-            on_done=lambda idx: _hr_built.setdefault("idx4", idx),
-            on_error=lambda e: _hr_errors.append(e),
-        )
         check("...and an unchanged rebuild still embeds NOTHING — the page "
               "comparison must not cost a re-embed on every open",
-              len(_hr_provider.calls) == 3, str(_hr_provider.calls[2:]))
+              len(_hr_provider.calls) == 2, str(_hr_provider.calls[2:]))
 
         # -- the matches cache follows the same pages (K-236 / I5b) -----
         _m_sig = ("ollama", "text-embedding-3-large")
@@ -766,18 +730,21 @@ if HAVE_RETENTION:
               "against are unchanged",
               retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
               is not None)
-        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 0, 5.0, 9.0,
-                                  "more words said over slide one")
+        # Change page one's text; the cache key below keeps passing the
+        # OLD source signature, so only the pages digest can see it.
+        _hr_pages[0] = "alpha page one REVISED"
+        with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+            json.dump({"pages": _hr_pages, "page_count": 3}, f)
         retention.ensure_pdf_index(
             None, "HR",
             on_done=lambda idx: _hr_built.setdefault("idx5", idx),
             on_error=lambda e: _hr_errors.append(e),
         )
-        check("...and goes COLD once a page re-embedded under it — every "
-              "other key (pdf_source_sig, the card digest, the signature) "
-              "is blind to a transcript, so without the pages digest "
-              "ensure_matches would serve the old ranking against the "
-              "new vectors",
+        check("...and goes COLD once a page re-embedded under it — with "
+              "every other key (pdf_source_sig, the card digest, the "
+              "signature) held fixed, only the pages digest can see it, "
+              "and without it ensure_matches would serve the old ranking "
+              "against the new vectors",
               retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
               is None)
         retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
@@ -893,7 +860,7 @@ if HAVE_RETENTION:
           "sent to the provider (Critical 2 fix-round-2 pin) ==")
     # Spec D3: "a page with empty combined_text gets a zero vector and never
     # wins best_page." A 3-page fixture whose middle page has no text at all
-    # (no slide text layer, no transcript) — page_store.combined_text("") for
+    # (no slide text layer) — page_store.combined_text("") for
     # that page, exactly the image-only-slide case the review reproduced.
     class _RecordingProvider:
         name = "ollama"
