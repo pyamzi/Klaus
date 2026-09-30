@@ -103,12 +103,46 @@ def _purge_stale_bytecode(addon_dir: str) -> None:
     importlib.invalidate_caches()
 
 
+_MIRROR: str | None = None
+
+
+def _scratch_mirror(addon_dir: str) -> str:
+    """A temp copy of the package made of symlinks, with an EMPTY user_files/.
+
+    klausmate/ is symlinked into Anki's addons21, and curation, retention
+    and anki_tools derive USER_FILES from `os.path.dirname(__file__)` at
+    import time — so a test that imports them and writes (drive_store,
+    library_map.json, pdf_index/prefs.json, contexts/*.txt) writes the
+    user's REAL Library. That happened on 2026-09-28 (test_library_sync).
+    Importing the package from this mirror makes every `__file__`-derived
+    path land in scratch by construction; no list of globals to patch.
+    """
+    import atexit
+    import shutil
+    import tempfile
+
+    root = tempfile.mkdtemp(prefix="klausmate-test-")
+    # rmtree unlinks the symlinks, it never descends into the real addon.
+    atexit.register(shutil.rmtree, root, True)
+    mirror = os.path.join(root, "klausmate")
+    os.mkdir(mirror)
+    for name in os.listdir(addon_dir):
+        if name not in ("user_files", "__pycache__"):
+            os.symlink(os.path.join(addon_dir, name), os.path.join(mirror, name))
+    os.mkdir(os.path.join(mirror, "user_files"))
+    return mirror
+
+
 def install_package_stub(addon_dir: str = ADDON) -> None:
-    """Make `import klausmate.<mod>` resolve to the working tree."""
+    """Make `import klausmate.<mod>` resolve to the working tree, with
+    USER_FILES in a fresh temp dir (see _scratch_mirror)."""
+    global _MIRROR
     _purge_stale_bytecode(addon_dir)
+    _MIRROR = _scratch_mirror(addon_dir)
     pkg = types.ModuleType("klausmate")
-    pkg.__path__ = [addon_dir]
+    pkg.__path__ = [_MIRROR]
     pkg.__package__ = "klausmate"
+    pkg.USER_FILES = os.path.join(_MIRROR, "user_files")
     sys.modules["klausmate"] = pkg
 
 
@@ -266,7 +300,7 @@ def install(addon_dir: str = ADDON) -> None:
     install_aqt_stubs()
 
 
-def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str = ADDON):
+def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str | None = None):
     """Execute klausmate/__init__.py as a module under REAL PyQt6 with the
     aqt/anki stubs in place, and point its USER_FILES at ``scratch``.
 
@@ -280,6 +314,11 @@ def exec_klausmate_under_qt(scratch_user_files: str, addon_dir: str = ADDON):
     import importlib.util
 
     from PyQt6 import QtCore, QtGui, QtWidgets
+
+    # The mirror, not ADDON: submodules __init__.py imports resolve through
+    # this path, and from the real dir curation.USER_FILES is the Library.
+    assert _MIRROR, "call install() first"
+    addon_dir = addon_dir or _MIRROR
 
     shim = types.ModuleType("aqt.qt")
     for mod in (QtCore, QtGui, QtWidgets):
