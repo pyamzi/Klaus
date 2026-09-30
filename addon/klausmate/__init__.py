@@ -2034,6 +2034,14 @@ except Exception as _e:
     print(f"[klausmate] browse retention setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    # K-307: Browse's sidebar draws Library tags by their real names.
+    from . import library_sidebar as _library_sidebar
+
+    _library_sidebar.setup()
+except Exception as _e:
+    print(f"[klausmate] library sidebar setup failed: {type(_e).__name__}: {_e}")
+
+try:
     from . import browse_toolkit as _browse_toolkit
 
     _browse_toolkit.setup_hooks()
