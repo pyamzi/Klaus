@@ -1390,6 +1390,40 @@ def muted_label_qss(night: bool, size_px: int = 11) -> str:
     return f"color: {c['text_muted']}; font-size: {size_px}px;"
 
 
+def status_bar_qss(night: bool) -> str:
+    """The status bar along the bottom of the main window and Browse
+    (VS Code's): chrome ground, a grey_light hairline on top, muted 11px
+    text, the progress chunk in the accent."""
+    c = palette(night)
+    return f"""
+    QWidget#KlausStatusBar {{
+        background-color: {c['chrome']};
+        border-top: 1px solid {c['grey_light']};
+    }}
+    QWidget#KlausStatusBar QLabel {{
+        color: {c['text_muted']};
+        font-size: 11px;
+        background: transparent;
+    }}
+    QWidget#KlausStatusBar QToolButton {{
+        background: transparent;
+        border: none;
+        color: {c['text_muted']};
+        padding: 0px 4px;
+    }}
+    QWidget#KlausStatusBar QProgressBar {{
+        background-color: {c['grey_light']};
+        border: none;
+        border-radius: 2px;
+        max-height: 4px;
+    }}
+    QWidget#KlausStatusBar QProgressBar::chunk {{
+        background-color: {c['blue']};
+        border-radius: 2px;
+    }}
+    """
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Anki-window builders (the KlausBook layer beyond the deck screen).
 # Consumed by window_chrome.py, gated on klausbook_design at the
