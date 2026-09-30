@@ -129,11 +129,32 @@ check(
     iq.queued_message("A", 0).startswith("KlausMate: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
-check(
-    "the bar's one button stops a run and clears a finished one",
-    iq.dock_button_label(iq.RunnerState(active=True)) == "Stop"
-    and iq.dock_button_label(iq.RunnerState(message="Indexed “X”.")) == "Dismiss",
-)
+section("the status bar's index task (status bar 4/6)")
+_tasks = importlib.import_module("klausmate.tasks")
+_tasks.run_on_main = lambda fn: fn()
+_tasks.clear()
+iq._report_task(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=3, total=10))
+_t = [t for t in _tasks.snapshot() if t.key == "index"]
+check("a running job is ONE cancellable index task with its progress",
+      len(_t) == 1 and _t[0].done == 3 and _t[0].total == 10 and _t[0].cancellable
+      and _t[0].label == iq.status_line(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=3, total=10)),
+      str(_t))
+_stopped = []
+_real_cancel_all = iq.cancel_all
+iq.cancel_all = lambda: _stopped.append(1)
+_tasks.clear()
+iq._report_task(iq.RunnerState(active=True, name="Anemia", label="Embedding PDF…", done=4, total=10))
+_tasks.cancel("index")
+iq.cancel_all = _real_cancel_all
+check("its ✕ stops the runner", _stopped == [1], str(_stopped))
+iq._report_task(iq.RunnerState(message="Anemia indexed"))
+_t = [t for t in _tasks.snapshot() if t.key == "index"]
+check("a finished run leaves its message", len(_t) == 1 and _t[0].message == "Anemia indexed", str(_t))
+_tasks.clear()
+iq._report_task(iq.RunnerState(message=iq.BUSY_WAIT_TEXT))
+check("a message with nothing running still reaches the bar",
+      [t.message for t in _tasks.snapshot() if t.key == "index"] == [iq.BUSY_WAIT_TEXT], str(_tasks.snapshot()))
+_tasks.clear()
 
 
 # ------------------------------------------------ signature change detection
@@ -1099,8 +1120,8 @@ check(
     "running; active=True would render a progress head ('Card index') and a "
     "Stop button for a job that has not started",
     iq.status_line(iq.state()) == iq.BUSY_WAIT_TEXT
-    and iq.dock_button_label(iq.state()) == "Dismiss",
-    f"{iq.status_line(iq.state())!r} / {iq.dock_button_label(iq.state())!r}",
+    and not iq.state().active,
+    f"{iq.status_line(iq.state())!r} / {iq.state().active!r}",
 )
 
 for _ in range(iq.BUSY_WAIT_POLLS + 2):
@@ -1111,8 +1132,8 @@ check(
     "a Dismiss button — the work is kept, but there is no run to Stop",
     "Another indexing run is still going" in _gave_up
     and "still waiting" in _gave_up
-    and iq.dock_button_label(iq.state()) == "Dismiss",
-    f"{_gave_up!r} / {iq.dock_button_label(iq.state())!r}",
+    and not iq.state().active,
+    f"{_gave_up!r} / {iq.state().active!r}",
 )
 pipe._busy = False
 
@@ -1161,19 +1182,9 @@ check(
     and "curation.ensure_index(" not in _drive_src,
 )
 check(
-    "...and the sidebar's Cancel drives the shared runner instead (K-308; "
-    "K-316 removed Re-embed: PDFs index themselves)",
-    "index_queue.cancel_all()" in _sidebar_src,
-)
-check(
-    "the sidebar footer renders the runner's own status_line, so the two "
-    "surfaces cannot describe one job differently",
-    "index_queue.status_line(" in _sidebar_src,
-)
-check(
-    "closing Browse does NOT cancel indexing: the footer only unsubscribes",
-    "index_queue.remove_listener" in _sidebar_src
-    and _sidebar_src.count("cancel_all") == 1,
+    "the sidebar no longer draws or stops indexing: the status bar does "
+    "(closing Browse can never cancel a run)",
+    "cancel_all" not in _sidebar_src and "status_line(" not in _sidebar_src,
 )
 
 
@@ -1245,10 +1256,11 @@ check(
     "_index_queue.setup()" in _init_src,
 )
 check(
-    "the status bar and the Library render the SAME text through the "
-    "same function — the dock has no wording of its own",
-    _iq_src.count("status_line(snapshot)") >= 1
-    and "dock_button_label(snapshot)" in _iq_src,
+    "the status bar's index task reads the runner's own status_line, and "
+    "the old dock is gone",
+    "status_line(state)" in _iq_src
+    and "_StatusDock" not in _iq_src and "dock_button_label" not in _iq_src
+    and "_render_dock" not in _iq_src,
 )
 
 _after_matches_fn = _fn(os.path.join(ADDON, "index_queue.py"), "after_matches")

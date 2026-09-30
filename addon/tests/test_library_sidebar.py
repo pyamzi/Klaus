@@ -300,16 +300,13 @@ check("a name clash at the root gets a new name, never an overwrite",
       and any(f.startswith("Lecture (") for f in os.listdir(root)), str(os.listdir(root)))
 check("each import starts the background scan", scans == [1, 1])
 
-section("footer: status line while indexing, and the Import button")
-iq = importlib.import_module("klausmate.index_queue")
+section("footer: only the Import button (indexing shows in the status bar)")
 ls.refresh_status = lambda: None
 footer = ls.Footer(types.SimpleNamespace())
 footer.show()
-footer.on_state(iq.RunnerState(active=True, kind="pdf", name="04-L-Intro to CBC", label="Embedding pages", done=3, total=10))
-check("indexing shows the runner's own status line",
-      footer.status_row.isVisible() and "04-L-Intro to CBC" in footer.status.text(), footer.status.text())
-footer.on_state(iq.RunnerState())
-check("idle hides it", not footer.status_row.isVisible())
+check("no status line and no ✕ in the footer any more",
+      not hasattr(footer, "status") and not hasattr(footer, "cancel")
+      and [b.text() for b in footer.findChildren(QtWidgets.QPushButton)] == ["Import PDFs…"])
 check("the button says what it does", footer.button.text() == "Import PDFs…")
 container = QtWidgets.QWidget()
 grid = QtWidgets.QGridLayout(container)

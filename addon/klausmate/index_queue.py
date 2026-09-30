@@ -34,15 +34,12 @@ its turn is dropped silently, checked at start time rather than trusting
 a delete path to call us.
 
 **Feedback is the shippable part.** Local embedding can take minutes, so a job must be visible
-and stoppable from wherever it was started. The Library has a status
-line and a Cancel button; the deck screen has neither, and a toast is
-not a progress display. So the runner publishes ONE ``RunnerState`` to
-every listener, rendered by ONE pure ``status_line()``: the Library
-paints it into its own status line, and ``_StatusDock`` — a thin
-bottom-docked bar on the main window, the ``lecture_view`` dock's
-pattern, visible on the deck screen, the overview and mid-review alike —
-paints it with a Stop button for everyone else. Same text, same Stop,
-two surfaces. Nothing is ever started silently: a single add tooltips
+and stoppable from wherever it was started, and a toast is not a
+progress display. So the runner publishes ONE ``RunnerState``, rendered
+by ONE pure ``status_line()``, and ``_report_task`` turns it into the
+``index`` task of the status bar (``tasks``/``status_bar``) at the
+bottom of the main window and Browse: progress bar, text, and ✕ to
+stop. Nothing is ever started silently: a single add tooltips
 and shows the bar, and a whole-library sweep asks first, in notes and
 PDFs, before spending anything.
 
@@ -165,9 +162,8 @@ def sweep_jobs(pdf_names: list[str]) -> list[tuple[str, str]]:
 
 
 class RunnerState(NamedTuple):
-    """One snapshot, published to every listener. The Library and the
-    status dock render THIS, through ``status_line`` below, so the two
-    surfaces cannot describe the same job differently."""
+    """One snapshot, published to every listener and to the status
+    bar's ``index`` task, which reads it through ``status_line`` below."""
 
     active: bool = False
     kind: str = ""
@@ -194,13 +190,6 @@ def status_line(state: RunnerState) -> str:
     if state.pending:
         head = f"{head}  ·  {state.pending} more queued"
     return head
-
-
-def dock_button_label(snapshot: RunnerState) -> str:
-    """The status bar carries ONE button, because a bar with two is a
-    toolbar: it stops the run while there is one, and clears the last
-    result when there is not."""
-    return "Stop" if snapshot.active else "Dismiss"
 
 
 def sweep_message(n_pdfs: int, n_notes: int, model: str) -> str:
@@ -237,32 +226,14 @@ def queued_message(name: str, ahead: int) -> str:
 
 try:
     from aqt import gui_hooks, mw
-    from aqt.qt import (
-        QDockWidget,
-        QHBoxLayout,
-        QLabel,
-        QMessageBox,
-        QPushButton,
-        Qt,
-        QTimer,
-        QWidget,
-    )
+    from aqt.qt import QMessageBox, QTimer
     from aqt.utils import tooltip
 except Exception:  # headless tests / partial environments
     gui_hooks = mw = None  # type: ignore[assignment]
-    QDockWidget = QHBoxLayout = QLabel = QMessageBox = None  # type: ignore[assignment]
-    QPushButton = Qt = QTimer = QWidget = None  # type: ignore[assignment]
+    QMessageBox = QTimer = None  # type: ignore[assignment]
 
     def tooltip(*_a: Any, **_k: Any) -> None:  # type: ignore[misc]
         pass
-
-
-# ``class _StatusDock(None)`` is a hard TypeError at IMPORT time, which
-# would take the whole runner down — queue, gates and all — on any
-# environment whose Qt surface is partial. Only the dock needs Qt, so
-# only the dock degrades: the base falls back to ``object`` and
-# ``_ensure_dock`` gates on ``QDockWidget`` still being None.
-_DockBase: Any = QDockWidget if QDockWidget is not None else object
 
 
 _queue = JobQueue()
@@ -271,11 +242,8 @@ _cancel: Any = None
 _seq = 0
 _state = RunnerState()
 _listeners: list[Callable[[RunnerState], None]] = []
-_dock: Any = None
-_hide_gen = 0
 _waits = 0
 
-IDLE_HIDE_MS = 8000
 BUSY_RETRY_MS = 1500
 BUSY_WAIT_POLLS = 40  # ~60s of waiting for Index Now before giving up
 BUSY_WAIT_TEXT = "Waiting for the current indexing run to finish…"
@@ -306,8 +274,8 @@ def pending_names() -> set[str]:
 
 
 def add_listener(fn: Callable[[RunnerState], None]) -> None:
-    """Subscribe a surface. The Library subscribes for the life of its
-    window; the dock is driven directly (it belongs to this module)."""
+    """Subscribe a surface (the Library's warning icons read the
+    runner through ``pending_names``; the status bar through ``tasks``)."""
     if fn not in _listeners:
         _listeners.append(fn)
 
@@ -326,15 +294,37 @@ def state() -> RunnerState:
 def _publish(new: RunnerState) -> None:
     global _state
     _state = new
-    try:
-        _render_dock(new)
-    except Exception as exc:
-        print(f"[klausmate] index status dock failed: {exc}")
+    _report_task(new)
     for fn in list(_listeners):
         try:
             fn(new)
         except Exception as exc:
             print(f"[klausmate] index listener failed: {exc}")
+
+
+def _report_task(state: RunnerState) -> None:
+    """The status bar's one ``index`` task: begun on the first active
+    snapshot (✕ = ``cancel_all``), updated while it runs, ended with the
+    runner's message. A message published with no run in progress (the
+    busy-wait text) is shown the same way, as a lingering end."""
+    try:
+        from . import tasks
+
+        running = any(t.key == "index" and not t.message for t in tasks.snapshot())
+        if state.active:
+            if running:
+                tasks.update("index", done=state.done, total=state.total, label=status_line(state))
+            else:
+                tasks.begin("index", status_line(state), cancel=cancel_all)
+                tasks.update("index", done=state.done, total=state.total)
+        elif state.message:
+            if not running:
+                tasks.begin("index", state.message)
+            tasks.end("index", state.message)
+        elif running:
+            tasks.end("index")
+    except Exception as exc:  # noqa: BLE001 - a report never breaks the run
+        print(f"[klausmate] index status report failed: {exc}")
 
 
 # ── entry points ─────────────────────────────────────────────────────────
@@ -920,133 +910,6 @@ def ask_card_index_confirm(parent: Any, text: str, answer: Callable[[bool], None
     box.open()
 
 
-# ── the status dock ──────────────────────────────────────────────────────
-
-
-class _StatusDock(_DockBase):  # type: ignore[misc]
-    """A thin bar across the bottom of the main window: what is being
-    indexed, how far along, and Stop.
-
-    A QDockWidget rather than an overlay child of ``mw`` because the
-    main window's centre is a webview and a plain child stacked over
-    QtWebEngine is a z-order gamble; the dock area is Qt's own managed
-    space, it survives every state change (deck browser, overview,
-    mid-review), and ``lecture_view`` already proves the pattern here.
-    Frameless and featureless — the user never docks, floats or closes
-    it; it appears when work starts and leaves when it is done.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(mw)
-        from . import theme
-
-        night = theme.night_mode()
-        c = theme.palette(night)
-        self.setObjectName("KlausIndexDock")
-        try:
-            self.setAllowedAreas(Qt.DockWidgetArea.BottomDockWidgetArea)
-            self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-            self.setTitleBarWidget(QWidget(self))
-            self.setStyleSheet(theme.dialog_qss(night))
-        except Exception as exc:
-            print(f"[klausmate] index dock chrome failed: {exc}")
-
-        body = QWidget(self)
-        try:
-            body.setObjectName("KlausIndexBar")
-            body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            body.setStyleSheet(
-                f"QWidget#KlausIndexBar {{ background-color: {c['bg']};"
-                f" border-top: 1px solid {c['grey_light']}; }}"
-            )
-        except Exception as exc:
-            print(f"[klausmate] index dock style failed: {exc}")
-        lay = QHBoxLayout(body)
-        lay.setContentsMargins(12, 5, 10, 5)
-        lay.setSpacing(10)
-        self.label = QLabel("", body)
-        try:
-            self.label.setStyleSheet(theme.muted_label_qss(night, 12))
-        except Exception:
-            pass
-        lay.addWidget(self.label, 1)
-        self.button = QPushButton("Stop", body)
-        self.button.setObjectName("SecondaryButton")
-        self.button.clicked.connect(_on_dock_button)
-        lay.addWidget(self.button, 0)
-        self.setWidget(body)
-
-    def show_state(self, snapshot: RunnerState) -> None:
-        self.label.setText(status_line(snapshot))
-        self.button.setText(dock_button_label(snapshot))
-
-
-def _on_dock_button() -> None:
-    """One button, two jobs: Stop while running, Dismiss when the bar is
-    only carrying the last result."""
-    if _current is not None:
-        cancel_all()
-    else:
-        _hide_dock()
-
-
-def _ensure_dock() -> Any:
-    global _dock
-    if _dock is not None:
-        return _dock
-    if mw is None or QDockWidget is None:
-        return None
-    _dock = _StatusDock()
-    try:
-        mw.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, _dock)
-    except Exception as exc:
-        print(f"[klausmate] index dock attach failed: {exc}")
-    return _dock
-
-
-def _render_dock(snapshot: RunnerState) -> None:
-    global _hide_gen
-    if not snapshot.active and not snapshot.message:
-        _hide_dock()
-        return
-    dock = _ensure_dock()
-    if dock is None:
-        return
-    dock.show_state(snapshot)
-    dock.show()
-    _hide_gen += 1
-    if not snapshot.active:
-        _hide_dock_later()
-
-
-def _hide_dock_later() -> None:
-    """A finished run leaves its result on screen briefly, then clears
-    itself — a failure does not (it stays until dismissed or superseded,
-    because it is the only place the reason is written)."""
-    if _state.active or not _state.message:
-        return
-    gen = _hide_gen
-
-    def go() -> None:
-        if gen == _hide_gen and _current is None:
-            _hide_dock()
-
-    try:
-        QTimer.singleShot(IDLE_HIDE_MS, go)
-    except Exception:
-        pass
-
-
-def _hide_dock() -> None:
-    global _hide_gen
-    _hide_gen += 1
-    if _dock is not None:
-        try:
-            _dock.hide()
-        except Exception:
-            pass
-
-
 # ── lifecycle ────────────────────────────────────────────────────────────
 
 
@@ -1054,18 +917,10 @@ def _on_profile_close(*_a: Any) -> None:
     """A job outlives its window but never its profile: the phases read
     the collection and write into ``user_files``, both of which are
     about to go away."""
-    global _dock
     try:
         cancel_all()
     except Exception as exc:
         print(f"[klausmate] index queue teardown failed: {exc}")
-    dock, _dock = _dock, None
-    if dock is not None:
-        try:
-            mw.removeDockWidget(dock)
-            dock.deleteLater()
-        except Exception as exc:
-            print(f"[klausmate] index dock teardown failed: {exc}")
 
 
 def setup() -> None:

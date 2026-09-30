@@ -237,8 +237,6 @@ from aqt.operations import QueryOp  # noqa: E402
 from aqt.qt import (  # noqa: E402
     QColor,
     QEvent,
-    QHBoxLayout,
-    QLabel,
     QObject,
     QPushButton,
     QStyle,
@@ -246,7 +244,6 @@ from aqt.qt import (  # noqa: E402
     QStyleOptionViewItem,
     Qt,
     QTimer,
-    QToolButton,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -521,56 +518,26 @@ class PdfDropFilter(QObject):
 
 
 class Footer(QWidget):
-    """Under the sidebar tree: the indexing status line (with ✕ to stop)
-    while something is indexing, and the Import PDFs… button."""
+    """Under the sidebar tree: the Import PDFs… button. Indexing progress
+    shows in the status bar (``status_bar``), not here."""
 
     def __init__(self, browser) -> None:
         super().__init__()
         self.setObjectName("klausmateLibraryFooter")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 6, 8, 6)
-        lay.setSpacing(4)
-        self.status_row = QWidget(self)
-        row = QHBoxLayout(self.status_row)
-        row.setContentsMargins(0, 0, 0, 0)
-        self.status = QLabel("", self.status_row)
-        self.status.setWordWrap(True)
-        self.cancel = QToolButton(self.status_row)
-        self.cancel.setText("✕")
-        self.cancel.setToolTip("Stop indexing")
-        self.cancel.setAutoRaise(True)
-        row.addWidget(self.status, 1)
-        row.addWidget(self.cancel)
-        self.status_row.hide()
         self.button = QPushButton("Import PDFs…", self)
-        lay.addWidget(self.status_row)
         lay.addWidget(self.button)
-        try:
-            from . import theme
-
-            self.status.setStyleSheet(theme.muted_label_qss(theme.night_mode(), 11))
-        except Exception as exc:  # noqa: BLE001
-            print(f"[klausmate] library footer theme failed: {exc}")
-
-        from . import index_queue, library_actions
+        from . import library_actions
 
         self.button.clicked.connect(lambda *_a: library_actions.pick_and_import(browser))
-        self.cancel.clicked.connect(lambda *_a: index_queue.cancel_all())
-        index_queue.add_listener(self.on_state)
-        self.destroyed.connect(lambda *_a: index_queue.remove_listener(self.on_state))
-        self.on_state(index_queue.state())
 
-    def on_state(self, state) -> None:
-        from . import index_queue
 
-        try:
-            self.status.setText(index_queue.status_line(state))
-            self.status_row.setVisible(bool(state.active))
-        except RuntimeError:
-            index_queue.remove_listener(self.on_state)  # the C++ side is gone
-            return
-        if state.finished or not state.active:
-            refresh_status()
+def _on_index_state(state) -> None:
+    """A PDF finished indexing (or the runner went idle): its warning
+    icon may be stale."""
+    if state.finished or not state.active:
+        refresh_status()
 
 
 def _install_footer(browser, sidebar) -> None:
@@ -620,6 +587,9 @@ def on_profile_will_close() -> None:
 
 
 def setup() -> None:
+    from . import index_queue
+
+    index_queue.add_listener(_on_index_state)
     gui_hooks.browser_will_show.append(on_browser_will_show)
     gui_hooks.operation_did_execute.append(on_operation_did_execute)
     gui_hooks.profile_will_close.append(on_profile_will_close)
