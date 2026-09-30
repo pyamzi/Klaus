@@ -23,8 +23,10 @@ sys.modules["klausmate"].get_config = lambda: {}
 ph = importlib.import_module("klausmate.pdf_handler")
 
 
-def make_world(tmp: str):
-    """A Library root with one mapped two-page PDF and one saved highlight."""
+def make_world(tmp: str, outside: bool = False):
+    """A Library root with one mapped two-page PDF and (by default) one
+    saved highlight. `outside` puts a non-Klaus highlight (like one drawn
+    in Preview) into the file."""
     uf = os.path.join(tmp, "user_files")
     root = os.path.join(tmp, "Library")
     os.makedirs(uf)
@@ -32,6 +34,13 @@ def make_world(tmp: str):
     w = ph.pypdf.PdfWriter()
     w.add_blank_page(width=612, height=792)
     w.add_blank_page(width=612, height=792)
+    if outside:
+        w.add_annotation(w.pages[0], ph._BakeHighlight(
+            rect=(50, 50, 150, 70),
+            quad_points=ph._BakeArray(ph._BakeFloat(v) for v in
+                                      (50, 70, 150, 70, 50, 50, 150, 50)),
+            highlight_color="ff0000", printing=True,
+        ))
     path = os.path.join(root, "Lecture.pdf")
     with open(path, "wb") as f:
         w.write(f)
@@ -51,7 +60,8 @@ def annots_in(path: str) -> int:
 
 def bake_paused(uf: str, action, at: str = "capture"):
     """Run a bake that pauses mid-way (`at`: right after the pristine
-    capture, or just before it creates its temp file), run `action` on
+    capture, or just before it creates its temp file, which is after the
+    carry scan), run `action` on
     the main thread while it is paused, then let it finish.
     Returns (bake result, report dict)."""
     paused, release = threading.Event(), threading.Event()
@@ -69,10 +79,10 @@ def bake_paused(uf: str, action, at: str = "capture"):
 
         ph._capture_pristine_stripped = slow
     else:
-        class _Uuid:  # the bake draws its tmp name after every read it makes
+        class _Uuid:  # the commit draws its tmp name after every read the bake makes
             @staticmethod
             def uuid4():
-                if sys._getframe(1).f_code.co_name == "bake_annotations":
+                if sys._getframe(1).f_code.co_name == "_commit_bake":
                     pause()
                 return real_uuid.uuid4()
 
@@ -115,7 +125,7 @@ with tempfile.TemporaryDirectory() as tmp:
     uf, root, old = make_world(tmp)
     new = os.path.join(root, "Renamed.pdf")
     ok, rep = bake_paused(
-        uf, lambda: ph.rename_mapped_file(uf, root, "Lecture", "Renamed")
+        uf, lambda: ph.rename_mapped_file(uf, root, "Lecture", "Renamed"), at="write"
     )
     check("rename during bake lands on new path",
           ok is True and not os.path.exists(old) and os.path.isfile(new)
@@ -139,20 +149,61 @@ with tempfile.TemporaryDirectory() as tmp:
     check("no temp file is left behind",
           not [f for d, _, fs in os.walk(root) for f in fs if f.endswith(".tmp")])
 
-section("a delete during the bake")
+section("a rename during the un-bake")
 with tempfile.TemporaryDirectory() as tmp:
     uf, root, old = make_world(tmp)
-    ok, rep = bake_paused(uf, lambda: ph.delete_context(uf, "Lecture"))
-    leftovers = [f for d, _, fs in os.walk(root) for f in fs]
-    check("delete during bake writes nothing",
-          ok is False and not os.path.exists(old) and leftovers == [],
-          f"ok={ok} exists={os.path.exists(old)} leftovers={leftovers}")
+    # Baked once, then every record is deleted: the next bake is an un-bake.
+    check("setup: the file carries one mark",
+          ph.bake_annotations(uf, "Lecture") and annots_in(old) == 1)
+    ph.save_annotations(uf, "Lecture", [])
+    new = os.path.join(root, "Renamed.pdf")
+    ok, rep = bake_paused(
+        uf, lambda: ph.rename_mapped_file(uf, root, "Lecture", "Renamed"), at="write"
+    )
+    check("rename during un-bake lands on new path",
+          ok is True and not os.path.exists(old) and os.path.isfile(new)
+          and annots_in(new) == 0 and rep.get("path") == new
+          and rep.get("stat") == ph.file_stat(new), f"ok={ok} {rep}")
 
+section("outside marks survive a rename during the bake")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp, outside=True)
+    new = os.path.join(root, "Renamed.pdf")
+    ok, rep = bake_paused(
+        uf, lambda: ph.rename_mapped_file(uf, root, "Lecture", "Renamed"), at="write"
+    )
+    check("a rename after the carry scan keeps the outside mark and adds ours",
+          ok is True and annots_in(new) == 2 and not os.path.exists(old), f"ok={ok}")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp, outside=True)
+    new = os.path.join(root, "Renamed.pdf")
+    ok, rep = bake_paused(
+        uf, lambda: ph.rename_mapped_file(uf, root, "Lecture", "Renamed")
+    )
+    check("a rename before the carry scan drops the bake, the file keeps the outside mark",
+          ok is False and os.path.isfile(new) and annots_in(new) == 1
+          and not [f for d, _, fs in os.walk(root) for f in fs if f.endswith(".tmp")],
+          f"ok={ok} n={annots_in(new) if os.path.isfile(new) else None}")
+
+section("a root with a trailing separator")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp)
+    os.makedirs(os.path.join(root, "W1"))
+    ph.move_mapped_file(uf, root, "Lecture", "W1")
+    ph._live_library_root = lambda: root + os.sep
+    ok, rep = bake_paused(
+        uf, lambda: ph.rename_mapped_folder(uf, root, "W1", "Week 1"), at="write"
+    )
+    new = os.path.join(root, "Week 1", "Lecture.pdf")
+    check("the bake temp file still sits in the root",
+          ok is True and annots_in(new) == 1, f"ok={ok} rep={rep}")
+
+section("a delete during the bake")
 with tempfile.TemporaryDirectory() as tmp:
     uf, root, old = make_world(tmp)
     ok, rep = bake_paused(uf, lambda: ph.delete_context(uf, "Lecture"), at="write")
     leftovers = [f for d, _, fs in os.walk(root) for f in fs]
-    check("delete just before the write drops the bake and its temp file",
+    check("delete during bake writes nothing",
           ok is False and not os.path.exists(old) and leftovers == [],
           f"ok={ok} exists={os.path.exists(old)} leftovers={leftovers}")
 

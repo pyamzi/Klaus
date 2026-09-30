@@ -1565,6 +1565,58 @@ def _atomic_replace_from(src_path: str, dest_path: str) -> None:
                 pass
 
 
+def _commit_bake(
+    user_files_dir: str,
+    name: str,
+    working: str,
+    had_working: bool,
+    carry_missed: bool,
+    write_tmp,
+    report: dict | None,
+) -> bool:
+    """The ONE commit tail of ``bake_annotations`` (bake and un-bake).
+
+    ``write_tmp(tmp)`` fills a hidden tmp file; then, under ``pdf_lock``,
+    the working path is resolved again and the tmp replaces it, so a
+    Library rename/move that landed mid-bake is followed instead of
+    forked. The tmp sits in the Library ROOT (same filesystem as every
+    subfolder), not beside the file: a folder rename mid-bake would
+    otherwise carry it away or remove its directory. Returns False —
+    writing nothing — when the file vanished meanwhile, or when the carry
+    scan could not read it (its outside marks would be silently lost);
+    the annotations JSON is intact and the next save bakes again.
+    """
+    base = _safe_basename(name)
+    root = _live_library_root()
+    root = os.path.normpath(root) if root else None
+    tmp_dir = (
+        root
+        if root and working.startswith(root + os.sep)
+        else os.path.dirname(working)
+    )
+    tmp = os.path.join(tmp_dir, f".{base}.pdf.{uuid.uuid4().hex}.tmp")
+    try:
+        write_tmp(tmp)
+        with pdf_lock(base):
+            final = _working_pdf_path(user_files_dir, name)
+            if had_working and (carry_missed or not os.path.isfile(final)):
+                # Deleted, or moved under the carry scan, while baking:
+                # writing now would resurrect it or drop outside marks.
+                print(f"[klausmate] bake dropped: {base} changed under it")
+                return False
+            os.replace(tmp, final)
+            if report is not None:
+                report["path"] = final
+                report["stat"] = file_stat(final)
+        return True
+    finally:
+        if os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 def _mark_klaus(anno, record: dict, suffix: str = "") -> None:
     """Stamp a pypdf annotation object with the Klaus /NM marker
     (K-077) — ``klausmate:<record id>``, plus a suffix for satellite
@@ -1728,6 +1780,9 @@ def bake_annotations(
         suppressed = load_suppressed(user_files_dir, name)
         carried: list[tuple[int, Any]] = []
         present_primary: set[str] = set()
+        # The file was there at the start but is not at the carry scan:
+        # a Library action moved it, so its outside marks are unknown.
+        carry_missed = had_working and not os.path.isfile(working)
         if os.path.isfile(working):
             try:
                 wreader = PdfReader(working)
@@ -1813,16 +1868,13 @@ def bake_annotations(
 
         if not native_to_bake and not carried:
             # Un-bake: nothing of anyone's to keep — pristine back.
-            _atomic_replace_from(pristine, working)
+            if not _commit_bake(
+                user_files_dir, name, working, had_working, carry_missed,
+                lambda tmp: shutil.copy2(pristine, tmp), report,
+            ):
+                return False
             if report is not None:
                 report["native_ids"] = []
-                try:
-                    st = os.stat(working)
-                    report["stat"] = (
-                        st.st_ino, st.st_mtime_ns, st.st_size
-                    )
-                except OSError:
-                    pass
             print(f"[klausmate] un-baked (restored pristine): {base}.pdf")
             return True
 
@@ -1949,36 +2001,15 @@ def bake_annotations(
                 _mark_klaus(sticky, hl, suffix=":note")
                 writer.add_annotation(page, sticky)
 
-        # The tmp sits in the Library ROOT (same filesystem as every
-        # subfolder), not beside the file: a folder rename mid-bake would
-        # otherwise carry it away or remove its directory.
-        root = _live_library_root()
-        tmp_dir = (
-            root
-            if root and working.startswith(root + os.sep)
-            else os.path.dirname(working)
-        )
-        tmp = os.path.join(tmp_dir, f".{base}.pdf.{uuid.uuid4().hex}.tmp")
-        try:
+        def write_tmp(tmp: str) -> None:
             with open(tmp, "wb") as f:
                 writer.write(f)
-            with pdf_lock(base):
-                final = _working_pdf_path(user_files_dir, name)
-                if had_working and not os.path.isfile(final):
-                    # Deleted (or moved away outside Klaus) while baking:
-                    # writing now would resurrect it. The finally drops tmp.
-                    print(f"[klausmate] bake dropped: {base} is gone")
-                    return False
-                os.replace(tmp, final)
-                if report is not None:
-                    report["path"] = final
-                    report["stat"] = file_stat(final)
-        finally:
-            if os.path.isfile(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+
+        if not _commit_bake(
+            user_files_dir, name, working, had_working, carry_missed,
+            write_tmp, report,
+        ):
+            return False
         if report is not None:
             report["native_ids"] = baked_ids_now
         print(
@@ -2204,8 +2235,9 @@ def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
         # Fingerprint of the file THIS scan reads (K-086): scans run on
         # threads and can complete out of order; the mirror discards a
         # result whose fingerprint no longer matches the file.
-        st = os.stat(working)
-        stat = (st.st_ino, st.st_mtime_ns, st.st_size)
+        stat = file_stat(working)
+        if stat is None:
+            return None
         reader = PdfReader(working)
         for pageno, pg in enumerate(reader.pages):
             ph, ox, oy = _page_frame(pg)
@@ -2655,10 +2687,7 @@ def mirror_foreign_annotations(
             # tick machinery always follows a change with a fresh pass.
             try:
                 working = _working_pdf_path(user_files_dir, name)
-                st = os.stat(working)
-                if (st.st_ino, st.st_mtime_ns, st.st_size) != tuple(
-                    scanned_stat
-                ):
+                if file_stat(working) != tuple(scanned_stat):
                     print(
                         f"[klausmate] stale mirror scan discarded "
                         f"for {name}"
