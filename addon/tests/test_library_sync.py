@@ -237,14 +237,25 @@ check("the empty PDF's tag was registered at its new place",
       "!Library::Renal::E1" in col.tags.tags and ts.get_stored_tag("e1") == "!Library::Renal::E1")
 check("settled", ts._plan(col, {}) == [], str(ts._plan(col, {})))
 
-section("apply: deleting a tag with cards asks; No restores, Yes trashes")
+section("a tag that vanished WITHOUT a sidebar delete is restored, never a prompt")
 asked, restored, trashed = [], [], []
 ts._ask = lambda text, on_yes, on_no: (asked.append(text), on_no())
 ts._reapply_missing = lambda col_, missing, cfg: restored.append(sorted(missing))
 col.tags.tags.discard("!Library::Onc::Leuk")
 ts.reconcile_from_tags(col)
+check("no delete prompt when the user deleted nothing (a sync caught mid-way, "
+      "Check Database, another add-on)", asked == [], str(asked))
+check("...the tag is put back instead", restored == [["leuk"]], str(restored))
+
+section("apply: deleting a tag in the sidebar asks; No restores, Yes trashes")
+del restored[:]
+ts.note_user_deleted(["!Library::Onc::Leuk"])
+ts.reconcile_from_tags(col)
 check("one prompt naming the PDF", len(asked) == 1 and "Leuk" in asked[0], str(asked))
 check("No restores the tag", restored == [["leuk"]], str(restored))
+ts.reconcile_from_tags(col)
+check("a delete is asked about once, not again on the next pass", len(asked) == 1, str(asked))
+ts.note_user_deleted(["!Library::Onc"])  # the folder tag: covers the PDFs under it
 
 pdf_drive = importlib.import_module("klausmate.pdf_drive")
 pdf_drive._move_to_trash = lambda path: trashed.append(path)
@@ -252,6 +263,22 @@ ts._ask = lambda text, on_yes, on_no: on_yes()
 ts.reconcile_from_tags(col)
 check("Yes sends the source PDF to the Trash", trashed == [os.path.join(root, "Onc", "leuk.pdf")], str(trashed))
 check("and the PDF is gone from the Library", not os.path.exists(os.path.join(UF, "contexts", "leuk.txt")))
+
+section("a reconcile waits for Klaus's own tag ops to land")
+ran = []
+_real_reconcile = ts.reconcile_from_tags
+ts.reconcile_from_tags = lambda c: ran.append(1)
+rescheduled = []
+_real_schedule = ts._schedule_reconcile
+ts._schedule_reconcile = lambda: rescheduled.append(1)
+ts.mw = types.SimpleNamespace(col=col)
+ts._own_ops["pending"] = 1
+ts._reconcile_now()
+check("while one of our ops is in flight it is put off, not run", ran == [] and rescheduled == [1])
+ts._own_ops["pending"] = 0
+ts._reconcile_now()
+check("...and runs once they have landed", ran == [1])
+ts.reconcile_from_tags, ts._schedule_reconcile = _real_reconcile, _real_schedule
 
 section("the live hook reacts to tag changes only")
 fired = []

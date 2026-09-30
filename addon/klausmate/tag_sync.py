@@ -660,6 +660,13 @@ def _cfg() -> dict:
     return _pkg().get_config()
 
 
+# Klaus's own tag ops still in flight. A reconcile that reads the
+# collection mid-op sees tags renamed but prefs not yet updated (or the
+# reverse) and would take its own rename for the user's delete — that
+# asked Pouya to delete four freshly renamed lectures (2026-09-30).
+_own_ops = {"pending": 0}
+
+
 def _run_sync_op(
     parent,
     undo_label: str,
@@ -684,6 +691,7 @@ def _run_sync_op(
         return col.merge_undo_entries(pos)
 
     def done(_changes) -> None:
+        _own_ops["pending"] -= 1
         if on_done:
             on_done(result)
         if on_finished:
@@ -693,10 +701,12 @@ def _run_sync_op(
         # on_finished fires on BOTH outcomes — callers use it to sequence
         # follow-on work (curation's Browse preview) and to release the
         # pipeline busy token; skipping it on failure would deadlock that.
+        _own_ops["pending"] -= 1
         print(f"[klausmate] tag_sync: {undo_label!r} failed: {exc}")
         if on_finished:
             on_finished()
 
+    _own_ops["pending"] += 1
     CollectionOp(parent=parent, op=op).success(done).failure(fail).run_in_background()
 
 
@@ -1139,12 +1149,40 @@ def _register(regs: list[dict], existing: set[str]) -> None:
             changes = OpChanges()
         return changes
 
-    CollectionOp(parent=mw, op=op).failure(
-        lambda exc: print(f"[klausmate] tag_sync: registering Library tags failed: {exc}")
-    ).run_in_background()
+    def settle(*_a) -> None:
+        _own_ops["pending"] -= 1
+
+    def failed(exc: Exception) -> None:
+        settle()
+        print(f"[klausmate] tag_sync: registering Library tags failed: {exc}")
+
+    _own_ops["pending"] += 1
+    CollectionOp(parent=mw, op=op).success(settle).failure(failed).run_in_background()
 
 
 _prompt = {"open": False}
+_user_deleted: dict = {"tags": set(), "at": 0.0}
+USER_DELETE_WINDOW_S = 120
+
+
+def note_user_deleted(tags) -> None:
+    """Called by the sidebar just before Anki removes these tags. A
+    vanished tag is only ever a DELETE when the user did this; any other
+    disappearance (a sync mid-flight, Check Database, another add-on) is
+    restored instead."""
+    import time
+
+    _user_deleted["tags"] = {t.casefold() for t in tags if t}
+    _user_deleted["at"] = time.monotonic()
+
+
+def _deleted_by_user(tag: str | None) -> bool:
+    import time
+
+    if not tag or time.monotonic() - _user_deleted["at"] > USER_DELETE_WINDOW_S:
+        return False
+    key = tag.casefold()
+    return any(key == d or key.startswith(d + "::") for d in _user_deleted["tags"])
 
 
 def _ask(text: str, on_yes: Callable[[], None], on_no: Callable[[], None]) -> None:
@@ -1232,8 +1270,20 @@ def reconcile_from_tags(col) -> dict:
         regs = [a for a in actions if a["kind"] == "register"]
         if regs:
             _register(regs, set(col.tags.all()))
-        deletes = [a for a in actions if a["kind"] == "delete"]
+        deletes, restore = [], {}
+        for a in actions:
+            if a["kind"] != "delete":
+                continue
+            stored = {s: get_stored_tag(s) for s in a["safes"]}
+            if all(_deleted_by_user(t) for t in stored.values() if t):
+                deletes.append(a)
+            else:
+                restore.update({s: t for s, t in stored.items() if t})
+        if restore:
+            print(f"[klausmate] tag_sync: restoring {len(restore)} tag(s) that vanished without a sidebar delete")
+            _reapply_missing(col, restore, cfg)
         if deletes and not _prompt["open"]:
+            _user_deleted["tags"] = set()  # one delete, one question
             _confirm_deletes(col, deletes, cfg)
         return {"actions": actions}
     except Exception as exc:  # noqa: BLE001 - never block a profile open or a Library refresh
@@ -1246,6 +1296,9 @@ _debounce: dict = {"timer": None}
 
 def _reconcile_now() -> None:
     if _prompt["open"] or mw is None or getattr(mw, "col", None) is None:
+        return
+    if _own_ops["pending"] > 0:
+        _schedule_reconcile()  # read the collection only once our ops landed
         return
     reconcile_from_tags(mw.col)
 

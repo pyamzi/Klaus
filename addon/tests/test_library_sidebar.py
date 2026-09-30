@@ -354,13 +354,48 @@ check("icons: library for the section, folder for folders, PDF for PDFs",
 check("the three icons ship", all(os.path.isfile(p) for p in (ls.ROOT_ICON, ls.FOLDER_ICON, ls.PDF_ICON)))
 check("no Library yet: nothing moves", ls.split_library_section(SItem("", kind="ROOT", children=[SItem("", kind="TAG_ROOT")]), {}) is None)
 
-built = []
-fake_browser = types.SimpleNamespace(sidebar=types.SimpleNamespace(_tag_tree=lambda r: built.append(r)))
-stage = lambda name: types.SimpleNamespace(name=name)  # noqa: E731
-check("other stages are Anki's", ls.on_build_tree(False, root, stage("DECKS"), fake_browser) is False and not built)
-check("an add-on that already built tags wins", ls.on_build_tree(True, root, stage("TAGS"), fake_browser) is True and not built)
-check("the TAGS stage builds Anki's tag tree itself, then claims the stage",
-      ls.on_build_tree(False, root, stage("TAGS"), fake_browser) is True and built == [root])
+orphan = SItem("!Library::2-BiB::Exam_1::Week_1::02-ELO-Intro_to_Blood")
+empty_folder = SItem("!Library::2-BiB::Exam_1")
+lib2 = SItem("!Library", children=[orphan, empty_folder])
+root2 = SItem("", kind="ROOT", children=[SItem("", kind="TAG_ROOT", children=[lib2])])
+ls.split_library_section(root2, {}, {"!library::2-bib::exam_1": "2-BiB/Exam 1"})
+check("a PDF whose tag lost its owner record still shows the PDF icon", orphan.icon == ls.PDF_ICON)
+check("an empty folder Klaus knows keeps the folder icon", empty_folder.icon == ls.FOLDER_ICON)
+
+section("the section is split AFTER every stage, whoever built the tags")
+tag_lists = []
+
+
+class FakeSidebar:
+    def __init__(self):
+        self.selected = ["!Library::Onc::Leuk"]
+
+    def _root_tree(self):
+        # Anki's own build, with AnkiHub-style add-ons having built Tags
+        lib_ = SItem("!Library", children=[SItem("!Library::A")])
+        return SItem("", kind="ROOT", children=[SItem("", kind="TAG_ROOT", children=[lib_, SItem("Heme")])])
+
+    def _selected_tags(self):
+        return self.selected
+
+    def remove_tags(self, item):
+        tag_lists.append("anki removed")
+
+
+fs = FakeSidebar()
+ls.wrap_sidebar(fs)
+ls.wrap_sidebar(fs)
+built_root = fs._root_tree()
+check("one Tags section, and the Library is its own section above it",
+      [c.full_name for c in built_root.children] == ["!Library", ""]
+      and sum(ls._kind(c) == "TAG_ROOT" for c in built_root.children) == 1)
+noted = []
+_ts = importlib.import_module("klausmate.tag_sync")
+_ts.note_user_deleted = lambda tags: noted.append(list(tags))
+fs.remove_tags(None)
+check("a sidebar delete is noted for tag_sync, then Anki deletes as usual",
+      noted == [["!Library::Onc::Leuk"]] and tag_lists == ["anki removed"])
+check("wrapped once", fs._klausmate_wrapped is True)
 
 section("the disclosure arrows are drawn")
 theme = importlib.import_module("klausmate.theme")
@@ -377,7 +412,7 @@ section("wired")
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("__init__ sets it up", "library_sidebar" in _init and ".setup()" in _init.split("library_sidebar", 1)[1][:200])
 _ls_src = open("klausmate/library_sidebar.py", encoding="utf-8").read()
-check("the section split is registered on browser_will_build_tree",
-      "gui_hooks.browser_will_build_tree.append(on_build_tree)" in _ls_src)
+check("Klaus no longer builds the Tags section itself (AnkiHub does, and two appeared)",
+      "browser_will_build_tree" not in _ls_src and "_tag_tree(" not in _ls_src)
 
 raise SystemExit(report())

@@ -143,7 +143,7 @@ iq = importlib.import_module("klausmate.index_queue")
 tsync = importlib.import_module("klausmate.tag_sync")
 ps.ensure_records = lambda uf_, safe, path, pages: calls.append(("pages", safe))
 iq.on_pdf_imported = lambda safe: calls.append(("index", safe))
-tsync.reconcile_from_tags = lambda col: calls.append(("tag", None))
+tsync._schedule_reconcile = lambda: calls.append(("tag", None))  # scheduled, not inline: our renames land first
 pdf_drive.mw = type("MW", (), {"col": object()})()
 pdf_drive._after_ingest(["splen"])
 check("page records, auto-index and a tag for the new PDF",

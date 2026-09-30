@@ -277,8 +277,10 @@ def _after_ingest(safes: list[str]) -> None:
             index_queue.on_pdf_imported(safe)
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] auto-index for {safe!r} failed: {exc}")
-    if mw is not None and getattr(mw, "col", None) is not None:
-        tag_sync.reconcile_from_tags(mw.col)  # registers the new PDFs' tags
+    # Registers the new PDFs' tags. Scheduled, not run inline: the
+    # rescan just queued tag renames, and reading the collection before
+    # they land mistook them for deletions (2026-09-30).
+    tag_sync._schedule_reconcile()
 
 
 def rescan_library_root(prepared: dict | None = None) -> dict | None:

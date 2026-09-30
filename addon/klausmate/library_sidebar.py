@@ -124,13 +124,14 @@ def _kind(item) -> str:
     return getattr(getattr(item, "item_type", None), "name", "")
 
 
-def split_library_section(root, safes: dict) -> object | None:
+def split_library_section(root, safes: dict, folders: dict | None = None) -> object | None:
     """Move the ``!Library`` tag branch out of Anki's Tags section into a
     section of its own at the top of the sidebar, with library, folder
     and PDF icons. Its rows stay Anki TAG items, so Anki's own rename,
     drag, delete and search keep working on them. Pure over the item
     objects (``children``, ``_parent_item``, ``full_name``, ``icon``);
     returns the Library item, or None when there is no Library yet."""
+    folders = folders or {}
     tags_root = next((c for c in reversed(root.children) if _kind(c) == "TAG_ROOT"), None)
     if tags_root is None:
         return None
@@ -144,30 +145,54 @@ def split_library_section(root, safes: dict) -> object | None:
 
     def mark(item) -> None:
         for child in item.children:
-            child.icon = PDF_ICON if child.full_name.casefold() in safes else FOLDER_ICON
+            key = child.full_name.casefold()
+            # A row with nothing under it is a PDF unless it is a known
+            # (empty) folder; a PDF's link to its tag can lag a rename.
+            is_folder = key not in safes and (key in folders or bool(child.children))
+            child.icon = FOLDER_ICON if is_folder else PDF_ICON
             mark(child)
 
     mark(lib)
     return lib
 
 
-def on_build_tree(handled: bool, root, stage, browser) -> bool:
-    """``browser_will_build_tree`` at the TAGS stage: build Anki's own
-    tag section (its private ``_tag_tree``; there is no after-hook), then
-    lift the Library out of it. Runs in the sidebar's background op, so
-    it touches plain item objects only."""
-    if handled or getattr(stage, "name", "") != "TAGS":
-        return handled
-    try:
-        browser.sidebar._tag_tree(root)
-    except Exception as exc:  # noqa: BLE001 - let Anki build tags itself
-        print(f"[klausmate] library section: tag tree failed: {exc}")
-        return handled
-    try:
-        split_library_section(root, library_index()["safes"])
-    except Exception as exc:  # noqa: BLE001 - tags are built; only the move failed
-        print(f"[klausmate] library section: split failed: {exc}")
-    return True
+def wrap_sidebar(sidebar) -> None:
+    """Two per-instance wraps on Anki's SidebarTreeView (once each):
+
+    - ``_root_tree``: after EVERY stage has been built — Anki's own tags
+      and any add-on's (AnkiHub builds the Tags section itself and does
+      not check whether someone already did, so building it here too
+      showed two Tags sections) — lift the Library into its own section.
+    - ``remove_tags``: tell tag_sync which tags the USER is deleting, the
+      one signal that may turn a vanished tag into "delete the PDF too?".
+
+    Private names: if Anki renames them the wrap is skipped and the
+    Library simply stays inside Tags, and no delete prompt ever shows."""
+    if getattr(sidebar, "_klausmate_wrapped", False):
+        return
+    sidebar._klausmate_wrapped = True
+    build = getattr(sidebar, "_root_tree", None)
+    if build is not None:
+        def root_tree():
+            root = build()
+            try:
+                lib = library_index()
+                split_library_section(root, lib["safes"], lib["folders"])
+            except Exception as exc:  # noqa: BLE001 - the tree is built; only the move failed
+                print(f"[klausmate] library section: split failed: {exc}")
+            return root
+
+        sidebar._root_tree = root_tree
+    remove = getattr(sidebar, "remove_tags", None)
+    if remove is not None:
+        def remove_tags(item):
+            try:
+                tag_sync.note_user_deleted(sidebar._selected_tags())
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] library: could not note a tag delete: {exc}")
+            return remove(item)
+
+        sidebar.remove_tags = remove_tags
 
 
 NOT_EMBEDDED = "Not in the search index yet. Right-click › Re-embed."
@@ -569,6 +594,7 @@ def on_browser_will_show(browser) -> None:
         sidebar = browser.sidebar
         if not isinstance(sidebar.itemDelegate(), LibraryNameDelegate):
             sidebar.setItemDelegate(LibraryNameDelegate(sidebar))
+        wrap_sidebar(sidebar)
         if not getattr(sidebar, "_klausmate_clicks", False):
             sidebar.clicked.connect(lambda index: _on_clicked(browser, index))
             sidebar._klausmate_clicks = True
@@ -592,4 +618,3 @@ def setup() -> None:
     gui_hooks.operation_did_execute.append(on_operation_did_execute)
     gui_hooks.profile_will_close.append(on_profile_will_close)
     gui_hooks.browser_sidebar_will_show_context_menu.append(on_context_menu)
-    gui_hooks.browser_will_build_tree.append(on_build_tree)
