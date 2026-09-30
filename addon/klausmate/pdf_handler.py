@@ -18,8 +18,10 @@ import re
 from typing import Any
 import shutil
 import sys
+import threading
 import time
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 _HERE = Path(__file__).parent
@@ -207,6 +209,30 @@ def repair_garbled_pages(
                 print(f"[klausmate] OCR failed on page {i + 1}: {exc}")
         pages[i] = text
     return pages
+
+
+# One re-entrant lock per PDF (by safe basename). Library actions that
+# move, rename or delete a file hold it, and a bake takes it only around
+# its final path resolution + os.replace, so the two can never interleave.
+# ponytail: the dict only grows (a few bytes per PDF name); prune if that matters.
+_PDF_LOCKS: dict[str, threading.RLock] = {}
+_PDF_LOCKS_GUARD = threading.Lock()
+
+
+def pdf_lock(safe: str):
+    """The re-entrant lock (a context manager) for one PDF's safe name."""
+    with _PDF_LOCKS_GUARD:
+        return _PDF_LOCKS.setdefault(safe, threading.RLock())
+
+
+def file_stat(path: str) -> tuple | None:
+    """The file fingerprint ``(st_ino, st_mtime_ns, st_size)``, or None
+    when the path cannot be stat'ed."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
 
 
 def _safe_basename(name: str) -> str:
@@ -857,27 +883,28 @@ def move_mapped_file(
     instead of reverting it on the next pass. Returns the new rel, the
     unchanged rel when already in place, or None when nothing is mapped
     or the file is missing (legacy store, unplugged root — no-op)."""
-    mapping = load_library_map(user_files_dir)
-    rel = mapping.get(safe)
-    if not rel:
-        return None
-    src = os.path.join(root, rel)
-    if not os.path.isfile(src):
-        return None
-    dest_dir = root
-    if isinstance(folder, str) and folder.strip():
-        for part in folder.split("/"):
-            part = part.strip()
-            if part and part != "..":
-                dest_dir = os.path.join(dest_dir, part)
-    if os.path.realpath(dest_dir) == os.path.realpath(os.path.dirname(src)):
-        return rel
-    os.makedirs(dest_dir, exist_ok=True)
-    dest = _unique_path(dest_dir, os.path.basename(rel))
-    shutil.move(src, dest)
-    mapping[safe] = os.path.relpath(dest, root)
-    save_library_map(user_files_dir, mapping)
-    return mapping[safe]
+    with pdf_lock(safe):
+        mapping = load_library_map(user_files_dir)
+        rel = mapping.get(safe)
+        if not rel:
+            return None
+        src = os.path.join(root, rel)
+        if not os.path.isfile(src):
+            return None
+        dest_dir = root
+        if isinstance(folder, str) and folder.strip():
+            for part in folder.split("/"):
+                part = part.strip()
+                if part and part != "..":
+                    dest_dir = os.path.join(dest_dir, part)
+        if os.path.realpath(dest_dir) == os.path.realpath(os.path.dirname(src)):
+            return rel
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = _unique_path(dest_dir, os.path.basename(rel))
+        shutil.move(src, dest)
+        mapping[safe] = os.path.relpath(dest, root)
+        save_library_map(user_files_dir, mapping)
+        return mapping[safe]
 
 
 def rename_mapped_file(
@@ -887,21 +914,22 @@ def rename_mapped_file(
     ``move_mapped_file``. The filename follows ``_library_filename`` —
     the same normalizer the rescan uses to decide a display still
     corresponds to its file, so rename and rescan can never disagree."""
-    mapping = load_library_map(user_files_dir)
-    rel = mapping.get(safe)
-    if not rel:
-        return None
-    src = os.path.join(root, rel)
-    if not os.path.isfile(src):
-        return None
-    filename = _library_filename(display, safe)
-    if os.path.basename(rel) == filename:
-        return rel
-    dest = _unique_path(os.path.dirname(src), filename)
-    shutil.move(src, dest)
-    mapping[safe] = os.path.relpath(dest, root)
-    save_library_map(user_files_dir, mapping)
-    return mapping[safe]
+    with pdf_lock(safe):
+        mapping = load_library_map(user_files_dir)
+        rel = mapping.get(safe)
+        if not rel:
+            return None
+        src = os.path.join(root, rel)
+        if not os.path.isfile(src):
+            return None
+        filename = _library_filename(display, safe)
+        if os.path.basename(rel) == filename:
+            return rel
+        dest = _unique_path(os.path.dirname(src), filename)
+        shutil.move(src, dest)
+        mapping[safe] = os.path.relpath(dest, root)
+        save_library_map(user_files_dir, mapping)
+        return mapping[safe]
 
 
 def rename_mapped_folder(
@@ -915,22 +943,32 @@ def rename_mapped_folder(
     dst = os.path.join(root, *[p for p in new.split("/") if p])
     if not os.path.isdir(src) or os.path.exists(dst):
         return False
-    parent = os.path.dirname(dst)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    os.rename(src, dst)
-    mapping = load_library_map(user_files_dir)
     old_prefix = old.rstrip("/") + "/"
-    changed = False
-    for safe, rel in list(mapping.items()):
-        rel_fwd = rel.replace(os.sep, "/")
-        if rel_fwd.startswith(old_prefix):
-            tail = rel_fwd[len(old_prefix):]
-            mapping[safe] = os.path.join(*[p for p in (new + "/" + tail).split("/") if p])
-            changed = True
-    if changed:
-        save_library_map(user_files_dir, mapping)
-    return True
+    # Every PDF under the folder, locked in name order so two folder
+    # actions can never wait on each other.
+    under = sorted(
+        safe
+        for safe, rel in load_library_map(user_files_dir).items()
+        if rel.replace(os.sep, "/").startswith(old_prefix)
+    )
+    with ExitStack() as held:
+        for safe in under:
+            held.enter_context(pdf_lock(safe))
+        parent = os.path.dirname(dst)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.rename(src, dst)
+        mapping = load_library_map(user_files_dir)
+        changed = False
+        for safe, rel in list(mapping.items()):
+            rel_fwd = rel.replace(os.sep, "/")
+            if rel_fwd.startswith(old_prefix):
+                tail = rel_fwd[len(old_prefix):]
+                mapping[safe] = os.path.join(*[p for p in (new + "/" + tail).split("/") if p])
+                changed = True
+        if changed:
+            save_library_map(user_files_dir, mapping)
+        return True
 
 
 # ------------------------------------------------- folder -> Anki sync
@@ -1651,8 +1689,12 @@ def bake_annotations(
         base = _safe_basename(name)
         # The MAPPED location once migrated (K-070) — same choke point as
         # pdf_path_for, so a bake after moving the library folder writes
-        # to where the file actually lives, not the old pdfs/ slot.
+        # to where the file actually lives, not the old pdfs/ slot. This
+        # early path only feeds the reads; the WRITE re-resolves it under
+        # pdf_lock just before os.replace (a Library action may have moved
+        # the file while this bake ran).
         working = _working_pdf_path(user_files_dir, name)
+        had_working = os.path.isfile(working)
         pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
         highlights = load_annotations(user_files_dir, name)
 
@@ -1907,14 +1949,30 @@ def bake_annotations(
                 _mark_klaus(sticky, hl, suffix=":note")
                 writer.add_annotation(page, sticky)
 
-        tmp = os.path.join(
-            os.path.dirname(working),
-            f".{base}.pdf.{uuid.uuid4().hex}.tmp",
+        # The tmp sits in the Library ROOT (same filesystem as every
+        # subfolder), not beside the file: a folder rename mid-bake would
+        # otherwise carry it away or remove its directory.
+        root = _live_library_root()
+        tmp_dir = (
+            root
+            if root and working.startswith(root + os.sep)
+            else os.path.dirname(working)
         )
+        tmp = os.path.join(tmp_dir, f".{base}.pdf.{uuid.uuid4().hex}.tmp")
         try:
             with open(tmp, "wb") as f:
                 writer.write(f)
-            os.replace(tmp, working)
+            with pdf_lock(base):
+                final = _working_pdf_path(user_files_dir, name)
+                if had_working and not os.path.isfile(final):
+                    # Deleted (or moved away outside Klaus) while baking:
+                    # writing now would resurrect it. The finally drops tmp.
+                    print(f"[klausmate] bake dropped: {base} is gone")
+                    return False
+                os.replace(tmp, final)
+                if report is not None:
+                    report["path"] = final
+                    report["stat"] = file_stat(final)
         finally:
             if os.path.isfile(tmp):
                 try:
@@ -1923,11 +1981,6 @@ def bake_annotations(
                     pass
         if report is not None:
             report["native_ids"] = baked_ids_now
-            try:
-                st = os.stat(working)
-                report["stat"] = (st.st_ino, st.st_mtime_ns, st.st_size)
-            except OSError:
-                pass
         print(
             f"[klausmate] baked {baked} annotation record(s) into "
             f"{base}.pdf ({len(carried)} outside mark(s) carried)"
@@ -2646,87 +2699,88 @@ def delete_context(user_files_dir: str, name: str, remove_file=os.remove) -> Non
     itself (library-root copy or legacy ``pdfs/`` copy) goes through
     ``remove_file`` — the caller passes a move-to-Trash (K-306); the
     derived files are rebuilt from it and are removed outright."""
-    base = _safe_basename(name)
-    source = {
-        os.path.join(user_files_dir, "pdfs", base + ".pdf"),
-        # The pristine pre-bake copy: once highlights are baked into the
-        # library file, this is the only copy without them.
-        os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
-    }
-    candidates = [
-        os.path.join(user_files_dir, "contexts", base + ".txt"),
-        os.path.join(user_files_dir, "contexts", base + ".json"),
-        os.path.join(user_files_dir, "pdfs", base + ".pdf"),
-        os.path.join(user_files_dir, "annotations", base + ".json"),
-        os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
-        os.path.join(user_files_dir, "contexts", name),
-    ]
-    # A migrated PDF's real file lives outside user_files_dir entirely
-    # (see migrate_to_root) — the candidates above can never reach it, so
-    # without this a delete would only clear the Klaus-private siblings
-    # and leave the actual PDF orphaned in the Library folder.
-    library_map = load_library_map(user_files_dir)
-    mapped_rel = library_map.pop(base, None)
-    if mapped_rel:
-        root = _live_library_root()
-        if root:
-            candidates.append(os.path.join(root, mapped_rel))
-            source.add(os.path.join(root, mapped_rel))
-        try:
-            save_library_map(user_files_dir, library_map)
-        except OSError as exc:
-            print(f"[klausmate] library_map cleanup failed for {base}: {exc}")
-    for path in candidates:
-        if os.path.isfile(path):
+    with pdf_lock(_safe_basename(name)):
+        base = _safe_basename(name)
+        source = {
+            os.path.join(user_files_dir, "pdfs", base + ".pdf"),
+            # The pristine pre-bake copy: once highlights are baked into the
+            # library file, this is the only copy without them.
+            os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
+        }
+        candidates = [
+            os.path.join(user_files_dir, "contexts", base + ".txt"),
+            os.path.join(user_files_dir, "contexts", base + ".json"),
+            os.path.join(user_files_dir, "pdfs", base + ".pdf"),
+            os.path.join(user_files_dir, "annotations", base + ".json"),
+            os.path.join(user_files_dir, "pdf_originals", base + ".pdf"),
+            os.path.join(user_files_dir, "contexts", name),
+        ]
+        # A migrated PDF's real file lives outside user_files_dir entirely
+        # (see migrate_to_root) — the candidates above can never reach it, so
+        # without this a delete would only clear the Klaus-private siblings
+        # and leave the actual PDF orphaned in the Library folder.
+        library_map = load_library_map(user_files_dir)
+        mapped_rel = library_map.pop(base, None)
+        if mapped_rel:
+            root = _live_library_root()
+            if root:
+                candidates.append(os.path.join(root, mapped_rel))
+                source.add(os.path.join(root, mapped_rel))
             try:
-                (remove_file if path in source else os.remove)(path)
-            except OSError:
-                pass
-    # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
-    # module level, for _safe_basename).
-    try:
-        from . import pdf_index
+                save_library_map(user_files_dir, library_map)
+            except OSError as exc:
+                print(f"[klausmate] library_map cleanup failed for {base}: {exc}")
+        for path in candidates:
+            if os.path.isfile(path):
+                try:
+                    (remove_file if path in source else os.remove)(path)
+                except OSError:
+                    pass
+        # Lazy import: avoids a module cycle (pdf_index imports pdf_handler at
+        # module level, for _safe_basename).
+        try:
+            from . import pdf_index
 
-        pdf_index.delete(user_files_dir, base)
-    except Exception as exc:
-        print(f"[klausmate] pdf_index cleanup failed for {base}: {exc}")
-    # user_files/pages/<safe>/ is a sibling too (page_store.py) — the
-    # PR1 review fix re-keys it onto a text digest so a bake or a move
-    # cannot orphan it, but an actual delete must still remove it, or a
-    # re-import under this safe basename would inherit a stranger's
-    # slide text and transcript. Lazy import: avoids a module cycle,
-    # matching the pdf_index import just above.
-    try:
-        from . import page_store
+            pdf_index.delete(user_files_dir, base)
+        except Exception as exc:
+            print(f"[klausmate] pdf_index cleanup failed for {base}: {exc}")
+        # user_files/pages/<safe>/ is a sibling too (page_store.py) — the
+        # PR1 review fix re-keys it onto a text digest so a bake or a move
+        # cannot orphan it, but an actual delete must still remove it, or a
+        # re-import under this safe basename would inherit a stranger's
+        # slide text and transcript. Lazy import: avoids a module cycle,
+        # matching the pdf_index import just above.
+        try:
+            from . import page_store
 
-        shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
-    except Exception as exc:
-        print(f"[klausmate] page record cleanup failed for {base}: {exc}")
-    try:
-        from . import drive_store
+            shutil.rmtree(os.path.join(user_files_dir, page_store.SUBDIR, base), ignore_errors=True)
+        except Exception as exc:
+            print(f"[klausmate] page record cleanup failed for {base}: {exc}")
+        try:
+            from . import drive_store
 
-        drive_store.remove_pdf(user_files_dir, base)
-    except Exception as exc:
-        print(f"[klausmate] drive cleanup failed for {base}: {exc}")
-    # prefs.json (sensitivity threshold, etc.) is a SIBLING of contexts/
-    # pdfs/annotations — the candidates list above can never reach it, so
-    # without this a re-import under the same safe basename would
-    # silently inherit a stale entry forever.
-    try:
-        from . import retention
+            drive_store.remove_pdf(user_files_dir, base)
+        except Exception as exc:
+            print(f"[klausmate] drive cleanup failed for {base}: {exc}")
+        # prefs.json (sensitivity threshold, etc.) is a SIBLING of contexts/
+        # pdfs/annotations — the candidates list above can never reach it, so
+        # without this a re-import under the same safe basename would
+        # silently inherit a stale entry forever.
+        try:
+            from . import retention
 
-        retention.forget_prefs(base)
-    except Exception as exc:
-        print(f"[klausmate] prefs cleanup failed for {base}: {exc}")
-    # retention_history.json is a sibling too, with the same blind spot:
-    # a re-import under this safe basename would otherwise inherit the
-    # deleted PDF's whole retention curve.
-    try:
-        from . import retention_history
+            retention.forget_prefs(base)
+        except Exception as exc:
+            print(f"[klausmate] prefs cleanup failed for {base}: {exc}")
+        # retention_history.json is a sibling too, with the same blind spot:
+        # a re-import under this safe basename would otherwise inherit the
+        # deleted PDF's whole retention curve.
+        try:
+            from . import retention_history
 
-        retention_history.forget_history(user_files_dir, base)
-    except Exception as exc:
-        print(f"[klausmate] retention history cleanup failed for {base}: {exc}")
-    if get_active_pdf(user_files_dir) == base:
-        clear_active_pdf(user_files_dir)
+            retention_history.forget_history(user_files_dir, base)
+        except Exception as exc:
+            print(f"[klausmate] retention history cleanup failed for {base}: {exc}")
+        if get_active_pdf(user_files_dir) == base:
+            clear_active_pdf(user_files_dir)
 
