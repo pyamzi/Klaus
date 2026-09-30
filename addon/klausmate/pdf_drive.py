@@ -73,11 +73,13 @@ def apply_folder_change(
     return True, ""
 
 
-def _move_to_trash(path: str) -> None:
+def _move_to_trash(path: str) -> bool:
     """The Trash, not a permanent delete (K-306): a deleted tag is one
-    click, so its PDF must be recoverable. Where there is no Trash, a
-    FILE is deleted (or the next rescan would re-import it); a directory
-    is only ever removed when empty — never rmtree'd."""
+    click, so its PDF must be recoverable. Where there is no Trash a FILE
+    stays where it is and this answers False for the caller to report —
+    the confirmation promised the Trash, and a rescan re-importing the
+    file loses nothing. A directory is only ever removed when empty,
+    never rmtree'd."""
     ok = False
     try:
         from aqt.qt import QFile
@@ -87,14 +89,16 @@ def _move_to_trash(path: str) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] move to Trash failed for {path!r}: {exc}")
     if ok or not os.path.exists(path):
-        return
-    try:
-        if os.path.isdir(path):
+        return True
+    if os.path.isdir(path):
+        try:
             os.rmdir(path)  # raises unless empty: whatever is inside stays
-        else:
-            os.remove(path)
-    except OSError as exc:
-        print(f"[klausmate] left {path!r} in place: {exc}")
+            return True
+        except OSError as exc:
+            print(f"[klausmate] left {path!r} in place: {exc}")
+            return False
+    print(f"[klausmate] left {path!r} in place: no Trash")
+    return False
 
 
 def delete_pdf(safe: str) -> bool:
@@ -108,11 +112,20 @@ def delete_pdf(safe: str) -> bool:
     # entry (including the stored tag name) — after that, there is no
     # way left to know what tag to remove.
     tag_sync.sync_after_delete(mw, safe, display)
+    kept = []
+
+    def _trash(path):
+        if _move_to_trash(path) is False:
+            kept.append(path)
+
     try:
-        pdf_handler.delete_context(uf, safe, remove_file=_move_to_trash)
+        pdf_handler.delete_context(uf, safe, remove_file=_trash)
     except Exception as e:  # noqa: BLE001
         showWarning(f"Could not delete that PDF.\n\n{e}")
         return False
+    if kept:
+        showWarning("Could not move this to the Trash, so it was left in place:\n\n"
+                    + "\n".join(kept))
     # Drop it from the index queue too (K-152). The runner re-checks
     # presence before it starts each job, so this is not what makes
     # a deleted PDF safe — it is what stops the bar advertising work

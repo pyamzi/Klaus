@@ -60,6 +60,9 @@ check("a folder tag shows its own name", labels["!library::2-bib::exam_1::week_1
 check("parents too", labels["!library::2-bib::exam_1"] == "Exam 1" and labels["!library::2-bib"] == "2-BiB")
 check("the root reads Library", labels["!library"] == "Library")
 check("a non-Library tag keeps its own name", ls.label_for("Hematology::Anemia") is None)
+check("a Library tag in another casing still gets its label (Anki tags are case-insensitive)",
+      ls.label_for("!library::2-BiB::Exam_1::Week_1") == "Week 1"
+      and ls.label_for("!LIBRARY::2-BIB::EXAM_1::WEEK_1") == "Week 1")
 
 
 class Item:

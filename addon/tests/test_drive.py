@@ -577,6 +577,27 @@ shutil.rmtree(tmp, ignore_errors=True)
 
 pdf_drive = importlib.import_module("klausmate.pdf_drive")
 
+print("== no Trash never means a permanent delete (Codex on PR #9) ==")
+_qt = sys.modules["aqt.qt"]
+_had_qfile, _old_qfile = hasattr(_qt, "QFile"), getattr(_qt, "QFile", None)
+_qt.QFile = type("_NoTrash", (), {"moveToTrash": staticmethod(lambda p: False)})
+_nt = tempfile.mkdtemp(prefix="klaus-notrash-")
+_nt_pdf = os.path.join(_nt, "Only_copy.pdf")
+open(_nt_pdf, "wb").write(b"%PDF-1.4")
+check("a file that cannot go to the Trash is reported (False)...",
+      pdf_drive._move_to_trash(_nt_pdf) is False)
+check("...and left exactly where it was", os.path.isfile(_nt_pdf))
+os.makedirs(os.path.join(_nt, "empty"))
+check("an EMPTY directory may still go without a Trash (nothing to lose)",
+      pdf_drive._move_to_trash(os.path.join(_nt, "empty")) is True
+      and not os.path.exists(os.path.join(_nt, "empty")))
+if _had_qfile:
+    _qt.QFile = _old_qfile
+else:
+    del _qt.QFile
+shutil.rmtree(_nt, ignore_errors=True)
+
+
 
 print("== rescan_library_root glue runs end-to-end (K-075 regression trap) ==")
 # The K-073 glue shipped WITHOUT `import os` in pdf_drive: every live call

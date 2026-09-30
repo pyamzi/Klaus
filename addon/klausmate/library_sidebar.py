@@ -219,7 +219,7 @@ def pdf_status(safes, pending: set, index_status: Callable) -> dict[str, str]:
 
 
 def label_for(tag: str | None) -> str | None:
-    if not tag or not tag.startswith(ROOT_TAG):
+    if not tag or not tag.casefold().startswith(ROOT_TAG.casefold()):
         return None
     try:
         return library_labels().get(tag.casefold())
