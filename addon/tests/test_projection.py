@@ -36,11 +36,13 @@ ADDON = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "klausmate"
 )
 
-# Synthetic package so relative imports inside the modules resolve.
-pkg = types.ModuleType("klausmate")
-pkg.__path__ = [ADDON]
-pkg.__package__ = "klausmate"
-sys.modules["klausmate"] = pkg
+# Synthetic package so relative imports inside the modules resolve; the
+# harness's, so every USER_FILES lands in scratch, never the real Library.
+sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "klaus-test", "scripts"))
+from anki_stubs import install_package_stub  # noqa: E402
+
+install_package_stub()
+pkg = sys.modules["klausmate"]
 
 # projection.py must be importable with NO aqt/Qt stub in place at all —
 # that is proven simply by this import succeeding before any stub exists

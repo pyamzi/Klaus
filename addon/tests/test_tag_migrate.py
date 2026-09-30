@@ -95,12 +95,14 @@ stub("aqt", mw=None)
 stub("aqt.operations", CollectionOp=RecordingOp)
 stub("aqt.utils", tooltip=lambda *a, **k: None)
 
-pkg = types.ModuleType("klausmate")
-pkg.__path__ = [__import__("os").path.join(
-    __import__("os").path.dirname(__import__("os").path.dirname(
-        __import__("os").path.abspath(__file__))), "klausmate")]
+# The harness's package stub, so every USER_FILES lands in scratch, never
+# the real Library.
+sys.path.insert(0, ".claude/skills/klaus-test/scripts")
+from anki_stubs import install_package_stub  # noqa: E402
+
+install_package_stub()
+pkg = sys.modules["klausmate"]
 pkg.get_config = lambda: {}
-sys.modules["klausmate"] = pkg
 
 import importlib  # noqa: E402
 
