@@ -279,7 +279,7 @@ def _on_fs_tick() -> None:
     any hidden screen is marked to refresh on its next show."""
     if not _refresh_live_libraries("on watcher tick"):
         try:
-            rescan_library_root()
+            start_library_rescan()
         except Exception as e:  # noqa: BLE001
             print(f"[klausmate] library watcher rescan failed: {e}")
     # After the rescan settled the mapping: any open viewer showing a
@@ -327,7 +327,48 @@ def _rearm_watcher(root: str | None) -> None:
         print(f"[klausmate] library watcher re-arm failed: {e}")
 
 
-def rescan_library_root() -> dict | None:
+_rescan = {"running": False, "again": False}
+
+
+def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -> None:
+    """Rescan the library root without freezing Anki (K-309): reading
+    and OCR-ing new PDFs runs in a background op that never touches the
+    collection; applying the result — the mapping, the tree, the tags —
+    happens back on the main thread. A rescan asked for while one runs
+    is folded into one more pass afterwards."""
+    if _rescan["running"]:
+        _rescan["again"] = True
+        return
+    root = pdf_handler._live_library_root()
+    if mw is None or not root or not os.path.isdir(root):
+        summary = rescan_library_root()
+        if on_done:
+            on_done(summary)
+        return
+    uf = _user_files()
+    _rescan["running"] = True
+
+    def finish(prepared: dict | None) -> None:
+        _rescan["running"] = False
+        summary = rescan_library_root(prepared)
+        if summary and (summary.get("moved") or summary.get("ingested") or summary.get("tree_changed")):
+            _refresh_live_libraries("after a rescan changed the Library")
+        if on_done:
+            on_done(summary)
+        if _rescan["again"]:
+            _rescan["again"] = False
+            start_library_rescan()
+
+    def failed(exc: Exception) -> None:
+        print(f"[klausmate] library rescan (background) failed: {exc}")
+        finish(None)
+
+    QueryOp(
+        parent=mw, op=lambda _col: pdf_handler.prepare_rescan(uf, root), success=finish
+    ).failure(failed).without_collection().run_in_background()
+
+
+def rescan_library_root(prepared: dict | None = None) -> dict | None:
     """Folder -> Anki half of the two-way Library sync (K-073).
 
     Walks the configured root, applies confirmed moves/renames to the
@@ -351,7 +392,7 @@ def rescan_library_root() -> dict | None:
             pdf_handler.migrate_to_root(uf, root, folders)
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
-        summary = pdf_handler.rescan_root(uf, root, folders)
+        summary = pdf_handler.rescan_root(uf, root, folders, prepared)
         # tree_changed, not moved: the tags follow folder+display, and
         # those can change for entries the mapping already knew about
         # (drift repair — see rescan_root's tree loop).
@@ -2258,7 +2299,9 @@ class DriveWindow(QWidget):
         # Disk first, tags second: the folder is the source of truth for
         # structure, the tree follows it, and the tag reconcile below
         # then works against the freshly-synced tree (K-073).
-        rescan_library_root()
+        # K-309: in the background now; if it changes anything it
+        # refreshes every live Library again when it lands.
+        start_library_rescan()
         if mw.col is not None:
             tag_sync.reconcile_from_tags(mw.col)
         # THE live-update fix (K-076): everything above only moved DATA

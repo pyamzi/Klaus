@@ -953,7 +953,25 @@ def walk_root(root: str) -> list[str]:
     return sorted(out)
 
 
-def plan_rescan(mapping: dict, disk_rels: list[str]) -> dict:
+def page_fingerprint(pages: list[str] | None):
+    """What survives a Finder rename: the page count plus the first
+    three non-empty pages, whitespace- and case-normalised. None for a
+    document with no text layer (nothing to compare)."""
+    if not pages:
+        return None
+    texts = [t for t in (" ".join((p or "").split()).lower()[:400] for p in pages) if t]
+    if not texts:
+        return None
+    return (len(pages), frozenset(texts[:3]))
+
+
+def _same_document(a, b) -> bool:
+    # Same page count and at least one shared page: a page that OCR
+    # repaired at import can differ from the raw layer, the others not.
+    return a is not None and b is not None and a[0] == b[0] and bool(a[1] & b[1])
+
+
+def plan_rescan(mapping: dict, disk_rels: list[str], fingerprints: dict | None = None) -> dict:
     """PURE folder->Anki diff (K-073, the reverse half of K-057).
 
     The disk is the source of truth for structure, but matching a
@@ -1001,9 +1019,46 @@ def plan_rescan(mapping: dict, disk_rels: list[str]) -> dict:
                 still.append(s)
         missing = still
 
+    if missing and new and fingerprints:
+        # K-309: a bulk rename in Finder (every file gets a new prefix)
+        # leaves no basename to match, so the text decides. A pair must
+        # be unique both ways, or neither side is guessed.
+        fp_missing = fingerprints.get("missing") or {}
+        fp_new = fingerprints.get("new") or {}
+        cands = {s: [r for r in new if _same_document(fp_missing.get(s), fp_new.get(r))] for s in missing}
+        claims: dict = {}
+        for s, rs in cands.items():
+            for r in rs:
+                claims[r] = claims.get(r, 0) + 1
+        still = []
+        for s in missing:
+            rs = cands[s]
+            if len(rs) == 1 and claims[rs[0]] == 1:
+                moves[s] = rs[0]
+                new.remove(rs[0])
+            else:
+                still.append(s)
+        missing = still
+
     if len(missing) == 1 and len(new) == 1:
-        moves[missing[0]] = new[0]
-        missing, new = [], []
+        a = (fingerprints or {}).get("missing", {}).get(missing[0])
+        b = (fingerprints or {}).get("new", {}).get(new[0])
+        if a is None or b is None:  # text cannot tell; the lone pair is the rename
+            moves[missing[0]] = new[0]
+            missing, new = [], []
+
+    if fingerprints and missing and new:
+        # Every new file was compared with every missing one and matched
+        # none: it is genuinely new, and a missing PDF is reported, not
+        # guessed. Only a file whose text could not be read stays held.
+        readable = [r for r in new if (fingerprints.get("new") or {}).get(r) is not None]
+        return {
+            "moves": moves,
+            "missing": missing,
+            "new": new,
+            "ingestable": readable,
+            "ambiguous": len(readable) < len(new),
+        }
 
     ambiguous = bool(missing and new)
     return {
@@ -1013,6 +1068,40 @@ def plan_rescan(mapping: dict, disk_rels: list[str]) -> dict:
         "ingestable": [] if ambiguous else list(new),
         "ambiguous": ambiguous,
     }
+
+
+def prepare_rescan(user_files_dir: str, root: str) -> dict:
+    """The slow half of a rescan, safe off the main thread (no Qt, no
+    collection): read the text of every new file ONCE, fingerprint it
+    against the stored text of every missing PDF, and OCR-repair the
+    files that will be ingested. ``rescan_root(..., prepared=...)``
+    then applies the result without touching a PDF again. Empty when
+    nothing on disk is new."""
+    mapping = load_library_map(user_files_dir)
+    disk = walk_root(root)
+    first = plan_rescan(mapping, disk)
+    if not first["new"]:
+        return {}
+    raw: dict = {}
+    for rel in first["new"]:
+        try:
+            raw[rel] = extract_pages(os.path.join(root, rel))
+        except Exception as exc:  # noqa: BLE001 - an unreadable file is simply unmatched
+            print(f"[klausmate] rescan: could not read {rel!r}: {exc}")
+    fingerprints = {
+        "missing": {s: page_fingerprint(load_pages(user_files_dir, s)) for s in first["missing"]},
+        "new": {rel: page_fingerprint(pages) for rel, pages in raw.items()},
+    }
+    plan = plan_rescan(mapping, disk, fingerprints if first["missing"] else None)
+    pages: dict = {}
+    for rel in plan["ingestable"]:
+        if rel in raw:
+            try:
+                pages[rel] = repair_garbled_pages(os.path.join(root, rel), raw[rel])
+            except Exception as exc:  # noqa: BLE001
+                print(f"[klausmate] rescan: could not repair {rel!r}: {exc}")
+                pages[rel] = raw[rel]
+    return {"fingerprints": fingerprints if first["missing"] else None, "pages": pages}
 
 
 def _rel_folder(rel: str) -> str | None:
@@ -1039,7 +1128,9 @@ def _unique_safe(user_files_dir: str, mapping: dict, stem: str) -> str:
     return f"{base}_{n}"
 
 
-def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> dict:
+def rescan_root(
+    user_files_dir: str, root: str, folders: dict | None = None, prepared: dict | None = None
+) -> dict:
     """Apply the folder->Anki half of the two-way sync (K-073).
 
     Moves/renames confirmed by ``plan_rescan`` update the mapping AND the
@@ -1062,8 +1153,9 @@ def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> 
     from . import drive_store  # aqt-free; local import keeps deps one-way
 
     folders = folders or {}
+    prepared = prepared or {}
     mapping = load_library_map(user_files_dir)
-    plan = plan_rescan(mapping, walk_root(root))
+    plan = plan_rescan(mapping, walk_root(root), prepared.get("fingerprints"))
 
     moved: list[str] = []
     for safe, rel in sorted(plan["moves"].items()):
@@ -1075,7 +1167,9 @@ def rescan_root(user_files_dir: str, root: str, folders: dict | None = None) -> 
     for rel in plan["ingestable"]:
         full = os.path.join(root, rel)
         try:
-            pages = repair_garbled_pages(full, extract_pages(full))
+            pages = (prepared.get("pages") or {}).get(rel)
+            if pages is None:
+                pages = repair_garbled_pages(full, extract_pages(full))
         except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
             print(f"[klausmate] rescan: could not ingest {rel!r}: {exc}")
             ingest_failed.append(rel)

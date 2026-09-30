@@ -849,8 +849,8 @@ with _scratch_rosters():
     # it), a disk change under the library root used to fall to the bare
     # rescan and never repaint the tree the user was looking at.
     _rescans = []
-    _prev_rescan = pdf_drive.rescan_library_root
-    pdf_drive.rescan_library_root = lambda *a, **k: _rescans.append(1)
+    _prev_rescan = pdf_drive.start_library_rescan  # K-309: the tick starts the background scan
+    pdf_drive.start_library_rescan = lambda *a, **k: _rescans.append(1)
     try:
         pdf_drive._embedded_windows.clear()
         _fs_scr = _FakeWin(alive=True, visible=True)
@@ -880,7 +880,7 @@ with _scratch_rosters():
               and len(_rescans) == 1,
               f"{_fs_hid.refreshes} refreshes, {len(_rescans)} rescans")
     finally:
-        pdf_drive.rescan_library_root = _prev_rescan
+        pdf_drive.start_library_rescan = _prev_rescan
 
 
 

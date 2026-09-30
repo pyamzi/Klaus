@@ -1888,7 +1888,7 @@ def _library_rescan_on_profile_open() -> None:
     try:
         from . import pdf_drive as _pdf_drive
 
-        _pdf_drive.rescan_library_root()
+        _pdf_drive.start_library_rescan()  # K-309: in the background
     except Exception as exc:  # noqa: BLE001 - never block profile open
         print(f"[klausmate] library rescan failed: {exc}")
 
