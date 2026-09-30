@@ -623,6 +623,10 @@ check("save_general no longer writes heatmap_enabled (Edit Widgets "
 check("the preview dict still carries heatmap_enabled, from STORED "
       "config read live per tick (dashboard_order's pattern)",
       "bool(_heatmap.enabled(_pkg().get_config()))" in code_only(_src2))
+check("the preview dict carries the removed add-on widgets too — it "
+      "replaces config, so without them a removed AMBOSS card returns on "
+      "the first preview tick",
+      "_dashboard.hidden_foreign(_pkg().get_config())" in code_only(_src2))
 check("...and the heatmap's two DISPLAY keys with it — the corner "
       "menu can be used while Preferences is open, and a key missing "
       "from the preview dict falls back to its default, not to the "

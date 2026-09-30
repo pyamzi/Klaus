@@ -308,7 +308,21 @@ same reason.
   Anki's `body.reduce-motion` class — Anki ships NO
   prefers-reduced-motion CSS), per-widget shields so deck clicks/drags
   are unreachable while jiggling, ⊖ badge, ＋ popover, Done/outside/
-  Esc, and pointer-event drag-reorder (HTML5 DnD is dead on this
+  Esc, and pointer-event drag-reorder. **Other add-ons' blocks are
+  widgets too** (Pouya, 2026-09-30: "anytime there's a new thing on the
+  screen"). **They are wrapped in PYTHON, in the HTML, and the page never
+  moves a widget**: AMBOSS's `<amboss-component-wrapper>` builds a new
+  React root in `connectedCallback`, so each DOM move drew another card
+  (three, live). `dashboard.wrap_foreign` (tolerant parse, bails to the
+  unchanged body) wraps every other direct child of the deck screen's
+  `<center>` as `x:<id | .class | tag>` (`FOREIGN_ID` is the only shape
+  Python accepts; Anki's table/`<br>`/studied line, `.klaus-*` and scripts
+  are skipped); the `<center>` becomes a flex column (`klaus-dash-col`)
+  and `applyOrder`/drag/abort write CSS `order` only. Removal writes
+  `dashboard_hidden` (`apply_action(action, cfg)`), which `wrap_foreign`
+  also writes as `display:none`. Blocks added after load are not
+  adopted (wrapping them would mean moving them). The node harness
+  counts custom-element connects to pin this. (HTML5 DnD is dead on this
   screen: MainWebView.dragEnterEvent eats non-file drags). Wrapper
   sizing is `width:fit-content; max-width:100%` — BOTH measured
   necessary (block = full-width badge misplacement; bare fit-content

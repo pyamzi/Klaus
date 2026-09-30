@@ -35,6 +35,7 @@
     "decks",
     "heatmap"
   ],
+  "dashboard_hidden": [],
   "embedding_provider": "ollama",
   "endpoint": "http://127.0.0.1:11434",
   "runtime_auto_setup": true

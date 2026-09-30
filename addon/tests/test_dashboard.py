@@ -99,6 +99,71 @@ check("unknown ids and junk are refused",
       and dash.apply_action("not a dict") is None
       and dash.apply_action(None) is None)
 
+section("other add-ons' blocks are widgets too (AMBOSS, AnkiHub, …)")
+# Pouya: "Anytime there's a new thing on the screen, could you allow that
+# to work within my widgets framework?" The page names each foreign block
+# x:<its id, or .its-class, or its tag>; Python only ever checks the shape.
+_AMB = "x:amboss-qbank-widget"
+check("a foreign id keeps its place in the saved order",
+      dash.normalize_order([_AMB, "heatmap", "decks", "x:.ankihub-thing"])
+      == [_AMB, "heatmap", "decks", "x:.ankihub-thing"])
+check("...but only in the page's own shape: markup, overlong ids and junk are dropped",
+      dash.normalize_order(["x:<script>", "x:" + "a" * 200, "x:", 5, "amboss"]) == ["decks", "heatmap"])
+check("removing one records it in dashboard_hidden",
+      dash.apply_action({"action": "remove", "id": _AMB}, {}) == {"dashboard_hidden": [_AMB]})
+check("...once, however often",
+      dash.apply_action({"action": "remove", "id": _AMB}, {"dashboard_hidden": [_AMB]})
+      == {"dashboard_hidden": [_AMB]})
+check("adding it back takes it out again",
+      dash.apply_action({"action": "add", "id": _AMB}, {"dashboard_hidden": [_AMB, "x:b"]})
+      == {"dashboard_hidden": ["x:b"]})
+check("a malformed foreign id is refused",
+      dash.apply_action({"action": "remove", "id": "x:<b>"}, {}) is None)
+check("the page learns which foreign blocks are hidden, junk dropped",
+      dash.boot_state({"dashboard_hidden": [_AMB, "x:<b>", 3]}, False)["hiddenForeign"] == [_AMB]
+      and dash.boot_state({"dashboard_hidden": "junk"}, False)["hiddenForeign"] == [])
+
+section("wrap_foreign: add-on blocks are wrapped BEFORE the page parses")
+# AMBOSS's <amboss-component-wrapper> builds a new React root on every
+# connect, so moving it after parse drew the card three times. The
+# wrapper is written into the HTML instead; the page never moves it.
+_BODY = (
+    "<center>\n<table cellspacing=0><tr class='deck'><td>A<td>B</tr></table>\n<br>\n"
+    "<div id=studiedToday>Studied 7 cards</div>"
+    '<div class="klaus-hm">grid</div>'
+    '<script src="/_addons/x/w.js"></script>\n'
+    '<amboss-component-wrapper data-widget-state="{&quot;a&quot;: 1}" id="amboss-qbank-widget">'
+    "</amboss-component-wrapper>\n"
+    '<div class="ankihub-thing"><p>unclosed<br></div>'
+    '<div class="ankihub-thing">second</div>'
+    "</center><script>after()</script>"
+)
+_W = dash.wrap_foreign(_BODY)
+check("the AMBOSS element is wrapped, whole and byte-for-byte",
+      '<div class="klaus-widget" data-w="x:amboss-qbank-widget">'
+      '<amboss-component-wrapper data-widget-state="{&quot;a&quot;: 1}" id="amboss-qbank-widget">'
+      "</amboss-component-wrapper></div>" in _W, _W)
+check("a class-keyed block is wrapped, a second one gets its own key",
+      '<div class="klaus-widget" data-w="x:.ankihub-thing"><div class="ankihub-thing"><p>unclosed<br></div></div>' in _W
+      and 'data-w="x:.ankihub-thing-2"><div class="ankihub-thing">second</div></div>' in _W, _W)
+check("Anki's table, <br>, studied line, the heatmap and scripts are left for the page",
+      _W.count("klaus-widget") == 3 and "<script src=\"/_addons/x/w.js\"></script>" in _W
+      and '<div id=studiedToday>Studied 7 cards</div><div class="klaus-hm">grid</div>' in _W)
+check("nothing outside the <center> changes", _W.endswith("</center><script>after()</script>"))
+check("a removed block is written hidden, so it never flashes",
+      'data-w="x:amboss-qbank-widget" style="display:none">' in dash.wrap_foreign(_BODY, ["x:amboss-qbank-widget"]))
+check("unparseable or center-less html is returned untouched",
+      dash.wrap_foreign("<center><div class=a>never closed</center>") == "<center><div class=a>never closed</center>"
+      and dash.wrap_foreign("<div>no center</div>") == "<div>no center</div>")
+
+_DSRC = open("klausmate/dashboard.py", encoding="utf-8").read()
+check("the deck screen's HTML goes through wrap_foreign before the boot script is added",
+      "web_content.body = wrap_foreign(web_content.body, hidden_foreign(_config()))" in _DSRC
+      and _DSRC.index("wrap_foreign(web_content.body") < _DSRC.index("web_content.body += boot_html("))
+check("the page's reorder is CSS order only: no widget is ever re-inserted by drag or order",
+      "insertBefore(w, neighbour" not in open("klausmate/web/dashboard.js").read()
+      and "center.klaus-dash-col" in dash.dashboard_css())
+
 section("bridge payload parsing")
 import base64  # noqa: E402
 _good = base64.b64encode(json.dumps({"action": "edit-on"}).encode()).decode()

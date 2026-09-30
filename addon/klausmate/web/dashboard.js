@@ -28,6 +28,8 @@
   var removable = [];
   var labels = {};
   var hidden = [];
+  var hiddenForeign = [];
+  var savedOrder = [];
 
   /* --- bridge ------------------------------------------------------ */
 
@@ -57,11 +59,17 @@
 
   /* --- widgets ----------------------------------------------------- */
 
+  // Widgets in DISPLAY order: CSS `order` on the <center> flex column,
+  // DOM order breaking ties. Order is never changed by moving nodes — a
+  // moved custom element re-runs connectedCallback (AMBOSS re-renders).
   function widgets() {
     var found = document.querySelectorAll(".klaus-widget");
     var out = [];
-    for (var i = 0; i < found.length; i++) out.push(found[i]);
-    return out;
+    for (var i = 0; i < found.length; i++) out.push({ w: found[i], i: i });
+    out.sort(function (a, b) {
+      return (Number(a.w.style.order) || 0) - (Number(b.w.style.order) || 0) || a.i - b.i;
+    });
+    return out.map(function (e) { return e.w; });
   }
 
   function widgetById(id) {
@@ -124,21 +132,49 @@
     return true;
   }
 
-  // Re-seat OUR wrappers into the saved order as one contiguous run
-  // anchored at the first of them. Foreign content (AnkiHub, the
-  // armed-PDF drop square) is never reparented or removed — at most it
-  // ends up after the run, which the design accepts.
+  // Other add-ons' blocks beside the deck list (AMBOSS's Qbank card, an
+  // AnkiHub banner, …) arrive already wrapped: dashboard.wrap_foreign
+  // writes <div class="klaus-widget" data-w="x:…"> around each in the
+  // HTML, before the page parses, so the page never has to move them.
+  // Here they only become removable, and a removed one is offered by ＋.
+  function label(id) {
+    if (labels[id]) return labels[id];
+    var words = String(id).replace(/^x:\.?/, "").split(/[-_.:#\s]+/).filter(function (w) {
+      return w && !/^(widget|wrapper|component|container|root|\d+)$/i.test(w);
+    });
+    return words.length
+      ? words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ")
+      : "Add-on";
+  }
+
+  function adopt() {
+    var ws = widgets();
+    for (var i = 0; i < ws.length; i++) {
+      var id = ws[i].getAttribute("data-w") || "";
+      if (id.indexOf("x:") !== 0) continue;
+      if (removable.indexOf(id) < 0) removable.push(id);
+      if (hiddenForeign.indexOf(id) >= 0) {
+        ws[i].style.display = "none";
+        var listed = false;
+        for (var k = 0; k < hidden.length; k++) if (hidden[k].id === id) listed = true;
+        if (!listed) hidden.push({ id: id, label: label(id) });
+      }
+    }
+  }
+
+  // The saved widgets take the display slots the saved ones hold, in
+  // the saved order; a widget with no saved place keeps its own slot.
+  // Written as CSS order only (see widgets()).
   function applyOrder(order) {
-    var present = [];
+    var seq = widgets();
+    var saved = [];
     for (var i = 0; i < order.length; i++) {
       var w = widgetById(order[i]);
-      if (w) present.push(w);
+      if (w && saved.indexOf(w) < 0) saved.push(w);
     }
-    for (var j = 1; j < present.length; j++) {
-      var prev = present[j - 1];
-      if (prev.nextElementSibling !== present[j])
-        prev.parentNode.insertBefore(present[j], prev.nextElementSibling);
-    }
+    var n = 0;
+    for (var j = 0; j < seq.length; j++) if (saved.indexOf(seq[j]) >= 0) seq[j] = saved[n++];
+    for (var k = 0; k < seq.length; k++) seq[k].style.order = String(k + 1);
   }
 
   /* --- menus ------------------------------------------------------- */
@@ -177,14 +213,14 @@
     var del = document.createElement("button");
     del.className = "klaus-w-remove";
     del.textContent = "−"; // minus sign, the iOS delete badge
-    del.setAttribute("title", "Remove " + (labels[id] || id));
+    del.setAttribute("title", "Remove " + label(id));
     del.addEventListener("click", function (ev) {
       ev.stopPropagation();
       // Hide locally and record it as hidden — no rebuild, no scroll
       // jump; the next natural refresh renders without it. ＋ can offer
       // it back immediately because labels shipped in the boot state.
       w.style.display = "none";
-      hidden.push({ id: id, label: labels[id] || id });
+      hidden.push({ id: id, label: label(id) });
       send({ action: "remove", id: id });
       buildBar();
     });
@@ -246,16 +282,18 @@
     editing = true;
     document.body.classList.add("klaus-dash-editing");
     var ws = widgets();
-    for (var i = 0; i < ws.length; i++) {
-      var w = ws[i];
-      var shield = document.createElement("div");
-      shield.className = "klaus-w-shield";
-      w.appendChild(shield);
-      bindDrag(shield, w);
-      var id = w.getAttribute("data-w");
-      if (removable.indexOf(id) >= 0) addBadge(w, id);
-    }
+    for (var i = 0; i < ws.length; i++) dress(ws[i]);
     buildBar();
+  }
+
+  // Edit-mode chrome for one widget: the drag shield, and ⊖ if removable.
+  function dress(w) {
+    var shield = document.createElement("div");
+    shield.className = "klaus-w-shield";
+    w.appendChild(shield);
+    bindDrag(shield, w);
+    var id = w.getAttribute("data-w");
+    if (removable.indexOf(id) >= 0) addBadge(w, id);
   }
 
   function exitEdit() {
@@ -283,8 +321,6 @@
         y0: ev.clientY,
         moved: false,
         startOrder: currentOrder(),
-        homeParent: w.parentNode,
-        homeNext: w.nextElementSibling,
       };
       try {
         shield.setPointerCapture(ev.pointerId);
@@ -308,12 +344,10 @@
       var i = ws.indexOf ? ws.indexOf(w) : indexOfNode(ws, w);
       var rect = w.getBoundingClientRect();
       var neighbour = null;
-      var before = false;
       if (dy < 0 && i > 0) {
         var prev = ws[i - 1].getBoundingClientRect();
         if (rect.top < prev.top + prev.height / 2) {
           neighbour = ws[i - 1];
-          before = true;
         }
       } else if (dy > 0 && i < ws.length - 1) {
         var next = ws[i + 1].getBoundingClientRect();
@@ -322,10 +356,11 @@
         }
       }
       if (neighbour) {
+        // Swap CSS order, never the DOM (see widgets()).
         var oldTop = w.offsetTop;
-        if (before) neighbour.parentNode.insertBefore(w, neighbour);
-        else
-          neighbour.parentNode.insertBefore(w, neighbour.nextElementSibling);
+        var o = w.style.order;
+        w.style.order = neighbour.style.order;
+        neighbour.style.order = o;
         dragState.y0 += w.offsetTop - oldTop;
         w.style.transform =
           "translateY(" + (ev.clientY - dragState.y0) + "px) scale(1.02)";
@@ -358,8 +393,8 @@
     dragState = null;
     st.w.classList.remove("klaus-w-drag");
     st.w.style.transform = "";
-    // Back to the slot the drag started from.
-    st.homeParent.insertBefore(st.w, st.homeNext);
+    // Back to the order the drag started from.
+    applyOrder(st.startOrder);
   }
 
   /* --- global listeners -------------------------------------------- */
@@ -432,8 +467,13 @@
     removable = state.removable || [];
     labels = state.labels || {};
     hidden = (state.hidden || []).slice();
+    hiddenForeign = state.hiddenForeign || [];
+    savedOrder = state.order || [];
     if (!wrap()) return;
-    applyOrder(state.order || []);
+    var col = widgetById("decks").parentNode;
+    if (col.classList) col.classList.add("klaus-dash-col");
+    adopt();
+    applyOrder(savedOrder);
     if (!window.klausDashBound) {
       // Real Anki never re-runs this script in one document (every
       // refresh is a fresh page), but the guard keeps a double eval —
@@ -447,6 +487,7 @@
 
   window.klausDash = {
     wrap: wrap,
+    label: label,
     applyOrder: applyOrder,
     enterEdit: enterEdit,
     exitEdit: exitEdit,

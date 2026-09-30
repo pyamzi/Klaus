@@ -2240,6 +2240,7 @@ def manage_models_dialog(*_args: Any) -> None:
             # Preferences has no order UI, so carry the stored value —
             # read live per tick, in case the dashboard writes mid-preview.
             "dashboard_order": _dashboard.order_from_cfg(_pkg().get_config()),
+            "dashboard_hidden": _dashboard.hidden_foreign(_pkg().get_config()),
         }
 
     def apply_appearance_live() -> None:

@@ -37,6 +37,7 @@ nothing about DOM manipulation.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import background, theme
@@ -51,6 +52,135 @@ WIDGETS: tuple = (
     ("decks", None, "Decks"),
     ("heatmap", "heatmap_enabled", "Review Heatmap"),
 )
+
+
+# Other add-ons' blocks on the deck screen (AMBOSS's Qbank card, …) are
+# widgets too: the page names each ``x:<its id | .its-class | its tag>``.
+# Python never sees the DOM, so it checks only that shape; the order
+# keeps them in place and ``dashboard_hidden`` lists the removed ones.
+FOREIGN_ID = re.compile(r"^x:[A-Za-z0-9_.:#-]{1,80}$")
+MAX_FOREIGN = 40
+
+
+def is_foreign(wid: Any) -> bool:
+    return isinstance(wid, str) and FOREIGN_ID.match(wid) is not None
+
+
+def hidden_foreign(cfg: Any) -> list:
+    value = cfg.get("dashboard_hidden") if isinstance(cfg, dict) else None
+    out: list = []
+    if isinstance(value, list):
+        for wid in value:
+            if is_foreign(wid) and wid not in out and len(out) < MAX_FOREIGN:
+                out.append(wid)
+    return out
+
+
+_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+         "meta", "param", "source", "track", "wbr"}
+_LEAVE = {"table", "br", "script", "style", "link", "meta", "noscript", "template"}
+
+
+def _foreign_key(tag: str, attrs: dict, taken: set) -> str:
+    cls = (attrs.get("class") or "").split()
+    raw = attrs.get("id") or ("." + cls[0] if cls else tag)
+    key = "x:" + re.sub(r"[^A-Za-z0-9_.:#-]", "-", raw)[:80]
+    k, n = key, 2
+    while k in taken:
+        k, n = f"{key[:76]}-{n}", n + 1
+    taken.add(k)
+    return k
+
+
+def wrap_foreign(body: str, hidden: Any = ()) -> str:
+    """Wrap every other add-on's block among the deck screen's
+    ``<center>`` children in ``<div class="klaus-widget" data-w="x:…">``,
+    in the HTML, before the page parses. Never in the page: a custom
+    element re-runs its ``connectedCallback`` on every move (AMBOSS's
+    Qbank card builds a new React root each time, and drew three cards).
+    Anki's table, ``<br>``, the studied line, Klaus's own blocks and
+    scripts are left for ``web/dashboard.js``. Tolerant parse (implicit
+    closes); anything it can't account for returns *body* unchanged."""
+    from html.parser import HTMLParser
+
+    starts = [0]
+    for line in body.splitlines(keepends=True):
+        starts.append(starts[-1] + len(line))
+
+    class P(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=False)
+            self.stack: list = []
+            self.level = None  # stack depth of the first <center>
+            self.done = False
+            self.kids: list = []  # [tag, attrs, start, end]
+            self.bad = False
+
+        def _at(self) -> int:
+            line, col = self.getpos()
+            return starts[line - 1] + col
+
+        def handle_starttag(self, tag, attrs) -> None:
+            if self.done:
+                return
+            start = self._at()
+            end = start + len(self.get_starttag_text() or "")
+            if self.level is None:
+                if tag == "center":
+                    self.stack.append(tag)
+                    self.level = len(self.stack)
+                elif tag not in _VOID:
+                    self.stack.append(tag)
+                return
+            if len(self.stack) == self.level:
+                self.kids.append([tag, dict(attrs), start, end if tag in _VOID else None])
+            if tag not in _VOID:
+                self.stack.append(tag)
+
+        def handle_startendtag(self, tag, attrs) -> None:
+            if not self.done and self.level is not None and len(self.stack) == self.level:
+                start = self._at()
+                self.kids.append([tag, dict(attrs), start, start + len(self.get_starttag_text() or "")])
+
+        def handle_endtag(self, tag) -> None:
+            if self.done or tag not in self.stack:
+                return
+            at = self._at()
+            end = body.find(">", at) + 1
+            while self.stack:
+                top = self.stack.pop()
+                if self.level is not None and len(self.stack) == self.level and self.kids \
+                        and self.kids[-1][3] is None:
+                    if top != tag:
+                        self.bad = True  # a direct child closed only implicitly
+                    self.kids[-1][3] = end
+                if top == tag:
+                    break
+            if self.level is not None and len(self.stack) < self.level:
+                self.done = True
+
+    try:
+        p = P()
+        p.feed(body)
+        p.close()
+    except Exception:
+        return body
+    if not p.done or p.bad or any(k[3] is None for k in p.kids):
+        return body
+    hide = set(hidden or ())
+    taken: set = set()
+    out = body
+    wraps = []
+    for tag, attrs, start, end in p.kids:
+        cls = (attrs.get("class") or "").split()
+        if tag in _LEAVE or attrs.get("id") == "studiedToday" or any(c.startswith("klaus-") for c in cls):
+            continue
+        wraps.append((start, end, _foreign_key(tag, attrs, taken)))
+    for start, end, key in reversed(wraps):
+        style = ' style="display:none"' if key in hide else ""
+        out = (out[:start] + f'<div class="klaus-widget" data-w="{key}"{style}>'
+               + out[start:end] + "</div>" + out[end:])
+    return out
 
 
 def widget_ids() -> list:
@@ -70,9 +200,15 @@ def normalize_order(value: Any) -> list:
     known = widget_ids()
     order: list = []
     if isinstance(value, list):
+        foreign = 0
         for item in value:
-            if item in known and item not in order:
+            if item in order:
+                continue
+            if item in known:
                 order.append(item)
+            elif is_foreign(item) and foreign < MAX_FOREIGN:
+                order.append(item)
+                foreign += 1
     order.extend(wid for wid in known if wid not in order)
     return order
 
@@ -110,6 +246,7 @@ def boot_state(cfg: Any, edit: bool) -> dict:
     """
     return {
         "order": order_from_cfg(cfg),
+        "hiddenForeign": hidden_foreign(cfg),
         "edit": bool(edit),
         "removable": removable_ids(),
         "labels": {wid: label for wid, key, label in WIDGETS if key},
@@ -143,7 +280,7 @@ def parse_bridge(payload: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def apply_action(action: Any) -> dict | None:
+def apply_action(action: Any, cfg: Any = None) -> dict | None:
     """The whole config-mutation policy, as one pure transform.
 
     Bridge action -> the config updates it is allowed to make, or None
@@ -158,6 +295,11 @@ def apply_action(action: Any) -> dict | None:
         return {"dashboard_order": normalize_order(action.get("order"))}
     if act in ("remove", "add"):
         wid = action.get("id")
+        if is_foreign(wid):
+            hidden = [h for h in hidden_foreign(cfg) if h != wid]
+            if act == "remove":
+                hidden.append(wid)
+            return {"dashboard_hidden": hidden[-MAX_FOREIGN:]}
         for known, key, _label in WIDGETS:
             if known == wid and key:
                 return {key: act == "add"}
@@ -241,6 +383,13 @@ def dashboard_css() -> str:
         # the design on. Child selector outranks heatmap_css's own
         # .klaus-hm margin rule — no !important needed.
         " .klaus-widget > .klaus-hm { margin: 0; }"
+        # Widgets reorder by CSS `order`, never by moving nodes (an add-on's
+        # custom element re-renders on every move), so their <center> is a
+        # flex column; a stray <br> there would be an empty item.
+        " center.klaus-dash-col {"
+        " display: flex; flex-direction: column; align-items: center;"
+        " }"
+        " center.klaus-dash-col > br { display: none; }"
         " @keyframes klaus-jiggle {"
         " 0% { transform: rotate(-0.4deg); }"
         " 50% { transform: rotate(0.4deg); }"
@@ -452,6 +601,9 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
             _EDIT = False
             return
         web_content.head += "<style>" + dashboard_css() + "</style>"
+        # Other add-ons' blocks are wrapped HERE, in the HTML, so the page
+        # never moves them (see wrap_foreign).
+        web_content.body = wrap_foreign(web_content.body, hidden_foreign(_config()))
         # Body-appended, so it parses AFTER background.panel_js (hook
         # registration order: top_bar.setup() runs first) — the weld
         # must finish while `center > table` still matches, before the
@@ -487,7 +639,7 @@ def _on_js_message(handled: tuple, message: str, context: Any) -> tuple:
     if act == "edit-off":
         _EDIT = False
         return (True, None)
-    updates = apply_action(action)
+    updates = apply_action(action, _config())
     if updates is None:
         return (True, None)
     write_cfg(updates)

@@ -12,7 +12,9 @@
 //                  [#studiedToday]></table><div.klaus-hm></center>
 //   theme mode:    <center><table><tr.deck>…</table><br>
 //                  <div id=studiedToday><div.klaus-hm></center>
-// plus foreign addon content that must never be touched.
+// plus other add-ons' blocks, which Python (dashboard.wrap_foreign)
+// already wrapped in the HTML. Custom elements count their connects:
+// AMBOSS's re-renders on every one, so the page must never move them.
 "use strict";
 const fs = require("fs");
 
@@ -30,6 +32,24 @@ function matches(n, sel) {
   throw new Error("unmodelled selector: " + sel);
 }
 const hasClass = (n, c) => (n.className || "").split(/\s+/).includes(c);
+
+// Every insertion (re)connects the subtree's custom elements, as in a
+// browser: a move is a disconnect + connect.
+function connected(c) {
+  let root = c;
+  while (root.parentNode) root = root.parentNode;
+  if (root.tag !== "body" && root.tag !== "document") return; // detached: no connect
+  for (const n of [c, ...c.all()]) if (n.tag.includes("-")) n.connects = (n.connects || 0) + 1;
+}
+// What dashboard.wrap_foreign writes around an add-on block.
+function pw(id, child) {
+  const w = el("div", "klaus-widget");
+  w.setAttribute("data-w", id);
+  w.appendChild(child);
+  return w;
+}
+// style.order as a number (CSS order is how the page reorders).
+const ord = (w) => Number(w.style.order || 0);
 
 let SEQ = 0;
 function el(tag, cls, id) {
@@ -49,7 +69,7 @@ function el(tag, cls, id) {
     getAttribute(k) { return k in node.attrs ? node.attrs[k] : null; },
     appendChild(c) {
       if (c.parentNode) c.parentNode.removeChild(c);
-      c.parentNode = node; node.children.push(c); return c;
+      c.parentNode = node; node.children.push(c); connected(c); return c;
     },
     insertBefore(c, ref) {
       if (c.parentNode) c.parentNode.removeChild(c);
@@ -57,6 +77,7 @@ function el(tag, cls, id) {
       const i = ref ? node.children.indexOf(ref) : -1;
       if (i >= 0) node.children.splice(i, 0, c);
       else node.children.push(c);
+      connected(c);
       return c;
     },
     removeChild(c) {
@@ -137,10 +158,10 @@ function build(opts) {
     // one and fails the theme-trio case.
     banner = el("div", "foreign-banner");
     banner.appendChild(el("br"));
-    center.insertBefore(banner, table);
-    foreign = center.appendChild(el("div", "ankihub-thing"));
+    center.insertBefore(pw("x:.foreign-banner", banner), table);
+    foreign = el("div", "ankihub-thing");
     foreignBr = foreign.appendChild(el("br")); // a br the wrap must NOT take
-    center.appendChild(el("div", "klaus-curate-drop")); // pdf_drop's square
+    center.appendChild(pw("x:.ankihub-thing", foreign));
   }
   let hm = null;
   if (opts.heatmap !== false) hm = center.appendChild(el("div", "klaus-hm"));
@@ -158,6 +179,7 @@ function build(opts) {
   // fire() consults DOC._ls; keep them the same object.
   DOC._ls = document._ls;
   global.window = { innerWidth: 1200, innerHeight: 900 };
+  center.appendChild(el("script")); // never a widget
   global.pycmd = (msg) => SENT.push(msg);
   SENT.length = 0;
   return { body, center, table, studied, hm, foreign, foreignBr, banner };
@@ -191,8 +213,9 @@ ok("heatmap lands inside its own widget",
    d.hm.closest(".klaus-widget") === widget("heatmap"));
 ok("wrappers live in <center>, order decks-then-heatmap",
    widget("decks").parentNode === d.center
-   && d.center.children.indexOf(widget("decks"))
-      < d.center.children.indexOf(widget("heatmap")));
+   && ord(widget("decks")) < ord(widget("heatmap")));
+ok("<center> becomes the flex column CSS order works in",
+   hasClass(d.center, "klaus-dash-col"));
 ok("wrappers never carry Anki's drag classes (deck / top-level-drag-row)",
    document.querySelectorAll(".klaus-widget").every(
      (w) => !hasClass(w, "deck") && !hasClass(w, "top-level-drag-row")));
@@ -207,24 +230,67 @@ ok("theme mode: only the table's own <br> moved — foreign <br>s stay "
    + "put, including one EARLIER in document order",
    d.foreignBr.parentNode === d.foreign
    && d.banner.querySelectorAll("br").length === 1
-   && d.banner.closest(".klaus-widget") === null
+   && d.banner.closest(".klaus-widget") !== widget("decks")
    && widget("decks").querySelectorAll("br").length === 1);
 
 // 3. Saved order applied: heatmap above decks.
 d = build({});
 boot(Object.assign({}, STATE, { order: ["heatmap", "decks"] }));
 ok("saved order is applied — heatmap widget precedes decks",
-   d.center.children.indexOf(widget("heatmap"))
-   < d.center.children.indexOf(widget("decks")));
+   ord(widget("heatmap")) < ord(widget("decks")));
 
-// 4. Foreign content: present, never wrapped, never removed.
+// 4. Other add-ons' blocks, pre-wrapped by Python: ordered with the
+//    rest by CSS order, and NEVER moved — a custom element re-renders
+//    on every connect (AMBOSS drew three cards when the page moved it).
 d = build({ foreign: true });
-boot(Object.assign({}, STATE, { order: ["heatmap", "decks"] }));
-ok("foreign addon content survives wrap + reorder, outside any widget",
-   d.foreign.parentNode === d.center
-   && d.foreign.closest(".klaus-widget") === null
-   && d.banner.parentNode === d.center
-   && document.querySelectorAll(".klaus-curate-drop").length === 1);
+const amb = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb));
+const before4 = d.center.children.slice();
+boot(Object.assign({}, STATE, { order: ["x:amboss-qbank-widget", "heatmap", "decks"] }));
+ok("an add-on's block is ordered with Klaus's widgets",
+   ord(widget("x:amboss-qbank-widget")) < ord(widget("heatmap"))
+   && ord(widget("heatmap")) < ord(widget("decks")), [ord(widget("x:amboss-qbank-widget")), ord(widget("heatmap"))]);
+ok("...without moving it: connected once, and the add-on wrappers keep their DOM slots",
+   amb.connects === 1
+   && d.center.children.indexOf(widget("x:amboss-qbank-widget")) === before4.indexOf(widget("x:amboss-qbank-widget")),
+   String(amb.connects));
+ok("its insides are untouched", d.foreignBr.parentNode === d.foreign);
+ok("each is named after its id",
+   window.klausDash.label("x:amboss-qbank-widget") === "Amboss Qbank"
+   && window.klausDash.label("x:.ankihub-thing") === "Ankihub Thing");
+
+// 4a. Dragging it in edit mode swaps CSS order, never the DOM.
+d = build({});
+const amb2 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb2));
+boot(Object.assign({}, STATE, { edit: true, order: ["decks", "heatmap", "x:amboss-qbank-widget"] }));
+for (const id of ["decks", "heatmap", "x:amboss-qbank-widget"]) {
+  const w = widget(id);
+  w.getBoundingClientRect = () => {
+    const m = /translateY\((-?[\d.]+)px\)/.exec(w.style.transform || "");
+    const top = (ord(w) - 1) * 100 + (m ? Number(m[1]) : 0);
+    return { top, bottom: top + 50, height: 50, left: 0, right: 0, width: 0 };
+  };
+}
+const sh = widget("x:amboss-qbank-widget").querySelector(".klaus-w-shield");
+fire(sh, "pointerdown", { clientY: 225, button: 0, pointerId: 1 });
+fire(sh, "pointermove", { clientY: 145, pointerId: 1 });
+fire(sh, "pointerup", { clientY: 145, pointerId: 1 });
+ok("the drop reports the new order",
+   JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["decks","x:amboss-qbank-widget","heatmap"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+ok("...and the dragged block was never re-connected", amb2.connects === 1, String(amb2.connects));
+
+// 4b. A hidden one stays hidden, and ＋ offers it back.
+d = build({ foreign: true });
+boot(Object.assign({}, STATE, { edit: true, hiddenForeign: ["x:.ankihub-thing"] }));
+ok("a removed add-on block boots hidden",
+   widget("x:.ankihub-thing").style.display === "none");
+fire(document.querySelectorAll(".klaus-dash-bar")[0]
+  .children.find((c) => c.id === "klaus-dash-add"), "click");
+ok("...and ＋ names it", document.querySelectorAll(".klaus-dash-menu")[0]
+  .children.some((c) => c.textContent === "Ankihub Thing"));
+ok("its ⊖ is there in edit mode", widget("x:.foreign-banner").querySelectorAll(".klaus-w-remove").length === 1);
 
 // 5. Idempotency: Anki rebuilds via stdHtml, but a double eval on one
 //    document must not double-wrap.

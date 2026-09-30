@@ -326,12 +326,16 @@ removed. Use the external MCP client setup below.
   bottom (default `["decks", "heatmap"]`). Normally written by the
   dashboard itself: right-click a widget → *Edit Widgets…*, then drag
   to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
-  the widget's own toggle, e.g. `heatmap_enabled`). Unknown entries are
+  the widget's own toggle, e.g. `heatmap_enabled`). Other add-ons'
+  blocks on the deck screen (AMBOSS's Qbank card, an AnkiHub banner)
+  are widgets too, saved as `x:<their id or .class>`. Unknown entries are
   ignored; missing ones reappear in default order. Inert while
   `klausbook_design` is off — native mode draws no widgets at all, and
   the saved order waits for the design layer.
+- **dashboard_hidden**: the other add-ons' deck-screen blocks you removed
+  with ⊖ (default `[]`), as their `x:` ids; ＋ brings one back.
 
-Apart from `heatmap_enabled` and `dashboard_order` (written from the
+Apart from `heatmap_enabled`, `dashboard_order` and `dashboard_hidden` (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display
 keys above (the heatmap's own corner menu), all of these live in **KlausMate
 Preferences → Appearance**; press **Save** and they apply immediately
