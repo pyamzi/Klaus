@@ -1,14 +1,25 @@
-This folder stores Klaus data that survives add-on upgrades:
+This folder stores Klaus data that survives add-on upgrades.
+Implementation references are relative to the add-on folder one level up.
 
-- pdfs/, pdf_originals/, annotations/ — your imported lecture PDFs, their
-  pristine originals, and your highlights and notes.
-- contexts/ — extracted PDF text, used to match cards to a PDF.
-- card_index/, pdf_index/ — embedding vectors and match scores for
-  semantic search, plus each PDF's sensitivity setting.
-- drive.json, pdf_tabs.json — Library folders and open-tab state.
-- runtime/ — the Klaus-managed Ollama install, if you chose local
-  embeddings. Safe to delete after disabling "Manage Ollama
-  automatically" in Klausmate Preferences.
+- pdfs/, pdf_originals/, annotations/: imported PDFs, originals and annotations
+  (pdf_handler.py).
+- contexts/: extracted PDF text; card_index/ and pdf_index/: local vectors,
+  matches and per-PDF sensitivity (card_index.py, pdf_index.py).
+- drive.json, pdf_tabs.json: Library folders and viewer state (drive_store.py,
+  pdf_handler.py). backgrounds/: copied background images (background.py).
+- pages/: page records with slide text (page_store.py).
+- runtime/: Klaus-managed Ollama runtime (ollama_runtime.py). Disable Automatic
+  management, Save and stop the managed server before removing this install.
+  Ollama model storage belongs to the configured server, not necessarily here.
+- mcp_connection.json: private runtime discovery for the external MCP bridge
+  (anki_endpoint.py, scripts/mcp_stdio_bridge.py). Contains the current local
+  address and token. Do not share it. A fresh token is generated on endpoint
+  startup; matching discovery is removed on shutdown. A crash may leave a stale
+  file until the next startup. The bridge reads it for each request; copied
+  client configuration contains only stable paths, no credentials. POSIX mode
+  0600 is tested; native Windows ACL privacy still needs verification.
 
-Deleting anything else here loses that data permanently; Klaus keeps no
-second copy. Do not edit these files by hand.
+Runtime/model downloads use the network. Klaus's embedding inference is
+local. An external client's selected provider may receive the
+context that client requests. Keep backups of personal data before deleting
+files. Do not hand-edit runtime discovery or storage records.

@@ -449,8 +449,7 @@ def dialog_qss(night: bool) -> str:
 
     SynapsePro's settings-dialog language: window on ``bg``, every
     QGroupBox a white card (12px radius, 1px ``grey_light`` border),
-    buttons blue-primary by default with rounded 8px corners; a button
-    named ``SecondaryButton`` gets the grey treatment instead.
+    quiet utility buttons with an explicit accented default action.
     """
     c = palette(night)
     return f"""
@@ -475,18 +474,25 @@ def dialog_qss(night: bool) -> str:
     }}
     QLabel {{ color: {c['text']}; background: transparent; }}
     QPushButton {{
-        background-color: {c['blue']};
-        color: white;
-        border: {c['blue_border']};
+        background-color: {c['hover_subtle']};
+        color: {c['text']};
+        border: 1px solid transparent;
         border-radius: 8px;
-        padding: 6px 16px;
+        padding: 6px 14px;
         font-weight: 600;
     }}
-    QPushButton:hover {{ background-color: {c['blue_hover']}; }}
-    QPushButton:pressed {{ background-color: {c['blue_pressed']}; }}
-    /* Keyboard focus must be visible (critique P1): a bright-accent
-       ring via border. Buttons whose base border is "none" gain 1px on
-       focus — acceptable jitter; an invisible focus is not. */
+    QPushButton:hover {{ background-color: {c['grey_light']}; }}
+    QPushButton:pressed {{ background-color: {c['grey_mid']}; }}
+    QPushButton:default, QPushButton#PrimaryButton {{
+        background-color: {c['blue']}; color: white;
+    }}
+    QPushButton:default:hover, QPushButton#PrimaryButton:hover {{
+        background-color: {c['blue_hover']};
+    }}
+    QPushButton:default:pressed, QPushButton#PrimaryButton:pressed {{
+        background-color: {c['blue_pressed']};
+    }}
+    /* Reserve the border at rest so keyboard focus never shifts layout. */
     QPushButton:focus {{ border: 1px solid {c['blue_bright']}; }}
     QPushButton:disabled {{
         background-color: {c['grey_light']};
@@ -495,7 +501,7 @@ def dialog_qss(night: bool) -> str:
     QPushButton#SecondaryButton {{
         background-color: {c['grey_light']};
         color: {c['text']};
-        border: none;
+        border: 1px solid transparent;
     }}
     QPushButton#SecondaryButton:hover {{ background-color: {c['grey_mid']}; }}
     QPushButton#SecondaryButton:pressed {{
@@ -510,6 +516,16 @@ def dialog_qss(night: bool) -> str:
         background-color: {c['red']};
         color: white;
     }}
+    QPushButton#AdvancedModelSettings {{
+        background: transparent; color: {c['text_muted']};
+        border: 1px solid transparent; text-align: left;
+        padding: 8px 0; font-weight: 500;
+    }}
+    QPushButton#AdvancedModelSettings:hover {{ color: {c['text']}; }}
+    QPushButton#AdvancedModelSettings:pressed {{ background: {c['hover_subtle']}; }}
+    QPushButton#SecondaryButton:focus,
+    QPushButton#DangerButton:focus,
+    QPushButton#AdvancedModelSettings:focus {{ border: 1px solid {c['blue_bright']}; }}
     QComboBox, QLineEdit {{
         background-color: {c['surface']};
         color: {c['text']};
@@ -633,10 +649,10 @@ def dialog_qss(night: bool) -> str:
         background-color: {accent_rgba(night, 0.16)};
         color: {c['blue']};
     }}
-    QLabel#PageTitle {{ font-size: 24px; font-weight: 800; }}
+    QLabel#PageTitle {{ font-size: 24px; font-weight: 600; }}
     QLabel#PageSubtitle {{ color: {c['text_muted']}; font-size: 12px; }}
     QLabel#SettingName {{ font-size: 13px; font-weight: 600; }}
-    QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 11px; }}
+    QLabel#SettingDesc {{ color: {c['text_muted']}; font-size: 12px; }}
     /* K-111 (manage_models's install/setup page): heading + subsection
        typography, sized like SubHeaderLabel/SettingName above so the
        install flow doesn't invent its own scale. */
@@ -791,13 +807,16 @@ def panel_header_qss(night: bool) -> str:
     QWidget#KlausPanelHeader QToolButton {{
         background: transparent;
         color: {c['text_muted']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 6px;
-        padding: 2px 6px;
+        padding: 3px 5px;
     }}
     QWidget#KlausPanelHeader QToolButton:hover {{
         background: {c['hover_subtle']};
         color: {c['text']};
+    }}
+    QWidget#KlausPanelHeader QToolButton:focus {{
+        border: 1px solid {c['blue_bright']};
     }}
     QWidget#KlausPanelHeader QToolButton:pressed {{
         background: {c['grey_mid']};
@@ -894,310 +913,18 @@ def find_bar_qss(night: bool) -> str:
     QWidget#KlausFindBar QToolButton {{
         background: transparent;
         color: {c['text_muted']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 6px;
         padding: 1px 6px;
         font-weight: 600;
     }}
+    QWidget#KlausFindBar QToolButton:focus {{
+        border: 1px solid {c['blue_bright']};
+    }}
+    QWidget#KlausFindBar QToolButton:pressed {{ background: {c['grey_mid']}; }}
     QWidget#KlausFindBar QToolButton:hover {{
         background: {c['hover_subtle']};
         color: {c['text']};
-    }}
-    """
-
-
-def library_qss(night: bool) -> str:
-    """The Library window (DriveWindow), in the VS Code Explorer
-    vernacular (K-117 — Pouya: "make it look like the VSCode UI"):
-    compact 22px rows of 13px type, FLAT full-width hover/selection
-    bands, chevron twisties on folders (shipped SVG files — QSS images
-    cannot be data: URIs, see :func:`_asset_url`), an uppercase
-    letter-spaced muted section caption (``#LibrarySectionHeader`` —
-    the "LIBRARY" label; Qt QSS has no text-transform, so the text
-    itself is uppercase in pdf_drive), quiet flat toolbar buttons, and
-    11px muted column headers. Numeric-column right-alignment is
-    per-item state set in pdf_drive; this sheet only paints. The
-    Library keeps its button inversion of :func:`dialog_qss` — quiet
-    default, ``PrimaryButton`` opts into blue.
-
-    K-130 (HIG pass, Pouya screenshot 2026-08-31) refines WITHIN that
-    vernacular: styled ``::up-arrow``/``::down-arrow`` sort glyphs
-    parked in a 16px ``::section`` padding-right reserve (Qt's stock
-    chevron used to paint OVER the caption text — "Note∧"); weight-500
-    headers; hover/pressed/focus affordance on the still-quiet caption
-    buttons; and the selection band tinted with the ACTIVE accent
-    (:func:`accent_rgba` at 0.16, the SettingsNav fill) instead of the
-    grey ``selection_bg``, with full-strength text.
-
-    A selected tree ROW is two paint regions, not one: the item AND
-    the branch (indentation/disclosure-arrow) cell that every row
-    reserves, folder or not — same trap as Browse's sidebar
-    (``sidebar_tree_qss``). Styling only ``::item:selected`` left Qt
-    painting the branch cell with the raw palette Highlight colour —
-    system blue — which showed up as a stray tinted block jammed
-    against the item's rounded corner (live screenshot, 2026-08-30).
-    ``selection-background-color: transparent`` stops that underlay
-    outright; the ``::branch`` states recolour the reserved cell to
-    match the item exactly, and ``show-decoration-selected: 1`` makes
-    the band span the indent column too, so hover/selection read as
-    ONE flat full-width bar — the VS Code treatment, and exactly what
-    the no-radius rule below already demanded.
-
-    K-175 (the Explorer redesign, library_explorer.py) moves the tree
-    and its header onto ``bg`` — VS Code's sidebar is the grey ground,
-    its editor the white one, and the tree pane IS the sidebar here —
-    mixes the accent band over that ground, draws a hairline along
-    each sash, and styles the ``QToolButton#LibraryGlyph`` caption
-    actions. Icons, indent guides and the column-0 band are painted by
-    the delegate, which reads the SAME tokens as this sheet.
-
-    Since 2026-09-01 (Pouya: "I want the panels, like the left panel,
-    to be the same color as the top bar") the tree and its header move
-    again, one token further: off ``bg`` onto ``chrome`` — the top
-    bar's own token, and the same one Task 1 of the constellation-and-
-    panel-integration plan already painted the embedding map on, which
-    is what makes the map read as part of this panel rather than a
-    card dropped onto it. ``BAND_BASE`` (library_explorer.py) and the
-    two ``accent_mix`` calls in the selection rules below move with
-    it, so the band keeps compositing over the tree's REAL ground
-    instead of a retired one.
-
-    A 2026-09-02 review found the window's own splitter handles could
-    not stay on ``bg`` as first shipped: on the map-dock sash, where
-    both neighbouring panes are NOW chrome, a ``bg`` grab measured as a
-    7-of-7px stripe belonging to neither pane — a visible regression on
-    exactly the seam Step 6 asks to read as "one flat surface". Each
-    handle's grab now matches the pane its hairline is flush to
-    (chrome) instead of carrying a third colour of its own: on the map
-    dock that puts the sash back to a 1px hairline with an invisible
-    grab (VS Code's own treatment, restored); on the main sash it still
-    reads as a real seam, since the PDF pane on the other side is
-    ``bg`` (Task 8) — a step darker. ``pdf_panel_qss``'s own scoped
-    copy of this rule, for the viewer's internal thumb-strip splitter,
-    stays on ``bg`` — that splitter's neighbours are still ``bg``.
-    """
-    c = palette(night)
-    return f"""
-    QWidget#KlausLibraryWindow {{
-        background-color: {c['chrome']};
-        color: {c['text']};
-        font-size: 13px;
-    }}
-    QLabel#LibrarySectionHeader {{
-        color: {c['text_muted']};
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 1px;
-        background: transparent;
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget {{
-        /* chrome, not bg (2026-09-01, Pouya: "the panels the same
-           colour as the top bar"): the sidebar and the bar are one
-           surface; the PDF pane, on bg, is the step darker. */
-        background-color: {c['chrome']};
-        alternate-background-color: {c['chrome']};
-        color: {c['text']};
-        border: none;
-        padding: 0px;
-        font-size: 13px;
-        selection-background-color: transparent;
-        show-decoration-selected: 1;
-        outline: 0;
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::item {{
-        /* Deliberately NO border-radius here. ::item is a per-CELL
-           subcontrol, never a row, and this tree has four columns
-           (PDF / Retention / Cards / Notes) — so a radius rounds each
-           column's selection box on its own, and the adjacent rounded
-           corners notch the band at every column boundary. That is the
-           visible bug: "bumps" along what should be one straight
-           highlight. sidebar_tree_qss, the addon's other tree, has
-           never carried a radius on ::item; this one was the outlier.
-           A rounded FULL-ROW pill is not expressible in Qt QSS at all —
-           there is no first-/last-column selector — so it would take a
-           QStyledItemDelegate painting one rect across the viewport.
-           min-height 22px is the VS Code Explorer row — and the
-           vertical padding is 0 because it ADDS to that: with 1px top
-           and bottom the measured row was 24px (offscreen, K-175),
-           so "22px rows" had been the sheet's word, not the pixels. */
-        min-height: 22px;
-        padding: 0px 4px;
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::item:hover {{
-        background: {c['hover_subtle']};
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::item:selected {{
-        /* The ACTIVE accent at the SettingsNav alpha, not the grey
-           selection_bg (K-130) — but pre-composited OPAQUE
-           (accent_mix): the band spans two paint regions, and an rgba
-           fill composites over each region's own base (measured
-           different greys, offscreen 2026-08-31); one opaque ink is
-           identical in both by construction. Full-strength text on
-           top; recolours with every colour theme either way. The base
-           is chrome, not bg, since 2026-09-01 — it must always be the
-           tree's REAL ground or the band tints the wrong paper. */
-        background: {accent_mix(night, 0.16, 'chrome')};
-        color: {c['text']};
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::branch {{
-        background: transparent;
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::branch:hover {{
-        background: {c['hover_subtle']};
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::branch:selected {{
-        background: {accent_mix(night, 0.16, 'chrome')};
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:closed {{
-        image: {_asset_url('chevron-right-night.svg' if night else 'chevron-right-day.svg')};
-    }}
-    QWidget#KlausLibraryWindow QTreeWidget::branch:has-children:open {{
-        image: {_asset_url('chevron-night.svg' if night else 'chevron-day.svg')};
-    }}
-    QWidget#KlausLibraryWindow QHeaderView {{
-        /* The header WIDGET, not just its sections: the area beyond the
-           last column is bare QHeaderView, and unstyled it painted the
-           palette base — a bright block in night mode (offscreen
-           render, 2026-08-31). Shares the tree's ground below — chrome,
-           since 2026-09-01 — or the column captions sit in a stripe of
-           the tree's OLD colour, sandwiched between two chrome bands. */
-        background: {c['chrome']};
-        border: none;
-    }}
-    QWidget#KlausLibraryWindow QHeaderView::section {{
-        background: {c['chrome']};
-        color: {c['text_muted']};
-        border: none;
-        border-bottom: 1px solid {c['grey_light']};
-        /* The 16px right padding is a RESERVE for the sort glyph
-           (K-130): the ::up/down-arrow subcontrols below live in the
-           section's padding box, so caption text (the content box)
-           and glyph can never overlap at any column width — a narrow
-           column elides the text instead. */
-        padding: 4px 8px;
-        font-size: 11px;
-        /* 500, not 600 — column headers are secondary structure
-           (HIG); 600 shouted over 13px body rows. */
-        font-weight: 500;
-    }}
-    /* Sort indicator (K-130). Unstyled, Qt drew its stock chevron
-       INSIDE the caption's text area — the "Note∧" mess (screenshot,
-       2026-08-31). Styling the subcontrols makes the glyph ours: a
-       small muted triangle via the border trick (QSS ``image:``
-       cannot take a data: URI and no up-chevron SVG ships in web/),
-       parked centre-right in the padding reserve above. */
-    QWidget#KlausLibraryWindow QHeaderView::down-arrow {{
-        /* A real image with an explicit size, NOT the zero-size
-           border-triangle hack: Qt derives the sorted section's
-           indicator reserve from this subcontrol's metrics, and the
-           zero-size hack made it compute a bogus huge reserve that
-           elided even 'Notes' at 88px (offscreen probes,
-           2026-08-31). 8x5 + margins = a truthful ~16px reserve. */
-        image: {_asset_url('sort-down-night.svg' if night else 'sort-down-day.svg')};
-        width: 8px;
-        height: 5px;
-        margin-left: 3px;
-    }}
-    QWidget#KlausLibraryWindow QHeaderView::up-arrow {{
-        image: {_asset_url('sort-up-night.svg' if night else 'sort-up-day.svg')};
-        width: 8px;
-        height: 5px;
-        margin-left: 3px;
-    }}
-    QWidget#KlausLibraryWindow QPushButton {{
-        background-color: transparent;
-        color: {c['text_muted']};
-        /* Transparent 1px border, not none: :focus recolours it in
-           place, so the ring costs zero layout jitter (dialog_qss's
-           border-none buttons accept a 1px shift on focus; the quiet
-           caption row shouldn't). Radius stays 6px — the K-110
-           small-control step; the spec's 5px is off-scale. */
-        border: 1px solid transparent;
-        border-radius: 6px;
-        padding: 4px 8px;
-        font-size: 12px;
-        font-weight: 600;
-    }}
-    QWidget#KlausLibraryWindow QPushButton:hover {{
-        background-color: {c['hover_subtle']};
-        color: {c['text']};
-    }}
-    QWidget#KlausLibraryWindow QPushButton:pressed {{
-        /* One VISIBLE step past the hover fill in each palette: dark
-           grey_mid equals dark hover_subtle (#404040), so dark steps
-           on to grey_dark; light steps hover_subtle -> grey_mid (the
-           panel-header quiet-toolbutton convention). */
-        background-color: {c['grey_dark'] if night else c['grey_mid']};
-    }}
-    QWidget#KlausLibraryWindow QPushButton:focus {{
-        border: 1px solid {c['blue_bright']};
-    }}
-    QWidget#KlausLibraryWindow QPushButton#PrimaryButton {{
-        background-color: {c['blue']};
-        color: white;
-        border: {c['blue_border']};
-    }}
-    QWidget#KlausLibraryWindow QPushButton#PrimaryButton:hover {{
-        background-color: {c['blue_hover']};
-    }}
-    /* The window's own two splitters — the main horizontal one and the
-       map dock's vertical one — still take their handle colour from
-       here. K-153 COPIED this rule into pdf_panel_qss rather than
-       moving it: that copy is scoped under #KlausPdfPanel so it reaches
-       only the viewer's internal thumb-strip splitter (in every host,
-       not just this window), and these two keep theirs. The two RULES
-       diverge on purpose since the 2026-09-02 fix round: this one
-       follows the panel onto chrome, pdf_panel_qss's copy stays on bg
-       — the viewer pane it grabs is bg too (Task 8), so that handle
-       still reads as a seam in ITS OWN pane's ground. */
-    QWidget#KlausLibraryWindow QSplitter::handle {{
-        background: {c['chrome']};
-    }}
-    /* K-175: VS Code draws a 1px sideBar.border along its sash and
-       leaves the GRAB itself the colour of the pane it closes — never
-       a third colour of its own (fixed 2026-09-02: a bg grab between
-       two now-chrome panes measured as a 7px stripe belonging to
-       neither, not the invisible grab this comment used to claim).
-       :horizontal is the SPLITTER's orientation (a vertical bar
-       between side-by-side panes), so the hairline sits on the bar's
-       left edge, flush against the pane it closes; the map dock's
-       vertical splitter gets the same line on its top edge — and on
-       THAT splitter, both panes are chrome, so the rule above puts the
-       grab back to invisible, hairline only. On the main sash the grab
-       is chrome too, reading as part of the tree side; the PDF pane
-       past the hairline is bg (Task 8), a step darker, so the seam
-       still shows there. Width is geometry and lives in
-       library_explorer (SASH_W), set from pdf_drive. */
-    QWidget#KlausLibraryWindow QSplitter::handle:horizontal {{
-        border-left: 1px solid {c['grey_light']};
-    }}
-    QWidget#KlausLibraryWindow QSplitter::handle:vertical {{
-        border-top: 1px solid {c['grey_light']};
-    }}
-    /* K-175: the section-caption glyph actions (library_explorer.
-       GlyphButton). Same quiet-at-rest / hover / pressed / focus
-       ladder as the caption QPushButtons above, on a QToolButton that
-       paints its own 16px glyph. Zero padding: the glyph is centred
-       by the widget in a fixed 24x22 box. The id is repeated on
-       :disabled so it outranks the resting rule (CLAUDE.md: an id
-       outranks a pseudo-state). */
-    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph {{
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        padding: 0px;
-    }}
-    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:hover {{
-        background: {c['hover_subtle']};
-    }}
-    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:pressed {{
-        background: {c['grey_dark'] if night else c['grey_mid']};
-    }}
-    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:focus {{
-        border: 1px solid {c['blue_bright']};
-    }}
-    QWidget#KlausLibraryWindow QToolButton#LibraryGlyph:disabled {{
-        background: transparent;
     }}
     """
 
@@ -1334,52 +1061,6 @@ def thumb_strip_qss(night: bool) -> str:
     """
 
 
-def transcript_strip_qss(night: bool) -> str:
-    """The transcript strip under the page, in BOTH PDF renderers
-    (Plan 2 D6) — objectName ``KlausTranscriptStrip`` for the native
-    viewer's Qt widget (the pdf.js side draws its own copy of this
-    same language straight in CSS, off ``theme.css_vars`` — see
-    ``web/pdfjs_viewer.html``'s ``.klaus-transcript`` rules). A
-    ``chrome`` ground with a ``grey_light`` hairline on top — the same
-    seam ``dialog_qss``'s RowSeparator/ButtonBarLine draw — and the
-    chevron plus the transcript text both in ``text_muted`` at 12px:
-    the lecturer's words are a caption under the page, not body copy
-    competing with it.
-
-    The ``QScrollArea`` rule is load-bearing, not tidiness (PR #4 sixth
-    review): a scroll area paints its VIEWPORT child, and Qt clears that
-    viewport's own palette fill only because this rule declares the
-    scroll area transparent. Narrow or delete it and the transcript body
-    comes back as an opaque palette-coloured rectangle over the strip's
-    chrome — a dark-mode pixel read in tests/test_transcript_strip.py
-    fails if it ever does.
-    """
-    c = palette(night)
-    return f"""
-    QWidget#KlausTranscriptStrip {{
-        background-color: {c['chrome']};
-        border-top: 1px solid {c['grey_light']};
-    }}
-    QWidget#KlausTranscriptStrip QToolButton {{
-        background: transparent;
-        border: none;
-        color: {c['text_muted']};
-        font-size: 12px;
-        font-weight: 600;
-        padding: 2px 0px;
-    }}
-    QWidget#KlausTranscriptStrip QScrollArea {{
-        background: transparent;
-        border: none;
-    }}
-    QWidget#KlausTranscriptStrip QLabel {{
-        background: transparent;
-        color: {c['text_muted']};
-        font-size: 12px;
-    }}
-    """
-
-
 def drop_zone_qss(
     night: bool, object_name: str, idle_border: bool = True
 ) -> str:
@@ -1434,25 +1115,6 @@ def accent_rgba(night: bool, alpha: float) -> str:
     h = palette(night)["blue_bright"].lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r}, {g}, {b}, {alpha:g})"
-
-
-def accent_mix(night: bool, alpha: float, base: str = "surface") -> str:
-    """``blue_bright`` pre-composited over the ``base`` token (default
-    ``surface``) at *alpha*, as OPAQUE hex. For selection bands that
-    span two QSS paint regions (tree item + branch): an rgba fill
-    composites over whatever base each region happens to have —
-    measured different greys per region on the Library tree
-    (offscreen, 2026-08-31) — while one opaque ink is identical
-    everywhere by construction. ``base`` exists because the Library
-    tree moved onto ``bg`` (K-175): a band mixed over ``surface`` on a
-    ``bg`` ground is a tint of the wrong paper."""
-    c = palette(night)
-    ah, sh = c["blue_bright"].lstrip("#"), c[base].lstrip("#")
-    mixed = (
-        round(int(ah[i:i + 2], 16) * alpha + int(sh[i:i + 2], 16) * (1 - alpha))
-        for i in (0, 2, 4)
-    )
-    return "#%02X%02X%02X" % tuple(mixed)
 
 
 def _toolbar_vars(c: dict, night: bool) -> str:
@@ -1514,6 +1176,21 @@ def _chip_hover_rules() -> str:
 def _chip_active_rules() -> str:
     """Chip press: one veil step stronger."""
     return "background: var(--klaus-press) !important;"
+
+
+def web_control_css(selector: str, accent: str = "var(--klaus-accent)") -> str:
+    """Immediate press feedback and keyboard focus for a chrome control."""
+    return f"""
+    {selector} {{ font-optical-sizing: auto; touch-action: manipulation; }}
+    {selector}:active {{ filter: brightness(0.92); transition: none; }}
+    {selector}:focus-visible {{
+        outline: 2px solid {accent} !important;
+        outline-offset: 2px !important;
+    }}
+    @media (prefers-contrast: more) {{
+        {selector} {{ outline: 1px solid currentColor; outline-offset: -1px; }}
+    }}
+    """
 
 
 def toolbar_css() -> str:
@@ -1592,6 +1269,34 @@ def toolbar_css() -> str:
        so the star sits in the SAME spot whether or not this sheet is
        injected — the design gate must never move the mark. Nothing
        mode-specific is left to say about it here. */
+    /* Other add-ons' toolbar items that draw their OWN chip artwork
+       (rather than using .hitem) don't know about this bar's chrome.
+       AMBOSS's `.amboss-indicator` is the case on hand: a baked-SVG
+       toggle it absolutely-positions itself, with no class we can ask
+       it to share. Two fixes, Klaus-side only — never touch the
+       add-on itself: (1) its `top: 0.1em` was tuned for Anki's stock
+       (shorter) toolbar; against this bar's 44px min-height that pins
+       it too high, so re-centre it the same way every .hitem is
+       centred, and give it the same 12px edge gutter as `.header`'s
+       own padding. (2) its day-mode artwork bakes an opaque white
+       pill — a white sticker on any chrome that isn't also white.
+       `multiply` erases pure-white pixels against whatever is
+       actually behind them while leaving the dark wordmark and the
+       accent triangle alone, which is exactly the see-through effect
+       a transparent chip would have had. The night variant ships its
+       own deliberately-coloured badge with WHITE text on a navy fill
+       instead — multiply there would blend that white text into the
+       chrome too and erase the one thing that has to stay legible, so
+       it ships untouched: a coloured badge, not a broken one. */
+    .amboss-indicator {{
+        top: 50% !important;
+        right: 12px !important;
+        transform: translateY(-50%) !important;
+    }}
+    .amboss-indicator.amboss-indicator-day {{
+        mix-blend-mode: multiply;
+    }}
+    {web_control_css(".header .hitem")}
     """
 
 
@@ -1635,6 +1340,7 @@ def bottombar_css() -> str:
     #header button:hover {{ {_chip_hover_rules()} }}
     #header button:active {{ {_chip_active_rules()} }}
     #header button:focus {{ outline: 0 !important; }}
+    {web_control_css("#header button")}
     """
 
 
@@ -1825,6 +1531,17 @@ def sidebar_tree_qss(night: bool) -> str:
     QTreeView::branch:selected {{
         background: {c['selection_bg']};
     }}
+    /* Styling ::branch at all hands the whole arrow column to the
+       stylesheet, and Qt then draws NO disclosure arrow unless an image
+       is given — the sidebar's folders showed no arrows at all. */
+    /* Square SVGs with the chevron drawn small in the middle: Qt
+       stretches a branch image over the whole indent cell. */
+    QTreeView::branch:has-children:closed {{
+        image: {_asset_url('branch-closed-night.svg' if night else 'branch-closed-day.svg')};
+    }}
+    QTreeView::branch:has-children:open {{
+        image: {_asset_url('branch-open-night.svg' if night else 'branch-open-day.svg')};
+    }}
     """
 
 
@@ -1850,7 +1567,7 @@ def utility_window_qss(night: bool) -> str:
     QPushButton {{
         background-color: {c['grey_light']};
         color: {c['text']};
-        border: none;
+        border: 1px solid transparent;
         border-radius: 8px;
         padding: 5px 14px;
         font-weight: 600;
@@ -1861,13 +1578,15 @@ def utility_window_qss(night: bool) -> str:
     QPushButton:pressed {{
         background-color: {c['grey_dark']};
     }}
+    QPushButton:focus, QPushButton:default:focus {{ border: 1px solid {c['blue_bright']}; }}
+    QPushButton:default:pressed {{ background-color: {c['blue_pressed']}; }}
     QPushButton:disabled {{
         color: {c['text_faint']};
     }}
     QPushButton:default {{
         background-color: {c['blue']};
         color: white;
-        border: {c['blue_border']};
+        border: 1px solid transparent;
     }}
     QPushButton:default:hover {{
         background-color: {c['blue_hover']};
@@ -1970,6 +1689,7 @@ def reviewer_bar_css() -> str:
         outline: 2px solid var(--klaus-accent) !important;
         outline-offset: 1px !important;
     }}
+    {web_control_css("button")}
     """
 
 
@@ -2014,6 +1734,8 @@ def editor_css() -> str:
         color: var(--klaus-text-muted);
         font-size: 11px;
     }}
+    {web_control_css(".editor-toolbar button")}
+    {web_control_css(".button-toolbar button")}
     """
 
 

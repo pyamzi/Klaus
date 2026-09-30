@@ -174,7 +174,7 @@ section("duck-typed viewer surface")
 for attr in ("load_path", "set_page_texts", "load_annotations",
              "set_document", "clear_document", "go_to_page",
              "scroll_position", "restore_scroll_position",
-             "toggle_thumbnails", "set_transcript", "_apply_mirror",
+             "toggle_thumbnails", "_apply_mirror",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))
 
@@ -248,8 +248,6 @@ check("a profile/quit sweep exists as backstop",
       hasattr(pdf_viewer, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
-check("Library close tears the sidebar down",
-      "sidebar.cleanup()" in _src("pdf_drive.py"))
 check("editor panel close tears the sidebar down",
       "_sidebar.cleanup()" in _src("__init__.py"))
 check("sweep registered on profile switch AND quit",
@@ -866,6 +864,30 @@ check("the swatch row lives inside #annobar, so it inherits the bar's "
 check("picking a colour with a live selection highlights it now "
       "(same move as arming Highlight)",
       "if (selectionRectMap()) addHighlightFromSelection();" in _HTML116)
+
+section("K-154: annobar carries a thumbnails toggle — reachable from "
+        "every host, not just the editor panel's own header button")
+# K-153 found the thumbnail toggle lived ONLY in the editor panel
+# (__init__.py's tab-header button); on the pdfjs renderer
+# klausToggleThumbs (below) had no in-page control and no keyboard
+# binding at all, so thumbnails were 100% unreachable from the Library
+# and the Lecture dock. The fix mirrors K-116's own move for
+# Highlight/Add Text: put the affordance INSIDE the already
+# host-agnostic annobar rather than in one host's chrome.
+check("annobar grows an eighth control: Thumbnails (the seven from "
+      "K-116/K-150 plus this one)",
+      'id="annobar"' in _HTML116 and 'id="abThumbs"' in _HTML116)
+check("HIG Title Case tooltip, matching Highlight/Add Text's own "
+      "shortcut-less style",
+      'title="Thumbnails"' in _HTML116)
+_AB_THUMBS_SPLIT = _HTML116.split('("abThumbs").addEventListener(', 1)
+check("clicking it drives the SAME klausToggleThumbs API the editor "
+      "panel's header button already used — no second toggle path",
+      len(_AB_THUMBS_SPLIT) == 2
+      and "klausToggleThumbs()" in _AB_THUMBS_SPLIT[1][:200])
+check("the button lives INSIDE #annobar (the bar every host already "
+      "renders), not a host-specific chrome row",
+      'id="abThumbs"' in _ANNOBAR_MARKUP)
 
 section("K-149: merging happens at MINT time, never in storage")
 # pdf_handler collapses duplicates ONLY for origin=="external" records
@@ -1791,198 +1813,139 @@ check("nothing sets the renderer to anything but 'native' outside an "
       % ([(ln, v) for ln, v, g in _assigns164 if v != "'native'" and not g],),
       not [1 for _ln, _v, _g in _assigns164 if _v != "'native'" and not _g])
 
-section("K-258: transcript strip bridge (Plan 2 D6)")
-# The strip under the page in both renderers. This file covers the
-# pdf.js half: the in-page JS function, and that the Python side
-# (both here and pdf_viewer.py's PdfSidebar, which owns WHEN to call
-# it) reaches it on a page change and on a page_store notification.
-# The native-renderer Qt widget itself is tests/test_transcript_strip.py's
-# job; the QSS tokens are test_theme.py's.
-_HTML258 = _src(os.path.join("web", "pdfjs_viewer.html"))
-check("the page defines klausSetTranscript",
-      "window.klausSetTranscript = function" in _HTML258)
-check("it is collapsible via its own chevron, not a plain show/hide",
-      "ktHead" in _HTML258 and 'classList.toggle("collapsed")' in _HTML258)
-check("hidden when the text is empty",
-      'classList.toggle("visible", !!text)' in _HTML258)
-check("the transcript text lands as textContent, never innerHTML — a "
-      "lecture transcript is untrusted content and must carry no "
-      "markup of its own",
-      '.textContent = text' in _HTML258)
+section("K-154: native renderer — a keyboard binding reaches "
+        "toggle_thumbnails, the same way Ctrl+F reaches the find bar")
+# The pdfjs half of K-154 lives above (the annobar button); the native
+# renderer's own affordance is a keyboard shortcut, claimed the same
+# way every other viewer combo already is (_match_shortcut_combo /
+# _dispatch_shortcut_combo, pdf_viewer.py) rather than a new mechanism.
+# This needs REAL Qt.Key/KeyboardModifier enums — the plain aqt stub's
+# Qt is a permissive _Dummy whose attribute lookups all collapse to the
+# same object (see anki_stubs.py), so Key_T and Key_F would compare
+# equal and the test would prove nothing. klausmate.pdf_viewer is
+# therefore imported here with REAL PyQt6 behind aqt.qt (test_drive.py's
+# K-117 pattern) — the module is not needed anywhere else in this
+# pdfjs-focused file, so swapping the stub this late costs nothing.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+try:
+    from PyQt6 import QtCore as _QtC154
+    from PyQt6 import QtGui as _QtG154
+    from PyQt6 import QtWidgets as _QtW154
 
-# PR #4 third re-review (Copilot), finding 4: the chevron swapped its
-# glyph and nothing else, so the collapsed/expanded state existed only
-# as a typographic hint. A screen reader read "▸ Transcript" as a button
-# with no state at all. aria-expanded is the standard for exactly this
-# control, and the header must also name the region it controls.
-_KTHEAD_MARKUP = _HTML258.split('id="ktHead"', 1)[1].split(">", 1)[0] if 'id="ktHead"' in _HTML258 else ""
-check("the toggle names the body it controls (which carries an id to "
-      "point at)", 'id="ktBody"' in _HTML258 and 'aria-controls="ktBody"' in _KTHEAD_MARKUP,
-      repr(_KTHEAD_MARKUP))
-_KTHEAD_FN = _HTML258.split('getElementById("ktHead").addEventListener', 1)
-check("the click handler exists as a real function to inspect", len(_KTHEAD_FN) == 2)
-def _uncommented(js: str) -> str:
-    """The JS with `//` line comments dropped, so a source pin cannot be
-    satisfied by a commented-out line (K-269 review). Crude on purpose:
-    neither extracted body carries a `://` literal."""
-    return "\n".join(line.split("//", 1)[0] for line in js.splitlines())
+    _HAVE_QT154 = True
+except Exception as _qt_e154:  # noqa: BLE001
+    _HAVE_QT154 = False
+    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e154}) — "
+          "the native shortcut binding needs real Qt enums")
 
-_KTHEAD_BODY = _uncommented(_KTHEAD_FN[1].split("});", 1)[0]) if len(_KTHEAD_FN) == 2 else ""
-check("...and every toggle publishes the new state as aria-expanded, "
-      "computed from the class that actually decides it rather than a "
-      "second flag that could drift from it",
-      'setAttribute("aria-expanded"' in _KTHEAD_BODY
-      and 'classList.contains("collapsed")' in _KTHEAD_BODY,
-      repr(_KTHEAD_BODY))
-check("klausSetTranscript sets it too, so the state is published the "
-      "first time the strip is shown — never only after a user has "
-      "already clicked it once",
-      'setAttribute("aria-expanded"'
-      in _uncommented(_HTML258.split("window.klausSetTranscript = function", 1)[-1].split("};", 1)[0]))
+if _HAVE_QT154:
+    import types as _types154
 
-section("K-258 fix round 1 (C1): the strip is OUT of the page flow")
-# The original shape appended .klaus-transcript INSIDE
-# state.pageDivs[pageIndex] — an in-flow child of a .page div whose
-# width/height are pinned to the exact rendered PDF size with no
-# reserved margin. Verified in a REAL Chromium browser (task-6-review.md
-# Finding C1, not just reasoned about): the next page's own canvas,
-# only #pages' 12px gap away, painted directly over it — 100% covered
-# for any single-line transcript on any page but the last. No headless
-# pixel check can reach this (PyQt6-WebEngine isn't installed for
-# system python3), so this section pins every structural fact a source
-# read CAN verify: the function no longer touches a per-page div at
-# all, the strip is static markup living as a SIBLING of #pages inside
-# #scroll (never a descendant of any .page), and its CSS takes it out
-# of normal flow with a z-index — the geometry a real browser would
-# need to actually paint it above the next page.
-import re as _re258
+    _qt_shim154 = _types154.ModuleType("aqt.qt")
 
-_KST_FN = _HTML258.split("window.klausSetTranscript = function", 1)
-check("klausSetTranscript exists as a real function to inspect",
-      len(_KST_FN) == 2)
-_KST_BODY = _KST_FN[1].split("};", 1)[0] if len(_KST_FN) == 2 else ""
-check("...and it NEVER reaches into state.pageDivs any more — the whole "
-      "bug was keying this per rendered page",
-      "pageDivs" not in _KST_BODY)
-check("the strip is ONE static element in the markup, a sibling of "
-      "#pages (never created inside buildPlaceholders/renderPage, "
-      "which is what made it a .page descendant before)",
-      'id="klausTranscript"' in _HTML258
-      and _HTML258.index('id="klausTranscript"')
-      > _HTML258.index('id="pages"')
-      and _HTML258.index('id="klausTranscript"')
-      < _HTML258.index("<script>"))
-_TSTRIP_CSS = _re258.search(r"#klausTranscript \{(.*?)\}", _HTML258, _re258.S)
-check("its CSS takes it OUT of normal flow — fixed or sticky — with a "
-      "z-index above the canvases (which carry none of their own, so "
-      "any positive value wins the paint order rather than relying on "
-      "DOM order alone)",
-      _TSTRIP_CSS is not None
-      and _re258.search(r"position:\s*(fixed|sticky)", _TSTRIP_CSS.group(1))
-      and "z-index" in _TSTRIP_CSS.group(1))
-check("#pages' own width rule is untouched by this — width:max-content; "
-      "min-width:100%, same as before the strip existed",
-      "width: max-content; min-width: 100%;" in _HTML258)
-check(".page's per-page inline sizing (renderPage's own "
-      "div.style.width/height) is never touched by the transcript code",
-      "pageDivs" not in _KST_BODY
-      and ".style.width" not in _KST_BODY
-      and ".style.height" not in _KST_BODY)
+    def _qt_getattr154(name, _mods=(_QtW154, _QtC154, _QtG154)):
+        for _m in _mods:
+            if hasattr(_m, name):
+                return getattr(_m, name)
+        if name == "qconnect":
+            return lambda sig, fn: sig.connect(fn)
+        raise AttributeError(name)
 
-_PJ_SRC258 = _src("pdfjs_viewer.py")
-_ST258 = _PJ_SRC258.split("def set_transcript(self, page_index", 1)
-check("PdfJsViewer.set_transcript exists", len(_ST258) == 2)
-_ST258_BODY = _ST258[1].split("\n\n    def ", 1)[0] if len(_ST258) == 2 else ""
-check("...and it stores the page/text on self rather than only "
-      "evaluating them (fix round 1, I1: needed so _bridge_ready can "
-      "replay across a fresh load's race)",
-      "self._transcript_page" in _ST258_BODY
-      and "self._transcript_text" in _ST258_BODY)
+    _qt_shim154.__getattr__ = _qt_getattr154
+    sys.modules["aqt.qt"] = _qt_shim154
+    # Line 244 already imported klausmate.pdf_viewer once, under the
+    # plain permissive aqt.qt stub — its cached module (with Qt bound to
+    # that stub's dummy) would otherwise win over this fresh shim, since
+    # Python does not re-execute an already-imported module. Popping it
+    # is safe here (unlike the partial-Qt probe above, which needs a
+    # subprocess instead): nothing after this section reads
+    # klausmate.pdf_viewer again, and the earlier ``pdf_viewer`` name at
+    # line 244 keeps pointing at its own already-bound module object.
+    sys.modules.pop("klausmate.pdf_viewer", None)
+    pv_native154 = importlib.import_module("klausmate.pdf_viewer")
 
-section("K-258 fix round 1 (I1): the transcript survives a fresh load's race")
-# klausPdfLoad fires window.klausPdfLoad() without awaiting it, so a
-# transcript pushed right after load_path() can arrive while
-# openDocument's teardown() has already wiped the page and
-# buildPlaceholders() hasn't refilled it yet — dropped with nothing to
-# replay, unlike annotations (state.annots persists and _bridge_ready
-# explicitly re-pushes it). Fix: PdfJsViewer keeps the last
-# (page_index, text) on self and _bridge_ready replays it too, right
-# next to _push_annotations() — proven here with a real _bridge_ready
-# call against a fake webview, not just by reading the source.
-_PT258 = _PJ_SRC258.split("def _push_transcript(self)", 1)
-_PT258_BODY = _PT258[1].split("\n\n    def ", 1)[0] if len(_PT258) == 2 else ""
-check("_push_transcript exists and JSON-encodes both values — never "
-      "interpolated raw into the eval string, so a quote or a "
-      "</script> in a transcript cannot break out of the call",
-      len(_PT258) == 2 and _PT258_BODY.count("json.dumps(") >= 2)
-_BR258 = _PJ_SRC258.split("def _bridge_ready(self, _payload: str)", 1)
-_BR258_BODY = _BR258[1].split("\n\n    def ", 1)[0] if len(_BR258) == 2 else ""
-check("_bridge_ready calls _push_transcript() right next to "
-      "_push_annotations() — the annotations' own re-push-on-ready "
-      "pattern, not a second mechanism",
-      "self._push_annotations()" in _BR258_BODY
-      and "self._push_transcript()" in _BR258_BODY
-      and _BR258_BODY.index("self._push_annotations()")
-      < _BR258_BODY.index("self._push_transcript()"))
+    class _FakeKeyEvent154:
+        """Just enough of a QKeyEvent for _match_shortcut_combo, which
+        only calls .key()/.modifiers() on whatever it's handed."""
 
+        def __init__(self, key, mods):
+            self._key, self._mods = key, mods
 
-class _FakeWeb258:
-    """Records every eval() call — no real webview needed to prove the
-    replay, just like the file's existing 'webview cleanup' fake."""
+        def key(self):
+            return self._key
 
-    def __init__(self) -> None:
-        self.evals: list[str] = []
+        def modifiers(self):
+            return self._mods
 
-    def eval(self, js: str) -> None:
-        self.evals.append(js)
+    class _ShortcutStand154:
+        """Duck-typed self, the _SelStand pattern from above (K-196):
+        _match_shortcut_combo only reads self._find_bar, and
+        _dispatch_shortcut_combo only calls named self methods — no
+        real QWidget construction needed to prove the wiring."""
 
+        def __init__(self):
+            self._find_bar = object()  # non-None -> find combos in play
+            self.calls: list[str] = []
 
-_viewer258 = pv.PdfJsViewer.__new__(pv.PdfJsViewer)
-_viewer258._web = _FakeWeb258()
-_viewer258._page_loaded = True
-_viewer258._highlights = []
-_viewer258._annotations_name = None
-_viewer258._scroll_pos = 0
-_viewer258._transcript_page = 0
-_viewer258._transcript_text = ""
-_viewer258.set_transcript(3, "the recorded lecture text")
-_viewer258._web.evals.clear()  # drop the push set_transcript itself made
-_viewer258._bridge_ready("")
-check("a simulated 'ready' signal re-issues klausSetTranscript with the "
-      "STORED text, exactly as _push_annotations() replays _highlights — "
-      "a fresh load's race can no longer drop it silently",
-      any("klausSetTranscript(" in e and "the recorded lecture text" in e
-          for e in _viewer258._web.evals))
+        def toggle_thumbnails(self):
+            self.calls.append("toggle_thumbnails")
 
-_PV_SRC258 = _src("pdf_viewer.py")
-_OPC258 = _PV_SRC258.split("def _on_page_changed(self, page: int)", 1)
-check("PdfSidebar refreshes the transcript on every page change",
-      len(_OPC258) == 2
-      and "self._refresh_transcript()" in _OPC258[1].split("\n    def ", 1)[0])
-check("the sidebar subscribes to page_store for live updates (the "
-      "lecture recorder's append_segment reaching a page in view)",
-      "_page_store.subscribe(" in _PV_SRC258
-      and "self._on_page_store_notify" in _PV_SRC258)
-check("...and unsubscribes on cleanup — page_store's subscriber list "
-      "is a module global that would otherwise outlive a torn-down "
-      "sidebar",
-      "self._transcript_unsubscribe" in _PV_SRC258
-      and "unsub()" in _PV_SRC258)
-_NOTIFY258 = _PV_SRC258.split(
-    "def _on_page_store_notify(self, pdf_safe: str, page_index: int)", 1)
-_NOTIFY258_BODY = _NOTIFY258[1] if len(_NOTIFY258) == 2 else ""
-check("the notification handler only reacts to THIS sidebar's own PDF "
-      "and its current page — a background write for a page the user "
-      "has since left must not repaint it",
-      "pdf_safe == self._name" in _NOTIFY258_BODY
-      and "page_index == self._current_page" in _NOTIFY258_BODY)
-_REFRESH258 = _PV_SRC258.split("def _refresh_transcript(self)", 1)
-_REFRESH258_BODY = (
-    _REFRESH258[1].split("\n    def ", 1)[0] if len(_REFRESH258) == 2 else ""
-)
-check("_refresh_transcript reads page_store.load_record, not the "
-      "slide text — the strip is what was SAID over the page",
-      "page_store.load_record(" in _REFRESH258_BODY
-      and 'seg.get("text")' in _REFRESH258_BODY)
+        def _show_find_bar(self):
+            self.calls.append("find")
+
+        def _find_next_shortcut(self):
+            self.calls.append("find_next")
+
+        def _find_prev_shortcut(self):
+            self.calls.append("find_prev")
+
+        def _prompt_go_to_page(self):
+            self.calls.append("goto")
+
+        def _add_highlight_from_selection(self):
+            self.calls.append("highlight")
+
+    _Qt154 = _QtC154.Qt
+    _stand154 = _ShortcutStand154()
+    _ev_thumbs154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_T,
+        _Qt154.KeyboardModifier.ControlModifier
+        | _Qt154.KeyboardModifier.ShiftModifier,
+    )
+    _combo154 = pv_native154.PdfViewer._match_shortcut_combo(
+        _stand154, _ev_thumbs154
+    )
+    check("Ctrl+Shift+T resolves to a thumbs combo",
+          _combo154 == "thumbs", repr(_combo154))
+    check("dispatching that combo reaches toggle_thumbnails — exactly "
+          "as dispatching \"find\" reaches _show_find_bar below",
+          pv_native154.PdfViewer._dispatch_shortcut_combo(
+              _stand154, _combo154
+          ) is True
+          and _stand154.calls == ["toggle_thumbnails"])
+
+    _ev_find154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_F, _Qt154.KeyboardModifier.ControlModifier
+    )
+    _stand154.calls.clear()
+    check("...proven against the existing Ctrl+F -> find_bar wiring, "
+          "same mechanism",
+          pv_native154.PdfViewer._match_shortcut_combo(
+              _stand154, _ev_find154
+          ) == "find"
+          and pv_native154.PdfViewer._dispatch_shortcut_combo(
+              _stand154, "find"
+          ) is True
+          and _stand154.calls == ["find"])
+
+    _ev_hl154 = _FakeKeyEvent154(
+        _Qt154.Key.Key_A,
+        _Qt154.KeyboardModifier.ControlModifier
+        | _Qt154.KeyboardModifier.ShiftModifier,
+    )
+    check("Ctrl+Shift+A (highlight) is untouched by the new binding",
+          pv_native154.PdfViewer._match_shortcut_combo(
+              _stand154, _ev_hl154
+          ) == "highlight")
 
 raise SystemExit(report())

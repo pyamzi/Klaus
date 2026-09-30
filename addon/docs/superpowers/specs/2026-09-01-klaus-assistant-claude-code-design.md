@@ -1,3 +1,5 @@
+> Superseded by [Local-model reversion](2026-09-18-local-model-reversion-design.md). Retained as historical design, not current implementation guidance.
+
 # Klaus Assistant on Claude Code — Design
 
 **Date:** 2026-09-01

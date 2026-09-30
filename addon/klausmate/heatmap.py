@@ -785,6 +785,8 @@ def heatmap_css() -> str:
         # spend a row of the panel drawing a bar under the grid.
         " .klaus-hm-scroll { scrollbar-width: none; }"
         " .klaus-hm-scroll::-webkit-scrollbar { display: none; }"
+        + theme.web_control_css(".klaus-hm-opt", "var(--klaus-hm-accent)")
+        + theme.web_control_css(".klaus-hm-gear", "var(--klaus-hm-accent)")
     )
 
 

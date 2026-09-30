@@ -101,18 +101,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: Copied into the sandbox.  ``klausmate/user_files`` (real PDFs, the
 #: card index, annotations) and ``meta.json`` (API keys) are excluded —
 #: they are half a gigabyte and none of it is ours to duplicate.
-#: ``service/klausplus`` joined the list in K-259, for exactly one file:
-#: ``tests/test_lecture_recorder.py`` lifts the service's own
-#: ``wav_seconds`` out of ``proxy.py`` BY AST (never importing it) so its
-#: WAV-header pin proves interop with the real metering code rather than a
-#: retyped copy of the formula.  Without the tree in the sandbox that
-#: test's module-level ``_load_wav_seconds()`` raises FileNotFoundError and
-#: the baseline is red, which aborts the whole run.  Nothing here is ever a
-#: mutation target — targets come from ``klausmate/<module>.py`` alone —
-#: and the tree is hashed before and after like every other, so the audit
-#: still cannot write to it.
-SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"),
-                 os.path.join("service", "klausplus"))
+SANDBOX_TREES = ("klausmate", "tests", os.path.join(".claude", "skills", "klaus-test"))
 _COPY_SKIP_DIRS = {"user_files", "__pycache__", ".git"}
 _COPY_SKIP_NAMES = {"meta.json", "meta.json.bak"}
 
@@ -125,9 +114,9 @@ AUDIT_MODULES = (
     "pdf_notes",
     "lecture_view",
     "projection",
-    # The assistant layers. All aqt-light by construction, so nearly
-    # every function is reachable from its own test file — which is
-    # exactly the condition this audit needs. The 2026-09-01 list also
+    # The remaining assistant layers are aqt-light by construction, so
+    # nearly every function is reachable from its own test file. The
+    # 2026-09-01 list also
     # named llm_client, entitlement, assistant_session and podcast; all
     # four were DELETED on 2026-09-02 when the plan converged on the
     # Claude Code dock, and leaving them here made ALLOWED_TESTS name
@@ -135,33 +124,15 @@ AUDIT_MODULES = (
     # them (final review M2).
     "card_forge",
     "anki_tools",
-    "agent_host",
-    "assistant_sessions",
     # The index runner (K-152, added by K-162).  Its chain, queue and
     # status rendering are all aqt-free above its glue divider, so the
     # 122 checks in tests/test_index_queue.py reach nearly all of it.
     "index_queue",
-    # The API-first modules (2026-09-15, added by K-228).  page_store
-    # and cost are pure; openai_client and anthropic_client are pure
-    # above one _urlopen the tests replace — so, like the rest of this
-    # roster, nearly every function is reachable from its own test file.
+    # Local storage and Ollama runtime modules.
     "page_store",
-    "cost",
-    "openai_client",
-    "anthropic_client",
-    # Klaus Plus on the add-on side (2026-09-16, K-249). Aqt-free, stdlib
-    # urllib above one _urlopen tests/test_plus.py replaces -- the same
-    # shape as the rest of this roster.
-    "plus",
-    # Plan 2 (2026-09-17, K-259).  pertinence is aqt-free above its own
-    # glue divider (the pure judge: the strict tool, the parser, the
-    # judged.json store); lecture_recorder is aqt-free above its "Qt
-    # glue" divider (Chunker, wav_bytes, chunk_path, Uploader), and its
-    # test file drives the Recorder's non-Qt internals directly.  Both
-    # reach the network only through a seam their tests replace
-    # (`client.complete`, `lecture_recorder._transcribe`).
-    "pertinence",
-    "lecture_recorder",
+    "ollama_client",
+    "ollama_runtime",
+    "ollama_setup",
 )
 
 #: The only test files this tool is allowed to execute.  The selftest

@@ -1,15 +1,4 @@
-"""Embedding provider for Klaus semantic search.
-
-Turns card text / prompts / PDF chunks into unit vectors via OpenAI's
-embeddings API — the sole provider now (Ollama and Voyage are gone; the
-actual HTTP lives in openai_client.py).
-
-aqt-free and stdlib-only: config is injected as a callable so the module is
-drivable headlessly against mock HTTP servers, and works within AnkiWeb's
-no-compiled-wheels constraint. Vectors are unit-normalized at creation time
-so downstream similarity is a plain dot product (see card_index.top_k).
-"""
-
+"""Local Ollama embedding adapter and normalized vector batching."""
 from __future__ import annotations
 
 import math
@@ -17,105 +6,39 @@ import threading
 from array import array
 from typing import Callable, Iterator
 
-DEFAULT_MODELS = {"openai": "text-embedding-3-large"}
-
-DEFAULT_PROVIDER = "openai"
-
-# OpenAI's v3 embedding models are trained with Matryoshka Representation
-# Learning: the most significant components sit at the FRONT of the vector,
-# so asking for fewer dimensions truncates the tail and degrades gracefully
-# rather than catastrophically. text-embedding-3-large shortened to 256 still
-# beats the old ada-002 at 1536.
-#
-# That is why the large model can be the fast one here. Ranking cost is
-# linear in dimensions — card_index.top_k is a sumprod over packed rows — so
-# -large at 1024 is BETTER than -small at 1536 on retrieval quality while
-# being cheaper to rank and smaller on disk. Full 3072 is available by
-# setting the key to 0 (meaning "whatever the model gives").
-#
-# Only these two models accept the parameter — _dimensions_for() gates on
-# the model, not just the provider, so a future non-Matryoshka model can't
-# silently get sent a dimensions value it will reject.
-DIMENSION_CAPABLE_MODELS = ("text-embedding-3-small", "text-embedding-3-large")
-DEFAULT_DIMENSIONS = 1024
-
+DEFAULT_MODELS = {"ollama": "nomic-embed-text"}
+DEFAULT_PROVIDER = "ollama"
+DEFAULT_DIMENSIONS = 0
 BATCH_SIZE = 64
-
 GetConfig = Callable[[], dict]
 
 
 class EmbeddingError(Exception):
-    def __init__(
-        self,
-        message: str,
-        *,
-        provider: str = "",
-        status: int | None = None,
-        retry_after: float | None = None,
-    ) -> None:
+    def __init__(self, message: str, *, provider: str = "", status: int | None = None,
+                 retry_after: float | None = None) -> None:
         super().__init__(message)
         self.provider = provider
         self.status = status
         self.retry_after = retry_after
 
     def user_message(self) -> str:
-        name = self.provider or "the embedding provider"
-        if self.provider == "Klaus Plus":
-            # The service's own wording (quota/version/maintenance
-            # refusals) — verbatim, never re-canned as OpenAI copy below.
-            return str(self)
-        if self.status in (401, 403):
-            return (
-                f"{name} rejected the embedding API key — check it in "
-                "KlausMate Preferences → API keys & models."
-            )
-        if self.status == 429:
-            wait = f" in {int(self.retry_after)}s" if self.retry_after else " shortly"
-            return f"{name} rate-limited the embedding request — try again{wait}."
-        if self.status is not None and self.status >= 500:
-            return f"{name} is overloaded right now — try again in a minute."
         return str(self)
 
 
 def provider_name(cfg: dict) -> str:
-    """OpenAI is now the only embedding provider; kept for existing callers."""
-    return "openai"
+    return "ollama"
 
 
 def embedding_model(cfg: dict) -> str:
-    model = str(cfg.get("embedding_model") or "").strip()
-    return model or DEFAULT_MODELS[provider_name(cfg)]
+    return str(cfg.get("embedding_model") or "").strip() or DEFAULT_MODELS["ollama"]
 
 
 def embedding_dimensions(cfg: dict) -> int:
-    """Requested output dimensions, or 0 for the model's own default."""
-    try:
-        value = int(cfg.get("embedding_dimensions") or 0)
-    except (TypeError, ValueError):
-        return DEFAULT_DIMENSIONS
-    return value if value > 0 else 0
-
-
-def _dimensions_for(cfg: dict) -> int:
-    """The `dimensions` value to send, or 0 to omit the parameter entirely.
-
-    Gated on the model, not just the provider: only OpenAI's v3 embedding
-    models accept it, and sending it anywhere else is a 400.
-    """
-    if embedding_model(cfg) not in DIMENSION_CAPABLE_MODELS:
-        return 0
-    return embedding_dimensions(cfg)
+    return 0
 
 
 def index_signature(cfg: dict) -> tuple[str, str, int]:
-    """(provider, model, dims) — a change in ANY of the three invalidates the
-    card index.
-
-    Dims belongs here: the same model at 3072 and at 1024 produces vectors
-    that cannot be compared with each other, and without it in the signature
-    that switch would be caught only later, by card_index's file-size check.
-    """
-    return provider_name(cfg), embedding_model(cfg), _dimensions_for(cfg)
+    return "ollama", embedding_model(cfg), 0
 
 
 def signature_matches(
@@ -131,17 +54,19 @@ def signature_matches(
     dims is compared only when the signature asks for a specific width; 0
     means "the model's own default" and cannot disagree with a stored width.
     """
-    if (provider, model) != (signature[0], signature[1]):
+    # Ollama resolves a bare name to its :latest tag — one model, two
+    # spellings; the shipped default is bare, the calibration tagged.
+    def _m(name):
+        return str(name or "").removesuffix(":latest")
+
+    if (provider, _m(model)) != (signature[0], _m(signature[1])):
         return False
     want = int(signature[2]) if len(signature) > 2 else 0
     return not want or int(dims or 0) == want
 
 
-# --------------------------------------------------------------- providers
-
-
-class OpenAIEmbeddings:
-    name = "openai"
+class OllamaEmbeddings:
+    name = "ollama"
 
     def __init__(self, get_config: GetConfig) -> None:
         self._get_config = get_config
@@ -149,69 +74,21 @@ class OpenAIEmbeddings:
     def embed(self, texts: list[str], kind: str = "document") -> list[list[float]]:
         if not texts:
             return []
+        from .ollama_client import OllamaClient, OllamaError
         cfg = self._get_config() or {}
-        from . import openai_client, plus
-
-        if plus.active(cfg):
-            try:
-                return openai_client.embed(
-                    "", texts, embedding_model(cfg), _dimensions_for(cfg),
-                    endpoint=plus.endpoint(cfg, "embed"),
-                )
-            except openai_client.OpenAIError as e:
-                if e.status in (401, 402, 426):
-                    # Remembered so the UI can say why — through the
-                    # PACKAGE's patch_config, reached lazily: this module
-                    # is aqt-free and cannot import __init__ (which
-                    # imports aqt) at module top. patch_config hops to the
-                    # main thread itself (this branch may run on
-                    # curation's QueryOp worker thread) and MERGES into
-                    # the stored config; the package's plain write_config
-                    # REPLACES the whole config and must never be the
-                    # sink here (a one-key patch through it would wipe
-                    # every other setting). A stub package with neither
-                    # attribute is a genuine wiring break, not silently
-                    # swallowed.
-                    pkg = __import__(__package__, fromlist=["patch_config"])
-                    wc = getattr(pkg, "patch_config", None)
-                    if wc is None:
-                        print("[klausmate] Klaus Plus refusal not cached: package has no patch_config")
-                    else:
-                        plus.note_refusal(cfg, e.status, wc, message=str(e))
-                # e.status is None for a connection-level failure (no HTTP
-                # response at all — openai_client never learned it was
-                # talking to Klaus Plus) — its message says "Could not
-                # reach OpenAI ...", which on THIS path names the wrong
-                # thing to blame (M-10). A real status means the service
-                # itself answered, in its own words: verbatim, unprefixed.
-                raise EmbeddingError(
-                    str(e) if e.status is not None else f"Klaus Plus: {e}",
-                    provider="Klaus Plus", status=e.status, retry_after=e.retry_after,
-                ) from e
-
-        key = str(cfg.get("api_key_openai") or "").strip()
-        if not key:
-            raise EmbeddingError(
-                "OpenAI API key is not set — add it in KlausMate Preferences "
-                "→ API keys & models.",
-                provider="OpenAI",
-                status=401,
-            )
         try:
-            return openai_client.embed(
-                key, texts, embedding_model(cfg), _dimensions_for(cfg)
+            return OllamaClient(str(cfg.get("endpoint") or "http://127.0.0.1:11434")).embed(
+                embedding_model(cfg), texts
             )
-        except openai_client.OpenAIError as e:
+        except OllamaError as exc:
             raise EmbeddingError(
-                str(e), provider="OpenAI", status=e.status, retry_after=e.retry_after
-            ) from e
-
-
-_PROVIDER_CLASSES = {"openai": OpenAIEmbeddings}
+                f"{exc}. Check Ollama and the selected model in KlausMate Preferences → Local models.",
+                provider="Ollama",
+            ) from exc
 
 
 def provider_from_config(get_config: GetConfig):
-    return _PROVIDER_CLASSES[provider_name(get_config())](get_config)
+    return OllamaEmbeddings(get_config)
 
 
 # ------------------------------------------------------------ batch helper

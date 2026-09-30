@@ -13,7 +13,6 @@ import html as html_mod
 import json
 import os
 import re
-import time
 import traceback
 import urllib.parse
 from typing import Any
@@ -68,7 +67,10 @@ def patch_config(updates: dict[str, Any]) -> None:
     every other setting. This is the one config writer a background thread
     may use, and the writer every ``plus.*`` sink must be.
     """
+    profile = getattr(mw, "col", None)
     def _apply() -> None:
+        if getattr(mw, "col", None) is not profile:
+            return
         try:
             cfg = get_config()
             cfg.update(updates)
@@ -114,17 +116,20 @@ _LEGACY_KEYS_DROPPED = (
     # (D1) — there is no separate assistant API key/backend/token to
     # store, the user's own `claude` login is the credential.
     "assistant_api_key", "assistant_backend", "assistant_token",
-    # Retired 2026-09-15 (K-226, spec D1/D8): Klaus went API-first. The
-    # local Ollama runtime and the vision-model OCR path are gone, so
-    # every key that only ever addressed them goes with them; the two
-    # one key that carried a VALUE worth keeping (embedding_api_key_openai)
-    # is renamed in _migrate_config BEFORE this loop runs, and only its
-    # spent old name is dropped here. assistant_model is a plain drop:
-    # see _migrate_config for why a rename could never have fired.
-    "embedding_provider", "embedding_api_key_voyage", "embedding_api_key_openai",
-    "ocr_enabled", "ocr_model", "runtime_auto_setup", "claude_binary",
-    "endpoint", "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
+    # Retired provider credentials and OCR settings.
+    "embedding_api_key_voyage", "embedding_api_key_openai",
+    "api_key_openai", "api_key_anthropic", "_embed_key_setup_declined",
+    "ocr_enabled", "ocr_model", "claude_binary",
+    "pdf_index_max_chunks", "pdf_match_agg", "assistant_model",
     "_embed_default_migrated",
+    # Retired 2026-09-18: Klaus Plus subscription service removed.
+    "klaus_plus_key", "klaus_plus_cache", "klaus_plus_base", "klaus_plus_email",
+    # 2026-09-18: embedded assistant dock removed (see
+    # docs/superpowers/specs/2026-09-18-local-model-reversion-design.md).
+    "assistant_reopen", "assistant_dock_width", "assistant_dock_open",
+    "reasoning_model", "transcription_model",
+    # 2026-09-30: lecture recording moved to the Klaus app (K-314).
+    "transcription_model_path", "transcription_binary", "transcription_language",
 )
 
 
@@ -132,52 +137,20 @@ def _migrate_config() -> None:
     """One-time migration of retired config keys (idempotent).
 
     Scrubs keys owned by removed features (chat_*, autocomplete, Ask,
-    Browse NL search) from old profiles. Once meta.json holds none of them
-    this is a no-op (the defaults no longer define them).
+    Browse NL search, Klaus Plus) from old profiles. Once meta.json holds
+    none of them this is a no-op (the defaults no longer define them).
     """
     cfg = get_config()
     changed = False
-    # 2026-09-15 (K-226): ONE retired key carried a VALUE the user set and
-    # would have to re-enter, so it is RENAMED before the drop loop below
-    # spends its old name. An empty destination only — a profile that
-    # already holds the new key keeps what it holds.
-    #
-    # assistant_model is NOT in here (K-236): Anki's getConfig returns
-    # config.json's defaults merged UNDER the profile's keys, so
-    # reasoning_model is never empty and the copy could never fire. It is
-    # dropped below, which is the better outcome anyway — the stored value
-    # is a Claude Code model alias the Messages API would reject, and
-    # nothing reads reasoning_model yet (K-235).
-    for old, new in (("embedding_api_key_openai", "api_key_openai"),):
-        if old in cfg:
-            if not str(cfg.get(new) or "").strip():
-                cfg[new] = cfg[old]
-            cfg.pop(old)
-            changed = True
-    # 2026-09-16 (K-236): the embedding MODEL belonged to the provider
-    # being scrubbed — the pre-plan dialog wrote the resolved Ollama model
-    # into this key, and "nomic-embed-text" in an OpenAI-only world prices
-    # as a KeyError in cost.PRICES and embeds as an HTTP 404. "" resolves
-    # to embeddings.DEFAULT_MODELS' OpenAI default.
-    if str(cfg.get("embedding_provider") or "openai") != "openai":
-        cfg["embedding_model"] = ""
+    if not cfg.get("_local_embeddings_migrated"):
+        cfg.update(embedding_provider="ollama", embedding_model="nomic-embed-text",
+                   embedding_dimensions=0, _local_embeddings_migrated=True)
         changed = True
     for old in _LEGACY_KEYS_DROPPED:
         if old in cfg:
             cfg.pop(old)
             changed = True
     if changed:
-        # 2026-09-16 (K-236): a profile that carried ANY retired key comes
-        # from the pre-API-first world, where an embedding key was optional
-        # because a local engine existed. `_embed_key_setup_declined` was a
-        # "no thanks" to an OPTIONAL key, and leaving it set silences the
-        # ONE profile-open message saying Klaus now REQUIRES one — the
-        # user's next signal would be a refusal tooltip on a drop. Cleared
-        # here, and only here: `changed` can never be True twice (the keys
-        # that set it are gone after this write), so the new regime gets
-        # exactly one fresh nudge and a decline made AFTER it is honoured
-        # forever.
-        cfg.pop("_embed_key_setup_declined", None)
         write_config(cfg)
 
 
@@ -616,15 +589,6 @@ def install_menu() -> None:
     already populated menuTools by the time main_window_did_init fires,
     so insertAction against its current first action is what puts us
     ahead of Anki's own items rather than appending after them.
-
-    Task 11: the assistant's Tools entry is inserted right after
-    Preferences, reusing assistant_dock's OWN QAction
-    (assistant_dock.menu_action()) rather than building a second one —
-    that action already carries the Ctrl+Shift+K shortcut
-    (assistant_dock.setup(), called at import time below, alongside
-    _pdf_drive.setup()), so this never registers a second shortcut for
-    the same chord. menu_action() answers None if setup() has not run
-    (or Qt is unavailable) — skipped rather than forcing a stub action.
     """
     menu = mw.form.menuTools
     action = QAction("KlausMate Preferences…", mw)
@@ -634,18 +598,6 @@ def install_menu() -> None:
         menu.insertAction(existing_actions[0], action)
     else:
         menu.addAction(action)
-    try:
-        from . import assistant_dock
-
-        assistant_action = assistant_dock.menu_action()
-    except Exception as exc:
-        print(f"[klausmate] assistant menu action unavailable: {exc}")
-        assistant_action = None
-    if assistant_action is not None:
-        if existing_actions:
-            menu.insertAction(existing_actions[0], assistant_action)
-        else:
-            menu.addAction(assistant_action)
 
 
 # ------------------------------ PDF import -------------------------------
@@ -802,225 +754,8 @@ PANEL_AREAS = {
 AREA_NAMES = {area: name for name, area in PANEL_AREAS.items()}
 
 
-# ---------------------------- lecture recording ----------------------------
-# D6 (2026-09-15 spec): ● Record / ■ Stop on the PDF dock's _PanelBar and on
-# the Lecture dock's header. One Uploader per profile (module-level,
-# lazily created here and by _start_lecture_uploader below); both docks
-# share the Record/Stop slot body so Recorder/Uploader wiring exists once.
-
-_uploader: Any = None
-# Main thread only (fix round 1, m4): touched at exactly four sites — a
-# Record/Stop click, a teardown path, and the two profile hooks — never
-# from the uploader's worker thread. No lock; if a future caller ever
-# reaches this from a worker thread, that call needs its own
-# mw.taskman.run_on_main, not a lock here.
-_active_recorders: set = set()
-
-
-def uploader() -> Any:
-    """The profile's one lecture_recorder.Uploader — created at profile
-    open (_start_lecture_uploader, registered near the other profile
-    hooks) and reused by every recording start/stop; never recreated
-    mid-profile (lecture_recorder's own fix-round-1 C1: a fresh Uploader
-    per Record would drop whatever the old one still had queued). Lazy
-    here too, so a caller before profile_did_open — or a test driving
-    this module directly — still gets a working instance.
-    """
-    global _uploader
-    if _uploader is None:
-        from . import lecture_recorder
-
-        _uploader = lecture_recorder.Uploader(USER_FILES, get_config)
-    return _uploader
-
-
-def start_or_stop_recording(owner: Any, sidebar: Any) -> None:
-    """Shared Record/Stop slot body for ``PdfDock`` and the Lecture dock.
-
-    Both keep ``_recorder`` (``None`` or a ``lecture_recorder.Recorder``)
-    and expose ``set_recording(on, status)`` for their button/status text.
-    ``sidebar`` is read live through closures (``get_page``), never
-    snapshotted, so it must be the one PdfSidebar this recording is
-    scoped to (Notes for Task 5, item 4) — never
-    ``viewer_context.current()``, which follows whichever viewer was
-    activated last and could drift to a different PDF mid-lecture.
-    """
-    from . import lecture_recorder
-
-    if owner._recorder is not None and owner._recorder.is_recording:
-        rec = owner._recorder
-        name = rec.pdf_name
-        rec.stop()
-        _active_recorders.discard(rec)
-        owner._recorder = None
-        owner.set_recording(False, "")
-        try:
-            owner._update_record_enabled()
-        except Exception as exc:
-            print(f"[klausmate] record button refresh failed: {exc}")
-        _request_index_when_idle(name)
-        return
-    if _active_recorders:
-        # I4 (fix round 1): each dock only ever checks its OWN
-        # _recorder, so nothing stopped Browse's dock, Add Cards' dock
-        # and the Lecture dock from each opening a second QAudioSource on
-        # the same microphone — two chunk streams appended to the same
-        # page records, and double the metered Klaus Plus minutes. One
-        # recording at a time, full stop, regardless of which dock owns
-        # it.
-        other = next(iter(_active_recorders))
-        tooltip(f"Already recording {getattr(other, 'pdf_name', 'a lecture')}")
-        return
-    name = getattr(sidebar, "_name", None)
-    path = (
-        pdf_handler.pdf_path_for(USER_FILES, pdf_handler._safe_basename(name))
-        if name else None
-    )
-    if not name or not path:
-        tooltip("Open a PDF first")
-        return
-    safe = pdf_handler._safe_basename(name)
-
-    def _get_page() -> int:
-        # C1 (fix round 1): a PdfSidebar is REUSED across documents (a
-        # PdfDock tab change; LectureDock._show_match auto-following the
-        # next reviewed card) — closing over the sidebar alone means a
-        # document switch mid-recording silently starts reporting the
-        # NEW document's page while the Recorder keeps writing chunks
-        # under the OLD one's pdf_safe. Returning 0 here is not "page
-        # zero": Recorder._tick's own `int(self._get_page() or
-        # self._chunker.page)` treats a falsy return as "no page update
-        # this tick", which freezes the chunker on its last known page
-        # instead of mis-filing the next segment under the wrong PDF.
-        if pdf_handler._safe_basename(getattr(sidebar, "_name", "") or "") != safe:
-            return 0
-        return int(getattr(sidebar, "_current_page", 0)) + 1
-
-    rec = lecture_recorder.Recorder(
-        USER_FILES, safe, path,
-        get_page=_get_page,
-        on_status=lambda s, q: owner.set_recording(
-            True, f"{int(s) // 60}:{int(s) % 60:02d} · {q} to transcribe"
-        ),
-        uploader=uploader(),
-    )
-    rec.pdf_name = name
-    # Notes for Task 5, item 6/2: once, when Record starts for THIS PDF,
-    # before Recorder.start() — never mid-recording, or a leftover WAV
-    # the live recorder is about to write over gets re-enqueued out from
-    # under it.
-    uploader().requeue_leftovers(safe, path)
-    if rec.start():
-        owner._recorder = rec
-        _active_recorders.add(rec)
-        owner.set_recording(True, "0:00")
-    else:
-        tooltip("No microphone available")
-
-
-# PDF display names with a drain poll armed (final review, I-2). Main
-# thread only, same rule as _active_recorders above — it is only ever
-# touched by a Stop click and by the poll's own QTimer callback.
-_index_when_idle: set = set()
-# Bumped by _stop_lecture_uploader; a poll captures it at arm time and
-# stops dead once it no longer matches (fix round 1). The queue a poll is
-# waiting on belongs to the profile that was open when Record stopped —
-# and its daemon worker can finish that last chunk AFTER the profile is
-# gone, dropping pending() to 0 and firing a re-index into whatever
-# profile opened next.
-_index_when_idle_gen = 0
-INDEX_IDLE_POLL_MS = 500
-INDEX_IDLE_CAP_S = 20 * 60.0
-
-
-def _request_index_when_idle(name: str) -> None:
-    """Re-index *name* once the lecture uploader has drained (I-2).
-
-    ``Recorder.stop()`` flushes the tail chunk INTO the uploader, whose
-    HTTP transcription then takes seconds on the worker thread — so
-    requesting the re-index in the same breath embeds the page records
-    without the end of the lecture (and without any backlog), and nothing
-    ever re-triggers: ``append_segment`` notifies the transcript strip and
-    no one else.
-
-    A main-thread poll, deliberately NOT an idle callback inside the
-    ``Uploader``: that queue also goes idle BETWEEN chunks mid-recording,
-    and this re-index ends at the Judge/Skip dialog — which must never
-    appear while the lecturer is still talking. De-duplicated per name (a
-    second Stop for the same PDF re-uses the armed poll) and capped, so a
-    hung upload delays the re-index instead of stranding it forever.
-    """
-    from . import index_queue
-
-    try:
-        up = uploader()
-        pending = up.pending
-    except Exception as exc:
-        print(f"[klausmate] lecture uploader unavailable, re-indexing {name} now: {exc}")
-        index_queue.request_pdf(name)
-        return
-    if name in _index_when_idle:
-        return
-    _index_when_idle.add(name)
-    deadline = time.monotonic() + INDEX_IDLE_CAP_S
-    gen = _index_when_idle_gen
-
-    def _poll() -> None:
-        if gen != _index_when_idle_gen:
-            return  # the profile this poll was armed in is gone
-        try:
-            left = int(pending())
-        except Exception as exc:
-            print(f"[klausmate] lecture uploader pending() failed: {exc}")
-            left = 0
-        if left and time.monotonic() < deadline:
-            QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
-            return
-        if left:
-            print(f"[klausmate] lecture recorder: {left} chunk(s) still not "
-                  f"transcribed after {int(INDEX_IDLE_CAP_S // 60)} minutes — "
-                  f"re-indexing {name} anyway")
-        _index_when_idle.discard(name)
-        try:
-            index_queue.request_pdf(name)
-        except Exception as exc:
-            print(f"[klausmate] re-index request failed for {name}: {exc}")
-
-    QTimer.singleShot(INDEX_IDLE_POLL_MS, _poll)
-
-
-def _release_recorder(owner: Any) -> None:
-    """Teardown-only stop (fix round 1, I1): releases *owner*'s recorder,
-    if one is running, without touching any UI — the widgets calling this
-    may be mid-destruction (a Browse/Add Cards window closing, a dock's
-    own shutdown). Never call this from the Record/Stop button itself;
-    that path is start_or_stop_recording, which also updates the button.
-
-    It DOES schedule the same drain-aware re-index the Stop button does
-    (PR #4, Codex): `rec.stop()` flushes the tail chunk into the uploader
-    here exactly as it does there, so without this the lecture you closed
-    Browse on stayed out of the page vectors until a manual re-index.
-
-    NOT reached on profile close — `_stop_lecture_uploader` stops every
-    `_active_recorders` member itself, deliberately, because the uploader
-    a poll would wait on dies with the profile (its generation counter is
-    the second net, for a poll already armed, not the first).
-    """
-    rec = owner._recorder
-    if rec is not None and rec.is_recording:
-        rec.stop()
-        _active_recorders.discard(rec)
-        owner._recorder = None
-        name = getattr(rec, "pdf_name", "")
-        if name:
-            try:
-                _request_index_when_idle(name)
-            except Exception as exc:
-                print(f"[klausmate] re-index after teardown failed for {name}: {exc}")
-
-
 class _PanelBar(QWidget):
-    """The dock's title bar: ``[◫] [＋] [●] [tabs]  …  [page n/m] [⧉] [✕]``.
+    """The dock's title bar: ``[◫] [＋] [tabs]  …  [page n/m] [⧉] [✕]``.
 
     Presses the bar does not handle are IGNORED so they reach the
     QDockWidget, which moves, docks and floats from them — Qt's
@@ -1074,22 +809,6 @@ class _PanelBar(QWidget):
         self.add_btn.setToolTip("Open another PDF in a new tab")
         row.addWidget(self.add_btn)
 
-        # Record/Stop (D6). Disabled until a document is actually showing
-        # (ruling 5: never record without a PDF in view) — PdfDock flips
-        # this on _on_sidebar_loaded / a tab close, so the initial value
-        # here only has to be right for the dock's very first paint.
-        self.record_btn = QToolButton(self)
-        self.record_btn.setText("●")
-        self.record_btn.setAutoRaise(True)
-        _has_doc = getattr(sidebar, "_name", None) is not None
-        # m1 (fix round 1): the disabled tooltip says WHY, matching
-        # PdfDock._update_record_enabled's later updates.
-        self.record_btn.setToolTip(
-            "Record this lecture" if _has_doc else "Open a PDF to record this lecture"
-        )
-        self.record_btn.setEnabled(_has_doc)
-        row.addWidget(self.record_btn)
-
         self.tabs = QTabBar(self)
         self.tabs.setDocumentMode(True)
         self.tabs.setDrawBase(False)
@@ -1102,22 +821,6 @@ class _PanelBar(QWidget):
         # which is the surface Qt drags the dock by.
         row.addWidget(self.tabs, 0)
         row.addStretch(1)
-
-        # Elapsed time / "n to transcribe" while recording, beside the
-        # page indicator — same label style as it (theme.muted_label_qss;
-        # the try/except fallback is that label's own established idiom,
-        # not a new one).
-        self.status_label = QLabel("", self)
-        try:
-            self.status_label.setStyleSheet(
-                _theme.muted_label_qss(_theme.night_mode(), 10)
-            )
-        except Exception:
-            self.status_label.setStyleSheet(
-                "color: rgba(100,100,100,0.95); font-size: 10px;"
-            )
-        self.status_label.setVisible(False)
-        row.addWidget(self.status_label)
 
         # The viewer's page indicator sits at the right end of the bar.
         page_label = (
@@ -1140,24 +843,10 @@ class _PanelBar(QWidget):
         row.addWidget(self.hide_btn)
 
         # First layout, before any resizeEvent fires: keep the cap right
-        # from the very first paint (F1, review round 1). 250, not the
-        # original 220: measured at a real 450px bar with four saturated
-        # tabs, 220 left only a 36px strip once the Record button (K-257)
-        # joined the left-side chrome — short of the >= 60px this is
-        # meant to guarantee (fixed chrome, now three icon buttons on the
-        # left and two on the right plus margins/spacing, measures wider
-        # than the pre-Record 147px regardless of the cap, so strip =
-        # bar_width - chrome - cap; 250 clears 60 again with margin).
+        # from the very first paint (F1, review round 1). 250 was measured
+        # with a Record button on the left (K-257, removed in K-314); it now
+        # leaves a wider drag strip than the >= 60px it guarantees.
         self.tabs.setMaximumWidth(max(80, self.width() - 250))
-
-    def set_recording(self, on: bool, status: str) -> None:
-        """Flip the Record/Stop glyph and update the elapsed-time label."""
-        self.record_btn.setText("■" if on else "●")
-        self.record_btn.setToolTip(
-            "Stop recording this lecture" if on else "Record this lecture"
-        )
-        self.status_label.setText(status)
-        self.status_label.setVisible(bool(status))
 
     def resizeEvent(self, ev) -> None:  # noqa: N802
         # Cap the tab bar so a drag strip always survives between it and
@@ -1218,7 +907,6 @@ class PdfDock(QDockWidget):
         self._syncing = False
         self._last_page: dict[str, int] = {}
         self._closed = False
-        self._recorder: Any = None
         # _placed means the remembered placement has been applied this
         # session; until then panel_show() applies it.
         self._placed = False
@@ -1245,9 +933,7 @@ class PdfDock(QDockWidget):
         self._bar = _PanelBar(self, sidebar)
         self._tabs = self._bar.tabs
         self._add_btn = self._bar.add_btn
-        self.record_btn = self._bar.record_btn
         self._bar.add_btn.clicked.connect(self._show_add_menu)
-        self._bar.record_btn.clicked.connect(self._toggle_record)
         self._bar.float_btn.clicked.connect(self._toggle_float)
         self._bar.hide_btn.clicked.connect(self.panel_hide)
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -1387,31 +1073,6 @@ class PdfDock(QDockWidget):
         except Exception as exc:
             print(f"[klausmate] pdf dock float toggle failed: {exc}")
 
-    @_guarded
-    def _toggle_record(self, *_args) -> None:
-        # *_args: a `clicked` bool, same reason as every other guarded
-        # slot on this bar (panel_hide's comment explains the TypeError
-        # this avoids).
-        start_or_stop_recording(self, self._sidebar)
-
-    def set_recording(self, on: bool, status: str) -> None:
-        self._bar.set_recording(on, status)
-
-    def _update_record_enabled(self) -> None:
-        has_doc = getattr(self._sidebar, "_name", None) is not None
-        recording = self._recorder is not None and self._recorder.is_recording
-        try:
-            self._bar.record_btn.setEnabled(has_doc or recording)
-            # m1 (fix round 1): say WHY it's disabled, not just repeat the
-            # enabled tooltip. Left alone while recording, or this would
-            # stomp set_recording's "Stop recording this lecture".
-            if not recording:
-                self._bar.record_btn.setToolTip(
-                    "Record this lecture" if has_doc else "Open a PDF to record this lecture"
-                )
-        except Exception as exc:
-            print(f"[klausmate] record button refresh failed: {exc}")
-
     def showEvent(self, ev) -> None:  # noqa: N802
         super().showEvent(ev)
         try:
@@ -1526,20 +1187,10 @@ class PdfDock(QDockWidget):
         renderer's webview while its C++ object still exists
         (PdfSidebar.cleanup — a webview destroyed without it crashes
         Anki's next theme change), drop the back-references. The dock
-        itself is the host's child and dies with it.
-
-        Stops a live recorder FIRST (fix round 1, I1) — before this
-        method existed a Browse window closing mid-lecture left the
-        microphone hot with no way to stop it short of profile close,
-        and reopening Browse built a fresh PdfDock whose new _recorder
-        started a SECOND simultaneous capture of the same lecture."""
+        itself is the host's child and dies with it."""
         if self._closed:
             return
         self._closed = True
-        try:
-            _release_recorder(self)
-        except Exception as exc:
-            print(f"[klausmate] pdf dock recorder release on host close failed: {exc}")
         try:
             self._persist_state()
         except Exception:
@@ -1646,7 +1297,6 @@ class PdfDock(QDockWidget):
             self._syncing = False
         self._persist()
         self._set_active_pointer(name)
-        self._update_record_enabled()
 
     @_guarded
     def _on_tab_changed(self, idx: int) -> None:
@@ -1688,7 +1338,6 @@ class PdfDock(QDockWidget):
                 pdf_handler.clear_active_pdf(USER_FILES)
             except Exception:
                 pass
-            self._update_record_enabled()
             self.panel_hide()
 
     def close_tab(self, name: str) -> None:
@@ -1737,6 +1386,7 @@ class PdfDock(QDockWidget):
         menu.exec(
             self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft())
         )
+        menu.deleteLater()  # its actions already fired inside exec()
 
 
 def on_editor_did_init(editor: Editor) -> None:
@@ -1799,7 +1449,13 @@ def on_editor_did_init(editor: Editor) -> None:
                     return
 
                 sidebar = _pdf_viewer.PdfSidebar(editor, parent=None)
-                container = PdfDock(editor, sidebar, parent_window)
+                try:
+                    container = PdfDock(editor, sidebar, parent_window)
+                except Exception:
+                    # Parentless, it dies with this frame: unhook its
+                    # webview from Anki's theme hook first (K-095).
+                    sidebar.cleanup()
+                    raise
                 editor._klausmate_pdf_tabs = container  # type: ignore[attr-defined]
                 editor._klausmate_sidebar = sidebar  # type: ignore[attr-defined]
                 parent_window._klausmate_pdf_container = container
@@ -1827,7 +1483,9 @@ def on_editor_did_init(editor: Editor) -> None:
 # of base64 into every webview.
 mw.addonManager.setWebExports(
     __name__,
-    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(png|jpg|jpeg|webp|gif))",
+    # (?i:...) because store_image keeps the file's own name: IMG_1234.JPG
+    # was stored as-is and then refused by a lower-case-only pattern.
+    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif))",
 )
 mw.addonManager.setConfigAction(__name__, open_config)
 
@@ -1854,41 +1512,8 @@ except Exception as _e:
     print(f"[klausmate] sidebar cleanup hooks failed: {type(_e).__name__}: {_e}")
 
 
-def _stop_assistant_on_profile_close() -> None:
-    """Mirror of _start_assistant_endpoint (registered on profile_did_open,
-    below) — but ORDER matters here in a way it doesn't there: the dock's
-    own host (the child `claude` process) must close BEFORE the endpoint
-    it talks to goes down, never after, or a turn still in flight could
-    have its MCP tool call hit a connection that is already refused.
-
-    Registration order is the primary fix (gui_hooks fires listeners in
-    append order): this function's own .append() call, further down this
-    file, is deliberately placed AFTER assistant_dock.setup() — which
-    registers assistant_dock._teardown (the function that actually calls
-    dock.shutdown() -> self._host.close()) on this SAME hook — so
-    _teardown always fires first in the real profile-close pass.
-
-    This body is belt-and-braces on top of that, in case setup() itself
-    never ran (a guarded import failure at import time, say) or some
-    future edit reorders the two .append() calls again without noticing:
-    it calls _teardown() explicitly FIRST — the exact function setup()
-    would otherwise register, safe to call twice since it is a no-op once
-    _dock_instance is already None — then close_assistant() (a no-op by
-    then too, in the common case; kept as its own independent guarded
-    step), then stops the endpoint LAST, always.
-    """
-    try:
-        from . import assistant_dock
-
-        assistant_dock._teardown()
-    except Exception as exc:
-        print(f"[klausmate] assistant dock teardown (belt-and-braces) failed: {type(exc).__name__}: {exc}")
-    try:
-        from . import assistant_dock
-
-        assistant_dock.close_assistant()
-    except Exception as exc:
-        print(f"[klausmate] assistant dock close failed: {type(exc).__name__}: {exc}")
+def _stop_endpoint_on_profile_close() -> None:
+    """Stop Klaus's MCP/AnkiConnect endpoint when the profile closes."""
     try:
         from . import anki_endpoint
 
@@ -1918,16 +1543,6 @@ def _apply_color_theme() -> None:
         print(f"[klausmate] colour theme failed: {_exc}")
 
 
-# The Library screen must step aside whenever Anki moves to one of its own
-# states, or it sits on top of the deck list forever — Anki changes state
-# without knowing another widget is covering its webviews.
-try:
-    from . import library_tab as _library_tab
-
-    _library_tab.install_hooks()
-except Exception as _e:
-    print(f"[klausmate] library tab hooks not installed: {_e}")
-
 gui_hooks.profile_did_open.append(_apply_color_theme)
 gui_hooks.profile_did_open.append(_migrate_config)
 # One-time klaus:: -> !Library:: tag rename (K-038). After _migrate_config
@@ -1954,26 +1569,27 @@ def _library_rescan_on_profile_open() -> None:
     try:
         from . import pdf_drive as _pdf_drive
 
-        _pdf_drive.rescan_library_root()
+        _pdf_drive.start_library_rescan()  # K-309: in the background
     except Exception as exc:  # noqa: BLE001 - never block profile open
         print(f"[klausmate] library rescan failed: {exc}")
 
 
 gui_hooks.profile_did_open.append(_library_rescan_on_profile_open)
 gui_hooks.profile_did_open.append(_tag_sync.reconcile_on_profile_open)
+# K-306: the !Library tag branch is the Library, so a rename, drag or
+# delete in Browse's sidebar reaches the PDF as soon as it happens.
+gui_hooks.operation_did_execute.append(_tag_sync.on_operation_did_execute)
 gui_hooks.profile_did_open.append(first_run_check)
 gui_hooks.profile_did_open.append(setup_readiness_check)
+from .setup_flow import stop_local_runtime
+gui_hooks.profile_will_close.append(stop_local_runtime)
 
 
-def _start_assistant_endpoint() -> None:
-    """Klaus's own AnkiConnect/MCP endpoint (anki_endpoint.py), bound for
-    the life of this profile — mw.col only exists once profile_did_open
-    fires, which is why this is a profile hook rather than the top-level
-    setup() call below (that one only needs mw, which exists earlier).
-    Guarded: a failed bind must not cost the rest of profile_did_open,
-    and the assistant dock already copes with anki_endpoint.current()
-    being None (chat still works, just without Anki tools — see
-    assistant_dock._on_init's mcp_ok branch)."""
+def _start_klaus_endpoint() -> None:
+    """Start Klaus's AnkiConnect/MCP endpoint (anki_endpoint.py), bound for
+    the life of this profile. mw.col only exists once profile_did_open
+    fires, which is why this is a profile hook.
+    Guarded: a failed bind must not cost the rest of profile_did_open."""
     try:
         from . import anki_endpoint
 
@@ -1982,7 +1598,7 @@ def _start_assistant_endpoint() -> None:
         print(f"[klausmate] assistant endpoint start failed: {type(exc).__name__}: {exc}")
 
 
-gui_hooks.profile_did_open.append(_start_assistant_endpoint)
+gui_hooks.profile_did_open.append(_start_klaus_endpoint)
 gui_hooks.editor_did_init.append(on_editor_did_init)
 if hasattr(gui_hooks, "browser_will_show"):
     gui_hooks.browser_will_show.append(on_browser_will_show)
@@ -1999,40 +1615,10 @@ try:
 except Exception as _e:
     print(f"[klausmate] pdf drop setup failed: {type(_e).__name__}: {_e}")
 
-try:
-    from . import pdf_drive as _pdf_drive
-
-    _pdf_drive.setup()
-except Exception as _e:
-    print(f"[klausmate] pdf drive setup failed: {type(_e).__name__}: {_e}")
-
-# The assistant dock's Tools-menu action + Ctrl+Shift+K shortcut: a plain
-# QAction on mw, live regardless of profile state (see assistant_dock.setup's
-# own docstring), so — like _pdf_drive.setup() just above — this runs once
-# at import time rather than waiting on a profile hook. install_menu() is
-# only REGISTERED against main_window_did_init above (it fires later, once
-# Anki finishes constructing the main window) — so this synchronous call,
-# reached during the same module import, always completes first and
-# menu_action() already answers the real QAction by the time install_menu()
-# actually runs.
-try:
-    from . import assistant_dock
-
-    assistant_dock.setup()
-except Exception as _e:
-    print(f"[klausmate] assistant dock setup failed: {type(_e).__name__}: {_e}")
-
-# Registered here — AFTER assistant_dock.setup() above, not beside
-# _stop_assistant_on_profile_close's own definition further up this file
-# — on purpose: gui_hooks fires profile_will_close listeners in append
-# order, and setup() is what registers assistant_dock._teardown (closes
-# the child claude process) on this same hook. This ordering is what
-# makes the dock's host close before _stop_assistant_on_profile_close
-# stops the endpoint it talks to; see that function's own docstring.
-gui_hooks.profile_will_close.append(_stop_assistant_on_profile_close)
+gui_hooks.profile_will_close.append(_stop_endpoint_on_profile_close)
 
 # The index runner: profile teardown only. Everything else about it is
-# demand-driven (an import, the Library's button, a model change), so
+# demand-driven (an import, a sidebar Re-embed, a model change), so
 # there is no hook to register until a job exists.
 try:
     from . import index_queue as _index_queue
@@ -2048,57 +1634,6 @@ try:
 except Exception as _e:
     print(f"[klausmate] lecture view setup failed: {type(_e).__name__}: {_e}")
 
-
-def _start_lecture_uploader() -> None:
-    try:
-        uploader()
-    except Exception as exc:
-        print(f"[klausmate] lecture uploader start failed: {type(exc).__name__}: {exc}")
-
-
-gui_hooks.profile_did_open.append(_start_lecture_uploader)
-
-
-def _stop_lecture_uploader() -> None:
-    """Ruling 4: stop any in-flight recorder BEFORE the uploader — a
-    Recorder mid-chunk enqueues into it, so tearing the queue down first
-    would orphan that chunk's WAV against a dead worker. ``_active_recorders``
-    covers every dock (PdfDock instances close over their own; the Lecture
-    dock's singleton is one more), not just whichever one this profile
-    happens to remember.
-
-    Bumping ``_index_when_idle_gen`` here (fix round 1) is what stops a
-    drain poll armed against THIS profile's uploader from outliving it:
-    the queue it is watching dies with the profile, but its daemon worker
-    may still finish the chunk it holds, and a poll that then saw
-    ``pending() == 0`` would request a re-index by display name in
-    whatever profile opened next.
-
-    Dropping the singleton right after ``stop()`` is only safe because
-    ``Uploader.stop`` now closes the uploader before it enqueues its
-    sentinel and then waits (bounded, ``STOP_JOIN_S``) for the worker: a
-    chunk still mid-transcription appends nothing and keeps its WAV for
-    the next profile's ``requeue_leftovers`` instead of writing a page
-    record behind a profile that is already gone (PR #4 second
-    re-review)."""
-    global _uploader, _index_when_idle_gen
-    for rec in list(_active_recorders):
-        try:
-            rec.stop()
-        except Exception as exc:
-            print(f"[klausmate] recorder stop at profile close failed: {type(exc).__name__}: {exc}")
-    _active_recorders.clear()
-    if _uploader is not None:
-        try:
-            _uploader.stop()
-        except Exception as exc:
-            print(f"[klausmate] lecture uploader stop failed: {type(exc).__name__}: {exc}")
-        _uploader = None
-    _index_when_idle_gen += 1
-    _index_when_idle.clear()
-
-
-gui_hooks.profile_will_close.append(_stop_lecture_uploader)
 
 try:
     from . import top_bar as _top_bar
@@ -2120,6 +1655,14 @@ try:
     _browse_retention.setup()
 except Exception as _e:
     print(f"[klausmate] browse retention setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    # K-307: Browse's sidebar draws Library tags by their real names.
+    from . import library_sidebar as _library_sidebar
+
+    _library_sidebar.setup()
+except Exception as _e:
+    print(f"[klausmate] library sidebar setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import browse_toolkit as _browse_toolkit

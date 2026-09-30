@@ -1,31 +1,4 @@
-"""KlausMate Preferences dialog: the two API keys and the three model
-names, the Library folder, and the KlausBook appearance layer.
-
-Extracted verbatim from __init__.py (K-023, slice 1 of the K-006 file
-split). Backs Tools > KlausMate Preferences — the single Tools-menu entry
-point (K-045 folded the old 'Klaus' submenu's three items in here).
-
-Since the API-first reversal (2026-09-15, spec D1) Klaus talks to exactly
-two services with the user's own keys — OpenAI for embeddings and lecture
-transcription, and Anthropic, whose key is STORED for the spec's Plans 2
-and 3 (card pertinence, the assistant on the Messages API) and read by
-nothing today: the assistant still runs on the user's own Claude Code
-login. So the
-old Semantic Search page (a provider combo fanned out over three
-per-provider key slots) and the whole "Local model library (Ollama)" page
-with its install / pull / delete / classify machinery are gone, together
-with the runtime they managed. One page, "API keys & models", holds what
-is left, and it is also where a changed embedding model or a first OpenAI
-key offers the whole-collection re-embed sweep, priced by cost.py before
-anything is spent.
-
-This module is imported by __init__.py at package load time, so it must
-never import __init__ (this package) at module load — only from inside a
-function, after the package has finished loading. _pkg() below is that
-lazy accessor (same pattern as curation.py's _pkg()); it reaches config
-and helpers that live in __init__.py: get_config, write_config,
-open_config.
-"""
+"""KlausMate Preferences for local models, general settings and appearance."""
 
 from __future__ import annotations
 
@@ -53,9 +26,8 @@ from aqt.qt import (
     QWidget,
     Qt,
 )
-from aqt.utils import openLink, showInfo, showWarning, tooltip
+from aqt.utils import showInfo, showWarning, tooltip
 
-from . import plus
 from .md3_switch import Md3Switch
 
 
@@ -203,7 +175,7 @@ class _KlausManageDialog(QDialog):
     Esc triggers QDialog.reject() and the title-bar ✕ triggers closeEvent —
     neither hits a Close button's clicked signal. Without routing them
     through confirm_close, a running card-index build would keep
-    embedding — and billing — invisibly after the dialog vanishes, and
+    embedding invisibly after the dialog vanishes, and
     unsaved preference edits would be discarded without a word.
     """
 
@@ -337,6 +309,20 @@ def _run_dialog_probe() -> None:
           "backing-store flush did NOT crash")
 
 
+def _close_for_profile(dlg: Any, preview_timer: Any, op_state: dict) -> None:
+    """Close Preferences for a profile switch: no prompts, no late preview."""
+    for step in (
+        preview_timer.stop,  # a pending tick would re-arm the preview
+        lambda: op_state.get("active") and op_state.get("cancel") and op_state["cancel"].set(),
+        lambda: setattr(dlg, "confirm_close_cb", None),
+        dlg.reject,
+    ):
+        try:
+            step()
+        except Exception as exc:  # noqa: BLE001 - never block a profile close
+            print(f"[klausmate] preferences close for profile failed: {exc}")
+
+
 def manage_models_dialog(*_args: Any) -> None:
     """Open (or front) the one Preferences window.
 
@@ -363,6 +349,9 @@ def manage_models_dialog(*_args: Any) -> None:
             pass  # a dead/half-torn-down window: fall through and rebuild
         _OPEN_DLG = None
 
+    from . import setup_flow
+    profile_lifetime = setup_flow.runtime_lifetime()
+    _generation, profile_cancel = profile_lifetime
     dlg = _KlausManageDialog(mw)
     dlg.setWindowTitle("KlausMate Preferences")
     dlg.setMinimumWidth(480)
@@ -618,6 +607,7 @@ def manage_models_dialog(*_args: Any) -> None:
         desc_lbl.setObjectName("SettingDesc")
         desc_lbl.setWordWrap(True)
         text_col.addWidget(desc_lbl)
+        text_col.setAlignment(Qt.AlignmentFlag.AlignTop)
         row.addLayout(text_col, 1)
         if isinstance(control, QWidget):
             row.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -642,6 +632,11 @@ def manage_models_dialog(*_args: Any) -> None:
         sidebar display order) that has one. Clearing the field
         restores everything except structurally hidden rows."""
         q = str(text).strip().lower()
+        advanced_expanded = advanced_toggle.isChecked() or bool(q and any(
+            q in row.klaus_search for row in _rows_by_page.get("Local models", ())
+            if advanced_panel.isAncestorOf(row)))
+        advanced_panel.setVisible(advanced_expanded)
+        advanced_toggle.setText("▾ Advanced settings" if advanced_expanded else "▸ Advanced settings")
         first_hit = ""
         for label in _nav_order or list(_page_index):
             any_visible = False
@@ -696,111 +691,176 @@ def manage_models_dialog(*_args: Any) -> None:
     search_edit.textChanged.connect(_apply_search)
 
     keys_layout = _page(
-        "API keys & models",
-        "API keys & models",
-        "Klaus talks to OpenAI (embeddings, lecture transcription) and "
-        "Anthropic (the assistant, and judging which cards a lecture "
-        "really covers) with your own keys. Both are stored in this "
-        "add-on's config on your machine and never sent anywhere else. "
-        "Or subscribe to Klaus Plus and skip the keys.",
+        "Local models", "Local models",
+        "Choose the model for matching cards.",
     )
-
-    # ----- Klaus Plus ---------------------------------------------------
-    # ABOVE the provider keys on purpose: the whole point of a licence
-    # key is that the two rows under it never need filling in. Nothing
-    # here gates anything — the add-on ships as readable Python, and the
-    # service answering 401/402 is the only gate there is.
-    plus_key_edit = QLineEdit()
-    plus_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    plus_key_edit.setMinimumWidth(220)
-    plus_key_edit.setPlaceholderText("kp_…  (from your welcome page or email)")
-    _row(
-        keys_layout,
-        "Klaus Plus key",
-        "Subscribers paste their licence key here; no other keys are "
-        "needed then.",
-        plus_key_edit,
-    )
-
-    plus_status = QLabel()
-    plus_status.setWordWrap(True)
-    plus_status.setOpenExternalLinks(True)
-    plus_btns = QHBoxLayout()
-    plus_subscribe_btn = QPushButton("Subscribe…")
-    plus_manage_btn = QPushButton("Manage subscription…")
-    plus_check_btn = QPushButton("Check")
-    for b in (plus_subscribe_btn, plus_manage_btn, plus_check_btn):
-        b.setObjectName("SecondaryButton")
-        plus_btns.addWidget(b)
-    _row(keys_layout, "Klaus Plus", plus_status, plus_btns)
-
-    openai_key_edit = QLineEdit()
-    openai_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    openai_key_edit.setMinimumWidth(220)
-    openai_key_edit.setPlaceholderText("sk-…  (platform.openai.com)")
-    # Both provider rows are CAPTURED: refresh_plus_status repaints their
-    # descriptions when a Plus key is present. They stay editable — the
-    # free tier is one deletion away.
-    openai_row = _row(
-        keys_layout,
-        "OpenAI API key",
-        "Embeddings and lecture transcription.",
-        openai_key_edit,
-    )
-
-    anthropic_key_edit = QLineEdit()
-    anthropic_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    anthropic_key_edit.setMinimumWidth(220)
-    anthropic_key_edit.setPlaceholderText("sk-ant-…  (console.anthropic.com)")
-    anthropic_row = _row(
-        keys_layout,
-        "Anthropic API key",
-        "The assistant and card pertinence.",
-        anthropic_key_edit,
-    )
-    # Captured HERE, not re-spelled in refresh_plus_status: the two
-    # descriptions above are the only place they're authored, so editing
-    # one cannot silently revert on the next repaint (K-247 fix 4).
-    _plus_base_descs = {
-        openai_row: openai_row.klaus_desc.text(),
-        anthropic_row: anthropic_row.klaus_desc.text(),
-    }
-
+    advanced_panel = QWidget()
+    advanced_panel.setObjectName("AdvancedModelPanel")
+    advanced_layout = QVBoxLayout(advanced_panel)
+    advanced_layout.setContentsMargins(0, 0, 0, 0)
+    advanced_layout.klaus_page = "Local models"
+    advanced_panel.hide()
+    endpoint_edit = QLineEdit()
+    endpoint_edit.setObjectName("endpoint")
+    endpoint_edit.setMinimumWidth(220)
+    endpoint_edit.setPlaceholderText("http://127.0.0.1:11434")
+    _row(advanced_layout, "Ollama endpoint", "Local HTTP address for Ollama.", endpoint_edit)
     embed_model_edit = QLineEdit()
+    embed_model_edit.setObjectName("embedding_model")
     embed_model_edit.setMinimumWidth(220)
-    embed_model_edit.setPlaceholderText("text-embedding-3-large")
+    embed_model_edit.setPlaceholderText("nomic-embed-text")
     _row(
-        keys_layout,
+        advanced_layout,
         "Embedding model",
-        "Changing it re-embeds everything (Klaus asks first, with an "
-        "estimate).",
+        "Changing it offers to re-index your cards and PDFs locally.",
         embed_model_edit,
     )
 
-    reasoning_model_edit = QLineEdit()
-    reasoning_model_edit.setMinimumWidth(220)
-    reasoning_model_edit.setPlaceholderText("claude-sonnet-5")
-    _row(
-        keys_layout,
-        "Reasoning model",
-        "Judges cards against lecture pages and powers the assistant.",
-        reasoning_model_edit,
-    )
+    from . import ollama_runtime
 
-    transcription_model_edit = QLineEdit()
-    transcription_model_edit.setMinimumWidth(220)
-    transcription_model_edit.setPlaceholderText("gpt-4o-mini-transcribe")
-    _row(
-        keys_layout,
-        "Transcription model",
-        "Turns lecture audio into per-slide notes.",
-        transcription_model_edit,
+    runtime_auto_cb = Md3Switch()
+    runtime_auto_cb.setObjectName("runtime_auto_setup")
+    _row(advanced_layout, "Automatic management",
+         "Start an installed Ollama runtime on profile open. Never downloads automatically.",
+         runtime_auto_cb)
+    runtime_status = QLabel("Not checked. Click Refresh to check Ollama and installed models.")
+    runtime_status.setWordWrap(True)
+    runtime_status.setTextFormat(Qt.TextFormat.PlainText)
+    runtime_controls = QVBoxLayout()
+    install_btn = QPushButton("Install/start")
+    stop_runtime_btn = QPushButton("Stop managed server")
+    update_runtime_btn = QPushButton("Update runtime")
+    stop_runtime_btn.setEnabled(False)
+    update_runtime_btn.setEnabled(False)
+    for button in (install_btn, stop_runtime_btn, update_runtime_btn):
+        button.setObjectName("SecondaryButton")
+        if button is install_btn:
+            runtime_controls.addWidget(button)
+        else:
+            _row(advanced_layout, button.text(), "Manage the Ollama runtime installed by Klaus.", button)
+    runtime_hint = QLabel(
+        "Runs your card-matching model on this computer. "
+        f"First-time installation downloads {ollama_runtime.runtime_download_size_hint()}."
     )
+    runtime_hint.setWordWrap(True)
+    _row(keys_layout, "Ollama", runtime_hint, runtime_controls)
+    _row(keys_layout, "Ollama status", runtime_status, None)
+    runtime_status.setObjectName("OllamaStatus")
+    installed_models = QListWidget()
+    installed_models.setObjectName("InstalledModels")
+    installed_models.setMinimumWidth(220)
+    installed_models.setFixedHeight(108)
+    inventory_controls = QVBoxLayout()
+    inventory_controls.addWidget(installed_models)
+    inventory_buttons = QHBoxLayout()
+    refresh_models_btn = QPushButton("Refresh")
+    delete_model_btn = QPushButton("Delete")
+    for button in (refresh_models_btn, delete_model_btn):
+        button.setObjectName("SecondaryButton")
+        inventory_buttons.addWidget(button)
+    inventory_controls.addLayout(inventory_buttons)
+    inventory_row = _row(keys_layout, "Installed models",
+         "Select a Card matching model, then Save. Model types appear below each name.",
+         inventory_controls)
+    inventory_row.layout().itemAt(0).layout().setAlignment(Qt.AlignmentFlag.AlignTop)
+    pull_model_edit = QLineEdit()
+    pull_model_edit.setObjectName("pull_model")
+    pull_model_edit.setPlaceholderText("nomic-embed-text")
+    pull_model_edit.setMinimumWidth(140)
+    pull_model_edit.setText("nomic-embed-text")
+    pull_btn = QPushButton("Download")
+    pull_controls = QHBoxLayout()
+    pull_controls.addWidget(pull_model_edit)
+    pull_controls.addWidget(pull_btn)
+    download_controls = QVBoxLayout()
+    download_controls.addLayout(pull_controls)
+    _row(keys_layout, "Download model", "For card matching, use nomic-embed-text. Download progress appears below.", download_controls)
+    runtime_progress = QProgressBar()
+    runtime_progress.setObjectName("OllamaProgress")
+    runtime_progress.setRange(0, 100)
+    runtime_progress.setValue(0)
+    download_controls.addWidget(runtime_progress)
+
+    model_usage = QLabel()
+    model_usage.setWordWrap(True)
+    inventory_controls.addWidget(model_usage)
+
+    def update_model_usage() -> None:
+        model_usage.setText("Card matching: " + (embed_model_edit.text().strip() or "Not selected"))
+
+    embed_model_edit.textChanged.connect(update_model_usage)
 
     embed_status = QLabel()
     embed_status.setWordWrap(True)
     index_btn = QPushButton("Index Now")
-    _row(keys_layout, "Card index", embed_status, index_btn)
+    _row(keys_layout, "Index cards", embed_status, index_btn)
+
+    from pathlib import Path
+    from aqt.qt import QApplication, QPlainTextEdit
+    from .scripts import mcp_stdio_bridge
+    from .scripts.mcp_stdio_bridge import client_config, external_python
+
+    external_interpreter = None
+    external_script = str(Path(__file__).resolve().parent / "scripts" / "mcp_stdio_bridge.py")
+    external_discovery = str(Path(_pkg().USER_FILES) / "mcp_connection.json")
+    external_controls = QVBoxLayout()
+    external_json = QPlainTextEdit()
+    external_json.setObjectName("external_client_config")
+    external_json.setReadOnly(True)
+    external_json.setMinimumWidth(260)
+    external_json.setMaximumHeight(180)
+    external_copy = QPushButton("Copy configuration")
+    external_copy.setObjectName("copy_external_client_config")
+    external_copy.setEnabled(False)
+    external_test = QPushButton("Test connection")
+    external_test.setObjectName("test_external_client_connection")
+    external_test.setEnabled(False)
+    external_status = QLabel("Checking for external Python 3.9 or newer…")
+    external_status.setProperty("mcp_status", True)
+    external_status.setWordWrap(True)
+    external_status.setTextFormat(Qt.TextFormat.PlainText)
+    external_copy.clicked.connect(lambda: QApplication.clipboard().setText(external_json.toPlainText()))
+    _row(advanced_layout, "MCP configuration", "Full configuration for an external assistant.", external_json)
+    external_controls.addWidget(external_copy)
+    external_controls.addWidget(external_test)
+    _row(keys_layout, "MCP", external_status, external_controls)
+
+    def connection_ready(result: dict) -> None:
+        if _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        external_test.setEnabled(True)
+        external_status.setText(result["message"])
+
+    def check_external_connection(*_args) -> None:
+        if not external_interpreter or _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        external_test.setEnabled(False)
+        external_status.setText("Testing connection…")
+        op = QueryOp(parent=dlg, op=lambda _col: mcp_stdio_bridge.test_connection(
+            external_interpreter, external_script, external_discovery), success=connection_ready)
+        op.failure(lambda _exc: connection_ready({"ok": False,
+            "message": "Connection test failed. Restart Anki and try again."}))
+        op.without_collection().run_in_background()
+
+    external_test.clicked.connect(check_external_connection)
+
+    def external_ready(interpreter: str | None) -> None:
+        nonlocal external_interpreter
+        if _OPEN_DLG is not dlg or profile_cancel.is_set():
+            return
+        external_interpreter = interpreter
+        if interpreter:
+            external_json.setPlainText(client_config(
+                interpreter, external_script, external_discovery,
+            ))
+            external_copy.setEnabled(True)
+            external_test.setEnabled(True)
+            external_status.setText(
+                "Connect an external assistant while Anki is open. Copy this configuration "
+                "into your client. The client may send requested page text and images to its model provider."
+            )
+        else:
+            external_status.setText("Install Python 3.9 or newer and reopen Preferences to copy the client configuration.")
 
     # ----- Default match sensitivity -----------------------------------
     # The global starting point for retention._migrate_default_threshold /
@@ -825,6 +885,16 @@ def manage_models_dialog(*_args: Any) -> None:
         "adjusted in the Library (right-click → Match sensitivity).",
         threshold_ctl,
     )
+
+    advanced_toggle = QPushButton("▸ Advanced settings")
+    advanced_toggle.setObjectName("AdvancedModelSettings")
+    advanced_toggle.setCheckable(True)
+    advanced_toggle.toggled.connect(advanced_panel.setVisible)
+    advanced_toggle.toggled.connect(lambda expanded: advanced_toggle.setText(
+        "▾ Advanced settings" if expanded else "▸ Advanced settings"))
+    advanced_toggle.setAccessibleName("Advanced settings")
+    keys_layout.addWidget(advanced_toggle)
+    keys_layout.addWidget(advanced_panel)
 
     # ----- General ------------------------------------------------------
     general_layout = _page(
@@ -870,28 +940,13 @@ def manage_models_dialog(*_args: Any) -> None:
 
     # Maintenance — the connection check that used to live in the
     # Tools > Klaus submenu (K-045).
-    test_conn_btn = QPushButton("Check Keys")
+    test_conn_btn = QPushButton("Check Connection")
     test_conn_btn.setObjectName("SecondaryButton")
     _row(
-        general_layout,
+        advanced_layout,
         "Connection",
-        "Check that both API keys are set.",
+        "Check the local Ollama connection.",
         test_conn_btn,
-    )
-
-    # The ONE reason the service URL is config at all: a self-hoster or a
-    # staging run. Deliberately NOT beside the licence key — nobody
-    # pasting a key should be invited to retarget the endpoint at the
-    # same time.
-    plus_base_edit = QLineEdit()
-    plus_base_edit.setMinimumWidth(220)
-    plus_base_edit.setPlaceholderText(plus.DEFAULT_BASE)
-    _row(
-        general_layout,
-        "Klaus Plus service",
-        "Where the Klaus Plus subscription is checked. Leave it empty "
-        "unless you run your own or a staging service.",
-        plus_base_edit,
     )
 
     # ---- Appearance: custom background + the deck-screen panels ----
@@ -1526,133 +1581,7 @@ def manage_models_dialog(*_args: Any) -> None:
         library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
 
     _refresh_library_label()
-    # ---- Assistant --------------------------------------------------
-    # The assistant runs on the Anthropic key on the keys page —
-    # `api_key_anthropic` and `reasoning_model`, both edited there
-    # because that is where every paid model name lives now. What is
-    # left here is the dock's own behaviour and its stored history: the
-    # OCR switch, the OCR model picker and the Claude Code binary row
-    # all went with the local runtime and the CLI child (spec D1).
-    assistant_layout = _page(
-        "Assistant",
-        "Assistant",
-        "Answers about the lecture page you are viewing — its slide "
-        "text, any transcript of what was said over it, and the page "
-        "image. It runs on Anthropic with the key above.",
-    )
-
-    assistant_reopen_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox
-    _row(
-        assistant_layout,
-        "Reopen on start",
-        "Reopen the Assistant dock where you left it the next time Anki "
-        "starts.",
-        assistant_reopen_cb,
-    )
-
-    def _clear_sessions_confirmed() -> None:
-        """The destructive back half, run only from the confirm's Yes.
-        assistant_sessions is Task 7's module, imported lazily for the
-        same reason agent_host is above."""
-        try:
-            from . import USER_FILES, assistant_sessions
-        except Exception as exc:
-            print(f"[klausmate] assistant_sessions unavailable: {exc}")
-            return
-        try:
-            assistant_sessions.clear_all(USER_FILES)
-        except Exception as exc:
-            print(f"[klausmate] assistant_sessions.clear_all failed: {exc}")
-            return
-        tooltip("Klaus: assistant sessions cleared", parent=dlg)
-
-    def clear_assistant_sessions() -> None:
-        # Hand-built QMessageBox + open() + finished (K-125), same
-        # pattern as pdf_drive._delete_pdf — never the blocking
-        # question() static (its internal exec() is the
-        # K-114 segfault class).
-        msg = QMessageBox(dlg)
-        msg.setWindowTitle("Clear Sessions")
-        msg.setIcon(QMessageBox.Icon.Question)
-        msg.setText(
-            "Clear every saved Assistant conversation?\n\n"
-            "This removes the session history the Assistant keeps per "
-            "PDF. Notes, PDFs, and highlights are never touched."
-        )
-        msg.setStandardButtons(
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        msg.setDefaultButton(QMessageBox.StandardButton.No)
-        yes_btn = msg.button(QMessageBox.StandardButton.Yes)
-        if yes_btn is not None:
-            yes_btn.setObjectName("DangerButton")
-        no_btn = msg.button(QMessageBox.StandardButton.No)
-        if no_btn is not None:
-            no_btn.setObjectName("SecondaryButton")
-        try:
-            from . import theme as _theme
-
-            msg.setStyleSheet(_theme.dialog_qss(_theme.night_mode()))
-        except Exception as exc:
-            print(f"[klausmate] clear-sessions dialog theme failed: {exc}")
-
-        def _on_answered(_r: int) -> None:
-            clicked = msg.clickedButton()
-            confirmed = (
-                clicked is not None
-                and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
-            )
-            msg.deleteLater()
-            if confirmed:
-                _clear_sessions_confirmed()
-
-        msg.finished.connect(_on_answered)
-        msg.open()
-
-    clear_sessions_btn = QPushButton("Clear Sessions")
-    clear_sessions_btn.setObjectName("SecondaryButton")
-    _row(
-        assistant_layout,
-        "Sessions",
-        "Deletes the saved Assistant conversation history for every "
-        "PDF. Notes, PDFs, and highlights are never touched.",
-        clear_sessions_btn,
-    )
-
-    def load_assistant() -> None:
-        cfg = _pkg().get_config()
-        anthropic_key_edit.setText(str(cfg.get("api_key_anthropic") or ""))
-        reasoning_model_edit.setText(str(cfg.get("reasoning_model") or ""))
-        transcription_model_edit.setText(
-            str(cfg.get("transcription_model") or "")
-        )
-        assistant_reopen_cb.setChecked(bool(cfg.get("assistant_reopen", False)))
-
-    def save_assistant() -> None:
-        """The Anthropic key and the two model names it pays for, plus
-        the dock's own state. They are EDITED on the keys page (that is
-        where every paid model name lives) and written here, so the
-        Assistant's settings still have exactly one writer."""
-        cfg = _pkg().get_config()
-        cfg["api_key_anthropic"] = anthropic_key_edit.text().strip()
-        cfg["reasoning_model"] = reasoning_model_edit.text().strip()
-        cfg["transcription_model"] = transcription_model_edit.text().strip()
-        cfg["assistant_reopen"] = bool(assistant_reopen_cb.isChecked())
-        # No Preferences row for these two — they're dock state, set by
-        # dragging the Assistant dock and by opening/closing it.
-        # Round-tripped so this save never wipes them back to defaults.
-        # int() is guarded because meta.json is hand-editable and a
-        # non-numeric width must not break the Save button for every
-        # other setting on the page (parked T8 finding).
-        try:
-            cfg["assistant_dock_width"] = int(cfg.get("assistant_dock_width", 420) or 420)
-        except (TypeError, ValueError):
-            cfg["assistant_dock_width"] = 420
-        cfg["assistant_dock_open"] = bool(cfg.get("assistant_dock_open", False))
-        _pkg().write_config(cfg)
-
-    _finish_nav("General", "Appearance", "Assistant",
-                "API keys & models")
+    _finish_nav("General", "Appearance", "Local models")
 
     outer.addWidget(models_page, 1)
 
@@ -1702,144 +1631,52 @@ def manage_models_dialog(*_args: Any) -> None:
     close_row.addWidget(save_btn)
     foot.addLayout(close_row)
 
-    # "kind" is only ever "index" now — the pull / install / runtime-setup
-    # operations went with the local runtime — but it stays a named kind
-    # so confirm_close keeps reading one thing.
+    # One background operation at a time in this dialog.
     op_state: dict[str, Any] = {"active": False, "kind": "", "cancel": None}
     # "syncing"/"dirty" back the deferred-save model: preference widgets
     # never write on a keystroke or a toggle — Save does. "syncing" is
     # what stops a programmatic repopulation looking like a user edit.
     ui_state: dict[str, Any] = {"syncing": False, "dirty": False}
 
+    runtime_state = {"owned": False, "update": False}
+
     def set_busy(busy: bool) -> None:
         op_state["active"] = busy
         for w in (
-            openai_key_edit, anthropic_key_edit, embed_model_edit,
-            reasoning_model_edit, transcription_model_edit,
+            endpoint_edit, embed_model_edit, runtime_auto_cb,
+            install_btn, refresh_models_btn, pull_btn, pull_model_edit, installed_models,
             index_btn, test_conn_btn,
             threshold_slider, library_change_btn,
         ):
             w.setEnabled(not busy)
-        progress.setVisible(busy)
-        progress_lbl.setVisible(busy)
+        stop_runtime_btn.setEnabled(not busy and runtime_state["owned"])
+        update_runtime_btn.setEnabled(not busy and runtime_state["update"])
+        delete_model_btn.setEnabled(not busy and installed_models.currentItem() is not None
+                                    and installed_models.currentItem().data(Qt.ItemDataRole.UserRole) is not None)
+        save_btn.setEnabled(not busy and ui_state["dirty"])
+        progress.setVisible(busy and op_state["kind"] != "local")
+        progress_lbl.setVisible(busy and op_state["kind"] != "local")
 
     def refresh() -> None:
-        """Reload every deferred-save widget from stored config. The one
-        entry point that used to probe a local server and rebuild a model
-        inventory; with two cloud keys there is nothing to probe."""
+        """Reload deferred-save widgets from the current configuration."""
         sync_embed_widgets()
         sync_threshold_widget()
 
-    # ----- API keys & models handlers --------------------------------------
-
-    def _plus_cfg() -> dict:
-        return _pkg().get_config() or {}
-
-    def refresh_plus_status() -> None:
-        """Repaint the Plus row and the two provider captions from STORED
-        config. Presence is read through plus.key(), which validates the
-        kp_ shape, so a half-pasted key cannot light the group up as a
-        working subscription. The provider rows stay EDITABLE — the free
-        tier is one deletion away — so the note is a caption, never a
-        setReadOnly."""
-        cfg = _plus_cfg()
-        has = bool(plus.key(cfg))
-        base_line = (
-            plus.status_line(cfg.get(plus.CACHE) or {}) if has
-            else "Klaus Plus: $12/month or $99/year — no API keys needed."
-        )
-        # Terms/Privacy live on the GROUP row's status text (never the
-        # licence-key field's row above it) so they survive every repaint
-        # this function does (M-11: spec D5 promised a link from
-        # Preferences and nothing built it).
-        service_base = plus.base(cfg)
-        plus_status.setText(
-            f'{base_line}<br><a href="{service_base}/terms">Terms</a> · '
-            f'<a href="{service_base}/privacy">Privacy</a>'
-        )
-        # Both are calls the service answers 401 to without a key; a
-        # button that can only fail is worse than no button. Subscribe
-        # stays live — it is the one thing a user without a key is here
-        # to press.
-        plus_manage_btn.setEnabled(has)
-        plus_check_btn.setEnabled(has)
-        note = "Not needed on Klaus Plus; kept for the free tier." if has else None
-        for roww in (openai_row, anthropic_row):
-            roww.klaus_desc.setText(note or _plus_base_descs[roww])
-
-    def on_plus_subscribe() -> None:
-        """A URL built from the configured base — no key, no network, so
-        a user with nothing configured can still reach the page that
-        sells them one. A browser hop is the ONLY way Klaus touches
-        payment: nothing to enter inside Anki."""
-        openLink(plus.base(_plus_cfg()) + "/subscribe")
-
-    def on_plus_manage() -> None:
-        cfg = _plus_cfg()
-
-        def work() -> str:
-            return plus.portal_url(cfg)
-
-        def done(fut) -> None:
-            try:
-                url = fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus portal failed: {exc.__class__.__name__}")
-                url = ""
-            if url:
-                openLink(url)
-            else:
-                tooltip("Could not open the subscription portal — check the key and try again.")
-
-        # taskman, not the click handler: plus.TIMEOUT_S is 15 s, and a
-        # urlopen that long on the main thread freezes Anki's whole UI.
-        mw.taskman.run_in_background(work, done)
-
-    def on_plus_check() -> None:
-        def work() -> dict:
-            # patch_config, not the raw replacing writer: this runs on
-            # the worker thread, and handing plus.refresh's patch sink a
-            # REPLACE would zero every other setting on one Check
-            # (K-247 fix 1). patch_config merges into a fresh read and
-            # hops back to the main thread itself, so the worker thread
-            # never touches meta.json directly.
-            return plus.refresh(_pkg().get_config, _pkg().patch_config)
-
-        def done(fut) -> None:
-            try:
-                fut.result()
-            except Exception as exc:  # noqa: BLE001
-                print(f"[klausmate] Klaus Plus check failed: {exc.__class__.__name__}")
-            refresh_plus_status()
-
-        mw.taskman.run_in_background(work, done)
+    # ----- Local models handlers --------------------------------------
 
     def sync_embed_widgets() -> None:
-        """Seed the five fields from stored config.
-
-        Never while dirty: a refresh landing mid-edit must not overwrite
-        unsaved values with the stored ones. The key fields are seeded
-        here and read only by save_embed / save_assistant — a key's value
-        never reaches a print, a tooltip or a status label.
-        """
+        """Seed local settings unless the user has pending edits."""
         if ui_state["dirty"]:
             return
         ui_state["syncing"] = True
         try:
             cfg = _pkg().get_config()
-            openai_key_edit.setText(str(cfg.get("api_key_openai") or ""))
+            endpoint_edit.setText(str(cfg.get("endpoint") or "http://127.0.0.1:11434"))
             embed_model_edit.setText(str(cfg.get("embedding_model") or ""))
-            plus_key_edit.setText(str(cfg.get(plus.KEY) or ""))
-            plus_base_edit.setText(str(cfg.get(plus.BASE) or ""))
-            # INSIDE the guard: load_assistant flips a switch, and a
-            # switch that starts out true emits toggled -> mark_dirty,
-            # which would light up "Unsaved changes" on a dialog nobody
-            # has touched.
-            load_assistant()
+            runtime_auto_cb.setChecked(bool(cfg.get("runtime_auto_setup", True)))
         finally:
             ui_state["syncing"] = False
         update_embed_status()
-        refresh_plus_status()
 
     def _fmt_ago(ts: float) -> str:
         secs = max(0, int(time.time() - ts))
@@ -1857,15 +1694,7 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
-        # A Plus key counts: telling a paying subscriber to add an OpenAI
-        # key is the exact contradiction the provider-row caption two
-        # rows up exists to prevent.
-        if not str(cfg.get("api_key_openai") or "").strip() and not plus.key(cfg):
-            txt = (
-                "Add your OpenAI API key above — or a Klaus Plus key — "
-                "to enable semantic search."
-            )
-        elif not st["exists"]:
+        if not st["exists"]:
             txt = "No card index yet — click “Index Now” to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
@@ -1886,45 +1715,16 @@ def manage_models_dialog(*_args: Any) -> None:
         # what config holds after the write is the only honest way to ask
         # "did the model move under the index?" (K-152).
         prev_sig = embeddings.index_signature(cfg)
-        had_key = bool(str(cfg.get("api_key_openai") or "").strip())
-        # Same capture-before-the-write rule for the subscription: a
-        # FIRST Plus key never moves the signature either (nothing was
-        # ever embedded), and that is exactly the user whose whole
-        # library is unindexed.
-        had_plus = bool(plus.key(cfg))
-        prev_plus = str(cfg.get(plus.KEY) or "").strip()
-        cfg["api_key_openai"] = openai_key_edit.text().strip()
+        cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
         cfg["embedding_model"] = embed_model_edit.text().strip()
-        cfg["klaus_plus_key"] = plus_key_edit.text().strip()
-        if cfg["klaus_plus_key"] != prev_plus:
-            # The cached verdict describes the OLD subscription, and a
-            # non-refused verdict is honoured with no expiry of its own
-            # (I-3). Left behind, a swapped key would show the previous
-            # subscription's status and quota until the next real Check.
-            cfg["klaus_plus_cache"] = {}
+        cfg["runtime_auto_setup"] = runtime_auto_cb.isChecked()
         _pkg().write_config(cfg)
         update_embed_status()
-        refresh_plus_status()
-        # K-152: a changed model or width invalidates EVERY stored
-        # vector, and PDF indexes rebuild only lazily — one at a time,
-        # whenever you next happen to touch that PDF — so without this
-        # the whole Library goes quietly stale until each is opened by
-        # hand. A FIRST key is the other half: the signature never moves
-        # (nothing was ever embedded), and that is exactly the moment
-        # the offer is most useful. offer_model_sweep does the
-        # comparison (via embeddings.signature_matches, never a tuple
-        # ==), counts the work, prices it, and asks before spending.
+        # Offer a local rebuild when the stored signature changes.
         try:
             from . import index_queue
 
-            index_queue.offer_model_sweep(
-                dlg,
-                prev_sig,
-                first_key=(
-                    (not had_key and bool(cfg["api_key_openai"]))
-                    or (not had_plus and bool(plus.key(cfg)))
-                ),
-            )
+            index_queue.offer_model_sweep(dlg, prev_sig)
         except Exception as exc:
             print(f"[klausmate] model-change sweep offer failed: {exc}")
 
@@ -2149,9 +1949,6 @@ def manage_models_dialog(*_args: Any) -> None:
 
         cfg = _pkg().get_config()
         sig = embeddings.index_signature(cfg)
-        if not str(cfg.get("api_key_openai") or "").strip():
-            showWarning("Enter your OpenAI API key above before indexing.")
-            return
         st = curation.index_stats()
         if st["exists"] and not embeddings.signature_matches(
             st["provider"], st["model"], st.get("dims", 0), sig
@@ -2211,8 +2008,8 @@ def manage_models_dialog(*_args: Any) -> None:
         # accept() straight away, and unsaved edits must not slip out
         # through one of them unmentioned.
         def _after_dirty_check() -> None:
-            if op_state["active"]:
-                # Indexing is the one long operation left in this
+            if op_state["active"] and op_state["kind"] == "index":
+                # Indexing is the cancellable collection operation in this
                 # window. K-114: hand-built QMessageBox + open() +
                 # finished, same shape as clear_assistant_sessions
                 # above — never a blocking question() static. Chained
@@ -2311,9 +2108,6 @@ def manage_models_dialog(*_args: Any) -> None:
         cfg = _pkg().get_config()
         cfg["image_crop_enabled"] = bool(image_crop_cb.isChecked())
         cfg["pdf_renderer"] = "pdfjs" if pdfjs_cb.isChecked() else "native"
-        # The service URL only. The licence key belongs to save_embed —
-        # one key, one writer, or Save's two halves race to spell it.
-        cfg["klaus_plus_base"] = plus_base_edit.text().strip()
         spec = _bg_state["spec"]
         cfg["background_mode"] = spec["mode"]
         cfg["background_color"] = spec["color"]
@@ -2547,7 +2341,6 @@ def manage_models_dialog(*_args: Any) -> None:
         save_embed()
         save_threshold()
         save_general()
-        save_assistant()
         # Paint through the same one path as every live edit, THEN drop
         # the override: stored config now holds identical values, so
         # leaving it armed would let a stale preview shadow a later
@@ -2614,40 +2407,207 @@ def manage_models_dialog(*_args: Any) -> None:
         op.failure(on_fail)
         op.without_collection().run_in_background()
 
-    def test_connection() -> None:
-        """Moved from the old Tools > Klaus > Test connection (K-045).
+    def local_alive() -> bool:
+        return not profile_cancel.is_set() and _OPEN_DLG is dlg and _dlg_alive()
 
-        A key-PRESENCE check, not a network probe: a live call would
-        cost money to answer a question the user did not ask, and the
-        only failure it could report that this cannot is a wrong key —
-        which the first real request reports anyway, with its own
-        message.
-        """
-        cfg = _pkg().get_config()
-        pairs = (("OpenAI", "api_key_openai"), ("Anthropic", "api_key_anthropic"))
-        if plus.key(cfg):
-            # A subscriber's provider keys are empty BY DESIGN — the
-            # "No API key is set for" warning below is the exact
-            # contradiction judgement call 1 already removed from
-            # update_embed_status, one page over.
-            present = [label for label, k in pairs if str(cfg.get(k) or "").strip()]
-            lines = [
-                "Klaus Plus key set — the OpenAI and Anthropic keys are "
-                "optional while Plus is active."
-            ]
-            lines += [f"{label} API key is also set." for label in present]
-            showInfo("\n".join(lines), parent=dlg)
+    def runtime_snapshot(endpoint: str) -> dict:
+        from .ollama_client import OllamaClient
+
+        client = OllamaClient(endpoint, timeout=5)
+        reachable = client.health()
+        owned = ollama_runtime.server_manager.spawned_or_adopted()
+        managed = ollama_runtime.find_managed_runtime()
+        update = bool(
+            managed and managed[0] != ollama_runtime.OLLAMA_VERSION
+            and owned and ollama_runtime.server_manager.active_binary() == managed[1]
+        )
+        models = []
+        for name in client.list_models() if reachable else []:
+            try:
+                capabilities = client.model_capabilities(name)
+            except Exception:
+                capabilities = []
+            models.append((name, capabilities))
+        return {"reachable": reachable, "owned": owned, "update": update, "models": models}
+
+    def local_progress(event: dict) -> None:
+        # Runtime and HTTP callbacks run on workers. Every Qt access,
+        # including the liveness check, belongs on the main thread.
+        event = dict(event)
+        def apply() -> None:
+            if not local_alive():
+                return
+            runtime_status.setText(str(event.get("status") or "Working…"))
+            total = event.get("total") or 0
+            if total:
+                runtime_progress.setRange(0, 100)
+                runtime_progress.setValue(int(100 * (event.get("completed") or 0) / total))
+            else:
+                runtime_progress.setRange(0, 0)
+        mw.taskman.run_on_main(apply)
+
+    def run_local(action: str, model: str = "") -> None:
+        if op_state["active"] or not local_alive():
             return
-        missing = [label for label, key in pairs if not str(cfg.get(key) or "").strip()]
-        if missing:
-            showWarning(
-                "No API key is set for: "
-                + ", ".join(missing)
-                + ".\n\nAdd one in KlausMate Preferences → API keys & models.",
-                parent=dlg,
-            )
-        else:
-            showInfo("Both API keys are set.", parent=dlg)
+        cfg = _pkg().get_config()
+        starting_endpoint = cfg.get("endpoint")
+        cfg["endpoint"] = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
+        endpoint = cfg["endpoint"]
+        # Manual unsaved endpoints remain owned by Save, including relocation.
+        save_endpoint = (
+            setup_flow.runtime_endpoint_saver(profile_lifetime, starting_endpoint)
+            if endpoint == (starting_endpoint or "http://127.0.0.1:11434") else None
+        )
+        op_state["kind"] = "local"
+        set_busy(True)
+        runtime_status.setText(f"{action}… You can close Preferences; the operation continues.")
+        runtime_progress.setRange(0, 0)
+
+        def perform(cancel_flag: threading.Event | None = None) -> tuple:
+            from .ollama_client import OllamaClient
+
+            result = None
+            if action == "Install/start":
+                result = ollama_runtime.full_setup(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
+            elif action == "Update runtime":
+                result = ollama_runtime.update_runtime(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
+            elif action == "Stop managed server":
+                if not ollama_runtime.server_manager.spawned_or_adopted():
+                    raise RuntimeError("This server is external. Stop it in the application that started it.")
+                ollama_runtime.server_manager.stop()
+            elif action == "Pull":
+                OllamaClient(endpoint).pull(model, on_event=local_progress)
+            elif action == "Delete":
+                OllamaClient(endpoint).delete(model)
+            if result is not None and not result.ok:
+                raise RuntimeError(result.detail or "Ollama could not start. Check the endpoint and try Install/start again.")
+            actual_endpoint = result.endpoint if result is not None else endpoint
+            return runtime_snapshot(actual_endpoint), actual_endpoint
+
+        def work(_col: Any) -> Any:
+            if profile_cancel.is_set():
+                return None
+            if action in ("Install/start", "Update runtime", "Stop managed server"):
+                return setup_flow.run_profile_runtime(profile_lifetime, perform)
+            return perform()
+
+        def done(result: tuple | None) -> None:
+            if result is None or not local_alive():
+                return
+            snapshot, actual_endpoint = result
+            runtime_state.update(owned=snapshot["owned"], update=snapshot["update"])
+            # Inventory updates never select a different embedding model.
+            installed_models.blockSignals(True)
+            installed_models.clear()
+            for name, capabilities in snapshot["models"]:
+                purposes = [label for key, label in (
+                    ("embedding", "Card matching"), ("vision", "Images"),
+                    ("completion", "Text generation")) if key in capabilities]
+                item = QListWidgetItem(name + "\n" + (" · ".join(purposes) or "Unknown type"))
+                item.setData(Qt.ItemDataRole.UserRole, (name, capabilities))
+                installed_models.addItem(item)
+            installed_models.blockSignals(False)
+            if actual_endpoint != endpoint and endpoint_edit.text().strip() == endpoint:
+                endpoint_edit.setText(actual_endpoint)
+                if _pkg().get_config().get("endpoint") != actual_endpoint:
+                    mark_dirty()
+            if snapshot["reachable"]:
+                status = "Ollama is running (managed by Klaus)." if snapshot["owned"] else (
+                    "Ollama is running (external). Stop it in the application that started it."
+                )
+            else:
+                status = "Ollama is not reachable. Check the endpoint and click Install/start."
+            if actual_endpoint != endpoint:
+                status += (
+                    " The runtime chose another port; its endpoint was saved."
+                    if _pkg().get_config().get("endpoint") == actual_endpoint else
+                    " The runtime chose another port. Save to use the new endpoint."
+                )
+            runtime_status.setText(status)
+            runtime_progress.setRange(0, 100)
+            runtime_progress.setValue(100 if action in ("Pull", "Install/start", "Update runtime") else 0)
+            op_state["kind"] = ""
+            set_busy(False)
+
+        def failed(exc: Exception) -> None:
+            if not local_alive():
+                return
+            runtime_status.setText(f"{action} failed: {exc}")
+            runtime_progress.setRange(0, 100)
+            runtime_progress.setValue(0)
+            op_state["kind"] = ""
+            set_busy(False)
+
+        op = QueryOp(parent=dlg, op=work, success=done)
+        op.failure(failed)
+        op.without_collection().run_in_background()
+
+    def select_installed_model() -> None:
+        item = installed_models.currentItem()
+        data = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        delete_model_btn.setEnabled(not op_state["active"] and data is not None)
+        if data is not None and "embedding" in data[1]:
+            embed_model_edit.setText(data[0])
+            mark_dirty()
+
+    def pull_model() -> None:
+        name = pull_model_edit.text().strip()
+        if not name:
+            runtime_status.setText("Enter a model name, such as nomic-embed-text, then click Download.")
+            return
+        run_local("Pull", name)
+
+    def delete_model() -> None:
+        item = installed_models.currentItem()
+        if item is None or op_state["active"]:
+            return
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data is None:
+            return
+        name = data[0]
+        msg = QMessageBox(dlg)
+        msg.setWindowTitle("Delete model?")
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setText(f"Delete {name} from Ollama? You will need to download it again to use it.")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+        def answered(_result: int) -> None:
+            clicked = msg.clickedButton()
+            confirmed = clicked is not None and msg.standardButton(clicked) == QMessageBox.StandardButton.Yes
+            msg.deleteLater()
+            if confirmed and local_alive():
+                run_local("Delete", name)
+        msg.finished.connect(answered)
+        msg.open()
+
+    install_btn.clicked.connect(lambda: run_local("Install/start"))
+    stop_runtime_btn.clicked.connect(lambda: run_local("Stop managed server"))
+    update_runtime_btn.clicked.connect(lambda: run_local("Update runtime"))
+    refresh_models_btn.clicked.connect(lambda: run_local("Refresh"))
+    pull_btn.clicked.connect(pull_model)
+    delete_model_btn.clicked.connect(delete_model)
+    delete_model_btn.setEnabled(False)
+    installed_models.currentItemChanged.connect(lambda *_args: select_installed_model())
+    runtime_auto_cb.toggled.connect(lambda _checked: mark_dirty())
+
+    def test_connection() -> None:
+        if op_state["active"]:
+            return
+        from .ollama_client import OllamaClient
+        endpoint = endpoint_edit.text().strip() or "http://127.0.0.1:11434"
+        set_busy(True)
+        def done(reachable: bool) -> None:
+            if _OPEN_DLG is not dlg:
+                return
+            set_busy(False)
+            if reachable:
+                showInfo("Local Ollama is reachable.", parent=dlg)
+            else:
+                showWarning("Cannot connect to Ollama. Check the endpoint and start Ollama.", parent=dlg)
+        op = QueryOp(parent=dlg, op=lambda _col: OllamaClient(endpoint, timeout=5).health(), success=done)
+        op.failure(lambda _exc: done(False))
+        op.without_collection().run_in_background()
 
     cancel_btn.clicked.connect(cancel_index)
     dlg.confirm_close_cb = confirm_close  # Esc and title-bar ✕ too
@@ -2656,20 +2616,8 @@ def manage_models_dialog(*_args: Any) -> None:
     # Preference widgets only MARK DIRTY; save_all() (Save button) is the
     # single writer. textEdited rather than editingFinished so the Save
     # button lights up as you type, not only on focus-out.
-    plus_key_edit.textEdited.connect(lambda _t: mark_dirty())
-    plus_base_edit.textEdited.connect(lambda _t: mark_dirty())
-    # The three buttons ACT (open a browser, ask the service) — they do
-    # not edit, so none of them marks the dialog dirty.
-    plus_subscribe_btn.clicked.connect(on_plus_subscribe)
-    plus_manage_btn.clicked.connect(on_plus_manage)
-    plus_check_btn.clicked.connect(on_plus_check)
-    openai_key_edit.textEdited.connect(lambda _t: mark_dirty())
+    endpoint_edit.textEdited.connect(lambda _t: mark_dirty())
     embed_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    anthropic_key_edit.textEdited.connect(lambda _t: mark_dirty())
-    reasoning_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    transcription_model_edit.textEdited.connect(lambda _t: mark_dirty())
-    assistant_reopen_cb.toggled.connect(lambda _c: mark_dirty())
-    clear_sessions_btn.clicked.connect(clear_assistant_sessions)
     threshold_slider.valueChanged.connect(_update_threshold_label)
     threshold_slider.sliderReleased.connect(mark_dirty)
     index_btn.clicked.connect(start_index)
@@ -2810,6 +2758,9 @@ def manage_models_dialog(*_args: Any) -> None:
                 pass
 
     dlg.finished.connect(_disarm_grad_edit)
+    # A control moved within 140 ms of closing left a tick pending that
+    # re-armed the preview after the revert below (K-305): stop it first.
+    dlg.finished.connect(lambda _result: _preview_timer.stop())
     # finished fires on EVERY close path (Save, Cancel, Esc, title-bar ✕),
     # so it is the one place an unsaved preview can be guaranteed not to
     # outlive the dialog. No-op unless a preview is actually armed.
@@ -2817,13 +2768,13 @@ def manage_models_dialog(*_args: Any) -> None:
 
     def _on_profile_will_close() -> None:
         # A NON-MODAL window can outlive its profile — close it before
-        # the collection goes away. reject() routes through finished →
-        # revert_appearance_preview, so an armed preview cannot leak
-        # into the next profile either.
-        try:
-            dlg.reject()
-        except Exception:
-            pass
+        # the collection goes away. Forced, never through confirm_close:
+        # its "Discard changes?" / "Stop indexing?" prompts return without
+        # closing, which left the window and its armed appearance preview
+        # open into the next profile. Unsaved edits are dropped with the
+        # collection they were for; a running index stops (it resumes).
+        # reject() then routes through finished → revert_appearance_preview.
+        _close_for_profile(dlg, _preview_timer, op_state)
 
     try:
         from aqt import gui_hooks as _gui_hooks
@@ -2864,6 +2815,9 @@ def manage_models_dialog(*_args: Any) -> None:
     # already callback-driven (confirm_close / save_all).
     _OPEN_DLG = dlg
     dlg.show()
+    external_op = QueryOp(parent=dlg, op=lambda _col: external_python(), success=external_ready)
+    external_op.failure(lambda _exc: external_ready(None))
+    external_op.without_collection().run_in_background()
     # Plant the gradient drag handles right away when a gradient is
     # already configured (arming an edge colour later plants them via
     # that edit's own live-preview refresh). After show(), so the one

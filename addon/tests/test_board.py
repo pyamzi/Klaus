@@ -17,6 +17,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BOARD_PY = os.path.join(REPO, "board", "board.py")
 sys.path.insert(0, os.path.join(REPO, "board"))
 
+# Pin the prefix rather than riding boardlib's own default: this suite
+# hardcodes "K-001"-shaped ids throughout, and PREFIX is now a runtime
+# knob (board_dir's counterpart in agent-board, the packaged skill).
+os.environ["BOARD_PREFIX"] = "K"
+
 PASS = FAIL = 0
 
 
@@ -187,6 +192,64 @@ check("disjoint files claim fine", b7.find(y7.id)[0] == "Doing")
 check("check_disjoint reports overlap", len(B.check_disjoint(b6)) > 0)
 check("check_disjoint clean when disjoint", B.check_disjoint(b7) == [])
 
+# --------------------------------------------------------- to_dict payload
+
+section("to_dict: the payload the dashboard actually reads")
+# to_dict is the ONLY contract between the board and board/dashboard.html.
+# Nothing else pins it, so a dropped key here used to surface as a silently
+# empty panel in the browser rather than a red test.
+b9 = B.Board(columns={c: [] for c in B.COLUMNS})
+d9 = B.add(b9, "Ready", "payload card",
+           {"priority": "P1", "tags": "design, needs-human",
+            "files": "klausmate/theme.py", "verify": "python3 tests/test_theme.py"},
+           body="Why this card exists.")
+B.comment(b9, d9.id, "reviewer", "one comment")
+B.claim(b9, d9.id, "w1")
+doc = B.to_dict(b9)
+
+card = [c for col in doc["columns"] for c in col["cards"]][0]
+CARD_KEYS = {"id", "title", "owner", "priority", "tags", "files", "verify",
+             "claimed", "created", "body", "comments"}
+check("card carries every key the dashboard reads",
+      set(card) == CARD_KEYS, f"got {sorted(set(card) ^ CARD_KEYS)}")
+check("to_dict lists every column",
+      [c["name"] for c in doc["columns"]] == list(B.COLUMNS))
+check("verify survives serialization", card["verify"].startswith("python3 "))
+check("body survives serialization", card["body"] == "Why this card exists.")
+check("comments survive serialization", len(card["comments"]) == 1)
+check("claimed stamp is exported", card["claimed"] != "")
+check("created stamp is exported", card["created"] != "")
+check("tags and files are lists, not strings",
+      isinstance(card["tags"], list) and isinstance(card["files"], list))
+check("payload is JSON-serializable", json.dumps(doc)[:1] == "{")
+
+# An unset field must serialize as "" — the dashboard reads it straight into
+# an input value, and a missing key renders the string "undefined".
+b10 = B.Board(columns={c: [] for c in B.COLUMNS})
+d10 = B.add(b10, "Backlog", "bare card")
+bare = B.to_dict(b10)["columns"][0]["cards"][0]
+check("unset verify is empty string, not missing", bare["verify"] == "")
+check("unclaimed card exports empty claimed", bare["claimed"] == "")
+
+# conflicts is the half check_disjoint already computed but never sent. The
+# Doing-vs-Doing pair is the case that matters: the map could always colour
+# Ready-blocked-by-Doing, and could never show two live workers colliding.
+b11 = B.Board(columns={c: [] for c in B.COLUMNS})
+p11 = B.add(b11, "Ready", "first", {"files": "klausmate/page_store.py"})
+B.claim(b11, p11.id, "w1")
+q11 = B.add(b11, "Ready", "second", {"files": "klausmate/page_store.py"})
+b11.columns["Ready"].remove(q11)          # force the collision past claim()
+b11.columns["Doing"].append(q11)          # so two Doing cards really overlap
+conf = B.to_dict(b11)["conflicts"]
+check("conflicts reports a Doing-vs-Doing collision", len(conf) == 1,
+      f"got {conf}")
+check("conflict names both cards and the path",
+      conf and set(conf[0]) == {"a", "b", "path"}
+      and conf[0]["path"] == "klausmate/page_store.py")
+check("conflicts mirrors check_disjoint exactly",
+      [(c["a"], c["b"], c["path"]) for c in conf] == B.check_disjoint(b11))
+check("clean board reports no conflicts", B.to_dict(b7)["conflicts"] == [])
+
 section("comments and edit preserve body")
 b8 = B.Board(columns={c: [] for c in B.COLUMNS})
 c8 = B.add(b8, "Ready", "c", body="Original body.")
@@ -339,6 +402,17 @@ p = subprocess.run([sys.executable, "-c",
 check("live lock is respected (exit 2)", p.returncode == 2, f"rc={p.returncode} {p.stderr[:120]}")
 check("timed out rather than hanging", time.time() - t0 < 8)
 os.unlink(lock)
+
+section("init installs the ROLES.md protocol from the vendored skill")
+d = new_board_dir()
+rc, out, err = cli("init")
+if os.path.exists(os.path.join(os.path.dirname(BOARD_PY), "..", ".claude", "skills",
+                               "agent-board", "templates", "ROLES.md")):
+    check("init on the live board/board.py copies ROLES.md in", rc == 0
+          and os.path.isfile(os.path.join(d, "ROLES.md")) and "ROLES.md" in out, out + err)
+else:  # a scratch copy (test_board_skill_parity) with no skill beside it
+    check("init with no template says so instead of skipping ROLES.md silently",
+          rc == 0 and "no ROLES.md template" in err, out + err)
 
 section("real board file is untouched")
 real = os.path.join(REPO, "board", "BOARD.md")

@@ -64,52 +64,6 @@ check(
     and iq.auto_index_enabled(None),
 )
 
-check(
-    "no OpenAI key is refused, by name (2026-09-15: OpenAI is the only "
-    "embedding provider, so the name is a constant, not a lookup)",
-    iq.missing_key_provider({"api_key_openai": ""}) == "OpenAI",
-)
-check(
-    "an OpenAI key passes",
-    iq.missing_key_provider({"api_key_openai": "sk-1"}) == "",
-)
-check(
-    "a whitespace-only key is no key",
-    iq.missing_key_provider({"api_key_openai": "   "}) == "OpenAI",
-)
-check(
-    "an empty config is judged missing — the key is absent, not blank",
-    iq.missing_key_provider({}) == "OpenAI",
-)
-check(
-    "a non-dict is never key-gated (the callers' defensive shape)",
-    iq.missing_key_provider(None) == "",
-)
-
-section("Klaus Plus: the key gate and the sweep wording")
-check(
-    "a Plus key satisfies the key gate",
-    iq.missing_key_provider({"klaus_plus_key": "kp_" + "f" * 32}) == "",
-)
-check(
-    "no key of either kind still names OpenAI",
-    iq.missing_key_provider({}) == "OpenAI",
-)
-check(
-    "the key message also points at Klaus Plus",
-    "Klaus Plus" in iq.missing_key_message("OpenAI"),
-)
-_plus_msg = iq.sweep_message(2, 100, "text-embedding-3-large", "~1,000 tokens · under $0.01", plus=True)
-check(
-    "on Plus the sweep is 'included', not billed",
-    "included in Klaus Plus" in _plus_msg and "billed to your OpenAI key" not in _plus_msg and "$" not in _plus_msg,
-)
-check(
-    "off Plus the estimate is billed to the key",
-    "billed to your OpenAI key" in iq.sweep_message(2, 100, "m", "~x", plus=False),
-)
-
-
 # -------------------------------------------------------------- the queue
 
 section("JobQueue")
@@ -165,52 +119,16 @@ check(
     iq.status_line(iq.RunnerState(active=True, label="Embedding cards…"))
     == "Card index — Embedding cards…",
 )
-check(
-    "the judge phase counts cards, not a rounded percent — 'judging "
-    "12/40' says how much work is left in a way a percentage would flatten",
-    "judging 12/40" in iq.status_line(
-        iq.RunnerState(active=True, name="Lec", label="judging", phase="judge", done=12, total=40)
-    ),
-)
-
-msg = iq.sweep_message(2, 30000, "text-embedding-3-large",
-                       "~1,000 tokens · about $0.01")
-check("the sweep names the model", "text-embedding-3-large" in msg)
-check("...counts both kinds of work", "30,000 notes" in msg and "2 PDFs" in msg)
-check(
-    "...and carries the cost estimate VERBATIM, plus whose key pays it — "
-    "a from-scratch re-embed of the whole collection is a paid API call, "
-    "and a confirm that hides the price is not a confirm",
-    "~1,000 tokens · about $0.01" in msg and "OpenAI" in msg,
-)
-check(
-    "...and still says the run can be stopped from the bottom bar",
-    "stop it" in msg.lower(),
-)
-check(
-    "...and says what declining actually COSTS — the next PDF add runs "
-    "the card index from scratch as phase one, unpriced and unconfirmed, "
-    "so a bare No reads as 'not now, and free' when it means 'not now, "
-    "and without being asked again'",
-    "If you decline, the card index is still rebuilt — unpriced — the "
-    "first time a PDF is indexed." in msg,
-)
-_one = iq.sweep_message(1, 1, "m", "~0 tokens · under $0.01")
-# "1 PDF" is a SUBSTRING of "1 PDFs", so the obvious form of this check
-# passes against a message that never learned the singular at all — it
-# did, until the falsification pass made it fail and it didn't. The
-# absence of the plural is the half with teeth.
-check(
-    "...singular when it is one, with the plural really gone",
-    "1 PDF" in _one and "1 note" in _one
-    and "1 PDFs" not in _one and "1 notes" not in _one,
-)
+msg = iq.sweep_message(2, 30000, "nomic-embed-text")
+check("local sweep names model and amount of work", "nomic-embed-text" in msg and "30,000 notes" in msg and "2 PDFs" in msg)
+check("one note and PDF use singular labels", "1 note and 1 PDF will" in iq.sweep_message(1, 1, "m"))
+check("local sweep describes time and cancellation", "locally" in msg and "stop it" in msg and "$" not in msg)
+check("declining sweep explains later confirmation", "If you decline" in msg and "with confirmation" in msg)
 check(
     "the add tooltip distinguishes running from queued",
     iq.queued_message("A", 0).startswith("KlausMate: indexing")
     and "3 ahead of it" in iq.queued_message("A", 3),
 )
-check("the key refusal names the provider and where to fix it", "OpenAI" in iq.missing_key_message("OpenAI") and "API keys & models" in iq.missing_key_message("OpenAI"))
 check(
     "the bar's one button stops a run and clears a finished one",
     iq.dock_button_label(iq.RunnerState(active=True)) == "Stop"
@@ -322,17 +240,28 @@ class Pipeline:
         self.calls = []
         self.pending = {}
         self.cancels = []
+        self._tag_raises = None
         self._busy = False  # curation's shared re-entrancy token
-        self.rejected_global = set()  # what doubtful_members() hands back
-        self.doubtful_seen = []  # the doubtful= kwarg each tag write actually got
-        self._doubtful_raises = None  # one-shot exception for doubtful_members
-        self._judge_raises = None  # one-shot exception for ensure_judged (fix round 1, C1)
+        # K-237: card_index_from_scratch's whole read. Defaults to a FRESH,
+        # matching manifest (the current index_signature() for a bare
+        # {"api_key_openai": "sk"} cfg) so every pre-existing test above —
+        # none of which knows this gate exists — keeps calling ensure_index
+        # straight through, with no confirm in the way.
+        self._index_stats = {
+            "exists": True,
+            "provider": "ollama",
+            "model": "nomic-embed-text",
+            "dims": 0,
+        }
 
     # -- curation ------------------------------------------------------
     def ensure_index(self, _parent, *, on_progress=None, on_done=None, on_error=None, cancel=None):
         self.calls.append(("ensure_index", ""))
         self.cancels.append(cancel)
         self.pending["cards"] = (on_done, on_error, on_progress)
+
+    def index_stats(self):
+        return dict(self._index_stats)
 
     # -- retention -----------------------------------------------------
     def ensure_pdf_index(self, _parent, name, *, on_progress=None, on_done=None, on_error=None, cancel=None):
@@ -346,22 +275,8 @@ class Pipeline:
     # -- tag_sync ------------------------------------------------------
     def sync_after_matches(self, _mw, name, matches, **_k):
         self.calls.append(("tag_sync", name))
-        self.doubtful_seen.append(_k.get("doubtful"))
-
-    def doubtful_members(self, _cfg):
-        if self._doubtful_raises is not None:
-            exc, self._doubtful_raises = self._doubtful_raises, None
-            raise exc
-        return self.rejected_global
-
-    # -- pertinence ------------------------------------------------------
-    def ensure_judged(self, _parent, name, _matches, *, on_done=None, on_error=None, cancel=None, on_progress=None, ask=None):
-        self.calls.append(("ensure_judged", name))
-        if self._judge_raises is not None:
-            exc, self._judge_raises = self._judge_raises, None
-            raise exc
-        self.pending["judge"] = (on_done, on_error, on_progress)
-
+        if self._tag_raises is not None:
+            raise self._tag_raises
     # -- drivers -------------------------------------------------------
     def finish_cards(self, completed=True):
         self.pending.pop("cards")[0](FakeIndex(), completed)
@@ -371,9 +286,6 @@ class Pipeline:
 
     def finish_matches(self, matches=((1, 0.9),)):
         self.pending.pop("matches")[0](list(matches))
-
-    def finish_judge(self, rejected=frozenset()):
-        self.pending.pop("judge")[0](set(rejected))
 
     def raise_in(self, phase, exc):
         self.pending.pop(phase)[1](exc)
@@ -397,7 +309,6 @@ def new_world(cfg=None, names=("a", "b", "c")):
         ("klausmate.curation", pipe),
         ("klausmate.retention", pipe),
         ("klausmate.tag_sync", pipe),
-        ("klausmate.pertinence", pipe),
     ):
         sys.modules[dotted] = obj
         setattr(pkg, dotted.split(".")[1], obj)
@@ -413,7 +324,6 @@ def new_world(cfg=None, names=("a", "b", "c")):
     iq._waits = 0
     iq._state = iq.RunnerState()
     iq._listeners = []
-    iq._key_warned = False
     iq._dock = None
     return tmp, pipe
 
@@ -423,7 +333,6 @@ def run_one(pipe, name):
     pipe.finish_cards()
     pipe.finish_pdf()
     pipe.finish_matches()
-    pipe.finish_judge()
 
 
 # ----------------------------------------------------------------- the chain
@@ -440,40 +349,14 @@ check("phase 2 is the PDF's own index", pipe.calls[-1] == ("ensure_pdf_index", "
 pipe.finish_pdf()
 check("phase 3 is matching", pipe.calls[-1] == ("ensure_matches", "a"))
 pipe.finish_matches()
-check("phase 4 judges pertinence", pipe.calls[-1] == ("ensure_judged", "a"))
-pipe.finish_judge()
-check("phase 5 writes the PDF's !Library tag", pipe.calls[-1] == ("tag_sync", "a"))
+check("phase 4 writes the PDF's !Library tag", pipe.calls[-1] == ("tag_sync", "a"))
 check(
     "the whole chain, in order, once",
     [c[0] for c in pipe.calls]
-    == ["ensure_index", "ensure_pdf_index", "ensure_matches", "ensure_judged", "tag_sync"],
+    == ["ensure_index", "ensure_pdf_index", "ensure_matches", "tag_sync"],
 )
 check("a completed job publishes its name so the Library can re-aggregate", iq.state().finished == "a")
 check("...and reads as idle", not iq.state().active)
-
-# Final review I-3: phase five reads Doubtful membership from tag_sync's own
-# doubtful_members and hands it straight to the tag write. The double was inert
-# before (rejected_global was never driven), so the wiring went unexercised.
-tmp, pipe = new_world()
-pipe.rejected_global = {42, 77}
-iq.request_pdf("a", announce=False)
-FakeTimer.drain()
-run_one(pipe, "a")
-check("the Doubtful set really reaches sync_after_matches' doubtful= kwarg",
-      pipe.doubtful_seen == [{42, 77}], pipe.doubtful_seen)
-
-# ...and its read is guarded ON ITS OWN, like tag_sync's other two sinks: an
-# auxiliary Doubtful failure must never cost this PDF the lecture tag it was
-# just indexed for. doubtful=None leaves the Doubtful tag untouched.
-tmp, pipe = new_world()
-pipe._doubtful_raises = RuntimeError("boom — simulated judged.json corruption")
-iq.request_pdf("a", announce=False)
-FakeTimer.drain()
-run_one(pipe, "a")
-check("doubtful_members raising still writes the lecture tag, with doubtful=None",
-      pipe.calls[-1] == ("tag_sync", "a") and pipe.doubtful_seen == [None],
-      (pipe.calls[-1], pipe.doubtful_seen))
-check("...and the job still completes and clears", iq.state().finished == "a" and iq._current is None)
 
 tmp, pipe = new_world()
 iq.request([(iq.JOB_CARDS, "")], announce=False)
@@ -484,34 +367,7 @@ check(
     [c[0] for c in pipe.calls] == ["ensure_index"],
 )
 
-section("fix round 1, C1 — a pertinence-phase exception never wedges the queue")
 
-tmp, pipe = new_world()
-pipe._judge_raises = KeyError("claude-sonnet-4-5")
-iq.request_pdf("a", announce=False)
-FakeTimer.drain()
-pipe.finish_cards()
-pipe.finish_pdf()
-pipe.finish_matches()
-check(
-    "ensure_judged raising reaches after_matches' own try/except, not the "
-    "caller's QueryOp — pipe.calls sees the attempt",
-    pipe.calls[-2] == ("ensure_judged", "a"),
-)
-check(
-    "...and the PDF is STILL tagged — an untagged pertinence phase beats a "
-    "wedged queue, the next index pass can always re-judge. The tag write "
-    "goes through the SAME after_judged the normal path uses (source/AST-"
-    "pinned above), so it still passes doubtful=tag_sync.doubtful_members(...)",
-    pipe.calls[-1] == ("tag_sync", "a"),
-)
-check(
-    "...and _current actually clears — the next queued job is free to run "
-    "(this is the wedge C1 found: a bare raise never reaches _job_done)",
-    iq._current is None,
-)
-FakeTimer.drain()
-check("...the run really did finish, idle, not stuck mid-job", not iq.state().active)
 
 
 # ------------------------------------------------------------------ the queue
@@ -637,11 +493,6 @@ check(
     "!Library membership",
     ("tag_sync", "a") not in pipe.calls,
 )
-check(
-    "...and never reaches the judge phase either — a cancelled matches "
-    "pass has nothing worth paying to judge",
-    ("ensure_judged", "a") not in pipe.calls,
-)
 FakeTimer.drain()
 check("...and nothing new starts", [c for c in pipe.calls if c[1] == "b"] == [])
 check("the user is told, in the same status line both surfaces read", "cancelled" in iq.status_line(iq.state()).lower())
@@ -683,14 +534,12 @@ check("...and only its own", iq._queue.pending() == 2)
 
 tmp, pipe = new_world()
 iq.request_pdf("a", announce=False)
-iq._key_warned = True
 iq._on_profile_close()
 check(
     "a profile close stops everything — the phases read the collection "
     "and write into user_files, and both are about to go away",
     iq._queue.pending() == 0 and iq._current is None,
 )
-check("...and the once-per-session key warning re-arms for the next profile", iq._key_warned is False)
 
 
 # -------------------------------------------------------------------- errors
@@ -717,15 +566,10 @@ iq.mw.col = None
 check("no profile, no job", iq.request_pdf("a", announce=False) is False)
 check("...and nothing queued to leak into the next profile", iq._queue.pending() == 0)
 
-tmp, pipe = new_world(cfg={"api_key_openai": ""})
-check("no API key, no job", iq.request_pdf("a", announce=False) is False)
-check(
-    "...and the refusal is a MESSAGE, not a shrug — a silent no-op on "
-    "every drop would be worse than the button this replaces",
-    "API key" in iq.state().message,
-)
+tmp, pipe = new_world(cfg={})
+check("local indexing requires no API key", iq.request_pdf("a", announce=False) is True)
 FakeTimer.drain()
-check("...nothing ran", pipe.calls == [])
+check("keyless local job runs", bool(pipe.calls))
 
 tmp, pipe = new_world(cfg={"api_key_openai": "sk", "auto_index_on_add": False})
 check("auto-index off: an import does not queue", iq.on_pdf_imported("a") is False)
@@ -773,7 +617,7 @@ embeddings = importlib.import_module("klausmate.embeddings")
 os.makedirs(pdf_index.index_dir(tmp, "a"))
 with open(os.path.join(pdf_index.index_dir(tmp, "a"), "manifest.json"), "w") as f:
     f.write('{"version": %d, "pages": [[0,"h0"]], "embedded_rows": 1, '
-            '"provider": "openai", "model": "text-embedding-3-large", "dims": 1024}'
+            '"provider": "ollama", "model": "nomic-embed-text", "dims": 1024}'
             % pdf_index.INDEX_VERSION)
 names = iq.indexed_pdf_names()
 check("a PDF with an index on disk is swept", "a" in names)
@@ -907,120 +751,167 @@ check(
 )
 
 
-# ------------------------------------------------------- what the sweep costs
-
-section("the sweep estimate")
-
+section("local sweep avoids paid estimates")
 tmp, pipe = new_world(names=("a",))
-page_store = importlib.import_module("klausmate.page_store")
-pdf_handler = importlib.import_module("klausmate.pdf_handler")
+check("unchanged model offers no sweep", iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg())) is False)
+check("changed local model offers sweep", iq.offer_model_sweep(None, ("ollama", "previous", 0)) is True)
 
-iq.mw.col.db.total = 40_000
-_est = iq.sweep_estimate([])
+# ----------------------------------------------------- K-237: the card-index
+# ------------------------------------------------------------ confirm gate
+#
+# offer_model_sweep's own confirm has no teeth: declining it leaves the card
+# index stale, and the VERY NEXT PDF add runs curation.ensure_index as phase
+# one of this same chain — which has no price gate of its own, so a stale
+# or missing index makes that a from-scratch re-embed of the whole
+# collection, silently. These pins drive that phase-one call site with a
+# fake QMessageBox (the sweep tests' own pattern) so the confirm can be
+# answered without real Qt.
+
+section("K-237: the card-index confirm")
+
+_RealBox2 = iq.QMessageBox
+
+
+class _ConfirmBox:
+    """Stands in for QMessageBox wherever ask_card_index_confirm builds
+    one: records the two buttons `addButton` mints and lets the test fire
+    `finished` as though a specific one were clicked — the shape
+    `ask_card_index_confirm` uses (Embed/Skip),
+    never a bare Yes/No."""
+
+    Icon = _RealBox2.Icon
+    ButtonRole = _RealBox2.ButtonRole
+    last = None
+
+    def __init__(self, _parent=None):
+        self.finished = _FakeSignal()
+        self.buttons = {}
+        self.clicked = None
+        _ConfirmBox.last = self
+
+    def addButton(self, text, _role):
+        btn = object()
+        self.buttons[text] = btn
+        return btn
+
+    def clickedButton(self):
+        return self.clicked
+
+    def click(self, text):
+        self.clicked = self.buttons[text]
+        for cb in list(self.finished.cbs):
+            cb(0)
+
+    def __getattr__(self, _name):  # setWindowTitle/setIcon/setText/…
+        return lambda *_a, **_k: None
+
+
+def _install_confirm_box():
+    iq.QMessageBox = _ConfirmBox
+    _ConfirmBox.last = None
+
+
+def _restore_confirm_box():
+    iq.QMessageBox = _RealBox2
+
+
+# -- the gate detection itself, in isolation --------------------------------
+
+tmp, pipe = new_world()
 check(
-    "the estimate counts the whole collection's note text — one scalar "
-    "over notes.flds, at cost.py's four-chars-a-token",
-    _est.tokens == 10_000 and _est.dollars > 0,
-    f"got {_est!r}",
+    "a fresh, signature-matching manifest is not a from-scratch embed",
+    iq.card_index_from_scratch(iq._cfg()) is False,
+)
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+check(
+    "no manifest on disk at all IS one",
+    iq.card_index_from_scratch(iq._cfg()) is True,
+)
+pipe._index_stats = {"exists": True, "provider": "voyage", "model": "voyage-3-lite", "dims": 0}
+check(
+    "a manifest under the OLD provider/model is one too — the same "
+    "signature comparison offer_model_sweep's own trigger uses, not a "
+    "hand-spelled tuple check",
+    iq.card_index_from_scratch(iq._cfg()) is True,
 )
 
-import json as _json  # noqa: E402
+# -- wired into phase one: the RED case this card exists to fix -------------
 
-with open(os.path.join(tmp, "contexts", "a.json"), "w") as f:
-    _json.dump({"pages": ["x", "y"]}, f)
-_path = pdf_handler.pdf_path_for(tmp, "a") or ""
-page_store.ensure_records(tmp, "a", _path, ["a" * 4000, "b" * 4000])
-_est2 = iq.sweep_estimate(["a"])
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
 check(
-    "...plus every PAGE of every swept PDF — the page store is what gets "
-    "re-embedded now, not a chunking of the raw text file",
-    _est2.tokens == _est.tokens + 2000,
-    f"got {_est2!r} vs {_est!r}",
+    "a from-scratch card index asks BEFORE curation.ensure_index ever "
+    "runs — the confirm this card adds, where before there was none",
+    pipe.calls == [] and _ConfirmBox.last is not None,
+    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
 )
-
-with open(os.path.join(tmp, "contexts", "d.json"), "w") as f:
-    _json.dump({"pages": ["p" * 2000, "q" * 2000]}, f)
-_est3 = iq.sweep_estimate(["d"])
+_ConfirmBox.last.click("Skip")
 check(
-    "...and a PDF with stored slide text but NO page-store records yet "
-    "(no ensure_records call at all) is counted at its slide-text "
-    "length, not skipped as zero — every PDF on every existing profile "
-    "is in exactly this state the first time this ships",
-    _est3.tokens == _est.tokens + 1000,
-    f"got {_est3!r} vs {_est!r}",
-)
-
-check(
-    "a PDF with no pages on disk contributes nothing and never raises",
-    iq.sweep_estimate(["b"]).tokens == _est.tokens,
-)
-
-check(
-    "a FIRST key offers the sweep even though the signature never moved "
-    "— nothing was ever embedded, so there is nothing for the comparison "
-    "to see, and that is exactly the moment the offer matters",
-    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()),
-                         first_key=True) is True,
+    "declining never calls ensure_index — the whole point of the gate: a "
+    "silent PDF add must not spend money nobody was asked about",
+    ("ensure_index", "") not in pipe.calls,
+    repr(pipe.calls),
 )
 check(
-    "...and without it that same unchanged signature still offers nothing",
-    iq.offer_model_sweep(None, embeddings.index_signature(iq._cfg()))
-    is False,
+    "...but the rest of the chain still runs, degraded rather than "
+    "aborted: a declined phase does not "
+    "crash or hang the PDF add, the phases after it still see whatever "
+    "data already exists",
+    pipe.calls == [("ensure_pdf_index", "a")],
+    repr(pipe.calls),
 )
-
-iq.mw.addonManager.cfg["embedding_model"] = "surprise-model-9"
-_raised = False
-try:
-    iq.sweep_estimate([])
-except Exception:
-    _raised = True
-iq.mw.addonManager.cfg.pop("embedding_model")
+pipe.finish_pdf()
+pipe.finish_matches()
 check(
-    "a hand-typed model with no published price RAISES rather than "
-    "silently pricing itself as some other model...",
-    _raised,
+    "...through to completion, PDF tagged and all",
+    pipe.calls[-1] == ("tag_sync", "a") and iq.state().finished == "a",
+    repr(pipe.calls),
 )
+_restore_confirm_box()
+
+# -- accepting the confirm really does embed --------------------------------
+
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+_ConfirmBox.last.click("Embed")
 check(
-    "...and offer_model_sweep catches that and says the cost is unknown, "
-    "so the confirm still appears (the re-embed is the user's to refuse)",
-    "cost unknown" in open(os.path.join(ADDON, "index_queue.py")).read(),
+    "accepting DOES call ensure_index, exactly as the old unconfirmed "
+    "path used to",
+    pipe.calls == [("ensure_index", "")],
+    repr(pipe.calls),
 )
+run_one(pipe, "a")
+check("...and the chain completes normally", pipe.calls[-1] == ("tag_sync", "a"))
+_restore_confirm_box()
 
+# -- a plain card-index sweep job never double-confirms ----------------------
 
-class _RaisingDb:
-    def scalar(self, _sql, *_a):
-        raise RuntimeError("notes scalar boom")
-
-
-_captured_estimate: dict = {}
-_orig_sweep_message = iq.sweep_message
-
-
-def _capture_sweep_message(n_pdfs, n_notes, model, estimate, plus=False):
-    # Task 7 re-baseline: sweep_message grew a `plus` keyword, and
-    # offer_model_sweep now always passes it — this stand-in must accept
-    # (and forward) it too, or the call from offer_model_sweep raises a
-    # TypeError that has nothing to do with what this test checks.
-    _captured_estimate["estimate"] = estimate
-    return _orig_sweep_message(n_pdfs, n_notes, model, estimate, plus=plus)
-
-
-_orig_notes_db = iq.mw.col.db
-iq.mw.col.db = _RaisingDb()
-iq.sweep_message = _capture_sweep_message
-try:
-    iq.offer_model_sweep(
-        None, embeddings.index_signature(iq._cfg()), first_key=True
-    )
-finally:
-    iq.mw.col.db = _orig_notes_db
-    iq.sweep_message = _orig_sweep_message
+tmp, pipe = new_world()
+pipe._index_stats = {"exists": False, "provider": "", "model": "", "dims": 0}
+_install_confirm_box()
+iq.request([(iq.JOB_CARDS, "")], announce=False)
+FakeTimer.drain()
 check(
-    "a failed notes scalar does NOT degrade to a cheap estimate — the "
-    "confirm must read cost unknown, never price a real re-embed at "
-    "~0 tokens because one SQL call happened to fail",
-    _captured_estimate.get("estimate") == "cost unknown for this model",
-    f"got {_captured_estimate!r}",
+    "a bare JOB_CARDS entry (offer_model_sweep's OWN priced confirm "
+    "already asked, in Preferences, before this ever reaches the queue) "
+    "is never asked a SECOND time here — only a PDF's own silent phase "
+    "one is gated",
+    pipe.calls == [("ensure_index", "")] and _ConfirmBox.last is None,
+    f"calls={pipe.calls!r} box={_ConfirmBox.last!r}",
+)
+_restore_confirm_box()
+
+check(
+    "the phrase this card's verify grep looks for actually names the "
+    "confirm's own purpose in the source, not just satisfies the grep "
+    "by accident",
+    "card-index confirm" in open(os.path.join(ADDON, "index_queue.py")).read(),
 )
 
 
@@ -1094,23 +985,11 @@ iq.request_pdf("a", announce=False)
 check("...and announce=False is still silent, so the pins above are about the "
       "DEFAULT and not about announcing at all", tips.seen == [], repr(tips.seen))
 
-# --- :401 — `_key_warned = True` -------------------------------------------
-tmp, pipe = new_world(cfg={"api_key_openai": ""})
+tmp, pipe = new_world(cfg={})
 tips = _tips()
-iq.request_pdf("a", announce=False)
-iq.request_pdf("b", announce=False)
-iq.request_pdf("c", announce=False)
-check(
-    "three keyless drops raise ONE tooltip, not three — the latch in "
-    "request() is what stops ten dropped PDFs stacking ten identical "
-    "tooltips over Anki (its RESET is pinned in cancel/new_world; this is "
-    "its SET)",
-    len(tips.seen) == 1 and "API key" in tips.seen[0],
-    repr(tips.seen),
-)
-check("...and every one of the three still published the refusal, so the "
-      "surfaces say why even when the tooltip is suppressed",
-      "API key" in iq.state().message)
+for name in ("a", "b", "c"):
+    iq.request_pdf(name, announce=False)
+check("keyless local jobs do not show key warnings", tips.seen == [])
 
 iq.tooltip = _orig_tooltip
 
@@ -1238,6 +1117,18 @@ check(
 pipe._busy = False
 
 
+section("tag sync errors release the runner")
+tmp, pipe = new_world()
+pipe._tag_raises = RuntimeError("simulated tag write failure")
+iq.request_pdf("a", announce=False)
+FakeTimer.drain()
+run_one(pipe, "a")
+check("a failed tag write still clears the completed job",
+      pipe.calls[-1] == ("tag_sync", "a")
+      and iq._current is None and iq.state().finished == "a")
+FakeTimer.drain()
+check("the runner returns to idle after a tag failure", not iq.state().active)
+
 # ------------------------------------------------------------- source pins
 
 section("one chain, one copy")
@@ -1245,6 +1136,7 @@ section("one chain, one copy")
 _iq_raw = open(os.path.join(ADDON, "index_queue.py")).read()  # docstrings are STRING tokens — code_only strips them
 _iq_src = code_only(_iq_raw)
 _drive_src = code_only(open(os.path.join(ADDON, "pdf_drive.py")).read())
+_sidebar_src = code_only(open(os.path.join(ADDON, "library_sidebar.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
 check(
@@ -1252,7 +1144,7 @@ check(
     "Enter-default, so Enter in the key field reaches this window-modal "
     "confirm next with keyboard focus; a stray Enter must not start a "
     "paid whole-collection re-embed, the same rule "
-    "clear_assistant_sessions' confirm already follows",
+    "the Library confirmation follows",
     "box.setDefaultButton(QMessageBox.StandardButton.No)" in _iq_src,
 )
 check(
@@ -1262,49 +1154,6 @@ check(
     and _iq_src.count("retention.ensure_matches(") == 1,
 )
 check(
-    "the Doubtful tag's membership comes from the ONE reader every sink shares "
-    "(final review I-3: the global rejected set narrowed to each PDF's current "
-    "at-threshold candidates) — never a subset hand-picked from this one job's "
-    "own matches, and never re-derived here",
-    "tag_sync.doubtful_members(" in _iq_src
-    and "pertinence.all_rejected(" not in _iq_src,
-)
-check(
-    "ask_judge is window-modal (.open(), never .exec()) with Skip as the "
-    "default button — the same K-114 rule and Enter-safety "
-    "offer_model_sweep's own confirm follows",
-    "box.open()" in _iq_src
-    and "box.setDefaultButton(skip_btn)" in _iq_src
-    and ".exec(" not in _iq_src,
-)
-check(
-    "...offering Judge and Skip as real buttons, not a Yes/No stand-in",
-    'box.addButton("Judge", QMessageBox.ButtonRole.AcceptRole)' in _iq_raw
-    and 'box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)' in _iq_raw,
-)
-check(
-    "fix round 1, I2 — the module docstring's chain names all five phases, "
-    "pertinence.ensure_judged included, in order",
-    "``curation.ensure_index`` → ``retention.ensure_pdf_index`` →\n"
-    "``retention.ensure_matches`` → ``pertinence.ensure_judged`` →\n"
-    "``tag_sync.sync_after_matches``" in _iq_raw,
-)
-check(
-    "fix round 1, I1 — the docstring names phase four as the ONE exception "
-    "to 'each phase takes curation._busy in turn', and says why (K-255 "
-    "review): holding the token across the Judge/Skip dialog would "
-    "re-create the exact K-146 leak the same paragraph warns about",
-    "with ONE exception: phase four" in _iq_raw
-    and "never touches it at all" in _iq_raw
-    and "Judge/Skip dialog" in _iq_raw,
-)
-check(
-    "offer_model_sweep routes the Plus flag from plus.active — a hand-"
-    "computed bool here is how a stale cache or a just-added key would "
-    "silently mis-price the sweep confirm",
-    "plus=plus.active(" in _iq_src,
-)
-check(
     "the Library no longer spells the chain itself — a second copy is "
     "the K-143 two-renderer failure with a different subject",
     "ensure_pdf_index(" not in _drive_src
@@ -1312,14 +1161,19 @@ check(
     and "curation.ensure_index(" not in _drive_src,
 )
 check(
-    "...and drives the shared runner instead",
-    "index_queue.request_pdf(" in _drive_src
-    and "index_queue.cancel_all()" in _drive_src,
+    "...and the sidebar's Cancel drives the shared runner instead (K-308; "
+    "K-316 removed Re-embed: PDFs index themselves)",
+    "index_queue.cancel_all()" in _sidebar_src,
 )
 check(
-    "the Library renders the runner's own status_line, so the two "
+    "the sidebar footer renders the runner's own status_line, so the two "
     "surfaces cannot describe one job differently",
-    "index_queue.status_line(" in _drive_src,
+    "index_queue.status_line(" in _sidebar_src,
+)
+check(
+    "closing Browse does NOT cancel indexing: the footer only unsubscribes",
+    "index_queue.remove_listener" in _sidebar_src
+    and _sidebar_src.count("cancel_all") == 1,
 )
 
 
@@ -1338,24 +1192,6 @@ def _fn(src_path, name, cls=None):
                 return n
     return None
 
-
-_shutdown = _fn(os.path.join(ADDON, "pdf_drive.py"), "shutdown", cls="DriveWindow")
-_shutdown_calls = {
-    ast.unparse(n.func) if hasattr(ast, "unparse") else ""
-    for n in ast.walk(_shutdown)
-    if isinstance(n, ast.Call)
-} if _shutdown else set()
-check("DriveWindow.shutdown exists to pin", _shutdown is not None)
-check(
-    "closing the Library does NOT cancel indexing — a job may have been "
-    "started from the deck screen, and minutes of paid embedding must "
-    "not die because a window was tidied away",
-    "self._on_cancel" not in _shutdown_calls,
-)
-check(
-    "...it unsubscribes instead",
-    "index_queue.remove_listener" in _shutdown_calls,
-)
 
 _sig_fn = _fn(os.path.join(ADDON, "index_queue.py"), "signature_changed")
 check("signature_changed exists to pin", _sig_fn is not None)
@@ -1422,33 +1258,7 @@ _after_matches_calls = {
     if isinstance(n, ast.Call)
 } if _after_matches_fn else set()
 check("after_matches exists to pin", _after_matches_fn is not None)
-check(
-    "phase four (pertinence) runs from INSIDE phase three's own "
-    "completion handler — the judge pass must see the freshly matched set",
-    "pertinence.ensure_judged" in _after_matches_calls,
-)
-
-_after_judged_fn = _fn(os.path.join(ADDON, "index_queue.py"), "after_judged")
-_after_judged_calls = {
-    ast.unparse(n.func) if hasattr(ast, "unparse") else ""
-    for n in ast.walk(_after_judged_fn)
-    if isinstance(n, ast.Call)
-} if _after_judged_fn else set()
-check("after_judged exists to pin", _after_judged_fn is not None)
-
-_run_fn = _fn(os.path.join(ADDON, "index_queue.py"), "_run")
-check(
-    "fix round 1, I2 — _run's OWN docstring names the new phase too, not "
-    "just the module docstring's chain",
-    _run_fn is not None and "pertinence.ensure_judged" in (ast.get_docstring(_run_fn) or ""),
-)
-check(
-    "...and the tag write happens from inside the JUDGE phase's own "
-    "completion handler, never straight from after_matches — the tag "
-    "write must see whatever the judge pass actually rejected, not run "
-    "concurrently with it",
-    "tag_sync.sync_after_matches" in _after_judged_calls
-    and "tag_sync.sync_after_matches" not in _after_matches_calls,
-)
+check("matching completion writes the lecture tag",
+      "tag_sync.sync_after_matches" in _after_matches_calls)
 
 raise SystemExit(report())

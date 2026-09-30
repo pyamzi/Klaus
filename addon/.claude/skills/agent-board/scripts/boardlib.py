@@ -144,11 +144,12 @@ def board_dir() -> str:
     would put a single board there — shared across every project, and lost
     whenever that folder is replaced.
 
-    Order: an explicit BOARD_DIR wins; then an existing board already in the
-    project (./board/ then ./); otherwise ./board/, which is where `init`
-    creates one.
+    Order: an explicit BOARD_DIR (or its KLAUS_BOARD_DIR alias, kept for
+    the klausmate checkout this skill was extracted from) wins; then an
+    existing board already in the project (./board/ then ./); otherwise
+    ./board/, which is where `init` creates one.
     """
-    explicit = os.environ.get("BOARD_DIR")
+    explicit = os.environ.get("BOARD_DIR") or os.environ.get("KLAUS_BOARD_DIR")
     if explicit:
         return explicit
     cwd = os.getcwd()
@@ -612,6 +613,12 @@ def to_dict(board: Board) -> dict:
                         "tags": c.tag_list(),
                         "files": c.file_list(),
                         "verify": c.fields.get("verify", ""),
+                        # Age is the one thing a supervisor of unattended
+                        # machines cannot infer: a worker wedged for three
+                        # days looked exactly like one that started a
+                        # minute ago.
+                        "claimed": c.fields.get("claimed", ""),
+                        "created": c.fields.get("created", ""),
                         "body": c.body,
                         "comments": c.comments,
                     }
@@ -619,5 +626,14 @@ def to_dict(board: Board) -> dict:
                 ],
             }
             for col in COLUMNS
-        ]
+        ],
+        # check_disjoint already finds the collision a dashboard could not
+        # draw on its own: two cards, Ready or Doing, whose declared paths
+        # overlap. Computed for the CLI; sending it too is what lets a
+        # dashboard colour Doing-against-Doing, not just Ready-blocked-by-
+        # Doing.
+        "conflicts": [
+            {"a": a_id, "b": b_id, "path": path}
+            for a_id, b_id, path in check_disjoint(board)
+        ],
     }

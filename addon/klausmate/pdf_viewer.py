@@ -32,7 +32,6 @@ from aqt.qt import (
     QPointF,
     QRect,
     QRectF,
-    QScrollArea,
     QShortcut,
     QSize,
     QSizePolicy,
@@ -52,6 +51,9 @@ try:
 except Exception:  # pragma: no cover
     QDrag = None  # type: ignore
 
+# Deliberately PyQt6, not aqt.qt: these types go straight into QtPdf
+# calls (render sizes, images), and QtPdf is not re-exported by aqt.qt,
+# so both halves must come from one binding.
 try:
     from PyQt6.QtCore import QSizeF
     from PyQt6.QtGui import (
@@ -177,7 +179,7 @@ def copy_pdf_page_image_to_clipboard(
     if cb is None:
         return False
     try:
-        from PyQt6.QtCore import QMimeData
+        from aqt.qt import QMimeData
 
         mime = QMimeData()
         mime.setImageData(pixmap.toImage())
@@ -964,6 +966,20 @@ class PdfViewer(QWidget):
                 hl_sc.activated.connect(self._add_highlight_from_selection)
             except Exception:
                 pass
+            # Toggle the thumbnails strip (K-154). Same dual mechanism as
+            # highlight above: a QShortcut fallback for conflict-free
+            # hosts, plus the ShortcutOverride/_match_shortcut_combo path
+            # in eventFilter for hosts that already bind Ctrl+Shift+T.
+            try:
+                thumbs_sc = QShortcut(
+                    QKeySequence("Ctrl+Shift+T"), self._pdf_view
+                )
+                thumbs_sc.setContext(
+                    Qt.ShortcutContext.WidgetWithChildrenShortcut
+                )
+                thumbs_sc.activated.connect(self.toggle_thumbnails)
+            except Exception:
+                pass
             # Cmd+F find bar (A9): lives in this widget's own VBox, above
             # the QPdfView. It must NOT touch _page_label — that label is
             # adopted into the dock header by the tab container.
@@ -1632,7 +1648,7 @@ class PdfViewer(QWidget):
         if cb is None:
             return False
         try:
-            from PyQt6.QtCore import QMimeData
+            from aqt.qt import QMimeData
 
             mime = QMimeData()
             mime.setImageData(cropped)
@@ -1664,7 +1680,7 @@ class PdfViewer(QWidget):
         if img is None:
             return
         try:
-            from PyQt6.QtCore import QMimeData
+            from aqt.qt import QMimeData
 
             drag = QDrag(self._viewport)
             mime = QMimeData()
@@ -2624,6 +2640,7 @@ class PdfViewer(QWidget):
         zoom_out_act = menu.addAction("Zoom Out\t⌘−")
         zoom_reset_act = menu.addAction("Actual Size\t⌘0")
         chosen = menu.exec(self._pdf_view.mapToGlobal(pos))
+        menu.deleteLater()  # deferred: `chosen` is still compared below
         if chosen is None:
             return
         if chosen == copy_act:
@@ -2686,6 +2703,12 @@ class PdfViewer(QWidget):
             return "highlight"
         if key == Qt.Key.Key_H and shift and not alt:
             return "highlight"
+        # Thumbnails (K-154): the strip's only affordance was the editor
+        # panel's own tab-header button, so the Library and the Lecture
+        # dock had no way to show or dismiss it. A keyboard binding here
+        # reaches every host the same way Cmd+F/Cmd+Shift+A already do.
+        if key == Qt.Key.Key_T and shift and not alt:
+            return "thumbs"
         return None
 
     def _dispatch_shortcut_combo(self, combo: str) -> bool:
@@ -2705,6 +2728,9 @@ class PdfViewer(QWidget):
                 return True
             if combo == "highlight":
                 self._add_highlight_from_selection()
+                return True
+            if combo == "thumbs":
+                self.toggle_thumbnails()
                 return True
         except Exception as exc:
             print(f"[klausmate] shortcut dispatch failed ({combo}): {exc}")
@@ -4332,203 +4358,6 @@ class PdfSidebar(QWidget):
             self._fallback_label.setWordWrap(True)
             outer.addWidget(self._fallback_label, 1)
 
-        # Transcript strip (Plan 2 D6, K-258): a Qt widget under the page
-        # for the native renderer; pdf.js draws its own copy of this same
-        # strip via the bridge instead — a docked footer that is a
-        # SIBLING of `#pages`, never inside a page div (K-258 fix round
-        # 1: in-flow inside the fixed-height .page was painted over by
-        # the next page, which is why the footer touches no page
-        # geometry). set_transcript below dispatches on which one
-        # applies. Every attribute exists
-        # — as None — even when the strip cannot be built, matching this
-        # file's own convention for optional UI (the find bar, the
-        # thumbnail strip above).
-        self._transcript: QWidget | None = None
-        self._transcript_chevron: QToolButton | None = None
-        self._transcript_scroll: QScrollArea | None = None
-        self._transcript_label: QLabel | None = None
-        self._transcript_unsubscribe: Callable[[], None] | None = None
-        # Latched by cleanup() before it unsubscribes: a page_store
-        # notification deferred through _run_on_main can still be sitting
-        # in Qt's event queue when this sidebar is torn down (PR #4 fifth
-        # re-review). One-way, like the uploader's own _closed — every
-        # teardown path here is final.
-        self._torn_down = False
-        if self._renderer != "pdfjs":
-            try:
-                self._build_transcript_strip(outer)
-            except Exception as exc:
-                print(f"[klausmate] transcript strip unavailable: {exc}")
-        try:
-            from . import page_store as _page_store
-
-            self._transcript_unsubscribe = _page_store.subscribe(
-                self._on_page_store_notify
-            )
-        except Exception as exc:
-            print(f"[klausmate] transcript subscribe failed: {exc}")
-
-    def _build_transcript_strip(self, outer: QVBoxLayout) -> None:
-        """Build the collapsible native-renderer transcript strip
-        (hidden until ``set_transcript`` has text to show): a
-        "Transcript" chevron over a capped-height ``QScrollArea``
-        holding the page's spoken-over text. Steals no focus and binds
-        no shortcut of its own — a plain checkable button and a plain
-        label."""
-        from . import theme as _theme
-
-        strip = QWidget(self)
-        strip.setObjectName("KlausTranscriptStrip")
-        strip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        strip.setStyleSheet(_theme.transcript_strip_qss(_theme.night_mode()))
-        lay = QVBoxLayout(strip)
-        lay.setContentsMargins(8, 4, 8, 4)
-        lay.setSpacing(2)
-
-        chevron = QToolButton(strip)
-        chevron.setCheckable(True)
-        chevron.setChecked(True)
-        chevron.setText("▾ Transcript")
-        chevron.setCursor(Qt.CursorShape.PointingHandCursor)
-        chevron.setAutoRaise(True)
-        # Fix round 1 (M1): DECLARED, not just defaulted — Qt's own
-        # QToolButton default (TabFocus, no click-focus bit) already
-        # keeps a mouse click here off the viewer's focus chain, but a
-        # default is not an invariant. This file's own established
-        # pattern for exactly this "don't let an ancillary widget steal
-        # the viewer's shortcuts" concern (see the thumbnail list at
-        # `lst.setFocusPolicy(Qt.FocusPolicy.NoFocus)`).
-        chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        chevron.toggled.connect(self._on_transcript_chevron_toggled)
-        lay.addWidget(chevron)
-
-        scroll = QScrollArea(strip)
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(120)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
-        # PR #4 sixth review: a scroll area paints its VIEWPORT child,
-        # not itself, so a viewport left filling from the palette would
-        # draw the transcript body as an opaque default rectangle on top
-        # of the strip's chrome. The sheet's own
-        # `QWidget#KlausTranscriptStrip QScrollArea { background:
-        # transparent }` already clears it (pinned by the dark-mode pixel
-        # read in tests/test_transcript_strip.py) — this is the belt to
-        # that sheet's braces, so narrowing the rule later cannot quietly
-        # bring the rectangle back.
-        scroll.viewport().setAutoFillBackground(False)
-        label = QLabel("", scroll)
-        # PR #4 third re-review: transcript text is UNTRUSTED — a
-        # microphone through a transcription API — and QLabel.setText
-        # defaults to AutoText, which sniffs the string and renders
-        # anything markup-shaped as markup (an <img>, a link). Declared
-        # once here so every set_transcript below inherits it; the
-        # pdf.js half of this same strip gets it from writing with
-        # textContent.
-        label.setTextFormat(Qt.TextFormat.PlainText)
-        label.setWordWrap(True)
-        label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
-        label.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # fix round 1 (M1)
-        scroll.setWidget(label)
-        lay.addWidget(scroll)
-
-        strip.setVisible(False)
-        outer.addWidget(strip)
-        self._transcript = strip
-        self._transcript_chevron = chevron
-        self._transcript_scroll = scroll
-        self._transcript_label = label
-
-    def _on_transcript_chevron_toggled(self, checked: bool) -> None:
-        if self._transcript_scroll is not None:
-            self._transcript_scroll.setVisible(checked)
-        if self._transcript_chevron is not None:
-            self._transcript_chevron.setText(
-                "▾ Transcript" if checked else "▸ Transcript"
-            )
-
-    def set_transcript(self, page_index: int, text: str) -> None:
-        """Show *text* as *page_index*'s transcript: the native strip
-        when this sidebar built one, or (pdf.js) push it into the page
-        itself over the bridge — the ``klausSetTranscript`` call.
-        ``page_index`` mirrors that bridge call's own signature;
-        callers (``_refresh_transcript``, the page_store subscription)
-        already only reach this for the sidebar's own current page.
-        """
-        text = str(text or "").strip()
-        if self._transcript is not None and self._transcript_label is not None:
-            self._transcript_label.setText(text)
-            self._transcript.setVisible(bool(text))
-            return
-        if self._renderer == "pdfjs" and self._viewer is not None:
-            try:
-                self._viewer.set_transcript(page_index, text)
-            except Exception as exc:
-                print(f"[klausmate] pdfjs transcript push failed: {exc}")
-
-    def _refresh_transcript(self) -> None:
-        """Pull the current page's transcript out of page_store and
-        show it (or hide the strip when there is none) — the one path
-        both a page change and a page_store notification for this
-        PDF funnel through. The SLIDE text is deliberately excluded:
-        this strip is what was SAID over the page, not the page itself."""
-        text = ""
-        if self._name is not None:
-            try:
-                from . import page_store as _page_store
-                from . import pdf_handler as _pdf_handler
-                from . import USER_FILES  # type: ignore
-
-                path = _pdf_handler.pdf_path_for(USER_FILES, self._name) or ""
-                rec = _page_store.load_record(
-                    USER_FILES, self._name, path, self._current_page
-                )
-                text = "\n".join(
-                    str(seg.get("text") or "").strip()
-                    for seg in rec.get("segments") or []
-                    if str(seg.get("text") or "").strip()
-                )
-            except Exception as exc:
-                print(f"[klausmate] transcript refresh failed: {exc}")
-                text = ""
-        self.set_transcript(self._current_page, text)
-
-    def _on_page_store_notify(self, pdf_safe: str, page_index: int) -> None:
-        """page_store.subscribe callback: refresh only for THIS
-        sidebar's own PDF and only while the notified page is the one
-        actually on screen — a recorder appending a segment to a page
-        the user has since scrolled past must not repaint over it.
-
-        Marshalled through _run_on_main (K-257 fix round 1, cross-task):
-        page_store.append_segment calls this synchronously, and the
-        lecture recorder's Uploader calls append_segment from its own
-        daemon worker thread — so, once Task 5 wired a recorder that
-        actually appends segments, this callback started touching
-        self._transcript/_transcript_label off the main thread. The
-        whole body is deferred (not just the widget touch) so the
-        pdf_safe/page_index check itself reads the freshest self._name/
-        self._current_page at the moment it actually runs, not whatever
-        they were on the worker thread a moment earlier.
-        """
-        def _apply() -> None:
-            # Deferred means "later", and later can be after cleanup():
-            # the dock closes, the widgets die, and this closure then
-            # refreshes a QLabel whose C++ half is gone — a RuntimeError
-            # raised out of the uploader's notify chain (PR #4 fifth
-            # re-review). The latch is the answer; the try is for the
-            # widget Qt deletes without anyone calling cleanup().
-            if self._torn_down:
-                return
-            if pdf_safe == self._name and page_index == self._current_page:
-                try:
-                    self._refresh_transcript()
-                except RuntimeError as exc:
-                    print(f"[klausmate] transcript notify skipped: {exc}")
-
-        _run_on_main(_apply)
-
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)
 
@@ -4555,7 +4384,7 @@ class PdfSidebar(QWidget):
         return True
 
     def load_pdf(self, name: str) -> None:
-        from . import pdf_handler
+        from . import pdf_handler, viewer_context
         from . import USER_FILES  # type: ignore
 
         path = pdf_handler.pdf_path_for(USER_FILES, name)
@@ -4565,10 +4394,10 @@ class PdfSidebar(QWidget):
                     f"The raw PDF for '{name}' is not stored.\n"
                     "Re-add it via the editor's PDF panel or the Library to enable the viewer."
                 )
+            viewer_context.forget(id(self))
             self._name = None
             self._file_stat = None
             self._set_active(None)
-            self._refresh_transcript()
             return
         self._file_stat = _stat_of(path)
 
@@ -4603,7 +4432,6 @@ class PdfSidebar(QWidget):
             self._page_count = len(pages)
             if self._page_count > 0:
                 self._set_active((name, (0, min(2, self._page_count - 1))))
-            self._refresh_transcript()  # fix round 1 (M2)
             self._notify_loaded(name)
             return
 
@@ -4613,17 +4441,13 @@ class PdfSidebar(QWidget):
             try:
                 self._doc.load(QUrl.fromLocalFile(path))
             except Exception:
-                # ...and drop the previous PDF with it (PR #4 fifth re-review):
-                # self._name still named the PDF that loaded FINE a moment
-                # ago, so clearing the strip alone was not enough — the next
-                # page_store notify or page change for that name re-read its
-                # record and put the stale text straight back on screen
-                # (K-276 review, measured). Same shape as the no-path branch
-                # above: forget the document, THEN refresh.
+                # ...and drop the previous PDF with it: self._name still
+                # named the PDF that loaded FINE a moment ago (PR #4 fifth
+                # re-review). Same shape as the no-path branch above.
+                viewer_context.forget(id(self))
                 self._name = None
                 self._file_stat = None
                 self._set_active(None)
-                self._refresh_transcript()
                 return
 
         self._name = name
@@ -4817,10 +4641,6 @@ class PdfSidebar(QWidget):
         owns an AnkiWebView, which must be unregistered from Anki's
         global hooks — see PdfJsViewer.cleanup); QPdfView has nothing
         to release. Call from every path that tears a sidebar down."""
-        # Before the unsubscribe, not after: a notification that already
-        # made it through subscribe() may be waiting its main-thread turn
-        # (see _on_page_store_notify).
-        self._torn_down = True
         v = self._viewer
         fn = getattr(v, "cleanup", None) if v is not None else None
         if fn is not None:
@@ -4828,12 +4648,6 @@ class PdfSidebar(QWidget):
                 fn()
             except Exception as exc:
                 print(f"[klausmate] viewer cleanup failed: {exc}")
-        unsub, self._transcript_unsubscribe = self._transcript_unsubscribe, None
-        if unsub is not None:
-            try:
-                unsub()
-            except Exception as exc:
-                print(f"[klausmate] transcript unsubscribe failed: {exc}")
         try:
             from . import viewer_context
 
@@ -4853,7 +4667,6 @@ class PdfSidebar(QWidget):
             except Exception:
                 pass
         self._set_active(None)
-        self._refresh_transcript()
         try:
             from . import viewer_context
 
@@ -4873,7 +4686,6 @@ class PdfSidebar(QWidget):
         end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
         self._set_active((self._name, (start, end)))
-        self._refresh_transcript()
         try:
             from . import viewer_context
 

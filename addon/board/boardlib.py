@@ -44,7 +44,13 @@ TRANSITIONS = {
 
 FIELD_ORDER = ["owner", "priority", "tags", "files", "verify", "created", "claimed"]
 
-_CARD_RE = re.compile(r"^### (K-\d{3}): (.+)$")
+# Card ids are "<PREFIX>-NNN". New ids are minted with BOARD_PREFIX, but
+# the READ pattern accepts any prefix on purpose: changing the prefix
+# half-way through a project must never orphan the cards already on the
+# board.
+PREFIX = (os.environ.get("BOARD_PREFIX") or "K").strip().upper()
+
+_CARD_RE = re.compile(r"^### ([A-Z]+-\d{3}): (.+)$")
 _FIELD_RE = re.compile(r"^([a-z_]+): ?(.*)$")
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
@@ -110,23 +116,52 @@ class Board:
         return None, None
 
     def next_id(self, extra=None) -> str:
-        """Lowest unused K-NNN. ``extra`` folds in ids that must not be
-        reused (e.g. archived ones) without the Board itself knowing where
-        those come from — see ``_archived_ids`` / ``add``."""
-        nums = [int(c.id[2:]) for _col, c in self.all_cards()]
+        """Lowest unused <PREFIX>-NNN. ``extra`` folds in ids that must not
+        be reused (e.g. archived ones) without the Board itself knowing
+        where those come from — see ``_archived_ids`` / ``add``.
+
+        Split on the hyphen rather than slicing a fixed width: the prefix
+        is configurable, so ``id[2:]`` (right for a one-letter prefix)
+        turns "ACME-001" into "ME-001" and raises on int().
+        """
+        nums = [
+            int(c.id.rsplit("-", 1)[-1]) for _col, c in self.all_cards()
+        ]
         if extra:
             nums.extend(extra)
-        return "K-%03d" % ((max(nums) + 1) if nums else 1)
+        return f"{PREFIX}-%03d" % ((max(nums) + 1) if nums else 1)
 
 
 # ------------------------------------------------------------------ paths
 
 
 def board_dir() -> str:
-    """Overridable so tests can operate on a scratch board."""
-    return os.environ.get(
-        "KLAUS_BOARD_DIR", os.path.dirname(os.path.abspath(__file__))
-    )
+    """Where BOARD.md and ARCHIVE.md live.
+
+    KLAUS_BOARD_DIR / BOARD_DIR win outright when set — this is the test
+    suite's entire isolation mechanism (see tests/test_board.py's
+    new_board_dir()), so an unset-env fallback must never come first: a
+    fallback that runs before the explicit override would silently resolve
+    to the real board on every machine where cwd happens to hold one, which
+    is every machine that has ever run this suite from the repo root.
+
+    Only when NEITHER is set do we search: an existing board already in the
+    project (./board/ then ./), else this script's own directory — the
+    original default, kept as the last resort for a project layout the
+    search doesn't recognize.
+    """
+    explicit = os.environ.get("KLAUS_BOARD_DIR") or os.environ.get("BOARD_DIR")
+    if explicit:
+        return explicit
+    cwd = os.getcwd()
+    for candidate in (os.path.join(cwd, "board"), cwd):
+        if os.path.exists(os.path.join(candidate, "BOARD.md")):
+            return candidate
+    # Not the script's own directory: board.py may be loaded through
+    # a symlink or shared elsewhere, and CLAUDE.md's own gotchas note
+    # that symlinks in this repo break silently -- resolving against
+    # the CURRENT PROJECT is the fallback that survives that.
+    return os.path.join(cwd, "board")
 
 
 def board_path() -> str:
@@ -349,7 +384,7 @@ def _write(board: Board) -> None:
 
 
 def _archived_ids() -> set:
-    """Numeric ids (the int after 'K-') already spent in ARCHIVE.md.
+    """Numeric ids (the int after the prefix) already spent in ARCHIVE.md.
 
     A regex scan over the archive file, not a persisted high-water mark: it
     needs no extra state to keep in sync with reality, matches how
@@ -363,7 +398,9 @@ def _archived_ids() -> set:
             text = f.read()
     except FileNotFoundError:
         return set()
-    return {int(m) for m in re.findall(r"^### K-(\d+):", text, re.MULTILINE)}
+    return {
+        int(m) for m in re.findall(r"^### [A-Z]+-(\d+):", text, re.MULTILINE)
+    }
 
 
 def _append_archive(card: Card) -> None:

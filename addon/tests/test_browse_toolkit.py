@@ -774,7 +774,7 @@ if _HAVE_QT:
               and strip.status.full_text() == bt.NO_INDEX_TEXT)
         panel._sync_enabled()
         # A stale signature is a different message on the same surface.
-        _curation._cfg = lambda: {"embedding_provider": "voyage"}
+        _curation._cfg = lambda: {"embedding_model": "different-local-model"}
         bt._index_dir = lambda: _IDX
         panel._sync_enabled()
         check("an index from another embedding model says SO, and does "

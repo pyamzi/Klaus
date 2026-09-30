@@ -1,5 +1,5 @@
-"""State-machine tests for the Preferences dialog's "API keys & models"
-page (openai_key_edit / embed_model_edit) and its default-sensitivity
+"""State-machine tests for the Preferences dialog's "Local models"
+page (endpoint_edit / embed_model_edit) and its default-sensitivity
 slider.
 
 PyQt6 cannot be imported here (its sip is 3.13-only), so this reimplements
@@ -12,23 +12,10 @@ Kept in lockstep with manage_models_dialog by construction — the functions
 below are transcribed from it; if that code changes these must too. The
 source-pin sections further down read manage_models.py directly.
 """
-import importlib.util
 import os
 import sys
 
 PASS = FAIL = 0
-
-# plus.py is aqt-free stdlib, so the World below can use the REAL
-# plus.key()/plus.KEY rather than transcribing the kp_ validation and
-# letting the two drift.
-_plus_spec = importlib.util.spec_from_file_location(
-    "_klaus_plus_under_test",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                 "klausmate", "plus.py"),
-)
-plus = importlib.util.module_from_spec(_plus_spec)
-_plus_spec.loader.exec_module(plus)
-
 
 def check(name, cond, detail=""):
     global PASS, FAIL
@@ -53,26 +40,27 @@ class LineEdit:
         self._text = t
 
 
-_DEFAULT_EMBED_MODEL = "text-embedding-3-large"
+_DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 
 class World:
-    """manage_models_dialog's "API keys & models" closure, transcribed:
-    openai_key_edit / embed_model_edit, the ui_state['syncing'] and
+    """manage_models_dialog's "Local models" closure, transcribed:
+    endpoint_edit / embed_model_edit, the ui_state['syncing'] and
     ['dirty'] guards, sync_embed_widgets and save_embed. There is ONE
     embedding provider now (OpenAI), so the provider combo, the
     per-provider key fan-out and the Ollama resolver are gone — what is
     left to get wrong is the deferred-save contract, which is what these
-    pins are for."""
+    pins are for.
+
+    """
 
     def __init__(self, cfg):
         self.cfg = dict(cfg)
         self.ui_state = {"syncing": False, "dirty": False}
         self.saves = 0
         self.sweeps = []
-        self.openai_key_edit = LineEdit()
+        self.endpoint_edit = LineEdit()
         self.embed_model_edit = LineEdit()
-        self.plus_key_edit = LineEdit()
         self.sync_embed_widgets()
 
     # --- transcribed from embeddings.py (embedding_model/index_signature) ---
@@ -81,7 +69,7 @@ class World:
         return str(self.cfg.get("embedding_model") or "").strip() or _DEFAULT_EMBED_MODEL
 
     def _index_signature(self):
-        return "openai", self._embedding_model(), 0
+        return "ollama", self._embedding_model(), 0
 
     # --- transcribed from manage_models_dialog ---
 
@@ -95,53 +83,39 @@ class World:
             return
         self.ui_state["syncing"] = True
         try:
-            self.openai_key_edit.setText(str(self.cfg.get("api_key_openai") or ""))
+            self.endpoint_edit.setText(str(self.cfg.get("endpoint") or ""))
             self.embed_model_edit.setText(str(self.cfg.get("embedding_model") or ""))
-            self.plus_key_edit.setText(str(self.cfg.get(plus.KEY) or ""))
         finally:
             self.ui_state["syncing"] = False
 
     def type_key(self, text):
-        self.openai_key_edit.setText(text)
+        self.endpoint_edit.setText(text)
         self.mark_dirty()
 
     def type_model(self, text):
         self.embed_model_edit.setText(text)
         self.mark_dirty()
 
-    def type_plus_key(self, text):
-        self.plus_key_edit.setText(text)
-        self.mark_dirty()
-
     def save_embed(self):
         if self.ui_state["syncing"]:
             return
         prev_sig = self._index_signature()
-        had_key = bool(str(self.cfg.get("api_key_openai") or "").strip())
-        had_plus = bool(plus.key(self.cfg))
-        prev_plus = str(self.cfg.get(plus.KEY) or "").strip()
-        self.cfg["api_key_openai"] = self.openai_key_edit.text().strip()
+        self.cfg["endpoint"] = self.endpoint_edit.text().strip()
         self.cfg["embedding_model"] = self.embed_model_edit.text().strip()
-        self.cfg["klaus_plus_key"] = self.plus_key_edit.text().strip()
-        if self.cfg["klaus_plus_key"] != prev_plus:
-            self.cfg["klaus_plus_cache"] = {}
         self.saves += 1
         self.sweeps.append(
-            (prev_sig, self._index_signature(),
-             (not had_key and bool(self.cfg["api_key_openai"]))
-             or (not had_plus and bool(plus.key(self.cfg))))
+            (prev_sig, self._index_signature())
         )
 
     def save_all(self):
         self.ui_state["dirty"] = False
         self.save_embed()
 
-
-BASE = {"api_key_openai": "", "embedding_model": ""}
+BASE = {"endpoint": "", "embedding_model": ""}
 
 print("== opening the page writes nothing ==")
 w = World(BASE)
-check("the key field seeds from config", w.openai_key_edit.text() == "")
+check("the key field seeds from config", w.endpoint_edit.text() == "")
 check("opening the dialog saves nothing", w.saves == 0)
 before = w.saves
 w.sync_embed_widgets()
@@ -151,112 +125,43 @@ print("== deferred save: edits do not reach config until Save ==")
 w = World(BASE)
 w.type_key("sk-new-key")
 check("typing a key marks dirty but writes nothing",
-      w.ui_state["dirty"] is True and w.cfg["api_key_openai"] == "")
+      w.ui_state["dirty"] is True and w.cfg["endpoint"] == "")
 w.save_all()
-check("Save persists the key", w.cfg["api_key_openai"] == "sk-new-key")
+check("Save persists the key", w.cfg["endpoint"] == "sk-new-key")
 check("Save clears dirty", w.ui_state["dirty"] is False)
 
-w = World({"api_key_openai": "sk", "embedding_model": ""})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": ""})
+w.type_model("custom-local")
 check("typing a model writes nothing yet", w.cfg["embedding_model"] == "")
 w.save_all()
-check("Save persists the model", w.cfg["embedding_model"] == "text-embedding-3-small")
+check("Save persists the model", w.cfg["embedding_model"] == "custom-local")
 
 print("== a refresh while dirty must not clobber unsaved edits ==")
-w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
+w.type_model("custom-local")
 w.sync_embed_widgets()          # what refresh() does
 check("unsaved edit survives a refresh",
-      w.embed_model_edit.text() == "text-embedding-3-small")
+      w.embed_model_edit.text() == "custom-local")
 w.save_all()
 check("and still saves correctly afterwards",
-      w.cfg["embedding_model"] == "text-embedding-3-small")
+      w.cfg["embedding_model"] == "custom-local")
 
 print("== the sweep offer: a model change, or a first key ==")
-w = World({"api_key_openai": "sk", "embedding_model": "text-embedding-3-large"})
-w.type_model("text-embedding-3-small")
+w = World({"endpoint": "sk", "embedding_model": "nomic-embed-text"})
+w.type_model("custom-local")
 w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
+_prev, _cur = w.sweeps[-1]
 check("the PREVIOUS signature is the one the stored vectors were made "
       "with, captured before the widgets overwrite config",
-      _prev == ("openai", "text-embedding-3-large", 0))
+      _prev == ("ollama", "nomic-embed-text", 0))
 check("...and the current one is what was just saved",
-      _cur == ("openai", "text-embedding-3-small", 0))
-check("a model change is not a first key", _first is False)
+      _cur == ("ollama", "custom-local", 0))
 
 w = World(BASE)
-w.type_key("sk-first")
+w.type_key("http://localhost:12345")
 w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
-check("an empty key filled in for the first time IS a first key — the "
-      "signature never moved, but nothing has ever been embedded",
-      _first is True and _prev == _cur)
-
-w = World({"api_key_openai": "sk-old", "embedding_model": "text-embedding-3-large"})
-w.type_key("sk-rotated")
-w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
-check("rotating an existing key is NOT a first key — the vectors on "
-      "disk are still valid, and re-embedding the collection on a key "
-      "change would be a bill for nothing",
-      _first is False and _prev == _cur)
-
-
-print("== a first Klaus Plus key is a first key too (T8 ruling 1) ==")
-# A subscriber never pastes a provider key, so without this branch the
-# one user whose library has never been embedded is the one the sweep
-# offer never reaches — silently, forever.
-_KP = "kp_" + "a" * 32          # plus.key(): kp_ prefix, 35 characters
-_KP2 = "kp_" + "b" * 32
-
-w = World(BASE)
-w.type_plus_key(_KP)
-w.save_all()
-_prev, _cur, _first = w.sweeps[-1]
-check("a first Plus key offers the sweep, exactly like a first OpenAI "
-      "key — the signature does not move for either",
-      _first is True and _prev == _cur)
-
-w = World({"api_key_openai": "", "embedding_model": "", "klaus_plus_key": _KP})
-w.type_plus_key(_KP2)
-w.save_all()
-check("swapping one Plus key for another is NOT a first key — the "
-      "vectors on disk are still valid, and re-embedding on a key "
-      "change would be a bill for nothing",
-      w.sweeps[-1][2] is False)
-
-w = World(BASE)
-w.type_plus_key("kp_too-short")
-w.save_all()
-check("a half-pasted key is not a first key either: presence is read "
-      "through plus.key(), which validates the kp_ shape, so a typo "
-      "cannot trigger a whole-collection re-embed",
-      w.sweeps[-1][2] is False)
-
-print("== a changed Plus key clears the cached verdict (T8 ruling 2) ==")
-w = World({"api_key_openai": "sk", "embedding_model": "",
-           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
-w.type_plus_key(_KP2)
-w.save_all()
-check("the cache goes in the SAME write — left behind, a revoked or "
-      "swapped key reads as active for the whole 7-day grace window",
-      w.cfg["klaus_plus_cache"] == {})
-
-w = World({"api_key_openai": "sk", "embedding_model": "",
-           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
-w.type_model("text-embedding-3-small")
-w.save_all()
-check("...but a Save that did not touch the key keeps it — otherwise "
-      "every Save throws away a verdict and re-asks the service",
-      w.cfg["klaus_plus_cache"] == {"status": "active"})
-
-w = World({"api_key_openai": "sk", "embedding_model": "",
-           "klaus_plus_key": _KP, "klaus_plus_cache": {"status": "active"}})
-w.type_plus_key("")
-w.save_all()
-check("deleting the key clears it too — the free tier is one deletion "
-      "away, and a stale verdict must not outlive the subscription",
-      w.cfg["klaus_plus_key"] == "" and w.cfg["klaus_plus_cache"] == {})
+_prev, _cur = w.sweeps[-1]
+check("changing endpoint preserves model signature", _prev == _cur)
 
 
 print("== default-sensitivity slider: migration-side bail (K-052) ==")
@@ -544,7 +449,7 @@ check("sidebar carries the app identity",
 check("sidebar identity: star logo beside the Garamond wordmark",
       "_logo_pixmap" in _src2
       and 'QLabel("KlausMate")' in _src2
-      and "_top_bar.star_polygons()" in _src2)
+      and "_top_bar.logo_svg(colour)" in _src2)
 check("the logo fills blue_accent and repaints on an accent save",
       'QColor(c["blue_accent"])' in _src2
       and "logo_lbl.setPixmap(_new_logo)" in _src2)
@@ -563,48 +468,12 @@ check("no-hit pages dim + lose clickability instead of vanishing",
       "Qt.ItemFlag.ItemIsEnabled" in _src2
       and "ForegroundRole" in _src2)
 check("every section is a page with a sidebar pill and a big title",
-      _src2.count("= _page(") == 4
+      _src2.count("= _page(") == 3
       and 'setObjectName("SettingsNav")' in _src2
       and 'setObjectName("PageTitle")' in _src2
       and 'setObjectName("PageSubtitle")' in _src2)
 check("display order is decoupled from build order via _finish_nav",
-      '_finish_nav("General", "Appearance", "Assistant",\n'
-      '                "API keys & models")' in _src2)
-# The assistant panel shipped telling users to "add one under KlausMate
-# Preferences" for a key that had nowhere to be typed. This is that surface.
-check("the Assistant page exists, so the panel's own error message points "
-      "somewhere real", '"Assistant",\n        "Assistant",' in _src2)
-# K-194 (Task 8 of the Klaus-assistant-on-Claude-Code plan) rewrote this
-# page: Klaus is not itself the assistant, Claude Code is, so the old
-# provider-key/hosted-token picker (assistant_key_edit, assistant_token_edit,
-# assistant_backend_combo, the klaus_hidden row-sync between them) is gone.
-# The four checks that used to pin those fields are replaced below with
-# their equivalents on the new fields; every other assertion in this
-# section (the sidebar/search/row-shape ones around it) is untouched.
-check("the old provider-key / hosted-token credential fields are gone — "
-      "Claude Code is the engine now, not a provider key",
-      "assistant_key_edit" not in _src2
-      and "assistant_token_edit" not in _src2
-      and "assistant_backend_combo" not in _src2
-      and "_sync_assistant_rows" not in _src2)
-check("the page offers reopen-on-start and Clear Sessions — and no "
-      "OCR row and no Claude Code binary row, both gone with the local "
-      "runtime (spec D1)",
-      "assistant_reopen_cb" in _src2 and "clear_sessions_btn" in _src2
-      and "ocr_enabled_cb" not in _src2 and "ocr_model_combo" not in _src2
-      and "claude_binary_lbl" not in _src2
-      and "claude_override_btn" not in _src2)
-check("save_all writes them — a preference with no line in a save_* is "
-      "exactly how pdf_renderer shipped broken", "save_assistant()" in _src2)
-check("every control marks dirty, or Save would silently skip it",
-      "assistant_reopen_cb.toggled.connect" in _src2
-      and "anthropic_key_edit.textEdited.connect" in _src2
-      and "reasoning_model_edit.textEdited.connect" in _src2
-      and "transcription_model_edit.textEdited.connect" in _src2)
-check("Clear Sessions confirms window-modal — a hand-built QMessageBox, "
-      "open() + finished (K-125) — never the blocking QMessageBox.question()",
-      "msg.open()" in _src2 and "msg.finished.connect(_on_answered)" in _src2)
-
+      '_finish_nav("General", "Appearance", "Local models")' in _src2)
 check("settings are SynapsePro rows — name + desc left, control right, "
       "hairline separated",
       'setObjectName("SettingName")' in _src2
@@ -925,136 +794,16 @@ check("the background paint seam honours the preview",
       "background.resolve(background.effective_cfg(_config()))" in _tb_src)
 
 print("== the API-first page list and its two save_* writers (D1) ==")
-# One page replaces two: the provider combo, the per-provider key fan-out
-# and the whole "Local model library (Ollama)" page are gone, and the two
-# API keys plus the three model names live together where the money is
-# spent. RAW source throughout — an absence pin against code_only() is
-# vacuous, because code_only strips the string literals these keys ARE.
-check("the page is called \"API keys & models\", as a nav label and a title",
-      '"API keys & models",\n        "API keys & models",' in _src2)
-check("...and neither page it replaces survives",
-      '"Semantic Search"' not in _src2 and '"Local Models"' not in _src2)
-check("the five fields the spec names are all constructed",
-      all(n in _src2 for n in ("openai_key_edit", "anthropic_key_edit",
-                               "embed_model_edit", "reasoning_model_edit",
-                               "transcription_model_edit")))
-check("every key field is password-masked — a shoulder or a screen "
-      "share must not read an API key off Preferences. The Klaus Plus "
-      "licence key is a credential too: it is the whole subscription, "
-      "and anyone who reads it off a stream can spend the quota",
-      _src2.count("EchoMode.Password") == 3
-      and "openai_key_edit.setEchoMode" in _src2
-      and "anthropic_key_edit.setEchoMode" in _src2
-      and "plus_key_edit.setEchoMode" in _src2)
+check("Local models has endpoint and model fields", '"Local models", "Local models"' in _src2 and "endpoint_edit" in _src2 and "embed_model_edit" in _src2)
+check("credential widgets and saves are removed", "api_key_" not in _src2 and "key_edit" not in _src2)
 _ast_tree = __import__("ast").parse(_src2)
-
-
-def _key_edit_leaks(tree) -> bool:
-    """True if a print/tooltip/setText/showWarning/showInfo call has a
-    ``*_key_edit.text()`` call anywhere inside its arguments.
-
-    An AST walk, not a same-line text scan: the old pin only rejected
-    ``print(`` and ``_key_edit.text()`` sharing one physical line, so a
-    leak split across two lines (a value assigned on one line, printed
-    on the next) would have passed it clean.
-    """
-    import ast as _a
-
-    sinks = {"print", "tooltip", "setText", "showWarning", "showInfo"}
-
-    def _callee_name(call):
-        f = call.func
-        if isinstance(f, _a.Name):
-            return f.id
-        if isinstance(f, _a.Attribute):
-            return f.attr
-        return None
-
-    def _owner_name(node):
-        if isinstance(node, _a.Name):
-            return node.id
-        if isinstance(node, _a.Attribute):
-            return node.attr
-        return None
-
-    def _is_key_edit_text_call(node):
-        return (
-            isinstance(node, _a.Call)
-            and isinstance(node.func, _a.Attribute)
-            and node.func.attr == "text"
-            and (_owner_name(node.func.value) or "").endswith("_key_edit")
-        )
-
-    for node in _a.walk(tree):
-        if isinstance(node, _a.Call) and _callee_name(node) in sinks:
-            args_and_kwargs = list(node.args) + [kw.value for kw in node.keywords]
-            for part in args_and_kwargs:
-                if any(_is_key_edit_text_call(sub) for sub in _a.walk(part)):
-                    return True
-    return False
-
-
-check("a key's VALUE is read only to be saved — never into a print, a "
-      "tooltip or a status label — an AST walk over every sink call's "
-      "arguments, so a leak split across two lines cannot slip past",
-      "openai_key_edit.text()" in _src2 and not _key_edit_leaks(_ast_tree))
-
-
 def _fn_src(name):
     import ast as _a
     for node in _a.walk(_ast_tree):
         if isinstance(node, _a.FunctionDef) and node.name == name:
             return _a.get_source_segment(_src2, node) or ""
     return ""
-
-
-_save_embed_src = _fn_src("save_embed")
-check("save_embed was found", bool(_save_embed_src))
-check("save_embed writes the OpenAI key and the embedding model...",
-      '"api_key_openai"' in _save_embed_src
-      and '"embedding_model"' in _save_embed_src)
-check("...and never the retired provider key — one provider now, so a "
-      "stored embedding_provider would be a value nothing reads",
-      "embedding_provider" not in _save_embed_src
-      and "embedding_api_key_" not in _save_embed_src)
-
-_save_assistant_src = _fn_src("save_assistant")
-check("save_assistant was found", bool(_save_assistant_src))
-for _k in ("api_key_anthropic", "reasoning_model", "transcription_model"):
-    check(f'save_assistant writes "{_k}"', f'"{_k}"' in _save_assistant_src)
-check("...and never the Ollama/Claude-Code era keys",
-      "claude_binary" not in _save_assistant_src
-      and "ocr_model" not in _save_assistant_src
-      and "ocr_enabled" not in _save_assistant_src
-      and "assistant_model" not in _save_assistant_src)
-check("every one of the five fields is written by exactly one save_*",
-      _src2.count('cfg["api_key_openai"] = ') == 1
-      and _src2.count('cfg["api_key_anthropic"] = ') == 1
-      and _src2.count('cfg["embedding_model"] = ') == 1
-      and _src2.count('cfg["reasoning_model"] = ') == 1
-      and _src2.count('cfg["transcription_model"] = ') == 1)
-_sync_embed_src = _fn_src("sync_embed_widgets")
-check("load_assistant runs INSIDE sync_embed_widgets' syncing guard — "
-      "seeding a switch that is already true emits toggled, and outside "
-      "the guard that marks a dialog nobody has touched as dirty",
-      "load_assistant()" in _sync_embed_src
-      and _sync_embed_src.index("load_assistant()")
-      < _sync_embed_src.index('ui_state["syncing"] = False'))
-check("every assistant widget connects in the ONE connect block at the "
-      "bottom, after mark_dirty exists — connecting them where the page "
-      "is built put a setChecked(True) ahead of mark_dirty's binding and "
-      "raised NameError out of a Qt signal for anyone with "
-      "assistant_reopen on",
-      _src2.index("def mark_dirty() -> None:")
-      < _src2.index("assistant_reopen_cb.toggled.connect")
-      and _src2.index("def mark_dirty() -> None:")
-      < _src2.index("anthropic_key_edit.textEdited.connect"))
-check("General no longer offers to manage a local runtime",
-      "runtime_auto_cb" not in _src2 and "runtime_auto_setup" not in _src2)
-check("and no module-top import of the deleted runtime modules survives",
-      "ollama_client" not in _src2 and "ollama_runtime" not in _src2
-      and "ollama_setup" not in _src2)
-
+check("connection check runs without collection", "without_collection().run_in_background()" in _fn_src("test_connection"))
 
 print("== changing the model re-indexes everything (K-152) ==")
 # save_embed is the ONE writer of the embedding keys, so it is also the
@@ -1090,7 +839,7 @@ def _stmt_index(fn, needle):
 
 
 _sig_line = _stmt_index(_save_embed, "index_signature(cfg)")
-_mut_line = _stmt_index(_save_embed, "cfg['api_key_openai'] =")
+_mut_line = _stmt_index(_save_embed, "cfg['endpoint'] =")
 _write_line = _stmt_index(_save_embed, "write_config(cfg)")
 _offer_line = _stmt_index(_save_embed, "offer_model_sweep")
 check("the previous signature is captured off STORED config",
@@ -1102,33 +851,10 @@ check("...and the sweep is offered AFTER the write, so a decline still "
       "leaves the new settings saved",
       _offer_line is not None and _write_line is not None
       and _write_line < _offer_line)
-_had_key_line = _stmt_index(_save_embed, "had_key =")
-check("the had_key flag is captured off STORED config too, BEFORE the "
-      "write — reading it afterwards would make every first key look "
-      "like a key that was already there",
-      _had_key_line is not None and _mut_line is not None
-      and _had_key_line < _mut_line)
-_first_key_arg = None
-for _n in ast.walk(_save_embed):
-    if isinstance(_n, ast.Call) and "offer_model_sweep" in ast.unparse(_n.func):
-        for _kw in _n.keywords:
-            if _kw.arg == "first_key":
-                _first_key_arg = ast.unparse(_kw.value)
-check("save_embed asks for the sweep on a FIRST key as well as a moved "
-      "signature — a hard False here makes the offer unreachable for "
-      "the one user who most needs it, and nothing else would notice",
-      _first_key_arg is not None and "had_key" in _first_key_arg,
-      f"got {_first_key_arg!r}")
-check("...and a first KLAUS PLUS key counts as one too (T8 ruling 1): "
-      "deleting that half of the condition leaves had_plus assigned and "
-      "every other source pin green, so the argument itself is pinned",
-      _first_key_arg is not None and "had_plus" in _first_key_arg,
-      f"got {_first_key_arg!r}")
-
-check("save_embed hands the comparison to index_queue rather than "
-      "spelling a signature == of its own",
+check("save_embed delegates the sweep comparison to index_queue",
       "index_queue.offer_model_sweep(" in code_only(_mm_src)
       and code_only(_mm_src).count("prev_sig") == 2)
+
 _iq_code = code_only(open("klausmate/index_queue.py").read())
 check("the sweep offer is raised window-modal — open() and a finished "
       "callback, never exec() (K-114: exec's nested app-modal loop "
@@ -1136,175 +862,9 @@ check("the sweep offer is raised window-modal — open() and a finished "
       "is raised from is itself non-modal)",
       "box.open()" in _iq_code and ".exec()" not in _iq_code)
 
-print("== Klaus Plus: the Preferences group (T8, spec D4) ==")
-# The subscription's whole surface in the dialog. Same two layers as the
-# rest of this file: RAW source for anything a string literal IS, and an
-# AST walk for the things a text scan reads wrong (a connect made where
-# the page is BUILT is textually identical to one made in the connect
-# block, but runs before mark_dirty exists).
-check("the five widgets the spec names are all constructed",
-      all(n in _src2 for n in ("plus_key_edit", "plus_status",
-                               "plus_subscribe_btn", "plus_manage_btn",
-                               "plus_check_btn")))
-check("...plus the service-URL field, which lives on GENERAL — the one "
-      "row here a self-hoster or a staging run needs and nobody else "
-      "should meet while pasting a licence key",
-      "plus_base_edit" in _src2
-      and _src2.index("plus_base_edit") > _src2.index('"General",\n        "General",'))
-check("the three buttons are SecondaryButton — Klaus's own opt-out from "
-      "the blue primary, so a row of three never reads as three "
-      "primaries (theme tokens only, no hardcoded colour)",
-      'b.setObjectName("SecondaryButton")' in _src2
-      and "for b in (plus_subscribe_btn, plus_manage_btn, plus_check_btn):"
-      in _src2)
-check("the key field is never spelled in a message either — the licence "
-      "key reaches config and nothing else (the same AST walk that "
-      "guards the provider keys; plus_key_edit ends in _key_edit, so it "
-      "is already in the walker's scope)",
-      "plus_key_edit.text()" in _src2 and not _key_edit_leaks(_ast_tree))
-
-_save_embed_src2 = _fn_src("save_embed")
-_save_general_src2 = _fn_src("save_general")
-check("save_embed writes the Klaus Plus key", '"klaus_plus_key"' in _save_embed_src2)
-check("...and clears the cached verdict in the SAME write when the key "
-      "moved — an active verdict is honoured with no expiry of its own "
-      "(I-3), so left behind, a swapped key would show the previous "
-      "subscription's status indefinitely",
-      '"klaus_plus_cache"' in _save_embed_src2)
-check("save_general writes the service URL, and NOT the key — one key, "
-      "one writer, or Save's two halves race to spell it",
-      '"klaus_plus_base"' in _save_general_src2
-      and '"klaus_plus_key"' not in _save_general_src2)
-check("each Klaus Plus key is written by exactly one save_*",
-      _src2.count('cfg["klaus_plus_key"] = ') == 1
-      and _src2.count('cfg["klaus_plus_base"] = ') == 1
-      and _src2.count('cfg["klaus_plus_cache"] = ') == 1)
-check("a FIRST Plus key offers the priced sweep exactly as a first "
-      "OpenAI key does — the signature never moves for either (nothing "
-      "was ever embedded), so without this the one user whose whole "
-      "library is unindexed is the one never asked",
-      "had_plus" in _save_embed_src2
-      and _save_embed_src2.index("had_plus")
-      < _save_embed_src2.index('cfg["api_key_openai"] ='))
-
-_sync_src2 = _fn_src("sync_embed_widgets")
-check("sync_embed_widgets seeds both new fields inside the syncing "
-      "guard, and repaints the status line",
-      "plus_key_edit.setText" in _sync_src2
-      and "plus_base_edit.setText" in _sync_src2
-      and "refresh_plus_status()" in _sync_src2
-      and _sync_src2.index("plus_key_edit.setText")
-      < _sync_src2.index('ui_state["syncing"] = False'))
-
-check("both editable Plus fields mark dirty, and all three BUTTONS do "
-      "not — they act now (open a browser, ask the service); marking a "
-      "dialog dirty for pressing Check would invent unsaved changes "
-      "nobody made",
-      "plus_key_edit.textEdited.connect" in _src2
-      and "plus_base_edit.textEdited.connect" in _src2
-      and "plus_subscribe_btn.clicked.connect" in _src2
-      and "plus_manage_btn.clicked.connect" in _src2
-      and "plus_check_btn.clicked.connect" in _src2
-      and not any(f"{b}.clicked.connect(lambda" in _src2
-                  for b in ("plus_subscribe_btn", "plus_manage_btn",
-                            "plus_check_btn")))
-check("...and they connect in the ONE block at the bottom, after "
-      "mark_dirty exists (K-227's lesson, same as every other widget)",
-      _src2.index("def mark_dirty() -> None:")
-      < _src2.index("plus_key_edit.textEdited.connect")
-      and _src2.index("def mark_dirty() -> None:")
-      < _src2.index("plus_check_btn.clicked.connect"))
-
-_PLUS_HANDLERS = ("on_plus_subscribe", "on_plus_manage", "on_plus_check",
-                  "refresh_plus_status")
-_plus_handlers = "\n".join(_fn_src(n) for n in _PLUS_HANDLERS)
-check("all four handlers were found",
-      all(_fn_src(n) for n in _PLUS_HANDLERS))
-check("no exec() anywhere in the new group — K-114 is addon-wide, and "
-      "this dialog is the one that segfaulted on it",
-      ".exec()" not in _plus_handlers and "exec(" not in _plus_handlers)
-check("Subscribe and Manage are the only openLink calls, one each — a "
-      "browser hop is the ONLY way Klaus touches payment: no card "
-      "number, no Stripe form, nothing to enter inside Anki",
-      _src2.count("openLink(") == 2
-      and "openLink(" in _fn_src("on_plus_subscribe")
-      and "openLink(" in _fn_src("on_plus_manage"))
-check("Subscribe needs no key and no network — it is a URL built from "
-      "the configured base, so a user with nothing configured can still "
-      "reach the page that sells them one",
-      "plus.base(" in _fn_src("on_plus_subscribe")
-      and "run_in_background" not in _fn_src("on_plus_subscribe"))
-check("...while both calls that DO touch the network run on taskman, "
-      "never on the main thread: a 15 s urlopen timeout inside a click "
-      "handler freezes Anki's whole UI, spinning beachball and all",
-      "mw.taskman.run_in_background(" in _fn_src("on_plus_manage")
-      and "mw.taskman.run_in_background(" in _fn_src("on_plus_check")
-      and "plus.portal_url(" in _fn_src("on_plus_manage")
-      and "plus.refresh(" in _fn_src("on_plus_check"))
-check("each background result is unwrapped inside try/except — an "
-      "unraised future's exception would otherwise surface as Anki's "
-      "own crash dialog for an offline laptop",
-      _fn_src("on_plus_manage").count("fut.result()") == 1
-      and "except Exception" in _fn_src("on_plus_manage")
-      and "except Exception" in _fn_src("on_plus_check"))
-check("the provider rows stay EDITABLE with a Plus key — the free tier "
-      "is one deletion away, so the note is a caption, never a "
-      "setReadOnly/setEnabled(False)",
-      "Not needed on Klaus Plus" in _src2
-      and "klaus_desc.setText" in _src2
-      and "openai_key_edit.setReadOnly" not in _src2
-      and "openai_key_edit.setEnabled(False)" not in _src2)
-check("the card-index status line names Klaus Plus as the other way to "
-      "have semantic search — telling a paying subscriber to add an "
-      "OpenAI key is the contradiction the provider-row caption exists "
-      "to prevent",
-      "or a Klaus Plus key" in _fn_src("update_embed_status"))
-check("the UI reads its status text from plus.status_line, never its "
-      "own re-spelling of the quota — the wording lives once",
-      "plus.status_line(" in _src2 and _src2.count("plus.status_line(") == 1)
-
-_refresh_plus_src2 = _fn_src("refresh_plus_status")
-check("refresh_plus_status was found", bool(_refresh_plus_src2))
-check("the Plus GROUP row's description links Terms and Privacy, built "
-      "from the configured base (M-11: spec D5 promised a link from "
-      "Preferences and nothing built one)",
-      "/terms" in _refresh_plus_src2 and "/privacy" in _refresh_plus_src2
-      and "plus.base(" in _refresh_plus_src2)
-check("the label renders those as real, clickable links",
-      "plus_status.setOpenExternalLinks(True)" in _src2)
-check("...and it repaints them on every refresh, not just once at "
-      "construction — plus_status.setText fully replaces the label's "
-      "text, so a link added only at construction would vanish on the "
-      "first status change",
-      "setOpenExternalLinks" not in _refresh_plus_src2
-      and "plus_status.setText" in _refresh_plus_src2)
-_plus_key_row_desc = _src2.split('"Klaus Plus key",', 1)[1].split("plus_key_edit,", 1)[0]
-check("the links sit in the Plus GROUP row, never the licence-key "
-      "field's own row above it",
-      "/terms" not in _plus_key_row_desc and "/privacy" not in _plus_key_row_desc)
-
-print("== Check Keys does not contradict a Plus subscriber (K-247 fix 3) ==")
-# test_connection (General -> Connection) used to warn "No API key is
-# set for: OpenAI, Anthropic" whenever the provider keys were empty --
-# true by coincidence and false by intent for a Plus subscriber, who is
-# never meant to fill those in. Same contradiction ruling 1 already
-# removed from update_embed_status, one page over.
 _test_conn_src = _fn_src("test_connection")
-check("test_connection was found", bool(_test_conn_src))
-_plus_branch = _test_conn_src.split("if plus.key(cfg):", 1)[1].split("return", 1)[0] \
-    if "if plus.key(cfg):" in _test_conn_src else ""
-check("test_connection short-circuits on plus.key(cfg) before it can "
-      "reach the missing-key warning, and that branch's own message "
-      "names Klaus Plus rather than saying a key is missing or not set",
-      bool(_plus_branch)
-      and "Klaus Plus" in _plus_branch
-      and "missing" not in _plus_branch.lower()
-      and "not set" not in _plus_branch.lower())
-check("...and the short-circuit reads config FRESH rather than trusting "
-      "a stale local, so a key pasted and saved earlier in the same "
-      "session is seen",
-      "_pkg().get_config()" in _test_conn_src)
-
+check("test_connection probes the endpoint currently shown",
+      bool(_test_conn_src) and "endpoint_edit.text()" in _test_conn_src)
 
 check("Preferences' own Index Now still calls curation directly — it "
       "has its own progress bar and cancel, and the runner WAITS for "
@@ -1316,8 +876,8 @@ print("== K-232: the four remaining blocking dialogs go window-modal ==")
 # askUser (save_threshold's tuned-PDFs offer) and three QMessageBox.question
 # statics (start_index's re-index confirm; confirm_close's discard-changes
 # and stop-indexing confirms) each opened a nested app-modal event loop —
-# the exact K-114 segfault class clear_assistant_sessions and pdf_drive's
-# _delete_pdf were already converted away from. Same shape here: a
+# the K-114 segfault class already fixed in pdf_drive._delete_pdf.
+# Same shape here: a
 # hand-built QMessageBox, themed, shown via open(), with the Yes/No
 # decision read from clickedButton() inside a finished handler.
 check("K-232: no blocking askUser or QMessageBox.question anywhere in "

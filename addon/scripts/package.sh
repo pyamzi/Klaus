@@ -32,14 +32,8 @@ path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 print(f"manifest mod -> {data['mod']}")
 PY
 
-# The Klaus Plus service is NEVER shipped to a user. It is a separate
-# program (server-side FastAPI, its own deps, its own licence) that lives
-# in `service/` at the repo root — outside $SRC, so staging only "$SRC/"
-# already leaves it out. The `service/` exclude below is belt-and-braces
-# for the two ways that could quietly stop being true: someone widens
-# $SRC to the repo root, or someone adds a `klausmate/service/` folder.
-# Shipping it would put the operator's deploy runbook (and one day
-# anything near it) in every user's add-ons folder.
+# Stage only add-on source. Exclude per-user configuration and data,
+# bytecode, and any service directory accidentally placed inside the package.
 echo "Staging add-on files..."
 rsync -a \
   --exclude '__pycache__/' \

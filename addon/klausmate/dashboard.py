@@ -199,7 +199,7 @@ def dashboard_css() -> str:
     The jiggle honours Anki's OWN reduced-motion mechanism: Anki ships
     no ``prefers-reduced-motion`` CSS at all — it live-toggles a
     ``reduce-motion`` class on <body> from Python — so the off-switch
-    keys on that class, and nothing else would work.
+    supports that class as well as the operating system media query.
     """
     return (
         f":root {{{_palette_vars(False)} }}"
@@ -332,6 +332,15 @@ def dashboard_css() -> str:
         " .klaus-dash-menu .mi:hover {"
         " background: var(--klaus-dash-hover);"
         " }"
+        + theme.web_control_css(".klaus-dash-chip", "var(--klaus-dash-accent)")
+        + theme.web_control_css(".klaus-w-remove", "var(--klaus-dash-accent)")
+        + " @media (prefers-reduced-motion: reduce) {"
+          " .klaus-widget { animation: none !important; } }"
+        + " @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {"
+          " .klaus-dash-chip { background: var(--klaus-dash-surface);"
+          " backdrop-filter: none; -webkit-backdrop-filter: none; } }"
+        + " @media (prefers-contrast: more) {"
+          " .klaus-dash-menu { border-color: var(--klaus-dash-text); } }"
     )
 
 

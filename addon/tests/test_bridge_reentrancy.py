@@ -266,28 +266,16 @@ check("a live Preferences window is a singleton (front, don't stack)",
       "_OPEN_DLG.raise_()" in _MM_CODE2
       and "_OPEN_DLG.activateWindow()" in _MM_CODE2
       and "_OPEN_DLG=dlg" in _MM_CODE2.replace(" ", ""))
-check("profile_will_close rejects the open dialog (and the handler is "
-      "removed again on finished)",
+check("profile_will_close closes the open dialog without its prompts "
+      "(K-304; behaviour in tests/test_anki_ops.py) and the handler is "
+      "removed again on finished",
       "profile_will_close.append(_on_profile_will_close)" in _MM_CODE2
       and "profile_will_close.remove(_on_profile_will_close)" in _MM_CODE2
-      and "dlg.reject()" in _MM_CODE2)
+      and "_close_for_profile(dlg, _preview_timer, op_state)" in _MM_CODE2)
 
-section("pdf_drive: the toolbar Library link (third dispatch shape)")
-# open_drive is the Library link's callback — toolbar links are
-# dispatched over the same webchannel. Its error branch used to call
-# showWarning synchronously (recorded as a known landmine in the
-# session handoff); now it defers, with the message frozen into the
-# lambda because the except-variable is unbound by fire time.
-_DRIVE = _code_only(_func_src("pdf_drive", "open_drive"))
-check("open_drive's error branch defers its showWarning, message "
-      "frozen into the lambda's default",
-      "QTimer.singleShot" in _DRIVE
-      and 'lambda msg=f"Could not open the PDF drive' in _DRIVE
-      and "showWarning(msg)" in _DRIVE)
-check("the deferred call is the ONLY modal left in open_drive's body",
-      _DRIVE.count("showWarning(") == 1
-      and not [tok for tok in _MODAL
-               if tok != "showWarning(" and tok in _DRIVE])
+section("K-308: no Library link on the toolbar")
+check("the Library lives in Browse's sidebar; nothing adds a toolbar link",
+      "top_toolbar_did_init_links" not in _code_only(_MODULES["pdf_drive"]))
 
 
 section("K-114: app-modal exec() retired addon-wide (per-file bans)")
@@ -386,7 +374,7 @@ check("setup_flow: the library-root offer threads a continuation so "
       "free); K-226 deleted the runtime-update offer this used to "
       "chain beside",
       "def _library_root_check(then" in _MODULES["setup_flow"]
-      and "_library_root_check(_readiness_after_library_root)"
+      and "_library_root_check(after_library)"
       in _K114["setup_flow"]
       and _K114["setup_flow"].count("then()") >= 4)
 check("setup_flow: the native folder sheet is deferred a tick past the "
@@ -404,8 +392,8 @@ check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
       "Lecture panel). Asked once per profile off the stale-manifest "
       "scan, and the flag is written whether the answer was yes or NO: "
       "a refused whole-collection re-embed is an answer, not a snooze",
-      "_offer_v2_index_sweep(cfg)"
-      in _func_src("setup_flow", "_readiness_check_body")
+      "_offer_v2_index_sweep(_pkg().get_config())"
+      in _func_src("setup_flow", "_readiness_after_library_root")
       and '_v2_index_sweep_offered' in _V2_SWEEP_SRC
       and "index_queue.stale_index_names()" in _V2_SWEEP_SRC
       and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC

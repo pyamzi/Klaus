@@ -6,7 +6,7 @@ Pouya: "add to index / re-index should automatically create the tags.
 also, the tags should ALWAYS follow the name of the PDF and the PDF
 should always follow the names of the tag, those two are always the
 same." The forward half (events 1-4 below) is K-053. The reverse half
-(`plan_reconcile`/`reconcile_from_tags`/`reconcile_on_profile_open`, at
+(`plan_library_sync`/`reconcile_from_tags`/`reconcile_on_profile_open`, at
 the end of this file) is K-054 — see that section's own docstrings for
 why it is INFERENCE from a before/after tag diff, never a real event.
 
@@ -80,6 +80,7 @@ and to keep this module importable under a minimal aqt stub for tests.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Callable
 
@@ -98,19 +99,9 @@ CONFIG_KEY = "library_tags_enabled"
 # stub tag_migrate.py already uses, and these three names are exactly as
 # stable as tag_migrate.TAG_RENAME_MAP's old side — they name tags that
 # already exist in shipped collections and must never quietly drift.
-# "doubtful" joined them in K-254: DOUBTFUL_TAG below is Klaus's own new
-# root tag (pertinence-rejected cards), reserved the same way so a PDF
-# literally named "Doubtful.pdf" can never collide with it either.
+# Keep "doubtful" reserved so a PDF named "Doubtful.pdf" cannot collide
+# with a tag already present in a collection.
 RESERVED_LEAVES = frozenset({"curating", "curated", "matching", "doubtful"})
-
-# The Doubtful tag (K-254, spec D5): membership is the UNION, across
-# every PDF's judged.json, of the pertinence-rejected nids that PDF
-# STILL matches at/above its threshold (`doubtful_members`, final review
-# 2026-09-17) — global, not per-PDF, unlike every other tag this module
-# manages. _do_sync_one
-# recomputes it in full (apply_membership's own diff) whenever a caller
-# hands it a `doubtful` set; passing None leaves it untouched entirely.
-DOUBTFUL_TAG = "!Library::Doubtful"
 
 _WHITESPACE_RE = re.compile(r"\s+")
 _UNDERSCORE_RUN_RE = re.compile(r"_+")
@@ -194,7 +185,7 @@ def diff_membership(desired: set[int], current: set[int]) -> tuple[list[int], li
 # fires no "tag renamed" event for that — the sidebar's rename UI is just
 # col.tags.rename() under the hood, indistinguishable from any other tag
 # mutation — so this is RECONSTRUCTION from a before/after diff of stored
-# vs. current tags, never a signal. `plan_reconcile` is the pure decision
+# vs. current tags, never a signal. `plan_library_sync` is the pure decision
 # core, fully unit-tested; `reconcile_from_tags` (aqt glue, at the end of
 # this file) is the only caller and the only thing that touches
 # col/drive_store/prefs.json for real.
@@ -257,55 +248,210 @@ def _display_with_ext(new_leaf: str, old_display: str) -> str:
     return new_leaf
 
 
-def plan_reconcile(stored_by_safe: dict[str, str], existing_tags: set[str]) -> dict:
-    """The reverse-direction decision core, pure and fully testable: no
-    col, no prefs.json, no drive_store — just "what WAS stored" (every
-    indexed PDF's ``get_stored_tag`` value) against "what tags exist
-    right now" (``col.tags.all()``).
+def folder_tag(folder: str | None) -> str:
+    """The tag a Library folder shows as: desired_tag's folder half."""
+    segments = [s for s in (_sanitize_segment(p) for p in (folder or "").split("/")) if s]
+    return "::".join(["!Library", *segments])
 
-    Per-PDF: a stored tag still present means nothing happened to it.
-    ``missing`` collects every PDF whose stored tag disappeared.
 
-    If ``missing`` is empty, the plan is a structural no-op regardless of
-    anything else — this is also Pouya's actual day-one state: an empty
-    ``stored_by_safe`` (no PDF has a stored tag yet) always plans a
-    no-op, without even needing ``existing_tags``.
+def _lib_segments(tag: str) -> list[str]:
+    parts = tag.split("::")
+    return parts[1:] if parts[:1] == ["!Library"] else parts
 
-    Otherwise, ``candidates`` is every ``!Library::``-prefixed tag that
-    IS currently in the collection, is NOT any PDF's stored tag (missing
-    OR still-present — a tag another PDF already owns is never up for
-    claiming), and is not one of the three reserved root tags
-    (``_is_reserved_tag``).
 
-    Exactly one missing PDF and exactly one candidate -> a confident
-    rename: that PDF became that tag in the sidebar. Anything else
-    (several missing, several candidates, or zero candidates for a real
-    miss) is ambiguous and NEVER guessed at — the action is "reapply",
-    meaning every missing PDF gets its deterministically-computed tag
-    restored instead (PDF wins ties: our side is deterministic, the
-    sidebar's diff is not).
+def _restore(segment: str) -> str:
+    # Same lossy underscore -> space guess as _tag_to_folder_display.
+    return segment.replace("_", " ").strip()
+
+
+def _under(folder: str | None, root: str) -> bool:
+    return bool(folder) and (folder == root or folder.startswith(root + "/"))
+
+
+def _with_parents(paths) -> set[str]:
+    out: set[str] = set()
+    for path in paths:
+        parts = [p for p in (path or "").split("/") if p]
+        for i in range(1, len(parts) + 1):
+            out.add("/".join(parts[:i]))
+    return out
+
+
+def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(), folders=(), deleted=()) -> list[dict]:
+    """K-306: what the Library must do so it and the ``!Library`` tag
+    branch agree again. Pure — every input is plain data:
+
+    - ``pdfs``: ``{safe: (folder or None, display)}``, every Library PDF.
+    - ``stored``: ``{safe: tag}``, the tag each PDF was last given.
+    - ``existing``: the collection's tags right now (``col.tags.all()``).
+    - ``nonempty`` / ``empty``: PDFs whose cached matches put at least
+      one / zero notes above threshold. A PDF in neither is unknown
+      (cold cache).
+    - ``folders``: every Library folder, empty ones included.
+    - ``deleted``: PDFs whose tag the user just deleted in the sidebar
+      (K-316: Anki's Delete is the Library's Delete PDF, even for a PDF
+      with no matched cards).
+
+    Returns actions, each a dict with a ``kind``:
+
+    - ``register``: give ``safe`` (None for an empty folder) ``tag``,
+      registering it as a zero-note tag if the collection lacks it.
+    - ``rename``: the sidebar renamed or moved one PDF's tag; the PDF
+      follows (``folder``, and ``display`` unless None = unchanged).
+    - ``folder_rename``: the sidebar renamed or moved a folder tag; the
+      folder follows with every PDF in it (``tags`` maps the ones whose
+      tag Anki moved; empty ones vanished and are re-registered).
+    - ``delete``: tags with matched cards, or ones in ``deleted``, are
+      gone with no rename to explain them. Only a confirmation may act
+      on this.
+
+    Anki refuses to rename a zero-note tag, so a vanished tag known to
+    be empty is never a rename source — that is the misrename fix: a
+    zero-match PDF's tag never existed before K-306, and one stray
+    ``!Library`` tag used to be "confidently" taken as its new name.
+    A vanished tag that is empty or unknown is housekeeping (Check
+    Database, Clear Unused Tags) and is silently re-registered.
     """
-    missing = {safe: tag for safe, tag in stored_by_safe.items() if tag not in existing_tags}
-    if not missing:
-        return {"missing": {}, "candidates": [], "action": "noop", "rename": None}
+    # Anki compares tags ignoring case and rewrites a new tag's parents
+    # to an existing row's case (register.rs adjusted_case_for_parents),
+    # so every presence test here is casefolded — an exact compare read
+    # Anki's respelling as "missing" and re-registered it forever.
+    exact = set(existing)
+    present = {t.casefold(): t for t in exact}
+    nonempty, empty, deleted = set(nonempty), set(empty), set(deleted)
+    actions: list[dict] = []
 
-    all_stored = set(stored_by_safe.values())
+    owned: dict[str, str] = {}
+    for safe in sorted(pdfs):
+        folder, display = pdfs[safe]
+        tag = stored.get(safe)
+        if not tag:
+            want = desired_tag(folder, display)
+            tag = present.get(want.casefold(), want)
+            actions.append({"kind": "register", "safe": safe, "tag": tag})
+        elif tag not in exact and tag.casefold() in present:
+            tag = present[tag.casefold()]  # adopt Anki's spelling, or this recurs
+            actions.append({"kind": "register", "safe": safe, "tag": tag})
+        owned[safe] = tag
+    missing = {s: t for s, t in owned.items() if stored.get(s) and t.casefold() not in present}
+    all_folders = _with_parents(list(folders) + [f for f, _ in pdfs.values()])
+
+    library = [t for t in present.values() if t.startswith("!Library::")]
+    taken = {t.casefold() for t in owned.values()} | {folder_tag(f).casefold() for f in all_folders}
     candidates = sorted(
-        t
-        for t in existing_tags
-        if t.startswith("!Library::") and t not in all_stored and not _is_reserved_tag(t)
+        t for t in library
+        if t.casefold() not in taken and not _is_reserved_tag(t)
+        and not any(o.casefold().startswith(t.casefold() + "::") for o in library)
     )
 
-    if len(missing) == 1 and len(candidates) == 1:
-        safe, old_tag = next(iter(missing.items()))
-        return {
-            "missing": missing,
-            "candidates": candidates,
-            "action": "rename",
-            "rename": {"safe": safe, "old": old_tag, "new": candidates[0]},
-        }
+    def leaf(tag: str) -> str:
+        return _lib_segments(tag)[-1].lower()
 
-    return {"missing": missing, "candidates": candidates, "action": "reapply", "rename": None}
+    pairable = [s for s in sorted(missing) if s not in empty]
+    pairs: dict[str, str] = {}
+    for c in candidates:
+        ms = [s for s in pairable if leaf(missing[s]) == leaf(c)]
+        if len(ms) == 1 and sum(leaf(d) == leaf(c) for d in candidates) == 1:
+            pairs[ms[0]] = c
+    rest_m = [s for s in pairable if s not in pairs]
+    rest_c = [c for c in candidates if c not in pairs.values()]
+    if len(rest_m) == 1 and len(rest_c) == 1:
+        pairs[rest_m[0]] = rest_c[0]
+
+    consumed: set[str] = set()
+    for s in sorted(pairs):
+        if s in consumed:
+            continue
+        old = [x.casefold() for x in _lib_segments(missing[s])]
+        new = [x.casefold() for x in _lib_segments(pairs[s])]
+        if old[-1] != new[-1] or old[:-1] == new[:-1]:
+            continue
+        o, n = old[:-1], new[:-1]
+        spelled = _lib_segments(pairs[s])[:-1]  # Anki's own spelling of the new folder
+        shared = 0
+        while shared < min(len(o), len(n)) and o[-1 - shared] == n[-1 - shared]:
+            shared += 1
+        raw = (pdfs[s][0] or "").split("/")
+        for j in range(shared, -1, -1):  # the highest folder that moved as a whole
+            a, b = o[: len(o) - j], n[: len(n) - j]
+            if not a or not b:
+                continue
+            old_folder = "/".join(raw[: len(a)])
+            new_folder = "/".join(_restore(x) for x in spelled[: len(b)])
+            if new_folder in all_folders:
+                continue  # an existing destination is a drag of PDFs, not a folder rename
+            under = [t for t in sorted(pdfs) if _under(pdfs[t][0], old_folder)]
+            tags = {}
+            ok = bool(under)
+            for t in under:
+                if t in pairs:
+                    ts = [x.casefold() for x in _lib_segments(missing[t])]
+                    ok = ts[: len(a)] == a and pairs[t].casefold() == "::".join(["!library", *b, *ts[len(a):]])
+                    tags[t] = pairs[t]
+                elif t in missing:
+                    ok = t not in nonempty
+                else:
+                    ok = not stored.get(t)  # a tag still in place: the folder did not move whole
+                if not ok:
+                    break
+            if ok:
+                actions.append({"kind": "folder_rename", "old": old_folder, "new": new_folder,
+                                "safes": under, "tags": tags})
+                consumed.update(under)
+                break
+
+    for s in sorted(pairs):
+        if s in consumed:
+            continue
+        old, new = _lib_segments(missing[s]), _lib_segments(pairs[s])
+        folder, display = pdfs[s]
+        new_folder = folder if old[:-1] == new[:-1] else ("/".join(_restore(x) for x in new[:-1]) or None)
+        new_display = None if old[-1] == new[-1] else _display_with_ext(_restore(new[-1]), display)
+        actions.append({"kind": "rename", "safe": s, "old": missing[s], "new": pairs[s],
+                        "folder": new_folder, "display": new_display})
+        consumed.add(s)
+
+    left = [s for s in sorted(missing) if s not in consumed]
+    gone = set(left) | {s for s in pdfs if not stored.get(s)}
+    grouped: set[str] = set()
+    deleted_folders: list[str] = []
+    for s in left:
+        if s in grouped or (s not in nonempty and s not in deleted):
+            continue
+        parts = [p for p in (pdfs[s][0] or "").split("/") if p]
+        group = None
+        for i in range(1, len(parts) + 1):  # the highest folder emptied whole
+            f = "/".join(parts[:i])
+            under = [t for t in sorted(pdfs) if _under(pdfs[t][0], f)]
+            if len(under) > 1 and all(t in gone for t in under):
+                group = (f, under)
+                break
+        if group:
+            actions.append({"kind": "delete", "folder": group[0], "safes": group[1]})
+            grouped.update(group[1])
+            deleted_folders.append(group[0])
+        else:
+            actions.append({"kind": "delete", "folder": None, "safes": [s]})
+            grouped.add(s)
+    for s in left:
+        if s not in grouped:
+            folder, display = pdfs[s]
+            actions.append({"kind": "register", "safe": s, "tag": desired_tag(folder, display)})
+    if grouped:
+        actions = [a for a in actions if not (a["kind"] == "register" and a["safe"] in grouped)]
+
+    known = _with_parents(folders)
+    for f in sorted(known):
+        if any(g.startswith(f + "/") for g in known):
+            continue  # a parent shows through its child's tag
+        if any(_under(pf, f) for pf, _ in pdfs.values()):
+            continue
+        if any(_under(f, d) for d in deleted_folders):
+            continue
+        ft = folder_tag(f)
+        if ft.casefold() not in present and not any(t.casefold().startswith(ft.casefold() + "::") for t in library):
+            actions.append({"kind": "register", "safe": None, "tag": ft})
+    return actions
 
 
 # --------------------------------------------------- col-only apply layer
@@ -423,9 +569,10 @@ def get_stored_tag(safe: str) -> str | None:
 def set_stored_tag(safe: str, tag: str) -> None:
     from . import pdf_handler, retention
 
-    prefs = retention._load_prefs()
-    prefs.setdefault(safe, {})["tag"] = tag
-    pdf_handler._atomic_write_json(retention._prefs_path(), prefs, separators=(",", ":"))
+    with retention.PREFS_LOCK:
+        prefs = retention._load_prefs()
+        prefs.setdefault(safe, {})["tag"] = tag
+        pdf_handler._atomic_write_json(retention._prefs_path(), prefs, separators=(",", ":"))
 
 
 def _folder_and_display(safe: str) -> tuple[str | None, str]:
@@ -436,26 +583,53 @@ def _folder_and_display(safe: str) -> tuple[str | None, str]:
     return entry.get("folder"), (entry.get("display") or safe)
 
 
-def _cached_matches(safe: str, cfg: dict) -> list[tuple[int, float]] | None:
-    """The current matches.json cache for `safe`, or None if it's cold,
-    missing, or invalidated (card index not ready, signature mismatch,
-    etc). None here is exactly retention.load_matches' "don't know" —
-    callers must treat it as a no-op, never as "zero matches"."""
+def _cached_matches_many(safes: list[str], cfg: dict) -> dict[str, list | None]:
+    """Each PDF's current matches.json cache, loading the card index ONCE
+    (the batch paths used to reload the whole vectors file per PDF, K-305).
+    None for a PDF whose cache is cold, missing, or invalidated — exactly
+    retention.load_matches' "don't know", which callers must treat as a
+    no-op, never as "zero matches"."""
     from . import card_index, embeddings, pdf_index, retention
 
     cfg_sig = embeddings.index_signature(cfg)
-    src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
     cidx = card_index.load(retention.INDEX_DIR)
     if cidx is None or not card_index.check_signature(cidx, cfg_sig):
-        return None
+        return {safe: None for safe in safes}
     digest = retention.card_index_digest(cidx)
-    cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
-    return cached[0] if cached is not None else None
+    out: dict[str, list | None] = {}
+    for safe in safes:
+        src_sig = pdf_index.source_signature(retention.USER_FILES, safe)
+        cached = retention.load_matches(safe, cfg_sig, cidx.dims, src_sig, digest)
+        out[safe] = cached[0] if cached is not None else None
+    return out
 
 
-def _do_sync_one(
-    col, safe: str, tag: str, desired_nids: set[int], doubtful: set[int] | None = None
-) -> dict:
+def _retag_others(col, skip_safe: str, cfg: dict) -> None:
+    """K-302: with best-lecture assignment on, re-matching one PDF can move
+    a card off (or onto) every OTHER PDF, so their tags are re-derived from
+    cache in the same op. Loads the card index once, on the op's worker."""
+    from . import retention
+
+    if retention.best_delta(cfg) is None:
+        return
+    safes = [
+        s for s, e in retention._load_prefs().items()
+        if s != skip_safe and isinstance(e, dict) and e.get("tag")
+    ]
+    if not safes:
+        return
+    for other, matches in _cached_matches_many(safes, cfg).items():
+        if matches is None:
+            continue  # cold cache: never strip a tag on missing data
+        threshold = retention.get_threshold(other, cfg)
+        folder, display = _folder_and_display(other)
+        _do_sync_one(
+            col, other, desired_tag(folder, display),
+            {nid for nid, score in matches if score >= threshold},
+        )
+
+
+def _do_sync_one(col, safe: str, tag: str, desired_nids: set[int]) -> dict:
     """The membership-diff body shared by sync_after_matches,
     sync_after_threshold, and sync_after_clear_overrides. Self-healing:
     if the stored tag exists but doesn't match the freshly computed
@@ -463,104 +637,18 @@ def _do_sync_one(
     — see module docstring), carries the old tag's members across before
     diffing, rather than leaving them orphaned under a dead tag name.
 
-    ``doubtful`` (K-254) is the GLOBAL set of pertinence-rejected nids —
-    not scoped to `safe` — so this recomputes DOUBTFUL_TAG's membership
-    in full via the same apply_membership diff, exactly like every other
-    tag here. None (the default) leaves DOUBTFUL_TAG untouched entirely,
-    which is what lets plain indexing/curating (sync_after_matches with
-    no judge pass yet run) skip it rather than wiping real verdicts.
     """
     stored = get_stored_tag(safe)
     renamed = apply_rename(col, stored, tag)
     added, removed = apply_membership(col, tag, desired_nids)
     if stored != tag:
         set_stored_tag(safe, tag)
-    doubtful_added: list[int] = []
-    doubtful_removed: list[int] = []
-    if doubtful is not None:
-        doubtful_added, doubtful_removed = apply_membership(col, DOUBTFUL_TAG, doubtful)
     return {
         "tag": tag,
         "added": added,
         "removed": removed,
         "renamed": renamed,
-        "doubtful_added": doubtful_added,
-        "doubtful_removed": doubtful_removed,
     }
-
-
-def _at_threshold_nids(safe: str, cfg: dict) -> set[int] | None:
-    """Every nid currently at or above `safe`'s sensitivity threshold, read
-    RAW from its matches.json — or None when that file cannot be read.
-
-    Raw on purpose, exactly as `pertinence._matched_pages` reads the same
-    file: the validated `retention.load_matches` answers None for every PDF
-    whose cached ranking is cold after ANY card-index change, so validating
-    here would defeat the intersection below for every PDF except the one
-    just indexed. None is "don't know", never "nobody" — a caller must
-    never strip on it.
-    """
-    import json
-    import os.path
-
-    from . import retention
-
-    try:
-        with open(retention._matches_path(safe), encoding="utf-8") as f:
-            rows = (json.load(f) or {}).get("matches") or []
-        threshold = retention.get_threshold(safe, cfg)
-        return {int(nid) for nid, score in rows if float(score) >= threshold}
-    except (OSError, ValueError, TypeError, AttributeError) as exc:
-        print(f"[klausmate] tag_sync: no readable matches for {safe!r} ({exc}) — its rejections all stand.")
-        return None
-
-
-def doubtful_members(cfg: dict) -> set[int]:
-    """DOUBTFUL_TAG's membership: every pertinence-rejected nid that is
-    STILL one of its PDF's at-threshold candidates (final review I-3).
-
-    `pertinence.all_rejected` alone unions every verdict ever written, and
-    judged.json is only ever added to — so raising a lecture's Match
-    Sensitivity (or editing a note until it stops matching) left the old
-    rejection in place and the card wearing `!Library::Doubtful` though no
-    PDF doubted it any more, with no path back: it is only re-judged if it
-    becomes that PDF's candidate again. Invisible inside Klaus (the counts
-    and "Doubtful cards…" both re-intersect) but not to a user's own search
-    or filtered deck on the bare tag. Intersecting HERE, at the one reader
-    all the sinks share, self-heals on the next sync of any kind.
-
-    The union across PDFs stays: a card rejected for A but confirmed for B
-    is still Doubtful. That is the spec's rule (and a known design debt —
-    per-card overrule is a board card), not something this narrowing
-    touches.
-
-    Never strips on missing data: a PDF whose matches.json is absent or
-    unreadable keeps its whole rejected set, and a judged.json that EXISTS
-    but cannot be read RAISES (``load_judged(strict=True)``) rather than
-    reading as "nobody rejected" — every sink catches that and passes
-    ``doubtful=None``, which leaves the tag untouched until the judge
-    rewrites the store on that PDF's next index (Copilot review of PR #4,
-    2026-09-17: the empty read was stripping members after a torn write).
-    """
-    import os
-
-    from . import pertinence, retention
-
-    user_files = retention.USER_FILES
-    out: set[int] = set()
-    try:
-        names = os.listdir(os.path.join(user_files, "pdf_index"))
-    except OSError:
-        return out
-    for safe in names:
-        if not os.path.isfile(pertinence.judged_path(user_files, safe)):
-            continue
-        rejected = pertinence.rejected_nids(pertinence.load_judged(user_files, safe, strict=True))
-        if not rejected:
-            continue
-        at_threshold = _at_threshold_nids(safe, cfg)
-        out |= rejected if at_threshold is None else (rejected & at_threshold)
-    return out
 
 
 # ------------------------------------------------------------- aqt glue
@@ -574,6 +662,13 @@ def _pkg():
 
 def _cfg() -> dict:
     return _pkg().get_config()
+
+
+# Klaus's own tag ops still in flight. A reconcile that reads the
+# collection mid-op sees tags renamed but prefs not yet updated (or the
+# reverse) and would take its own rename for the user's delete — that
+# asked Pouya to delete four freshly renamed lectures (2026-09-30).
+_own_ops = {"pending": 0}
 
 
 def _run_sync_op(
@@ -600,6 +695,7 @@ def _run_sync_op(
         return col.merge_undo_entries(pos)
 
     def done(_changes) -> None:
+        _own_ops["pending"] -= 1
         if on_done:
             on_done(result)
         if on_finished:
@@ -609,10 +705,12 @@ def _run_sync_op(
         # on_finished fires on BOTH outcomes — callers use it to sequence
         # follow-on work (curation's Browse preview) and to release the
         # pipeline busy token; skipping it on failure would deadlock that.
+        _own_ops["pending"] -= 1
         print(f"[klausmate] tag_sync: {undo_label!r} failed: {exc}")
         if on_finished:
             on_finished()
 
+    _own_ops["pending"] += 1
     CollectionOp(parent=parent, op=op).success(done).failure(fail).run_in_background()
 
 
@@ -637,7 +735,6 @@ def sync_after_matches(
     pdf_name: str,
     matches: list[tuple[int, float]] | None,
     *,
-    doubtful: set[int] | None = None,
     on_done: Callable[[], None] | None = None,
 ) -> None:
     """Event 1 — indexing/curating a PDF creates or refreshes its tag.
@@ -648,13 +745,6 @@ def sync_after_matches(
     value is never None in practice — ensure_matches raises on failure
     rather than returning None — the guard below is defense in depth only,
     matching every other event's "never strip on missing data" rule.
-
-    ``doubtful`` (K-254) is passed straight through to `_do_sync_one`;
-    None (the default — every call site above except the judge phase)
-    leaves DOUBTFUL_TAG untouched, so plain indexing never re-derives it
-    from a stale or absent judged.json. The judge phase (index_queue's
-    phase four, Task 3) is the one caller that passes
-    `doubtful_members(cfg)` here.
 
     ``on_done`` (K-064) fires exactly once when the event is SETTLED —
     after the sync op succeeds or fails, and immediately on every early
@@ -692,10 +782,15 @@ def sync_after_matches(
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
 
+        def work(col):
+            result = _do_sync_one(col, safe, tag, desired_nids)
+            _retag_others(col, safe, cfg)
+            return result
+
         _run_sync_op(
             parent,
             f"Klaus: tag “{display}” in !Library",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
+            work,
             on_done=lambda result: _tooltip_membership(parent, display, result),
             on_finished=settled,
         )
@@ -715,13 +810,6 @@ def sync_after_threshold(
     both places instead of the tag sync silently disagreeing with what
     the dialog just showed.
 
-    Doubtful (K-254) is recomputed from `doubtful_members(cfg)` here —
-    never re-judged — so dragging the sensitivity slider can never spend
-    a paid pass; it only reflects whatever verdicts already exist. That
-    read is its own try/except (K-254 review Important 2): a failure
-    there falls back to `doubtful=None` rather than aborting the retag
-    the user just confirmed — only the primary tag sync's own failure
-    (below) does that.
     """
     try:
         cfg = _cfg()
@@ -735,20 +823,10 @@ def sync_after_threshold(
         tag = desired_tag(folder, display)
         desired_nids = {nid for nid, score in matches if score >= threshold}
 
-        # K-254 review Important 2: guarded on its own, same shape as
-        # priority_rows — a failure in the AUXILIARY Doubtful read must
-        # never take down the PRIMARY retag the user just confirmed by
-        # moving the slider.
-        try:
-            doubtful = doubtful_members(cfg)
-        except Exception as exc:
-            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
-            doubtful = None
-
         _run_sync_op(
             parent,
             f"Klaus: retag “{display}” for new sensitivity",
-            lambda col: _do_sync_one(col, safe, tag, desired_nids, doubtful),
+            lambda col: _do_sync_one(col, safe, tag, desired_nids),
             on_done=lambda result: _tooltip_membership(parent, display, result),
         )
     except Exception as exc:  # noqa: BLE001
@@ -764,13 +842,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
     itself only returns a count). One undo entry for the whole batch,
     matching the folder-rename batching rule below. A PDF whose matches
     cache is cold is skipped individually (never strips that one PDF's
-    tag) without blocking the rest of the batch. Doubtful (K-254) is
-    computed ONCE from `doubtful_members(cfg)` for the whole batch —
-    never re-judged, and never per-PDF, since it is one global tag. That
-    computation is its own try/except (K-254 review Important 2,
-    mirroring sync_after_threshold above): a failure there is
-    `doubtful=None` for the whole batch, never a reason to skip the
-    retag every cleared PDF is here for.
+    tag) without blocking the rest of the batch.
     """
     try:
         cfg = _cfg()
@@ -778,17 +850,10 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
             return
         from . import retention
 
-        # K-254 review Important 2: same guard as sync_after_threshold —
-        # an auxiliary Doubtful-read failure must not cancel the whole
-        # batch's retag.
-        try:
-            doubtful = doubtful_members(cfg)
-        except Exception as exc:
-            print(f"[klausmate] tag_sync: doubtful set unavailable: {exc}")
-            doubtful = None
         plans: list[tuple[str, str, set[int]]] = []
+        cached = _cached_matches_many(list(cleared_safes), cfg)
         for safe in cleared_safes:
-            matches = _cached_matches(safe, cfg)
+            matches = cached[safe]
             if matches is None:
                 print(f"[klausmate] tag_sync: no cached matches for {safe!r} — skipped in apply-to-all retag.")
                 continue
@@ -802,7 +867,7 @@ def sync_after_clear_overrides(parent, cleared_safes: list[str]) -> None:
         def work(col):
             added = removed = 0
             for safe, tag, desired_nids in plans:
-                r = _do_sync_one(col, safe, tag, desired_nids, doubtful)
+                r = _do_sync_one(col, safe, tag, desired_nids)
                 added += len(r["added"])
                 removed += len(r["removed"])
             return {"added": added, "removed": removed, "count": len(plans)}
@@ -948,8 +1013,9 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
     from . import retention
 
     plans: list[tuple[str, str, set[int]]] = []
+    cached = _cached_matches_many(list(missing), cfg)
     for safe in missing:
-        matches = _cached_matches(safe, cfg)
+        matches = cached[safe]
         if matches is None:
             print(f"[klausmate] tag_sync: no cached matches for {safe!r} — cannot restore its !Library tag yet.")
             continue
@@ -969,83 +1035,303 @@ def _reapply_missing(col, missing: dict[str, str], cfg: dict) -> None:
     _run_sync_op(mw, "Klaus: restore !Library tags after sidebar rename", work)
 
 
+def _library_state(col):
+    from . import curation, drive_store, pdf_handler, retention
+
+    uf = curation.USER_FILES
+    tree = drive_store.build_tree(pdf_handler.list_contexts(uf), drive_store.load(uf))
+    pdfs = {
+        p["safe"]: (p["folder"], p["display"])
+        for items in (tree["root"], *tree["folders"].values())
+        for p in items
+    }
+    stored = {
+        safe: entry["tag"]
+        for safe, entry in retention._load_prefs().items()
+        if isinstance(entry, dict) and entry.get("tag")
+    }
+    return pdfs, stored, set(col.tags.all()), set(tree["folders"])
+
+
+def _membership_known(safes, cfg: dict) -> tuple[set[str], set[str]]:
+    """(nonempty, empty) from the matches cache; a cold PDF is in neither."""
+    from . import retention
+
+    nonempty: set[str] = set()
+    empty: set[str] = set()
+    for safe, matches in _cached_matches_many(list(safes), cfg).items():
+        if matches is None:
+            continue
+        threshold = retention.get_threshold(safe, cfg)
+        (nonempty if any(score >= threshold for _, score in matches) else empty).add(safe)
+    return nonempty, empty
+
+
+def _plan(col, cfg: dict) -> list[dict]:
+    pdfs, stored, existing, folders = _library_state(col)
+    missing = [s for s in pdfs if stored.get(s) and stored[s] not in existing]
+    # ponytail: the card index loads on the main thread, and only when a
+    # tag vanished; move it into a QueryOp if that ever shows as a hitch.
+    nonempty, empty = _membership_known(missing, cfg) if missing else (set(), set())
+    deleted = {s for s in missing if _deleted_by_user(stored[s])}
+    return plan_library_sync(pdfs, stored, existing, nonempty, empty, folders, deleted)
+
+
+def _library_root() -> str | None:
+    from . import pdf_handler
+
+    root = pdf_handler._live_library_root()
+    return root if root and os.path.isdir(root) else None
+
+
+def _move_pdf(safe: str, folder: str | None, display: str | None = None) -> None:
+    """One PDF follows its tag: drive_store first, then the file on disk
+    (K-075), or the next disk rescan would snap it back."""
+    from . import curation, drive_store, pdf_handler
+
+    uf = curation.USER_FILES
+    root = _library_root()
+    if display:
+        drive_store.rename_display(uf, safe, display)
+        if root:
+            pdf_handler.rename_mapped_file(uf, root, safe, display)
+    drive_store.set_folder(uf, safe, folder)
+    if root:
+        pdf_handler.move_mapped_file(uf, root, safe, folder)
+
+
+def _apply_moves(actions: list[dict]) -> bool:
+    from . import curation
+
+    moved = False
+    for a in actions:
+        try:
+            if a["kind"] == "rename":
+                _move_pdf(a["safe"], a["folder"], a["display"])
+                set_stored_tag(a["safe"], a["new"])
+                moved = True
+            elif a["kind"] == "folder_rename":
+                from . import pdf_drive
+
+                ok, why = pdf_drive.apply_folder_change(
+                    curation.USER_FILES, _library_root(), a["old"], a["new"]
+                )
+                if not ok:  # the directory would not move: move the PDFs one by one
+                    print(f"[klausmate] tag_sync: folder move {a['old']!r} -> {a['new']!r} failed ({why}); moving its PDFs")
+                    for safe in a["safes"]:
+                        folder, _ = _folder_and_display(safe)
+                        _move_pdf(safe, a["new"] + (folder or "")[len(a["old"]):])
+                for safe, tag in a["tags"].items():
+                    set_stored_tag(safe, tag)
+                moved = True
+        except Exception as exc:  # noqa: BLE001 - one bad move never blocks the rest
+            print(f"[klausmate] tag_sync: could not apply {a!r}: {exc}")
+    return moved
+
+
+def _register(regs: list[dict], existing: set[str]) -> None:
+    """Give each PDF its tag and register the zero-note ones, so a PDF
+    with no matched cards and an empty folder still show in the sidebar.
+    ``set_collapsed`` is Anki's own way to register a tag with no notes;
+    it is SkipUndo, so this op adds no undo entry."""
+    for a in regs:
+        if a["safe"]:
+            set_stored_tag(a["safe"], a["tag"])
+    have_now = {t.casefold() for t in existing}
+    tags = sorted({a["tag"] for a in regs if a["tag"].casefold() not in have_now})
+    if not tags:
+        return
+
+    def op(col):
+        have = {t.casefold() for t in col.tags.all()}
+        changes = None
+        for tag in tags:
+            if tag.casefold() not in have:
+                changes = col.tags.set_collapsed(tag, False)
+        if changes is None:
+            from anki.collection import OpChanges
+
+            changes = OpChanges()
+        return changes
+
+    def settle(*_a) -> None:
+        _own_ops["pending"] -= 1
+
+    def failed(exc: Exception) -> None:
+        settle()
+        print(f"[klausmate] tag_sync: registering Library tags failed: {exc}")
+
+    _own_ops["pending"] += 1
+    CollectionOp(parent=mw, op=op).success(settle).failure(failed).run_in_background()
+
+
+_prompt = {"open": False}
+_user_deleted: dict = {"tags": set(), "at": 0.0}
+USER_DELETE_WINDOW_S = 120
+
+
+def note_user_deleted(tags) -> None:
+    """Called by the sidebar just before Anki removes these tags. A
+    vanished tag is only ever a DELETE when the user did this; any other
+    disappearance (a sync mid-flight, Check Database, another add-on) is
+    restored instead."""
+    import time
+
+    _user_deleted["tags"] = {t.casefold() for t in tags if t}
+    _user_deleted["at"] = time.monotonic()
+
+
+def _deleted_by_user(tag: str | None) -> bool:
+    import time
+
+    if not tag or time.monotonic() - _user_deleted["at"] > USER_DELETE_WINDOW_S:
+        return False
+    key = tag.casefold()
+    return any(key == d or key.startswith(d + "::") for d in _user_deleted["tags"])
+
+
+def _ask(text: str, on_yes: Callable[[], None], on_no: Callable[[], None]) -> None:
+    """K-125: an instance, open(), and the answer from finished — never
+    an exec. No is the default: this deletes files."""
+    from aqt.qt import QMessageBox
+
+    box = QMessageBox(mw)
+    box.setWindowTitle("Delete PDF")
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(text)
+    box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    box.setDefaultButton(QMessageBox.StandardButton.No)
+    try:
+        from . import theme
+
+        box.button(QMessageBox.StandardButton.Yes).setObjectName("DangerButton")
+        box.button(QMessageBox.StandardButton.No).setObjectName("SecondaryButton")
+        box.setStyleSheet(theme.dialog_qss(theme.night_mode()))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] delete prompt theme failed: {exc}")
+
+    def answered(_result: int) -> None:
+        yes = box.standardButton(box.clickedButton()) == QMessageBox.StandardButton.Yes
+        box.deleteLater()
+        (on_yes if yes else on_no)()
+
+    box.finished.connect(answered)
+    box.open()
+
+
+def _confirm_deletes(col, deletes: list[dict], cfg: dict) -> None:
+    """A tag with matched cards was deleted in the sidebar. Yes deletes
+    the PDFs (files to the Trash); No puts the tags back."""
+    safes = [s for a in deletes for s in a["safes"]]
+    if len(deletes) == 1 and deletes[0]["folder"]:
+        text = f"You deleted the “{deletes[0]['folder']}” tag. Delete the {len(safes)} PDFs in it too?"
+    elif len(safes) == 1:
+        text = f"You deleted the tag for “{strip_pdf_ext(_folder_and_display(safes[0])[1])}”. Delete the PDF too?"
+    else:
+        text = f"You deleted the tags for {len(safes)} PDFs. Delete the PDFs too?"
+    text += "\n\nYes moves the files to the Trash. No puts the tags back."
+
+    def settle() -> None:
+        _prompt["open"] = False
+        _schedule_reconcile()  # tag changes made while the prompt was up
+
+    def yes() -> None:
+        from . import pdf_drive
+
+        for safe in safes:
+            pdf_drive.delete_pdf(safe)
+        for a in deletes:
+            if a["folder"]:
+                pdf_drive.delete_folder(a["folder"])
+        settle()
+
+    def no() -> None:
+        stored = {s: t for s in safes if (t := get_stored_tag(s))}
+        _reapply_missing(col, stored, cfg)
+        settle()
+
+    _prompt["open"] = True
+    _ask(text, yes, no)
+
+
 def reconcile_from_tags(col) -> dict:
-    """Event 5 — the REVERSE direction of THE INVARIANT (K-054): a tag
-    renamed in Anki's own tag sidebar renames the PDF in the Library.
-    Call with ``mw.col`` — callers own the None-check, exactly like every
-    ``_do_sync_one`` caller above owns handing this a real collection.
-
-    Registration owed:
-      - ``gui_hooks.profile_did_open.append(tag_sync.reconcile_on_profile_open)``
-        next to tag_migrate's own hook (__init__.py, out of this card's
-        file scope — see ``reconcile_on_profile_open`` below).
-      - ``pdf_drive.DriveWindow._refresh_rows`` calls this directly at
-        the top (in this card's scope), so opening or refreshing the
-        Library also picks up sidebar renames.
-
-    See ``plan_reconcile`` for the ambiguity rules this enforces (the
-    actual decision logic, pure and fully unit-tested). This function is
-    the thin, deferred-import glue around it: load every PDF's stored tag
-    from prefs.json, diff against ``col.tags.all()``, then either
-
-    (a) a confident single-candidate rename — pure drive_store/prefs.json
-        writes, no CollectionOp at all, since Anki's own sidebar rename
-        already moved every note's tag; nothing here touches col.tags —
-        or
-    (b) an ambiguous reapply — routed through ``_run_sync_op`` exactly
-        like every forward event, because that path DOES mutate
-        col.tags (recreating membership from cached scores). Never a
-        second CollectionOp path (see module docstring's OpChanges
-        contract note).
-
-    Never raises: wrapped the same way every other public event in this
-    module is, so a bug here can never block a profile open or a Library
-    refresh. Returns a plain dict describing what happened ({} when
-    there was nothing to reconcile, including the kill-switch/no-stored-
-    tag/failure cases) — never anything from CollectionOp.
+    """The REVERSE direction of THE INVARIANT (K-054, rebuilt K-306): the
+    ``!Library`` tag branch in Browse's sidebar IS the Library, so what
+    happened to a tag there happens to the PDF. Runs on profile open,
+    after every operation that changed tags (``on_operation_did_execute``)
+    and at the top of a Library refresh. ``plan_library_sync`` decides;
+    this applies: moves and renames first (drive_store, prefs, the file
+    on disk), then a second plan for what the moves left — registering
+    zero-note tags, and confirming deletes. Never raises. Returns
+    ``{"actions": [...]}``, or ``{}`` when switched off or on failure.
     """
     try:
         cfg = _cfg()
         if not library_tags_enabled(cfg):
             return {}
-        from . import retention
-
-        prefs = retention._load_prefs()
-        stored_by_safe = {
-            safe: entry.get("tag")
-            for safe, entry in prefs.items()
-            if isinstance(entry, dict) and entry.get("tag")
-        }
-        if not stored_by_safe:
-            return {}  # e.g. Pouya's current state: no PDF has a stored tag yet
-
-        plan = plan_reconcile(stored_by_safe, set(col.tags.all()))
-        if plan["action"] == "noop":
-            return plan
-
-        if plan["action"] == "rename":
-            from . import curation, drive_store
-
-            r = plan["rename"]
-            safe, old_tag, new_tag = r["safe"], r["old"], r["new"]
-            folder, leaf = _tag_to_folder_display(new_tag)
-            _, old_display = _folder_and_display(safe)
-            drive_store.rename_display(curation.USER_FILES, safe, _display_with_ext(leaf, old_display))
-            drive_store.set_folder(curation.USER_FILES, safe, folder)
-            set_stored_tag(safe, new_tag)
-            print(f"[klausmate] tag_sync: reconciled sidebar rename — {safe!r}: {old_tag!r} -> {new_tag!r}")
-            return plan
-
-        print(
-            f"[klausmate] tag_sync: ambiguous tag reconciliation "
-            f"({len(plan['missing'])} missing, {len(plan['candidates'])} candidate(s)) "
-            "— reapplying the forward direction instead of guessing."
-        )
-        _reapply_missing(col, plan["missing"], cfg)
-        return plan
+        actions = _plan(col, cfg)
+        if _apply_moves(actions):
+            actions = _plan(col, cfg)
+        regs = [a for a in actions if a["kind"] == "register"]
+        if regs:
+            _register(regs, set(col.tags.all()))
+        deletes, restore = [], {}
+        for a in actions:
+            if a["kind"] != "delete":
+                continue
+            stored = {s: get_stored_tag(s) for s in a["safes"]}
+            if all(_deleted_by_user(t) for t in stored.values() if t):
+                deletes.append(a)
+            else:
+                restore.update({s: t for s, t in stored.items() if t})
+        if restore:
+            print(f"[klausmate] tag_sync: restoring {len(restore)} tag(s) that vanished without a sidebar delete")
+            _reapply_missing(col, restore, cfg)
+        if deletes and not _prompt["open"]:
+            _user_deleted["tags"] = set()  # one delete, one question
+            _confirm_deletes(col, deletes, cfg)
+        return {"actions": actions}
     except Exception as exc:  # noqa: BLE001 - never block a profile open or a Library refresh
         print(f"[klausmate] tag_sync: reconcile_from_tags failed: {exc}")
         return {}
+
+
+_debounce: dict = {"timer": None}
+
+
+def _reconcile_now() -> None:
+    if _prompt["open"] or mw is None or getattr(mw, "col", None) is None:
+        return
+    if _own_ops["pending"] > 0:
+        _schedule_reconcile()  # read the collection only once our ops landed
+        return
+    reconcile_from_tags(mw.col)
+
+
+def _schedule_reconcile() -> None:
+    """Debounced, so a drag of twenty tags is one reconcile."""
+    if mw is None:
+        return
+    try:
+        if _debounce["timer"] is None:
+            from aqt.qt import QTimer
+
+            timer = QTimer(mw)
+            timer.setSingleShot(True)
+            timer.setInterval(300)
+            timer.timeout.connect(_reconcile_now)
+            _debounce["timer"] = timer
+        _debounce["timer"].start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] tag_sync: could not schedule a reconcile: {exc}")
+
+
+def on_operation_did_execute(changes, handler) -> None:
+    """``operation_did_execute``: any op that touched tags (a sidebar
+    rename, drag or delete, undo, Check Database's reset, or one of
+    ours, which then plans nothing) is followed by a reconcile."""
+    if getattr(changes, "tag", False):
+        _schedule_reconcile()
 
 
 def reconcile_on_profile_open() -> None:

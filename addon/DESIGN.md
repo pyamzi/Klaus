@@ -31,7 +31,7 @@ typography:
   page-title:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
     fontSize: "24px"
-    fontWeight: 800
+    fontWeight: 600
   heading:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
     fontSize: "14px"
@@ -69,14 +69,14 @@ components:
     backgroundColor: "{colors.system-blue}"
     textColor: "#FFFFFF"
     rounded: "{rounded.control}"
-    padding: "6px 16px"
+    padding: "6px 14px"
   button-primary-hover:
     backgroundColor: "#0062C4"
   button-secondary:
     backgroundColor: "{colors.fog-border}"
     textColor: "{colors.ink}"
     rounded: "{rounded.control}"
-    padding: "6px 16px"
+    padding: "6px 14px"
   chip-toolbar:
     backgroundColor: "transparent"
     textColor: "{colors.ink-muted}"
@@ -215,7 +215,7 @@ standardized door.
 ### Hierarchy
 - **Wordmark** (300, 18px): "KlausMate" in light Garamond, sidebar and
   identity moments only. The lightness is the point.
-- **Page Title** (800, 24px): one per settings page ("General",
+- **Page Title** (600, 24px): one per settings page ("General",
   "Appearance"…).
 - **Heading** (700, 14px): section/card headings (SubHeaderLabel,
   InstallHeading).
@@ -303,9 +303,8 @@ imperfection deliberately preserved.
 ## Components
 
 ### Buttons
-- **Shape:** softly rounded (8px), 6px 16px padding, weight 600.
-- **Primary:** System Blue fill, white text — the *default* in dialogs;
-  a button is primary unless it opts out.
+- **Shape:** softly rounded (8px), 6px 14px padding, weight 600.
+- **Primary:** System Blue fill and white text for the default action or an explicit `PrimaryButton`. Utility actions use a quiet neutral fill.
 - **SecondaryButton (opt-out):** Fog Border fill, Ink text; hover
   deepens through Fog Mid to Fog Deep pressed.
 - **DangerButton:** soft red ground (#FFEBEB) with red text; fills
@@ -314,8 +313,7 @@ imperfection deliberately preserved.
 - **Disabled:** every `:disabled` rule repeats the id selector it must
   beat (`QPushButton#SecondaryButton:disabled`) — an id outranks a
   pseudo-state, and an inert control MUST look inert.
-- **Library window inverts:** grey is the default there, `PrimaryButton`
-  is the opt-in — a browsing surface, not a form.
+- **Library window:** neutral controls with explicit `PrimaryButton` emphasis, consistent with dialogs.
 
 ### Chips (toolbar / bottom bar)
 - **Style:** transparent at rest, Ink Muted 13px/600 text, 8px radius,
@@ -411,3 +409,8 @@ imperfection deliberately preserved.
 - **Don't** fork backgrounds or text per accent theme, and don't let
   any accent state read as a loud solid block where a translucent tint
   is the established voice.
+
+
+## Apple design application
+
+See [the cross-surface application notes](docs/reference/apple-design.md) for action hierarchy, immediate feedback, keyboard focus, material fallbacks, and the native/web boundary.

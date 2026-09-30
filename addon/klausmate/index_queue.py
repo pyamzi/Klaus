@@ -13,28 +13,17 @@ flag, status label, ``_on_progress`` and Cancel button. A PDF dropped on
 the deck screen has no Library window, so none of that is reachable from
 where most PDFs now arrive. So the phase chain moved here whole —
 ``curation.ensure_index`` → ``retention.ensure_pdf_index`` →
-``retention.ensure_matches`` → ``pertinence.ensure_judged`` →
-``tag_sync.sync_after_matches``, with the
+``retention.ensure_matches`` → ``tag_sync.sync_after_matches``, with the
 cancel token threaded through exactly as K-146 left it — and the Library
 became one more CALLER. There is exactly one copy of that sequence in
 the addon; a second one would drift (K-143's two-renderer lesson).
 
-**Each phase still takes ``curation._busy`` in turn** rather than one
-held token across the run — with ONE exception: phase four
-(``pertinence.ensure_judged``) never touches it at all (K-255's review,
-finding I1). That is K-146's finding, not an oversight: the
+**Each indexing phase takes ``curation._busy`` in turn** rather than one
+held token across the run. That is K-146's finding, not an oversight: the
 cancellation branches return without releasing, so a caller-held token
 would leak and brick indexing for the rest of the session.
 Serialisation across jobs is the queue below, not the token. Phase
-four's own wait — the Judge/Skip dialog, then however long the
-Anthropic batches take — runs at the user's own pace and can sit open
-for minutes; holding the token across an interactive dialog is exactly
-the shape of leak the previous sentence warns about, so it is left
-free for that stretch instead. The one visible consequence: Preferences'
-**Index Now** can start a concurrent card-index embed where every other
-phase would have refused it — different files, different resources, no
-data corruption, just a documented gap in the "each phase takes it in
-turn" rule above.
+four writes the tags after matching.
 
 **A queue, not a race.** Ten dropped PDFs are ten legitimate requests.
 ``curation._busy`` REFUSES a concurrent run — correct for a user
@@ -44,8 +33,7 @@ here and the token is never contended by us. Duplicates collapse
 its turn is dropped silently, checked at start time rather than trusting
 a delete path to call us.
 
-**Feedback is the shippable part.** Embedding is a paid cloud call by
-default and a model sweep is minutes of work, so a job must be visible
+**Feedback is the shippable part.** Local embedding can take minutes, so a job must be visible
 and stoppable from wherever it was started. The Library has a status
 line and a Cancel button; the deck screen has neither, and a toast is
 not a progress display. So the runner publishes ONE ``RunnerState`` to
@@ -58,10 +46,8 @@ two surfaces. Nothing is ever started silently: a single add tooltips
 and shows the bar, and a whole-library sweep asks first, in notes and
 PDFs, before spending anything.
 
-**Gates.** No profile, no run (``mw.col`` is None until one opens). No
-API key for a cloud provider, no run — an auto-index that fails silently
-on every drop would be worse than the button it replaces, so the refusal
-is a message, not a shrug. And a cancelled or failed job leaves nothing
+**Gates.** No profile, no run (``mw.col`` is None until one opens).
+A cancelled or failed job leaves nothing
 that later reads as complete: the phases persist partial work as
 explicitly partial (``card_index`` writes its manifest after its
 vectors, ``pdf_index.is_fresh`` is False while ``embedded_rows`` trails
@@ -80,7 +66,7 @@ import os
 import threading
 from typing import Any, Callable, NamedTuple
 
-from . import embeddings, plus
+from . import embeddings
 
 # A job is a plain ``(kind, name)`` tuple; name is "" for JOB_CARDS.
 JOB_CARDS = "cards"  # refresh the card index alone (a sweep with no PDFs)
@@ -113,22 +99,6 @@ def auto_index_enabled(cfg: dict) -> bool:
     if not isinstance(cfg, dict) or CONFIG_KEY not in cfg:
         return True
     return _truthy(cfg.get(CONFIG_KEY))
-
-
-def missing_key_provider(cfg: dict) -> str:
-    """The cloud provider whose API key is missing, or "" when ready.
-
-    The PURE half of ``setup_flow._embedding_ready`` — it checks only
-    what is free to check, a key is a string in config, so ten dropped
-    PDFs cost nothing on the main thread. Since 2026-09-15 (K-226) there
-    is exactly one embedding provider, so the name it returns is a
-    constant rather than a per-provider lookup.
-    """
-    if not isinstance(cfg, dict):
-        return ""
-    if plus.key(cfg):
-        return ""
-    return "" if str(cfg.get("api_key_openai") or "").strip() else "OpenAI"
 
 
 # ── pure: the queue ──────────────────────────────────────────────────────
@@ -203,7 +173,7 @@ class RunnerState(NamedTuple):
     kind: str = ""
     name: str = ""  # display label of the running job
     label: str = ""  # phase label from the pipeline ("Embedding PDF…")
-    phase: str = ""  # "" for the K-146 chain phases; "judge" for pertinence
+    phase: str = ""  # no separate phase value in the four-phase chain
     done: int = 0
     total: int = 0
     pending: int = 0  # jobs still waiting behind this one
@@ -219,10 +189,7 @@ def status_line(state: RunnerState) -> str:
     if state.label:
         head = f"{head} — {state.label}"
     if state.total:
-        # The judge phase counts cards, not percent complete — "judging
-        # 12/40" says something a rounded percentage would flatten (how
-        # much work, not just how far along).
-        progress = f"{state.done}/{state.total}" if state.phase == "judge" else f"{round(state.done * 100 / state.total)}%"
+        progress = f"{round(state.done * 100 / state.total)}%"
         head = f"{head} {progress}"
     if state.pending:
         head = f"{head}  ·  {state.pending} more queued"
@@ -236,33 +203,24 @@ def dock_button_label(snapshot: RunnerState) -> str:
     return "Stop" if snapshot.active else "Dismiss"
 
 
-def sweep_message(n_pdfs: int, n_notes: int, model: str, estimate: str, plus: bool = False) -> str:
-    """The confirm text for a model change. Never start a sweep without
-    saying how much work it is AND what it costs: a changed model
-    invalidates every stored vector, so this is a from-scratch re-embed
-    of the whole collection, billed per token to the user's own OpenAI
-    key. ``estimate`` is cost.format_estimate's own string, carried
-    verbatim — this module never formats money itself. On Klaus Plus
-    embeddings are unmetered, so ``estimate`` is ignored and the line
-    says so instead of pricing a call that costs the user nothing."""
-    pdfs = "1 PDF" if n_pdfs == 1 else f"{n_pdfs:,} PDFs"
+def sweep_message(n_pdfs: int, n_notes: int, model: str) -> str:
     notes = "1 note" if n_notes == 1 else f"{n_notes:,} notes"
-    price = "included in Klaus Plus, no charge.\n\n" if plus else f"{estimate}, billed to your OpenAI key.\n\n"
+    pdfs = "1 PDF" if n_pdfs == 1 else f"{n_pdfs:,} PDFs"
     return (
         f"Re-index everything with {model}?\n\n"
-        f"{notes} and {pdfs} will be embedded again from scratch — "
-        f"{price}"
-        # Declining does NOT prevent the spend this priced: the next PDF
-        # add runs curation.ensure_index as phase one and embeds every
-        # note from scratch, unpriced and unconfirmed. Before the
-        # API-first turn that path was free (a local engine); now it
-        # bills the same key this dialog just asked about, so "No" has
-        # to say what it really means. K-237 is the queue-side confirm
-        # that would let it mean "and free".
-        "If you decline, the card index is still rebuilt — unpriced — "
-        "the first time a PDF is indexed.\n\n"
-        "You can stop it at any time from the bar at the bottom of the "
-        "main window."
+        f"{notes} and {pdfs} will be embedded again locally. "
+        "This may take a while. If you decline, the card index is rebuilt "
+        "when a PDF is next indexed, with confirmation.\n\n"
+        "You can stop it at any time from the bar at the bottom of the main window."
+    )
+
+
+def card_index_confirm_message(pdf_label: str) -> str:
+    return (
+        f"Indexing “{pdf_label}” needs to rebuild your whole card index locally first. "
+        "This may take a while. Skip to add this PDF anyway: matching against your cards "
+        "stays degraded until the card index is rebuilt (Preferences' Index Now, "
+        "or the next model sweep, will finish it)."
     )
 
 
@@ -273,14 +231,6 @@ def queued_message(name: str, ahead: int) -> str:
     if ahead <= 0:
         return f"KlausMate: indexing “{name}”"
     return f"KlausMate: “{name}” queued for indexing — {ahead} ahead of it"
-
-
-def missing_key_message(provider: str) -> str:
-    return (
-        f"KlausMate can't index yet — add your {provider} API key in "
-        "KlausMate Preferences → API keys & models, or subscribe to "
-        "Klaus Plus."
-    )
 
 
 # ── aqt glue ─────────────────────────────────────────────────────────────
@@ -323,7 +273,6 @@ _state = RunnerState()
 _listeners: list[Callable[[RunnerState], None]] = []
 _dock: Any = None
 _hide_gen = 0
-_key_warned = False
 _waits = 0
 
 IDLE_HIDE_MS = 8000
@@ -346,6 +295,14 @@ def _cfg() -> dict:
 
 
 # ── listeners + published state ──────────────────────────────────────────
+
+
+def pending_names() -> set[str]:
+    """Safe names of the PDF being indexed now plus every queued one."""
+    names = {name for kind, name in _queue.snapshot() if kind == JOB_PDF}
+    if _current is not None and _current[0] == JOB_PDF:
+        names.add(_current[1])
+    return names
 
 
 def add_listener(fn: Callable[[RunnerState], None]) -> None:
@@ -386,21 +343,11 @@ def _publish(new: RunnerState) -> None:
 def request(jobs: list[tuple[str, str]], *, announce: bool = True) -> int:
     """Queue jobs and start pumping. Returns how many were newly queued.
 
-    THE gate wall, in one place so no caller can skip half of it: no
-    profile, no cloud key, nothing runs. Both refusals publish, so
-    whichever surface is open says why instead of appearing to work.
+    A profile must be open. Local provider failures are reported by the worker.
     """
-    global _key_warned, _waits
+    global _waits
     if mw is None or getattr(mw, "col", None) is None:
         return 0  # nothing runs before the profile is open
-    provider = missing_key_provider(_cfg())
-    if provider:
-        msg = missing_key_message(provider)
-        _publish(RunnerState(message=msg))
-        if not _key_warned:
-            _key_warned = True  # ten drops must not stack ten tooltips
-            tooltip(msg, period=6000)
-        return 0
     added = 0
     for job in jobs:
         if job == _current:
@@ -442,7 +389,7 @@ def cancel_all() -> None:
     Bumping ``_seq`` is what makes this safe rather than merely
     requested: every continuation below checks it first, so the phase
     already in flight finishes into a discarded callback. That matters
-    most at ``after_matches`` — ``ensure_matches`` hands back a PARTIAL
+    most at the match callback — ``ensure_matches`` hands back a PARTIAL
     ranking when cancelled (deliberately uncached), and tagging on it
     would silently shrink the PDF's ``!Library`` tag.
     """
@@ -572,13 +519,12 @@ def _run(job: tuple[str, str]) -> None:
     refreshes the CARD index, and everything that matches notes against
     a PDF reads it: skip it and every note written since the last pass
     is invisible to ``ensure_matches``, and the PDF's tag under-covers
-    with no error at all (K-146's whole point). Five phases now, not
-    four: ``pertinence.ensure_judged`` runs between ``ensure_matches``
-    and the tag write (module docstring's chain; I1 in K-255's review
-    is why it does not take ``curation._busy`` like the other three).
+    with no error at all (K-146's whole point). The four phases are
+    ``ensure_index``, ``ensure_pdf_index``, ``ensure_matches``, and
+    ``tag_sync.sync_after_matches``.
     """
     global _cancel, _seq
-    from . import curation, pertinence, retention, tag_sync
+    from . import curation, retention, tag_sync
 
     kind, name = job
     _seq += 1
@@ -604,46 +550,14 @@ def _run(job: tuple[str, str]) -> None:
             return
         _fail(exc)
 
-    def after_judged(rejected: set[int], matches: Any) -> None:
-        if not live():
-            return
-        # The Doubtful read is guarded ON ITS OWN, the same shape
-        # sync_after_threshold/sync_after_clear_overrides use: an auxiliary
-        # failure there must never cost this PDF the lecture-tag write it
-        # was indexed for. doubtful=None leaves the tag untouched.
-        try:
-            doubtful = tag_sync.doubtful_members(_cfg())
-        except Exception as exc:
-            print(f"[klausmate] doubtful set unavailable: {exc}")
-            doubtful = None
-        try:
-            tag_sync.sync_after_matches(mw, name, matches, doubtful=doubtful)
-        except Exception as exc:
-            print(f"[klausmate] tag sync after index failed: {exc}")
-        _job_done(f"Indexed “{label}”.", finished=name)
-
     def after_matches(matches: Any) -> None:
         if not live():
             return
         try:
-            pertinence.ensure_judged(
-                mw,
-                name,
-                matches,
-                on_done=lambda rejected: after_judged(rejected, matches),
-                on_error=on_error,
-                cancel=cancel,
-                on_progress=lambda text, d, t: _publish(_state._replace(phase="judge", label=text, done=d, total=t)) if live() else None,
-                ask=ask_judge,
-            )
+            tag_sync.sync_after_matches(mw, name, matches)
         except Exception as exc:
-            # Belt to pertinence's own defenses (fix round 1, C1): whatever
-            # got past them must not skip the tag write or leave _current
-            # set forever — every queued and future PDF would silently stop
-            # indexing until Stop or a restart. Untagged pertinence beats a
-            # wedged queue; the next index pass re-judges from scratch.
-            print(f"[klausmate] pertinence phase failed, cards left unjudged: {type(exc).__name__}: {exc}")
-            after_judged(set(), matches)
+            print(f"[klausmate] tag sync after index failed: {exc}")
+        _job_done(f"Indexed “{label}”.", finished=name)
 
     def after_pdf_index(idx: Any) -> None:
         if not live():
@@ -683,6 +597,36 @@ def _run(job: tuple[str, str]) -> None:
             cancel=cancel,
         )
 
+    def start_card_index() -> None:
+        curation.ensure_index(
+            mw,
+            on_progress=prog,
+            on_done=after_card_index,
+            on_error=on_error,
+            cancel=cancel,
+        )
+
+    def card_index_answered(embed: bool) -> None:
+        if not live():
+            return
+        if embed:
+            start_card_index()
+            return
+        # K-237's decline behaviour: continue without the embed. The rest
+        # of the chain still runs, against whatever card
+        # index already exists on disk (stale or empty) rather than the
+        # fresh one the user just declined to pay for — matching this PDF
+        # against recently added/edited cards is degraded until the index
+        # is rebuilt, but the PDF still gets its own pages embedded,
+        # matched and tagged. A raise or a silent hang here would be worse
+        # than a documented degradation.
+        _publish(
+            _state._replace(
+                label="Card index embed skipped — matching may miss recent cards."
+            )
+        )
+        after_card_index(None, True)
+
     _publish(
         RunnerState(
             active=True,
@@ -692,13 +636,20 @@ def _run(job: tuple[str, str]) -> None:
             pending=_queue.pending(),
         )
     )
-    curation.ensure_index(
-        mw,
-        on_progress=prog,
-        on_done=after_card_index,
-        on_error=on_error,
-        cancel=cancel,
-    )
+    cfg = _cfg()
+    # The confirm guards only the SILENT auto-index-on-add path (a single
+    # PDF's own phase one) — never a JOB_CARDS entry, which only ever
+    # reaches this queue via offer_model_sweep's OWN priced confirm
+    # (Preferences Save); asking again here would double-prompt for a
+    # spend the user already approved.
+    if kind != JOB_PDF or not card_index_from_scratch(cfg):
+        start_card_index()
+    else:
+        ask_card_index_confirm(
+            mw,
+            card_index_confirm_message(label),
+            card_index_answered,
+        )
 
 
 def _job_done(message: str, finished: str = "") -> None:
@@ -712,7 +663,7 @@ def _job_done(message: str, finished: str = "") -> None:
 
 def _job_stopped() -> None:
     """A phase reported partial work. Stop the whole run rather than
-    burning a paid API on the jobs behind it."""
+    repeating failed local work for the jobs behind it."""
     global _current
     _current = None
     dropped = _queue.clear()
@@ -723,9 +674,9 @@ def _job_stopped() -> None:
 
 
 def _fail(exc: Exception) -> None:
-    """One failure ends the run. OpenAI being down would fail all ten
+    """One failure ends the run. Ollama being down would fail all ten
     queued jobs identically; ten identical errors is not information,
-    and each attempt is a billable request.
+    and each attempt repeats the same local failure.
 
     ONE exception to that: a PDF deleted while it was the running job
     fails with "no stored text", which says nothing about the nine
@@ -824,6 +775,27 @@ def stale_index_names() -> list[str]:
     return names
 
 
+def stale_match_names() -> list[str]:
+    """K-302: PDFs whose matches.json was written by an older
+    MATCHES_VERSION (scores on the old raw-cosine scale). Re-matching them
+    costs no embedding when their indexes are current, and it is what
+    re-tags each PDF at the new threshold. A PDF never matched is not
+    stale — there is nothing on disk to refresh."""
+    from . import retention
+
+    names: list[str] = []
+    for name, manifest in _manifest_paths():
+        path = os.path.join(os.path.dirname(manifest), retention.MATCHES_FILE)
+        try:
+            with open(path, encoding="utf-8") as f:
+                version = json.load(f).get("version")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if version != retention.MATCHES_VERSION:
+            names.append(name)
+    return names
+
+
 def signature_changed(previous: tuple, current: tuple) -> bool:
     """Did the embedding settings move under the stored vectors?
 
@@ -842,71 +814,39 @@ def signature_changed(previous: tuple, current: tuple) -> bool:
         return False
 
 
-def sweep_estimate(names: list[str]) -> Any:
-    """What re-embedding everything would cost, as a ``cost.Estimate``.
+def card_index_from_scratch(cfg: dict) -> bool:
+    """K-237: is ``curation.ensure_index`` about to re-embed the WHOLE card
+    index rather than diff it — no manifest on disk yet, or its stored
+    signature no longer matches the configured provider/model/dims?
 
-    Every note's field text plus every PAGE of every swept PDF — the
-    page store is what gets embedded now, so a chunking of the raw text
-    file would be counting the wrong thing. The note half is ONE SQL
-    scalar rather than a walk of the collection: this runs on the main
-    thread, inside Save, with the user waiting.
-
-    Raises (KeyError) for a model with no published price in cost.PRICES
-    — deliberately, rather than quietly pricing a hand-typed model as
-    some other one. ``offer_model_sweep`` catches it and says so.
+    The exact condition ``offer_model_sweep`` already gates its own priced
+    confirm on, read here from ``curation.index_stats()`` (manifest-only,
+    no vector load — cheap enough for the phase-one call site this backs,
+    which runs on every silent auto-index-on-add). Comparison is always
+    ``signature_changed``/``embeddings.signature_matches``, never a
+    hand-spelled tuple check, for the same reason spelled out there.
     """
-    from . import cost, page_store, pdf_handler
+    from . import curation
 
-    chars = 0
-    # A failed scalar here must NOT degrade to a cheap $0 estimate — it
-    # propagates (like the price-lookup KeyError above it) so
-    # offer_model_sweep's own catch reads it as "cost unknown", never
-    # as a priced re-embed that costs real money for the wrong reason.
-    chars += int(
-        mw.col.db.scalar("select coalesce(sum(length(flds)),0) from notes") or 0
-    )
-    for name in names:
-        try:
-            safe = pdf_handler._safe_basename(name)
-            pages = pdf_handler.load_pages(_user_files(), name) or []
-            path = pdf_handler.pdf_path_for(_user_files(), safe) or ""
-            # ponytail: one JSON read per page on the main thread inside
-            # Save; a QueryOp if libraries reach ~10k pages.
-            rows = page_store.page_texts(_user_files(), safe, path, len(pages))
-            stored = sum(len(t) for _p, _h, t in rows)
-            chars += stored or sum(len(p) for p in pages)
-        except Exception as exc:
-            print(f"[klausmate] page-text size unavailable for {name}: {exc}")
-    return cost.estimate_embed(chars, embeddings.embedding_model(_cfg()))
+    try:
+        stats = curation.index_stats()
+    except Exception as exc:
+        print(f"[klausmate] card-index stats unavailable: {exc}")
+        return False  # a bookkeeping hiccup must not manufacture a confirm
+    if not stats.get("exists"):
+        return True
+    current = embeddings.index_signature(cfg)
+    stored = (stats.get("provider", ""), stats.get("model", ""), stats.get("dims", 0))
+    return signature_changed(stored, current)
 
 
-def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> bool:
-    """Preferences → Save changed the model, or set the API key for the
-    first time: offer to re-index.
-
-    ``first_key`` exists because the signature does NOT move when a user
-    finally pastes their key — nothing was ever embedded, so there is
-    nothing to compare — and that is precisely the moment the offer is
-    most useful. Rotating an existing key is not a first key: those
-    vectors are still valid, and re-embedding them would be a bill for
-    nothing.
-
-    A stale-version manifest on disk is the third trigger, for the same
-    reason (K-236): an upgrade to pdf_index v2 moves no signature either,
-    yet every one of those indexes now reads as absent.
-    ``setup_flow`` calls this once per profile on that ground alone.
-
-    Returns True when the question was actually asked. Window-modal via
-    ``open()`` and a ``finished`` callback — K-114: ``exec()`` on a
-    static (question/askUser) runs a nested app-modal loop that segfaults
-    on Qt 6.11 + macOS 26, and this dialog is raised from a NON-modal
-    Preferences window that stays usable behind it.
-    """
+def offer_model_sweep(parent: Any, previous: tuple) -> bool:
+    """Offer a local rebuild for a changed model or stale index manifests."""
     if mw is None or getattr(mw, "col", None) is None:
         return False
     current = embeddings.index_signature(_cfg())
     if not (
-        first_key or signature_changed(previous, current) or stale_index_names()
+        signature_changed(previous, current) or stale_index_names()
     ):
         return False
     names = indexed_pdf_names()
@@ -914,22 +854,7 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
         note_count = mw.col.note_count()
     except Exception:
         note_count = 0
-    if plus.active(_cfg()):
-        # Unmetered on Plus — skip the priced estimate call entirely
-        # rather than compute a number the confirm will never show.
-        estimate = ""
-    else:
-        try:
-            from . import cost
-
-            estimate = cost.format_estimate(sweep_estimate(names))
-        except Exception as exc:
-            print(f"[klausmate] sweep estimate failed: {exc}")
-            estimate = "cost unknown for this model"
-    text = sweep_message(
-        len(names), note_count, current[1] or current[0], estimate,
-        plus=plus.active(_cfg()),
-    )
+    text = sweep_message(len(names), note_count, current[1] or current[0])
     jobs = sweep_jobs(names)
 
     def answered(_result: int) -> None:
@@ -964,18 +889,19 @@ def offer_model_sweep(parent: Any, previous: tuple, first_key: bool = False) -> 
     return True
 
 
-def ask_judge(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
-    """The pertinence phase's own paid-pass confirm (spec D4): Judge or
-    Skip, Skip the default — a stray Enter reaching this window-modal
-    dialog must not start a paid batch, the same rule ``offer_model_sweep``
-    follows for its own confirm. Window-modal via ``open()`` (K-114);
-    ``answer`` fires from ``finished`` rather than a return value.
+def ask_card_index_confirm(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
+    """K-237's own local rebuild confirm: a from-scratch card-index embed
+    about to run as phase one of an autonomous, silent PDF add. This fires
+    deep inside the queue's async chain, never from an open Preferences
+    window with a real parent to anchor on, so it is Embed/Skip,
+    window-modal via ``open()`` (K-114), with Skip the default button — a
+    stray Enter must never start a whole-collection re-embed.
     """
     box = QMessageBox(parent)
-    box.setWindowTitle("Judge matched cards?")
+    box.setWindowTitle("Rebuild the card index?")
     box.setIcon(QMessageBox.Icon.Question)
     box.setText(text)
-    judge_btn = box.addButton("Judge", QMessageBox.ButtonRole.AcceptRole)
+    embed_btn = box.addButton("Embed", QMessageBox.ButtonRole.AcceptRole)
     skip_btn = box.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(skip_btn)
     try:
@@ -983,12 +909,12 @@ def ask_judge(parent: Any, text: str, answer: Callable[[bool], None]) -> None:
 
         box.setStyleSheet(theme.dialog_qss(theme.night_mode()))
     except Exception as exc:
-        print(f"[klausmate] judge dialog theme failed: {exc}")
+        print(f"[klausmate] card-index confirm dialog theme failed: {exc}")
 
     def finished(_result: int) -> None:
         clicked = box.clickedButton()
         box.deleteLater()
-        answer(clicked is judge_btn)
+        answer(clicked is embed_btn)
 
     box.finished.connect(finished)
     box.open()
@@ -1050,7 +976,7 @@ class _StatusDock(_DockBase):  # type: ignore[misc]
         lay.addWidget(self.button, 0)
         self.setWidget(body)
 
-    def render(self, snapshot: RunnerState) -> None:
+    def show_state(self, snapshot: RunnerState) -> None:
         self.label.setText(status_line(snapshot))
         self.button.setText(dock_button_label(snapshot))
 
@@ -1086,7 +1012,7 @@ def _render_dock(snapshot: RunnerState) -> None:
     dock = _ensure_dock()
     if dock is None:
         return
-    dock.render(snapshot)
+    dock.show_state(snapshot)
     dock.show()
     _hide_gen += 1
     if not snapshot.active:
@@ -1128,12 +1054,11 @@ def _on_profile_close(*_a: Any) -> None:
     """A job outlives its window but never its profile: the phases read
     the collection and write into ``user_files``, both of which are
     about to go away."""
-    global _dock, _key_warned
+    global _dock
     try:
         cancel_all()
     except Exception as exc:
         print(f"[klausmate] index queue teardown failed: {exc}")
-    _key_warned = False
     dock, _dock = _dock, None
     if dock is not None:
         try:

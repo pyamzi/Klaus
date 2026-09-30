@@ -1,75 +1,59 @@
 # KlausMate Configuration
 
-## API keys & models
+## Local models
 
-Klaus is API-first: semantic search runs on OpenAI, through **your own**
-`api_key_openai`. The assistant is separate — it runs on your own Claude
-Code login (the `claude` CLI, launched as a child process), not on a key
-stored here. There is no local engine to install, start or update any
-more. Set both keys in **KlausMate Preferences → API keys & models**;
-they are stored in this add-on's config (`meta.json`, plain text —
-standard for Anki add-ons) and never in the repo.
+Runtime and model downloads use the network. Embedding inference runs
+locally; external-client processing follows its provider choice.
+Sources: [defaults](config.json), [Preferences](manage_models.py) and
+[Ollama runtime](ollama_runtime.py).
 
-- **api_key_openai**: Your OpenAI API key. Default `""`. Powers card and
-  PDF embeddings (see **Card embeddings** below) and lecture
-  transcription. Without it nothing indexes, and Klaus says so rather
-  than failing quietly.
-- **api_key_anthropic**: Your Anthropic API key. Default `""`. Used for
-  exactly one thing: the **pertinence check** at the end of indexing (see
-  **Doubtful cards** below), which asks Claude whether each matched card
-  is really about the lecture page it matched. Without it, indexing still
-  works — the check is skipped for new matches and every match counts, as
-  it did before; verdicts from an earlier judged run stay until that card
-  or page changes. The assistant does not read this key; it runs on your
-  own Claude Code login instead (see **Assistant** below).
-- **reasoning_model**: Free text, default `"claude-sonnet-5"`. Two uses,
-  one live: it is the model the **pertinence check** asks, and it is what
-  a future release (Plan 3) will move the assistant onto. The assistant's
-  Claude Code child does not read it today. Because the field is free
-  text, a model Klaus has no price for is estimated as Sonnet and the
-  confirm says so.
-- **transcription_model**: Which OpenAI model transcribes recorded
-  lecture audio. Default `"gpt-4o-mini-transcribe"`. Used whenever a
-  recorded chunk is uploaded (see **Recording a lecture** below).
-- **_embed_key_setup_declined**: Written automatically when you dismiss
-  the "needs an API key" nudge, so Klaus stops re-prompting at startup.
-  Delete it to see the nudge again. Cleared ONCE by the 2026-09-15
-  migration: it was a "no thanks" to an optional key, back when a local
-  engine existed, and the API-first release genuinely requires one — so
-  an upgrading profile gets exactly one fresh nudge.
+Semantic search uses local Ollama embeddings, configured in
+**KlausMate Preferences → Local models**. Provider credentials are removed
+from existing profiles during migration.
+
+- **embedding_provider**: `"ollama"`, the only embedding provider.
+- **endpoint**: Local Ollama HTTP address. Default `"http://127.0.0.1:11434"`.
+- **runtime_auto_setup**: Default `true`. On profile open Klaus checks for
+  an existing Ollama server or starts an installed runtime in the background.
+  This does not install a runtime or download models. Set `false` to manage
+  the server yourself.
+The **Ollama runtime** row shows the estimated runtime download size before
+**Install/start** or **Update runtime** is clicked. These buttons authorize a
+runtime download if needed. **Install/start** reuses or starts an installed
+runtime first. **Update runtime** is enabled after **Refresh** when Klaus owns
+a running managed runtime older than the bundled target version. Runtime files
+live under `user_files/runtime/` in the add-on. **Stop managed server** only
+stops a process Klaus started or adopted; an external Ollama process must be
+stopped in the application that started it.
+
+**Refresh** checks runtime health and reloads **Installed models**. Opening
+Preferences does not start Ollama or download anything. Select a listed model
+to populate **Embedding model**, then **Save** to apply it and receive the
+ordinary re-index offer. Refresh, Pull and Delete never change the saved
+embedding model. Enter a name under **Download model** and click **Pull** to
+download it; **Download progress** reports runtime and model transfers.
+**Delete** asks for confirmation. Models are stored by the configured Ollama
+server. Closing Preferences allows an active local operation to finish in the
+background. Closing the Anki profile cancels its runtime work and stops owned
+servers; the next profile waits for any late startup to be cleaned up.
+If starting or updating the runtime chooses a free port for the saved endpoint,
+the new address is saved automatically, even after Preferences closes. A newer
+saved endpoint edit takes precedence. Manual unsaved endpoint and model choices
+still require **Save**; starting from an unsaved endpoint does not apply it.
+
+- **embedding_model**: The model name in **Embedding model**, initially
+  `"nomic-embed-text"`. It must be installed on the configured Ollama server.
+- **runtime_auto_setup** is controlled by **Automatic management**; toggle it
+  and click **Save**. This controls profile-open startup of installed runtimes.
+
+- **_local_embeddings_migrated**: Internal one-time migration marker. The first
+  migration selects `nomic-embed-text` with native dimensions and removes old
+  credentials. Later migrations preserve your local model selection.
+
 - **_v2_index_sweep_offered**: Written automatically after Klaus offers,
   once per profile, to rebuild PDF indexes written before the one-vector-
   per-page format (those read as no index at all). Set whether you accept
   or decline. Delete it to be asked again.
-
-### Klaus Plus
-
-Klaus Plus is the alternative to the two keys above: one subscription,
-one key, and Klaus talks to its own service instead of to OpenAI and
-Anthropic directly. Bring-your-own-keys stays free and unchanged — a
-Plus key simply makes the provider keys unnecessary, and deleting it
-puts you straight back on them.
-
-- **klaus_plus_key**: Your Klaus Plus licence key — the `kp_…` string
-  from the welcome page after you subscribe, or from the email that
-  follows it. Default `""`. With it set, `api_key_openai` and
-  `api_key_anthropic` are not needed; the provider-key rows in
-  Preferences stay editable anyway, so the free tier is one deletion
-  away. Stored like every other key, in this add-on's config
-  (`meta.json`, plain text), and never sent anywhere but the Klaus Plus
-  service.
-- **klaus_plus_cache**: Not a setting — state Klaus writes: the last
-  verdict the service gave (active, past due, refused) with the date it
-  was checked, the renewal date, and the quota readout Preferences shows.
-  Default `{}`. Safe to clear: the next **Check** (or the next call that
-  needs it) fills it in again. A refusal is remembered for 6 hours, then
-  the service is asked again; an active verdict is honoured until the
-  service refuses it.
-- **klaus_plus_base**: The Klaus Plus service URL. Default `""`, which
-  falls back to the built-in service, `https://klausmate.com`
-  (`plus.DEFAULT_BASE`) — editable under **KlausMate Preferences →
-  General → Klaus Plus service**. Change it only to point at a staging
-  or self-hosted service.
 
 ## Semantic library (matching + retention)
 
@@ -85,65 +69,17 @@ opens the PDF's own `!Library` tag, which holds exactly its matches at or
 above that PDF's sensitivity. Indexing writes that tag; nothing extra is
 needed to produce it.
 
-### Doubtful cards (the pertinence check)
+### Cosine matching
 
-Matching by similarity finds cards about the same *subject*; it cannot
-tell "this slide's actual content" from "the same organ system". So the
-last step of indexing asks Claude, card by card, whether studying that
-card would really be reasonable preparation for the one lecture page it
-matched best. Cards it says no to are tagged **`!Library::Doubtful`**,
-are left out of that PDF's retention score, and show up in the Library
-row's Cards cell as "n · m doubtful". Right-click → **Doubtful cards…**
-opens Browse on them.
-
-- It **always asks first**. Before the first paid request of a job, a
-  dialog says how many cards it would judge and roughly what that costs
-  (on Klaus Plus, what it uses of your monthly allowance instead).
-  **Skip** is the default button; skipping leaves those cards simply
-  matched, exactly as before, and the index finishes normally.
-- It needs `api_key_anthropic` (or a Klaus Plus key). With neither, the
-  step is skipped silently — no dialog, nothing to decline: new matches
-  stay unjudged (and count), while verdicts from an earlier judged run
-  keep standing until their card or page changes. Removing a key never
-  un-doubts a card by itself.
-- **A card Claude does not answer for is never doubtful.** Unjudged
-  counts as confirmed; only an explicit "no" rejects a card.
-- Verdicts are cached per PDF and re-used until the card's text, the
-  page's text, or the model changes — editing a note re-judges just that
-  card on the next index, not the whole lecture.
-- `!Library::Doubtful` is **one tag for your whole collection**, not one
-  per PDF: its members are every card rejected by a lecture it still matches
-  (raise a lecture's sensitivity past a card and that lecture's doubt
-  about it lapses). So a card rejected for lecture A but confirmed for
-  lecture B still carries the tag. **Doubtful cards…** narrows it to the lecture you clicked by
-  searching for both tags at once.
-- Nothing is ever suspended, deleted or untagged by this check. It only
-  adds a tag and changes what the retention score counts.
+Matching and retention use the configured cosine threshold. No reasoning pass
+or Doubtful menu remains. Historical `!Library::Doubtful` tags are reserved and
+preserved, but do not exclude cards from scores. See [tag sync](tag_sync.py).
 
 ### Recording a lecture
 
-The **●** button on the PDF panel's title bar (and on the Lecture panel
-during review) records your microphone while you follow along in the
-slides. Every 30 seconds — or the moment you turn the page, whichever
-comes first — the recording is cut and sent to OpenAI for transcription,
-and the text is stored **on the page you were looking at when you said
-it**. Press **■** to stop; the bar shows elapsed time and how many pieces
-are still waiting to be transcribed. Once the last piece has been transcribed,
-Klaus re-indexes that PDF, so the pages you spoke over are searchable by
-what was said on them, and the assistant reads them too (if an upload
-hangs, the re-index runs anyway after about twenty minutes).
-
-- Only one recording at a time, across every panel. Klaus says so rather
-  than quietly opening a second microphone.
-- Nothing is recorded until you press ●, and there is no recording
-  without a PDF open.
-- A piece that cannot be uploaded — no key, no network, a subscription
-  refusal — **keeps its audio** in the add-on's
-  `user_files/recordings/<pdf>/` folder and is retried the next time you
-  record that lecture. Once uploaded, the audio file is deleted; only the
-  text is kept. Silence transcribes to nothing and is dropped.
-- The transcript for the page you are on shows in a collapsible strip
-  under the PDF, filling in live as pieces come back.
+Lecture recording moved to the Klaus app (K-314). The add-on no longer
+records, transcribes or stores transcripts; old `transcription_*` settings
+are removed from profiles automatically.
 
 **Copying cards into a new deck**: select notes in Browse — the tag above
 is one good way to find them — then **Notes → KlausMate: Create Curated
@@ -163,8 +99,8 @@ anything. Ten PDFs at once queue ten jobs and run them one at a time, in
 the order you added them. Whatever the job was started from, a thin bar
 appears at the bottom of the main window with what is running, how far
 along it is, and a **Stop** button; the Library shows the same line in
-its own status area. Nothing starts before a profile is open, or while a
-cloud provider has no API key (the bar says so). Stopping or failing
+its own status area. Nothing starts before a profile is open. Ollama connection or model errors
+are reported by the indexing operation. Stopping or failing
 mid-way is always safe: partial work is saved as partial and the next
 run resumes from it, and a PDF's `!Library` tag is only ever written by
 a run that finished.
@@ -177,43 +113,53 @@ a run that finished.
 
 **Changing the embedding model re-indexes everything.** Vectors made by
 one model cannot be compared with another's, so when you change
-model or `embedding_dimensions` in KlausMate Preferences,
+the model in KlausMate Preferences,
 saving offers to re-embed your notes and every indexed PDF from scratch.
 It tells you how many of each first, and you can decline and keep
 working on stale vectors, or stop the sweep part-way from the same bar.
 
 - **pdf_match_threshold**: The single sensitivity control — how closely a
   card must match a PDF to count, for the priorities score and the
-  `!Library` tags alike. Default `0.75`. Each PDF also has its own
-  slider (PDF drive → right-click a PDF → **Match sensitivity…**), which
-  overrides this for that PDF only.
+  `!Library` tags alike. Default `0.45`. Scores are cosine similarity
+  after subtracting your collection's mean embedding (K-302), which keeps
+  cards of the same subject from all scoring alike (needs 10+ indexed
+  notes; smaller collections score raw). On this scale 0.45 keeps most of
+  what 0.75 caught with far fewer wrong-lecture matches; raise it toward
+  0.50 for fewer, surer matches, lower it toward 0.40 for a big review PDF. Each
+  PDF also has its own slider (PDF drive → right-click a PDF → **Match
+  sensitivity…**), which overrides this for that PDF only.
+- **pdf_match_best_delta**: Best-lecture assignment, off by default (`-1`).
+  Set it to e.g. `0.03` and a card counts for a PDF only when its score
+  there is within that much of its best score on any indexed PDF, so a
+  generic card lands on the lecture(s) that fit it best instead of every
+  lecture in the subject. It also moves cards covered by a review lecture
+  (e.g. a Bootcamp deck) off the course lecture, so try it per library.
+- **_threshold_scale**: Written automatically. Records that thresholds are
+  on the centered scale; the one-time switch reset the global sensitivity
+  to the default and cleared per-PDF overrides, since old-scale values
+  (0.75 matched nearly everything before, nearly nothing now) no longer
+  mean the same thing.
 
 ### Card embeddings
 
-Semantic search needs a one-time index of your cards (then it updates
-incrementally — only new/edited notes are re-embedded). Configure and
-build it in **KlausMate Preferences → API keys & models**; the index
-itself lives in the add-on's `user_files/card_index/` folder. Card text
-is sent to OpenAI's embeddings API when indexing and searching.
+Semantic search indexes your cards once and then updates changed notes.
+Configure and build the index in **KlausMate Preferences → Local models**.
+Vectors are stored in `user_files/card_index/`. Card and page text are sent
+only to the configured local Ollama endpoint.
 
-- **embedding_model**: Embedding model ID. Default
-  `"text-embedding-3-large"`. Changing it rebuilds the index.
-- **embedding_dimensions**: output width for OpenAI's v3 embedding
-  models, which are MRL-trained so a shorter vector keeps the most
-  significant components. `1024` is the default: better retrieval than
-  `text-embedding-3-small` at 1536, while being cheaper to rank and
-  smaller on disk. `0` means the model's own width (3072 for -large).
-  Changing it forces a full re-index.
+- **embedding_model**: Default `"nomic-embed-text"`. The model must be
+  available in Ollama. Changing it offers a full local re-index.
+- **embedding_dimensions**: `0`, using the model's native output width.
+  Other values are ignored by the local adapter.
 
 ### PDF study priorities
 
 The Library shows a per-PDF retention score — the share of that PDF's
-**confirmed** cards (at or above its sensitivity, see
-`pdf_match_threshold` above, minus anything the pertinence check
-rejected) you'd currently recall — so you know what to study first. It
+matched cards (at or above its sensitivity, see
+`pdf_match_threshold` above) you'd currently recall, so you know what to study first. It
 reads the same match cache the `!Library` tags do; nothing here embeds
 anything indexing wouldn't already need. The Cards count and the
-sensitivity slider's live preview use the same confirmed-only figure, so
+sensitivity slider's live preview use the same matched-card figure, so
 the number never changes just because you opened a dialog.
 
 ### Lecture view (review screen)
@@ -231,32 +177,10 @@ the number never changes just because you opened a dialog.
   available for this card." Panel width and open-state live in
   `pdf_tabs.json` (`lecture_view` key) — state, not preferences.
 
-## Assistant
+## Assistant history
 
-The assistant answers about whatever lecture page you are looking at,
-reaching it as the page record Klaus keeps for it — the slide's own text
-plus any transcript of what was said over it — together with the page
-image. It runs on your own Claude Code login today — the `claude` CLI,
-launched as a child process, not a Klaus-held key. `api_key_anthropic`
-and `reasoning_model` (see **API keys & models** above) belong to the
-pertinence check, not to the assistant — it does not read either of them
-yet; a future release will move it onto them.
-
-- **assistant_reopen**: Default `false`. Reopen the Assistant dock
-  where you left it the next time Anki starts — the same idea as
-  `lecture_view_reopen` above. Only reopens it if it was open when you
-  last closed the profile (see `assistant_dock_open`).
-- **assistant_dock_width**: Default `420`. The Assistant dock's last
-  width in pixels, written by dragging the dock itself rather than a
-  Preferences row.
-- **assistant_dock_open**: Default `false`. Whether the Assistant dock
-  was open the last time you opened or closed it. Written by the dock
-  itself, never by a Preferences row; `assistant_reopen` is what decides
-  whether it is acted on.
-
-**Clear Sessions** (KlausMate Preferences → Assistant) deletes the
-saved per-PDF conversation history the Assistant keeps. It never
-touches your notes, PDFs, or highlights.
+As of 2026-09-19 the embedded assistant, its sessions and dock settings are
+removed. Use the external MCP client setup below.
 
 ## Feature toggles
 
@@ -269,17 +193,11 @@ touches your notes, PDFs, or highlights.
   searching, matched terms are highlighted in the editor pane of the
   selected row (View menu → **Highlight Search Results** toggles it per
   window; this config key is only the starting state).
-- **library_tags_enabled**: Default `true`. Keeps every indexed PDF's
-  per-PDF `!Library` tag (one tag per PDF, holding exactly the notes
-  matched at or above its sensitivity — see `pdf_match_threshold` above)
-  created, renamed, and pruned automatically as you index, re-sensitize,
-  rename, or delete PDFs. Turn off and Klaus stops creating or updating
-  those tags entirely — including `!Library::Doubtful` — so **Show
-  Matched Cards in Browse** and **Doubtful cards…** have no tag to open.
-  That is all this switch costs you: retention scores (confirmed-only
-  included), the doubtful counts in the Library, and the deck copier are
-  unaffected, and the pertinence check still runs and still caches its
-  verdicts.
+- **library_tags_enabled**: Optional stored override, read as `true` when
+  absent; not a key in the shipped defaults. Controls creation, renaming and
+  pruning of per-PDF `!Library` tags. Turning it off leaves cosine retention
+  scoring and deck copying available, but stops automatic membership updates.
+  See [tag sync](tag_sync.py).
 
 - **pdf_renderer**: Default `"native"`. Which engine draws PDFs in the
   viewer panel and Library. `"native"` is Qt's built-in QPdfView;
@@ -418,3 +336,65 @@ deck screen's own Edit Widgets mode) and the two `heatmap_*` display
 keys above (the heatmap's own corner menu), all of these live in **KlausMate
 Preferences → Appearance**; press **Save** and they apply immediately
 (no restart).
+
+
+## External MCP clients
+
+In **KlausMate Preferences → Local models → MCP**, copy the
+configuration. Install a separate Python 3.9 or newer first if Copy is disabled,
+then reopen Preferences. Keep Anki running with your profile open. Merge the
+`klaus` entry into `mcpServers` in Claude Desktop's configuration and restart
+Claude Desktop. See the [official local-server setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
+
+Use **Test connection** beside **Copy configuration** to check that the bridge
+can start, connect to Klaus and discover its tools. It reads no lecture or card
+content. The status explains how to recover if the profile is closed, the
+connection is unavailable or Python cannot launch. The full JSON is also shown
+under **Advanced settings → MCP configuration**.
+
+The generated JSON uses absolute paths to Python, the bundled stdio bridge,
+and `user_files/mcp_connection.json`. It contains no token or current port.
+The bridge reads that private discovery file for each request, so an Anki
+restart does not require copying new credentials. Klaus never writes another
+application's configuration. Copy the block again if you move the add-on or
+Python installation.
+
+`current_page` returns the active PDF's ID, name, page number, selection and slide
+text, plus a page image when available. Set `include_image: false`
+for text only. `get_page` accepts `pdf_id` and a one-based `page` for any imported
+lecture, without changing the viewer; set `include_image: true` to request its
+image. Lecture search now returns a `pdf` ID alongside its existing `source`.
+Closing the viewer clears `current_page`; other imported lectures remain
+accessible through `get_page`. `current_view` retains its metadata-only behavior.
+
+MCP `add_note` now requires both `source_pdf` and `source_page`. Use the `pdf`
+and `page` returned by a page or lecture-search tool. A missing source is rejected
+before approval, rather than attributed to whichever PDF is currently open.
+Reconnect the external client after upgrading so it refreshes the tool schemas.
+`add_notes` accepts 1-20 notes with those same fields, shows one approval, and
+returns a zero-based `index`, `note_id` and `error` for each note. A batch can
+partially succeed. Check its outcomes and Anki before retrying a failed or
+interrupted request; requests are never automatically replayed.
+
+Collection writes still require approval in Anki. Lecture content is untrusted
+input and is not an instruction to the external client.
+
+Your external client chooses its model provider and may transmit requested
+lecture text, images and card context to that provider. Klaus
+exposes only its authenticated local endpoint. This setup does not provide
+public hosting or direct ChatGPT access. Automated checks cover the stdio
+bridge and Preferences clipboard. The official MCP Python client is also tested
+against a scratch endpoint; a real Claude Desktop session has not been verified
+by those checks. See [MCP interface and verification](../docs/reference/mcp-interface.md).
+
+## Stored state and optional overrides
+
+The shipped defaults are exactly [config.json](config.json). `library_tags_enabled`
+is an optional override with a code fallback, not a shipped default.
+`background_gradients` and `reviewer_background_gradients` are saved sphere lists
+created by Appearance; legacy scalar coordinates supply missing-list fallback.
+`library_root` is written after choosing a library folder.
+`_local_embeddings_migrated`, `_v2_index_sweep_offered` and
+`_library_tag_migrated` are automatic migration/offer state, not user controls.
+The old cloud credential, subscription, judge and dock keys are removed during
+[migration](__init__.py). Other historical keys are not current settings.

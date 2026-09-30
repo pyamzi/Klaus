@@ -170,6 +170,53 @@ def _signature_ok(header: dict, signature: tuple) -> bool:
     )
 
 
+def _read_prior_layout(
+    user_files: str, signature: tuple
+) -> tuple[list[tuple[float, ...]], list[int]] | None:
+    """Whatever positions are on disk for THIS embedding space, regardless
+    of whether the card index has since changed — the alignment anchor
+    K-171 rotates a fresh layout onto (see ``projection.align_to`` and the
+    module docstring's isotropy finding: a resample or an add/delete can
+    swap PC2/PC3 outright, and this is the previous picture to stay
+    continuous with).
+
+    Deliberately looser than ``_read_layout``: it ignores the digest and
+    row count entirely, because those are exactly what a note add/delete/
+    edit changes, and an anchor that required them unchanged would never
+    fire for the case this exists to fix. A different embedding space
+    (provider/model/dims) is still refused — those coordinates mean
+    nothing here — and so is anything that cannot name its own rows'
+    identities (an older-format cache with no ``nids``, or a corrupt one),
+    since alignment cannot pair points it cannot identify. None always
+    means "nothing to align to", never a partial answer.
+    """
+    blob = _read_blob(os.path.join(user_files, LAYOUT_SUBDIR, LAYOUT_FILE))
+    if blob is None:
+        return None
+    header, values = blob
+    try:
+        if header.get("version") != LAYOUT_VERSION:
+            return None
+        if not _signature_ok(header, signature):
+            return None
+        comps = int(header["params"]["components"])
+        if comps != projection.COMPONENTS or comps <= 0:
+            return None
+        nids = header.get("nids")
+        stored = int(header["rows"])
+        if (
+            not isinstance(nids, list)
+            or len(nids) != stored
+            or len(values) != stored * comps
+        ):
+            return None
+        nids = [int(n) for n in nids]
+    except (KeyError, TypeError, ValueError):
+        return None
+    points = list(zip(*(values[k::comps] for k in range(comps))))
+    return points, nids
+
+
 def _write_blob(path: str, header: dict, values: array) -> None:
     """One self-describing artifact: a JSON header line, then packed
     float64. Atomic tmp + ``os.replace``, retention_history's shape.
@@ -251,16 +298,24 @@ def _read_layout(
 
 
 def _write_layout(
-    user_files: str, signature: tuple, digest: str, points: list
+    user_files: str, signature: tuple, digest: str, points: list, nids: list
 ) -> None:
-    """Persist positions. A cache that cannot be written is not an error —
-    it costs the next open a refit, which is exactly the status quo."""
+    """Persist positions AND the note ids they belong to. A cache that
+    cannot be written is not an error — it costs the next open a refit,
+    which is exactly the status quo.
+
+    ``nids`` is new for K-171: the exact-match read below never needed it
+    (a matching digest already guarantees the same nids in the same
+    order), but ``_read_prior_layout`` does — it is read back precisely
+    when the digest DOESN'T match, to pair up whichever notes the old and
+    new layouts still share.
+    """
     params = _layout_params()
     comps = int(params["components"])
     flat = array("d")
     for p in points:
         flat.extend(p)
-    if comps <= 0 or len(flat) != len(points) * comps:
+    if comps <= 0 or len(flat) != len(points) * comps or len(nids) != len(points):
         return  # a point of unexpected width would never read back
     header = {
         "version": LAYOUT_VERSION,
@@ -270,6 +325,7 @@ def _write_layout(
         "digest": str(digest),
         "rows": len(points),
         "params": params,
+        "nids": [int(n) for n in nids],
     }
     try:
         _write_blob(
@@ -340,18 +396,33 @@ def build_graph_data(user_files: str, cfg: dict) -> dict:
         d = cidx.dims
         mv = memoryview(cidx.vectors)
         row_views = [mv[i * d:(i + 1) * d] for i in range(len(cidx.nids))]
-        points, sampled = projection.project(row_views, seed=PROJECTION_SEED)
+        # normalize=False: K-171's alignment has to rotate the RAW cloud
+        # onto whatever the previous layout was BEFORE the [-1, 1] squash,
+        # or the squash's own per-axis noise defeats most of the fix (see
+        # projection.normalize_points's docstring for the measurement).
+        raw_points, sampled = projection.project(
+            row_views, seed=PROJECTION_SEED, normalize=False
+        )
+        full = sampled == list(range(len(cidx.nids)))
+        if full:
+            # K-138 made every row a point, so `sampled` is range(n) and a
+            # point's ROW is its identity — which is what lets the fresh
+            # layout align directly against cidx.nids with no lookup of
+            # its own. A reduced sample (should that ever come back) skips
+            # alignment along with the cache write below, for the same
+            # reason it always skipped caching: the subset would later
+            # read back onto the wrong notes.
+            prior = _read_prior_layout(user_files, sig)
+            if prior is not None:
+                raw_points, _aligned = projection.align_to(
+                    raw_points, cidx.nids, prior[0], prior[1]
+                )
+        points = projection.normalize_points(raw_points)
         note_xyz = {
             cidx.nids[row_idx]: pt for row_idx, pt in zip(sampled, points)
         }
-        # K-138 made every row a point, so `sampled` is range(n) and a
-        # point's ROW is its identity — which is what lets the cache store
-        # bare positions with no nid list of its own, keyed on a digest
-        # that already covers the nids in order. Should that ever stop
-        # being true, this simply declines to cache rather than storing a
-        # subset that would later read back onto the wrong notes.
-        if sampled == list(range(len(cidx.nids))):
-            _write_layout(user_files, sig, digest, points)
+        if full:
+            _write_layout(user_files, sig, digest, points, cidx.nids)
     notes = [{"nid": nid, "xyz": list(p)} for nid, p in note_xyz.items()]
 
     drive = drive_store.load(user_files)

@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import json
+import math
 import os
 import re
 import time
@@ -480,3 +481,96 @@ def read_vector(dir_path: str, row: int, dims: int) -> array | None:
         return vec
     except (OSError, EOFError, ValueError):
         return None
+
+
+# ------------------------------------------------------- centering (K-302)
+# Every note in a med collection shares one dominant embedding direction
+# ("this is medicine"), so raw cosine piles every card of a subject into a
+# narrow band near 0.75 and cannot say which LECTURE teaches it. Scoring
+# after subtracting the collection's mean vector from both sides cut the
+# B12 lecture's wrong-lesson heme matches 65 -> 20 at equal recall, judged
+# by AnKing's #Bootcamp lesson tags. Subject-level matching (a whole-subject
+# review PDF) is unchanged at equal recall. Harness in scripts/eval/.
+MEAN_FILE = "mean.json"
+# Below this many notes the mean is mostly the notes themselves (one note:
+# the mean IS it, and centering zeroes it), so scores stay raw — and raw
+# cosine at the centered default threshold over-matches. Toy collections
+# only. ponytail: a flat cut; nothing measured between 3 and 43k notes.
+MIN_ROWS_FOR_MEAN = 10
+_mean_memo: dict[str, tuple[list, array]] = {}
+
+
+def mean_vector(dir_path: str) -> array | None:
+    """The card index's mean vector, cached beside it in mean.json and keyed
+    on vectors.f32's (mtime_ns, size), so a rebuilt index recomputes. None
+    when there is no readable index."""
+    path = os.path.join(dir_path, VECTORS_FILE)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    stamp = [st.st_mtime_ns, st.st_size]
+    memo = _mean_memo.get(dir_path)
+    if memo is not None and memo[0] == stamp:
+        return memo[1]  # the Lecture panel asks on every card flip
+    m = read_manifest(dir_path)
+    try:
+        dims = int(m["dims"]) if m else 0
+    except (KeyError, TypeError, ValueError):
+        return None
+    if dims <= 0 or st.st_size < dims * 4:
+        return None
+    side = os.path.join(dir_path, MEAN_FILE)
+    try:
+        with open(side, encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached["stamp"] == stamp and len(cached["mean"]) == dims:
+            _mean_memo[dir_path] = (stamp, array("f", cached["mean"]))
+            return _mean_memo[dir_path][1]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    vecs = array("f")
+    try:
+        with open(path, "rb") as f:
+            vecs.fromfile(f, st.st_size // vecs.itemsize)
+    except (OSError, EOFError, ValueError):
+        return None
+    n = len(vecs) // dims
+    if n < MIN_ROWS_FOR_MEAN:
+        return None
+    mean = array("f", (sum(vecs[j : n * dims : dims]) / n for j in range(dims)))
+    tmp = side + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"stamp": stamp, "mean": list(mean)}, f)
+        os.replace(tmp, side)
+    except OSError:
+        pass  # uncached is only slower
+    _mean_memo[dir_path] = (stamp, mean)
+    return mean
+
+
+class Centered:
+    """Cosine after subtracting ``mean`` from both (unit) vectors.
+
+    (a-m).(b-m) = a.b - a.m - b.m + m.m, so each side's (x.m, |x-m|) is
+    computed once and a pair still costs the single dot product it did.
+    """
+
+    def __init__(self, mean) -> None:
+        self.mean = mean
+        self.mm = _sumprod(mean, mean)
+
+    def terms(self, vec) -> tuple[float, float] | None:
+        """(vec.mean, |vec-mean|), or None for a zero row (never a match)."""
+        vv = _sumprod(vec, vec)
+        if vv == 0.0:
+            return None
+        vm = _sumprod(vec, self.mean)
+        return vm, math.sqrt(max(vv - 2.0 * vm + self.mm, 0.0))
+
+    def score(self, dot: float, a: tuple[float, float], b: tuple[float, float]) -> float:
+        den = a[1] * b[1]
+        if den <= 1e-12:
+            return -1.0
+        return (dot - a[0] - b[0] + self.mm) / den

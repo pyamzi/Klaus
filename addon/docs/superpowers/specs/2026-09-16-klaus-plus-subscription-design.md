@@ -1,3 +1,5 @@
+> Superseded by [Local-model reversion](2026-09-18-local-model-reversion-design.md). Retained as historical design, not current implementation guidance.
+
 # Klaus Plus — the subscription that removes the keys: design
 
 **Date:** 2026-09-16. **Asked by Pouya:** "Instead of APIs, would it be

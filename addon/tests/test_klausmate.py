@@ -2,7 +2,6 @@
 
 Run: env QT_QPA_PLATFORM=offscreen python3 test_klausmate.py
 """
-import io
 import json
 import math
 import os
@@ -12,7 +11,6 @@ import tempfile
 import threading
 import time
 import types
-import urllib.error
 from array import array
 
 ADDON = os.path.join(
@@ -20,11 +18,13 @@ ADDON = os.path.join(
 )
 APP_PACKAGES = "/Applications/Anki.app/Contents/Resources/app_packages"
 
-# Synthetic package so relative imports inside the modules resolve.
-pkg = types.ModuleType("klausmate")
-pkg.__path__ = [ADDON]
-pkg.__package__ = "klausmate"
-sys.modules["klausmate"] = pkg
+# Synthetic package so relative imports inside the modules resolve; the
+# harness's, so every USER_FILES lands in scratch, never the real Library.
+sys.path.insert(0, os.path.join(os.path.dirname(ADDON), ".claude", "skills", "klaus-test", "scripts"))
+from anki_stubs import install_package_stub  # noqa: E402
+
+install_package_stub()
+pkg = sys.modules["klausmate"]
 
 import importlib
 
@@ -72,23 +72,9 @@ def check(name, cond, detail=""):
 # ---------------------------------------------------------------- providers
 
 print("== provider selection ==")
-# OpenAI is the only embedding provider now (K-222/Task 2) — Voyage and
-# Ollama are gone from embeddings.py entirely, and provider_name is a
-# constant function kept only so existing callers still compile and run.
-check("openai is the only provider, for any cfg",
-      embeddings.provider_name({}) == "openai")
-check("an unrecognized/legacy provider key changes nothing — always openai",
-      embeddings.provider_name({"embedding_provider": "banana"}) == "openai")
-check("an explicit ollama/voyage request is ignored too — always openai",
-      embeddings.provider_name({"embedding_provider": "ollama"}) == "openai")
-check("openai default model is text-embedding-3-large",
-      embeddings.embedding_model({}) == "text-embedding-3-large")
-check("signature carries dims, so a width change invalidates the index",
-      embeddings.index_signature({}) == ("openai", "text-embedding-3-large", 0))
-check("dims ARE sent for text-embedding-3-large — it's Matryoshka/dimension-capable",
-      embeddings.index_signature(
-          {"embedding_provider": "openai", "embedding_dimensions": 1024}
-      )[2] == 1024)
+check("Ollama is the only provider", embeddings.provider_name({}) == "ollama")
+check("default local model", embeddings.embedding_model({}) == "nomic-embed-text")
+check("native dimension signature", embeddings.index_signature({"embedding_dimensions": 1024}) == ("ollama", "nomic-embed-text", 0))
 # An index built at one width cannot be ranked against another, so the
 # width has to reach check_signature — not merely be recorded.
 _ix = card_index.empty_index("openai", "text-embedding-3-large")
@@ -223,29 +209,6 @@ for _name in ("card_index.py", "pdf_index.py", "retention.py",
           "never by hand",
           _SIG_SPELLINGS.search(_src) is None)
 
-check("...and sent for OpenAI's v3 models, which are MRL-trained",
-      embeddings.index_signature(
-          {"embedding_provider": "openai",
-           "embedding_model": "text-embedding-3-large",
-           "embedding_dimensions": 1024}
-      ) == ("openai", "text-embedding-3-large", 1024))
-
-print("== missing key ==")
-try:
-    embeddings.OpenAIEmbeddings(lambda: {}).embed(["hi"])
-    check("openai no key raises", False)
-except embeddings.EmbeddingError as e:
-    check("openai no key raises 401", e.status == 401)
-    # K-236: the old copy sent the user to "Tools → Klaus → Manage models",
-    # a menu K-045 folded away and K-227 finished off — a dead address on a
-    # message that only ever appears when something needs fixing.
-    check("401 message names the page that actually holds the key",
-          "KlausMate Preferences → API keys & models" in e.user_message())
-
-# The HTTP-level behavior (auth header, retries, dims field, batching) now
-# lives entirely in openai_client.py and is covered by
-# tests/test_openai_client.py — OpenAIEmbeddings.embed is a thin
-# translation shim over it (see embeddings.py), so it isn't re-mocked here.
 # embed_batches itself is still this module's own — provider-agnostic
 # batching with no clamp (the old Voyage-specific 128 clamp is gone with
 # Voyage): a fake provider is enough to pin the loop, no HTTP involved.
@@ -260,181 +223,6 @@ fp = FakeProvider()
 list(embeddings.embed_batches(fp, ["x"] * 300, batch_size=999))
 check("batch_size passed straight through — no provider-level clamp",
       fp.sizes == [300], str(fp.sizes))
-
-print("== Klaus Plus routes embeddings through the service ==")
-openai_client = importlib.import_module("klausmate.openai_client")
-plus_mod = importlib.import_module("klausmate.plus")
-_orig_openai_urlopen = openai_client._urlopen
-
-
-class _PlusResp(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-_plus_calls = []
-
-
-def _plus_urlopen(req, timeout=None):
-    _plus_calls.append((req.full_url, dict(req.headers)))
-    body = json.loads(req.data)
-    n = len(body["input"])
-    return _PlusResp(json.dumps(
-        {"data": [{"index": i, "embedding": [1.0]} for i in range(n)]}
-    ).encode())
-
-
-openai_client._urlopen = _plus_urlopen
-try:
-    vecs = embeddings.OpenAIEmbeddings(
-        lambda: {"klaus_plus_key": "kp_" + "a" * 32, "klaus_plus_base": "https://svc.test"}
-    ).embed(["a"])
-    url, headers = _plus_calls[-1]
-    check("a Plus key routes embeddings to the service, no api_key_openai needed",
-          url == "https://svc.test/v1/embeddings"
-          and headers.get("Authorization") == "Bearer kp_" + "a" * 32
-          and len(vecs) == 1)
-finally:
-    openai_client._urlopen = _orig_openai_urlopen
-
-# A refusal (401/402/426) while on Plus must be remembered through the
-# PACKAGE's patch_config (plus.note_refusal) — a PATCH writer, reached
-# lazily since embeddings.py cannot import __init__ at module top (it
-# imports aqt). patch_config MERGES into the stored config; the
-# package's plain write_config REPLACES it wholesale and must never be
-# the sink a Plus refusal reaches (a one-key patch through it would wipe
-# every other setting — API keys, library root, every preference). A
-# synthetic write_config is left defined here too, recording, purely to
-# prove the refusal path never touches it.
-_refusals = []
-_write_calls = []
-
-
-def _patch_config(patch):
-    _refusals.append(patch)
-
-
-def _write_config(cfg):
-    _write_calls.append(cfg)
-
-
-pkg.patch_config = _patch_config
-pkg.write_config = _write_config
-
-_UNRECOGNISED_KEY_MSG = "Klaus Plus key not recognised — check it under KlausMate Preferences."
-_MAINTENANCE_MSG = "Klaus Plus is paused for maintenance — try again later, or use your own API key."
-
-
-def _plus_401_urlopen(req, timeout=None):
-    raise urllib.error.HTTPError(
-        req.full_url, 401, "unauthorized",
-        {}, io.BytesIO(json.dumps({"error": {"message": _UNRECOGNISED_KEY_MSG}}).encode()))
-
-
-openai_client._urlopen = _plus_401_urlopen
-try:
-    embeddings.OpenAIEmbeddings(
-        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
-    ).embed(["a"])
-    check("a 401 on Plus raises EmbeddingError", False)
-except embeddings.EmbeddingError as e:
-    check("a 401 on Plus surfaces the service's message verbatim, not OpenAI's canned key-rejection copy",
-          e.status == 401 and e.user_message() == _UNRECOGNISED_KEY_MSG)
-    check("a 401 on Plus is remembered via patch_config with exactly one key (CACHE), message verbatim",
-          bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
-          and _refusals[-1][plus_mod.CACHE]["status"] == "refused:401"
-          and _refusals[-1][plus_mod.CACHE]["message"] == _UNRECOGNISED_KEY_MSG)
-finally:
-    openai_client._urlopen = _orig_openai_urlopen
-
-_refusals.clear()
-_write_calls.clear()
-
-
-def _plus_402_urlopen(req, timeout=None):
-    raise urllib.error.HTTPError(
-        req.full_url, 402, "quota",
-        {}, io.BytesIO(json.dumps({"error": {"message": "quota used up"}}).encode()))
-
-
-openai_client._urlopen = _plus_402_urlopen
-try:
-    embeddings.OpenAIEmbeddings(
-        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
-    ).embed(["a"])
-    check("a 402 on Plus raises EmbeddingError", False)
-except embeddings.EmbeddingError as e:
-    check("a 402 on Plus is remembered via patch_config with exactly one key: CACHE",
-          e.status == 402 and bool(_refusals) and set(_refusals[-1].keys()) == {plus_mod.CACHE}
-          and _refusals[-1][plus_mod.CACHE].get("status") == "refused:402")
-    check("the refusal never reaches the package's write_config (that one REPLACES the whole config — C1)",
-          _write_calls == [])
-finally:
-    openai_client._urlopen = _orig_openai_urlopen
-
-_refusals.clear()
-_write_calls.clear()
-
-
-def _plus_503_urlopen(req, timeout=None):
-    raise urllib.error.HTTPError(
-        req.full_url, 503, "unavailable",
-        {}, io.BytesIO(json.dumps({"error": {"message": _MAINTENANCE_MSG}}).encode()))
-
-
-openai_client._urlopen = _plus_503_urlopen
-try:
-    embeddings.OpenAIEmbeddings(
-        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
-    ).embed(["a"])
-    check("a 503 on Plus raises EmbeddingError", False)
-except embeddings.EmbeddingError as e:
-    check("a 503 on Plus surfaces the service's message verbatim too, not 'OpenAI is overloaded'",
-          e.status == 503 and e.user_message() == _MAINTENANCE_MSG)
-    check("a 503 is not cached as a refusal (not a gate decision — a restart isn't a refusal)",
-          _refusals == [])
-finally:
-    openai_client._urlopen = _orig_openai_urlopen
-
-_refusals.clear()
-_write_calls.clear()
-
-# A connection-level failure never reaches the service at all — status is
-# None, openai_client's own message says "Could not reach OpenAI ..."
-# (it has no idea it was talking to Klaus Plus) — so on the Plus path that
-# message must be renamed, or a service outage reads as an OpenAI outage
-# (M-10). _SLEEP is patched out for this one case only: _request retries
-# once on a URLError with a real 2s time.sleep, which every other Plus
-# fake here avoids by raising a status the retry branch doesn't cover.
-_orig_openai_sleep = openai_client._SLEEP
-openai_client._SLEEP = lambda *a, **k: None
-
-
-def _plus_network_urlopen(req, timeout=None):
-    raise urllib.error.URLError("connection refused")
-
-
-openai_client._urlopen = _plus_network_urlopen
-try:
-    embeddings.OpenAIEmbeddings(
-        lambda: {"klaus_plus_key": "kp_" + "b" * 32, "klaus_plus_base": "https://svc.test"}
-    ).embed(["a"])
-    check("a connection error on Plus raises EmbeddingError", False)
-except embeddings.EmbeddingError as e:
-    check("a connection error on Plus names the service, not just 'Could not reach "
-          "OpenAI ...' (M-10)",
-          e.status is None and e.user_message().startswith("Klaus Plus: "), e.user_message())
-    check("a connection error (no status at all) is never cached as a refusal",
-          _refusals == [])
-finally:
-    openai_client._urlopen = _orig_openai_urlopen
-    openai_client._SLEEP = _orig_openai_sleep
-
-del pkg.patch_config
-del pkg.write_config
 
 # ---------------------------------------------------------------- pdf_index
 
@@ -571,7 +359,7 @@ with open(os.path.join(d2, "manifest.json"), "w") as f:
     f.write("{}")
 # PR1 review fix: user_files/pages/<safe>/ (page_store.py) is a sibling
 # that delete_context never touched — a re-import under this same safe
-# basename would silently inherit a stranger's slide text and transcript.
+# basename would silently inherit a stranger's slide text.
 _dc_page_store = importlib.import_module("klausmate.page_store")
 _dc_page_store.ensure_records(tmp, "Lecture_1", os.path.join(tmp, "Lecture 1.pdf"),
                                ["slide text"])
@@ -800,8 +588,8 @@ if HAVE_RETENTION:
     # the other half is proving a stored v1 payload actually reads as
     # absent now, mirroring how every other invalidation check above calls
     # load_matches.
-    check("MATCHES_VERSION bumped to 2 (payload gained \"pages\", lost \"agg\")",
-          retention.MATCHES_VERSION == 2)
+    check("MATCHES_VERSION bumped past 1 (payload gained \"pages\", lost \"agg\"; 3 = K-302 prefixed space)",
+          retention.MATCHES_VERSION >= 2)
     _v1_path = retention._matches_path("Lecture 1")
     with open(_v1_path, encoding="utf-8") as f:
         _v1_payload = json.load(f)
@@ -861,7 +649,7 @@ if HAVE_RETENTION:
                 self._success(result)
 
     class _CountingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self):
             self.calls = []
@@ -924,53 +712,17 @@ if HAVE_RETENTION:
               "idx2" in _hr_built and _hr_built["idx2"].embedded_rows == 3
               and [p for p, _h in _hr_built["idx2"].pages] == [1, 2, 3])
 
-        # -- a TRANSCRIPT grows (K-236 / I5) ---------------------------
-        # page_store.append_segment writes the page RECORD and never
-        # contexts/<safe>.json, so the source signature — the only thing
-        # is_fresh() can see — does not move. do_build used to return at
-        # is_fresh before any hash was compared, which made D3's "a page
-        # whose transcript grew re-embeds alone" untrue: the new text was
-        # never embedded and the stale hash stayed on disk forever.
-        page_store = importlib.import_module("klausmate.page_store")
-        pdf_handler = importlib.import_module("klausmate.pdf_handler")
-        _hr_safe = pdf_handler._safe_basename("HR")
-        _hr_path = pdf_handler.pdf_path_for(_hr_tmp, _hr_safe) or ""
-        _hr_src_before = pdf_index.source_signature(_hr_tmp, "HR")
-        _hr_hash_before = dict(_hr_built["idx2"].pages)[3]
-        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 2, 0.0, 5.0,
-                                  "and this is what the lecturer said")
-        check("a transcript append does not move the context file's "
-              "signature — is_fresh() alone cannot see it",
-              pdf_index.source_signature(_hr_tmp, "HR") == _hr_src_before)
         retention.ensure_pdf_index(
             None, "HR",
             on_done=lambda idx: _hr_built.setdefault("idx3", idx),
             on_error=lambda e: _hr_errors.append(e),
         )
-        check("do_build harness: transcript build hit no error",
-              _hr_errors == [], str(_hr_errors))
-        check("a page whose TRANSCRIPT grew re-embeds ALONE — exactly one "
-              "text reaches the provider, and it is the page that changed",
-              len(_hr_provider.calls) == 3
-              and len(_hr_provider.calls[2]) == 1
-              and "lecturer said" in _hr_provider.calls[2][0],
-              str(_hr_provider.calls[2:]))
-        check("...and the index's stored hash for that page moves with it, "
-              "so the next build sees the page as current",
-              "idx3" in _hr_built
-              and dict(_hr_built["idx3"].pages)[3] != _hr_hash_before
-              and _hr_built["idx3"].embedded_rows == 3)
-        retention.ensure_pdf_index(
-            None, "HR",
-            on_done=lambda idx: _hr_built.setdefault("idx4", idx),
-            on_error=lambda e: _hr_errors.append(e),
-        )
         check("...and an unchanged rebuild still embeds NOTHING — the page "
               "comparison must not cost a re-embed on every open",
-              len(_hr_provider.calls) == 3, str(_hr_provider.calls[2:]))
+              len(_hr_provider.calls) == 2, str(_hr_provider.calls[2:]))
 
         # -- the matches cache follows the same pages (K-236 / I5b) -----
-        _m_sig = ("openai", "text-embedding-3-large")
+        _m_sig = ("ollama", "text-embedding-3-large")
         _m_src = pdf_index.source_signature(_hr_tmp, "HR")
         retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
                                [(1, 0.9)], {1: 3})
@@ -978,18 +730,21 @@ if HAVE_RETENTION:
               "against are unchanged",
               retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
               is not None)
-        page_store.append_segment(_hr_tmp, _hr_safe, _hr_path, 0, 5.0, 9.0,
-                                  "more words said over slide one")
+        # Change page one's text; the cache key below keeps passing the
+        # OLD source signature, so only the pages digest can see it.
+        _hr_pages[0] = "alpha page one REVISED"
+        with open(os.path.join(_hr_tmp, "contexts", "HR.json"), "w") as f:
+            json.dump({"pages": _hr_pages, "page_count": 3}, f)
         retention.ensure_pdf_index(
             None, "HR",
             on_done=lambda idx: _hr_built.setdefault("idx5", idx),
             on_error=lambda e: _hr_errors.append(e),
         )
-        check("...and goes COLD once a page re-embedded under it — every "
-              "other key (pdf_source_sig, the card digest, the signature) "
-              "is blind to a transcript, so without the pages digest "
-              "ensure_matches would serve the old ranking against the "
-              "new vectors",
+        check("...and goes COLD once a page re-embedded under it — with "
+              "every other key (pdf_source_sig, the card digest, the "
+              "signature) held fixed, only the pages digest can see it, "
+              "and without it ensure_matches would serve the old ranking "
+              "against the new vectors",
               retention.load_matches("HR", _m_sig, 2, _m_src, "digestHR")
               is None)
         retention.save_matches("HR", _m_sig, 2, _m_src, "digestHR",
@@ -1013,7 +768,7 @@ if HAVE_RETENTION:
     # embed_batches BATCH_SIZE of 64) so a cancel mid-first-batch leaves a
     # real, provable gap: batch one (rows 0-63) lands, batch two never runs.
     class _CancelingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self, cancel_event):
             self.calls = []
@@ -1066,7 +821,7 @@ if HAVE_RETENTION:
               None if _c1_reloaded is None else _c1_reloaded.embedded_rows)
         check("cancel pin: reloaded index is not complete",
               _c1_reloaded is not None and not _c1_reloaded.is_complete())
-        _c1_sig = ("openai", "text-embedding-3-large", 0)
+        _c1_sig = ("ollama", "text-embedding-3-large", 0)
         _c1_src = pdf_index.source_signature(_c1_tmp, "C1")
         check("cancel pin: reloaded index is not fresh (so the next run "
               "won't short-circuit and skip resuming)",
@@ -1105,10 +860,10 @@ if HAVE_RETENTION:
           "sent to the provider (Critical 2 fix-round-2 pin) ==")
     # Spec D3: "a page with empty combined_text gets a zero vector and never
     # wins best_page." A 3-page fixture whose middle page has no text at all
-    # (no slide text layer, no transcript) — page_store.combined_text("") for
+    # (no slide text layer) — page_store.combined_text("") for
     # that page, exactly the image-only-slide case the review reproduced.
     class _RecordingProvider:
-        name = "openai"
+        name = "ollama"
 
         def __init__(self):
             self.calls = []
@@ -1254,7 +1009,7 @@ shutil.rmtree(tmp, ignore_errors=True)
 # ------------------------------------------------- K-254: Doubtful tag +
 # ------------------------------------------------- confirmed-only counts
 
-print("== K-254: Doubtful tag membership (tag_sync) ==")
+print("== Lecture tag synchronization ==")
 
 try:
     tag_sync = importlib.import_module("klausmate.tag_sync")
@@ -1264,26 +1019,13 @@ except Exception as e:
     print(f" SKIP tag_sync import failed: {type(e).__name__}: {e}")
 
 if HAVE_TAG_SYNC:
-    check("the Doubtful tag is reserved and named",
-          tag_sync.DOUBTFUL_TAG == "!Library::Doubtful"
-          and "doubtful" in tag_sync.RESERVED_LEAVES)
-
-    # K-254 review Minor 5: the constant-only pin above never exercises
-    # what "reserved" actually buys — plan_reconcile (K-054's reverse
-    # sync) treats any !Library::<reserved leaf> tag as ineligible for
-    # the "this PDF got renamed in the sidebar" inference. Without the
-    # reserve, a lone missing PDF plus the freshly-created global
-    # Doubtful tag looks EXACTLY like a PDF renamed to "Doubtful" —
-    # profile-open reconcile would then rename the PDF and hand it that
-    # tag. With the reserve, the same inputs plan a safe "reapply"
-    # instead, touching Doubtful not at all.
-    _plan = tag_sync.plan_reconcile(
-        {"renal": "!Library::Renal"}, {"!Library::Doubtful"}
+    # A reserved tag from an existing collection must not rename a PDF.
+    _plan = tag_sync.plan_library_sync(
+        {"renal": (None, "Renal.pdf")}, {"renal": "!Library::Renal"},
+        {"!Library::Doubtful"}, nonempty={"renal"},
     )
-    check("!Library::Doubtful is never a reconcile-rename candidate",
-          _plan["candidates"] == [] and _plan["action"] == "reapply"
-          and _plan["rename"] is None,
-          _plan)
+    check("the legacy reserved tag is never a reconcile-rename candidate",
+          [a["kind"] for a in _plan] == ["delete"], _plan)
 
     # PR #4 fourth review (1): a stored lecture tag is user-derived and
     # lands inside Anki's QUERY LANGUAGE. desired_tag's sanitizer only
@@ -1312,10 +1054,6 @@ if HAVE_TAG_SYNC:
     check("a plain tag round-trips unchanged inside tag:\"…\"",
           tag_sync.tag_query("!Library::Renal") == 'tag:"!Library::Renal"',
           tag_sync.tag_query("!Library::Renal"))
-    check("the Doubtful tag itself is quoted the same way (no bare "
-          "operand left anywhere)",
-          tag_sync.tag_query(tag_sync.DOUBTFUL_TAG)
-          == 'tag:"!Library::Doubtful"')
 
 if HAVE_TAG_SYNC and HAVE_RETENTION:
     # _do_sync_one reaches retention._load_prefs()/_prefs_path() for
@@ -1357,243 +1095,46 @@ if HAVE_TAG_SYNC and HAVE_RETENTION:
             def members(self, tag):
                 return set(self._tagmap.get(tag, set()))
 
-        col = FakeCol(tags={"!Library::Renal": {1, 2, 3}, "!Library::Doubtful": {9}})
-        res = tag_sync._do_sync_one(
-            col, "renal", "!Library::Renal", desired_nids={1, 2, 3}, doubtful={2, 5}
-        )
-        check("the lecture tag keeps every match; Doubtful becomes exactly "
-              "the rejected set across PDFs",
-              col.members("!Library::Renal") == {1, 2, 3}
-              and col.members("!Library::Doubtful") == {2, 5},
-              (col.members("!Library::Renal"), col.members("!Library::Doubtful")))
-        check("both diffs are reported back",
-              res["doubtful_added"] == [2, 5] and res["doubtful_removed"] == [9],
-              res)
-
-        col2 = FakeCol(tags={"!Library::Renal": {1, 2, 3}})
-        res2 = tag_sync._do_sync_one(
-            col2, "renal", "!Library::Renal", desired_nids={1, 2, 3}
-        )
-        check("doubtful=None (plain indexing, no judge pass yet) never "
-              "invents or touches the Doubtful tag",
-              "!Library::Doubtful" not in col2._tagmap
-              and res2["doubtful_added"] == [] and res2["doubtful_removed"] == [])
-
-        # Final review I-3: membership is the rejected set INTERSECTED with
-        # each PDF's CURRENT at-threshold candidates, not the raw union of
-        # every verdict ever written. judged.json is append-only, so without
-        # the intersection a card that stops matching its lecture (the
-        # sensitivity slider moved, or the note was edited) keeps
-        # !Library::Doubtful forever — invisible inside Klaus, but not to a
-        # user's own search or filtered deck on the bare tag, and with no
-        # self-heal short of becoming that PDF's candidate again.
-        _pert = importlib.import_module("klausmate.pertinence")
-
-        def _seed_judged(safe, rejected, matches=None):
-            _pert.save_judged(_dbt_tmp, safe, {
-                "version": _pert.VERSION, "model": "m",
-                "verdicts": {str(n): {"pertinent": False, "reason": "", "page": 1,
-                                      "page_hash": "", "card_hash": "", "model": "m"}
-                             for n in rejected},
-            })
-            if matches is not None:
-                _mp = retention._matches_path(safe)
-                os.makedirs(os.path.dirname(_mp), exist_ok=True)
-                with open(_mp, "w", encoding="utf-8") as _f:
-                    _f.write(matches if isinstance(matches, str) else json.dumps({"matches": matches}))
-
-        # nid 2 rejected and still matching; nid 5 rejected but has fallen to
-        # 0.10; nid 8 matches but was never rejected. cardio has verdicts and
-        # NO matches.json at all.
-        _seed_judged("renal", [2, 5], matches=[[2, 0.9], [5, 0.10], [8, 0.95]])
-        _seed_judged("cardio", [7])
-        _members = tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
-        check("a rejected nid that has dropped below its PDF's threshold is no longer "
-              "doubtful; one still at/above it is; a matched nid nobody rejected never is",
-              _members == {2, 7}, _members)
-        check("...and a PDF whose matches.json is missing keeps its WHOLE rejected set — "
-              "never strip on missing data",
-              7 in _members and 7 in _pert.rejected_nids(_pert.load_judged(_dbt_tmp, "cardio")))
-        check("raising Match Sensitivity past a rejected card's score self-heals it out of "
-              "the tag on the next sync of any kind (the I-3 scenario)",
-              tag_sync.doubtful_members({"pdf_match_threshold": 0.95}) == {7})
-        _seed_judged("renal", [2, 5], matches="{not json at all")
-        check("a corrupt matches.json is 'don't know', not 'nobody' — renal's rejections "
-              "all stand rather than silently vanishing",
-              tag_sync.doubtful_members({"pdf_match_threshold": 0.5}) == {2, 5, 7})
-        check("the union across PDFs is untouched by the narrowing (a card rejected for A "
-              "and confirmed for B is still Doubtful — spec rule, known design debt)",
-              _pert.all_rejected(_dbt_tmp) == {2, 5, 7})
-        # Copilot review of PR #4 (2026-09-17): a judged.json that EXISTS but
-        # is unreadable used to read as EMPTY here, so that PDF contributed
-        # nothing and the full recompute stripped its Doubtful members —
-        # the opposite of the fail-safe above. It must raise instead; every
-        # sink catches that and passes doubtful=None (tag untouched).
-        with open(_pert.judged_path(_dbt_tmp, "cardio"), "w", encoding="utf-8") as _f:
-            _f.write("{torn")
-        _raised = False
-        try:
-            tag_sync.doubtful_members({"pdf_match_threshold": 0.5})
-        except ValueError:
-            _raised = True
-        check("a judged.json that exists but cannot be read makes doubtful_members RAISE "
-              "(the sinks turn that into doubtful=None) rather than strip that PDF's members",
-              _raised)
-        shutil.rmtree(os.path.join(_dbt_tmp, "pdf_index"), ignore_errors=True)
-
-        # K-254 review Important 2 + 3: sync_after_threshold's own guard
-        # and wiring — mutations 5/7 in the review walked straight
-        # through the pure-function pins above because nothing exercised
-        # the GLUE. `_run_sync_op` is stubbed to run `work` synchronously
-        # instead of queuing a CollectionOp (this file's aqt.operations
-        # stub is a pure no-op — see the module docstring above — so the
-        # real op would never fire at all), and `_folder_and_display` is
-        # stubbed to skip curation/drive_store, which is not what this
-        # pin is about.
-        pertinence = importlib.import_module("klausmate.pertinence")
+        col = FakeCol(tags={"!Library::Renal": {1, 3}})
+        tag_sync._do_sync_one(col, "renal", "!Library::Renal", desired_nids={1, 2})
+        check("lecture membership adds and removes notes", col.members("!Library::Renal") == {1, 2})
         _orig_folder_display = tag_sync._folder_and_display
         _orig_run_sync_op = tag_sync._run_sync_op
-        _orig_doubtful_members = tag_sync.doubtful_members
-        pkg.get_config = lambda: {}
+        _orig_cached_matches = tag_sync._cached_matches_many
+        pkg.get_config = lambda: {"pdf_match_threshold": 0.5}
         tag_sync._folder_and_display = lambda safe: (None, "Renal")
-        _captured: list = []
-        tag_sync._run_sync_op = (
-            lambda parent, label, work, on_done=None, on_finished=None:
-            _captured.append(work)
-        )
-        def _run_captured(fcol):
-            """`_captured[0](fcol)` if the guard under test actually let
-            work reach `_run_sync_op`, else None — so a regression in
-            the guard FAILS the check below instead of crashing this
-            whole test file via IndexError and hiding every later pin."""
-            return _captured[0](fcol) if _captured else None
-
+        _captured = []
+        tag_sync._run_sync_op = lambda parent, label, work, **kwargs: _captured.append(work)
         try:
-            def _boom_doubtful(cfg):
-                raise RuntimeError("boom — simulated judged.json corruption")
-
-            tag_sync.doubtful_members = _boom_doubtful
-            _captured.clear()
-            tag_sync.sync_after_threshold(
-                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
-            )
-            check("doubtful_members raising still reaches _run_sync_op — the "
-                  "lecture-tag retag the user just confirmed is never "
-                  "cancelled by a Doubtful-side failure",
-                  len(_captured) == 1)
-            _fcol = FakeCol()
-            _gres = _run_captured(_fcol)
-            check("...and doubtful safely becomes None (_do_sync_one's own "
-                  "contract), not a crash and not an invented tag",
-                  _gres is not None
-                  and _gres["doubtful_added"] == [] and _gres["doubtful_removed"] == []
-                  and "!Library::Doubtful" not in _fcol._tagmap)
-
-            tag_sync.doubtful_members = lambda cfg: {2, 5}
-            _captured.clear()
-            tag_sync.sync_after_threshold(
-                None, "renal", [(1, 0.9), (2, 0.8)], 0.5
-            )
-            _fcol2 = FakeCol()
-            _run_captured(_fcol2)
-            check("when doubtful_members SUCCEEDS, its set really reaches "
-                  "_do_sync_one's doubtful= — the exact wiring mutation 7 "
-                  "(drop doubtful from this call) would break",
-                  _fcol2.members("!Library::Doubtful") == {2, 5})
-
-            # sync_after_clear_overrides — same two guarantees, batch
-            # path. `_cached_matches` is stubbed too: with a cold
-            # card_index (nothing seeded on this scratch USER_FILES) it
-            # would return None for every PDF and the function would
-            # return before ever reaching _run_sync_op, which is not
-            # what either pin below is about.
-            _orig_cached_matches = tag_sync._cached_matches
-            tag_sync._cached_matches = lambda safe, cfg: [(1, 0.9), (2, 0.8)]
-            try:
-                tag_sync.doubtful_members = _boom_doubtful
-                _captured.clear()
-                tag_sync.sync_after_clear_overrides(None, ["renal"])
-                check("sync_after_clear_overrides: doubtful_members raising "
-                      "still reaches _run_sync_op for the whole batch",
-                      len(_captured) == 1)
-                _fcol3 = FakeCol()
-                _run_captured(_fcol3)  # work(col) — {"added","removed","count"} shape, not _do_sync_one's
-                check("...doubtful is None, not a crash, for the batch too "
-                      "— the Doubtful tag is left untouched entirely",
-                      "!Library::Doubtful" not in _fcol3._tagmap)
-
-                tag_sync.doubtful_members = lambda cfg: {7}
-                _captured.clear()
-                tag_sync.sync_after_clear_overrides(None, ["renal"])
-                _fcol4 = FakeCol()
-                _run_captured(_fcol4)
-                check("sync_after_clear_overrides: a successful doubtful_members "
-                      "reaches _do_sync_one's doubtful= here too",
-                      _fcol4.members("!Library::Doubtful") == {7})
-            finally:
-                tag_sync._cached_matches = _orig_cached_matches
+            tag_sync.sync_after_threshold(None, "renal", [(1, 0.9), (2, 0.4)], 0.5)
+            check("threshold sync schedules one collection operation", len(_captured) == 1)
+            if _captured:
+                _captured.pop()(col)
+            check("threshold sync removes the below-threshold note", col.members("!Library::Renal") == {1})
+            tag_sync._cached_matches_many = lambda safes, cfg: {s: [(1, 0.9), (2, 0.8)] for s in safes}
+            tag_sync.sync_after_clear_overrides(None, ["renal"])
+            check("clearing overrides schedules one collection operation", len(_captured) == 1)
+            if _captured:
+                _captured.pop()(col)
+            check("clearing overrides restores matching notes", col.members("!Library::Renal") == {1, 2})
         finally:
             tag_sync._folder_and_display = _orig_folder_display
             tag_sync._run_sync_op = _orig_run_sync_op
-            tag_sync.doubtful_members = _orig_doubtful_members
+            tag_sync._cached_matches_many = _orig_cached_matches
             del pkg.get_config
     finally:
         retention.USER_FILES = _orig_user_files
         shutil.rmtree(_dbt_tmp, ignore_errors=True)
 
-print("== K-254: retention counts confirmed cards only ==")
-
 if HAVE_RETENTION:
-    # note_card_counts: matches at/above threshold are nid 1 (.9) and
-    # nid 2 (.8); nid 3 (.7) is already below threshold. nid 2 is
-    # rejected, so it moves entirely out of notes/cards/suspended and
-    # into doubtful_count — confirmed = matched - rejected. nid 2 also
-    # has THREE cards (two viewable queues, one suspended -1), which is
-    # the point of this fixture (K-254 review Minor 6): doubtful_count
-    # is a CARD count sharing card_count's own unit — the Cards cell
-    # renders it as "{card_count} · {doubtful_count} doubtful" — not a
-    # note count, so a single rejected note with multiple viewable cards
-    # must report more than 1.
-    n, c, s, d = retention.note_card_counts(
-        [(1, 0.9), (2, 0.8), (3, 0.7)], 0.75,
-        {1: [0], 2: [0, 2, -1]}, rejected={2},
-    )
-    check("note_count excludes rejected; doubtful_count reports the "
-          "rejected note's VIEWABLE cards (2), not the note (1)",
-          n == 1 and d == 2, (n, c, s, d))
-    check("a rejected note's cards are never counted as viewable or "
-          "suspended either — not even its suspended one",
-          c == 1 and s == 0, (n, c, s, d))
-
-    n0, c0, s0, d0 = retention.note_card_counts(
-        [(1, 0.9), (2, 0.8)], 0.75, {1: [0], 2: [0]}
-    )
-    check("rejected=None (the default) matches the pre-K-254 3-tuple "
-          "contract with doubtful_count 0",
-          (n0, c0, s0, d0) == (2, 2, 0, 0))
-
-    # pdf_retention: same two notes, nid 2's card barely retained (0.1).
-    # Excluding it as rejected should RAISE the confirmed score, not
-    # lower it — the rejected card was dragging the average down.
-    _card_r_254 = {1: [(0.9, False)], 2: [(0.1, False)]}
-    r_all = retention.pdf_retention([(1, 0.9), (2, 0.8)], 0.75, _card_r_254)
-    r_conf = retention.pdf_retention(
-        [(1, 0.9), (2, 0.8)], 0.75, _card_r_254, rejected={2}
-    )
-    check("the score ignores rejected cards",
-          r_conf["retention"] > r_all["retention"],
-          (r_all["retention"], r_conf["retention"]))
-    # K-254 review Minor 7: this used to compare the SAME call to
-    # itself ("retention.pdf_retention(...) == r_all"), which can only
-    # ever prove determinism — mutation-tested to survive a real
-    # divergence (rejected=None silently dropping the weakest match).
-    # Concrete values instead: both notes matched, both single-card, and
-    # the exact pre-K-254 aggregate (0.9*0.9 + 0.8*0.1 over 0.9+0.8).
-    check("rejected=None reproduces the pre-K-254 aggregate exactly — "
-          "concrete values, not a call compared to its own result",
+    check("threshold counts include viewable and suspended cards",
+          retention.note_card_counts([(1, .9), (2, .8), (3, .7)], .75,
+                                     {1: [0], 2: [0, 2, -1], 3: [0]}) == (2, 3, 1))
+    _card_r = {1: [(0.9, False)], 2: [(0.1, False)]}
+    r_all = retention.pdf_retention([(1, .9), (2, .8)], .75, _card_r)
+    check("retention includes every note above threshold with similarity weighting",
           r_all["matched_notes"] == 2 and r_all["matched_cards"] == 2
-          and abs(r_all["retention"] - 0.5235294117647059) < 1e-9,
-          r_all)
+          and abs(r_all["retention"] - 0.5235294117647059) < 1e-9, r_all)
 
 print("== threshold default migration (retention._migrate_default_threshold) ==")
 
@@ -1621,7 +1162,7 @@ def _mig(cfg):
 
 _D = _ret_mod.DEFAULT_THRESHOLD
 
-check("current default is 0.75", _D == 0.75)
+check("current default is 0.45 (K-302 centered scale)", _D == 0.45)
 check(
     "a stored 0.35 (first shipped default) moves to the current default",
     _mig({"pdf_match_threshold": 0.35})["pdf_match_threshold"] == _D,
@@ -3191,14 +2732,6 @@ else:
     shutil.rmtree(_da_uf, ignore_errors=True)
 
 print("== Task 11: the dead in-house assistant-loop modules are gone ==")
-# D6 (docs/superpowers/specs/2026-09-01-klaus-assistant-claude-code-design.md
-# section 2/11): llm_client, entitlement, assistant_session, podcast and
-# assistant_panel were the whole in-house chat/practice/podcast loop the
-# Claude Code assistant (agent_host + anki_endpoint + assistant_dock)
-# replaces. Both the modules and their tests must be gone, and — the part
-# a plain `rm` cannot verify by itself — no SURVIVING test's own bootstrap
-# may still try to import one, or that test would fail at collection time
-# with an ImportError instead of a clean, honest "file not found" here.
 _DEL_MODS = ("llm_client", "entitlement", "assistant_session", "podcast",
              "assistant_panel")
 for _dm in _DEL_MODS:
@@ -3211,13 +2744,6 @@ for _dt in _DEL_TESTS:
     check(f"tests/{_dt} no longer exists",
           not os.path.exists(os.path.join(_TESTS_DIR, _dt)))
 
-# Real import shapes only — never a bare substring — so this cannot
-# misfire on unrelated prose that merely mentions the word: a raw-source
-# check for the retired "podcast" copy in manage_models.py (present-day,
-# in test_manage_models_assistant.py), or the SURVIVING assistant_sessions
-# (plural — Task 7's per-PDF session store), whose name is a superstring
-# of the deleted assistant_session.py (singular) and must never trip a
-# bare `in` test. \b word boundaries are what keep the two apart.
 _IMPORT_SHAPES = {
     _dm: _re.compile(
         r'import_module\(\s*["\']klausmate\.' + _re.escape(_dm) + r'["\']\s*\)'

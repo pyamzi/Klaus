@@ -1,18 +1,11 @@
-# KlausMate — a lecture-PDF library with semantic card matching for Anki
+# KlausMate: lecture PDFs and local matching
 
-Klaus gives you a library for your lecture PDFs and finds the cards in your
-collection that each one covers. A native PDF viewer, highlights, and image
-cropping come along for the ride. There's no autocomplete or chat feature —
-the one AI capability is semantic search, which runs on a cloud embedding
-API by default.
-
-> **Privacy.** Semantic search sends your card text to Voyage AI's cloud
-> embedding service to build the search index — that's the default, and the
-> only thing that leaves your computer. Switch the embedding provider to
-> Ollama in **Manage models…** to keep it fully local instead. No telemetry
-> either way.
-
----
+**Privacy:** Embeddings run against the configured local Ollama server. Runtime
+and model downloads use the network. An external MCP client can request lecture
+text, images and card context, and its chosen model provider may receive
+that context. Local inference in Klaus does not make external-client processing
+local. See [configuration](config.md), [embeddings](embeddings.py)
+and [endpoint](anki_endpoint.py).
 
 ## What it does
 
@@ -25,14 +18,13 @@ API by default.
   meaning, and tags every card that lecture covers with its own
   `!Library::…` tag, so the matches are one click away in Anki's tag
   sidebar. Re-run it as **Update Search Index** after you add cards.
-- **Library** — the **Library** link in the top toolbar (left of
-  Decks…Sync) opens a window listing every PDF you've imported, organized
-  into folders you create (mirrored as real folders on disk). Each row
-  shows a retention score — the share of that PDF's matched cards you'd
-  currently recall — plus its card and note counts, and a right-click menu
-  to open, rename, move to a folder, index it, adjust how closely a card
-  must relate to count as a match, show matched cards in Browse, suspend or
-  unsuspend its cards, see its retention history, or delete it.
+- **Library** — the first section of Browse's sidebar lists every PDF
+  you've imported, in folders mirrored as real folders on disk. Each row
+  shows a retention % (how much of its cards you'd recall right now).
+  Click a PDF to see its cards; double-click it to read it in place of the
+  cards (Esc or a click goes back). Anki's own Rename, drag and Delete act
+  on the PDF itself. Right-click adds Match Sensitivity…, Retention
+  History… and Show in Finder.
 - **Copying matches into a deck** — select the notes you want in Browse and
   use **Notes → KlausMate: Create Curated Deck from Selection…**. It's one
   undo step, and your originals are untouched.
@@ -46,31 +38,52 @@ API by default.
   field, drag a crop box, and the result saves as a **new** media file. The
   original image, and any other note using it, is untouched.
 
-## Setup
+## Local model setup
 
-**Tools → KlausMate Preferences…** is the one settings dialog (the star in
-the top toolbar opens it too):
+Open **Tools → KlausMate Preferences… → Local models** (the toolbar star
+also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
+and embedding model is `nomic-embed-text`.
 
-- **Semantic Search** — pick your embedding provider. **Voyage** (cloud,
-  default) needs a free API key from voyageai.com. **OpenAI** (cloud) needs
-  your own key. **Ollama** runs locally — free and private, but needs
-  Ollama installed (Klaus can download and manage a local copy for you the
-  first time it's needed). **Index Now** builds or refreshes the card
-  index, and **Test connection** checks whether Ollama is reachable.
-- **Local model library** — pull or delete Ollama embedding models
-  (`nomic-embed-text` is the default).
-- **General** and **Appearance** — image cropping, whether Klaus manages a
-  local Ollama install automatically, the accent colour, and the deck and
-  study backgrounds.
+1. Use **Install/start** to authorize installation or start a local Ollama
+   runtime, or enter the endpoint of your own local Ollama server. **Automatic
+   management** starts an installed runtime on profile open; it does not download
+   a runtime or model automatically. See [Ollama's official quickstart](https://docs.ollama.com/quickstart).
+2. Use **Refresh** to inspect **Installed models**. Enter `nomic-embed-text`
+   under **Download model** and choose **Pull** if needed. Select a model,
+   check **Embedding model**, then **Save**. Changing models offers a local
+   re-index. **Update runtime**, **Stop managed server** and confirmed
+   **Delete** manage runtime/model resources; progress is shown during downloads.
+3. Optional external client: install a separate Python **3.9 or newer**, then
+   use **External clients → Copy configuration**. Merge the `klaus` entry into
+   Claude Desktop's `mcpServers` configuration and restart that client. Keep
+   Anki open with a profile loaded. The copied block uses absolute Python,
+   bridge and discovery-file paths, without a token or port. Copy again after
+   moving Python or the add-on. Klaus does not modify the client's settings.
+   Follow the [official local MCP setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
-## Reclaiming disk space
+`current_view` supplies view metadata; `current_page` supplies slide text,
+selection and an image when available. Collection writes require
+approval in Anki. Treat lecture content as untrusted input. The bridge is local;
+this is not a public endpoint or a direct ChatGPT connector. Real Claude Desktop
+and live Anki integration remain installation checks, not automated-test claims.
 
-If Klaus downloaded and manages its own local Ollama install for you, it
-lives under `user_files/runtime/` inside the add-on folder. There's no
-in-app button to remove it: turn off "Manage Ollama automatically" in
-**Manage models… → General** first (otherwise Klaus just re-downloads it
-next time it's needed), then delete that folder yourself. Find it via
-**Tools → Add-ons → View Files**.
+The exact defaults and controls are documented in [configuration](config.md)
+and implemented by [Preferences](manage_models.py).
+
+## Matching
+
+Lecture recording lives in the Klaus app, not the add-on.
+
+Cosine sensitivity controls matching and retention. There is no reasoning judge
+or Doubtful menu. Existing historical tags are preserved. See [tag sync](tag_sync.py)
+and [matching](retention.py).
+
+## Reclaiming runtime disk space
+
+Turn off **Automatic management**, **Save**, and stop the managed server before
+removing `user_files/runtime/`. Model storage belongs to the configured Ollama
+server; use the confirmed **Delete** control for installed models. See
+[runtime management](ollama_runtime.py). Keep backups of personal library data.
 
 ## Tags
 
@@ -83,6 +96,6 @@ it. Notes copied into a deck from Browse also get a permanent
 `klaus::`-prefixed tags renames them automatically, once, the first time you
 open Anki after updating.
 
----
+## Support
 
-Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY)
+Questions or feedback: [Discord](https://discord.gg/uFRgE8RtDY).

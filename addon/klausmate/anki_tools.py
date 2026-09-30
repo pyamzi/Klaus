@@ -2,8 +2,7 @@
 
 The tool layer both assistants call: the query assistant reads through
 ``search_notes`` / ``get_note`` / ``search_lecture_pdfs``, and the card
-assistant writes through ``create_note`` / ``update_note`` and the batch
-``add_reviewed_cards``.
+assistant writes through ``create_note`` / ``update_note``.
 
 Restored from the deletion in K-032 (`30847b9^`), which took it out when the
 agentic chat went. One thing had rotted in the meantime:
@@ -13,12 +12,9 @@ which is also what the rest of the add-on means by "search".
 
 Design for testability: every handler is ``handler(col, args, ctx)`` with
 a duck-typed ``col`` and a ctx dict of injected capabilities, so the whole
-registry runs against a stub collection outside Anki. ``execute_tool`` is
-the only aqt-coupled entry point: it marshals the handler (including the
-write-confirmation dialog) onto the Qt main thread and waits.
-
-Write tools never touch the collection without the user approving a
-plain-text preview dialog (plain text so note-field HTML can't spoof it).
+registry runs against a stub collection outside Anki. The only caller is
+``anki_endpoint``, which shows its own plain-text approval before a write
+and runs it as a CollectionOp; ``default_ctx``'s ``confirm`` refuses.
 """
 
 from __future__ import annotations
@@ -27,7 +23,6 @@ import datetime as _dt
 import json
 import os
 import re
-import threading
 import time
 from typing import Any, Callable
 
@@ -41,11 +36,6 @@ MAX_CHUNK_CHARS = 2_000
 _CONFIRM_FIELD_CHARS = 500
 
 WRITE_TOOLS = {"create_note", "update_note"}
-
-# Timeouts for main-thread marshalling: writes include a human staring at
-# a dialog, so they get 10 minutes; reads should be instant.
-READ_TIMEOUT_S = 30.0
-WRITE_TIMEOUT_S = 600.0
 
 
 class ToolError(Exception):
@@ -205,7 +195,9 @@ def default_ctx() -> dict:
         _sh = _strip_html_fallback
     return {
         "strip": _sh,
-        "confirm": _confirm_write_dialog,
+        # Callers that write pass their own approval (the endpoint's
+        # dialog); a write reached without one is refused, never approved.
+        "confirm": lambda *_a: False,
         "user_files": _USER_FILES,
         # Injected rather than imported by the handler, so the tool stays
         # runnable against a stub with no embedding provider and no network.
@@ -222,7 +214,7 @@ def _semantic_pdf_search(query: str, top_k: int, user_files: str) -> list[dict]:
     different embedding signature is SKIPPED rather than scored, because a
     score from another embedding space is not a smaller number, it is a
     meaningless one. The hit's text is that page's ``page_store`` record —
-    slide text plus any transcript said over it — falling back to the bare
+    its slide text — falling back to the bare
     slide text when there is no record, or no PDF file to key one on.
     """
     from . import embeddings, page_store, pdf_handler, pdf_index
@@ -544,167 +536,3 @@ def run_tool(col: Any, name: str, arguments: dict, ctx: dict) -> tuple[str, bool
                     return text, False
         text = text.encode("utf-8")[:MAX_RESULT_BYTES].decode("utf-8", "ignore")
     return text, False
-
-
-def execute_tool(name: str, arguments: dict) -> tuple[str, bool]:
-    """Real-Anki entry point — called from ToolServer's HTTP threads.
-
-    Marshals the whole handler (including any confirmation dialog) onto
-    the Qt main thread and blocks the calling worker until it finishes.
-    Never call this ON the main thread — it would deadlock. The assistant
-    runs its tool loop on a worker thread, which is what makes that safe.
-    """
-    timeout = WRITE_TIMEOUT_S if name in WRITE_TOOLS else READ_TIMEOUT_S
-
-    def on_main() -> tuple[str, bool]:
-        from aqt import mw
-
-        if mw is None or mw.col is None:
-            return (
-                json.dumps(
-                    {
-                        "error": "Anki collection is not available right now "
-                        "(syncing or profile closed) — try again shortly"
-                    }
-                ),
-                True,
-            )
-        return run_tool(mw.col, name, arguments, default_ctx())
-
-    try:
-        return _run_on_main_sync(on_main, timeout)
-    except TimeoutError:
-        return (
-            json.dumps({"error": f"Tool timed out after {int(timeout)}s"}),
-            True,
-        )
-    except Exception as e:
-        return json.dumps({"error": f"internal error: {type(e).__name__}"}), True
-
-
-def _run_on_main_sync(fn: Callable[[], Any], timeout: float) -> Any:
-    from aqt import mw
-
-    box: dict[str, Any] = {}
-    done = threading.Event()
-
-    def wrapper() -> None:
-        try:
-            box["result"] = fn()
-        except BaseException as e:  # noqa: BLE001 — relayed to caller
-            box["error"] = e
-        finally:
-            done.set()
-
-    mw.taskman.run_on_main(wrapper)
-    if not done.wait(timeout):
-        raise TimeoutError
-    if "error" in box:
-        raise box["error"]
-    return box["result"]
-
-
-def add_reviewed_cards(
-    col: Any,
-    proposals: list,
-    deck_name: str,
-    notetype: str,
-    front_field: str = "",
-    back_field: str = "",
-    tag: str = "!Library::Drafted",
-) -> Any:
-    """Write card_forge's ACCEPTED proposals as one undoable operation.
-
-    Separate from ``create_note`` because the unit differs. create_note is
-    one note the model asked for, approved one dialog at a time. This is a
-    batch the user has already reviewed card by card, and it must undo as a
-    batch: accepting twelve cards and then pressing Ctrl+Z eleven times to
-    take them back is not an undo, it is a punishment.
-
-    Follows curation.py's proven pattern — add_custom_undo_entry →
-    add_notes → merge_undo_entries — rather than looping col.add_note,
-    which would leave one undo entry per card.
-
-    The caller passes proposals straight from ``ReviewQueue.to_write()``, so
-    nothing unaccepted can arrive here. Provenance travels with the card as
-    a tag, because a card whose source is only in a review UI that has since
-    closed is a card you cannot audit later.
-    """
-    model = col.models.by_name(notetype)
-    if model is None:
-        raise ToolError(f"Note type '{notetype}' not found")
-    deck = col.decks.by_name(deck_name)
-    if deck is None:
-        raise ToolError(f"Deck '{deck_name}' not found")
-    names = [f["name"] for f in model["flds"]]
-    if len(names) < 2:
-        raise ToolError(f"Note type '{notetype}' has fewer than two fields")
-    front = front_field or names[0]
-    back = back_field or names[1]
-    for field in (front, back):
-        if field not in names:
-            raise ToolError(f"Field '{field}' not in '{notetype}': {names}")
-
-    from anki.collection import AddNoteRequest
-
-    if not proposals:
-        return None
-    pos = col.add_custom_undo_entry(
-        f"Klaus: add {len(proposals)} card"
-        f"{'s' if len(proposals) != 1 else ''}"
-    )
-    did = col.decks.id(deck_name)
-    requests = []
-    for proposal in proposals:
-        note = col.new_note(model)
-        note[front] = str(proposal.front)
-        note[back] = str(proposal.back)
-        tags = [tag] if tag else []
-        # 1-based in the tag: a human reads it against a page number in a
-        # PDF viewer, not code.
-        tags += [f"page::{int(p) + 1}" for p in proposal.pages]
-        note.tags = tags
-        # add_notes takes AddNoteRequest, never bare notes — the deck id
-        # rides with each note rather than being passed alongside.
-        requests.append(AddNoteRequest(note=note, deck_id=did))
-    col.add_notes(requests)
-    return col.merge_undo_entries(pos)
-
-
-def _confirm_write_dialog(title: str, sections: list[tuple[str, str]]) -> bool:
-    """Modal approval dialog. Main thread only (called via execute_tool).
-
-    Plain-text QPlainTextEdit — note-field HTML renders inert, so the
-    model can't dress a destructive change up as something harmless.
-    """
-    from aqt import mw
-    from aqt.qt import (
-        QDialog,
-        QDialogButtonBox,
-        QLabel,
-        QPlainTextEdit,
-        QVBoxLayout,
-    )
-
-    dlg = QDialog(mw)
-    dlg.setWindowTitle("Klaus — approval needed")
-    lay = QVBoxLayout(dlg)
-    head = QLabel(title)
-    head.setStyleSheet("font-weight: 600; font-size: 14px;")
-    lay.addWidget(head)
-    body = QPlainTextEdit()
-    body.setReadOnly(True)
-    body.setMinimumSize(460, 260)
-    body.setPlainText(
-        "\n".join(f"── {name} ──\n{value}" for name, value in sections)
-    )
-    lay.addWidget(body)
-    btns = QDialogButtonBox()
-    approve = btns.addButton("Approve", QDialogButtonBox.ButtonRole.AcceptRole)
-    deny = btns.addButton("Deny", QDialogButtonBox.ButtonRole.RejectRole)
-    btns.accepted.connect(dlg.accept)
-    btns.rejected.connect(dlg.reject)
-    deny.setDefault(True)
-    approve.setAutoDefault(False)
-    lay.addWidget(btns)
-    return dlg.exec() == QDialog.DialogCode.Accepted

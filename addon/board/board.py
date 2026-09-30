@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import boardlib as B
@@ -144,6 +145,46 @@ def cmd_check_disjoint(args) -> int:
     return 1
 
 
+
+def cmd_init(args) -> int:
+    """Create BOARD.md and drop ROLES.md beside it.
+
+    Ships as its own command because a board is useless to a new project
+    until the roles/columns/gates document is actually THERE: the protocol
+    is the half that makes the CLI safe, and a copy step buried in a README
+    is a copy step somebody skips.
+    """
+    os.makedirs(B.board_dir(), exist_ok=True)
+    board_path = B.board_path()
+    created = []
+    if not os.path.exists(board_path):
+        B.mutate(lambda board: None)          # writes the header + columns
+        created.append(os.path.basename(board_path))
+    # The skill ships templates/ beside scripts/; this live copy sits in
+    # board/, so it reads them out of the vendored skill instead.
+    here = os.path.dirname(os.path.abspath(__file__))
+    roles_src = next((p for p in (
+        os.path.join(here, "..", "templates", "ROLES.md"),
+        os.path.join(here, "..", ".claude", "skills", "agent-board",
+                     "templates", "ROLES.md"),
+    ) if os.path.exists(p)), None)
+    roles_dst = os.path.join(B.board_dir(), "ROLES.md")
+    if roles_src is None and not os.path.exists(roles_dst):
+        print("warning: no ROLES.md template found; not installed",
+              file=sys.stderr)
+    elif roles_src and not os.path.exists(roles_dst):
+        with open(roles_src, encoding="utf-8") as fh:
+            text = fh.read()
+        with open(roles_dst, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        created.append("ROLES.md")
+    if created:
+        print("created: %s (in %s)" % (", ".join(created), B.board_dir()))
+    else:
+        print("already initialised in %s" % B.board_dir())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="board.py", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -210,6 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     cd = sub.add_parser("check-disjoint", help="report file collisions")
     cd.set_defaults(func=cmd_check_disjoint)
+
+    i = sub.add_parser("init", help="create BOARD.md + ROLES.md")
+    i.set_defaults(func=cmd_init)
 
     return p
 

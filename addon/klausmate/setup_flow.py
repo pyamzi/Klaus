@@ -1,24 +1,4 @@
-"""First-run welcome dialog and per-profile-open readiness checks.
-
-Extracted verbatim from __init__.py (K-025, slice 3 of the K-006 file
-split). Backs the one-time "Welcome to Klaus" dialog and the readiness
-nudge that runs on every profile open thereafter.
-
-Klaus is API-first since 2026-09-15 (K-226, spec D1): indexing runs on
-OpenAI and the pertinence judge on Anthropic, both through the user's
-own API keys (or one Klaus Plus key in place of both). The assistant is
-the user's own Claude Code login and needs no key at all. There is no
-local runtime to start, probe, download or update any more, so readiness
-is one question — are those keys there — and the only other thing worth
-surfacing on profile open is the Library folder.
-
-This module is imported by __init__.py at package load time, so it must
-never import __init__ (this package) at module load — only from inside a
-function, after the package has finished loading. _pkg() below is that
-lazy accessor (same pattern as manage_models.py's and browse_toggles.py's
-_pkg()); it reaches config and dialog helpers that still live in
-__init__.py: get_config, write_config, open_settings_dialog.
-"""
+"""Welcome, library-folder readiness and silent local Ollama startup."""
 
 from __future__ import annotations
 
@@ -29,46 +9,12 @@ from aqt.operations import QueryOp
 from aqt.qt import QMessageBox, QTimer
 from aqt.utils import showWarning, tooltip
 
-from . import plus
 from .manage_models import manage_models_dialog
 
-# The two provider keys, each described to the user in exactly ONE
-# place: what it buys, what stays dark without it, and the window title
-# of the nudge that names it. KEYS_COPY and the per-case nudge are both
-# built from this table, so the welcome dialog and the profile-open
-# nudge can never describe setup two ways — and the nudge can never name
-# a key it did not actually check (K-231: it listed both while readiness
-# tested only the OpenAI one, so a user who pasted that key alone was
-# told setup was done and met the first surprise at the judge).
-KEY_COPY = {
-    "api_key_openai": {
-        "buys": "Indexing your cards and lecture pages uses OpenAI "
-                "through your own API key.",
-        "without": "semantic search and PDF study priorities won't "
-                   "produce results",
-        "title": "KlausMate: semantic search needs an API key",
-    },
-    "api_key_anthropic": {
-        "buys": "Judging which of the matched cards a lecture page "
-                "really covers uses Anthropic through your own API key.",
-        "without": "Klaus indexes without the judging pass, so no card "
-                   "is marked doubtful",
-        "title": "KlausMate: judging lecture matches needs an API key",
-    },
-}
-
-# One action sentence for every case — it never has to agree with how
-# many keys are missing.
-KEYS_ACTION = (
-    "Add what's missing in KlausMate Preferences → API keys & models, or "
-    "subscribe to Klaus Plus there and skip both keys. The assistant uses "
-    "your own Claude Code login and needs no key."
+LOCAL_MODELS_COPY = (
+    "Semantic search uses local Ollama embeddings. Configure your Ollama endpoint "
+    "and embedding model in KlausMate Preferences → Local models."
 )
-
-# The fresh-install wording: both keys named. Every narrower case is
-# this same copy with the keys that ARE set left out.
-KEYS_COPY = " ".join([v["buys"] for v in KEY_COPY.values()] + [KEYS_ACTION])
-
 
 def _pkg():
     import importlib
@@ -102,64 +48,21 @@ def _themed_message_box(parent: Any, title: str, icon: Any) -> QMessageBox:
 _first_run_dialog_shown_this_session: bool = False
 
 
-def missing_keys(cfg: dict) -> list[str]:
-    """Which provider keys are not set — ``[]`` when none is.
-
-    A Klaus Plus key covers BOTH (K-246): the service holds the provider
-    keys, so a subscriber has nothing to paste. Order follows KEY_COPY,
-    which is the order the nudge names them in.
-
-    This is a WORDING gate, never an entitlement check — nothing in
-    Klaus is blocked on what it answers, and the service and the
-    providers have the last word. It exists so the nudge says what it
-    checked, nothing more.
-    """
-    if plus.key(cfg):
-        return []
-    return [k for k in KEY_COPY if not str((cfg or {}).get(k) or "").strip()]
-
-
-def keys_missing_copy(cfg: dict) -> str:
-    """KEYS_COPY narrowed to the keys actually missing; "" when none is.
-
-    Derived from the same clauses KEYS_COPY is built from — never a
-    second copy of the wording.
-    """
-    names = missing_keys(cfg)
-    if not names:
-        return ""
-    return " ".join([KEY_COPY[n]["buys"] for n in names] + [KEYS_ACTION])
-
-
-def _embedding_ready(cfg: dict) -> bool:
-    """True if semantic search can actually run right now — the OpenAI
-    key or a Klaus Plus subscription is present. Nothing to probe: a key
-    is a string in config. The EMBEDDING half of readiness only; the
-    judge's Anthropic key is reported by ``missing_keys`` and gates
-    nothing here."""
-    return "api_key_openai" not in missing_keys(cfg)
-
-
 def first_run_check() -> None:
     """Welcome dialog shown once per profile.
 
     Always shows the how-to bullets (PDF sidebar, semantic search) so the
     user knows the feature surface — not just when something needs setup.
-    The readiness line and follow-up buttons say whether the API keys are
-    in place yet.
+    The readiness line directs users to local model settings.
     """
     global _first_run_dialog_shown_this_session
     # Reset each profile-open so profile switches re-evaluate cleanly.
     _first_run_dialog_shown_this_session = False
     cfg = _pkg().get_config()
+    generation = _profile_generation
     if cfg.get("_first_run_done"):
         return
     _first_run_dialog_shown_this_session = True
-
-    # The same derived sentence the profile-open nudge shows, so the two
-    # surfaces cannot describe setup two ways (K-231).
-    missing_copy = keys_missing_copy(cfg)
-    ready = not missing_copy
 
     body_lines = [
         "Klaus adds a PDF workspace and semantic search to Anki.",
@@ -170,31 +73,22 @@ def first_run_check() -> None:
         "them, and scores how well you still recall them.",
         "",
     ]
-    body_lines.append(
-        "Everything Klaus needs is set up — you're ready to go."
-        if ready
-        else missing_copy
-    )
+    body_lines.append(LOCAL_MODELS_COPY)
 
     msg = _themed_message_box(mw, "Welcome to Klaus", QMessageBox.Icon.Information)
     msg.setText("\n".join(body_lines))
-    if ready:
-        # "OK" is the primary/dismissive action here — stays default blue.
-        msg.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
-        manage_btn = msg.addButton(
-            "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
-        )
-        manage_btn.setObjectName("SecondaryButton")
-    else:
-        manage_btn = msg.addButton(
-            "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
-        )
-        msg.addButton(
-            "Later", QMessageBox.ButtonRole.AcceptRole
-        ).setObjectName("SecondaryButton")
-        msg.setDefaultButton(manage_btn)
+    manage_btn = msg.addButton(
+        "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
+    )
+    msg.addButton(
+        "Later", QMessageBox.ButtonRole.AcceptRole
+    ).setObjectName("SecondaryButton")
+    msg.setDefaultButton(manage_btn)
 
     def _on_welcome_finished(_r: int) -> None:
+        if generation != _profile_generation:
+            msg.deleteLater()
+            return
         clicked = msg.clickedButton()
         if clicked is manage_btn:
             try:
@@ -243,6 +137,7 @@ def _library_root_check(then: Callable[[], None]) -> None:
     from . import pdf_handler
 
     cfg = _pkg().get_config()
+    generation = _profile_generation
     if pdf_handler.get_library_root(cfg):
         then()
         return
@@ -266,6 +161,8 @@ def _library_root_check(then: Callable[[], None]) -> None:
         no_btn.setObjectName("SecondaryButton")
 
     def _pick_folder() -> None:
+        if generation != _profile_generation:
+            return
         from aqt.qt import QFileDialog
 
         chosen = QFileDialog.getExistingDirectory(
@@ -282,6 +179,8 @@ def _library_root_check(then: Callable[[], None]) -> None:
             return pdf_handler.migrate_to_root(USER_FILES, chosen, folders)
 
         def on_done(result: Any) -> None:
+            if generation != _profile_generation:
+                return
             cfg2 = _pkg().get_config()
             cfg2["library_root"] = chosen
             _pkg().write_config(cfg2)
@@ -295,6 +194,8 @@ def _library_root_check(then: Callable[[], None]) -> None:
                 tooltip("Klaus: Library folder set")
 
         def on_fail(exc: Exception) -> None:
+            if generation != _profile_generation:
+                return
             print(f"[klausmate] library migration failed: {exc}")
             showWarning(
                 f"Could not set up the Library folder: {exc}", parent=mw
@@ -308,6 +209,9 @@ def _library_root_check(then: Callable[[], None]) -> None:
         then()
 
     def _on_answered(_r: int) -> None:
+        if generation != _profile_generation:
+            msg.deleteLater()
+            return
         clicked = msg.clickedButton()
         accepted = (
             clicked is not None
@@ -331,31 +235,144 @@ def setup_readiness_check() -> None:
     Klaus can actually embed — surfacing an actionable dialog only when
     it genuinely can't.
 
-    Skipped on the very first profile open because ``first_run_check``
-    already showed the welcome dialog (which itself includes setup
-    guidance). The ``_first_run_dialog_shown_this_session`` module flag
+    The first profile open starts the runtime behind the welcome dialog
+    without stacking another setup prompt. The ``_first_run_dialog_shown_this_session`` module flag
     tracks that — both hooks share the ``profile_did_open`` signal in
     registration order: first_run_check runs first, this runs second.
     """
     if _first_run_dialog_shown_this_session:
+        _readiness_after_library_root()
         return
 
     # K-125: the Library-folder offer is callback-driven now, so the
     # provider checks run through its continuation — the old blocking
     # askUser ordered the two prompt families for free.
-    _library_root_check(_readiness_after_library_root)
+    generation = _profile_generation
+    def after_library() -> None:
+        if generation == _profile_generation:
+            _readiness_after_library_root()
+    _library_root_check(after_library)
+
+
+# A generation fences callbacks belonging to a closed profile. The worker lock
+# also keeps cleanup of a late startup ahead of the next profile's startup.
+import threading
+_profile_generation = 0
+_runtime_worker_lock = threading.Lock()
+_profile_runtime_cancel = threading.Event()
+
+
+def runtime_lifetime() -> tuple[int, threading.Event]:
+    """Capture on the main thread before scheduling profile-owned work."""
+    return _profile_generation, _profile_runtime_cancel
+
+
+def run_profile_runtime(
+    lifetime: tuple[int, threading.Event],
+    operation: Callable[[threading.Event], Any],
+) -> Any:
+    """Serialize startup and stale-worker cleanup across profile switches."""
+    generation, cancel = lifetime
+    with _runtime_worker_lock:
+        if cancel.is_set() or generation != _profile_generation:
+            return None
+        try:
+            result = operation(cancel)
+        finally:
+            # A helper can finish spawning while profile close sets cancel.
+            # Clean up before releasing the lock to the next profile, also
+            # when the old operation raises after starting its process.
+            if generation != _profile_generation:
+                from . import ollama_runtime
+                ollama_runtime.server_manager.stop()
+        return result if generation == _profile_generation else None
+
+
+def stop_local_runtime() -> None:
+    global _profile_generation, _profile_runtime_cancel
+    _profile_runtime_cancel.set()
+    _profile_generation += 1
+    _profile_runtime_cancel = threading.Event()
+    from . import ollama_runtime
+    ollama_runtime.server_manager.stop()
+
+
+def runtime_endpoint_saver(
+    lifetime: tuple[int, threading.Event], starting_endpoint: Any,
+) -> Callable[[dict], None]:
+    """Persist automatic relocation only while its profile and endpoint match."""
+    generation, cancel = lifetime
+
+    def save_endpoint(updated: dict) -> None:
+        endpoint = updated["endpoint"]
+
+        def apply() -> None:
+            if cancel.is_set() or generation != _profile_generation:
+                return
+            cfg = _pkg().get_config()
+            if cfg.get("endpoint") != starting_endpoint:
+                return
+            # Read, compare and merge in this single main-thread callback.
+            # patch_config queues again, leaving a gap for newer endpoint edits.
+            cfg["endpoint"] = endpoint
+            _pkg().write_config(cfg)
+
+        mw.taskman.run_on_main(apply)
+
+    return save_endpoint
 
 
 def _readiness_after_library_root() -> None:
-    """The provider-readiness half of setup_readiness_check, chained
-    behind the Library-folder offer's continuation (K-125).
+    from . import ollama_runtime
+    cfg = _pkg().get_config()
+    lifetime = runtime_lifetime()
+    generation, _cancel = lifetime
 
-    A pass-through since K-226 — the silent local-runtime start and the
-    once-per-version runtime update offer that used to sit here went
-    with the runtime. Kept as the named continuation so the chain reads
-    the same and a future async step has a place to land.
-    """
-    _readiness_check_body()
+    save_endpoint = runtime_endpoint_saver(lifetime, cfg.get("endpoint"))
+
+    def start(_cancel: threading.Event) -> Any:
+        if cfg.get("runtime_auto_setup", True):
+            return ollama_runtime.ensure_server(dict(cfg), save_config=save_endpoint)
+        from .ollama_setup import ollama_reachable
+        return ollama_runtime.EnsureResult(
+            "reachable" if ollama_reachable(str(cfg.get("endpoint") or "http://127.0.0.1:11434")) else "failed",
+            str(cfg.get("endpoint") or "http://127.0.0.1:11434"),
+        )
+
+    def work(_col: Any) -> Any:
+        return run_profile_runtime(lifetime, start)
+
+    def done(result: Any) -> None:
+        if generation != _profile_generation or result is None:
+            return
+        if _first_run_dialog_shown_this_session:
+            return
+        if result.status in ("reachable", "started"):
+            _offer_v2_index_sweep(_pkg().get_config())
+            _rematch_stale_matches()
+        else:
+            _readiness_check_body()
+
+    op = QueryOp(parent=mw, op=work, success=done)
+    op.failure(lambda _exc: done(ollama_runtime.EnsureResult("failed", "")))
+    op.without_collection().run_in_background()
+
+
+def _rematch_stale_matches() -> None:
+    """K-302: re-match every PDF whose match cache predates the centered
+    score scale, quietly (no embedding when its indexes are current). Runs
+    the threshold-scale migration on the main thread first so the re-tag
+    each job ends with uses the new thresholds. Self-healing, no flag: the
+    re-match rewrites the cache at the current version."""
+    try:
+        from . import index_queue, retention
+
+        retention._cfg()
+        names = index_queue.stale_match_names()
+        if names:
+            index_queue.request([(index_queue.JOB_PDF, n) for n in names], announce=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] re-match after scoring change failed: {exc}")
 
 
 def _offer_v2_index_sweep(cfg: dict) -> bool:
@@ -398,59 +415,18 @@ def _offer_v2_index_sweep(cfg: dict) -> bool:
 
 
 def _readiness_check_body() -> None:
-    """The readiness dialog: one nudge, naming the keys that are missing.
+    """Offer local setup after the background connection check fails."""
+    generation = _profile_generation
+    msg = _themed_message_box(mw, "KlausMate: local models", QMessageBox.Icon.Warning)
+    msg.setText(LOCAL_MODELS_COPY)
+    msg.setInformativeText("Start Ollama and make the selected embedding model available to enable semantic search.")
+    manage_btn = msg.addButton("Local models", QMessageBox.ButtonRole.ActionRole)
+    msg.addButton("Later", QMessageBox.ButtonRole.AcceptRole).setObjectName("SecondaryButton")
 
-    Silent when both are set (or one Klaus Plus key covers them), and
-    silent again once the user has said "Later" — an API key is a
-    one-time errand, not something to re-ask on every profile open
-    (unlike the Library folder above, which has no such flag on
-    purpose). One nudge and one flag for both keys, deliberately: a
-    second dialog for the second key is a second thing to dismiss.
-
-    It names WHAT IT CHECKED (K-231) and blocks nothing: readiness is a
-    wording gate, and the service and the providers have the last word.
-    """
-    cfg = _pkg().get_config()
-    if _embedding_ready(cfg) and _offer_v2_index_sweep(cfg):
-        # Set up to embed, but carrying pre-v2 indexes that read as
-        # absent — that confirm is now on screen, so the key nudge waits
-        # for the next profile open rather than stacking on top of it.
-        return
-    missing = missing_keys(cfg)
-    if not missing or cfg.get("_embed_key_setup_declined"):
-        return
-
-    msg = _themed_message_box(
-        mw, KEY_COPY[missing[0]]["title"], QMessageBox.Icon.Warning
-    )
-    msg.setText(keys_missing_copy(cfg))
-    msg.setInformativeText(
-        "Until then, "
-        + "; ".join(KEY_COPY[name]["without"] for name in missing)
-        + "."
-    )
-    manage_btn = msg.addButton(
-        "KlausMate Preferences", QMessageBox.ButtonRole.ActionRole
-    )
-    msg.addButton(
-        "Later", QMessageBox.ButtonRole.AcceptRole
-    ).setObjectName("SecondaryButton")
-
-    def _on_key_needed_finished(_r: int) -> None:
-        if msg.clickedButton() is manage_btn:
-            try:
-                manage_models_dialog()
-            except Exception as exc:
-                print(f"[klausmate] manage_models_dialog failed: {exc}")
-        else:
-            # Respect the decision — don't re-prompt on every profile
-            # open.
-            cfg2 = _pkg().get_config()
-            cfg2["_embed_key_setup_declined"] = True
-            _pkg().write_config(cfg2)
+    def finished(_r: int) -> None:
+        if generation == _profile_generation and msg.clickedButton() is manage_btn:
+            manage_models_dialog()
         msg.deleteLater()
 
-    # K-114: open() + finished, never exec (see first_run_check) —
-    # Esc/close still count as declining, as exec()'s fall-through did.
-    msg.finished.connect(_on_key_needed_finished)
+    msg.finished.connect(finished)
     msg.open()

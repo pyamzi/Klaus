@@ -209,27 +209,50 @@ else:
 # --------------------------------------------------------------- tiers
 
 # Calibrated against Pouya's 28,670-note index on 2026-09-01, under the
-# local embedding model Klaus ran then (768 dims). See "What the scores
-# mean" above — these are band edges read off real pairs, not round
-# numbers, and they are NOT transferable to another embedding model
-# unchanged. Which means they are DUE: the 2026-09-15 API-first turn
-# moved embeddings to OpenAI text-embedding-3-large at 1024 dims, so
-# these edges describe a space this add-on no longer produces vectors
-# in. Re-read them off real pairs before trusting a tier name.
+# local embedding model Klaus ran then (768 dims) — see "What the scores
+# mean" above: these are band edges read off real pairs, not round
+# numbers. The 2026-09-15 API-first turn moved embeddings to OpenAI
+# text-embedding-3-large at 1024 dims, and different models at different
+# widths do not share a cosine geometry, so these edges are NOT
+# transferable unchanged. There is no formula that rescales one model's
+# thresholds onto another's — re-reading them needs a live pass over real
+# pairs embedded by the model actually in use (K-233's follow-up, needs
+# ``KLAUS_LIVE_API=1`` and a real collection; not done here, and not
+# fakeable from this headless environment without shipping a confidently
+# wrong number in place of an honestly stale one).
+#
+# What THIS module does instead: know which model it was calibrated for,
+# and say so loudly when the index it is scoring was built by a different
+# one. ``CALIBRATION_SIGNATURE`` names that model; ``Tiers.calibration``
+# carries it; ``tiers_calibrated()`` is the one check (mirroring
+# ``index_is_current`` below, same ``card_index.check_signature`` engine)
+# and ``duplicates_of``/``scan_index`` print a one-line, log-once warning
+# the first time they score an index that fails it.
 DUPLICATE = 0.95
 NEAR = 0.90
 CLOSE = 0.85
 
 TIER_NAMES = ("duplicate", "near", "close")
 
+# The (provider, model, dims) these floors were read off — the local
+# Ollama model Klaus ran before the 2026-09-15 API-first turn (deleted
+# with ollama_client.py; the exact provider string is inferred from that
+# module's name, not preserved anywhere still importable). Width is
+# non-zero on purpose: ``signature_matches`` treats a 0 width as "any
+# width", which would silently swallow the exact mismatch this exists to
+# catch.
+CALIBRATION_SIGNATURE: tuple[str, str, int] = ("ollama", "nomic-embed-text:latest", 768)
+
 
 @dataclass(frozen=True)
 class Tiers:
-    """The three bands the user asked for, in his words."""
+    """The three bands the user asked for, in his words, plus the
+    (provider, model, dims) signature they were calibrated against."""
 
     duplicate: float = DUPLICATE
     near: float = NEAR
     close: float = CLOSE
+    calibration: tuple = CALIBRATION_SIGNATURE
 
     def name_for(self, score: float) -> str:
         if score >= self.duplicate:
@@ -242,6 +265,39 @@ class Tiers:
 
 
 DEFAULT_TIERS = Tiers()
+
+# ponytail: process-lifetime log-once set, not persisted config — a
+# second profile load or a changed index re-warns, which is the point.
+_warned_uncalibrated: set = set()
+
+
+def tiers_calibrated(index: card_index.CardIndex | None, tiers: Tiers = DEFAULT_TIERS) -> bool:
+    """True when ``index`` was actually built by the model these tiers'
+    band edges were read off — never the config's target, always what is
+    really on disk (``index_is_current`` below makes the same choice for
+    the same reason: config can drift, the index cannot lie about itself).
+    """
+    return card_index.check_signature(index, tiers.calibration)
+
+
+def _warn_if_uncalibrated(index: card_index.CardIndex | None, tiers: Tiers) -> None:
+    """Print once per distinct (provider, model, dims) the first time it
+    scores against tiers it was never calibrated for. A repeat call with
+    the same signature is silent; a different index (new provider, new
+    dims) warns again."""
+    if index is None or tiers_calibrated(index, tiers):
+        return
+    key = (index.provider, index.model, index.dims)
+    if key in _warned_uncalibrated:
+        return
+    _warned_uncalibrated.add(key)
+    cal_provider, cal_model, cal_dims = tiers.calibration
+    print(
+        "[klausmate] duplicate tiers calibrated for "
+        f"{cal_provider}/{cal_model}@{cal_dims} but this index is "
+        f"{index.provider}/{index.model}@{index.dims} — tier names "
+        "(duplicate/near/close) are uncalibrated for it"
+    )
 
 
 @dataclass(frozen=True)
@@ -283,6 +339,7 @@ class ScanStats:
     audit_rows: int = 0
     audit_pairs: int = 0
     audit_found: int = 0
+    tiers_calibrated: bool = False
 
     @property
     def audit_recall(self) -> float | None:
@@ -335,6 +392,7 @@ def duplicates_of(
     row = row_of(index, nid)
     if row < 0 or limit <= 0:
         return []
+    _warn_if_uncalibrated(index, tiers)
     d = index.dims
     vec = array("f", memoryview(index.vectors)[row * d : (row + 1) * d])
     hits = neighbours_of_vector(
@@ -514,9 +572,11 @@ def scan_index(
     d = index.dims
     stats = ScanStats(notes=n, dims=d, pairs_total=n * (n - 1) // 2)
     stats.counts = {name: 0 for name in TIER_NAMES}
+    stats.tiers_calibrated = tiers_calibrated(index, tiers)
     result = ScanResult(pairs=[], stats=stats)
     if n < 2 or d <= 0 or limit <= 0:
         return result
+    _warn_if_uncalibrated(index, tiers)
 
     nids = index.nids
     means = column_means(index)

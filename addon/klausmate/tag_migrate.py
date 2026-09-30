@@ -238,8 +238,10 @@ def migrate_on_profile_open() -> None:
                 done |= {"klaus::pdfmatch", "!Library::Matching"}
             return done
 
-        if cfg.get(MIGRATED_FLAG) and set(RETIRED_TAGS) <= _cleaned(cfg):
-            return
+        # No early return on the flags (K-305): they live in add-on config,
+        # which every profile shares, so profile A's run used to skip
+        # profile B's rename forever. The pre-flight below is the real,
+        # per-collection guard and costs one tags.all().
 
         def _record_flags() -> None:
             try:

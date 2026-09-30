@@ -2125,14 +2125,6 @@ def _fill_retention(graph: dict) -> None:
         # to the printed failure line rather than a crash.
         from . import retention
 
-        try:
-            from . import pertinence
-
-            user_files = retention.USER_FILES
-        except Exception:
-            pertinence = None
-            user_files = None
-
         edges = [e for e in graph.get("edges") or [] if isinstance(e, dict)]
         nids = {int(e["nid"]) for e in edges if "nid" in e}
         if not nids:
@@ -2153,16 +2145,8 @@ def _fill_retention(graph: dict) -> None:
             matches = by_pdf.get(safe)
             if not matches:
                 continue
-            rejected: set = set()
-            if pertinence is not None:
-                try:
-                    rejected = pertinence.rejected_nids(
-                        pertinence.load_judged(user_files, safe)
-                    )
-                except Exception as exc:
-                    print(f"[klausmate] map judged.json unreadable for {safe!r}: {exc}")
             stats = retention.pdf_retention(
-                matches, float(p.get("threshold") or 0.0), card_r, rejected=rejected
+                matches, float(p.get("threshold") or 0.0), card_r
             )
             p["retention"] = stats.get("retention")
     except Exception as exc:
@@ -2183,6 +2167,29 @@ def graph_data() -> dict:
     graph = _load_graph()
     _fill_retention(graph)
     return graph
+
+
+def start_graph_build(done, fail) -> None:
+    """``graph_data()`` as two ops, for callers with a live ``mw``.
+
+    The layout (``_load_graph``, the ~17 s PCA over the card-index files)
+    runs ``without_collection()``; holding the collection for it stalled
+    every other op, reviewer answers included. Only the retention fill
+    needs the collection, and that second op is short.
+    """
+    from aqt import mw
+    from aqt.operations import QueryOp
+
+    def with_retention(graph: dict) -> None:
+        def fill(_col) -> dict:
+            _fill_retention(graph)
+            return graph
+
+        QueryOp(parent=mw, op=fill, success=done).failure(fail).run_in_background()
+
+    QueryOp(parent=mw, op=lambda _col: _load_graph(), success=with_retention).failure(
+        fail
+    ).without_collection().run_in_background()
 
 
 def _canvas_class():
@@ -2344,6 +2351,16 @@ def _canvas_class():
             self._cam = Camera()
             self._did_fit = False
             self._hover = None
+            # The last screen point a real mouseMoveEvent reported —
+            # None once the pointer has left, or before it has ever
+            # entered (K-214). The sway moves every node's PROJECTED
+            # position every tick even with the pointer dead still, so
+            # hover cannot be a function of mouseMoveEvent alone or a
+            # motionless pointer drifts out from under (or into) a node
+            # with nothing ever re-testing it. ``_idle_tick`` re-hits
+            # THIS point on every frame; it is never itself a screen
+            # point that moved.
+            self._last_mouse = None
             self._selected = None
             self._dragging = False
             self._drag_moved = False
@@ -2520,6 +2537,19 @@ def _canvas_class():
                 self._cam = Camera(
                     sway_angle(self._phase), self._cam.distance
                 )
+                # K-214 (final review 2026-09-02 M3, accepted as polish
+                # rather than fixed): hover was computed only from the
+                # last mouseMoveEvent, never re-hit-tested as the sway
+                # carries the projected nodes out from under (or into) a
+                # pointer that never moved. Re-run the same hit-test the
+                # mouse itself would have triggered, against the LAST
+                # KNOWN screen point — skipped mid-drag, where hover is
+                # deliberately frozen (mouseMoveEvent never updates it
+                # there either, see its own comment).
+                if self._last_mouse is not None and not self._dragging:
+                    self._update_hover(
+                        self._last_mouse[0], self._last_mouse[1], None
+                    )
                 self.update()
             except Exception as exc:
                 print(f"[klausmate] map idle tick failed: {exc}")
@@ -3232,6 +3262,11 @@ def _canvas_class():
             try:
                 pos = event.position()
                 px, py = float(pos.x()), float(pos.y())
+                # Recorded on every move, drag included: it is what
+                # _idle_tick re-hit-tests once the sway has moved on
+                # (K-214), and a drag still has a real cursor position
+                # under it even though hover itself is frozen for one.
+                self._last_mouse = (px, py)
                 if self._dragging and self._drag_last is not None:
                     dx = px - self._drag_last[0]
                     dy = py - self._drag_last[1]
@@ -3305,6 +3340,7 @@ def _canvas_class():
 
         def leaveEvent(self, event) -> None:  # noqa: N802
             try:
+                self._last_mouse = None
                 if self._hover is not None:
                     self._hover = None
                     self.update()
@@ -3721,9 +3757,7 @@ def _start_build(win) -> None:
         done(graph_data())
         return
     try:
-        op = QueryOp(parent=mw, op=lambda _col: graph_data(), success=done)
-        op.failure(fail)
-        op.run_in_background()
+        start_graph_build(done, fail)
     except Exception as exc:
         print(f"[klausmate] map build could not start: {exc}")
         fail(exc)
