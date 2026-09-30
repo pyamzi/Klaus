@@ -38,6 +38,7 @@ class SavePipeline:
         self._running: set = set()  # names with a live worker
         self._again: set = set()  # requested again while running
         self._failed: set = set()
+        self._done: list = []  # (name, report or None, ok) awaiting the main thread
         self._subs: list = []
 
     # ---- public ---------------------------------------------------------
@@ -56,7 +57,11 @@ class SavePipeline:
 
     def flush(self, name: Optional[str] = None, timeout: float = 10.0) -> bool:
         """Run pending bakes now and wait (up to ``timeout`` s) for the
-        named PDF — or every PDF — to go idle. True when idle."""
+        named PDF — or every PDF — to go idle, then run the queued
+        post-steps. Call it on the MAIN thread (profile close): it drains
+        them itself, because main-thread callbacks queued through
+        ``run_on_main`` cannot run while main is blocked here. True when
+        idle."""
         with self._cond:
             names = {name} if name is not None else self._pending | self._running
             due = [(n, self._gen.get(n, 0)) for n in names if n in self._pending]
@@ -67,8 +72,10 @@ class SavePipeline:
             while any(n in self._pending or n in self._running for n in names):
                 left = deadline - time.monotonic()
                 if left <= 0:
+                    self._drain()
                     return False
                 self._cond.wait(left)
+        self._drain()
         return True
 
     def subscribe(self, cb: Callable[[str, str], None]) -> Callable[[], None]:
@@ -108,7 +115,11 @@ class SavePipeline:
             ).start()
         except Exception as exc:
             print(f"[klausmate] bake thread failed to start: {exc}")
+            with self._cond:
+                self._failed.add(name)
+                self._done.append((name, None, False))
             self._finish(name)
+            self._run_on_main(self._drain)
 
     def _finish(self, name: str) -> None:
         with self._cond:
@@ -127,6 +138,8 @@ class SavePipeline:
                     self._cond.notify_all()
                     return
         except BaseException:
+            with self._cond:
+                self._again.discard(name)
             self._finish(name)
             raise
 
@@ -144,13 +157,25 @@ class SavePipeline:
         if ok:
             with self._cond:
                 self._failed.discard(name)
-            self._run_on_main(lambda r=dict(rep): self._post(name, r))
+                self._done.append((name, dict(rep), True))
         else:
             # JSON is untouched; it stays the source of truth and the next
             # request() retries.
             with self._cond:
                 self._failed.add(name)
-            self._run_on_main(lambda: self._emit("failed", name))
+                self._done.append((name, None, False))
+        self._run_on_main(self._drain)
+
+    def _drain(self) -> None:
+        """Main thread: run the post-step (or emit "failed") for every
+        finished bake. Idempotent — entries are popped under the lock."""
+        with self._cond:
+            done, self._done = self._done, []
+        for name, rep, ok in done:
+            if ok:
+                self._post(name, rep)
+            else:
+                self._emit("failed", name)
 
     def _post(self, name: str, rep: dict) -> None:
         """Main thread, per successful bake: pin the fingerprint of the file
@@ -160,19 +185,26 @@ class SavePipeline:
         from . import pdf_handler as ph
 
         stat = rep.get("stat")
-        try:
-            self._pin(name, stat)
-        except Exception as exc:
-            print(f"[klausmate] pin failed for {name}: {exc}")
+        if stat is not None:  # no stat: never overwrite a good fingerprint
+            try:
+                self._pin(name, stat)
+            except Exception as exc:
+                print(f"[klausmate] pin failed for {name}: {exc}")
+            try:
+                ph.record_stat(self._ufd, name, stat)
+            except Exception as exc:
+                print(f"[klausmate] record_stat failed for {name}: {exc}")
         omitted = rep.get("omitted_native") or []
         removed = 0
-        try:
-            ph.record_stat(self._ufd, name, stat)
-            if omitted:
+        if omitted:
+            try:
                 removed = ph.remove_records(self._ufd, name, omitted)
+            except Exception as exc:
+                print(f"[klausmate] remove_records failed for {name}: {exc}")
+        try:
             ph.mark_native_baked(self._ufd, name, rep.get("native_ids") or [])
         except Exception as exc:
-            print(f"[klausmate] post-bake sync failed for {name}: {exc}")
+            print(f"[klausmate] mark_native_baked failed for {name}: {exc}")
         if removed:
             self._emit("records", name)
         self._emit("saved", name)
@@ -207,10 +239,15 @@ def _run_on_main(cb: Callable[[], None]) -> None:
 
 def _start_timer(_name: str, ms: int, cb: Callable[[], None]) -> None:
     # Restarts are handled by SavePipeline's generation check, so a plain
-    # singleShot per request is enough (stale ones return at once).
-    from aqt.qt import QTimer
+    # singleShot per request is enough (stale ones return at once). The
+    # timer is armed on the main thread: singleShot from a worker thread
+    # never fires, and request()/retry() may be called from any thread.
+    def _arm() -> None:
+        from aqt.qt import QTimer
 
-    QTimer.singleShot(ms, cb)
+        QTimer.singleShot(ms, cb)
+
+    _run_on_main(_arm)
 
 
 def _pin(name: str, stat: Optional[tuple]) -> None:

@@ -18,9 +18,10 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
-sys.modules["klausmate"].get_config = lambda: {}
 ph = importlib.import_module("klausmate.pdf_handler")
 asv = importlib.import_module("klausmate.annotation_save")
+LOG = []
+asv.print = lambda *a, **k: LOG.append(" ".join(map(str, a)))  # keep output pristine
 
 STAT = (1, 2, 3)
 
@@ -72,12 +73,12 @@ class Bake:
                 self.active[name] -= 1
 
 
-def make(bake):
+def make(bake, run_on_main=None):
     ph.bake_annotations = bake
     timers, pins, events = Timers(), [], []
     pipe = asv.SavePipeline(
         tempfile.mkdtemp(),
-        lambda cb: cb(),
+        run_on_main or (lambda cb: cb()),
         timers,
         lambda name, stat: pins.append((name, stat)),
     )
@@ -94,9 +95,10 @@ def wait_for(cond, secs=3.0):
     return False
 
 
-ph.record_stat = lambda *a: None
-ph.remove_records = lambda *a: 0
-ph.mark_native_baked = lambda *a: None
+STEPS = []  # every bookkeeping call the post-step makes, in order
+ph.record_stat = lambda d, n, s: STEPS.append(("record_stat", n, s))
+ph.remove_records = lambda d, n, ids: STEPS.append(("remove", n, list(ids))) or 2
+ph.mark_native_baked = lambda d, n, ids: STEPS.append(("mark", n, list(ids)))
 
 section("debounce: three requests, one bake")
 bake = Bake()
@@ -146,9 +148,7 @@ check("both bakes ran concurrently", pipe.flush(timeout=5) is True
       and sorted(bake.calls) == ["A", "B"])
 
 section("failed bake: event, failed_names, retry clears")
-jpath = os.path.join(tempfile.mkdtemp(), "A.json")
-with open(jpath, "w") as f:
-    f.write('{"records": [1]}')
+STEPS.clear()
 bake = Bake(result=False)
 pipe, timers, pins, events = make(bake)
 pipe.request("A")
@@ -156,9 +156,8 @@ timers.fire_all()
 pipe.flush("A")
 check("failed event emitted", events == [("failed", "A")], str(events))
 check("failed_names", pipe.failed_names() == {"A"})
-check("no pin on failure", pins == [])
-with open(jpath) as f:
-    check("json untouched", f.read() == '{"records": [1]}')
+check("no pin / record_stat / remove / mark on failure",
+      pins == [] and STEPS == [], str((pins, STEPS)))
 bake.result = True
 pipe.request("A")
 timers.fire_all()
@@ -200,10 +199,8 @@ gate.set()
 pipe.flush("A")
 
 section("post-step on success")
-ph.record_stat = lambda d, n, s: order.append(("record_stat", n, s))
-ph.remove_records = lambda d, n, ids: order.append(("remove", n, list(ids))) or 2
-ph.mark_native_baked = lambda d, n, ids: order.append(("mark", n, list(ids)))
-order = []
+order = STEPS
+STEPS.clear()
 bake = Bake(omitted=["x"])
 pipe, timers, pins, events = make(bake)
 pipe.subscribe(lambda ev, n: order.append((ev, n)))
@@ -238,6 +235,78 @@ timers.fire_all()
 check("flush idle", pipe.flush("A") is True)
 check("reported failed", events == [("failed", "A")]
       and pipe.failed_names() == {"A"})
+check("error logged", any("disk full" in l for l in LOG), str(LOG[-2:]))
+bake = Bake()
+ph.bake_annotations = bake
+pipe.request("A")
+timers.fire_all()
+pipe.flush("A")
+check("worker survived: next request bakes", bake.calls == ["A"])
+check("and clears the failure", pipe.failed_names() == set())
+
+section("flush completes the post-step when run_on_main is queued")
+queue = []
+STEPS.clear()
+bake = Bake()
+pipe, timers, pins, events = make(bake, run_on_main=queue.append)
+pipe.request("A")
+check("flush True on the 'main thread'", pipe.flush("A") is True)
+check("pin and record_stat happened without the queue running",
+      pins == [("A", STAT)] and ("record_stat", "A", STAT) in STEPS
+      and ("saved", "A") in events, str((pins, STEPS, events)))
+n = len(STEPS)
+for cb in queue:  # the queued drains run later: harmless
+    cb()
+check("draining twice is harmless", len(STEPS) == n and pins == [("A", STAT)]
+      and events.count(("saved", "A")) == 1)
+
+section("a bake with no stat keeps the recorded fingerprint")
+
+
+class NoStat(Bake):
+    def __call__(self, ufd, name, report=None):
+        super().__call__(ufd, name, report=None)
+        return True
+
+
+STEPS.clear()
+pipe, timers, pins, events = make(NoStat())
+pipe.request("A")
+timers.fire_all()
+pipe.flush("A")
+check("no pin, no record_stat", pins == []
+      and not any(s[0] == "record_stat" for s in STEPS), str((pins, STEPS)))
+check("saved still emitted", ("saved", "A") in events)
+
+section("thread that cannot start fails loudly, not silently")
+
+
+class NoThreads:
+    class Thread:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise RuntimeError("no threads")
+
+
+pipe, timers, pins, events = make(Bake())
+real_threading = asv.threading
+asv.threading = NoThreads
+pipe.request("A")
+timers.fire_all()
+asv.threading = real_threading
+check("failed event", events == [("failed", "A")], str(events))
+check("failed_names", pipe.failed_names() == {"A"})
+check("not stuck running: flush idle", pipe.flush("A", timeout=1) is True)
+
+section("the timer is armed on the main thread")
+hops = []
+real_rom = asv._run_on_main
+asv._run_on_main = hops.append  # never runs _arm, so no Qt is touched
+asv._start_timer("A", 500, lambda: None)
+asv._run_on_main = real_rom
+check("start_timer goes through run_on_main", len(hops) == 1)
 
 section("unsubscribe")
 pipe, timers, pins, events = make(Bake())
