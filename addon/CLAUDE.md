@@ -358,6 +358,12 @@ same reason.
   `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
   QStatusBar (one hairline, no macOS panel line or item frames).
   Anki's own "Processing…" popups are deliberately not mirrored.
+- `addons_menu.py`: every top-level menu bar entry that isn't Anki's own
+  (`MAIN_MENUS`/`BROWSE_MENUS`, the `window.form` names from main.ui and
+  browser.ui) moves whole under ONE "Add-ons" menu before Help, in the main
+  window (`main_window_did_init`, which fires after all add-ons load) and
+  Browse (`browser_will_show`). A menu-bar `ActionAdded` watcher re-runs
+  it a tick later for menus added afterwards (AnkiHub's). Hidden when empty.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
   highlighting (K-113), adapted from Glutanimate's
   highlight-search-results (AGPLv3 — its header must stay intact;

@@ -1681,6 +1681,14 @@ except Exception as _e:
     print(f"[klausmate] bottom row setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    # Other add-ons' top-level menus (AMBOSS, AnkiHub, …) go under Add-ons.
+    from . import addons_menu as _addons_menu
+
+    _addons_menu.setup()
+except Exception as _e:
+    print(f"[klausmate] add-ons menu setup failed: {type(_e).__name__}: {_e}")
+
+try:
     from . import browse_toolkit as _browse_toolkit
 
     _browse_toolkit.setup_hooks()

@@ -60,6 +60,7 @@ Addons/                       # Git repo root
     ├── tasks.py                # The one list of running processes (aqt-free, thread-safe reports)
     ├── status_bar.py           # Browse's bottom bar: gear (Anki Preferences), task progress, pane toggles
     ├── bottom_row.py           # main window: Anki's own bottom row + gear and task readout at its left edge
+    ├── addons_menu.py          # other add-ons' top-level menus → one Add-ons menu before Help (main window + Browse)
     ├── library_actions.py      # Window-free Library actions the sidebar menus call
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
     ├── manage_models.py        # General, Appearance, Local models and external MCP configuration
@@ -222,6 +223,7 @@ pdf_drop.setup()                                                    # Add to Lib
 library_sidebar.setup()                                             # the Library in Browse's sidebar (independent try/except)
 status_bar.setup()                                                  # Browse bottom bar; sync/media hooks (independent try/except)
 bottom_row.setup()                                                  # main window bottom row: gear + task readout (independent try/except)
+addons_menu.setup()                                                 # main_window_did_init + browser_will_show: Add-ons menu (independent try/except)
 gui_hooks.operation_did_execute.append(tag_sync.on_operation_did_execute)  # sidebar tag edits reach the PDFs
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
