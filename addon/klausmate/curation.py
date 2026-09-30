@@ -295,7 +295,9 @@ def create_curated_deck(
         if on_done:
             on_done(len(nids))
 
-    CollectionOp(parent=parent, op=op).success(done).run_in_background()
+    # Progress on mw (K-319): closing Browse within Anki's 600 ms progress
+    # delay would otherwise delete the progress window before it shows.
+    CollectionOp(parent=mw, op=op).success(done).run_in_background()
 
 
 def prompt_and_create(parent, nids: list[int], on_done: Callable[[int], None] | None = None) -> None:

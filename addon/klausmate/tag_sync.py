@@ -711,7 +711,10 @@ def _run_sync_op(
             on_finished()
 
     _own_ops["pending"] += 1
-    CollectionOp(parent=parent, op=op).success(done).failure(fail).run_in_background()
+    # Progress on mw, never ``parent`` (K-319): Anki shows it 600 ms later,
+    # and a dialog closed in between takes the progress window with it —
+    # "wrapped C/C++ object of type ProgressDialog has been deleted".
+    CollectionOp(parent=mw, op=op).success(done).failure(fail).run_in_background()
 
 
 def _phrase_counts(added: int, removed: int) -> str:

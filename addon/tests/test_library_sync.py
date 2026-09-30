@@ -202,6 +202,7 @@ ops = []
 class Op:
     def __init__(self, parent=None, op=None):
         self.op = op
+        self.parent = parent
         ops.append(self)
 
     def success(self, fn):
@@ -278,6 +279,13 @@ col.tags.tags.discard("!Library::Renal::E1")  # e1 has no matched cards
 ts.note_user_deleted(["!Library::Renal::E1"])
 ts.reconcile_from_tags(col)
 check("one prompt naming the card-less PDF", len(asked2) == 1 and "E1" in asked2[0], str(asked2))
+
+section("K-319: a sync op's progress window never hangs off a closable dialog")
+_dialog = object()
+ts._run_sync_op(_dialog, "Klaus: test", lambda col: {})
+check("progress is parented to mw, not the caller's dialog",
+      ops[-1].parent is ts.mw and ops[-1].parent is not _dialog, repr(ops[-1].parent))
+ts._own_ops["pending"] -= 1  # the fake op never reports back
 
 section("a reconcile waits for Klaus's own tag ops to land")
 ran = []
