@@ -62,9 +62,10 @@ check("a non-Library tag keeps its own name", ls.label_for("Hematology::Anemia")
 
 
 class Item:
-    def __init__(self, full_name):
+    def __init__(self, full_name, kind="TAG"):
         self.full_name = full_name
         self.name = full_name.rsplit("::", 1)[-1]
+        self.item_type = types.SimpleNamespace(name=kind)
 
 
 class Model(QtCore.QAbstractItemModel):
@@ -114,6 +115,75 @@ check("a Library PDF row draws its real name", drawn(0) == "04-L-Intro to CBC", 
 check("any other tag draws as Anki drew it", drawn(1) == "Anemia", drawn(1))
 check("editing still opens on the tag name",
       model.data(model.index(0, 0), QtCore.Qt.ItemDataRole.EditRole) == "04-L-Intro_to_CBC")
+
+section("retention: the mean recall of a tag's studied cards")
+means = ls.tag_means(
+    {1: " Heme::Anemia ", 2: " Heme::Anemia Heme::Iron ", 3: " Onc ", 4: " Heme::Iron "},
+    {1: [(0.9, False), (0.0, True)], 2: [(0.7, False)], 3: [(0.0, True)], 4: [(0.5, False)]},
+)
+check("a tag averages its studied cards; new cards are left out",
+      abs(means["heme::anemia"] - 0.8) < 1e-9, str(means))
+check("a parent counts its children's cards, each card once",
+      abs(means["heme"] - (0.9 + 0.7 + 0.5) / 3) < 1e-9, str(means))
+check("a tag with only new cards has no mean", "onc" not in means)
+check("row text", ls.percent_text(means, "Heme::Anemia") == "80%"
+      and ls.percent_text(means, "Onc") == "\u2014" and ls.percent_text(None, "Onc") is None)
+
+retention = importlib.import_module("klausmate.retention")
+
+
+class DB:
+    def all(self, sql):
+        if "revlog" in sql:
+            return []
+        card = '{"s": 10, "decay": 0.5, "lrt": 1700000000}'
+        return [(10, 1, 2, 5, card), (11, 1, 2, 5, card)]
+
+    def list(self, sql):
+        return [11] if "queue = -1" in sql else []
+
+
+cr = retention.card_retrievability(types.SimpleNamespace(db=DB()), {1}, skip_suspended=True)
+check("suspended cards are skipped when asked", len(cr[1]) == 1, str(cr))
+check("...and kept by default", len(retention.card_retrievability(types.SimpleNamespace(db=DB()), {1})[1]) == 2)
+
+section("the % is painted at the row's right edge")
+tree.resize(320, 200)
+tree.show()
+app.processEvents()
+
+
+def right_edge_ink(means):
+    ls._state["means"] = means
+    img = QtGui.QImage(300, 22, QtGui.QImage.Format.Format_ARGB32)
+    img.fill(QtGui.QColor("white"))
+    painter = QtGui.QPainter(img)
+    opt = QtWidgets.QStyleOptionViewItem()
+    opt.rect = QtCore.QRect(0, 0, 300, 22)
+    opt.widget = tree
+    opt.fontMetrics = tree.fontMetrics()
+    opt.palette = tree.palette()
+    delegate.paint(painter, opt, model.index(1, 0))
+    painter.end()
+    return sum(1 for x in range(250, 300) for y in range(22) if img.pixel(x, y) != QtGui.QColor("white").rgb())
+
+
+check("nothing at the right edge before retention is computed", right_edge_ink(None) == 0)
+check("the % lands at the right edge once it is", right_edge_ink({"hematology::anemia": 0.82}) > 0)
+check("a studied-nothing tag shows a dash there", right_edge_ink({}) > 0)
+check("a non-tag row (a deck) never gets one",
+      ls.percent_text({}, "x") and not ls._is_tag(Item("Default", kind="DECK")))
+
+section("recomputed after changes, only while Browse is open")
+fired = []
+ls._schedule_refresh = lambda: fired.append(1)
+ls._sidebars.clear()
+ls.on_operation_did_execute(types.SimpleNamespace(card=True), None)
+check("no Browse open: nothing scheduled", fired == [])
+ls._sidebars.add(tree)
+ls.on_operation_did_execute(types.SimpleNamespace(card=False, note=False, tag=False, study_queues=False), None)
+ls.on_operation_did_execute(types.SimpleNamespace(card=True), None)
+check("a card change with Browse open schedules one refresh", fired == [1])
 
 section("wired")
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
