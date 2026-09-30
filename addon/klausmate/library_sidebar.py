@@ -356,6 +356,16 @@ def _repaint() -> None:
             pass
 
 
+def _task(report) -> None:
+    """Report to the status bar; a report never breaks the refresh."""
+    try:
+        from . import tasks
+
+        report(tasks)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] retention status report failed: {exc}")
+
+
 def refresh_retention() -> None:
     """Recompute every tag's % in the background; a request made while
     one runs is folded into one more pass afterwards."""
@@ -366,9 +376,11 @@ def refresh_retention() -> None:
         _state["means"] = None  # stale by the next open; recomputed then
         return
     _state["busy"] = True
+    _task(lambda t: t.begin("retention", "Updating retention…"))
 
     def done(means: dict) -> None:
         _state["busy"] = False
+        _task(lambda t: t.end("retention"))
         _state["means"] = means
         _repaint()
         if _state["again"]:
@@ -377,6 +389,7 @@ def refresh_retention() -> None:
 
     def failed(exc: Exception) -> None:
         _state["busy"] = False
+        _task(lambda t: t.end("retention"))
         print(f"[klausmate] tag retention failed: {exc}")
 
     QueryOp(parent=mw, op=compute_means, success=done).failure(failed).run_in_background()

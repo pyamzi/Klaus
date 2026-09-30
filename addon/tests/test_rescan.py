@@ -187,6 +187,45 @@ check("pending_names is the running PDF plus the queued ones",
 iq._queue.clear()
 iq._current = None
 
+section("the folder scan shows in the status bar (status bar 5/6)")
+tasks = importlib.import_module("klausmate.tasks")
+tasks.run_on_main = lambda fn: fn()
+tasks.clear()
+held = []
+
+
+class HoldOp:
+    """Keeps the op pending so the test can see the task while it runs."""
+
+    def __init__(self, parent=None, op=None, success=None):
+        self.success, self.fail = success, None
+        held.append(self)
+
+    def failure(self, fn):
+        self.fail = fn
+        return self
+
+    def without_collection(self):
+        return self
+
+    def run_in_background(self):
+        pass
+
+
+pd5 = importlib.import_module("klausmate.pdf_drive")
+pd5.QueryOp = HoldOp
+pd5.mw = type("MW", (), {"col": object()})()
+pd5._rescan.update(running=False, again=False)
+ph._live_library_root = lambda: root
+pd5.rescan_library_root = lambda prepared=None: {"moved": []}
+pd5.start_library_rescan()
+check("a running scan is a task", [t.key for t in tasks.snapshot()] == ["rescan"], str(tasks.snapshot()))
+held[-1].success({})
+check("...gone when it finishes", tasks.snapshot() == [], str(tasks.snapshot()))
+pd5.start_library_rescan()
+held[-1].fail(RuntimeError("disk"))
+check("...and when it fails", tasks.snapshot() == [], str(tasks.snapshot()))
+
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("profile open starts the background rescan",
       "_pdf_drive.start_library_rescan()" in _init and "_pdf_drive.rescan_library_root()" not in _init)

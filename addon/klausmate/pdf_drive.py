@@ -229,6 +229,16 @@ def _rearm_watcher(root: str | None) -> None:
 _rescan = {"running": False, "again": False}
 
 
+def _task(report: Callable) -> None:
+    """Report to the status bar; a report never breaks the scan."""
+    try:
+        from . import tasks
+
+        report(tasks)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] rescan status report failed: {exc}")
+
+
 def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -> None:
     """Rescan the library root without freezing Anki (K-309): reading
     and OCR-ing new PDFs runs in a background op that never touches the
@@ -246,9 +256,11 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         return
     uf = _user_files()
     _rescan["running"] = True
+    _task(lambda t: t.begin("rescan", "Scanning the Library folder…"))
 
     def finish(prepared: dict | None) -> None:
         _rescan["running"] = False
+        _task(lambda t: t.end("rescan"))
         summary = rescan_library_root(prepared)
         if summary and summary.get("ingested"):
             _after_ingest(summary["ingested"])

@@ -408,4 +408,37 @@ _ls_src = open("klausmate/library_sidebar.py", encoding="utf-8").read()
 check("Klaus no longer builds the Tags section itself (AnkiHub does, and two appeared)",
       "browser_will_build_tree" not in _ls_src and "_tag_tree(" not in _ls_src)
 
+section("the retention refresh shows in the status bar (status bar 5/6)")
+tasks = importlib.import_module("klausmate.tasks")
+tasks.run_on_main = lambda fn: fn()
+tasks.clear()
+held = []
+
+
+class HoldOp:
+    def __init__(self, parent=None, op=None, success=None):
+        self.success, self.fail = success, None
+        held.append(self)
+
+    def failure(self, fn):
+        self.fail = fn
+        return self
+
+    def run_in_background(self):
+        pass
+
+
+ls.QueryOp = HoldOp
+ls.mw = types.SimpleNamespace(col=object())
+ls._sidebars.add(tree)
+ls._state.update(busy=False, again=False)
+ls._repaint = lambda: None
+ls.refresh_retention()
+check("a running refresh is a task", [t.key for t in tasks.snapshot()] == ["retention"], str(tasks.snapshot()))
+held[-1].success({})
+check("...gone when it lands", tasks.snapshot() == [], str(tasks.snapshot()))
+ls.refresh_retention()
+held[-1].fail(RuntimeError("db"))
+check("...and when it fails", tasks.snapshot() == [], str(tasks.snapshot()))
+
 raise SystemExit(report())
