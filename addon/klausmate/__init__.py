@@ -1665,12 +1665,20 @@ except Exception as _e:
     print(f"[klausmate] library sidebar setup failed: {type(_e).__name__}: {_e}")
 
 try:
-    # The VS Code-style status bar: main window + Browse.
+    # Browse's bottom bar (the task tracker's readout, gear, pane toggles).
     from . import status_bar as _status_bar
 
     _status_bar.setup()
 except Exception as _e:
     print(f"[klausmate] status bar setup failed: {type(_e).__name__}: {_e}")
+
+try:
+    # The main window's bottom row: Anki's own, plus gear + task readout.
+    from . import bottom_row as _bottom_row
+
+    _bottom_row.setup()
+except Exception as _e:
+    print(f"[klausmate] bottom row setup failed: {type(_e).__name__}: {_e}")
 
 try:
     from . import browse_toolkit as _browse_toolkit

@@ -327,21 +327,25 @@ same reason.
 - `browse_toggles.py`: the self-painted pane toggle (`_PaneToggle`, ◧
   sidebar / ◨ editor column) and `_VisibilityWatcher`, placed by the status
   bar; plus the `browser_will_show` layout repair. Split out of `__init__.py`.
-- `tasks.py` (aqt-free) + `status_bar.py` (pure helpers above its aqt
-  glue; spec [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)):
-  a VS Code-style bar in `mw.statusBar()` (Anki's main.ui has NO status
-  bar; `form.statusbar` is the profile manager's) and a `QStatusBar` added
-  to Browse. Left: ONE painted gear menu (KlausMate Settings…, Anki
-  Settings…), then a progress bar + the newest task's text ("+N more";
-  click → a `Qt.Popup` list, clamped to the screen, with ✕ where a task
-  can be cancelled). Far right: Browse's two pane toggles; in the main
-  window, the deck list's / overview's own bottom-row buttons (Get Shared,
-  Create Deck, Import File; Options, Custom Study…), parsed from
-  `webview_will_set_content` (`DeckBrowserBottomBar`/`OverviewBottomBar`
-  contexts) and clicked through the js-message filter then
-  `mw.bottomWeb.onBridgeCmd`, with `mw.bottomWeb` hidden. Review's bottom
-  content (answer buttons) restores Anki's row; any non-`pycmd` button
-  (another add-on's JS) leaves Anki's row alone.
+- `tasks.py` (aqt-free) + `status_bar.py` + `bottom_row.py` (spec
+  [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)).
+  **Main window: NO Qt bar** (the user's call, 2026-09-30, after the
+  copied-buttons version showed Anki's row twice). `bottom_row` extends
+  Anki's OWN deck-list / overview bottom row (`webview_will_set_content`,
+  `DeckBrowserBottomBar`/`OverviewBottomBar` contexts; review's answer
+  row untouched): a fixed block at its left edge with a gear (divs, not
+  `<button>` — Anki's bottom CSS frames buttons) → Anki's Preferences,
+  and the task readout (progress + newest task, red on failure; click →
+  the task list). It starts in the rendered state and follows `tasks`
+  live via `klausStatus` evals on `mw.bottomWeb` while
+  `mw.state` is deckBrowser/overview. Both clicks open a tick later
+  (`bridge_reentrancy`'s deferral rule). **Browse** keeps a 28pt Qt bar
+  (`status_bar.install_browser`): gear → Anki's Preferences in one click
+  (no menu; Klaus's settings are the top bar's star and Tools menu),
+  progress bar + text ("+N more"; click → `show_task_list`, a `Qt.Popup`
+  clamped to the screen with ✕ where a task can be cancelled), pane
+  toggles at the far right. `visible_tasks`, `gear_points` and
+  `show_task_list` are shared by both.
   `tasks` is the one list of running processes — `begin`/`update`/`end`
   from any thread; listeners run only through `run_on_main`
   (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing
@@ -1017,8 +1021,11 @@ same reason.
   - `pdf_drop.py` (was `deck_curate.py` until K-151, a misnomer once it
     curated nothing): the deck-screen **PDF import** surface — the
     `MainWebView.dropEvent` wrap (the only thing stopping Anki's own
-    importer choking on a dropped PDF) and the drop square on the deck
-    list and overview with its Browse… picker. K-146 removed the two
+    importer choking on a dropped PDF) and an **Add to Library** button in
+    the deck list's and overview's bottom rows (`add_library_link` on
+    `DeckBrowser.drawLinks`, `on_overview_will_render_bottom`), shown
+    in Anki's own row beside its buttons, opening the file picker. The dashed drop
+    square it replaced is gone (on request). K-146 removed the two
     bottom-bar buttons, `CURATE_CMD`, `choose_deck_scope`,
     `run_curation_flow` and `_pick_pdf_menu`; **K-151 removed the ARMED
     half whole** — `_armed_pdf`/`arm`/`disarm_if`, `DISARM_CMD` and its

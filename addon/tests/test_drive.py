@@ -412,7 +412,7 @@ check("last_run is gone with the search that wrote it — a module global "
 # ...but the drop machinery it was tangled with SURVIVES: this wrapper is
 # the only thing stopping Anki's own importer choking on a dropped PDF.
 for _sym in ("_install_drop_wrap", "_import_pdfs", "_browse_for_pdfs",
-             "BROWSE_CMD", "_drop_square_html"):
+             "BROWSE_CMD"):
     check(f"pdf_drop keeps {_sym} (the import surface, not the "
           f"ceremony)", _sym in _DP_SRC)
 
@@ -507,29 +507,35 @@ _DP_GLOBALS = sorted(
     for t in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
     if isinstance(t, ast.Name)
 )
-check("the module holds exactly ONE module-level name, BROWSE_CMD — the "
+check("the module holds only its two constants, BROWSE_CMD and ADD_LABEL — the "
       "armed PDF was session state, and with it gone there is nothing "
       "left for setup() to reset on profile_will_close",
-      _DP_GLOBALS == ["BROWSE_CMD"], repr(_DP_GLOBALS))
+      _DP_GLOBALS == ["ADD_LABEL", "BROWSE_CMD"], repr(_DP_GLOBALS))
 check("and no function rebinds a module global (the `global` statement "
       "went with the state it wrote)",
       not [n for n in ast.walk(_DP_TREE) if isinstance(n, ast.Global)])
 
-try:
-    _SQUARE = sys.modules["klausmate.pdf_drop"]._drop_square_html()
-    check("the square renders ONE state — the invitation and its "
-          "Browse… anchor; no armed variant, no × dismiss link, and no "
-          "copy naming an imported file",
-          "Drop a lecture PDF" in _SQUARE
-          and "Browse&hellip;" in _SQUARE
-          and "&times;" not in _SQUARE
-          and "Imported:" not in _SQUARE
-          and "Armed:" not in _SQUARE, repr(_SQUARE[-260:]))
-    check("with exactly one pycmd in it, the Browse command",
-          _SQUARE.count("pycmd(") == 1
-          and 'pycmd("klausmate_browse")' in _SQUARE)
-except Exception as e:
-    check("K-151 drop-square render", False, f"{type(e).__name__}: {e}")
+print("== the drop square is gone; Add to Library joins Anki's bottom row ==")
+# Pouya: "remove the PDF drop thing and just add 'Add to Library' for that
+# instead". The row's buttons live in the status bar (status_bar parses
+# Anki's own bottom-bar HTML), so the button goes where Anki's are.
+for _sym in ("_drop_square_html", "on_deck_browser_content", "on_overview_content"):
+    check(f"pdf_drop carries no {_sym}", _sym not in _DP_IDENTS)
+_dp = sys.modules["klausmate.pdf_drop"]
+_links = [["", "shared", "Get Shared"]]
+_dp.add_library_link(_links)
+_dp.add_library_link(_links)
+check("the deck list's row gains Add to Library, once however often setup runs",
+      _links == [["", "shared", "Get Shared"], ["", "klausmate_browse", "Add to Library"]], repr(_links))
+_handler = object()
+_ov = [["O", "opts", "Options"]]
+check("the overview's row gains it too, and the filter hands back Anki's link handler",
+      _dp.on_overview_will_render_bottom(_handler, _ov) is _handler
+      and _ov[-1] == ["", "klausmate_browse", "Add to Library"], repr(_ov))
+check("setup installs both", _calls_in_func(_DP_SRC, "setup", "add_library_link")
+      and "overview_will_render_bottom.append(on_overview_will_render_bottom)" in _DP_SRC)
+check("a click from the overview's row is claimed too (OverviewBottomBar context)",
+      "OverviewBottomBar" in _DP_CODE)
 
 check("pdf_drive's delete path no longer reaches into the armed state — "
       "it held the last disarm_if caller, and the module import went "

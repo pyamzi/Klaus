@@ -59,6 +59,7 @@ _MODULES = {
     "dashboard": open("klausmate/dashboard.py").read(),
     "setup_flow": open("klausmate/setup_flow.py").read(),
     "curation": open("klausmate/curation.py").read(),
+    "bottom_row": open("klausmate/bottom_row.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -119,6 +120,7 @@ check("exactly the five known js-message handlers are registered — a "
           "pdf_drop.on_deck_js_message",
           "heatmap._on_js_message",
           "dashboard._on_js_message",
+          "bottom_row._on_js_message",
       }, str(sorted(_registered)))
 
 section("pdfjs_viewer: the _bridge_* dispatch table (crash #1's shape)")
@@ -218,6 +220,14 @@ for qualified in sorted(_registered | _bridge_methods):
     direct = [tok for tok in _MODAL if tok in body]
     check(f"{qualified} opens no modal directly in its own body",
           not direct, str(direct))
+
+section("bottom_row: the main window row's gear and readout")
+_BR = _func_src("bottom_row", "_on_js_message")
+check("the row's handler was found in the source", bool(_BR))
+check("Preferences and the task-list popup both open a tick later, never "
+      "inside the webchannel call",
+      _BR.count("QTimer.singleShot(0,") == 2
+      and "\n            status_bar._open_anki_settings()" not in _BR, _BR[-400:])
 
 section("heatmap: a clicked day opens Browse")
 _HM = _func_src("heatmap", "_on_js_message")

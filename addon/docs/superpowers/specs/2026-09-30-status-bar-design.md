@@ -2,6 +2,31 @@
 
 Agreed with Pouya on 2026-09-30.
 
+## Revision, same day, after first use (supersedes the main-window parts below)
+
+Pouya: "perhaps what I want is not a status bar, but just a bar at the
+bottom that combines that whole Get Shared, Create Deck, Import File
+thing … with a little settings thing on the bottom left." Settled in a
+grilling round:
+
+- **Main window: no Qt bar.** `bottom_row.py` extends Anki's OWN
+  bottom row on the deck list and the deck overview. At its left edge:
+  a gear that opens Anki's Preferences directly, then the task readout
+  (progress bar, newest task, "+N more", failures in red; click → the
+  task list with ✕). Anki's buttons stay exactly as Anki draws them,
+  centred, plus Add to Library. Review's answer row is untouched; the
+  readout returns when review ends. The row's height and look are
+  Anki's. This reverses the Approach's rejection of an HTML bar in
+  `mw.bottomWeb`: copying Anki's buttons into a Qt bar meant hiding
+  Anki's row, which Anki re-shows on every page load (the duplicate row).
+- **Browse** keeps its Qt bar: gear (Anki's Preferences, one click,
+  no menu) and readout on the left, pane toggles on the right.
+- **The gear has no menu anywhere.** Klaus's settings are the top bar's
+  star and Tools › KlausMate Preferences…, as before.
+- **The drop square is gone**; Add to Library joins both deck-screen
+  rows (`DeckBrowser.drawLinks`, `overview_will_render_bottom`), and a
+  PDF dropped on either screen still imports.
+
 ## Goal
 
 A thin bar along the bottom of Anki's windows, like VS Code's status bar:

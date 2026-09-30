@@ -17,7 +17,7 @@ and [endpoint](klausmate/anki_endpoint.py).
 
 | Feature | How to use |
 |---------|------------|
-| **Adding a PDF** | Drop a lecture PDF on the deck list or a deck's overview screen (or use **Browse…** on the square there), or drop it straight into the Library window. |
+| **Adding a PDF** | Click **Add to Library** at the bottom of the deck list or a deck's overview, drop a lecture PDF on either screen, or drop it straight into the Library window. |
 | **Card matching** | Right-click a PDF in the Library → **Add to Search Index**. Klaus searches the whole collection by meaning and tags every card that lecture covers with the PDF's own `!Library::…` tag. |
 | **Library** | The **Library** link in the top toolbar opens a window listing every PDF you've imported, in folders you create, each with a retention score, card/note counts, and a right-click menu to index, re-tag, suspend, chart, or open it. |
 | **Copying matches into a deck** | Select notes in Browse → **Notes → KlausMate: Create Curated Deck from Selection…**. One undo step, originals untouched. |

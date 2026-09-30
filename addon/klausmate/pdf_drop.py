@@ -1,4 +1,4 @@
-"""Import a lecture PDF from Anki's deck screens — drop square and drop wrap.
+"""Import a lecture PDF from Anki's deck screens — Add to Library and drop wrap.
 
 **K-146 removed the curate-a-deck ceremony this file was built around;
 K-151 renamed the file and retired the last of its vocabulary.** The
@@ -18,10 +18,12 @@ What remains is the import surface, on two screens:
   PDFs, delegate everything else to the original. **This wrapper is the
   only thing standing between a dropped PDF and Anki's own importer
   choking on it** — it outlives the button by a wide margin.
-- **The drop square** — rendered into the deck browser's and the
-  overview's content webviews, with a Browse… file picker for people who
-  would rather not drag. Its ``pycmd`` clicks arrive over
-  ``webview_did_receive_js_message`` gated on those screens' contexts.
+- **Add to Library** — a button in the deck list's and the overview's
+  bottom rows (``DeckBrowser.drawLinks``, ``overview_will_render_bottom``),
+  beside Anki's own buttons there; it opens the file picker. Its
+  ``pycmd`` click arrives over ``webview_did_receive_js_message`` gated on
+  those screens' contexts. It replaced the dashed drop square that sat
+  in the content webviews (removed on request); a drop still imports.
 
 Command namespace is ``klausmate_<action>`` (underscore) — deliberately
 NOT the editor bridge's ``klausmate:<action>`` (colon), whose handler
@@ -49,6 +51,7 @@ from aqt.qt import QTimer
 from aqt.utils import tooltip
 
 BROWSE_CMD = "klausmate_browse"
+ADD_LABEL = "Add to Library"
 
 
 # --------------------------------------------------------------- import
@@ -59,8 +62,8 @@ def _import_pdfs(paths: list[str], skipped: int = 0) -> None:
 
     No return value and no screen refresh: ``import_pdf_file`` already
     tooltips each successful load and warns on each failure, and since
-    K-151 the square renders the same either way, so there is nothing
-    here to tell the deck screen about.
+    nothing on the deck screen reflects an import, so there is nothing
+    here to tell it about.
     """
     from . import import_pdf_file
 
@@ -109,6 +112,12 @@ def on_deck_js_message(
         from aqt.deckbrowser import DeckBrowser, DeckBrowserBottomBar
 
         valid_contexts: tuple[type, ...] = (DeckBrowser, DeckBrowserBottomBar)
+        try:
+            from aqt.overview import OverviewBottomBar
+
+            valid_contexts += (OverviewBottomBar,)
+        except Exception:
+            pass
         # The overview's content webview (mw.web) passes the Overview
         # instance itself as bridge context (Overview._renderPage calls
         # stdHtml(..., context=self)) — imported defensively since aqt
@@ -127,84 +136,19 @@ def on_deck_js_message(
     return (True, None)
 
 
-def _drop_square_html() -> str:
-    """Render the drop-PDF square: the invitation plus its Browse anchor.
-
-    Single source for every deck-scoped screen — deck browser and deck
-    overview — so they can never drift apart from each other. ONE state
-    since K-151: there is no armed variant to reflow into.
-
-    Fixed to the bottom of the CONTENT webview's own viewport rather than
-    flowing in-place: on both the deck browser and the deck overview, the
-    stats/table HTML this gets appended to renders in the main content
-    webview (mw.web), while Anki's own button row (Get Shared / Create
-    Deck / Import File — K-146 took Klaus's button out of it)
-    lives in a SEPARATE webview (mw.bottomWeb, via aqt.toolbar.BottomBar)
-    pinned below it — same split on both screens (both construct
-    ``self.bottom = BottomBar(mw, mw.bottomWeb)`` in the real Anki source).
-    There is no shared document to lay these two out against each other in
-    normal flow, so `position: fixed; bottom` is what actually lands this
-    directly above that button row on either screen — it stops exactly at
-    the edge of the content webview, which is exactly where the separate
-    bottom-bar webview begins.
-    """
-    # Colours from the shared theme tokens (theme.drop_zone_qss renders
-    # the same values as QSS for the Library's Qt drop zone).
-    try:
-        from . import theme as _theme
-
-        _c = _theme.palette(_theme.night_mode())
-        _idle_border = f"1px dashed {_c['grey_mid']}"
-        _btn_border = f"1px solid {_c['grey_mid']}"
-    except Exception:
-        _idle_border = "1px dashed rgba(128,128,128,0.55)"
-        _btn_border = "1px solid rgba(128,128,128,0.55)"
-    # One flex row, not a stacked block: the label takes the free space and
-    # Browse… sits hard right, matching the Qt surfaces in
-    # pdf_drive._LibraryDropZone and __init__._PdfBar.
-    body = (
-        "<span style='flex:1;text-align:left;'>"
-        "Drop a lecture PDF to add it to your Library</span>"
-        f"<a href=# onclick='pycmd(\"{BROWSE_CMD}\"); return false;' "
-        "style='flex:0 0 auto;padding:3px 10px;"
-        f"border:{_btn_border};border-radius:6px;"
-        "font-size:12px;color:inherit;text-decoration:none;'>"
-        "Browse&hellip;</a>"
-    )
-    return (
-        f"<div style='position:fixed;left:50%;bottom:10px;"
-        f"transform:translateX(-50%);z-index:50;"
-        f"display:flex;align-items:center;gap:10px;"
-        f"margin:0;padding:8px 14px;max-width:420px;width:calc(100% - 40px);"
-        f"box-sizing:border-box;background:var(--window-bg,transparent);"
-        f"border:{_idle_border};border-radius:12px;"
-        f"font-size:13px;opacity:0.95;color:inherit;'>{body}</div>"
-    )
+def add_library_link(links: list) -> None:
+    """Append Add to Library to a bottom-row link list, once, so the
+    button sits in Anki's own row beside Get Shared / Create Deck."""
+    link = ["", BROWSE_CMD, ADD_LABEL]
+    if link not in links:
+        links.append(link)
 
 
-def on_deck_browser_content(deck_browser: Any, content: Any) -> None:
-    """Inject the drop square above the deck list."""
-    if not hasattr(content, "stats"):
-        return
-    try:
-        content.stats += _drop_square_html()
-    except Exception as e:
-        print(f"[klausmate] deck browser content injection failed: {e}")
-
-
-def on_overview_content(overview: Any, content: Any) -> None:
-    """Inject the same drop square on the deck overview screen — 'just
-    like it does for the main menu': opening a deck must not lose the
-    affordance the deck-list screen has. Appended to content.table, the
-    OverviewContent field that plays the same role content.stats does on
-    the deck browser (both are the last piece rendered into the _body
-    template before the closing </center>)."""
-    if not hasattr(content, "table"):
-        return
-    try:
-        content.table += _drop_square_html()
-    except Exception as e:
-        print(f"[klausmate] overview content injection failed: {e}")
+def on_overview_will_render_bottom(link_handler: Any, links: list) -> Any:
+    """``overview_will_render_bottom`` filter: the same button on the
+    deck overview's row. Returns Anki's link handler untouched."""
+    add_library_link(links)
+    return link_handler
 
 
 def _install_drop_wrap() -> None:
@@ -221,11 +165,9 @@ def _install_drop_wrap() -> None:
 
     def dropEvent(self, evt):  # noqa: N802 — Qt naming
         try:
-            # Both screens that render the drop square (K-040), not just
-            # the deck list. The square says "Drop a lecture PDF here" on
-            # the overview too, and without this the drop falls through to
-            # Anki's own importer, which chokes on a PDF — an invitation
-            # the add-on then fails to honour.
+            # Both deck screens (K-040), not just the deck list: without
+            # this a PDF dropped on the overview falls through to Anki's
+            # own importer, which chokes on it.
             if getattr(mw, "state", "") in ("deckBrowser", "overview"):
                 md = evt.mimeData()
                 if md is not None and md.hasUrls():
@@ -256,9 +198,9 @@ def _install_drop_wrap() -> None:
 def setup() -> None:
     """Install every deck surface; each failure is isolated and logged.
 
-    K-146 dropped two installs with the button they existed for: the
-    ``DeckBrowser.drawLinks`` append and the ``overview_will_render_bottom``
-    filter. Klaus adds nothing to either bottom bar now. K-151 dropped a
+    K-146 dropped the curate button's ``DeckBrowser.drawLinks`` append and
+    ``overview_will_render_bottom`` filter; Add to Library uses the same
+    two installs now, in place of the drop square. K-151 dropped a
     third — the ``profile_will_close`` handler that reset the armed PDF —
     because there is no session state left in this module to reset.
     """
@@ -271,13 +213,14 @@ def setup() -> None:
         gui_hooks.webview_did_receive_js_message.append(on_deck_js_message)
     except Exception as e:
         print(f"[klausmate] deck js hook failed: {e}")
-    if hasattr(gui_hooks, "deck_browser_will_render_content"):
+    try:
+        from aqt.deckbrowser import DeckBrowser
+
+        add_library_link(DeckBrowser.drawLinks)
+    except Exception as e:
+        print(f"[klausmate] deck browser Add to Library failed: {e}")
+    if hasattr(gui_hooks, "overview_will_render_bottom"):
         try:
-            gui_hooks.deck_browser_will_render_content.append(on_deck_browser_content)
+            gui_hooks.overview_will_render_bottom.append(on_overview_will_render_bottom)
         except Exception as e:
-            print(f"[klausmate] deck content hook failed: {e}")
-    if hasattr(gui_hooks, "overview_will_render_content"):
-        try:
-            gui_hooks.overview_will_render_content.append(on_overview_content)
-        except Exception as e:
-            print(f"[klausmate] overview content hook failed: {e}")
+            print(f"[klausmate] overview Add to Library failed: {e}")

@@ -1,18 +1,15 @@
-"""The status bar along the bottom of the main window and Browse, like
-VS Code's: one gear holding KlausMate Settings and Anki Settings on the
-left, then a progress readout of every running process (``tasks``), and
-at the far right Browse's layout toggles (◧ sidebar, ◨ card editor) or,
-in the main window, the deck list's and overview's own buttons (Get
-Shared, Create Deck, Import File; Options, Custom Study…), moved out of
-Anki's bottom webview.
+"""Browse's bottom bar: a gear that opens Anki's Preferences on the left,
+then a progress readout of every running process (``tasks``), and the
+layout toggles (◧ sidebar, ◨ card editor) at the far right. The main
+window has no Qt bar: its row is Anki's own, extended by ``bottom_row``,
+which shares this module's readout rules, gear shape and task list.
+Klaus's own settings are the top bar's star.
 
 Pure helpers above the divider; the widget and install glue below it.
 """
 from __future__ import annotations
 
-import re
-import sys
-from html.parser import HTMLParser
+import math
 
 from . import tasks
 
@@ -28,44 +25,30 @@ def readout_text(items: list) -> str:
     return items[0].message if items else ""
 
 
-_PYCMD = re.compile(r"""^\s*pycmd\(\s*(["'])([^"']*)\1\s*\)\s*;?\s*$""")
+SHOW_DELAY_S = 0.5  # a task quicker than this never flashes the readout
 
 
-class _Buttons(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.found: list = []  # [title, onclick, text]
-        self._in = False
-
-    def handle_starttag(self, tag, attrs) -> None:
-        if tag == "button":
-            a = dict(attrs)
-            self.found.append([a.get("title") or "", a.get("onclick") or "", ""])
-            self._in = True
-
-    def handle_endtag(self, tag) -> None:
-        if tag == "button":
-            self._in = False
-
-    def handle_data(self, data) -> None:
-        if self._in:
-            self.found[-1][2] += data
+def visible_tasks(items: list, now: float) -> tuple[list, float | None]:
+    """The tasks the readout draws, and in how many seconds to look again:
+    a running task younger than ``SHOW_DELAY_S`` is left out until then."""
+    young = [t for t in items if not t.message and now - t.started < SHOW_DELAY_S]
+    if not young:
+        return list(items), None
+    wait = min(SHOW_DELAY_S - (now - t.started) for t in young)
+    return [t for t in items if t not in young], wait
 
 
-def parse_bottom_buttons(html: str) -> list | None:
-    """``[(label, cmd, title)]`` for the buttons of one of Anki's bottom
-    bars, each a plain ``pycmd("cmd")``. None when any button is
-    something else (another add-on's JS): the bar can't reproduce it, so
-    Anki's row must stay."""
-    p = _Buttons()
-    p.feed(html or "")
-    out = []
-    for title, onclick, text in p.found:
-        m = _PYCMD.match(onclick)
-        if not m:
-            return None
-        out.append((" ".join(text.split()), m.group(2), title))
-    return out
+def gear_points(size: float) -> list[tuple[float, float]]:
+    """An 8-tooth gear outline centred in a ``size`` box — drawn, because
+    the ⚙ glyph renders at whatever the fallback font picks. The hub is a
+    circle of radius ``size * 0.14`` at the centre."""
+    c, ro, ri = size / 2.0, size * 0.44, size * 0.32
+    pts = []
+    for k in range(8):
+        for r, da in ((ri, -15.0), (ro, -9.0), (ro, 9.0), (ri, 15.0)):
+            t = math.radians(k * 45.0 + da)
+            pts.append((c + r * math.cos(t), c + r * math.sin(t)))
+    return pts
 
 
 # ── aqt glue ─────────────────────────────────────────────────────────────
@@ -77,7 +60,6 @@ from aqt.qt import (  # noqa: E402
     QFrame,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QObject,
     QPainter,
     QPainterPath,
@@ -98,14 +80,6 @@ LABEL_MAX_PX = 320
 # inside gets what's left, which also centres it in the strip.
 STRIP_HEIGHT = 28
 BAR_HEIGHT = STRIP_HEIGHT - 3 - 2
-SHOW_DELAY_S = 0.5  # a task quicker than this never flashes the bar
-
-
-def _open_klaus_settings() -> None:
-    try:
-        sys.modules[__package__].manage_models_dialog()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] status bar: KlausMate settings failed: {exc}")
 
 
 def _open_anki_settings() -> None:
@@ -145,19 +119,10 @@ class _ClickFilter(QObject):
 
 
 def gear_path(size: float) -> "QPainterPath":
-    """An 8-tooth gear outline centred in a ``size`` box, with its hub
-    hole — drawn, because the ⚙ glyph renders at whatever the fallback
-    font picks."""
-    import math
-
-    c, ro, ri, hub = size / 2.0, size * 0.44, size * 0.32, size * 0.14
+    """``gear_points`` as a QPainterPath, with its hub hole."""
+    c, hub = size / 2.0, size * 0.14
     path = QPainterPath()
-    pts = []
-    for k in range(8):
-        a = k * 45.0
-        for r, da in ((ri, -15.0), (ro, -9.0), (ro, 9.0), (ri, 15.0)):
-            t = math.radians(a + da)
-            pts.append(QPointF(c + r * math.cos(t), c + r * math.sin(t)))
+    pts = [QPointF(x, y) for x, y in gear_points(size)]
     path.moveTo(pts[0])
     for p in pts[1:]:
         path.lineTo(p)
@@ -167,9 +132,9 @@ def gear_path(size: float) -> "QPainterPath":
 
 
 class _GearButton(QToolButton):
-    """The settings gear: painted like the pane toggles (nothing at rest,
-    a grey wash on hover) so the bar's three icons read as one set, and
-    with no menu arrow."""
+    """The gear: opens Anki's Preferences in one click. Painted like the
+    pane toggles (nothing at rest, a grey wash on hover) so the bar's
+    three icons read as one set."""
 
     def __init__(self, parent) -> None:
         super().__init__(parent)
@@ -180,9 +145,8 @@ class _GearButton(QToolButton):
         self._tab_focus = False
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setToolTip("Settings")
-        self.setAccessibleName("Settings")
-        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.setToolTip("Anki Settings")
+        self.setAccessibleName("Anki Settings")
 
     def focusInEvent(self, event) -> None:  # noqa: N802 - Qt override
         from .browse_toggles import is_keyboard_focus
@@ -242,10 +206,7 @@ class StatusBar(QWidget):
         row.setContentsMargins(4, 0, 4, 0)
         row.setSpacing(6)
         self.gear = _GearButton(self)
-        menu = QMenu(self.gear)
-        menu.addAction("KlausMate Settings…").triggered.connect(lambda *_a: _open_klaus_settings())
-        menu.addAction("Anki Settings…").triggered.connect(lambda *_a: _open_anki_settings())
-        self.gear.setMenu(menu)
+        self.gear.clicked.connect(lambda *_a: _open_anki_settings())
         row.addWidget(self.gear)
         self.progress = QProgressBar(self)
         self.progress.setFixedWidth(120)
@@ -260,9 +221,6 @@ class StatusBar(QWidget):
         row.addSpacing(2)
         row.addWidget(self.label)
         row.addStretch(1)
-        self._actions = QHBoxLayout()
-        self._actions.setSpacing(2)
-        row.addLayout(self._actions)
         if browser is not None:
             row.setSpacing(2)  # the two toggles sit as a pair
             self._add_toggles(row, browser)
@@ -305,23 +263,6 @@ class StatusBar(QWidget):
             row.addWidget(btn)
             self.editor_btn = btn
 
-    def set_actions(self, items: list) -> None:
-        """Replace the right-hand buttons with ``[(label, title, fn)]``."""
-        while self._actions.count():
-            w = self._actions.takeAt(0).widget()
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
-        for label, title, fn in items:
-            btn = QToolButton(self)
-            btn.setObjectName("KlausBarAction")
-            btn.setText(label)
-            btn.setToolTip(title)
-            btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
-            btn.setAutoRaise(True)
-            btn.clicked.connect(lambda *_a, f=fn: f())
-            self._actions.addWidget(btn)
-
     def apply_theme(self) -> None:
         try:
             from . import theme
@@ -336,12 +277,9 @@ class StatusBar(QWidget):
             print(f"[klausmate] status bar theme failed: {exc}")
 
     def refresh(self, items: list) -> None:
-        now = tasks.clock()
-        young = [t for t in items if not t.message and now - t.started < SHOW_DELAY_S]
-        if young:
-            wait = min(SHOW_DELAY_S - (now - t.started) for t in young)
+        items, wait = visible_tasks(items, tasks.clock())
+        if wait is not None:
             self._wake.start(int(wait * 1000) + 20)
-            items = [t for t in items if t not in young]
         self._tasks = list(items)
         running = [t for t in items if not t.message]
         text = readout_text(items)
@@ -373,47 +311,55 @@ class StatusBar(QWidget):
             pass  # the bar was deleted while the timer waited
 
     def open_task_list(self) -> None:
-        if not self._tasks:
-            return
-        frame = QFrame(self, Qt.WindowType.Popup)
-        frame.setObjectName("KlausStatusBar")
-        frame.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        from . import theme
+        if self._tasks:
+            anchor = self.progress.mapToGlobal(self.progress.rect().topLeft())
+            self.popup = show_task_list(self, self._tasks, anchor)
 
-        frame.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
-        col = QVBoxLayout(frame)
-        col.setContentsMargins(10, 8, 10, 8)
-        for t in self._tasks:
-            line = QHBoxLayout()
-            text = t.message or t.label
-            name = QLabel(QFontMetrics(frame.font()).elidedText(
-                text, Qt.TextElideMode.ElideMiddle, LABEL_MAX_PX), frame)
-            name.setToolTip(text)
-            line.addWidget(name, 1)
-            if not t.message:
-                bar = QProgressBar(frame)
-                bar.setFixedWidth(100)
-                bar.setTextVisible(False)
-                bar.setRange(0, t.total if t.total > 0 else 0)
-                if t.total > 0:
-                    bar.setValue(min(t.done, t.total))
-                line.addWidget(bar)
-            if t.cancellable:
-                x = QToolButton(frame)
-                x.setText("✕")
-                x.setToolTip("Stop")
-                x.clicked.connect(lambda *_a, k=t.key: (tasks.cancel(k), frame.close()))
-                line.addWidget(x)
-            col.addLayout(line)
-        frame.adjustSize()
-        # Above the readout, kept on this bar's screen.
-        pos = self.progress.mapToGlobal(self.progress.rect().topLeft())
-        area = self.screen().availableGeometry()
-        x = max(area.left(), min(pos.x(), area.right() + 1 - frame.width()))
-        y = max(area.top(), pos.y() - frame.height() - 2)
-        frame.move(x, y)
-        self.popup = frame
-        frame.show()
+
+def show_task_list(parent, items: list, anchor) -> "QFrame":
+    """Every task with its own bar and a ✕ where it can be stopped, in a
+    ``Qt.Popup`` frame just above ``anchor`` (a global point), kept on
+    that screen. Shared by Browse's bar and the main window's row."""
+    from . import theme
+
+    frame = QFrame(parent, Qt.WindowType.Popup)
+    frame.setObjectName("KlausStatusBar")
+    frame.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    frame.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
+    col = QVBoxLayout(frame)
+    col.setContentsMargins(10, 8, 10, 8)
+    for t in items:
+        line = QHBoxLayout()
+        text = t.message or t.label
+        name = QLabel(QFontMetrics(frame.font()).elidedText(
+            text, Qt.TextElideMode.ElideMiddle, LABEL_MAX_PX), frame)
+        name.setToolTip(text)
+        line.addWidget(name, 1)
+        if not t.message:
+            bar = QProgressBar(frame)
+            bar.setFixedWidth(100)
+            bar.setTextVisible(False)
+            bar.setRange(0, t.total if t.total > 0 else 0)
+            if t.total > 0:
+                bar.setValue(min(t.done, t.total))
+            line.addWidget(bar)
+        if t.cancellable:
+            x = QToolButton(frame)
+            x.setText("✕")
+            x.setToolTip("Stop")
+            x.clicked.connect(lambda *_a, k=t.key: (tasks.cancel(k), frame.close()))
+            line.addWidget(x)
+        col.addLayout(line)
+    frame.adjustSize()
+    screen = parent.screen() if hasattr(parent, "screen") else None
+    area = screen.availableGeometry() if screen is not None else None
+    x, y = anchor.x(), anchor.y() - frame.height() - 2
+    if area is not None:
+        x = max(area.left(), min(x, area.right() + 1 - frame.width()))
+        y = max(area.top(), y)
+    frame.move(x, y)
+    frame.show()
+    return frame
 
 
 # ── install ──────────────────────────────────────────────────────────────
@@ -425,27 +371,6 @@ def _track(bar: StatusBar) -> StatusBar:
     _bars.append(bar)
     bar.destroyed.connect(lambda *_a, b=bar: _bars.remove(b) if b in _bars else None)
     return bar
-
-
-def install_main(mw) -> StatusBar | None:
-    """Give the main window a status bar. Anki's main.ui has none, so
-    QMainWindow.statusBar() creates it."""
-    existing = getattr(mw, "_klausmate_status_bar", None)
-    if existing is not None:
-        return existing
-    try:
-        native = mw.statusBar()
-        native.setVisible(True)
-        native.setSizeGripEnabled(False)
-        bar = StatusBar(mw)
-        native.addPermanentWidget(bar, 1)
-        native.setFixedHeight(STRIP_HEIGHT)
-        bar.apply_theme()
-        mw._klausmate_status_bar = bar
-        return _track(bar)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] status bar (main window) failed: {exc}")
-        return None
 
 
 def install_browser(browser) -> StatusBar | None:
@@ -500,50 +425,6 @@ def _on_profile_open() -> None:
         tasks.run_on_main = mw.taskman.run_on_main
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] status bar: no taskman: {exc}")
-    install_main(mw)
-
-
-def _bridge(web, cmd: str) -> None:
-    """What a click on Anki's own button does (AnkiWebView._onBridgeCmd):
-    the js-message filter first, so add-ons that intercept still do, then
-    the link handler Anki's draw() installed — read now, not at move time."""
-    try:
-        from aqt import gui_hooks
-
-        handled, _r = gui_hooks.webview_did_receive_js_message(
-            (False, None), cmd, getattr(web, "_bridge_context", None))
-        if not handled:
-            web.onBridgeCmd(cmd)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] status bar: {cmd!r} failed: {exc}")
-
-
-_MOVED = {"DeckBrowserBottomBar", "OverviewBottomBar"}
-_BOTTOM = _MOVED | {"ReviewerBottomBar", "BottomToolbar"}
-
-
-def _on_webview_content(web_content, context) -> None:
-    """The deck list's and overview's bottom rows move into the main
-    window's bar; any other content in Anki's bottom webview (review's
-    answer buttons) puts the row back."""
-    name = type(context).__name__
-    if name not in _BOTTOM:
-        return
-    try:
-        from aqt import mw
-
-        bar = getattr(mw, "_klausmate_status_bar", None)
-        web = mw.bottomWeb
-        buttons = parse_bottom_buttons(web_content.body) if name in _MOVED else None
-        if bar is None or not buttons:
-            if bar is not None:
-                bar.set_actions([])
-            web.show()
-            return
-        bar.set_actions([(label, title, lambda c=cmd: _bridge(web, c)) for label, cmd, title in buttons])
-        web.hide()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] status bar: moving Anki's buttons failed: {exc}")
 
 
 def _on_browser_will_show(browser) -> None:
@@ -565,7 +446,6 @@ def setup() -> None:
     gui_hooks.profile_will_close.append(tasks.clear)
     gui_hooks.browser_will_show.append(_on_browser_will_show)
     gui_hooks.theme_did_change.append(_on_theme_change)
-    gui_hooks.webview_will_set_content.append(_on_webview_content)
     for name, fn in (
         ("sync_will_start", on_sync_will_start),
         ("sync_did_finish", on_sync_did_finish),
