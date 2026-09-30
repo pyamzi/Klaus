@@ -67,6 +67,7 @@ def make_browser(panel_open=False, floating=False):
     side = QtWidgets.QDockWidget("sidebar")
     side.setWidget(QtWidgets.QTreeView())
     b.addDockWidget(L, side)
+    b.sidebarDockWidget = side  # Browse's own attribute name
     dock = PdfDock(b)
     b.editor = types.SimpleNamespace(_klausmate_pdf_tabs=dock)
     b.show()
@@ -140,6 +141,21 @@ lv.leave(b3)
 app.processEvents()
 check("...and floats again after", dock3.isFloating())
 check("...without its placement memory seeing any of it", dock3.persisted == persisted, str(dock3.persisted))
+
+section("the sidebar keeps its width through viewer mode and back")
+for _open in (False, True):
+    b5, dock5, side5 = make_browser(panel_open=_open)
+    b5.resizeDocks([side5], [260], QtCore.Qt.Orientation.Horizontal)
+    app.processEvents()
+    w0 = side5.width()
+    lv.enter(b5, "A")
+    app.processEvents()
+    w1 = side5.width()
+    lv.leave(b5)
+    app.processEvents()
+    w2 = side5.width()
+    check(f"panel {'open' if _open else 'closed'} before: sidebar {w0} -> {w1} (viewer) -> {w2} (cards)",
+          abs(w1 - w0) <= 2 and abs(w2 - w0) <= 2)
 
 section("no panel yet: nothing happens")
 b4 = QtWidgets.QMainWindow()

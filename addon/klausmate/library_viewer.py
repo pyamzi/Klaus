@@ -11,12 +11,15 @@ The panel is Klaus's own PdfDock (``editor._klausmate_pdf_tabs``).
 Viewer mode never changes its remembered placement: a floating panel is
 docked for the duration with its signals blocked, so its
 placement-memory handlers never see it, and is floated back after.
+Anki's sidebar keeps its width both ways: hiding or showing the central
+widget makes Qt re-split the dock area, so the width is pinned back
+after each switch.
 """
 from __future__ import annotations
 
 import time
 
-from aqt.qt import QApplication, QEvent, QObject, Qt
+from aqt.qt import QApplication, QEvent, QObject, QStyle, Qt
 
 ATTR = "_klausmate_viewer"
 
@@ -29,13 +32,34 @@ def active(browser) -> bool:
     return getattr(browser, ATTR, None) is not None
 
 
-def _fill(browser, dock) -> None:
+def _sidebar(browser):
+    side = getattr(browser, "sidebarDockWidget", None)
+    return side if side is not None and side.isVisible() and not side.isFloating() else None
+
+
+def _pin_sidebar(browser, width) -> None:
+    side = _sidebar(browser)
+    if side is not None and width:
+        browser.resizeDocks([side], [width], Qt.Orientation.Horizontal)
+
+
+def _fill(browser, dock, side_width) -> None:
+    # One resizeDocks for both, sized to add up exactly (the separator
+    # between them included): sizing the panel alone let Qt take the
+    # difference out of the sidebar.
     try:
-        vertical = browser.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea
-        total = browser.height() if vertical else browser.width()
+        if browser.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea:
+            browser.resizeDocks([dock], [max(400, browser.height())], Qt.Orientation.Vertical)
+            _pin_sidebar(browser, side_width)
+            return
+        side = _sidebar(browser)
+        if side is None or not side_width:
+            browser.resizeDocks([dock], [max(400, browser.width())], Qt.Orientation.Horizontal)
+            return
+        sep = browser.style().pixelMetric(QStyle.PixelMetric.PM_DockWidgetSeparatorExtent)
         browser.resizeDocks(
-            [dock], [max(400, total)],
-            Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal,
+            [side, dock], [side_width, max(400, browser.width() - side_width - sep)],
+            Qt.Orientation.Horizontal,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] viewer mode resize failed: {exc}")
@@ -54,6 +78,7 @@ def enter(browser, safe: str) -> bool:
             "geometry": dock.geometry(),
             "width": dock.width(),
             "height": dock.height(),
+            "side": _sidebar(browser).width() if _sidebar(browser) is not None else 0,
             "entered": 0.0,
         }
         if state["floating"]:
@@ -66,7 +91,7 @@ def enter(browser, safe: str) -> bool:
         _install_filter(browser, dock)
         dock.panel_show()
         central.hide()
-        _fill(browser, dock)
+        _fill(browser, dock, state["side"])
     getattr(browser, ATTR)["entered"] = time.monotonic()
     try:
         sidebar = dock._sidebar
@@ -108,6 +133,7 @@ def leave(browser) -> None:
                 [dock], [state["height"] if vertical else state["width"]],
                 Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal,
             )
+        _pin_sidebar(browser, state["side"])
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] leaving viewer mode: panel restore failed: {exc}")
 
