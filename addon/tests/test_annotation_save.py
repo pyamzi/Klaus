@@ -308,6 +308,47 @@ asv._start_timer("A", 500, lambda: None)
 asv._run_on_main = real_rom
 check("start_timer goes through run_on_main", len(hops) == 1)
 
+section("doc_sync wiring: pin resolves, 'back' retries a failed save")
+ds = importlib.import_module("klausmate.doc_sync")
+asv._pin("A", STAT)
+check("_pin reaches doc_sync.pin_own_write", ds.classify("A", STAT) == "own")
+ds.pin_own_write("A", None)
+
+
+class FakePipe:
+    def __init__(self, *a):
+        self.failed = {"A"}
+        self.retried = []
+
+    def failed_names(self):
+        return set(self.failed)
+
+    def retry(self, name):
+        self.retried.append(name)
+
+
+fake = FakePipe()
+subs_before = list(ds._subs)
+asv._wire_doc_sync(fake)
+ds.mark_back("A", "/lib/a.pdf")
+check("'back' for a failed name retries it", fake.retried == ["A"], str(fake.retried))
+ds.mark_back("B", "/lib/b.pdf")
+check("'back' for a name that saved fine does nothing", fake.retried == ["A"])
+ds.mark_missing("A")
+ds.repoint("A", "/lib/moved/a.pdf")
+check("'missing'/'moved' never retry", fake.retried == ["A"])
+ds._subs[:] = subs_before
+
+wired = []
+real_cls, real_wire = asv.SavePipeline, asv._wire_doc_sync
+asv.SavePipeline, asv._wire_doc_sync = FakePipe, wired.append
+sys.modules["klausmate"].USER_FILES = tempfile.mkdtemp()  # pre-settings layout
+asv._PIPELINE = None
+pipe = asv.pipeline()
+asv.SavePipeline, asv._wire_doc_sync = real_cls, real_wire
+asv._PIPELINE = None
+check("pipeline() wires its singleton to doc_sync", wired == [pipe])
+
 section("unsubscribe")
 pipe, timers, pins, events = make(Bake())
 seen = []

@@ -251,11 +251,25 @@ def _start_timer(_name: str, ms: int, cb: Callable[[], None]) -> None:
 
 
 def _pin(name: str, stat: Optional[tuple]) -> None:
+    from . import doc_sync
+
+    doc_sync.pin_own_write(name, stat)
+
+
+def _wire_doc_sync(pipe: SavePipeline) -> None:
+    """A PDF that failed to save and comes back (the rescan's "back")
+    retries its bake."""
     try:
         from . import doc_sync
-    except ImportError:  # Task 4 wires this for real
+    except Exception as exc:
+        print(f"[klausmate] doc_sync unavailable, no retry on return: {exc}")
         return
-    doc_sync.pin_own_write(name, stat)
+
+    def _on_doc(event: str, safe: str, _path: Optional[str]) -> None:
+        if event == "back" and safe in pipe.failed_names():
+            pipe.retry(safe)
+
+    doc_sync.subscribe(_on_doc)
 
 
 def pipeline() -> SavePipeline:
@@ -264,6 +278,7 @@ def pipeline() -> SavePipeline:
         from . import USER_FILES
 
         _PIPELINE = SavePipeline(USER_FILES, _run_on_main, _start_timer, _pin)
+        _wire_doc_sync(_PIPELINE)
     return _PIPELINE
 
 
