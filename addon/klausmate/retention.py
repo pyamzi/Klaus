@@ -642,6 +642,21 @@ def forget_prefs(name: str) -> None:
 # --------------------------------------------------- FSRS retrievability
 
 
+def index_status(name: str, sig) -> tuple[bool, bool]:
+    """(indexed, stale) for one PDF's page index, from its manifest and
+    source signature only — no card index. The Library's rows and the
+    sidebar's warning icons both read this, so they cannot disagree.
+    (Whether the MATCHES are current needs the card index; see
+    priority_rows.)"""
+    st = pdf_index.stats_from_disk(pdf_index.index_dir(USER_FILES, name))
+    indexed = bool(st["exists"] and st["complete"])
+    stale = indexed and (
+        not embeddings.signature_matches(st["provider"], st["model"], st.get("dims", 0), sig)
+        or pdf_index.source_signature(USER_FILES, name) is None
+    )
+    return indexed, stale
+
+
 def card_retrievability(
     col, nids: set[int], skip_suspended: bool = False
 ) -> dict[int, list[tuple[float, bool]]]:
@@ -1004,14 +1019,7 @@ def priority_rows(col, cfg: dict) -> dict:
         name = fname[:-4] if fname.endswith(".txt") else fname
         safe = pdf_handler._safe_basename(name)
         src_sig = pdf_index.source_signature(USER_FILES, name)
-        st = pdf_index.stats_from_disk(pdf_index.index_dir(USER_FILES, name))
-        indexed = st["exists"] and st["complete"]
-        stale = indexed and (
-            not embeddings.signature_matches(
-                st["provider"], st["model"], st.get("dims", 0), sig
-            )
-            or src_sig is None
-        )
+        indexed, stale = index_status(name, sig)
         matches = None
         if indexed and not stale and card_ok:
             cached = load_matches(name, sig, cidx.dims, src_sig, digest)

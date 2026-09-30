@@ -21,6 +21,7 @@ sys.path.insert(0, ".claude/skills/klaus-test/scripts")
 from anki_stubs import check, install, report, section  # noqa: E402
 
 install()
+sys.modules["klausmate"].get_config = lambda: {}
 from PyQt6 import QtCore, QtGui, QtWidgets  # noqa: E402
 
 shim = types.ModuleType("aqt.qt")
@@ -184,6 +185,148 @@ ls._sidebars.add(tree)
 ls.on_operation_did_execute(types.SimpleNamespace(card=False, note=False, tag=False, study_queues=False), None)
 ls.on_operation_did_execute(types.SimpleNamespace(card=True), None)
 check("a card change with Browse open schedules one refresh", fired == [1])
+
+section("a PDF that needs attention says why")
+idx = ls.build_index(drive, prefs)
+check("tag -> PDF and tag -> folder maps",
+      idx["safes"]["!library::2-bib::exam_1::week_1::04-l-intro_to_cbc"] == "Intro_to_CBC"
+      and idx["folders"]["!library::2-bib::exam_1"] == "2-BiB/Exam 1", str(idx))
+st = ls.pdf_status(["a", "b", "c", "d"], {"d"},
+                   {"a": (False, False), "b": (True, True), "c": (True, False), "d": (False, False)}.get)
+check("not embedded, stale and indexing get reasons; a current one gets none",
+      st == {"a": ls.NOT_EMBEDDED, "b": ls.STALE, "d": ls.INDEXING}, str(st))
+ls._state["status"] = {"Intro_to_CBC": ls.STALE}
+opt = QtWidgets.QStyleOptionViewItem()
+opt.widget = tree
+delegate.initStyleOption(opt, model.index(0, 0))
+check("its row carries a warning icon", not opt.icon.isNull())
+opt = QtWidgets.QStyleOptionViewItem()
+opt.widget = tree
+delegate.initStyleOption(opt, model.index(1, 0))
+check("an ordinary tag row does not", opt.icon.isNull())
+ls._state["status"] = {}
+
+section("right-click menus")
+act = importlib.import_module("klausmate.library_actions")
+act.pdfs_under = lambda folder: ["Intro_to_CBC"] if folder == "2-BiB/Exam 1/Week 1" else []
+
+
+def menu_for(full_name):
+    menu = QtWidgets.QMenu()
+    menu.addAction("Anki's own item")
+    ls.on_context_menu(types.SimpleNamespace(browser=None), menu, Item(full_name), None)
+    return [a.text() for a in menu.actions() if not a.isSeparator()]
+
+
+check("Anki's items stay first", menu_for("!Library")[0] == "Anki's own item")
+check("root: import and new folder", menu_for("!Library")[1:] == ["Import PDFs…", "New Folder…"])
+check("a PDF: every Library action",
+      menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")[1:]
+      == ["Open PDF", "Rename PDF…", "Match Sensitivity…", "Retention History…", "Re-embed",
+          "Suspend Cards", "Unsuspend Cards", "Show in Finder", "Delete PDF…"],
+      str(menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")))
+check("a folder with PDFs",
+      menu_for("!Library::2-BiB::Exam_1::Week_1")[1:] == ["New Folder…", "Import PDFs Here…", "Re-embed All"])
+check("an empty folder can be renamed and removed here (Anki's own items skip empty tags)",
+      menu_for("!Library::2-BiB::Exam_1")[1:]
+      == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])
+check("any other tag gets nothing extra", menu_for("Hematology::Anemia") == ["Anki's own item"])
+
+section("clicking a PDF opens it in the panel only if the panel is showing")
+
+
+class Dock:
+    def __init__(self, visible):
+        self.visible, self.loaded, self.shown = visible, [], 0
+        self._sidebar = types.SimpleNamespace(is_loaded=lambda s: False, load_pdf=self.loaded.append)
+
+    def isVisible(self):
+        return self.visible
+
+    def panel_show(self):
+        self.shown += 1
+        self.visible = True
+
+
+import klausmate.pdf_handler as _ph  # noqa: E402
+_ph.touch_last_used = lambda uf, safe: None
+hidden, shown = Dock(False), Dock(True)
+ls._on_clicked(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=hidden)), model.index(0, 0))
+ls._on_clicked(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=shown)), model.index(0, 0))
+check("a hidden panel stays hidden", hidden.loaded == [] and hidden.shown == 0)
+check("an open panel follows the click", shown.loaded == ["Intro_to_CBC"])
+act.open_in_panel(types.SimpleNamespace(editor=types.SimpleNamespace(_klausmate_pdf_tabs=hidden)), "Intro_to_CBC", force=True)
+check("Open PDF shows the panel", hidden.shown == 1 and hidden.loaded == ["Intro_to_CBC"])
+
+section("drop PDFs on the sidebar")
+imported = []
+act.import_files = lambda paths, folder=None: imported.append(paths)
+drops = ls.PdfDropFilter()
+
+
+_keep = []  # a drag event holds a raw pointer to its mime data
+
+
+def drag(kind, urls):
+    mime = QtCore.QMimeData()
+    _keep.append(mime)
+    if urls:
+        mime.setUrls([QtCore.QUrl.fromLocalFile(u) for u in urls])
+    else:
+        mime.setText("a tag")
+    cls = QtGui.QDropEvent if kind == QtCore.QEvent.Type.Drop else QtGui.QDragEnterEvent
+    return cls(QtCore.QPointF(5, 5) if cls is QtGui.QDropEvent else QtCore.QPoint(5, 5),
+               QtCore.Qt.DropAction.CopyAction, mime, QtCore.Qt.MouseButton.LeftButton,
+               QtCore.Qt.KeyboardModifier.NoModifier)
+
+
+check("a PDF drag is taken", drops.eventFilter(tree, drag(QtCore.QEvent.Type.DragEnter, ["/tmp/a.pdf"])))
+check("Anki's own tag drags pass through", not drops.eventFilter(tree, drag(QtCore.QEvent.Type.DragEnter, None)))
+drops.eventFilter(tree, drag(QtCore.QEvent.Type.Drop, ["/tmp/a.pdf", "/tmp/notes.txt"]))
+check("dropping imports just the PDFs", imported == [["/tmp/a.pdf"]], str(imported))
+
+section("import copies into the library root; the background scan does the rest")
+act = importlib.reload(act)
+root = tempfile.mkdtemp(prefix="klaus-k307-root-")
+src = tempfile.mkdtemp(prefix="klaus-k307-src-")
+open(os.path.join(src, "Lecture.pdf"), "wb").write(b"%PDF")
+open(os.path.join(root, "Lecture.pdf"), "wb").write(b"%PDF old")
+_ph._live_library_root = lambda: root
+scans = []
+pdf_drive = importlib.import_module("klausmate.pdf_drive")
+pdf_drive.start_library_rescan = lambda *a, **k: scans.append(1)
+pdf_drive._user_files = lambda: UF
+n = act.import_files([os.path.join(src, "Lecture.pdf"), os.path.join(src, "missing.pdf")], "Heme")
+check("the PDF is copied into its folder", n == 1 and os.path.isfile(os.path.join(root, "Heme", "Lecture.pdf")))
+act.import_files([os.path.join(src, "Lecture.pdf")])
+check("a name clash at the root gets a new name, never an overwrite",
+      open(os.path.join(root, "Lecture.pdf"), "rb").read() == b"%PDF old"
+      and any(f.startswith("Lecture (") for f in os.listdir(root)), str(os.listdir(root)))
+check("each import starts the background scan", scans == [1, 1])
+
+section("footer: status line while indexing, and the Import button")
+iq = importlib.import_module("klausmate.index_queue")
+ls.refresh_status = lambda: None
+footer = ls.Footer(types.SimpleNamespace())
+footer.show()
+footer.on_state(iq.RunnerState(active=True, kind="pdf", name="04-L-Intro to CBC", label="Embedding pages", done=3, total=10))
+check("indexing shows the runner's own status line",
+      footer.status_row.isVisible() and "04-L-Intro to CBC" in footer.status.text(), footer.status.text())
+footer.on_state(iq.RunnerState())
+check("idle hides it", not footer.status_row.isVisible())
+check("the button says what it does", footer.button.text() == "Import PDFs…")
+container = QtWidgets.QWidget()
+grid = QtWidgets.QGridLayout(container)
+grid.addWidget(QtWidgets.QLineEdit(), 0, 0)
+grid.addWidget(QtWidgets.QToolBar(), 0, 1)
+side = QtWidgets.QTreeView()
+grid.addWidget(side, 1, 0, 1, 2)
+browser = types.SimpleNamespace(sidebarDockWidget=types.SimpleNamespace(widget=lambda: container))
+ls._install_footer(browser, side)
+ls._install_footer(browser, side)
+check("the footer sits under the tree, once",
+      grid.itemAtPosition(2, 0) is not None and grid.itemAtPosition(2, 0).widget() is browser._klausmate_library_footer
+      and grid.rowCount() == 3)
 
 section("wired")
 _init = open("klausmate/__init__.py", encoding="utf-8").read()

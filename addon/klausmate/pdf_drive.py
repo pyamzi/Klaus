@@ -351,6 +351,8 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
     def finish(prepared: dict | None) -> None:
         _rescan["running"] = False
         summary = rescan_library_root(prepared)
+        if summary and summary.get("ingested"):
+            _after_ingest(summary["ingested"])
         if summary and (summary.get("moved") or summary.get("ingested") or summary.get("tree_changed")):
             _refresh_live_libraries("after a rescan changed the Library")
         if on_done:
@@ -366,6 +368,31 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
     QueryOp(
         parent=mw, op=lambda _col: pdf_handler.prepare_rescan(uf, root), success=finish
     ).failure(failed).without_collection().run_in_background()
+
+
+def _after_ingest(safes: list[str]) -> None:
+    """A PDF the folder scan imported gets what every other import
+    surface gives it (``__init__.import_pdf_file``): page records for the
+    transcript strip and current_page, a tag so it shows in Browse's
+    sidebar, and auto-indexing when that is on."""
+    uf = _user_files()
+    for safe in safes:
+        try:
+            from . import page_store
+
+            page_store.ensure_records(
+                uf, safe, pdf_handler.pdf_path_for(uf, safe) or "", pdf_handler.load_pages(uf, safe) or []
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] page records for {safe!r} failed: {exc}")
+        try:
+            from . import index_queue
+
+            index_queue.on_pdf_imported(safe)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] auto-index for {safe!r} failed: {exc}")
+    if mw is not None and getattr(mw, "col", None) is not None:
+        tag_sync.reconcile_from_tags(mw.col)  # registers the new PDFs' tags
 
 
 def rescan_library_root(prepared: dict | None = None) -> dict | None:

@@ -136,6 +136,34 @@ done = []
 pdf_drive.start_library_rescan(done.append)
 check("one op, without the collection", len(ops) == 1 and ops[0].no_col)
 check("its result is applied back on the main thread", len(applied) == 1 and done == [{"moved": []}])
+section("an imported PDF gets what every import gets")
+calls = []
+ps = importlib.import_module("klausmate.page_store")
+iq = importlib.import_module("klausmate.index_queue")
+tsync = importlib.import_module("klausmate.tag_sync")
+ps.ensure_records = lambda uf_, safe, path, pages: calls.append(("pages", safe))
+iq.on_pdf_imported = lambda safe: calls.append(("index", safe))
+tsync.reconcile_from_tags = lambda col: calls.append(("tag", None))
+pdf_drive.mw = type("MW", (), {"col": object()})()
+pdf_drive._after_ingest(["splen"])
+check("page records, auto-index and a tag for the new PDF",
+      calls == [("pages", "splen"), ("index", "splen"), ("tag", None)], str(calls))
+del calls[:]
+pdf_drive.rescan_library_root = lambda prepared=None: {"moved": [], "ingested": ["x"], "tree_changed": []}
+pdf_drive._refresh_live_libraries = lambda why: 0
+pdf_drive.start_library_rescan()
+check("the background rescan hands what it ingested on", ("index", "x") in calls, str(calls))
+
+section("which PDFs are being indexed")
+iq._queue.clear()
+iq._queue.enqueue((iq.JOB_PDF, "a"))
+iq._queue.enqueue((iq.JOB_CARDS, ""))
+iq._current = (iq.JOB_PDF, "b")
+check("pending_names is the running PDF plus the queued ones",
+      iq.pending_names() == {"a", "b"}, str(iq.pending_names()))
+iq._queue.clear()
+iq._current = None
+
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("profile open starts the background rescan",
       "_pdf_drive.start_library_rescan()" in _init and "_pdf_drive.rescan_library_root()" not in _init)

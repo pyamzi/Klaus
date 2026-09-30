@@ -297,6 +297,14 @@ def _cfg() -> dict:
 # ── listeners + published state ──────────────────────────────────────────
 
 
+def pending_names() -> set[str]:
+    """Safe names of the PDF being indexed now plus every queued one."""
+    names = {name for kind, name in _queue.snapshot() if kind == JOB_PDF}
+    if _current is not None and _current[0] == JOB_PDF:
+        names.add(_current[1])
+    return names
+
+
 def add_listener(fn: Callable[[RunnerState], None]) -> None:
     """Subscribe a surface. The Library subscribes for the life of its
     window; the dock is driven directly (it belongs to this module)."""
