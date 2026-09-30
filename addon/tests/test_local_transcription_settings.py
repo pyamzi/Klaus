@@ -22,6 +22,9 @@ K = exec_klausmate_under_qt(scratch.name)
 store = json.loads((Path(__file__).resolve().parents[1] / 'klausmate/config.json').read_text())
 store.update(transcription_model_path='/saved model.bin', transcription_binary='/saved cli',
              transcription_language='fa', preserved_fixture='untouched')
+# A profile whose one-time threshold migration (retention, K-302) already
+# ran: these tests pin what SETTINGS write, not that migration's write.
+store.update(_threshold_scale='centered', _threshold_default_applied=0.45)
 K.get_config = lambda: dict(store)
 writes = []
 def write(cfg):

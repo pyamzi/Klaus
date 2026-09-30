@@ -13,7 +13,13 @@ Anki's shortcuts live behind it, layout never saved).
 ## Shape
 
 The Library **is** the existing `!Library::<folder>::<leaf>` tag branch in
-Anki's Browse sidebar (Tags section), extended by Klaus. No separate tree.
+Anki's Browse sidebar, extended by Klaus. No separate tree of data.
+
+Revised 2026-09-30 (Pouya): the branch is shown as **its own section**,
+first in the sidebar, apart from Tags, with a library icon on the root,
+folder icons on folders and PDF icons on PDFs. It is still made of Anki's
+own TAG rows (moved out of the Tags section at the `browser_will_build_tree`
+TAGS stage), so Anki's rename, drag, delete and search keep working.
 
 Facts this rests on (checked 2026-09-28):
 

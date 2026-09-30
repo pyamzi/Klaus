@@ -22,6 +22,9 @@ scratch = tempfile.TemporaryDirectory()
 K = exec_klausmate_under_qt(scratch.name)
 store = json.loads(Path('klausmate/config.json').read_text())
 store.update(embedding_model='saved-model', transcription_model_path='/saved model.bin')
+# A profile whose one-time threshold migration (retention, K-302) already
+# ran: these tests pin what SETTINGS write, not that migration's write.
+store.update(_threshold_scale='centered', _threshold_default_applied=0.45)
 writes, pending, operations, calls = [], [], [], []
 K.get_config = lambda: dict(store)
 def write(cfg):

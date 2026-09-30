@@ -112,6 +112,64 @@ def percent_text(means: dict | None, tag: str) -> str | None:
     return "—" if mean is None else f"{round(mean * 100)}%"
 
 
+_WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+# Black outline SVGs, the same kind Anki's own sidebar icons are: Anki
+# inverts a plain-path icon in night mode, so one file serves both.
+ROOT_ICON = os.path.join(_WEB, "library-root.svg")
+FOLDER_ICON = os.path.join(_WEB, "library-folder.svg")
+PDF_ICON = os.path.join(_WEB, "library-pdf.svg")
+
+
+def _kind(item) -> str:
+    return getattr(getattr(item, "item_type", None), "name", "")
+
+
+def split_library_section(root, safes: dict) -> object | None:
+    """Move the ``!Library`` tag branch out of Anki's Tags section into a
+    section of its own at the top of the sidebar, with library, folder
+    and PDF icons. Its rows stay Anki TAG items, so Anki's own rename,
+    drag, delete and search keep working on them. Pure over the item
+    objects (``children``, ``_parent_item``, ``full_name``, ``icon``);
+    returns the Library item, or None when there is no Library yet."""
+    tags_root = next((c for c in reversed(root.children) if _kind(c) == "TAG_ROOT"), None)
+    if tags_root is None:
+        return None
+    lib = next((c for c in tags_root.children if c.full_name.casefold() == ROOT_TAG.casefold()), None)
+    if lib is None:
+        return None
+    tags_root.children.remove(lib)
+    lib._parent_item = root
+    root.children.insert(0, lib)
+    lib.icon = ROOT_ICON
+
+    def mark(item) -> None:
+        for child in item.children:
+            child.icon = PDF_ICON if child.full_name.casefold() in safes else FOLDER_ICON
+            mark(child)
+
+    mark(lib)
+    return lib
+
+
+def on_build_tree(handled: bool, root, stage, browser) -> bool:
+    """``browser_will_build_tree`` at the TAGS stage: build Anki's own
+    tag section (its private ``_tag_tree``; there is no after-hook), then
+    lift the Library out of it. Runs in the sidebar's background op, so
+    it touches plain item objects only."""
+    if handled or getattr(stage, "name", "") != "TAGS":
+        return handled
+    try:
+        browser.sidebar._tag_tree(root)
+    except Exception as exc:  # noqa: BLE001 - let Anki build tags itself
+        print(f"[klausmate] library section: tag tree failed: {exc}")
+        return handled
+    try:
+        split_library_section(root, library_index()["safes"])
+    except Exception as exc:  # noqa: BLE001 - tags are built; only the move failed
+        print(f"[klausmate] library section: split failed: {exc}")
+    return True
+
+
 NOT_EMBEDDED = "Not in the search index yet. Right-click › Re-embed."
 STALE = "Needs re-embedding: the embedding model or the file changed. Right-click › Re-embed."
 INDEXING = "Indexing…"
@@ -237,8 +295,18 @@ class LibraryNameDelegate(QStyledItemDelegate):
         painter.save()
         if option.state & QStyle.StateFlag.State_Selected:
             # Muted grey on the selection band is unreadable: the band's
-            # own text colour, slightly dimmed, stays secondary.
-            color = QColor(option.palette.highlightedText().color())
+            # own text colour, slightly dimmed, stays secondary. With
+            # Klaus's sidebar sheet the band is a light tint and the text
+            # the theme's; without it, Qt's blue band and its white text.
+            styled = option.widget is not None and bool(option.widget.styleSheet())
+            try:
+                from . import theme
+
+                color = QColor(theme.palette(theme.night_mode())["text"]) if styled else QColor(
+                    option.palette.highlightedText().color()
+                )
+            except Exception:  # noqa: BLE001
+                color = QColor(option.palette.highlightedText().color())
             color.setAlphaF(0.75)
         else:
             try:
@@ -271,7 +339,8 @@ def refresh_retention() -> None:
     if _state["busy"]:
         _state["again"] = True
         return
-    if mw is None or getattr(mw, "col", None) is None:
+    if not _sidebars or mw is None or getattr(mw, "col", None) is None:
+        _state["means"] = None  # stale by the next open; recomputed then
         return
     _state["busy"] = True
 
@@ -314,6 +383,8 @@ def status_for(tag: str | None) -> str | None:
 def refresh_status() -> None:
     """Which PDFs get a warning icon. Reads index manifests only (no card
     index), on the main thread: a few dozen small JSON files."""
+    if not _sidebars:
+        return  # recomputed when Browse opens
     try:
         from . import embeddings, index_queue, retention
 
@@ -521,3 +592,4 @@ def setup() -> None:
     gui_hooks.operation_did_execute.append(on_operation_did_execute)
     gui_hooks.profile_will_close.append(on_profile_will_close)
     gui_hooks.browser_sidebar_will_show_context_menu.append(on_context_menu)
+    gui_hooks.browser_will_build_tree.append(on_build_tree)

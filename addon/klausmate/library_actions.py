@@ -4,9 +4,6 @@ What the Library window's right-click menu did, callable with just a
 PDF's safe name or a folder path plus a parent widget, so Browse's
 sidebar menu can offer it. Every dialog is an instance opened with
 ``open()`` (K-114/K-125), never an exec.
-
-ponytail: pdf_drive.DriveWindow keeps its own copies of these until
-Part 3 deletes that window (K-308); fix a bug in both until then.
 """
 from __future__ import annotations
 
@@ -48,14 +45,9 @@ def _style(dialog) -> None:
 
 
 def _refresh() -> None:
-    """Every open Library window follows (until Part 3 removes it)."""
     from . import pdf_drive
 
-    for win in pdf_drive._live_libraries():
-        try:
-            win.rebuild_tree()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[klausmate] library refresh failed: {exc}")
+    pdf_drive._library_changed()
 
 
 def _live_root() -> str | None:

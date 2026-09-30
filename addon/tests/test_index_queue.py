@@ -1136,6 +1136,8 @@ section("one chain, one copy")
 _iq_raw = open(os.path.join(ADDON, "index_queue.py")).read()  # docstrings are STRING tokens — code_only strips them
 _iq_src = code_only(_iq_raw)
 _drive_src = code_only(open(os.path.join(ADDON, "pdf_drive.py")).read())
+_sidebar_src = code_only(open(os.path.join(ADDON, "library_sidebar.py")).read())
+_actions_src = code_only(open(os.path.join(ADDON, "library_actions.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
 check(
@@ -1160,14 +1162,19 @@ check(
     and "curation.ensure_index(" not in _drive_src,
 )
 check(
-    "...and drives the shared runner instead",
-    "index_queue.request_pdf(" in _drive_src
-    and "index_queue.cancel_all()" in _drive_src,
+    "...and the sidebar drives the shared runner instead (K-308)",
+    "index_queue.request(" in _actions_src
+    and "index_queue.cancel_all()" in _sidebar_src,
 )
 check(
-    "the Library renders the runner's own status_line, so the two "
+    "the sidebar footer renders the runner's own status_line, so the two "
     "surfaces cannot describe one job differently",
-    "index_queue.status_line(" in _drive_src,
+    "index_queue.status_line(" in _sidebar_src,
+)
+check(
+    "closing Browse does NOT cancel indexing: the footer only unsubscribes",
+    "index_queue.remove_listener" in _sidebar_src
+    and _sidebar_src.count("cancel_all") == 1,
 )
 
 
@@ -1186,24 +1193,6 @@ def _fn(src_path, name, cls=None):
                 return n
     return None
 
-
-_shutdown = _fn(os.path.join(ADDON, "pdf_drive.py"), "shutdown", cls="DriveWindow")
-_shutdown_calls = {
-    ast.unparse(n.func) if hasattr(ast, "unparse") else ""
-    for n in ast.walk(_shutdown)
-    if isinstance(n, ast.Call)
-} if _shutdown else set()
-check("DriveWindow.shutdown exists to pin", _shutdown is not None)
-check(
-    "closing the Library does NOT cancel indexing — a job may have been "
-    "started from the deck screen, and minutes of paid embedding must "
-    "not die because a window was tidied away",
-    "self._on_cancel" not in _shutdown_calls,
-)
-check(
-    "...it unsubscribes instead",
-    "index_queue.remove_listener" in _shutdown_calls,
-)
 
 _sig_fn = _fn(os.path.join(ADDON, "index_queue.py"), "signature_changed")
 check("signature_changed exists to pin", _sig_fn is not None)

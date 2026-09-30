@@ -273,22 +273,9 @@ check("profile_will_close closes the open dialog without its prompts "
       and "profile_will_close.remove(_on_profile_will_close)" in _MM_CODE2
       and "_close_for_profile(dlg, _preview_timer, op_state)" in _MM_CODE2)
 
-section("pdf_drive: the toolbar Library link (third dispatch shape)")
-# open_drive is the Library link's callback — toolbar links are
-# dispatched over the same webchannel. Its error branch used to call
-# showWarning synchronously (recorded as a known landmine in the
-# session handoff); now it defers, with the message frozen into the
-# lambda because the except-variable is unbound by fire time.
-_DRIVE = _code_only(_func_src("pdf_drive", "open_drive"))
-check("open_drive's error branch defers its showWarning, message "
-      "frozen into the lambda's default",
-      "QTimer.singleShot" in _DRIVE
-      and 'lambda msg=f"Could not open the PDF drive' in _DRIVE
-      and "showWarning(msg)" in _DRIVE)
-check("the deferred call is the ONLY modal left in open_drive's body",
-      _DRIVE.count("showWarning(") == 1
-      and not [tok for tok in _MODAL
-               if tok != "showWarning(" and tok in _DRIVE])
+section("K-308: no Library link on the toolbar")
+check("the Library lives in Browse's sidebar; nothing adds a toolbar link",
+      "top_toolbar_did_init_links" not in _code_only(_MODULES["pdf_drive"]))
 
 
 section("K-114: app-modal exec() retired addon-wide (per-file bans)")

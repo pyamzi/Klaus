@@ -269,30 +269,6 @@ finally:
 check("batch retags load the card index once, not once per PDF",
       len(_loads) == 1 and out == {"a": None, "b": None, "c": None})
 
-pdf_drive = importlib.import_module("klausmate.pdf_drive")
-_steps = []
-
-
-class _Sidebar:
-    def clear(self):
-        _steps.append("clear")
-        raise RuntimeError("clear failed")
-
-    def cleanup(self):
-        _steps.append("cleanup")
-
-    def setParent(self, p):
-        pass
-
-    def deleteLater(self):
-        pass
-
-
-_holder = type("W", (), {"sidebar": _Sidebar()})()
-pdf_drive.DriveWindow.release_viewer(_holder)
-check("release_viewer still unhooks the webview when clear() raises",
-      _steps == ["clear", "cleanup"] and _holder.sidebar is None)
-
 _bt = open("klausmate/browse_toolkit.py", encoding="utf-8").read()
 check("the duplicate scan runs without the collection; only the row "
       "texts are fetched with it",
@@ -303,9 +279,10 @@ _mm = open("klausmate/manage_models.py", encoding="utf-8").read()
 check("Preferences stops its preview timer on every close",
       "dlg.finished.connect(lambda _result: _preview_timer.stop())" in _mm)
 _pd = open("klausmate/pdf_drive.py", encoding="utf-8").read()
+_la = open("klausmate/library_actions.py", encoding="utf-8").read()
 check("the /tmp debug log is gone", "klausmate-debug" not in _pd and "_dbg(" not in _pd)
 check("context menus and the threshold dialog are freed",
-      _pd.count("menu.deleteLater()") == 1 and "dlg.finished.connect(dlg.deleteLater)" in _pd
+      "dlg.finished.connect(dlg.deleteLater)" in _la
       and "menu.deleteLater()" in _init
       and "menu.deleteLater()" in open("klausmate/pdf_viewer.py", encoding="utf-8").read())
 

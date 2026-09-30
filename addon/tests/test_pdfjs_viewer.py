@@ -248,8 +248,6 @@ check("a profile/quit sweep exists as backstop",
       hasattr(pdf_viewer, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
-check("Library close tears the sidebar down",
-      "sidebar.cleanup()" in _src("pdf_drive.py"))
 check("editor panel close tears the sidebar down",
       "_sidebar.cleanup()" in _src("__init__.py"))
 check("sweep registered on profile switch AND quit",

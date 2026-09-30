@@ -154,7 +154,7 @@ same reason.
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Offscreen PyQt6 can verify far more than "does it construct"
   (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
-  `DriveWindow`/`PdfSidebar`/`MapCanvas` renders to a `grab()` you can
+  `PdfSidebar`/`MapCanvas` (or the Browse-sidebar delegate) renders to a `grab()` you can
   pixel-read, and every one of these is reachable headless — do not
   claim they need a live screen: **Retina** (`QT_SCALE_FACTOR=2` before
   `QApplication`, then `devicePixelRatioF()` is 2.0 and strokes render
@@ -162,9 +162,9 @@ same reason.
   and `QHoverEvent` — they live in QtGui, not QtCore — then
   `unpolish/polish` so QSS re-evaluates); **pressed** (`setDown(True)`);
   **focus** (`QApplication.focusWidget()` after the same parentless-
-  construct → `addWidget` → `show()` sequence `library_tab.mount()`
-  uses — that exact mount is what caught K-179's misplaced focus ring,
-  which a live accessibility probe had missed). Prove a state took by
+  construct → `addWidget` → `show()` sequence the host uses — that is
+  what caught K-179's misplaced focus ring in the since-deleted Library
+  screen, which a live accessibility probe had missed). Prove a state took by
   diffing pixels inside the widget's rect against the rest frame; zero
   changed pixels means the QSS state never applied. What offscreen
   genuinely CANNOT do: screencapture the live window, or drive the real
@@ -385,16 +385,11 @@ same reason.
   (`QPushButton#SecondaryButton:disabled` — an id outranks a
   pseudo-state, which is why disabled controls once looked live). Also
   per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
-  `library_qss`, `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
-  `accent_rgba`). Since 2026-09-01 `library_qss` grounds the Library
-  window, its tree, its header and the window-scoped
-  `QSplitter::handle` all on `chrome` — the top bar's own token;
-  `pdf_panel_qss`'s own scoped copy of that same handle rule stays on
-  `bg` on purpose, because the pane it grabs (the PDF viewer's own
-  internal splitter) is `bg` too. `accent_mix(night, alpha,
-  base="surface")` takes a `base` at all because a tinted band has to
-  mix over whatever paper it actually sits on — `"chrome"` for the
-  Library's own selection band now. A documentless native `QPdfView`
+  `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
+  `accent_rgba`). `pdf_panel_qss`'s scoped `QSplitter::handle` rule sits
+  on `bg`, because the pane it grabs (the PDF viewer's own internal
+  splitter) is `bg` too. (`library_qss` and `accent_mix` went with the
+  Library window in K-308.) A documentless native `QPdfView`
   paints `bg` the same way — through palette roles rather than a
   stylesheet (Window/Base/Dark/Mid, set once at construction on both
   the view and its viewport in `pdf_viewer.py`, K-178, closed by
@@ -403,8 +398,7 @@ same reason.
   the page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
   reference tokens; styles are computed at widget creation (a night-mode
   flip catches up on next open). Dialog buttons are blue-primary by
-  default with `SecondaryButton`/`DangerButton` objectName opt-outs; the
-  Library window inverts (grey default, `PrimaryButton` opt-in).
+  default with `SecondaryButton`/`DangerButton` objectName opt-outs.
 - `pdfjs_viewer.py` + `web/pdfjs_viewer.html` + `web/pdfjs/` (vendored
   pdf.js 3.11.174): the flicker-free webview renderer (K-095 umbrella),
   selected by config `pdf_renderer` (`"native"` default until the K-101
@@ -552,7 +546,7 @@ same reason.
   stroked, click → Klaus Preferences via `klausmate:settings` on
   `webview_did_receive_js_message`; the same hook also routes the
   on-screen gradient editor's `klausmate:bggrad` drag-end messages
-  into `background.grad_edit_event`). Because it only restyles, Anki's links, Klaus's Library link,
+  into `background.grad_edit_event`). Because it only restyles, Anki's links
   and AnkiHub's toolbar items all keep working and inherit the look via
   the shared `.hitem` class. **Anki draws the toolbar in
   `finish_ui_setup()`, BEFORE any profile opens** — so the accent a
@@ -694,96 +688,55 @@ same reason.
   overriding ONLY `--canvas/--canvas-elevated/--border/--border-subtle`.
   The editor is dual-path: legacy stdHtml gets `editor_css` via
   web_content.head; the flag-gated Svelte editor degrades to stock.
-- `pdf_drive.py`: the **Library** (renamed from "PDF drive" in the UI;
-  file/class names still say drive) — folder tree (`drive_store.py`,
-  `user_files/drive.json`) next to a standalone `PdfSidebar`. **It has
-  TWO shapes since 2026-09-01**: the toolbar link's `open_library` first
-  tries `library_tab.mount()`, which builds ONE `DriveWindow(embedded=True)`
-  as a screen inside `mw.mainLayout` and keeps it for the session (unmount
-  only HIDES it — hidden is its resting state, not "closed"); the
-  standalone window is the fallback when the mount fails. The two live in
-  DISJOINT rosters: `_instance` is written only by `_create()` (the window
-  path, embedded=False), `_embedded_windows` is a WeakSet joined only by an
-  embedded `__init__` (K-173). Any "every open Library" consumer must walk
-  BOTH — `refresh_open_library` (settings save) and `_on_fs_tick` (disk
-  watcher) are the two that need it, and a consumer that reads only
-  `_instance` silently misses the screen the user is actually looking at.
-  Since K-073
-  the tree is **mirrored two-way with real folders under the library
-  root** (single-copy invariant: one file per PDF, living in the root;
-  `rescan_library_root` + a debounced filesystem watcher pick up outside
-  edits) — `drive_store.py` itself stays a pure aqt-free presentation
-  join; the disk sync lives here and in `pdf_handler`. Top-toolbar link
-  labeled "Library" (`gui_hooks.top_toolbar_did_init_links`). Right-click
-  per row: open, rename, move to folder, re-embed, adjust match
-  sensitivity, show matches in Browse, delete. (K-146 removed "Curate
-  Deck from This PDF…" — it only tagged and opened Browse on the tag
-  indexing already writes, which the show-matches action opens.)
-  Since K-152 the window **drives** `index_queue` rather than owning
-  the index chain: `_on_embed` is one `request_pdf` call, `_on_cancel`
-  stops the whole queue, and `_on_index_state` renders the runner's own
-  `status_line` into the status label (so this window and the bottom
-  status dock cannot word one job two ways) and re-aggregates the tree
-  only on a `finished` snapshot. `busy`/`cancel_event`/`_begin`/
-  `_finish`/`_on_progress` went with the chain; `seq` stays as the
-  RETENTION-refresh staleness token, and `shutdown` unsubscribes
-  instead of cancelling.
-  Since K-117 the Library wears the VS Code Explorer vernacular
-  (theme.library_qss: flat 22px rows on `chrome` — K-117 put them on
-  `surface`, K-175 on `bg` — one full-width
-  hover/selection band, chevron twisties via
-  `web/chevron-right-{day,night}.svg`, uppercase LIBRARY caption with
-  New Folder/Refresh/Map beside it (Map opens `pdf_map.open_map_window`
-  through a guarded import — K-124), quiet flat buttons — PrimaryButton
-  opt-in kept). The move to `chrome` is 2026-09-01, Pouya's ask: "I
-  want the panels, like the left panel, to be the same color as the top
-  bar." The window-scoped `QSplitter::handle` grab
-  follows onto `chrome` too, with only a 1px `grey_light` hairline
-  marking the seam — a `bg` grab between two now-chrome panes had
-  measured as a 7px stripe belonging to neither, fixed in the same
-  round (K-206). The map box shares that same chrome surface (its
-  canvas already painted chrome, K-185); the documentless viewer pane
-  alone is `bg`, a step darker (K-178, closed by K-208).
-  `library_explorer.BAND_BASE` moved to `"chrome"` with it, so the
-  tree delegate's column-0 selection band and the sheet's own
-  `accent_mix(..., 'chrome')` rules composite over the same real
-  ground instead of drifting apart (K-130). Columns are
-  PDF/Retention/Cards/Notes (Cards =
-  VIEWABLE cards only, counts from priority_rows' K-118 keys via
-  .get; a fully suspended PDF renders dimmed with "suspended" in its
-  Cards cell); the context menu includes Suspend/Unsuspend Cards
-  (stored-tag-first membership, ONE CollectionOp, undoable),
-  Retention History… (guarded retention_history import, omitted when
-  absent), and the clarity renames Update/Add to Search Index with
-  setToolTipsVisible tooltips; the folder TREE also accepts external
-  .pdf drops filed into the hovered folder (internal moves
-  byte-equivalent); Match Sensitivity opens window-modal (dlg.open,
-  K-114; pdf_drive carries an exec-ban pin) and scores its live preview
-  from matched cards at the selected threshold. The OK path uses the same
-  matched-card retention calculation and refreshes counts at that threshold;
-  neither path applies a judge rejection set. See
-  [Match Sensitivity](klausmate/pdf_drive.py). An empty Library is not
-  a void (K-132): `_LibraryEmptyState`, owned by `_LibraryTree`, is a
-  sibling OVERLAY carrying `LIBRARY_EMPTY_TEXT`/`_HINT` and doubling as
-  a drop target — `WA_TransparentForMouseEvents` is what keeps the
-  K-117 drop path (dropEvent → `_dest_folder_at` → `_on_dropped_paths`)
-  reachable through it; a stacked-widget swap would have needed a
-  second drop handler. Folders-but-no-PDFs shows the SAME copy, moved
-  below the folder rows. **The default splitter is `[560, 480]`, not
-  `[300, 740]`** (K-135): the numeric columns are Fixed at 84+88+88, so
-  a 300px pane left 24px for the PDF NAME and every row opened nameless
-  — Fixed widths do not yield, the pane must fit them; test_drive pins
-  that arithmetic against the real constants. tests/test_drive.py
-  runs a real-offscreen-PyQt6 section: PyQt6 IS importable under
-  system python3 (the klaus-test skill note saying widgets can't be
-  instantiated predates this).
+- **The Library is the `!Library` tag branch in Browse's sidebar**
+  (K-306..K-309, 2026-09-28/30; spec
+  [library-in-browse](docs/superpowers/specs/2026-09-28-library-in-browse-design.md)).
+  The Library window (`DriveWindow`), the embedded main-window screen
+  (`library_tab.py`), its tree styling (`library_explorer.py`,
+  `theme.library_qss`), the top-bar Library link and the map button were
+  all deleted in K-308 — do not resurrect them; `pdf_map`/`pdf_graph`
+  remain with no entry point for now.
+  - `library_sidebar.py`: `on_build_tree` claims the sidebar's TAGS
+    stage (builds Anki's own `_tag_tree`, there is no after-hook) and
+    lifts the `!Library` branch into its OWN first section with
+    library/folder/PDF icons (`web/library-*.svg`, black outlines Anki
+    inverts at night) — its rows stay TAG items, so Anki's rename, drag,
+    delete and search still work. Also a delegate that DRAWS a
+    Library tag by its real name (tags cannot hold spaces; EditRole and
+    search still use the tag), a right-aligned muted retention % on EVERY
+    tag (mean FSRS recall of studied cards, parents include children, new
+    and suspended excluded, computed in a QueryOp only while a Browse is
+    open), warning icons with `helpEvent` tooltips (not embedded / stale /
+    indexing, from `retention.index_status` + `index_queue.pending_names`),
+    the right-click menus (`browser_sidebar_will_show_context_menu`), a
+    click that loads the PDF into Browse's PDF panel only when that panel
+    is already showing, a drop filter for PDF files, and a footer under the
+    tree (index status line + ✕, Import PDFs…).
+  - `library_actions.py`: the window-free actions those menus call; every
+    dialog an instance with `open()`. Import COPIES files into the library
+    root and lets the background scan read, import and index them.
+  - `pdf_drive.py` is now only the disk half: `start_library_rescan`
+    (QueryOp without the collection → `pdf_handler.prepare_rescan` reads and
+    OCRs new files; applied on main by `rescan_library_root`), renamed files
+    matched by CONTENT (`plan_rescan` fingerprints: page count + first three
+    pages — a bulk Finder rename once froze the Library for a week), the
+    filesystem watcher, `delete_pdf`/`delete_folder` (files go to the
+    Trash), `apply_folder_change`, and `refresh_open_library` (Preferences
+    calls it). PDFs the scan imports get page records, auto-indexing and a
+    tag (`_after_ingest`), like every other import.
 - `tag_sync.py`: per-PDF collection tags. THE INVARIANT: every indexed PDF
   owns exactly one tag `!Library::<folder path, / → ::>::<leaf>` (leaf =
   display name minus extension, tag-sanitized), whose members are exactly
   the notes at/above that PDF's sensitivity threshold. Forward direction
   (index/re-index creates + renames tags, K-053) and reverse (a rename in
   Anki's tag sidebar renames the PDF, K-054 — INFERENCE from a
-  before/after tag diff on profile open, never a real event). Reserved
+  before/after tag diff, never a real event). Since K-306
+  `plan_library_sync` also registers zero-note tags (`set_collapsed`) so
+  every PDF and empty folder shows, follows drags and folder renames onto
+  disk, and turns a deleted tag with matched cards into a "delete the PDF
+  too?" prompt; it runs on profile open AND after every op that changed
+  tags (`on_operation_did_execute`, debounced). Tag presence compares
+  casefolded, as Anki does. Reserved
   leaves `Curating`/`Curated`/`Matching`/**`Doubtful`** are never
   touched. Historical note, 2026-09-19: D2 removed doubtful-membership
   computation while preserving reserved historical names and existing tags.

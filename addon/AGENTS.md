@@ -58,7 +58,9 @@ Addons/                       # Git repo root
     ├── retention.py            # Per-PDF retention/study-priority scoring for the Library
     ├── pdf_handler.py          # PDF import/storage, text extraction, per-tab state, annotation baking
     ├── pdf_viewer.py           # PdfViewer (QPdfView + selection/highlight overlay, find, thumbnails) and PdfSidebar
-    ├── pdf_drive.py            # The Library window — virtual-folder tree + PdfSidebar
+    ├── pdf_drive.py            # The Library's disk half: background folder scan, watcher, delete-to-Trash
+    ├── library_sidebar.py      # The Library in Browse's sidebar: real names, retention %, icons, menus, footer
+    ├── library_actions.py      # Window-free Library actions the sidebar menus call
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
     ├── manage_models.py        # General, Appearance, Local models and external MCP configuration
     ├── setup_flow.py           # First-run dialog + per-profile-open readiness checks (library root and local runtime readiness)
@@ -134,9 +136,10 @@ already writes) and K-151 removed the last of its vocabulary.
 ### The Library and retention scoring
 
 ```
-pdf_drive.py — the Library window: a tree of virtual folders (drive_store.py,
-        │       user_files/drive.json — nothing on disk moves) next to a
-        │       standalone PdfSidebar
+library_sidebar.py — the Library is the !Library tag branch in Browse's
+        │       sidebar (K-306..K-308): real names, a retention % per tag,
+        │       warning icons, right-click menus (library_actions.py);
+        │       pdf_drive.py mirrors the library root on disk
         ▼
 retention.py — per PDF: embed its pages (pdf_index.py, one vector each) →
         │       score every indexed note against those pages (max cosine,
@@ -219,7 +222,8 @@ gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel 
 gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse toolbar toggles (◧ / ◨)
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
 pdf_drop.setup()                                                    # PDF drop square + drop wrap on deck screens (independent try/except)
-pdf_drive.setup()                                                   # Library window + top-toolbar link (independent try/except)
+library_sidebar.setup()                                             # the Library in Browse's sidebar (independent try/except)
+gui_hooks.operation_did_execute.append(tag_sync.on_operation_did_execute)  # sidebar tag edits reach the PDFs
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
@@ -245,7 +249,7 @@ tearing the queue down first orphans the WAV it was about to hand over.
 `webview_did_receive_js_message` (a clicked day) and `browser_will_search`
 (resolving the `klausday:` token those clicks produce).
 
-`pdf_drop.setup()` and `pdf_drive.setup()` are each wrapped in their own
+`pdf_drop.setup()` and `library_sidebar.setup()` are each wrapped in their own
 `try/except` at import time — a failure in one must not cost the user the
 other, or the editor/menu features above. `tests/test_imports.py` imports
 every module directly (bypassing that swallowing try/except) so a genuine

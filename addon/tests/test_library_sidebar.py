@@ -328,8 +328,56 @@ check("the footer sits under the tree, once",
       grid.itemAtPosition(2, 0) is not None and grid.itemAtPosition(2, 0).widget() is browser._klausmate_library_footer
       and grid.rowCount() == 3)
 
+section("the Library is its own section, with its own icons")
+
+
+class SItem:
+    def __init__(self, full_name, kind="TAG", children=()):
+        self.full_name, self.item_type = full_name, types.SimpleNamespace(name=kind)
+        self.icon, self.children, self._parent_item = "icons:tag-outline.svg", list(children), None
+        for c in self.children:
+            c._parent_item = self
+
+
+pdf_row = SItem("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")
+week = SItem("!Library::2-BiB::Exam_1::Week_1", children=[pdf_row])
+lib = SItem("!Library", children=[SItem("!Library::2-BiB", children=[SItem("!Library::2-BiB::Exam_1", children=[week])])])
+heme = SItem("Hematology")
+tags = SItem("", kind="TAG_ROOT", children=[SItem("", kind="TAG_NONE"), lib, heme])
+root = SItem("", kind="ROOT", children=[SItem("", kind="DECK_ROOT"), tags])
+moved = ls.split_library_section(root, idx["safes"])
+check("the Library leaves Tags and becomes the first section",
+      moved is lib and root.children[0] is lib and lib not in tags.children and lib._parent_item is root)
+check("other tags stay where they were", tags.children[-1] is heme and heme.icon == "icons:tag-outline.svg")
+check("icons: library for the section, folder for folders, PDF for PDFs",
+      lib.icon == ls.ROOT_ICON and week.icon == ls.FOLDER_ICON and pdf_row.icon == ls.PDF_ICON)
+check("the three icons ship", all(os.path.isfile(p) for p in (ls.ROOT_ICON, ls.FOLDER_ICON, ls.PDF_ICON)))
+check("no Library yet: nothing moves", ls.split_library_section(SItem("", kind="ROOT", children=[SItem("", kind="TAG_ROOT")]), {}) is None)
+
+built = []
+fake_browser = types.SimpleNamespace(sidebar=types.SimpleNamespace(_tag_tree=lambda r: built.append(r)))
+stage = lambda name: types.SimpleNamespace(name=name)  # noqa: E731
+check("other stages are Anki's", ls.on_build_tree(False, root, stage("DECKS"), fake_browser) is False and not built)
+check("an add-on that already built tags wins", ls.on_build_tree(True, root, stage("TAGS"), fake_browser) is True and not built)
+check("the TAGS stage builds Anki's tag tree itself, then claims the stage",
+      ls.on_build_tree(False, root, stage("TAGS"), fake_browser) is True and built == [root])
+
+section("the disclosure arrows are drawn")
+theme = importlib.import_module("klausmate.theme")
+for _night in (False, True):
+    _qss = theme.sidebar_tree_qss(_night)
+    check(f"night={_night}: closed and open folders get arrow images",
+          "::branch:has-children:closed" in _qss and "::branch:has-children:open" in _qss
+          and ("branch-closed-night.svg" if _night else "branch-closed-day.svg") in _qss
+          and ("branch-open-night.svg" if _night else "branch-open-day.svg") in _qss)
+check("the arrow images ship", all(os.path.isfile(os.path.join("klausmate", "web", f)) for f in
+      ("branch-closed-day.svg", "branch-closed-night.svg", "branch-open-day.svg", "branch-open-night.svg")))
+
 section("wired")
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("__init__ sets it up", "library_sidebar" in _init and ".setup()" in _init.split("library_sidebar", 1)[1][:200])
+_ls_src = open("klausmate/library_sidebar.py", encoding="utf-8").read()
+check("the section split is registered on browser_will_build_tree",
+      "gui_hooks.browser_will_build_tree.append(on_build_tree)" in _ls_src)
 
 raise SystemExit(report())

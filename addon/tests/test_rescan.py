@@ -150,9 +150,32 @@ check("page records, auto-index and a tag for the new PDF",
       calls == [("pages", "splen"), ("index", "splen"), ("tag", None)], str(calls))
 del calls[:]
 pdf_drive.rescan_library_root = lambda prepared=None: {"moved": [], "ingested": ["x"], "tree_changed": []}
-pdf_drive._refresh_live_libraries = lambda why: 0
+pdf_drive._library_changed = lambda: None
 pdf_drive.start_library_rescan()
 check("the background rescan hands what it ingested on", ("index", "x") in calls, str(calls))
+
+section("deleting a folder never takes the user's own files with it")
+import importlib as _il  # noqa: E402
+pdf_drive = _il.reload(_il.import_module("klausmate.pdf_drive"))
+ph._live_library_root = lambda: root
+sys.modules["klausmate"].USER_FILES = uf
+trashed = []
+pdf_drive._move_to_trash = lambda path: trashed.append(os.path.relpath(path, root))
+os.makedirs(os.path.join(root, "Notes only"))
+open(os.path.join(root, "Notes only", "02-ELO-Intro to Blood.md"), "w").write("my notes")
+pdf_drive.delete_folder("Notes only")
+check("a folder holding notes (no PDFs) stays on disk",
+      trashed == [] and os.path.isfile(os.path.join(root, "Notes only", "02-ELO-Intro to Blood.md")))
+os.makedirs(os.path.join(root, "Empty"))
+open(os.path.join(root, "Empty", ".DS_Store"), "w").write("")
+pdf_drive.delete_folder("Empty")
+check("an empty folder goes to the Trash", trashed == ["Empty"], str(trashed))
+real_trash = _il.reload(_il.import_module("klausmate.pdf_drive"))._move_to_trash
+os.makedirs(os.path.join(root, "Kept"))
+open(os.path.join(root, "Kept", "a.md"), "w").write("x")
+real_trash(os.path.join(root, "Kept"))  # the stub Qt has no Trash: the fallback runs
+check("with no Trash, a non-empty directory is left alone (never rmtree)",
+      os.path.isfile(os.path.join(root, "Kept", "a.md")))
 
 section("which PDFs are being indexed")
 iq._queue.clear()
