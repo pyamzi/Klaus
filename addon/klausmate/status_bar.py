@@ -229,3 +229,114 @@ class StatusBar(QWidget):
         frame.move(pos.x() - frame.width(), pos.y() - frame.height() - 2)
         self.popup = frame
         frame.show()
+
+
+# ── install ──────────────────────────────────────────────────────────────
+
+_bars: list = []  # live bars, for theme_did_change
+
+
+def _track(bar: StatusBar) -> StatusBar:
+    _bars.append(bar)
+    bar.destroyed.connect(lambda *_a, b=bar: _bars.remove(b) if b in _bars else None)
+    return bar
+
+
+def install_main(mw) -> StatusBar | None:
+    """Show the main window's own status bar (Anki keeps it hidden)."""
+    existing = getattr(mw, "_klausmate_status_bar", None)
+    if existing is not None:
+        return existing
+    try:
+        native = mw.form.statusbar
+        native.setVisible(True)
+        native.setSizeGripEnabled(False)
+        bar = StatusBar(mw)
+        native.addPermanentWidget(bar, 1)
+        mw._klausmate_status_bar = bar
+        return _track(bar)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar (main window) failed: {exc}")
+        return None
+
+
+def install_browser(browser) -> StatusBar | None:
+    """Browse has no status bar of its own: give it one, with toggles."""
+    existing = getattr(browser, "_klausmate_status_bar", None)
+    if existing is not None:
+        return existing
+    try:
+        from aqt.qt import QStatusBar
+
+        native = QStatusBar(browser)
+        native.setSizeGripEnabled(False)
+        browser.setStatusBar(native)
+        bar = StatusBar(browser, browser=browser)
+        native.addPermanentWidget(bar, 1)
+        browser._klausmate_status_bar = bar
+        return _track(bar)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar (Browse) failed: {exc}")
+        return None
+
+
+def _report(fn) -> None:
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar report failed: {exc}")
+
+
+def on_sync_will_start() -> None:
+    _report(lambda: tasks.begin("sync", "Syncing…"))
+
+
+def on_sync_did_finish() -> None:
+    _report(lambda: tasks.end("sync"))
+
+
+def on_media_sync_did_start_or_stop(running: bool) -> None:
+    _report(lambda: tasks.begin("media", "Syncing media…") if running else tasks.end("media"))
+
+
+def on_media_sync_did_progress(entry: str) -> None:
+    _report(lambda: tasks.update("media", label=f"Media: {entry}"))
+
+
+def _on_profile_open() -> None:
+    from aqt import mw
+
+    try:
+        tasks.run_on_main = mw.taskman.run_on_main
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar: no taskman: {exc}")
+    install_main(mw)
+
+
+def _on_browser_will_show(browser) -> None:
+    QTimer.singleShot(0, lambda: install_browser(browser))
+
+
+def _on_theme_change() -> None:
+    for bar in list(_bars):
+        try:
+            bar.apply_theme()
+        except RuntimeError:
+            pass
+
+
+def setup() -> None:
+    from aqt import gui_hooks
+
+    gui_hooks.profile_did_open.append(_on_profile_open)
+    gui_hooks.profile_will_close.append(tasks.clear)
+    gui_hooks.browser_will_show.append(_on_browser_will_show)
+    gui_hooks.theme_did_change.append(_on_theme_change)
+    for name, fn in (
+        ("sync_will_start", on_sync_will_start),
+        ("sync_did_finish", on_sync_did_finish),
+        ("media_sync_did_start_or_stop", on_media_sync_did_start_or_stop),
+        ("media_sync_did_progress", on_media_sync_did_progress),
+    ):
+        if hasattr(gui_hooks, name):
+            getattr(gui_hooks, name).append(fn)

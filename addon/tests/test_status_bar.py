@@ -156,6 +156,38 @@ except Exception as exc:  # noqa: BLE001
     print(exc)
 check("and a report after that raises nothing", ok)
 
+section("installed into the main window and Browse")
+b3, _s3, _c3 = make_browser()
+first = sb.install_browser(b3)
+again = sb.install_browser(b3)
+found = b3.statusBar().findChildren(QtWidgets.QWidget, "KlausStatusBar")
+check("Browse gets one bar, with toggles", first is not None and again is first and len(found) == 1
+      and first.sidebar_btn is not None, str(len(found)))
+mwin = QtWidgets.QMainWindow()
+native = QtWidgets.QStatusBar()
+mwin.setStatusBar(native)
+native.setVisible(False)
+mwin.form = types.SimpleNamespace(statusbar=native)
+mwin.show()
+mbar = sb.install_main(mwin)
+app.processEvents()
+check("the main window's hidden status bar is shown, holding one bar",
+      mbar is not None and native.isVisible() and len(native.findChildren(QtWidgets.QWidget, "KlausStatusBar")) == 1
+      and sb.install_main(mwin) is mbar)
+
+section("sync and media sync report")
+tasks.run_on_main = lambda fn: fn()
+sb.on_sync_will_start()
+check("a sync shows while it runs", tasks.snapshot()[0].key == "sync")
+sb.on_sync_did_finish()
+check("...and goes when it finishes", all(t.key != "sync" for t in tasks.snapshot()))
+sb.on_media_sync_did_start_or_stop(True)
+sb.on_media_sync_did_progress("12 of 40")
+check("media sync shows Anki's own progress line",
+      [t.label for t in tasks.snapshot() if t.key == "media"] == ["Media: 12 of 40"], str(tasks.snapshot()))
+sb.on_media_sync_did_start_or_stop(False)
+check("...and goes when it stops", all(t.key != "media" for t in tasks.snapshot()))
+
 section("theme: tokens only")
 for night in (False, True):
     qss = theme.status_bar_qss(night)

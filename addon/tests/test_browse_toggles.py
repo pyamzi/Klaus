@@ -225,4 +225,8 @@ check(
     "klausbook_design" not in _CODE,
 )
 
+section("the toggles live in the status bar now, not beside Browse's search box")
+check("browse_toggles no longer installs search-row buttons",
+      not hasattr(bt, "_install_browser_sidebar_toggle") and "_klausmate_sidebar_toggle_btn" not in _CODE)
+
 raise SystemExit(report())

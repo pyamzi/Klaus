@@ -1665,6 +1665,14 @@ except Exception as _e:
     print(f"[klausmate] library sidebar setup failed: {type(_e).__name__}: {_e}")
 
 try:
+    # The VS Code-style status bar: main window + Browse.
+    from . import status_bar as _status_bar
+
+    _status_bar.setup()
+except Exception as _e:
+    print(f"[klausmate] status bar setup failed: {type(_e).__name__}: {_e}")
+
+try:
     from . import browse_toolkit as _browse_toolkit
 
     _browse_toolkit.setup_hooks()

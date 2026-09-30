@@ -620,10 +620,9 @@ if _HAVE_QT:
               and _d.width() > 20,
               f"sidebar w={_win.sidebarDockWidget.width()} pdf w={_d.width()}")
 
-        # browse_toggles' own editor-column button, with the PDF docked.
-        _browse_toggles._install_browser_sidebar_toggle(_win)
-        _btn = getattr(_win, "_klausmate_editor_toggle_btn", None)
-        check("browse_toggles still finds the editor column with the panel "
+        # The status bar's editor-column toggle, with the PDF docked.
+        _btn = importlib.import_module("klausmate.status_bar").StatusBar(_win, browser=_win).editor_btn
+        check("the status bar still finds the editor column with the panel "
               "docked (it walks up from fieldsArea, and the dock never "
               "touches that column)",
               _btn is not None)
