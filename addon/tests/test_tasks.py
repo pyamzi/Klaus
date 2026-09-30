@@ -70,6 +70,23 @@ except Exception:
 check("a raising listener neither breaks the reporter nor the next listener", ok and len(later) == 1)
 tasks.remove_listener(boom)
 
+section("a late delivery never shows a stale state")
+tasks.clear()
+tasks.run_on_main = lambda fn: fn()
+late: list = []
+tasks.add_listener(late.append)
+q: list = []
+tasks.run_on_main = q.append
+tasks.begin("o", "Ollama")
+tasks.update("o", done=99, total=100)
+tasks.end("o")
+for fn in reversed(q):  # two threads can enqueue in either order
+    fn()
+check("the last delivery is the current state, not the one queued first",
+      late[-1] == [], str(late[-1:]))
+tasks.remove_listener(late.append)
+tasks.run_on_main = lambda fn: fn()
+
 section("clear on profile close")
 del later[:]
 tasks.clear()

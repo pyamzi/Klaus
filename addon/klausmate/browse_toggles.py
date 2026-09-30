@@ -145,9 +145,9 @@ def toggle_label(pane: str, visible: bool) -> str:
 
 # ── The widget ─────────────────────────────────────────────────────────
 
-# 28px is HIG's comfortable pointer target for a macOS control; the glyph
-# chip this replaces was 26.
-BUTTON_SIZE = 28
+# Sized for the 24px status bar row (VS Code's is 22): a 16px icon with
+# 3px of hover wash around it.
+BUTTON_SIZE = 22
 ICON_SIZE = 16.0
 CHIP_RADIUS = 6.0  # the design system's small-control radius
 
@@ -181,8 +181,9 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         self.setChecked(checked)
         self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
         self.setAutoRaise(True)
-        # Keyboard-reachable, and the ring below makes that visible.
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Keyboard-reachable, and the ring below makes that visible. Tab
+        # only: a click that took focus left a ring on the button.
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._sync_copy()
         self.toggled.connect(self._sync_copy)
@@ -258,14 +259,13 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         w, h = float(self.width()), float(self.height())
         on = self.isChecked()
 
-        # Chrome. Nothing at all at rest — that is the point.
+        # Chrome. Nothing at rest, on or off — the filled column already
+        # says "on", and a tinted chip too read as a heavy block in the bar.
         fill = None
         if not self.isEnabled():
             fill = None
         elif self.isDown():
             fill = self._tint(theme, night, 0.22)
-        elif on:
-            fill = self._tint(theme, night, 0.14)
         elif self._hovered:
             fill = QColor(c["hover_subtle"])
         if fill is not None:

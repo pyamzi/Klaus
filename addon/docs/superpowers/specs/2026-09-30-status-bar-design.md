@@ -27,8 +27,9 @@ main-window-only indexing dock belong in one predictable spot.
 
 ## Approach
 
-Each window uses Qt's own status bar: the main window's `form.statusbar`,
-which Anki keeps hidden, and a `QStatusBar` added to Browse. Qt keeps it
+Each window uses Qt's own status bar: `QMainWindow.statusBar()`, which
+creates one (Anki's main.ui has none — the hidden `form.statusbar` is the
+profile manager's), and a `QStatusBar` added to Browse. Qt keeps it
 at the bottom through resizes and dock changes, and nothing of Anki's is
 patched. One shared task tracker feeds both bars. An HTML bar in
 `mw.bottomWeb` was rejected: it exists only in the main window and hides
@@ -83,7 +84,12 @@ job's failure path, with the error as its message.
 `StatusBar(QWidget)`, one class, installed as a permanent widget in the
 window's `QStatusBar`. It is about 22–24 px tall and always visible.
 
-- **Left, Browse only:** two checkable icon buttons.
+Order, as the user asked after the first build: gear at the left, then
+the readout, the toggles at the far right. Every icon is painted at
+16 px in a 22 px button (no chip at rest or when on; Tab focus only, so
+a click leaves no ring).
+
+- **Far right, Browse only:** two checkable icon buttons.
   - ◧ shows and hides Anki's sidebar dock (`browser.sidebarDockWidget`).
   - ◨ shows and hides the card editor column.
   - The logic moves here from `browse_toggles._install_browser_sidebar_toggle`
@@ -91,7 +97,7 @@ window's `QStatusBar`. It is about 22–24 px tall and always visible.
     changes made elsewhere: ⌘⇧F, the View menu, and Anki hiding the
     editor for a multi-card selection.
   - The icons are new theme-aware SVGs in VS Code's layout style.
-- **Right, the task readout:**
+- **Left, after the gear, the task readout:**
   - a small `QProgressBar` (about 120 px): determinate when `total` > 0,
     indeterminate otherwise;
   - the newest task's label, then "+N more" when several run;
@@ -100,7 +106,7 @@ window's `QStatusBar`. It is about 22–24 px tall and always visible.
   modal dialog) anchored above the bar. It lists every task with its
   label, its own bar and a ✕ when it can be cancelled, and closes on an
   outside click.
-- **Far right, one gear:** it opens a menu with
+- **Far left, one gear** (painted, no menu arrow): it opens a menu with
   - **KlausMate Settings…** (`manage_models_dialog`, the Tools-menu
     entry's target);
   - **Anki Settings…** (`mw.onPrefs`).
@@ -110,7 +116,7 @@ window's `QStatusBar`. It is about 22–24 px tall and always visible.
   `theme_did_change`.
 
 **Install:**
-- `profile_did_open`: show `mw.form.statusbar`, add a `StatusBar`.
+- `profile_did_open`: show `mw.statusBar()`, add a `StatusBar`.
 - `browser_will_show`: `browser.setStatusBar(QStatusBar())`, add a
   `StatusBar` with toggles.
 - Each bar subscribes to the tracker and unsubscribes when its widget is

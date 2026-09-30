@@ -197,7 +197,7 @@ check(
 check("paint failures degrade to a log line", "pane toggle paint failed" in _SRC)
 
 section("HIG: targets, focus, names, direction")
-check("the button meets HIG's 28pt pointer target", bt.BUTTON_SIZE >= 28)
+check("the button fits the status bar's 24px row", bt.BUTTON_SIZE <= 24)
 check("the icon has breathing room inside it", bt.ICON_SIZE < bt.BUTTON_SIZE)
 check(
     "the chip radius is on the documented 12/8/6 scale",
@@ -208,7 +208,7 @@ check(
     "labels re-sync on programmatic flips too, not only clicks",
     "toggled.connect(self._sync_copy)" in _CODE,
 )
-check("keyboard focus is reachable", "StrongFocus" in _CODE)
+check("keyboard focus is reachable (Tab, so a click leaves no ring)", "TabFocus" in _CODE)
 check(
     "and visible — a self-painted widget must draw its own ring",
     "hasFocus()" in _CODE,

@@ -44,8 +44,9 @@ _listeners: list[Callable[[list[Task]], None]] = []
 
 
 def _changed() -> None:
-    snap = snapshot()
-    run_on_main(lambda: _notify(snap))
+    # Snapshot at delivery, on the main thread: two threads can enqueue
+    # in either order, and a snapshot taken here could land stale.
+    run_on_main(lambda: _notify(snapshot()))
 
 
 def _notify(snap: list[Task]) -> None:

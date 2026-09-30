@@ -1,7 +1,7 @@
 """The status bar along the bottom of the main window and Browse, like
-VS Code's: Browse's layout toggles on the left (◧ sidebar, ◨ card
-editor), then a progress readout of every running process (``tasks``)
-and one gear holding KlausMate Settings and Anki Settings.
+VS Code's: one gear holding KlausMate Settings and Anki Settings on the
+left, then a progress readout of every running process (``tasks``), and
+Browse's layout toggles (◧ sidebar, ◨ card editor) at the far right.
 
 Pure helpers above the divider; the widget and install glue below it.
 """
@@ -26,6 +26,7 @@ def readout_text(items: list) -> str:
 # ── aqt glue ─────────────────────────────────────────────────────────────
 
 from aqt.qt import (  # noqa: E402
+    QColor,
     QEvent,
     QFontMetrics,
     QFrame,
@@ -33,7 +34,12 @@ from aqt.qt import (  # noqa: E402
     QLabel,
     QMenu,
     QObject,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPointF,
     QProgressBar,
+    QRectF,
     Qt,
     QTimer,
     QToolButton,
@@ -42,6 +48,7 @@ from aqt.qt import (  # noqa: E402
 )
 
 LABEL_MAX_PX = 320
+BAR_HEIGHT = 24
 
 
 def _open_klaus_settings() -> None:
@@ -87,22 +94,91 @@ class _ClickFilter(QObject):
         return False
 
 
+def gear_path(size: float) -> "QPainterPath":
+    """An 8-tooth gear outline centred in a ``size`` box, with its hub
+    hole — drawn, because the ⚙ glyph renders at whatever the fallback
+    font picks."""
+    import math
+
+    c, ro, ri, hub = size / 2.0, size * 0.44, size * 0.32, size * 0.14
+    path = QPainterPath()
+    pts = []
+    for k in range(8):
+        a = k * 45.0
+        for r, da in ((ri, -15.0), (ro, -9.0), (ro, 9.0), (ri, 15.0)):
+            t = math.radians(a + da)
+            pts.append(QPointF(c + r * math.cos(t), c + r * math.sin(t)))
+    path.moveTo(pts[0])
+    for p in pts[1:]:
+        path.lineTo(p)
+    path.closeSubpath()
+    path.addEllipse(QPointF(c, c), hub, hub)
+    return path
+
+
+class _GearButton(QToolButton):
+    """The settings gear: painted like the pane toggles (nothing at rest,
+    a grey wash on hover) so the bar's three icons read as one set, and
+    with no menu arrow."""
+
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        from .browse_toggles import BUTTON_SIZE
+
+        self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setToolTip("Settings")
+        self.setAccessibleName("Settings")
+        self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        painter = QPainter(self)
+        try:
+            from . import theme
+            from .browse_toggles import CHIP_RADIUS, ICON_SIZE, stroke_width
+
+            c = theme.palette(theme.night_mode())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            w, h = float(self.width()), float(self.height())
+            if self.isDown() or self.underMouse() or self.hasFocus():
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(c["hover_subtle"]))
+                painter.drawRoundedRect(QRectF(0.0, 0.0, w, h), CHIP_RADIUS, CHIP_RADIUS)
+            painter.translate(round((w - ICON_SIZE) / 2.0), round((h - ICON_SIZE) / 2.0))
+            pen = QPen(QColor(c["text_muted"]))
+            pen.setWidthF(stroke_width(ICON_SIZE))
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(gear_path(ICON_SIZE))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] status bar gear paint failed: {exc}")
+        finally:
+            painter.end()
+
+
 class StatusBar(QWidget):
     def __init__(self, window, browser=None) -> None:
         super().__init__(window)
         self.setObjectName("KlausStatusBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedHeight(22)
+        self.setFixedHeight(BAR_HEIGHT)
         self.popup = None
         self.sidebar_btn = None
         self.editor_btn = None
         self._tasks: list = []
         row = QHBoxLayout(self)
-        row.setContentsMargins(6, 0, 4, 0)
+        row.setContentsMargins(4, 0, 4, 0)
         row.setSpacing(6)
-        if browser is not None:
-            self._add_toggles(row, browser)
-        row.addStretch(1)
+        self.gear = _GearButton(self)
+        menu = QMenu(self.gear)
+        menu.addAction("KlausMate Settings…").triggered.connect(lambda *_a: _open_klaus_settings())
+        menu.addAction("Anki Settings…").triggered.connect(lambda *_a: _open_anki_settings())
+        self.gear.setMenu(menu)
+        row.addWidget(self.gear)
         self.progress = QProgressBar(self)
         self.progress.setFixedWidth(120)
         self.progress.setTextVisible(False)
@@ -112,17 +188,13 @@ class StatusBar(QWidget):
         clicks = _ClickFilter(self, self.open_task_list)
         self.progress.installEventFilter(clicks)
         self.label.installEventFilter(clicks)
-        self.gear = QToolButton(self)
-        self.gear.setText("⚙")
-        self.gear.setToolTip("Settings")
-        self.gear.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(self.gear)
-        menu.addAction("KlausMate Settings…").triggered.connect(lambda *_a: _open_klaus_settings())
-        menu.addAction("Anki Settings…").triggered.connect(lambda *_a: _open_anki_settings())
-        self.gear.setMenu(menu)
         row.addWidget(self.progress)
+        row.addSpacing(2)
         row.addWidget(self.label)
-        row.addWidget(self.gear)
+        row.addStretch(1)
+        if browser is not None:
+            row.setSpacing(2)  # the two toggles sit as a pair
+            self._add_toggles(row, browser)
         self.apply_theme()
 
         # The listener must not keep a deleted bar alive, nor touch one:
@@ -207,7 +279,10 @@ class StatusBar(QWidget):
         col.setContentsMargins(10, 8, 10, 8)
         for t in self._tasks:
             line = QHBoxLayout()
-            name = QLabel(t.message or t.label, frame)
+            text = t.message or t.label
+            name = QLabel(QFontMetrics(frame.font()).elidedText(
+                text, Qt.TextElideMode.ElideMiddle, LABEL_MAX_PX), frame)
+            name.setToolTip(text)
             line.addWidget(name, 1)
             if not t.message:
                 bar = QProgressBar(frame)
@@ -225,8 +300,12 @@ class StatusBar(QWidget):
                 line.addWidget(x)
             col.addLayout(line)
         frame.adjustSize()
-        pos = self.mapToGlobal(self.rect().topRight())
-        frame.move(pos.x() - frame.width(), pos.y() - frame.height() - 2)
+        # Above the readout, kept on this bar's screen.
+        pos = self.progress.mapToGlobal(self.progress.rect().topLeft())
+        area = self.screen().availableGeometry()
+        x = max(area.left(), min(pos.x(), area.right() + 1 - frame.width()))
+        y = max(area.top(), pos.y() - frame.height() - 2)
+        frame.move(x, y)
         self.popup = frame
         frame.show()
 
@@ -243,12 +322,13 @@ def _track(bar: StatusBar) -> StatusBar:
 
 
 def install_main(mw) -> StatusBar | None:
-    """Show the main window's own status bar (Anki keeps it hidden)."""
+    """Give the main window a status bar. Anki's main.ui has none, so
+    QMainWindow.statusBar() creates it."""
     existing = getattr(mw, "_klausmate_status_bar", None)
     if existing is not None:
         return existing
     try:
-        native = mw.form.statusbar
+        native = mw.statusBar()
         native.setVisible(True)
         native.setSizeGripEnabled(False)
         bar = StatusBar(mw)

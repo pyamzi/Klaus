@@ -98,6 +98,17 @@ bar.editor_btn.click()
 app.processEvents()
 check("...and shows it again", col.isVisible())
 
+section("layout: settings on the left, toggles on the right, all inside the bar")
+xs = [bar.gear.x(), bar.label.x(), bar.sidebar_btn.x(), bar.editor_btn.x()]
+check("gear, then readout, then ◧ ◨ at the far right", xs == sorted(xs) and bar.editor_btn.geometry().right() > bar.width() - 20, str(xs))
+for name, w in (("gear", bar.gear), ("sidebar", bar.sidebar_btn), ("editor", bar.editor_btn)):
+    check(f"the {name} button fits the bar's height", w.height() <= bar.height(), f"{w.height()} > {bar.height()}")
+check("the gear is a painted icon, not a font glyph with a menu arrow", bar.gear.text() == "")
+check("a click doesn't leave a focus ring behind (Tab still reaches it)",
+      all(w.focusPolicy() == QtCore.Qt.FocusPolicy.TabFocus for w in (bar.gear, bar.sidebar_btn, bar.editor_btn)))
+check("an on toggle carries no chip (the filled column shows the state)",
+      "elif on:" not in open("klausmate/browse_toggles.py").read())
+
 main = sb.StatusBar(QtWidgets.QMainWindow())
 check("the main window's bar has no toggles", main.sidebar_btn is None and main.editor_btn is None)
 
@@ -137,6 +148,13 @@ xs[0].click()
 check("✕ cancels that task", cancelled == ["i"], str(cancelled))
 tasks.cancel = real_cancel
 bar.popup.close()
+bar.refresh([Task("l", "x" * 200, 0, 0, True, "", 1.0)])
+bar.open_task_list()
+app.processEvents()
+screen = bar.screen().availableGeometry()
+check("a very long name can't push the list off screen",
+      screen.contains(bar.popup.frameGeometry()), f"{bar.popup.frameGeometry()} vs {screen}")
+bar.popup.close()
 
 section("a closed window's bar stops listening")
 b2, _s, _c = make_browser()
@@ -163,14 +181,11 @@ again = sb.install_browser(b3)
 found = b3.statusBar().findChildren(QtWidgets.QWidget, "KlausStatusBar")
 check("Browse gets one bar, with toggles", first is not None and again is first and len(found) == 1
       and first.sidebar_btn is not None, str(len(found)))
-mwin = QtWidgets.QMainWindow()
-native = QtWidgets.QStatusBar()
-mwin.setStatusBar(native)
-native.setVisible(False)
-mwin.form = types.SimpleNamespace(statusbar=native)
+mwin = QtWidgets.QMainWindow()  # Anki's main.ui has no QStatusBar at all
 mwin.show()
 mbar = sb.install_main(mwin)
 app.processEvents()
+native = mwin.statusBar()
 check("the main window's hidden status bar is shown, holding one bar",
       mbar is not None and native.isVisible() and len(native.findChildren(QtWidgets.QWidget, "KlausStatusBar")) == 1
       and sb.install_main(mwin) is mbar)

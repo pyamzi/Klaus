@@ -329,11 +329,12 @@ same reason.
   bar; plus the `browser_will_show` layout repair. Split out of `__init__.py`.
 - `tasks.py` (aqt-free) + `status_bar.py` (pure helpers above its aqt
   glue; spec [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)):
-  a VS Code-style bar in the main window's own `form.statusbar` (Anki
-  keeps it hidden) and a `QStatusBar` added to Browse. Left (Browse only):
-  the two pane toggles. Right: a progress bar + the newest task's text
-  ("+N more"; click → a `Qt.Popup` list with ✕ where a task can be
-  cancelled), then ONE gear menu (KlausMate Settings…, Anki Settings…).
+  a VS Code-style bar in `mw.statusBar()` (Anki's main.ui has NO status
+  bar; `form.statusbar` is the profile manager's) and a `QStatusBar` added
+  to Browse. Left: ONE painted gear menu (KlausMate Settings…, Anki
+  Settings…), then a progress bar + the newest task's text ("+N more";
+  click → a `Qt.Popup` list, clamped to the screen, with ✕ where a task
+  can be cancelled). Far right (Browse only): the two pane toggles.
   `tasks` is the one list of running processes — `begin`/`update`/`end`
   from any thread; listeners run only through `run_on_main`
   (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing
