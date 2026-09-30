@@ -220,6 +220,61 @@ check("the main window's hidden status bar is shown, holding one bar",
       mbar is not None and native.isVisible() and len(native.findChildren(QtWidgets.QWidget, "KlausStatusBar")) == 1
       and sb.install_main(mwin) is mbar)
 
+section("Anki's deck-screen buttons move into the bar")
+_deck_html = """<center id=outer><table id=innertable><tr><td>
+<button title='' onclick='pycmd("shared");'>Get Shared</button>
+<button title='' onclick='pycmd("create");'>Create Deck</button>
+<button title='Shortcut key: Ctrl+Shift+I' onclick='pycmd("import");'>Import File</button>
+</td></tr></table></center>"""
+check("Anki's deck browser buttons parse",
+      sb.parse_bottom_buttons(_deck_html) == [("Get Shared", "shared", ""), ("Create Deck", "create", ""),
+                                               ("Import File", "import", "Shortcut key: Ctrl+Shift+I")],
+      str(sb.parse_bottom_buttons(_deck_html)))
+check("the overview's quoting parses too",
+      sb.parse_bottom_buttons("""<button title="Shortcut key: O" onclick='pycmd("opts")'>Options</button>""")
+      == [("Options", "opts", "Shortcut key: O")])
+check("a button that isn't a plain pycmd means hands off",
+      sb.parse_bottom_buttons("""<button onclick='pycmd("a")'>A</button><button onclick='doThing()'>B</button>""") is None)
+
+
+class DeckBrowserBottomBar:
+    pass
+
+
+class ReviewerBottomBar:
+    pass
+
+
+_bridge: list = []
+_bottom = QtWidgets.QWidget()
+_bottom.onBridgeCmd = _bridge.append
+_bottom.show()
+_mw = sys.modules["aqt"].mw
+_mw.bottomWeb = _bottom
+_mw._klausmate_status_bar = mbar
+sb._on_webview_content(types.SimpleNamespace(body=_deck_html), DeckBrowserBottomBar())
+app.processEvents()
+_acts = [w for w in mbar.findChildren(QtWidgets.QToolButton) if w.objectName() == "KlausBarAction"]
+check("the deck list's buttons are in the bar, and Anki's row is hidden",
+      [w.text() for w in _acts] == ["Get Shared", "Create Deck", "Import File"] and _bottom.isHidden(),
+      str([w.text() for w in _acts]))
+check("...right of the readout", all(w.x() > mbar.label.x() for w in _acts))
+_hooks = sys.modules["aqt"].gui_hooks
+_real_filter = getattr(_hooks, "webview_did_receive_js_message", None)
+_hooks.webview_did_receive_js_message = lambda h, cmd, ctx: (True, None) if cmd == "shared" else h
+_acts[2].click()
+check("a click runs Anki's own handler for it", _bridge == ["import"], str(_bridge))
+_acts[0].click()
+check("...unless another add-on's js-message filter takes it, as for Anki's own button", _bridge == ["import"], str(_bridge))
+_hooks.webview_did_receive_js_message = _real_filter
+check("...with Anki's tooltip", _acts[2].toolTip() == "Shortcut key: Ctrl+Shift+I")
+sb._on_webview_content(types.SimpleNamespace(body="<button onclick='pycmd(\"ans\")'>Show Answer</button>"),
+                       ReviewerBottomBar())
+app.processEvents()
+check("review keeps its own buttons: Anki's row comes back, the bar's go",
+      not _bottom.isHidden()
+      and not [w for w in mbar.findChildren(QtWidgets.QToolButton) if w.objectName() == "KlausBarAction"])
+
 section("sync and media sync report")
 tasks.run_on_main = lambda fn: fn()
 sb.on_sync_will_start()

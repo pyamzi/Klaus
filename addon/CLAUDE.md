@@ -334,7 +334,14 @@ same reason.
   to Browse. Left: ONE painted gear menu (KlausMate Settings…, Anki
   Settings…), then a progress bar + the newest task's text ("+N more";
   click → a `Qt.Popup` list, clamped to the screen, with ✕ where a task
-  can be cancelled). Far right (Browse only): the two pane toggles.
+  can be cancelled). Far right: Browse's two pane toggles; in the main
+  window, the deck list's / overview's own bottom-row buttons (Get Shared,
+  Create Deck, Import File; Options, Custom Study…), parsed from
+  `webview_will_set_content` (`DeckBrowserBottomBar`/`OverviewBottomBar`
+  contexts) and clicked through the js-message filter then
+  `mw.bottomWeb.onBridgeCmd`, with `mw.bottomWeb` hidden. Review's bottom
+  content (answer buttons) restores Anki's row; any non-`pycmd` button
+  (another add-on's JS) leaves Anki's row alone.
   `tasks` is the one list of running processes — `begin`/`update`/`end`
   from any thread; listeners run only through `run_on_main`
   (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing

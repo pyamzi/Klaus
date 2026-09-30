@@ -1422,6 +1422,18 @@ def status_bar_qss(night: bool) -> str:
         color: {c['text_muted']};
         padding: 0px 4px;
     }}
+    QWidget#KlausStatusBar QToolButton#KlausBarAction {{
+        color: {c['text']};
+        font-size: 12px;
+        padding: 1px 8px;
+        border-radius: 5px;
+    }}
+    QWidget#KlausStatusBar QToolButton#KlausBarAction:hover {{
+        background: {c['hover_subtle']};
+    }}
+    QWidget#KlausStatusBar QToolButton#KlausBarAction:pressed {{
+        background: {c['grey_light']};
+    }}
     QWidget#KlausStatusBar QProgressBar {{
         background-color: {c['grey_light']};
         border: none;

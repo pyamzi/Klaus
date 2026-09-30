@@ -1,13 +1,18 @@
 """The status bar along the bottom of the main window and Browse, like
 VS Code's: one gear holding KlausMate Settings and Anki Settings on the
 left, then a progress readout of every running process (``tasks``), and
-Browse's layout toggles (◧ sidebar, ◨ card editor) at the far right.
+at the far right Browse's layout toggles (◧ sidebar, ◨ card editor) or,
+in the main window, the deck list's and overview's own buttons (Get
+Shared, Create Deck, Import File; Options, Custom Study…), moved out of
+Anki's bottom webview.
 
 Pure helpers above the divider; the widget and install glue below it.
 """
 from __future__ import annotations
 
+import re
 import sys
+from html.parser import HTMLParser
 
 from . import tasks
 
@@ -21,6 +26,46 @@ def readout_text(items: list) -> str:
         head = running[0].label
         return f"{head}  +{len(running) - 1} more" if len(running) > 1 else head
     return items[0].message if items else ""
+
+
+_PYCMD = re.compile(r"""^\s*pycmd\(\s*(["'])([^"']*)\1\s*\)\s*;?\s*$""")
+
+
+class _Buttons(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.found: list = []  # [title, onclick, text]
+        self._in = False
+
+    def handle_starttag(self, tag, attrs) -> None:
+        if tag == "button":
+            a = dict(attrs)
+            self.found.append([a.get("title") or "", a.get("onclick") or "", ""])
+            self._in = True
+
+    def handle_endtag(self, tag) -> None:
+        if tag == "button":
+            self._in = False
+
+    def handle_data(self, data) -> None:
+        if self._in:
+            self.found[-1][2] += data
+
+
+def parse_bottom_buttons(html: str) -> list | None:
+    """``[(label, cmd, title)]`` for the buttons of one of Anki's bottom
+    bars, each a plain ``pycmd("cmd")``. None when any button is
+    something else (another add-on's JS): the bar can't reproduce it, so
+    Anki's row must stay."""
+    p = _Buttons()
+    p.feed(html or "")
+    out = []
+    for title, onclick, text in p.found:
+        m = _PYCMD.match(onclick)
+        if not m:
+            return None
+        out.append((" ".join(text.split()), m.group(2), title))
+    return out
 
 
 # ── aqt glue ─────────────────────────────────────────────────────────────
@@ -215,6 +260,9 @@ class StatusBar(QWidget):
         row.addSpacing(2)
         row.addWidget(self.label)
         row.addStretch(1)
+        self._actions = QHBoxLayout()
+        self._actions.setSpacing(2)
+        row.addLayout(self._actions)
         if browser is not None:
             row.setSpacing(2)  # the two toggles sit as a pair
             self._add_toggles(row, browser)
@@ -256,6 +304,23 @@ class StatusBar(QWidget):
             _VisibilityWatcher(col, btn.setChecked)
             row.addWidget(btn)
             self.editor_btn = btn
+
+    def set_actions(self, items: list) -> None:
+        """Replace the right-hand buttons with ``[(label, title, fn)]``."""
+        while self._actions.count():
+            w = self._actions.takeAt(0).widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        for label, title, fn in items:
+            btn = QToolButton(self)
+            btn.setObjectName("KlausBarAction")
+            btn.setText(label)
+            btn.setToolTip(title)
+            btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+            btn.setAutoRaise(True)
+            btn.clicked.connect(lambda *_a, f=fn: f())
+            self._actions.addWidget(btn)
 
     def apply_theme(self) -> None:
         try:
@@ -438,6 +503,49 @@ def _on_profile_open() -> None:
     install_main(mw)
 
 
+def _bridge(web, cmd: str) -> None:
+    """What a click on Anki's own button does (AnkiWebView._onBridgeCmd):
+    the js-message filter first, so add-ons that intercept still do, then
+    the link handler Anki's draw() installed — read now, not at move time."""
+    try:
+        from aqt import gui_hooks
+
+        handled, _r = gui_hooks.webview_did_receive_js_message(
+            (False, None), cmd, getattr(web, "_bridge_context", None))
+        if not handled:
+            web.onBridgeCmd(cmd)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar: {cmd!r} failed: {exc}")
+
+
+_MOVED = {"DeckBrowserBottomBar", "OverviewBottomBar"}
+_BOTTOM = _MOVED | {"ReviewerBottomBar", "BottomToolbar"}
+
+
+def _on_webview_content(web_content, context) -> None:
+    """The deck list's and overview's bottom rows move into the main
+    window's bar; any other content in Anki's bottom webview (review's
+    answer buttons) puts the row back."""
+    name = type(context).__name__
+    if name not in _BOTTOM:
+        return
+    try:
+        from aqt import mw
+
+        bar = getattr(mw, "_klausmate_status_bar", None)
+        web = mw.bottomWeb
+        buttons = parse_bottom_buttons(web_content.body) if name in _MOVED else None
+        if bar is None or not buttons:
+            if bar is not None:
+                bar.set_actions([])
+            web.show()
+            return
+        bar.set_actions([(label, title, lambda c=cmd: _bridge(web, c)) for label, cmd, title in buttons])
+        web.hide()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar: moving Anki's buttons failed: {exc}")
+
+
 def _on_browser_will_show(browser) -> None:
     QTimer.singleShot(0, lambda: install_browser(browser))
 
@@ -457,6 +565,7 @@ def setup() -> None:
     gui_hooks.profile_will_close.append(tasks.clear)
     gui_hooks.browser_will_show.append(_on_browser_will_show)
     gui_hooks.theme_did_change.append(_on_theme_change)
+    gui_hooks.webview_will_set_content.append(_on_webview_content)
     for name, fn in (
         ("sync_will_start", on_sync_will_start),
         ("sync_did_finish", on_sync_did_finish),

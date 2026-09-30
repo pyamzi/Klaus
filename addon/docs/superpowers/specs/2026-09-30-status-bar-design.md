@@ -92,6 +92,13 @@ the readout, the toggles at the far right. Every icon is painted at
 16 px in a 22 px button (no chip at rest or when on; Tab focus only, so
 a click leaves no ring).
 
+- **Far right, main window (added on request):** the deck list's and
+  deck overview's bottom-row buttons, moved out of `mw.bottomWeb` (which
+  is hidden on those screens). Labels, tooltips and commands are parsed
+  from Anki's own HTML, so add-on additions come along; a click goes
+  through `webview_did_receive_js_message` then the installed link
+  handler, exactly like Anki's button. Review keeps its answer buttons
+  in Anki's row. A button that isn't a plain `pycmd` keeps Anki's row.
 - **Far right, Browse only:** two checkable icon buttons.
   - ◧ shows and hides Anki's sidebar dock (`browser.sidebarDockWidget`).
   - ◨ shows and hides the card editor column.
