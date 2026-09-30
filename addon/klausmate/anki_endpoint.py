@@ -376,6 +376,8 @@ def _page_content(view, ctx, include_image, pages=None):
             png = page_store.render_page_png(view.path, view.page_index)
         except Exception:
             png = None
+        if png:
+            page_store.store_page_png(user_files, view.pdf_safe, view.path, view.page_index, png)
     if include_image and not png:
         text["image_status"] = "Page image unavailable."
     content = [{"type": "text", "text": json.dumps(text)}]

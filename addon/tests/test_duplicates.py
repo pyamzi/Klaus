@@ -335,6 +335,10 @@ openai_ix = build_index(n=8, d=1024, provider="openai",
                         model="text-embedding-3-large")
 check("an index actually built by the calibrated model reports calibrated",
       duplicates.tiers_calibrated(calibrated_ix))
+check("an index built under the shipped bare default (nomic-embed-text, "
+      "Ollama's alias for :latest) reports calibrated too",
+      duplicates.tiers_calibrated(build_index(n=8, d=768, provider="ollama",
+                                              model="nomic-embed-text")))
 check("today's real index — OpenAI text-embedding-3-large at 1024 dims — "
       "reports UNCALIBRATED, which is the whole point of this card",
       not duplicates.tiers_calibrated(openai_ix))

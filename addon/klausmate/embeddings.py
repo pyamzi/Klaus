@@ -54,7 +54,12 @@ def signature_matches(
     dims is compared only when the signature asks for a specific width; 0
     means "the model's own default" and cannot disagree with a stored width.
     """
-    if (provider, model) != (signature[0], signature[1]):
+    # Ollama resolves a bare name to its :latest tag — one model, two
+    # spellings; the shipped default is bare, the calibration tagged.
+    def _m(name):
+        return str(name or "").removesuffix(":latest")
+
+    if (provider, _m(model)) != (signature[0], _m(signature[1])):
         return False
     want = int(signature[2]) if len(signature) > 2 else 0
     return not want or int(dims or 0) == want

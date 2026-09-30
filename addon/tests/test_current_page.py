@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory() as root:
     out = call(); text = out['content'][0]['text']
     check('switch has no previous content', 'slide B' in text and 'slide A' not in text and 'selected A' not in text)
     check('render keeps captured view', 'Lecture B' in text and 'Lecture C' not in text and renders == [(str(Path(root)/'B.pdf'), 0)])
+    check('a fresh render is cached for the next call', ps.cached_page_png(root, 'B', str(Path(root)/'B.pdf'), 0) == png)
     def failed(*args): raise RuntimeError('render failed')
     ps.render_page_png = failed
     out = call()

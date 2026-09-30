@@ -160,11 +160,19 @@ def cmd_init(args) -> int:
     if not os.path.exists(board_path):
         B.mutate(lambda board: None)          # writes the header + columns
         created.append(os.path.basename(board_path))
-    roles_src = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "templates",
-        "ROLES.md")
+    # The skill ships templates/ beside scripts/; this live copy sits in
+    # board/, so it reads them out of the vendored skill instead.
+    here = os.path.dirname(os.path.abspath(__file__))
+    roles_src = next((p for p in (
+        os.path.join(here, "..", "templates", "ROLES.md"),
+        os.path.join(here, "..", ".claude", "skills", "agent-board",
+                     "templates", "ROLES.md"),
+    ) if os.path.exists(p)), None)
     roles_dst = os.path.join(B.board_dir(), "ROLES.md")
-    if os.path.exists(roles_src) and not os.path.exists(roles_dst):
+    if roles_src is None and not os.path.exists(roles_dst):
+        print("warning: no ROLES.md template found; not installed",
+              file=sys.stderr)
+    elif roles_src and not os.path.exists(roles_dst):
         with open(roles_src, encoding="utf-8") as fh:
             text = fh.read()
         with open(roles_dst, "w", encoding="utf-8") as fh:

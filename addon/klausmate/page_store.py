@@ -376,14 +376,15 @@ def page_texts(user_files: str, pdf_safe: str, path: str, page_count: int) -> li
 
 def _png_path(user_files: str, pdf_safe: str, path: str, page_index: int) -> str:
     """Where this page's rendered PNG is cached — a sibling of its JSON
-    record, same directory, same stem (K-230). Moves and expires with the
-    record for free: a replaced file gets a fresh record_dir and so a
-    fresh cache, while a changed slide_text never
-    invalidates it — only the rendered IMAGE depends on the file's own
-    bytes, not on what a record stores about it, so this cache's
-    invalidation is simpler than the text_hash-driven re-embed elsewhere
-    in this module and must not be coupled to it."""
-    return os.path.join(record_dir(user_files, pdf_safe, path), f"{int(page_index):04d}.png")
+    record, same stem plus a stamp of the source file (K-230). The record
+    directory alone cannot expire it: a text-bearing PDF is keyed by its
+    TEXT, so a replacement with the same text and new graphics keeps the
+    directory. ``digest12`` (path, size, mtime) changes with the file's
+    bytes, so a replaced — or re-baked — file misses and re-renders. A
+    changed slide_text never invalidates it: only the IMAGE depends on
+    the file's own bytes."""
+    return os.path.join(record_dir(user_files, pdf_safe, path),
+                        f"{int(page_index):04d}.{digest12(path)}.png")
 
 
 def cached_page_png(user_files: str, pdf_safe: str, path: str, page_index: int) -> bytes | None:
@@ -413,6 +414,13 @@ def store_page_png(user_files: str, pdf_safe: str, path: str, page_index: int, p
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, p)
+        # Drop this page's renders of earlier source files (and the
+        # pre-stamp NNNN.png), which no reader can hit again.
+        d, stem = os.path.split(p)
+        page = stem.split(".", 1)[0]
+        for name in os.listdir(d):
+            if name != stem and name.startswith(page + ".") and name.endswith(".png"):
+                os.remove(os.path.join(d, name))
     except Exception as exc:
         print(f"[klausmate] page png cache write failed: {exc}")
 

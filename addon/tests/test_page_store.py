@@ -465,11 +465,23 @@ check("a cache miss answers None", ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0
 ps.store_page_png(_pc_root, "pc", _pc_pdf, 0, b"FAKEPNGBYTES")
 check("a stored PNG reads back byte for byte",
       ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0) == b"FAKEPNGBYTES")
-_pc_expect = os.path.join(ps.record_dir(_pc_root, "pc", _pc_pdf), "0000.png")
-check("the cache lives beside the JSON record, same stem, .png extension",
+_pc_expect = os.path.join(ps.record_dir(_pc_root, "pc", _pc_pdf),
+                          "0000.%s.png" % ps.digest12(_pc_pdf))
+check("the cache lives beside the JSON record, same stem, stamped by the source file",
       os.path.isfile(_pc_expect)
       and os.path.isfile(os.path.join(os.path.dirname(_pc_expect), "0000.json")))
 check("the write is atomic — no leftover .tmp file", not os.path.isfile(_pc_expect + ".tmp"))
+_pc_dir = os.path.dirname(_pc_expect)
+open(_pc_pdf, "wb").write(b"%PDF-1.4 pngcache, same text, new graphics")
+check("replacing the PDF keeps its record dir (same text) — the case the stamp exists for",
+      ps.record_dir(_pc_root, "pc", _pc_pdf) == _pc_dir)
+check("...but the old render no longer answers for the new file",
+      ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0) is None)
+ps.store_page_png(_pc_root, "pc", _pc_pdf, 0, b"NEWPNG")
+check("the new render reads back", ps.cached_page_png(_pc_root, "pc", _pc_pdf, 0) == b"NEWPNG")
+check("storing it drops the stale render: one PNG for page 1",
+      [n for n in os.listdir(_pc_dir) if n.endswith(".png")]
+      == ["0000.%s.png" % ps.digest12(_pc_pdf)], os.listdir(_pc_dir))
 check("cached_page_png never raises for an unresolvable path — answers None",
       ps.cached_page_png(_pc_root, "ghost", "", 5) is None)
 _pc_blocked_base = os.path.join(_pc_root, ps.SUBDIR, "blocked")

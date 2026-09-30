@@ -403,6 +403,17 @@ check("live lock is respected (exit 2)", p.returncode == 2, f"rc={p.returncode} 
 check("timed out rather than hanging", time.time() - t0 < 8)
 os.unlink(lock)
 
+section("init installs the ROLES.md protocol from the vendored skill")
+d = new_board_dir()
+rc, out, err = cli("init")
+if os.path.exists(os.path.join(os.path.dirname(BOARD_PY), "..", ".claude", "skills",
+                               "agent-board", "templates", "ROLES.md")):
+    check("init on the live board/board.py copies ROLES.md in", rc == 0
+          and os.path.isfile(os.path.join(d, "ROLES.md")) and "ROLES.md" in out, out + err)
+else:  # a scratch copy (test_board_skill_parity) with no skill beside it
+    check("init with no template says so instead of skipping ROLES.md silently",
+          rc == 0 and "no ROLES.md template" in err, out + err)
+
 section("real board file is untouched")
 real = os.path.join(REPO, "board", "BOARD.md")
 check("tests never created the real BOARD.md unexpectedly",
