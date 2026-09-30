@@ -1392,18 +1392,29 @@ def muted_label_qss(night: bool, size_px: int = 11) -> str:
 
 def status_bar_qss(night: bool) -> str:
     """The status bar along the bottom of the main window and Browse
-    (VS Code's): chrome ground, a grey_light hairline on top, muted 11px
-    text, the progress chunk in the accent."""
+    (VS Code's): chrome ground, ONE grey_light hairline on top (on Qt's
+    QStatusBar, replacing the macOS panel line; the bar inside draws
+    none), muted 11px text, the progress chunk in the accent."""
     c = palette(night)
     return f"""
+    QStatusBar {{
+        background-color: {c['chrome']};
+        border: none;
+        border-top: 1px solid {c['grey_light']};
+    }}
+    QStatusBar::item {{
+        border: none;
+    }}
     QWidget#KlausStatusBar {{
         background-color: {c['chrome']};
-        border-top: 1px solid {c['grey_light']};
     }}
     QWidget#KlausStatusBar QLabel {{
         color: {c['text_muted']};
         font-size: 11px;
         background: transparent;
+    }}
+    QWidget#KlausStatusBar QLabel[error="true"] {{
+        color: {c['red_text']};
     }}
     QWidget#KlausStatusBar QToolButton {{
         background: transparent;

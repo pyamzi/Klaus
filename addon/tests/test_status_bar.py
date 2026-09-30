@@ -43,6 +43,7 @@ sys.modules["klausmate"].manage_models_dialog = lambda: calls.append("klaus")
 sys.modules["aqt"].mw = types.SimpleNamespace(onPrefs=lambda: calls.append("anki"))
 
 tasks = importlib.import_module("klausmate.tasks")
+tasks.clock = lambda: 1000.0  # every fixture task (started ≤ 3.0) is long past SHOW_DELAY_S
 theme = importlib.import_module("klausmate.theme")
 sb = importlib.import_module("klausmate.status_bar")
 Task = tasks.Task
@@ -110,6 +111,17 @@ check("an on toggle carries no chip (the filled column shows the state)",
       "elif on:" not in open("klausmate/browse_toggles.py").read())
 
 main = sb.StatusBar(QtWidgets.QMainWindow())
+b.activateWindow()
+app.processEvents()
+for w in (bar.gear, bar.sidebar_btn):
+    w.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+    app.processEvents()
+    quiet = w.hasFocus() and not w.show_focus()
+    w.clearFocus()
+    w.setFocus(QtCore.Qt.FocusReason.TabFocusReason)
+    app.processEvents()
+    check(f"{type(w).__name__}: focus Qt hands out on open draws nothing; Tab focus draws",
+          quiet and w.show_focus())
 check("the main window's bar has no toggles", main.sidebar_btn is None and main.editor_btn is None)
 
 section("one gear, two settings")
@@ -127,6 +139,14 @@ check("a known total fills the bar", bar.progress.maximum() == 10 and bar.progre
 check("...beside the task's name", bar.label.text() == "Anemia — Embedding", bar.label.text())
 bar.refresh([Task("s", "Syncing…", 0, 0, False, "", 1.0)])
 check("an unknown total animates", bar.progress.maximum() == 0 and bar.progress.minimum() == 0)
+bar.refresh([Task("o", "Ollama", 0, 0, False, "Pull failed: offline", 1.0, True)])
+check("a failure reads in red", bar.label.property("error") is True and bar.label.text() == "Pull failed: offline")
+bar.refresh([Task("o", "Ollama", 0, 0, False, "Pulled", 1.0)])
+check("...a plain message doesn't", bar.label.property("error") is False)
+bar.refresh([Task("s", "Syncing…", 0, 0, False, "", tasks.clock())])
+check("a task that just began doesn't flash the bar", bar.progress.isHidden() and bar.label.text() == "")
+bar.refresh([Task("s", "Syncing…", 0, 0, False, "", tasks.clock() - sb.SHOW_DELAY_S - 0.1)])
+check("...it shows once it has run a moment", not bar.progress.isHidden() and bar.label.text() == "Syncing…")
 bar.refresh([])
 check("idle: no bar, no text", bar.progress.isHidden() and bar.label.text() == "")
 bar.refresh([Task("l", "x" * 200, 0, 0, False, "", 1.0)])
@@ -186,6 +206,10 @@ mwin.show()
 mbar = sb.install_main(mwin)
 app.processEvents()
 native = mwin.statusBar()
+_own = theme.status_bar_qss(False).split("QWidget#KlausStatusBar {")[1].split("}")[0]
+check("one hairline only: Qt's own status bar draws it, the bar inside draws none, no item frames",
+      "border" not in _own and "QStatusBar::item" in native.styleSheet()
+      and "border-top" in native.styleSheet().split("QStatusBar {")[1].split("}")[0], _own)
 check("the main window's hidden status bar is shown, holding one bar",
       mbar is not None and native.isVisible() and len(native.findChildren(QtWidgets.QWidget, "KlausStatusBar")) == 1
       and sb.install_main(mwin) is mbar)

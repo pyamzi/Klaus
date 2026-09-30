@@ -439,6 +439,8 @@ held[-1].success({})
 check("...gone when it lands", tasks.snapshot() == [], str(tasks.snapshot()))
 ls.refresh_retention()
 held[-1].fail(RuntimeError("db"))
-check("...and when it fails", tasks.snapshot() == [], str(tasks.snapshot()))
+check("...and a failure stays in the bar with its reason",
+      [(t.key, t.error, "db" in t.message) for t in tasks.snapshot()] == [("retention", True, True)], str(tasks.snapshot()))
+tasks.clear()
 
 raise SystemExit(report())

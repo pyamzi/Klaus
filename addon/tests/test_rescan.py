@@ -219,12 +219,14 @@ pd5._rescan.update(running=False, again=False)
 ph._live_library_root = lambda: root
 pd5.rescan_library_root = lambda prepared=None: {"moved": []}
 pd5.start_library_rescan()
-check("a running scan is a task", [t.key for t in tasks.snapshot()] == ["rescan"], str(tasks.snapshot()))
+check("a running scan stays out of the status bar", tasks.snapshot() == [], str(tasks.snapshot()))
 held[-1].success({})
-check("...gone when it finishes", tasks.snapshot() == [], str(tasks.snapshot()))
+check("...and so does a finished one", tasks.snapshot() == [], str(tasks.snapshot()))
 pd5.start_library_rescan()
 held[-1].fail(RuntimeError("disk"))
-check("...and when it fails", tasks.snapshot() == [], str(tasks.snapshot()))
+check("...and a failure stays in the bar with its reason",
+      [(t.key, t.error, "disk" in t.message) for t in tasks.snapshot()] == [("rescan", True, True)], str(tasks.snapshot()))
+tasks.clear()
 
 _init = open("klausmate/__init__.py", encoding="utf-8").read()
 check("profile open starts the background rescan",

@@ -152,6 +152,10 @@ ICON_SIZE = 16.0
 CHIP_RADIUS = 6.0  # the design system's small-control radius
 
 
+def is_keyboard_focus(event) -> bool:
+    return event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason)
+
+
 class _PaneToggle(QToolButton):  # type: ignore[misc]
     """A borderless toolbar toggle that paints its own sidebar icon.
 
@@ -177,6 +181,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         self._side = side
         self._pane = pane
         self._hovered = False
+        self._tab_focus = False
         self.setCheckable(True)
         self.setChecked(checked)
         self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
@@ -210,12 +215,20 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         super().leaveEvent(event)
 
     def focusInEvent(self, event) -> None:  # noqa: N802 — Qt override name
+        self._tab_focus = is_keyboard_focus(event)
         self.update()
         super().focusInEvent(event)
 
     def focusOutEvent(self, event) -> None:  # noqa: N802 — Qt override name
+        self._tab_focus = False
         self.update()
         super().focusOutEvent(event)
+
+    def show_focus(self) -> bool:
+        """Draw the ring only for focus the keyboard brought: Qt hands a
+        window's first Tab-focusable widget focus when it opens, and a
+        ring nobody asked for read as a stuck button."""
+        return self.hasFocus() and self._tab_focus
 
     def paintEvent(self, _event) -> None:  # noqa: N802 — Qt override name
         try:
@@ -288,7 +301,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
         self._paint_icon(painter, c, on, side)
         painter.restore()
 
-        if self.hasFocus():
+        if self.show_focus():
             # A self-painted widget bypasses QStyle entirely, so the shared
             # :focus rule in dialog_qss can never reach this one.
             pen = QPen(self._tint(theme, night, 0.9))

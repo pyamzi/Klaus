@@ -175,6 +175,7 @@ class RunnerState(NamedTuple):
     pending: int = 0  # jobs still waiting behind this one
     message: str = ""  # terminal text: finished / cancelled / refused
     finished: str = ""  # safe name of the PDF that just completed
+    failed: bool = False  # the message is a failure: it stays in the bar
 
 
 def status_line(state: RunnerState) -> str:
@@ -320,7 +321,7 @@ def _report_task(state: RunnerState) -> None:
         elif state.message:
             if not running:
                 tasks.begin("index", state.message)
-            tasks.end("index", state.message)
+            tasks.end("index", state.message, error=state.failed)
         elif running:
             tasks.end("index")
     except Exception as exc:  # noqa: BLE001 - a report never breaks the run
@@ -659,7 +660,7 @@ def _job_stopped() -> None:
     dropped = _queue.clear()
     tail = f" {dropped} queued job(s) dropped." if dropped else ""
     _publish(
-        RunnerState(message="Indexing stopped — it resumes where it left off." + tail)
+        RunnerState(message="Indexing stopped — it resumes where it left off." + tail, failed=True)
     )
 
 
@@ -690,7 +691,7 @@ def _fail(exc: Exception) -> None:
     if dropped:
         msg += f"  {dropped} queued job(s) were not started."
     print(f"[klausmate] indexing failed: {msg}")
-    _publish(RunnerState(message=msg))
+    _publish(RunnerState(message=msg, failed=True))
 
 
 # ── the model-change sweep ───────────────────────────────────────────────

@@ -151,6 +151,15 @@ iq._report_task(iq.RunnerState(message="Anemia indexed"))
 _t = [t for t in _tasks.snapshot() if t.key == "index"]
 check("a finished run leaves its message", len(_t) == 1 and _t[0].message == "Anemia indexed", str(_t))
 _tasks.clear()
+iq._fail(RuntimeError("Ollama is down"))
+check("a failed run stays in the bar as a failure",
+      [(t.error, "Ollama is down" in t.message) for t in _tasks.snapshot() if t.key == "index"] == [(True, True)],
+      str(_tasks.snapshot()))
+_tasks.clear()
+iq._job_stopped()
+check("so does a run stopped on partial work",
+      [t.error for t in _tasks.snapshot() if t.key == "index"] == [True], str(_tasks.snapshot()))
+_tasks.clear()
 iq._report_task(iq.RunnerState(message=iq.BUSY_WAIT_TEXT))
 check("a message with nothing running still reaches the bar",
       [t.message for t in _tasks.snapshot() if t.key == "index"] == [iq.BUSY_WAIT_TEXT], str(_tasks.snapshot()))

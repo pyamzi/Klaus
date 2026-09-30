@@ -69,7 +69,7 @@ raises is logged and skipped, and never breaks the reporter.
 | Process | Where | Key | Progress | Cancel |
 |---|---|---|---|---|
 | Indexing (PDF embed, matching, card index) | `index_queue`'s own listener turns `RunnerState` into one task | `index` | `done`/`total`; the label comes from `status_line`, and "+N queued" shows in the list | `index_queue.cancel_all` |
-| Library folder scan | `pdf_drive.start_library_rescan` | `rescan` | unknown | — |
+| Library folder scan (failures only — the user asked for the running scan to stay out of the bar) | `pdf_drive.start_library_rescan` | `rescan` | — | — |
 | Retention % refresh | `library_sidebar.refresh_retention` | `retention` | unknown | — |
 | Collection sync | `gui_hooks.sync_will_start` / `sync_did_finish` | `sync` | unknown | — |
 | Media sync | `gui_hooks.media_sync_did_start_or_stop` / `media_sync_did_progress` | `media` | counts when Anki reports them, otherwise unknown | — |
@@ -77,7 +77,10 @@ raises is logged and skipped, and never breaks the reporter.
 
 Every source wraps its report in try/except, so a failing report can't
 break the work it describes. A task whose job crashes is ended from that
-job's failure path, with the error as its message.
+job's failure path, with the error as its message and `error=True`: a
+failure stays in the bar, in red, until the next task begins (a plain
+end message lingers 4 s). A task younger than `SHOW_DELAY_S` (0.5 s) is
+not drawn, so quick sync/retry blips never flash the bar.
 
 ### `status_bar.py`: the bar widget
 
@@ -153,8 +156,8 @@ Real PyQt6, offscreen:
   - a `RunnerState` sequence produces one `index` task that ends with the
     runner's message;
   - the sync and media-sync hook handlers begin and end their tasks;
-  - `start_library_rescan` begins and ends `rescan`, including on
-    failure.
+  - `start_library_rescan` reports nothing while it runs, and a
+    failure as a sticky `rescan` error.
 - **Removals:** `_StatusDock` is gone; the footer has no status label;
   `browse_toggles` installs no search-row toggles; no app-modal `exec()`
   in the new files.

@@ -2544,7 +2544,7 @@ def manage_models_dialog(*_args: Any) -> None:
             set_busy(False)
 
         def failed(exc: Exception) -> None:
-            _bar(lambda t: t.end("ollama", f"{action} failed: {exc}"))
+            _bar(lambda t: t.end("ollama", f"{action} failed: {exc}", error=True))
             if not local_alive():
                 return
             runtime_status.setText(f"{action} failed: {exc}")

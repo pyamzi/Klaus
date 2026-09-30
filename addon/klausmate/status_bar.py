@@ -49,6 +49,7 @@ from aqt.qt import (  # noqa: E402
 
 LABEL_MAX_PX = 320
 BAR_HEIGHT = 24
+SHOW_DELAY_S = 0.5  # a task quicker than this never flashes the bar
 
 
 def _open_klaus_settings() -> None:
@@ -126,11 +127,26 @@ class _GearButton(QToolButton):
         from .browse_toggles import BUTTON_SIZE
 
         self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+        self.setAutoRaise(True)  # repaints on hover
+        self._tab_focus = False
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setToolTip("Settings")
         self.setAccessibleName("Settings")
         self.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+    def focusInEvent(self, event) -> None:  # noqa: N802 - Qt override
+        from .browse_toggles import is_keyboard_focus
+
+        self._tab_focus = is_keyboard_focus(event)
+        super().focusInEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self._tab_focus = False
+        super().focusOutEvent(event)
+
+    def show_focus(self) -> bool:
+        return self.hasFocus() and self._tab_focus
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt override
         if self.width() <= 0 or self.height() <= 0:
@@ -143,7 +159,7 @@ class _GearButton(QToolButton):
             c = theme.palette(theme.night_mode())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             w, h = float(self.width()), float(self.height())
-            if self.isDown() or self.underMouse() or self.hasFocus():
+            if self.isDown() or self.underMouse() or self.show_focus():
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(c["hover_subtle"]))
                 painter.drawRoundedRect(QRectF(0.0, 0.0, w, h), CHIP_RADIUS, CHIP_RADIUS)
@@ -167,6 +183,9 @@ class StatusBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(BAR_HEIGHT)
         self.popup = None
+        self._wake = QTimer(self)  # re-check once young tasks come of age
+        self._wake.setSingleShot(True)
+        self._wake.timeout.connect(self._expire)
         self.sidebar_btn = None
         self.editor_btn = None
         self._tasks: list = []
@@ -238,17 +257,33 @@ class StatusBar(QWidget):
         try:
             from . import theme
 
-            self.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
+            # On Qt's own status bar when inside one, so its QStatusBar
+            # rules replace the macOS panel line and item frames.
+            host = self.parentWidget()
+            if host is None or not host.inherits("QStatusBar"):
+                host = self
+            host.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] status bar theme failed: {exc}")
 
     def refresh(self, items: list) -> None:
+        now = tasks.clock()
+        young = [t for t in items if not t.message and now - t.started < SHOW_DELAY_S]
+        if young:
+            wait = min(SHOW_DELAY_S - (now - t.started) for t in young)
+            self._wake.start(int(wait * 1000) + 20)
+            items = [t for t in items if t not in young]
         self._tasks = list(items)
         running = [t for t in items if not t.message]
         text = readout_text(items)
         self.label.setText(QFontMetrics(self.label.font()).elidedText(
             text, Qt.TextElideMode.ElideMiddle, LABEL_MAX_PX))
         self.label.setToolTip(text)
+        failed = not running and bool(items) and items[0].error
+        if self.label.property("error") is not failed:
+            self.label.setProperty("error", failed)
+            self.label.style().unpolish(self.label)
+            self.label.style().polish(self.label)
         if running:
             head = running[0]
             if head.total > 0:
@@ -274,7 +309,9 @@ class StatusBar(QWidget):
         frame = QFrame(self, Qt.WindowType.Popup)
         frame.setObjectName("KlausStatusBar")
         frame.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        frame.setStyleSheet(self.styleSheet())
+        from . import theme
+
+        frame.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
         col = QVBoxLayout(frame)
         col.setContentsMargins(10, 8, 10, 8)
         for t in self._tasks:
@@ -333,6 +370,7 @@ def install_main(mw) -> StatusBar | None:
         native.setSizeGripEnabled(False)
         bar = StatusBar(mw)
         native.addPermanentWidget(bar, 1)
+        bar.apply_theme()
         mw._klausmate_status_bar = bar
         return _track(bar)
     except Exception as exc:  # noqa: BLE001
@@ -353,6 +391,7 @@ def install_browser(browser) -> StatusBar | None:
         browser.setStatusBar(native)
         bar = StatusBar(browser, browser=browser)
         native.addPermanentWidget(bar, 1)
+        bar.apply_theme()
         browser._klausmate_status_bar = bar
         return _track(bar)
     except Exception as exc:  # noqa: BLE001

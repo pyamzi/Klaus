@@ -256,11 +256,11 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         return
     uf = _user_files()
     _rescan["running"] = True
-    _task(lambda t: t.begin("rescan", "Scanning the Library folder…"))
 
-    def finish(prepared: dict | None) -> None:
+    def finish(prepared: dict | None, error: str = "") -> None:
         _rescan["running"] = False
-        _task(lambda t: t.end("rescan"))
+        if error:  # the scan itself is silent; only a failure reaches the bar
+            _task(lambda t: (t.begin("rescan", error), t.end("rescan", error, error=True)))
         summary = rescan_library_root(prepared)
         if summary and summary.get("ingested"):
             _after_ingest(summary["ingested"])
@@ -274,7 +274,7 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
 
     def failed(exc: Exception) -> None:
         print(f"[klausmate] library rescan (background) failed: {exc}")
-        finish(None)
+        finish(None, f"Folder scan failed: {exc}")
 
     QueryOp(
         parent=mw, op=lambda _col: pdf_handler.prepare_rescan(uf, root), success=finish

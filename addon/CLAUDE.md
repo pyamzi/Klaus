@@ -338,10 +338,14 @@ same reason.
   `tasks` is the one list of running processes — `begin`/`update`/`end`
   from any thread; listeners run only through `run_on_main`
   (`mw.taskman.run_on_main` once a profile opens). Reporters: indexing
-  (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), the folder
-  scan (`rescan`), the Browse retention % (`retention`), Anki's collection
-  and media sync hooks (`sync`, `media`), and Preferences' Ollama
-  install/pull (`ollama`). An end message lingers `LINGER_S` (4 s).
+  (`index_queue._report_task`, key `index`, ✕ = `cancel_all`), folder
+  scan FAILURES only (`rescan`; the running scan is silent by request),
+  the Browse retention % (`retention`), Anki's collection and media sync
+  hooks (`sync`, `media`), and Preferences' Ollama install/pull
+  (`ollama`). An end message lingers `LINGER_S` (4 s); `end(...,
+  error=True)` stays, in red, until the next `begin`. Tasks younger than
+  `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
+  QStatusBar (one hairline, no macOS panel line or item frames).
   Anki's own "Processing…" popups are deliberately not mirrored.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
   highlighting (K-113), adapted from Glutanimate's

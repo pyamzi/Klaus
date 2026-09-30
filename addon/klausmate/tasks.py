@@ -3,7 +3,8 @@
 Anything that does work reports three things: it started (``begin``,
 with a cancel callable when it can be stopped), how far along it is
 (``update``; ``total`` 0 means unknown) and that it finished (``end``,
-optionally with a message that lingers ``LINGER_S`` seconds).
+optionally with a message that lingers ``LINGER_S`` seconds — or, with
+``error=True``, stays until the next ``begin`` of any task).
 
 Thread rule: ``begin``/``update``/``end`` may be called from any
 thread. They only record the change under a lock and hand the listener
@@ -29,6 +30,7 @@ class Task(NamedTuple):
     cancellable: bool
     message: str  # "" while running; the end message once finished
     started: float
+    error: bool = False  # a failure: kept until the next task begins
 
 
 clock: Callable[[], float] = time.monotonic
@@ -36,7 +38,7 @@ run_on_main: Callable[[Callable[[], None]], None] = lambda fn: fn()
 
 _lock = threading.Lock()
 _tasks: dict[str, Task] = {}
-_ended: dict[str, float] = {}
+_ended: dict[str, float | None] = {}  # None: a failure, no expiry
 _cancels: dict[str, Callable[[], None]] = {}
 _order: dict[str, int] = {}  # begin order: breaks ties between equal clock readings
 _seq = [0]
@@ -59,6 +61,10 @@ def _notify(snap: list[Task]) -> None:
 
 def begin(key: str, label: str, cancel: Callable[[], None] | None = None) -> None:
     with _lock:
+        for k, at in list(_ended.items()):
+            if at is None:  # a new task clears the failures
+                _ended.pop(k, None)
+                _tasks.pop(k, None)
         _tasks[key] = Task(key, label, 0, 0, cancel is not None, "", clock())
         _seq[0] += 1
         _order[key] = _seq[0]
@@ -83,15 +89,15 @@ def update(key: str, done: int | None = None, total: int | None = None, label: s
     _changed()
 
 
-def end(key: str, message: str = "") -> None:
+def end(key: str, message: str = "", error: bool = False) -> None:
     with _lock:
         task = _tasks.get(key)
         _cancels.pop(key, None)
         if task is None:
             return
         if message:
-            _tasks[key] = task._replace(message=message, cancellable=False)
-            _ended[key] = clock()
+            _tasks[key] = task._replace(message=message, cancellable=False, error=error)
+            _ended[key] = None if error else clock()
         else:
             _tasks.pop(key, None)
             _ended.pop(key, None)
@@ -102,7 +108,7 @@ def snapshot() -> list[Task]:
     with _lock:
         now = clock()
         for key, at in list(_ended.items()):
-            if now - at > LINGER_S:
+            if at is not None and now - at > LINGER_S:
                 _ended.pop(key, None)
                 _tasks.pop(key, None)
         return sorted(_tasks.values(), key=lambda t: (t.started, _order.get(t.key, 0)), reverse=True)

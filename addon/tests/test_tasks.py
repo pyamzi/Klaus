@@ -87,6 +87,23 @@ check("the last delivery is the current state, not the one queued first",
 tasks.remove_listener(late.append)
 tasks.run_on_main = lambda fn: fn()
 
+section("a failure stays until the next task starts")
+tasks.clear()
+_now = [100.0]
+_real_clock = tasks.clock
+tasks.clock = lambda: _now[0]
+tasks.begin("s", "Sync")
+tasks.end("s", "Synced")
+tasks.begin("o", "Ollama")
+tasks.end("o", "Pull failed: offline", error=True)
+_now[0] += tasks.LINGER_S + 60
+check("past the linger, the failure is still there and the plain message is not",
+      [(t.key, t.error) for t in tasks.snapshot()] == [("o", True)], str(tasks.snapshot()))
+tasks.begin("r", "Scanning")
+check("the next task clears it", [t.key for t in tasks.snapshot()] == ["r"], str(tasks.snapshot()))
+tasks.clock = _real_clock
+tasks.clear()
+
 section("clear on profile close")
 del later[:]
 tasks.clear()

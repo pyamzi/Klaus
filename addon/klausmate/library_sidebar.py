@@ -389,7 +389,7 @@ def refresh_retention() -> None:
 
     def failed(exc: Exception) -> None:
         _state["busy"] = False
-        _task(lambda t: t.end("retention"))
+        _task(lambda t: t.end("retention", f"Retention update failed: {exc}", error=True))
         print(f"[klausmate] tag retention failed: {exc}")
 
     QueryOp(parent=mw, op=compute_means, success=done).failure(failed).run_in_background()

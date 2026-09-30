@@ -250,6 +250,8 @@ button('Download').click(); work(); drain()
 check('failure actionable and controls usable', 'Retry Pull' in status.text() and button('Download').isEnabled() and button('Refresh').isEnabled())
 check('a failed download leaves its reason in the bar',
       [t.message for t in _tasks.snapshot() if t.key == 'ollama'] == ['Pull failed: Download failed. Retry Pull.'], str(_tasks.snapshot()))
+check('...marked as a failure, so it stays until the next task',
+      [t.error for t in _tasks.snapshot() if t.key == 'ollama'] == [True], str(_tasks.snapshot()))
 button('Stop managed server').click(); work(); drain()
 check('stop calls owned server manager', 'stop' in calls and not button('Stop managed server').isEnabled())
 state['setup_error'] = True
