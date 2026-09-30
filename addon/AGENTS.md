@@ -142,9 +142,8 @@ retention.py — per PDF: embed its pages (pdf_index.py, one vector each) →
         │       cached in matches.json) → pull FSRS retrievability for
         │       matched cards → aggregate into a study-priority score
         ▼
-Library row shows the score and matched card count; right-click can
-index/re-index, adjust sensitivity, show matches in Browse, suspend or
-unsuspend cards, or chart retention history
+Browse's Library sidebar row shows the retention %; right-click can
+adjust sensitivity, chart retention history or show the file in Finder
 ```
 
 The judge, doubtful count and Doubtful cards menu were removed in D2.

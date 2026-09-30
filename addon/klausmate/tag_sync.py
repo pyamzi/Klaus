@@ -277,7 +277,7 @@ def _with_parents(paths) -> set[str]:
     return out
 
 
-def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(), folders=()) -> list[dict]:
+def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(), folders=(), deleted=()) -> list[dict]:
     """K-306: what the Library must do so it and the ``!Library`` tag
     branch agree again. Pure — every input is plain data:
 
@@ -288,6 +288,9 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
       one / zero notes above threshold. A PDF in neither is unknown
       (cold cache).
     - ``folders``: every Library folder, empty ones included.
+    - ``deleted``: PDFs whose tag the user just deleted in the sidebar
+      (K-316: Anki's Delete is the Library's Delete PDF, even for a PDF
+      with no matched cards).
 
     Returns actions, each a dict with a ``kind``:
 
@@ -298,8 +301,9 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     - ``folder_rename``: the sidebar renamed or moved a folder tag; the
       folder follows with every PDF in it (``tags`` maps the ones whose
       tag Anki moved; empty ones vanished and are re-registered).
-    - ``delete``: tags with matched cards are gone with no rename to
-      explain them. Only a confirmation may act on this.
+    - ``delete``: tags with matched cards, or ones in ``deleted``, are
+      gone with no rename to explain them. Only a confirmation may act
+      on this.
 
     Anki refuses to rename a zero-note tag, so a vanished tag known to
     be empty is never a rename source — that is the misrename fix: a
@@ -314,7 +318,7 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     # Anki's respelling as "missing" and re-registered it forever.
     exact = set(existing)
     present = {t.casefold(): t for t in exact}
-    nonempty, empty = set(nonempty), set(empty)
+    nonempty, empty, deleted = set(nonempty), set(empty), set(deleted)
     actions: list[dict] = []
 
     owned: dict[str, str] = {}
@@ -412,7 +416,7 @@ def plan_library_sync(pdfs: dict, stored: dict, existing, nonempty=(), empty=(),
     grouped: set[str] = set()
     deleted_folders: list[str] = []
     for s in left:
-        if s in grouped or s not in nonempty:
+        if s in grouped or (s not in nonempty and s not in deleted):
             continue
         parts = [p for p in (pdfs[s][0] or "").split("/") if p]
         group = None
@@ -1069,7 +1073,8 @@ def _plan(col, cfg: dict) -> list[dict]:
     # ponytail: the card index loads on the main thread, and only when a
     # tag vanished; move it into a QueryOp if that ever shows as a hitch.
     nonempty, empty = _membership_known(missing, cfg) if missing else (set(), set())
-    return plan_library_sync(pdfs, stored, existing, nonempty, empty, folders)
+    deleted = {s for s in missing if _deleted_by_user(stored[s])}
+    return plan_library_sync(pdfs, stored, existing, nonempty, empty, folders, deleted)
 
 
 def _library_root() -> str | None:

@@ -701,7 +701,7 @@ check("no toolbar Library link, no Library window, no Library screen",
       and "class DriveWindow" not in _srcs["pdf_drive.py"]
       and not os.path.exists(os.path.join(ADDON, "library_tab.py")))
 check("every dialog in library_actions is an instance opened with open()",
-      _code_only(_srcs["library_actions.py"]).count(".open()") == 4)  # text prompt, sensitivity, delete, file picker
+      _code_only(_srcs["library_actions.py"]).count(".open()") == 3)  # text prompt, sensitivity, file picker
 check("Preferences' refresh hook still exists (manage_models calls it)",
       hasattr(pdf_drive, "refresh_open_library"))
 

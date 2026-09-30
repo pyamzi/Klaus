@@ -12,14 +12,13 @@ import shutil
 from typing import Callable
 
 from aqt import mw
-from aqt.operations import CollectionOp, QueryOp
+from aqt.operations import QueryOp
 from aqt.qt import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QSlider,
     Qt,
     QVBoxLayout,
@@ -86,33 +85,7 @@ def history(parent, safe: str) -> None:
     )
 
 
-# ------------------------------------------------------------ indexing
-
-
-def reembed(safes: list[str]) -> None:
-    from . import index_queue
-
-    index_queue.request([(index_queue.JOB_PDF, s) for s in safes], announce=True)
-
-
-def set_suspended(safe: str, suspend: bool) -> None:
-    """Suspend or unsuspend every card carrying this PDF's tag, as one
-    undoable op (the sched call brings its own undo entry)."""
-    if mw is None or mw.col is None:
-        return
-    tag = tag_sync.get_stored_tag(safe) or tag_sync.desired_tag(*tag_sync._folder_and_display(safe))
-    cids = list(mw.col.find_cards(tag_sync.tag_query(tag)))
-    if not cids:
-        tooltip("No cards carry this PDF's tag yet. Index it first.")
-        return
-
-    def op(col):
-        return col.sched.suspend_cards(cids) if suspend else col.sched.unsuspend_cards(cids)
-
-    verb = "Suspended" if suspend else "Unsuspended"
-    CollectionOp(parent=mw, op=op).success(
-        lambda _c: tooltip(f"{verb} {len(cids):,} cards (Ctrl+Z to undo)")
-    ).run_in_background()
+# ------------------------------------------------------------ sensitivity
 
 
 def sensitivity(parent, safe: str) -> None:
@@ -194,24 +167,6 @@ def _ask_text(parent, title: str, label: str, value: str, on_text: Callable[[str
     return dlg
 
 
-def rename_pdf(parent, safe: str) -> None:
-    """For a PDF with no matched cards: Anki refuses to rename an empty
-    tag, so the sidebar's own rename cannot reach it."""
-
-    def apply(name: str) -> None:
-        if not name:
-            return
-        drive_store.rename_display(_uf(), safe, name)
-        root = _live_root()
-        if root:
-            pdf_handler.rename_mapped_file(_uf(), root, safe, name)
-        _refresh()
-        tag_sync.sync_after_rename(mw, safe)
-        tag_sync._schedule_reconcile()  # an empty tag has no op to follow
-
-    _ask_text(parent, "Rename PDF", "Name:", drive_store.display_name(_uf(), safe), apply)
-
-
 def new_folder(parent, parent_path: str | None = None) -> None:
     def apply(name: str) -> None:
         name = name.strip("/")
@@ -266,35 +221,6 @@ def remove_empty_folder(path: str) -> None:
     _refresh()
     tag = tag_sync.folder_tag(path)
     tag_sync._run_sync_op(mw, f"Klaus: remove folder “{path}”", lambda col: {"removed": tag_sync.apply_removal(col, tag)})
-
-
-def confirm_delete_pdf(parent, safe: str) -> QMessageBox:
-    from . import pdf_drive
-
-    display = drive_store.display_name(_uf(), safe)
-    box = QMessageBox(parent)
-    box.setWindowTitle("Delete PDF")
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setText(
-        f"Delete “{display}”?\n\nThe PDF goes to the Trash. Its extracted text, "
-        "your highlights and notes, and its retention index are removed. "
-        "Cards are not touched."
-    )
-    box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    box.setDefaultButton(QMessageBox.StandardButton.No)
-    box.button(QMessageBox.StandardButton.Yes).setObjectName("DangerButton")
-    box.button(QMessageBox.StandardButton.No).setObjectName("SecondaryButton")
-    _style(box)
-
-    def answered(_r: int) -> None:
-        yes = box.standardButton(box.clickedButton()) == QMessageBox.StandardButton.Yes
-        box.deleteLater()
-        if yes and pdf_drive.delete_pdf(safe):
-            tooltip(f"Deleted “{display}”.")
-
-    box.finished.connect(answered)
-    box.open()
-    return box
 
 
 # ------------------------------------------------------------ import

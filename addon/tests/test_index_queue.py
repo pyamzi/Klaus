@@ -1137,7 +1137,6 @@ _iq_raw = open(os.path.join(ADDON, "index_queue.py")).read()  # docstrings are S
 _iq_src = code_only(_iq_raw)
 _drive_src = code_only(open(os.path.join(ADDON, "pdf_drive.py")).read())
 _sidebar_src = code_only(open(os.path.join(ADDON, "library_sidebar.py")).read())
-_actions_src = code_only(open(os.path.join(ADDON, "library_actions.py")).read())
 _init_src = code_only(open(os.path.join(ADDON, "__init__.py")).read())
 
 check(
@@ -1162,9 +1161,9 @@ check(
     and "curation.ensure_index(" not in _drive_src,
 )
 check(
-    "...and the sidebar drives the shared runner instead (K-308)",
-    "index_queue.request(" in _actions_src
-    and "index_queue.cancel_all()" in _sidebar_src,
+    "...and the sidebar's Cancel drives the shared runner instead (K-308; "
+    "K-316 removed Re-embed: PDFs index themselves)",
+    "index_queue.cancel_all()" in _sidebar_src,
 )
 check(
     "the sidebar footer renders the runner's own status_line, so the two "

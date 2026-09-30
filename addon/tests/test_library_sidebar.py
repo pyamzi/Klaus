@@ -226,13 +226,12 @@ def menu_for(full_name):
 
 check("Anki's items stay first", menu_for("!Library")[0] == "Anki's own item")
 check("root: import and new folder", menu_for("!Library")[1:] == ["Import PDFs…", "New Folder…"])
-check("a PDF: every Library action",
+check("a PDF: only what Anki's own items and a double-click can't do (K-316)",
       menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")[1:]
-      == ["Open PDF", "Rename PDF…", "Match Sensitivity…", "Retention History…", "Re-embed",
-          "Suspend Cards", "Unsuspend Cards", "Show in Finder", "Delete PDF…"],
+      == ["Match Sensitivity…", "Retention History…", "Show in Finder"],
       str(menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")))
 check("a folder with PDFs",
-      menu_for("!Library::2-BiB::Exam_1::Week_1")[1:] == ["New Folder…", "Import PDFs Here…", "Re-embed All"])
+      menu_for("!Library::2-BiB::Exam_1::Week_1")[1:] == ["New Folder…", "Import PDFs Here…"])
 check("an empty folder can be renamed and removed here (Anki's own items skip empty tags)",
       menu_for("!Library::2-BiB::Exam_1")[1:]
       == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])

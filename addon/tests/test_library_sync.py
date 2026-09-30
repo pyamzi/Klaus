@@ -111,6 +111,13 @@ acts = plan({"a": (None, "A.pdf")}, {"a": "!Library::A"}, set())
 check("an unknown (cold cache) vanished tag is re-registered, not a prompt",
       kinds(acts) == ["register"], str(acts))
 
+acts = plan({"z": (None, "Zero.pdf")}, {"z": "!Library::Zero"}, set(), empty={"z"}, deleted={"z"})
+check("Delete on a card-less PDF's tag in the sidebar asks to delete that PDF (K-316)",
+      acts == [{"kind": "delete", "folder": None, "safes": ["z"]}], str(acts))
+acts = plan({"z": (None, "Zero.pdf")}, {"z": "!Library::Zero"}, set(), deleted={"z"})
+check("...a cold-cache one too: the user's Delete is what counts",
+      kinds(acts) == ["delete"], str(acts))
+
 section("never claimed")
 acts = plan({"a": (None, "A.pdf"), "b": (None, "B.pdf")}, {"a": "!Library::A", "b": "!Library::B"},
             {"!Library::B", "!Library::Curated"}, nonempty={"a"})
@@ -263,6 +270,14 @@ ts._ask = lambda text, on_yes, on_no: on_yes()
 ts.reconcile_from_tags(col)
 check("Yes sends the source PDF to the Trash", trashed == [os.path.join(root, "Onc", "leuk.pdf")], str(trashed))
 check("and the PDF is gone from the Library", not os.path.exists(os.path.join(UF, "contexts", "leuk.txt")))
+
+section("K-316: Delete on a card-less PDF's tag asks too")
+asked2 = []
+ts._ask = lambda text, on_yes, on_no: (asked2.append(text), on_no())
+col.tags.tags.discard("!Library::Renal::E1")  # e1 has no matched cards
+ts.note_user_deleted(["!Library::Renal::E1"])
+ts.reconcile_from_tags(col)
+check("one prompt naming the card-less PDF", len(asked2) == 1 and "E1" in asked2[0], str(asked2))
 
 section("a reconcile waits for Klaus's own tag ops to land")
 ran = []

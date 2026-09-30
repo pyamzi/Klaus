@@ -74,8 +74,9 @@ the button shows indexing progress with ✕ to cancel.
   directory on disk and every PDF in it (empty ones included).
 - Deleting a tag with matched cards asks "Delete the PDF too?"
   ("Delete N PDFs in X?" for a folder). Yes moves the file(s) to the
-  macOS Trash; No restores the tag(s). Right-click Delete PDF… also uses
-  the Trash from now on.
+  macOS Trash; No restores the tag(s). Revised 2026-09-30 (K-316): the
+  same prompt follows Delete on a PDF tag with no matched cards, so
+  Anki's Delete replaces a separate Delete PDF… item.
 - A vanished tag with no matched cards (Check Database, Clear Unused
   Tags, deleting an empty tag) is silently re-registered, never a prompt.
   Removing an empty folder or empty PDF is a right-click action.
@@ -84,9 +85,11 @@ the button shows indexing progress with ✕ to cancel.
 
 **Right-click menus** (Anki's own items stay above a separator):
 
-- PDF tag: Open PDF, Match Sensitivity…, Retention History…, Re-embed,
-  Suspend/Unsuspend matched cards, Show in Finder, Delete PDF….
-- Folder tag: New Folder…, Import PDFs here…, Re-embed all, Remove Folder.
+- PDF tag: Match Sensitivity…, Retention History…, Show in Finder.
+  (Revised 2026-09-30, K-316: opening is a double-click, rename and delete
+  are Anki's own items, PDFs embed themselves, and suspending is ⌘A ⌘J.)
+- Folder tag: New Folder…, Import PDFs here…; Rename Folder… and Remove
+  Folder only when it is empty (Anki's own items skip an empty tag).
 - `!Library` root: Import PDFs…, New Folder….
 
 **Removed** (Part 3): `DriveWindow`, `library_tab.py`, the top-bar Library

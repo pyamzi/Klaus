@@ -18,14 +18,13 @@ and [endpoint](anki_endpoint.py).
   meaning, and tags every card that lecture covers with its own
   `!Library::…` tag, so the matches are one click away in Anki's tag
   sidebar. Re-run it as **Update Search Index** after you add cards.
-- **Library** — the **Library** link in the top toolbar (left of
-  Decks…Sync) opens a window listing every PDF you've imported, organized
-  into folders you create (mirrored as real folders on disk). Each row
-  shows a retention score — the share of that PDF's matched cards you'd
-  currently recall — plus its card and note counts, and a right-click menu
-  to open, rename, move to a folder, index it, adjust how closely a card
-  must relate to count as a match, show matched cards in Browse, suspend or
-  unsuspend its cards, see its retention history, or delete it.
+- **Library** — the first section of Browse's sidebar lists every PDF
+  you've imported, in folders mirrored as real folders on disk. Each row
+  shows a retention % (how much of its cards you'd recall right now).
+  Click a PDF to see its cards; double-click it to read it in place of the
+  cards (Esc or a click goes back). Anki's own Rename, drag and Delete act
+  on the PDF itself. Right-click adds Match Sensitivity…, Retention
+  History… and Show in Finder.
 - **Copying matches into a deck** — select the notes you want in Browse and
   use **Notes → KlausMate: Create Curated Deck from Selection…**. It's one
   undo step, and your originals are untouched.

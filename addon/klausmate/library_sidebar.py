@@ -428,12 +428,6 @@ def refresh_status() -> None:
 # ------------------------------------------------------------ menus
 
 
-def _open_viewer(browser, safe: str) -> None:
-    from . import library_viewer
-
-    library_viewer.enter(browser, safe)
-
-
 def _add(menu, text: str, fn: Callable) -> None:
     menu.addAction(text).triggered.connect(lambda *_a: fn())
 
@@ -454,25 +448,19 @@ def on_context_menu(sidebar, menu, item, index) -> None:
         _add(menu, "New Folder…", lambda: act.new_folder(parent))
     elif key in lib["safes"]:
         safe = lib["safes"][key]
+        # K-316: opening is a double-click, rename and delete are Anki's
+        # own items above (tag_sync follows them), and PDFs embed
+        # themselves — only what nothing else does is left here.
         menu.addSeparator()
-        _add(menu, "Open PDF", lambda: _open_viewer(parent, safe))
-        _add(menu, "Rename PDF…", lambda: act.rename_pdf(parent, safe))
         _add(menu, "Match Sensitivity…", lambda: act.sensitivity(parent, safe))
         _add(menu, "Retention History…", lambda: act.history(parent, safe))
-        _add(menu, "Re-embed", lambda: act.reembed([safe]))
-        _add(menu, "Suspend Cards", lambda: act.set_suspended(safe, True))
-        _add(menu, "Unsuspend Cards", lambda: act.set_suspended(safe, False))
         _add(menu, "Show in Finder", lambda: act.show_in_finder(safe))
-        _add(menu, "Delete PDF…", lambda: act.confirm_delete_pdf(parent, safe))
     elif key in lib["folders"]:
         folder = lib["folders"][key]
-        inside = act.pdfs_under(folder)
         menu.addSeparator()
         _add(menu, "New Folder…", lambda: act.new_folder(parent, folder))
         _add(menu, "Import PDFs Here…", lambda: act.pick_and_import(parent, folder))
-        if inside:
-            _add(menu, "Re-embed All", lambda: act.reembed(inside))
-        else:  # Anki's own rename and delete skip a tag with no cards
+        if not act.pdfs_under(folder):  # Anki's own rename and delete skip a tag with no cards
             _add(menu, "Rename Folder…", lambda: act.rename_folder(parent, folder))
             _add(menu, "Remove Folder", lambda: act.remove_empty_folder(folder))
 
