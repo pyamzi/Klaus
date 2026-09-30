@@ -48,7 +48,11 @@ from aqt.qt import (  # noqa: E402
 )
 
 LABEL_MAX_PX = 320
-BAR_HEIGHT = 24
+# The whole strip matches the macOS title bar (28pt since Big Sur).
+# QStatusBar hard-codes 3px above its items and ~2px below, so the bar
+# inside gets what's left, which also centres it in the strip.
+STRIP_HEIGHT = 28
+BAR_HEIGHT = STRIP_HEIGHT - 3 - 2
 SHOW_DELAY_S = 0.5  # a task quicker than this never flashes the bar
 
 
@@ -370,6 +374,7 @@ def install_main(mw) -> StatusBar | None:
         native.setSizeGripEnabled(False)
         bar = StatusBar(mw)
         native.addPermanentWidget(bar, 1)
+        native.setFixedHeight(STRIP_HEIGHT)
         bar.apply_theme()
         mw._klausmate_status_bar = bar
         return _track(bar)
@@ -391,6 +396,7 @@ def install_browser(browser) -> StatusBar | None:
         browser.setStatusBar(native)
         bar = StatusBar(browser, browser=browser)
         native.addPermanentWidget(bar, 1)
+        native.setFixedHeight(STRIP_HEIGHT)
         bar.apply_theme()
         browser._klausmate_status_bar = bar
         return _track(bar)

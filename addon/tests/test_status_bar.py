@@ -199,6 +199,12 @@ b3, _s3, _c3 = make_browser()
 first = sb.install_browser(b3)
 again = sb.install_browser(b3)
 found = b3.statusBar().findChildren(QtWidgets.QWidget, "KlausStatusBar")
+b3.show()
+app.processEvents()
+_strip = b3.statusBar()
+check("the strip is the macOS title bar's height (28pt), content centred in it",
+      _strip.height() == 28 and abs(first.y() + first.height() / 2 - 14) <= 1,
+      f"{_strip.height()} {first.geometry()}")
 check("Browse gets one bar, with toggles", first is not None and again is first and len(found) == 1
       and first.sidebar_btn is not None, str(len(found)))
 mwin = QtWidgets.QMainWindow()  # Anki's main.ui has no QStatusBar at all

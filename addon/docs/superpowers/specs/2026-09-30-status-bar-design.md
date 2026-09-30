@@ -85,7 +85,7 @@ not drawn, so quick sync/retry blips never flash the bar.
 ### `status_bar.py`: the bar widget
 
 `StatusBar(QWidget)`, one class, installed as a permanent widget in the
-window's `QStatusBar`. It is about 22–24 px tall and always visible.
+window's `QStatusBar`. It is 28pt tall, the macOS title bar's height (the user asked for a match), and always visible.
 
 Order, as the user asked after the first build: gear at the left, then
 the readout, the toggles at the far right. Every icon is painted at

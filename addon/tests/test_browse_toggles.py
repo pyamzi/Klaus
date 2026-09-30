@@ -197,7 +197,7 @@ check(
 check("paint failures degrade to a log line", "pane toggle paint failed" in _SRC)
 
 section("HIG: targets, focus, names, direction")
-check("the button fits the status bar's 24px row", bt.BUTTON_SIZE <= 24)
+check("the button fits the status bar's row", bt.BUTTON_SIZE <= importlib.import_module("klausmate.status_bar").BAR_HEIGHT)
 check("the icon has breathing room inside it", bt.ICON_SIZE < bt.BUTTON_SIZE)
 check(
     "the chip radius is on the documented 12/8/6 scale",

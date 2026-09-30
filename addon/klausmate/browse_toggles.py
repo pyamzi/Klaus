@@ -145,7 +145,7 @@ def toggle_label(pane: str, visible: bool) -> str:
 
 # ── The widget ─────────────────────────────────────────────────────────
 
-# Sized for the 24px status bar row (VS Code's is 22): a 16px icon with
+# Sized for the status bar's 23px row inside its 28pt strip: a 16px icon with
 # 3px of hover wash around it.
 BUTTON_SIZE = 22
 ICON_SIZE = 16.0
