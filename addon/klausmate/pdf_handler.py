@@ -638,6 +638,96 @@ def save_library_map(user_files_dir: str, mapping: dict) -> None:
     _atomic_write_json(_library_map_path(user_files_dir), dict(mapping))
 
 
+_LIBRARY_STATS_FILE = "library_stats.json"
+_STATS_LOCK = threading.Lock()
+
+
+def _stats_path(user_files_dir: str) -> str:
+    return os.path.join(user_files_dir, _LIBRARY_STATS_FILE)
+
+
+def _read_stats_raw(user_files_dir: str) -> dict:
+    """The whole sidecar including reserved ``__`` keys; {} when absent or
+    corrupt."""
+    try:
+        with open(_stats_path(user_files_dir), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stat_entry(stat: tuple) -> list[int]:
+    """``file_stat``'s ``(ino, mtime_ns, size)`` as the sidecar's
+    ``[size, mtime_ns]`` (the inode changes on every atomic replace)."""
+    return [stat[2], stat[1]]
+
+
+def load_library_stats(user_files_dir: str) -> dict[str, list[int]]:
+    """{safe: [size, mtime_ns]} last seen for each PDF (what Klaus wrote
+    or observed), so a CLOSED file changed outside Klaus is noticed.
+    Corrupt or missing reads as ``{}``; keys starting ``__`` are reserved
+    and skipped."""
+    out: dict[str, list[int]] = {}
+    for k, v in _read_stats_raw(user_files_dir).items():
+        if (
+            not str(k).startswith("__")
+            and isinstance(v, list)
+            and len(v) == 2
+            and all(isinstance(n, int) for n in v)
+        ):
+            out[str(k)] = v
+    return out
+
+
+def _apply_stats(user_files_dir: str, updates: dict) -> None:
+    """Merge ``{safe: stat | None}`` into the sidecar in ONE atomic write
+    (``None`` removes), preserving reserved ``__`` keys."""
+    try:
+        with _STATS_LOCK:
+            data = _read_stats_raw(user_files_dir)
+            before = dict(data)
+            for safe, stat in updates.items():
+                if stat is None:
+                    data.pop(safe, None)
+                else:
+                    data[safe] = _stat_entry(stat)
+            if data != before:
+                _atomic_write_json(_stats_path(user_files_dir), data)
+    except OSError as e:
+        print(f"[klausmate] library_stats write failed: {e}")
+
+
+def record_stat(user_files_dir: str, safe: str, stat: tuple | None) -> None:
+    """Record ``safe``'s fingerprint after a Klaus write (``stat`` is
+    ``file_stat``'s tuple); ``None`` removes the entry."""
+    _apply_stats(user_files_dir, {safe: stat})
+
+
+def changed_since_recorded(
+    user_files_dir: str, root: str, mapping: dict
+) -> list[str]:
+    """Safe names in ``mapping`` ({safe: path relative to ``root``}) whose
+    current ``[size, mtime_ns]`` differs from the recorded one. A changed
+    file is reported once (its new value is recorded); an unrecorded name
+    is recorded, not reported; a missing file is neither."""
+    recorded = load_library_stats(user_files_dir)
+    changed: list[str] = []
+    updates: dict[str, tuple] = {}
+    for safe, rel in mapping.items():
+        if str(safe).startswith("__"):
+            continue
+        st = file_stat(os.path.join(root, rel))
+        if st is None or recorded.get(safe) == _stat_entry(st):
+            continue
+        if safe in recorded:
+            changed.append(safe)
+        updates[safe] = st
+    if updates:
+        _apply_stats(user_files_dir, updates)
+    return changed
+
+
 def get_library_root(cfg: dict | None) -> str | None:
     """The user-chosen Library storage folder (absolute path) from the
     addon config, or None if never set. Takes ``cfg`` explicitly (rather
@@ -1840,6 +1930,9 @@ def bake_annotations(
                     f"[klausmate] bake: carry scan failed ({base}): {exc}"
                 )
                 carried = []
+                # Outside marks unknown (e.g. a rename landed between the
+                # isfile check and the open): drop the bake, keep the JSON.
+                carry_missed = had_working
 
         # Resurrection guard (K-085): a record whose mark the LAST bake
         # put in the file, now absent while other Klaus marks survived,

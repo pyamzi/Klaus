@@ -207,4 +207,26 @@ with tempfile.TemporaryDirectory() as tmp:
           ok is False and not os.path.exists(old) and leftovers == [],
           f"ok={ok} exists={os.path.exists(old)} leftovers={leftovers}")
 
+section("the file vanishes between the carry check and the reader open")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp, outside=True)
+    real_reader, fired = ph.PdfReader, []
+
+    def flaky(path, *a, **kw):  # the carry scan's open of the working file loses a rename race
+        if (path == old and not fired
+                and sys._getframe(1).f_code.co_name == "bake_annotations"):
+            fired.append(1)
+            raise FileNotFoundError(path)
+        return real_reader(path, *a, **kw)
+
+    ph.PdfReader = flaky
+    try:
+        ok = ph.bake_annotations(uf, "Lecture", {})
+    finally:
+        ph.PdfReader = real_reader
+    check("a reader-open failure drops the bake, the file keeps the outside mark",
+          fired and ok is False and annots_in(old) == 1
+          and [h["id"] for h in ph.load_annotations(uf, "Lecture")] == ["a1"],
+          f"fired={fired} ok={ok} n={annots_in(old)}")
+
 raise SystemExit(report())
