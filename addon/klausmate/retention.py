@@ -657,9 +657,7 @@ def index_status(name: str, sig) -> tuple[bool, bool]:
     return indexed, stale
 
 
-def card_retrievability(
-    col, nids: set[int], skip_suspended: bool = False
-) -> dict[int, list[tuple[float, bool]]]:
+def card_retrievability(col, nids: set[int]) -> dict[int, list[tuple[float, bool]]]:
     """nid → [(R, is_new)] per card, computed in bulk from raw SQL.
 
     FSRS state lives in ``cards.data`` JSON ({"s","d","dr","decay","lrt"}).
@@ -670,7 +668,6 @@ def card_retrievability(
     now = time.time()
     out: dict[int, list[tuple[float, bool]]] = {}
     rows = col.db.all("select id, nid, type, ivl, data from cards")
-    suspended = set(col.db.list("select id from cards where queue = -1")) if skip_suspended else set()
     # Lazy revlog fallback for FSRS states missing "lrt" (older versions).
     last_review: dict[int, int] | None = None
 
@@ -686,7 +683,7 @@ def card_retrievability(
 
     for cid, nid, ctype, ivl, data in rows:
         nid = int(nid)
-        if nid not in nids or cid in suspended:
+        if nid not in nids:
             continue
         entry: tuple[float, bool]
         state: dict | None = None

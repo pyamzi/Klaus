@@ -10,7 +10,8 @@ drag and delete still act on the tag.
 
 Retention: every tag row, not only the Library's, ends in a dimmed
 grey %: the mean FSRS recall of the tag's cards right now, a parent
-counting its children's cards, new and suspended cards left out ("—"
+counting its children's cards, suspended ones included, new cards left
+out ("—"
 when nothing is studied). Computed in a background op over the whole
 collection and repainted when it lands.
 
@@ -101,7 +102,7 @@ def compute_means(col) -> dict[str, float]:
     from . import retention
 
     note_tags = {int(nid): tags for nid, tags in col.db.all("select id, tags from notes")}
-    return tag_means(note_tags, retention.card_retrievability(col, set(note_tags), skip_suspended=True))
+    return tag_means(note_tags, retention.card_retrievability(col, set(note_tags)))
 
 
 def percent_text(means: dict | None, tag: str) -> str | None:

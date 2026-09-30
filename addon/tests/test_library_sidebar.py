@@ -134,19 +134,25 @@ retention = importlib.import_module("klausmate.retention")
 
 
 class DB:
+    """Card 11 is suspended (queue -1) and well remembered; card 10 is not."""
+
     def all(self, sql):
         if "revlog" in sql:
             return []
-        card = '{"s": 10, "decay": 0.5, "lrt": 1700000000}'
-        return [(10, 1, 2, 5, card), (11, 1, 2, 5, card)]
+        if "from notes" in sql:
+            return [(1, " Heme ")]
+        return [(10, 1, 2, 5, '{"s": 1, "decay": 0.5, "lrt": 1700000000}'),
+                (11, 1, 2, 5, '{"s": 100000, "decay": 0.5, "lrt": 1700000000}')]
 
     def list(self, sql):
         return [11] if "queue = -1" in sql else []
 
 
-cr = retention.card_retrievability(types.SimpleNamespace(db=DB()), {1}, skip_suspended=True)
-check("suspended cards are skipped when asked", len(cr[1]) == 1, str(cr))
-check("...and kept by default", len(retention.card_retrievability(types.SimpleNamespace(db=DB()), {1})[1]) == 2)
+_col = types.SimpleNamespace(db=DB())
+cr = retention.card_retrievability(_col, {1})
+_both = sum(r for r, _n in cr[1]) / 2
+check("suspended cards count toward a tag's %", len(cr[1]) == 2
+      and abs(ls.compute_means(_col)["heme"] - _both) < 1e-9, str(cr))
 
 section("the % is painted at the row's right edge")
 tree.resize(320, 200)
