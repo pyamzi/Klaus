@@ -329,7 +329,7 @@ server-side gates. See [D5](docs/superpowers/plans/2026-09-19-external-mcp-bridg
 Attributes on `editor` (all `editor._klausmate_*`, guarded with
 `getattr(..., None)` / `is None` checks to stay reload-safe): `_klausmate_panel`
 (the PDF drop bar, `_PdfBar`), `_klausmate_pdf_container`, `_klausmate_pdf_tabs`,
-`_klausmate_sidebar`, `_klausmate_active_pdf`, `_klausmate_vsplit`,
+`_klausmate_sidebar`, `_klausmate_vsplit`,
 `_klausmate_target_field_index` / `_target_field_name`, `_klausmate_crop_open`.
 Browse-window toggles carry their own: `_klausmate_sidebar_toggle_btn` /
 `_klausmate_editor_toggle_btn`. Deck-screen state is down to the drop

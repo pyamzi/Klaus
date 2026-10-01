@@ -103,8 +103,11 @@ check("it is no preference any more: no key, no restart effect",
       and "renderer_restart" not in open(os.path.join(_here12, "prefs_state.py"), encoding="utf-8").read())
 with open(os.path.join(_here12, "manage_models.py"), encoding="utf-8") as _f12:
     _mm12 = _f12.read()
-check("...and Preferences has no row for it",
+_general12 = re.search(r'_page\(\s*"General",\s*"General",\s*((?:"[^"]*"\s*)+),?\s*\)', _mm12)
+check("...and Preferences has no row for it, nor a General subtitle naming it",
       "pdf_renderer" not in _mm12 and "renderer_restart" not in _mm12
-      and "Use the new pdf.js viewer" not in _mm12)
+      and "Use the new pdf.js viewer" not in _mm12
+      and _general12 is not None and "renderer" not in _general12.group(1).lower(),
+      _general12.group(1) if _general12 else "General page not found")
 
 raise SystemExit(report())

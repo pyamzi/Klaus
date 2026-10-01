@@ -434,8 +434,9 @@ same reason.
   default with `SecondaryButton`/`DangerButton` objectName opt-outs.
 - `pdfjs_viewer.py` + `web/pdfjs_viewer.html` + `web/pdfjs/` (vendored
   pdf.js 3.11.174): the flicker-free webview renderer (K-095 umbrella),
-  selected by config `pdf_renderer` (`"native"` default until the K-101
-  cutover; parity cards K-097..K-100). `PdfSidebar` branches at
+  which every reader uses since PDF reader 3/5 (2026-10-01); the native
+  `PdfViewer` is only the fallback when QtWebEngine is missing
+  (`PDFJS_AVAILABLE`; parity cards K-097..K-100). `PdfSidebar` branches at
   construction; the PDF is fed as chunked base64 into window globals
   (SynapsePro's pattern), pages render lazily via IntersectionObserver
   over sized placeholders, the pdf.js text layer gives native selection,
@@ -494,8 +495,7 @@ same reason.
   the bridge (`hl-add`/`hl-remove`/`note-edit`), `PdfJsViewer` persists
   via `pdf_handler.save_annotations` + the same 500ms debounced bake,
   keeps K-081 tombstones, and pushes canonical records back via
-  `klausSetAnnotations`. Pure helpers (`renderer_from_config`,
-  `chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
+  `klausSetAnnotations`. Pure helpers (`chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
   `records_from_rect_map`) are aqt-free for `tests/test_pdfjs_viewer.py`.
   Parity completed by K-100:
   Cmd/Ctrl-double-click copies the slide (through the shared
@@ -1149,7 +1149,7 @@ same reason.
     `state.commit()`: ONE `settings.patch` of the changed keys, then the
     effects in fixed order — `index_sweep` (baseline signature → the
     rebuild offer), `threshold_changed` (the tuned-PDFs prompt),
-    `anki_theme` (`mw.set_theme`), `renderer_restart` (the notice),
+    `anki_theme` (`mw.set_theme`),
     `appearance` (live apply, then drop the preview). Discard is
     `state.discard()` + `paint_all()`. Endpoint relocation is
     `state.reseed` (a stored value moved; not an edit); a model pick is

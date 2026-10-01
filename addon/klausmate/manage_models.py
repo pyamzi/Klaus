@@ -932,8 +932,7 @@ def manage_models_dialog(*_args: Any) -> None:
     general_layout = _page(
         "General",
         "General",
-        "Feature toggles, the Library folder on disk, and the PDF "
-        "renderer.",
+        "Feature toggles and the Library folder on disk.",
     )
 
     image_crop_cb = Md3Switch()  # MD3 switch (K-material3), not a checkbox

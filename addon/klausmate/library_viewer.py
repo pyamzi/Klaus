@@ -64,9 +64,15 @@ def _pin_sidebar(browser, width) -> None:
         _dock_host(side).resizeDocks([side], [width], Qt.Orientation.Horizontal)
 
 
+_NO_HOST = "[klausmate] viewer mode: no main window holds the PDF panel; not resizing it"
+
+
 def _fill(browser, dock, side_width) -> None:
     try:
         host = _dock_host(dock)
+        if host is None:
+            print(_NO_HOST)
+            return
         if host.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea:
             host.resizeDocks([dock], [max(400, host.height())], Qt.Orientation.Vertical)
             _pin_sidebar(browser, side_width)
@@ -156,11 +162,14 @@ def leave(browser) -> None:
             dock.hide()
         else:
             host = _dock_host(dock)
-            vertical = host.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea
-            host.resizeDocks(
-                [dock], [state["height"] if vertical else state["width"]],
-                Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal,
-            )
+            if host is None:
+                print(_NO_HOST)  # Browse's sidebar is still pinned below
+            else:
+                vertical = host.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea
+                host.resizeDocks(
+                    [dock], [state["height"] if vertical else state["width"]],
+                    Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal,
+                )
         _pin_sidebar(browser, state["side"])
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] leaving viewer mode: panel restore failed: {exc}")

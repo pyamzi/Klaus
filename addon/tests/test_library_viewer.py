@@ -222,6 +222,62 @@ app.processEvents()
 check("leave restores through the main window as well",
       not any(dock7 in c for c in b_calls) and b7.centralWidget().isVisible(), str(b_calls))
 
+section("an open panel in another window is restored through that window too")
+dock7.show()
+app.processEvents()
+lv.enter(b7, "A")
+app.processEvents()
+mw_calls.clear()
+b_calls.clear()
+lv.leave(b7)
+app.processEvents()
+check("leave resizes the still-visible panel through the main window",
+      any(dock7 in c for c in mw_calls) and not any(dock7 in c for c in b_calls),
+      f"{mw_calls} {b_calls}")
+dock7.hide()
+
+section("a dock in no main window: no host, a clear log line, nothing raises")
+b9, _, _ = make_browser()
+_was9 = QtWidgets.QMainWindow()
+loose = PdfDock(_was9)
+_was9.removeDockWidget(loose)
+loose.setParent(None)
+b9.editor = types.SimpleNamespace(_klausmate_pdf_tabs=loose)
+check("_dock_host is None when no QMainWindow holds the dock", lv._dock_host(loose) is None)
+import contextlib as _cl  # noqa: E402
+import io as _io  # noqa: E402
+
+_log, _raised = _io.StringIO(), None
+try:
+    with _cl.redirect_stdout(_log):
+        lv.enter(b9, "A")
+        app.processEvents()
+        lv.leave(b9)
+except Exception as exc:  # noqa: BLE001
+    _raised = exc
+check("enter and leave don't raise", _raised is None, repr(_raised))
+check("...and say why the panel wasn't sized, not a generic AttributeError",
+      "no main window holds the PDF panel" in _log.getvalue()
+      and "AttributeError" not in _log.getvalue() and "NoneType" not in _log.getvalue(),
+      _log.getvalue())
+_log, _raised = _io.StringIO(), None
+loose.show()
+app.processEvents()
+try:
+    with _cl.redirect_stdout(_log):
+        lv.enter(b9, "A")
+        app.processEvents()
+        lv.leave(b9)
+except Exception as exc:  # noqa: BLE001
+    _raised = exc
+# A parentless dock counts as floating, so leave floats it back without
+# asking for a host; only enter's sizing hits the no-host line here.
+check("an open host-less panel: no raise, the clear line, the cards come back",
+      _raised is None and "no main window holds the PDF panel" in _log.getvalue()
+      and "NoneType" not in _log.getvalue() and b9.centralWidget().isVisible(),
+      f"{_raised!r} {_log.getvalue()!r}")
+loose.close()
+
 section("a main window nested inside another: the inner one holds the dock")
 outer = QtWidgets.QMainWindow()
 outer.resize(1200, 800)
