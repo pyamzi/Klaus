@@ -132,7 +132,6 @@ class _FakeSidebar(_QtW.QWidget):
         self.on_loaded = None
         self.loaded = []
         self.cleanups = 0
-        self.actives = []
 
     def is_loaded(self, name):
         return name in self.loaded
@@ -155,9 +154,6 @@ class _FakeSidebar(_QtW.QWidget):
 
     def jump_to_page(self, page):
         self._current_page = page
-
-    def _set_active(self, name):
-        self.actives.append(name)
 
     def _on_page_changed(self, page):
         pass
@@ -515,5 +511,13 @@ check(f"all {len(_all_docks)} docks this file created are torn down — "
       "none left live for sip's exit-time cleanup to walk",
       all(_d._closed for _, _d in _all_docks),
       f"{sum(1 for _, _d in _all_docks if not _d._closed)} still open")
+
+section("K-155: the dead editor seam (written, never read) is gone")
+_SEAM = "_klausmate_" + "active_pdf"  # spelled in two parts so a grep finds no use
+_k155 = [
+    _n for _n in _os.listdir("klausmate") if _n.endswith(".py")
+    and _SEAM in open(_os.path.join("klausmate", _n), encoding="utf-8").read()
+]
+check("no module writes or reads the editor's active-PDF seam", _k155 == [], str(_k155))
 
 raise SystemExit(report())

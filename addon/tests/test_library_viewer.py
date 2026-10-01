@@ -49,13 +49,23 @@ class PdfDock(QtWidgets.QDockWidget):
         super().__init__("PDF")
         self.setWidget(QtWidgets.QLabel("viewer"))
         self._loaded = []
-        self._sidebar = types.SimpleNamespace(is_loaded=lambda s: s in self._loaded, load_pdf=self._loaded.append)
+        # The editor dock's active pointer: a load moves it, and showing the
+        # panel loads it if it isn't loaded (PdfDock.showEvent ->
+        # _ensure_sidebar_pdf in __init__.py).
+        self.pointer = None
+        self._sidebar = types.SimpleNamespace(is_loaded=lambda s: s in self._loaded, load_pdf=self._load)
         self.persisted = 0
         self.topLevelChanged.connect(lambda *_a: setattr(self, "persisted", self.persisted + 1))
         win.addDockWidget(R, self)
 
+    def _load(self, name):
+        self._loaded.append(name)
+        self.pointer = name
+
     def panel_show(self):
         self.show()
+        if self.pointer and self.pointer not in self._loaded:
+            self._load(self.pointer)
 
 
 def make_browser(panel_open=False, floating=False):
@@ -154,6 +164,83 @@ for _open in (False, True):
     w2 = side5.width()
     check(f"panel {'open' if _open else 'closed'} before: sidebar {w0} -> {w1} (viewer) -> {w2} (cards)",
           abs(w1 - w0) <= 2 and abs(w2 - w0) <= 2)
+
+section("a first open loads only the PDF that was double-clicked")
+b6, dock6, _ = make_browser()
+dock6.pointer = "Last_session"
+lv.enter(b6, "Hemolysis")
+app.processEvents()
+check("the panel's remembered PDF is not loaded first and then replaced",
+      dock6._loaded == ["Hemolysis"], str(dock6._loaded))
+lv.leave(b6)
+
+
+def spy_resize(win):
+    calls = []
+    real = win.resizeDocks
+
+    def spy(docks, sizes, orientation):
+        calls.append(list(docks))
+        real(docks, sizes, orientation)
+
+    win.resizeDocks = spy
+    return calls
+
+
+section("the panel sizes through the window that holds it, not through Browse")
+# Single window: the PDF dock lives in the main window, not in Browse.
+b7 = QtWidgets.QMainWindow()
+b7.resize(1100, 700)
+b7.setCentralWidget(QtWidgets.QSplitter())
+side7 = QtWidgets.QDockWidget("sidebar")
+side7.setWidget(QtWidgets.QTreeView())
+b7.addDockWidget(L, side7)
+b7.sidebarDockWidget = side7
+mw7 = QtWidgets.QMainWindow()  # stands in for mw
+mw7.resize(1200, 800)
+mw7.setCentralWidget(QtWidgets.QWidget())
+dock7 = PdfDock(mw7)
+dock7.hide()
+b7.editor = types.SimpleNamespace(_klausmate_pdf_tabs=dock7)
+mw7.show()
+b7.show()
+app.processEvents()
+check("_dock_host is the dock's own main window", lv._dock_host(dock7) is mw7)
+check("...and Browse holds only its sidebar", lv._dock_host(side7) is b7)
+mw_calls, b_calls = spy_resize(mw7), spy_resize(b7)
+lv.enter(b7, "A")
+app.processEvents()
+check("enter sizes the panel through the main window",
+      any(dock7 in c for c in mw_calls), str(mw_calls))
+check("...and never asks Browse to size a dock it doesn't hold",
+      not any(dock7 in c for c in b_calls), str(b_calls))
+check("the panel fills its window", dock7.width() > 700, str(dock7.width()))
+mw_calls.clear()
+b_calls.clear()
+lv.leave(b7)
+app.processEvents()
+check("leave restores through the main window as well",
+      not any(dock7 in c for c in b_calls) and b7.centralWidget().isVisible(), str(b_calls))
+
+section("a main window nested inside another: the inner one holds the dock")
+outer = QtWidgets.QMainWindow()
+outer.resize(1200, 800)
+inner = QtWidgets.QMainWindow(outer, QtCore.Qt.WindowType.Widget)
+inner.setCentralWidget(QtWidgets.QWidget())
+outer.setCentralWidget(inner)
+dock8 = PdfDock(inner)
+outer.show()
+app.processEvents()
+check("_dock_host walks to the nearest main window that holds the dock",
+      lv._dock_host(dock8) is inner and dock8.parentWidget() is inner)
+inner_calls, outer_calls = spy_resize(inner), spy_resize(outer)
+b8, _, _ = make_browser()
+b8.editor = types.SimpleNamespace(_klausmate_pdf_tabs=dock8)
+lv.enter(b8, "A")
+app.processEvents()
+check("enter sizes through the inner window, never the outer one",
+      any(dock8 in c for c in inner_calls) and not outer_calls, f"{inner_calls} {outer_calls}")
+lv.leave(b8)
 
 section("no panel yet: nothing happens")
 b4 = QtWidgets.QMainWindow()

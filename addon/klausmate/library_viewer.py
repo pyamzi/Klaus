@@ -14,6 +14,10 @@ placement-memory handlers never see it, and is floated back after.
 Anki's sidebar keeps its width both ways: hiding or showing the central
 widget makes Qt re-split the dock area, so the width is pinned back
 after each switch.
+
+The panel is sized through the main window that holds it
+(``_dock_host``), never assumed to be Browse: in the single window it
+lives in ``mw`` or in a main window nested inside it.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from . import settings
 
 import time
 
-from aqt.qt import QApplication, QEvent, QObject, QStyle, Qt
+from aqt.qt import QApplication, QEvent, QMainWindow, QObject, QStyle, Qt
 
 ATTR = "_klausmate_viewer"
 
@@ -39,30 +43,49 @@ def _sidebar(browser):
     return side if side is not None and side.isVisible() and not side.isFloating() else None
 
 
+def _dock_host(dock):
+    """The main window that holds ``dock``: the nearest ancestor that
+    reports an area for it, else the nearest one that could (a dock
+    mid-float). Browse, ``mw``, or a main window nested inside ``mw``."""
+    nearest = None
+    w = dock.parentWidget() if dock is not None else None
+    while w is not None:
+        if isinstance(w, QMainWindow):
+            if w.dockWidgetArea(dock) != Qt.DockWidgetArea.NoDockWidgetArea:
+                return w
+            nearest = nearest or w
+        w = w.parentWidget()
+    return nearest
+
+
 def _pin_sidebar(browser, width) -> None:
     side = _sidebar(browser)
     if side is not None and width:
-        browser.resizeDocks([side], [width], Qt.Orientation.Horizontal)
+        _dock_host(side).resizeDocks([side], [width], Qt.Orientation.Horizontal)
 
 
 def _fill(browser, dock, side_width) -> None:
-    # One resizeDocks for both, sized to add up exactly (the separator
-    # between them included): sizing the panel alone let Qt take the
-    # difference out of the sidebar.
     try:
-        if browser.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea:
-            browser.resizeDocks([dock], [max(400, browser.height())], Qt.Orientation.Vertical)
+        host = _dock_host(dock)
+        if host.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea:
+            host.resizeDocks([dock], [max(400, host.height())], Qt.Orientation.Vertical)
             _pin_sidebar(browser, side_width)
             return
         side = _sidebar(browser)
         if side is None or not side_width:
-            browser.resizeDocks([dock], [max(400, browser.width())], Qt.Orientation.Horizontal)
+            host.resizeDocks([dock], [max(400, host.width())], Qt.Orientation.Horizontal)
             return
-        sep = browser.style().pixelMetric(QStyle.PixelMetric.PM_DockWidgetSeparatorExtent)
-        browser.resizeDocks(
-            [side, dock], [side_width, max(400, browser.width() - side_width - sep)],
-            Qt.Orientation.Horizontal,
-        )
+        sep = host.style().pixelMetric(QStyle.PixelMetric.PM_DockWidgetSeparatorExtent)
+        rest = max(400, host.width() - side_width - sep)
+        if _dock_host(side) is host:
+            # One resizeDocks for both, sized to add up exactly (the
+            # separator between them included): sizing the panel alone
+            # let Qt take the difference out of the sidebar.
+            host.resizeDocks([side, dock], [side_width, rest], Qt.Orientation.Horizontal)
+        else:
+            # The sidebar is Browse's, the panel another window's.
+            host.resizeDocks([dock], [rest], Qt.Orientation.Horizontal)
+            _pin_sidebar(browser, side_width)
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] viewer mode resize failed: {exc}")
 
@@ -73,6 +96,17 @@ def enter(browser, safe: str) -> bool:
     central = browser.centralWidget() if browser is not None else None
     if dock is None or central is None:
         return False  # the panel is installed one tick after Browse opens
+    # Load before the panel shows: showing it loads its remembered PDF
+    # (PdfDock.showEvent), which ``safe`` would then replace.
+    try:
+        sidebar = dock._sidebar
+        if not sidebar.is_loaded(safe):
+            sidebar.load_pdf(safe)
+        from . import pdf_handler
+
+        pdf_handler.touch_last_used(settings.user_files(), safe)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] viewer mode could not load {safe!r}: {exc}")
     if not active(browser):
         state = {
             "visible": dock.isVisible(),
@@ -95,15 +129,6 @@ def enter(browser, safe: str) -> bool:
         central.hide()
         _fill(browser, dock, state["side"])
     getattr(browser, ATTR)["entered"] = time.monotonic()
-    try:
-        sidebar = dock._sidebar
-        if not sidebar.is_loaded(safe):
-            sidebar.load_pdf(safe)
-        from . import library_actions, pdf_handler
-
-        pdf_handler.touch_last_used(settings.user_files(), safe)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] viewer mode could not load {safe!r}: {exc}")
     return True
 
 
@@ -130,8 +155,9 @@ def leave(browser) -> None:
         elif not state["visible"]:
             dock.hide()
         else:
-            vertical = browser.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea
-            browser.resizeDocks(
+            host = _dock_host(dock)
+            vertical = host.dockWidgetArea(dock) == Qt.DockWidgetArea.BottomDockWidgetArea
+            host.resizeDocks(
                 [dock], [state["height"] if vertical else state["width"]],
                 Qt.Orientation.Vertical if vertical else Qt.Orientation.Horizontal,
             )

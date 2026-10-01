@@ -4319,7 +4319,6 @@ class PdfSidebar(QWidget):
             viewer_context.forget(id(self))
             self._release(flush=False)
             self._name = None
-            self._set_active(None)
             return
         self._follow(name, path)
         if not isinstance(self._viewer, PdfViewer):
@@ -4355,8 +4354,6 @@ class PdfSidebar(QWidget):
             self._name = name
             pages = pdf_handler.load_pages(settings.user_files(), name) or []
             self._page_count = len(pages)
-            if self._page_count > 0:
-                self._set_active((name, (0, min(2, self._page_count - 1))))
             self._notify_loaded(name)
             return
 
@@ -4372,7 +4369,6 @@ class PdfSidebar(QWidget):
                 viewer_context.forget(id(self))
                 self._release(flush=False)
                 self._name = None
-                self._set_active(None)
                 return
 
         self._name = name
@@ -4638,7 +4634,6 @@ class PdfSidebar(QWidget):
                 self._doc.close()
             except Exception:
                 pass
-        self._set_active(None)
         try:
             from . import viewer_context
 
@@ -4654,10 +4649,7 @@ class PdfSidebar(QWidget):
         except (TypeError, ValueError):
             return
         last = max(0, self._page_count - 1)
-        start = max(0, page - 1)
-        end = min(last, page + 1)
         self._current_page = max(0, min(page, last))
-        self._set_active((self._name, (start, end)))
         if self._viewer is None:  # no viewer label to adopt: ours shows it
             self.tabs.set_page(self._current_page + 1, self._page_count)
         try:
@@ -4666,14 +4658,6 @@ class PdfSidebar(QWidget):
             viewer_context.report_page(id(self), self._current_page)
         except Exception as exc:
             print(f"[klausmate] viewer_context: {exc}")
-
-    def _set_active(self, value) -> None:
-        if self._editor is None:
-            return
-        try:
-            setattr(self._editor, "_klausmate_active_pdf", value)
-        except Exception:
-            pass
 
     def showEvent(self, ev) -> None:  # noqa: N802
         # Task 10 (K-196): the assistant dock follows viewer_context's

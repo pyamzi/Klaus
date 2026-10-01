@@ -910,7 +910,7 @@ class PdfDock(QDockWidget):
             _ensure_sidebar_pdf(self._editor)
         except Exception:
             pass
-        # Re-arm page-window retrieval (hideEvent cleared it).
+        # Re-report the current page (viewer_context, the page label).
         try:
             if self._sidebar._name is not None:
                 self._sidebar._on_page_changed(
@@ -922,10 +922,6 @@ class PdfDock(QDockWidget):
     def hideEvent(self, ev) -> None:  # noqa: N802
         super().hideEvent(ev)
         self._remember_float_geom()
-        try:
-            self._sidebar._set_active(None)
-        except Exception:
-            pass
 
     # ---- placement memory ----
 
@@ -1080,9 +1076,6 @@ def on_editor_did_init(editor: Editor) -> None:
             return
         pdf_handler.ensure_active_pdf(settings.user_files())
 
-        # Default state for the page-aware retrieval helper.
-        if not hasattr(editor, "_klausmate_active_pdf"):
-            editor._klausmate_active_pdf = None  # type: ignore[attr-defined]
         # The panel is a QDockWidget now, so its host must be a
         # QMainWindow: Anki's three editor windows — Browse, Add Cards
         # and Edit Current — all are (verified against Anki 26.8.1 with
