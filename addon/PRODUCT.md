@@ -95,11 +95,13 @@ Volunteered and binding from the owner:
 - Names: **"KlausMate"** (the addon, titles/menus) and **"Klaus"** (the
   short product name in prose and tooltips). The mixed usage is
   deliberate.
-- Mark: the hand-drawn point-down pentagram star (traced from Pouya's
-  sketch, `top_bar._STAR_PATH` is the single source of truth), drawn as
-  an open accent-coloured stroke — never inside an icon square.
+- Mark: Pouya's hand-drawn k (2026-10-01; `top_bar._LOGO_PATH` is the
+  single source of truth, verbatim from
+  `docs/reference/brand/klaus-logo.svg`). Inside Klaus it is just the k,
+  filled in the accent colour, never inside an icon square; the app
+  icon is the full #2393f4 tile with a white k.
 - Wordmark: "KlausMate" in Excalifont, the hand-drawn Excalidraw font,
-  matching the hand-drawn star (was light Garamond until 2026-10-01).
+  matching the hand-drawn k (was light Garamond until 2026-10-01).
 - Visual language: the SynapsePro-derived Apple-system-palette token
   discipline in `klausmate/theme.py` — semantic tokens, identical
   light/dark key sets, user-selectable accent themes (six presets +

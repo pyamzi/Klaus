@@ -1,6 +1,6 @@
 ---
 name: KlausMate
-description: The Quiet Clinic — Apple-calm study chrome inside Anki, with one hand-drawn star.
+description: The Quiet Clinic — Apple-calm study chrome inside Anki, with one hand-drawn k.
 colors:
   fog-white: "#F5F5F7"
   pure-surface: "#FFFFFF"
@@ -111,11 +111,12 @@ stimulation. The visual world is the Apple system palette held under
 strict token discipline: fog-white fields, hairline borders, white
 cards, and exactly one saturated voice (the user's chosen accent) used
 sparingly. Into this sterile field walks one deliberately human
-artifact: a hand-drawn, point-down star, traced from the owner's
-sketch, always an open stroke in the accent colour, never boxed into an
-icon square — the warm pulse in the clinic. Beside it, the "KlausMate"
-wordmark in Excalifont, the same hand-drawn hand as the star, is the
-single display voice in an otherwise system-sans world.
+artifact: Pouya's hand-drawn k, a brush-like lowercase letter with a
+separate dash at its left, filled solid in the accent colour and never
+boxed into an icon square inside Klaus — the warm pulse in the clinic.
+Beside it, the "KlausMate" wordmark in Excalifont, the same hand-drawn
+hand as the k, is the single display voice in an otherwise system-sans
+world.
 
 The system is implemented as one Python module (`klausmate/theme.py`)
 of semantic tokens and per-surface QSS builders; the entire look of
@@ -152,7 +153,7 @@ vocabulary.
   brightens to **Night Accent** (#4FACFE) because saturation reads
   differently on graphite; `blue_accent` encodes exactly this rule
   (base in light, bright in dark).
-- **System Blue Bright** (#007AFF): focus rings, the toolbar star, and
+- **System Blue Bright** (#007AFF): focus rings, the toolbar k, and
   translucent selection tints (via `accent_rgba`).
 - The whole blue family (`blue`, `blue_hover`, `blue_pressed`,
   `blue_border`, `blue_bright`, `blue_accent`) is what an accent theme
@@ -211,7 +212,7 @@ falls back to Garamond → Georgia → serif) — the wordmark only.
 
 **Character:** a single hand-drawn signature over a fully system-native
 text world — a handwritten name on an otherwise standardized door, in
-the same hand as the star.
+the same hand as the k.
 
 ### Hierarchy
 - **Wordmark** (400, 18px): "KlausMate" in Excalifont, sidebar and
@@ -298,9 +299,9 @@ inputs, chips, nav rows), 6px for small controls (swatches, list items,
 checkbox indicators), 7px only as the slider handle's circle
 (height/2), 4px and 2px for slim fills (progress, grooves), and 0 only
 as a deliberate flattener. Hairlines are always 1px in Fog Border. The
-star mark is the one irregular shape in the system — a hand-traced,
-self-crossing pentagram stroke with round caps and joins, its
-imperfection deliberately preserved.
+k mark is the one irregular shape in the system — a hand-drawn letter
+traced into straight-segment polygons, its wobble deliberately
+preserved.
 
 ## Components
 
@@ -390,12 +391,17 @@ imperfection deliberately preserved.
 - The native renderer was deleted in PDF reader 5/5; there is no
   second renderer to match.
 
-### The Star (signature)
-- The hand-drawn point-down pentagram from `top_bar._STAR_PATH` — the
-  single source of truth for both the toolbar SVG and any Qt-side
-  pixmap. Always an open stroke in the accent (`--klaus-accent` /
-  `blue_accent`), round caps and joins, **never** filled, boxed, or
-  squared. Clicking it opens KlausMate Preferences.
+### The k (signature)
+- Pouya's hand-drawn k (2026-10-01), one `fill-rule="evenodd"` path in
+  `top_bar._LOGO_PATH`, copied verbatim from the white shape in
+  `docs/reference/brand/klaus-logo.svg`. It is the single source of
+  truth for both the toolbar SVG and the Preferences sidebar pixmap
+  (`top_bar.logo_svg`, rendered by `QSvgRenderer`).
+- Inside Klaus it is **just the k**: filled solid in the accent
+  (`--klaus-accent` / `blue_accent`), never stroked, on a transparent
+  ground, in a viewBox cropped to the letter so it fills its seat.
+  The brand file's #2393f4 tile belongs to the app icon only.
+  Clicking the k opens KlausMate Preferences.
 
 ## Do's and Don'ts
 
@@ -422,7 +428,8 @@ imperfection deliberately preserved.
   files — the test suite scans for off-scale values and will fail.
 - **Don't** use drop shadows; depth is tone, hairline, and frost.
 - **Don't** use opaque fills for chrome-bar hover states — veils only.
-- **Don't** box, fill, or "iconify" the star, and don't introduce a
+- **Don't** box, stroke, or "iconify" the k inside Klaus (the blue
+  tile is for the app icon only), and don't introduce a
   second display-font moment beyond the Excalifont wordmark.
 - **Don't** build sidebar navigation from per-item buttons, or derive
   control geometry from QSS size hints — hard view geometry only.

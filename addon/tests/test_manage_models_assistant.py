@@ -89,7 +89,7 @@ for gone_name in ("assistant_key_edit", "assistant_token_edit",
 
 
 # =====================================================================
-section("K-270: the sidebar star is FILLED in the accent (real pixels)")
+section("the sidebar k is FILLED in the accent (real pixels)")
 # =====================================================================
 # The Preferences sidebar mark is a baked QPixmap, so the only honest
 # proof that it renders — and renders in the accent, not a stroke and
@@ -97,7 +97,7 @@ section("K-270: the sidebar star is FILLED in the accent (real pixels)")
 # work through a LAZY `from aqt.qt import ...`, so swapping that one
 # module for a real-PyQt6 shim is enough; no purge, no re-import.
 check("the sidebar documents sharing the toolbar SVG",
-      "same curved SVG as the toolbar" in (manage_models._logo_pixmap.__doc__ or ""))
+      "same SVG as the toolbar" in (manage_models._logo_pixmap.__doc__ or ""))
 check("the sidebar renders the toolbar SVG in its accent colour",
       "QSvgRenderer(_top_bar.logo_svg(colour).encode(" in _func_seg("_logo_pixmap")
       and "renderer.render(painter," in _func_seg("_logo_pixmap"))
@@ -159,14 +159,14 @@ if _HAVE_QT:
                     if (_c.red(), _c.green(), _c.blue()) != (
                             _accent.red(), _accent.green(), _accent.blue()):
                         _wrong += 1
-        check("the mark actually covers the box — a filled star, not an "
+        check("the mark actually covers the box — a filled k, not an "
               "empty pixmap and not a hairline outline",
               _opaque > _w * _h * 0.10, f"{_opaque}/{_w * _h} opaque")
         check("every solid pixel is the ACCENT — no baked #171717 from "
               "the asset, no second colour from a stroke",
               _wrong == 0, f"{_wrong} off-accent")
-        # The impossible star's arms never reach the box's corners; a
-        # mark that filled them would be a square, i.e. the wrong art.
+        # The k never reaches the box's corners; a mark that filled
+        # them would be the brand file's blue tile, i.e. the app icon.
         _k = max(2, _w // 12)
         _corners = [(0, 0), (_w - _k, 0), (0, _h - _k), (_w - _k, _h - _k)]
         _corner_ink = sum(
@@ -176,7 +176,7 @@ if _HAVE_QT:
             for _x in range(_cx, _cx + _k)
             if _img.pixelColor(_x, _y).alpha() != 0
         )
-        check("all four corners stay empty — the star's own silhouette",
+        check("all four corners stay empty — the k's own silhouette, no tile",
               _corner_ink == 0, f"{_corner_ink} inked corner px")
 
 

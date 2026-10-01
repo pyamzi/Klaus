@@ -240,7 +240,7 @@ bottom_row.setup()                                                  # main windo
 addons_menu.setup()                                                 # main_window_did_init + browser_will_show: Add-ons menu (independent try/except)
 single_window.setup()                                               # main_window_did_init: host layout, dialog-registry creators, hooks; config single_window (independent try/except)
 gui_hooks.operation_did_execute.append(tag_sync.on_operation_did_execute)  # sidebar tag edits reach the PDFs
-top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
+top_bar.setup()                                                     # toolbar restyle + k logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
 dashboard.setup()                                                   # Control-Center widget editing (independent try/except; MUST stay after heatmap — body order)
@@ -356,7 +356,7 @@ wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.
 
 - Defaults: `klausmate/config.json`
 - User overrides: stored in `meta.json` by Anki's add-on manager
-- UI: **Tools → KlausMate Preferences…** (`manage_models_dialog`; the top bar's star opens it too, and raw JSON is still at **Tools → Add-ons → Klausmate → Config**)
+- UI: **Tools → KlausMate Preferences…** (`manage_models_dialog`; the top bar's k opens it too, and raw JSON is still at **Tools → Add-ons → Klausmate → Config**)
 - Key docs: `klausmate/config.md`
 
 The current [defaults](klausmate/config.json), [configuration reference](klausmate/config.md)

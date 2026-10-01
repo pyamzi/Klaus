@@ -19,12 +19,9 @@ kanban board — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
 hooks registered, JS↔Python protocol, config keys, packaging).
 `PRODUCT.md` says what Klaus is for; `DESIGN.md` is the design language —
-tokens, surfaces, the "Quiet Clinic" brief — **and its star section is
-stale**: six passages still describe a hand-drawn point-down pentagram and
-name `top_bar._STAR_PATH`, but K-270 replaced that on 2026-09-17 with the
-impossible star's five filled paths (`_STAR_PATHS`, sourced from
-`klausmate/web/klaus-logo.svg`). Trust the code over that section until it
-is rewritten.
+tokens, surfaces, the "Quiet Clinic" brief, and the mark: Pouya's
+hand-drawn k (2026-10-01), one evenodd path in `top_bar._LOGO_PATH`,
+verbatim from `docs/reference/brand/klaus-logo.svg`.
 
 Klaus was **embeddings-only** from 2026-08 to 2026-09-01: its one AI
 capability was semantic search, which defaulted then to the **Voyage**
@@ -361,7 +358,7 @@ same reason.
   `mw.state` is deckBrowser/overview. Both clicks open a tick later
   (`bridge_reentrancy`'s deferral rule). **Browse** keeps a 28pt Qt bar
   (`status_bar.install_browser`): gear → Anki's Preferences in one click
-  (no menu; Klaus's settings are the top bar's star and Tools menu),
+  (no menu; Klaus's settings are the top bar's k and Tools menu),
   progress bar + text ("+N more"; click → `show_task_list`, a `Qt.Popup`
   clamped to the screen with ✕ where a task can be cancelled), pane
   toggles at the far right. `visible_tasks`, `gear_points` and
@@ -682,11 +679,15 @@ same reason.
   Windows without touching NSWindow/DWM; the palette `chrome` token is
   only the fallback. Also
   `top_toolbar_will_set_left_tray_content` prepends `logo_html()` — the
-  **impossible star** (K-270, Pouya's `klaus-logo.svg`, 2026-09-17; the
-  design source of record is `klausmate/web/klaus-logo.svg`): five
-  FILLED paths inline in a 26×26 box on a `viewBox="0 0 1254 1254"`,
-  each `fill="var(--klaus-accent, currentColor)"` and none of them
-  stroked, click → Klaus Preferences via `klausmate:settings` on
+  **hand-drawn k** (Pouya's logo, 2026-10-01, replacing the K-270
+  impossible star; the source of record is
+  `docs/reference/brand/klaus-logo.svg`, a blue tile with a white k):
+  `logo_svg(fill)` draws ONLY the k, never the tile — ONE FILLED
+  `fill-rule="evenodd"` path (`_LOGO_PATH`, the file's white path
+  verbatim, pinned equal by `tests/test_top_bar.py`) in a 26×26 box on
+  `LOGO_VIEWBOX`, the file's 1254 box cropped to the k plus ~4% so it
+  fills the seat; `logo_html()` fills it
+  `var(--klaus-accent, currentColor)`, never stroked, click → Klaus Preferences via `klausmate:settings` on
   `webview_did_receive_js_message`; the same hook also routes the
   on-screen gradient editor's `klausmate:bggrad` drag-end messages
   into `background.grad_edit_event`). Because it only restyles, Anki's links
@@ -695,7 +696,7 @@ same reason.
   `finish_ui_setup()`, BEFORE any profile opens** — so the accent a
   profile saved reaches the bar only via `_on_profile_open_redraw`
   (profile_did_open, one-tick-deferred toolbar.draw); without it the
-  star launched default-blue on every restart. `refresh()` is
+  k launched default-blue on every restart. `refresh()` is
   review-safe: in the review state it never calls `mw.reset()` (that
   rebuilds the study queues) — it evals `reviewer_style_push_js`
   (replace-not-stack on the one `#klaus-reviewer-bg` tag the
@@ -714,14 +715,14 @@ same reason.
   main/panel css + the panel_js weld), the toolbar/bottombar restyle,
   the chrome push, and the whole dashboard injection (which also resets
   `_EDIT` so toggling off mid-jiggle can't strand edit mode). NOT
-  gated: the star (fills `var(--klaus-accent, currentColor)` so it
+  gated: the k (fills `var(--klaus-accent, currentColor)` so it
   survives on the stock bar), the heatmap, every functional injection,
   and Klaus's own windows. In native mode the deck screen draws NO
   Klaus widgets: the heatmap's two injections are gated too (at the
   injections, never inside `enabled()` — the same round-trip rule as
   `resolve()` above: a reader whose value any UI seeds from and writes
   back must never be gated, or it persists a `heatmap_enabled` False
-  the user never chose). The star is
+  the user never chose). The k is
   the one survivor, and it carries its own geometry inline (`logo_html`)
   so the gate cannot move it. Corrupt values read as OFF — opposite of
   heatmap's rule — so bad config can't surprise-restyle the app.
@@ -1221,21 +1222,20 @@ same reason.
     reads `.changes` off a `CollectionOp`'s result).
   - `manage_models.py`: the "Manage models" dialog (`manage_models_dialog`,
     also first-run setup; Tools menu label "KlausMate Preferences…", and
-    the top bar's star opens it too; Appearance also carries Anki's
+    the top bar's k opens it too; Appearance also carries Anki's
     own Follow-System/Light/Dark switch, applied on Save through
     `mw.set_theme` — the one row writing an Anki preference).
     **NON-MODAL since 2026-08-30**
     (`dlg.show()`, NEVER exec() — the 2026-08-26 segfault was
     app-modal exec's nested loop): a live control panel used beside
     the main window while appearance edits preview on it. `_OPEN_DLG`
-    keeps it a singleton (a second star click fronts it);
+    keeps it a singleton (a second k click fronts it);
     `profile_will_close` rejects it before the collection goes away. **SynapsePro settings shell
     (K-106 — replaced the K-105 card grid; built from a screenshot of
     SynapsePro 1.5.x, the vendored source only has their older grid)**:
-    a fixed `SettingsSidebar` (star-logo pixmap FILLED from
-    `top_bar.star_polygons()` — five polygons into ONE `QPainterPath` on
-    `WindingFill`, SVG's own rule, at the label's own
-    `devicePixelRatioF()` — app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
+    a fixed `SettingsSidebar` (k-logo pixmap: `QSvgRenderer` over
+    `top_bar.logo_svg(<blue_accent hex>)`, the toolbar's own SVG, at the
+    label's own `devicePixelRatioF()`, repainted on an accent save — app name + manifest `human_version`, `SettingsNav` list (ONE QListWidget — never
     per-page buttons; three pill-mush rounds proved per-button polish
     timing unfixable) with a row per page) beside a QStackedWidget of pages.
     Each page = `PageTitle`/`PageSubtitle` over ONE rounded `CardFrame`
@@ -1243,7 +1243,7 @@ same reason.
     muted `SettingDesc` left, control right, `RowSeparator` hairlines
     between. Sidebar display order comes from `_finish_nav(...)`,
     decoupled from widget build order; the sidebar header is the
-    star logo beside the Excalifont wordmark, over a search field that filters
+    k logo beside the Excalifont wordmark, over a search field that filters
     setting rows across pages (`_apply_search`; rows carry
     `klaus_search` haystacks, structural hiding via `klaus_hidden` —
     how a background row hides whole for the mode that doesn't use it —

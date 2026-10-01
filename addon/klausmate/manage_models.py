@@ -52,59 +52,34 @@ def _addon_version() -> str:
 
 
 def _logo_pixmap(size: int, dpr: float = 2.0) -> Any:
-    """The Klaus impossible star for the Preferences sidebar, drawn
-    exactly like the top bar's: five FILLED shapes in the accent colour
-    on a transparent ground — no icon-square treatment — from the same
-    top_bar.star_polygons() data the toolbar's SVG fills.
+    """The Klaus k for the Preferences sidebar, the same SVG as the toolbar
+    (top_bar.logo_svg, evenodd and all), filled in the current accent on
+    a transparent ground, never inside a tile.
 
-    ``dpr`` comes from the label that will show it, so the mark is
-    crisp on whatever screen the dialog opened on rather than on an
-    assumed Retina one; 2.0 is only the fallback for a caller with no
-    widget to ask.
-
-    ONE QPainterPath with WindingFill, not five drawPolygon calls:
-    winding is SVG's own default fill rule, so a self-crossing arm
-    fills here the way it fills in klaus-logo.svg. Qt's polygon default
-    is odd-even, which would punch holes the drawing does not have.
-    """
+    ``dpr`` comes from the label that will show it, so the mark is crisp
+    on whatever screen the dialog opened on; 2.0 is only the fallback
+    for a caller with no widget to ask. The k keeps its aspect ratio,
+    centred vertically in the square."""
     try:
-        from aqt.qt import (
-            QColor,
-            QPainter,
-            QPainterPath,
-            QPixmap,
-            QPointF,
-            QPolygonF,
-            Qt,
-        )
-
+        from aqt.qt import QColor, QPainter, QPixmap, QRectF
+        from PyQt6.QtSvg import QSvgRenderer
         from . import theme as _theme
         from . import top_bar as _top_bar
 
         px = QPixmap(int(size * dpr), int(size * dpr))
         px.setDevicePixelRatio(dpr)
         px.fill(QColor(0, 0, 0, 0))
-        painter = QPainter(px)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         c = _theme.palette(_theme.night_mode())
-        # The same margin the stroked mark left: half the old pen width
-        # on every side, so the star keeps its seat in the 24px row.
-        inset = max(1.3, size * 0.09) / 2.0
-        scale = (size - inset * 2.0) / _top_bar.STAR_VIEWBOX
-        path = QPainterPath()
-        path.setFillRule(Qt.FillRule.WindingFill)
-        for poly in _top_bar.star_polygons():
-            path.addPolygon(
-                QPolygonF(
-                    [
-                        QPointF(x * scale + inset, y * scale + inset)
-                        for x, y in poly
-                    ]
-                )
-            )
-            path.closeSubpath()
-        painter.fillPath(path, QColor(c["blue_accent"]))
-        painter.end()
+        colour = QColor(c["blue_accent"]).name()
+        renderer = QSvgRenderer(_top_bar.logo_svg(colour).encode("utf-8"))
+        painter = QPainter(px)
+        try:
+            inset = max(1.3, size * 0.09) / 2.0
+            width = size - inset * 2.0
+            height = width * renderer.viewBoxF().height() / renderer.viewBoxF().width()
+            renderer.render(painter, QRectF(inset, (size - height) / 2, width, height))
+        finally:
+            painter.end()
         return px
     except Exception as exc:
         print(f"[klausmate] sidebar logo failed: {exc}")
@@ -2095,7 +2070,7 @@ def manage_models_dialog(*_args: Any) -> None:
             # The swatches carry their own inline QSS, so the dialog
             # sheet swap above wipes them — repaint from the state.
             sync_accent_swatches()
-            # The sidebar star is a baked pixmap filled in blue_accent;
+            # The sidebar k is a baked pixmap filled in blue_accent;
             # re-render it or it keeps the old accent until reopen.
             _new_logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
             if _new_logo is not None:
