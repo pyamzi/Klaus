@@ -202,13 +202,14 @@ GRID_GAP = 16
 GRID_MAX = 800
 SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x1"}
 FOREIGN_SIZE = "2x2"
-# Widgets whose content height depends on the user's data (the deck list:
-# 3 decks or 30): their SIZES rows are a MAXIMUM, and the page shrinks
-# the box to the fewest rows that hold the content (Pouya, 2026-10-01:
-# "some of the widgets are clearly much larger in space than they should
-# be" — 3 decks in a 4x3 box). Fixed per render: the deck screen is
-# rebuilt on every change, so the box never jumps under the pointer.
-FIT_ROWS = ("decks",)
+# Widgets with their OWN height (Pouya, 2026-10-01: "let the deck list
+# have its own height", after 3 decks still left ~120px of a 2-row box
+# empty): the box is as tall as the content, at least one cell, at most
+# the rows in SIZES, then it scrolls. Its row of the grid follows it
+# (grid rows are minmax(GRID_CELL, auto)); every other widget's body is
+# out of flow, so all other rows stay exactly GRID_CELL. Only a
+# full-width widget may be listed: a row it set would stretch neighbours.
+OWN_HEIGHT = ("decks",)
 
 
 # Add-on blocks that draw their card inside an open shadow root, where the
@@ -307,7 +308,7 @@ def boot_state(cfg: Any, edit: bool) -> dict:
         "sizes": dict(SIZES),
         "foreignSize": FOREIGN_SIZE,
         "shadowCss": dict(SHADOW_CSS),
-        "fitRows": list(FIT_ROWS),
+        "ownHeight": list(OWN_HEIGHT),
         "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
         "uniform": uniform_from_cfg(cfg),
         "edit": bool(edit),
@@ -393,23 +394,9 @@ def _palette_vars(night: bool) -> str:
         f" --klaus-dash-badge: {colours['grey_light']};"
         f" --klaus-dash-edge: {edge};"
         f" --klaus-dash-chip: {chip};"
-        f" --klaus-dash-cells: {_cell_tile(night)};"
+        f" --klaus-dash-cell: {'rgba(255,255,255,0.04)' if night else 'rgba(0,0,0,0.03)'};"
+        f" --klaus-dash-cell-edge: {'rgba(255,255,255,0.22)' if night else 'rgba(0,0,0,0.18)'};"
     )
-
-
-def _cell_tile(night: bool) -> str:
-    """One grid cell as a background tile (GRID_CELL plus a GAP of
-    nothing to its right and below): a faint dashed rounded square, the
-    slots edit mode shows widgets can snap to."""
-    import urllib.parse
-
-    fill, stroke = (("rgba(255,255,255,0.04)", "rgba(255,255,255,0.22)") if night
-                    else ("rgba(0,0,0,0.03)", "rgba(0,0,0,0.18)"))
-    step = GRID_CELL + GRID_GAP
-    svg = (f"<svg xmlns='http://www.w3.org/2000/svg' width='{step}' height='{step}'>"
-           f"<rect x='0.5' y='0.5' width='{GRID_CELL - 1}' height='{GRID_CELL - 1}' rx='12'"
-           f" fill='{fill}' stroke='{stroke}' stroke-dasharray='5 4'/></svg>")
-    return 'url("data:image/svg+xml,' + urllib.parse.quote(svg) + '")'
 
 
 def dashboard_css() -> str:
@@ -439,24 +426,25 @@ def dashboard_css() -> str:
         # order, or a drag lands somewhere other than where it was aimed.
         " center.klaus-dash-col {"
         f" display: grid; grid-template-columns: repeat(auto-fill, {GRID_CELL}px);"
-        f" grid-auto-rows: {GRID_CELL}px; gap: {GRID_GAP}px; padding: {GRID_GAP}px;"
+        f" grid-auto-rows: minmax({GRID_CELL}px, auto); gap: {GRID_GAP}px; padding: {GRID_GAP}px;"
         " justify-content: center;"
         # At most GRID_MAX wide and centred: auto-fill counts columns
         # against the max width (definite), and fit-content then shrinks
-        # the box onto exactly those columns, so the cell tiles below
-        # line up with the tracks from the content box's corner.
+        # the box onto exactly those columns.
         f" width: fit-content; max-width: min({GRID_MAX}px, 100%);"
         " box-sizing: border-box; margin: 0 auto; position: relative;"
         " }"
         " center.klaus-dash-col > br { display: none; }"
         # EDIT MODE SHOWS THE GRID (Pouya: "I can't tell where I can latch
-        # widgets to"): every cell as a faint dashed slot behind the
-        # widgets, and while dragging, the box the widget will land in.
-        " body.klaus-dash-editing center.klaus-dash-col {"
-        " background-image: var(--klaus-dash-cells);"
-        f" background-size: {GRID_CELL + GRID_GAP}px {GRID_CELL + GRID_GAP}px;"
-        " background-origin: content-box; background-clip: content-box;"
-        " background-repeat: repeat;"
+        # widgets to"): the page draws every cell of the grid's real tracks
+        # (an own-height row is taller than a cell, so a repeating tile
+        # would drift) as a faint dashed slot behind the widgets, and
+        # while dragging, the box the widget will land in. Both are
+        # absolutely positioned: an in-flow node would take a grid cell.
+        " .klaus-dash-cell {"
+        " position: absolute; pointer-events: none; box-sizing: border-box;"
+        " border: 1px dashed var(--klaus-dash-cell-edge); border-radius: 12px;"
+        " background: var(--klaus-dash-cell);"
         " }"
         " .klaus-dash-slot {"
         " position: absolute; z-index: 1; pointer-events: none; box-sizing: border-box;"
@@ -497,13 +485,12 @@ def dashboard_css() -> str:
         # count cells keep their own align=end.
         " .klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box;"
         " text-align: start; }"
-        # A fitted deck box is up to a cell taller than its table: the
-        # table's card fills the box and its last row (the studied line
-        # background.panel_js welds in) takes the slack, so the space is
-        # inside the card under the decks, not an empty box under a card.
-        # Tables treat height as a minimum: a long list still scrolls.
-        " .klaus-w-body > table:only-child { height: 100%; }"
-        " .klaus-w-body > table:only-child tr.klaus-studied > td { height: 100%; vertical-align: bottom; }"
+        # An OWN_HEIGHT widget's body is in flow, so its row sizes to it:
+        # at least a cell, at most its SIZES rows (max-height, set by the
+        # page), scrolling past that.
+        " .klaus-widget.klaus-w-own > .klaus-w-body {"
+        f" position: relative; inset: auto; min-height: {GRID_CELL}px;"
+        " }"
         # A shadow-root card's host is inline by default; as a block the
         # full height of its box, the adopted SHADOW_CSS can fill it.
         + "".join(f" .klaus-w-body > {tag} {{ display: block; height: 100%; }}" for tag in SHADOW_CSS)

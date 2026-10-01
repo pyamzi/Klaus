@@ -342,19 +342,22 @@ same reason.
   add-on block not listed. A stale `dashboard_sizes` in meta.json is
   ignored. The grid is at most `GRID_MAX` (800px, 4 columns) wide and
   centred (`width: fit-content; max-width: min(800px, 100%)`, so the
-  box sits exactly on its tracks); edit mode tiles every cell as a
-  dashed slot (`--klaus-dash-cells`, an SVG tile from the content box's
-  corner) and outlines the landing box while dragging
+  box sits exactly on its tracks); edit mode shows every cell as a
+  dashed slot (`.klaus-dash-cell`, see OWN_HEIGHT below) and outlines the landing box while dragging
   (`.klaus-dash-slot`, absolutely positioned so it takes no cell).
   Add-on cards drawn in an OPEN shadow root (AMBOSS) get
   `SHADOW_CSS[tag]` adopted into the root as a constructed sheet (a
   `<style>` node would be the add-on renderer's to drop): AMBOSS's
   440px div with 2em margins is what sat its card ~30px low.
-  `FIT_ROWS` (the deck list) makes a widget's SIZES rows a MAXIMUM: the
-  page measures the body's scrollHeight at one row and takes the fewest
-  rows that hold it (3 decks in a 4x3 box was "much larger than it
-  should be"); the table then fills the box and its welded
-  `tr.klaus-studied` row takes the slack at the bottom. A box's ONE card stretches to fill it (`:only-child`,
+  `OWN_HEIGHT` (the deck list; Pouya: "let the deck list have its own
+  height") takes ONE grid row whose height is its content's: grid rows
+  are `minmax(GRID_CELL, auto)`, its body is in flow (`.klaus-w-own`)
+  with the SIZES rows as `max-height`, then it scrolls; every other
+  body is absolute, so other rows stay exactly a cell. Only full-width
+  widgets may be listed (a row it sets would stretch neighbours). So the
+  edit-mode cells are drawn by the page from the grid's computed
+  `gridTemplateRows` (`.klaus-dash-cell`, inserted first, absolute), not
+  a repeating tile, which would drift below a taller row. A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer

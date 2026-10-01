@@ -34,7 +34,7 @@
   var sizes = {};
   var foreignSize = "2x2";
   var shadowCss = {};
-  var fitRows = [];
+  var ownHeight = [];
   var grid = { cell: 160, gap: 16 };
   var uniform = false;
 
@@ -221,17 +221,53 @@
     w.setAttribute("data-size", sizeOf(id));
     if (!w.style.setProperty) return;
     w.style.setProperty("--kw-cols", String(cols));
-    w.style.setProperty("--kw-rows", String(rows));
-    if (fitRows.indexOf(id) >= 0) w.style.setProperty("--kw-rows", String(fittedRows(w, rows)));
+    if (ownHeight.indexOf(id) < 0) {
+      w.style.setProperty("--kw-rows", String(rows));
+      return;
+    }
+    // Its own height: one grid row that grows with the content (CSS),
+    // up to the box SIZES gives it, then the body scrolls.
+    w.classList.add("klaus-w-own");
+    w.style.setProperty("--kw-rows", "1");
+    bodyOf(w).style.maxHeight = rows * grid.cell + (rows - 1) * grid.gap + "px";
   }
 
-  // The fewest rows (up to max) whose box holds the content: measured at
-  // one row, where the body overflows and scrollHeight is the content's.
-  function fittedRows(w, max) {
-    w.style.setProperty("--kw-rows", "1");
-    var need = bodyOf(w).scrollHeight || 0;
-    var rows = Math.ceil((need + grid.gap) / (grid.cell + grid.gap));
-    return Math.max(1, Math.min(max, rows));
+  // Edit mode's slots: one dashed box per cell of the grid's REAL tracks
+  // (an own-height row is taller than a cell), inserted first so the
+  // widgets paint over them, absolutely positioned so they take no cell.
+  function drawCells() {
+    clearCells();
+    var first = widgets()[0];
+    if (!first || !window.getComputedStyle) return;
+    var host = first.parentNode;
+    var rows = String(window.getComputedStyle(host).gridTemplateRows || "").split(" ");
+    var cols = columns(first);
+    if (cols > 8) return; // width unknown: no grid to draw
+    var top = grid.gap;
+    for (var r = 0; r < rows.length; r++) {
+      var h = parseFloat(rows[r]);
+      if (!(h > 0)) continue;
+      for (var c = 0; c < cols; c++) {
+        var cell = document.createElement("div");
+        cell.className = "klaus-dash-cell";
+        cell.style.left = grid.gap + c * (grid.cell + grid.gap) + "px";
+        cell.style.top = top + "px";
+        cell.style.width = grid.cell + "px";
+        cell.style.height = h + "px";
+        host.insertBefore(cell, host.children[0] || null);
+      }
+      top += h + grid.gap;
+    }
+  }
+
+  function relayout() {
+    applySizes();
+    if (editing) drawCells();
+  }
+
+  function clearCells() {
+    var cells = document.querySelectorAll(".klaus-dash-cell");
+    for (var i = 0; i < cells.length; i++) cells[i].parentNode.removeChild(cells[i]);
   }
 
   function applySizes() {
@@ -264,7 +300,7 @@
     uniform = !!on;
     if (uniform) document.body.classList.add("klaus-dash-uniform");
     else document.body.classList.remove("klaus-dash-uniform");
-    applySizes(); // Same Look's padding changes what a fitted box holds
+    relayout(); // Same Look's padding changes an own-height row
   }
 
   /* --- menus ------------------------------------------------------- */
@@ -388,6 +424,7 @@
     var ws = widgets();
     for (var i = 0; i < ws.length; i++) dress(ws[i]);
     buildBar();
+    drawCells();
   }
 
   // Edit-mode chrome for one widget: its own shake phase, the drag
@@ -422,6 +459,7 @@
     }
     removeBar();
     hideMenus();
+    clearCells();
   }
 
   /* --- drag to reorder --------------------------------------------- */
@@ -473,6 +511,7 @@
         ws.splice(from, 1);
         ws.splice(to, 0, w);
         for (var k = 0; k < ws.length; k++) ws[k].style.order = String(k + 1);
+        drawCells(); // an own-height row moved: the tracks changed
       }
       dragState.over = target;
       // Keep the grabbed point under the pointer wherever the widget's
@@ -538,6 +577,7 @@
     hideSlot();
     // Back to the order the drag started from.
     applyOrder(st.startOrder);
+    if (editing) drawCells();
   }
 
   /* --- global listeners -------------------------------------------- */
@@ -615,7 +655,7 @@
     sizes = state.sizes || {};
     foreignSize = state.foreignSize || "2x2";
     shadowCss = state.shadowCss || {};
-    fitRows = state.fitRows || [];
+    ownHeight = state.ownHeight || [];
     grid = state.grid || grid;
     if (!wrap()) return;
     var col = widgetById("decks").parentNode;
@@ -631,7 +671,7 @@
       // document-level listeners.
       window.klausDashBound = true;
       bindGlobal();
-      if (window.addEventListener) window.addEventListener("resize", applySizes);
+      if (window.addEventListener) window.addEventListener("resize", relayout);
     }
     if (state.edit) enterEdit();
   }

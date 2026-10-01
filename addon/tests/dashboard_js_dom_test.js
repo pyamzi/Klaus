@@ -405,20 +405,33 @@ ok("an add-on block Klaus has no size for gets the shared box",
 ok("Anki's table sits in the decks box's scroll body, not the grid item itself",
    d.table.parentNode.className === "klaus-w-body" && d.table.parentNode.parentNode === widget("decks"));
 
-// 14b. A fit-rows widget (the deck list) shrinks to the fewest rows that
-//      hold its content, never past its size's rows.
-for (const [need, want] of [[100, "1"], [300, "2"], [5000, "3"]]) {
-  d = build({});
-  const deckBody = d.table.parentNode;
-  Object.defineProperty(deckBody, "scrollHeight", { get: () => need, configurable: true });
-  boot(Object.assign({}, SIZED, { sizes: { decks: "4x3", heatmap: "4x1" }, fitRows: ["decks"] }));
-  const body = widget("decks").children.find((c) => c.className === "klaus-w-body");
-  Object.defineProperty(body, "scrollHeight", { get: () => need, configurable: true });
-  window.klausDash.applySizes();
-  ok(`${need}px of decks take ${want} row(s) of a 4x3 box`,
-     widget("decks").style["--kw-rows"] === want && widget("heatmap").style["--kw-rows"] === "1",
-     widget("decks").style["--kw-rows"]);
-}
+// 14b. An own-height widget (the deck list) takes one auto-height row,
+//      capped at its size's rows by max-height; the others keep their box.
+d = build({});
+boot(Object.assign({}, SIZED, { sizes: { decks: "4x3", heatmap: "4x1" }, ownHeight: ["decks"] }));
+const deckBody = widget("decks").children.find((c) => c.className === "klaus-w-body");
+ok("the deck list sizes its own row, at most 3 cells tall",
+   hasClass(widget("decks"), "klaus-w-own") && widget("decks").style["--kw-rows"] === "1"
+   && deckBody.style.maxHeight === "512px", deckBody.style.maxHeight);
+ok("…and the heatmap keeps its fixed box",
+   !hasClass(widget("heatmap"), "klaus-w-own") && widget("heatmap").style["--kw-rows"] === "1");
+
+// 14c. Edit mode draws a slot per cell of the REAL tracks (an own-height
+//      row is taller than a cell), before the widgets, and clears them.
+d = build({});
+d.center.clientWidth = 16 + 3 * 176;
+window.getComputedStyle = () => ({ gridTemplateRows: "189px 160px" });
+boot(Object.assign({}, SIZED, { edit: true, sizes: { decks: "4x3", heatmap: "4x1" }, ownHeight: ["decks"] }));
+const cells = d.center.querySelectorAll(".klaus-dash-cell");
+ok("3 columns x 2 rows of slots, the first row as tall as the deck list",
+   cells.length === 6 && cells.filter((c) => c.style.height === "189px").length === 3
+   && cells.some((c) => c.style.top === "221px" && c.style.height === "160px"),
+   cells.map((c) => c.style.top + "/" + c.style.height).join(","));
+ok("…painted under the widgets (they come first in the grid's children)",
+   d.center.children.slice(0, 6).every((c) => hasClass(c, "klaus-dash-cell")));
+window.klausDash.exitEdit();
+ok("…and gone when editing ends", d.center.querySelectorAll(".klaus-dash-cell").length === 0);
+delete window.getComputedStyle;
 
 // 15. Edit mode offers no size control: sizes are Klaus's.
 d = build({});

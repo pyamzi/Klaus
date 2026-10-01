@@ -252,7 +252,7 @@ _grid_rule = _css.split("center.klaus-dash-col {", 1)[1].split("}")[0]
 check("the deck screen is ONE grid of square cells, one gap everywhere "
       "(between widgets and around them)",
       f"grid-template-columns: repeat(auto-fill, {dash.GRID_CELL}px)" in _grid_rule
-      and f"grid-auto-rows: {dash.GRID_CELL}px" in _grid_rule
+      and f"grid-auto-rows: minmax({dash.GRID_CELL}px, auto)" in _grid_rule
       and f"gap: {dash.GRID_GAP}px" in _grid_rule and f"padding: {dash.GRID_GAP}px" in _grid_rule
       and "dense" not in _grid_rule, _grid_rule)
 check("a widget fills a whole COLUMNS x ROWS box from the spans the page sets, "
@@ -295,10 +295,14 @@ check("the grid is at most GRID_MAX (800px) wide, centred, and shrinks onto its 
 check("…and 4 columns (720px with padding) fit under it, so every 4-wide box does",
       4 * (dash.GRID_CELL + dash.GRID_GAP) + dash.GRID_GAP <= dash.GRID_MAX
       < 5 * (dash.GRID_CELL + dash.GRID_GAP) + dash.GRID_GAP)
-check("edit mode shows every cell as a slot, tiled from the content box's corner",
-      "body.klaus-dash-editing center.klaus-dash-col {" in _css
-      and "background-origin: content-box" in _css and "--klaus-dash-cells: url(" in _css
-      and _css.count("--klaus-dash-cells: url(") == 2)
+check("edit mode's cell slots are drawn by the page, out of flow, in both palettes",
+      ".klaus-dash-cell {" in _css
+      and "position: absolute;" in _css.split(".klaus-dash-cell {")[1].split("}")[0]
+      and _css.count("--klaus-dash-cell-edge:") == 2)
+check("grid rows are at least a cell and grow only for an in-flow (own-height) body",
+      "grid-auto-rows: minmax(160px, auto);" in _css
+      and "position: relative; inset: auto; min-height: 160px;"
+      in _css.split(".klaus-widget.klaus-w-own > .klaus-w-body {")[1].split("}")[0])
 check("the landing outline is out of flow (an in-flow node would take a grid cell)",
       "position: absolute;" in _css.split(".klaus-dash-slot {")[1].split("}")[0]
       and "pointer-events: none" in _css.split(".klaus-dash-slot {")[1].split("}")[0])
@@ -312,11 +316,9 @@ check("AMBOSS's card loses its 2em margins and 440px width inside its root",
       "margin: 0 !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and "width: auto !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and dash.boot_state({}, False)["shadowCss"] == dash.SHADOW_CSS)
-check("the deck list's rows are fitted to its decks (3 decks filled a third of a 4x3 box)",
-      dash.FIT_ROWS == ("decks",) and dash.boot_state({}, False)["fitRows"] == ["decks"])
-check("a fitted deck table fills its box and its studied row takes the slack, at the bottom",
-      ".klaus-w-body > table:only-child { height: 100%; }" in _css
-      and ".klaus-w-body > table:only-child tr.klaus-studied > td { height: 100%; vertical-align: bottom; }" in _css)
+check("the deck list has its own height (3 decks left a 2-row box a third empty)",
+      dash.OWN_HEIGHT == ("decks",) and dash.boot_state({}, False)["ownHeight"] == ["decks"]
+      and dash.size_of("decks").startswith("4x"))  # full width: its row stretches nobody
 check("no size chip: sizes are Klaus's, not the user's",
       ".klaus-w-size" not in _css)
 check("Same Look's card padding replaces the child's, so the 4x1 heatmap "
