@@ -17,8 +17,9 @@
 
     addEventListener("message", (event) => {
         if (event.source !== parent || !event.data?.klaus) return;
-        const { show, html, bodyClass, ask } = event.data;
-        if (show === "question") globalThis._showQuestion(html, "", bodyClass);
+        const { show, html, answer, bodyClass, ask } = event.data;
+        // The answer is passed only so the reviewer preloads its images and MathJax.
+        if (show === "question") globalThis._showQuestion(html, answer ?? "", bodyClass);
         if (show === "answer") globalThis._showAnswer(html, bodyClass);
         if (ask === "typedAnswer") toParent({ typedAnswer: globalThis.getTypedAnswer() });
     });

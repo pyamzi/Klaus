@@ -11,6 +11,8 @@
   const night = matchMedia("(prefers-color-scheme: dark)").matches;
   const ratings = [CardAnswer_Rating.AGAIN, CardAnswer_Rating.HARD, CardAnswer_Rating.GOOD, CardAnswer_Rating.EASY];
   const ratingNames = ["Again", "Hard", "Good", "Easy"];
+  // aqt/theme.py body_class
+  const platform = /Win/.test(navigator.userAgent) ? "isWin" : /Mac/.test(navigator.userAgent) ? "isMac" : "isLin";
 
   let frame: HTMLIFrameElement;
   let current: QueuedCards_QueuedCard | undefined = $state();
@@ -19,7 +21,10 @@
   let side: "question" | "answer" = $state("question");
   let rendered: RenderCardResponse | undefined;
   let shownAt = 0;
-  let busy = false;
+  // Card transitions run one at a time: reveal/grade are dropped while one is in
+  // flight or queued (no double grades from key repeat), undo waits its turn.
+  let last: Promise<void> = Promise.resolve();
+  let pending = 0;
   let frameReady: Promise<void>;
   let pendingTyped: ((typed: string | null) => void) | undefined;
 
@@ -29,7 +34,14 @@
 
   function bodyClass(card: QueuedCards_QueuedCard): string {
     const ord = (card.card?.templateIdx ?? 0) + 1;
-    return `card card${ord} isMac fancy${night ? " nightMode night_mode" : ""}`;
+    return `card card${ord} ${platform} fancy${night ? " nightMode night_mode" : ""}`;
+  }
+
+  function exclusive(fn: () => Promise<void>): Promise<void> {
+    pending++;
+    const run = last.then(fn).finally(() => pending--);
+    last = run.catch(() => {});
+    return run;
   }
 
   function post(msg: object) {
@@ -37,65 +49,74 @@
     frame.contentWindow?.postMessage({ klaus: true, ...msg }, "*");
   }
 
+  // Call only inside exclusive().
   async function next() {
     const queued = await getQueuedCards({ fetchLimit: 1, intradayLearningOnly: false });
-    current = queued.cards[0];
-    if (!current) {
+    const card = queued.cards[0];
+    if (!card) {
+      current = undefined;
       location.href = `/congrats${night ? "#night" : ""}`;
       return;
     }
-    counts = [queued.newCount, queued.learningCount, queued.reviewCount];
-    labels = (await describeNextStates(current.states!)).vals;
-    rendered = await render(current.card!.id);
-    side = "question";
+    const nextLabels = (await describeNextStates(card.states!)).vals;
+    const nextRendered = await render(card.card!.id);
     await frameReady;
-    post({ show: "question", html: rendered.question, bodyClass: bodyClass(current) });
+    [current, rendered, labels, side] = [card, nextRendered, nextLabels, "question"];
+    counts = [queued.newCount, queued.learningCount, queued.reviewCount];
+    // The answer goes along so the reviewer preloads its images and MathJax.
+    post({ show: "question", html: rendered.question, answer: rendered.answer, bodyClass: bodyClass(card) });
     shownAt = Date.now();
   }
 
-  async function reveal() {
-    if (!current || side !== "question") return;
-    post({ ask: "typedAnswer" });
-    const typed = await new Promise<string | null>((resolve) => (pendingTyped = resolve));
-    const answer = typed === null ? rendered!.answer : (await render(current.card!.id, typed)).answer;
-    side = "answer";
-    post({ show: "answer", html: answer, bodyClass: bodyClass(current) });
+  function reveal() {
+    if (pending || !current || side !== "question") return;
+    exclusive(async () => {
+      const card = current!;
+      post({ ask: "typedAnswer" });
+      const typed = await new Promise<string | null>((resolve) => (pendingTyped = resolve));
+      pendingTyped = undefined;
+      const answer = typed === null ? rendered!.answer : (await render(card.card!.id, typed)).answer;
+      side = "answer";
+      post({ show: "answer", html: answer, bodyClass: bodyClass(card) });
+    });
   }
 
-  async function grade(ease: number) {
-    if (!current || side !== "answer" || busy) return;
-    busy = true;
-    const states = current.states!;
-    const newState = [states.again, states.hard, states.good, states.easy][ease - 1];
-    try {
+  function grade(ease: number) {
+    if (pending || !current || side !== "answer") return;
+    const card = current;
+    const states = card.states!;
+    exclusive(async () => {
       await answerCard({
-        cardId: current.card!.id,
+        cardId: card.card!.id,
         currentState: states.current,
-        newState,
+        newState: [states.again, states.hard, states.good, states.easy][ease - 1],
         rating: ratings[ease - 1],
         answeredAtMillis: BigInt(Date.now()),
         millisecondsTaken: Date.now() - shownAt,
       });
       await next();
-    } finally {
-      busy = false;
-    }
+    });
   }
 
-  async function undoLast() {
-    // Nothing to undo is not an error worth showing (Anki ignores UndoEmpty too).
-    await undo({}, { alertOnError: false }).catch(() => {});
-    await next();
+  function undoLast() {
+    exclusive(async () => {
+      // Nothing to undo is not an error worth showing (Anki ignores UndoEmpty too).
+      await undo({}, { alertOnError: false }).catch(() => {});
+      await next();
+    });
   }
 
   // Anki's reviewer shortcuts (aqt/reviewer.py _shortcutKeys), subset for #7.
-  function onKey(key: string, ctrl: boolean) {
+  /** True if the key was a reviewer shortcut. */
+  function onKey(key: string, ctrl: boolean): boolean {
     if (key === "Escape") location.href = "/";
     else if (ctrl && key === "z") undoLast();
-    else if (ctrl) return;
+    else if (ctrl) return false;
     else if (key === " " || key === "Enter") side === "question" ? reveal() : grade(3);
     else if (["1", "2", "3", "4"].includes(key)) grade(Number(key));
     else if (key === "u") undoLast();
+    else return false;
+    return true;
   }
 
   // Commands the card frame may send (Anki's reviewer _linkHandler); anything else,
@@ -116,11 +137,15 @@
       if (typeof key === "string" && [" ", "Enter", "1", "2", "3", "4"].includes(key)) onKey(key, false);
       if ("typedAnswer" in event.data) pendingTyped?.(typeof typedAnswer === "string" ? typedAnswer : null);
     };
-    const onKeydown = (e: KeyboardEvent) => onKey(e.key, e.ctrlKey || e.metaKey);
+    // A focused button would also activate on Space/Enter: handle the key once.
+    const onKeydown = (e: KeyboardEvent) => onKey(e.key, e.ctrlKey || e.metaKey) && e.preventDefault();
     addEventListener("message", onMessage);
     addEventListener("keydown", onKeydown);
     const deck = BigInt(new URLSearchParams(location.search).get("deck") ?? "1");
-    setCurrentDeck({ did: deck }).then(next);
+    exclusive(async () => {
+      await setCurrentDeck({ did: deck });
+      await next();
+    });
     return () => {
       removeEventListener("message", onMessage);
       removeEventListener("keydown", onKeydown);
