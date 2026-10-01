@@ -626,7 +626,7 @@ same reason.
   never written over: `save_annotations`, `_update_doc_keys` (atomic
   too) and the outside-mark mirror leave it alone, the bake skips it
   (no un-bake), and a viewer that opens one shows no marks, toasts
-  `SAVE_FAILED_COPY` once, keeps new marks in memory and merges them in
+  `UNREADABLE_MARKS_COPY` once, keeps new marks in memory and merges them in
   when the file reads again. A stored number too big for a float
   (`10**400`) costs only its own value (`_finite_number`), never the
   whole load. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let

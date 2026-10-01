@@ -20,6 +20,12 @@ from typing import Callable, Optional
 DEBOUNCE_MS = 500  # defined once; K-085 (Klaus edits reach the file in <1s)
 # Both viewers toast this on a "failed" event for their document.
 SAVE_FAILED_COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
+# The reader toasts this once, when it opens a PDF whose marks file it
+# cannot read (nothing is written over that file until it reads again).
+UNREADABLE_MARKS_COPY = (
+    "Klaus can't read this PDF's saved marks, so new marks won't be saved "
+    "until that file is fixed or removed."
+)
 
 
 class SavePipeline:

@@ -1853,7 +1853,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 if tooltip is not None:
                     from . import annotation_save
 
-                    tooltip(annotation_save.SAVE_FAILED_COPY)
+                    tooltip(annotation_save.UNREADABLE_MARKS_COPY)
             else:
                 self._highlights = recs
         except Exception as exc:

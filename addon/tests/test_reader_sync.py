@@ -663,7 +663,10 @@ ro._web, ro._page_loaded, ro._unsub_save = Web(), True, None
 ro._start_foreign_mirror = lambda name: None
 REAL_JS.load_annotations(ro, "Corrupt")
 check("the reader opens with nothing to show", ro._highlights == [], str(ro._highlights))
-check("...and says so once", _tips5 == [asv.SAVE_FAILED_COPY], str(_tips5))
+_UNREADABLE = "Klaus can't read this PDF's saved marks, so new marks won't be saved until that file is fixed or removed."
+check("the exact unreadable-marks copy, defined once beside the save-failed copy",
+      getattr(asv, "UNREADABLE_MARKS_COPY", None) == _UNREADABLE)
+check("...and says so once, in those words", _tips5 == [_UNREADABLE], str(_tips5))
 PIPE.requests.clear()
 mark(ro, 0)
 mark(ro, 1)
@@ -671,7 +674,7 @@ with open(_cj, "rb") as _f:
     check("marks made meanwhile never overwrite the unreadable file", _f.read() == _cbytes)
 check("...they stay in memory", sorted(h.get("page") for h in ro._highlights) == [0, 1], str(ro._highlights))
 check("...no bake is requested and no further toast", PIPE.requests == []
-      and _tips5.count(asv.SAVE_FAILED_COPY) == 1, f"{PIPE.requests} {_tips5}")
+      and _tips5 == [_UNREADABLE], f"{PIPE.requests} {_tips5}")
 _old = dict(MARK, id="old1", page=5, note="")
 with open(_cj, "w") as _f:  # the sync client finishes: the file is whole again
     json.dump({"version": 1, "highlights": [_old]}, _f)
