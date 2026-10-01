@@ -2094,6 +2094,7 @@ def manage_models_dialog(*_args: Any) -> None:
             "dashboard_order": _dashboard.order_from_cfg(settings.read()),
             "dashboard_hidden": _dashboard.hidden_foreign(settings.read()),
             "dashboard_uniform": _dashboard.uniform_from_cfg(settings.read()),
+            "dashboard_scale": _dashboard.scale_from_cfg(settings.read()),
         })
         return out
 

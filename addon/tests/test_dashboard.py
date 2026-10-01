@@ -310,15 +310,50 @@ check("Anki's table spans its box with border-box sizing (its 1rem padding overf
       "deck names aligned to the start, not centred by the box",
       ".klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box;"
       " text-align: start; }" in _css)
-check("a shadow-root card's host is a full-height block so its adopted CSS can fill the box",
-      ".klaus-w-body > amboss-component-wrapper { display: block; height: 100%; }" in _css)
+check("a shadow-root card's host is a growing column flexbox so its adopted CSS can fill "
+      "the box, fixed or own-height (no percentage height to resolve)",
+      ".klaus-w-body > amboss-component-wrapper { display: flex; flex-direction: column;"
+      " flex: 1 0 auto; min-height: 100%; }" in _css
+      and "flex: 1 0 auto" in dash.SHADOW_CSS["amboss-component-wrapper"])
 check("AMBOSS's card loses its 2em margins and 440px width inside its root",
       "margin: 0 !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and "width: auto !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and dash.boot_state({}, False)["shadowCss"] == dash.SHADOW_CSS)
-check("the deck list has its own height (3 decks left a 2-row box a third empty)",
-      dash.OWN_HEIGHT == ("decks",) and dash.boot_state({}, False)["ownHeight"] == ["decks"]
-      and dash.size_of("decks").startswith("4x"))  # full width: its row stretches nobody
+check("the deck list and AMBOSS have their own height (3 decks left a 2-row box a third "
+      "empty; AMBOSS's text wraps taller in 3 columns)",
+      dash.OWN_HEIGHT == ("decks", "x:amboss-qbank-widget")
+      and dash.boot_state({}, False)["ownHeight"] == list(dash.OWN_HEIGHT))
+check("…and every own-height widget is 4 wide, so it is always full width and its row "
+      "stretches nobody",
+      all(dash.size_of(w).startswith("4x") for w in dash.OWN_HEIGHT))
+check("Anki's 15em deck-name minimum is lifted, or the table scrolls sideways in 3 columns",
+      ".klaus-w-body > table .decktd { min-width: 0; }" in _css)
+check("Same Look's card steps up from the canvas, with a firmer hairline and no shadow "
+      "(DESIGN.md: depth is tone plus a hairline, never a shadow)",
+      "--klaus-dash-card: #3A3A3C;" in _css and "--klaus-dash-card-edge: rgba(0,0,0,0.14);" in _css
+      and "box-shadow: none; padding: 12px;" in _css and "--klaus-dash-lift" not in _css)
+check("Same Look turns add-on blocks' buttons into DESIGN.md primary buttons in the accent "
+      "theme's blue — light DOM and AMBOSS's shadow root alike",
+      "body.klaus-dash-uniform .klaus-widget[data-w^='x:'] .klaus-w-body button {" in _css
+      and "var(--klaus-dash-primary)" in dash._PRIMARY_BUTTON and "border-radius: 8px" in dash._PRIMARY_BUTTON
+      and ":host-context(body.klaus-dash-uniform) button {" + dash._PRIMARY_BUTTON
+      in dash.SHADOW_CSS["amboss-component-wrapper"]
+      and _css.count("--klaus-dash-primary:") == 2)
+check("the widget size zooms the grid, keeps it at most 800px ON SCREEN and 4 columns",
+      "zoom: var(--klaus-dash-scale, 1);" in _css
+      and "max-width: min(720px, calc(800px / var(--klaus-dash-scale, 1)), 100%);" in _css)
+check("widget size: 70-150% in Anki's 5% steps; anything else reads as 100",
+      [dash.scale_from_cfg({"dashboard_scale": v}) for v in (70, 115, 150, 65, 155, 112, True, "110", None)]
+      == [70, 115, 150, 100, 100, 100, 100, 100, 100] and dash.scale_from_cfg(None) == 100)
+check("…the slider's value is validated the same way before it is saved",
+      dash.apply_action({"action": "scale", "value": 125}, {}) == {"dashboard_scale": 125}
+      and dash.apply_action({"action": "scale", "value": 127}, {}) is None
+      and dash.apply_action({"action": "scale", "value": True}, {}) is None
+      and dash.apply_action({"action": "scale", "value": 500}, {}) is None)
+_bs2 = dash.boot_state({"dashboard_scale": 110}, True, 125)
+check("…and the page gets the size, its range and Anki's own interface size (the slider sits on top of it)",
+      _bs2["scale"] == 110 and _bs2["scaleRange"] == [70, 150, 5] and _bs2["ankiScale"] == 125
+      and dash.boot_state({}, False)["ankiScale"] == 100)
 check("no size chip: sizes are Klaus's, not the user's",
       ".klaus-w-size" not in _css)
 check("Same Look's card padding replaces the child's, so the 4x1 heatmap "
@@ -429,7 +464,7 @@ else:
 section("sizes and Same Look: config policy")
 check("Klaus fixes each widget's box from its measured content; unknown add-on blocks share one",
       dash.size_of("decks") == "4x3" and dash.size_of("heatmap") == "4x1"
-      and dash.size_of("x:amboss-qbank-widget") == "4x1"
+      and dash.size_of("x:amboss-qbank-widget") == "4x2"
       and dash.size_of("x:.ankihub-thing") == dash.FOREIGN_SIZE == "2x2")
 check("every size is a real COLUMNS x ROWS box no wider than 4 columns",
       all(re.fullmatch(r"[1-4]x[1-4]", v) for v in list(dash.SIZES.values()) + [dash.FOREIGN_SIZE]))

@@ -462,6 +462,28 @@ d = build({});
 boot(Object.assign({}, SIZED, { uniform: true }));
 ok("a saved Same Look boots on", document.body.classList.contains("klaus-dash-uniform"));
 
+// 17b. Widget size: a slider in the bar, on top of Anki's interface size.
+d = build({});
+boot(Object.assign({}, SIZED, { edit: true, scale: 110, scaleRange: [70, 150, 5], ankiScale: 125 }));
+const sizeChip = document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-scale");
+const slider = sizeChip && sizeChip.children.find((c) => c.tag === "input");
+const pct = sizeChip && sizeChip.children.find((c) => c.className === "klaus-dash-pct");
+ok("the bar has a 70-150% slider in 5% steps at the saved size, with a % readout",
+   slider && slider.type === "range" && slider.min === "70" && slider.max === "150" && slider.step === "5"
+   && slider.value === "110" && pct.textContent === "110%"
+   && document.body.style["--klaus-dash-scale"] === "1.1");
+ok("…and it names Anki's own interface size, which it sits on top of",
+   /Anki's interface size \(125%/.test(sizeChip.getAttribute("title")), sizeChip.getAttribute("title"));
+const sentBefore = SENT.length;
+slider.value = "135";
+fire(slider, "input");
+ok("dragging it resizes the widgets live without saving",
+   document.body.style["--klaus-dash-scale"] === "1.35" && pct.textContent === "135%" && SENT.length === sentBefore);
+fire(slider, "change");
+ok("letting go saves it", JSON.stringify(decoded(SENT.length - 1)) === '{"action":"scale","value":135}',
+   JSON.stringify(decoded(SENT.length - 1)));
+window.klausDash.exitEdit();
+
 // 18. Drag works across the grid too: drop beside, not just above.
 d = build({});
 const amb3 = el("amboss-component-wrapper", "", "amboss-qbank-widget");

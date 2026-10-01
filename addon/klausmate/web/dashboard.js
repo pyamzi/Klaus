@@ -37,6 +37,9 @@
   var ownHeight = [];
   var grid = { cell: 160, gap: 16 };
   var uniform = false;
+  var scale = 100;
+  var scaleRange = [70, 150, 5];
+  var ankiScale = 100;
 
   /* --- bridge ------------------------------------------------------ */
 
@@ -296,6 +299,21 @@
     }
   }
 
+  // The widget size: CSS zoom on the grid (dashboard_css). Layout values
+  // (clientWidth, computed tracks) stay unzoomed; on-screen rects do not,
+  // so screen distances are divided by zoom() before they set a style.
+  function setScale(pct) {
+    pct = Math.round(Number(pct) / scaleRange[2]) * scaleRange[2];
+    scale = pct >= scaleRange[0] && pct <= scaleRange[1] ? pct : 100;
+    if (document.body.style.setProperty)
+      document.body.style.setProperty("--klaus-dash-scale", String(scale / 100));
+    relayout();
+  }
+
+  function zoom() {
+    return scale / 100;
+  }
+
   function setUniform(on) {
     uniform = !!on;
     if (uniform) document.body.classList.add("klaus-dash-uniform");
@@ -371,6 +389,41 @@
       send({ action: "uniform", on: uniform });
     });
     bar.appendChild(same);
+    // Size: a slider, live while it moves, saved when it is let go.
+    var size = document.createElement("label");
+    size.className = "klaus-dash-chip";
+    size.id = "klaus-dash-scale";
+    // On top of Anki's own User Interface Size, which already scales
+    // this page: say so, so the two settings read as one.
+    size.setAttribute(
+      "title",
+      "Widget size, on top of Anki's interface size (" + ankiScale + "%, Preferences > Appearance)"
+    );
+    var range = document.createElement("input");
+    range.type = "range";
+    range.min = String(scaleRange[0]);
+    range.max = String(scaleRange[1]);
+    range.step = String(scaleRange[2]);
+    range.value = String(scale);
+    range.setAttribute("aria-label", "Widget size");
+    var readout = document.createElement("span");
+    readout.className = "klaus-dash-pct";
+    readout.textContent = scale + "%";
+    range.addEventListener("input", function () {
+      setScale(range.value);
+      readout.textContent = scale + "%";
+    });
+    range.addEventListener("change", function () {
+      setScale(range.value);
+      readout.textContent = scale + "%";
+      send({ action: "scale", value: scale });
+    });
+    size.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+    });
+    size.appendChild(range);
+    size.appendChild(readout);
+    bar.appendChild(size);
     if (hidden.length) {
       var plus = document.createElement("button");
       plus.className = "klaus-dash-chip";
@@ -521,8 +574,8 @@
       var slot = w.getBoundingClientRect();
       showSlot(w, slot);
       w.style.transform =
-        "translate(" + (ev.clientX - dragState.gx - slot.left) + "px, " +
-        (ev.clientY - dragState.gy - slot.top) + "px) scale(1.02)";
+        "translate(" + (ev.clientX - dragState.gx - slot.left) / zoom() + "px, " +
+        (ev.clientY - dragState.gy - slot.top) / zoom() + "px) scale(1.02)";
     });
     var finish = function () {
       if (!dragState || dragState.w !== w) return;
@@ -552,10 +605,10 @@
       host.appendChild(box);
     }
     var h = host.getBoundingClientRect();
-    box.style.left = slot.left - h.left + "px";
-    box.style.top = slot.top - h.top + "px";
-    box.style.width = slot.width + "px";
-    box.style.height = slot.height + "px";
+    box.style.left = (slot.left - h.left) / zoom() + "px";
+    box.style.top = (slot.top - h.top) / zoom() + "px";
+    box.style.width = slot.width / zoom() + "px";
+    box.style.height = slot.height / zoom() + "px";
   }
 
   function hideSlot() {
@@ -662,6 +715,11 @@
     if (col.classList) col.classList.add("klaus-dash-col");
     adopt();
     applyOrder(savedOrder);
+    if (state.scaleRange) scaleRange = state.scaleRange;
+    ankiScale = state.ankiScale || 100;
+    scale = state.scale || 100;
+    if (document.body.style.setProperty)
+      document.body.style.setProperty("--klaus-dash-scale", String(scale / 100));
     setUniform(state.uniform); // also sizes every widget
     dressShadows();
     if (!window.klausDashBound) {

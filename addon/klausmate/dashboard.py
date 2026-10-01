@@ -191,7 +191,8 @@ def wrap_foreign(body: str, hidden: Any = ()) -> str:
 # "set up predecided 2x1, 1x2, and whatnot for it, and then I will just
 # move it around"), measured once from each widget's rendered content:
 # the heatmap is a 159px strip that wants width (4x1); AMBOSS's Qbank card,
-# its margins stripped by SHADOW_CSS, is 142px tall at full width (4x1);
+# its margins stripped by SHADOW_CSS, is 142px tall at full width and
+# taller once its text wraps (own height, at most 4x2);
 # Anki's deck table is ~546px wide with its 1rem padding and holds ~12
 # decks before it scrolls (4x3). An add-on block not listed here gets
 # FOREIGN_SIZE. Nothing is saved: sizes are not a setting.
@@ -200,7 +201,7 @@ GRID_GAP = 16
 # Pouya, 2026-10-01: "I don't want the widget grid to get wider than
 # 800 px, keep it aligned center" — 4 columns (4*176+16 = 720px).
 GRID_MAX = 800
-SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x1"}
+SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x2"}
 FOREIGN_SIZE = "2x2"
 # Widgets with their OWN height (Pouya, 2026-10-01: "let the deck list
 # have its own height", after 3 decks still left ~120px of a 2-row box
@@ -209,8 +210,16 @@ FOREIGN_SIZE = "2x2"
 # (grid rows are minmax(GRID_CELL, auto)); every other widget's body is
 # out of flow, so all other rows stay exactly GRID_CELL. Only a
 # full-width widget may be listed: a row it set would stretch neighbours.
-OWN_HEIGHT = ("decks",)
+OWN_HEIGHT = ("decks", "x:amboss-qbank-widget")
 
+
+# DESIGN.md's primary button, as declarations (8px, 6px 14px, 600, the
+# accent theme's blue with white text), forced over an add-on's own.
+_PRIMARY_BUTTON = (
+    " background: var(--klaus-dash-primary) !important; color: #FFFFFF !important;"
+    " border: 1px solid var(--klaus-dash-primary) !important; border-radius: 8px !important;"
+    " box-shadow: none !important; font-weight: 600 !important;"
+)
 
 # Add-on blocks that draw their card inside an open shadow root, where the
 # page's CSS cannot reach: these rules are adopted INTO that root (keyed
@@ -221,12 +230,17 @@ OWN_HEIGHT = ("decks",)
 SHADOW_CSS = {
     "amboss-component-wrapper": (
         'div:has(> [data-e2e-test-id="qbank-container"])'
-        " { width: auto !important; margin: 0 !important; height: 100%; }"
-        ' [data-e2e-test-id="qbank-container"] { height: 100%; box-sizing: border-box; }'
+        " { width: auto !important; margin: 0 !important;"
+        " flex: 1 0 auto; display: flex; flex-direction: column; }"
+        ' [data-e2e-test-id="qbank-container"] { flex: 1 0 auto; box-sizing: border-box; }'
         ' :host-context(body.klaus-dash-uniform) [data-e2e-test-id="qbank-container"]'
         " { background: transparent !important; box-shadow: none !important; }"
         ' :host-context(body.klaus-dash-uniform) [data-e2e-test-id="qbank-box"]'
         " { padding: 0 !important; }"
+        " :host-context(body.klaus-dash-uniform) button {" + _PRIMARY_BUTTON + " }"
+        # Its count field, as a DESIGN.md input: 8px corners, a hairline.
+        " :host-context(body.klaus-dash-uniform) input"
+        " { border-radius: 8px !important; }"
     ),
 }
 
@@ -239,6 +253,30 @@ def uniform_from_cfg(cfg: Any) -> bool:
     """``dashboard_uniform``: only an explicit True forces the one card
     look (a corrupt value must not restyle other add-ons' blocks)."""
     return isinstance(cfg, dict) and cfg.get("dashboard_uniform") is True
+
+
+# Pouya, 2026-10-01: "an option to increase and decrease the UI item size",
+# then "allow me to choose whatever % I want, and have a nice slider" —
+# the dashboard widgets only, a slider in the Edit Widgets bar, 70-150% in
+# 5% steps. CSS zoom on the grid, so other add-ons' blocks (AMBOSS's
+# shadow-root card) scale too. It ALIGNS WITH Anki's own Preferences >
+# User Interface Size (Pouya: "there is a proper setting for this"):
+# Anki applies that at startup as QT_SCALE_FACTOR, which scales this
+# webview's CSS pixels too, so the dashboard already follows it; this
+# percentage is a fine-tune ON TOP (100% = Anki's size), in Anki's 5%
+# steps, and the bar names Anki's size (anki_ui_scale) beside it.
+SCALE_MIN, SCALE_MAX, SCALE_STEP = 70, 150, 5
+
+
+def valid_scale(value: Any) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and SCALE_MIN <= value <= SCALE_MAX and value % SCALE_STEP == 0)
+
+
+def scale_from_cfg(cfg: Any) -> int:
+    """``dashboard_scale`` in percent; anything not valid_scale is 100."""
+    value = cfg.get("dashboard_scale") if isinstance(cfg, dict) else None
+    return value if valid_scale(value) else 100
 
 
 def widget_ids() -> list:
@@ -293,7 +331,17 @@ def widget_shown(cfg: Any, wid: str) -> bool:
     return False
 
 
-def boot_state(cfg: Any, edit: bool) -> dict:
+def anki_ui_scale() -> int:
+    """Anki's User Interface Size in percent (100 when unreadable)."""
+    try:
+        from aqt import mw
+
+        return int(round(float(mw.pm.uiScale()) * 100))
+    except Exception:  # noqa: BLE001
+        return 100
+
+
+def boot_state(cfg: Any, edit: bool, ui_scale: int = 100) -> dict:
     """Everything web/dashboard.js needs for one render.
 
     ``hidden`` is CONFIG-driven, never DOM-driven — a widget that is
@@ -311,6 +359,9 @@ def boot_state(cfg: Any, edit: bool) -> dict:
         "ownHeight": list(OWN_HEIGHT),
         "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
         "uniform": uniform_from_cfg(cfg),
+        "scale": scale_from_cfg(cfg),
+        "scaleRange": [SCALE_MIN, SCALE_MAX, SCALE_STEP],
+        "ankiScale": ui_scale if isinstance(ui_scale, int) else 100,
         "edit": bool(edit),
         "removable": removable_ids(),
         "labels": {wid: label for wid, key, label in WIDGETS if key},
@@ -357,6 +408,9 @@ def apply_action(action: Any, cfg: Any = None) -> dict | None:
     act = action.get("action")
     if act == "order":
         return {"dashboard_order": normalize_order(action.get("order"))}
+    if act == "scale":
+        value = action.get("value")
+        return {"dashboard_scale": value} if valid_scale(value) else None
     if act == "uniform":
         on = action.get("on")
         return {"dashboard_uniform": on} if isinstance(on, bool) else None
@@ -382,11 +436,16 @@ def _palette_vars(night: bool) -> str:
     colours = theme.palette(night)
     edge = "rgba(255,255,255,0.12)" if night else "rgba(0,0,0,0.10)"
     chip = "rgba(48,48,48,0.60)" if night else "rgba(255,255,255,0.60)"
-    lift = "0 1px 3px rgba(0,0,0,0.40)" if night else "0 1px 3px rgba(0,0,0,0.08)"
+    # Same Look's card (Pouya: "it could have more contrast to the
+    # background"). DESIGN.md: depth is tonal layering plus a hairline,
+    # never a shadow. Dark `surface` IS Anki's canvas (#2C2C2C), so the
+    # card steps a tone up; both modes get a firmer hairline.
+    card = "#3A3A3C" if night else colours["surface"]
+    card_edge = "rgba(255,255,255,0.16)" if night else "rgba(0,0,0,0.14)"
     return (
-        f" --klaus-dash-card: {colours['surface']};"
-        f" --klaus-dash-card-edge: {colours['grey_light']};"
-        f" --klaus-dash-lift: {lift};"
+        f" --klaus-dash-card: {card};"
+        f" --klaus-dash-card-edge: {card_edge};"
+        f" --klaus-dash-primary: {colours['blue']};"
         f" --klaus-dash-surface: {colours['surface']};"
         f" --klaus-dash-text: {colours['text']};"
         f" --klaus-dash-hover: {colours['hover_subtle']};"
@@ -432,6 +491,12 @@ def dashboard_css() -> str:
         # against the max width (definite), and fit-content then shrinks
         # the box onto exactly those columns.
         f" width: fit-content; max-width: min({GRID_MAX}px, 100%);"
+        # The widget size (dashboard_scale, set by the page as
+        # --klaus-dash-scale): zoom scales cells, text and add-on blocks
+        # alike; the cap stays GRID_MAX on screen and 4 columns at most.
+        " zoom: var(--klaus-dash-scale, 1);"
+        f" max-width: min({4 * (GRID_CELL + GRID_GAP) + GRID_GAP}px,"
+        f" calc({GRID_MAX}px / var(--klaus-dash-scale, 1)), 100%);"
         " box-sizing: border-box; margin: 0 auto; position: relative;"
         " }"
         " center.klaus-dash-col > br { display: none; }"
@@ -490,10 +555,18 @@ def dashboard_css() -> str:
         # page), scrolling past that.
         " .klaus-widget.klaus-w-own > .klaus-w-body {"
         f" position: relative; inset: auto; min-height: {GRID_CELL}px;"
+        " display: flex; flex-direction: column;"
         " }"
-        # A shadow-root card's host is inline by default; as a block the
-        # full height of its box, the adopted SHADOW_CSS can fill it.
-        + "".join(f" .klaus-w-body > {tag} {{ display: block; height: 100%; }}" for tag in SHADOW_CSS)
+        # Anki's deck-name column has min-width:15em, which made the table
+        # ~546px and scrolled it sideways in a 3-column grid (120% size, a
+        # narrow window); the name column already takes the spare width.
+        " .klaus-w-body > table .decktd { min-width: 0; }"
+        # A shadow-root card's host is inline by default; as a column
+        # flexbox that grows to its box, the adopted SHADOW_CSS flexes the
+        # card down to fill it (flex, not height:100%: an own-height box
+        # has no definite height for a percentage to resolve against).
+        + "".join(f" .klaus-w-body > {tag} {{ display: flex; flex-direction: column;"
+                  " flex: 1 0 auto; min-height: 100%; }" for tag in SHADOW_CSS)
         + ""
         # SAME LOOK (dashboard_uniform): one card from DESIGN.md on every
         # widget, other add-ons' blocks included, and each widget's own
@@ -505,13 +578,19 @@ def dashboard_css() -> str:
         " body.klaus-dash-uniform .klaus-w-body {"
         " background: var(--klaus-dash-card);"
         " border: 1px solid var(--klaus-dash-card-edge);"
-        " box-shadow: var(--klaus-dash-lift); padding: 12px;"
+        " box-shadow: none; padding: 12px;"
         " }"
         " body.klaus-dash-uniform .klaus-w-body > * {"
         " background: transparent !important; border: 0 !important; padding: 0 !important;"
         " box-shadow: none !important; border-radius: 0 !important;"
         " -webkit-backdrop-filter: none !important; backdrop-filter: none !important;"
         " }"
+        # SAME LOOK BUTTONS (Pouya: "ensure the buttons also follow the
+        # same style ... that they follow the color theme"): an add-on
+        # block's buttons become DESIGN.md primary buttons in the accent
+        # theme's blue. Klaus's own widgets are themed already; buttons in
+        # a shadow root get the same rules from SHADOW_CSS.
+        f" body.klaus-dash-uniform .klaus-widget[data-w^='x:'] .klaus-w-body button {{{_PRIMARY_BUTTON} }}"
         # THE SHAKE: iOS's home-screen jiggle, ~±1.5° with a 1px bob on a
         # quarter-second cycle. The page gives each widget its own phase
         # and a slightly different period (animation-delay/-duration
@@ -538,6 +617,12 @@ def dashboard_css() -> str:
         " animation: none !important; z-index: 7;"
         " filter: drop-shadow(0 12px 24px rgba(0,0,0,0.28));"
         " }"
+        # The widget-size slider: a chip holding a range and its % readout.
+        " #klaus-dash-scale { display: inline-flex; align-items: center; gap: 8px; cursor: default; }"
+        " #klaus-dash-scale input[type=range] {"
+        " width: 110px; margin: 0; accent-color: var(--klaus-dash-accent); cursor: pointer;"
+        " }"
+        " .klaus-dash-pct { min-width: 3em; text-align: end; font-variant-numeric: tabular-nums; }"
         " #klaus-dash-uniform[aria-pressed=true] {"
         " color: var(--klaus-dash-accent); border-color: var(--klaus-dash-accent);"
         " }"
@@ -727,7 +812,7 @@ def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
         # table is wrapped. That ordering contract is also commented at
         # the __init__.py registration site.
         web_content.body += boot_html(
-            boot_state(_config(), _EDIT), _script_url()
+            boot_state(_config(), _EDIT, anki_ui_scale()), _script_url()
         )
     except Exception as exc:
         print(f"[klausmate] dashboard inject failed: {exc}")

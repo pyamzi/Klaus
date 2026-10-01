@@ -36,6 +36,7 @@
   ],
   "dashboard_hidden": [],
   "dashboard_uniform": false,
+  "dashboard_scale": 100,
   "embedding_provider": "ollama",
   "endpoint": "http://127.0.0.1:11434",
   "runtime_auto_setup": true

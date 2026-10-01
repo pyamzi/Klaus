@@ -357,7 +357,22 @@ same reason.
   widgets may be listed (a row it sets would stretch neighbours). So the
   edit-mode cells are drawn by the page from the grid's computed
   `gridTemplateRows` (`.klaus-dash-cell`, inserted first, absolute), not
-  a repeating tile, which would drift below a taller row. A box's ONE card stretches to fill it (`:only-child`,
+  a repeating tile, which would drift below a taller row. AMBOSS is
+  own-height too (its text wraps taller in 3 columns), so SHADOW_CSS
+  fills by FLEX (host a growing column flexbox), never height:100%,
+  which an own-height box cannot resolve. **Widget size**
+  (`dashboard_scale`, 70-150 in 5s, `valid_scale`): a slider in the edit
+  bar, live on `input`, saved on `change`; CSS `zoom` on the grid via
+  `--klaus-dash-scale`. Chromium 140 zoom: clientWidth and computed
+  tracks stay UNZOOMED, getBoundingClientRect is zoomed, so drag
+  translate and the landing outline divide screen distances by zoom().
+  The cap is `min(720px, 800px / scale, 100%)`: 4 columns at most and
+  never over 800px on screen. It sits ON TOP of Anki's User Interface
+  Size (QT_SCALE_FACTOR already scales the webview; `ankiScale` is shown
+  in the chip's title). Same Look: card #3A3A3C at night (dark `surface`
+  IS Anki's canvas), firmer hairline, no shadow (DESIGN.md), and add-on
+  buttons become DESIGN.md primary buttons (`_PRIMARY_BUTTON`, also in
+  AMBOSS's root via `:host-context`). A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer

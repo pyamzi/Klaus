@@ -326,9 +326,14 @@ removed. Use the external MCP client setup below.
 - **dashboard_hidden**: the other add-ons' deck-screen blocks you removed
   with ⊖ (default `[]`), as their `x:` ids; ＋ brings one back.
 - **dashboard_uniform**: `true` gives every deck-screen widget, other
-  add-ons' blocks included, the same card (Klaus's surface, corners, border
-  and shadow); `false` (default) lets each keep its own look. Toggled by
-  **Same Look** in *Edit Widgets…*.
+  add-ons' blocks included, the same card (Klaus's surface, corners and
+  border; add-on blocks' buttons take your colour theme); `false` (default)
+  lets each keep its own look. Toggled by **Same Look** in *Edit Widgets…*.
+- **dashboard_scale**: the size of the deck-screen widgets in percent,
+  `70` to `150` in steps of `5` (default `100`). It applies on top of
+  Anki's own **Preferences → Appearance → User Interface Size**, which
+  already scales the whole deck screen; `100` means Anki's size. Set with
+  the **Size** slider in *Edit Widgets…*.
 
 Apart from `heatmap_enabled` and the four `dashboard_*` keys (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display
