@@ -22,10 +22,13 @@
                 })
             );
         },
-        // Context-menu actions; Qt triggers the native page action.
+        // Context-menu actions. Cut/copy work from script; paste doesn't (browsers
+        // block it), so, like Anki's Qt host, Klaus's shell sends the native paste
+        // action, which fires a real paste event with clipboard data.
         cut: () => document.execCommand("cut"),
         copy: () => document.execCommand("copy"),
-        paste: () => document.execCommand("paste"),
+        paste: () =>
+            fetch("/_anki/klausPaste", { method: "POST", headers: { "Content-Type": "application/binary" } }),
     };
     // Everything else (focus:N, blur:N, key:N, saved, editorState:…) is a
     // notification Klaus doesn't need yet.

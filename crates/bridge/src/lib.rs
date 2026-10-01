@@ -13,7 +13,7 @@ use anki_proto::backend::{backend_error, BackendError, BackendInit};
 use anki_proto::collection::{CloseCollectionRequest, OpenCollectionRequest};
 use anki_proto::generic;
 use axum::body::Bytes;
-use axum::extract::{Path as UrlPath, Request, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
@@ -169,6 +169,7 @@ const HOOKS: &[&str] = &[
     "writeClipboard",
     "saveCustomColours",
     "klausImportPackage",
+    "klausPaste",
 ];
 
 /// Anki host calls that are pure data, answered by the bridge itself.
@@ -305,7 +306,9 @@ impl Bridge {
         match method {
             "convertPastedImage" => {
                 let req = ConvertPastedImageRequest::decode(input).map_err(bad)?;
-                Ok(ConvertPastedImageResponse { data: convert_image(req.data, &req.ext) }.encode_to_vec())
+                let data = convert_image(&req.data, &req.ext)
+                    .ok_or_else(|| CallError::Backend("Klaus can't read this image format.".into()))?;
+                Ok(ConvertPastedImageResponse { data }.encode_to_vec())
             }
             "getMetaJson" | "getProfileConfigJson" => {
                 let key = generic::String::decode(input).map_err(bad)?.val;
@@ -330,20 +333,23 @@ impl Bridge {
 
 const SETTINGS_FILE: &str = "klaus-settings.json";
 
+/// Largest `/_anki` request body: big media pasted or dropped into the editor.
+const MAX_BODY: usize = 256 * 1024 * 1024;
+
 /// Re-encodes a pasted image as the format the editor named it with (`png` or `jpg`),
-/// as Anki's Qt host does, so a file's bytes match its extension. Undecodable input
-/// is returned unchanged.
-fn convert_image(data: Vec<u8>, ext: &str) -> Vec<u8> {
+/// as Anki's Qt host does, so a file's bytes always match its extension. None if the
+/// input can't be decoded: better to refuse the paste than store mismatched bytes.
+fn convert_image(data: &[u8], ext: &str) -> Option<Vec<u8>> {
     use image::codecs::jpeg::JpegEncoder;
-    let Ok(img) = image::load_from_memory(&data) else { return data };
+    let img = image::load_from_memory(data).ok()?;
     let mut out = Vec::new();
-    let encoded = if ext == "png" {
-        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+    if ext == "png" {
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
     } else {
         // Same quality Anki uses for jpg; JPEG has no alpha.
-        img.to_rgb8().write_with_encoder(JpegEncoder::new_with_quality(&mut out, 80))
-    };
-    if encoded.is_ok() { out } else { data }
+        img.to_rgb8().write_with_encoder(JpegEncoder::new_with_quality(&mut out, 80)).ok()?;
+    }
+    Some(out)
 }
 
 fn backend_call_error(err: Option<BackendError>) -> CallError {
@@ -407,7 +413,9 @@ pub async fn serve(
     let klaus = ServeDir::new(&web.klaus).fallback(ServeFile::new(web.klaus.join("index.html")));
     let klaus_dir: Arc<PathBuf> = web.klaus.clone().into();
     let mut app = Router::new()
-        .route("/_anki/{method}", post(anki_method))
+        // Axum's default 2 MiB cap would reject pasted photos (convertPastedImage,
+        // addMediaFile carry the bytes); the caller is already cookie-authenticated.
+        .route("/_anki/{method}", post(anki_method).layer(DefaultBodyLimit::max(MAX_BODY)))
         .nest_service("/_app", ServeDir::new(web.anki.join("_app")));
     for page in ANKI_PAGES {
         app = app

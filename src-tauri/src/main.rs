@@ -111,11 +111,35 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
             let val = picked.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
             Some(generic::String { val }.encode_to_vec())
         }
+        "klausPaste" => {
+            paste(app);
+            None
+        }
         // Not wired yet: the browser (#11), note type dialogs (#16), recording/playback,
         // clipboard reads, external links. Anki pages treat the empty reply as cancel.
         _ => None,
     }
 }
+
+/// The native Edit > Paste action on the focused webview, as Anki's Qt host
+/// triggers its page action: a real paste event with the clipboard's data.
+#[cfg(target_os = "macos")]
+fn paste(app: &AppHandle) {
+    let _ = app.run_on_main_thread(|| unsafe {
+        use objc2::runtime::{AnyClass, AnyObject, Sel};
+        use objc2::{msg_send, sel};
+        let Some(class) = AnyClass::get(c"NSApplication") else { return };
+        let ns_app: *mut AnyObject = msg_send![class, sharedApplication];
+        let nothing: *mut AnyObject = std::ptr::null_mut();
+        let action: Sel = sel!(paste:);
+        let _: bool = msg_send![ns_app, sendAction: action, to: nothing, from: nothing];
+    });
+}
+
+// ponytail: context-menu Paste is macOS-only; keyboard paste works everywhere.
+// Windows/Linux need their webview's native paste (WebView2 has no API for it).
+#[cfg(not(target_os = "macos"))]
+fn paste(_app: &AppHandle) {}
 
 fn confirm(app: &AppHandle, text: &str, title: Option<&str>, kind: MessageDialogKind) -> bool {
     let mut dialog = app.dialog().message(text).kind(kind).buttons(MessageDialogButtons::OkCancel);

@@ -148,6 +148,17 @@ fn adds_a_note_the_way_the_editor_does() {
         AddMediaFileRequest { desired_name: "paste-1.jpg".into(), data: converted.data.clone() },
     );
     assert_eq!(std::fs::read(dir.path().join("collection.media").join(&name.val)).unwrap(), converted.data);
+    // Formats browsers paste besides png/jpg are converted too; unreadable bytes are
+    // refused rather than stored under a mismatched extension.
+    let mut gif = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)
+        .unwrap();
+    let from_gif: ConvertPastedImageResponse =
+        call(&bridge, "convertPastedImage", ConvertPastedImageRequest { data: gif, ext: "png".into() });
+    assert_eq!(image::guess_format(&from_gif.data).unwrap(), image::ImageFormat::Png);
+    let junk = ConvertPastedImageRequest { data: b"<svg/>".to_vec(), ext: "png".into() };
+    assert!(matches!(bridge.call("convertPastedImage", &junk.encode_to_vec()), Err(CallError::Backend(_))));
 
     note.fields = vec![format!("Loop of Henle <img src=\"{}\">", name.val), "Countercurrent multiplier".into()];
     note.tags = vec!["renal".into()];
@@ -194,6 +205,7 @@ async fn http_contract_matches_ankis_post_ts() {
     let (col_dir, bridge) = open_temp();
     std::fs::create_dir_all(col_dir.path().join("collection.media")).unwrap();
     std::fs::write(col_dir.path().join("collection.media/heart.png"), "png bytes").unwrap();
+    std::fs::write(col_dir.path().join("collection.media/evil.svg"), "<svg onload=alert(1)/>").unwrap();
     let klaus_dir = tempfile::tempdir().unwrap();
     std::fs::write(klaus_dir.path().join("index.html"), "<p>klaus</p>").unwrap();
     std::fs::write(klaus_dir.path().join("anki-host.js"), "// klaus host").unwrap();
@@ -301,6 +313,16 @@ async fn http_contract_matches_ankis_post_ts() {
     assert_eq!(get("/editor/heart.png").await, "png bytes");
     assert_eq!(get("/heart.png").await, "png bytes");
     assert_eq!(get("/anki-host.js").await, "// klaus host");
+    // Media (e.g. a deck's SVG/HTML) must never run as a same-origin document.
+    for path in ["/evil.svg", "/editor/evil.svg"] {
+        let res = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(res.headers()["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'", "{path}");
+    }
+
+    // Large bodies (pasted photos) get past the default 2 MiB cap.
+    let big = ConvertPastedImageRequest { data: vec![0; 3 * 1024 * 1024], ext: "png".into() };
+    let res = raw("convertPastedImage", big.encode_to_vec()).await.unwrap();
+    assert_eq!(res.status(), 500, "reaches the handler (and is refused as unreadable), not 413");
     assert_eq!(get("/..%2Fcollection.anki2").await, "<p>klaus</p>");
     assert_eq!(get("/_app/start.mjs").await, "// anki");
     assert_eq!(get("/decks").await, "<p>klaus</p>");
