@@ -148,6 +148,28 @@ if m is not None and NODE:
               [i[0] for i in got["onNoMarquee"]] == ["Occlude this page"])
 elif m is not None:
     print("SKIP  occlusionItems behaviour (no node)")
+m2 = re.search(r"async function occludeImage\(.*?\n\}\n", html, re.S)
+check("occludeImage is extractable", m2 is not None)
+if m2 is not None and NODE:
+    prog = (
+        'const posts = [];\n'
+        'const post = (m) => posts.push(m);\n'
+        'const postB64 = () => posts.push("POSTB64");\n'
+        'const state = {doc: {getPage: async () => { throw new Error("boom"); }}};\n'
+        'const renderRegionCanvas = async () => { throw new Error("boom"); };\n'
+        + m2.group(0) +
+        'occludeImage(3, null).then(() => console.log(JSON.stringify(posts)));\n'
+    )
+    run = subprocess.run([NODE, "-e", prog], capture_output=True, text=True)
+    posts = json.loads(run.stdout) if run.returncode == 0 else []
+    check("a failed render logs and ALSO toasts why (same toast: encoding as the others)",
+          len(posts) == 2 and posts[0] == "log:occlude failed: boom"
+          and posts[1] == "toast:" + base64.b64encode(
+              b"Klaus: couldn't render that page").decode(), str(posts) + run.stderr[-200:])
+elif m2 is not None:
+    print("SKIP  occludeImage failure toast (no node)")
+check("the failure toast is in the source",
+      "post(\"toast:\" + btoa(\"Klaus: couldn't render that page\"))" in html)
 check("a disabled item shows the tip on hover and on click",
       "mi.title = NO_EDITOR_TIP" in html and 'post("toast:" + btoa(NO_EDITOR_TIP))' in html)
 
@@ -315,6 +337,10 @@ check("reader_host still assigns r._editor directly (the setter is the seam)",
       "r._editor = " in rh_src)
 
 
+def _raise_os(*a, **k):
+    raise OSError(28, "No space left on device")
+
+
 section("PdfSidebar: the occlude handler")
 
 
@@ -323,6 +349,7 @@ def occ_sb(*a):
 
 
 CALLS: list = []
+io._active = True  # setup() ran: the separate IOE add-on is not in the way
 io.occlude = lambda editor, path, svg=None: CALLS.append((editor, path, svg)) or True
 sb._name = "Heme"
 sb._editor = None
@@ -362,17 +389,51 @@ ok, _ = occ_sb(PNG, 0, False)
 check("no document: nothing is written and nothing is called (no raise)", ok and CALLS == [])
 sb._name = "Heme"
 
-io._active = False
-io.occlude = lambda editor, path, svg=None: False  # the real one's answer while the guard is tripped
+io.occlude = lambda editor, path, svg=None: False  # IOE refused (it may have said why itself)
 TIPS.clear()
 occ_sb(PNG, 4, False)
-check("occlude False with the conflict guard tripped: the conflict tooltip",
-      TIPS == [io.CONFLICT_TOOLTIP], str(TIPS))
+check("occlude False with the guard off: a tooltip, never silent",
+      TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+
+section("R15: the conflict guard is checked before anything is written")
+MKDIRS: list = []
+ATEXIT: list = []
+_mkdtemp, _register = rp.tempfile.mkdtemp, rp.atexit.register
+rp.tempfile.mkdtemp = lambda *a, **k: MKDIRS.append(a) or _mkdtemp(*a, **k)
+rp.atexit.register = lambda *a, **k: ATEXIT.append(a)
+try:
+    CALLS.clear()
+    io.occlude = lambda editor, path, svg=None: CALLS.append((editor, path, svg)) or True
+    io._active = False
+    TIPS.clear()
+    ok, res = occ_sb(PNG, 4, False)
+    check("guard tripped: exactly the conflict tooltip",
+          ok and TIPS == [io.CONFLICT_TOOLTIP], f"{res} {TIPS}")
+    check("...no temp dir, no atexit registration, occlude not called",
+          MKDIRS == [] and ATEXIT == [] and CALLS == [], f"{MKDIRS} {ATEXIT} {CALLS}")
+    io._active = True
+    TIPS.clear()
+    ok, _ = occ_sb(PNG, 4, False)
+    check("guard clear: the temp dir and exit cleanup do happen",
+          ok and len(MKDIRS) == 1 and len(ATEXIT) == 1 and len(CALLS) == 1, f"{MKDIRS} {ATEXIT} {CALLS}")
+
+    section("R15: a PNG that cannot be saved says so and does not open the editor")
+    for label, patch in (
+        ("mkdtemp fails", lambda: setattr(rp.tempfile, "mkdtemp", _raise_os)),
+        ("the write fails (the dir vanished)",
+         lambda: setattr(rp.tempfile, "mkdtemp", lambda *a, **k: os.path.join(TMP, "gone", "x"))),
+    ):
+        patch()
+        CALLS.clear()
+        ATEXIT.clear()
+        TIPS.clear()
+        ok, res = occ_sb(PNG, 4, False)
+        check(label + ": the tooltip, no raise, occlude not called",
+              ok and TIPS == ["Klaus: couldn't save the page image"] and CALLS == [],
+              f"{res} {TIPS} {CALLS}")
+finally:
+    rp.tempfile.mkdtemp, rp.atexit.register = _mkdtemp, _register
 io._active = True
-TIPS.clear()
-occ_sb(PNG, 4, False)
-check("occlude False otherwise: still a tooltip, never silent", len(TIPS) == 1, str(TIPS))
-io._active = False
 
 
 section("Review Focus 2: the same page occluded twice")

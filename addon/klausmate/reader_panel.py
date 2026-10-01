@@ -218,19 +218,28 @@ class PdfSidebar(QWidget):
             return
         if not self._name:
             return
-        folder = tempfile.mkdtemp(prefix="klaus-occlude-")
-        # The editor reads the file after this returns (svg-edit loads it
-        # by URL), so it can only go at exit.
-        atexit.register(shutil.rmtree, folder, True)
-        path = os.path.join(folder, occlude_media_stem(self._name, page0, region) + ".png")
-        with open(path, "wb") as f:
-            f.write(png)
-        if not image_occlusion.occlude(editor, path, None):
-            tooltip(
-                image_occlusion.CONFLICT_TOOLTIP
-                if not image_occlusion._active
-                else "Klaus: couldn't open the occlusion editor"
+        if not image_occlusion._active:
+            # The separate IOE add-on is on: occlude() would do nothing, so
+            # write nothing either.
+            tooltip(image_occlusion.CONFLICT_TOOLTIP)
+            return
+        try:
+            folder = tempfile.mkdtemp(prefix="klaus-occlude-")
+            # The editor reads the file after this returns (svg-edit loads it
+            # by URL), so it can only go at exit.
+            atexit.register(shutil.rmtree, folder, True)
+            path = os.path.join(
+                folder, occlude_media_stem(self._name, page0, region) + ".png"
             )
+            with open(path, "wb") as f:
+                f.write(png)
+        except OSError as exc:
+            print(f"[klausmate] occlude: could not save the page image: {exc}")
+            tooltip("Klaus: couldn't save the page image")
+            return
+        if not image_occlusion.occlude(editor, path, None):
+            # IOE may have said why itself (unsupported image, wrong note type).
+            tooltip("Klaus: couldn't open the occlusion editor")
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)

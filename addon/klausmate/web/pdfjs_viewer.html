@@ -1134,7 +1134,10 @@ async function occludeImage(page0, pm) {
       page: pm ? pm.page0 : page0,
       region: !!pm,
     });
-  } catch (e) { post("log:occlude failed: " + e.message); }
+  } catch (e) {
+    post("log:occlude failed: " + e.message);
+    post("toast:" + btoa("Klaus: couldn't render that page"));
+  }
 }
 
 /* Python's pdfjs_viewer.NO_EDITOR_TIP, the same string. */
