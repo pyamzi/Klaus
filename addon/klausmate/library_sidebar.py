@@ -484,7 +484,8 @@ def on_context_menu(sidebar, menu, item, index) -> None:
             # Only while its file is really gone: a file back on disk
             # before the next scan would go to the Trash with it.
             if pdf_handler.pdf_path_for(pdf_source.user_files_dir(), safe) is None:
-                _add(menu, "Remove from Library", lambda: pdf_drive.delete_pdf(safe))
+                name = lib["labels"].get(key) or safe
+                _add(menu, "Remove from Library", lambda: _confirm_remove(safe, name))
     elif key in lib["folders"]:
         folder = lib["folders"][key]
         menu.addSeparator()
@@ -493,6 +494,24 @@ def on_context_menu(sidebar, menu, item, index) -> None:
         if not act.pdfs_under(folder):  # Anki's own rename and delete skip a tag with no cards
             _add(menu, "Rename Folder…", lambda: act.rename_folder(parent, folder))
             _add(menu, "Remove Folder", lambda: act.remove_empty_folder(folder))
+
+
+def _confirm_remove(safe: str, name: str) -> None:
+    """Remove from Library deletes the PDF's marks, context, prefs and
+    card tag, so it asks first: window-modal, No the default (K-114)."""
+    from . import pdf_drive, pdf_handler, pdf_source, tag_sync
+
+    def yes() -> None:
+        if pdf_drive.delete_pdf(safe):
+            uf = pdf_source.user_files_dir()
+            pdf_handler.set_missing(uf, pdf_handler.load_missing(uf) - {safe})
+
+    tag_sync._ask(
+        f"“{name}” is no longer in your Library folder. Remove it from Klaus too?"
+        "\n\nThis also removes its marks and its card tag.",
+        yes,
+        lambda: None,
+    )
 
 
 # ------------------------------------------------------------ click, drop, footer

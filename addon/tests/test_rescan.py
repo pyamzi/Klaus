@@ -522,11 +522,11 @@ def putg(rel, text):
 
 
 for _safe, (_rel, _text) in {"Lecture": ("Lecture.pdf", "lecture one|two"), "Gone": ("Gone.pdf", "gone one"),
-                             "Edited": ("Edited.pdf", "old|text")}.items():
+                             "Edited": ("Edited.pdf", "old|text"), "Fresh": ("Fresh.pdf", "fresh|one")}.items():
     putg(_rel, _text)
     write_text(os.path.join(ufg, "contexts", _safe + ".json"),
                json.dumps({"pages": _text.split("|"), "page_count": len(_text.split("|"))}))
-ph.save_library_map(ufg, {"Lecture": "Lecture.pdf", "Gone": "Gone.pdf", "Edited": "Edited.pdf"})
+ph.save_library_map(ufg, {"Lecture": "Lecture.pdf", "Gone": "Gone.pdf", "Edited": "Edited.pdf", "Fresh": "Fresh.pdf"})
 _point_user_files(ufg)
 ph._live_library_root = lambda: rootg
 ph.extract_pages = lambda path: read_text(path).split("|")
@@ -538,7 +538,11 @@ ui = []
 pdg._library_changed = lambda: ui.append(1)
 requested, resyncs, events = [], [], []
 _real_request_pdf = iq.request_pdf
-iq.request_pdf = lambda safe, **k: requested.append(safe)
+iq.request_pdf = lambda safe, **k: requested.append((safe, k.get("announce", True)))
+_real_indexed, _real_auto = iq.indexed_pdf_names, iq.auto_index_enabled
+auto_on = [False]
+iq.indexed_pdf_names = lambda: ["Edited"]  # Fresh was never indexed
+iq.auto_index_enabled = lambda cfg: auto_on[0]
 _real_resync = ds5.resync
 ds5.resync = lambda: resyncs.append(1)
 _unsub = ds5.subscribe(lambda ev, safe, path: events.append((ev, safe, path, ph.load_library_map(ufg).get(safe))))
@@ -560,6 +564,10 @@ del ui[:]
 pdg.start_library_rescan()
 check("a deleted file: 'missing'", events == [("missing", "Gone", None, "Gone.pdf")], str(events))
 check("...and the sidebar redraws its warning icon", ui == [1], str(ui))
+del events[:], ui[:]
+pdg.start_library_rescan()
+check("still missing next scan: no second 'missing'", events == [], str(events))
+check("...and no second sidebar/retention refresh", ui == [], str(ui))
 del events[:]
 putg("Gone.pdf", "gone one")
 del ui[:]
@@ -571,12 +579,22 @@ check("...and the sidebar clears the icon", ui == [1], str(ui))
 del events[:]
 putg("Edited.pdf", "new|text|three")
 pdg.start_library_rescan()
-check("a closed file whose text changed outside Klaus is re-indexed once", requested == ["Edited"], str(requested))
+check("an indexed closed file whose text changed outside Klaus is re-indexed once, quietly",
+      requested == [("Edited", False)], str(requested))
 pdg.start_library_rescan()
-check("...and only once", requested == ["Edited"], str(requested))
+check("...and only once", requested == [("Edited", False)], str(requested))
 putg("Edited.pdf", "new |text|three\n")
 pdg.start_library_rescan()
-check("a whitespace-only change is not re-indexed", requested == ["Edited"], str(requested))
+check("a whitespace-only change is not re-indexed", requested == [("Edited", False)], str(requested))
+del requested[:]
+putg("Fresh.pdf", "fresh|one|edited")
+pdg.start_library_rescan()
+check("a never-indexed PDF with auto-index off is not indexed by an outside edit", requested == [], str(requested))
+auto_on[0] = True
+putg("Fresh.pdf", "fresh|one|edited again")
+pdg.start_library_rescan()
+check("...with auto-index on it is", requested == [("Fresh", False)], str(requested))
+auto_on[0] = False
 check("none of these were reader events", events == [], str(events))
 
 section("the watcher tick skips the rescan when it saw only Klaus's own files")
@@ -645,6 +663,7 @@ else:
 _unsub()
 ds5.resync = _real_resync
 iq.request_pdf = _real_request_pdf
+iq.indexed_pdf_names, iq.auto_index_enabled = _real_indexed, _real_auto
 ph.extract_pages, ph.repair_garbled_pages = _stub_extract, _stub_repair
 ps5.ensure_records = _real_ensure
 

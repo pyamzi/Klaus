@@ -314,7 +314,7 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         summary = rescan_library_root(prepared)
         if summary and summary.get("ingested"):
             _after_ingest(summary["ingested"])
-        if summary and any(summary.get(k) for k in ("moved", "ingested", "tree_changed", "missing", "back")):
+        if summary and any(summary.get(k) for k in ("moved", "ingested", "tree_changed", "newly_missing", "back")):
             _library_changed()
         if on_done:
             on_done(summary)
@@ -382,7 +382,11 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
             pdf_handler.migrate_to_root(uf, root, folders)
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
+        missing_before = pdf_handler.load_missing(uf)
         summary = pdf_handler.rescan_root(uf, root, folders, prepared)
+        # A file that stays gone is reported every pass; readers and the
+        # sidebar hear it once, when it goes.
+        summary["newly_missing"] = [s for s in summary.get("missing") or [] if s not in missing_before]
         # tree_changed, not moved: the tags follow folder+display, and
         # those can change for entries the mapping already knew about
         # (drift repair — see rescan_root's tree loop).
@@ -407,13 +411,14 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
 def _tell_readers(uf: str, root: str, summary: dict) -> None:
     """After the mapping is applied, never before: open readers follow a
     move, hear a delete or a return (doc_sync), the watches are re-synced,
-    and a closed PDF whose text changed outside Klaus is re-indexed."""
+    and a closed PDF whose text changed outside Klaus is re-indexed when
+    it already has an index or auto-index is on."""
     try:
         from . import doc_sync
 
         for safe, path in (summary.get("moved") or {}).items():
             doc_sync.repoint(safe, path)
-        for safe in summary.get("missing") or []:
+        for safe in summary.get("newly_missing") or []:
             doc_sync.mark_missing(safe)
         mapping = pdf_handler.load_library_map(uf) if summary.get("back") else {}
         for safe in summary.get("back") or []:
@@ -422,13 +427,32 @@ def _tell_readers(uf: str, root: str, summary: dict) -> None:
         doc_sync.resync()
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] rescan: telling readers failed: {exc}")
-    for safe in summary.get("changed_text") or []:
-        try:
-            from . import index_queue
+    changed = summary.get("changed_text") or []
+    if not changed:
+        return
+    try:
+        from . import index_queue
 
-            index_queue.request_pdf(safe)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[klausmate] re-index of changed {safe!r} failed: {exc}")
+        indexed = set(index_queue.indexed_pdf_names())
+        auto = index_queue.auto_index_enabled(_config())
+        for safe in changed:
+            if safe in indexed or auto:
+                index_queue.request_pdf(safe, announce=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] re-index of changed PDFs failed: {exc}")
+
+
+def _config() -> dict:
+    """The add-on config: the settings seam's ``read()`` where it exists,
+    else what ``index_queue`` reads at HEAD."""
+    try:
+        from . import settings
+
+        return settings.read()
+    except ImportError:
+        from . import index_queue
+
+        return index_queue._cfg()
 
 
 def _library_changed() -> None:
