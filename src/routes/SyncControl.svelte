@@ -95,7 +95,10 @@
   async function watchMedia() {
     if (!account.syncMedia) return;
     for (;;) {
-      const media = await mediaSyncStatus({}, { alertOnError: false }).catch(() => undefined);
+      // A failed media sync reports its error here once it stops.
+      const media = await mediaSyncStatus({}, { alertOnError: false }).catch((err: Error) => {
+        toast.error("Media sync failed", { description: err.message });
+      });
       if (!media?.active) break;
       const p = media.progress;
       mediaStatus = p ? ["Media", p.checked, p.added, p.removed].filter(Boolean).join(" · ") : "Syncing media…";

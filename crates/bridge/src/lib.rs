@@ -289,7 +289,8 @@ pub struct Bridge {
 pub trait Secrets: Send + Sync {
     fn get(&self, key: &str) -> Option<String>;
     fn set(&self, key: &str, value: &str) -> Result<(), String>;
-    fn delete(&self, key: &str);
+    /// Removing a key that isn't there succeeds.
+    fn delete(&self, key: &str) -> Result<(), String>;
 }
 
 /// In-memory secrets: tests, and builds without a keychain.
@@ -304,8 +305,9 @@ impl Secrets for MemorySecrets {
         self.0.lock().unwrap().insert(key.into(), value.into());
         Ok(())
     }
-    fn delete(&self, key: &str) {
+    fn delete(&self, key: &str) -> Result<(), String> {
         self.0.lock().unwrap().remove(key);
+        Ok(())
     }
 }
 
@@ -547,7 +549,7 @@ impl Bridge {
 
     /// pm.clear_sync_auth.
     pub fn sync_sign_out(&self) -> Result<(), CallError> {
-        self.secrets.delete(SYNC_KEY);
+        self.secrets.delete(SYNC_KEY).map_err(CallError::Backend)?;
         self.set_setting("profile", "syncUser", Value::Null)?;
         self.set_setting("profile", "syncUrl", Value::Null)
     }
@@ -720,6 +722,53 @@ impl Bridge {
             std::thread::sleep(std::time::Duration::from_secs(60));
             bridge.auto_sync_tick();
         });
+    }
+
+    /// Anki's sync on close: waits for a running sync, syncs, then waits for media
+    /// sync, all within `limit`; past it, the sync in progress is aborted so
+    /// quitting never hangs. A full sync is left for next time (it needs a choice).
+    pub fn sync_before_quit(self: &Arc<Self>, limit: std::time::Duration) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let deadline = std::time::Instant::now() + limit;
+        let done = Arc::new(AtomicBool::new(false));
+        let watchdog = {
+            let (bridge, done) = (Arc::clone(self), Arc::clone(&done));
+            std::thread::spawn(move || {
+                while !done.load(Ordering::SeqCst) {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = bridge.call_trusted("abortSync", &[]);
+                        let _ = bridge.call_trusted("abortMediaSync", &[]);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            })
+        };
+        // Claim the sync slot, waiting out a sync already running (the watchdog
+        // aborts it at the deadline).
+        let id = loop {
+            if let Some(id) = self.begin_sync(true) {
+                break Some(id);
+            }
+            if std::time::Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        };
+        if let Some(id) = id {
+            let result = self.sync();
+            self.end_sync(id, true, result);
+        }
+        while std::time::Instant::now() < deadline && self.media_sync_active() {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        done.store(true, Ordering::SeqCst);
+        let _ = watchdog.join();
+    }
+
+    fn media_sync_active(&self) -> bool {
+        self.rpc::<_, anki_proto::sync::MediaSyncStatusResponse>("mediaSyncStatus", anki_proto::generic::Empty {})
+            .is_ok_and(|status| status.active)
     }
 }
 

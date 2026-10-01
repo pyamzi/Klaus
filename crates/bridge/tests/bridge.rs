@@ -1043,6 +1043,13 @@ fn syncs_automatically_when_quiet() {
     let page = Page::open(a.clone());
     assert_eq!(page.post("deckTree", DeckTreeRequest { now: now() }.encode_to_vec()).0, 200);
     assert!(!a.auto_sync_tick(), "app in use");
+    // Quitting syncs it anyway, and finishes well within its limit.
+    let started = std::time::Instant::now();
+    a.sync_before_quit(std::time::Duration::from_secs(30));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    let out: SyncOutcome = call(&a, "klausSyncOutcome", Empty {});
+    assert_eq!(ok(&out), ChangesRequired::NoChanges);
+    assert!(!a.auto_sync_tick(), "nothing left to sync");
 
     // A full sync is found once and left for the user to choose.
     change_schema(&b, "Cloze");

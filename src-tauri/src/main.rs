@@ -79,12 +79,8 @@ fn main() {
             }
             let app = app.clone();
             std::thread::spawn(move || {
-                // An automatic sync may be running; rslib allows one at a time.
-                while bridge.sync_running() {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                }
-                bridge.sync();
-                wait_for_media_sync(&bridge);
+                // ponytail: 2 minutes for the whole quit; a huge first media upload resumes next time.
+                bridge.sync_before_quit(std::time::Duration::from_secs(120));
                 app.exit(0);
             });
         }
@@ -95,24 +91,7 @@ fn main() {
     });
 }
 
-/// Media sync runs in the background after a sync; quitting mid-way would waste it.
-fn wait_for_media_sync(bridge: &Bridge) {
-    use anki_proto::sync::MediaSyncStatusResponse;
-    // ponytail: capped at 2 minutes; a huge first media upload resumes next time.
-    for _ in 0..240 {
-        let active = bridge
-            .call_trusted("mediaSyncStatus", &[])
-            .ok()
-            .and_then(|bytes| MediaSyncStatusResponse::decode(bytes.as_slice()).ok())
-            .is_some_and(|status| status.active);
-        if !active {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-}
-
-/// The AnkiWeb sync key, in the macOS Keychain (Windows Credential Manager,
+/// The Klaus Account sync key, in the macOS Keychain (Windows Credential Manager,
 /// Linux keyutils) rather than a file.
 struct Keychain;
 
@@ -126,9 +105,11 @@ impl Secrets for Keychain {
         let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|e| e.to_string())?;
         entry.set_password(value).map_err(|e| e.to_string())
     }
-    fn delete(&self, key: &str) {
-        if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, key) {
-            let _ = entry.delete_credential();
+    fn delete(&self, key: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|e| e.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
         }
     }
 }
