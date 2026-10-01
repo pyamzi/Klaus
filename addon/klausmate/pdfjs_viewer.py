@@ -133,15 +133,25 @@ def renderer_from_config(cfg: Any) -> str:
     return "pdfjs" if val == "pdfjs" else "native"
 
 
-def first_chunk(path: str) -> tuple[int, str]:
-    """File length and base64 of its first ``FIRST_CHUNK`` bytes — all
-    the main thread reads at load; pdf.js asks for the rest by range."""
+def first_chunk(source: Any) -> tuple[int, str]:
+    """Length and base64 of the first ``FIRST_CHUNK`` bytes of a
+    ``pdf_source.DocSource`` — all the main thread reads at load, through
+    the same source every later range comes from."""
     from .pdf_source import FIRST_CHUNK
 
-    with open(path, "rb") as f:
-        length = os.fstat(f.fileno()).st_size
-        head = f.read(FIRST_CHUNK)
-    return length, base64.b64encode(head).decode("ascii")
+    head = source.read(0, FIRST_CHUNK)
+    return source.length, base64.b64encode(head).decode("ascii")
+
+
+def _reading_dir() -> str:
+    """``<user files>/reading``: where open PDFs are hard-link snapshotted.
+    ``<addon>/user_files`` is the one user-files folder (``USER_FILES`` in
+    ``__init__``), derived here rather than imported back from the package."""
+    addon = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(addon, "user_files", "reading")
+
+
+_SWEPT = False  # leftover snapshots are swept once per process
 
 
 def handle_range(payload: Any, source: Any, current_gen: int) -> dict:
@@ -898,6 +908,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._path: str | None = None
         self._gen = 0
         self._source: Any = None  # pdf_source.DocSource of the open file
+        # True while a stale reload waits for "ready": the teardown's
+        # scroll-to-top report must not overwrite the position to restore.
+        self._hold_scroll = False
         # Called when the page reports the open file changed under it.
         # A later task repoints this at doc_sync.
         self.on_stale: Callable[[], None] = self._reload_current
@@ -1070,6 +1083,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self.on_selection(str(data.get("text") or ""))
 
     def _bridge_ready(self, _payload: str) -> None:
+        self._hold_scroll = False
         # openDocument's teardown() wiped page state — (re)push whatever
         # records we hold so annotations survive load order races.
         self._push_annotations()
@@ -1088,7 +1102,12 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
     def _reload_current(self) -> None:
         if self._path is not None and self._name is not None:
-            self.load_path(self._path, self._name)
+            self.load_path(self._path, self._name, keep_view=True)
+
+    def _close_source(self) -> None:
+        src, self._source = getattr(self, "_source", None), None
+        if src is not None:
+            src.close()
 
     def _bridge_firstpage(self, payload: str) -> None:
         print(f"[klausmate] pdfjs first page {self._name} {int(payload)} ms")
@@ -1097,6 +1116,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         print(f"[klausmate] pdfjs: {payload}")
 
     def _bridge_scroll(self, payload: str) -> None:
+        if self._hold_scroll:
+            return
         try:
             self._scroll_pos = int(payload)
         except ValueError:
@@ -1511,9 +1532,12 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             pass
         self._claim_shortcuts()
 
-    def load_path(self, path: str, name: str) -> None:
+    def load_path(self, path: str, name: str, keep_view: bool = False) -> None:
         """Open the stored PDF in pdf.js by byte range: only its length and
-        first chunk are read here; the page asks for the rest."""
+        first chunk are read here; the page asks for the rest.
+
+        ``keep_view`` (a stale reload of the same document) keeps the
+        scroll position and any user zoom."""
         if self._web is None:
             return
         self._ensure_page()
@@ -1524,30 +1548,39 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             pass
         self._name = name
         self._path = path
-        self._scroll_pos = 0
+        if not keep_view:
+            self._scroll_pos = 0
+        self._hold_scroll = keep_view
         self._gen += 1
-        self._source = None
+        self._close_source()
+        source = None
         try:
-            from .pdf_source import DocSource
+            from .pdf_source import DocSource, sweep_snapshots
 
-            source = DocSource(path)
+            source = DocSource(path, _reading_dir())
+            global _SWEPT
+            if not _SWEPT:
+                _SWEPT = True
+                sweep_snapshots(_reading_dir(), keep={source.read_path})
             size_mb = source.length / (1024 * 1024)
             if size_mb > MAX_PDF_MB:
-                self._eval(
-                    "window.klausPdfError && window.klausPdfError("
-                    + json.dumps(
-                        f"This PDF is {size_mb:.0f} MB — too large for the "
-                        "pdf.js viewer."
-                    )
-                    + ");"
+                source.close()
+                self._page_close(
+                    f"This PDF is {size_mb:.0f} MB — too large for the "
+                    "pdf.js viewer."
                 )
                 return
-            length, first_b64 = first_chunk(path)
+            length, first_b64 = first_chunk(source)
         except Exception as exc:
+            if source is not None:
+                source.close()
             print(f"[klausmate] pdfjs read failed: {exc}")
+            self._page_close("Could not open this PDF.")
             return
         self._source = source
-        args = ", ".join(json.dumps(v) for v in (self._gen, length, first_b64, name))
+        args = ", ".join(
+            json.dumps(v) for v in (self._gen, length, first_b64, name, keep_view)
+        )
         self._web.eval(f"window.klausPdfOpen && window.klausPdfOpen({args});")
 
     # ---- PdfViewer-surface parity ---------------------------------------
@@ -1642,16 +1675,21 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def set_document(self, *_a: Any) -> None:
         pass  # native-renderer concept; load_path is the pdfjs entry
 
+    def _page_close(self, error: Optional[str] = None) -> None:
+        """Tear the page's document down for the current generation and,
+        given *error*, show it where the pages were."""
+        args = ", ".join(json.dumps(v) for v in (self._gen, error) if v is not None)
+        self._eval(f"window.klausPdfClose && window.klausPdfClose({args});")
+
     def clear_document(self) -> None:
         self._name = None
         self._annotations_name = None
         self._highlights = []
         self._page_count = 0
         self._scroll_pos = 0
-        self._eval(
-            "(function(){var p=document.getElementById('pages');"
-            "if(p)p.textContent='';})();"
-        )
+        self._gen += 1
+        self._close_source()
+        self._page_close()
 
     def go_to_page(self, page: int) -> None:
         self._eval(
@@ -1687,6 +1725,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         Library window closed, then the theme was switched). Idempotent
         and safe to call twice.
         """
+        self._close_source()
         web, self._web = self._web, None
         self._page_loaded = False
         if web is None:

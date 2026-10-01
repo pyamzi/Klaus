@@ -417,6 +417,7 @@ const state = {
   gen: 0,                // load generation, from Python's klausPdfOpen
   transport: null,       // KlausRange feeding the open document
   task: null,            // its getDocument loading task
+  keepZoom: false,       // a reload of the same document keeps a user zoom
   annots: [],            // canonical records, pushed from Python
   pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
   find: { query: "", matches: [], index: -1 },
@@ -519,10 +520,20 @@ class KlausRange extends pdfjsLib.PDFDataRangeTransport {
   abort() { this.aborted = true; }
 }
 
-window.klausPdfOpen = function (gen, length, firstB64, _name) {
+window.klausPdfOpen = function (gen, length, firstB64, _name, keepView) {
   state.t0 = performance.now();
   state.gen = gen;
+  state.keepZoom = !!keepView;
   openDocument(gen, length, b64Bytes(firstB64));
+};
+/* Python closes the document (clear, or a failed load): drop it for good
+   — its ranges are refused from now on, so leaving it up would leave
+   pages blank forever — and show any error where the pages were. */
+window.klausPdfClose = function (gen, text) {
+  state.gen = gen;
+  teardown().then(() => {
+    if (text && state.gen === gen) window.klausPdfError(text);
+  });
 };
 window.klausPdfError = function (text) {
   const el = document.getElementById("error");
@@ -555,6 +566,7 @@ async function openDocument(gen, length, first) {
   state.doc = doc;
   post("count:" + state.doc.numPages);
   await buildPlaceholders();
+  if (gen !== state.gen) return;
   buildThumbs();
   observePages();
   post("ready");
@@ -577,7 +589,7 @@ async function buildPlaceholders() {
   const first = await state.doc.getPage(1);
   const base = first.getViewport({ scale: 1.0 });
   const avail = await availWidth();
-  state.scale = clampScale(avail / base.width);
+  if (!(state.keepZoom && state.userZoomed)) state.scale = clampScale(avail / base.width);
   applyScaleFactor();
   for (let i = 1; i <= state.doc.numPages; i++) {
     const div = document.createElement("div");

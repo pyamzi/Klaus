@@ -107,4 +107,89 @@ except OSError:
     replaced = False
 check("os.replace onto the path succeeds right after a read", replaced)
 
+section("R20: ranges come from a hard-link snapshot taken at load")
+snap_dir = os.path.join(tmp, "reading")
+orig = big
+p6 = make("f.pdf", orig)
+s6 = ps.DocSource(p6, snap_dir)
+check("snapshot dir is created and holds one link",
+      os.path.isdir(snap_dir) and len(os.listdir(snap_dir)) == 1)
+check("reads go through the snapshot path",
+      s6.read_path != p6 and os.path.dirname(s6.read_path) == snap_dir
+      and s6.read_path.endswith(".pdf")
+      and os.path.samefile(s6.read_path, p6))
+check("length and fingerprint describe the file", s6.length == len(orig)
+      and s6.stat == ph.file_stat(p6))
+# Klaus's own bake: write a new file and os.replace it onto the path.
+newer = make("f.new", b"%PDF-baked" + b"n" * 9000)
+os.replace(newer, p6)
+check("an os.replace of the original path does NOT make reads stale",
+      ps.range_reply(s6, 1, 1, 0, 100) != {"stale": True})
+check("...and reads still return the original bytes",
+      s6.read(0, ps.FIRST_CHUNK) == orig[: ps.FIRST_CHUNK]
+      and s6.read(1000, 5000) == orig[1000:5000])
+
+p7 = make("g.pdf", orig)
+s7 = ps.DocSource(p7, snap_dir)
+with open(p7, "r+b") as f:
+    f.seek(10)
+    f.write(b"OUTSIDE-EDIT")
+os.utime(p7, ns=(os.stat(p7).st_atime_ns, os.stat(p7).st_mtime_ns + 5_000_000))
+check("an in-place rewrite of the original (shared inode) DOES make reads stale",
+      ps.range_reply(s7, 1, 1, 0, 100) == {"stale": True})
+
+_real_link = os.link
+
+
+def _no_link(*a, **k):
+    raise OSError(18, "Cross-device link")
+
+
+os.link = _no_link
+try:
+    p8 = make("h.pdf", b"h" * 5000)
+    s8 = ps.DocSource(p8, snap_dir)
+finally:
+    os.link = _real_link
+check("link failure falls back to the live path", s8.read_path == p8
+      and s8.read(0, 10) == b"h" * 10)
+os.replace(make("h.new", b"i" * 5000), p8)
+check("...and behaves as before: a replaced file reads stale",
+      ps.range_reply(s8, 1, 1, 0, 10) == {"stale": True})
+s8.close()
+check("closing a source without a link touches nothing", os.path.exists(p8))
+
+link6 = s6.read_path
+s6.close()
+check("close() removes the snapshot link", not os.path.exists(link6))
+try:
+    s6.close()
+    closed_twice = True
+except Exception:
+    closed_twice = False
+check("close() is idempotent", closed_twice)
+
+before = set(os.listdir(snap_dir))
+try:
+    ps.DocSource(os.path.join(tmp, "nope.pdf"), snap_dir)
+    missing_raised = False
+except ps.StaleSource:
+    missing_raised = True
+check("...StaleSource for a missing file", missing_raised)
+check("...and no link left behind", set(os.listdir(snap_dir)) == before)
+
+keep_src = ps.DocSource(make("k.pdf", b"k" * 100), snap_dir)
+open(os.path.join(snap_dir, "leftover.pdf"), "wb").close()
+open(os.path.join(snap_dir, "notes.txt"), "wb").close()
+ps.sweep_snapshots(snap_dir, keep={keep_src.read_path})
+left = sorted(os.listdir(snap_dir))
+check("sweep removes leftover links except keep (and non-PDFs)",
+      left == sorted([os.path.basename(keep_src.read_path), "notes.txt"]))
+try:
+    ps.sweep_snapshots(os.path.join(tmp, "no-such-dir"))
+    sweep_ok = True
+except Exception:
+    sweep_ok = False
+check("sweep of a missing dir never raises", sweep_ok)
+
 raise SystemExit(report())

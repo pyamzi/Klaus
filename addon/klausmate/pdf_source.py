@@ -5,11 +5,18 @@ call and closed again: Windows refuses ``os.replace`` onto a path with an
 open handle, and the add-on bakes annotations that way. A fingerprint
 ``(inode, mtime_ns, size)`` is captured at load; a read of a file that no
 longer matches it raises ``StaleSource`` so the page can reload.
+
+With a ``snapshot_dir`` the source hard-links the file there at load and
+reads the link (ruling R20): Klaus's own bakes ``os.replace`` the library
+file onto a new inode and leave the snapshot untouched, while an outside
+in-place rewrite changes the shared inode and still reads stale. Where a
+hard link is impossible the live path is read, as without a snapshot.
 """
 from __future__ import annotations
 
 import base64
 import os
+import uuid
 
 from . import pdf_handler
 
@@ -22,11 +29,22 @@ class StaleSource(Exception):
 
 
 class DocSource:
-    def __init__(self, path: str):
-        stat = pdf_handler.file_stat(path)
-        if stat is None:
-            raise StaleSource(path)
+    def __init__(self, path: str, snapshot_dir: str | None = None):
         self.path = path
+        self.read_path = path
+        self._link: str | None = None
+        if snapshot_dir is not None:
+            try:
+                os.makedirs(snapshot_dir, exist_ok=True)
+                link = os.path.join(snapshot_dir, uuid.uuid4().hex + ".pdf")
+                os.link(path, link)
+                self._link = self.read_path = link
+            except OSError:
+                pass  # other volume, no hard links, permission: read live
+        stat = pdf_handler.file_stat(self.read_path)
+        if stat is None:
+            self.close()
+            raise StaleSource(path)
         self.stat = stat
         self.length = stat[2]
 
@@ -34,7 +52,7 @@ class DocSource:
         begin = max(0, min(begin, self.length))
         end = max(begin, min(end, self.length, begin + MAX_RANGE))
         try:
-            with open(self.path, "rb") as f:
+            with open(self.read_path, "rb") as f:
                 st = os.fstat(f.fileno())
                 if (st.st_ino, st.st_mtime_ns, st.st_size) != self.stat:
                     raise StaleSource(self.path)
@@ -42,6 +60,30 @@ class DocSource:
                 return f.read(end - begin)
         except OSError as e:
             raise StaleSource(str(e)) from e
+
+    def close(self) -> None:
+        """Remove the snapshot link, if one was made. Idempotent."""
+        link, self._link = self._link, None
+        if link is not None:
+            try:
+                os.remove(link)
+            except OSError:
+                pass
+
+
+def sweep_snapshots(snapshot_dir: str, keep: set[str] = frozenset()) -> None:
+    """Remove leftover ``*.pdf`` snapshot links whose path is not in *keep*."""
+    try:
+        names = os.listdir(snapshot_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(snapshot_dir, n)
+        if n.endswith(".pdf") and p not in keep:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
 
 
 def range_reply(source, gen: int, current_gen: int, begin: int, end: int) -> dict:

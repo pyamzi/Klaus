@@ -190,14 +190,16 @@ def _counting(box):
     return _open
 
 
+_src8 = _ps.DocSource(_pdf8)
 _box8 = [0]
 _bi.open = _counting(_box8)
 try:
-    _len8, _first8 = pv.first_chunk(_pdf8)
+    _len8, _first8 = pv.first_chunk(_src8)
 finally:
     _bi.open = _real_open8
-check("first_chunk returns the true file length", _len8 == len(_data8))
-check("first_chunk returns base64 of the first 256 KB",
+check("first_chunk returns the source's length", _len8 == len(_data8))
+check("first_chunk returns base64 of the first 256 KB, read through the "
+      "same source as every range",
       _b64.b64decode(_first8) == _data8[:_ps.FIRST_CHUNK])
 check("first_chunk reads no more than FIRST_CHUNK bytes",
       0 < _box8[0] <= _ps.FIRST_CHUNK)
@@ -214,6 +216,10 @@ class _FakeWeb8:
         pass
 
 
+_read8 = os.path.join(_tmp8, "reading")   # never the real user_files
+pv._reading_dir = lambda: _read8
+
+
 def _viewer8():
     v = pv.PdfJsViewer.__new__(pv.PdfJsViewer)   # no Qt construction
     v._web = _FakeWeb8()
@@ -223,9 +229,15 @@ def _viewer8():
     v._path = None
     v._name = None
     v._scroll_pos = 0
+    v._hold_scroll = False
+    v._highlights = []
     return v
 
 
+os.makedirs(_read8, exist_ok=True)
+_leftover8 = os.path.join(_read8, "leftover.pdf")
+open(_leftover8, "wb").close()
+pv._SWEPT = False
 _v8 = _viewer8()
 _box8 = [0]
 _bi.open = _counting(_box8)
@@ -236,20 +248,33 @@ finally:
 check("load_path reads only the first chunk on the main thread",
       0 < _box8[0] <= _ps.FIRST_CHUNK)
 _open8 = [j for j in _v8._web.js if "klausPdfOpen(" in j]
-check("load_path calls klausPdfOpen(gen, length, firstB64, name) once",
+check("load_path calls klausPdfOpen(gen, length, firstB64, name, keepView) once",
       _open8 == ["window.klausPdfOpen && window.klausPdfOpen(1, %d, %s, "
-                 "\"lecture.pdf\");" % (len(_data8), '"' + _first8 + '"')])
+                 "\"lecture.pdf\", false);" % (len(_data8), '"' + _first8 + '"')])
 check("no whole-file feed is sent", not any("klausPdfChunk" in j
                                             for j in _v8._web.js))
 check("load_path bumps the generation and holds a DocSource",
       _v8._gen == 1 and _v8._source is not None
       and _v8._source.length == len(_data8))
+_link8 = _v8._source.read_path
+check("the source reads a hard-link snapshot under <user files>/reading",
+      os.path.dirname(_link8) == _read8 and os.path.samefile(_link8, _pdf8))
+check("the first load sweeps leftover snapshots, keeping its own",
+      not os.path.exists(_leftover8) and os.path.exists(_link8))
 _rep8 = _v8._on_bridge("klausmate_pdfjs:range:1:0:10")
 check("_on_bridge RETURNS the range reply (Anki hands it to the JS callback)",
       isinstance(_rep8, dict) and _b64.b64decode(_rep8["b64"]) == _data8[:10])
 check("other bridge commands keep the old (True, None) reply",
       _v8._on_bridge("klausmate_pdfjs:scroll:5") == (True, None)
       and _v8._scroll_pos == 5)
+_bake8 = os.path.join(_tmp8, "bake.pdf")
+with open(_bake8, "wb") as _f8:
+    _f8.write(_data8 + b"%baked\n")
+os.replace(_bake8, _pdf8)                     # what Klaus's own bake does
+_rep8 = _v8._on_bridge("klausmate_pdfjs:range:1:100:200")
+check("a bake (os.replace) does not make the open document stale (R20)",
+      "b64" in _rep8 and _b64.b64decode(_rep8["b64"]) == _data8[100:200])
+_data8 = open(_pdf8, "rb").read()
 
 _v8._web.js.clear()
 _out8 = _io.StringIO()
@@ -258,7 +283,11 @@ with _ctxl.redirect_stdout(_out8):
 check("a missing file at load does not raise and opens nothing",
       not any("klausPdfOpen(" in j for j in _v8._web.js)
       and "[klausmate] pdfjs read failed" in _out8.getvalue())
-check("...and the generation still moved on, so the old page's ranges "
+check("...the previous snapshot is closed", not os.path.exists(_link8))
+check("...the page tears the old document down and shows the error",
+      any(j.startswith("window.klausPdfClose && window.klausPdfClose(2, ")
+          and "Could not open this PDF." in j for j in _v8._web.js))
+check("...and the generation moved on, so the old page's ranges "
       "are refused", _v8._gen == 2
       and _v8._on_bridge("klausmate_pdfjs:range:1:0:10") == {"refused": True})
 
@@ -271,7 +300,9 @@ finally:
     pv.MAX_PDF_MB = _max8
 check("MAX_PDF_MB still applies before anything is opened",
       not any("klausPdfOpen(" in j for j in _v8._web.js)
-      and any("too large" in j for j in _v8._web.js))
+      and any(j.startswith("window.klausPdfClose && window.klausPdfClose(3, ")
+              and "too large" in j for j in _v8._web.js))
+check("...and leaves no snapshot behind", os.listdir(_read8) == [])
 
 # stale: the page aborts its transport and posts stale:<gen>
 _v8 = _viewer8()
@@ -296,11 +327,39 @@ try:
           _stale8 == [1])
 finally:
     pv.QTimer = _qt8
+_v8._scroll_pos = 900
+_old8 = _v8._source.read_path
 _v8._web.js.clear()
 pv.PdfJsViewer._reload_current(_v8)
-check("the default on_stale reloads the current document",
+check("the default on_stale reloads the current document, keeping the view",
       _v8._gen == 2 and any('klausPdfOpen(2, ' in j
-                            and '"lecture.pdf");' in j for j in _v8._web.js))
+                            and '"lecture.pdf", true);' in j for j in _v8._web.js))
+check("...and closes the previous snapshot", not os.path.exists(_old8))
+check("a stale reload keeps the scroll position", _v8._scroll_pos == 900)
+_v8._on_bridge("klausmate_pdfjs:scroll:0")   # the teardown's scroll to the top
+check("...through the teardown's scroll-to-top report", _v8._scroll_pos == 900)
+_v8._web.js.clear()
+_v8._on_bridge("klausmate_pdfjs:ready")
+check("...and ready scrolls back there",
+      any("klausScrollTo(900)" in j for j in _v8._web.js))
+_v8._on_bridge("klausmate_pdfjs:scroll:40")
+check("after ready, scroll reports count again", _v8._scroll_pos == 40)
+
+_v8._web.js.clear()
+_cur8 = _v8._source.read_path
+_v8.clear_document()
+check("clear_document bumps the generation and closes the snapshot",
+      _v8._gen == 3 and _v8._source is None and not os.path.exists(_cur8))
+check("...and tears the page's document down",
+      "window.klausPdfClose && window.klausPdfClose(3);" in _v8._web.js)
+
+_v8.load_path(_pdf8, "lecture.pdf")
+_cur8 = _v8._source.read_path
+_v8.cleanup = pv.PdfJsViewer.cleanup.__get__(_v8)
+_v8._web = None
+_v8.cleanup()
+check("cleanup closes the snapshot", not os.path.exists(_cur8)
+      and _v8._source is None)
 
 _FEED8 = html.split("/* ==== feed", 1)[1].split("async function availWidth", 1)[0]
 check("the page builds a PDFDataRangeTransport",
@@ -326,8 +385,17 @@ check("the whole-file feed is gone from the page",
       "b64parts" not in html and "klausPdfChunk" not in html
       and "klausPdfLoad" not in html)
 check("first-page timing is measured from klausPdfOpen",
-      "window.klausPdfOpen = function (gen, length, firstB64, _name) {\n"
+      "window.klausPdfOpen = function (gen, length, firstB64, _name, keepView) {\n"
       "  state.t0 = performance.now();" in html)
+check("a reload keeps a user zoom instead of refitting",
+      "if (!(state.keepZoom && state.userZoomed))" in html)
+_OD8 = html.split("async function openDocument(", 1)[1].split("\n}\n", 1)[0]
+check("openDocument re-checks the generation after building placeholders",
+      "await buildPlaceholders();\n  if (gen !== state.gen) return;" in _OD8)
+_PC8 = html.split("window.klausPdfClose = function", 1)[1].split("\n};\n", 1)[0]
+check("klausPdfClose tears the document down, then shows any error where "
+      "#pages was", "state.gen = gen;" in _PC8 and "teardown()" in _PC8
+      and "window.klausPdfError(text)" in _PC8)
 
 section("live selection reported over the bridge (K-196 task 10)")
 _sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
