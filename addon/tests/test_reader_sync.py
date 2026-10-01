@@ -601,6 +601,53 @@ check("once writes work again, every kept mark reaches the JSON",
       str(ph.load_annotations(UF, "Failing")))
 check("...and the bake is requested", PIPE.requests == ["Failing"], str(PIPE.requests))
 
+section("an unreadable marks file never wipes the marks (R54)")
+_lj = ph.annotations_path_for(UF, "Lock")
+ph.save_annotations(UF, "Lock", [])
+_strict = getattr(ph, "load_annotations_strict", lambda *a: "missing")
+with open(_lj, "w") as _f:
+    _f.write("{not json")
+check("load_annotations_strict: unreadable is None", _strict(UF, "Lock") is None)
+check("...a missing file is empty", _strict(UF, "NoSuchDoc") == [])
+ph.save_annotations(UF, "Lock", [])
+check("...a good file is its marks", _strict(UF, "Lock") == [])
+rl = reader_of("Lock")
+mark(rl, 0)
+mark(rl, 1)
+os.chmod(_lj, 0)  # unreadable for the next read (a sync client or antivirus holds it)
+_real_save = ph.save_annotations
+
+
+def _readable_again(*a, **k):
+    os.chmod(_lj, 0o644)
+    return _real_save(*a, **k)
+
+
+ph.save_annotations = _readable_again
+try:
+    mark(rl, 2)
+finally:
+    ph.save_annotations = _real_save
+    os.chmod(_lj, 0o644)
+check("the file keeps all three marks",
+      sorted(h.get("page") for h in ph.load_annotations(UF, "Lock")) == [0, 1, 2],
+      str(ph.load_annotations(UF, "Lock")))
+check("save_annotations writes through a tmp file and a rename (never a truncated file)",
+      "_atomic_write_json(" in inspect.getsource(ph.save_annotations))
+
+section("a failed marks write says so (R54)")
+_tips4 = []
+pj.tooltip = lambda text, *a, **k: _tips4.append(text)
+ph.save_annotations(UF, "Failing2", [])
+rf = reader_of("Failing2")
+_fj = ph.annotations_path_for(UF, "Failing2")
+os.remove(_fj)
+os.makedirs(_fj)
+mark(rf, 0)
+os.rmdir(_fj)
+pj.tooltip = lambda *a, **k: None
+check("the failure toasts the kept-and-will-retry copy", asv.SAVE_FAILED_COPY in _tips4, str(_tips4))
+
 section("two readers in one host keep their own registration (R36)")
 e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)
 e1.load_pdf("Doc")

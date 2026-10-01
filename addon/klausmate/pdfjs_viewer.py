@@ -1646,9 +1646,11 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         try:
             from . import pdf_handler, settings
 
-            self._highlights = pdf_handler.load_annotations(
+            fresh = pdf_handler.load_annotations_strict(
                 settings.user_files(), self._annotations_name
             )
+            if fresh is not None:  # unreadable is not "no marks": keep ours
+                self._highlights = fresh
         except Exception as exc:
             print(f"[klausmate] pdfjs marks re-read failed: {exc}")
 
@@ -1666,12 +1668,18 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             )
             self._save_failed = not ok
             if not ok:
+                if tooltip is not None:
+                    from . import annotation_save
+
+                    tooltip(annotation_save.SAVE_FAILED_COPY)
                 return
             # Hold what the JSON holds (normalized), so a pipeline event
             # compares like with like and pushes only real differences.
-            self._highlights = pdf_handler.load_annotations(
+            fresh = pdf_handler.load_annotations_strict(
                 settings.user_files(), self._annotations_name
             )
+            if fresh is not None:
+                self._highlights = fresh
             self._schedule_bake(settings.user_files(), self._annotations_name)
         except Exception as exc:
             print(f"[klausmate] pdfjs save annotations failed: {exc}")
@@ -1695,8 +1703,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         if event in ("saved", "records") and not self._save_failed:
             from . import pdf_handler, pdf_source
 
-            fresh = pdf_handler.load_annotations(pdf_source.user_files_dir(), name)
-            if fresh != self._highlights:
+            fresh = pdf_handler.load_annotations_strict(pdf_source.user_files_dir(), name)
+            if fresh is not None and fresh != self._highlights:
                 self._highlights = fresh
                 self._refresh_highlight_overlay()
         elif event == "failed" and tooltip is not None:

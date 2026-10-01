@@ -217,4 +217,90 @@ ph.pdf_lock = _real_lock
 check("the re-bake succeeds and the page stays deleted, the Klaus mark once",
       ok and counts(DOC4) == (1, 0, 2), f"{ok} {counts(DOC4)}")
 
+section("Round 3 (R54): no revert window between the stat check and the carry scan")
+_asv = importlib.import_module("klausmate.annotation_save")
+captures = []
+_real_cap = ph._capture_pristine_stripped
+
+
+def counting_cap(ufd, name, working):
+    if not os.path.isfile(os.path.join(UF, "pdf_originals", ph._safe_basename(name) + ".pdf")):
+        captures.append(name)
+    return _real_cap(ufd, name, working)
+
+
+ph._capture_pristine_stripped = counting_cap
+
+
+def setup(name, pages=3):
+    p = os.path.join(ROOT, name + ".pdf")
+    make_pdf(p, pages=pages)
+    ph.save_library_map(UF, dict(ph.load_library_map(UF), **{name: name + ".pdf"}))
+    ph.save_annotations(UF, name, [dict(MARK, id=name + "1", note="")])
+    check(f"{name}: baked with its stat recorded", pipe_bake(name))
+    return p
+
+
+CAP = setup("Cap")
+ph._drop_stale_original(UF, "Cap")  # an earlier outside edit: the next bake captures
+_fired = []
+
+
+def cap_then_delete(ufd, name, working):
+    r = counting_cap(ufd, name, working)
+    if name == "Cap" and not _fired:
+        _fired.append(1)
+        delete_last(CAP)  # Preview saves right after the capture read the file
+    return r
+
+
+ph._capture_pristine_stripped = cap_then_delete
+ok = pipe_bake("Cap")
+ph._capture_pristine_stripped = counting_cap
+check("a page deleted during the pristine capture stays deleted", ok and counts(CAP) == (1, 0, 2),
+      f"{ok} {counts(CAP)}")
+
+GAP = setup("Gap")
+_real_sup = ph.load_suppressed
+_gap = {"n": 0}
+
+
+def sup_then_delete(ufd, name):
+    if name == "Gap" and _gap["n"] == 0:
+        _gap["n"] = 1
+        delete_last(GAP)  # Preview saves after the stat check, before the carry scan
+    return _real_sup(ufd, name)
+
+
+ph.load_suppressed = sup_then_delete
+ok = pipe_bake("Gap")
+ph.load_suppressed = _real_sup
+check("a page deleted between the stat check and the carry scan stays deleted",
+      ok and counts(GAP) == (1, 0, 2), f"{ok} {counts(GAP)}")
+
+section("Round 3 (R54): Klaus's own back-to-back bakes keep the pristine")
+AGAIN = setup("Again")
+_main_q = []
+_pipe = _asv.SavePipeline(UF, _main_q.append, lambda n, ms, cb: cb(), lambda n, st: None)
+_real_bake = ph.bake_annotations
+_bakes = {"n": 0}
+
+
+def bake_requesting_again(ufd, name, report=None, _again=True):
+    _bakes["n"] += 1
+    if _bakes["n"] == 1:
+        _pipe.request(name)  # a mark lands mid-bake: the worker loops once more
+    return _real_bake(ufd, name, report, _again)
+
+
+ph.bake_annotations = bake_requesting_again
+del captures[:]
+_pipe.request("Again")
+_pipe.flush("Again", timeout=60)
+ph.bake_annotations = _real_bake
+check("two bakes ran in one worker loop", _bakes["n"] == 2, str(_bakes))
+check("...with no pristine re-capture", captures == [], str(captures))
+check("...the Klaus mark once, every page kept", counts(AGAIN) == (1, 0, 3), str(counts(AGAIN)))
+ph._capture_pristine_stripped = _real_cap
+
 raise SystemExit(report())

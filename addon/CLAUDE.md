@@ -610,12 +610,18 @@ same reason.
   second reader never writes back a stale list over the first one's
   marks; every mutating bridge handler also re-reads the JSON first
   (`PdfJsViewer._sync_marks`), closing the window before `saved`
-  arrives. `save_annotations` returns whether the JSON was written: a
-  failed write keeps the marks in memory, requests no bake, and is
-  retried by the next save. A bake whose working file differs from the
-  stat recorded in `library_stats.json` (an outside save doc_sync has
-  not reported yet, or one landing mid-bake) drops the stale pristine
-  first. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
+  arrives; those re-reads use `load_annotations_strict` (None for an
+  unreadable or corrupt file), so a locked or half-synced JSON never
+  replaces the marks with `[]`. `save_annotations` writes atomically
+  (`_atomic_write_json`) and returns whether the JSON was written: a
+  failed write keeps the marks in memory, toasts `SAVE_FAILED_COPY`,
+  requests no bake, and is retried by the next save. A bake whose
+  working file differs from the stat recorded in `library_stats.json`
+  (an outside save doc_sync has not reported yet, or one landing
+  mid-bake) drops the stale pristine first; the same stat is the carry
+  scan's baseline, so a save landing after the check re-bakes. The
+  worker records each bake's stat itself, so the next bake in its
+  "again" loop sees Klaus's own write. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
   go) drops a deleted PDF's pending save and failed flag.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
   … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only

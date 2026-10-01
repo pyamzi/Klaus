@@ -167,6 +167,15 @@ class SavePipeline:
             print(f"[klausmate] bake worker error for {name}: {exc}")
             ok = False
         if ok:
+            stat = rep.get("stat")
+            if stat is not None:
+                # Recorded here, not in the main-thread post-step: a bake
+                # the worker runs next ("again") must see Klaus's own write
+                # as its own, or it drops a good pristine.
+                try:
+                    pdf_handler.record_stat(self._ufd, name, stat)
+                except Exception as exc:
+                    print(f"[klausmate] record_stat failed for {name}: {exc}")
             with self._cond:
                 self._failed.discard(name)
                 self._done.append((name, dict(rep), True))
@@ -199,13 +208,9 @@ class SavePipeline:
         stat = rep.get("stat")
         if stat is not None:  # no stat: never overwrite a good fingerprint
             try:
-                self._pin(name, stat)
+                self._pin(name, stat)  # library_stats was recorded on the worker
             except Exception as exc:
                 print(f"[klausmate] pin failed for {name}: {exc}")
-            try:
-                ph.record_stat(self._ufd, name, stat)
-            except Exception as exc:
-                print(f"[klausmate] record_stat failed for {name}: {exc}")
         omitted = rep.get("omitted_native") or []
         removed = 0
         if omitted:

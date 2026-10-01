@@ -1562,8 +1562,18 @@ def load_annotations(user_files_dir: str, name: str) -> list[dict]:
     """Persisted highlights for ``name`` (plan B).
 
     Validates every entry and skips malformed ones with a log line, so
-    one corrupted record never takes down the whole file.
+    one corrupted record never takes down the whole file. An unreadable
+    file reads as ``[]``; a caller that would write that back over the
+    marks uses ``load_annotations_strict``.
     """
+    out = load_annotations_strict(user_files_dir, name)
+    return [] if out is None else out
+
+
+def load_annotations_strict(user_files_dir: str, name: str) -> list[dict] | None:
+    """``load_annotations``, but None when the file exists and cannot be
+    read or parsed (a locked, half-synced or corrupt file is not "no
+    marks"). A missing file is ``[]``."""
     path = annotations_path_for(user_files_dir, name)
     if not os.path.isfile(path):
         return []
@@ -1572,13 +1582,13 @@ def load_annotations(user_files_dir: str, name: str) -> list[dict]:
             data = json.load(f)
     except (OSError, ValueError):
         print(f"[klausmate] annotations unreadable: {path}")
-        return []
+        return None
     if not isinstance(data, dict):
         print(f"[klausmate] annotations malformed (not a dict): {path}")
-        return []
+        return None
     raw = data.get("highlights")
     if not isinstance(raw, list):
-        return []
+        return None
     out: list[dict] = []
     for entry in raw:
         hl = _validate_highlight(entry)
@@ -1623,9 +1633,7 @@ def save_annotations(
         doc = _load_annotation_doc(user_files_dir, name)
         doc["version"] = 1
         doc["highlights"] = list(highlights or [])
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(doc, f)
+        _atomic_write_json(path, doc)  # a failed write never truncates the marks
         return True
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klausmate] failed to save annotations {path}: {exc}")
@@ -1992,9 +2000,11 @@ def bake_annotations(
         # The file was there at the start but is not at the carry scan:
         # a Library action moved it, so its outside marks are unknown.
         carry_missed = had_working and not os.path.isfile(working)
-        # What the carry scan reads: an outside save after this stat makes
-        # the commit re-bake from the new file instead of overwriting it.
-        scan_stat = file_stat(working)
+        # The stat the pristine check above trusted: an outside save any
+        # time after it (during the capture, or before the carry scan)
+        # makes the commit re-bake from the new file instead of reverting
+        # it — the re-bake's own check then drops the stale pristine.
+        scan_stat = now
         if os.path.isfile(working):
             try:
                 wreader = PdfReader(working)

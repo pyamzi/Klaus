@@ -112,6 +112,7 @@ saved_json = []
 ph.save_annotations = lambda ufd, name, hl: saved_json.append((name, list(hl))) or True  # written
 loaded = []
 ph.load_annotations = lambda ufd, name: loaded.append((ufd, name)) or [{"id": "r"}]
+ph.load_annotations_strict = ph.load_annotations  # the viewer's re-reads use the strict form
 
 section("copy constant")
 check("exact failure copy, defined once", asv.SAVE_FAILED_COPY == COPY)
