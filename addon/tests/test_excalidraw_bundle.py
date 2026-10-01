@@ -76,6 +76,17 @@ check("no CDN anywhere (the font fallback is patched to the asset path)",
 missing = [u for u in re.findall(r"url\([\"']?([^)\"']+)", css)
            if not u.startswith("data:") and not os.path.isfile(os.path.join(D, u))]
 check("every font the stylesheet names is shipped", not missing, str(missing[:3]))
+js_missing = [u for u in set(re.findall(r"\./fonts/[^\"'`)\s]*\.woff2", js))
+              if not os.path.isfile(os.path.join(D, u))]
+check("every ./fonts/ woff2 the bundle names is shipped", not js_missing, str(js_missing[:3]))
+licenses = os.path.join(fonts, "LICENSES.txt")
+check("fonts/LICENSES.txt exists", os.path.isfile(licenses))
+FAMILIES = ("Assistant", "Cascadia", "ComicShanns", "Excalifont", "Liberation",
+            "Lilita", "Nunito", "Virgil", "Xiaolai")
+lic_text = open(licenses, encoding="utf-8").read() if os.path.isfile(licenses) else ""
+check("fonts/LICENSES.txt names all 9 families, one folder each",
+      all(f in lic_text and os.path.isdir(os.path.join(fonts, f)) for f in FAMILIES),
+      str([f for f in FAMILIES if f not in lic_text]))
 
 section("served by Anki")
 init = open(os.path.join(ROOT, "klausmate", "__init__.py"), encoding="utf-8").read()

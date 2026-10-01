@@ -1,8 +1,10 @@
 excalidraw.js bundles the npm package @excalidraw/excalidraw 0.18.1
-(license: MIT) with React (LICENSE-react.txt); fonts/ holds the fonts that
-package ships. Built by scripts/build_excalidraw.sh. Licence comments of
-every bundled dependency are in excalidraw.js.LEGAL.txt. Source:
-https://github.com/excalidraw/excalidraw
+(license: MIT) with React (LICENSE-react.txt). The MIT licence below covers
+Excalidraw's code only. fonts/ holds the fonts that package ships; they are NOT
+MIT (mostly SIL OFL 1.1; Comic Shanns is MIT; Liberation Sans is GPL v2 with a
+font exception): see fonts/LICENSES.txt. Built by scripts/build_excalidraw.sh.
+Licence comments of every bundled dependency are in excalidraw.js.LEGAL.txt.
+Source: https://github.com/excalidraw/excalidraw
 
 MIT License
 

@@ -24,8 +24,9 @@ echo '{"private": true}' > package.json
 npm install --silent --no-audit --no-fund --save-exact \
   "@excalidraw/excalidraw@$EXCALIDRAW" "react@$REACT" "react-dom@$REACT" "esbuild@$ESBUILD"
 cp "$OUT/entry.jsx" entry.jsx
-rm -rf "$OUT/fonts" "$OUT/excalidraw.js" "$OUT/excalidraw.css" "$OUT"/*.LEGAL.txt
-node - "$OUT" <<'EOF'
+cp "$OUT/fonts/LICENSES.txt" "$TMP/LICENSES.txt"  # committed, not from npm: kept across the rebuild
+# esbuild writes to $TMP/dist; the tree is touched only after the patch check passes.
+node - "$TMP/dist" <<'EOF'
 const esbuild = require("esbuild");
 const fs = require("fs");
 const out = process.argv[2];
@@ -68,8 +69,11 @@ esbuild.build({
   if (patched !== 1) { console.error("font fallback patched " + patched + " times, expected 1"); process.exit(1); }
 }).catch((e) => { console.error(e.message); process.exit(1); });
 EOF
+rm -rf "$OUT/fonts" "$OUT/excalidraw.js" "$OUT/excalidraw.css" "$OUT"/*.LEGAL.txt
+cp -R "$TMP/dist/." "$OUT/"
 P=node_modules/@excalidraw/excalidraw
 cp -R "$P/dist/prod/fonts/." "$OUT/fonts/"
+cp "$TMP/LICENSES.txt" "$OUT/fonts/LICENSES.txt"
 cp node_modules/react/LICENSE "$OUT/LICENSE-react.txt"
 [ -s "$OUT/excalidraw.css.LEGAL.txt" ] || rm -f "$OUT/excalidraw.css.LEGAL.txt"
 ls -l "$OUT/excalidraw.js" | awk '{print "excalidraw.js:", $5, "bytes"}'
