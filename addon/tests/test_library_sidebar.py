@@ -281,30 +281,47 @@ def _prompt():
 
 # PyQt6 aborts the process (qFatal) on an exception in a slot unless
 # sys.excepthook is replaced: record instead, and check it stayed empty.
-_slot_errors, _real_hook = [], sys.excepthook
-sys.excepthook = lambda *exc: _slot_errors.append(exc[1])
-_ts5 = importlib.import_module("klausmate.tag_sync")
-_ts5_mw, _ts5.mw = _ts5.mw, QtWidgets.QWidget()  # Anki's main window parents the prompt
-_acts[0].trigger()
-_box = _prompt()
-check("Remove asks first, window-modal, never exec (K-114)",
-      _box is not None and _box.windowModality() == QtCore.Qt.WindowModality.WindowModal and _removed == [])
-check("...in these words",
-      _box is not None and _box.text() == "“04-L-Intro to CBC” is no longer in your Library folder. "
-      "Remove it from Klaus too?\n\nThis also removes its marks and its card tag.", _box and _box.text())
 _No, _Yes = QtWidgets.QMessageBox.StandardButton.No, QtWidgets.QMessageBox.StandardButton.Yes
-check("...with No the default", _box is not None and _box.defaultButton() is _box.button(_No))
-_box.button(_No).click()
-app.processEvents()
-check("No leaves everything alone",
-      _removed == [] and _ph5.load_missing(_uf5) == {"Intro_to_CBC"} and _prompt() is None, str(_removed))
-_acts[0].trigger()
-_prompt().button(_Yes).click()
-app.processEvents()
-check("Yes deletes it from the Library and clears its missing flag at once",
-      _removed == ["Intro_to_CBC"] and _ph5.load_missing(_uf5) == set(), str((_removed, _ph5.load_missing(_uf5))))
-_ts5.mw = _ts5_mw
-sys.excepthook = _real_hook
+
+
+def _ask_remove():
+    """Pick Remove from Library; the prompt it opened, or None."""
+    if _acts:
+        _acts[0].trigger()
+    return _prompt()
+
+
+def _answer(box, button):
+    """Click Yes or No on the prompt; False when there was no prompt."""
+    if box is None:
+        return False
+    box.button(button).click()
+    app.processEvents()
+    return True
+
+
+_slot_errors, _real_hook = [], sys.excepthook
+_ts5 = importlib.import_module("klausmate.tag_sync")
+_ts5_mw = _ts5.mw
+sys.excepthook = lambda *exc: _slot_errors.append(exc[1])
+try:
+    _ts5.mw = QtWidgets.QWidget()  # Anki's main window parents the prompt
+    _box = _ask_remove()
+    check("Remove asks first, window-modal, never exec (K-114)",
+          _box is not None and _box.windowModality() == QtCore.Qt.WindowModality.WindowModal and _removed == [])
+    check("...in these words",
+          _box is not None and _box.text() == "“04-L-Intro to CBC” is no longer in your Library folder. "
+          "Remove it from Klaus too?\n\nThis also removes its marks and its card tag.", _box and _box.text())
+    check("...with No the default", _box is not None and _box.defaultButton() is _box.button(_No))
+    check("No leaves everything alone",
+          _answer(_box, _No) and _removed == [] and _ph5.load_missing(_uf5) == {"Intro_to_CBC"}
+          and _prompt() is None, str(_removed))
+    check("Yes deletes it from the Library and clears its missing flag at once",
+          _answer(_ask_remove(), _Yes) and _removed == ["Intro_to_CBC"] and _ph5.load_missing(_uf5) == set(),
+          str((_removed, _ph5.load_missing(_uf5))))
+finally:
+    _ts5.mw = _ts5_mw
+    sys.excepthook = _real_hook
 check("no slot raised", _slot_errors == [], str(_slot_errors))
 _ph5.set_missing(_uf5, {"Intro_to_CBC"})
 _back = os.path.join(_uf5, "pdfs", "Intro_to_CBC.pdf")

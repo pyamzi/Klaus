@@ -456,6 +456,7 @@ check("profile open starts the background rescan",
       "_pdf_drive.start_library_rescan()" in _init and "_pdf_drive.rescan_library_root()" not in _init)
 
 # ------------------------------------------------------------ Task 5b
+import shutil  # noqa: E402
 import types  # noqa: E402
 
 
@@ -646,10 +647,38 @@ write_text(os.path.join(rootg, "notes.md"), "mine")
 check("a new non-PDF entry does (the scan decides what it is)", tick() is True)
 os.remove(os.path.join(rootg, "notes.md"))
 check("a directory the last scan never listed does", tick(os.path.join(rootg, "Unknown")) is True)
-pdg._fs_watcher.directoryChanged.emit(rootg)  # an event lands while the scan is applying...
-os.makedirs(os.path.join(rootg, "Week 9"))
-pdg._rearm_watcher(rootg)  # ...and the re-arm walks after it, before the debounce fires
-check("a change still waiting for its tick is not folded into the new baseline", tick() is True)
+_real_prepare = ph.prepare_rescan
+
+
+def _scan_with(change):
+    """A real scan; Finder acts right after its walk, and Qt delivers the
+    directory event only after the re-arm (it was queued behind finish)."""
+    def prepare(uf_, root_):
+        out = _real_prepare(uf_, root_)
+        change()
+        return out
+
+    ph.prepare_rescan = prepare
+    try:
+        _real_start()
+    finally:
+        ph.prepare_rescan = _real_prepare
+
+
+def _new_week():
+    os.makedirs(os.path.join(rootg, "Week 9"))
+    putg("Week 9/W9.pdf", "week nine")
+
+
+_scan_with(_new_week)
+check("a folder of PDFs added between the scan's walk and the re-arm still rescans on its tick", tick() is True)
+shutil.rmtree(os.path.join(rootg, "Week 9"))
+_real_start()
+check("(settled again)", tick() is False)
+_scan_with(lambda: os.rename(os.path.join(rootg, "Gone.pdf"), os.path.join(rootg, ".Gone.pdf.away")))
+check("a mapped file deleted between the scan's walk and the re-arm still rescans on its tick", tick() is True)
+os.rename(os.path.join(rootg, ".Gone.pdf.away"), os.path.join(rootg, "Gone.pdf"))
+_real_start()
 
 pdg.start_library_rescan = _real_start
 if _had_pv[0] is not None:

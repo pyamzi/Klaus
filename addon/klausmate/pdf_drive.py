@@ -177,6 +177,18 @@ def _visible(names) -> set:
     return {n for n in names if not n.startswith(".")}
 
 
+def _dir_snapshot(root: str) -> dict:
+    """Directory -> visible entry names, for the root and every visible
+    subdirectory: the pre-check's baseline. Taken BEFORE a scan walks, so
+    anything that changes after the walk differs from it and rescans,
+    whenever Qt gets round to delivering its event."""
+    names = {}
+    for dirpath, dirnames, files in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        names[dirpath] = _visible(dirnames + files)
+    return names
+
+
 def _tick_needs_rescan(dirs) -> bool:
     """The watcher's pre-check: False only when every changed entry is
     hidden (a bake's ``.x.pdf.<uuid>.tmp``) or a mapped PDF whose stat is
@@ -234,10 +246,12 @@ def _on_fs_tick() -> None:
         print(f"[klausmate] viewer external-change poll failed: {e}")
 
 
-def _rearm_watcher(root: str | None) -> None:
+def _rearm_watcher(root: str | None, names: dict | None = None) -> None:
     """Point the watcher at the root and every current subdirectory.
     Called after every rescan — moved or newly created directories fall
-    off a QFileSystemWatcher silently. Idempotent and cheap."""
+    off a QFileSystemWatcher silently. Idempotent and cheap. ``names`` is
+    the pre-check's new baseline (``_dir_snapshot`` from before the scan's
+    walk); None keeps the old one."""
     global _fs_watcher, _fs_debounce
     if mw is None:
         return
@@ -260,16 +274,11 @@ def _rearm_watcher(root: str | None) -> None:
         if not root or not os.path.isdir(root):
             return
         paths = [root]
-        names = {}
-        for dirpath, dirnames, files in os.walk(root):
+        for dirpath, dirnames, _files in os.walk(root):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             paths.extend(os.path.join(dirpath, d) for d in dirnames)
-            names[dirpath] = _visible(dirnames + files)
         _fs_watcher.addPaths(paths)
-        # The pre-check's baseline. Not while a tick is pending: its
-        # change may postdate the scan that just ran, and folding it in
-        # here would let that tick skip it.
-        if not _fs_debounce.isActive():
+        if names is not None:
             _dir_names.clear()
             _dir_names.update(names)
     except Exception as e:  # noqa: BLE001
@@ -327,8 +336,17 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
         finish(None, f"Folder scan failed: {exc}")
 
     QueryOp(
-        parent=mw, op=lambda _col: pdf_handler.prepare_rescan(uf, root), success=finish
+        parent=mw, op=lambda _col: _prepare(uf, root), success=finish
     ).failure(failed).without_collection().run_in_background()
+
+
+def _prepare(uf: str, root: str) -> dict:
+    """The background half: the watcher's baseline first, then the scan's
+    own walk and reads (``prepare_rescan``)."""
+    names = _dir_snapshot(root)
+    prepared = pdf_handler.prepare_rescan(uf, root)
+    prepared["names"] = names
+    return prepared
 
 
 def _after_ingest(safes: list[str]) -> None:
@@ -383,6 +401,9 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] rescan: straggler sweep failed: {exc}")
         missing_before = pdf_handler.load_missing(uf)
+        names = (prepared or {}).get("names")
+        if names is None:
+            names = _dir_snapshot(root)  # before rescan_root walks
         summary = pdf_handler.rescan_root(uf, root, folders, prepared)
         # A file that stays gone is reported every pass; readers and the
         # sidebar hear it once, when it goes.
@@ -401,7 +422,7 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
         _tell_readers(uf, root, summary)
         # Every rescan re-arms the live watcher: directories that moved
         # or appeared since the last pass must fire the next one.
-        _rearm_watcher(root)
+        _rearm_watcher(root, names)
         return summary
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] library rescan failed: {exc}")

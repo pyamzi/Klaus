@@ -479,7 +479,7 @@ def on_context_menu(sidebar, menu, item, index) -> None:
         _add(menu, "Retention History…", lambda: act.history(parent, safe))
         _add(menu, "Show in Finder", lambda: act.show_in_finder(safe))
         if safe in _missing():
-            from . import pdf_drive, pdf_handler, pdf_source
+            from . import pdf_handler, pdf_source
 
             # Only while its file is really gone: a file back on disk
             # before the next scan would go to the Trash with it.
