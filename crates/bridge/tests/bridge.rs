@@ -6,13 +6,18 @@ use std::sync::{Arc, Mutex};
 
 use anki_proto::collection::OpChangesWithId;
 use anki_proto::decks::{Deck, DeckTreeNode, DeckTreeRequest};
-use anki_proto::generic::Empty;
+use anki_proto::generic::{self, Empty};
 use anki_proto::import_export::{
     export_limit, ExportAnkiPackageOptions, ExportAnkiPackageRequest, ExportLimit,
     ImportAnkiPackageOptions, ImportAnkiPackageRequest, ImportResponse,
 };
-use anki_proto::notes::{AddNoteRequest, Note, NoteId};
+use anki_proto::media::AddMediaFileRequest;
+use anki_proto::notes::{
+    note_fields_check_response::State, AddNoteRequest, DeckAndNotetype, DefaultsForAddingRequest, Note,
+    NoteFieldsCheckResponse, NoteId,
+};
 use anki_proto::notetypes::{NotetypeId, NotetypeNames};
+use klaus_bridge::frontend::{ConvertPastedImageRequest, ConvertPastedImageResponse, SetSettingJsonRequest};
 use klaus_bridge::{new_token, serve, Bridge, CallError, Hook, WebDirs};
 use prost::Message;
 
@@ -120,11 +125,91 @@ fn imports_apkg_and_deck_list_shows_it() {
     assert_eq!((biology.new_count, biology.learn_count, biology.review_count), (1, 0, 0));
 }
 
+/// The calls Anki's editor page makes in add mode (NoteEditor.svelte), in order.
+#[test]
+fn adds_a_note_the_way_the_editor_does() {
+    let (dir, bridge) = open_temp();
+    let defaults: DeckAndNotetype =
+        call(&bridge, "defaultsForAdding", DefaultsForAddingRequest { home_deck_of_current_review_card: 0 });
+    let mut note: Note = call(&bridge, "newNote", NotetypeId { ntid: defaults.notetype_id });
+
+    // A pasted image: convertPastedImage (re-encoded to the editor's chosen jpg), then
+    // addMediaFile, then an <img> in the field.
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([225, 29, 72, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let converted: ConvertPastedImageResponse =
+        call(&bridge, "convertPastedImage", ConvertPastedImageRequest { data: png, ext: "jpg".into() });
+    assert_eq!(image::guess_format(&converted.data).unwrap(), image::ImageFormat::Jpeg);
+    let name: generic::String = call(
+        &bridge,
+        "addMediaFile",
+        AddMediaFileRequest { desired_name: "paste-1.jpg".into(), data: converted.data.clone() },
+    );
+    assert_eq!(std::fs::read(dir.path().join("collection.media").join(&name.val)).unwrap(), converted.data);
+    // Formats browsers paste besides png/jpg are converted too; unreadable bytes are
+    // refused rather than stored under a mismatched extension.
+    let mut gif = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut gif), image::ImageFormat::Gif)
+        .unwrap();
+    let from_gif: ConvertPastedImageResponse =
+        call(&bridge, "convertPastedImage", ConvertPastedImageRequest { data: gif, ext: "png".into() });
+    assert_eq!(image::guess_format(&from_gif.data).unwrap(), image::ImageFormat::Png);
+    let junk = ConvertPastedImageRequest { data: b"<svg/>".to_vec(), ext: "png".into() };
+    assert!(matches!(bridge.call("convertPastedImage", &junk.encode_to_vec()), Err(CallError::Backend(_))));
+
+    note.fields = vec![format!("Loop of Henle <img src=\"{}\">", name.val), "Countercurrent multiplier".into()];
+    note.tags = vec!["renal".into()];
+    let check: NoteFieldsCheckResponse = call(&bridge, "noteFieldsCheck", note.clone());
+    assert_eq!(check.state(), State::Normal);
+    let added: anki_proto::notes::AddNoteResponse =
+        call(&bridge, "addNote", AddNoteRequest { note: Some(note.clone()), deck_id: defaults.deck_id });
+
+    let saved: Note = call(&bridge, "getNote", NoteId { nid: added.note_id });
+    assert_eq!(saved.tags, ["renal"]);
+    assert_eq!(deck_tree(&bridge).children[0].new_count, 1);
+    // Same first field again: the editor flags it as a duplicate.
+    let dupe: NoteFieldsCheckResponse = call(&bridge, "noteFieldsCheck", note);
+    assert_eq!(dupe.state(), State::Duplicate);
+}
+
+/// Profile settings Anki keeps in Qt (pm.meta / pm.profile) and collection config.
+#[test]
+fn settings_round_trip_and_persist() {
+    let dir = tempfile::tempdir().unwrap();
+    let get = |bridge: &Bridge, method: &str, key: &str| -> String {
+        let out: generic::Json = call(bridge, method, generic::String { val: key.into() });
+        String::from_utf8(out.json).unwrap()
+    };
+    {
+        let bridge = Bridge::new().unwrap();
+        bridge.open_collection(dir.path()).unwrap();
+        assert_eq!(get(&bridge, "getMetaJson", "addTagsCollapsed"), "null");
+        assert_eq!(get(&bridge, "getConfigJson", "noSuchKey"), "null");
+        let set = SetSettingJsonRequest { key: "addTagsCollapsed".into(), value_json: b"true".to_vec() };
+        bridge.call("setMetaJson", &set.encode_to_vec()).unwrap();
+        let set = SetSettingJsonRequest { key: "lastColour".into(), value_json: b"\"#ff0000\"".to_vec() };
+        bridge.call("setProfileConfigJson", &set.encode_to_vec()).unwrap();
+    }
+    let bridge = Bridge::new().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+    assert_eq!(get(&bridge, "getMetaJson", "addTagsCollapsed"), "true");
+    assert_eq!(get(&bridge, "getProfileConfigJson", "lastColour"), "\"#ff0000\"");
+    assert_eq!(get(&bridge, "getMetaJson", "lastColour"), "null");
+}
+
 #[tokio::test]
 async fn http_contract_matches_ankis_post_ts() {
-    let (_dir, bridge) = open_temp();
+    let (col_dir, bridge) = open_temp();
+    std::fs::create_dir_all(col_dir.path().join("collection.media")).unwrap();
+    std::fs::write(col_dir.path().join("collection.media/heart.png"), "png bytes").unwrap();
+    std::fs::write(col_dir.path().join("collection.media/evil.svg"), "<svg onload=alert(1)/>").unwrap();
     let klaus_dir = tempfile::tempdir().unwrap();
     std::fs::write(klaus_dir.path().join("index.html"), "<p>klaus</p>").unwrap();
+    std::fs::write(klaus_dir.path().join("anki-host.js"), "// klaus host").unwrap();
+    std::fs::write(col_dir.path().join("collection.media/anki-host.js"), "// from a deck").unwrap();
     let anki_dir = tempfile::tempdir().unwrap();
     std::fs::write(anki_dir.path().join("index.html"), "<html><head></head><p>anki</p></html>").unwrap();
     std::fs::create_dir(anki_dir.path().join("_app")).unwrap();
@@ -132,7 +217,11 @@ async fn http_contract_matches_ankis_post_ts() {
     let hooked = Arc::new(Mutex::new(Vec::new()));
     let hook: Hook = {
         let hooked = hooked.clone();
-        Arc::new(move |method: &str, _: &[u8]| hooked.lock().unwrap().push(method.to_owned()))
+        Arc::new(move |method: &str, input: &[u8]| {
+            hooked.lock().unwrap().push(method.to_owned());
+            // A hook that answers, like askUser: echo the input back.
+            (method == "askUser").then(|| input.to_vec())
+        })
     };
     let token = new_token();
     let web = WebDirs { klaus: klaus_dir.path().into(), anki: anki_dir.path().into() };
@@ -205,6 +294,10 @@ async fn http_contract_matches_ankis_post_ts() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(*hooked.lock().unwrap(), ["importDone"]);
+    // A hook's reply is returned to the page as the protobuf response.
+    let asked = raw("askUser", b"question".to_vec()).await.unwrap();
+    assert_eq!(asked.status(), 200);
+    assert_eq!(&asked.bytes().await.unwrap()[..], b"question");
 
     // Anki's routes and assets come from Anki's build; everything else from Klaus's.
     let get = |path: &str| {
@@ -212,10 +305,25 @@ async fn http_contract_matches_ankis_post_ts() {
         let client = client.clone();
         async move { client.get(url).send().await.unwrap().text().await.unwrap() }
     };
-    // Anki pages get Klaus's host script and base styles before their own scripts.
+    // Anki pages get the host script (bridgeCommand) and base styles before their own scripts.
     let anki_page = r#"<html><head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script></head><p>anki</p></html>"#;
     assert_eq!(get("/import-anki-package/Users/me/biology.apkg").await, anki_page);
-    assert_eq!(get("/import-page/").await, anki_page);
+    assert_eq!(get("/editor/?mode=add").await, anki_page);
+    // The editor's relative media URLs come from the Collection's media folder.
+    assert_eq!(get("/editor/heart.png").await, "png bytes");
+    assert_eq!(get("/heart.png").await, "png bytes");
+    assert_eq!(get("/anki-host.js").await, "// klaus host");
+    // Media (e.g. a deck's SVG/HTML) must never run as a same-origin document.
+    for path in ["/evil.svg", "/editor/evil.svg"] {
+        let res = client.get(format!("{base}{path}")).send().await.unwrap();
+        assert_eq!(res.headers()["content-security-policy"], "default-src 'none'; style-src 'unsafe-inline'", "{path}");
+    }
+
+    // Large bodies (pasted photos) get past the default 2 MiB cap.
+    let big = ConvertPastedImageRequest { data: vec![0; 3 * 1024 * 1024], ext: "png".into() };
+    let res = raw("convertPastedImage", big.encode_to_vec()).await.unwrap();
+    assert_eq!(res.status(), 500, "reaches the handler (and is refused as unreadable), not 413");
+    assert_eq!(get("/..%2Fcollection.anki2").await, "<p>klaus</p>");
     assert_eq!(get("/_app/start.mjs").await, "// anki");
     assert_eq!(get("/decks").await, "<p>klaus</p>");
 }
