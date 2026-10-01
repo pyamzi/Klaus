@@ -222,8 +222,18 @@ origin, matching the native viewer and the bake pipeline exactly
      (/Helv) and Preview draws: the UI font runs ~7% wider and made a box
      look bigger here than in Preview. */
   .hlLayer .hltext { position: absolute; white-space: pre-wrap;
+                     overflow-wrap: break-word;
                      font-family: Helvetica, Arial, sans-serif;
                      line-height: 1.15; overflow: hidden; }
+  /* measureTextBox's hidden twin: the same font, line-height and
+     wrapping as .hltext and .editBody, laid out UNSCALED, so its CSS
+     px are page points. max-width is TEXT_BOX_MAX_W. */
+  #textMeasure { position: absolute; left: 0; top: 0;
+                 visibility: hidden; pointer-events: none;
+                 width: max-content; max-width: 480px;
+                 white-space: pre-wrap; overflow-wrap: break-word;
+                 font-family: Helvetica, Arial, sans-serif;
+                 line-height: 1.15; margin: 0; padding: 0; }
   /* ---- in-place text editor (K-150) ----
      Preview's shape: click, and a box appears ON the page that you
      type into. It is a DIRECT CHILD OF .page, deliberately NOT inside
@@ -241,14 +251,26 @@ origin, matching the native viewer and the bake pipeline exactly
      to the current zoom. Laying it out in px * scale instead would
      re-wrap the text at every zoom step and jitter on the fractional
      ones. Its content box is exactly the box that gets committed —
-     the frame is an OUTLINE, which takes no layout space, so the
-     glyphs do not shift when the editor closes and the static
-     .hltext twin takes over. */
+     the frame is SHADOWS (a halo here, a 1px ring 3px out on ::after),
+     which take no layout space, so the glyphs do not shift when the
+     editor closes and the static .hltext twin takes over.
+
+     The frame is chrome, so it must NOT zoom with the text:
+     positionTextEdit sets --k to 1 / state.scale and every frame
+     length is multiplied by it, which keeps grip, ring and halo at
+     their 100% screen size at any zoom. The ring is a box-shadow
+     rather than an outline because Blink snaps outline widths up to
+     1 layout px BEFORE the scale(): a 1/3 px outline still drew 3 px
+     wide at 300%. */
   .editLayer {
     position: absolute; z-index: 7; transform-origin: 0 0;
-    padding: 0; border: none; background: transparent;
-    outline: 1px solid var(--accent); outline-offset: 3px;
-    box-shadow: 0 0 0 6px var(--accent-selection);
+    padding: 0; border: none; background: transparent; outline: none;
+    box-shadow: 0 0 0 calc(6px * var(--k, 1)) var(--accent-selection);
+  }
+  .editLayer::after {
+    content: ""; position: absolute; pointer-events: none;
+    inset: calc(-3px * var(--k, 1));
+    box-shadow: 0 0 0 calc(1px * var(--k, 1)) var(--accent);
   }
   .editLayer .editBody {
     outline: none; white-space: pre-wrap; overflow-wrap: break-word;
@@ -258,10 +280,12 @@ origin, matching the native viewer and the bake pipeline exactly
   /* The grip is the move handle: the interior is a text field, so
      dragging inside it selects text (Preview behaves the same — you
      move an annotation by its frame, not its words). Offset ABOVE the
-     content box so it costs no layout either. */
+     content box so it costs no layout either; sized by --k like the
+     rest of the frame. */
   .editLayer .editGrip {
-    position: absolute; left: 0; right: 0; top: -11px; height: 6px;
-    border-radius: 3px; background: var(--accent); cursor: move;
+    position: absolute; left: 0; right: 0; top: calc(-11px * var(--k, 1));
+    height: calc(6px * var(--k, 1)); border-radius: calc(3px * var(--k, 1));
+    background: var(--accent); cursor: move;
   }
   .noteLayer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
   .noteLayer .noteAnchor {
@@ -842,7 +866,10 @@ function renderAnnotLayers(num, div) {
       t.style.width = w * s + "px";
       t.style.height = h * s + "px";
       t.style.color = String(rec.color || "#000000");
-      t.style.fontSize = Math.max(6, (parseFloat(rec.size) || 12) * s) + "px";
+      /* No px floor: the box is sized to its text, so a floor (it was
+         6px) outgrew the box below 50% zoom (fit-width in a narrow
+         dock) and the committed text wrapped and clipped. */
+      t.style.fontSize = (parseFloat(rec.size) || 12) * s + "px";
       hlLayer.appendChild(t);
     } else {
       let first = null;
@@ -1763,6 +1790,8 @@ document.getElementById("scroll").addEventListener("click", (ev) => {
    ones that get committed. */
 const TEXT_SIZES = [8, 10, 12, 14, 18, 24, 36, 48];
 const MAX_TEXT_CHARS = 4000;
+const TEXT_BOX_MAX_W = 480;   // pdfjs_viewer.TEXT_BOX_MAX_W, pt
+const TEXT_BOX_MAX_H = 720;   // pdfjs_viewer.TEXT_BOX_MAX_H, pt
 
 /* Mirror of pdfjs_viewer.sanitize_text — same normalization, so the
    text this box MEASURES itself against is the text Python stores.
@@ -1774,22 +1803,42 @@ function sanitizeEditText(value) {
     .slice(0, MAX_TEXT_CHARS).trim();
 }
 
-/* Mirror of pdfjs_viewer.text_box_size (mergeRects' arrangement: two
-   implementations, pinned against each other). The editor has to size
-   itself to the box that will be committed, or the text jumps and
-   re-wraps the moment the static .hltext twin takes over. */
-function textBoxSize(text, size, rows) {
-  const lines = String(text || "").split("\n");
-  let longest = 0;
-  for (const line of lines) longest = Math.max(longest, line.length);
-  const w = Math.min(Math.max(longest * size * 0.6 + 8, 60), 480);
-  const perRow = Math.max(w - 8, size * 0.6);
-  let wrapped = 0;
-  for (const line of lines) {
-    wrapped += Math.max(1, Math.ceil(line.length * size * 0.6 / perRow));
+/* The box *text* needs at *size*, in page points, MEASURED by the
+   browser in the font the box draws in (it used to be a 0.6-em-per-char
+   guess, which drew a one-line box rows tall and wider than its text).
+   Width is the widest line plus 1 pt, so a zoomed .hltext cannot wrap
+   a line the editor did not; height is measured AT that width, so it
+   is exactly the lines a box that wide holds. Whole points, so the
+   same text always measures the same and a click-away is a no-op.
+   An empty box is one line tall. */
+let textMeasurer = null;
+function measureTextBox(text, size) {
+  let m = textMeasurer;
+  if (!m || !m.isConnected) {
+    m = textMeasurer = document.createElement("div");
+    m.id = "textMeasure";
+    document.getElementById("root").appendChild(m);
   }
-  wrapped = Math.max(wrapped, rows || 0);
-  return [w, Math.min(Math.max(wrapped * size * 1.35 + 6, size * 1.5), 720)];
+  m.style.fontSize = size + "px";
+  m.style.width = "";
+  m.textContent = text || "\u200b";
+  const w = Math.min(
+    Math.ceil(m.getBoundingClientRect().width + 1), TEXT_BOX_MAX_W);
+  m.style.width = w + "px";
+  const h = Math.min(
+    Math.ceil(m.getBoundingClientRect().height), TEXT_BOX_MAX_H);
+  return [w, h];
+}
+
+/* The box the editor shows and the commit sends. A re-opened record
+   keeps its STORED box until its text or size changes, so old records
+   (sized by the old estimate, or by Preview) are never re-measured
+   just by opening them; Python applies the same rule. */
+function textBoxFor(te, text) {
+  if (te.kept && text === te.kept.text && te.size === te.kept.size) {
+    return te.kept.box;
+  }
+  return measureTextBox(text, te.size);
 }
 
 /* currentInk()'s sibling for the text row: the swatch's own theme
@@ -1884,10 +1933,13 @@ function openTextEdit(page0, xPt, yPt, rec) {
   const size = rec ? (parseFloat(rec.size) || state.tsize) : state.tsize;
   body.style.color = color;
   body.style.fontSize = size + "px";   // POINTS — scale() carries it
+  const r0 = rec && (rec.rects || [])[0];
   state.textEdit = {
     id: rec ? String(rec.id || "") : null,
     page0: page0, x: xPt, y: yPt, color: color, size: size,
     el: el, body: body,
+    kept: r0 ? { text: String(rec.text || ""), size: size,
+                 box: [r0[2], r0[3]] } : null,
   };
   /* Swallow mousedown so the press belongs to the caret: #scroll's
      handler would otherwise collapse a persisted marquee, and an
@@ -1950,9 +2002,10 @@ function repaintAnnotPage(page0) {
 function sizeTextEdit() {
   const te = state.textEdit;
   if (!te) return;
-  /* RAW text, not the sanitized form: a trailing newline you have just
-     typed must grow the box, not shrink it back a line. */
-  const box = textBoxSize(te.body.innerText || "", te.size, 0);
+  /* RAW text, not the sanitized form: Enter at the end puts the caret
+     on a new line, and the box grows by that one line (Blink adds the
+     placeholder newline the caret sits on, and the twin measures it). */
+  const box = textBoxFor(te, te.body.innerText || "");
   te.el.style.width = box[0] + "px";
   te.el.style.minHeight = box[1] + "px";
 }
@@ -1971,6 +2024,9 @@ function positionTextEdit() {
   te.el.style.left = te.x * s + "px";
   te.el.style.top = te.y * s + "px";
   te.el.style.transform = "scale(" + s + ")";
+  /* The frame is chrome, not content: --k undoes the zoom on the grip,
+     ring and halo (see .editLayer), so they keep their 100% size. */
+  te.el.style.setProperty("--k", String(1 / s));
 }
 
 /* repaint === false only when a bridge call is already on its way for
@@ -1999,23 +2055,25 @@ function commitTextEdit() {
   const te = state.textEdit;
   if (!te) return;
   const text = sanitizeEditText(te.body.innerText || "");
-  let rows = 0;
-  try {
-    rows = Math.max(1, Math.round(te.body.scrollHeight / (te.size * 1.15)));
-  } catch (e) { rows = 0; }
+  /* Measured for the text as stored (trailing newlines trimmed), and
+     sent: Python stores this box, so the .hltext that replaces the
+     editor is the box the text was laid out in. */
+  const box = textBoxFor(te, text);
   closeTextEdit(!te.id);   /* an existing record: let the push repaint */
   if (!te.id) {
     if (!text) return;
     postB64("text-add", {
       page: te.page0, x: te.x, y: te.y,
-      text: text, color: te.color, size: te.size, rows: rows,
+      text: text, color: te.color, size: te.size,
+      w: box[0], h: box[1],
     });
     return;
   }
   if (!text) { postB64("hl-remove", { id: te.id }); return; }
   postB64("text-update", {
     id: te.id, x: te.x, y: te.y,
-    text: text, color: te.color, size: te.size, rows: rows,
+    text: text, color: te.color, size: te.size,
+    w: box[0], h: box[1],
   });
 }
 

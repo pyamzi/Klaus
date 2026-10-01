@@ -1837,6 +1837,13 @@ _DA_FONT = "Helv"
 # never disagree.
 TEXT_SIZE_FALLBACK = 12
 
+# PDFKit (Preview) lays FreeText out this far inside its /Rect on every
+# side; the reader draws a text box's glyphs AT the box edge. The bake
+# outsets a text record's box by it, so the text lands where the reader
+# shows it and a box measured to fit its text is not wrapped or clipped
+# by the inset (rendered through PDFKit, 2026-09-30).
+FREETEXT_INSET_PT = 2.0
+
 
 def _num(value: float) -> str:
     """A PDF numeric token: ``12`` not ``12.0``, ``0.9804`` not
@@ -2138,6 +2145,8 @@ def bake_annotations(
                 if not rects:
                     continue
                 x, y, w, h = (float(v) for v in rects[0])
+                inset = FREETEXT_INSET_PT
+                x, y, w, h = x - inset, y - inset, w + 2 * inset, h + 2 * inset
                 pt = text_point_size(hl.get("size"))
                 free = _BakeFreeText(
                     text=str(hl.get("text") or ""),

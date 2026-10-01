@@ -1551,18 +1551,65 @@ check("its layout width and font size are POINTS — the transform "
       "carries them to the current zoom",
       'te.el.style.width = box[0] + "px";' in _H150
       and 'body.style.fontSize = size + "px";   // POINTS' in _H150)
-check("the frame takes NO layout space (an outline, and a grip offset "
+check("the frame takes NO layout space (box-shadows, and a grip offset "
       "above it), so the glyphs sit exactly where the committed "
       "record draws them and nothing shifts on commit",
-      "outline: 1px solid var(--accent); outline-offset: 3px;" in _H150
-      and "padding: 0; border: none; background: transparent;" in _H150
-      and "top: -11px;" in _H150)
-check("the page carries textBoxSize with the SAME constants as "
-      "text_box_size, so the box you type in is the box you get "
-      "(mergeRects' two-implementations arrangement)",
-      "function textBoxSize(text, size, rows)" in _H150
-      and "* 0.6 + 8, 60), 480)" in _H150
-      and "* 1.35 + 6, size * 1.5), 720)" in _H150)
+      "box-shadow: 0 0 0 calc(1px * var(--k, 1)) var(--accent);" in _H150
+      and "inset: calc(-3px * var(--k, 1));" in _H150
+      and "padding: 0; border: none; background: transparent; outline: none;"
+      in _H150
+      and "top: calc(-11px * var(--k, 1));" in _H150)
+# 2026-09-30 text-box fix: the page used to carry textBoxSize, a mirror
+# of text_box_size's 0.6-em guess. It sized a one-line box several rows
+# tall and wider than its text, and the commit's measured rows could
+# only RAISE Python's copy, so the box jumped on close. The page now
+# measures in the browser, in the same font, and sends what it measured.
+def _jsfn(head):
+    """One function's body out of the page, or "" when it is missing."""
+    parts = _H150.split(head, 1)
+    return parts[1].split("\n}\n", 1)[0] if len(parts) == 2 else ""
+
+
+_STE = _jsfn("function sizeTextEdit() {")
+check("the editor sizes from the browser's own MEASUREMENT, not from "
+      "the 0.6-em formula (which is gone from the page)",
+      "function textBoxSize(" not in _H150
+      and "* 0.6 + 8" not in _H150 and "* 1.35 + 6" not in _H150
+      and "textBoxFor(te, " in _STE and "textBoxSize" not in _STE)
+_MTB = _jsfn("function measureTextBox(text, size) {")
+check("measureTextBox lays the text out in a hidden twin and reads "
+      "its rendered size — width first, then height AT that width, so "
+      "the height is exactly what a box of that width wraps to",
+      "getBoundingClientRect()" in _MTB
+      and _MTB.find("m.style.width = w + \"px\";")
+      > _MTB.find("const w = ") > -1)
+_TMR = _H150.split("#textMeasure {", 1)[1].split("}", 1)[0] if "#textMeasure {" in _H150 else ""
+_HLT = _H150.split(".hlLayer .hltext {", 1)[1].split("}", 1)[0]
+_EBD = _H150.split(".editLayer .editBody {", 1)[1].split("}", 1)[0]
+check("the measuring twin, the editor and the committed .hltext share "
+      "font, line-height and wrapping, so all three break lines alike",
+      all("font-family: Helvetica, Arial, sans-serif;" in r
+          and "line-height: 1.15;" in r and "white-space: pre-wrap;" in r
+          and "overflow-wrap: break-word;" in r
+          for r in (_TMR, _HLT, _EBD)), repr((_TMR, _HLT, _EBD)))
+check("the twin is unscaled (its px are page points) and invisible",
+      "visibility: hidden;" in _TMR and "width: max-content;" in _TMR
+      and "max-width: 480px;" in _TMR and "transform" not in _TMR)
+check("the page's box caps are Python's",
+      "const TEXT_BOX_MAX_W = 480;" in _H150
+      and "const TEXT_BOX_MAX_H = 720;" in _H150
+      and pv.TEXT_BOX_MAX_W == 480.0 and pv.TEXT_BOX_MAX_H == 720.0)
+check("the committed .hltext font scales WITH the page — no 6px floor, "
+      "which made the glyphs outgrow a measured box below 50% zoom "
+      "(fit-width in a narrow dock is ~45%) so the text wrapped and "
+      "clipped",
+      't.style.fontSize = (parseFloat(rec.size) || 12) * s + "px";'
+      in _H150 and "Math.max(6," not in _H150)
+_TBF = _jsfn("function textBoxFor(te, text) {")
+check("an existing box keeps its STORED size until its text or size "
+      "changes, so opening an old record is not a resize",
+      "te.kept" in _TBF and "te.kept.box" in _TBF
+      and "measureTextBox(text, te.size)" in _TBF)
 check("and sanitizeEditText mirroring sanitize_text, on the same cap",
       "function sanitizeEditText(value)" in _H150
       and "MAX_TEXT_CHARS = 4000" in _H150 and pv.MAX_TEXT_CHARS == 4000)
@@ -1635,8 +1682,187 @@ check("the page's measured row count raises the estimate and never "
 check("an untrusted row count degrades to the formula alone",
       pv.text_box_size("hi", 12.0, -5) == pv.text_box_size("hi", 12.0)
       and pv.text_box_size("hi", 12.0, 10 ** 9)[1] == 720.0)
-check("the commit sends its measured rows",
-      "rows: rows," in _H150 and "te.body.scrollHeight" in _H150)
+_CTE = _jsfn("function commitTextEdit() {")
+check("the commit sends the MEASURED box (w/h in points) with both "
+      "text-add and text-update, and no longer a row count",
+      _CTE.count("w: box[0], h: box[1],") == 2
+      and "const box = textBoxFor(te, text);" in _CTE
+      and "rows" not in _CTE and "scrollHeight" not in _CTE)
+_PTE = _jsfn("function positionTextEdit() {")
+_ELR = _H150.split("  .editLayer {", 1)[1].split("}", 1)[0]
+_RING = _H150.split(".editLayer::after {", 1)[1].split("}", 1)[0] \
+    if ".editLayer::after {" in _H150 else ""
+_GRIP = _H150.split(".editLayer .editGrip {", 1)[1].split("}", 1)[0]
+check("the frame is CHROME: positionTextEdit sets --k = 1 / state.scale "
+      "and grip, ring and halo are all multiplied by it, so they stay "
+      "the same screen size at any zoom (a 6 px grip was an 18 px bar "
+      "at 300%)",
+      'te.el.style.setProperty("--k", String(1 / s));' in _PTE
+      and "const s = state.scale;" in _PTE
+      and "calc(6px * var(--k, 1)) var(--accent-selection)" in _ELR
+      and "calc(1px * var(--k, 1)) var(--accent)" in _RING
+      and "calc(-3px * var(--k, 1))" in _RING
+      and all(f"calc({v} * var(--k, 1))" in _GRIP
+              for v in ("-11px", "6px", "3px")))
+check("...and the ring is NOT an outline: Blink snaps an outline's "
+      "width up to 1 layout px before scale(), so 1/3 px drew 3 px "
+      "wide at 300% (measured in headless Chrome)",
+      "outline: none;" in _ELR and "outline:" not in _RING
+      and "outline-width" not in _H150)
+
+section("2026-09-30: the bridge stores the MEASURED box")
+check("validate_text_box passes a measured box through",
+      pv.validate_text_box(58.5, 14) == (58.5, 14.0))
+check("...clamps an absurd one to the caps, and a sliver up to 1 pt",
+      pv.validate_text_box(1e9, 1e9) == (pv.TEXT_BOX_MAX_W, pv.TEXT_BOX_MAX_H)
+      and pv.validate_text_box(0.25, 0.5) == (1.0, 1.0))
+check("...and REJECTS junk: absent, bools, strings, non-finite, zero "
+      "and negative sizes all mean 'not measured'",
+      all(pv.validate_text_box(w, h) is None for w, h in (
+          (None, None), (None, 14), (58, None), (True, 14), (58, False),
+          ("58", 14), (float("nan"), 14), (58, float("inf")),
+          (0, 14), (58, -1), ([1], 14))))
+check("make_text_record stores a measured box as-is",
+      pv.make_text_record(0, 5.0, 6.0, "hi", box=(20.0, 14.0))["rects"]
+      == [[5.0, 6.0, 20.0, 14.0]])
+check("...and falls back to text_box_size without one",
+      pv.make_text_record(0, 5.0, 6.0, "hi")["rects"]
+      == [[5.0, 6.0] + list(pv.text_box_size("hi"))])
+
+
+def _b64(obj):
+    import json as _json
+    return base64.b64encode(_json.dumps(obj).encode()).decode()
+
+
+class _FakeViewer:
+    """The handful of attributes the text handlers touch — called
+    directly, never through a Qt slot (PyQt6 aborts on a slot that
+    raises)."""
+
+    def __init__(self, highlights=None):
+        self._page_count = 3
+        self._highlights = list(highlights or [])
+        self.saves = self.pushes = 0
+
+    def _sync_marks(self):
+        pass
+
+    def _save_annotations(self):
+        self.saves += 1
+
+    def _push_annotations(self):
+        self.pushes += 1
+
+
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12,
+     "color": "#000000", "w": 60, "h": 14}))
+check("text-add stores the page's measured w/h",
+      [h["rects"] for h in _fv._highlights] == [[[10.0, 20.0, 60.0, 14.0]]]
+      and _fv.saves == 1, repr(_fv._highlights))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12}))
+check("text-add without w/h (an older payload) falls back to "
+      "text_box_size",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0)))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello world", "size": 12,
+     "w": "wide", "h": -3}))
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 1, "x": 10, "y": 20, "text": "Hello", "size": 12,
+     "w": 1e12, "h": 1e12}))
+check("text-add rejects a junk box (formula instead) and clamps an "
+      "absurd one",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0))
+      and _fv._highlights[1]["rects"][0][2:]
+      == [pv.TEXT_BOX_MAX_W, pv.TEXT_BOX_MAX_H], repr(_fv._highlights))
+
+_old_rec = dict(pv.make_text_record(0, 10.0, 20.0, "hello"),
+                rects=[[10.0, 20.0, 99.0, 22.2]])
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello there",
+     "color": "#000000", "size": 12, "w": 57, "h": 14}))
+check("text-update stores the measured w/h for edited text",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 57.0, 14.0]]
+      and _fv.saves == 1 and _fv.pushes == 1, repr(_fv._highlights))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello there",
+     "color": "#000000", "size": 12}))
+check("text-update without w/h falls back to text_box_size",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("hello there", 12.0)))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello",
+     "color": "#000000", "size": 12, "w": 31, "h": 14}))
+check("an OLD record re-committed with the same text and size keeps "
+      "its stored box — no re-measure, no save, still a push",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 99.0, 22.2]]
+      and _fv.saves == 0 and _fv.pushes == 1, repr(_fv._highlights))
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 30, "y": 40, "text": "hello",
+     "color": "#000000", "size": 12, "w": 31, "h": 14}))
+check("...and a pure MOVE keeps the stored size too",
+      _fv._highlights[0]["rects"] == [[30.0, 40.0, 99.0, 22.2]])
+_fv = _FakeViewer([_old_rec])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _old_rec["id"], "x": 10, "y": 20, "text": "hello",
+     "color": "#000000", "size": 18, "w": 45, "h": 21}))
+check("a new SIZE is a re-measure",
+      _fv._highlights[0]["rects"] == [[10.0, 20.0, 45.0, 21.0]])
+
+# The bake reads rects[0] like .hltext does, so a measured box reaches
+# the PDF's FreeText /Rect — OUTSET by the 2pt PDFKit insets FreeText
+# text on every side. Rendered through PDFKit (Preview's engine), the
+# bare measured box wrapped "Hello world" onto a clipped second line
+# and cut 18pt descenders; the old estimate's +8pt slack had hidden
+# the inset. Outset, the text fits and lands where the reader draws it
+# (the reader has no inset). Proved on a real bake into a temp
+# user_files (never klausmate/user_files).
+import tempfile as _tf930
+_ph930 = importlib.import_module("klausmate.pdf_handler")
+_uf930 = _tf930.mkdtemp(prefix="klaus_textbox_bake_")
+_root930 = _ph930._live_library_root
+_ph930._live_library_root = lambda: None   # never the real Library
+try:
+    from pypdf import PdfReader as _R930, PdfWriter as _W930
+    os.makedirs(os.path.join(_uf930, "pdfs"))
+    _w930 = _W930()
+    _w930.add_blank_page(width=612, height=792)
+    with open(os.path.join(_uf930, "pdfs", "Box.pdf"), "wb") as _f930:
+        _w930.write(_f930)
+    _rec930 = pv.make_text_record(0, 100.0, 200.0, "Hello world",
+                                  box=(61.0, 14.0))
+    _ph930.save_annotations(_uf930, "Box", [_rec930])
+    _ok930 = _ph930.bake_annotations(_uf930, "Box")
+    _ft930 = [a.get_object() for a in (_R930(os.path.join(
+        _uf930, "pdfs", "Box.pdf")).pages[0].get("/Annots") or [])
+        if a.get_object().get("/Subtype") == "/FreeText"]
+    check("the baked FreeText /Rect is the measured box outset by "
+          "FREETEXT_INSET_PT on every side (Qt top-left 100,200 61x14 "
+          "-> PDF 98,576 .. 163,594)",
+          _ok930 and len(_ft930) == 1
+          and getattr(_ph930, "FREETEXT_INSET_PT", None) == 2.0
+          and [round(float(v), 2) for v in _ft930[0]["/Rect"]]
+          == [98.0, 576.0, 163.0, 594.0],
+          repr([list(o.get("/Rect")) for o in _ft930]))
+    check("...and the stored record keeps the measured box: the outset "
+          "is applied at bake time only, so it cannot compound",
+          _ph930.load_annotations(_uf930, "Box")[0]["rects"]
+          == [[100.0, 200.0, 61.0, 14.0]])
+finally:
+    _ph930._live_library_root = _root930
+    import shutil as _sh930
+    _sh930.rmtree(_uf930, ignore_errors=True)
 _KEYS150 = {"id", "kind", "page", "rects", "text", "note", "color", "size"}
 check("a picked ink and size are written EXPLICITLY, and the KEY SET "
       "is still closed: the editor's frame is chrome, not record "

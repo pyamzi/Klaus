@@ -112,6 +112,10 @@ TEXT_SIZE_MAX = 96.0
 # A measured row count the page may send with a commit; see
 # :func:`text_box_size`.
 MAX_TEXT_ROWS = 400
+# Caps on a text box, in page points: the page measures inside them and
+# :func:`validate_text_box` clamps whatever arrives to them.
+TEXT_BOX_MAX_W = 480.0
+TEXT_BOX_MAX_H = 720.0
 
 # WCAG AA for body text. Text ink is OPAQUE glyphs on white paper, so
 # legibility is a hard floor, not a preference — see :func:`ink_for_text`.
@@ -745,10 +749,36 @@ def _validate_rows(value: Any) -> int:
     return int(min(rows, MAX_TEXT_ROWS))
 
 
+def validate_text_box(w: Any, h: Any) -> tuple[float, float] | None:
+    """The page's MEASURED box ``(w, h)`` in points, or None.
+
+    The page lays the text out in the browser, in the font it draws in,
+    and sends the size it got. That beats any estimate, but it is still
+    bridge input: both values must be real, finite and positive (bools
+    rejected), else None and the caller falls back to
+    :func:`text_box_size`. A good value is clamped into
+    [1, :data:`TEXT_BOX_MAX_W`] x [1, :data:`TEXT_BOX_MAX_H`].
+    """
+    out: list[float] = []
+    for v, cap in ((w, TEXT_BOX_MAX_W), (h, TEXT_BOX_MAX_H)):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        f = float(v)
+        if not math.isfinite(f) or f <= 0:
+            return None
+        out.append(min(max(f, 1.0), cap))
+    return out[0], out[1]
+
+
 def text_box_size(
     text: str, size: float = TEXT_SIZE_DEFAULT, rows: int = 0
 ) -> tuple[float, float]:
-    """A FreeText box sized for freshly typed *text*, in page points.
+    """An ESTIMATED FreeText box for *text*, in page points.
+
+    Only the fallback since 2026-09-30: the page measures the box it
+    typed in and sends it (:func:`validate_text_box`). This estimate is
+    for a payload without one. Records already on disk keep the box
+    they were stored with; nothing re-sizes them.
 
     Width fits the longest line at ~0.6 em/char (a Helvetica-ish
     average; the renderers clip/shrink gracefully either side), height
@@ -772,13 +802,13 @@ def text_box_size(
     """
     lines = (text or "").splitlines() or [""]
     longest = max(len(line) for line in lines)
-    w = min(max(longest * size * 0.6 + 8.0, 60.0), 480.0)
+    w = min(max(longest * size * 0.6 + 8.0, 60.0), TEXT_BOX_MAX_W)
     per_row = max(w - 8.0, size * 0.6)
     wrapped = 0
     for line in lines:
         wrapped += max(1, math.ceil(len(line) * size * 0.6 / per_row))
     wrapped = max(wrapped, _validate_rows(rows))
-    h = min(max(wrapped * size * 1.35 + 6.0, size * 1.5), 720.0)
+    h = min(max(wrapped * size * 1.35 + 6.0, size * 1.5), TEXT_BOX_MAX_H)
     return w, h
 
 
@@ -790,6 +820,7 @@ def make_text_record(
     color: str = TEXT_COLOR_DEFAULT,
     size: float = TEXT_SIZE_DEFAULT,
     rows: int = 0,
+    box: tuple[float, float] | None = None,
 ) -> dict:
     """A Klaus-native outside-text record at (*x*, *y*) page points.
 
@@ -808,7 +839,7 @@ def make_text_record(
     the on-screen twin keeps matching the baked PDF exactly, with no
     border flag to keep in step between them.
     """
-    w, h = text_box_size(text, size, rows)
+    w, h = box or text_box_size(text, size, rows)
     return {
         "id": uuid.uuid4().hex,
         "kind": "text",
@@ -837,6 +868,12 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
     record's own anchor stands otherwise. The box is re-measured from
     the new text and size, and every OTHER key — ``origin`` above all,
     which decides K-081 tombstoning — is carried through unchanged.
+
+    The box is the page's measured ``w``/``h`` when valid, else the
+    :func:`text_box_size` estimate — but only when the text or size
+    CHANGED. Same text, same size keeps the stored box: an old record
+    (estimated, or adopted from Preview) is never re-sized by a
+    click-away or a move.
 
     An empty body is NOT a delete here: the page routes that to
     ``hl-remove``, which already owns tombstoning an adopted record.
@@ -877,7 +914,16 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
             x = min(max(f, 0.0), MAX_PAGE_PT)
         else:
             y = min(max(f, 0.0), MAX_PAGE_PT)
-    w, h = text_box_size(body, size, _validate_rows(data.get("rows")))
+    try:
+        w, h = float(rects[0][2]), float(rects[0][3])
+    except (TypeError, ValueError, IndexError):
+        w = h = 0.0
+    if body != old.get("text") or size != validate_text_size(
+        old.get("size")
+    ) or w <= 0 or h <= 0:
+        w, h = validate_text_box(
+            data.get("w"), data.get("h")
+        ) or text_box_size(body, size, _validate_rows(data.get("rows")))
     updated = dict(
         old,
         text=body,
@@ -1357,6 +1403,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 ),
                 size=validate_text_size(data.get("size")),
                 rows=_validate_rows(data.get("rows")),
+                box=validate_text_box(data.get("w"), data.get("h")),
             )
         )
         self._save_annotations()
