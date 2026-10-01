@@ -8,8 +8,9 @@ pycmd("klausexcal:occlude:<base64 JSON>") with {png, scene, originX,
 originY, width, height} or {error}. prepare_occlusion turns a good answer
 into the PNG, IOE's mask SVG (one mask per text label, excal_masks) and the
 sidecar JSON that is saved as "_<image media name>.excalidraw" once IOE has
-added the notes (ImgOccAdd.use_drawing / _onAddNotesButton). The leading
-underscore keeps Check Media from listing it as unused.
+added or updated the notes (ImgOccAdd.use_drawing / _onAddNotesButton /
+_onEditNotesButton). The leading underscore keeps Check Media from listing
+it as unused; read_diagram reads it back for re-editing in edit mode.
 """
 from __future__ import annotations
 
@@ -98,6 +99,28 @@ def prepare_occlusion(result: dict, tmpdir: str, fill: str, stroke: str) -> tupl
                           "klaus": {"originX": ox, "originY": oy,
                                     "padding": PADDING, "scale": SCALE}})
     return png_path, svg_path, sidecar
+
+
+def read_diagram(media_dir: str, image_name: str) -> Optional[dict]:
+    """The scene saved beside image_name (media's _<image_name>.excalidraw,
+    with its klaus block), or None when it is missing or unreadable: then the
+    note stays an ordinary image occlusion."""
+    try:
+        with open(os.path.join(media_dir, "_" + image_name + ".excalidraw"),
+                  encoding="utf-8") as f:
+            data = json.load(f)
+        meta = data["klaus"]
+        if isinstance(data.get("elements"), list) and all(
+                math.isfinite(float(meta[k])) for k in ("originX", "originY", "padding", "scale")):
+            return data
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def has_diagram(media_dir: str, image_name: str) -> bool:
+    """True when image_name has a readable saved scene: edit mode shows Draw."""
+    return read_diagram(media_dir, image_name) is not None
 
 
 def theme_css() -> str:

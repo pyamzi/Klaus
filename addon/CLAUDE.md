@@ -1191,6 +1191,22 @@ same reason.
   the starting masks in add mode. Note type, mask SVGs and the `imgocc`
   config stay byte-compatible with IOE. svg-edit loads by file URL; only
   `image_occlusion/web/` and `image_occlusion/excalidraw/` are web exports.
+  **Excalidraw diagrams** (Image Occlusion 3/3): "Draw a diagram…"
+  (`occlude(..., draw=True)`) opens the same editor on a blank PNG with a
+  third tab, Draw (`excal_tab.DrawTab`, the offline bundle in
+  `excalidraw/`); "Use drawing" makes the export (PNG, 2×, 20 px padding)
+  the image and each text label one mask (`excal_masks.label_rects`).
+  Once IOE has added or updated the notes, the scene is saved in media as
+  `_<image media name>.excalidraw` (JSON plus a `klaus` block holding the
+  export origin), under the name Anki RETURNED; the `_` keeps Check Media
+  from listing it as unused. **Re-edit**: edit mode shows Draw (the Masks
+  Editor stays current) only when that file reads (`excal_tab.has_diagram`).
+  A Use drawing on top of an earlier drawing reads svg-edit's masks back and
+  `remap_masks` carries them over: a mask with IoU >= 0.8 on an old label's
+  box follows its label and keeps its id (so the note updates in place);
+  every other mask shifts with the scene origin and goes once wholly outside
+  the new image. The PNG gets a new media name; the old image and its scene
+  stay for notes not yet updated.
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick

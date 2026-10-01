@@ -431,15 +431,18 @@ class ImgOccEdit(QDialog):
         QShortcut(QKeySequence("Ctrl+Shift+t"), self).activated.connect(self.focusTags)
         QShortcut(QKeySequence("Ctrl+f"), self).activated.connect(self.fitImageCanvas)
 
-    def add_draw_tab(self, on_use):
-        """Klaus: the third tab, Draw, made current; Add waits for a drawing."""
+    def add_draw_tab(self, on_use, start=True):
+        """Klaus: the third tab, Draw. start (a new drawing): it is made
+        current and Add waits for a drawing; otherwise (re-editing a saved
+        one) the Masks Editor stays current and nothing is blocked."""
         from .excal_tab import DrawTab
 
         self.draw_tab = DrawTab(self, on_use)
         index = self.tab_widget.addTab(self.draw_tab, _("&Draw"))
         self.tab_widget.setTabToolTip(index, _("Draw a diagram; its text labels become masks"))
-        self.tab_widget.setCurrentIndex(index)
-        self.set_add_enabled(False)
+        if start:
+            self.tab_widget.setCurrentIndex(index)
+            self.set_add_enabled(False)
         return self.draw_tab
 
     def set_add_enabled(self, enabled):

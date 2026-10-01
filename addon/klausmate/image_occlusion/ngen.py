@@ -166,6 +166,7 @@ class ImgOccNoteGenerator(object):
             state = "reset"
 
         image_path = mw.col.media.add_file(self.image_path)
+        self.media_name = image_path  # Klaus: as in generateNotes (the diagram sidecar follows it)
         img = path_to_img_element(image_path)
 
         logging.debug("mnode_indexes %s", self.mnode_indexes)

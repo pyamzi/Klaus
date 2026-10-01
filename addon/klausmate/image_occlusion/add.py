@@ -47,6 +47,7 @@ from aqt.utils import showWarning, tooltip
 
 from . import excal_tab
 from .config import *
+from .excal_masks import remap_masks
 from .consts import SUPPORTED_EXTENSIONS
 from .dialogs import io_critical, io_info
 from .editor import ImgOccEdit
@@ -95,6 +96,10 @@ class ImgOccAdd(object):
         self.draw = False
         self.draw_dir = None
         self.excal_sidecar = None
+        # The scene (with its klaus block) the current masks were made from:
+        # the saved one in edit mode, else the last drawing used. A drawing
+        # used on top of it carries the masks over (remap_masks).
+        self.excal_scene = None
         loadConfig(self)
 
     def occlude(self, image_path=None, initial_svg=None, draw=False):
@@ -265,6 +270,13 @@ class ImgOccAdd(object):
         self.imgoccedit = dialog
         if self.draw:
             dialog.add_draw_tab(self.use_drawing).load(None)
+        elif self.mode != "add":
+            # Klaus: a note whose image has its saved scene re-opens it on
+            # the Draw tab; the Masks Editor stays current.
+            self.excal_scene = excal_tab.read_diagram(
+                mw.col.media.dir(), os.path.basename(opref["image"]))
+            if self.excal_scene is not None:
+                dialog.add_draw_tab(self.use_drawing, start=False).load(self.excal_scene)
         logging.debug("Launching new ImgOccEdit instance")
 
         url = QUrl.fromLocalFile(svg_edit_path)
@@ -369,9 +381,12 @@ class ImgOccAdd(object):
 
     def use_drawing(self, result):
         """Klaus: "Use drawing" on the Draw tab. The drawing becomes the
-        image (the change-image path) with one mask per text label, Add is
-        allowed, and the Masks Editor shows. False, changing nothing, when
-        the result can't be used (a tooltip says why) or the editor closed."""
+        image (the change-image path) and the Masks Editor shows. The first
+        drawing of a session gets one mask per text label; on top of an
+        earlier drawing (a repeat use, or a saved diagram in edit mode) the
+        masks svg-edit holds are carried over by remap_masks, once svg-edit
+        hands them back. False, changing nothing, when the result can't be
+        used (a tooltip says why) or the editor closed."""
         dialog = self.imgoccedit
         if dialog.svg_edit is None:  # closed meanwhile (Review Focus 4)
             return False
@@ -385,9 +400,34 @@ class ImgOccAdd(object):
         except (ValueError, OSError) as e:
             tooltip(str(e), parent=dialog)
             return False
+        new, old = json.loads(sidecar), self.excal_scene
+        if old is None:
+            self._show_drawing(png_path, svg, width, height, sidecar, new)
+            return True
+
+        def carry_over(current):
+            # svg-edit's answer, on the main thread: a slot exception would abort Anki
+            try:
+                if dialog.svg_edit is None:  # closed meanwhile
+                    return
+                masks = remap_masks(current, old, old["klaus"], new, new["klaus"], width, height)
+                self._show_drawing(png_path, masks, width, height, sidecar, new)
+            except Exception as e:
+                print("[klausmate] draw: masks not carried over: %s: %s" % (type(e).__name__, e))
+                tooltip(_("Klaus: couldn't carry the masks over; press Use drawing again"),
+                        parent=dialog)
+                if dialog.draw_tab is not None:
+                    dialog.draw_tab.dirty = True
+
+        # See onAddNotesButton about leaveContext().
+        dialog.svg_edit.evalWithCallback(
+            "svgCanvas.leaveContext(); svgCanvas.svgCanvasToString();", carry_over)
+        return True
+
+    def _show_drawing(self, png_path, svg, width, height, sidecar, scene):
         # setSvgString sizes the canvas from the SVG, so the background and
         # resolution come after it, as onChangeImage sets them.
-        # Masks are replaced; Task 8 keeps the hand-drawn ones.
+        dialog = self.imgoccedit
         dialog.svg_edit.eval(
             "svgEditor.loadFromString(%s);\n"
             "svgCanvas.setBackground('#FFF', '%s');\n"
@@ -396,11 +436,11 @@ class ImgOccAdd(object):
         )
         self.image_path = png_path
         self.excal_sidecar = sidecar
+        self.excal_scene = scene
         dialog.set_add_enabled(True)
         dialog.tab_widget.setCurrentIndex(0)
         dialog.fitImageCanvas()
         dialog.fitImageCanvas(delay=200)
-        return True
 
     def _save_sidecar(self, image_name):
         """Klaus: the scene as _<image media name>.excalidraw, beside the image
@@ -413,7 +453,7 @@ class ImgOccAdd(object):
                 f.write(self.excal_sidecar)
         except OSError as e:
             print("[klausmate] draw: the scene was not saved: %s" % e)
-            tooltip(_("Klaus: the cards were added, but the drawing couldn't be saved for editing"))
+            tooltip(_("Klaus: the cards were saved, but the drawing couldn't be saved for editing"))
 
     def onAddNotesButton(self, choice, close):
         dialog = self.imgoccedit
@@ -489,8 +529,14 @@ class ImgOccAdd(object):
             self.ed, svg, self.image_path, self.opref, tags, fields, did
         )
         # Klaus: updateNotes may ask first (window-modal); the rest runs
-        # once the notes are written.
-        gen.updateNotes(lambda r: self._afterEditNotes(dialog, r))
+        # once the notes are written. A used drawing's scene goes beside the
+        # new image's name (old notes keep the old image and its scene).
+        def done(r):
+            if self.excal_sidecar is not None:
+                self._save_sidecar(gen.media_name)
+            self._afterEditNotes(dialog, r)
+
+        gen.updateNotes(done)
 
     def _afterEditNotes(self, dialog, r):
         """The rest of _onEditNotesButton, once updateNotes is done"""
