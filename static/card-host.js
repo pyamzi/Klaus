@@ -24,10 +24,12 @@
     });
 
     // Anki handles reviewer keys in Qt, globally; with focus inside this frame the
-    // review screen wouldn't see them, so forward them. Typing in the type-in box
-    // stays local (its Enter already sends "ans").
+    // review screen wouldn't see them, so forward the reveal/grade keys (the same
+    // power card JS has via pycmd("ans"/"easeN")). Undo and leaving are not
+    // forwarded: card JS mustn't trigger them. Typing in the type-in box stays local.
+    const forwarded = [" ", "Enter", "1", "2", "3", "4"];
     addEventListener("keydown", (e) => {
-        if (e.target?.id === "typeans") return;
-        toParent({ key: e.key, ctrl: e.ctrlKey || e.metaKey });
+        if (e.target?.id === "typeans" || e.ctrlKey || e.metaKey || !forwarded.includes(e.key)) return;
+        toParent({ key: e.key });
     });
 })();

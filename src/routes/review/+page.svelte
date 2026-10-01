@@ -110,9 +110,10 @@
     frameReady = new Promise((resolve) => frame.addEventListener("load", () => resolve(), { once: true }));
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frame.contentWindow || !event.data?.klaus) return;
-      const { cmd, key, ctrl, typedAnswer } = event.data;
+      const { cmd, key, typedAnswer } = event.data;
       if (typeof cmd === "string") onCommand(cmd);
-      if (typeof key === "string") onKey(key, !!ctrl);
+      // Card JS can post these too, so only reveal/grade keys count from the frame.
+      if (typeof key === "string" && [" ", "Enter", "1", "2", "3", "4"].includes(key)) onKey(key, false);
       if ("typedAnswer" in event.data) pendingTyped?.(typeof typedAnswer === "string" ? typedAnswer : null);
     };
     const onKeydown = (e: KeyboardEvent) => onKey(e.key, e.ctrlKey || e.metaKey);
