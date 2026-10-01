@@ -825,28 +825,25 @@ def panel_header_qss(night: bool) -> str:
 
 
 def pdf_panel_qss(night: bool) -> str:
-    """The PDF viewer's own panel, objectName ``KlausPdfPanel`` (K-153).
+    """The PDF reader's own panel, objectName ``KlausPdfPanel`` (K-153).
 
     Pouya: "I want it to be the same throughout the entire Anki app,
-    because it should be consistent no matter what." The viewer lives
-    in three hosts — the editor panel, the Library window and the
-    review-time lecture dock — and only the parts that SELF-STYLE
-    (the native viewer's find bar and thumbnail strip, both deleted
-    with it in PDF reader 5/5, and pdf.js's ``css_vars``) already
-    looked identical in all three. Everything that drifted, drifted
-    because it relied on ancestry: ``PdfSidebar`` was a plain QWidget
-    with no sheet and no ``WA_StyledBackground``, so it painted NOTHING
-    and whatever was behind it showed through every gap around the
-    viewer. In the Library that ambient was ``library_qss``; in the
-    lecture dock, ``mw``'s stock palette; in the editor panel,
-    whatever the host happened to be.
-    And ``klausbook_design`` defaults FALSE, so two of the three hosts
-    inherited nothing at all in a default profile while the Library —
-    Klaus's own window — was styled unconditionally. That asymmetry is
-    the whole reason the Library's viewer looked best.
+    because it should be consistent no matter what." The reader appears
+    in more than one host, and when this was written (K-153) only the
+    parts that SELF-STYLED looked identical everywhere: the native
+    viewer's find bar and thumbnail strip (both deleted with it in PDF
+    reader 5/5) and pdf.js's ``css_vars``, which still style the page.
+    Everything that drifted, drifted because it relied on ancestry:
+    ``PdfSidebar`` was a plain QWidget with no sheet and no
+    ``WA_StyledBackground``, so it painted NOTHING and whatever was
+    behind it showed through every gap around the reader — a different
+    ambient in each host window (the since-deleted Library window's
+    ``library_qss``, ``mw``'s stock palette under the lecture panel).
+    With ``klausbook_design`` off by default, most hosts inherited
+    nothing at all.
 
     So ``PdfSidebar`` applies this TO ITSELF: no host can forget it,
-    and a fourth host gets the look for free. ONE id selector,
+    and a new host gets the look for free. ONE id selector,
     deliberately. A child widget's own stylesheet still beats this
     inherited one irrespective of specificity (measured, K-153).
 

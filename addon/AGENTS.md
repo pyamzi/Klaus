@@ -11,8 +11,8 @@ Klaus app, not the add-on. See [completion evidence and limits](docs/superpowers
 Older API-first and cloud-only designs are dated history, not current guidance.
 
 Klaus is an Anki add-on built around the Library: imported lecture PDFs,
-semantic card matching, per-PDF tags and retention scores, a native PDF
-viewer, annotations and image cropping. The page store remains;
+semantic card matching, per-PDF tags and retention scores, a PDF reader
+(pdf.js), annotations and image cropping. The page store remains;
 duplicate matching now uses cosine thresholds without a reasoning pass.
 See [the matching runner](klausmate/index_queue.py) and
 [retention](klausmate/retention.py).

@@ -12,8 +12,8 @@ Older API-first and cloud-only designs are dated history, not current guidance.
 
 The real project here is **`klausmate/`** — "Klaus", an Anki addon for a
 lecture-PDF library with per-PDF retention scoring, semantic card↔PDF
-matching (indexing a PDF tags every card it covers), a native
-PDF viewer with highlights/sticky notes, and image cropping. Around it:
+matching (indexing a PDF tags every card it covers), a PDF reader
+(pdf.js) with highlights/sticky notes, and image cropping. Around it:
 `tests/` (headless logic tests), `board/` + `context/` (the multi-agent
 kanban board — see below), `References/` and `scripts/` (vendored
 reference repos + packaging), and `AGENTS.md` (deep architecture guide:
@@ -528,9 +528,10 @@ same reason.
   the live file. Each `read(begin, end)` opens and closes the file (an
   open handle would block `os.replace` on Windows) and checks the load
   fingerprint `(st_ino, st_mtime_ns, st_size)` (`pdf_handler.file_stat`);
-  a mismatch raises `StaleSource`. `range_reply` bounds the range to the
-  file, caps it at `MAX_RANGE` (1 MB), refuses an old generation and
-  answers `{"stale": true}` for a changed file. `FIRST_CHUNK` = 256 KB.
+  a mismatch raises `StaleSource`. `read` also bounds the range to the
+  file and caps it at `MAX_RANGE` (1 MB). `range_reply` refuses an old
+  generation, calls `read`, and answers `{"stale": true}` for a changed
+  file. `FIRST_CHUNK` = 256 KB.
   The snapshot goes on teardown and at the next load;
   `sweep_snapshots` clears leftovers at a session's first load.
 - `doc_sync.py` (aqt-free above its Qt-glue divider): the folder-sync
@@ -539,14 +540,14 @@ same reason.
   a `QFileSystemWatcher`, re-added after a save-over drops it. Events to
   subscribers: `changed` (an outside edit, once size and `mtime_ns` hold
   across two checks `STABLE_MS` = 150 ms apart), `moved`, `missing` and
-  `back` (the last three from the Library rescan's `finish` in
-  `pdf_drive`, AFTER it applies the new mapping). Klaus's own writes are
+  `back` (the last three from `pdf_drive.rescan_library_root` →
+  `_tell_readers`, AFTER the new mapping is applied). Klaus's own writes are
   pinned (`pin_own_write`) and classify as `own`, never `changed`. The
   reader answers `changed` by reloading in place, page and zoom kept,
   with "Updated from disk" (an open text box commits first); `moved` by
-  re-pointing with no reload; `missing` by closing the tab with
-  "<name> was removed from your Library folder." (marks, JSON and tag
-  kept).
+  re-pointing with no reload; `missing` by clearing the reader (the tab
+  stays) with "<name> was removed from your Library folder." (marks,
+  JSON and tag kept).
 - `annotation_save.py` (aqt-free above its Qt-glue divider):
   `SavePipeline`, the ONE bake path. `request(name)` restarts a
   `DEBOUNCE_MS` = 500 ms debounce; then `bake_annotations` runs on a
@@ -558,8 +559,10 @@ same reason.
   the file yet; they're kept and will retry.") and the pipeline retries
   on the next change and when `doc_sync` reports the file `back` or
   `moved`. `flush_all()` runs on `profile_will_close`; a reader flushes
-  its PDF when it lets go of it, and a reader that opens a PDF whose JSON
-  is newer than the file requests a bake.
+  its PDF on `clear()`, `cleanup()` and before a reload from disk.
+  Switching to another PDF releases without a flush — the running
+  debounce still bakes it. A reader that opens a PDF whose JSON is newer
+  than the file requests a bake.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
   … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only
   shows names and reports `activated` / `closed` / `add_requested`;
@@ -1427,7 +1430,7 @@ same reason.
   the banned class too (they exec internally). QMenu.exec is fine.
   Ban pins live in tests/test_bridge_reentrancy.py + test_drive.py.
 - Defensive `try/except` around every Qt call; guarded imports with `None`
-  fallbacks (`PDF_VIEWER_AVAILABLE` pattern); log with
+  fallbacks (`PDFJS_AVAILABLE` pattern); log with
   `print("[klausmate] ...")`; tooltips only for capture-style actions
   (selection/copy is silent, Preview-style).
 - pypdf is vendored in `klausmate/vendor/` (6.11.0, has

@@ -1,27 +1,25 @@
-"""pdf.js-backed PDF viewer (K-095/K-096; parity K-097..K-099) — the
-flicker fix.
+"""The PDF reader: pdf.js in an AnkiWebView (K-095/K-096; parity
+K-097..K-099).
 
-QPdfView flickers structurally: pdfium delivers page bitmaps async (blank
-flash on scroll/zoom) and the Python-side selection overlay repaints in a
-separate pass from the viewport. This module hosts ``web/pdfjs_viewer.html``
-(vendored pdf.js 3.11.174 in ``web/pdfjs/``) in an AnkiWebView instead:
-canvases are GPU-composited by Chromium, scrolling translates
-already-rendered layers, and the text layer gives native browser selection.
+This module hosts ``web/pdfjs_viewer.html`` (vendored pdf.js 3.11.174 in
+``web/pdfjs/``): canvases are GPU-composited by Chromium, scrolling
+translates already-rendered layers, and the text layer gives native
+browser selection. It replaced the QPdfView renderer, which flickered
+because pdfium delivered page bitmaps late.
 
-Every reader runs on it (PDF reader 3/5); the native ``PdfViewer`` was
-deleted in PDF reader 5/5, so without QtWebEngine (``PDFJS_AVAILABLE``)
-``PdfSidebar`` shows an "unavailable" label instead.
+It is the only reader: the native ``PdfViewer`` was deleted in PDF
+reader 5/5, so without QtWebEngine (``PDFJS_AVAILABLE``) ``PdfSidebar``
+shows an "unavailable" label instead.
 
 Division of labour (K-097..K-099): the page owns rendering and gestures;
 THIS MODULE OWNS THE ANNOTATIONS JSON. JS sends mutations over the bridge
 (``hl-add``/``hl-remove``/``note-edit``/``text-add``/``text-update``),
 Python mutates ``_highlights``,
-persists via ``pdf_handler.save_annotations`` + the same debounced bake
-the native viewer uses, then pushes the canonical records back through
-``window.klausSetAnnotations``. Record schema is identical to the native
-viewer's (0-based ``page``, ``rects`` in top-left-origin page points), so
-the bake pipeline and K-081 external-delete tombstones are shared, not
-forked.
+persists via ``pdf_handler.save_annotations``, requests the bake from
+``annotation_save``'s pipeline (500 ms debounce), then pushes the canonical
+records back through ``window.klausSetAnnotations``. Records keep the
+schema the bake reads (0-based ``page``, ``rects`` in top-left-origin page
+points), shared with K-081's external-delete tombstones.
 
 Feed (PDF reader 2/5): Python hands the page the file length and the
 first ``pdf_source.FIRST_CHUNK`` bytes; pdf.js asks for further byte
@@ -96,7 +94,7 @@ MAX_PDF_MB = 200
 
 _BRIDGE_PREFIX = "klausmate_pdfjs:"
 
-HIGHLIGHT_COLOR = "#fadc50"  # native viewer's default highlight yellow
+HIGHLIGHT_COLOR = "#fadc50"  # default highlight yellow (the deleted native viewer's)
 
 # Outside-text defaults, matching what the bake assumes when a record
 # omits them (12pt, black) — but written EXPLICITLY into new records:
@@ -434,9 +432,9 @@ def records_from_rect_map(
     pages: Any, color: str = HIGHLIGHT_COLOR
 ) -> list[dict]:
     """New highlight records from the JS selection map
-    ``{page0: [[x, y, w, h] page points, ...]}`` — same shape the native
-    viewer's ``_add_highlight_from_selection`` mints (uuid id, 0-based
-    int page, float rects, default yellow). Malformed pages/rects are
+    ``{page0: [[x, y, w, h] page points, ...]}`` — the shape the deleted
+    native viewer minted too (uuid id, 0-based int page, float rects,
+    default yellow). Malformed pages/rects are
     skipped, never raised on.
 
     Every page's rects go through :func:`merge_rects` first. The page
@@ -1002,7 +1000,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._page_loaded = False
 
     # Keys the PAGE owns. Without claiming these via ShortcutOverride
-    # (the same gotcha the native viewer documents), Anki's window-level
+    # (CLAUDE.md's host-window shortcut gotcha), Anki's window-level
     # QActions fire first: Cmd+/- zooms the WHOLE webview frame (page,
     # sidebar and all) instead of the PDF, and Cmd+F opens the host
     # window's find. Accepting the override delivers the key to the
@@ -1279,7 +1277,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def _bridge_hl_add(self, payload: str) -> None:
         data = decode_b64_json(payload) or {}
         # The page sends the swatch row's chosen ink; anything that is
-        # not a hex colour falls back to the native yellow rather than
+        # not a hex colour falls back to the default yellow rather than
         # landing in the JSON verbatim (JS is never trusted).
         color = validate_hex_color(data.get("color"))
         records = records_from_rect_map(data.get("pages"), color=color)
@@ -1307,8 +1305,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         ]
         # A deleted ADOPTED mark must stay deleted (K-081) — tombstone
         # external records so the next foreign-annotation scan doesn't
-        # resurrect them. Same rule as the native viewer's
-        # _remove_highlight.
+        # resurrect them (the rule the deleted native viewer's
+        # _remove_highlight followed).
         try:
             rec = removed[0]
             if rec.get("origin") == "external" and self._annotations_name:
@@ -1494,8 +1492,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             if cb is not None:
                 cb.setText(text)  # selection copy: silent, Preview-style
                 if data.get("toast"):
-                    # Menu-driven page capture — parity with the native
-                    # viewer's confirmation (critique H1 finding).
+                    # Menu-driven page capture confirms with a toast
+                    # (critique H1 finding).
                     try:
                         from aqt.utils import tooltip
 
@@ -1764,8 +1762,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         """Scan the working PDF for outside text/highlights on a daemon
         thread (multi-MB pypdf parse must never block the UI); the
         merge/save hops back to the main thread so it cannot race the
-        synchronous _save_annotations writes. Same shape as the native
-        viewer's method."""
+        synchronous _save_annotations writes."""
         try:
             from . import settings
             from . import pdf_handler
