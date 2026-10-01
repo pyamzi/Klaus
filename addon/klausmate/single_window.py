@@ -280,10 +280,27 @@ _EMBEDDED: dict = {}
 
 def embedded_class(base) -> type:
     """``base`` with ``_Shim`` after it in the method resolution order, so
-    its ``super().__init__(None, Window)`` lands in the shim. Cached."""
+    its ``super().__init__(None, Window)`` lands in the shim. Cached.
+
+    Browse's Cmd+W (``actionClose``) runs ``_handle_close``, which closes the
+    ACTIVE window unless it is Browse; hosted, that is mw. The override sits
+    ahead of the base, so ``setupUi`` connects it: mw counts as Browse (Close
+    Browse), anything else (a dialog) keeps Anki's handling."""
     cls = _EMBEDDED.get(base)
     if cls is None:
-        cls = type(f"Embedded{base.__name__}", (base, _Shim), {})
+        ns = {}
+        if hasattr(base, "_handle_close"):
+            def _handle_close(self) -> None:
+                from aqt.qt import QApplication
+
+                active = QApplication.activeWindow()
+                if active is None or active is self.window():
+                    self.close()
+                else:
+                    base._handle_close(self)
+
+            ns["_handle_close"] = _handle_close
+        cls = type(f"Embedded{base.__name__}", (base, _Shim), ns)
         _EMBEDDED[base] = cls
     return cls
 
@@ -743,38 +760,11 @@ def _replace_add_placeholder() -> None:
         pass
 
 
-def _route_close(browser) -> None:
-    """Cmd+W (Browse's actionClose) runs Anki's ``_handle_close``, which closes
-    the active window unless it is Browse; hosted, that is mw. Rewire it so
-    mw counts as Browse (Close Browse) and a dialog keeps Anki's handling."""
-    action = getattr(getattr(browser, "form", None), "actionClose", None)
-    if action is None:
-        return
-    try:
-        action.triggered.disconnect()  # setupUi bound Browser._handle_close
-    except TypeError:
-        pass
-    action.triggered.connect(lambda *_: _close_hosted_browse(browser))
-
-
-def _close_hosted_browse(browser) -> None:
-    from aqt.qt import QApplication, QDialog
-
-    active = QApplication.activeWindow()
-    if active is None or active is browser or active is browser.window():
-        browser.close()
-    elif isinstance(active, QDialog):
-        active.reject()
-    else:
-        active.close()
-
-
 def _on_browser_will_show(browser) -> None:
     try:
         if _state.host is None or not _hosted_in(browser, _state.host.pages["browse"]):
             return  # a stock top-level Browse (fallback) is left alone
         _hide_menu_bar(browser)
-        _route_close(browser)
         _drop_placeholders(_state.host.pages["browse"])
         _state.browser = browser
         # Klaus's refresh must run AFTER Browse's own handler (registered per
