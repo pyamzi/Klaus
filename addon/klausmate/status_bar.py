@@ -280,11 +280,12 @@ class StatusBar(QWidget):
 
     def _add_toggles(self, row, browser) -> None:
         from .browse_toggles import _PaneToggle, _VisibilityWatcher
+        from . import pane_keep
 
         dock = getattr(browser, "sidebarDockWidget", None)
         if dock is not None:
             btn = _PaneToggle("left", "sidebar", dock.isVisible())
-            btn.clicked.connect(dock.setVisible)
+            btn.clicked.connect(lambda on, d=dock: pane_keep.set_visible_keeping(d, on, _editor_column(browser)))
             try:
                 dock.visibilityChanged.connect(btn.setChecked)
             except Exception:  # noqa: BLE001
@@ -294,7 +295,7 @@ class StatusBar(QWidget):
         col = _editor_column(browser)
         if col is not None:
             btn = _PaneToggle("right", "editor", col.isVisible())
-            btn.clicked.connect(col.setVisible)
+            btn.clicked.connect(lambda on, c=col: pane_keep.set_visible_keeping(c, on, getattr(browser, "sidebarDockWidget", None)))
             _VisibilityWatcher(col, btn.setChecked)
             row.addWidget(btn)
             self.editor_btn = btn

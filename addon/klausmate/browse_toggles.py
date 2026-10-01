@@ -571,11 +571,15 @@ def push_panes() -> None:
 
 
 def toggle_pane(side: str) -> None:
-    pane = _pane_widgets().get(side)
+    panes = _pane_widgets()
+    pane = panes.get(side)
     if pane is None:
         return
     widget = pane[1]
-    widget.setVisible(widget.isHidden())
+    other = panes.get("right" if side == "left" else "left")
+    from . import pane_keep
+
+    pane_keep.set_visible_keeping(widget, widget.isHidden(), other[1] if other else None)
     push_panes()
 
 
