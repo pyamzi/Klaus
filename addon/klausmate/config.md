@@ -230,6 +230,13 @@ removed. Use the external MCP client setup below.
   background/accent setting stays stored and comes back with the
   switch). Klaus's own windows (Preferences, Library, PDF viewer) keep
   their design either way, and every tool keeps working.
+- **single_window**: `true` (default) hosts Anki's Add and Browse windows
+  as tabs beside the deck screen (the Add tab is Library tree | PDF
+  reader | Add editor) and Edit Current in a right dock of the main
+  window, built there from the start (never moved). `false`
+  returns to Anki's separate windows. Klaus also falls back to them for
+  the session, with a notice, if an Anki update breaks the hosting.
+
 - **background_mode**: `"theme"` (default — no wallpaper: Anki's own
   ground, with the Klaus panels on it whenever the design is on),
   `"color"` (gradient spheres — there is no flat-colour mode), or

@@ -260,6 +260,7 @@ PCT_GAP = 8  # px between the name and the %, and after the %
 
 _state: dict = {"means": None, "busy": False, "again": False, "timer": None, "status": {}}
 _sidebars: "weakref.WeakSet" = weakref.WeakSet()
+_trees: "weakref.WeakSet" = weakref.WeakSet()  # library_tree.LibraryTree instances (the Add tab)
 
 
 def _is_tag(item) -> bool:
@@ -271,10 +272,16 @@ class LibraryNameDelegate(QStyledItemDelegate):
     default one. It changes two things: a Library row's drawn name, and
     a right-aligned retention % on every tag row."""
 
+    def tag_of(self, index) -> str | None:
+        """The tag a row paints for: Anki's SidebarItem behind the index.
+        ``library_tree.TreeDelegate`` reads its own role instead."""
+        item = index.internalPointer()
+        return getattr(item, "full_name", None) if _is_tag(item) else None
+
     def initStyleOption(self, option, index) -> None:  # noqa: N802 - Qt override
         super().initStyleOption(option, index)
         try:
-            name = getattr(index.internalPointer(), "full_name", None)
+            name = self.tag_of(index)
             label = label_for(name)
             if label:
                 option.text = label
@@ -291,7 +298,7 @@ class LibraryNameDelegate(QStyledItemDelegate):
 
     def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802 - Qt override
         try:
-            name = getattr(index.internalPointer(), "full_name", None)
+            name = self.tag_of(index)
             reason = status_for(name)
             if event.type() == QEvent.Type.ToolTip and reason:
                 QToolTip.showText(event.globalPos(), f"{label_for(name)}\n{reason}", view)
@@ -302,8 +309,8 @@ class LibraryNameDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index) -> None:
         try:
-            item = index.internalPointer()
-            text = percent_text(_state["means"], item.full_name) if _is_tag(item) else None
+            tag = self.tag_of(index)
+            text = percent_text(_state["means"], tag) if tag else None
         except Exception:  # noqa: BLE001
             text = None
         if not text:
@@ -361,6 +368,21 @@ def _repaint() -> None:
             sidebar.viewport().update()
         except Exception:  # noqa: BLE001 - a closed Browse is not an error
             pass
+    for tree in list(_trees):
+        try:
+            tree.view.viewport().update()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def refresh_trees() -> None:
+    """The Library changed (names, folders, files): rebuild every Add-tab
+    tree. The Anki sidebars rebuild themselves through Anki."""
+    for tree in list(_trees):
+        try:
+            tree.refresh()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] library tree refresh failed: {exc}")
 
 
 def _task(report) -> None:
@@ -379,7 +401,7 @@ def refresh_retention() -> None:
     if _state["busy"]:
         _state["again"] = True
         return
-    if not _sidebars or mw is None or getattr(mw, "col", None) is None:
+    if (not _sidebars and not _trees) or mw is None or getattr(mw, "col", None) is None:
         _state["means"] = None  # stale by the next open; recomputed then
         return
     _state["busy"] = True
@@ -426,8 +448,8 @@ def status_for(tag: str | None) -> str | None:
 def refresh_status() -> None:
     """Which PDFs get a warning icon. Reads index manifests only (no card
     index), on the main thread: a few dozen small JSON files."""
-    if not _sidebars:
-        return  # recomputed when Browse opens
+    if not _sidebars and not _trees:
+        return  # recomputed when Browse or the Add tab opens
     try:
         from . import embeddings, index_queue, retention
 
@@ -457,29 +479,27 @@ def _add(menu, text: str, fn: Callable) -> None:
     menu.addAction(text).triggered.connect(lambda *_a: fn())
 
 
-def on_context_menu(sidebar, menu, item, index) -> None:
-    """``browser_sidebar_will_show_context_menu``: Klaus's section below
-    Anki's own tag items."""
-    if not _is_tag(item):
-        return
+def menu_entries(parent, key: str) -> list:
+    """Klaus's right-click items for the Library row whose tag (casefolded)
+    is ``key``: ``(label, callback)`` pairs, ``None`` for a separator, in
+    menu order; empty for a tag that is not the Library's. Browse's
+    sidebar hook and the Add tab's tree both build their menus from
+    this."""
     from . import library_actions as act
 
-    key = item.full_name.casefold()
     lib = library_index()
-    parent = getattr(sidebar, "browser", None) or sidebar
+    out: list = []
     if key == ROOT_TAG.casefold():
-        menu.addSeparator()
-        _add(menu, "Import PDFs…", lambda: act.pick_and_import(parent))
-        _add(menu, "New Folder…", lambda: act.new_folder(parent))
+        out += [None, ("Import PDFs…", lambda: act.pick_and_import(parent)),
+                ("New Folder…", lambda: act.new_folder(parent))]
     elif key in lib["safes"]:
         safe = lib["safes"][key]
         # K-316: opening is a double-click, rename and delete are Anki's
         # own items above (tag_sync follows them), and PDFs embed
         # themselves — only what nothing else does is left here.
-        menu.addSeparator()
-        _add(menu, "Match Sensitivity…", lambda: act.sensitivity(parent, safe))
-        _add(menu, "Retention History…", lambda: act.history(parent, safe))
-        _add(menu, "Show in Finder", lambda: act.show_in_finder(safe))
+        out += [None, ("Match Sensitivity…", lambda: act.sensitivity(parent, safe)),
+                ("Retention History…", lambda: act.history(parent, safe)),
+                ("Show in Finder", lambda: act.show_in_finder(safe))]
         if safe in _missing():
             from . import pdf_handler, pdf_source
 
@@ -487,15 +507,28 @@ def on_context_menu(sidebar, menu, item, index) -> None:
             # before the next scan would go to the Trash with it.
             if pdf_handler.pdf_path_for(pdf_source.user_files_dir(), safe) is None:
                 name = lib["labels"].get(key) or safe
-                _add(menu, "Remove from Library", lambda: _confirm_remove(safe, name))
+                out.append(("Remove from Library", lambda: _confirm_remove(safe, name)))
     elif key in lib["folders"]:
         folder = lib["folders"][key]
-        menu.addSeparator()
-        _add(menu, "New Folder…", lambda: act.new_folder(parent, folder))
-        _add(menu, "Import PDFs Here…", lambda: act.pick_and_import(parent, folder))
+        out += [None, ("New Folder…", lambda: act.new_folder(parent, folder)),
+                ("Import PDFs Here…", lambda: act.pick_and_import(parent, folder))]
         if not act.pdfs_under(folder):  # Anki's own rename and delete skip a tag with no cards
-            _add(menu, "Rename Folder…", lambda: act.rename_folder(parent, folder))
-            _add(menu, "Remove Folder", lambda: act.remove_empty_folder(folder))
+            out += [("Rename Folder…", lambda: act.rename_folder(parent, folder)),
+                    ("Remove Folder", lambda: act.remove_empty_folder(folder))]
+    return out
+
+
+def on_context_menu(sidebar, menu, item, index) -> None:
+    """``browser_sidebar_will_show_context_menu``: Klaus's section below
+    Anki's own tag items."""
+    if not _is_tag(item):
+        return
+    parent = getattr(sidebar, "browser", None) or sidebar
+    for entry in menu_entries(parent, item.full_name.casefold()):
+        if entry is None:
+            menu.addSeparator()
+        else:
+            _add(menu, *entry)
 
 
 def _confirm_remove(safe: str, name: str) -> None:
@@ -572,10 +605,11 @@ class PdfDropFilter(QObject):
 
 
 class Footer(QWidget):
-    """Under the sidebar tree: the Import PDFs… button. Indexing progress
-    shows in the status bar (``status_bar``), not here."""
+    """Under the sidebar tree (and the Add tab's tree): the Import PDFs…
+    button. ``parent`` is any widget the file dialog can hang off.
+    Indexing progress shows in the status bar (``status_bar``), not here."""
 
-    def __init__(self, browser) -> None:
+    def __init__(self, parent) -> None:
         super().__init__()
         self.setObjectName("klausmateLibraryFooter")
         lay = QVBoxLayout(self)
@@ -584,7 +618,7 @@ class Footer(QWidget):
         lay.addWidget(self.button)
         from . import library_actions
 
-        self.button.clicked.connect(lambda *_a: library_actions.pick_and_import(browser))
+        self.button.clicked.connect(lambda *_a: library_actions.pick_and_import(parent))
 
 
 def _on_index_state(state) -> None:
@@ -609,8 +643,8 @@ def _install_footer(browser, sidebar) -> None:
 
 
 def on_operation_did_execute(changes, handler) -> None:
-    if not _sidebars:
-        return  # no Browse open: recompute when one opens
+    if not _sidebars and not _trees:
+        return  # nothing showing the Library: recompute when something opens
     if any(getattr(changes, k, False) for k in ("card", "note", "tag", "study_queues")):
         _schedule_refresh()
 

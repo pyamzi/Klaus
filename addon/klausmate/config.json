@@ -9,6 +9,7 @@
   "color_theme": "ocean",
   "color_theme_custom": "#0071D3",
   "klausbook_design": false,
+  "single_window": true,
   "background_mode": "theme",
   "background_color": "#FFFFFF",
   "background_image": "",

@@ -77,6 +77,12 @@ window.addEventListener('resize', klausFit);
 function klausKey(e, cmd) {
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pycmd(cmd); }
 }
+// A click must not leave focus on a row button: the deck screens bind no
+// Space shortcut, so the next Space reached klausKey and re-fired it (the
+// Space re-fired the button). Tab still focuses them.
+document.addEventListener('mousedown', function (e) {
+  if (e.target.closest && e.target.closest('#klaus-row [role=button]')) e.preventDefault();
+});
 """
 
 

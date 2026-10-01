@@ -232,4 +232,50 @@ for night in (False, True):
     check(f"night={night}: names the bar and uses palette colours only",
           "QWidget#KlausStatusBar" in qss and hexes <= pal, str(hexes - pal))
 
+section("single window: a Close Browse control, no dock toggle")
+sw = importlib.import_module("klausmate.single_window")
+sw.is_active = lambda: True
+b4, _side4, _col4 = make_browser()
+bar4 = sb.StatusBar(b4, browser=b4)
+bar4.resize(800, sb.BAR_HEIGHT)
+bar4.show()
+app.processEvents()
+check("no dock toggle any more", bar4.dock_btn is None and not hasattr(sb.StatusBar, "_add_toggles_dock"))
+closed4: list = []
+b4.close = lambda: closed4.append(1) or True
+inst4 = sb.install_browser(b4)
+check("install adds a Close Browse control", inst4.close_btn is not None and inst4.close_btn.toolTip() == "Close Browse")
+inst4.close_btn.click()
+check("…which closes Browse", closed4 == [1])
+sw.is_active = lambda: False
+b5, _s5, _c5 = make_browser()
+bar5 = sb.StatusBar(b5, browser=b5)
+check("without the single window there is no close control", sb.install_browser(b5).close_btn is None)
+
+section("panes: the Add tab's bar toggles two given widgets")
+page = QtWidgets.QWidget()
+QtWidgets.QVBoxLayout(page).setContentsMargins(0, 0, 0, 0)
+left, right = QtWidgets.QTreeView(), QtWidgets.QTextEdit()
+page.layout().addWidget(left)
+page.layout().addWidget(right)
+page.resize(900, 500)
+page.show()
+app.processEvents()
+bar6 = sb.install_add_tab(page, left, right)
+app.processEvents()
+check("install_add_tab appends the bar under the page's content, no close control",
+      bar6 is not None and page.layout().itemAt(page.layout().count() - 1).widget() is bar6 and bar6.close_btn is None
+      and bar6.dock_btn is None and bar6.height() == sb.BAR_HEIGHT)
+check("◧ names the Library pane, ◨ the editor", bar6.sidebar_btn.toolTip() == "Hide Library" and bar6.editor_btn.toolTip() == "Hide Card Editor")
+bar6.sidebar_btn.click()
+app.processEvents()
+check("◧ hides the left pane", not left.isVisible() and not bar6.sidebar_btn.isChecked())
+right.hide()
+app.processEvents()
+check("◨ follows the right pane's visibility", not bar6.editor_btn.isChecked())
+bar6.editor_btn.click()
+app.processEvents()
+check("…and shows it again", right.isVisible() and bar6.editor_btn.isChecked())
+check("the bar is tracked for theme changes", bar6 in sb._bars)
+
 raise SystemExit(report())

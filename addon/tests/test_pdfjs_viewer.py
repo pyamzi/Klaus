@@ -525,8 +525,8 @@ check("a profile/quit sweep exists as backstop",
       hasattr(reader_panel, "cleanup_all_sidebars"))
 _here = os.path.dirname(os.path.abspath(__file__))
 _src = lambda n: open(os.path.join(_here, "..", "klausmate", n)).read()
-check("editor panel close tears the sidebar down",
-      "_sidebar.cleanup()" in _src("__init__.py"))
+check("the reader host's release() tears the sidebar down, and a Browse closing with no home calls it",
+      "r.cleanup()" in _src("reader_host.py") and "reader_host.release()" in _src("library_viewer.py"))
 check("sweep registered on profile switch AND quit",
       _src("__init__.py").count("cleanup_all_sidebars") >= 2)
 

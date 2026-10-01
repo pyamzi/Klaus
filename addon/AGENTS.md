@@ -67,6 +67,10 @@ Addons/                       # Git repo root
     ├── status_bar.py           # Browse's bottom bar: gear (Anki Preferences), task progress, pane toggles
     ├── bottom_row.py           # main window: Anki's own bottom row + gear and task readout at its left edge
     ├── addons_menu.py          # other add-ons' top-level menus → one Add-ons menu before Help (main window + Browse)
+    ├── single_window.py        # Decks + Add + Browse as tabs (Add = Library tree | reader | editor), Edit Current in a right dock — Anki's windows built inside mw, never moved
+    ├── host_keys.py            # review keys disabled on the Add and Browse tabs; the hosted editors get their keys (ShortcutOverride)
+    ├── reader_host.py          # the ONE PDF reader: home = the Add tab's reader slot, lent to Browse's viewer mode, never across windows
+    ├── library_tree.py         # the Add tab's Library view (Klaus's own QTreeView over library_sidebar's index; filter, clicks, menus, drops)
     ├── library_actions.py      # Window-free Library actions the sidebar menus call
     ├── drive_store.py          # Library's virtual folder layer (user_files/drive.json); nothing on disk moves
     ├── prefs_state.py        # Preferences value state: keys, dirty, commit() → one patch + effects (aqt-free)
@@ -88,7 +92,7 @@ Addons/                       # Git repo root
         ├── pdfs/                # Stored PDF copies (post-bake, real annotations included)
         ├── pdf_originals/       # Pristine copy captured once, used to regenerate bakes
         ├── annotations/         # Per-PDF highlight/note JSON, source of truth for baking
-        ├── pdf_tabs.json        # Open tabs, placement (dock left/right/bottom/float), thumbs, last_used
+        ├── pdf_tabs.json        # Open tabs per host, thumbs, last_used (placement/geom dropped on read since the Add tab)
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
         ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) and cosine matches
@@ -173,25 +177,24 @@ not deleted by the rebuild. See [tag membership](klausmate/tag_sync.py).
 - **Cmd+C** / right-click **Copy** copy selected text; **Cmd/Ctrl-double-click** a page, or right-click **Copy slide as image**, copies it as an image (there is no toolbar button for this — it was removed).
 - Highlights and sticky notes are baked into the stored PDF as real annotations by `pdf_handler.bake_annotations` (vendored `pypdf`).
 
-### Editor-side PDF panel
+### The PDF reader and its homes
 
-`PdfDock` — a `QDockWidget`, one per host window (Browse and Add Cards),
-created from `editor_did_init` exactly as the panel's earlier container
-was — hosts any number of open PDFs, with `_PanelBar` as its title-bar
-widget (`[◫] [＋] [tabs] … [page n/m] [⧉] [✕]`), which ignores presses it
-does not handle so Qt itself moves, docks and floats the dock from the
-bar's empty space. Allowed areas are left, right and bottom; floating is
-Qt's own attached tool window above the host, never a parentless real
-window — the old pane-anchored placements and the native
-`startSystemMove()` tear-off with its watchdog/ghost fallback are gone.
-`placement` (`left`/`right`/`bottom`/`float`, old values migrated once by
-`pdf_handler.migrate_placement`) and `geom` persist the same way and
-apply on the first `panel_show`, never from Anki's own saved
-`QMainWindow` state. One
-`PdfViewer`/`PdfSidebar` instance is reused across tabs. The open tab set,
-dock placement, thumbnails, and last-used page persist in
-`user_files/pdf_tabs.json` (all writers merge via `pdf_handler._save_tabs_file`,
-never overwrite wholesale). `web/copilot.js` only tracks field focus (for
+The ONE editor-host reader (`reader_panel.PdfSidebar`, `host_key="editor"`,
+with `reader_tabs.ReaderTabs` above the page) is owned by `reader_host.py`:
+its permanent parent is the Add tab's reader slot (`set_home`), Browse's
+viewer mode borrows it (`library_viewer.enter` → `lend(box)`, `leave` →
+`give_back()`), and `release()` is cleanup + forget (a cleaned reader is
+never reused; the next `reader()` builds afresh). It is never re-parented
+across top-level windows: a lend into another window releases and rebuilds
+there (fallback mode, where Browse is a stock window, builds it under
+Browse and releases it when that Browse closes). The dock (`PdfDock`,
+`_PanelBar`), its placement memory and the editor-toolbar Library… button
+went with the Add tab (spec 2026-10-01-add-tab-design.md); the Lecture
+panel keeps its own reader. The open tab set, thumbnails and last-used
+page persist in `user_files/pdf_tabs.json` (all writers merge via
+`pdf_handler._save_tabs_file`, never overwrite wholesale; `placement`/`geom`
+from older builds are dropped on read).
+`web/copilot.js` only tracks field focus (for
 PDF-page-insert targeting) and the image-crop double-click trigger now —
 the ghost-text/Ask bridge it used to carry is gone.
 
@@ -227,7 +230,6 @@ gui_hooks.profile_did_open.append(tag_migrate.migrate_on_profile_open)  # one-ti
 gui_hooks.profile_did_open.append(first_run_check)                  # first-run: library root + local-model setup
 gui_hooks.profile_did_open.append(setup_readiness_check)
 gui_hooks.profile_did_open.append(_start_klaus_endpoint)        # anki_endpoint bind (mw.col must exist)
-gui_hooks.editor_did_init.append(on_editor_did_init)                # PDF panel + tab container
 gui_hooks.browser_will_show.append(on_browser_will_show)            # Browse layout repair (toggles now in the status bar)
 curation.setup_hooks()                                              # gui_hooks.browser_menus_did_init
 pdf_drop.setup()                                                    # Add to Library + drop wrap on deck screens (independent try/except)
@@ -235,6 +237,7 @@ library_sidebar.setup()                                             # the Librar
 status_bar.setup()                                                  # Browse bottom bar; sync/media hooks (independent try/except)
 bottom_row.setup()                                                  # main window bottom row: gear + task readout (independent try/except)
 addons_menu.setup()                                                 # main_window_did_init + browser_will_show: Add-ons menu (independent try/except)
+single_window.setup()                                               # main_window_did_init: host layout, dialog-registry creators, hooks; config single_window (independent try/except)
 gui_hooks.operation_did_execute.append(tag_sync.on_operation_did_execute)  # sidebar tag edits reach the PDFs
 top_bar.setup()                                                     # toolbar restyle + star logo (independent try/except)
 browse_highlight.setup()                                            # Browse search-term highlighting (independent try/except)
@@ -337,9 +340,10 @@ server-side gates. See [D5](docs/superpowers/plans/2026-09-19-external-mcp-bridg
 
 Attributes on `editor` (all `editor._klausmate_*`, guarded with
 `getattr(..., None)` / `is None` checks to stay reload-safe): `_klausmate_panel`
-(the PDF drop bar, `_PdfBar`), `_klausmate_pdf_container`, `_klausmate_pdf_tabs`,
-`_klausmate_sidebar`, `_klausmate_vsplit`,
+(the PDF drop bar, `_PdfBar`), `_klausmate_vsplit`,
 `_klausmate_target_field_index` / `_target_field_name`, `_klausmate_crop_open`.
+(`_klausmate_pdf_tabs` / `_klausmate_sidebar` / `_klausmate_pdf_container` went
+with the dock: the reader is reached through `reader_host.reader()`.)
 Browse-window toggles carry their own: `_klausmate_sidebar_toggle_btn` /
 `_klausmate_editor_toggle_btn`. Deck-screen state is down to the drop
 wrap's own guards since K-151: `_klausmate_drop_wrapped` / `_drop_orig`.

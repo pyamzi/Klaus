@@ -464,10 +464,12 @@ def _config() -> dict:
 
 
 def _library_changed() -> None:
-    """Browse's sidebar redraws the Library: names, warning icons, %."""
+    """Browse's sidebar and the Add tab's tree redraw the Library: names,
+    warning icons, %."""
     try:
         from . import library_sidebar
 
+        library_sidebar.refresh_trees()
         library_sidebar.refresh_status()
         library_sidebar.refresh_retention()
     except Exception as e:  # noqa: BLE001

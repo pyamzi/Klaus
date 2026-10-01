@@ -17,6 +17,7 @@ and [endpoint](klausmate/anki_endpoint.py).
 
 | Feature | How to use |
 |---------|------------|
+| **One window** | Decks, Add and Browse are tabs of Anki's main window: the toolbar's three links switch between them. The Add tab is your Library on the left, the PDF reader in the middle and Anki's Add editor on the right — click a PDF, read, drag a region into a field. Edit Current opens in a panel on the right. Set `single_window` to `false` in the add-on config for Anki's separate windows. |
 | **Adding a PDF** | Click **Add to Library** at the bottom of the deck list or a deck's overview, drop a lecture PDF on either screen, or drop it straight into the Library window. |
 | **Card matching** | Right-click a PDF in the Library → **Add to Search Index**. Klaus searches the whole collection by meaning and tags every card that lecture covers with the PDF's own `!Library::…` tag. |
 | **Library** | The **Library** link in the top toolbar opens a window listing every PDF you've imported, in folders you create, each with a retention score, card/note counts, and a right-click menu to index, re-tag, suspend, chart, or open it. |

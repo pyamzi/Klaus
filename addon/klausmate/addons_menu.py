@@ -14,9 +14,21 @@ BROWSE_MENUS = ("menuEdit", "menuqt_accel_view", "menu_Notes", "menu_Cards", "me
 TITLE = "Add-ons"
 
 
+def place_before_help(bar, menu, help_menu) -> None:
+    """Insert ``menu`` just before Help (or at the end without one)."""
+    before = help_menu.menuAction() if help_menu is not None else None
+    if before in bar.actions():
+        bar.insertMenu(before, menu)
+    else:
+        bar.addMenu(menu)
+
+
 def _consolidate(window, names) -> None:
     bar = window.menuBar()
     own = {getattr(window.form, n).menuAction() for n in names if getattr(window.form, n, None) is not None}
+    # Menus another Klaus module put on the bar on purpose (the single
+    # window's Browse menus) are never swept.
+    own |= set(getattr(window, "_klausmate_keep_on_bar", ()))
     addons = getattr(window, "_klausmate_addons_menu", None)
     if addons is None:
         addons = QMenu(TITLE, window)
@@ -26,12 +38,7 @@ def _consolidate(window, names) -> None:
         bar.removeAction(a)
         addons.addAction(a)
     if addons.menuAction() not in bar.actions():
-        help_menu = getattr(window.form, names[-1], None)  # Help is last in both lists
-        before = help_menu.menuAction() if help_menu is not None else None
-        if before in bar.actions():
-            bar.insertMenu(before, addons)
-        else:
-            bar.addMenu(addons)
+        place_before_help(bar, addons, getattr(window.form, names[-1], None))  # Help is last in both lists
     addons.menuAction().setVisible(bool(addons.actions()))
 
 

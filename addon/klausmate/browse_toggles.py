@@ -128,7 +128,7 @@ def pane_rect(size: float, side: str) -> tuple[float, float, float, float]:
     return d + half, iy, (ix + iw) - (d + half), ih
 
 
-PANE_NAMES = {"sidebar": "Sidebar", "editor": "Card Editor"}
+PANE_NAMES = {"sidebar": "Sidebar", "editor": "Card Editor", "tree": "Library"}
 
 
 def toggle_label(pane: str, visible: bool) -> str:

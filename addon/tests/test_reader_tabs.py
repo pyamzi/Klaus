@@ -164,7 +164,7 @@ check("an unknown host starts empty", ph.load_open_tabs(UF, host_key="other") ==
 
 section("pdf_handler: the legacy list migrates into 'editor'")
 with open(os.path.join(UF, "pdf_tabs.json"), "w", encoding="utf-8") as f:
-    json.dump({"open": ["b", "a"], "placement": "left"}, f)
+    json.dump({"open": ["b", "a"], "extra": "kept"}, f)  # placement/geom are dropped since the Add tab
 check("a legacy file reads as the editor's tabs", ph.load_open_tabs(UF) == ["b", "a"],
       str(ph.load_open_tabs(UF)))
 check("...and the Lecture panel starts empty", ph.load_open_tabs(UF, host_key="lecture") == [])
@@ -173,7 +173,7 @@ data = raw()
 check("the first save moves the legacy list under 'editor' and drops 'open'",
       data.get("tabs") == {"editor": ["b", "a"], "lecture": ["c"]} and "open" not in data,
       str(data))
-check("other keys in the file survive", data.get("placement") == "left")
+check("other keys in the file survive", data.get("extra") == "kept")
 with open(os.path.join(UF, "pdf_tabs.json"), "w", encoding="utf-8") as f:
     json.dump({"open": ["a"], "tabs": {"editor": ["c"]}}, f)
 check("once 'editor' exists the legacy list is ignored", ph.load_open_tabs(UF) == ["c"])

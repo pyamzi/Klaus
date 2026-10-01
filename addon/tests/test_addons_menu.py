@@ -92,4 +92,20 @@ am.install(b, am.BROWSE_MENUS)
 check("Browse's own menus stay, AnkiHub goes under Add-ons",
       titles(bb) == ["Edit", "View", "Notes", "Cards", "Go", "Add-ons", "Help"], str(titles(bb)))
 
+section("keep-on-bar exemption (the single window's Browse menus)")
+w3, b3 = make_main()
+am.install(w3, am.MAIN_MENUS)
+keep = QtWidgets.QMenu("Notes", w3)
+w3._klausmate_keep_on_bar = {keep.menuAction()}
+am.place_before_help(b3, keep, w3.form.menuHelp)
+app.processEvents()
+app.processEvents()
+check("an exempt menu stays on the bar before Help, the watcher leaves it",
+      titles(b3) == ["File", "Edit", "View", "Tools", "Notes", "Help"], str(titles(b3)))
+b3.addMenu("Stray")
+app.processEvents()
+app.processEvents()
+check("…while a stray one still moves under Add-ons",
+      titles(b3) == ["File", "Edit", "View", "Tools", "Add-ons", "Notes", "Help"], str(titles(b3)))
+
 raise SystemExit(report())

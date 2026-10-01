@@ -60,6 +60,7 @@ _MODULES = {
     "setup_flow": open("klausmate/setup_flow.py").read(),
     "curation": open("klausmate/curation.py").read(),
     "bottom_row": open("klausmate/bottom_row.py").read(),
+    "reader_host": open("klausmate/reader_host.py").read(),
 }
 # Parsed once per module — _func_src and both roster scans below walk
 # these shared trees instead of re-parsing per lookup.
@@ -167,8 +168,8 @@ section("__init__: editor bridge actions (already correct)")
 _INIT = _func_src("__init__", "on_js_message")
 check("crop defers its modal", "_launch_crop_dialog(editor, fname)" in _INIT
       and "QTimer.singleShot(0, lambda: _launch_crop_dialog" in _INIT)
-check("library defers its QMenu",
-      "QTimer.singleShot(0, lambda: _on_library_button(editor))" in _INIT)
+check("the library action is gone with the Library… button (Add tab, 2026-10-01)",
+      "_on_library_button" not in _INIT and '"library"' not in _INIT)
 
 section("pdfjs_viewer: page bridge (live crash #1)")
 _NOTE = _func_src("pdfjs_viewer", "_bridge_note_edit")
@@ -224,10 +225,10 @@ for qualified in sorted(_registered | _bridge_methods):
 section("bottom_row: the main window row's gear and readout")
 _BR = _func_src("bottom_row", "_on_js_message")
 check("the row's handler was found in the source", bool(_BR))
-check("Preferences and the task-list popup both open a tick later, never "
-      "inside the webchannel call",
+check("Preferences and the task-list popup both open a tick later, never inside the webchannel call",
       _BR.count("QTimer.singleShot(0,") == 2
-      and "\n            status_bar._open_anki_settings()" not in _BR, _BR[-400:])
+      and "\n            status_bar._open_anki_settings()" not in _BR
+      and "toggle_dock" not in _BR, _BR[-400:])
 
 section("heatmap: a clicked day opens Browse")
 _HM = _func_src("heatmap", "_on_js_message")
@@ -452,210 +453,13 @@ def _class_src(module: str, name: str) -> str:
     return ""
 
 
-_DOCK = _no_prose(_class_src("__init__", "PdfDock"))
-check("the dock class is in __init__.py and its source was found — "
-      "without this every pin below passes vacuously",
-      bool(_DOCK) and "class PdfDock" in _DOCK)
-check("PdfDock never calls setParent — Qt owns every reparent, which is "
-      "what closes K-169's crash class",
-      "setParent(" not in _DOCK)
-check("...and it never wraps a host pane in a splitter of its own",
-      "QSplitter(" not in _DOCK and "insertWidget(" not in _DOCK)
-check("PdfDock still releases the webview on host close (K-095: a "
-      "webview destroyed without cleanup() crashes Anki's next theme "
-      "change)",
-      "self._sidebar.cleanup()"
-      in _no_prose(_func_src("__init__", "_on_host_closing")))
-check("the host's Close is still handled a TICK LATER, never inside the "
-      "event — the host may ignore() it (AddCards' discard prompt)",
-      "QTimer.singleShot(0, self._host_close_check)"
-      in _no_prose(_func_src("__init__", "eventFilter")))
-_BAR = _no_prose(_class_src("__init__", "_PanelBar"))
-check("the title bar IGNORES the presses it does not handle, so the "
-      "QDockWidget can move, dock and float from it (Qt's "
-      "setTitleBarWidget contract) — an accept() here strands the panel",
-      bool(_BAR) and _BAR.count("ev.ignore()") == 4
-      and "ev.accept()" not in _BAR)
-
-
-section("2026-09-05: real offscreen Qt — the dock in a Browse-shaped host")
-# The dock's own behaviour is pinned in tests/test_pdf_dock.py. What
-# belongs HERE is what the deleted engine used to put at risk: Anki's own
-# Browse layout. The replica is read out of _aqt/forms/browser_qt6.pyc
-# (bytecode-only, so via `strings` in creation order):
-#     splitter[0] = widget > verticalLayout_2 > (gridLayout > searchEdit)
-#                                             > tableView
-#     splitter[1] = verticalLayoutWidget > verticalLayout
-#                                        > horizontalLayout2 > fieldsArea
-# The sidebar is a QDockWidget, NOT a splitter child — which is exactly
-# why the PDF panel can now sit beside it.
-import importlib  # noqa: E402
-import os  # noqa: E402
-import tempfile  # noqa: E402
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-try:
-    from PyQt6 import QtCore as _QtC  # noqa: E402
-    from PyQt6 import QtWidgets as _QtW  # noqa: E402
-    _HAVE_QT = True
-except Exception as _qt_e:  # noqa: BLE001
-    _HAVE_QT = False
-    print(f"  SKIP: PyQt6 unavailable under this python ({_qt_e}) — "
-          "the source pins above still ran")
-
-if _HAVE_QT:
-    # A missing anchor must read as a FAILING PIN, never as a
-    # traceback that skips report() and takes the tally with it.
-    try:
-        _app = _QtW.QApplication.instance() or _QtW.QApplication(["klaus-test"])
-        _UF = tempfile.mkdtemp(prefix="klaus_dock_uf_")
-        os.makedirs(os.path.join(_UF, "contexts"), exist_ok=True)
-        from anki_stubs import exec_klausmate_under_qt  # noqa: E402
-
-        _pkg = exec_klausmate_under_qt(_UF)
-        _browse_toggles = importlib.import_module("klausmate.browse_toggles")
-
-        class _FakeSidebar(_QtW.QWidget):
-            """PdfSidebar reduced to what the dock touches."""
-
-            def __init__(self):
-                super().__init__()
-                self._name = None
-                self._current_page = 0
-                self._viewer = None
-                self.on_loaded = None
-                self.cleaned = 0
-                _QtW.QVBoxLayout(self).addWidget(_QtW.QLabel("pdf"))
-
-            def is_loaded(self, name):
-                return False
-
-            def load_pdf(self, name):
-                self._name = name
-
-            def clear(self):
-                pass
-
-            def cleanup(self):
-                self.cleaned += 1
-
-            def _set_active(self, name):
-                pass
-
-            def _on_page_changed(self, page):
-                pass
-
-        def _build_browse():
-            win = _QtW.QMainWindow()
-            central = _QtW.QWidget()
-            win.setCentralWidget(central)
-            _QtW.QVBoxLayout(central)
-            split = _QtW.QSplitter(_QtC.Qt.Orientation.Horizontal)
-            split.setChildrenCollapsible(False)
-            central.layout().addWidget(split)
-
-            table_col = _QtW.QWidget(split)
-            table_col.setObjectName("widget")
-            _QtW.QVBoxLayout(table_col)
-            grid = _QtW.QGridLayout()
-            search = _QtW.QLineEdit()
-            grid.addWidget(search, 0, 1)
-            # Anki's Cards/Notes Switch occupies cell (0,0) at runtime.
-            grid.addWidget(_QtW.QToolButton(), 0, 0)
-            table_col.layout().addLayout(grid)
-            table = _QtW.QTableWidget(12, 2)
-            table_col.layout().addWidget(table)
-
-            ed_col = _QtW.QWidget(split)
-            ed_col.setObjectName("verticalLayoutWidget")
-            _QtW.QVBoxLayout(ed_col)
-            fields = _QtW.QWidget(ed_col)
-            _QtW.QVBoxLayout(fields)
-            ed_col.layout().addWidget(fields)
-            split.setSizes([700, 300])
-
-            dock = _QtW.QDockWidget()
-            dock.setObjectName("AnkiSidebar")
-            dock.setTitleBarWidget(_QtW.QWidget())
-            dock.setWidget(_QtW.QTreeWidget())
-            win.addDockWidget(_QtC.Qt.DockWidgetArea.LeftDockWidgetArea, dock)
-            win.sidebarDockWidget = dock
-
-            win.form = types.SimpleNamespace(
-                splitter=split, widget=table_col, gridLayout=grid,
-                searchEdit=search, tableView=table,
-                verticalLayoutWidget=ed_col, fieldsArea=fields)
-
-            class _Ed:
-                pass
-
-            ed = _Ed()
-            ed.parentWindow = win
-            ed.widget = _QtW.QWidget()
-            _QtW.QVBoxLayout(ed.widget)
-            fields.layout().addWidget(ed.widget)
-            win.editor = ed
-            return win, ed
-
-        _ph = importlib.import_module("klausmate.pdf_handler")
-        _ph.save_panel_state(_UF, placement="left")
-        _win, _ed = _build_browse()
-        _win.resize(1280, 760)
-        _win.show()
-        _sb = _FakeSidebar()
-        _saved_split = _win.form.splitter.saveState()
-        _d = _pkg.PdfDock(_ed, _sb, _win)
-        _ed._klausmate_pdf_tabs = _d
-        _win._klausmate_pdf_container = _d
-        _d.panel_show()
-        _app.processEvents()
-
-        check("the panel opens on the side Browse last left it on",
-              _d.isVisible()
-              and _win.dockWidgetArea(_d)
-              == _QtC.Qt.DockWidgetArea.LeftDockWidgetArea,
-              str(_win.dockWidgetArea(_d)))
-        check("form.splitter still has exactly TWO children, unmoved — the "
-              "dock is not in it, so Anki's own saved Browse layout keeps "
-              "round-tripping (the deleted engine wrapped a splitter child)",
-              _win.form.splitter.count() == 2
-              and _win.form.splitter.saveState() == _saved_split)
-        check("...and its state still restores into a two-child splitter",
-              _QtW.QSplitter().restoreState(_win.form.splitter.saveState()))
-        check("Anki's own sidebar dock still sits in the left area beside "
-              "ours — D5's setDockNestingEnabled, not a tab stack",
-              _win.isDockNestingEnabled()
-              and _win.dockWidgetArea(_win.sidebarDockWidget)
-              == _QtC.Qt.DockWidgetArea.LeftDockWidgetArea
-              and _win.sidebarDockWidget.isVisible()
-              and _win.sidebarDockWidget.width() > 20
-              and _d.width() > 20,
-              f"sidebar w={_win.sidebarDockWidget.width()} pdf w={_d.width()}")
-
-        # The status bar's editor-column toggle, with the PDF docked.
-        _btn = importlib.import_module("klausmate.status_bar").StatusBar(_win, browser=_win).editor_btn
-        check("the status bar still finds the editor column with the panel "
-              "docked (it walks up from fieldsArea, and the dock never "
-              "touches that column)",
-              _btn is not None)
-        if _btn is not None:
-            _btn.click()
-            _app.processEvents()
-            check("hiding the editor column leaves the note table and the "
-                  "PDF dock alive",
-                  not _win.form.verticalLayoutWidget.isVisible()
-                  and _win.form.widget.width() > 40 and _d.width() > 40,
-                  f"notes w={_win.form.widget.width()} pdf w={_d.width()}")
-            _btn.click()
-            _app.processEvents()
-            check("...and showing it again brings it back",
-                  _win.form.verticalLayoutWidget.isVisible())
-
-        _before = _sb.cleaned
-        _d._on_host_closing()
-        check("K-095: teardown still runs sidebar.cleanup()",
-              _sb.cleaned == _before + 1)
-    except Exception as _edock:  # noqa: BLE001
-        check(f"offscreen Browse dock checks ran ({_edock!r})", False)
+# The dock itself went with the Add tab (2026-10-01): the ONE reader lives
+# in the Add tab's reader slot and is lent to Browse's viewer mode
+# (reader_host.py, library_viewer.py); nothing re-parents across windows.
+check("PdfDock and _PanelBar are gone from __init__.py",
+      not _class_src("__init__", "PdfDock") and not _class_src("__init__", "_PanelBar"))
+check("the reader host never crosses top-level windows (K-169's crash class stays closed by construction)",
+      "r.window() is not container.window()" in _no_prose(_func_src("reader_host", "lend"))
+      and "r.window() is not home.window()" in _no_prose(_func_src("reader_host", "give_back")))
 
 raise SystemExit(report())

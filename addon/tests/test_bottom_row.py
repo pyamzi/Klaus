@@ -138,4 +138,23 @@ tasks.end("i")
 check("...and again on the overview", evals and "klausStatus(" in evals[-1])
 tasks.clear()
 
+section("no dock toggle (the Add tab replaced the right dock)")
+state = br.row_state([], 1000.0)
+html = br.row_html(state, False)
+check("the row has no dock toggle and no DOCK_CMD", "klausmate_row_dock" not in html and not hasattr(br, "DOCK_CMD") and not hasattr(br, "_dock_toggle"))
+# The deck screens bind no Space shortcut, so a row button left focused by
+# a mouse click took the next Space through klausKey. Mouse presses must
+# not focus them; Tab still does.
+check("a mouse press never leaves focus on a row button (Space would re-fire it)",
+      "addEventListener('mousedown'" in html and "#klaus-row [role=button]" in html
+      and "preventDefault" in html.split("addEventListener('mousedown'", 1)[-1][:200])
+check("…while Tab still reaches them", html.count('tabindex="0"') == html.count('role="button"') == 2)
+check("an unknown command is left alone", br._on_js_message((False, None), "klausmate_row_dock", None) == (False, None))
+css = html.split("<style>", 1)[-1]
+gear_rule = [r for r in css.split("}") if ".kr-gear:hover" in r]
+check("the gear keeps its own hover/focus rule (I-3): a wash and no focus ring, not the readout's block",
+      len(gear_rule) == 1 and "outline: none" in gear_rule[0] and ".kr-readout" not in gear_rule[0]
+      and "min-width" not in gear_rule[0], str(gear_rule))
+check("no stray '+' debris in the row html", "+ <" not in html and "+<" not in html)
+
 raise SystemExit(report())

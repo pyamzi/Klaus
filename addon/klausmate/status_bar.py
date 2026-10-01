@@ -1,9 +1,11 @@
-"""Browse's bottom bar: a gear that opens Anki's Preferences on the left,
-then a progress readout of every running process (``tasks``), and the
-layout toggles (◧ sidebar, ◨ card editor) at the far right. The main
-window has no Qt bar: its row is Anki's own, extended by ``bottom_row``,
-which shares this module's readout rules, gear shape and task list.
-Klaus's own settings are the top bar's star.
+"""Browse's bottom bar — and the Add tab's: a gear that opens Anki's
+Preferences on the left, then a progress readout of every running process
+(``tasks``), and the layout toggles at the far right (◧ sidebar, ◨ card
+editor on Browse; ◧ Library tree, ◨ editor on the Add tab, bound to two
+given widgets through ``panes``). The main window has no Qt bar: its row
+is Anki's own, extended by ``bottom_row``, which shares this module's
+readout rules, gear shape and task list. Klaus's own settings are the top
+bar's star.
 
 Pure helpers above the divider; the widget and install glue below it.
 """
@@ -190,7 +192,7 @@ class _GearButton(QToolButton):
 
 
 class StatusBar(QWidget):
-    def __init__(self, window, browser=None) -> None:
+    def __init__(self, window, browser=None, panes=None) -> None:
         super().__init__(window)
         self.setObjectName("KlausStatusBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -201,6 +203,8 @@ class StatusBar(QWidget):
         self._wake.timeout.connect(self._expire)
         self.sidebar_btn = None
         self.editor_btn = None
+        self.dock_btn = None
+        self.close_btn = None
         self._tasks: list = []
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 0, 4, 0)
@@ -224,6 +228,9 @@ class StatusBar(QWidget):
         if browser is not None:
             row.setSpacing(2)  # the two toggles sit as a pair
             self._add_toggles(row, browser)
+        elif panes is not None:
+            row.setSpacing(2)
+            self._add_pane_toggles(row, *panes)
         self.apply_theme()
 
         # The listener must not keep a deleted bar alive, nor touch one:
@@ -262,6 +269,17 @@ class StatusBar(QWidget):
             _VisibilityWatcher(col, btn.setChecked)
             row.addWidget(btn)
             self.editor_btn = btn
+
+    def _add_pane_toggles(self, row, left, right) -> None:
+        """The Add tab: ◧ the Library tree, ◨ the editor slot."""
+        from .browse_toggles import _PaneToggle, _VisibilityWatcher
+
+        for side, pane, widget, attr in (("left", "tree", left, "sidebar_btn"), ("right", "editor", right, "editor_btn")):
+            btn = _PaneToggle(side, pane, not widget.isHidden())
+            btn.clicked.connect(widget.setVisible)
+            _VisibilityWatcher(widget, btn.setChecked)
+            row.addWidget(btn)
+            setattr(self, attr, btn)
 
     def apply_theme(self) -> None:
         try:
@@ -373,6 +391,20 @@ def _track(bar: StatusBar) -> StatusBar:
     return bar
 
 
+def install_add_tab(page, left, right) -> StatusBar | None:
+    """The Add tab's bar: appended under the page's content, no close
+    control (Close and Escape switch tabs)."""
+    try:
+        bar = StatusBar(page, panes=(left, right))
+        bar.setFixedHeight(BAR_HEIGHT)
+        page.layout().addWidget(bar)
+        bar.apply_theme()
+        return _track(bar)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] status bar (Add tab) failed: {exc}")
+        return None
+
+
 def install_browser(browser) -> StatusBar | None:
     """Browse has no status bar of its own: give it one, with toggles."""
     existing = getattr(browser, "_klausmate_status_bar", None)
@@ -386,6 +418,24 @@ def install_browser(browser) -> StatusBar | None:
         browser.setStatusBar(native)
         bar = StatusBar(browser, browser=browser)
         native.addPermanentWidget(bar, 1)
+        try:
+            from . import single_window
+
+            if single_window.is_active():
+                # Browse is a tab: the one way to close it lives here.
+                from aqt.qt import QToolButton
+
+                close_btn = QToolButton(native)
+                close_btn.setText("✕")
+                close_btn.setAutoRaise(True)
+                close_btn.setToolTip("Close Browse")
+                close_btn.setAccessibleName("Close Browse")
+                close_btn.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+                close_btn.clicked.connect(lambda *_a: browser.close())
+                native.addPermanentWidget(close_btn)
+                bar.close_btn = close_btn
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] status bar close control failed: {exc}")
         native.setFixedHeight(STRIP_HEIGHT)
         bar.apply_theme()
         browser._klausmate_status_bar = bar

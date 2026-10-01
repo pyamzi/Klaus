@@ -319,7 +319,12 @@ def _load_tabs_file(user_files_dir: str) -> dict:
             os.path.join(user_files_dir, _OPEN_TABS_FILE), encoding="utf-8"
         ) as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        # The dock's placement memory went with the dock (Add tab,
+        # 2026-10-01): an older file's keys are ignored on read and gone
+        # on the next save.
+        return {k: v for k, v in data.items() if k not in ("placement", "geom")}
     except Exception:
         return {}
 
@@ -469,74 +474,6 @@ def save_thumbs_state(
             updates["thumbs_width"] = max(80, min(400, int(width)))
         except (TypeError, ValueError):
             pass
-    if updates:
-        _save_tabs_file(user_files_dir, updates)
-
-
-#: The values ``save_panel_state`` writes for ``placement`` since
-#: 2026-09-05 (the PDF panel is a QDockWidget: three areas plus floating).
-PANEL_PLACEMENTS = ("left", "right", "bottom", "float")
-
-_LEGACY_PLACEMENTS = {
-    # The 2026-08 placement engine anchored the panel on a pane, above or
-    # below the editor and beside the note list; the dock has window edges.
-    "above": "bottom",
-    "below": "bottom",
-    "left": "left",
-    "notes-left": "left",
-    "right": "right",
-    "notes-right": "right",
-    "float": "float",
-    "bottom": "bottom",
-}
-
-
-def migrate_placement(value: object) -> str:
-    """Map a stored ``placement`` — any build's — to one of
-    ``PANEL_PLACEMENTS``. Unknown, missing or non-string values land on
-    ``"right"``, the editor-side default; a corrupt file must cost a
-    default, never the panel."""
-    if isinstance(value, str):
-        return _LEGACY_PLACEMENTS.get(value.strip().lower(), "right")
-    return "right"
-
-
-def load_panel_state(user_files_dir: str) -> dict:
-    """Viewer placement from last session: {"placement": one of
-    ``PANEL_PLACEMENTS``, "geom": [x, y, w, h]} — either key may be
-    absent.
-
-    THE MIGRATION HAPPENS HERE, at the one read every caller goes
-    through (spec: "old values migrate once on read"). The whitelist
-    this replaced was the five PRE-dock values, so it silently dropped
-    a stored "bottom" — the value the dock itself writes — and the
-    panel came back on the right after every restart. A missing key
-    stays missing: the caller's own default decides, not "right"."""
-    data = _load_tabs_file(user_files_dir)
-    out: dict = {}
-    placement = data.get("placement")
-    if placement is not None:
-        out["placement"] = migrate_placement(placement)
-    geom = data.get("geom")
-    if (
-        isinstance(geom, list)
-        and len(geom) == 4
-        and all(isinstance(v, int) for v in geom)
-    ):
-        out["geom"] = geom
-    return out
-
-
-def save_panel_state(
-    user_files_dir: str,
-    placement: str | None = None,
-    geom: list[int] | None = None,
-) -> None:
-    updates: dict = {}
-    if placement is not None:
-        updates["placement"] = placement
-    if geom is not None:
-        updates["geom"] = geom
     if updates:
         _save_tabs_file(user_files_dir, updates)
 
