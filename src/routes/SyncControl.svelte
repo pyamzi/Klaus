@@ -1,92 +1,95 @@
 <script lang="ts">
-  // AnkiWeb sync, as aqt/sync.py drives it: sign in, sync (then media in the
-  // background), and the full-sync choice. The sync key never reaches the page:
-  // the bridge's klausSync* methods hold it (Keychain).
+  // Collection sync through the Klaus Account (ADR-0007). Syncing is automatic (the
+  // bridge syncs on open, on quit, and when there's something to sync); this shows
+  // its status, signs in through the browser, offers a manual sync, and asks the
+  // one question sync can't answer itself: which side wins a full sync.
   import { latestProgress, mediaSyncStatus, setProfileConfigJson } from "@generated/backend";
   import { BackendError_Kind } from "@generated/anki/backend_pb";
   import { SyncCollectionResponse_ChangesRequired as Required } from "@generated/anki/sync_pb";
   import { Empty, String as PbString } from "@generated/anki/generic_pb";
-  import { FullSyncRequest, SyncAccount, SyncOutcome, SyncOutcome_State as State, SyncSignIn } from "@generated/klaus_pb";
+  import { FullSyncRequest, SyncAccount, SyncOutcome, SyncOutcome_State as State } from "@generated/klaus_pb";
   import { postProto } from "@generated/post";
   import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+  import CloudAlertIcon from "@lucide/svelte/icons/cloud-alert";
+  import CloudCheckIcon from "@lucide/svelte/icons/cloud-check";
   import UserIcon from "@lucide/svelte/icons/circle-user";
   import { onMount } from "svelte";
   import { toast } from "svelte-sonner";
   import { Button } from "$lib/components/ui/button";
-  import { Checkbox } from "$lib/components/ui/checkbox";
-  import * as Collapsible from "$lib/components/ui/collapsible";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-  import * as Field from "$lib/components/ui/field";
-  import { Input } from "$lib/components/ui/input";
 
-  /** Called after a sync changed the Collection (the deck list reloads). */
+  /** Called after a sync finished (the deck list reloads its counts). */
   let { onsynced }: { onsynced: () => void } = $props();
 
   let account = $state(new SyncAccount());
-  let busy = $state(false);
-  let status = $state("");
+  let outcome = $state(new SyncOutcome());
+  let progress = $state("");
   let mediaStatus = $state("");
+  let now = $state(Date.now());
 
   const call = <T extends object>(method: string, input: object, output: { fromBinary(b: Uint8Array): T }) =>
     postProto(method, input as never, output as never) as Promise<T>;
   const loadAccount = async () => (account = await call("klausSyncAccount", new Empty(), SyncAccount));
+  const running = $derived(outcome.state === State.RUNNING);
+  /** The last sync needs the user's choice (a full sync). */
+  const needsChoice = $derived(outcome.state === State.DONE && !outcome.error && outcome.required >= Required.FULL_SYNC);
 
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Each finished sync is handled once, whoever started it (the page or automatic sync).
+  let handledId = 0;
+  let manualId = 0;
 
-  /** Polls a background sync (klausSync / klausFullSync) until it's done, showing
-   * its progress like aqt/sync.py's 150 ms timer. */
-  async function outcome(): Promise<SyncOutcome> {
-    for (;;) {
-      await wait(150);
-      const progress = (await latestProgress({}, { alertOnError: false }).catch(() => undefined))?.value;
-      if (progress?.case === "normalSync") {
-        const { stage, added, removed } = progress.value;
-        status = [stage, added, removed].filter(Boolean).join(" · ");
-      } else if (progress?.case === "fullSync" && progress.value.total) {
-        const { transferred, total } = progress.value;
-        status = `${Math.round((transferred / total) * 100)}% of ${(total / 1024 / 1024).toFixed(1)} MB`;
-      }
-      const result = await call("klausSyncOutcome", new Empty(), SyncOutcome);
-      if (result.state === State.DONE) return result;
-    }
-  }
-
-  async function sync() {
-    if (busy) return;
-    if (!account.username) return openSignIn();
-    busy = true;
-    status = "Checking…";
-    try {
-      await call("klausSync", new Empty(), Empty);
-      const result = await outcome();
-      if (failed(result)) return;
-      if (result.serverMessage) toast.info(result.serverMessage);
-      if (result.required === Required.NO_CHANGES || result.required === Required.NORMAL_SYNC) {
-        toast.success("Collection sync complete.");
-        onsynced();
-        watchMedia();
-      } else {
-        askFullSync(result);
-      }
-    } catch {
-      // The bridge's error was shown.
-    } finally {
-      busy = false;
-      status = "";
-    }
-  }
-
-  /** Shows a sync error; an expired sign-in (the bridge signed out) asks again. */
-  function failed(result: SyncOutcome): boolean {
-    if (!result.error) return false;
-    if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
-      loadAccount();
-      openSignIn(result.error);
+  async function poll() {
+    outcome = await call("klausSyncOutcome", new Empty(), SyncOutcome);
+    now = Date.now();
+    if (outcome.state === State.RUNNING) {
+      const p = (await latestProgress({}, { alertOnError: false }).catch(() => undefined))?.value;
+      if (p?.case === "normalSync") progress = [p.value.stage, p.value.added, p.value.removed].filter(Boolean).join(" · ");
+      else if (p?.case === "fullSync" && p.value.total)
+        progress = `${Math.round((p.value.transferred / p.value.total) * 100)}% of ${(p.value.total / 1048576).toFixed(1)} MB`;
     } else {
-      toast.error(result.error);
+      progress = "";
     }
-    return true;
+    if (outcome.state === State.DONE && outcome.id > handledId) {
+      handledId = outcome.id;
+      finished(outcome);
+    }
+  }
+
+  function finished(result: SyncOutcome) {
+    const manual = result.id === manualId;
+    if (result.error) {
+      if (result.errorKind === BackendError_Kind.SYNC_AUTH_ERROR) {
+        loadAccount();
+        toast.error("Your Klaus Account sign-in has expired. Sign in again to keep syncing.");
+      } else if (manual) {
+        toast.error(result.error);
+      }
+      return;
+    }
+    if (result.serverMessage) toast.info(result.serverMessage);
+    if (result.required >= Required.FULL_SYNC) return askFullSync(result);
+    if (fullRunning) {
+      fullRunning = false;
+      fullOpen = false;
+      toast.success(
+        "Full sync complete.",
+        result.backupFolder ? { description: `Your previous collection was backed up to ${result.backupFolder}.` } : {},
+      );
+    } else if (manual) {
+      toast.success("Collection synced.");
+    }
+    onsynced();
+    watchMedia();
+  }
+
+  async function syncNow() {
+    if (running) return;
+    if (!account.email) return signIn();
+    if (needsChoice) return askFullSync(outcome);
+    await call("klausSync", new Empty(), Empty);
+    await poll();
+    manualId = outcome.id;
   }
 
   async function watchMedia() {
@@ -96,7 +99,7 @@
       if (!media?.active) break;
       const p = media.progress;
       mediaStatus = p ? ["Media", p.checked, p.added, p.removed].filter(Boolean).join(" · ") : "Syncing media…";
-      await wait(1000);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     mediaStatus = "";
   }
@@ -111,72 +114,47 @@
     fullOpen = true;
   }
   async function fullSync(upload: boolean) {
-    const result = full!;
+    const serverMediaUsn = account.syncMedia ? full!.serverMediaUsn : undefined;
     fullRunning = true;
-    status = upload ? "Uploading to AnkiWeb…" : "Downloading from AnkiWeb…";
     try {
-      const serverMediaUsn = account.syncMedia ? result.serverMediaUsn : undefined;
       await call("klausFullSync", new FullSyncRequest({ upload, serverMediaUsn }), Empty);
-      const done = await outcome();
-      fullOpen = false;
-      if (failed(done)) return;
-      toast.success(
-        upload ? "Uploaded to AnkiWeb." : "Downloaded from AnkiWeb.",
-        done.backupFolder ? { description: `Your previous collection was backed up to ${done.backupFolder}.` } : {},
-      );
-      onsynced();
-      watchMedia();
-    } finally {
+      await poll();
+      manualId = outcome.id;
+    } catch {
       fullRunning = false;
-      status = "";
     }
   }
+  const fullText = $derived(
+    full?.required === Required.FULL_DOWNLOAD
+      ? "This device's collection has no cards. Download your collection from your Klaus Account?"
+      : full?.required === Required.FULL_UPLOAD
+        ? "Your Klaus Account's collection has no cards. Replace it with this device's collection?"
+        : "There is a conflict between decks on this device and your Klaus Account. You must choose which version to keep:",
+  );
 
-  // Sign in (aqt/sync.py get_id_and_pass_from_user), with the self-hosted server
-  // and the two sync preferences Anki keeps in its profile.
+  // Browser sign-in: klaus.ink signs the user in, then sends them back to Klaus.
   let signInOpen = $state(false);
-  let signInError = $state("");
-  let signingIn = $state(false);
-  let username = $state("");
-  let password = $state("");
-  let customUrl = $state("");
-  let autoSync = $state(true);
-  let syncMedia = $state(true);
-  function openSignIn(error = "") {
-    signInError = error;
-    username = account.username;
-    password = "";
-    customUrl = account.customUrl;
-    autoSync = account.autoSync;
-    syncMedia = account.syncMedia;
+  let signInUrl = $state("");
+  async function signIn() {
+    signInUrl = (await call("klausAccountSignIn", new Empty(), PbString)).val;
+    openLink(signInUrl);
     signInOpen = true;
-  }
-  async function signIn(event: SubmitEvent) {
-    event.preventDefault();
-    signInError = "";
-    signingIn = true;
-    try {
-      if (customUrl.trim() !== account.customUrl) await call("klausSetSyncUrl", new PbString({ val: customUrl }), Empty);
-      await saveFlag("autoSync", autoSync);
-      await saveFlag("syncMedia", syncMedia);
-      await postProto("klausSyncSignIn", new SyncSignIn({ username: username.trim(), password }), Empty, {
-        alertOnError: false,
-      });
+    while (signInOpen) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       await loadAccount();
-      signInOpen = false;
-      sync();
-    } catch (err) {
-      signInError = err instanceof Error ? err.message : String(err);
-    } finally {
-      signingIn = false;
+      if (account.email) {
+        signInOpen = false;
+        toast.success(`Signed in as ${account.email}.`);
+        syncNow();
+      }
     }
   }
-
-  function saveFlag(key: "autoSync" | "syncMedia", value: boolean) {
-    return setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) });
+  function openLink(url: string) {
+    postProto("openLink", new PbString({ val: url }), Empty, { alertOnError: false }).catch(() => {});
   }
+
   async function toggle(key: "autoSync" | "syncMedia", value: boolean) {
-    await saveFlag(key, value);
+    await setProfileConfigJson({ key, valueJson: new TextEncoder().encode(JSON.stringify(value)) });
     await loadAccount();
   }
   async function signOut() {
@@ -184,55 +162,65 @@
     await loadAccount();
   }
 
-  onMount(async () => {
-    await loadAccount();
-    // Anki syncs when the profile opens; once per launch, not on every return to the deck list.
-    let opened = false;
-    try {
-      opened = sessionStorage.getItem("klausSyncedOnOpen") === "1";
-      sessionStorage.setItem("klausSyncedOnOpen", "1");
-    } catch {
-      // Storage unavailable: sync anyway.
+  const statusText = $derived.by(() => {
+    if (running) return progress || "Syncing…";
+    if (mediaStatus) return mediaStatus;
+    if (!account.email) return "";
+    if (outcome.state === State.DONE && outcome.error) return "Sync failed";
+    if (needsChoice) return "Full sync needed";
+    if (outcome.finishedMs) {
+      const minutes = Math.floor((now - Number(outcome.finishedMs)) / 60000);
+      return minutes < 1 ? "Synced just now" : `Synced ${minutes} min ago`;
     }
-    if (!opened && account.username && account.autoSync) sync();
+    return "";
   });
 
-  // Full-sync wording, by what the server requires.
-  const fullText = $derived(
-    full?.required === Required.FULL_DOWNLOAD
-      ? "Local collection has no cards. Download from AnkiWeb?"
-      : full?.required === Required.FULL_UPLOAD
-        ? "AnkiWeb collection has no cards. Replace it with local collection?"
-        : "There is a conflict between decks on this device and AnkiWeb. You must choose which version to keep:",
-  );
+  onMount(() => {
+    loadAccount();
+    // A sync that finished before this page opened isn't news; a full sync still
+    // waiting for a choice is asked about again.
+    call("klausSyncOutcome", new Empty(), SyncOutcome).then((current) => {
+      handledId = current.state === State.DONE && current.required < Required.FULL_SYNC ? current.id : 0;
+      poll();
+    });
+    const timer = setInterval(() => poll().catch(() => {}), 2000);
+    return () => clearInterval(timer);
+  });
 </script>
 
 <div class="flex items-center gap-2">
-  {#if status || mediaStatus}
-    <span class="text-sm text-muted-foreground" aria-live="polite">{status || mediaStatus}</span>
-  {/if}
-  <Button variant="outline" onclick={sync} disabled={busy} title={account.username ? "Sync with AnkiWeb" : "Sign in to sync"}>
-    <RefreshCwIcon data-icon="inline-start" class={busy ? "animate-spin" : ""} />
-    Sync
-  </Button>
-  {#if account.username}
+  {#if account.email}
+    <Button
+      variant="ghost"
+      size="sm"
+      onclick={syncNow}
+      disabled={running}
+      title={needsChoice ? "Choose how to finish syncing" : "Sync now"}
+      class="text-muted-foreground"
+    >
+      {#if running}
+        <RefreshCwIcon data-icon="inline-start" class="animate-spin" />
+      {:else if (outcome.state === State.DONE && outcome.error) || needsChoice}
+        <CloudAlertIcon data-icon="inline-start" />
+      {:else}
+        <CloudCheckIcon data-icon="inline-start" />
+      {/if}
+      <span aria-live="polite">{statusText || "Sync"}</span>
+    </Button>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger>
         {#snippet child({ props })}
-          <Button {...props} variant="ghost" size="icon" aria-label="AnkiWeb account"><UserIcon /></Button>
+          <Button {...props} variant="ghost" size="icon" aria-label="Klaus Account"><UserIcon /></Button>
         {/snippet}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end" class="w-64">
         <DropdownMenu.Group>
-          <DropdownMenu.Label class="truncate">{account.username}</DropdownMenu.Label>
-          {#if account.customUrl}
-            <DropdownMenu.Label class="truncate text-xs font-normal text-muted-foreground">{account.customUrl}</DropdownMenu.Label>
-          {/if}
+          <DropdownMenu.Label class="truncate">{account.email}</DropdownMenu.Label>
         </DropdownMenu.Group>
         <DropdownMenu.Separator />
         <DropdownMenu.Group>
           <DropdownMenu.CheckboxItem checked={account.autoSync} onCheckedChange={(v) => toggle("autoSync", v)}>
-            Sync on open and close
+            Sync automatically
           </DropdownMenu.CheckboxItem>
           <DropdownMenu.CheckboxItem checked={account.syncMedia} onCheckedChange={(v) => toggle("syncMedia", v)}>
             Sync media
@@ -244,73 +232,36 @@
         </DropdownMenu.Group>
       </DropdownMenu.Content>
     </DropdownMenu.Root>
+  {:else}
+    <Button variant="outline" onclick={signIn}>Sign in to sync</Button>
   {/if}
 </div>
 
 <Dialog.Root bind:open={signInOpen}>
   <Dialog.Content class="sm:max-w-sm">
-    <form onsubmit={signIn} class="flex flex-col gap-4">
-      <Dialog.Header>
-        <Dialog.Title>Sign in to AnkiWeb</Dialog.Title>
-        <Dialog.Description>
-          Syncs your collection with Anki on your other devices. Your AnkiWeb key is kept in the macOS Keychain.
-        </Dialog.Description>
-      </Dialog.Header>
-      <Field.Group>
-        <Field.Field data-invalid={signInError ? true : undefined}>
-          <Field.Label for="sync-user">Email</Field.Label>
-          <Input id="sync-user" type="email" autocomplete="username" bind:value={username} required />
-        </Field.Field>
-        <Field.Field data-invalid={signInError ? true : undefined}>
-          <Field.Label for="sync-password">Password</Field.Label>
-          <Input
-            id="sync-password"
-            type="password"
-            autocomplete="current-password"
-            bind:value={password}
-            aria-invalid={signInError ? true : undefined}
-            required
-          />
-          {#if signInError}<Field.Error>{signInError}</Field.Error>{/if}
-        </Field.Field>
-        <Field.Field orientation="horizontal">
-          <Checkbox id="sync-auto" bind:checked={autoSync} />
-          <Field.Label for="sync-auto">Sync on open and close</Field.Label>
-        </Field.Field>
-        <Field.Field orientation="horizontal">
-          <Checkbox id="sync-media" bind:checked={syncMedia} />
-          <Field.Label for="sync-media">Sync media</Field.Label>
-        </Field.Field>
-        <Collapsible.Root open={!!customUrl}>
-          <Collapsible.Trigger class="text-sm text-muted-foreground underline-offset-4 hover:underline">
-            Self-hosted sync server
-          </Collapsible.Trigger>
-          <Collapsible.Content class="pt-2">
-            <Field.Field>
-              <Field.Label for="sync-url">Server URL</Field.Label>
-              <Input id="sync-url" type="url" placeholder="https://sync.example.com/" bind:value={customUrl} />
-              <Field.Description>Leave empty for AnkiWeb.</Field.Description>
-            </Field.Field>
-          </Collapsible.Content>
-        </Collapsible.Root>
-      </Field.Group>
-      <Dialog.Footer>
-        <Dialog.Close>
-          {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
-        </Dialog.Close>
-        <Button type="submit" disabled={signingIn}>{signingIn ? "Signing in…" : "Sign in"}</Button>
-      </Dialog.Footer>
-    </form>
+    <Dialog.Header>
+      <Dialog.Title>Finish signing in in your browser</Dialog.Title>
+      <Dialog.Description>
+        Sign in to your Klaus Account on klaus.ink. Klaus will pick it up as soon as you're done.
+      </Dialog.Description>
+    </Dialog.Header>
+    <p class="text-sm text-muted-foreground">
+      Browser didn't open?
+      <Button variant="link" class="h-auto p-0" onclick={() => openLink(signInUrl)}>Open klaus.ink</Button>
+    </p>
+    <Dialog.Footer>
+      <Dialog.Close>
+        {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
+      </Dialog.Close>
+    </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 
 <!-- A full sync takes the Collection away while it runs, so this stays modal until done. -->
-<Dialog.Root
-  bind:open={() => fullOpen, (open) => (fullOpen = open || fullRunning)}
->
+<Dialog.Root bind:open={() => fullOpen, (open) => (fullOpen = open || fullRunning)}>
   <Dialog.Content class="sm:max-w-lg" showCloseButton={!fullRunning}>
     <Dialog.Header>
-      <Dialog.Title>{fullRunning ? status : "Full sync required"}</Dialog.Title>
+      <Dialog.Title>{fullRunning ? progress || "Syncing…" : "Full sync required"}</Dialog.Title>
       {#if !fullRunning}
         <Dialog.Description>{fullText}</Dialog.Description>
       {/if}
@@ -320,12 +271,12 @@
     {:else if full?.required === Required.FULL_SYNC}
       <ul class="flex list-disc flex-col gap-2 pl-5 text-sm">
         <li>
-          Select <strong>Download from AnkiWeb</strong> to replace decks here with AnkiWeb’s version. You will lose any
-          changes you made on this device since your last sync.
+          Select <strong>Download</strong> to replace decks here with your Klaus Account's version. You will lose any changes
+          you made on this device since your last sync.
         </li>
         <li>
-          Select <strong>Upload to AnkiWeb</strong> to overwrite AnkiWeb’s versions with decks from this device, and delete
-          any changes on AnkiWeb.
+          Select <strong>Upload</strong> to overwrite your Klaus Account's version with decks from this device, and delete
+          any changes made on your other devices.
         </li>
       </ul>
       <p class="text-sm text-muted-foreground">Once the conflict is resolved, syncing will work as usual.</p>
@@ -333,15 +284,15 @@
     {#if !fullRunning}
       <Dialog.Footer>
         <Dialog.Close>
-          {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
+          {#snippet child({ props })}<Button {...props} variant="outline">Not now</Button>{/snippet}
         </Dialog.Close>
         {#if full?.required !== Required.FULL_DOWNLOAD}
           <Button variant={full?.required === Required.FULL_UPLOAD ? "default" : "outline"} onclick={() => fullSync(true)}>
-            Upload to AnkiWeb
+            Upload
           </Button>
         {/if}
         {#if full?.required !== Required.FULL_UPLOAD}
-          <Button onclick={() => fullSync(false)}>Download from AnkiWeb</Button>
+          <Button onclick={() => fullSync(false)}>Download</Button>
         {/if}
       </Dialog.Footer>
     {/if}

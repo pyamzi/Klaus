@@ -14,6 +14,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             // Dev only: a scratch Collection (e.g. a test fixture) instead of the real one.
@@ -33,6 +34,10 @@ fn main() {
             let hook: Hook = Arc::new(move |method: &str, input: &[u8]| on_hook(&handle, method, input));
             let (addr, server) = tauri::async_runtime::block_on(serve(bridge, web, token.clone(), hook))?;
             tauri::async_runtime::spawn(server);
+            // Automatic sync (ADR-0007): once now, then whenever there's something to sync.
+            let sync = app.state::<Arc<Bridge>>().inner().clone();
+            sync.sync_in_background();
+            sync.start_auto_sync();
             println!("Klaus bridge listening on {addr}");
 
             let base: Url = format!("http://{addr}/").parse()?;
@@ -65,7 +70,7 @@ fn main() {
         RunEvent::ExitRequested { api, .. } => {
             let bridge = app.state::<Arc<Bridge>>().inner().clone();
             let account = bridge.sync_account();
-            if account.username.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
+            if account.email.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
                 return;
             }
             api.prevent_exit();
@@ -74,6 +79,10 @@ fn main() {
             }
             let app = app.clone();
             std::thread::spawn(move || {
+                // An automatic sync may be running; rslib allows one at a time.
+                while bridge.sync_running() {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
                 bridge.sync();
                 wait_for_media_sync(&bridge);
                 app.exit(0);
@@ -188,6 +197,15 @@ fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
         }
         // Not wired yet: the browser (#11), note type dialogs (#16), recording/playback,
         // clipboard reads, external links. Anki pages treat the empty reply as cancel.
+        // Links from Anki pages and Klaus's sign-in: the system browser.
+        "openLink" => {
+            use tauri_plugin_opener::OpenerExt;
+            let url = generic::String::decode(input).ok()?.val;
+            if url.starts_with("https://") || url.starts_with("http://") {
+                let _ = app.opener().open_url(url, None::<&str>);
+            }
+            None
+        }
         _ => None,
     }
 }
