@@ -1,6 +1,6 @@
 """The main window's bottom row: Anki's own deck-list / overview row,
-extended with a gear (Anki's Preferences) and the running-task readout
-at its left edge. Review's answer row is left exactly as Anki draws it.
+extended with a gear (Anki's Preferences) at its left edge and the
+running-task readout at its right edge. Review's answer row is left exactly as Anki draws it.
 
 Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_bottom_row.py
 """
@@ -146,7 +146,7 @@ check("the row has no dock toggle and no DOCK_CMD", "klausmate_row_dock" not in 
 # a mouse click took the next Space through klausKey. Mouse presses must
 # not focus them; Tab still does.
 check("a mouse press never leaves focus on a row button (Space would re-fire it)",
-      "addEventListener('mousedown'" in html and "#klaus-row [role=button]" in html
+      "addEventListener('mousedown'" in html and ".klaus-edge [role=button]" in html
       and "preventDefault" in html.split("addEventListener('mousedown'", 1)[-1][:200])
 check("…while Tab still reaches them", html.count('tabindex="0"') == html.count('role="button"') == 2)
 check("an unknown command is left alone", br._on_js_message((False, None), "klausmate_row_dock", None) == (False, None))
@@ -156,5 +156,27 @@ check("the gear keeps its own hover/focus rule (I-3): a wash and no focus ring, 
       len(gear_rule) == 1 and "outline: none" in gear_rule[0] and ".kr-readout" not in gear_rule[0]
       and "min-width" not in gear_rule[0], str(gear_rule))
 check("no stray '+' debris in the row html", "+ <" not in html and "+<" not in html)
+
+section("the readout sits at the bottom right, like the Add and Browse bars")
+_html = br.row_html(br.row_state([], 1000.0), False)
+check("the gear is pinned left, the readout right", re.search(r"#klaus-row \{ left: 8px", _html)
+      and re.search(r"#klaus-status \{ right: 8px", _html)
+      and _html.index('id="klaus-row"') < _html.index('class="kr-gear"') < _html.index('id="klaus-status"'))
+check("…the task name, then its progress bar", _html.index('class="kr-text"') < _html.index('class="kr-track"'))
+check("klausStatus and klausFit drive the right-hand block", "getElementById('klaus-status')" in _html
+      and "getElementById('klaus-row')" not in _html)
+
+section("the Decks row's height is what the Add and Browse bars follow")
+heights = []
+real_set = sb.set_row_height
+sb.set_row_height = heights.append
+web = types.SimpleNamespace(height=lambda: 41)
+mw.state = "deckBrowser"
+br._report_height(web)
+mw.state = "review"
+br._report_height(web)
+mw.state = "deckBrowser"
+check("reported on a deck screen, never from the taller review row", heights == [41], str(heights))
+sb.set_row_height = real_set
 
 raise SystemExit(report())

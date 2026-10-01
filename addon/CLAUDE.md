@@ -326,10 +326,26 @@ same reason.
   also writes as `display:none`. Blocks added after load are not
   adopted (wrapping them would mean moving them). The node harness
   counts custom-element connects to pin this. (HTML5 DnD is dead on this
-  screen: MainWebView.dragEnterEvent eats non-file drags). Wrapper
-  sizing is `width:fit-content; max-width:100%` — BOTH measured
-  necessary (block = full-width badge misplacement; bare fit-content
-  can't go below the heatmap grid's min-content, 859px). Visibility
+  screen: MainWebView.dragEnterEvent eats non-file drags). **The deck
+  screen is a GRID since 2026-10-01** (Pouya: "they should fit within
+  square boxes"): the `<center>` is one CSS grid of `GRID_CELL` (160px)
+  squares, `GRID_GAP` (16px) apart and around, no `dense` flow (a
+  widget's place must follow its order or a drag lands elsewhere).
+  Every widget fills a whole COLUMNS x ROWS box (`--kw-cols`/`--kw-rows`
+  spans, set by the page and clamped to the columns the window has) and
+  scrolls inside its `.klaus-w-body` (the wrapper's own child, so the ⊖
+  badge and the size chip are never clipped; Python's `wrap_foreign`
+  writes the same pair). Sizes: `SIZES`, picked per widget from a size
+  chip in edit mode, saved in `dashboard_sizes` (validated in
+  `apply_action`; defaults `DEFAULT_SIZES`, add-on blocks
+  `FOREIGN_SIZE`). A box's ONE card stretches to fill it (`:only-child`,
+  never Anki's table: a stretched table spreads height into its rows).
+  **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
+  edit bar): one DESIGN.md card on every box and each widget's own outer
+  card switched off, colours inside untouched. The jiggle is iOS-strength
+  (±1.5° and a 1px bob, ~0.26 s) with a random phase and period per
+  widget, and drag is 2-D: pointer over another widget takes its place
+  in the order. Visibility
   stays on per-widget bools (`heatmap_enabled`); `dashboard_order` is
   order ONLY. `_bg_preview_cfg` carries it, and `_write_cfg` patches an
   armed preview so a dashboard edit survives the next preview tick.
@@ -341,27 +357,43 @@ same reason.
   heatmap's, so its body script parses after panel_js's weld. DOM
   behaviour is tested by `tests/dashboard_js_dom_test.js` (node, run
   from test_dashboard.py, honest SKIP without node).
-- `browse_toggles.py`: the self-painted pane toggle (`_PaneToggle`, ◧
-  sidebar / ◨ editor column) and `_VisibilityWatcher`, placed by the status
-  bar; plus the `browser_will_show` layout repair. Split out of `__init__.py`.
+- `browse_toggles.py`: the pane toggles. In the single window they are
+  HTML in Anki's top bar, right after the Klaus logo
+  (`top_toolbar_will_set_left_tray_content`, `setup_top_bar` called from
+  `status_bar.setup`): ◧ ◨ for the Add tab (Library tree, editor) and
+  Browse (sidebar, card editor), hidden on Decks; a click is
+  `pycmd("klausmate_pane:left|right")`, and every change (click, tab
+  switch via `Host.listeners`, a pane hidden elsewhere, toolbar redraw)
+  re-pushes `pane_state()` through `klausPanes`. The icon is
+  `_PaneToggle`'s geometry as SVG (`pane_icon_svg`); on = `text`, off =
+  `text_muted`. The self-painted `_PaneToggle` and `_VisibilityWatcher`
+  remain for Browse outside the single window, beside its status-bar
+  gear; plus the `browser_will_show` layout repair.
 - `tasks.py` (aqt-free) + `status_bar.py` + `bottom_row.py` (spec
   [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)).
   **Main window: NO Qt bar** (the user's call, 2026-09-30, after the
   copied-buttons version showed Anki's row twice). `bottom_row` extends
   Anki's OWN deck-list / overview bottom row (`webview_will_set_content`,
   `DeckBrowserBottomBar`/`OverviewBottomBar` contexts; review's answer
-  row untouched): a fixed block at its left edge with a gear (divs, not
+  row untouched): a gear at its left edge (divs, not
   `<button>` — Anki's bottom CSS frames buttons) → Anki's Preferences,
-  and the task readout (progress + newest task, red on failure; click →
-  the task list). It starts in the rendered state and follows `tasks`
+  and at its RIGHT edge the task readout (newest task, then its
+  progress, red on failure; click → the task list). Its height is what
+  every Qt bar follows: a resize filter on `mw.bottomWeb` (deck screens
+  only, never the taller review row) calls `status_bar.set_row_height`,
+  so the bottom edge is one height on every tab (28px floor,
+  `STRIP_MAX` cap). It starts in the rendered state and follows `tasks`
   live via `klausStatus` evals on `mw.bottomWeb` while
   `mw.state` is deckBrowser/overview. Both clicks open a tick later
   (`bridge_reentrancy`'s deferral rule). **Browse** keeps a 28pt Qt bar
   (`status_bar.install_browser`): gear → Anki's Preferences in one click
   (no menu; Klaus's settings are the top bar's k and Tools menu),
-  progress bar + text ("+N more"; click → `show_task_list`, a `Qt.Popup`
-  clamped to the screen with ✕ where a task can be cancelled), pane
-  toggles at the far right. `visible_tasks`, `gear_points` and
+  and at the bottom RIGHT the task text ("+N more") then its progress
+  bar (click → `show_task_list`, a `Qt.Popup` clamped to the screen by
+  its outer frame, with ✕ where a task can be cancelled). The Add tab's
+  bar is built the same way (a `QStatusBar` strip, `_strip`), so the two
+  cannot differ; neither has pane toggles in the single window (they
+  are in the top bar). `visible_tasks`, `gear_points` and
   `show_task_list` are shared by both.
   `tasks` is the one list of running processes — `begin`/`update`/`end`
   from any thread; listeners run only through `run_on_main`
@@ -389,8 +421,8 @@ same reason.
   the tabs (`klaus-active` class). The Add page (`build_add_page`,
   `AddPage`) is a splitter of `library_tree.LibraryTree` | the reader
   slot (`reader_host`'s home) | the editor slot Anki's Add is built into,
-  with Klaus's status bar (◧ tree, ◨ editor; `status_bar.install_add_tab`)
-  under it; `a` and the Add link switch to it (`open_add` asks Anki for an
+  with Klaus's status bar (`status_bar.install_add_tab`; its ◧ tree /
+  ◨ editor toggles are in the top bar, `browse_toggles`) under it; `a` and the Add link switch to it (`open_add` asks Anki for an
   instance when none is live), Close and Escape go back to
   `Host.previous`, the splitter persists under `klausmate_add_tab`
   (`saveSplitter`), and a click on a PDF row loads it into the reader.
@@ -632,8 +664,12 @@ same reason.
   whole load. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
   go) drops a deleted PDF's pending save and failed flag.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
-  … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only
-  shows names and reports `activated` / `closed` / `add_requested`;
+  … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). A tab
+  SHOWS the Library's display name (`tab_label`: drive.json, no `.pdf`,
+  `&` doubled so QTabBar shows it rather than taking a mnemonic) and
+  carries the stored name in `tabData`, which is all the interface ever
+  reports. It only shows names and reports `activated` / `closed` /
+  `add_requested`;
   `PdfSidebar` loads documents and persists each host's tab set in
   `pdf_tabs.json` under its `host_key` (`editor`, `lecture`).
 - `reader_panel.py`: `PdfSidebar`, the reader every host wraps — a
@@ -935,8 +971,15 @@ same reason.
   (`ReviewerBottomBar` name-match; `pycmd("klausmate:lecture")`,
   answered by this module's own js-message handler — the hook filters
   CHAIN and the final return wins, so `__init__`'s blanket non-Editor
-  swallow upstream is harmless) toggles a right QDockWidget on mw
-  hosting a standalone `PdfSidebar`. Once open it follows
+  swallow upstream is harmless) toggles a panel hosting a standalone
+  `PdfSidebar`. **Not a dock since 2026-10-01**: an mw `QDockWidget` runs
+  the full window height beside the top bar and the bottom row and
+  pushed the whole window aside, so `_install_beside_reviewer` moves
+  whatever holds `mw.web` in `mw.mainLayout` (the webview, or AMBOSS's
+  and AnkiHub's wrapping splitter) into a horizontal `QSplitter`
+  (`REVIEW_SPLIT`) in the same layout slot, with the panel beside it,
+  once per session; the panel takes its saved width a tick after show
+  (`_size_panel`). Once open it follows
   `reviewer_did_show_question`: note tags → `!Library` candidates
   (prefs.json inverted, casefolded; the tag IS the membership verdict
   — deliberately NO threshold re-gating, `MATCH_FLOOR` sanity only) →
@@ -945,14 +988,14 @@ same reason.
   results cached per (nid, tags), revalidated by file stamps. No match
   shows exactly "No lecture page available for this card." pdfjs
   first-load jumps ride a generation-stamped retry ladder (the page
-  posts `count:` before its divs exist); leaving review hides the dock
+  posts `count:` before its divs exist); leaving review hides the panel
   (mw.web is shared across states); open-state + width persist under
   `pdf_tabs.json`'s `lecture_view` key; EVERY teardown path runs
   `sidebar.cleanup()` (K-095). Config `lecture_view_reopen`. Shortcut
   "l" via `state_shortcuts_will_change` (collision-scanned) + a
   reviewer context-menu toggle; never activateWindow — answer keys
-  stay on the reviewer. The dock's title bar is an empty `QWidget`
-  (K-257's Record button was removed with recording in K-314).
+  stay on the reviewer. The panel has no chrome (K-257's Record button
+  was removed with recording in K-314).
 - `projection.py` (aqt-free, pure stdlib): top-2 PCA by power iteration +
   deflation over one packed `array('d')` buffer (`math.sumprod` on
   memoryview slices, strided slices for the transpose — never the d×d
@@ -1501,6 +1544,17 @@ same reason.
   marks. The bake's coordinate flip from the records' top-left page
   points is `y_pdf = page_mediabox_height − (y + h)` (verified
   pixel-exact).
+- **`embeddings.provider_from_config` takes a config GETTER, not a dict**
+  (`OllamaEmbeddings` calls it per request). The settings seam (d8a7025)
+  deleted curation's `_cfg` helper but left `provider_from_config(_cfg)`
+  in `_embed_plan`: every card-index phase with anything to embed died
+  with a NameError, `index_queue._fail` dropped the whole queue, and no
+  PDF embedded for a day; the first fix passed `settings.read()` (a dict)
+  and failed the same way one call later. The index_queue tests fake
+  curation entirely, so neither showed up there:
+  `tests/test_curation_embed.py` runs the real `_embed_plan`. After a
+  refactor that deletes helpers, run `uvx pyflakes klausmate/*.py | grep
+  "undefined name"`.
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
   used `shutil.which`, a bounded login-shell lookup, then known paths.

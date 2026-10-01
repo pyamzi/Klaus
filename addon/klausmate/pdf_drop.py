@@ -73,7 +73,7 @@ def _import_pdfs(paths: list[str], skipped: int = 0) -> None:
         except Exception as e:
             print(f"[klausmate] deck-drop import failed for {path}: {e}")
     if skipped:
-        tooltip(f"Klaus imported the PDF — ignored {skipped} other file(s).")
+        tooltip(f"Klaus imported the PDF and ignored {skipped} other file(s).")
 
 
 def _browse_for_pdfs() -> None:

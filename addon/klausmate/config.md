@@ -18,11 +18,11 @@ from existing profiles during migration.
   This does not install a runtime or download models. Set `false` to manage
   the server yourself.
 The **Ollama runtime** row shows the estimated runtime download size before
-**Install/start** or **Update runtime** is clicked. These buttons authorize a
-runtime download if needed. **Install/start** reuses or starts an installed
-runtime first. **Update runtime** is enabled after **Refresh** when Klaus owns
+**Install/Start** or **Update Runtime** is clicked. These buttons authorize a
+runtime download if needed. **Install/Start** reuses or starts an installed
+runtime first. **Update Runtime** is enabled after **Refresh** when Klaus owns
 a running managed runtime older than the bundled target version. Runtime files
-live under `user_files/runtime/` in the add-on. **Stop managed server** only
+live under `user_files/runtime/` in the add-on. **Stop Managed Server** only
 stops a process Klaus started or adopted; an external Ollama process must be
 stopped in the application that started it.
 
@@ -320,8 +320,8 @@ removed. Use the external MCP client setup below.
   scheduled cards to the right of today; `false` stops the grid at
   today. Same corner menu → **Upcoming**. Only an explicit `false`
   hides them.
-- **dashboard_order**: the order of the deck-screen widgets, top to
-  bottom (default `["decks", "heatmap"]`). Normally written by the
+- **dashboard_order**: the order of the deck-screen widgets on its grid,
+  in reading order (default `["decks", "heatmap"]`). Normally written by the
   dashboard itself: right-click a widget → *Edit Widgets…*, then drag
   to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
   the widget's own toggle, e.g. `heatmap_enabled`). Other add-ons'
@@ -332,8 +332,17 @@ removed. Use the external MCP client setup below.
   the saved order waits for the design layer.
 - **dashboard_hidden**: the other add-ons' deck-screen blocks you removed
   with ⊖ (default `[]`), as their `x:` ids; ＋ brings one back.
+- **dashboard_sizes**: each widget's box on the deck screen's grid, as
+  columns×rows of square cells (default `{}`: the deck list is `3x3`, the
+  heatmap `4x2`, other add-ons' blocks `2x1`). Pick one with the size chip
+  on a widget in *Edit Widgets…*; choices are `1x1`, `2x1`, `1x2`, `2x2`,
+  `3x2`, `3x3`, `4x2` and `4x3`. Content bigger than its box scrolls inside it.
+- **dashboard_uniform**: `true` gives every deck-screen widget, other
+  add-ons' blocks included, the same card (Klaus's surface, corners, border
+  and shadow); `false` (default) lets each keep its own look. Toggled by
+  **Same Look** in *Edit Widgets…*.
 
-Apart from `heatmap_enabled`, `dashboard_order` and `dashboard_hidden` (written from the
+Apart from `heatmap_enabled` and the four `dashboard_*` keys (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display
 keys above (the heatmap's own corner menu), all of these live in **KlausMate
 Preferences → Appearance**; press **Save** and they apply immediately
@@ -348,11 +357,11 @@ then reopen Preferences. Keep Anki running with your profile open. Merge the
 `klaus` entry into `mcpServers` in Claude Desktop's configuration and restart
 Claude Desktop. See the [official local-server setup guide](https://modelcontextprotocol.io/docs/2026-07-28/develop/connect-local-servers).
 
-Use **Test connection** beside **Copy configuration** to check that the bridge
+Use **Test Connection** beside **Copy Configuration** to check that the bridge
 can start, connect to Klaus and discover its tools. It reads no lecture or card
 content. The status explains how to recover if the profile is closed, the
 connection is unavailable or Python cannot launch. The full JSON is also shown
-under **Advanced settings → MCP configuration**.
+under **Advanced Settings → MCP configuration**.
 
 The generated JSON uses absolute paths to Python, the bundled stdio bridge,
 and `user_files/mcp_connection.json`. It contains no token or current port.

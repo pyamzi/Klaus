@@ -27,7 +27,7 @@ Features
 Privacy — read before installing
 Embeddings run locally. Downloading runtimes and models uses the network. External MCP clients may request lecture text, page images and card context and send them to their chosen provider. Collection writes require approval in Anki. Matching uses cosine thresholds. There is no subscription service or embedded assistant.
 
-Setup: Tools → KlausMate Preferences… → Local models. Install/start Ollama, Pull an embedding model, and Save. External clients → Copy configuration provides a token-free bridge configuration for a separate client; Klaus never edits that client's settings.
+Setup: Tools → KlausMate Preferences… → Local models. Install/Start Ollama, Pull an embedding model, and Save. External clients → Copy Configuration provides a token-free bridge configuration for a separate client; Klaus never edits that client's settings.
 
 Requirements
 • Anki with Qt PDF support for the native viewer; verify this build on your installation.

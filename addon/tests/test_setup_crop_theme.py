@@ -189,7 +189,7 @@ check("rubber-band selection state machine intact",
 check("save-as-new-file encode path intact",
       "def encode_cropped" in _CROP_SRC and "_KEEP_FORMATS" in _CROP_SRC)
 check("crop dialog title still names the file, not renamed to KlausMate",
-      'f"Crop Image — {fname}"' in _CROP_SRC)
+      'f"Crop Image: {fname}"' in _CROP_SRC)
 
 class _FakeBtn:
     def __init__(self):

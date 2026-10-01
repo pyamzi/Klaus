@@ -259,8 +259,8 @@ class LectureResolver:
 try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
-        QDockWidget,
         QLabel,
+        QSplitter,
         QStackedWidget,
         Qt,
         QTimer,
@@ -269,7 +269,7 @@ try:
     )
 except Exception:  # headless tests / partial environments
     gui_hooks = mw = None  # type: ignore[assignment]
-    QDockWidget = QLabel = QStackedWidget = Qt = QTimer = QVBoxLayout = QWidget = None  # type: ignore[assignment]
+    QLabel = QSplitter = QStackedWidget = Qt = QTimer = QVBoxLayout = QWidget = None  # type: ignore[assignment]
 
 from .slot_guard import guarded as _guarded
 from . import settings
@@ -280,10 +280,16 @@ from . import settings
 # hook as well — not just the panel that could not have been drawn. The
 # None fallback is the house convention and is right for names used as
 # values; it is a trap for names used as BASE CLASSES. Only the dock needs
-# Qt, so only the dock degrades: the base falls back to ``object`` and
+# Qt, so only the panel degrades: the base falls back to ``object`` and
 # ``_ensure_dock`` keeps the real gate. Same shape as
 # ``index_queue._DockBase`` (K-152), which is where this was found first.
-_DockBase: Any = QDockWidget if QDockWidget is not None else object
+_DockBase: Any = QWidget if QSplitter is not None else object
+
+# The splitter that puts the panel beside the reviewer, inside Anki's main
+# layout and so BETWEEN the top bar and the bottom row. A QDockWidget on
+# mw (what this was until 2026-10-01) always runs the full window height,
+# beside both bars, and pushed the whole window to the side.
+REVIEW_SPLIT = "klausmate_review_split"
 
 _dock: Any = None
 _resolver: LectureResolver | None = None
@@ -369,24 +375,17 @@ def _save_state(**updates: Any) -> None:
 
 
 class LectureDock(_DockBase):  # type: ignore[misc]
-    """Right-docked lecture panel on mw. Frameless: an empty title bar (no drag/
-    float/close chrome) — the bottom-bar button, the L shortcut, and the
-    reviewer menu are its only toggles."""
+    """The lecture panel, right of the reviewer inside the review splitter
+    (``_install_beside_reviewer``). No chrome: the bottom-bar button, the
+    L shortcut, and the reviewer menu are its only toggles."""
 
     def __init__(self) -> None:
-        super().__init__(mw)
+        super().__init__()
         from . import theme
         from .reader_panel import PdfSidebar
 
         self.setObjectName("KlausLectureDock")
-        try:
-            self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-            self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-            self.setTitleBarWidget(QWidget(self))
-        except Exception as e:
-            print(f"[klausmate] lecture dock chrome failed: {e}")
-
-        body = QWidget(self)
+        body = self
         lay = QVBoxLayout(body)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -417,7 +416,6 @@ class LectureDock(_DockBase):  # type: ignore[misc]
         except Exception:
             pass
         lay.addWidget(self.status, 0)
-        self.setWidget(body)
 
         self._jump_gen = 0
         self._last_target: tuple[str, int] | None = None
@@ -601,26 +599,70 @@ def _refocus_reviewer() -> None:
         pass
 
 
+def _install_beside_reviewer(panel: Any) -> bool:
+    """Put ``panel`` right of the reviewer: the main-layout item holding
+    ``mw.web`` (the webview itself, or the splitter AMBOSS and AnkiHub
+    wrap it in) moves into a horizontal splitter that takes its place.
+    Same window, same layout slot, so the top bar and the bottom row keep
+    their full width above and below it. Once per session; later calls
+    reuse the splitter."""
+    lay = getattr(mw, "mainLayout", None)
+    web = getattr(mw, "web", None)
+    if lay is None or web is None:
+        return False
+    for i in range(lay.count()):
+        held = lay.itemAt(i).widget()
+        if held is None or not (held is web or held.isAncestorOf(web)):
+            continue
+        if held.objectName() == REVIEW_SPLIT:
+            held.addWidget(panel)
+            return True
+        stretch = lay.stretch(i)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.setObjectName(REVIEW_SPLIT)
+        split.setChildrenCollapsible(False)
+        lay.removeWidget(held)
+        lay.insertWidget(i, split, stretch)
+        split.addWidget(held)
+        split.addWidget(panel)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 0)
+        return True
+    return False
+
+
+def _size_panel(panel: Any) -> None:
+    """The saved width for the panel, the rest for the reviewer."""
+    try:
+        split = panel.parentWidget()
+        total = sum(split.sizes())
+        width = max(240, int(_saved_state().get("width") or 420))
+        if total > width:
+            split.setSizes([total - width, width])
+    except Exception:
+        pass
+
+
 def _ensure_dock() -> Any:
     global _dock, _resolver
     if _dock is not None:
         return _dock
-    if mw is None or QDockWidget is None:
+    if mw is None or QSplitter is None:
         return None  # the gate _DockBase's fallback moved down to here
-    _dock = LectureDock()
+    panel = LectureDock()
+    try:
+        if not _install_beside_reviewer(panel):
+            print("[klausmate] lecture panel: no reviewer in the main layout")
+            panel.shutdown()
+            panel.deleteLater()
+            return None
+    except Exception as e:
+        print(f"[klausmate] lecture panel install failed: {e}")
+        return None
+    panel.hide()
+    _dock = panel
     if _resolver is None:
         _resolver = LectureResolver(settings.user_files())
-    try:
-        mw.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, _dock)
-        width = int(_saved_state().get("width") or 420)
-        QTimer.singleShot(
-            0,
-            lambda: mw.resizeDocks(
-                [_dock], [max(240, width)], Qt.Orientation.Horizontal
-            ),
-        )
-    except Exception as e:
-        print(f"[klausmate] lecture dock install failed: {e}")
     return _dock
 
 
@@ -633,8 +675,8 @@ def open_lecture_view() -> None:
     try:
         if _resolver is not None:
             _resolver.invalidate()  # fresh stamps on a user-initiated open
-        dock.show()
-        dock.raise_()  # never activateWindow(): answer keys stay put
+        dock.show()  # never activateWindow(): answer keys stay put
+        QTimer.singleShot(0, lambda: _size_panel(dock))
     except Exception as e:
         print(f"[klausmate] lecture open failed: {e}")
         return
@@ -744,10 +786,8 @@ def _teardown() -> None:
         dock._closing_for_shutdown = True
         dock.save_width()
         dock.shutdown()
-        try:
-            mw.removeDockWidget(dock)
-        except Exception:
-            pass
+        dock.hide()
+        dock.setParent(None)  # leaves the review splitter to the reviewer
         dock.deleteLater()
     except RuntimeError:
         pass  # C++ side already gone

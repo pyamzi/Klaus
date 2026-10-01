@@ -464,4 +464,13 @@ try:
 except FileNotFoundError:
     check("docs/reference/design-tokens.json exists", False)
 
+section("Preferences row dividers stay visible at night (UI review #3)")
+for _night in (False, True):
+    _m = re.search(r"QFrame#RowSeparator\s*\{[^}]*background-color:\s*(#[0-9A-Fa-f]{6})", theme.dialog_qss(_night))
+    _line = _m.group(1) if _m else "#000000"
+    _surf = theme.palette(_night)["surface"]
+    _gap = max(abs(int(_line[i:i + 2], 16) - int(_surf[i:i + 2], 16)) for i in (1, 3, 5))
+    check(f"{'night' if _night else 'day'} divider differs from the card surface by at least 0x10",
+          _gap >= 0x10, f"{_line} on {_surf}")
+
 raise SystemExit(report())

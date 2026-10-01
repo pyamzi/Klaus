@@ -11,6 +11,7 @@ from aqt.operations import QueryOp
 from aqt.qt import (
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -329,6 +330,9 @@ class _Binding:
             _Binding.syncing = False
 
 
+PREFS_GEOM_KEY = "klausmate_prefs"
+
+
 def manage_models_dialog(*_args: Any) -> None:
     """Open (or front) the one Preferences window.
 
@@ -362,6 +366,15 @@ def manage_models_dialog(*_args: Any) -> None:
     dlg.setWindowTitle("KlausMate Preferences")
     dlg.setMinimumWidth(480)
     dlg.resize(960, 680)
+    # The size the user last left it at, and no "?" on Windows.
+    try:
+        from aqt.utils import disable_help_button, restoreGeom, saveGeom
+
+        disable_help_button(dlg)
+        restoreGeom(dlg, PREFS_GEOM_KEY)
+        dlg.finished.connect(lambda *_a: saveGeom(dlg, PREFS_GEOM_KEY))
+    except Exception as exc:
+        print(f"[klausmate] preferences geometry failed: {exc}")
     # SynapsePro dialog language (theme.dialog_qss): window on bg, group
     # boxes as white cards, blue-primary buttons (objectName
     # SecondaryButton/DangerButton opt out per button below).
@@ -438,6 +451,34 @@ def manage_models_dialog(*_args: Any) -> None:
         name_col.addWidget(ver_lbl)
     head_row.addLayout(name_col, 1)
     side_lay.addLayout(head_row)
+    logo_px = [24]  # the pixmap's square; fit_logo sets it once laid out
+
+    def fit_logo() -> None:
+        """Make the k as tall as the wordmark and version together: their
+        laid-out height (so any font or platform fits), over the share of
+        its square the k fills (measured, so a new logo still fits)."""
+        try:
+            last = ver_lbl if _ver else app_name_lbl
+            block = last.geometry().bottom() - app_name_lbl.geometry().top() + 1
+            probe = _logo_pixmap(100, 1.0)
+            if probe is None or block <= 0:
+                return
+            img = probe.toImage()
+            rows = [y for y in range(img.height())
+                    if any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()))]
+            frac = (rows[-1] - rows[0] + 1) / img.height() if rows else 1.0
+            logo_px[0] = max(24, round(block / frac))
+            new = _logo_pixmap(logo_px[0], logo_lbl.devicePixelRatioF())
+            if new is not None:
+                # The label is the text block's height; the square pixmap
+                # is centred in it, so only its empty margins are cropped.
+                logo_lbl.setFixedSize(logo_px[0], block)
+                logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                logo_lbl.setPixmap(new)
+        except Exception as exc:
+            print(f"[klausmate] preferences logo fit failed: {exc}")
+
+    QTimer.singleShot(0, fit_logo)  # after the first layout pass
     side_lay.addSpacing(10)
 
     search_edit = QLineEdit()
@@ -642,7 +683,7 @@ def manage_models_dialog(*_args: Any) -> None:
             q in row.klaus_search for row in _rows_by_page.get("Local models", ())
             if advanced_panel.isAncestorOf(row)))
         advanced_panel.setVisible(advanced_expanded)
-        advanced_toggle.setText("▾ Advanced settings" if advanced_expanded else "▸ Advanced settings")
+        advanced_toggle.setText("▾ Advanced Settings" if advanced_expanded else "▸ Advanced Settings")
         first_hit = ""
         for label in _nav_order or list(_page_index):
             any_visible = False
@@ -733,9 +774,9 @@ def manage_models_dialog(*_args: Any) -> None:
     runtime_status.setWordWrap(True)
     runtime_status.setTextFormat(Qt.TextFormat.PlainText)
     runtime_controls = QVBoxLayout()
-    install_btn = QPushButton("Install/start")
-    stop_runtime_btn = QPushButton("Stop managed server")
-    update_runtime_btn = QPushButton("Update runtime")
+    install_btn = QPushButton("Install/Start")
+    stop_runtime_btn = QPushButton("Stop Managed Server")
+    update_runtime_btn = QPushButton("Update Runtime")
     stop_runtime_btn.setEnabled(False)
     update_runtime_btn.setEnabled(False)
     for button in (install_btn, stop_runtime_btn, update_runtime_btn):
@@ -815,10 +856,10 @@ def manage_models_dialog(*_args: Any) -> None:
     external_json.setReadOnly(True)
     external_json.setMinimumWidth(260)
     external_json.setMaximumHeight(180)
-    external_copy = QPushButton("Copy configuration")
+    external_copy = QPushButton("Copy Configuration")
     external_copy.setObjectName("copy_external_client_config")
     external_copy.setEnabled(False)
-    external_test = QPushButton("Test connection")
+    external_test = QPushButton("Test Connection")
     external_test.setObjectName("test_external_client_connection")
     external_test.setEnabled(False)
     external_status = QLabel("Checking for external Python 3.9 or newer…")
@@ -893,13 +934,13 @@ def manage_models_dialog(*_args: Any) -> None:
         threshold_ctl,
     )
 
-    advanced_toggle = QPushButton("▸ Advanced settings")
+    advanced_toggle = QPushButton("▸ Advanced Settings")
     advanced_toggle.setObjectName("AdvancedModelSettings")
     advanced_toggle.setCheckable(True)
     advanced_toggle.toggled.connect(advanced_panel.setVisible)
     advanced_toggle.toggled.connect(lambda expanded: advanced_toggle.setText(
-        "▾ Advanced settings" if expanded else "▸ Advanced settings"))
-    advanced_toggle.setAccessibleName("Advanced settings")
+        "▾ Advanced Settings" if expanded else "▸ Advanced Settings"))
+    advanced_toggle.setAccessibleName("Advanced Settings")
     keys_layout.addWidget(advanced_toggle)
     keys_layout.addWidget(advanced_panel)
 
@@ -915,7 +956,7 @@ def manage_models_dialog(*_args: Any) -> None:
         general_layout,
         "Image crop",
         "Right-click or double-click an image in a note field to crop a "
-        "copy — the original file is untouched.",
+        "copy. The original file is untouched.",
         image_crop_cb,
     )
 
@@ -945,13 +986,11 @@ def manage_models_dialog(*_args: Any) -> None:
     appearance_layout = _page(
         "Appearance",
         "Appearance",
-        "The KlausBook design layer and everything it draws — the "
-        "background of Anki's deck and overview screens and its "
-        "panels, a separate background for the study screen, and the "
-        "deck-screen widgets — plus the accent color, which styles "
-        "Klaus's own windows in either mode. Widgets like the review "
-        "heatmap are added or removed on the deck screen itself: "
-        "right-click it and choose Edit Widgets….",
+        "The KlausBook design layer: backgrounds for Anki's deck, "
+        "overview and study screens, and the deck-screen widgets. The "
+        "accent color styles Klaus's own windows in either mode. To add "
+        "or remove a widget such as the review heatmap, right-click the "
+        "deck screen and choose Edit Widgets…",
     )
 
     # Anki's own Light/Dark switch, mirrored here (Pouya: "add the
@@ -968,7 +1007,7 @@ def manage_models_dialog(*_args: Any) -> None:
     _row(
         appearance_layout,
         "Theme",
-        "Light or dark for all of Anki — the same switch as Anki's "
+        "Light or dark for all of Anki, the same switch as Anki's "
         "own preferences. Applies when you press Save.",
         anki_theme_combo,
     )
@@ -980,7 +1019,7 @@ def manage_models_dialog(*_args: Any) -> None:
     _row(
         appearance_layout,
         "KlausBook design",
-        "Restyle Anki toward the KlausBook look — toolbar, backgrounds, "
+        "Restyle Anki toward the KlausBook look: toolbar, backgrounds, "
         "frosted panels, and widget editing on the deck screen. "
         "Off, Anki keeps its native design and Klaus adds only its "
         "tools.",
@@ -1077,7 +1116,7 @@ def manage_models_dialog(*_args: Any) -> None:
     bg_wash_row = _row(
         appearance_layout,
         "Image Wash",
-        "Mutes the whole picture behind a soft blurred veil — white "
+        "Mutes the whole picture behind a soft blurred veil: white "
         "in light mode, dark at night.",
         wash_ctl,
     )
@@ -1150,7 +1189,7 @@ def manage_models_dialog(*_args: Any) -> None:
     study_wash_row = _row(
         appearance_layout,
         "Image Wash",
-        "Mutes the whole picture behind a soft blurred veil — white "
+        "Mutes the whole picture behind a soft blurred veil: white "
         "in light mode, dark at night.",
         study_wash_ctl,
     )
@@ -1252,7 +1291,7 @@ def manage_models_dialog(*_args: Any) -> None:
             )
             n = len(spec_x["gradients"])
             lbl.setText(
-                f'{n} sphere{"s" if n != 1 else ""} {swatches} — edited '
+                f'{n} sphere{"s" if n != 1 else ""} {swatches}, edited '
                 f"on the screen itself: drag a dot to move it, its ring "
                 f"to resize, click a dot to recolor, right-click to "
                 f"remove, ＋ to add another."
@@ -1527,7 +1566,7 @@ def manage_models_dialog(*_args: Any) -> None:
         sw.setFixedSize(22, 22)
         sw.setCursor(Qt.CursorShape.PointingHandCursor)
         sw.setToolTip(
-            "Custom color — click to pick" if _is_custom
+            "Custom color: click to pick" if _is_custom
             else _name.capitalize()
         )
         # A bare colour square is silent in VoiceOver; the accessible
@@ -1550,7 +1589,7 @@ def manage_models_dialog(*_args: Any) -> None:
         appearance_layout,
         "Accent color",
         "Recolors buttons, pills and highlights across every Klaus "
-        "surface. The last square is your own color — click it to pick.",
+        "surface. Click the last square to pick your own color.",
         accent_ctl,
     )
 
@@ -1558,7 +1597,7 @@ def manage_models_dialog(*_args: Any) -> None:
         from . import pdf_handler
 
         root = pdf_handler.get_library_root(settings.read())
-        library_path_lbl.setText(root or "Not set — PDFs stay inside the add-on")
+        library_path_lbl.setText(root or "Not set. PDFs stay inside the add-on.")
 
     _refresh_library_label()
     _finish_nav("General", "Appearance", "Local models")
@@ -1599,7 +1638,6 @@ def manage_models_dialog(*_args: Any) -> None:
     close_row.addWidget(cancel_btn)
     close_btn = QPushButton("Cancel")
     close_btn.setObjectName("SecondaryButton")
-    close_row.addWidget(close_btn)
     # Save is the primary action (theme default = blue) and the ONLY
     # writer of preference keys — see save_all() (state.commit()).
     save_btn = QPushButton("Save")
@@ -1608,7 +1646,13 @@ def manage_models_dialog(*_args: Any) -> None:
     # to save (Qt never fires a disabled default). HIG: a dialog names
     # its default action; crop_dialog and setup_flow already comply.
     save_btn.setDefault(True)
-    close_row.addWidget(save_btn)
+    # Cancel and Save in the platform's order (Save last on macOS, first
+    # on Windows). Their clicks are wired directly below; the box only
+    # places them, so its accepted/rejected signals stay unconnected.
+    button_box = QDialogButtonBox()
+    button_box.addButton(close_btn, QDialogButtonBox.ButtonRole.RejectRole)
+    button_box.addButton(save_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+    close_row.addWidget(button_box)
     foot.addLayout(close_row)
 
     # One background operation at a time in this dialog.
@@ -1666,7 +1710,7 @@ def manage_models_dialog(*_args: Any) -> None:
         sig = embeddings.index_signature(cfg)
         st = curation.index_stats()
         if not st["exists"]:
-            txt = "No card index yet — click “Index Now” to enable semantic search."
+            txt = "No card index yet. Click Index Now to enable semantic search."
         else:
             txt = f"{st['count']:,} cards indexed · updated {_fmt_ago(st['updated_at'])}"
             if not embeddings.signature_matches(
@@ -1830,7 +1874,7 @@ def manage_models_dialog(*_args: Any) -> None:
             tooltip(
                 "Klaus: card index up to date"
                 if completed
-                else "Klaus: indexing cancelled — it resumes where it stopped"
+                else "Klaus: indexing cancelled. It resumes where it stopped."
             )
 
         def on_error(exc: Exception) -> None:
@@ -1930,7 +1974,7 @@ def manage_models_dialog(*_args: Any) -> None:
                 msg2.setIcon(QMessageBox.Icon.Question)
                 msg2.setText(
                     "Card indexing is still running.\n\n"
-                    "Stop it and close? Progress is saved — indexing "
+                    "Stop it and close? Progress is saved, and indexing "
                     "resumes where it stopped next time."
                 )
                 msg2.setStandardButtons(
@@ -2045,6 +2089,8 @@ def manage_models_dialog(*_args: Any) -> None:
             # read live per tick, in case the dashboard writes mid-preview.
             "dashboard_order": _dashboard.order_from_cfg(settings.read()),
             "dashboard_hidden": _dashboard.hidden_foreign(settings.read()),
+            "dashboard_sizes": _dashboard.sizes_from_cfg(settings.read()),
+            "dashboard_uniform": _dashboard.uniform_from_cfg(settings.read()),
         })
         return out
 
@@ -2072,7 +2118,7 @@ def manage_models_dialog(*_args: Any) -> None:
             sync_accent_swatches()
             # The sidebar k is a baked pixmap filled in blue_accent;
             # re-render it or it keeps the old accent until reopen.
-            _new_logo = _logo_pixmap(24, logo_lbl.devicePixelRatioF())
+            _new_logo = _logo_pixmap(logo_px[0], logo_lbl.devicePixelRatioF())
             if _new_logo is not None:
                 logo_lbl.setPixmap(_new_logo)
         except Exception as _exc:
@@ -2299,11 +2345,11 @@ def manage_models_dialog(*_args: Any) -> None:
             from .ollama_client import OllamaClient
 
             result = None
-            if action == "Install/start":
+            if action == "Install/Start":
                 result = ollama_runtime.full_setup(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
-            elif action == "Update runtime":
+            elif action == "Update Runtime":
                 result = ollama_runtime.update_runtime(cfg, on_progress=local_progress, cancel_flag=cancel_flag, save_config=save_endpoint)
-            elif action == "Stop managed server":
+            elif action == "Stop Managed Server":
                 if not ollama_runtime.server_manager.spawned_or_adopted():
                     raise RuntimeError("This server is external. Stop it in the application that started it.")
                 ollama_runtime.server_manager.stop()
@@ -2312,14 +2358,14 @@ def manage_models_dialog(*_args: Any) -> None:
             elif action == "Delete":
                 OllamaClient(endpoint).delete(model)
             if result is not None and not result.ok:
-                raise RuntimeError(result.detail or "Ollama could not start. Check the endpoint and try Install/start again.")
+                raise RuntimeError(result.detail or "Ollama could not start. Check the endpoint and try Install/Start again.")
             actual_endpoint = result.endpoint if result is not None else endpoint
             return runtime_snapshot(actual_endpoint), actual_endpoint
 
         def work(_col: Any) -> Any:
             if profile_cancel.is_set():
                 return None
-            if action in ("Install/start", "Update runtime", "Stop managed server"):
+            if action in ("Install/Start", "Update Runtime", "Stop Managed Server"):
                 return setup_flow.run_profile_runtime(profile_lifetime, perform)
             return perform()
 
@@ -2354,7 +2400,7 @@ def manage_models_dialog(*_args: Any) -> None:
                     "Ollama is running (external). Stop it in the application that started it."
                 )
             else:
-                status = "Ollama is not reachable. Check the endpoint and click Install/start."
+                status = "Ollama is not reachable. Check the endpoint and click Install/Start."
             if actual_endpoint != endpoint:
                 status += (
                     " The runtime chose another port; its endpoint was saved."
@@ -2363,7 +2409,7 @@ def manage_models_dialog(*_args: Any) -> None:
                 )
             runtime_status.setText(status)
             runtime_progress.setRange(0, 100)
-            runtime_progress.setValue(100 if action in ("Pull", "Install/start", "Update runtime") else 0)
+            runtime_progress.setValue(100 if action in ("Pull", "Install/Start", "Update Runtime") else 0)
             op_state["kind"] = ""
             set_busy(False)
 
@@ -2421,9 +2467,9 @@ def manage_models_dialog(*_args: Any) -> None:
         msg.finished.connect(answered)
         msg.open()
 
-    install_btn.clicked.connect(lambda: run_local("Install/start"))
-    stop_runtime_btn.clicked.connect(lambda: run_local("Stop managed server"))
-    update_runtime_btn.clicked.connect(lambda: run_local("Update runtime"))
+    install_btn.clicked.connect(lambda: run_local("Install/Start"))
+    stop_runtime_btn.clicked.connect(lambda: run_local("Stop Managed Server"))
+    update_runtime_btn.clicked.connect(lambda: run_local("Update Runtime"))
     refresh_models_btn.clicked.connect(lambda: run_local("Refresh"))
     pull_btn.clicked.connect(pull_model)
     delete_model_btn.clicked.connect(delete_model)

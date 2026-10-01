@@ -613,7 +613,7 @@ check(
     "empty-state sentence is Pouya's, verbatim",
     lecture_view.NO_LECTURE_TEXT == "No lecture page available for this card.",
 )
-check("dock is right-area", "RightDockWidgetArea" in CODE)
+check("the panel sits in the review splitter, not a full-height dock", "REVIEW_SPLIT" in CODE and "addDockWidget" not in CODE)
 check("state change hides outside review", "_dock.hide()" in CODE)
 
 section("wiring pins")
@@ -767,8 +767,8 @@ finally:
     (lecture_view.gui_hooks, lecture_view.mw,
      lecture_view._setup_done) = _saved_glue
 
-section("a partial Qt surface degrades the DOCK, not the whole module (K-161)")
-# ``class LectureDock(QDockWidget)`` with ``QDockWidget = None`` in the
+section("a partial Qt surface degrades the PANEL, not the whole module (K-161)")
+# ``class LectureDock(QWidget)`` with ``QWidget = None`` in the
 # import fallback is a hard TypeError AT IMPORT TIME — "NoneType takes no
 # arguments" — so an environment whose aqt.qt is partial loses the
 # resolver, the config keys and the hooks too, not just the panel it could
@@ -780,7 +780,7 @@ section("a partial Qt surface degrades the DOCK, not the whole module (K-161)")
 # failure); this is the twin.
 #
 # Run in a SUBPROCESS, deliberately. The pin must swap aqt.qt for a
-# namespace WITHOUT QDockWidget and re-import lecture_view; doing that in
+# namespace WITHOUT QSplitter and re-import lecture_view; doing that in
 # process would leave a differently-configured module in sys.modules for
 # every section after it, and the boot-state pins at the top of this file
 # would be reading a different module than they were captured from. A
@@ -801,7 +801,7 @@ class _Any:
 
 
 # tests/test_drive.py's shape exactly: an EXPLICIT aqt.qt whose hand-listed
-# names do not include QDockWidget. anki_stubs' own aqt.qt is PERMISSIVE
+# names do not include QSplitter. anki_stubs' own aqt.qt is PERMISSIVE
 # (PEP 562 __getattr__ auto-vivifies every name), which is why this whole
 # class of defect is invisible to the default bootstrap and why the pin
 # builds its own stub rather than reusing it.
@@ -818,7 +818,7 @@ lv = importlib.import_module("klausmate.lecture_view")
 # probe simply failed to reproduce a partial surface. So prove the module
 # really did take the fallback, really did degrade the base, and really is
 # still usable above the divider.
-assert lv.QDockWidget is None, "probe did not reproduce a partial aqt.qt"
+assert lv.QSplitter is None, "probe did not reproduce a partial aqt.qt"
 assert lv.LectureDock.__bases__ == (object,), lv.LectureDock.__bases__
 assert lv._ensure_dock() is None, "dock build must refuse, not raise"
 assert lv._dock is None, "a refused build must not latch a half-made dock"
@@ -833,7 +833,7 @@ _probe = subprocess.run(
     env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
 )
 check(
-    "lecture_view IMPORTS under an aqt.qt with no QDockWidget — a partial "
+    "lecture_view IMPORTS under an aqt.qt with no QSplitter — a partial "
     "Qt surface must cost the dock, not the resolver, the config keys and "
     "the hooks as well%s" % (
         "" if _probe.returncode == 0

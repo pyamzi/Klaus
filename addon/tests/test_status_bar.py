@@ -98,9 +98,13 @@ bar.editor_btn.click()
 app.processEvents()
 check("...and shows it again", col.isVisible())
 
-section("layout: settings on the left, toggles on the right, all inside the bar")
-xs = [bar.gear.x(), bar.label.x(), bar.sidebar_btn.x(), bar.editor_btn.x()]
-check("gear, then readout, then ◧ ◨ at the far right", xs == sorted(xs) and bar.editor_btn.geometry().right() > bar.width() - 20, str(xs))
+section("layout: gear and toggles on the left, the readout at the bottom right")
+bar.refresh([Task("i", "Anemia", 3, 10, True, "", 1.0)])
+app.processEvents()
+xs = [bar.gear.x(), bar.sidebar_btn.x(), bar.editor_btn.x(), bar.label.x(), bar.progress.x()]
+check("gear, ◧ ◨, then the task name and its progress bar at the far right",
+      xs == sorted(xs) and bar.progress.geometry().right() > bar.width() - 20, str(xs))
+bar.refresh([])
 for name, w in (("gear", bar.gear), ("sidebar", bar.sidebar_btn), ("editor", bar.editor_btn)):
     check(f"the {name} button fits the bar's height", w.height() <= bar.height(), f"{w.height()} > {bar.height()}")
 check("the gear is a painted icon, not a font glyph with a menu arrow", bar.gear.text() == "")
@@ -201,8 +205,8 @@ _strip = b3.statusBar()
 check("the strip is the macOS title bar's height (28pt), content centred in it",
       _strip.height() == 28 and abs(first.y() + first.height() / 2 - 14) <= 1,
       f"{_strip.height()} {first.geometry()}")
-check("Browse gets one bar, with toggles", first is not None and again is first and len(found) == 1
-      and first.sidebar_btn is not None, str(len(found)))
+check("Browse outside the single window gets one bar, with toggles", first is not None and again is first
+      and len(found) == 1 and first.sidebar_btn is not None, str(len(found)))
 native = b3.statusBar()
 _own = theme.status_bar_qss(False).split("QWidget#KlausStatusBar {")[1].split("}")[0]
 check("one hairline only: Qt's own status bar draws it, the bar inside draws none, no item frames",
@@ -252,7 +256,7 @@ b5, _s5, _c5 = make_browser()
 bar5 = sb.StatusBar(b5, browser=b5)
 check("without the single window there is no close control", sb.install_browser(b5).close_btn is None)
 
-section("panes: the Add tab's bar toggles two given widgets")
+section("the Add tab's bar: Browse's strip, no toggles (they are in the top bar)")
 page = QtWidgets.QWidget()
 QtWidgets.QVBoxLayout(page).setContentsMargins(0, 0, 0, 0)
 left, right = QtWidgets.QTreeView(), QtWidgets.QTextEdit()
@@ -263,19 +267,91 @@ page.show()
 app.processEvents()
 bar6 = sb.install_add_tab(page, left, right)
 app.processEvents()
-check("install_add_tab appends the bar under the page's content, no close control",
-      bar6 is not None and page.layout().itemAt(page.layout().count() - 1).widget() is bar6 and bar6.close_btn is None
-      and bar6.dock_btn is None and bar6.height() == sb.BAR_HEIGHT)
-check("◧ names the Library pane, ◨ the editor", bar6.sidebar_btn.toolTip() == "Hide Library" and bar6.editor_btn.toolTip() == "Hide Card Editor")
-bar6.sidebar_btn.click()
-app.processEvents()
-check("◧ hides the left pane", not left.isVisible() and not bar6.sidebar_btn.isChecked())
-right.hide()
-app.processEvents()
-check("◨ follows the right pane's visibility", not bar6.editor_btn.isChecked())
-bar6.editor_btn.click()
-app.processEvents()
-check("…and shows it again", right.isVisible() and bar6.editor_btn.isChecked())
+strip6 = bar6.parentWidget()
+check("install_add_tab appends a Qt status strip holding the bar, no close control",
+      bar6 is not None and isinstance(strip6, QtWidgets.QStatusBar)
+      and page.layout().itemAt(page.layout().count() - 1).widget() is strip6
+      and bar6.close_btn is None and bar6.dock_btn is None)
+check("no pane toggles in the bar", bar6.sidebar_btn is None and bar6.editor_btn is None)
 check("the bar is tracked for theme changes", bar6 in sb._bars)
+
+section("one height on every tab: the bars follow the Decks row (set_row_height)")
+sw.is_active = lambda: True
+b7, _s7, _c7 = make_browser()
+bar7 = sb.install_browser(b7)
+b7.show()
+app.processEvents()
+check("Add and Browse strips start at the same height (28)",
+      strip6.height() == b7.statusBar().height() == sb.STRIP_HEIGHT == 28, f"{strip6.height()} {b7.statusBar().height()}")
+check("hosted Browse has no toggles in its bar (they are in the top bar)", bar7.sidebar_btn is None)
+sb.set_row_height(40)
+app.processEvents()
+check("a 40px Decks row makes both strips 40", strip6.height() == 40 and b7.statusBar().height() == 40,
+      f"{strip6.height()} {b7.statusBar().height()}")
+check("…the bars inside keep Qt's insets", bar6.height() == bar7.height() == 40 - sb.STRIP_INSET)
+sb.set_row_height(10)
+check("never below the 28pt floor", strip6.height() == 28)
+sb.set_row_height(500)
+check("…nor past the cap", strip6.height() == sb.STRIP_MAX)
+sb.set_row_height(sb.STRIP_HEIGHT)
+sw.is_active = lambda: False
+
+section("the top bar's pane toggles (single window)")
+bt = importlib.import_module("klausmate.browse_toggles")
+for side in ("left", "right"):
+    svg = bt.pane_icon_svg(side)
+    check(f"the {side} icon is the Qt toggle's drawing: frame, divider, a fillable column",
+          svg.count("<rect") == 3 and "<line" in svg and 'class="kp-fill"' in svg and "currentColor" in svg)
+html = bt.panes_html({"show": False})
+check("the pair ships hidden and is drawn from klausPanes", 'id="klaus-panes" style="display: none"' in html
+      and "klausPanes(" in html and f"pycmd('{bt.PANE_CMD}:left')" in html)
+css = bt.panes_css()
+check("both palettes, keyed on Anki's night class", ":root.night-mode .klaus-pane" in css and ":root .klaus-pane" in css)
+tray = ['<a id="klaus-logo">star</a>', "<a>ankihub</a>"]
+bt._on_left_tray(tray, None)
+check("the pair lands right after the logo", 'id="klaus-panes"' in tray[1] and tray[2] == "<a>ankihub</a>")
+tray = ["<a>ankihub</a>"]
+bt._on_left_tray(tray, None)
+check("…or first, when the logo hook runs after it", 'id="klaus-panes"' in tray[0])
+
+st = sw._state
+tree, slot = QtWidgets.QTreeView(), QtWidgets.QWidget()
+holder = QtWidgets.QWidget()
+QtWidgets.QHBoxLayout(holder).addWidget(tree)
+holder.layout().addWidget(slot)
+holder.show()
+app.processEvents()
+real = (sw.is_active, st.host, st.add, st.browser)
+sw.is_active = lambda: True
+st.host = types.SimpleNamespace(tab="add", listeners=[])
+st.add = types.SimpleNamespace(tree=tree, editor_slot=slot)
+state = bt.pane_state()
+check("Add: ◧ is the Library, ◨ the editor, both showing",
+      state["show"] and state["left"] == {"on": True, "label": "Hide Library"}
+      and state["right"] == {"on": True, "label": "Hide Card Editor"}, str(state))
+bt.toggle_pane("left")
+check("a click hides the Library tree", tree.isHidden() and bt.pane_state()["left"]["on"] is False)
+bt.toggle_pane("left")
+check("…and shows it again", not tree.isHidden())
+b8, side8, col8 = make_browser()
+b8.show()
+app.processEvents()
+st.host.tab, st.browser = "browse", b8
+state = bt.pane_state()
+check("Browse: ◧ is the sidebar, ◨ the card editor",
+      state["left"]["label"] == "Hide Sidebar" and state["right"]["label"] == "Hide Card Editor", str(state))
+bt.toggle_pane("right")
+check("a click hides Browse's editor column", col8.isHidden())
+st.host.tab = "decks"
+check("Decks has no panes: the pair hides", bt.pane_state() == {"show": False})
+st.host.tab, st.browser = "browse", None
+check("a closed Browse: the pair hides", bt.pane_state() == {"show": False})
+sw.is_active, st.host, st.add, st.browser = real
+check("without the single window the pair stays hidden", bt.pane_state() == {"show": False})
+fired = []
+bt.QTimer = types.SimpleNamespace(singleShot=lambda _ms, fn: fired.append(fn))
+check("a pane click is handled, a tick later", bt._on_js_message((False, None), f"{bt.PANE_CMD}:left", None) == (True, None)
+      and len(fired) == 1)
+check("other messages pass through", bt._on_js_message((False, None), "klausmate:settings", None) == (False, None))
 
 raise SystemExit(report())

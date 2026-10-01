@@ -90,6 +90,34 @@ SAFE_ROLE = Qt.ItemDataRole.UserRole + 3
 _ICONS = {"root": ls.ROOT_ICON, "folder": ls.FOLDER_ICON, "pdf": ls.PDF_ICON}
 
 
+def _icon(kind: str) -> QIcon:
+    """The row icon through Anki's themed loader, which turns the black
+    outlines white at night (a plain QIcon left them black on black)."""
+    try:
+        from aqt.theme import theme_manager
+
+        return theme_manager.icon_from_resources(_ICONS[kind])
+    except Exception:  # noqa: BLE001
+        return QIcon(_ICONS[kind])
+
+
+_theme_hooked = False
+
+
+def _hook_theme() -> None:
+    """Rebuild every tree on a theme switch so the icons follow it."""
+    global _theme_hooked
+    if _theme_hooked:
+        return
+    try:
+        from aqt import gui_hooks
+
+        gui_hooks.theme_did_change.append(ls.refresh_trees)
+        _theme_hooked = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] library tree theme hook failed: {exc}")
+
+
 class TreeDelegate(ls.LibraryNameDelegate):
     def tag_of(self, index) -> str | None:
         return index.data(TAG_ROLE)
@@ -133,6 +161,7 @@ class LibraryTree(QWidget):
         self.view.customContextMenuRequested.connect(self._on_context_menu)
         self.filter.textChanged.connect(lambda _t: self._apply_filter())
         ls._trees.add(self)
+        _hook_theme()
         self.refresh()
 
     # ── rows ──
@@ -166,7 +195,7 @@ class LibraryTree(QWidget):
         item.setData(node["key"], TAG_ROLE)
         item.setData(node["kind"], KIND_ROLE)
         item.setData(node["safe"], SAFE_ROLE)
-        item.setIcon(QIcon(_ICONS[node["kind"]]))
+        item.setIcon(_icon(node["kind"]))
         self._items[node["key"]] = item
         for child in node["children"]:
             item.appendRow(self._item(child))

@@ -314,7 +314,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
 
     def _paint_icon(self, painter, c: dict, on: bool, side: str) -> None:
         size = ICON_SIZE
-        colour = QColor(c["blue_accent"] if on else c["text_muted"])
+        colour = QColor(c["text"] if on else c["text_muted"])
 
         # Fill first, outline over it: the stroke then covers the fill's
         # outer edge instead of sitting beside it.
@@ -398,3 +398,226 @@ def on_browser_will_show(browser: Any) -> None:
         print(f"[klausmate] browser_will_show defer failed: {exc}")
         # Last-ditch synchronous attempt if the singleShot itself errored.
         _deferred()
+
+
+# ── The top bar's pane toggles (single window) ─────────────────────────
+#
+# In the single window the ◧ ◨ toggles sit in Anki's top toolbar, right of
+# the Klaus logo, for whichever tab has panes (Add: the Library tree and
+# the editor; Browse: the sidebar and the card editor). Decks has none, so
+# the pair hides there. The toolbar is a webview: the pair is HTML in the
+# left tray, a click comes back as ``PANE_CMD:<side>``, and every change
+# (a click, a tab switch, a pane hidden from elsewhere, a toolbar redraw)
+# re-pushes ``pane_state()`` through ``klausPanes``. Same icon as
+# ``_PaneToggle``: the geometry above, emitted as SVG.
+
+PANE_CMD = "klausmate_pane"
+
+
+def _n(v: float) -> str:
+    return f"{v:.2f}".rstrip("0").rstrip(".")
+
+
+def pane_icon_svg(side: str) -> str:
+    """``_PaneToggle``'s icon as inline SVG in ``currentColor``; the pane
+    column (``.kp-fill``) is filled by CSS while that pane shows."""
+    s = ICON_BOX
+    fx, fy, fw, fh, fr = frame_rect(s)
+    px, py, pw, ph = pane_rect(s, side)
+    ix, iy, iw, ih, ir = frame_inner_rect(s)
+    d, sw = divider_x(s, side), stroke_width(s)
+    return (
+        f'<svg width="16" height="16" viewBox="0 0 {_n(s)} {_n(s)}" aria-hidden="true">'
+        f'<clipPath id="kp-clip-{side}"><rect x="{_n(ix)}" y="{_n(iy)}" width="{_n(iw)}" '
+        f'height="{_n(ih)}" rx="{_n(ir)}"/></clipPath>'
+        f'<rect class="kp-fill" clip-path="url(#kp-clip-{side})" x="{_n(px)}" y="{_n(py)}" '
+        f'width="{_n(pw)}" height="{_n(ph)}"/>'
+        f'<rect x="{_n(fx)}" y="{_n(fy)}" width="{_n(fw)}" height="{_n(fh)}" rx="{_n(fr)}" '
+        f'fill="none" stroke="currentColor" stroke-width="{_n(sw)}"/>'
+        f'<line x1="{_n(d)}" y1="{_n(fy)}" x2="{_n(d)}" y2="{_n(fy + fh)}" '
+        f'stroke="currentColor" stroke-width="{_n(sw)}"/></svg>'
+    )
+
+
+_PANES_JS = """
+function klausPanes(s) {
+  var g = document.getElementById('klaus-panes'); if (!g) return;
+  g.style.display = s.show ? '' : 'none';
+  ['left', 'right'].forEach(function (k) {
+    var e = document.getElementById('klaus-pane-' + k), p = s[k]; if (!e) return;
+    e.style.display = p ? '' : 'none'; if (!p) return;
+    e.classList.toggle('on', !!p.on);
+    e.title = p.label; e.setAttribute('aria-label', p.label);
+    e.setAttribute('aria-pressed', p.on ? 'true' : 'false');
+  });
+}
+"""
+
+
+def panes_css() -> str:
+    """Both palettes, keyed on the classes Anki toggles on a theme switch
+    (the toolbar never redraws for one; see ``theme.toolbar_css``)."""
+    from . import theme
+
+    rules = []
+    for night in (False, True):
+        c = theme.palette(night)
+        root = ":root.night-mode" if night else ":root"
+        rules.append(
+            f"{root} .klaus-pane {{ color: {c['text_muted']}; }}"
+            f"{root} .klaus-pane:hover, {root} .klaus-pane:focus-visible {{ background: {c['hover_subtle']}; }}"
+            f"{root} .klaus-pane.on {{ color: {c['text']}; }}"
+        )
+    return (
+        "#klaus-panes { display: inline-flex; align-items: center; gap: 2px;"
+        " vertical-align: middle; margin-right: 6px; }"
+        ".klaus-pane { display: inline-flex; padding: 3px; border-radius: 6px;"
+        " cursor: default; outline: none; }"
+        ".klaus-pane .kp-fill { fill: none; } .klaus-pane.on .kp-fill { fill: currentColor; }"
+        + "".join(rules)
+    )
+
+
+def panes_html(state: dict) -> str:
+    """The pair, hidden until ``state`` says the tab has panes."""
+    import json
+
+    links = "".join(
+        f'<a id="klaus-pane-{side}" class="klaus-pane" href=# role="button" '
+        f'onclick="return pycmd(\'{PANE_CMD}:{side}\')">{pane_icon_svg(side)}</a>'
+        for side in ("left", "right")
+    )
+    return (
+        f"<style>{panes_css()}</style>"
+        f'<span id="klaus-panes" style="display: none">{links}</span>'
+        f"<script>{_PANES_JS}klausPanes({json.dumps(state)});</script>"
+    )
+
+
+def _pane_widgets() -> dict:
+    """``{side: (pane name, widget)}`` for the single window's tab; empty
+    on Decks, with Browse closed, or without the single window."""
+    try:
+        from . import single_window as sw
+
+        if not sw.is_active():
+            return {}
+        st = sw._state
+        tab = getattr(st.host, "tab", None)
+        if tab == "add" and st.add is not None:
+            return {"left": ("tree", st.add.tree), "right": ("editor", st.add.editor_slot)}
+        if tab == "browse" and st.browser is not None:
+            from .status_bar import _editor_column
+
+            out = {}
+            dock = getattr(st.browser, "sidebarDockWidget", None)
+            if dock is not None:
+                out["left"] = ("sidebar", dock)
+            col = _editor_column(st.browser)
+            if col is not None:
+                out["right"] = ("editor", col)
+            return out
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] pane toggles: panes unknown: {exc}")
+    return {}
+
+
+def pane_state() -> dict:
+    out: dict = {"show": False}
+    for side, (pane, widget) in _pane_widgets().items():
+        try:
+            on = not widget.isHidden()
+        except RuntimeError:  # deleted under us
+            continue
+        out[side] = {"on": on, "label": toggle_label(pane, on)}
+        out["show"] = True
+    return out
+
+
+_watched: set = set()
+_push_pending = [False]
+
+
+def push_panes() -> None:
+    """Re-draw the pair from the live panes, one tick later (several
+    Show/Hide events arrive together), and keep watching those panes."""
+    if _push_pending[0]:
+        return
+    _push_pending[0] = True
+
+    def run() -> None:
+        _push_pending[0] = False
+        try:
+            import json
+
+            from aqt import mw
+
+            for _pane, widget in _pane_widgets().values():
+                if id(widget) not in _watched:
+                    _watched.add(id(widget))
+                    _VisibilityWatcher(widget, lambda _v: push_panes())
+                    widget.destroyed.connect(lambda *_a, k=id(widget): _watched.discard(k))
+            web = getattr(mw, "toolbarWeb", None)
+            if web is not None:
+                web.eval(f"window.klausPanes && klausPanes({json.dumps(pane_state())});")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] pane toggles push failed: {exc}")
+
+    QTimer.singleShot(0, run)
+
+
+def toggle_pane(side: str) -> None:
+    pane = _pane_widgets().get(side)
+    if pane is None:
+        return
+    widget = pane[1]
+    widget.setVisible(widget.isHidden())
+    push_panes()
+
+
+def _on_left_tray(content: list, _toolbar: Any) -> None:
+    """Right of the Klaus logo (top_bar puts it first; whichever hook
+    runs first, the pair lands just after it)."""
+    try:
+        html = panes_html(pane_state())
+        at = next((i + 1 for i, item in enumerate(content) if 'id="klaus-logo"' in str(item)), 0)
+        content.insert(at, html)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] pane toggles failed: {exc}")
+
+
+def _on_js_message(handled, message: str, _context):
+    if not message.startswith(PANE_CMD + ":"):
+        return handled
+    side = message.split(":", 1)[1]
+    if side in ("left", "right"):
+        # A tick later, never inside the webchannel call (bridge_reentrancy).
+        QTimer.singleShot(0, lambda: toggle_pane(side))
+    return (True, None)
+
+
+def _listen_to_tabs(*_args) -> None:
+    """Follow tab switches (Host.listeners), once."""
+    try:
+        from . import single_window as sw
+
+        host = sw._state.host
+        if host is not None and _on_tab not in host.listeners:
+            host.listeners.append(_on_tab)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[klausmate] pane toggles: tab listener failed: {exc}")
+    push_panes()
+
+
+def _on_tab(_new: str, _old: str) -> None:
+    push_panes()
+
+
+def setup_top_bar() -> None:
+    from aqt import gui_hooks
+
+    gui_hooks.top_toolbar_will_set_left_tray_content.append(_on_left_tray)
+    gui_hooks.webview_did_receive_js_message.append(_on_js_message)
+    gui_hooks.top_toolbar_did_redraw.append(lambda *_a: push_panes())
+    gui_hooks.profile_did_open.append(_listen_to_tabs)
+    gui_hooks.browser_will_show.append(lambda *_a: push_panes())

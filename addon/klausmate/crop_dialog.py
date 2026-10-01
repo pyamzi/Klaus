@@ -19,6 +19,7 @@ from aqt.qt import (
     QBuffer,
     QColor,
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QIODevice,
     QImage,
@@ -340,7 +341,13 @@ class ImageCropDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._image = image
-        self.setWindowTitle(f"Crop Image — {fname}")
+        self.setWindowTitle(f"Crop Image: {fname}")
+        try:
+            from aqt.utils import disable_help_button
+
+            disable_help_button(self)
+        except Exception:  # noqa: BLE001
+            pass
         self.setModal(True)
 
         # Shared dialog chrome (theme.dialog_qss): window bg, blue-primary
@@ -368,12 +375,15 @@ class ImageCropDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("SecondaryButton")
         cancel_btn.clicked.connect(self.reject)
-        bottom.addWidget(cancel_btn)
         self._crop_btn = QPushButton("Crop")
         self._crop_btn.clicked.connect(self.accept)
         self._crop_btn.setDefault(True)
         self._crop_btn.setEnabled(False)
-        bottom.addWidget(self._crop_btn)
+        # Platform button order; the clicks above are the wiring.
+        buttons = QDialogButtonBox()
+        buttons.addButton(cancel_btn, QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.addButton(self._crop_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+        bottom.addWidget(buttons)
         layout.addLayout(bottom)
 
         self._canvas.on_selection_changed = self._on_selection_changed

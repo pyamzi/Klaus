@@ -179,7 +179,7 @@ def _library_root_check(then: Callable[[], None]) -> None:
             failed = (result or {}).get("failed") or {}
             if failed:
                 tooltip(
-                    f"Klaus: Library folder set — {len(failed)} file(s) "
+                    f"Klaus: Library folder set. {len(failed)} file(s) "
                     "couldn't be moved and stay in the old location"
                 )
             else:

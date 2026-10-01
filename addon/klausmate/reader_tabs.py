@@ -18,6 +18,20 @@ from __future__ import annotations
 
 from typing import Optional
 
+def tab_label(name: str) -> str:
+    """What a tab shows for the stored PDF ``name``: the name the Library
+    shows (drive.json's display name, no ``.pdf``), else ``name``."""
+    try:
+        from . import drive_store, settings
+
+        display = drive_store.display_name(settings.user_files(), name)
+    except Exception:  # noqa: BLE001
+        display = name
+    if display.lower().endswith(".pdf"):
+        display = display[:-4]
+    return display.strip() or name
+
+
 from aqt.qt import (
     QHBoxLayout,
     QLabel,
@@ -85,11 +99,11 @@ class ReaderTabs(QWidget):
     # ---- the interface ----
 
     def names(self) -> list[str]:
-        return [self.bar.tabText(i) for i in range(self.bar.count())]
+        return [self._name_at(i) for i in range(self.bar.count())]
 
     def current(self) -> Optional[str]:
         idx = self.bar.currentIndex()
-        return self.bar.tabText(idx) if idx >= 0 else None
+        return self._name_at(idx) if idx >= 0 else None
 
     def set_tabs(self, names: list[str], active: Optional[str]) -> None:
         """Show exactly ``names`` (``active`` selected when given) without
@@ -100,7 +114,7 @@ class ReaderTabs(QWidget):
                 self.bar.removeTab(0)
             for name in names:
                 if self._find_tab(name) < 0:
-                    self._decorate_tab(self.bar.addTab(name))
+                    self._add_tab(name)
             idx = self._find_tab(active) if active else -1
             if idx >= 0:
                 self.bar.setCurrentIndex(idx)
@@ -115,8 +129,7 @@ class ReaderTabs(QWidget):
         try:
             idx = self._find_tab(name)
             if idx < 0:
-                idx = self.bar.addTab(name)
-                self._decorate_tab(idx)
+                idx = self._add_tab(name)
             self.bar.setCurrentIndex(idx)
         finally:
             self.bar.blockSignals(False)
@@ -136,6 +149,22 @@ class ReaderTabs(QWidget):
 
     # ---- per-tab ✕ ----
 
+    def _add_tab(self, name: str) -> int:
+        """The tab shows the Library's name for ``name``; ``name`` itself
+        rides in the tab data, which is what the interface reports."""
+        label = tab_label(name)
+        # "&&": a lone & is a mnemonic to QTabBar ("Hematology & Oncology"
+        # lost its ampersand and underlined the O).
+        idx = self.bar.addTab(label.replace("&", "&&"))
+        self.bar.setTabData(idx, name)
+        self._decorate_tab(idx)
+        self.bar.setTabToolTip(idx, label)
+        return idx
+
+    def _name_at(self, idx: int) -> str:
+        data = self.bar.tabData(idx)
+        return data if isinstance(data, str) and data else self.bar.tabText(idx)
+
     def _decorate_tab(self, idx: int) -> None:
         # Every tab is added through here, so this is the one place a tab's
         # tooltip needs setting: the FULL name, since ElideMiddle can only
@@ -153,17 +182,17 @@ class ReaderTabs(QWidget):
     def _close_tab_of(self, btn: QToolButton) -> None:
         for i in range(self.bar.count()):
             if self.bar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
-                self.close(self.bar.tabText(i))
+                self.close(self._name_at(i))
                 return
 
     # ---- tab bookkeeping ----
 
     def _find_tab(self, name: str) -> int:
         for i in range(self.bar.count()):
-            if self.bar.tabText(i) == name:
+            if self._name_at(i) == name:
                 return i
         return -1
 
     def _on_current_changed(self, idx: int) -> None:
         if idx >= 0:
-            self.activated.emit(self.bar.tabText(idx))
+            self.activated.emit(self._name_at(idx))

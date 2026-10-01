@@ -172,4 +172,18 @@ check("pdf_drive's library-changed fan-out reaches the trees",
 check("refresh_status no longer bails when only trees exist",
       "if not _sidebars and not _trees" in open("klausmate/library_sidebar.py").read())
 
+section("row icons follow the theme (UI review #1)")
+_themed = []
+_fake_tm = types.SimpleNamespace(icon_from_resources=lambda path: (_themed.append(path), QtGui.QIcon(path))[1])
+_real_theme = sys.modules.get("aqt.theme")
+sys.modules["aqt.theme"] = types.SimpleNamespace(theme_manager=_fake_tm)
+try:
+    _ico = lt._icon("folder")
+finally:
+    if _real_theme is None:
+        del sys.modules["aqt.theme"]
+    else:
+        sys.modules["aqt.theme"] = _real_theme
+check("icons load through Anki's themed loader (white at night)", _themed == [lt._ICONS["folder"]] and not _ico.isNull(), str(_themed))
+
 raise SystemExit(report())

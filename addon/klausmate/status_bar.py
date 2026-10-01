@@ -1,11 +1,13 @@
 """Browse's bottom bar — and the Add tab's: a gear that opens Anki's
-Preferences on the left, then a progress readout of every running process
-(``tasks``), and the layout toggles at the far right (◧ sidebar, ◨ card
-editor on Browse; ◧ Library tree, ◨ editor on the Add tab, bound to two
-given widgets through ``panes``). The main window has no Qt bar: its row
-is Anki's own, extended by ``bottom_row``, which shares this module's
-readout rules, gear shape and task list. Klaus's own settings are the top
-bar's star.
+Preferences on the left, and the readout of every running process
+(``tasks``: the newest task's name, then its progress bar) at the bottom
+right. The pane toggles live in the top bar beside the Klaus logo
+(``browse_toggles.setup_top_bar``); only a Browse window outside the
+single window keeps them here, beside the gear. The main window has no Qt
+bar: its row is Anki's own, extended by ``bottom_row``, which shares this
+module's readout rules, gear shape and task list, and whose height every
+bar here follows (``set_row_height``), so the bottom edge is one height on
+every tab. Klaus's own settings are the top bar's logo.
 
 Pure helpers above the divider; the widget and install glue below it.
 """
@@ -77,11 +79,15 @@ from aqt.qt import (  # noqa: E402
 )
 
 LABEL_MAX_PX = 320
-# The whole strip matches the macOS title bar (28pt since Big Sur).
+# The strip's floor is the macOS title bar (28pt since Big Sur); it grows
+# to the Decks row's height when that is taller (set_row_height).
 # QStatusBar hard-codes 3px above its items and ~2px below, so the bar
 # inside gets what's left, which also centres it in the strip.
 STRIP_HEIGHT = 28
-BAR_HEIGHT = STRIP_HEIGHT - 3 - 2
+STRIP_MAX = 64  # a measurement past this is a transient layout, not a row
+STRIP_INSET = 3 + 2
+BAR_HEIGHT = STRIP_HEIGHT - STRIP_INSET
+_row_height = [STRIP_HEIGHT]
 
 
 def _open_anki_settings() -> None:
@@ -192,7 +198,7 @@ class _GearButton(QToolButton):
 
 
 class StatusBar(QWidget):
-    def __init__(self, window, browser=None, panes=None) -> None:
+    def __init__(self, window, browser=None) -> None:
         super().__init__(window)
         self.setObjectName("KlausStatusBar")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -212,6 +218,12 @@ class StatusBar(QWidget):
         self.gear = _GearButton(self)
         self.gear.clicked.connect(lambda *_a: _open_anki_settings())
         row.addWidget(self.gear)
+        if browser is not None:
+            # Outside the single window Browse has no Klaus top bar, so
+            # its toggles stay here, grouped with the gear.
+            row.setSpacing(2)
+            self._add_toggles(row, browser)
+        row.addStretch(1)
         self.progress = QProgressBar(self)
         self.progress.setFixedWidth(120)
         self.progress.setTextVisible(False)
@@ -221,16 +233,10 @@ class StatusBar(QWidget):
         clicks = _ClickFilter(self, self.open_task_list)
         self.progress.installEventFilter(clicks)
         self.label.installEventFilter(clicks)
-        row.addWidget(self.progress)
-        row.addSpacing(2)
+        # Bottom right: what is running, then how far along it is.
         row.addWidget(self.label)
-        row.addStretch(1)
-        if browser is not None:
-            row.setSpacing(2)  # the two toggles sit as a pair
-            self._add_toggles(row, browser)
-        elif panes is not None:
-            row.setSpacing(2)
-            self._add_pane_toggles(row, *panes)
+        row.addSpacing(6)
+        row.addWidget(self.progress)
         self.apply_theme()
 
         # The listener must not keep a deleted bar alive, nor touch one:
@@ -269,17 +275,6 @@ class StatusBar(QWidget):
             _VisibilityWatcher(col, btn.setChecked)
             row.addWidget(btn)
             self.editor_btn = btn
-
-    def _add_pane_toggles(self, row, left, right) -> None:
-        """The Add tab: ◧ the Library tree, ◨ the editor slot."""
-        from .browse_toggles import _PaneToggle, _VisibilityWatcher
-
-        for side, pane, widget, attr in (("left", "tree", left, "sidebar_btn"), ("right", "editor", right, "editor_btn")):
-            btn = _PaneToggle(side, pane, not widget.isHidden())
-            btn.clicked.connect(widget.setVisible)
-            _VisibilityWatcher(widget, btn.setChecked)
-            row.addWidget(btn)
-            setattr(self, attr, btn)
 
     def apply_theme(self) -> None:
         try:
@@ -330,7 +325,7 @@ class StatusBar(QWidget):
 
     def open_task_list(self) -> None:
         if self._tasks:
-            anchor = self.progress.mapToGlobal(self.progress.rect().topLeft())
+            anchor = self.label.mapToGlobal(self.label.rect().topLeft())
             self.popup = show_task_list(self, self._tasks, anchor)
 
 
@@ -369,14 +364,17 @@ def show_task_list(parent, items: list, anchor) -> "QFrame":
             line.addWidget(x)
         col.addLayout(line)
     frame.adjustSize()
+    frame.show()
+    # Clamped once shown: frameGeometry then includes the window frame,
+    # and the readout sits at the bottom RIGHT, so the right edge matters.
     screen = parent.screen() if hasattr(parent, "screen") else None
     area = screen.availableGeometry() if screen is not None else None
-    x, y = anchor.x(), anchor.y() - frame.height() - 2
+    outer = frame.frameGeometry()
+    x, y = anchor.x(), anchor.y() - outer.height() - 2
     if area is not None:
-        x = max(area.left(), min(x, area.right() + 1 - frame.width()))
+        x = max(area.left(), min(x, area.right() + 1 - outer.width()))
         y = max(area.top(), y)
     frame.move(x, y)
-    frame.show()
     return frame
 
 
@@ -391,37 +389,76 @@ def _track(bar: StatusBar) -> StatusBar:
     return bar
 
 
-def install_add_tab(page, left, right) -> StatusBar | None:
+def strip_height() -> int:
+    """Every Klaus bar's strip height: the Decks row's, at least 28."""
+    return _row_height[0]
+
+
+def _size(bar: StatusBar) -> None:
+    native = bar.parentWidget()
+    if native is not None and native.inherits("QStatusBar"):
+        native.setFixedHeight(strip_height())
+    bar.setFixedHeight(strip_height() - STRIP_INSET)
+
+
+def set_row_height(px: int) -> None:
+    """The Decks row measured ``px`` tall: size every bar to match."""
+    h = max(STRIP_HEIGHT, min(int(px), STRIP_MAX))
+    if h == _row_height[0]:
+        return
+    _row_height[0] = h
+    for bar in list(_bars):
+        try:
+            _size(bar)
+        except RuntimeError:
+            pass
+
+
+def _strip(parent):
+    """Qt's own status bar, the frame both bars sit in (one hairline,
+    the same insets, so the Add tab and Browse cannot differ)."""
+    from aqt.qt import QStatusBar
+
+    native = QStatusBar(parent)
+    native.setSizeGripEnabled(False)
+    return native
+
+
+def install_add_tab(page, *_panes) -> StatusBar | None:
     """The Add tab's bar: appended under the page's content, no close
-    control (Close and Escape switch tabs)."""
+    control (Close and Escape switch tabs). Its panes' toggles are in the
+    top bar (``browse_toggles``); ``_panes`` is the old call shape."""
     try:
-        bar = StatusBar(page, panes=(left, right))
-        bar.setFixedHeight(BAR_HEIGHT)
-        page.layout().addWidget(bar)
+        native = _strip(page)
+        bar = StatusBar(native)
+        native.addPermanentWidget(bar, 1)
+        page.layout().addWidget(native)
         bar.apply_theme()
-        return _track(bar)
+        _track(bar)
+        _size(bar)
+        return bar
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] status bar (Add tab) failed: {exc}")
         return None
 
 
 def install_browser(browser) -> StatusBar | None:
-    """Browse has no status bar of its own: give it one, with toggles."""
+    """Browse has no status bar of its own: give it one (with the pane
+    toggles only outside the single window)."""
     existing = getattr(browser, "_klausmate_status_bar", None)
     if existing is not None:
         return existing
     try:
-        from aqt.qt import QStatusBar
+        from . import single_window
 
-        native = QStatusBar(browser)
-        native.setSizeGripEnabled(False)
+        hosted = single_window.is_active()
+        native = _strip(browser)
         browser.setStatusBar(native)
-        bar = StatusBar(browser, browser=browser)
+        # Hosted, the toggles are in the top bar beside the logo.
+        bar = StatusBar(browser, browser=None if hosted else browser)
         native.addPermanentWidget(bar, 1)
         try:
-            from . import single_window
-
-            if single_window.is_active():
+            if hosted:
                 # Browse is a tab: the one way to close it lives here.
                 from aqt.qt import QToolButton
 
@@ -436,10 +473,11 @@ def install_browser(browser) -> StatusBar | None:
                 bar.close_btn = close_btn
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] status bar close control failed: {exc}")
-        native.setFixedHeight(STRIP_HEIGHT)
         bar.apply_theme()
         browser._klausmate_status_bar = bar
-        return _track(bar)
+        _track(bar)
+        _size(bar)
+        return bar
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] status bar (Browse) failed: {exc}")
         return None
@@ -496,6 +534,9 @@ def setup() -> None:
     gui_hooks.profile_will_close.append(tasks.clear)
     gui_hooks.browser_will_show.append(_on_browser_will_show)
     gui_hooks.theme_did_change.append(_on_theme_change)
+    from . import browse_toggles
+
+    browse_toggles.setup_top_bar()
     for name, fn in (
         ("sync_will_start", on_sync_will_start),
         ("sync_did_finish", on_sync_did_finish),

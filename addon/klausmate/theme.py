@@ -690,7 +690,7 @@ def dialog_qss(night: bool) -> str:
         margin-top: 8px;
     }}
     QFrame#RowSeparator {{
-        background-color: {c['grey_light']};
+        background-color: {c['grey_mid'] if night else c['grey_light']};
         border: none;
         max-height: 1px;
     }}

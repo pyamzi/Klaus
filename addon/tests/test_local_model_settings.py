@@ -86,14 +86,14 @@ def setup(cfg, on_progress=None, **kwargs):
     if on_progress:
         on_progress({'status': 'Downloading runtime', 'completed': 25, 'total': 100})
     if state.get('setup_error'):
-        raise RuntimeError('Install failed. Retry Install/start.')
+        raise RuntimeError('Install failed. Retry Install/Start.')
     state['owned'] = True
     return rt.EnsureResult('started', cfg['endpoint'])
 rt.full_setup = setup
 def update(cfg, **kwargs):
     calls.append('update')
     if state.get('update_error'):
-        raise RuntimeError('Update failed. Retry Update runtime.')
+        raise RuntimeError('Update failed. Retry Update Runtime.')
     state['version'] = rt.OLLAMA_VERSION
     return rt.EnsureResult('started', cfg['endpoint'])
 rt.update_runtime = update
@@ -179,7 +179,7 @@ search.setText('Ollama endpoint'); app.processEvents()
 check('search reveals matching advanced setting', field('endpoint').isVisible())
 search.clear(); app.processEvents()
 check('clearing search restores collapsed advanced state', not field('endpoint').isVisible())
-required = ['Install/start', 'Stop managed server', 'Update runtime', 'Refresh', 'Download', 'Delete']
+required = ['Install/Start', 'Stop Managed Server', 'Update Runtime', 'Refresh', 'Download', 'Delete']
 check('runtime and inventory controls exist', all(button(s) for s in required))
 if not all(button(s) for s in required):
     dlg.accept()
@@ -188,11 +188,11 @@ status = dlg.findChild(QtWidgets.QLabel, 'OllamaStatus')
 progress = dlg.findChild(QtWidgets.QProgressBar, 'OllamaProgress')
 inventory = dlg.findChild(QtWidgets.QListWidget, 'InstalledModels')
 check('download size shown before install consent', any('~123 MB' in l.text() for l in dlg.findChildren(QtWidgets.QLabel)))
-check('stop initially disabled', not button('Stop managed server').isEnabled())
+check('stop initially disabled', not button('Stop Managed Server').isEnabled())
 button('Refresh').click()
 work(); drain()
 check('refresh retrieves installed names without changing config', inventory.count() == 2 and not writes and field('embedding_model').text() == 'saved-model')
-check('external server cannot be stopped', not button('Stop managed server').isEnabled() and 'external' in status.text().lower())
+check('external server cannot be stopped', not button('Stop Managed Server').isEnabled() and 'external' in status.text().lower())
 check('installed model shows its purpose', 'Card matching' in inventory.item(0).text())
 models.append('vision-model')
 button('Refresh').click(); work(); drain()
@@ -207,7 +207,7 @@ auto = dlg.findChild(QtWidgets.QAbstractButton, 'runtime_auto_setup')
 auto.setChecked(False)
 save_preferences()
 check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps))
-button('Install/start').click()
+button('Install/Start').click()
 check('explicit install click queues background setup', len(operations) == 1 and not button('Download').isEnabled())
 before = status.text()
 work()
@@ -215,14 +215,14 @@ check('worker progress does not touch Qt directly', status.text() == before)
 pending.pop(0)()
 check('queued runtime progress reaches main-thread widgets', progress.value() == 25 and status.text() == 'Downloading runtime')
 drain()
-check('runtime progress and completion recover controls', ('setup', store['endpoint']) in calls and button('Download').isEnabled() and button('Stop managed server').isEnabled())
+check('runtime progress and completion recover controls', ('setup', store['endpoint']) in calls and button('Download').isEnabled() and button('Stop Managed Server').isEnabled())
 state['update_error'] = True
-button('Update runtime').click(); work(); drain()
-check('failed update restores retry control', button('Update runtime').isEnabled() and 'Retry Update' in status.text())
+button('Update Runtime').click(); work(); drain()
+check('failed update restores retry control', button('Update Runtime').isEnabled() and 'Retry Update' in status.text())
 state['update_error'] = False
-button('Update runtime').click()
+button('Update Runtime').click()
 work(); drain()
-check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update runtime').isEnabled())
+check('update uses runtime helper and disables current version update', 'update' in calls and not button('Update Runtime').isEnabled())
 field('pull_model').setText('downloaded-model')
 _tasks = importlib.import_module('klausmate.tasks')
 _tasks.run_on_main = lambda fn: fn()
@@ -256,11 +256,11 @@ check('a failed download leaves its reason in the bar',
       [t.message for t in _tasks.snapshot() if t.key == 'ollama'] == ['Pull failed: Download failed. Retry Pull.'], str(_tasks.snapshot()))
 check('...marked as a failure, so it stays until the next task',
       [t.error for t in _tasks.snapshot() if t.key == 'ollama'] == [True], str(_tasks.snapshot()))
-button('Stop managed server').click(); work(); drain()
-check('stop calls owned server manager', 'stop' in calls and not button('Stop managed server').isEnabled())
+button('Stop Managed Server').click(); work(); drain()
+check('stop calls owned server manager', 'stop' in calls and not button('Stop Managed Server').isEnabled())
 state['setup_error'] = True
-button('Install/start').click(); work(); drain()
-check('failed install restores controls', button('Install/start').isEnabled() and 'Retry Install/start' in status.text())
+button('Install/Start').click(); work(); drain()
+check('failed install restores controls', button('Install/Start').isEnabled() and 'Retry Install/Start' in status.text())
 state['list_error'] = True
 button('Refresh').click(); work(); drain()
 check('failed refresh restores controls', button('Refresh').isEnabled() and 'Retry Refresh' in status.text())
@@ -386,10 +386,10 @@ def close_profile():
             hook()
     drain()
 
-for action, helper, raises in [('Install/start', 'full_setup', False),
-                                ('Update runtime', 'update_runtime', False),
-                                ('Install/start', 'full_setup', True),
-                                ('Update runtime', 'update_runtime', True)]:
+for action, helper, raises in [('Install/Start', 'full_setup', False),
+                                ('Update Runtime', 'update_runtime', False),
+                                ('Install/Start', 'full_setup', True),
+                                ('Update Runtime', 'update_runtime', True)]:
     case = action + (' exception' if raises else '')
     state.update(owned=True, version='old')
     mm.manage_models_dialog(); dlg = mm._OPEN_DLG
@@ -435,7 +435,7 @@ for action, helper, raises in [('Install/start', 'full_setup', False),
     setattr(rt, helper, original)
 
 # A queued old operation must never start after the next profile is active.
-for action in ('Install/start', 'Stop managed server', 'Update runtime'):
+for action in ('Install/Start', 'Stop Managed Server', 'Update Runtime'):
     state.update(owned=True, version='old')
     mm.manage_models_dialog(); dlg = mm._OPEN_DLG
     button('Refresh').click(); work(); drain()
@@ -452,7 +452,7 @@ for action in ('Install/start', 'Stop managed server', 'Update runtime'):
 # Ordinary dialog close does not invalidate this profile's install consent.
 state.update(owned=False, setup_error=False)
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
-button('Install/start').click()
+button('Install/Start').click()
 dlg.accept()
 work(); drain()
 check('ordinary dialog close still permits same-profile background install', state['owned'])
@@ -482,14 +482,14 @@ def traced_write(cfg):
     write_threads.append(threading.get_ident())
     write(cfg)
 _writer = traced_write
-for action in ('Install/start', 'Update runtime'):
+for action in ('Install/Start', 'Update Runtime'):
     for variant in ('close', 'new endpoint', 'unsaved endpoint', 'stale profile', 'open'):
         case = action + ' relocation ' + variant
         store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model', color_theme='rose')
         state.update(owned=False, version='old')
         running['endpoint'] = None
         mm.manage_models_dialog(); dlg = mm._OPEN_DLG
-        if action == 'Update runtime':
+        if action == 'Update Runtime':
             state['owned'] = True
             button('Refresh').click(); work(); drain()
         field('embedding_model').setText('unsaved-model')
@@ -543,7 +543,7 @@ store.update(endpoint='http://127.0.0.1:11434', embedding_model='saved-model')
 state.update(owned=False, version='old'); running['endpoint'] = None
 mm.manage_models_dialog(); dlg = mm._OPEN_DLG
 _st = dlg.prefs_state
-button('Install/start').click(); work()
+button('Install/Start').click(); work()
 field('endpoint').setText('http://127.0.0.1:11499'); field('endpoint').textEdited.emit('http://127.0.0.1:11499')
 drain()
 check('the relocation was saved underneath the edit', store['endpoint'] == 'http://127.0.0.1:11435')

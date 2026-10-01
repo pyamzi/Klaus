@@ -44,17 +44,17 @@ Open **Tools → KlausMate Preferences… → Local models** (the toolbar star
 also opens Preferences). The initial endpoint is `http://127.0.0.1:11434`
 and embedding model is `nomic-embed-text`.
 
-1. Use **Install/start** to authorize installation or start a local Ollama
+1. Use **Install/Start** to authorize installation or start a local Ollama
    runtime, or enter the endpoint of your own local Ollama server. **Automatic
    management** starts an installed runtime on profile open; it does not download
    a runtime or model automatically. See [Ollama's official quickstart](https://docs.ollama.com/quickstart).
 2. Use **Refresh** to inspect **Installed models**. Enter `nomic-embed-text`
    under **Download model** and choose **Pull** if needed. Select a model,
    check **Embedding model**, then **Save**. Changing models offers a local
-   re-index. **Update runtime**, **Stop managed server** and confirmed
+   re-index. **Update Runtime**, **Stop Managed Server** and confirmed
    **Delete** manage runtime/model resources; progress is shown during downloads.
 3. Optional external client: install a separate Python **3.9 or newer**, then
-   use **External clients → Copy configuration**. Merge the `klaus` entry into
+   use **External clients → Copy Configuration**. Merge the `klaus` entry into
    Claude Desktop's `mcpServers` configuration and restart that client. Keep
    Anki open with a profile loaded. The copied block uses absolute Python,
    bridge and discovery-file paths, without a token or port. Copy again after

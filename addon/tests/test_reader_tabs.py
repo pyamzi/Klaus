@@ -431,7 +431,7 @@ lv._refocus_reviewer = lambda: events.append("focus")
 dock = None
 try:
     dock = lv.LectureDock()
-    host.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
+    host.setCentralWidget(dock)
     host.show()
     spin()
     dock.sidebar.tabs.set_tabs([], None)
@@ -507,5 +507,77 @@ for sb in (lec, ed):
     sb.cleanup()
     sb.close()
 spin()
+
+section("tabs show the Library's name, report the stored one (UI review #2)")
+with open(os.path.join(UF, "drive.json"), "w", encoding="utf-8") as fh:
+    json.dump({"version": 1, "folders": [], "window": {}, "pdfs": {
+        "Approach_to_Anemic_Patient": {"folder": None, "display": "06-L-Approach to Anemic Patient.pdf"},
+        "Heme___Onc": {"folder": None, "display": "Hematology & Oncology"}}}, fh)
+named = rt.ReaderTabs()
+named.set_tabs(["Approach_to_Anemic_Patient", "no_drive_entry"], "Approach_to_Anemic_Patient")
+check("a tab shows the display name without .pdf",
+      named.bar.tabText(0) == "06-L-Approach to Anemic Patient", named.bar.tabText(0))
+check("names() and current() still report the stored name",
+      named.names() == ["Approach_to_Anemic_Patient", "no_drive_entry"]
+      and named.current() == "Approach_to_Anemic_Patient", named.names())
+check("a PDF with no drive entry shows its stored name", named.bar.tabText(1) == "no_drive_entry")
+amp = rt.ReaderTabs()
+amp.set_tabs(["Heme___Onc"], None)
+check("an & in a name is shown, not taken as a shortcut mnemonic",
+      amp.bar.tabText(0) == "Hematology && Oncology" and amp.bar.tabToolTip(0) == "Hematology & Oncology"
+      and amp.names() == ["Heme___Onc"], amp.bar.tabText(0))
+seen = []
+named.closed.connect(seen.append)
+named.close("Approach_to_Anemic_Patient")
+check("close() finds a tab by its stored name", seen == ["Approach_to_Anemic_Patient"] and named.names() == ["no_drive_entry"])
+os.remove(os.path.join(UF, "drive.json"))
+
+section("the Lecture panel sits beside the reviewer, between the top bar and the bottom row")
+win = QtWidgets.QMainWindow()
+central = QtWidgets.QWidget()
+main_lay = QtWidgets.QVBoxLayout(central)
+main_lay.setContentsMargins(0, 0, 0, 0)
+top, bottom = QtWidgets.QLabel("toolbar"), QtWidgets.QLabel("bottom row")
+top.setFixedHeight(40)
+bottom.setFixedHeight(40)
+web = QtWidgets.QTextEdit()
+wrap = QtWidgets.QSplitter()  # AMBOSS/AnkiHub wrap mw.web like this
+wrap.addWidget(web)
+main_lay.addWidget(top)
+main_lay.addWidget(wrap, 1)
+main_lay.addWidget(bottom)
+win.setCentralWidget(central)
+win.resize(1200, 700)
+win.mainLayout, win.web, win.state = main_lay, web, "review"
+real_lv2 = (lv.mw, lv._dock, lv._resolver, lv._saved_state, lv._save_state)
+lv.mw, lv._dock = win, None
+lv._saved_state, lv._save_state = (lambda: {"width": 420}), (lambda **_k: None)
+try:
+    win.show()
+    spin()
+    panel = lv._ensure_dock()
+    split = panel.parentWidget() if panel is not None else None
+    check("the reviewer's holder and the panel share one splitter in the layout slot the holder had",
+          split is not None and split.objectName() == lv.REVIEW_SPLIT and split.widget(0) is wrap
+          and main_lay.indexOf(split) == 1 and main_lay.stretch(1) == 1)
+    panel.show()
+    spin()  # open_lecture_view sizes a tick after show, once laid out
+    lv._size_panel(panel)
+    spin()
+    g = panel.mapTo(win, QtCore.QPoint(0, 0))
+    check("the panel starts below the top bar and ends above the bottom row",
+          g.y() >= top.geometry().bottom() and g.y() + panel.height() <= bottom.geometry().top() + 1,
+          f"panel y {g.y()}..{g.y() + panel.height()} top bar ..{top.geometry().bottom()} bottom row {bottom.geometry().top()}..")
+    check("…and both bars keep the full window width", top.width() == bottom.width() == central.width())
+    check("the panel takes its saved width", abs(panel.width() - 420) <= 8, str(panel.width()))
+    check("no dock on the main window", not win.findChildren(QtWidgets.QDockWidget))
+    lv._dock = None
+    again = lv._ensure_dock()
+    check("a rebuilt panel reuses the same splitter", again.parentWidget() is split and split.count() == 3)
+    lv._teardown()
+    check("teardown takes the panel out and leaves the reviewer", split.count() == 2 and split.widget(0) is wrap)
+finally:
+    lv.mw, lv._dock, lv._resolver, lv._saved_state, lv._save_state = real_lv2
+    win.close()
 
 raise SystemExit(report())
