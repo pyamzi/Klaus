@@ -51,8 +51,9 @@ _TPL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 check("template spells __THEME_VARS__ only at its real site "
       "(a prose mention would splice the whole palette in)",
       _TPL.count("__THEME_VARS__") == 1)
-check("template spells __ADDON__ only at its two real sites",
-      _TPL.count("__ADDON__") == 2)
+check("template spells __ADDON__ only at its three real sites "
+      "(pdf.min.js, pdfjs_pure.js, the worker)",
+      _TPL.count("__ADDON__") == 3)
 check("so the rendered page carries the palette exactly once",
       html.count("--bg: ") == 1 and dark.count("--bg: ") == 1)
 for fn in ("klausPdfOpen", "klausPdfError",

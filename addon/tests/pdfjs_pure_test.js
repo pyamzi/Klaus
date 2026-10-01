@@ -4,7 +4,8 @@
 "use strict";
 const assert = require("assert");
 const path = require("path");
-const { KEEP_RENDERED, evictable, changedPages, findOrder } =
+const { KEEP_RENDERED, evictable, changedPages, findOrder,
+        FIND_BUDGET_MS, shouldYield, insertMatch } =
   require(path.join(__dirname, "..", "klausmate", "web", "pdfjs_pure.js"));
 
 const failures = [];
@@ -58,6 +59,32 @@ check("findOrder keeps visible order, drops duplicates and out-of-range pages", 
   assert.deepStrictEqual(findOrder([3, 2, 3, 0, 9], 4), [3, 2, 1, 4]);
   assert.deepStrictEqual(findOrder([], 3), [1, 2, 3]);
   assert.deepStrictEqual(findOrder([1], 0), []);
+});
+
+check("find yields only after a text extraction or a spent time budget", () => {
+  assert.strictEqual(FIND_BUDGET_MS, 8);
+  assert.strictEqual(shouldYield(0, 0), false);
+  assert.strictEqual(shouldYield(0, 7.9), false);
+  assert.strictEqual(shouldYield(0, 8), true);
+  assert.strictEqual(shouldYield(1, 0), true);
+});
+
+const m = (page0, start) => ({ page0, start });
+const keys = (list) => list.map((x) => x.page0 + ":" + x.start);
+check("insertMatch keeps document order (page, then start)", () => {
+  const list = [];
+  for (const x of [m(4, 0), m(5, 3), m(0, 7), m(4, 9), m(0, 2), m(2, 1)]) insertMatch(list, x, -1);
+  assert.deepStrictEqual(keys(list), ["0:2", "0:7", "2:1", "4:0", "4:9", "5:3"]);
+});
+check("insertMatch keeps the current match current", () => {
+  const list = [m(4, 0), m(5, 3)];
+  assert.strictEqual(insertMatch(list, m(1, 0), 0), 1);   // before current: index moves
+  assert.strictEqual(list[1].page0, 4);
+  assert.strictEqual(insertMatch(list, m(9, 0), 1), 1);   // after current: unchanged
+  assert.strictEqual(insertMatch(list, m(4, 5), 1), 1);   // same page, later offset: unchanged
+  assert.strictEqual(insertMatch(list, m(3, 0), 1), 2);   // earlier page: index moves again
+  assert.deepStrictEqual(keys(list), ["1:0", "3:0", "4:0", "4:5", "5:3", "9:0"]);
+  assert.strictEqual(insertMatch([], m(0, 0), -1), -1);   // no current match yet
 });
 
 if (failures.length) { console.log(failures.length + " failed"); process.exit(1); }

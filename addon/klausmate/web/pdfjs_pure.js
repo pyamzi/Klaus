@@ -42,6 +42,28 @@ function findOrder(visible, count) {
   return first;
 }
 
+/* Synchronous find work allowed between idle yields. */
+const FIND_BUDGET_MS = 8;
+
+/* Find yields to idle time only after a batch extracted page text (a
+   cache miss) or spent its time budget: a search over cached text
+   finishes in one go. */
+function shouldYield(extractedInBatch, elapsedMs) {
+  return extractedInBatch > 0 || elapsedMs >= FIND_BUDGET_MS;
+}
+
+/* Insert a find match ({page0, start}) in document order and return
+   the current index adjusted so the same match stays current (-1
+   stays -1). */
+function insertMatch(list, match, currentIndex) {
+  let i = list.length;
+  while (i > 0 && (list[i - 1].page0 > match.page0
+      || (list[i - 1].page0 === match.page0 && list[i - 1].start > match.start))) i--;
+  list.splice(i, 0, match);
+  return currentIndex >= 0 && i <= currentIndex ? currentIndex + 1 : currentIndex;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { KEEP_RENDERED, evictable, changedPages, findOrder };
+  module.exports = { KEEP_RENDERED, evictable, changedPages, findOrder,
+                     FIND_BUDGET_MS, shouldYield, insertMatch };
 }

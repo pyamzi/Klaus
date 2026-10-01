@@ -392,6 +392,7 @@ origin, matching the native viewer and the bake pipeline exactly
 <div id="marquee"></div>
 
 <script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>
+<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>
 <script>
 "use strict";
 /* global pdfjsLib */
@@ -709,13 +710,13 @@ async function renderPage(num, div) {
     }
   } catch (e) {
     state.rendered.delete(num);
+    state.lru.delete(num);
     post("log:render " + num + " failed: " + e.message);
   }
 }
 
 function teardownPage(num, div) {
   const r = state.rendered.get(num);
-  if (!r) state.lru.delete(num);  // a failed render left it behind
   if (!r || !r.canvas || !div) return;   // never tear down a mid-render claim
   for (const cls of ["canvas.pg", ".textLayer", ".hlLayer", ".noteLayer"]) {
     const el = div.querySelector(cls);
@@ -2044,13 +2045,20 @@ document.getElementById("abTszUp").addEventListener(
 
 /* ==== find ========================================================= */
 /* One page's find text, extracted once per document (teardown drops
-   the cache). null when the document went away meanwhile. */
+   the cache). null when the document went away meanwhile or the page's
+   text could not be read (logged); never throws. */
 async function pageText(page0) {
   const doc = state.doc;
   if (!doc) return null;
   if (state.pageTexts && state.pageTexts[page0]) return state.pageTexts[page0];
-  const page = await doc.getPage(page0 + 1);
-  const tc = await page.getTextContent();
+  let tc;
+  try {
+    const page = await doc.getPage(page0 + 1);
+    tc = await page.getTextContent();
+  } catch (e) {
+    if (state.doc === doc) post("log:text of page " + (page0 + 1) + " failed: " + e.message);
+    return null;
+  }
   if (state.doc !== doc) return null;
   let str = "";
   const items = [];
@@ -2098,10 +2106,12 @@ document.getElementById("findinput").addEventListener("keydown", (ev) => {
   else if (ev.key === "Escape") { ev.preventDefault(); hideFindBar(); }
 });
 
-/* Visible pages are searched first, the rest in idle-time batches of 5;
-   matches are appended as found and the first is shown at once. A new
-   search, hideFindBar or a teardown replaces state.find, which stops
-   the running one. */
+/* Visible pages are searched first, the rest in batches of 5 that yield
+   to idle time only after extracting text or spending FIND_BUDGET_MS
+   (cached text is searched in one go). Matches are inserted in
+   document order as found, the current one staying current, and the
+   first found is shown at once. A new search, hideFindBar or a
+   teardown replaces state.find, which stops the running one. */
 const FIND_BATCH = 5;
 const idle = window.requestIdleCallback
   ? (cb) => window.requestIdleCallback(cb, { timeout: 250 })  // busy scrolling never starves find
@@ -2112,22 +2122,32 @@ async function runFind() {
   clearFindHighlight();
   const f = state.find = { query: q, matches: [], index: -1 };
   const countEl = document.getElementById("findcount");
-  if (!q || !state.doc) { countEl.textContent = ""; return; }
+  countEl.textContent = "";
+  if (!q || !state.doc) return;
   const order = findOrder(visiblePages(), state.doc.numPages);
+  let since = performance.now(), extracted = 0;
   for (let i = 0; i < order.length; i += FIND_BATCH) {
-    if (i) await new Promise((r) => idle(r));
     for (const num of order.slice(i, i + FIND_BATCH)) {
       if (state.find !== f) return;
+      if (!(state.pageTexts && state.pageTexts[num - 1])) extracted++;
       const text = await pageText(num - 1);
-      if (state.find !== f || !text) return;
-      f.matches.push(...pageMatches(num - 1, text, q));
+      if (state.find !== f) return;
+      if (!text) continue;   // unreadable page: skipped, logged by pageText
+      const found = pageMatches(num - 1, text, q);
+      for (const m of found) f.index = insertMatch(f.matches, m, f.index);
+      if (f.index < 0 && found.length) {
+        f.index = f.matches.indexOf(found[0]);
+        jumpToMatch();
+      }
     }
-    if (f.matches.length) {
-      countEl.textContent = `${f.index < 0 ? 1 : f.index + 1} / ${f.matches.length}`;
-      if (f.index < 0) { f.index = 0; jumpToMatch(); }
+    if (f.matches.length) countEl.textContent = `${f.index + 1} / ${f.matches.length}`;
+    if (shouldYield(extracted, performance.now() - since)) {
+      await new Promise((r) => idle(r));
+      since = performance.now();
+      extracted = 0;
     }
   }
-  if (!f.matches.length) countEl.textContent = "0 matches";
+  if (state.find === f && !f.matches.length) countEl.textContent = "0 matches";
 }
 
 function pageMatches(p, text, q) {

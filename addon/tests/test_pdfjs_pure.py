@@ -21,7 +21,7 @@ pv = importlib.import_module("klausmate.pdfjs_viewer")
 section("the page loads pdfjs_pure.js before its main script")
 html = pv.build_page_html("x", night=False)
 tag = '<script src="/_addons/x/web/pdfjs_pure.js"></script>'
-check("build_page_html includes the helpers once, by add-on URL",
+check("the page template loads the helpers once, by add-on URL",
       html.count(tag) == 1)
 check("...before the main page script",
       tag in html and html.index(tag) < html.index('<script>\n"use strict";'))

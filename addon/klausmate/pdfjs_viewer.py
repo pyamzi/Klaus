@@ -272,14 +272,6 @@ def build_page_html(addon_name: str, night: bool) -> str:
     path = os.path.join(os.path.dirname(__file__), "web", "pdfjs_viewer.html")
     with open(path, encoding="utf-8") as f:
         html = f.read()
-    # web/pdfjs_pure.js (PDF reader 2/5) defines globals the main script
-    # uses, so it loads right after pdf.js, before that script.
-    pdfjs = '<script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>'
-    html = html.replace(
-        pdfjs,
-        pdfjs + '\n<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>',
-        1,
-    )
     html = html.replace("__ADDON__", addon_name)
     html = html.replace(
         "__THEME_VARS__", theme.css_vars(night) + text_ink_vars()
