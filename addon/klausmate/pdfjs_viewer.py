@@ -1741,7 +1741,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             if fresh is not None and fresh != self._highlights:
                 self._highlights = fresh
                 self._refresh_highlight_overlay()
-        elif event == "failed" and tooltip is not None:
+        elif event == "failed" and tooltip is not None and not self._unreadable:
+            # An unreadable marks file already said so at open; its bakes
+            # are refused on purpose, so no second notice per retry.
             from . import annotation_save
 
             tooltip(annotation_save.SAVE_FAILED_COPY)

@@ -685,6 +685,46 @@ check("once it reads again, its marks and the ones made meanwhile are all kept",
 check("...and the bake is requested", PIPE.requests == ["Corrupt"], str(PIPE.requests))
 pj.tooltip = lambda *a, **k: None
 
+section("opening an unreadable marks file shows only the unreadable notice, even when a bake fails (R58)")
+_tips6 = []
+pj.tooltip = lambda text, *a, **k: _tips6.append(text)
+_c2 = os.path.join(ROOT, "Corrupt2.pdf")
+make_pdf(_c2, pages=2)
+age(_c2, 300)  # the marks JSON is newer than the PDF: opening it requests a bake
+ph.save_library_map(UF, dict(ph.load_library_map(UF), Corrupt2="Corrupt2.pdf"))
+_c2j = ph.annotations_path_for(UF, "Corrupt2")
+with open(_c2j, "w") as _f:
+    _f.write('{"highlights": [half')
+_timers, _mainq = [], []
+real_pipe = asv.SavePipeline(UF, _mainq.append, lambda n, ms, cb: _timers.append(cb), lambda n, st: None)
+asv.pipeline = lambda: real_pipe
+sx = rp.PdfSidebar(None, host_key="lecture")
+rv = REAL_JS.__new__(REAL_JS)  # the real viewer's save half, on the real pipeline
+rv._web, rv._page_loaded, rv._page_count = Web(), True, 0
+rv._start_foreign_mirror = lambda name: None
+rv.load_path = lambda *a, **k: None
+rv._unsub_save = real_pipe.subscribe(rv._on_save_event)
+sx._viewer = rv
+sx.load_pdf("Corrupt2")
+for _cb in list(_timers):
+    _cb()
+real_pipe.flush("Corrupt2", timeout=30)
+check("the open-time bake request ran and failed", "Corrupt2" in real_pipe.failed_names())
+check("only the unreadable-marks notice is shown", _tips6 == [asv.UNREADABLE_MARKS_COPY], str(_tips6))
+del _timers[:]
+real_pipe.retry("Corrupt2")  # what a doc_sync "back" or "moved" does
+for _cb in list(_timers):
+    _cb()
+real_pipe.flush("Corrupt2", timeout=30)
+check("...and a retry that fails again adds nothing", _tips6 == [asv.UNREADABLE_MARKS_COPY], str(_tips6))
+rv._unsub_save()
+sx._viewer = None
+sx.cleanup()
+asv.pipeline = lambda: PIPE
+pj.tooltip = lambda *a, **k: None
+check("doc_sync pops a pin in one step (a pin landing mid-check survives)",
+      "_pins.get(" not in inspect.getsource(ds.classify) and "_pins.pop(" in inspect.getsource(ds.classify))
+
 section("two readers in one host keep their own registration (R36)")
 e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)
 e1.load_pdf("Doc")

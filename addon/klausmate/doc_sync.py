@@ -64,9 +64,13 @@ def pin_own_write(safe: str, stat: Optional[tuple]) -> None:
 def classify(safe: str, stat: Optional[tuple]) -> str:
     if stat is None:
         return "missing"
-    if _pins.get(safe) == tuple(stat):
+    # One pop, not get-then-pop: the save worker pins from its own thread,
+    # and a pin landing between a get and a pop would be dropped. A match
+    # puts it back (setdefault keeps a newer worker pin landing meanwhile).
+    pin = _pins.pop(safe, None)
+    if pin == tuple(stat):
+        _pins.setdefault(safe, pin)
         return "own"
-    _pins.pop(safe, None)
     return "changed"
 
 
