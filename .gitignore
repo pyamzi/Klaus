@@ -20,5 +20,4 @@ graphify-out/
 node_modules/
 /build/
 /.svelte-kit/
-src/lib/generated/
 src-tauri/gen/

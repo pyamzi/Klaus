@@ -1,11 +1,19 @@
 //! Drives the Backend Bridge exactly as the webview does: method name + protobuf
 //! bytes in, protobuf bytes out, against a real Collection in a temp dir.
 
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use anki_proto::decks::{DeckTreeNode, DeckTreeRequest};
-use anki_proto::notes::NoteId;
-use klaus_bridge::{new_token, serve, Bridge, CallError};
+use anki_proto::collection::OpChangesWithId;
+use anki_proto::decks::{Deck, DeckTreeNode, DeckTreeRequest};
+use anki_proto::generic::Empty;
+use anki_proto::import_export::{
+    export_limit, ExportAnkiPackageOptions, ExportAnkiPackageRequest, ExportLimit,
+    ImportAnkiPackageOptions, ImportAnkiPackageRequest, ImportResponse,
+};
+use anki_proto::notes::{AddNoteRequest, Note, NoteId};
+use anki_proto::notetypes::{NotetypeId, NotetypeNames};
+use klaus_bridge::{new_token, serve, Bridge, CallError, Hook, WebDirs};
 use prost::Message;
 
 fn now() -> i64 {
@@ -65,13 +73,70 @@ fn backend_errors_come_back_as_messages() {
     }
 }
 
+fn call<T: Message + Default>(bridge: &Bridge, method: &str, input: impl Message) -> T {
+    T::decode(bridge.call(method, &input.encode_to_vec()).unwrap().as_slice()).unwrap()
+}
+
+/// Builds a real .apkg: a Collection with one Basic note in a "Biology" deck, exported
+/// the way Anki exports (a shell-initiated call, so not via the webview allowlist).
+fn make_apkg(out: &Path) {
+    let (_dir, bridge) = open_temp();
+    let mut deck: Deck = Deck::decode(bridge.call_trusted("newDeck", &[]).unwrap().as_slice()).unwrap();
+    deck.name = "Biology".into();
+    let deck_id = OpChangesWithId::decode(bridge.call_trusted("addDeck", &deck.encode_to_vec()).unwrap().as_slice())
+        .unwrap()
+        .id;
+    let names: NotetypeNames = call(&bridge, "getNotetypeNames", Empty {});
+    let basic = names.entries.iter().find(|n| n.name == "Basic").unwrap();
+    let mut note: Note = call(&bridge, "newNote", NotetypeId { ntid: basic.id });
+    note.fields = vec!["Loop of Henle".into(), "Countercurrent multiplier".into()];
+    let _: anki_proto::notes::AddNoteResponse = call(&bridge, "addNote", AddNoteRequest { note: Some(note), deck_id });
+    let req = ExportAnkiPackageRequest {
+        out_path: out.to_string_lossy().into(),
+        options: Some(ExportAnkiPackageOptions { with_scheduling: true, with_media: true, ..Default::default() }),
+        limit: Some(ExportLimit { limit: Some(export_limit::Limit::WholeCollection(Empty {})) }),
+    };
+    bridge.call_trusted("exportAnkiPackage", &req.encode_to_vec()).unwrap();
+}
+
+#[test]
+fn imports_apkg_and_deck_list_shows_it() {
+    let pkg = tempfile::tempdir().unwrap();
+    let apkg = pkg.path().join("biology.apkg");
+    make_apkg(&apkg);
+
+    let (_dir, bridge) = open_temp();
+    // Exactly the calls Anki's import-anki-package page makes.
+    let options: ImportAnkiPackageOptions = call(&bridge, "getImportAnkiPackagePresets", Empty {});
+    let res: ImportResponse = call(
+        &bridge,
+        "importAnkiPackage",
+        ImportAnkiPackageRequest { package_path: apkg.to_string_lossy().into(), options: Some(options) },
+    );
+    assert_eq!(res.log.unwrap().new.len(), 1);
+
+    let tree = deck_tree(&bridge);
+    let biology = tree.children.iter().find(|d| d.name == "Biology").expect("imported deck");
+    assert_eq!((biology.new_count, biology.learn_count, biology.review_count), (1, 0, 0));
+}
+
 #[tokio::test]
 async fn http_contract_matches_ankis_post_ts() {
     let (_dir, bridge) = open_temp();
-    let static_dir = tempfile::tempdir().unwrap();
-    std::fs::write(static_dir.path().join("index.html"), "<p>klaus</p>").unwrap();
+    let klaus_dir = tempfile::tempdir().unwrap();
+    std::fs::write(klaus_dir.path().join("index.html"), "<p>klaus</p>").unwrap();
+    let anki_dir = tempfile::tempdir().unwrap();
+    std::fs::write(anki_dir.path().join("index.html"), "<html><head></head><p>anki</p></html>").unwrap();
+    std::fs::create_dir(anki_dir.path().join("_app")).unwrap();
+    std::fs::write(anki_dir.path().join("_app/start.mjs"), "// anki").unwrap();
+    let hooked = Arc::new(Mutex::new(Vec::new()));
+    let hook: Hook = {
+        let hooked = hooked.clone();
+        Arc::new(move |method: &str, _: &[u8]| hooked.lock().unwrap().push(method.to_owned()))
+    };
     let token = new_token();
-    let (addr, server) = serve(Arc::new(bridge), static_dir.path().into(), token.clone()).await.unwrap();
+    let web = WebDirs { klaus: klaus_dir.path().into(), anki: anki_dir.path().into() };
+    let (addr, server) = serve(Arc::new(bridge), web, token.clone(), hook).await.unwrap();
     tokio::spawn(server);
     let base = format!("http://{addr}");
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
@@ -123,4 +188,34 @@ async fn http_contract_matches_ankis_post_ts() {
     let err = raw("getNote", NoteId { nid: 42 }.encode_to_vec()).await.unwrap();
     assert_eq!(err.status(), 500);
     assert!(!err.text().await.unwrap().is_empty());
+
+    // Calls Anki pages make to their Qt host go to the shell's hook instead.
+    let done = client
+        .post(format!("{base}/_anki/importDone"))
+        .header("Content-Type", "application/binary")
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(done.status(), 204);
+    for _ in 0..50 {
+        if !hooked.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(*hooked.lock().unwrap(), ["importDone"]);
+
+    // Anki's routes and assets come from Anki's build; everything else from Klaus's.
+    let get = |path: &str| {
+        let url = format!("{base}{path}");
+        let client = client.clone();
+        async move { client.get(url).send().await.unwrap().text().await.unwrap() }
+    };
+    // Anki pages get Klaus's host script and base styles before their own scripts.
+    let anki_page = r#"<html><head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script></head><p>anki</p></html>"#;
+    assert_eq!(get("/import-anki-package/Users/me/biology.apkg").await, anki_page);
+    assert_eq!(get("/import-page/").await, anki_page);
+    assert_eq!(get("/_app/start.mjs").await, "// anki");
+    assert_eq!(get("/decks").await, "<p>klaus</p>");
 }

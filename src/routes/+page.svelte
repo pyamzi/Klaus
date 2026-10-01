@@ -1,12 +1,20 @@
 <script lang="ts">
-  import { deckTree } from "$lib/generated/backend";
+  import { deckTree } from "@generated/backend";
   import DeckRows from "./DeckRows.svelte";
 
   const tree = deckTree({ now: BigInt(Math.floor(Date.now() / 1000)) });
+
+  // Klaus's shell shows a file picker, then opens Anki's import page.
+  function importPackage() {
+    fetch("/_anki/klausImportPackage", { method: "POST", headers: { "Content-Type": "application/binary" } });
+  }
 </script>
 
 <main>
-  <h1>Decks</h1>
+  <header>
+    <h1>Decks</h1>
+    <button onclick={importPackage}>Import…</button>
+  </header>
   {#await tree}
     <p>Loading…</p>
   {:then root}
@@ -27,6 +35,7 @@
     color-scheme: light dark;
   }
   main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  header { display: flex; align-items: center; justify-content: space-between; }
   table { width: 100%; border-collapse: collapse; }
   th, :global(td) { padding: 0.35rem 0.5rem; text-align: right; }
   th:first-child, :global(td:first-child) { text-align: left; }

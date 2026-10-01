@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { DeckTreeNode } from "$lib/generated/anki/decks_pb";
+  import type { DeckTreeNode } from "@generated/anki/decks_pb";
   import DeckRows from "./DeckRows.svelte";
 
   let { decks }: { decks: DeckTreeNode[] } = $props();

@@ -3,11 +3,13 @@
 
 use std::sync::Arc;
 
-use klaus_bridge::{new_token, serve, Bridge};
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use klaus_bridge::{new_token, serve, Bridge, Hook, WebDirs};
+use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
 fn main() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -15,15 +17,24 @@ fn main() {
             bridge.open_collection(&dir).map_err(|e| format!("could not open Collection: {e:?}"))?;
             app.manage(bridge.clone());
 
-            // The frontend is served by the bridge (same origin as /_anki), not Tauri's
-            // asset protocol, because Anki's client fetches root-relative URLs.
-            let web = app.path().resource_dir()?.join("web");
+            // Both frontends are served by the bridge (same origin as /_anki), not
+            // Tauri's asset protocol, because Anki's client fetches root-relative URLs.
+            let res = app.path().resource_dir()?;
+            let web = WebDirs { klaus: res.join("web"), anki: res.join("anki-web") };
             let token = new_token();
-            let (addr, server) = tauri::async_runtime::block_on(serve(bridge, web, token.clone()))?;
+            let handle = app.handle().clone();
+            let hook: Hook = Arc::new(move |method: &str, _input: &[u8]| on_hook(&handle, method));
+            let (addr, server) = tauri::async_runtime::block_on(serve(bridge, web, token.clone(), hook))?;
             tauri::async_runtime::spawn(server);
             println!("Klaus bridge listening on {addr}");
 
-            let url = format!("http://{addr}/?t={token}").parse()?;
+            let base: Url = format!("http://{addr}/").parse()?;
+            app.manage(base.clone());
+            let mut url = base;
+            url.set_query(Some(&format!("t={token}")));
+            // Lets a dev browser drive the same pages; never in release builds.
+            #[cfg(debug_assertions)]
+            println!("Klaus dev URL: {url}");
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
                 .title("Klaus")
                 .inner_size(1100.0, 750.0)
@@ -38,4 +49,42 @@ fn main() {
             let _ = app.state::<Arc<Bridge>>().close_collection();
         }
     });
+}
+
+/// Requests the webview makes to its host (see klaus_bridge::HOOKS).
+fn on_hook(app: &AppHandle, method: &str) {
+    match method {
+        "klausImportPackage" => {
+            let picked = app.dialog().file().add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
+            if let Some(path) = picked.and_then(|p| p.into_path().ok()) {
+                // Same URL shape as Anki's import dialog: <page>/<quoted path>.
+                navigate(app, &format!("import-anki-package/{}", quote(&path.to_string_lossy())));
+            }
+        }
+        // The import page's Close button; the deck list reloads its counts.
+        "importDialogRequireClose" => navigate(app, ""),
+        // Nothing to do until the browser exists (#11); Anki uses importDone to un-modal its dialog.
+        _ => {}
+    }
+}
+
+/// Points the main window at a page on the bridge, telling Anki pages about dark mode
+/// the way Anki does (`#night`).
+fn navigate(app: &AppHandle, path: &str) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let mut url = app.state::<Url>().join(path).expect("valid page path");
+    if window.theme().is_ok_and(|t| t == Theme::Dark) {
+        url.set_fragment(Some("night"));
+    }
+    let _ = window.navigate(url);
+}
+
+/// Python's urllib.parse.quote: percent-encode everything but unreserved characters and '/'.
+fn quote(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' | b'-' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }

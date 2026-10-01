@@ -15,8 +15,8 @@ use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::response::{Html, IntoResponse, Response};
+use axum::routing::{get, post};
 use axum::Router;
 use prost::Message;
 use tower_http::services::{ServeDir, ServeFile};
@@ -86,6 +86,34 @@ const ALLOWED: &[&str] = &[
     "getCard",
 ];
 
+/// Calls the webview makes that Klaus's shell answers instead of the backend:
+/// Anki pages' requests to their Qt host (mediasrv post_handler_list), plus
+/// Klaus's own. Each is acknowledged with 204 and handed to the shell's hook.
+const HOOKS: &[&str] = &[
+    "importDone",
+    "importDialogRequireClose",
+    "searchInBrowser",
+    "klausImportPackage",
+];
+
+/// Anki SvelteKit routes, served from Anki's build (its client router takes over).
+const ANKI_PAGES: &[&str] = &[
+    "card-info",
+    "change-notetype",
+    "congrats",
+    "deck-options",
+    "editor",
+    "graphs",
+    "image-occlusion",
+    "import-anki-package",
+    "import-csv",
+    "import-page",
+    "preferences",
+];
+
+/// What the shell does when the webview fires a [`HOOKS`] call.
+pub type Hook = Arc<dyn Fn(&str, &[u8]) + Send + Sync>;
+
 #[derive(Debug, PartialEq)]
 pub enum CallError {
     UnknownMethod,
@@ -121,6 +149,12 @@ impl Bridge {
     pub fn close_collection(&self) -> Result<(), CallError> {
         let req = CloseCollectionRequest { downgrade_to_schema11: false };
         self.run("closeCollection", &req.encode_to_vec()).map(drop)
+    }
+
+    /// For calls the shell itself decides to make (and tests); not reachable
+    /// from the webview.
+    pub fn call_trusted(&self, method: &str, input: &[u8]) -> Result<Vec<u8>, CallError> {
+        self.run(method, input)
     }
 
     /// What the webview reaches: allowlisted methods only.
@@ -179,26 +213,58 @@ struct AppState {
     /// `klaus_<port>=<token>`. Cookies aren't scoped by port, so the name carries it:
     /// two running instances must not overwrite each other's cookie.
     cookie: Arc<str>,
+    hook: Hook,
+    anki_dir: Arc<PathBuf>,
+}
+
+/// Where the two frontends live on disk.
+pub struct WebDirs {
+    /// Klaus's SvelteKit build (SPA fallback to its index.html).
+    pub klaus: PathBuf,
+    /// Anki's SvelteKit build (`vendor/anki/out/sveltekit`).
+    pub anki: PathBuf,
 }
 
 /// Binds 127.0.0.1 on a free port and returns the address plus the server future.
-/// `static_dir` holds the built frontend (SPA fallback to its index.html).
 pub async fn serve(
     bridge: Arc<Bridge>,
-    static_dir: PathBuf,
+    web: WebDirs,
     token: String,
+    hook: Hook,
 ) -> std::io::Result<(SocketAddr, impl std::future::Future<Output = std::io::Result<()>>)> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
     let cookie = format!("klaus_{}={token}", addr.port()).into();
-    let state = AppState { bridge, token: token.into(), cookie };
-    let spa = ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html")));
-    let app = Router::new()
+    let state = AppState { bridge, token: token.into(), cookie, hook, anki_dir: web.anki.clone().into() };
+    let klaus = ServeDir::new(&web.klaus).fallback(ServeFile::new(web.klaus.join("index.html")));
+    let mut app = Router::new()
         .route("/_anki/{method}", post(anki_method))
-        .fallback_service(spa)
+        .nest_service("/_app", ServeDir::new(web.anki.join("_app")));
+    for page in ANKI_PAGES {
+        app = app
+            .route(&format!("/{page}"), get(anki_page))
+            .route(&format!("/{page}/"), get(anki_page))
+            .route(&format!("/{page}/{{*rest}}"), get(anki_page));
+    }
+    let app = app
+        .fallback_service(klaus)
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
         .with_state(state);
     Ok((addr, async move { axum::serve(listener, app).await }))
+}
+
+/// Anki's SvelteKit shell, with what Klaus adds in place of Anki's Qt window: the
+/// host script and base styling, before any page script runs.
+async fn anki_page(State(state): State<AppState>) -> Response {
+    match tokio::fs::read_to_string(state.anki_dir.join("index.html")).await {
+        Ok(html) => Html(html.replacen(
+            "<head>",
+            r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script>"#,
+            1,
+        ))
+        .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn grant_cookie(State(state): State<AppState>, req: Request, next: Next) -> Response {
@@ -230,6 +296,11 @@ async fn anki_method(
     let binary = headers.get(header::CONTENT_TYPE).is_some_and(|v| v == "application/binary");
     if !has_token || !binary {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if HOOKS.contains(&method.as_str()) {
+        let hook = state.hook.clone();
+        tokio::task::spawn_blocking(move || hook(&method, &body));
+        return StatusCode::NO_CONTENT.into_response();
     }
     let bridge = state.bridge.clone();
     let result = tokio::task::spawn_blocking(move || bridge.call(&method, &body)).await;
