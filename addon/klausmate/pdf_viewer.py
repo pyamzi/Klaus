@@ -4153,10 +4153,12 @@ class PdfSidebar(QWidget):
             print(f"[klausmate] pdf panel theme failed: {exc}")
         self._editor = editor
         self._name: Optional[str] = None
-        # Which host this panel is in doc_sync's open registry ("editor",
-        # "lecture"); _path is where the shown PDF is now. Open readers
-        # follow the folder through doc_sync's events (PDF reader 1/5).
+        # Which host this panel lives in ("editor", "lecture"); _path is
+        # where the shown PDF is now. Open readers follow the folder through
+        # doc_sync's events (PDF reader 1/5), each registered under its own
+        # key so two panels of one host never close each other's (R36).
         self.host_key = host_key
+        self._sync_key = f"{host_key}:{id(self)}"
         self._path: Optional[str] = None
         self._held: Optional[str] = None  # the name open in doc_sync
         self._unsub_doc: Optional[Callable[[], None]] = None
@@ -4416,7 +4418,7 @@ class PdfSidebar(QWidget):
             if self._held is not None and self._held != name:
                 self._release(flush=False)
             self._held, self._path = name, path
-            doc_sync.open_doc(self.host_key, name, path)
+            doc_sync.open_doc(self._sync_key, name, path)
         except Exception as exc:
             print(f"[klausmate] doc_sync open failed: {exc}")
 
@@ -4436,7 +4438,7 @@ class PdfSidebar(QWidget):
         try:
             from . import doc_sync
 
-            doc_sync.close_doc(self.host_key, name)
+            doc_sync.close_doc(self._sync_key, name)
         except Exception as exc:
             print(f"[klausmate] doc_sync close failed: {exc}")
 

@@ -1813,9 +1813,11 @@ def _commit_bake(
     forked. The tmp sits in the Library ROOT (same filesystem as every
     subfolder), not beside the file: a folder rename mid-bake would
     otherwise carry it away or remove its directory. Returns False —
-    writing nothing — when the file vanished meanwhile, or when the carry
-    scan could not read it (its outside marks would be silently lost);
-    the annotations JSON is intact and the next save bakes again.
+    writing nothing — when the file vanished meanwhile, when a mapped file
+    is missing (mid Finder rename: writing would recreate it at the old
+    path; R35), or when the carry scan could not read it (its outside
+    marks would be silently lost). The annotations JSON is intact; the
+    pipeline retries when the file comes back.
     """
     base = _safe_basename(name)
     root = _live_library_root()
@@ -1834,6 +1836,9 @@ def _commit_bake(
                 # Deleted, or moved under the carry scan, while baking:
                 # writing now would resurrect it or drop outside marks.
                 print(f"[klausmate] bake dropped: {base} changed under it")
+                return False
+            if not os.path.isfile(final) and base in load_library_map(user_files_dir):
+                print(f"[klausmate] bake dropped: {base} is missing from the Library folder")
                 return False
             os.replace(tmp, final)
             if report is not None:

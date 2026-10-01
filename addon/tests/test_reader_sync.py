@@ -162,6 +162,7 @@ check("the default host is the editor dock", plain.host_key == "editor")
 plain.cleanup()
 sb = pv.PdfSidebar(None, host_key="lecture")
 check("the Lecture dock's key is kept", sb.host_key == "lecture")
+KEY = f"lecture:{id(sb)}"  # doc_sync registers each reader on its own (R36)
 check("native renderer under test", sb._renderer == "native" and sb._viewer is not None)
 lv_src = open(os.path.join(os.path.dirname(pv.__file__), "lecture_view.py"), encoding="utf-8").read()
 check("the Lecture dock passes host_key=\"lecture\"",
@@ -175,7 +176,7 @@ sb.load_pdf("Doc")
 spin()
 check("loaded", sb.is_loaded("Doc"))
 check("doc_sync knows the path", ds.open_paths().get("Doc") == DOC, str(ds.open_paths()))
-check("...for this host", ds._hosts.get("Doc") == {"lecture"}, str(ds._hosts))
+check("...for this reader", ds._hosts.get("Doc") == {KEY}, str(ds._hosts))
 check("the sidebar follows doc_sync events", sb._on_doc_event in ds._subs)
 check("an up-to-date bake requests no save", PIPE.requests == [], str(PIPE.requests))
 
@@ -239,7 +240,7 @@ check("with the exact copy, by display name",
       TIPS == ["Doc Lecture was removed from your Library folder."], str(TIPS))
 check("doc_sync no longer holds it for this host", "Doc" not in ds.open_paths())
 check("closed in doc_sync without a flush (a bake now would recreate the file at its old path)",
-      LOG == [("close_doc", "lecture", "Doc")], str(LOG))
+      LOG == [("close_doc", KEY, "Doc")], str(LOG))
 check("...so the pending save stays pending", "Doc" in PIPE.pending)
 PIPE.pending.discard("Doc")
 check("marks, annotations JSON, context and names untouched", tree(UF) == before)
@@ -269,7 +270,7 @@ LOG.clear()
 sb.load_pdf = _real_load
 sb.clear()
 check("clear: flush (with the save pending) then close_doc",
-      LOG[:2] == [("flush", "Doc", True), ("close_doc", "lecture", "Doc")], str(LOG))
+      LOG[:2] == [("flush", "Doc", True), ("close_doc", KEY, "Doc")], str(LOG))
 check("clear forgets the document", "Doc" not in ds.open_paths())
 sb.load_pdf("Doc")
 spin()
@@ -277,7 +278,7 @@ PIPE.request("Doc")
 LOG.clear()
 sb.cleanup()
 check("cleanup: flush (with the save pending) then close_doc",
-      LOG[:2] == [("flush", "Doc", True), ("close_doc", "lecture", "Doc")], str(LOG))
+      LOG[:2] == [("flush", "Doc", True), ("close_doc", KEY, "Doc")], str(LOG))
 check("cleanup stops following doc_sync", sb._on_doc_event not in ds._subs)
 LOG.clear()
 sb.cleanup()
@@ -292,7 +293,7 @@ make_pdf(os.path.join(UF, "pdfs", "Two.pdf"), pages=2)
 LOG.clear()
 sb.load_pdf("Two")
 spin()
-check("the previous document is closed in doc_sync", ("close_doc", "lecture", "Doc") in LOG, str(LOG))
+check("the previous document is closed in doc_sync", ("close_doc", KEY, "Doc") in LOG, str(LOG))
 check("the new one is open", "Two" in ds.open_paths() and "Doc" not in ds.open_paths())
 sb.load_pdf("Doc")
 spin()
@@ -444,6 +445,34 @@ check("the page commits an open box, then replies on the same channel",
       "  if (state.textEdit) commitTextEdit();\n"
       '  post("edit-done:" + seq);\n'
       "};" in html)
+
+section("two readers in one host keep their own registration (R36)")
+e1, e2 = pv.PdfSidebar(None), pv.PdfSidebar(None)
+e1.load_pdf("Doc")
+e2.load_pdf("Doc")
+spin()
+check("both editor readers are registered apart",
+      {f"editor:{id(e1)}", f"editor:{id(e2)}"} <= ds._hosts.get("Doc", set()), str(ds._hosts))
+e1.cleanup()
+check("closing one keeps the other registered",
+      "Doc" in ds.open_paths() and f"editor:{id(e2)}" in ds._hosts["Doc"]
+      and f"editor:{id(e1)}" not in ds._hosts["Doc"], str(ds._hosts))
+followed: list = []
+_real_reload = e2._reload_from_disk
+e2._reload_from_disk = lambda name, toast: (followed.append(name), _real_reload(name, toast))
+e1_followed: list = []
+e1._reload_from_disk = lambda name, toast: e1_followed.append(name)
+t = time.time() + 5
+os.utime(DOC, (t, t))  # an outside save: the fingerprint changes
+ds._on_file_changed(DOC)  # what the watcher would deliver
+deadline = time.monotonic() + 2
+while not followed and time.monotonic() < deadline:
+    spin(1)
+    time.sleep(0.01)
+spin()
+check("the other still follows \"changed\"", followed == ["Doc"], str(followed))
+check("the closed one does not", e1_followed == [], str(e1_followed))
+e2.cleanup()
 
 section("the old pollers are gone")
 # The deleted names are pinned by the task's grep over klausmate and tests,

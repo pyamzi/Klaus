@@ -10,6 +10,7 @@ Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_pdf_
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -228,5 +229,57 @@ with tempfile.TemporaryDirectory() as tmp:
           fired and ok is False and annots_in(old) == 1
           and [h["id"] for h in ph.load_annotations(uf, "Lecture")] == ["a1"],
           f"fired={fired} ok={ok} n={annots_in(old)}")
+
+section("no bake into a mapped file that is missing (R35)")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp)
+    assert ph.bake_annotations(uf, "Lecture", {})  # a pristine original now exists
+    away = os.path.join(tmp, "Lecture.pdf")  # mid Finder rename: out of the Library
+    os.rename(old, away)
+    jpath = ph.annotations_path_for(uf, "Lecture")
+    with open(jpath, "rb") as f:
+        marks = f.read()
+    rep = {}
+    ok = ph.bake_annotations(uf, "Lecture", rep)
+    check("the bake refuses, though a pristine original exists",
+          ok is False and os.path.isfile(os.path.join(uf, "pdf_originals", "Lecture.pdf")))
+    check("...and creates no file at the old path", not os.path.exists(old))
+    check("...nor a temp file anywhere in the Library",
+          [f for d, _, fs in os.walk(root) for f in fs] == [])
+    check("...and reports no stat", "stat" not in rep)
+    with open(jpath, "rb") as f:
+        check("the marks JSON is untouched", f.read() == marks)
+    ph.save_annotations(uf, "Lecture", [])
+    check("an un-bake refuses too", ph.bake_annotations(uf, "Lecture", {}) is False
+          and not os.path.exists(old))
+    ph.save_annotations(uf, "Lecture", json.loads(marks)["highlights"])
+
+    section("...and the save lands when the file comes back (\"back\" retries it)")
+    asv = importlib.import_module("klausmate.annotation_save")
+    ds = importlib.import_module("klausmate.doc_sync")
+    ds._sync = lambda: None
+    timers, events = [], []
+    pipe = asv.SavePipeline(uf, lambda cb: cb(), lambda n, ms, cb: timers.append(cb),
+                            lambda n, st: None)
+    pipe.subscribe(lambda ev, n: events.append((ev, n)))
+    subs_before = list(ds._subs)
+    asv._wire_doc_sync(pipe)
+    real_record = ph.record_stat
+    ph.record_stat = lambda *a: None  # bookkeeping is not under test here
+    try:
+        pipe.request("Lecture")
+        pipe.flush("Lecture")
+        check("a request for the missing file fails visibly",
+              events == [("failed", "Lecture")] and "Lecture" in pipe.failed_names(), str(events))
+        check("...writes nothing at the old path", not os.path.exists(old))
+        os.rename(away, old)
+        ds.mark_back("Lecture", old)
+        pipe.flush("Lecture")
+        check("'back' retries and the bake succeeds",
+              events[-1] == ("saved", "Lecture") and "Lecture" not in pipe.failed_names(), str(events))
+        check("...with the mark in the file", annots_in(old) == 1)
+    finally:
+        ph.record_stat = real_record
+        ds._subs[:] = subs_before
 
 raise SystemExit(report())
