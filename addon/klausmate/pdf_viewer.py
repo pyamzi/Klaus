@@ -4410,14 +4410,14 @@ class PdfSidebar(QWidget):
     def _follow(self, name: str, path: str) -> None:
         """Hold ``name`` open in doc_sync for this host, releasing the
         document shown before, and hear its events. Never raises."""
+        if self._held is not None and self._held != name:
+            self._release(flush=False)
+        self._held, self._path = name, path
         try:
             from . import doc_sync
 
             if self._unsub_doc is None:
                 self._unsub_doc = doc_sync.subscribe(self._on_doc_event)
-            if self._held is not None and self._held != name:
-                self._release(flush=False)
-            self._held, self._path = name, path
             doc_sync.open_doc(self._sync_key, name, path)
         except Exception as exc:
             print(f"[klausmate] doc_sync open failed: {exc}")
@@ -4462,8 +4462,12 @@ class PdfSidebar(QWidget):
             return
         try:
             self.isVisible()
-        except RuntimeError:
-            return  # C++ side already deleted
+        except RuntimeError:  # C++ side already deleted: let go of doc_sync
+            self._release(flush=False)
+            unsub, self._unsub_doc = self._unsub_doc, None
+            if unsub is not None:
+                unsub()
+            return
         if event == "changed":
             self._reload_from_disk(safe, toast=True)
         elif event == "moved" and path:
@@ -4505,8 +4509,8 @@ class PdfSidebar(QWidget):
 
         def _reload() -> None:
             try:
-                if self._name != name:
-                    return
+                if self._name != name or self._held != name:
+                    return  # left, cleared or cleaned up while waiting
                 self.isVisible()
                 print(f"[klausmate] {name} changed on disk — reloading viewer")
                 self._reload_in_place(name)

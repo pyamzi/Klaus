@@ -1743,9 +1743,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._start_foreign_mirror(name)
 
     # ---- outside-annotation mirror (K-082) -------------------------------
-    # PdfSidebar's external-change poller duck-types the viewer: it calls
-    # v._apply_mirror(name, res) on whichever renderer is active (this
-    # crashed live as AttributeError until PdfJsViewer grew the method).
+    # load_annotations starts the mirror on every load and every reload
+    # from disk; _apply_mirror mirrors the native viewer's method of the
+    # same name.
     # The scan/merge machinery is pdf_handler's and fully shared; only
     # the last hop — putting refreshed records on screen — differs, and
     # here that is a push through klausSetAnnotations.
@@ -1862,6 +1862,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         Library window closed, then the theme was switched). Idempotent
         and safe to call twice.
         """
+        self._after_edit = None  # a late commit reply must not reload a dead page
         unsub, self._unsub_save = self._unsub_save, None
         if unsub is not None:
             unsub()

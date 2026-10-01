@@ -259,8 +259,8 @@ def _pin(name: str, stat: Optional[tuple]) -> None:
 
 
 def _wire_doc_sync(pipe: SavePipeline) -> None:
-    """A PDF that failed to save and comes back (the rescan's "back")
-    retries its bake."""
+    """A PDF that failed to save retries its bake when the rescan finds it
+    again: "back" (it returned) or "moved" (a rename the save ran into)."""
     try:
         from . import doc_sync
     except Exception as exc:
@@ -268,7 +268,7 @@ def _wire_doc_sync(pipe: SavePipeline) -> None:
         return
 
     def _on_doc(event: str, safe: str, _path: Optional[str]) -> None:
-        if event == "back" and safe in pipe.failed_names():
+        if event in ("back", "moved") and safe in pipe.failed_names():
             pipe.retry(safe)
 
     doc_sync.subscribe(_on_doc)

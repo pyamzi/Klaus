@@ -1796,6 +1796,11 @@ def _atomic_replace_from(src_path: str, dest_path: str) -> None:
                 pass
 
 
+class _MovedIn(Exception):
+    """A file reached the path the bake writes only after its carry scan
+    looked there (a rename the map caught up with mid-bake)."""
+
+
 def _commit_bake(
     user_files_dir: str,
     name: str,
@@ -1840,6 +1845,10 @@ def _commit_bake(
             if not os.path.isfile(final) and base in load_library_map(user_files_dir):
                 print(f"[klausmate] bake dropped: {base} is missing from the Library folder")
                 return False
+            if not had_working and os.path.isfile(final):
+                # The carry scan read no file, but replacing this one would
+                # drop its outside marks: bake again from its real path.
+                raise _MovedIn(final)
             os.replace(tmp, final)
             if report is not None:
                 report["path"] = final
@@ -1952,6 +1961,7 @@ def bake_annotations(
     user_files_dir: str,
     name: str,
     report: dict | None = None,
+    _again: bool = True,
 ) -> bool:
     """Bake stored highlights/notes into ``pdfs/<base>.pdf`` as REAL PDF
     annotations (visible in Preview/Acrobat). Returns False on failure.
@@ -2256,6 +2266,11 @@ def bake_annotations(
             f"{base}.pdf ({len(carried)} outside mark(s) carried)"
         )
         return True
+    except _MovedIn as moved:
+        if _again:  # once: the second pass reads the file it replaces
+            return bake_annotations(user_files_dir, name, report, _again=False)
+        print(f"[klausmate] bake dropped: {name} kept moving ({moved})")
+        return False
     except Exception as exc:
         print(f"[klausmate] bake failed for {name}: {exc}")
         return False

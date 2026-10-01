@@ -335,8 +335,11 @@ check("'back' for a failed name retries it", fake.retried == ["A"], str(fake.ret
 ds.mark_back("B", "/lib/b.pdf")
 check("'back' for a name that saved fine does nothing", fake.retried == ["A"])
 ds.mark_missing("A")
+check("'missing' never retries", fake.retried == ["A"])
 ds.repoint("A", "/lib/moved/a.pdf")
-check("'missing'/'moved' never retry", fake.retried == ["A"])
+check("'moved' for a failed name retries it (R38)", fake.retried == ["A", "A"], str(fake.retried))
+ds.repoint("B", "/lib/moved/b.pdf")
+check("'moved' for a name that saved fine does nothing", fake.retried == ["A", "A"])
 ds._subs[:] = subs_before
 
 wired = []

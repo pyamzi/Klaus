@@ -282,4 +282,48 @@ with tempfile.TemporaryDirectory() as tmp:
         ph.record_stat = real_record
         ds._subs[:] = subs_before
 
+section("a save refused during a plain rename lands at the new path on \"moved\" (R38)")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp)
+    new = os.path.join(root, "Renamed.pdf")
+    os.rename(old, new)  # renamed in Finder; the rescan has not run yet
+    asv = importlib.import_module("klausmate.annotation_save")
+    ds = importlib.import_module("klausmate.doc_sync")
+    ds._sync = lambda: None
+    events = []
+    pipe = asv.SavePipeline(uf, lambda cb: cb(), lambda n, ms, cb: None, lambda n, st: None)
+    pipe.subscribe(lambda ev, n: events.append((ev, n)))
+    subs_before = list(ds._subs)
+    asv._wire_doc_sync(pipe)
+    real_record = ph.record_stat
+    ph.record_stat = lambda *a: None
+    try:
+        pipe.request("Lecture")
+        pipe.flush("Lecture")
+        check("the save is refused while the map names the old path",
+              events == [("failed", "Lecture")] and not os.path.exists(old), str(events))
+        ph.save_library_map(uf, {"Lecture": "Renamed.pdf"})  # the rescan applies the move
+        ds.repoint("Lecture", new)  # ...and tells readers: "moved"
+        pipe.flush("Lecture")
+        check("\"moved\" retries it and the save lands at the new path",
+              events[-1] == ("saved", "Lecture") and annots_in(new) == 1
+              and not os.path.exists(old), str(events))
+    finally:
+        ph.record_stat = real_record
+        ds._subs[:] = subs_before
+
+section("a bake that starts mid-rename carries the outside marks of the file it replaces")
+with tempfile.TemporaryDirectory() as tmp:
+    uf, root, old = make_world(tmp, outside=True)
+    assert ph.bake_annotations(uf, "Lecture", {}) and annots_in(old) == 2
+    new = os.path.join(root, "Renamed.pdf")
+    os.rename(old, new)  # renamed in Finder; the map still names the old path
+    ok, rep = bake_paused(
+        uf, lambda: ph.save_library_map(uf, {"Lecture": "Renamed.pdf"}), at="write"
+    )
+    check("the bake re-reads the file it would replace: outside mark kept, ours added",
+          ok is True and annots_in(new) == 2 and not os.path.exists(old),
+          f"ok={ok} n={annots_in(new)}")
+    check("...and reports the new path", rep.get("path") == new, str(rep.get("path")))
+
 raise SystemExit(report())

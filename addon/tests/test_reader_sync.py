@@ -388,8 +388,29 @@ fake.calls.clear()
 js._on_doc_event("moved", "Doc", "/elsewhere/Doc.pdf")
 check("viewer re-pointed, no reload", fake.calls == [("repoint", "/elsewhere/Doc.pdf")], str(fake.calls))
 js._path = DOC
-js._viewer = FakeJs()
+
+section("a commit reply after cleanup reloads nothing")
+fake.calls.clear()
+del TIPS[:]
+js._on_doc_event("changed", "Doc", None)
+late = fake.waiting
 js.cleanup()
+fake.calls.clear()
+late()
+check("no reload, no mirror, no toast for a closed panel", fake.calls == [] and TIPS == [],
+      f"{fake.calls} {TIPS}")
+
+section("a deleted sidebar lets go of doc_sync")
+from PyQt6 import sip  # noqa: E402
+
+dead = pv.PdfSidebar(None, host_key="lecture")
+dead.load_pdf("Doc")
+dead_key = dead._sync_key
+check("subscribed while alive", dead._on_doc_event in ds._subs)
+sip.delete(dead)
+dead._on_doc_event("changed", "Doc", None)
+check("the first event after deletion unsubscribes it", dead._on_doc_event not in ds._subs)
+check("...and drops its registration", dead_key not in ds._hosts.get("Doc", set()), str(ds._hosts))
 
 section("PdfJsViewer.repoint and commit_open_edit")
 stand = pj.PdfJsViewer.__new__(pj.PdfJsViewer)
@@ -410,6 +431,9 @@ class Web:
 
     def eval(self, js):
         self.js.append(js)
+
+    def cleanup(self):
+        pass
 
 
 stand._web = Web()
@@ -439,6 +463,14 @@ pj.EDIT_COMMIT_WAIT_MS = _wait
 stand._page_loaded = False
 stand.commit_open_edit(lambda: done.append(3))
 check("no page: continues at once", done == [1, 2, 3], str(done))
+stand._page_loaded = True
+stand._unsub_save = None
+stand.commit_open_edit(lambda: done.append(4))
+seq = stand._edit_seq
+stand.cleanup()
+stand._bridge_edit_done(str(seq))
+spin()
+check("cleanup drops a pending continuation", stand._after_edit is None and done == [1, 2, 3], str(done))
 html = open(os.path.join(os.path.dirname(pj.__file__), "web", "pdfjs_viewer.html"), encoding="utf-8").read()
 check("the page commits an open box, then replies on the same channel",
       "window.klausCommitEdit = function (seq) {\n"
