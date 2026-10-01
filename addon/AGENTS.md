@@ -92,7 +92,7 @@ Addons/                       # Git repo root
         ├── pdfs/                # Stored PDF copies (post-bake, real annotations included)
         ├── pdf_originals/       # Pristine copy captured once, used to regenerate bakes
         ├── annotations/         # Per-PDF highlight/note JSON, source of truth for baking
-        ├── pdf_tabs.json        # Open tabs per host, thumbs, last_used (placement/geom dropped on read since the Add tab)
+        ├── pdf_tabs.json        # Open tabs per host, last_used (placement/geom dropped on read since the Add tab)
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
         ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) and cosine matches

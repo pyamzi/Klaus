@@ -101,6 +101,14 @@ def delete_pdf(safe: str) -> bool:
     Library's own Delete…, or a confirmed sidebar tag delete (K-306)."""
     uf = settings.user_files()
     display = drive_store.display_name(uf, safe)
+    # Its marks go with it: no pending save may bake (or fail and toast)
+    # once the readers showing it let go — clear() flushes.
+    try:
+        from . import annotation_save
+
+        annotation_save.pipeline().forget(safe)
+    except Exception as e:  # noqa: BLE001
+        print(f"[klausmate] save pipeline forget failed: {e}")
     _close_in_panels(safe)
     # Must run BEFORE delete_context: that call chains into
     # retention.forget_prefs, which wipes this PDF's whole prefs.json
@@ -238,7 +246,8 @@ def _rearm_watcher(root: str | None, names: dict | None = None) -> None:
     Called after every rescan — moved or newly created directories fall
     off a QFileSystemWatcher silently. Idempotent and cheap. ``names`` is
     the pre-check's new baseline (``_dir_snapshot`` from before the scan's
-    walk); None keeps the old one."""
+    walk) and also the directories to watch, so this never walks the tree
+    on the main thread; None keeps the old baseline and walks."""
     global _fs_watcher, _fs_debounce
     if mw is None:
         return
@@ -260,10 +269,13 @@ def _rearm_watcher(root: str | None, names: dict | None = None) -> None:
             _fs_watcher.removePaths(old)
         if not root or not os.path.isdir(root):
             return
-        paths = [root]
-        for dirpath, dirnames, _files in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            paths.extend(os.path.join(dirpath, d) for d in dirnames)
+        if names is not None:  # the scan's own snapshot: no walk on the main thread
+            paths = list(names)
+        else:
+            paths = [root]
+            for dirpath, dirnames, _files in os.walk(root):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                paths.extend(os.path.join(dirpath, d) for d in dirnames)
         _fs_watcher.addPaths(paths)
         if names is not None:
             _dir_names.clear()
@@ -327,9 +339,17 @@ def start_library_rescan(on_done: Callable[[dict | None], None] | None = None) -
     ).failure(failed).without_collection().run_in_background()
 
 
+_tmp_swept = False  # the session's first scan sweeps stranded bake tmps
+
+
 def _prepare(uf: str, root: str) -> dict:
     """The background half: the watcher's baseline first, then the scan's
-    own walk and reads (``prepare_rescan``)."""
+    own walk and reads (``prepare_rescan``). The session's first scan
+    also clears bake tmp files a crash left in the root."""
+    global _tmp_swept
+    if not _tmp_swept:
+        _tmp_swept = True
+        pdf_handler.sweep_stranded_tmps(root)
     names = _dir_snapshot(root)
     prepared = pdf_handler.prepare_rescan(uf, root)
     prepared["names"] = names
@@ -418,7 +438,8 @@ def rescan_library_root(prepared: dict | None = None) -> dict | None:
 
 def _tell_readers(uf: str, root: str, summary: dict) -> None:
     """After the mapping is applied, never before: open readers follow a
-    move, hear a delete or a return (doc_sync), the watches are re-synced,
+    move (the scan's, or Klaus's own rename/move, which the scan cannot
+    see), hear a delete or a return (doc_sync), the watches are re-synced,
     and a closed PDF whose text changed outside Klaus is re-indexed when
     it already has an index or auto-index is on."""
     try:
@@ -432,6 +453,14 @@ def _tell_readers(uf: str, root: str, summary: dict) -> None:
         for safe in summary.get("back") or []:
             if safe in mapping:
                 doc_sync.mark_back(safe, os.path.join(root, mapping[safe]))
+        # Klaus's own rename/move already updated the map, so the scan
+        # saw no move: an open reader still holds the old path.
+        held = doc_sync.open_paths()
+        mapping = pdf_handler.load_library_map(uf) if held else {}
+        for safe, path in held.items():
+            mapped = os.path.join(root, mapping[safe]) if safe in mapping else None
+            if mapped and os.path.normpath(mapped) != os.path.normpath(path) and os.path.isfile(mapped):
+                doc_sync.repoint(safe, mapped)
         doc_sync.resync()
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] rescan: telling readers failed: {exc}")

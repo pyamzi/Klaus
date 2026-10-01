@@ -2337,4 +2337,10 @@ check("a fresh document's fit clears a stale user-zoom flag",
       "state.scale = clampScale(avail / base.width);\n"
       "    state.userZoomed = false;" in _HTML10)
 
+section("the no-webview fallback names no switch that no longer exists")
+with open(pv.__file__, encoding="utf-8") as _fh:
+    _PY_SRC = _fh.read()
+check("no 'switch off the pdf.js viewer' copy (PDF reader 5/5 deleted the switch)",
+      "switch off the pdf.js" not in _PY_SRC and "The PDF viewer could not start." in _PY_SRC)
+
 raise SystemExit(report())

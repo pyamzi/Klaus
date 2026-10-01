@@ -15,6 +15,7 @@ Run: PYTHONDONTWRITEBYTECODE=1 QT_QPA_PLATFORM=offscreen python3 tests/test_read
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import inspect
@@ -140,7 +141,7 @@ class FakeJs(QtWidgets.QWidget):
         pass
 
     def clear_document(self):
-        pass
+        self.calls.append(("clear_document",))
 
     def cleanup(self):
         pass
@@ -293,8 +294,12 @@ check("doc_sync no longer holds it for this host", "Doc" not in ds.open_paths())
 check("closed in doc_sync without a flush (a bake now would recreate the file at its old path)",
       LOG == [("close_doc", KEY, "Doc")], str(LOG))
 check("...so the pending save stays pending", "Doc" in PIPE.pending)
+check("...and its tab closes (R50)", "Doc" not in sb.tabs.names(), str(sb.tabs.names()))
 PIPE.pending.discard("Doc")
-check("marks, annotations JSON, context and names untouched", tree(UF) == before)
+_now = tree(UF)
+for _t in (before, _now):  # the closed tab is session state, not data
+    _t.pop("pdf_tabs.json", None)
+check("marks, annotations JSON, context and names untouched", _now == before)
 FINAL = os.path.join(ROOT, "Renamed", "Doc.pdf")
 os.makedirs(os.path.dirname(FINAL))
 os.rename(GONE, FINAL)
@@ -303,8 +308,9 @@ ds.repoint("Doc", FINAL)  # the next scan: the same file, moved
 spin()
 check("a later \"moved\" for a closed document reloads nothing", loads == [], str(loads))
 after = tree(UF)
-after.pop("library_map.json", None)
-before.pop("library_map.json", None)
+for _t in (before, after):
+    _t.pop("library_map.json", None)
+    _t.pop("pdf_tabs.json", None)
 check("...and still touches nothing but the map", after == before)
 v.calls.clear()
 sb.load_pdf("Doc")
@@ -351,6 +357,37 @@ check("the previous document is closed in doc_sync", ("close_doc", KEY, "Doc") i
 check("the new one is open", "Two" in ds.open_paths() and "Doc" not in ds.open_paths())
 sb.load_pdf("Doc")
 spin()
+
+section('"missing" closes its tab; a neighbour tab loads and stays (R50)')
+m = rp.PdfSidebar(None, host_key="lecture")
+mv = m._viewer
+m.load_pdf("Two")
+m.load_pdf("Doc")
+spin()
+check("two tabs, Doc showing", sorted(m.tabs.names()) == ["Doc", "Two"] and m._name == "Doc", str(m.tabs.names()))
+mv.calls.clear()
+del TIPS[:]
+m._on_doc_event("missing", "Doc", None)
+spin()
+check("the missing PDF's tab is closed", m.tabs.names() == ["Two"], str(m.tabs.names()))
+check("the neighbour is loaded, not cleared after",
+      m._name == "Two" and mv.calls[-2:] == [("load_path", os.path.join(UF, "pdfs", "Two.pdf"), "Two", False),
+                                             ("load_annotations", "Two")], str(mv.calls))
+check("with the exact copy", TIPS == ["Doc Lecture was removed from your Library folder."], str(TIPS))
+m.load_pdf("Doc")
+spin()
+mv.calls.clear()
+m._on_doc_event("missing", "Two", None)
+spin()
+check("a background tab whose PDF went missing closes too", m.tabs.names() == ["Doc"], str(m.tabs.names()))
+check("...and the PDF on screen stays", m._name == "Doc" and ("clear_document",) not in mv.calls, str(mv.calls))
+
+section("a load with no stored file clears the viewer")
+mv.calls.clear()
+m.load_pdf("Nowhere")
+check("the previous document is not left on screen",
+      m._name is None and ("clear_document",) in mv.calls, str(mv.calls))
+m.cleanup()
 
 section("a JSON newer than the PDF requests one save on load")
 age(DOC, 200)
@@ -492,6 +529,43 @@ check("the page commits an open box, then replies on the same channel",
       "  if (state.textEdit) commitTextEdit();\n"
       '  post("edit-done:" + seq);\n'
       "};" in html)
+
+section("a second reader of one PDF never erases the first reader's marks (I1)")
+pj.tooltip = lambda *a, **k: None
+ph.save_annotations(UF, "Shared", [])
+
+
+def reader_of(name):
+    """A real PdfJsViewer's annotation half, without its webview."""
+    r = REAL_JS.__new__(REAL_JS)
+    r._web, r._page_loaded, r._unsub_save = Web(), True, None
+    r._annotations_name = name
+    r._highlights = ph.load_annotations(UF, name)
+    return r
+
+
+def mark(r, page):
+    """The page's hl-add bridge call: one new highlight on ``page``."""
+    data = {"pages": {str(page): [[72, 72, 100, 14]]}, "color": "#fadc50"}
+    r._bridge_hl_add(base64.b64encode(json.dumps(data).encode()).decode())
+
+
+ra, rb = reader_of("Shared"), reader_of("Shared")
+mark(ra, 0)
+pushes = len(ra._web.js)
+for r in (ra, rb):  # the pipeline's "saved" reaches every reader
+    r._on_save_event("saved", "Shared")
+check("the reader that saved pushes nothing more", len(ra._web.js) == pushes, str(ra._web.js[pushes:]))
+check("the other reader takes the new mark and pushes it",
+      [h.get("page") for h in rb._highlights] == [0] and any("klausSetAnnotations" in j for j in rb._web.js),
+      f"{rb._highlights} {rb._web.js}")
+mark(rb, 1)
+check("its own mark then keeps the first reader's",
+      sorted(h.get("page") for h in ph.load_annotations(UF, "Shared")) == [0, 1],
+      str(ph.load_annotations(UF, "Shared")))
+pushes = len(rb._web.js)
+rb._on_save_event("saved", "Other")
+check("another document's save changes nothing", len(rb._web.js) == pushes)
 
 section("two readers in one host keep their own registration (R36)")
 e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)

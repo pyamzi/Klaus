@@ -1688,6 +1688,22 @@ check("rename refuses to merge into an existing directory",
       pdf_handler.rename_mapped_folder(ad_user, ad_root, "Anatomy", "Clash") is False
       and os.path.isdir(os.path.join(ad_root, "Anatomy")))
 
+def _scan_foreign(uf, name):
+    """The outside marks a scan of ``name``'s working PDF finds."""
+    return (pdf_handler.scan_working_annotations(uf, name) or {}).get("foreign") or []
+
+
+def _adopt(uf, name, scanned=None):
+    """The mirror's add/update pass with no removals, fed a scanned list
+    (a real scan when None): stripped pristine first, as the mirror does.
+    It drives the live _mirror_core; the old public wrapper is gone."""
+    foreign = _scan_foreign(uf, name) if scanned is None else scanned
+    if foreign and not pdf_handler._capture_pristine_stripped(
+            uf, name, pdf_handler._working_pdf_path(uf, name)):
+        return 0
+    return pdf_handler._mirror_core(uf, name, foreign, None, remove_missing=False)
+
+
 print("== K-077: foreign annotation scan/adopt (outside text + highlights) ==")
 fa_uf = tempfile.mkdtemp(prefix="klaus_fa_uf_")
 try:
@@ -1734,7 +1750,7 @@ try:
 
     fa_write_foreign(fa_working)
 
-    found = pdf_handler.scan_foreign_annotations(fa_uf, FA)
+    found = _scan_foreign(fa_uf, FA)
     check("scan finds both foreign annotations", len(found) == 2, repr(found))
     fa_hl = next((x for x in found if x.get("kind") == "highlight"), None)
     fa_tx = next((x for x in found if x.get("kind") == "text"), None)
@@ -1756,7 +1772,7 @@ try:
     check("text contents carried", fa_tx is not None
           and fa_tx.get("text") == "added in Preview")
 
-    adopted = pdf_handler.adopt_foreign_annotations(fa_uf, FA)
+    adopted = _adopt(fa_uf, FA)
     check("adopt imports both", adopted == 2, adopted)
     fa_recs = pdf_handler.load_annotations(fa_uf, FA)
     check("adopted records survive the validator", len(fa_recs) == 2,
@@ -1780,7 +1796,7 @@ try:
           repr(pr_annots))
 
     check("re-adopt before any bake is a no-op (signature dedup)",
-          pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
+          _adopt(fa_uf, FA) == 0)
 
     check("bake succeeds", pdf_handler.bake_annotations(fa_uf, FA))
     # K-082 contract: bake CARRIES the outside originals verbatim and
@@ -1816,7 +1832,7 @@ try:
           and len(pdf_handler.load_annotations(fa_uf, FA)) == 2)
 
     check("adopt after bake is a no-op",
-          pdf_handler.adopt_foreign_annotations(fa_uf, FA) == 0)
+          _adopt(fa_uf, FA) == 0)
 
     # A native Klaus highlight bakes marked — and the outside originals
     # must survive the native bake (they used to be silently wiped).
@@ -1832,7 +1848,7 @@ try:
     # The two carried originals ARE in a scan (unmarked, by design);
     # the marked native highlight must not be.
     check("native Klaus highlight is never scanned as foreign",
-          len(pdf_handler.scan_foreign_annotations(fa_uf, FA)) == 2)
+          len(_scan_foreign(fa_uf, FA)) == 2)
     wr2 = _FaReader(fa_working)
     wr2_annots = [a.get_object() for a in (wr2.pages[0].get("/Annots") or [])]
     check("native bake carries the outside originals too",
@@ -1846,12 +1862,12 @@ try:
     # thread — adopt must accept the pre-scanned list without re-parsing.
     fa_write_foreign(fa_working)
     os.remove(os.path.join(fa_uf, "annotations", FA + ".json"))
-    fa_pre = pdf_handler.scan_foreign_annotations(fa_uf, FA)
+    fa_pre = _scan_foreign(fa_uf, FA)
     check("pre-scan finds the rewritten foreign pair", len(fa_pre) == 2)
     check("adopt honors a pre-scanned list",
-          pdf_handler.adopt_foreign_annotations(fa_uf, FA, scanned=fa_pre) == 2)
+          _adopt(fa_uf, FA, scanned=fa_pre) == 2)
     check("pre-scanned adopt is signature-deduped too",
-          pdf_handler.adopt_foreign_annotations(fa_uf, FA, scanned=fa_pre) == 0)
+          _adopt(fa_uf, FA, scanned=fa_pre) == 0)
     check("bake after pre-scanned adopt", pdf_handler.bake_annotations(fa_uf, FA))
 
     # K-082: un-baking clears KLAUS's marks only — outside marks belong
@@ -1918,7 +1934,7 @@ try:
         w2.write(f)
     os.remove(ap_base)
 
-    ap_found = pdf_handler.scan_foreign_annotations(ap_uf, APN)
+    ap_found = _scan_foreign(ap_uf, APN)
     check("scan finds the Contents-less FreeText", len(ap_found) == 1,
           repr(ap_found))
     ap_rec = ap_found[0] if ap_found else {}
@@ -1926,7 +1942,7 @@ try:
           ap_rec.get("text") == "added in\nPreview",
           repr(ap_rec.get("text")))
     check("adopts and bakes",
-          pdf_handler.adopt_foreign_annotations(ap_uf, APN, scanned=ap_found) == 1
+          _adopt(ap_uf, APN, scanned=ap_found) == 1
           and pdf_handler.bake_annotations(ap_uf, APN))
     # K-082: the bake carries Preview's object VERBATIM — after the
     # round-trip it is still Contents-less (text only in /AP), unmarked.
@@ -1974,8 +1990,8 @@ try:
              "text": "This is more text for the output", "note": "",
              "color": "#000000"}]
     check("first adopt imports one",
-          pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen1) == 1)
-    n2 = pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen2)
+          _adopt(au_uf, AU, scanned=gen1) == 1)
+    n2 = _adopt(au_uf, AU, scanned=gen2)
     au_recs = pdf_handler.load_annotations(au_uf, AU)
     check("drifted rescan is ONE change, not a new record",
           n2 == 1 and len(au_recs) == 1, f"changes={n2} records={len(au_recs)}")
@@ -1995,7 +2011,7 @@ try:
          "text": "This is more text for the output", "origin": "external"},
     ]
     pdf_handler.save_annotations(au_uf, AU, dupes)
-    healed = pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=[])
+    healed = _adopt(au_uf, AU, scanned=[])
     au_recs = pdf_handler.load_annotations(au_uf, AU)
     check("empty-scan adopt collapses existing dupes",
           healed >= 1 and len(au_recs) == 1,
@@ -2011,20 +2027,20 @@ try:
          "color": "#fadc50", "note": ""},
     ]
     pdf_handler.save_annotations(au_uf, AU, natives)
-    pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=[])
+    _adopt(au_uf, AU, scanned=[])
     check("overlapping NATIVE highlights are never collapsed",
           len(pdf_handler.load_annotations(au_uf, AU)) == 2)
 
     # 3. Tombstones: a deleted external record must STAY deleted when the
     # unmarked original shows up in a later scan.
     pdf_handler.save_annotations(au_uf, AU, [])
-    check("re-adopt after wipe", pdf_handler.adopt_foreign_annotations(
+    check("re-adopt after wipe", _adopt(
         au_uf, AU, scanned=gen2) == 1)
     au_rec = pdf_handler.load_annotations(au_uf, AU)[0]
     pdf_handler.add_suppressed(au_uf, AU, au_rec)
     pdf_handler.save_annotations(au_uf, AU, [])
     check("tombstoned original is not re-adopted",
-          pdf_handler.adopt_foreign_annotations(au_uf, AU, scanned=gen2) == 0
+          _adopt(au_uf, AU, scanned=gen2) == 0
           and pdf_handler.load_annotations(au_uf, AU) == [])
     # 4. save_annotations must preserve the tombstones (today it drops
     # every top-level key it doesn't know).
@@ -2270,10 +2286,10 @@ try:
                "rects": [[108.0, 400.0, 60.0, 12.0]],
                "note": "", "color": "#ffff00"}
     check("identical stale copy still blocked",
-          pdf_handler.adopt_foreign_annotations(
+          _adopt(
               nd_uf, ND, scanned=[identical]) == 0)
     check("shifted NEW highlight at the same spot imports",
-          pdf_handler.adopt_foreign_annotations(
+          _adopt(
               nd_uf, ND, scanned=[shifted]) == 1)
 
     # Expiry: a successful mirror scan with no trace of the stale copy
@@ -2449,13 +2465,13 @@ try:
              "text": "mark B", "origin": "external"}
     pdf_handler.add_suppressed(st_uf, ST, rec_b)
     check("fresh tombstone still blocks the identical copy",
-          pdf_handler.adopt_foreign_annotations(st_uf, ST, scanned=[ghost])
+          _adopt(st_uf, ST, scanned=[ghost])
           == 0)
     sup = pdf_handler.load_suppressed(st_uf, ST)
     sup[-1]["ts"] = time.time() - 3600
     pdf_handler._update_doc_keys(st_uf, ST, {"suppressed_external": sup})
     check("aged tombstone no longer blocks a deliberate re-add",
-          pdf_handler.adopt_foreign_annotations(st_uf, ST, scanned=[ghost])
+          _adopt(st_uf, ST, scanned=[ghost])
           == 1)
 except Exception as e:
     import traceback
@@ -2494,7 +2510,7 @@ try:
 
     # Preview deletes the ONLY Klaus mark -> zero marks left in the
     # file. K-084's clobber guard used to block this forever.
-    pdf_handler._atomic_replace_from(
+    shutil.copy2(
         os.path.join(pv_uf, "pdf_originals", PV + ".pdf"), pv_working
     )
     pv_res = pdf_handler.scan_working_annotations(pv_uf, PV)
@@ -2555,7 +2571,7 @@ try:
     check("observing the mark seeds the ledger",
           idn in pdf_handler.load_baked_native(pv_uf, PL),
           repr(pdf_handler.load_baked_native(pv_uf, PL)))
-    pdf_handler._atomic_replace_from(
+    shutil.copy2(
         os.path.join(pv_uf, "pdf_originals", PL + ".pdf"), pl_working
     )
     pl_res = pdf_handler.scan_working_annotations(pv_uf, PL)

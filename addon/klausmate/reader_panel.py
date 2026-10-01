@@ -213,6 +213,9 @@ class PdfSidebar(QWidget):
             viewer_context.forget(id(self))
             self._release(flush=False)
             self._name = None
+            self._page_count = 0
+            if self._viewer is not None:  # never the previous document under this tab
+                self._viewer.clear_document()
             return
         self._follow(name, path)
         self._request_save_if_stale(name, path)
@@ -352,8 +355,9 @@ class PdfSidebar(QWidget):
 
     def _on_doc_event(self, event: str, safe: str, path: Optional[str]) -> None:
         """doc_sync: the shown PDF changed outside Klaus, moved, or left the
-        Library folder. Other documents' events are ignored."""
-        if safe != self._name:
+        Library folder (that one also closes a background tab). Other
+        documents' events are ignored."""
+        if safe != self._name and event != "missing":
             return
         try:
             self.isVisible()
@@ -363,6 +367,9 @@ class PdfSidebar(QWidget):
             if unsub is not None:
                 unsub()
             return
+        if safe != self._name:  # a background tab's PDF left the folder
+            self.tabs.close(safe)
+            return
         if event == "changed":
             self._reload_from_disk(safe, toast=True)
         elif event == "moved" and path:
@@ -371,9 +378,12 @@ class PdfSidebar(QWidget):
             if repoint is not None:
                 repoint(path)
         elif event == "missing":
-            # Close only. Marks, the JSON, context and prefs stay: in a bulk
-            # Finder rename the next scan reports the same file "moved" (R33).
-            # No flush: a bake now would recreate the file at its old path.
+            # Close the document and its tab (R50). Marks, the JSON, context
+            # and prefs stay: in a bulk Finder rename the next scan reports
+            # the same file "moved" and it can be reopened (R33). No flush:
+            # a bake now would recreate the file at its old path. The tab
+            # closes last: that selects (and loads) a neighbour, which a
+            # clear() after it would wipe.
             try:
                 from . import drive_store, pdf_source
 
@@ -382,6 +392,7 @@ class PdfSidebar(QWidget):
                 display = safe
             self._release(flush=False)
             self.clear()
+            self.tabs.close(safe)
             tooltip(f"{display} was removed from your Library folder.")
 
     def _on_viewer_stale(self) -> None:

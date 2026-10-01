@@ -100,6 +100,16 @@ class SavePipeline:
     def retry(self, name: str) -> None:
         self.request(name)
 
+    def forget(self, name: str) -> None:
+        """``name`` left the Library: drop its pending save and its failed
+        flag, so nothing bakes it or toasts for it afterwards. A bake
+        already running finishes."""
+        with self._cond:
+            self._pending.discard(name)
+            self._again.discard(name)
+            self._failed.discard(name)
+            self._cond.notify_all()
+
     # ---- internals ------------------------------------------------------
 
     def _fire(self, name: str, gen: int) -> None:

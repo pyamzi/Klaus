@@ -599,6 +599,73 @@ check("...with auto-index on it is", requested == [("Fresh", False)], str(reques
 auto_on[0] = False
 check("none of these were reader events", events == [], str(events))
 
+section("Klaus's own rename re-points an open reader on the next rescan (I4)")
+_real_sync5 = ds5._sync
+ds5._sync = lambda: None  # no real watcher here
+ds5.open_doc("test:1", "Fresh", os.path.join(rootg, "Fresh.pdf"))
+_new_rel = ph.rename_mapped_file(ufg, rootg, "Fresh", "Fresh Renamed")
+_fresh_new = os.path.join(rootg, _new_rel or "")
+pdg.start_library_rescan()
+check("the open reader's path follows the rename", ds5.open_paths().get("Fresh") == _fresh_new,
+      str(ds5.open_paths()))
+check("...through one 'moved' event", events == [("moved", "Fresh", _fresh_new, _new_rel)], str(events))
+pdg.start_library_rescan()
+check("...and only once", events == [("moved", "Fresh", _fresh_new, _new_rel)], str(events))
+ds5.close_doc("test:1", "Fresh")
+ds5._sync = _real_sync5
+del events[:]
+
+section("re-arming the watcher from a scan's snapshot walks nothing on the main thread")
+_real_walk, _walks = os.walk, []
+_snap = {rootg: {"x"}, os.path.join(rootg, "Sub"): set()}
+os.walk = lambda *a, **k: _walks.append(a) or iter(())
+try:
+    pdg._rearm_watcher(rootg, _snap)
+finally:
+    os.walk = _real_walk
+check("no walk", _walks == [], str(_walks))
+check("it watches exactly the snapshot's directories",
+      sorted(pdg._fs_watcher.directories()) == sorted(_snap), str(pdg._fs_watcher.directories()))
+pdg._rearm_watcher(rootg, pdg._dir_snapshot(rootg))  # back to a real baseline
+
+section("bake tmp files a crash left in the Library root are swept once, when over an hour old")
+import time  # noqa: E402
+
+_old_tmp = os.path.join(rootg, ".Fresh.pdf." + "a" * 32 + ".tmp")
+_young_tmp = os.path.join(rootg, ".Fresh.pdf." + "b" * 32 + ".tmp")
+_other = os.path.join(rootg, ".mine.pdf.tmp")
+for _p in (_old_tmp, _young_tmp, _other):
+    write_text(_p, "half a bake")
+for _p in (_old_tmp, _other):
+    os.utime(_p, (time.time() - 7200, time.time() - 7200))
+pdg._tmp_swept = False
+pdg._prepare(ufg, rootg)
+check("an old bake tmp is removed", not os.path.exists(_old_tmp))
+check("a young one (a bake may still be running) stays", os.path.exists(_young_tmp))
+check("a hidden file that is not a bake tmp stays", os.path.exists(_other))
+os.utime(_young_tmp, (time.time() - 7200, time.time() - 7200))
+pdg._prepare(ufg, rootg)
+check("...once per session: the next scan sweeps nothing", os.path.exists(_young_tmp))
+for _p in (_young_tmp, _other):
+    os.remove(_p)
+
+section("deleting a PDF drops its pending save before the readers let go of it")
+_asv5 = importlib.import_module("klausmate.annotation_save")
+_ts5 = importlib.import_module("klausmate.tag_sync")
+_order = []
+_saved5 = (_asv5.pipeline, pdg._close_in_panels, _ts5.sync_after_delete, ph.delete_context, pdg._library_changed)
+_asv5.pipeline = lambda: types.SimpleNamespace(forget=lambda s: _order.append(("forget", s)))
+pdg._close_in_panels = lambda s: _order.append(("close", s))
+_ts5.sync_after_delete = lambda *a: None
+ph.delete_context = lambda *a, **k: None
+pdg._library_changed = lambda: None
+try:
+    check("delete_pdf succeeds", pdg.delete_pdf("Edited") is True)
+finally:
+    _asv5.pipeline, pdg._close_in_panels, _ts5.sync_after_delete, ph.delete_context, pdg._library_changed = _saved5
+check("the save pipeline forgets it first, so closing its reader bakes nothing",
+      _order == [("forget", "Edited"), ("close", "Edited")], str(_order))
+
 section("the watcher tick skips the rescan when it saw only Klaus's own files")
 pvs = types.ModuleType("klausmate.reader_panel")  # the tick must not need the real one
 _had_pv = sys.modules.get("klausmate.reader_panel"), getattr(sys.modules["klausmate"], "reader_panel", None)

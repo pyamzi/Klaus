@@ -989,11 +989,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             lay.addWidget(self._web, 1)
         except Exception as exc:
             print(f"[klausmate] pdfjs webview failed: {exc}")
-            fallback = QLabel(
-                "pdf.js viewer could not start — switch off the pdf.js "
-                "viewer in KlausMate Preferences.",
-                self,
-            )
+            fallback = QLabel("The PDF viewer could not start.", self)
             fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
             fallback.setWordWrap(True)
             lay.addWidget(fallback, 1)
@@ -1596,6 +1592,11 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             pdf_handler.save_annotations(
                 settings.user_files(), self._annotations_name, self._highlights
             )
+            # Hold what the JSON holds (normalized), so a pipeline event
+            # compares like with like and pushes only real differences.
+            self._highlights = pdf_handler.load_annotations(
+                settings.user_files(), self._annotations_name
+            )
             self._schedule_bake(settings.user_files(), self._annotations_name)
         except Exception as exc:
             print(f"[klausmate] pdfjs save annotations failed: {exc}")
@@ -1608,17 +1609,21 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         annotation_save.pipeline().request(name)
 
     def _on_save_event(self, event: str, name: str) -> None:
-        """Pipeline event for THIS viewer's document: "records" reloads
-        the marks the bake dropped; "failed" toasts that they are kept."""
+        """Pipeline event for THIS viewer's document: "saved" and "records"
+        re-read the marks JSON and push it when it differs from what this
+        viewer holds (another reader of the same PDF saved, or the bake
+        dropped marks) — so this viewer's next save writes them back
+        instead of erasing them; the page keeps an open text box. "failed"
+        toasts that the marks are kept."""
         if name != self._annotations_name:
             return
-        if event == "records":
+        if event in ("saved", "records"):
             from . import pdf_handler, pdf_source
 
-            self._highlights = pdf_handler.load_annotations(
-                pdf_source.user_files_dir(), name
-            )
-            self._refresh_highlight_overlay()
+            fresh = pdf_handler.load_annotations(pdf_source.user_files_dir(), name)
+            if fresh != self._highlights:
+                self._highlights = fresh
+                self._refresh_highlight_overlay()
         elif event == "failed" and tooltip is not None:
             from . import annotation_save
 

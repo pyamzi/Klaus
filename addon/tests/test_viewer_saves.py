@@ -165,7 +165,7 @@ check("'records' reloads this viewer's marks",
       loaded == [(UFD, "A")] and g._highlights == [{"id": "r"}]
       and g.redraws == 1)
 cls._on_save_event(g, "saved", "A")
-check("'saved' needs nothing from the viewer", tips == [COPY] and g.redraws == 1)
+check("'saved' with the marks already shown redraws nothing", tips == [COPY] and g.redraws == 1)
 
 section("pdf.js: subscribes in __init__, unsubscribes in cleanup")
 init_src = inspect.getsource(pj.PdfJsViewer.__init__)

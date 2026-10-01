@@ -352,6 +352,21 @@ asv.SavePipeline, asv._wire_doc_sync = real_cls, real_wire
 asv._PIPELINE = None
 check("pipeline() wires its singleton to doc_sync", wired == [pipe])
 
+section("forget: a PDF removed from the Library is never baked or reported failed")
+bake = Bake(result=False)
+pipe, timers, pins, events = make(bake)
+pipe.request("A")
+timers.fire_all()
+pipe.flush("A")
+pipe.request("A")  # a mark still debouncing when the PDF is removed
+del events[:]
+pipe.forget("A")
+check("its failed flag is cleared", pipe.failed_names() == set())
+timers.fire_all()
+check("the pending debounce bakes nothing", bake.calls == ["A"], str(bake.calls))
+check("a flush (a reader letting go) has nothing to run and emits nothing",
+      pipe.flush("A") is True and bake.calls == ["A"] and events == [], f"{bake.calls} {events}")
+
 section("unsubscribe")
 pipe, timers, pins, events = make(Bake())
 seen = []

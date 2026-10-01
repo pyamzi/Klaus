@@ -70,13 +70,12 @@ _ACTIVE_PDF_FILE = "active_pdf.txt"
 # ------------------------------- atomic writes ----------------------------
 #
 # Shared by every store below that can be written from more than one call
-# site (pdf_tabs.json has four: open tabs, last_used, thumbs, panel
-# placement) or that a background thread might touch concurrently with a
-# read. A tmp file lives in the SAME directory as the target so
-# ``os.replace`` is a same-filesystem rename: atomic, and safe even while
-# something else still holds the old inode open (mirrors
-# ``_atomic_replace_from`` below, which does the analogous thing for whole
-# PDF files during bake/un-bake).
+# site (pdf_tabs.json has three: open tabs per host, last_used, the
+# Lecture dock's state) or that a background thread might touch
+# concurrently with a read. A tmp file lives in the SAME directory as the
+# target so ``os.replace`` is a same-filesystem rename: atomic, and safe
+# even while something else still holds the old inode open (the bake's
+# ``_commit_bake`` does the analogous thing for whole PDF files).
 #
 # Both helpers RAISE on failure rather than swallowing — callers decide
 # whether a failed write should be silent (``_save_tabs_file`` keeps its
@@ -442,42 +441,6 @@ def list_by_recency(
     return names[:limit] if limit is not None else names
 
 
-def load_thumbs_state(user_files_dir: str) -> dict:
-    """Thumbnails-strip state from last session (plan B).
-
-    Returns {"thumbs_visible": bool, "thumbs_width": int} — either key
-    may be absent when never saved or invalid. Width is only accepted
-    inside the sane 80–400px band.
-    """
-    data = _load_tabs_file(user_files_dir)
-    out: dict = {}
-    vis = data.get("thumbs_visible")
-    if isinstance(vis, bool):
-        out["thumbs_visible"] = vis
-    width = data.get("thumbs_width")
-    if isinstance(width, int) and not isinstance(width, bool) and 80 <= width <= 400:
-        out["thumbs_width"] = width
-    return out
-
-
-def save_thumbs_state(
-    user_files_dir: str,
-    visible: bool | None = None,
-    width: int | None = None,
-) -> None:
-    """Persist thumbnails-strip visibility/width into pdf_tabs.json."""
-    updates: dict = {}
-    if visible is not None:
-        updates["thumbs_visible"] = bool(visible)
-    if width is not None:
-        try:
-            updates["thumbs_width"] = max(80, min(400, int(width)))
-        except (TypeError, ValueError):
-            pass
-    if updates:
-        _save_tabs_file(user_files_dir, updates)
-
-
 def save_pdf(
     user_files_dir: str, name: str, raw_path: str, root: str | None = None
 ) -> dict:
@@ -545,15 +508,45 @@ def save_pdf(
     return {"name": safe, "page_count": len(pages), "txt_path": txt_path}
 
 
-def _drop_stale_original(user_files_dir: str, safe: str) -> None:
-    """Remove ``pdf_originals/<safe>.pdf`` (the base file changed); never raises."""
-    stale_orig = os.path.join(_originals_dir(user_files_dir), safe + ".pdf")
-    if os.path.isfile(stale_orig):
+# The bake's hidden tmp in the Library root (``_commit_bake``).
+_BAKE_TMP = re.compile(r"^\..+\.pdf\.[0-9a-f]{32}\.tmp$")
+
+
+def sweep_stranded_tmps(root: str, max_age_s: float = 3600.0) -> int:
+    """Remove bake tmp files (``.<base>.pdf.<uuid>.tmp``) a crash left in
+    the Library root once they are over ``max_age_s`` old (a younger one
+    may belong to a bake still running). Returns how many went; never
+    raises."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    cutoff = time.time() - max_age_s
+    removed = 0
+    for n in names:
+        path = os.path.join(root, n)
         try:
-            os.remove(stale_orig)
-            print(f"[klausmate] dropped stale pristine original: {safe}.pdf")
-        except OSError as exc:
-            print(f"[klausmate] could not drop stale original: {exc}")
+            if _BAKE_TMP.match(n) and os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        print(f"[klausmate] swept {removed} stranded bake tmp file(s) from the Library root")
+    return removed
+
+
+def _drop_stale_original(user_files_dir: str, safe: str) -> None:
+    """Remove ``pdf_originals/<safe>.pdf`` (the base file changed), under
+    ``pdf_lock`` so no bake commits between; never raises."""
+    stale_orig = os.path.join(_originals_dir(user_files_dir), safe + ".pdf")
+    with pdf_lock(safe):
+        if os.path.isfile(stale_orig):
+            try:
+                os.remove(stale_orig)
+                print(f"[klausmate] dropped stale pristine original: {safe}.pdf")
+            except OSError as exc:
+                print(f"[klausmate] could not drop stale original: {exc}")
 
 
 def load_pages(user_files_dir: str, name: str) -> list[str] | None:
@@ -1733,31 +1726,11 @@ def _originals_dir(user_files_dir: str) -> str:
     return os.path.join(user_files_dir, "pdf_originals")
 
 
-def _atomic_replace_from(src_path: str, dest_path: str) -> None:
-    """Copy ``src_path`` over ``dest_path`` atomically (tmp + os.replace).
-
-    The tmp file lives in the destination directory so ``os.replace`` is
-    a same-filesystem rename — safe even while a reader still holds the
-    old inode open.
-    """
-    dest_dir = os.path.dirname(dest_path)
-    tmp = os.path.join(
-        dest_dir, f".{os.path.basename(dest_path)}.{uuid.uuid4().hex}.tmp"
-    )
-    try:
-        shutil.copy2(src_path, tmp)
-        os.replace(tmp, dest_path)
-    finally:
-        if os.path.isfile(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-
-
 class _MovedIn(Exception):
-    """A file reached the path the bake writes only after its carry scan
-    looked there (a rename the map caught up with mid-bake)."""
+    """The file at the path the bake writes is not the one its carry scan
+    read: it arrived there later (a rename the map caught up with
+    mid-bake) or was saved outside Klaus meanwhile. The bake runs once
+    more from it."""
 
 
 def _commit_bake(
@@ -1768,6 +1741,7 @@ def _commit_bake(
     carry_missed: bool,
     write_tmp,
     report: dict | None,
+    scan_stat: tuple | None = None,
 ) -> bool:
     """The ONE commit tail of ``bake_annotations`` (bake and un-bake).
 
@@ -1781,7 +1755,9 @@ def _commit_bake(
     is missing (mid Finder rename: writing would recreate it at the old
     path; R35), or when the carry scan could not read it (its outside
     marks would be silently lost). The annotations JSON is intact; the
-    pipeline retries when the file comes back.
+    pipeline retries when the file comes back. A file whose stat is no
+    longer ``scan_stat`` (saved outside Klaus after the carry scan) raises
+    ``_MovedIn`` instead, so the one re-bake reads that save.
     """
     base = _safe_basename(name)
     root = _live_library_root()
@@ -1807,6 +1783,10 @@ def _commit_bake(
             if not had_working and os.path.isfile(final):
                 # The carry scan read no file, but replacing this one would
                 # drop its outside marks: bake again from its real path.
+                raise _MovedIn(final)
+            if scan_stat is not None and file_stat(final) != scan_stat:
+                # Saved outside Klaus after the carry scan read it:
+                # replacing it now would drop that save.
                 raise _MovedIn(final)
             os.replace(tmp, final)
             if report is not None:
@@ -1957,8 +1937,12 @@ def bake_annotations(
 
         if not os.path.isfile(pristine):
             if not highlights:
-                # Never baked and nothing to bake — working IS pristine.
-                return True
+                # Nothing to bake and no Klaus mark in the file — working
+                # IS pristine. (A pristine dropped after an outside edit
+                # leaves Klaus marks behind: those still need removing.)
+                scan = scan_working_annotations(user_files_dir, name)
+                if not (scan and scan.get("marked_ids")):
+                    return True
             if not os.path.isfile(working):
                 print(f"[klausmate] bake failed: no stored PDF for {base}")
                 return False
@@ -1988,6 +1972,9 @@ def bake_annotations(
         # The file was there at the start but is not at the carry scan:
         # a Library action moved it, so its outside marks are unknown.
         carry_missed = had_working and not os.path.isfile(working)
+        # What the carry scan reads: an outside save after this stat makes
+        # the commit re-bake from the new file instead of overwriting it.
+        scan_stat = file_stat(working)
         if os.path.isfile(working):
             try:
                 wreader = PdfReader(working)
@@ -2078,7 +2065,7 @@ def bake_annotations(
             # Un-bake: nothing of anyone's to keep — pristine back.
             if not _commit_bake(
                 user_files_dir, name, working, had_working, carry_missed,
-                lambda tmp: shutil.copy2(pristine, tmp), report,
+                lambda tmp: shutil.copy2(pristine, tmp), report, scan_stat,
             ):
                 return False
             if report is not None:
@@ -2215,7 +2202,7 @@ def bake_annotations(
 
         if not _commit_bake(
             user_files_dir, name, working, had_working, carry_missed,
-            write_tmp, report,
+            write_tmp, report, scan_stat,
         ):
             return False
         if report is not None:
@@ -2418,13 +2405,6 @@ def _freetext_style(o) -> tuple[str, float | None]:
     return color, size
 
 
-def scan_foreign_annotations(user_files_dir: str, name: str) -> list[dict]:
-    """Compatibility wrapper over ``scan_working_annotations``: just the
-    foreign records, [] on failure."""
-    res = scan_working_annotations(user_files_dir, name)
-    return list(res.get("foreign") or []) if isinstance(res, dict) else []
-
-
 def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
     """Everything the mirror needs from ``name``'s working PDF (K-082):
 
@@ -2518,10 +2498,13 @@ def scan_working_annotations(user_files_dir: str, name: str) -> dict | None:
 def _capture_pristine_stripped(
     user_files_dir: str, name: str, working: str
 ) -> bool:
-    """First-adoption pristine capture: the baseline must NOT contain
-    the foreign annotations being adopted, or every regenerating bake
-    would double them (pristine copy + marked Klaus copy). A pristine
-    that already exists predates the foreign markup and stands."""
+    """Pristine capture from the working file: the baseline must contain
+    neither the outside highlights/text the bake carries nor ANY Klaus
+    mark (``/NM`` ``klausmate:…``, whatever its subtype, ``:note``
+    stickies included) — the bake regenerates those, so a baseline
+    holding them doubles every Klaus mark and makes it undeletable (a
+    pristine dropped after an outside edit is re-captured from a baked
+    file). A pristine that already exists stands."""
     try:
         base = _safe_basename(name)
         pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
@@ -2537,10 +2520,9 @@ def _capture_pristine_stripped(
             for ref in annots:
                 try:
                     o = ref.get_object()
-                    sub = str(o.get("/Subtype"))
-                    if sub in ("/Highlight", "/FreeText") and not str(
-                        o.get("/NM") or ""
-                    ).startswith(_KLAUS_NM):
+                    if str(o.get("/NM") or "").startswith(_KLAUS_NM) or str(
+                        o.get("/Subtype")
+                    ) in ("/Highlight", "/FreeText"):
                         continue
                 except Exception:
                     pass
@@ -2854,30 +2836,6 @@ def _mirror_core(
             f"change(s) for {name}"
         )
     return changes
-
-
-def adopt_foreign_annotations(
-    user_files_dir: str, name: str, scanned: list[dict] | None = None
-) -> int:
-    """Add/update pass only (no removals) — kept for callers and tests
-    that feed a bare foreign list. The live viewer path uses
-    ``mirror_foreign_annotations``. Never raises."""
-    try:
-        foreign = (
-            scanned
-            if scanned is not None
-            else scan_foreign_annotations(user_files_dir, name)
-        )
-        if foreign:
-            working = _working_pdf_path(user_files_dir, name)
-            if not _capture_pristine_stripped(user_files_dir, name, working):
-                foreign = []
-        return _mirror_core(
-            user_files_dir, name, foreign, None, remove_missing=False
-        )
-    except Exception as exc:
-        print(f"[klausmate] foreign annotation adopt failed for {name}: {exc}")
-        return 0
 
 
 def mirror_foreign_annotations(

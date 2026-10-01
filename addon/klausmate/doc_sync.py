@@ -116,11 +116,20 @@ def resync() -> None:
 
 def _settled(safe: str, stat: Optional[tuple]) -> None:
     """A settled stat for an open ``safe``: emit "changed" if it is new and
-    not Klaus's own write. Missing is left to the rescan."""
+    not Klaus's own write. Missing is left to the rescan. The pristine
+    original is dropped first: it predates the outside edit, so the next
+    bake (the reader's flush) would rebuild the file from it and revert
+    that edit; the bake re-captures it from the edited file."""
     if stat is None or stat == _last.get(safe):
         return
     _last[safe] = stat
     if classify(safe, stat) == "changed":
+        try:
+            from . import pdf_source
+
+            pdf_handler._drop_stale_original(pdf_source.user_files_dir(), safe)
+        except Exception as exc:
+            print(f"[klausmate] doc_sync could not drop the stale original: {exc}")
         _emit("changed", safe, None)
 
 

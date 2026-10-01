@@ -583,12 +583,17 @@ same reason.
   across two checks `STABLE_MS` = 150 ms apart), `moved`, `missing` and
   `back` (the last three from `pdf_drive.rescan_library_root` →
   `_tell_readers`, AFTER the new mapping is applied). Klaus's own writes are
-  pinned (`pin_own_write`) and classify as `own`, never `changed`. The
+  pinned (`pin_own_write`) and classify as `own`, never `changed`; a
+  `changed` drops the stale pristine original first (under `pdf_lock`),
+  so the next bake re-captures it from the edited file instead of
+  reverting the edit. The
   reader answers `changed` by reloading in place, page and zoom kept,
   with "Updated from disk" (an open text box commits first); `moved` by
-  re-pointing with no reload; `missing` by clearing the reader (the tab
-  stays) with "<name> was removed from your Library folder." (marks,
-  JSON and tag kept).
+  re-pointing with no reload; `missing` by clearing the reader and
+  closing that PDF's tab (R50) with "<name> was removed from your
+  Library folder." (marks, JSON and tag kept). Klaus's own rename or
+  move updates the map before the rescan sees it, so `_tell_readers`
+  also re-points every open reader whose mapped path differs.
 - `annotation_save.py` (aqt-free above its Qt-glue divider):
   `SavePipeline`, the ONE bake path. `request(name)` restarts a
   `DEBOUNCE_MS` = 500 ms debounce; then `bake_annotations` runs on a
@@ -603,7 +608,11 @@ same reason.
   its PDF on `clear()`, `cleanup()` and before a reload from disk.
   Switching to another PDF releases without a flush — the running
   debounce still bakes it. A reader that opens a PDF whose JSON is newer
-  than the file requests a bake.
+  than the file requests a bake. On `saved` and `records` every reader
+  of that PDF re-reads the JSON and pushes it when it differs, so a
+  second reader never writes back a stale list over the first one's
+  marks. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
+  go) drops a deleted PDF's pending save and failed flag.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
   … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only
   shows names and reports `activated` / `closed` / `add_requested`;
@@ -618,7 +627,7 @@ same reason.
   image", copies it as an image; right-click also offers "Copy page text".
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
   pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs per host,
-  thumbs, last_used — all writers MERGE via `_save_tabs_file`; `placement`/
+  last_used — all writers MERGE via `_save_tabs_file`; `placement`/
   `geom` from older builds are dropped on read). Since K-070/
   K-073 the PDF *files* live in a user-chosen **library root** (config key
   `library_root`, picked at setup or in Preferences): `library_map.json`
@@ -639,7 +648,13 @@ same reason.
   hard-link snapshot, so the swap never disturbs it). The working path
   is resolved under `pdf_lock(name)` right before the replace — the lock
   rename, move and delete share — so a rename mid-bake writes to the
-  new path, and a bake never recreates a mapped file that is gone.
+  new path, and a bake never recreates a mapped file that is gone. A
+  file whose stat changed since the carry scan read it (an outside save
+  mid-bake) is re-baked once from the new file, never overwritten. The
+  pristine is captured with every Klaus mark (any subtype) and every
+  outside highlight/text box stripped, so a re-capture after an outside
+  edit never doubles Klaus marks. The first rescan of a session sweeps
+  bake tmps over an hour old from the root (`sweep_stranded_tmps`).
   Scheduled only through `annotation_save.SavePipeline` (500 ms
   debounce, one worker per PDF).
 - `top_bar.py`: the **Klaus top bar** — restyles Anki's main-window top
