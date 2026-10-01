@@ -43,6 +43,7 @@ from aqt.qt import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QEvent,
     QHBoxLayout,
     QIcon,
     QKeySequence,
@@ -54,6 +55,7 @@ from aqt.qt import (
     QSize,
     Qt,
     QTabWidget,
+    QTimer,
     QVBoxLayout,
     QWidget,
     sip,
@@ -138,10 +140,55 @@ class ImgOccEdit(QDialog):
         self.setupUi()
         restoreGeom(self, "imgoccedit")
         profile_will_close.append(self.onProfileUnload)
+        self._watch_parent_window(parent)
+
+    def _watch_parent_window(self, window):
+        """Klaus (R21): the Add/Edit window closing or going away closes this
+        editor too, without asking and writing nothing; a stale editor must
+        never reach its note. Closing is read a tick after the Close event,
+        once the window has had its say (it may ask and refuse); a window
+        that is only hidden (a tab switch) is not closed."""
+        self._watched = window if isinstance(window, QWidget) else None
+        if self._watched is None:
+            return
+        window.installEventFilter(self)
+        window.destroyed.connect(self._on_parent_window_gone)
+
+    def eventFilter(self, obj, event):
+        if obj is self._watched and event.type() == QEvent.Type.Close:
+            QTimer.singleShot(0, self._check_parent_window)
+        return False
+
+    def _check_parent_window(self):
+        window = self._watched
+        if window is None or sip.isdeleted(self):
+            return
+        if sip.isdeleted(window) or not window.isVisible():
+            self._on_parent_window_gone()
+
+    def _on_parent_window_gone(self, *_args):
+        if not sip.isdeleted(self) and self.svg_edit is not None:
+            self.close()  # programmatic: no ask
 
     def closeEvent(self, event):
+        # Klaus (R20): the title-bar X goes through reject(), the one gate
+        # that asks before unsaved masks or an unused drawing are discarded.
+        # A programmatic close (after Add, profile close, R21) never asks.
+        if event.spontaneous() and self.svg_edit is not None:
+            event.ignore()
+            self.reject()
+            return
+        if self.svg_edit is None:  # already closed
+            return QDialog.reject(self)
         if self.draw_tab is not None:
             self.draw_tab.shutdown()  # a late "Use drawing" answer touches nothing
+        window, self._watched = self._watched, None
+        if window is not None and not sip.isdeleted(window):
+            window.removeEventFilter(self)
+            try:
+                window.destroyed.disconnect(self._on_parent_window_gone)
+            except (TypeError, RuntimeError):
+                pass
         if mw.pm.profile is not None:
             self.deckChooser.cleanup()
             saveGeom(self, "imgoccedit")
@@ -163,8 +210,11 @@ class ImgOccEdit(QDialog):
         )
 
     def _on_reject_callback(self, undo_stack_empty: bool):
-        if undo_stack_empty and not self._input_modified():
-            return super().reject()
+        if self.svg_edit is None:  # closed meanwhile
+            return
+        drawing = self.draw_tab is not None and self.draw_tab.dirty
+        if undo_stack_empty and not self._input_modified() and not drawing:
+            return self.close()
         io_ask(
             self,
             "Are you sure you want to close the window? This will discard any unsaved"
@@ -174,8 +224,10 @@ class ImgOccEdit(QDialog):
         )
 
     def _on_reject_answer(self, yes: bool):
-        if yes:
-            super().reject()
+        # Klaus: close() rather than QDialog.reject, so closeEvent's cleanup
+        # (Draw tab, geometry, hooks) runs on Escape and Close too.
+        if yes and self.svg_edit is not None:
+            self.close()
 
     def _input_modified(self) -> bool:
         tags_modified = self.tags_edit.isModified()
@@ -291,7 +343,7 @@ class ImgOccEdit(QDialog):
         self.new_btn.clicked.connect(self.new)
         self.ao_btn.clicked.connect(self.addAO)
         self.oa_btn.clicked.connect(self.addOA)
-        close_button.clicked.connect(self.close)
+        close_button.clicked.connect(self.reject)  # Klaus (R20): the discard gate
 
         # Set basic layout up
 

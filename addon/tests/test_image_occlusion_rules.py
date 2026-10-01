@@ -316,6 +316,9 @@ ed_mod.QDialog.reject = lambda self: rejected.append(self)
 asks = Asks()
 ed_mod.io_ask = asks
 ed = object.__new__(ed_mod.ImgOccEdit)
+ed.svg_edit, ed.draw_tab = object(), None  # open, no Draw tab
+# Klaus (R20): a yes closes through close(), so closeEvent's cleanup runs.
+ed.close = lambda: rejected.append(ed)
 ed._input_modified = lambda: False
 ed._on_reject_callback(True)
 check("nothing changed: closes at once, asks nothing", rejected == [ed] and asks == [])

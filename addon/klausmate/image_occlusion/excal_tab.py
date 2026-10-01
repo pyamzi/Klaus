@@ -7,14 +7,16 @@ button asks the page to export; the page answers
 pycmd("klausexcal:occlude:<base64 JSON>") with {png, scene, originX,
 originY, width, height} or {error}. prepare_occlusion turns a good answer
 into the PNG, IOE's mask SVG (one mask per text label, excal_masks) and the
-sidecar JSON that is saved as "<image media name>.excalidraw" once IOE has
-added the notes (ImgOccAdd.use_drawing / _onAddNotesButton).
+sidecar JSON that is saved as "_<image media name>.excalidraw" once IOE has
+added the notes (ImgOccAdd.use_drawing / _onAddNotesButton). The leading
+underscore keeps Check Media from listing it as unused.
 """
 from __future__ import annotations
 
 import base64
 import binascii
 import json
+import math
 import os
 import struct
 import tempfile
@@ -22,7 +24,7 @@ import time
 from typing import Callable, Optional
 
 from aqt import mw
-from aqt.qt import QColor, QHBoxLayout, QImage, QPushButton, QUrl, QVBoxLayout, QWidget
+from aqt.qt import QColor, QHBoxLayout, QImage, QPushButton, Qt, QUrl, QVBoxLayout, QWidget
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebPage, AnkiWebView
 
@@ -69,14 +71,20 @@ def prepare_occlusion(result: dict, tmpdir: str, fill: str, stroke: str) -> tupl
         png = base64.b64decode(result.get("png") or "", validate=True)
     except (binascii.Error, ValueError, TypeError):
         png = b""
-    if png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
+    if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
         raise ValueError("Klaus: the drawing didn't export as an image")
     width, height = struct.unpack(">II", png[16:24])
     if width > MAX_SIDE or height > MAX_SIDE:
         raise ValueError(
             "Klaus: the drawing is too large to occlude (%d × %d px, at most %d a side). "
             "Make it smaller and press Use drawing again." % (width, height, MAX_SIDE))
-    ox, oy = float(result["originX"]), float(result["originY"])
+    try:
+        ox, oy = float(result["originX"]), float(result["originY"])
+    except (KeyError, TypeError, ValueError):
+        ox = oy = math.nan
+    if not (math.isfinite(ox) and math.isfinite(oy)):
+        raise ValueError("Klaus: the drawing came back without its position; "
+                         "press Use drawing again")
     folder = tempfile.mkdtemp(dir=tmpdir)
     stem = time.strftime("diagram-%Y%m%d-%H%M%S")
     png_path = os.path.join(folder, stem + ".png")
@@ -109,9 +117,12 @@ def theme_css() -> str:
 
 class DrawPage(AnkiWebPage):
     def acceptNavigationRequest(self, url, navType, isMainFrame):
-        # The page itself only. Excalidraw's links (GitHub, help, libraries,
-        # embeds) never leave the tab and never reach the system browser.
-        return url.path().startswith(PAGE_DIR)
+        # The page itself only, on Anki's own server. Excalidraw's links
+        # (GitHub, help, libraries, embeds) never leave the tab and never
+        # reach the system browser.
+        server = QUrl(mw.serverURL())
+        return (url.scheme() == server.scheme() and url.host() == server.host()
+                and url.port() == server.port() and url.path().startswith(PAGE_DIR))
 
 
 class DrawWebView(AnkiWebView):
@@ -127,10 +138,14 @@ class DrawWebView(AnkiWebView):
 class DrawTab(QWidget):
     """The Draw tab: Excalidraw, and "Use drawing" under it."""
 
-    def __init__(self, parent: QWidget, on_use: Callable[[dict], None]) -> None:
+    def __init__(self, parent: QWidget, on_use: Callable[[dict], bool]) -> None:
         super().__init__(parent)
-        self._on_use: Optional[Callable[[dict], None]] = on_use
+        self._on_use: Optional[Callable[[dict], bool]] = on_use
         self._ready = False
+        # Changed since the last Use drawing (or load). The page says so once
+        # per change through klausexcal:dirty: its scene version, the sum of
+        # the element versions, moved away from the one it last exported.
+        self.dirty = False
         self._load_js: Optional[str] = None
         self.web = DrawWebView(parent=self)
         self.web._page = DrawPage(self.web._onBridgeCmd)
@@ -150,7 +165,9 @@ class DrawTab(QWidget):
         self.web.setUrl(QUrl(mw.serverURL().rstrip("/") + PAGE_DIR + "index.html"))
 
     def load(self, scene: Optional[dict]) -> None:
-        """Show scene (None: an empty canvas), once the page is ready."""
+        """Show scene (None: an empty canvas), once the page is ready. The
+        loaded scene is the clean state."""
+        self.dirty = False
         arg = json.dumps(json.dumps(scene) if scene is not None else None)
         self._load_js = "klausExcalidraw.load(%s);" % arg
         if self._ready:
@@ -160,6 +177,14 @@ class DrawTab(QWidget):
         if self._on_use is None or not self._ready:
             return
         self.web.eval("klausExcalidraw.occlude();")
+
+    def keyPressEvent(self, event) -> None:
+        # Escape the canvas did not use must not travel on to the dialog
+        # (QDialog would reject, i.e. close): the Draw tab never closes the window.
+        if event.key() == Qt.Key.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def shutdown(self) -> None:
         """The editor closed: drop late answers (Review Focus 4)."""
@@ -178,12 +203,15 @@ class DrawTab(QWidget):
                     "document.head.appendChild(s);})();" % json.dumps(theme_css()))
                 if self._load_js:
                     self.web.eval(self._load_js)
+            elif action == "dirty":
+                self.dirty = True
             elif action == "occlude":
                 if not isinstance(data, dict) or data.get("error"):
                     tooltip(_error_text(data.get("error") if isinstance(data, dict) else "?"),
                             parent=self)
                     return None
-                self._on_use(data)
+                if self._on_use(data):
+                    self.dirty = False
         except Exception as exc:  # a slot exception would abort Anki
             print(f"[klausmate] draw tab: {cmd[:40]}: {type(exc).__name__}: {exc}")
         return None

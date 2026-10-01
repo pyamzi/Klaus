@@ -295,6 +295,9 @@ if et is not None:
         "no PNG": dict(RESULT, png=""),
         "not a PNG": dict(RESULT, png=base64.b64encode(b"GIF89a....").decode()),
         "an oversized PNG (side > 8192, R2)": big,
+        "no originX (KeyError)": {k: v for k, v in RESULT.items() if k != "originX"},
+        "a non-numeric originY": dict(RESULT, originY="left"),
+        "a truncated PNG (struct.error)": dict(RESULT, png=base64.b64encode(PNG[:20]).decode()),
     }
     for label, res in cases.items():
         d = tempfile.mkdtemp(dir=TMP)
@@ -340,7 +343,13 @@ if et is not None:
               nav(QtCore.QUrl(SERVER + PAGE[1:] + "index.html"), 0, True) is True)
         for url in ("https://github.com/excalidraw/excalidraw", "https://discord.gg/x",
                     "https://libraries.excalidraw.com/", SERVER + "_anki/pages/x.html",
-                    "file:///etc/hosts"):
+                    "file:///etc/hosts",
+                    # the page's own path on anything but Anki's server:
+                    "http://127.0.0.1:40001" + PAGE + "index.html",
+                    "https://127.0.0.1:40000" + PAGE + "index.html",
+                    "http://evil.example:40000" + PAGE + "index.html",
+                    "http://evil.example" + PAGE + "index.html",
+                    "file://" + PAGE + "index.html"):
             check("navigation to %s is refused" % url,
                   nav(QtCore.QUrl(url), 0, True) is False
                   and nav(QtCore.QUrl(url), 0, False) is False)
@@ -349,6 +358,12 @@ if et is not None:
         holder.show()
         web._onBridgeCmd("close")  # Anki's Escape listener
         check("Escape in the drawing does not close the editor window", holder.isVisible())
+        for target, what in ((tab, "the Draw tab"), (tab.use_btn, "the Use drawing button")):
+            esc = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Escape,
+                                  QtCore.Qt.KeyboardModifier.NoModifier)
+            QtWidgets.QApplication.sendEvent(target, esc)
+            check("an Escape key event on %s stops there (the dialog stays open)" % what,
+                  holder.isVisible())
         btns = tab.findChildren(QtWidgets.QPushButton)
         check("one Qt button, 'Use drawing'", [b.text() for b in btns] == ["Use drawing"],
               str([b.text() for b in btns]))
@@ -387,8 +402,12 @@ if et is not None and ok:
     web._onBridgeCmd("klausexcal:occlude:" + b64json({"error": "empty"}))
     check("an {error} result: a tooltip, on_use not called", len(TIPS) == 1 and USED == [],
           f"{TIPS} {USED}")
+    check("a fresh tab is not dirty", getattr(tab, "dirty", None) is False)
+    web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+    check("klausexcal:dirty marks the drawing changed", getattr(tab, "dirty", None) is True)
     web._onBridgeCmd("klausexcal:occlude:" + b64json(RESULT))
     check("a good result reaches on_use as a dict", USED == [RESULT])
+    check("...and stays dirty when on_use did not take it (returned falsy)", getattr(tab, "dirty", None) is True)
     TIPS.clear()
     ok2, _ = attempt(web._onBridgeCmd, "klausexcal:occlude:@@@not-base64")
     check("a garbled message is logged, never raised", ok2 and len(USED) == 1)
@@ -413,6 +432,11 @@ check("entry.jsx renders an empty <MainMenu> and no renderTopRightUI",
       and "renderTopRightUI" not in src)
 check("entry.jsx exposes klausExcalidraw.occlude",
       re.search(r"window\.klausExcalidraw\s*=\s*\{[^}]*\bocclude\b", src) is not None)
+check("entry.jsx sets aiEnabled={false}", re.search(r"aiEnabled=\{false\}", src) is not None)
+check("entry.jsx reports changes: onChange sends a dirty message",
+      "onChange=" in src and 'send("dirty"' in src)
+check("the bundle carries aiEnabled:false and the dirty message",
+      re.search(r"aiEnabled:(!1|false)", js) is not None and '"dirty"' in js)
 check("the bundle exposes it too", "exportForOcclusion" in js and "klausexcal:" in js
       and re.search(r"klausExcalidraw=\{[^}]*occlude", js) is not None)
 for cls in (".main-menu-trigger", ".sidebar-trigger", ".help-icon"):
@@ -589,15 +613,18 @@ if dlg is not None:
     check("the Masks Editor tab is current", dlg.tab_widget.currentIndex() == 0)
     check("no tooltip", TIPS == [], str(TIPS))
     check("media untouched until Add", listing(MEDIA) == [])
+    check("a used drawing is no longer dirty", getattr(tab, "dirty", None) is False)
 
-    section("after IOE adds the notes: <returned name>.excalidraw in media")
+    section("after IOE adds the notes: _<returned name>.excalidraw in media (R19)")
     ok2, r = attempt(ia._onAddNotesButton, "ao", False, want)
     check("IOE added two notes", ok2 and len(col.added) == 2, f"{r} {len(col.added)}")
-    side = os.path.join(MEDIA, "diagram-returned-1.png.excalidraw")
+    side = os.path.join(MEDIA, "_diagram-returned-1.png.excalidraw")
     check("the sidecar follows the name Anki returned, not the requested one",
           os.path.isfile(side) and not any(
               n.endswith(".excalidraw") and n != os.path.basename(side) for n in listing(MEDIA)),
           str(listing(MEDIA)))
+    check("its name starts with _ (Check Media never lists it as unused)",
+          os.path.basename(side).startswith("_") and os.path.isfile(side))
     if os.path.isfile(side):
         data = json.loads(open(side, encoding="utf-8").read())
         check("...holding the scene and klaus.originX/originY",
@@ -659,6 +686,162 @@ for label, closer in (("closing the window", lambda d: d.close()),
     check(label + ": no diagram written", listing(os.path.dirname(blank4)) == files4)
     ok4, r4 = attempt(real_use, RESULT)
     check(label + ": use_drawing itself refuses after close", ok4 and r4 is False, str(r4))
+for mod in (cfg, ngen, add, ed_mod, main):
+    mod.mw = MW
+
+
+class Asks(list):
+    """Stands in for io_ask: records (parent, text, on_answer)."""
+
+    def __call__(self, parent, text, on_answer, title="", **kw):
+        self.append(types.SimpleNamespace(parent=parent, text=text, on_answer=on_answer))
+
+
+class TitleBarClose:
+    """A spontaneous QCloseEvent (the title-bar X) as closeEvent reads it."""
+
+    def __init__(self):
+        self.ignored = False
+
+    def spontaneous(self):
+        return True
+
+    def ignore(self):
+        self.ignored = True
+
+    def accept(self):
+        self.ignored = False
+
+
+GATE = "svgCanvas.undoMgr.getUndoStackSize() == 0"
+
+
+def draw_session():
+    e = new_editor()
+    e.parentWindow.show()
+    attempt(io.occlude, e, draw=True)
+    d = getattr(getattr(e, "imgoccadd", None), "imgoccedit", None)
+    if d is not None:
+        d.draw_tab.web._onBridgeCmd("klausexcal:ready:" + b64json({}))
+    return e, d
+
+
+section("R20: closing with an unused or changed drawing asks first")
+_io_ask = ed_mod.io_ask
+asks = Asks()
+ed_mod.io_ask = asks
+try:
+    e6, d6 = draw_session()
+    check("a draw session opened", d6 is not None)
+    if d6 is not None:
+        ok6, _ = attempt(d6._on_reject_callback, True)
+        check("nothing drawn, no masks, no fields: closes at once, no ask",
+              ok6 and not d6.isVisible() and asks == [], f"{_} {asks}")
+
+    e6, d6 = draw_session()
+    if d6 is not None:
+        d6.draw_tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+        d6.svg_edit.evals.clear()
+        attempt(d6.reject)
+        check("reject() is the gate: it asks svg-edit about unsaved masks",
+              d6.svg_edit.evals == [GATE], str(d6.svg_edit.evals))
+        attempt(d6._on_reject_callback, True)
+        check("an unused drawing (masks and fields clean): asks first, stays open",
+              len(asks) == 1 and d6.isVisible() and asks[0].parent is d6)
+        asks[0].on_answer(False)
+        check("answer No: still open, the Draw tab still live",
+              d6.isVisible() and d6.draw_tab._on_use is not None)
+        asks[0].on_answer(True)
+        check("answer Yes: closed, the Draw tab shut down",
+              not d6.isVisible() and d6.draw_tab._on_use is None)
+
+    del asks[:]
+    e6, d6 = draw_session()
+    if d6 is not None:
+        d6.svg_edit.evals.clear()
+        ev = TitleBarClose()
+        attempt(d6.closeEvent, ev)
+        check("the title-bar X is ignored and goes through the gate",
+              ev.ignored and d6.svg_edit.evals == [GATE] and d6.isVisible(),
+              f"{ev.ignored} {d6.svg_edit.evals}")
+        d6.svg_edit.evals.clear()
+        btn = [b for b in d6.findChildren(QtWidgets.QPushButton) if b.text() == "&Close"]
+        if btn:
+            btn[0].click()
+        check("the Close button goes through the gate too",
+              btn and d6.svg_edit.evals == [GATE] and d6.isVisible(), str(d6.svg_edit.evals))
+        d6.svg_edit.evals.clear()
+        esc = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Escape,
+                              QtCore.Qt.KeyboardModifier.NoModifier)
+        QtWidgets.QApplication.sendEvent(d6.ao_btn, esc)
+        check("Escape reaching the dialog by key propagation hits the gate",
+              d6.svg_edit.evals == [GATE] and d6.isVisible(), str(d6.svg_edit.evals))
+        d6.svg_edit.evals.clear()
+        QtWidgets.QApplication.sendEvent(d6.draw_tab.use_btn, QtGui.QKeyEvent(
+            QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Escape,
+            QtCore.Qt.KeyboardModifier.NoModifier))
+        check("...but not from the Draw tab (the canvas never closes the window)",
+              d6.svg_edit.evals == [] and d6.isVisible())
+        d6.draw_tab.web._onBridgeCmd("klausexcal:occlude:" + b64json(RESULT))
+        check("after Use drawing the drawing is clean", getattr(d6.draw_tab, "dirty", None) is False)
+        del asks[:]
+        d6.close()
+        check("a programmatic close (after Add, profile close) never asks",
+              not d6.isVisible() and asks == [])
+finally:
+    ed_mod.io_ask = _io_ask
+
+
+section("R21: closing the Add/Edit window closes the occlusion editor")
+ed_mod.io_ask = asks
+try:
+    for label, how in (("closed", "close"), ("destroyed", "destroy")):
+        for kind in ("photo", "draw"):
+            media = tempfile.mkdtemp(prefix="io-media-", dir=TMP)
+            c = Col(media)
+            for mod in (cfg, ngen, add, ed_mod, main):
+                mod.mw = fake_mw(c)
+            e7 = new_editor()
+            e7.parentWindow.show()
+            if kind == "draw":
+                attempt(io.occlude, e7, draw=True)
+            else:
+                attempt(io.occlude, e7, photo)
+            d7 = getattr(getattr(e7, "imgoccadd", None), "imgoccedit", None)
+            if d7 is None:
+                check("%s/%s: a session opened" % (label, kind), False)
+                continue
+            if kind == "draw":
+                d7.draw_tab.web._onBridgeCmd("klausexcal:ready:" + b64json({}))
+                d7.draw_tab.web._onBridgeCmd("klausexcal:dirty:" + b64json({}))
+            del asks[:]
+            if how == "close":
+                e7.parentWindow.close()
+            else:
+                pw = e7.parentWindow
+                e7.parentWindow = None
+                sip.delete(pw)
+            for _i in range(3):
+                app.processEvents()
+            check("%s parent, %s session: the occlusion editor closes" % (label, kind),
+                  sip.isdeleted(d7) or not d7.isVisible())
+            check("%s parent, %s session: without asking" % (label, kind), asks == [], str(asks))
+            check("%s parent, %s session: nothing written to media" % (label, kind),
+                  listing(media) == [] and c.adds == [])
+            if kind == "draw" and not sip.isdeleted(d7):
+                check("%s parent: the Draw tab is shut down" % label, d7.draw_tab._on_use is None)
+    e8 = new_editor()
+    e8.parentWindow.show()
+    attempt(io.occlude, e8, photo)
+    d8 = e8.imgoccadd.imgoccedit
+    e8.parentWindow.hide()
+    app.processEvents()
+    e8.parentWindow.show()
+    app.processEvents()
+    check("a parent that is only hidden (a tab switch) leaves it open", d8.isVisible())
+    d8.close()
+finally:
+    ed_mod.io_ask = _io_ask
 for mod in (cfg, ngen, add, ed_mod, main):
     mod.mw = MW
 

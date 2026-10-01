@@ -9,9 +9,12 @@
 //     elements; PNG = exportToBlob, exportPadding 20, scale 2.
 //   occlude()                    export, then send("occlude", result | {error});
 //                                the Draw tab's Qt "Use drawing" button calls it
-// Python hears pycmd("klausexcal:<action>:<base64 JSON>") for ready and
-// occlude. occlude carries the export result, or {error} when the drawing is
-// empty or the export failed (the tab stays open).
+// Python hears pycmd("klausexcal:<action>:<base64 JSON>") for ready, occlude
+// and dirty. occlude carries the export result, or {error} when the drawing is
+// empty or the export failed (the tab stays open). dirty ({}) is sent once
+// after the scene changes from its clean state (the last load or successful
+// export); "changed" is the sum of the element versions, so an edit that is
+// undone still counts as a change.
 // The page lives on the occlusion editor's Draw tab, so Excalidraw's web-app
 // chrome is gone: an empty <MainMenu> replaces the default one (and its
 // GitHub/X/Discord links), and index.html hides the menu, library and help
@@ -32,6 +35,25 @@ const PADDING = 20;
 const SCALE = 2;
 
 let api = null;
+let cleanVersion = 0;
+let reported = false;
+
+function sceneVersion(elements) {
+  let v = 0;
+  for (const e of elements) v += e.version || 0;
+  return v;
+}
+
+function markClean(version) {
+  cleanVersion = version;
+  reported = false;
+}
+
+function onChange(elements) {
+  if (!api || reported || sceneVersion(elements) === cleanVersion) return;
+  reported = true;
+  send("dirty", {});
+}
 
 function b64(text) {
   const bytes = new TextEncoder().encode(text);
@@ -60,13 +82,16 @@ function blobBase64(blob) {
 
 function load(sceneJson) {
   if (!api) throw new Error("Excalidraw is not ready");
+  reported = true; // the load itself is no change; markClean below re-arms
   api.resetScene();
-  if (!sceneJson) return;
-  const data = restore(JSON.parse(sceneJson), null, null);
-  const files = Object.values(data.files || {});
-  if (files.length) api.addFiles(files);
-  api.updateScene({ elements: data.elements });
-  api.scrollToContent(data.elements, { fitToContent: true });
+  if (sceneJson) {
+    const data = restore(JSON.parse(sceneJson), null, null);
+    const files = Object.values(data.files || {});
+    if (files.length) api.addFiles(files);
+    api.updateScene({ elements: data.elements });
+    api.scrollToContent(data.elements, { fitToContent: true });
+  }
+  markClean(sceneVersion(api.getSceneElementsIncludingDeleted()));
 }
 
 async function exportForOcclusion() {
@@ -97,7 +122,9 @@ async function exportForOcclusion() {
 async function occlude() {
   let out;
   try {
+    const version = api ? sceneVersion(api.getSceneElementsIncludingDeleted()) : 0;
     out = JSON.parse(await exportForOcclusion());
+    markClean(version); // Python keeps its own dirty flag until it takes the result
   } catch (e) {
     out = { error: String((e && e.message) || e) };
   }
@@ -114,6 +141,8 @@ function App() {
         api = a;
         send("ready", {});
       }}
+      onChange={onChange}
+      aiEnabled={false}
       UIOptions={{
         canvasActions: { loadScene: false, saveToActiveFile: false, export: false },
       }}

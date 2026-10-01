@@ -403,9 +403,11 @@ class ImgOccAdd(object):
         return True
 
     def _save_sidecar(self, image_name):
-        """Klaus: the scene as <image media name>.excalidraw, beside the image
-        the notes show (written like IOE writes its masks)."""
-        path = os.path.join(mw.col.media.dir(), image_name + ".excalidraw")
+        """Klaus: the scene as _<image media name>.excalidraw, beside the image
+        the notes show (written like IOE writes its masks). No note names the
+        file; the leading underscore keeps Check Media from listing it as
+        unused, so "Delete Unused" can't take it."""
+        path = os.path.join(mw.col.media.dir(), "_" + image_name + ".excalidraw")
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(self.excal_sidecar)
