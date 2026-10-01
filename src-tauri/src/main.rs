@@ -15,6 +15,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            // Dev only: a scratch Collection (e.g. a test fixture) instead of the real one.
+            #[cfg(debug_assertions)]
+            let dir = std::env::var_os("KLAUS_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(dir);
             std::fs::create_dir_all(&dir)?;
             let bridge = Arc::new(Bridge::new()?);
             bridge.open_collection(&dir).map_err(|e| format!("could not open Collection: {e:?}"))?;
@@ -23,7 +26,7 @@ fn main() {
             // Both frontends are served by the bridge (same origin as /_anki), not
             // Tauri's asset protocol, because Anki's client fetches root-relative URLs.
             let res = app.path().resource_dir()?;
-            let web = WebDirs { klaus: res.join("web"), anki: res.join("anki-web") };
+            let web = WebDirs { klaus: res.join("web"), anki: res.join("anki-web"), anki_static: res.join("anki-static") };
             let token = new_token();
             let handle = app.handle().clone();
             let hook: Hook = Arc::new(move |method: &str, input: &[u8]| on_hook(&handle, method, input));
@@ -33,8 +36,14 @@ fn main() {
 
             let base: Url = format!("http://{addr}/").parse()?;
             app.manage(base.clone());
-            let mut url = base;
-            url.set_query(Some(&format!("t={token}")));
+            let mut url = base.clone();
+            // Dev only: open a page directly (e.g. KLAUS_OPEN="review?deck=1").
+            #[cfg(debug_assertions)]
+            if let Ok(open) = std::env::var("KLAUS_OPEN") {
+                url = base.join(&open)?;
+            }
+            let query = url.query().map(|q| format!("{q}&")).unwrap_or_default();
+            url.set_query(Some(&format!("{query}t={token}")));
             // Lets a dev browser drive the same pages; never in release builds.
             #[cfg(debug_assertions)]
             println!("Klaus dev URL: {url}");

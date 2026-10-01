@@ -26,7 +26,8 @@
     ],
     "resources": {
       "../build/": "web/",
-      "../vendor/anki/out/sveltekit/": "anki-web/"
+      "../vendor/anki/out/sveltekit/": "anki-web/",
+      "../vendor/anki/out/klaus/": "anki-static/"
     }
   }
 }
