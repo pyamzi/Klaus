@@ -77,6 +77,19 @@ elif m is not None:
 check("index.html loads the bundle as a classic script",
       '<script src="excalidraw.js"></script>' in html and 'type="module"' not in html)
 
+section("layout: the tool bar runs down the right edge (Pouya, 2026-10-01)")
+_desk = ".excalidraw:not(.excalidraw--mobile)"
+check("the shapes bar is pinned to the right and centred, desktop layout only",
+      _desk + " .shapes-section {" in html
+      and "position: fixed; top: 0; bottom: 0; right: 16px;" in html.split(_desk + " .shapes-section {")[1].split("}")[0])
+check("its tools stack in one column",
+      "grid-auto-flow: row;" in html.split(_desk + " .App-toolbar > .Stack_horizontal {")[1].split("}")[0])
+check("the extra-tools menu opens to the bar's left, never off the bottom",
+      "right: calc(100% + 12px)" in html.split(_desk + " .App-toolbar__extra-tools-dropdown {")[1].split("}")[0])
+check("no rule restyles the mobile layout (Excalidraw's own bar stays there)",
+      all(line.lstrip().startswith(_desk) for line in html.splitlines()
+          if line.lstrip().startswith(".excalidraw") and "{" in line))
+
 section("no network")
 XMLNS = {"www.w3.org"}
 check("index.html names no remote URL", not hosts(html) - LOCAL - XMLNS, str(hosts(html)))
