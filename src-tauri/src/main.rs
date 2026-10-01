@@ -3,9 +3,12 @@
 
 use std::sync::Arc;
 
+use anki_proto::generic;
+use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageBoxRequest};
 use klaus_bridge::{new_token, serve, Bridge, Hook, WebDirs};
+use prost::Message;
 use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 fn main() {
     let app = tauri::Builder::default()
@@ -23,7 +26,7 @@ fn main() {
             let web = WebDirs { klaus: res.join("web"), anki: res.join("anki-web") };
             let token = new_token();
             let handle = app.handle().clone();
-            let hook: Hook = Arc::new(move |method: &str, _input: &[u8]| on_hook(&handle, method));
+            let hook: Hook = Arc::new(move |method: &str, input: &[u8]| on_hook(&handle, method, input));
             let (addr, server) = tauri::async_runtime::block_on(serve(bridge, web, token.clone(), hook))?;
             tauri::async_runtime::spawn(server);
             println!("Klaus bridge listening on {addr}");
@@ -51,8 +54,9 @@ fn main() {
     });
 }
 
-/// Requests the webview makes to its host (see klaus_bridge::HOOKS).
-fn on_hook(app: &AppHandle, method: &str) {
+/// Requests the webview makes to its host (see klaus_bridge::HOOKS); the reply is
+/// the protobuf the page expects, or None for an empty one.
+fn on_hook(app: &AppHandle, method: &str, input: &[u8]) -> Option<Vec<u8>> {
     match method {
         "klausImportPackage" => {
             let picked = app.dialog().file().add_filter("Anki deck package", &["apkg"]).blocking_pick_file();
@@ -60,12 +64,65 @@ fn on_hook(app: &AppHandle, method: &str) {
                 // Same URL shape as Anki's import dialog: <page>/<quoted path>.
                 navigate(app, &format!("import-anki-package/{}", quote(&path.to_string_lossy())));
             }
+            None
         }
         // The import page's Close button; the deck list reloads its counts.
-        "importDialogRequireClose" => navigate(app, ""),
-        // Nothing to do until the browser exists (#11); Anki uses importDone to un-modal its dialog.
-        _ => {}
+        "importDialogRequireClose" => {
+            navigate(app, "");
+            None
+        }
+        // The editor's Close; `true` means fields have content (Anki asks before discarding).
+        "closeAddCards" => {
+            let has_input = generic::Bool::decode(input).ok()?.val;
+            if !has_input || confirm(app, "Discard current input?", None, MessageDialogKind::Warning) {
+                navigate(app, "");
+            }
+            None
+        }
+        "askUser" => {
+            let req = AskUserRequest::decode(input).ok()?;
+            let yes = confirm(app, &req.text, req.title.as_deref(), MessageDialogKind::Info);
+            Some(generic::Bool { val: yes }.encode_to_vec())
+        }
+        "showMessageBox" => {
+            let req = ShowMessageBoxRequest::decode(input).ok()?;
+            let kind = match req.r#type {
+                1 => MessageDialogKind::Warning,
+                2 => MessageDialogKind::Error,
+                _ => MessageDialogKind::Info,
+            };
+            let mut dialog = app.dialog().message(req.text).kind(kind);
+            if let Some(title) = req.title {
+                dialog = dialog.title(title);
+            }
+            dialog.blocking_show();
+            None
+        }
+        "openFilePicker" => {
+            let req = OpenFilePickerRequest::decode(input).ok()?;
+            let extensions: Vec<&str> = req.extensions.iter().map(String::as_str).collect();
+            let picked = app
+                .dialog()
+                .file()
+                .set_title(req.title)
+                .add_filter(req.filter_description, &extensions)
+                .blocking_pick_file()
+                .and_then(|p| p.into_path().ok());
+            let val = picked.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            Some(generic::String { val }.encode_to_vec())
+        }
+        // Not wired yet: the browser (#11), note type dialogs (#16), recording/playback,
+        // clipboard reads, external links. Anki pages treat the empty reply as cancel.
+        _ => None,
     }
+}
+
+fn confirm(app: &AppHandle, text: &str, title: Option<&str>, kind: MessageDialogKind) -> bool {
+    let mut dialog = app.dialog().message(text).kind(kind).buttons(MessageDialogButtons::OkCancel);
+    if let Some(title) = title {
+        dialog = dialog.title(title);
+    }
+    dialog.blocking_show()
 }
 
 /// Points the main window at a page on the bridge, telling Anki pages about dark mode

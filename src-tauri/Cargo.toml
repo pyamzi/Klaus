@@ -8,6 +8,8 @@ license.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+anki_proto = { path = "../vendor/anki/rslib/proto" }
+prost = "0.13"
 klaus-bridge = { path = "../crates/bridge" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

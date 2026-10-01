@@ -4,6 +4,12 @@
 
   const tree = deckTree({ now: BigInt(Math.floor(Date.now() / 1000)) });
 
+  // Anki's own editor; it adds the note itself through the bridge.
+  function addNote() {
+    const night = matchMedia("(prefers-color-scheme: dark)").matches ? "#night" : "";
+    location.href = `/editor/?mode=add${night}`;
+  }
+
   // Klaus's shell shows a file picker, then opens Anki's import page.
   function importPackage() {
     fetch("/_anki/klausImportPackage", { method: "POST", headers: { "Content-Type": "application/binary" } });
@@ -13,7 +19,10 @@
 <main>
   <header>
     <h1>Decks</h1>
-    <button onclick={importPackage}>Import…</button>
+    <div>
+      <button onclick={addNote}>Add</button>
+      <button onclick={importPackage}>Import…</button>
+    </div>
   </header>
   {#await tree}
     <p>Loading…</p>
