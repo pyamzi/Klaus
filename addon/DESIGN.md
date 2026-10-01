@@ -370,6 +370,24 @@ imperfection deliberately preserved.
   square is the user's own colour and opens the picker; cancelling the
   picker still selects custom with its held colour.
 
+### PDF Reader
+- **One reader, identical everywhere.** Every place a PDF opens shows
+  the same surface: pdf.js pages in a webview, with the tab strip
+  (`[＋] [tabs] … [page n/m]`) above them. Each host keeps its own tab
+  set; nothing about the reader changes with the window it sits in,
+  because the panel styles itself (`pdf_panel_qss`) and the page takes
+  its colours from `theme.css_vars`.
+- **Paper on ground.** Pages are white paper with a 4px radius and
+  the soft page shadow (see Elevation) on the panel's ground; the
+  thumbnail strip repeats them in miniature.
+- **Tools.** The find bar is a flat strip above the pages (hairline
+  below it). The annotation pill (Highlight, Add Text, the ink row,
+  −/%/+/fit) and the context menu float over the page on soft shadows
+  — with paper, the only things that cast one. Inks are page colours,
+  not chrome: they bake into the PDF.
+- The native renderer was deleted in PDF reader 5/5; there is no
+  second renderer to match.
+
 ### The Star (signature)
 - The hand-drawn point-down pentagram from `top_bar._STAR_PATH` — the
   single source of truth for both the toolbar SVG and any Qt-side

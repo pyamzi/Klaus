@@ -155,7 +155,7 @@ same reason.
   `failed=0; for t in tests/test_*.py; do env QT_QPA_PLATFORM=offscreen PYTHONDONTWRITEBYTECODE=1 python3 "$t" || failed=1; done; test "$failed" -eq 0`
 - **Offscreen PyQt6 can verify far more than "does it construct"
   (Pouya, 2026-09-01).** Under `QT_QPA_PLATFORM=offscreen` a real
-  `PdfSidebar`/`MapCanvas` (or the Browse-sidebar delegate) renders to a `grab()` you can
+  `ReaderTabs`/`MapCanvas` (or the Browse-sidebar delegate) renders to a `grab()` you can
   pixel-read, and every one of these is reachable headless — do not
   claim they need a live screen: **Retina** (`QT_SCALE_FACTOR=2` before
   `QApplication`, then `devicePixelRatioF()` is 2.0 and strokes render
@@ -417,29 +417,39 @@ same reason.
   code. Disabled-state QSS must repeat any id selector it has to beat
   (`QPushButton#SecondaryButton:disabled` — an id outranks a
   pseudo-state, which is why disabled controls once looked live). Also
-  per-surface builders (`dialog_qss`, `panel_header_qss`, `find_bar_qss`,
-  `thumb_strip_qss`, `drop_zone_qss`, `muted_label_qss`,
-  `accent_rgba`). `pdf_panel_qss`'s scoped `QSplitter::handle` rule sits
-  on `bg`, because the pane it grabs (the PDF viewer's own internal
-  splitter) is `bg` too. (`library_qss` and `accent_mix` went with the
-  Library window in K-308.) A documentless native `QPdfView`
-  paints `bg` the same way — through palette roles rather than a
-  stylesheet (Window/Base/Dark/Mid, set once at construction on both
-  the view and its viewport in `pdf_viewer.py`, K-178, closed by
-  K-208) — since a `QPdfView` answers to Qt's palette, not QSS;
-  pdf.js needs no equivalent, since its own `css_vars` already hands
-  the page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
+  per-surface builders (`dialog_qss`, `panel_header_qss`,
+  `pdf_panel_qss` — the reader panel styles itself, K-153 —
+  `drop_zone_qss`, `muted_label_qss`, `accent_rgba`). (`library_qss`
+  and `accent_mix` went with the Library window in K-308;
+  `find_bar_qss`, `thumb_strip_qss` and `pdf_panel_qss`'s splitter rule
+  went with the native viewer in PDF reader 5/5.) The pdf.js reader needs no palette roles:
+  `css_vars` hands its page `var(--bg)` directly. **UI files must not hardcode colours** — import theme and
   reference tokens; styles are computed at widget creation (a night-mode
   flip catches up on next open). Dialog buttons are blue-primary by
   default with `SecondaryButton`/`DangerButton` objectName opt-outs.
 - `pdfjs_viewer.py` + `web/pdfjs_viewer.html` + `web/pdfjs/` (vendored
-  pdf.js 3.11.174): the flicker-free webview renderer (K-095 umbrella),
-  which every reader uses since PDF reader 3/5 (2026-10-01); the native
-  `PdfViewer` is only the fallback when QtWebEngine is missing
-  (`PDFJS_AVAILABLE`; parity cards K-097..K-100). `PdfSidebar` branches at
-  construction; the PDF is fed as chunked base64 into window globals
-  (SynapsePro's pattern), pages render lazily via IntersectionObserver
-  over sized placeholders, the pdf.js text layer gives native selection,
+  pdf.js 3.11.174): the ONE PDF reader (spec
+  `docs/superpowers/specs/2026-09-30-pdf-reader-design.md`). The native
+  QPdfView renderer (`pdf_viewer.py`) was deleted in PDF reader 5/5
+  (2026-10-01); there is no fallback — without QtWebEngine
+  (`PDFJS_AVAILABLE` false) `PdfSidebar` shows a "PDF viewer is
+  unavailable" label. The PDF loads in pieces: Python hands the page the
+  file length and the first 256 KB (`first_chunk`), and pdf.js's
+  `PDFDataRangeTransport` asks for the rest on demand over
+  `pycmd("klausmate_pdfjs:range:<gen>:<begin>:<end>")`, answered by
+  `handle_range` → `pdf_source.range_reply` (at most 1 MB a call; a
+  request from an older document generation is refused; a stale
+  fingerprint makes the reader reload in place). `teardown()` destroys
+  the document. Pages render lazily via IntersectionObserver
+  over sized placeholders, and up to 12 pages outside the render zone
+  stay rendered (`KEEP_RENDERED` in `web/pdfjs_pure.js`, least recently
+  visible evicted first); `klausSetAnnotations` redraws only the pages
+  whose records changed; the first find searches visible pages first,
+  then the rest in idle batches. Native pinch gestures never reach
+  Chromium: the webview's event filter forwards `ZoomNativeGesture` to
+  the page and turns `SmartZoomNativeGesture` into a fit-width toggle, and a
+  page whose `visualViewport.scale` leaves 1 anyway posts `vv-scale`
+  and Python reloads it. The pdf.js text layer gives native selection,
   and theme tokens arrive as CSS vars (`theme.css_vars`) — which must
   emit EVERY var the page hands to `var()`, since an undefined one
   computes that declaration to nothing rather than failing loudly
@@ -492,24 +502,74 @@ same reason.
   stays scrollable (the old fixed-width flex centred overflow off the
   left edge, unreachable). **The page owns rendering and
   gestures; Python owns the annotations JSON** — mutations arrive over
-  the bridge (`hl-add`/`hl-remove`/`note-edit`), `PdfJsViewer` persists
-  via `pdf_handler.save_annotations` + the same 500ms debounced bake,
-  keeps K-081 tombstones, and pushes canonical records back via
-  `klausSetAnnotations`. Pure helpers (`chunk_b64`, `build_page_html`, `parse_bridge`, `decode_b64_json`,
-  `records_from_rect_map`) are aqt-free for `tests/test_pdfjs_viewer.py`.
+  the bridge (`hl-add`/`hl-remove`/`note-edit`/`text-add`/`text-update`),
+  `PdfJsViewer` persists via `pdf_handler.save_annotations`, asks
+  `annotation_save`'s pipeline for the bake, keeps K-081 tombstones, and
+  pushes canonical records back via `klausSetAnnotations`. Pure helpers
+  (`first_chunk`, `handle_range`, `build_page_html`, `parse_bridge`,
+  `decode_b64_json`, `gesture_action`, `records_from_rect_map`) are
+  aqt-free for `tests/test_pdfjs_viewer.py`.
   Parity completed by K-100:
   Cmd/Ctrl-double-click copies the slide (through the shared
-  copyPageImage bridge — the native "insert into field" surface IS the
-  clipboard), the marquee persists across zoom/re-render with native
-  press semantics + drag-out (PNG dragstart; the drop-into-field leg
-  awaits live-Anki verification on the K-101 soak — re-copy+paste is
-  the working fallback), and find highlights the exact substring via
-  the CSS Custom Highlight API with the whole-span ring as guarded
-  fallback. Cutover gate: K-101 (needs-human). The annotations JSON + bake
-  pipeline are renderer-independent — parity work must not fork them.
-- `pdf_viewer.py`: `PdfViewer` (QPdfView + selection/marquee/highlight
-  overlay, find bar, thumbnails, zoom/nav, per-gesture eventFilter) and
-  `PdfSidebar` (one instance reused across tabs). No toolbar "Copy page"
+  copyPageImage bridge — the clipboard is the "insert into field"
+  surface), the marquee persists across zoom/re-render with native
+  press semantics + drag-out (PNG dragstart; re-copy+paste is the
+  fallback if a drop into a field does not land), and find highlights
+  the exact substring via the CSS Custom Highlight API with the
+  whole-span ring as guarded fallback. The cutover (K-101) finished with
+  PDF reader 5/5. The annotations JSON + bake pipeline belong to no
+  reader — never fork them.
+- `pdf_source.py` (aqt-free): piece loading's byte source. `DocSource(path,
+  snapshot_dir)` hard-links the file into `<user files>/reading/` at load
+  (`pdfjs_viewer._reading_dir`, via `pdf_source.user_files_dir()`) and
+  reads that link, so Klaus's own bakes (`os.replace` → a new inode)
+  never disturb an open reader, while an outside in-place rewrite still
+  reads stale; where a hard link is impossible (another volume) it reads
+  the live file. Each `read(begin, end)` opens and closes the file (an
+  open handle would block `os.replace` on Windows) and checks the load
+  fingerprint `(st_ino, st_mtime_ns, st_size)` (`pdf_handler.file_stat`);
+  a mismatch raises `StaleSource`. `range_reply` bounds the range to the
+  file, caps it at `MAX_RANGE` (1 MB), refuses an old generation and
+  answers `{"stale": true}` for a changed file. `FIRST_CHUNK` = 256 KB.
+  The snapshot goes on teardown and at the next load;
+  `sweep_snapshots` clears leftovers at a session's first load.
+- `doc_sync.py` (aqt-free above its Qt-glue divider): the folder-sync
+  engine for open PDFs. A registry of what each reader has open
+  (`open_doc`/`close_doc`, per reader instance); every open path sits on
+  a `QFileSystemWatcher`, re-added after a save-over drops it. Events to
+  subscribers: `changed` (an outside edit, once size and `mtime_ns` hold
+  across two checks `STABLE_MS` = 150 ms apart), `moved`, `missing` and
+  `back` (the last three from the Library rescan's `finish` in
+  `pdf_drive`, AFTER it applies the new mapping). Klaus's own writes are
+  pinned (`pin_own_write`) and classify as `own`, never `changed`. The
+  reader answers `changed` by reloading in place, page and zoom kept,
+  with "Updated from disk" (an open text box commits first); `moved` by
+  re-pointing with no reload; `missing` by closing the tab with
+  "<name> was removed from your Library folder." (marks, JSON and tag
+  kept).
+- `annotation_save.py` (aqt-free above its Qt-glue divider):
+  `SavePipeline`, the ONE bake path. `request(name)` restarts a
+  `DEBOUNCE_MS` = 500 ms debounce; then `bake_annotations` runs on a
+  background worker, at most one per PDF (a request mid-bake sets an
+  "again" flag). A main-thread post-step pins the written fingerprint in
+  `doc_sync` and `library_stats.json`, removes omitted records and emits
+  `saved` / `records`. A failed bake keeps the JSON as the safe copy;
+  the reader toasts `SAVE_FAILED_COPY` ("Marks couldn't be saved into
+  the file yet; they're kept and will retry.") and the pipeline retries
+  on the next change and when `doc_sync` reports the file `back` or
+  `moved`. `flush_all()` runs on `profile_will_close`; a reader flushes
+  its PDF when it lets go of it, and a reader that opens a PDF whose JSON
+  is newer than the file requests a bake.
+- `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
+  … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only
+  shows names and reports `activated` / `closed` / `add_requested`;
+  `PdfSidebar` loads documents and persists each host's tab set in
+  `pdf_tabs.json` under its `host_key` (`editor`, `lecture`).
+- `reader_panel.py`: `PdfSidebar`, the reader every host wraps — a
+  `PdfJsViewer` (or, without QtWebEngine, the "PDF viewer is
+  unavailable" label), its `ReaderTabs`, and the `doc_sync` /
+  `annotation_save` wiring above; `cleanup_all_sidebars` sweeps every
+  live one on profile close and quit. No toolbar "Copy page"
   button — Cmd/Ctrl-double-click a page, or right-click "Copy slide as
   image", copies it as an image; right-click also offers "Copy page text".
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
@@ -529,9 +589,14 @@ same reason.
   PDF as REAL annotations
   (vendored pypdf): pristine original captured once in `pdf_originals/`,
   every bake regenerates from pristine + full json (never incremental; empty
-  json = un-bake/restore), atomic `os.replace` (safe under the viewer's open
-  QPdfDocument inode). Scheduled from `pdf_viewer._save_annotations` via a
-  1200ms debounce → daemon thread.
+  json = un-bake/restore), atomic `os.replace` from a hidden
+  `.<base>.pdf.<uuid>.tmp` in the Library root (an open reader reads its
+  hard-link snapshot, so the swap never disturbs it). The working path
+  is resolved under `pdf_lock(name)` right before the replace — the lock
+  rename, move and delete share — so a rename mid-bake writes to the
+  new path, and a bake never recreates a mapped file that is gone.
+  Scheduled only through `annotation_save.SavePipeline` (500 ms
+  debounce, one worker per PDF).
 - `top_bar.py`: the **Klaus top bar** — restyles Anki's main-window top
   toolbar IN PLACE (never rebuilds it): `webview_will_set_content` with
   an `aqt.toolbar.TopToolbar` context injects `theme.toolbar_css()`
@@ -1277,6 +1342,12 @@ same reason.
   keys back. OCR and Voyage remain out of scope. D1-D3 retired Plus, judge
   and assistant settings; D4 removed the final cloud client and cost module.
   Current defaults are in `config.json`; preserve migration coverage.
+  Historical note, 2026-10-01 (PDF reader 5/5): the native renderer is
+  gone — `pdf_viewer.py` (`PdfViewer` on QPdfView, with its own find bar,
+  thumbnails and selection overlay), the `pdf_renderer` key (now in
+  `settings.LEGACY_KEYS_DROPPED`), Preferences' renderer switch with its
+  `renderer_restart` effect, and `pdfjs_viewer.renderer_from_config`.
+  `PdfSidebar` lives in `reader_panel.py`; there is no native fallback.
 
 ## Hard-won gotchas (each cost real debugging — don't relearn them)
 
@@ -1287,11 +1358,6 @@ same reason.
   peek-through if the item is rounded. Full fix: `::branch:{hover,
   selected}` rules + `selection-background-color: transparent` + keep
   square geometry (see `theme.sidebar_tree_qss`).
-- **pdfium hit tolerance**: `QPdfDocument.getSelection()` silently returns an
-  INVALID selection if an endpoint is >~7pt from a glyph, or if both endpoints
-  hit the same character. Never anchor at page corners/edges — use
-  `getAllText` / `getSelectionAtIndex` (index space) or the probe helpers
-  (`_probe_selection_at`, `_snap_to_char`).
 - **Host-window shortcut ambiguity**: widget-scoped QShortcuts that collide
   with Browse/AddCards QActions (⌘F, ⌘G, ⌘⌥G, ⇧⌘G, ⇧⌘H) become *dead keys*.
   The viewer claims them via `QEvent.ShortcutOverride` + KeyPress handling.
@@ -1304,8 +1370,6 @@ same reason.
 - **`QSplitter.setOrientation` transposes its sizePolicy** — re-assert the
   wrapped pane's policy after every orientation change or the host layout's
   stretch hints are lost (blank-space bug in the Add window).
-- **One `QPdfDocument` is reused across tabs** — cache by
-  `_doc_generation` (bumped in `set_document`), never `id(doc)`.
 - **Anki stores DECODED filenames in note fields** (`reverse_url_quoting` on
   save) and entity-escapes attribute values — `_replace_img_src` matches raw,
   percent-decoded, and html-unescaped forms.
@@ -1335,15 +1399,12 @@ same reason.
   page reads as "broken file" when it is the proxy that is broken;
   PDFKit — the framework Preview.app itself draws with — is the honest
   check, pdf.js with `annotationMode: ENABLE` the second.
-- **pdfium renders annotations only WITH `RenderFlag.Annotations`** — the
-  viewer and image copies render without it, so baked-in highlights never
-  double-draw under the screen overlay. The coordinate flip is
-  `y_pdf = page_mediabox_height − (y_qt + h)` (verified pixel-exact).
-- **Selection-path perf caches** (pdf_viewer): `_page_geoms_cache` keyed
-  (doc generation, viewport width, zoom mode, zoom factor, vsb.max);
-  `_alltext_bounds_cache` keyed (generation, page); `_probe_selection_at`
-  has a `fast=True` mode for per-mouse-move callers. Rewiring selection
-  code must respect these or drag/scroll jank returns.
+- **pdfium (QtPdf) renders annotations only WITH `RenderFlag.Annotations`**
+  — `page_store.render_page_png` (the external page tool's image and the
+  garbled-page OCR) renders without it, so its images carry no baked
+  marks. The bake's coordinate flip from the records' top-left page
+  points is `y_pdf = page_mediabox_height − (y + h)` (verified
+  pixel-exact).
 - **A GUI-launched app inherits a minimal PATH**: binary discovery must
   account for GUI launch environments. The removed `agent_host.find_claude`
   used `shutil.which`, a bounded login-shell lookup, then known paths.

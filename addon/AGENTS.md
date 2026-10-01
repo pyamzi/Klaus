@@ -55,7 +55,12 @@ Addons/                       # Git repo root
     ├── pdf_index.py            # Persistent embedding index over one PDF — ONE vector per page (aqt-free)
     ├── retention.py            # Per-PDF retention/study-priority scoring for the Library
     ├── pdf_handler.py          # PDF import/storage, text extraction, per-tab state, annotation baking
-    ├── pdf_viewer.py           # PdfViewer (QPdfView + selection/highlight overlay, find, thumbnails) and PdfSidebar
+    ├── pdfjs_viewer.py         # PdfJsViewer: the one PDF reader (pdf.js in a webview); Python owns the annotations JSON
+    ├── reader_panel.py         # PdfSidebar: the reader panel every host wraps ("PDF viewer is unavailable" without QtWebEngine)
+    ├── reader_tabs.py          # ReaderTabs: the reader's tab strip ([＋] [tabs] … [page n/m]), one tab set per host
+    ├── pdf_source.py           # Piece loading: DocSource byte ranges from a hard-link snapshot (user_files/reading), ≤1 MB a call
+    ├── doc_sync.py             # Open-PDF folder sync: watcher + rescan events changed/moved/missing/back; own writes pinned
+    ├── annotation_save.py      # SavePipeline: the one bake path (500 ms debounce, one worker per PDF, retry, flush on close)
     ├── pdf_drive.py            # The Library's disk half: background folder scan, watcher, delete-to-Trash
     ├── library_sidebar.py      # The Library in Browse's sidebar: real names, retention %, icons, menus, footer
     ├── tasks.py                # The one list of running processes (aqt-free, thread-safe reports)
@@ -74,7 +79,9 @@ Addons/                       # Git repo root
     ├── config.md               # Config key documentation (shown in Anki config UI)
     ├── manifest.json           # Package name and version for non–AnkiWeb distribution
     ├── web/
-    │   └── copilot.js          # Editor field-focus tracking (for PDF page-insert targeting) + image-crop dblclick trigger
+    │   ├── copilot.js          # Editor field-focus tracking (for PDF page-insert targeting) + image-crop dblclick trigger
+    │   ├── pdfjs_viewer.html   # The reader page (pdf.js 3.11.174 vendored in pdfjs/; pure helpers in pdfjs_pure.js)
+    │   └── pdfjs/              # Vendored pdf.js
     ├── vendor/                 # Vendored pure-Python deps (pypdf 6.11.0) — the sole third-party exception
     └── user_files/             # Persisted across upgrades — never write here from a test
         ├── contexts/           # *.json (per-page PDF text), one per imported PDF
@@ -85,7 +92,9 @@ Addons/                       # Git repo root
         ├── drive.json           # Library's virtual folders + window geometry (drive_store.py)
         ├── card_index/          # Packed vectors.f32 + manifest.json for semantic deck search
         ├── pdf_index/           # Per-PDF embedding indexes (one vector per page) and cosine matches
-        └── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text (page_store.py)
+        ├── pages/               # <pdf_safe>/<digest12>/<page:04d>.json — slide text (page_store.py)
+        ├── library_stats.json   # {safe: [size, mtime_ns]} per mapped PDF — spots closed PDFs changed outside Klaus
+        └── reading/             # Hard-link snapshots the open readers read ranges from (pdf_source.py)
 ```
 
 **Install path:** `addons21/klausmate/` (folder name must be alphanumeric per Anki conventions).
@@ -156,11 +165,11 @@ The judge, doubtful count and Doubtful cards menu were removed in D2.
 `Doubtful` remains a reserved historical tag name; existing user tags are
 not deleted by the rebuild. See [tag membership](klausmate/tag_sync.py).
 
-### PDF viewer (`pdf_viewer.py`)
+### PDF reader (`pdfjs_viewer.py`, `reader_panel.py`)
 
-- One `QPdfView` in **MultiPage / FitToWidth** mode inside a `PdfSidebar` widget, opened from the Library or the editor's drop panel.
-- Layout math mirrors Qt's `QPdfViewPrivate::calculateDocumentLayout` (screen DPI / 72, margins, page spacing, centered page width) — required so hit-testing and selection highlights line up.
-- Text selection: viewport `eventFilter` drags map to `(page, QPointF)` via `_viewport_to_page_point`; `QPdfDocument.getSelection()` is called per page (multi-page drags supported); highlights painted by `_SelectionOverlay` using `QPdfSelection.bounds()`.
+- One reader everywhere: pdf.js in a webview (`PdfJsViewer`) inside a `PdfSidebar` panel, with a `ReaderTabs` strip and its own tab set per host. The native QPdfView renderer was deleted in PDF reader 5/5; without QtWebEngine the panel shows "PDF viewer is unavailable".
+- Loading is piecewise: the page gets the file length and the first 256 KB, then pdf.js asks for byte ranges over the bridge (`pdf_source`). The page owns rendering, selection (pdf.js text layer), zoom and find; Python owns the annotations JSON.
+- Outside edits, renames and deletes reach an open reader through `doc_sync`; every save goes through `annotation_save`'s pipeline.
 - **Cmd+C** / right-click **Copy** copy selected text; **Cmd/Ctrl-double-click** a page, or right-click **Copy slide as image**, copies it as an image (there is no toolbar button for this — it was removed).
 - Highlights and sticky notes are baked into the stored PDF as real annotations by `pdf_handler.bake_annotations` (vendored `pypdf`).
 
@@ -372,7 +381,8 @@ un-retires its local runtime keys.
 |-----------|--------|
 | Anki / aqt / gui_hooks | Anki runtime |
 | `pypdf` 6.11.0 | Vendored under `klausmate/vendor/`; the sole vendored third-party Python dependency |
-| `PyQt6.QtPdf` / `PyQt6.QtPdfWidgets` | Anki's PyQt6 (PDF viewer; graceful fallback if missing) |
+| `PyQt6.QtWebEngine` | Anki's PyQt6 (the pdf.js reader; "PDF viewer is unavailable" label if missing) |
+| `PyQt6.QtPdf` | Anki's PyQt6 (page images only: `page_store.render_page_png`) |
 | Ollama | Managed local runtime; no cloud embedding fallback |
 | External MCP client | Separate client connects through a stdio bridge while Anki runs |
 
@@ -431,7 +441,7 @@ mypy klausmate
 
 - Prefer **gui_hooks** over monkey-patching.
 - Background work: always `QueryOp` / `without_collection()` for network calls (including local Ollama HTTP calls); UI updates via `mw.taskman.run_on_main` when needed.
-- Import Qt from `aqt.qt`; QtPdf from `PyQt6.QtPdf` behind try/except (`pdf_viewer.py`).
+- Import Qt from `aqt.qt`; QtPdf from `PyQt6.QtPdf` only inside the function that uses it (`page_store.render_page_png`).
 - Editor-attached state via attributes — see "Editor-attached state" above.
 - When adding config keys: update `config.json`, `config.md`, and the relevant section of `manage_models.py`.
 
