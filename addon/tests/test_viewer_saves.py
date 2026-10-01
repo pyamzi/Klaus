@@ -56,6 +56,37 @@ pv = importlib.import_module("klausmate.pdf_viewer")
 pj = importlib.import_module("klausmate.pdfjs_viewer")
 COPY = "Marks couldn't be saved into the file yet; they're kept and will retry."
 
+section("user_files_dir(): settings seam when present, USER_FILES otherwise")
+pkg = sys.modules["klausmate"]
+_MISSING = object()
+saved_mod = sys.modules.get("klausmate.settings", _MISSING)
+saved_attr = getattr(pkg, "settings", _MISSING)
+fake_settings = types.ModuleType("klausmate.settings")
+fake_settings.user_files = lambda: os.path.join(TMP, "from-settings")
+try:
+    sys.modules["klausmate.settings"] = fake_settings
+    pkg.settings = fake_settings
+    check("with a settings module: settings.user_files()",
+          src.user_files_dir() == os.path.join(TMP, "from-settings"))
+    sys.modules["klausmate.settings"] = None  # import raises ImportError
+    if hasattr(pkg, "settings"):
+        del pkg.settings
+    check("without one: the package's USER_FILES", src.user_files_dir() == TMP)
+finally:
+    if saved_mod is _MISSING:
+        sys.modules.pop("klausmate.settings", None)
+    else:
+        sys.modules["klausmate.settings"] = saved_mod
+    if saved_attr is not _MISSING:
+        pkg.settings = saved_attr
+    elif hasattr(pkg, "settings"):
+        del pkg.settings
+
+UFD = os.path.join(TMP, "ufd")  # every viewer path below resolves here
+src.user_files_dir = lambda: UFD
+check("pdf.js snapshots under <user_files_dir()>/reading",
+      pj._reading_dir() == os.path.join(UFD, "reading"))
+
 
 class FakePipe:
     def __init__(self):
@@ -130,7 +161,7 @@ for label, cls in (("native", pv.PdfViewer), ("pdf.js", pj.PdfJsViewer)):
           tips == [COPY] and loaded == [] and g.redraws == 0)
     cls._on_save_event(g, "records", "A")
     check("'records' reloads this viewer's marks",
-          loaded == [(src.user_files_dir(), "A")] and g._highlights == [{"id": "r"}]
+          loaded == [(UFD, "A")] and g._highlights == [{"id": "r"}]
           and g.redraws == 1)
     cls._on_save_event(g, "saved", "A")
     check("'saved' needs nothing from the viewer", tips == [COPY] and g.redraws == 1)

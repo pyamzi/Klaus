@@ -144,11 +144,10 @@ def first_chunk(source: Any) -> tuple[int, str]:
 
 
 def _reading_dir() -> str:
-    """``<user files>/reading``: where open PDFs are hard-link snapshotted.
-    ``<addon>/user_files`` is the one user-files folder (``USER_FILES`` in
-    ``__init__``), derived here rather than imported back from the package."""
-    addon = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(addon, "user_files", "reading")
+    """``<user files>/reading``: where open PDFs are hard-link snapshotted."""
+    from . import pdf_source
+
+    return os.path.join(pdf_source.user_files_dir(), "reading")
 
 
 _SWEPT = False  # leftover snapshots are swept once per process

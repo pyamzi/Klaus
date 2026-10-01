@@ -25,9 +25,17 @@ MAX_RANGE = 1048576
 
 
 def user_files_dir() -> str:
-    """The add-on's user-files folder (Ruling R25: never realpath'd, so it
-    matches what the rest of the add-on derives from its own path)."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_files")
+    """The add-on's user-files folder (Ruling R25, amended): the settings
+    seam's ``settings.user_files()`` where that module exists (tests point
+    it at scratch), else the package's ``USER_FILES``."""
+    try:
+        from . import settings
+
+        return settings.user_files()
+    except ImportError:
+        from . import USER_FILES
+
+        return USER_FILES
 
 
 class StaleSource(Exception):
