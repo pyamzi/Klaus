@@ -445,13 +445,12 @@ check("malformed input degrades to empty",
       and pv.records_from_rect_map({"x": [[1, 2, 3, 4]]}) == [])
 
 section("duck-typed viewer surface")
-# Shared PdfSidebar/poller code calls these on WHICHEVER renderer is
-# active (grep reader_panel.py for `self._viewer.` and `v._`). A missing
-# one is a live AttributeError — _apply_mirror crashed exactly that way
-# on 2026-08-25 (external-change poll against the pdfjs renderer).
+# PdfSidebar and its hosts call these on the viewer (grep reader_panel.py
+# for `self._viewer.` and `v.`). A missing one is a live AttributeError —
+# _apply_mirror crashed exactly that way on 2026-08-25 (external-change
+# poll against the pdfjs renderer).
 for attr in ("load_path", "set_page_texts", "load_annotations",
-             "set_document", "clear_document", "go_to_page",
-             "scroll_position", "restore_scroll_position",
+             "clear_document", "go_to_page",
              "toggle_thumbnails", "_apply_mirror",
              "_refresh_highlight_overlay", "_start_foreign_mirror"):
     check(f"PdfJsViewer has {attr}", hasattr(pv.PdfJsViewer, attr))

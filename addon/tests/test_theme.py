@@ -32,9 +32,7 @@ section("QSS builders substitute tokens for both modes")
 builders = [
     ("dialog_qss", theme.dialog_qss),
     ("panel_header_qss", theme.panel_header_qss),
-    ("find_bar_qss", theme.find_bar_qss),
     ("pdf_panel_qss", theme.pdf_panel_qss),
-    ("thumb_strip_qss", theme.thumb_strip_qss),
     # The Anki-window builders (window_chrome consumers) join here so
     # every audit below — tokens substituted, background present, the
     # K-110 radius/font design scale — applies to them by construction.
@@ -284,10 +282,9 @@ for night in (False, True):
     check(f"css_vars(night={night}) takes --hover-subtle from the "
           "palette token, not a hand-mixed neutral",
           f"--hover-subtle: {c['hover_subtle']};" in cv)
-    check(f"css_vars(night={night}): that is the fill find_bar_qss "
-          "and thumb_strip_qss hover their Qt siblings with",
-          c["hover_subtle"] in theme.find_bar_qss(night)
-          and c["hover_subtle"] in theme.thumb_strip_qss(night))
+    check(f"css_vars(night={night}): that is the fill panel_header_qss "
+          "(the reader's tab strip) hovers its Qt sibling with",
+          c["hover_subtle"] in theme.panel_header_qss(night))
 check("light and dark hover fills actually differ (a single baked "
       "neutral would pass every check above)",
       theme.LIGHT["hover_subtle"] != theme.DARK["hover_subtle"])
@@ -329,13 +326,11 @@ section("one PDF viewer everywhere (K-153): pdf_panel_qss, self-applied")
 # because it should be consistent no matter what." The viewer has three
 # hosts — the editor panel, the Library window, the review-time lecture
 # dock — and before this card the only parts of it that looked identical
-# in all three were the ones that SELF-STYLE (#KlausFindBar,
-# #KlausThumbStrip, and pdf.js's css_vars). Everything else drifted
-# because it relied on ancestry: PdfSidebar carried no sheet and no
-# styled background, so it painted nothing and the host showed through
-# every gap. Measured offscreen, the worst of it was a ~4px NEAR-WHITE
-# vertical seam (rgb 239) where the thumb-strip splitter handle sat on
-# the #191919 dark panel, in every host but the Library.
+# in all three were the ones that SELF-STYLE (the native find bar and
+# thumb strip, deleted in PDF reader 5/5, and pdf.js's css_vars).
+# Everything else drifted because it relied on ancestry: PdfSidebar
+# carried no sheet and no styled background, so it painted nothing and
+# the host showed through every gap.
 _pdf_panel_src = open("klausmate/reader_panel.py").read()
 
 for night in (False, True):
@@ -360,36 +355,21 @@ for night in (False, True):
           "deterministic ground instead of letting the host bleed through",
           _panel_blk is not None
           and f"background-color: {c['bg']}" in _panel_blk.group(1))
-    _handle_blk = re.search(
-        r"QWidget#KlausPdfPanel QSplitter::handle \{(.*?)\}", _no_c, re.S
-    )
-    check(f"pdf_panel_qss(night={night}): the splitter handle is the "
-          "panel ground — this is the seam that was near-white on dark",
-          _handle_blk is not None and c["bg"] in _handle_blk.group(1))
     _label_blk = re.search(
         r"QWidget#KlausPdfPanel QLabel \{(.*?)\}", _no_c, re.S
     )
     check(f"pdf_panel_qss(night={night}): labels default to text_muted — "
-          "the viewer's labels are all secondary readouts, and the two "
-          "fallback labels carry no sheet of their own, so without this "
-          "they took utility_window_qss's bare QLabel colour in Add Cards",
+          "the panel's labels are secondary readouts, and the "
+          "fallback label carries no sheet of its own, so without this "
+          "it took utility_window_qss's bare QLabel colour in Add Cards",
           _label_blk is not None
           and f"color: {c['text_muted']}" in _label_blk.group(1))
-    # find_bar_qss and thumb_strip_qss live INSIDE this panel and must
-    # keep winning. They do so by construction — a widget's own
-    # stylesheet beats an inherited one irrespective of specificity
-    # (measured on PyQt6 6.10.2 / Qt 6.10.0: a selector-less widget
-    # sheet held against an ancestor's `QWidget#X QLabel#Y` rule) — but
-    # only as long as this sheet never grows rules in their territory.
-    check(f"pdf_panel_qss(night={night}) never names the find bar or the "
-          "thumb strip — their sheets own those surfaces",
-          "KlausFindBar" not in pq and "KlausThumbStrip" not in pq)
-    # The hover family is find_bar_qss's and thumb_strip_qss's, keyed on
-    # the hover_subtle token that css_vars mirrors for the pdf.js half
-    # (pinned above). A hover rule here would be a fourth definition of
-    # the same interaction, on a surface that has no hover state.
+    # The hover family is keyed on the hover_subtle token that css_vars
+    # mirrors for the pdf.js half (pinned above). A hover rule here
+    # would be another definition of the same interaction, on a surface
+    # that has no hover state.
     check(f"pdf_panel_qss(night={night}) declares no hover state — the "
-          "hover_subtle family stays with the two sheets that own it",
+          "hover_subtle family stays with the sheets that own it",
           ":hover" not in pq)
     # Scrollbars are the one part of the viewer already identical in
     # every host, precisely because NOTHING styles them. Styling them

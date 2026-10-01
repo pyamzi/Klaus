@@ -243,8 +243,17 @@ spin()
 check("reloads the same file exactly once, in place, keeping page and zoom",
       [c for c in v.calls if c[0] == "load_path"] == [("load_path", DOC, "Doc", True)]
       and loads == [], f"{v.calls} {loads}")
-check("...and re-reads the marks, which runs the outside-mark mirror",
-      v.calls[-1] == ("load_annotations", "Doc"), str(v.calls))
+check("...and re-reads the marks", v.calls[-1] == ("load_annotations", "Doc"), str(v.calls))
+# The last link, on the real viewer: its load_annotations is what starts
+# the outside-mark mirror (K-082), on every load and reload from disk.
+_mstand = REAL_JS.__new__(REAL_JS)
+_mirrored: list = []
+_mstand._push_annotations = lambda: None
+_mstand._start_foreign_mirror = _mirrored.append
+REAL_JS.load_annotations(_mstand, "Doc")
+check("...which, on the real PdfJsViewer, reads the JSON and starts the outside-mark mirror",
+      _mirrored == ["Doc"] and [h.get("id") for h in _mstand._highlights] == ["m1"],
+      f"{_mirrored} {_mstand._highlights}")
 check('toasts exactly "Updated from disk"', TIPS == ["Updated from disk"], str(TIPS))
 check("no save is requested", PIPE.requests == [], str(PIPE.requests))
 loads.clear()

@@ -439,8 +439,8 @@ class PdfSidebar(QWidget):
         destroyed. The pdf.js viewer owns an AnkiWebView, which must be
         unregistered from Anki's global hooks (see PdfJsViewer.cleanup),
         and drops its save-pipeline subscription. Bakes pending marks and
-        releases the document in
-        doc_sync first. Call from every path that tears a sidebar down."""
+        releases the document in doc_sync first. Call from every path
+        that tears a sidebar down."""
         self._release()
         unsub, self._unsub_doc = self._unsub_doc, None
         if unsub is not None:

@@ -831,42 +831,33 @@ def pdf_panel_qss(night: bool) -> str:
     because it should be consistent no matter what." The viewer lives
     in three hosts — the editor panel, the Library window and the
     review-time lecture dock — and only the parts that SELF-STYLE
-    (``find_bar_qss``'s ``#KlausFindBar``, ``thumb_strip_qss``'s
-    ``#KlausThumbStrip``, and pdf.js's ``css_vars``) already looked
-    identical in all three. Everything that drifted, drifted because
-    it relied on ancestry: ``PdfSidebar`` was a plain QWidget with no
-    sheet and no ``WA_StyledBackground``, so it painted NOTHING and
-    whatever was behind it showed through every gap — the find bar's
-    margins, the strip gutter, the QPdfView frame. In the Library that
-    ambient was ``library_qss``; in the lecture dock, ``mw``'s stock
-    palette; in the editor panel, whatever the host happened to be.
+    (the native viewer's find bar and thumbnail strip, both deleted
+    with it in PDF reader 5/5, and pdf.js's ``css_vars``) already
+    looked identical in all three. Everything that drifted, drifted
+    because it relied on ancestry: ``PdfSidebar`` was a plain QWidget
+    with no sheet and no ``WA_StyledBackground``, so it painted NOTHING
+    and whatever was behind it showed through every gap around the
+    viewer. In the Library that ambient was ``library_qss``; in the
+    lecture dock, ``mw``'s stock palette; in the editor panel,
+    whatever the host happened to be.
     And ``klausbook_design`` defaults FALSE, so two of the three hosts
     inherited nothing at all in a default profile while the Library —
     Klaus's own window — was styled unconditionally. That asymmetry is
     the whole reason the Library's viewer looked best.
 
-    So ``PdfSidebar`` applies this TO ITSELF, the way the find bar and
-    the strip already do: no host can forget it, and a fourth host
-    gets the look for free. ONE id selector, deliberately — the sheet
-    must not grow rules that duplicate the find bar's or the strip's
-    territory. It cannot outrank them in any case: a widget's own
-    stylesheet beats an inherited one irrespective of specificity
-    (measured, K-153), and both of those carry their own.
+    So ``PdfSidebar`` applies this TO ITSELF: no host can forget it,
+    and a fourth host gets the look for free. ONE id selector,
+    deliberately. A child widget's own stylesheet still beats this
+    inherited one irrespective of specificity (measured, K-153).
 
     Contents, and why each is here:
 
     * the panel background — one deterministic base instead of bleed.
-    * ``QSplitter::handle`` — the ONE rule of ``library_qss``'s ~20
-      that ever reached inside the viewer (its thumb-strip splitter).
-      Scoped as a descendant of the panel so it CANNOT touch the
-      Library window's own two splitters, which still take theirs from
-      the window-scoped copy that stays put in :func:`library_qss`.
-    * ``QLabel`` — the viewer's labels are all secondary readouts (the
-      page indicator, the find-bar match counter, the two
-      viewer-unavailable fallbacks). The two readouts carry
-      ``muted_label_qss`` on themselves and were never at risk; the
-      FALLBACKS carry nothing, so they took their colour from whatever
-      window they were in — ``utility_window_qss``'s bare
+    * ``QLabel`` — the panel's labels are secondary readouts (the page
+      indicator, the viewer-unavailable fallback). A readout that
+      carries ``muted_label_qss`` on itself was never at risk; the
+      FALLBACK carries nothing, so it took its colour from whatever
+      window it was in — ``utility_window_qss``'s bare
       ``QLabel { color: text }`` in Add Cards. This makes muted the
       panel's default for any label that does not ask otherwise,
       including ones added later.
@@ -881,50 +872,9 @@ def pdf_panel_qss(night: bool) -> str:
     QWidget#KlausPdfPanel {{
         background-color: {c['bg']};
     }}
-    QWidget#KlausPdfPanel QSplitter::handle {{
-        background: {c['bg']};
-    }}
     QWidget#KlausPdfPanel QLabel {{
         color: {c['text_muted']};
         background: transparent;
-    }}
-    """
-
-
-def find_bar_qss(night: bool) -> str:
-    """The viewer's find bar, objectName ``KlausFindBar`` — surface strip,
-    rounded input with an accent focus ring, borderless nav glyphs."""
-    c = palette(night)
-    return f"""
-    QWidget#KlausFindBar {{
-        background-color: {c['surface']};
-        border-bottom: 1px solid {c['grey_light']};
-    }}
-    QWidget#KlausFindBar QLineEdit {{
-        background-color: {c['bg']};
-        color: {c['text']};
-        border: 1px solid {c['grey_mid']};
-        border-radius: 8px;
-        padding: 3px 8px;
-    }}
-    QWidget#KlausFindBar QLineEdit:focus {{
-        border: 1px solid {c['blue_bright']};
-    }}
-    QWidget#KlausFindBar QToolButton {{
-        background: transparent;
-        color: {c['text_muted']};
-        border: 1px solid transparent;
-        border-radius: 6px;
-        padding: 1px 6px;
-        font-weight: 600;
-    }}
-    QWidget#KlausFindBar QToolButton:focus {{
-        border: 1px solid {c['blue_bright']};
-    }}
-    QWidget#KlausFindBar QToolButton:pressed {{ background: {c['grey_mid']}; }}
-    QWidget#KlausFindBar QToolButton:hover {{
-        background: {c['hover_subtle']};
-        color: {c['text']};
     }}
     """
 
@@ -1029,34 +979,6 @@ def assistant_dock_qss(night: bool) -> str:
         background-color: {c['grey_light']};
         color: {c['text_faint']};
         border: none;
-    }}
-    """
-
-
-def thumb_strip_qss(night: bool) -> str:
-    """The viewer's page-thumbnail strip, objectName ``KlausThumbStrip``:
-    page-bg column, items as rounded cards, accent ring on the current
-    page's selection."""
-    c = palette(night)
-    return f"""
-    QListWidget#KlausThumbStrip {{
-        background-color: {c['bg']};
-        border: none;
-        border-right: 1px solid {c['grey_light']};
-        padding: 6px;
-    }}
-    QListWidget#KlausThumbStrip::item {{
-        border: 2px solid transparent;
-        border-radius: 8px;
-        margin: 3px 2px;
-        color: {c['text_muted']};
-    }}
-    QListWidget#KlausThumbStrip::item:hover {{
-        background: {c['hover_subtle']};
-    }}
-    QListWidget#KlausThumbStrip::item:selected {{
-        background: {c['selection_bg']};
-        border: 2px solid {c['blue_bright']};
     }}
     """
 
@@ -1351,8 +1273,8 @@ def css_vars(night: bool) -> str:
     drift (SynapsePro mirrors its palette into ``:root`` the same way).
 
     ``--hover-subtle`` is the webview half of the SAME hover fill every
-    QSS builder reaches for (``find_bar_qss``, ``thumb_strip_qss``,
-    ``library_qss`` — all ``c['hover_subtle']``): the pdf.js findbar,
+    QSS builder reaches for (``panel_header_qss`` among them — all
+    ``c['hover_subtle']``): the pdf.js findbar,
     annobar, context menu and thumbnail strip hover over ``--surface``
     exactly as their Qt siblings do, so the token, not a hand-mixed
     neutral, is what keeps the two halves of that family in step.

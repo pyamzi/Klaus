@@ -1205,7 +1205,7 @@ document.getElementById("scroll").addEventListener("dblclick", (ev) => {
 const marqueeEl = document.getElementById("marquee");
 
 /* ---- persisted marquee (K-100): the region survives release ------- */
-/* Native semantics mirrored from pdf_viewer.py: the rect is kept after
+/* Semantics kept from the deleted native viewer: the rect is kept after
    the creation drag (like Preview); a plain left press anywhere else
    collapses it; press-and-move INSIDE it drags the region image out;
    a click inside that never becomes a drag clears it on release; the
@@ -1234,8 +1234,8 @@ function positionPersistMarquee() {
     el.addEventListener("dragstart", (ev) => {
       const cur = state.persistMarquee;
       if (!cur || !cur.dataUrl) { ev.preventDefault(); return; }
-      /* Drag-out, webview edition: the page cannot start the native
-         QDrag+QMimeData image drag QPdfView uses, so the region
+      /* Drag-out, webview edition: the page cannot start a native
+         QDrag+QMimeData image drag, so the region
          travels as HTML carrying a data: URI image — what Anki's
          editor webview accepts on drop and inlines through its own
          paste pipeline. Rendered/cached at persist time because

@@ -773,7 +773,7 @@ section("a partial Qt surface degrades the DOCK, not the whole module (K-161)")
 # arguments" — so an environment whose aqt.qt is partial loses the
 # resolver, the config keys and the hooks too, not just the panel it could
 # not have drawn anyway. The guarded-import-with-None-fallback convention
-# (PDF_VIEWER_AVAILABLE and friends) is correct for names used as VALUES
+# (PDFJS_AVAILABLE and friends) is correct for names used as VALUES
 # and a trap for names used as BASE CLASSES. Found in
 # index_queue._StatusDock first (K-152, where tests/test_drive.py's
 # explicit aqt.qt stub reported the whole K-152 block as one opaque

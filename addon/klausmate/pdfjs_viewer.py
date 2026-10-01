@@ -896,11 +896,9 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
 class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     """Every reader's viewer (PDF reader 3/5; the only one since 5/5).
 
-    Matches the surface PdfSidebar and the tab container actually use:
-    ``load_path`` (the pdf.js entry — the sidebar calls it instead of
-    ``set_document``), ``set_page_texts``, ``load_annotations``,
-    ``clear_document``, ``go_to_page``, ``scroll_position`` /
-    ``restore_scroll_position``, ``toggle_thumbnails``, ``_page_label``.
+    The surface PdfSidebar and its hosts use: ``load_path``,
+    ``set_page_texts``, ``load_annotations``, ``clear_document``,
+    ``go_to_page``, ``toggle_thumbnails``, ``_page_label``.
     """
 
     def __init__(
@@ -948,8 +946,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._goto_dlg: Any = None  # live Go to Page prompt (singleton)
 
         # Bakes run in annotation_save's one pipeline (PDF reader 1/5),
-        # shared with the native viewer: this one only hears the events
-        # for its own document.
+        # shared by every reader: this one only hears the events for its
+        # own document.
         self._unsub_save: Optional[Callable[[], None]] = None
         try:
             from . import annotation_save
@@ -960,9 +958,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         except Exception as exc:
             print(f"[klausmate] pdfjs save pipeline subscribe failed: {exc}")
 
-        # Same adoption contract as the native viewer: the tab container
-        # re-parents this label into the panel header bar. Clicking it
-        # opens Go to Page (native parity).
+        # The reader's tab strip (ReaderTabs) re-parents this label into
+        # its row. Clicking it opens Go to Page.
         self._page_label = QLabel("", self)
         try:
             from . import theme
@@ -1711,11 +1708,11 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         )
         self._web.eval(f"window.klausPdfOpen && window.klausPdfOpen({args});")
 
-    # ---- PdfViewer-surface parity ---------------------------------------
+    # ---- the surface PdfSidebar uses -------------------------------------
 
     def set_page_texts(self, pages: list[str]) -> None:
-        # pdf.js extracts its own text layer; retained so the sidebar's
-        # call sites stay identical across renderers.
+        # pdf.js extracts its own text layer; the stored page texts only
+        # seed the page count until the document reports its own.
         if self._page_count == 0:
             self._page_count = len(pages)
 
@@ -1735,8 +1732,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
     # ---- outside-annotation mirror (K-082) -------------------------------
     # load_annotations starts the mirror on every load and every reload
-    # from disk; _apply_mirror mirrors the native viewer's method of the
-    # same name.
+    # from disk.
     # The scan/merge machinery is pdf_handler's and fully shared; only
     # the last hop — putting refreshed records on screen — differs, and
     # here that is a push through klausSetAnnotations.
@@ -1800,9 +1796,6 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             target=_worker, name="klausmate-pdfjs-extmirror", daemon=True
         ).start()
 
-    def set_document(self, *_a: Any) -> None:
-        pass  # native-renderer concept; load_path is the pdfjs entry
-
     def _page_close(self, error: Optional[str] = None) -> None:
         """Tear the page's document down for the current generation and,
         given *error*, show it where the pages were."""
@@ -1823,17 +1816,6 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._eval(
             f"window.klausGoToPage && window.klausGoToPage({int(page) + 1});"
         )
-
-    def scroll_position(self) -> int:
-        return self._scroll_pos
-
-    def restore_scroll_position(self, pos: Any) -> None:
-        try:
-            y = int(pos)
-        except (TypeError, ValueError):
-            return
-        self._scroll_pos = y
-        self._eval(f"window.klausScrollTo && window.klausScrollTo({y});")
 
     def toggle_thumbnails(self) -> None:
         self._eval("window.klausToggleThumbs && window.klausToggleThumbs();")

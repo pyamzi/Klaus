@@ -1682,7 +1682,8 @@ def save_annotations(
     """Write highlights for ``name`` — SYNCHRONOUS by design (plan B).
 
     Saves are rare and tiny; a debounce would risk cross-tab loss when
-    ``load_pdf`` swaps the shared QPdfDocument before the flush fires.
+    ``load_pdf`` moves the shared viewer to another document before the
+    flush fires.
     Top-level keys other than ``highlights`` are preserved (K-081: the
     suppressed_external tombstones used to be dropped on every save).
     """
@@ -1799,8 +1800,8 @@ def _atomic_replace_from(src_path: str, dest_path: str) -> None:
     """Copy ``src_path`` over ``dest_path`` atomically (tmp + os.replace).
 
     The tmp file lives in the destination directory so ``os.replace`` is
-    a same-filesystem rename — safe even while a QPdfDocument still holds
-    the old inode open.
+    a same-filesystem rename — safe even while a reader still holds the
+    old inode open.
     """
     dest_dir = os.path.dirname(dest_path)
     tmp = os.path.join(

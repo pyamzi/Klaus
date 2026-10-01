@@ -349,6 +349,47 @@ check("...and the panel shows the unavailable label, never a blank panel",
 check("...and says so in one log line",
       _out.getvalue().count("pdf.js unavailable") == 1, _out.getvalue())
 
+section("R45: the no-viewer reader still loads, switches tabs, follows pages and clears")
+for _n in ("a", "b"):  # stored PDFs (pdfs/<n>.pdf above) with a 3-page text layer
+    with open(os.path.join(UF, "contexts", _n + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"pages": ["one", "two", "three"]}, f)
+_errs45 = []
+
+
+def _try45(label, fn):
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        _errs45.append(f"{label}: {exc!r}")
+
+
+real_hook = sys.excepthook
+sys.excepthook = lambda *a: _errs45.append(f"slot: {a[1]!r}")
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        _try45("load_pdf", lambda: nat.load_pdf("a"))
+        spin()
+        check("load_pdf names the document, counts its pages and opens its tab",
+              nat.is_loaded("a") and nat._page_count == 3 and nat.tabs.current() == "a",
+              f"{nat._name} {nat._page_count} {nat.tabs.names()}")
+        check("...with the unavailable label still showing", nat._fallback_label.isVisible())
+        _try45("tab switch", lambda: nat.tabs.open("b"))
+        spin()
+        check("a tab switch loads the other document", nat.is_loaded("b"), str(nat._name))
+        _try45("page changed", lambda: nat.notify_page_changed(2))
+        check("the page path writes the strip's own page label (no viewer label to adopt)",
+              nat._current_page == 2 and nat.tabs.page_label.text() == "3 / 3",
+              nat.tabs.page_label.text())
+        _try45("jump_to_page", lambda: nat.jump_to_page(1))
+        _try45("changed on disk", lambda: nat._on_doc_event("changed", "b", None))
+        spin()
+        check("a change on disk reloads it in place", nat.is_loaded("b"), str(nat._name))
+        _try45("clear", nat.clear)
+        check("clear forgets the document", nat._name is None and nat._page_count == 0)
+finally:
+    sys.excepthook = real_hook
+check("none of it raised", _errs45 == [], str(_errs45))
+
 section("a failing tab sync cannot escape load_pdf (_notify_loaded)")
 heard = []
 nat.on_loaded = heard.append
