@@ -416,6 +416,14 @@ same reason.
   `text_muted`. The self-painted `_PaneToggle` and `_VisibilityWatcher`
   remain for Browse outside the single window, beside its status-bar
   gear; plus the `browser_will_show` layout repair.
+  `pane_keep.py`: a toggle hides or shows one pane and keeps the
+  OPPOSITE one at its width (`set_visible_keeping(widget, on,
+  opposite)`); the difference goes to the widest other splitter pane
+  (the reader, the card table). A plain `setVisible` made Qt share the
+  change across every pane, so the opposite sidebar grew or shrank too.
+  A dock never matches an outer splitter (the climb stops at a main
+  window), and the width is put back now and again a tick later, when a
+  main window re-lays its docks.
 - `tasks.py` (aqt-free) + `status_bar.py` + `bottom_row.py` (spec
   [status-bar](docs/superpowers/specs/2026-09-30-status-bar-design.md)).
   **Main window: NO Qt bar** (the user's call, 2026-09-30, after the
