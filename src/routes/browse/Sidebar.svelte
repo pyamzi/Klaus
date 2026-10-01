@@ -10,6 +10,12 @@
   } from "@generated/anki/search_pb";
   import type { PlainMessage } from "@bufbuild/protobuf";
   import { onMount } from "svelte";
+  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
+  import XIcon from "@lucide/svelte/icons/x";
+  import { Button } from "$lib/components/ui/button";
+  import * as Collapsible from "$lib/components/ui/collapsible";
+  import { Input } from "$lib/components/ui/input";
+  import { ScrollArea } from "$lib/components/ui/scroll-area";
 
   type Node = PlainMessage<SearchNode>;
   type Item = { label: string; node: Node; children: Item[] };
@@ -116,64 +122,73 @@
 </script>
 
 {#snippet tree(items: Item[])}
-  <ul>
+  <ul class="flex flex-col">
     {#each items as item (item.label)}
       <li>
-        <button class="item" onclick={() => onsearch(item.node)}>{item.label}</button>
-        {#if item.children.length}{@render tree(item.children)}{/if}
+        <Button variant="ghost" size="xs" class="w-full justify-start font-normal" onclick={() => onsearch(item.node)}>
+          <span class="truncate">{item.label}</span>
+        </Button>
+        {#if item.children.length}<div class="pl-3">{@render tree(item.children)}</div>{/if}
       </li>
     {/each}
   </ul>
 {/snippet}
 
-<nav aria-label="Browser sidebar">
-  <details open>
-    <summary>Saved Searches</summary>
-    <ul>
-      {#each Object.entries(saved) as [label, search] (label)}
-        <li class="saved">
-          <button class="item" onclick={() => onsearch(new SearchNode({ filter: { case: "parsableText", value: search } }))}
-            >{label}</button
-          >
-          <button class="remove" aria-label="Remove saved search {label}" onclick={() => removeSaved(label)}>×</button>
-        </li>
-      {/each}
-    </ul>
-    {#if naming}
-      <form onsubmit={saveCurrent}>
-        <input bind:value={name} placeholder="Name" aria-label="Saved search name" required />
-        <button type="submit">Save</button>
-      </form>
-    {:else}
-      <button class="add" onclick={() => (naming = true)}>Save current search</button>
-    {/if}
-  </details>
-  <details open><summary>Today</summary>{@render tree(today)}</details>
-  <details open><summary>Flags</summary>{@render tree(flags)}</details>
-  <details open><summary>Card State</summary>{@render tree(states)}</details>
-  <details open><summary>Decks</summary>{@render tree(decks)}</details>
-  <details open><summary>Note Types</summary>{@render tree(notetypes)}</details>
-  <details open><summary>Tags</summary>{@render tree(tags)}</details>
-</nav>
+{#snippet section(title: string, body: import("svelte").Snippet)}
+  <Collapsible.Root open class="flex flex-col gap-1">
+    <Collapsible.Trigger
+      class="group flex w-full items-center gap-1 rounded-sm px-2 py-1 text-xs font-semibold text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <ChevronDownIcon class="size-3.5 transition-transform group-data-[state=closed]:-rotate-90" />
+      {title}
+    </Collapsible.Trigger>
+    <Collapsible.Content class="pl-3">{@render body()}</Collapsible.Content>
+  </Collapsible.Root>
+{/snippet}
 
-<style>
-  nav { overflow: auto; padding: 0.5rem; font-size: 0.9rem; }
-  summary { font-weight: 600; cursor: pointer; padding: 0.25rem 0; }
-  ul { list-style: none; margin: 0; padding-left: 0.9rem; }
-  details > ul { padding-left: 0.4rem; }
-  .item, .add, .remove {
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    padding: 0.1rem 0.25rem;
-    text-align: left;
-  }
-  .item:hover, .item:focus-visible { background: color-mix(in srgb, CanvasText 10%, transparent); border-radius: 4px; }
-  .saved { display: flex; justify-content: space-between; }
-  .remove { opacity: 0.6; }
-  .add { opacity: 0.75; font-size: 0.85rem; }
-  form { display: flex; gap: 0.25rem; }
-  form input { min-width: 0; flex: 1; }
-</style>
+{#snippet savedSearches()}
+  <ul class="flex flex-col">
+    {#each Object.entries(saved) as [label, search] (label)}
+      <li class="flex items-center">
+        <Button
+          variant="ghost"
+          size="xs"
+          class="flex-1 justify-start font-normal"
+          onclick={() => onsearch(new SearchNode({ filter: { case: "parsableText", value: search } }))}
+        >
+          <span class="truncate">{label}</span>
+        </Button>
+        <Button variant="ghost" size="icon-xs" aria-label="Remove saved search {label}" onclick={() => removeSaved(label)}>
+          <XIcon />
+        </Button>
+      </li>
+    {/each}
+  </ul>
+  {#if naming}
+    <form onsubmit={saveCurrent} class="flex gap-1 py-1">
+      <Input bind:value={name} placeholder="Name" aria-label="Saved search name" class="h-7" required />
+      <Button type="submit" size="xs">Save</Button>
+    </form>
+  {:else}
+    <Button variant="link" size="xs" class="text-muted-foreground" onclick={() => (naming = true)}>Save current search</Button>
+  {/if}
+{/snippet}
+
+{#snippet todayItems()}{@render tree(today)}{/snippet}
+{#snippet flagItems()}{@render tree(flags)}{/snippet}
+{#snippet stateItems()}{@render tree(states)}{/snippet}
+{#snippet deckItems()}{@render tree(decks)}{/snippet}
+{#snippet notetypeItems()}{@render tree(notetypes)}{/snippet}
+{#snippet tagItems()}{@render tree(tags)}{/snippet}
+
+<ScrollArea class="min-h-0 border-r">
+  <nav aria-label="Browser sidebar" class="flex flex-col gap-2 p-2">
+    {@render section("Saved Searches", savedSearches)}
+    {@render section("Today", todayItems)}
+    {@render section("Flags", flagItems)}
+    {@render section("Card State", stateItems)}
+    {@render section("Decks", deckItems)}
+    {@render section("Note Types", notetypeItems)}
+    {@render section("Tags", tagItems)}
+  </nav>
+</ScrollArea>

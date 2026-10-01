@@ -30,6 +30,15 @@
   import { onMount } from "svelte";
   import { cardBodyClass, cardFrameSrc, night, postToCard, renderCard } from "$lib/card";
   import Sidebar from "./Sidebar.svelte";
+  import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
+  import Columns3Icon from "@lucide/svelte/icons/columns-3";
+  import EyeIcon from "@lucide/svelte/icons/eye";
+  import { Button } from "$lib/components/ui/button";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
+  import { Input } from "$lib/components/ui/input";
+  import * as Table from "$lib/components/ui/table";
+  import * as ToggleGroup from "$lib/components/ui/toggle-group";
 
   const ROW_HEIGHT = 28;
   // anki/browser.py BrowserConfig / BrowserDefaults
@@ -214,9 +223,10 @@
   }
 
   // Preview (Anki's previewer): the selected card in the sandboxed card frame.
-  let previewDialog: HTMLDialogElement;
-  let previewFrame: HTMLIFrameElement;
-  let previewReady: Promise<void>;
+  // The dialog mounts the frame on open, so each opening waits for its load.
+  let previewFrame: HTMLIFrameElement | undefined = $state();
+  let previewReady: Promise<void> = Promise.resolve();
+  let previewLoaded = () => {};
   let previewOpen = $state(false);
   let previewSide: "question" | "answer" = $state("question");
   let preview: { rendered: RenderCardResponse; bodyClass: string } | undefined;
@@ -238,22 +248,23 @@
   }
   function openPreview() {
     if (selected === undefined) return;
+    if (!previewOpen) previewReady = new Promise((resolve) => (previewLoaded = resolve));
     previewOpen = true;
-    previewDialog.showModal();
     showPreview();
   }
 
+  // Anki's row colours, as theme tokens (src/app.css).
   const colorClass: Partial<Record<Color, string>> = {
-    [Color.MARKED]: "marked",
-    [Color.SUSPENDED]: "suspended",
-    [Color.BURIED]: "buried",
-    [Color.FLAG_RED]: "flag-red",
-    [Color.FLAG_ORANGE]: "flag-orange",
-    [Color.FLAG_GREEN]: "flag-green",
-    [Color.FLAG_BLUE]: "flag-blue",
-    [Color.FLAG_PINK]: "flag-pink",
-    [Color.FLAG_TURQUOISE]: "flag-turquoise",
-    [Color.FLAG_PURPLE]: "flag-purple",
+    [Color.MARKED]: "bg-row-marked",
+    [Color.SUSPENDED]: "bg-row-suspended",
+    [Color.BURIED]: "bg-row-buried",
+    [Color.FLAG_RED]: "bg-row-flag-red",
+    [Color.FLAG_ORANGE]: "bg-row-flag-orange",
+    [Color.FLAG_GREEN]: "bg-row-flag-green",
+    [Color.FLAG_BLUE]: "bg-row-flag-blue",
+    [Color.FLAG_PINK]: "bg-row-flag-pink",
+    [Color.FLAG_TURQUOISE]: "bg-row-flag-turquoise",
+    [Color.FLAG_PURPLE]: "bg-row-flag-purple",
   };
 
   async function sidebarSearch(node: PlainMessage<SearchNode>) {
@@ -263,7 +274,6 @@
 
   onMount(() => {
     editorReady = new Promise((resolve) => (markEditorReady = resolve));
-    previewReady = new Promise((resolve) => previewFrame.addEventListener("load", () => resolve(), { once: true }));
     const onMessage = (event: MessageEvent) => {
       if (event.source === editorFrame.contentWindow && typeof event.data?.klausEditor === "string") {
         const cmd: string = event.data.klausEditor;
@@ -282,7 +292,7 @@
       if (mod && event.shiftKey && event.key.toLowerCase() === "p") {
         event.preventDefault();
         openPreview();
-      } else if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+      } else if (event.key === "Escape" && !document.querySelector('[role="dialog"], [role="menu"]')) {
         location.href = "/";
       }
     };
@@ -300,40 +310,68 @@
   });
 </script>
 
-<div class="browser">
-  <header>
-    <a href="/" class="back">← Decks</a>
+<div class="grid h-screen grid-cols-[14rem_minmax(0,1fr)_minmax(20rem,28rem)] grid-rows-[auto_minmax(0,1fr)]">
+  <header class="col-span-full flex items-center gap-2 border-b px-3 py-2">
+    <Button href="/" variant="ghost" size="sm">
+      <ArrowLeftIcon data-icon="inline-start" />
+      Decks
+    </Button>
     <form
-      class="search"
+      class="flex flex-1"
       onsubmit={(e) => {
         e.preventDefault();
         runSearch();
       }}
     >
-      <input type="search" bind:value={search} aria-label="Search" spellcheck="false" />
+      <Input type="search" bind:value={search} aria-label="Search" spellcheck="false" />
     </form>
-    <button onclick={toggleMode} aria-pressed={notesMode} title="Switch between cards and notes"
-      >{notesMode ? "Notes" : "Cards"}</button
+    <ToggleGroup.Root
+      type="single"
+      variant="outline"
+      size="sm"
+      value={notesMode ? "notes" : "cards"}
+      onValueChange={(v) => v && (v === "notes") !== notesMode && toggleMode()}
+      aria-label="Show cards or notes"
     >
-    <details class="columns">
-      <summary>Columns</summary>
-      <div class="menu">
-        {#each columns as column (column.key)}
-          <label
-            ><input type="checkbox" checked={active.includes(column.key)} onchange={() => toggleColumn(column.key)} />
-            {columnLabel(column)}</label
-          >
-        {/each}
-      </div>
-    </details>
-    <button onclick={openPreview} disabled={selected === undefined} title="Preview (Ctrl+Shift+P)">Preview</button>
-    <span class="count" aria-live="polite">{ids.length} {notesMode ? "notes" : "cards"}</span>
+      <ToggleGroup.Item value="cards">Cards</ToggleGroup.Item>
+      <ToggleGroup.Item value="notes">Notes</ToggleGroup.Item>
+    </ToggleGroup.Root>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <Button {...props} variant="outline" size="sm">
+            <Columns3Icon data-icon="inline-start" />
+            Columns
+          </Button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="max-h-[60vh] overflow-y-auto">
+        <DropdownMenu.Group>
+          {#each columns as column (column.key)}
+            <DropdownMenu.CheckboxItem
+              checked={active.includes(column.key)}
+              onCheckedChange={() => toggleColumn(column.key)}
+              closeOnSelect={false}
+            >
+              {columnLabel(column)}
+            </DropdownMenu.CheckboxItem>
+          {/each}
+        </DropdownMenu.Group>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+    <Button variant="outline" size="sm" onclick={openPreview} disabled={selected === undefined} title="Preview (Ctrl+Shift+P)">
+      <EyeIcon data-icon="inline-start" />
+      Preview
+    </Button>
+    <span class="text-sm whitespace-nowrap text-muted-foreground" aria-live="polite">
+      {ids.length} {notesMode ? "notes" : "cards"}
+    </span>
   </header>
 
   <Sidebar onsearch={sidebarSearch} current={search} />
 
   <div
-    class="table"
+    class="overflow-auto outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
     bind:this={tableBox}
     bind:clientHeight={viewHeight}
     onscroll={() => (scrollTop = tableBox.scrollTop)}
@@ -343,129 +381,78 @@
     aria-rowcount={ids.length}
     onkeydown={onTableKey}
   >
-    <table>
-      <thead>
-        <tr>
+    <!-- A plain table: Table.Root's own scroll box would unstick the header. -->
+    <table class="w-full table-fixed caption-bottom text-sm">
+      <Table.Header class="sticky top-0 bg-background">
+        <Table.Row>
           {#each active as key (key)}
             {@const column = columns.find((c) => c.key === key)}
-            <th
+            <Table.Head
               title={column ? (notesMode ? column.notesModeTooltip : column.cardsModeTooltip) : key}
               aria-sort={key === sortColumn ? (sortBackwards ? "descending" : "ascending") : "none"}
+              class="p-0"
             >
-              <button onclick={() => column && sortBy(column)} disabled={sortingOf(column) === Sorting.NONE}>
-                {column ? columnLabel(column) : key}{key === sortColumn ? (sortBackwards ? " ▼" : " ▲") : ""}
-              </button>
-            </th>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="w-full justify-start rounded-none"
+                onclick={() => column && sortBy(column)}
+                disabled={sortingOf(column) === Sorting.NONE}
+              >
+                <span class="truncate">{column ? columnLabel(column) : key}</span>
+                {#if key === sortColumn}<span aria-hidden="true">{sortBackwards ? "▼" : "▲"}</span>{/if}
+              </Button>
+            </Table.Head>
           {/each}
-        </tr>
-      </thead>
-      <tbody>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
         <tr style:height="{first * ROW_HEIGHT}px" aria-hidden="true"></tr>
         {#each visible as id (id)}
           {@const row = rowFor(id)}
-          <tr
-            class={row ? colorClass[row.color] : undefined}
-            class:selected={id === selected}
+          <Table.Row
+            class={["h-7 cursor-default", id !== selected && row && colorClass[row.color]]}
+            data-state={id === selected ? "selected" : undefined}
             aria-selected={id === selected}
             onclick={() => select(id)}
           >
             {#each active as key, i (key)}
-              <td dir={row?.cells[i]?.isRtl ? "rtl" : undefined}>{row?.cells[i]?.text ?? ""}</td>
+              <Table.Cell class="truncate py-0" dir={row?.cells[i]?.isRtl ? "rtl" : undefined}>
+                {row?.cells[i]?.text ?? ""}
+              </Table.Cell>
             {/each}
-          </tr>
+          </Table.Row>
         {/each}
         <tr style:height="{(ids.length - last) * ROW_HEIGHT}px" aria-hidden="true"></tr>
-      </tbody>
+      </Table.Body>
     </table>
   </div>
 
-  <iframe class="editor" bind:this={editorFrame} src={editorSrc} title="Editor"></iframe>
+  <iframe class="size-full border-0 border-l" bind:this={editorFrame} src={editorSrc} title="Editor"></iframe>
 </div>
 
-<dialog
-  bind:this={previewDialog}
-  class="preview"
-  aria-label="Preview"
-  onclose={() => {
-    previewOpen = false;
-    preview = undefined;
+<Dialog.Root
+  bind:open={previewOpen}
+  onOpenChange={(open) => {
+    if (!open) preview = undefined;
   }}
 >
-  <iframe bind:this={previewFrame} src={cardFrameSrc} sandbox="allow-scripts" title="Card preview"></iframe>
-  <footer>
-    <button onclick={() => move(-1)}>Previous</button>
-    <button onclick={flipPreview}>{previewSide === "question" ? "Show Answer" : "Show Question"}</button>
-    <button onclick={() => move(1)}>Next</button>
-    <button onclick={() => previewDialog.close()}>Close</button>
-  </footer>
-</dialog>
-
-<style>
-  :global(body) {
-    margin: 0;
-    font-family: system-ui, sans-serif;
-    color: CanvasText;
-    background: Canvas;
-    color-scheme: light dark;
-  }
-  .browser {
-    display: grid;
-    grid-template: auto 1fr / 14rem minmax(0, 1fr) minmax(20rem, 28rem);
-    height: 100vh;
-  }
-  header {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-  }
-  .back { color: inherit; white-space: nowrap; }
-  .search { flex: 1; display: flex; }
-  .search input { flex: 1; padding: 0.3rem 0.5rem; font: inherit; }
-  .count { opacity: 0.7; font-size: 0.85rem; white-space: nowrap; }
-  .columns { position: relative; }
-  .columns summary { cursor: pointer; list-style: none; padding: 0.2rem 0.5rem; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 4px; }
-  .columns .menu {
-    position: absolute;
-    right: 0;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    max-height: 60vh;
-    overflow: auto;
-    padding: 0.5rem 0.75rem;
-    background: Canvas;
-    border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
-    border-radius: 6px;
-    white-space: nowrap;
-  }
-  :global(.browser > nav) { border-right: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
-  .table { overflow: auto; outline: none; }
-  .table:focus-visible { box-shadow: inset 0 0 0 2px Highlight; }
-  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 0.9rem; }
-  thead th { position: sticky; top: 0; z-index: 1; background: Canvas; border-bottom: 1px solid color-mix(in srgb, CanvasText 20%, transparent); }
-  th button { width: 100%; padding: 0.3rem 0.5rem; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
-  th button:disabled { cursor: default; }
-  tbody tr:not([aria-hidden]) { height: 28px; cursor: default; }
-  td { padding: 0 0.5rem; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  tr.selected { background: Highlight; color: HighlightText; }
-  /* Anki's row colours (aqt/browser/table: backend_color_to_aqt_color). */
-  .marked { background: light-dark(#e9d5ff, #4c1d95); }
-  .suspended { background: light-dark(#fef08a, #713f12); }
-  .buried { background: light-dark(#e5e7eb, #374151); }
-  .flag-red { background: light-dark(#fecaca, #7f1d1d); }
-  .flag-orange { background: light-dark(#fed7aa, #7c2d12); }
-  .flag-green { background: light-dark(#bbf7d0, #14532d); }
-  .flag-blue { background: light-dark(#bfdbfe, #1e3a8a); }
-  .flag-pink { background: light-dark(#fbcfe8, #831843); }
-  .flag-turquoise { background: light-dark(#99f6e4, #134e4a); }
-  .flag-purple { background: light-dark(#ddd6fe, #4c1d95); }
-  .editor { width: 100%; height: 100%; border: 0; border-left: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
-  .preview { width: min(48rem, 90vw); height: min(40rem, 85vh); padding: 0; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 8px; background: Canvas; color: inherit; }
-  .preview[open] { display: flex; flex-direction: column; }
-  .preview iframe { flex: 1; width: 100%; border: 0; }
-  .preview footer { display: flex; justify-content: center; gap: 0.5rem; padding: 0.5rem; border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
-</style>
+  <Dialog.Content class="flex h-[min(40rem,85vh)] flex-col sm:max-w-3xl">
+    <Dialog.Header>
+      <Dialog.Title>Preview</Dialog.Title>
+    </Dialog.Header>
+    <iframe
+      bind:this={previewFrame}
+      src={cardFrameSrc}
+      sandbox="allow-scripts"
+      title="Card preview"
+      class="w-full flex-1 rounded-md border"
+      onload={() => previewLoaded()}
+    ></iframe>
+    <Dialog.Footer class="sm:justify-center">
+      <Button variant="outline" onclick={() => move(-1)}>Previous</Button>
+      <Button onclick={flipPreview}>{previewSide === "question" ? "Show Answer" : "Show Question"}</Button>
+      <Button variant="outline" onclick={() => move(1)}>Next</Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
