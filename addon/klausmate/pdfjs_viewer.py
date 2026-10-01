@@ -1047,6 +1047,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         if self._scroll_pos:
             self._eval(f"window.klausScrollTo && window.klausScrollTo({int(self._scroll_pos)});")
 
+    def _bridge_firstpage(self, payload: str) -> None:
+        print(f"[klausmate] pdfjs first page {self._name} {int(payload)} ms")
+
     def _bridge_log(self, payload: str) -> None:
         print(f"[klausmate] pdfjs: {payload}")
 

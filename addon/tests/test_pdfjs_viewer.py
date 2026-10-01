@@ -112,6 +112,22 @@ payload = _b64.b64encode(b'{"id": "abc"}').decode()
 check("b64 json round-trip", pv.decode_b64_json(payload) == {"id": "abc"})
 check("bad b64 json degrades to None", pv.decode_b64_json("!!") is None)
 
+section("PDF reader 2/5: time to first page is logged")
+check("the page posts firstpage:<ms> once page 1 has rendered",
+      'if (num === 1 && state.t0 !== null) {' in html
+      and 'post("firstpage:" + Math.round(performance.now() - state.t0));'
+      in html)
+import contextlib as _ctxl
+import io as _io
+_fp_stand = type("_FpStand", (), {})()
+_fp_stand._name = "lecture.pdf"
+_fp_out = _io.StringIO()
+with _ctxl.redirect_stdout(_fp_out):
+    pv.PdfJsViewer._bridge_firstpage(_fp_stand, "412")
+check("Python prints the timing line",
+      _fp_out.getvalue().strip()
+      == "[klausmate] pdfjs first page lecture.pdf 412 ms")
+
 section("live selection reported over the bridge (K-196 task 10)")
 _sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
 check("parse_bridge routes sel",

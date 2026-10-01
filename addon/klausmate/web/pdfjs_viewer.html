@@ -414,6 +414,7 @@ const state = {
   thumbObserver: null,
   currentPage: 0,
   b64parts: [],
+  t0: null,              // performance.now() at load start; first-page timing
   annots: [],            // canonical records, pushed from Python
   pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
   find: { query: "", matches: [], index: -1 },
@@ -459,6 +460,7 @@ function postB64(action, obj) {
 /* ==== feed ========================================================= */
 window.klausPdfChunk = function (part) { state.b64parts.push(part); };
 window.klausPdfLoad = function () {
+  state.t0 = performance.now();
   const b64 = state.b64parts.join("");
   state.b64parts = [];
   const raw = atob(b64);
@@ -572,6 +574,10 @@ async function renderPage(num, div) {
       transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null,
       annotationMode: pdfjsLib.AnnotationMode.DISABLE,
     }).promise;
+    if (num === 1 && state.t0 !== null) {
+      post("firstpage:" + Math.round(performance.now() - state.t0));
+      state.t0 = null;
+    }
     const textLayer = document.createElement("div");
     textLayer.className = "textLayer";
     textLayer.style.width = Math.floor(viewport.width) + "px";
