@@ -2736,6 +2736,74 @@ else:
           and all(o.get("/DR") is None for o in _da_free))
     shutil.rmtree(_da_uf, ignore_errors=True)
 
+    print("== hand-drawn reader 4: notes bake as plain Helvetica cards ==")
+    check("card_box matches pdfjs_pure.cardSpot's cases",
+          pdf_handler.card_box({"rects": [[100, 50, 80, 12], [100, 64, 40, 12]]}, 600, 800, 120, 40) == (188.0, 50.0)
+          and pdf_handler.card_box({"rects": [[100, 50, 80, 12]], "card": [10, 5]}, 600, 800, 120, 40) == (190.0, 55.0)
+          and pdf_handler.card_box({"rects": [[550, 790, 40, 12]]}, 600, 800, 120, 40) == (480.0, 760.0)
+          and pdf_handler.card_box({"rects": [[0, 0, 10, 10]], "card": [-500, -500]}, 600, 800, 120, 40) == (0.0, 0.0)
+          and pdf_handler.card_box({"rects": [[100, 50, 80, 12]]}, 100, 100, 300, 300) == (0.0, 0.0))
+    _nb_uf = tempfile.mkdtemp(prefix="klaus_notes_bake_")
+    _NB = "NotesBake"
+    os.makedirs(os.path.join(_nb_uf, "pdfs"))
+    _nb_work = os.path.join(_nb_uf, "pdfs", _NB + ".pdf")
+    _wnb = _DaWriter()
+    _wnb.add_blank_page(width=612, height=792)
+    with open(_nb_work, "wb") as _fhnb:
+        _wnb.write(_fhnb)
+    _NOTE_ID, _HL_ID = "a" * 32, "b" * 32
+    _nb_recs = [
+        {"id": _NOTE_ID, "kind": "note", "page": 0, "rects": [[300.0, 400.0, 120.0, 40.0]],
+         "text": "remember this", "note": "", "color": "#8ae08c", "size": 14},
+        {"id": _HL_ID, "page": 0, "rects": [[100.0, 50.0, 80.0, 12.0]], "color": "#fadc50",
+         "note": "see page 4", "card": [10, 5]},
+    ]
+    pdf_handler.save_annotations(_nb_uf, _NB, _nb_recs)
+
+    def _nb_annots():
+        return [a.get_object() for a in (_DaReader(_nb_work).pages[0].get("/Annots") or [])]
+
+    def _nm(o):
+        return str(o.get("/NM") or "")
+
+    check("bake succeeds", pdf_handler.bake_annotations(_nb_uf, _NB))
+    _ann = _nb_annots()
+    _note_ft = [o for o in _ann if _nm(o) == "klausmate:" + _NOTE_ID]
+    check("a note is one /FreeText in Helvetica, its ink as the fill, its text as /Contents",
+          len(_note_ft) == 1 and str(_note_ft[0].get("/Subtype")) == "/FreeText"
+          and str(_note_ft[0].get("/DA")) == "/Helv 14 Tf 0 0 0 rg"
+          and [round(float(v), 3) for v in _note_ft[0].get("/C")] == [round(0x8a / 255, 3), round(0xe0 / 255, 3), round(0x8c / 255, 3)]
+          and str(_note_ft[0].get("/Contents")) == "remember this",
+          repr(_note_ft and dict(_note_ft[0])))
+    _hl_ann = [o for o in _ann if _nm(o) == "klausmate:" + _HL_ID]
+    _card = [o for o in _ann if _nm(o) == "klausmate:" + _HL_ID + ":note"]
+    check("a highlight's note is its popup text", len(_hl_ann) == 1 and str(_hl_ann[0].get("/Contents")) == "see page 4")
+    _cw, _ch = pdf_handler.note_card_size("see page 4", 12.0)
+    _cx, _cy = pdf_handler.card_box(_nb_recs[1], 612, 792, _cw, _ch)
+    check("note_card_size grows with the text and stays inside the text-box caps",
+          pdf_handler.note_card_size("a " * 300, 12.0)[1] > _ch
+          and pdf_handler.note_card_size("x" * 4000, 12.0)[0] <= 480 and pdf_handler.note_card_size("x\n" * 900, 12.0)[1] <= 720)
+    check("...and a Helvetica card at the card position (PDF space, y up)",
+          len(_card) == 1 and str(_card[0].get("/Subtype")) == "/FreeText"
+          and [round(float(v), 1) for v in _card[0].get("/Rect")][:2]
+          == [round(_cx - pdf_handler.FREETEXT_INSET_PT, 1), round(792 - _cy - _ch - pdf_handler.FREETEXT_INSET_PT, 1)],
+          repr(_card and list(_card[0].get("/Rect"))))
+    check("no sticky /Text icon any more", not any(str(o.get("/Subtype")) == "/Text" for o in _ann))
+    check("still no /AP, /DR or /AcroForm",
+          all(o.get("/AP") is None and o.get("/DR") is None for o in _ann)
+          and _DaReader(_nb_work).trailer["/Root"].get("/AcroForm") is None)
+    _first = sorted((_nm(o), str(o.get("/Subtype")), str(o.get("/Contents"))) for o in _ann)
+    check("a second bake gives the same annotations", pdf_handler.bake_annotations(_nb_uf, _NB)
+          and sorted((_nm(o), str(o.get("/Subtype")), str(o.get("/Contents"))) for o in _nb_annots()) == _first)
+    _scan = pdf_handler.scan_working_annotations(_nb_uf, _NB)
+    check("Klaus's own note cards are never adopted as outside marks",
+          _scan is not None and _scan["foreign"] == [], repr(_scan and _scan["foreign"]))
+    pdf_handler.save_annotations(_nb_uf, _NB, [_nb_recs[0]])
+    pdf_handler.bake_annotations(_nb_uf, _NB)
+    check("removing the highlight removes its card too",
+          not any(_nm(o).startswith("klausmate:" + _HL_ID) for o in _nb_annots()))
+    shutil.rmtree(_nb_uf, ignore_errors=True)
+
 print("== Task 11: the dead in-house assistant-loop modules are gone ==")
 _DEL_MODS = ("llm_client", "entitlement", "assistant_session", "podcast",
              "assistant_panel")

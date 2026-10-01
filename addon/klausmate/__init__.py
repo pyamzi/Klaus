@@ -564,7 +564,7 @@ mw.addonManager.setWebExports(
     # (?i:...) because store_image keeps the file's own name: IMG_1234.JPG
     # was stored as-is and then refused by a lower-case-only pattern.
     # Keep it ONE string literal: tests read the first one after the call.
-    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif)|image_occlusion/web/.*\.(css|js)|image_occlusion/excalidraw/.*\.(html|js|css|woff2|png))",
+    r"(web/.*\.(css|js|ttf)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif)|image_occlusion/web/.*\.(css|js)|image_occlusion/excalidraw/.*\.(html|js|css|woff2|png))",
 )
 mw.addonManager.setConfigAction(__name__, open_config)
 

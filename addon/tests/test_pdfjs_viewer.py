@@ -43,9 +43,9 @@ _TPL = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 check("template spells __THEME_VARS__ only at its real site "
       "(a prose mention would splice the whole palette in)",
       _TPL.count("__THEME_VARS__") == 1)
-check("template spells __ADDON__ only at its three real sites "
-      "(pdf.min.js, pdfjs_pure.js, the worker)",
-      _TPL.count("__ADDON__") == 3)
+check("template spells __ADDON__ only at its five real sites "
+      "(pdf.min.js, pdfjs_pure.js, rough.min.js, the worker, Excalifont)",
+      _TPL.count("__ADDON__") == 5)
 check("so the rendered page carries the palette exactly once",
       html.count("--bg: ") == 1 and dark.count("--bg: ") == 1)
 for fn in ("klausPdfOpen", "klausPdfError",
@@ -2043,9 +2043,12 @@ check("a picked ink and size are written EXPLICITLY, and the KEY SET "
       set(pv.make_text_record(0, 0, 0, "x", color="#137bbb", size=18.0))
       == _KEYS150)
 _PH150 = _src("pdf_handler.py")
-check("...and the bake still passes None for border and background, "
-      "so the box on screen and the baked PDF agree by construction",
-      "border_color=None," in _PH150 and "background_color=None," in _PH150)
+check("...and the bake still passes None for border, and None for "
+      "background unless the record is a note card (filled with its ink), "
+      "so a text box on screen and in the baked PDF agree by construction",
+      "border_color=None," in _PH150
+      and 'background_color=_bake_color(fill, "fadc50") if fill else None,' in _PH150
+      and "_freetext(hl.get(\"text\"), box, ox, oy, ph,\n                                     hl.get(\"color\"), hl.get(\"size\"))" in _PH150)
 
 section("K-150: re-editing an existing box")
 _base150 = pv.make_text_record(1, 10.0, 20.0, "hello")
@@ -2753,5 +2756,106 @@ for _payload in ("812", "abc", "", "9" * 400, "1e999", "-5"):
 check("malformed or huge payloads are ignored, not raised", _fp_errors == [], str(_fp_errors))
 check("it goes through the shared number guard",
       "_finite(" in __import__("inspect").getsource(pv.PdfJsViewer._bridge_firstpage))
+
+section("hand-drawn reader 1: the page can load Excalifont and rough.js")
+import re as _re
+_init = open("klausmate/__init__.py", encoding="utf-8").read()
+_pat = _re.search(r'setWebExports\(\s*__name__,.*?\br"([^"]+)"', _init, _re.S).group(1)
+check("web exports serve the font and rough.js",
+      _re.fullmatch(_pat, "web/fonts/Excalifont-Regular.ttf") is not None
+      and _re.fullmatch(_pat, "web/rough.min.js") is not None
+      and _re.fullmatch(_pat, "user_files/annotations/x.json") is None)
+_tpl = open("klausmate/web/pdfjs_viewer.html", encoding="utf-8").read()
+check("the page declares Excalifont from the add-on's own file",
+      '@font-face { font-family: "Excalifont"; src: url("/_addons/__ADDON__/web/fonts/Excalifont-Regular.ttf"); }' in _tpl)
+_pure_at = _tpl.find('<script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>')
+_rough_at = _tpl.find('<script src="/_addons/__ADDON__/web/rough.min.js"></script>')
+_main_at = _tpl.find("<script>", _rough_at)
+check("rough.js loads after pdfjs_pure.js and before the main script", 0 < _pure_at < _rough_at < _main_at)
+check("rough.js ships with its MIT licence and a pinned build script",
+      os.path.isfile("klausmate/web/rough.min.js")
+      and "MIT" in open("klausmate/web/LICENSE-roughjs.txt", encoding="utf-8").read()
+      and "roughjs@4.6.6" in open("scripts/build_roughjs.sh", encoding="utf-8").read())
+
+section("hand-drawn reader 3: the note record, the card offset and their bridges")
+_phn = importlib.import_module("klausmate.pdf_handler")
+_note = {"id": "n1", "kind": "note", "page": 0, "rects": [[10.0, 20.0, 120.0, 40.0]],
+         "text": "remember β", "note": "", "color": "#8ae08c", "size": 12.0}
+check("a note record round-trips exactly", _phn._validate_highlight(dict(_note)) == _note,
+      repr(_phn._validate_highlight(dict(_note))))
+check("an empty or whitespace note is dropped",
+      _phn._validate_highlight(dict(_note, text="")) is None
+      and _phn._validate_highlight(dict(_note, text="  \n ")) is None)
+check("a note's colour must be #rrggbb, else yellow",
+      _phn._validate_highlight(dict(_note, color="red"))["color"] == "#fadc50")
+check("a note's size follows the text rule (missing stays missing, bad dropped)",
+      "size" not in _phn._validate_highlight({k: v for k, v in _note.items() if k != "size"})
+      and "size" not in _phn._validate_highlight(dict(_note, size=-4)))
+_hl = {"id": "h1", "page": 0, "rects": [[100.0, 50.0, 80.0, 12.0]], "color": "#fadc50", "note": "see p.4"}
+check("a highlight keeps a two-number card offset",
+      _phn._validate_highlight(dict(_hl, card=[12.5, -3]))["card"] == [12.5, -3.0])
+check("...and drops a bad one",
+      all("card" not in _phn._validate_highlight(dict(_hl, card=c))
+          for c in (["x", 1], [1, 2, 3], [float("nan"), 1], "12,3", None)))
+check("a text record never carries a card",
+      "card" not in _phn._validate_highlight({"id": "t", "kind": "text", "page": 0,
+                                               "rects": [[1, 2, 3, 4]], "text": "t", "card": [1, 2]}))
+check("record_kind names the three kinds",
+      [_phn.record_kind(r) for r in (_note, _hl, {"kind": "text"}, {"kind": "weird"})]
+      == ["note", "highlight", "text", "highlight"])
+check("a note and a highlight on the same rects are not the same annotation",
+      not _phn._same_annotation(dict(_note, rects=_hl["rects"]), _hl))
+check("signatures differ by kind",
+      _phn._record_signature(dict(_note, rects=_hl["rects"])) != _phn._record_signature(_hl))
+import time as _time
+_tomb = {"page": 0, "kind": "note", "rects": _note["rects"], "text": "remember β", "ts": _time.time()}
+check("a note's tombstone matches the same note and never a highlight",
+      _phn._tombstone_hits(_tomb, _note) and not _phn._tombstone_hits(_tomb, dict(_hl, rects=_note["rects"])))
+check("_is_plain_highlight is False for a note", not pv._is_plain_highlight(_note, 0))
+check("make_note_record's key set is closed",
+      set(pv.make_note_record(0, 1.0, 2.0, "x", "#fadc50", 12.0, 50.0, 20.0)) == set(_note))
+
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_note_add(_fv, _b64({"page": 1, "x": 10, "y": 20, "text": "hi", "color": "#f79ac8",
+                                           "size": 14, "w": 60, "h": 30}))
+_n = _fv._highlights[0] if _fv._highlights else {}
+check("note-add stores one note with the measured box and its ink",
+      len(_fv._highlights) == 1 and _n.get("kind") == "note" and _n["rects"] == [[10.0, 20.0, 60.0, 30.0]]
+      and _n["color"] == "#f79ac8" and _n["size"] == 14.0 and _fv.saves == 1 and _fv.pushes == 1, repr(_fv._highlights))
+pv.PdfJsViewer._bridge_note_add(_fv, _b64({"page": 1, "x": 10, "y": 20, "text": "   ", "w": 60, "h": 30}))
+check("an empty note-add mints nothing", len(_fv._highlights) == 1)
+pv.PdfJsViewer._bridge_note_update(_fv, _b64({"id": _n["id"], "x": 30, "y": 40, "text": "hello", "color": "#7fc6f2",
+                                              "size": 14, "w": 70, "h": 30}))
+_n = _fv._highlights[0]
+check("note-update moves, recolours and re-texts it",
+      _n["rects"] == [[30.0, 40.0, 70.0, 30.0]] and _n["text"] == "hello" and _n["color"] == "#7fc6f2", repr(_n))
+pv.PdfJsViewer._bridge_note_update(_fv, _b64({"id": _n["id"], "text": "hello", "color": "#7fc6f2", "size": 14,
+                                              "x": 30, "y": 40}))
+check("note-update never touches a text box with the same id scheme",
+      pv.apply_text_update([{"id": "t", "kind": "text", "page": 0, "rects": [[0, 0, 5, 5]], "text": "a"}],
+                           {"id": "t", "text": "b"}, kind="note")[1] is False)
+pv.PdfJsViewer._bridge_note_remove(_fv, _b64({"id": _n["id"]}))
+check("note-remove deletes it", _fv._highlights == [])
+_fv = _FakeViewer([dict(_hl), dict(_hl, id="h2", note="")])
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h1", "dx": 15, "dy": -4}))
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h2", "dx": 15, "dy": -4}))
+check("card-move stores the offset on a highlight with a note, ignores one without",
+      _fv._highlights[0].get("card") == [15.0, -4.0] and "card" not in _fv._highlights[1])
+pv.PdfJsViewer._bridge_card_move(_fv, _b64({"id": "h1", "dx": "x", "dy": 1}))
+check("a bad card-move changes nothing", _fv._highlights[0].get("card") == [15.0, -4.0])
+pv.PdfJsViewer._bridge_note_text(_fv, _b64({"id": "h2", "text": "new note"}))
+check("note-text sets a highlight's note", _fv._highlights[1]["note"] == "new note")
+pv.PdfJsViewer._bridge_note_text(_fv, _b64({"id": "h1", "text": "  "}))
+check("an emptied note-text clears the note and its card",
+      _fv._highlights[0]["note"] == "" and "card" not in _fv._highlights[0])
+
+section("hand-drawn reader 5: the reader hears the switch")
+check("set_hand_drawn_all exists", callable(getattr(pv, "set_hand_drawn_all", None)))
+_PV5 = _src("pdfjs_viewer.py")
+check("the page is told the stored value on ready, beside the occlusion state",
+      "window.klausSetHandDrawn && " in _PV5 and "window.klausSetOcclusionEnabled && " in _PV5)
+_cfg = json.load(open("klausmate/config.json")) if "json" in dir() else __import__("json").load(open("klausmate/config.json"))
+check("config.json ships hand_drawn on, config.md documents it",
+      _cfg.get("hand_drawn") is True and "**hand_drawn**" in open("klausmate/config.md", encoding="utf-8").read())
 
 raise SystemExit(report())

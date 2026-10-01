@@ -207,6 +207,17 @@ auto = dlg.findChild(QtWidgets.QAbstractButton, 'runtime_auto_setup')
 auto.setChecked(False)
 save_preferences()
 check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps) and sweeps[-1].endswith('Press ⟳ in the Library to re-index for the new model.') and 'preferences saved' in sweeps[-1], str(sweeps))  # one tooltip: Anki's closes the previous one
+_hd_calls = []
+_pv_mod = importlib.import_module('klausmate.pdfjs_viewer')
+_pv_mod.set_hand_drawn_all = lambda flag: _hd_calls.append(flag)
+_hd_sw = dlg.findChild(QtWidgets.QAbstractButton, 'hand_drawn')
+check('Appearance has a "Hand-drawn style" switch, on by default',
+      _hd_sw is not None and _hd_sw.isChecked()
+      and any(l.text() == 'Hand-drawn style' for l in dlg.findChildren(QtWidgets.QLabel)))
+if _hd_sw is not None:
+    _hd_sw.setChecked(False)
+    save_preferences()
+check('Save with it off stores it and tells every open reader', store.get('hand_drawn') is False and _hd_calls == [False], repr((store.get('hand_drawn'), _hd_calls)))
 button('Install/Start').click()
 check('explicit install click queues background setup', len(operations) == 1 and not button('Download').isEnabled())
 before = status.text()

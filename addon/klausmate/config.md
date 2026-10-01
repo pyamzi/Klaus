@@ -181,6 +181,11 @@ removed. Use the external MCP client setup below.
   image in a note field → **Crop image**, or double-click the image). The
   crop is always saved as a *new* media file — the original is untouched.
   Default `true`.
+- **hand_drawn**: Default `true` (Preferences → Appearance → "Hand-drawn
+  style"). The PDF reader draws highlights as wobbly marker strokes and
+  text boxes and notes in Excalifont, like Excalidraw; each mark keeps the
+  same wobble every time. `false` draws today's clean shapes in Helvetica.
+  The PDF file is written the same way either way.
 - **browse_highlight_default**: Default `true`. Whether Browse's "Highlight
   Search Results" is on by default in a fresh Browser window — while
   searching, matched terms are highlighted in the editor pane of the

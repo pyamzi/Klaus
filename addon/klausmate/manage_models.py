@@ -1066,6 +1066,17 @@ def manage_models_dialog(*_args: Any) -> None:
         klausbook_cb,
     )
 
+    hand_drawn_cb = Md3Switch()
+    hand_drawn_cb.setObjectName("hand_drawn")
+    _row(
+        appearance_layout,
+        "Hand-drawn style",
+        "Draw PDF highlights, text and notes like Excalidraw: wobbly "
+        "marker highlights and handwritten text. Off, the reader uses "
+        "clean shapes and Helvetica. The PDF file is the same either way.",
+        hand_drawn_cb,
+    )
+
     bg_mode_combo = QComboBox()
 
     bg_mode_combo.setObjectName("background_mode")
@@ -2237,6 +2248,13 @@ def manage_models_dialog(*_args: Any) -> None:
                 mw.set_theme(_Theme(int(effect[1])))
             except Exception as _exc:
                 print(f"[klausmate] theme apply failed: {_exc}")
+        elif kind == "hand_drawn":
+            try:
+                from . import pdfjs_viewer
+
+                pdfjs_viewer.set_hand_drawn_all(bool(effect[1]))
+            except Exception as _exc:
+                print(f"[klausmate] hand-drawn push failed: {_exc}")
         elif kind == "appearance":
             # Paint through the same one path as every live edit, THEN
             # drop the override: stored config now holds identical
@@ -2551,6 +2569,8 @@ def manage_models_dialog(*_args: Any) -> None:
     bindings[:] = [
         _Binding(state, "image_crop_enabled", image_crop_cb.isChecked, image_crop_cb.setChecked,
                  image_crop_cb.toggled, refresh_dirty),
+        _Binding(state, "hand_drawn", hand_drawn_cb.isChecked, hand_drawn_cb.setChecked,
+                 hand_drawn_cb.toggled, refresh_dirty),
         _Binding(state, "endpoint", endpoint_edit.text, endpoint_edit.setText, endpoint_edit.textEdited, refresh_dirty),
         _Binding(state, "embedding_model", embed_model_edit.text, embed_model_edit.setText,
                  embed_model_edit.textEdited, refresh_dirty),

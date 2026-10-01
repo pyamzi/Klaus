@@ -20,6 +20,7 @@ origin, matching the native viewer and the bake pipeline exactly
 (CSS px = points x state.scale).
 -->
 <style>
+  @font-face { font-family: "Excalifont"; src: url("/_addons/__ADDON__/web/fonts/Excalifont-Regular.ttf"); }
   /* --hover-subtle is the findbar/annobar/menu/thumb family's hover
      fill, and theme.css_vars now emits it from the palette token the
      Qt-side builders hover with, so both halves match. This neutral
@@ -423,6 +424,7 @@ origin, matching the native viewer and the bake pipeline exactly
 
 <script src="/_addons/__ADDON__/web/pdfjs/pdf.min.js"></script>
 <script src="/_addons/__ADDON__/web/pdfjs_pure.js"></script>
+<script src="/_addons/__ADDON__/web/rough.min.js"></script>
 <script>
 "use strict";
 /* global pdfjsLib */

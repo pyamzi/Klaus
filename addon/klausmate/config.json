@@ -1,5 +1,6 @@
 {
   "image_crop_enabled": true,
+  "hand_drawn": true,
   "browse_highlight_default": true,
   "embedding_dimensions": 0,
   "embedding_model": "nomic-embed-text",

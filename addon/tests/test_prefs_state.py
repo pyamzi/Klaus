@@ -131,4 +131,14 @@ view = st.view()
 check("flatten_appearance copies the gradients of the view it is handed",
       ps.flatten_appearance(view)["background_gradients"] is not view["background"]["gradients"])
 
+section("hand-drawn reader 5: the Hand-drawn style switch")
+_hd = ps.PrefsState.from_config({})
+check("hand_drawn defaults on", _hd.get("hand_drawn") is True)
+check("a corrupt value reads on", ps.PrefsState.from_config({"hand_drawn": "x"}).get("hand_drawn") is True)
+_hd.set("hand_drawn", False)
+_c = _hd.commit()
+check("turning it off patches the key and emits its effect",
+      _c.patch.get("hand_drawn") is False and ("hand_drawn", False) in _c.effects, repr(_c))
+check("an unchanged value emits nothing", not any(e[0] == "hand_drawn" for e in ps.PrefsState.from_config({}).commit().effects))
+
 raise SystemExit(report())

@@ -92,6 +92,7 @@ def _bool(default: bool) -> Callable[[Any], bool]:
 # key -> (default, normaliser)
 _SPEC: dict[str, tuple[Any, Callable[[Any], Any]]] = {
     "image_crop_enabled": (True, _bool(True)),
+    "hand_drawn": (True, _bool(True)),
     "endpoint": (DEFAULT_ENDPOINT, _endpoint),
     "embedding_model": ("", _model),
     "runtime_auto_setup": (True, _bool(True)),
@@ -203,6 +204,8 @@ class PrefsState:
             effects.append(("threshold_changed", before["pdf_match_threshold"], after["pdf_match_threshold"]))
         if "anki_theme" in patch:
             effects.append(("anki_theme", after["anki_theme"]))
+        if "hand_drawn" in patch:
+            effects.append(("hand_drawn", after["hand_drawn"]))
         if any(k in patch for k in APPEARANCE_KEYS if k not in PSEUDO_KEYS):
             flat = flatten_appearance(after)
             for key in ("background", "reviewer_background"):

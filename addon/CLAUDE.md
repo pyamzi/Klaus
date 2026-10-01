@@ -650,6 +650,26 @@ same reason.
   (`first_chunk`, `handle_range`, `build_page_html`, `parse_bridge`,
   `decode_b64_json`, `gesture_action`, `records_from_rect_map`) are
   aqt-free for `tests/test_pdfjs_viewer.py`.
+  **Hand-drawn reader (2026-10-01, spec
+  [hand-drawn-reader](docs/superpowers/specs/2026-10-01-hand-drawn-reader-design.md))**:
+  three record kinds, named by `pdf_handler.record_kind` — a highlight
+  (optional `card: [dx, dy]`, its note card's offset from the union's
+  top-right), a text box (`kind: "text"`) and a free-standing sticky
+  note (`kind: "note"`, `rects[0]` its card, a highlight ink). Bridges
+  `note-add`/`note-update`/`note-remove`/`card-move`/`note-text` (empty
+  clears a highlight's note and its card); `apply_text_update(...,
+  kind=)` serves text and notes. The "Hand-drawn style" preference
+  (`hand_drawn`, default on) reaches the page as `klausSetHandDrawn` on
+  ready and on Save (`pdfjs_viewer.set_hand_drawn_all`); the page (plan
+  Tasks 6–7, pending as of 2026-10-01) draws
+  rough.js marker highlights (vendored `web/rough.min.js`, seed
+  `pdfjs_pure.seedFor(id)`, never stored) and Excalifont text (served as
+  `web/fonts/Excalifont-Regular.ttf`, OFL-1.1), and places cards with
+  `pdfjs_pure.cardSpot` — `pdf_handler.card_box` is the same arithmetic.
+  The PDF FILE never depends on the switch: text boxes stay Helvetica,
+  notes and highlight-note cards are Helvetica `/FreeText` filled with
+  their ink (no border, no `/AP`), a highlight's note also rides in its
+  `/Contents`, and the old `/Text` sticky icon is gone.
   Parity completed by K-100:
   Cmd/Ctrl-double-click copies the slide (through the shared
   copyPageImage bridge — the clipboard is the "insert into field"

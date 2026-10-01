@@ -63,7 +63,36 @@ function insertMatch(list, match, currentIndex) {
   return currentIndex >= 0 && i <= currentIndex ? currentIndex + 1 : currentIndex;
 }
 
+/* Hand-drawn reader: the wobble seed of a mark, from its id (FNV-1a over
+   the UTF-16 code units). Never 0: rough.js reads seed 0 as "random". */
+function seedFor(id) {
+  let h = 0x811c9dc5;
+  const s = String(id);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h === 0 ? 1 : h;
+}
+
+/* Where a highlight's note card sits, in page points: its saved offset
+   `card` [dx, dy] from the union's top-right, else 8 pt right of it,
+   top-aligned; kept inside the page (a card bigger than the page pins
+   to the top-left). pdf_handler.card_box is the same arithmetic. */
+function cardSpot(rec, pageW, pageH, cardW, cardH) {
+  const rects = rec.rects || [];
+  let right = 0, top = Infinity;
+  for (const [x, y, w] of rects) {
+    right = Math.max(right, x + w);
+    top = Math.min(top, y);
+  }
+  if (!isFinite(top)) top = 0;
+  const [dx, dy] = Array.isArray(rec.card) ? rec.card : [8, 0];
+  const clamp = (v, hi) => Math.max(0, Math.min(v, Math.max(0, hi)));
+  return { x: clamp(right + dx, pageW - cardW), y: clamp(top + dy, pageH - cardH) };
+}
+
 if (typeof module !== "undefined") {
   module.exports = { KEEP_RENDERED, evictable, changedPages, findOrder,
-                     FIND_BUDGET_MS, shouldYield, insertMatch };
+                     FIND_BUDGET_MS, shouldYield, insertMatch, seedFor, cardSpot };
 }

@@ -302,6 +302,9 @@ class Flag:
     def _push_annotations(self):
         pass
 
+    def _push_hand_drawn(self, flag=None):  # hand-drawn reader: pushed on ready too
+        EVALS.append("klausSetHandDrawn")
+
 
 f = Flag()
 setter = getattr(pj.PdfJsViewer, "set_occlusion_enabled", None)

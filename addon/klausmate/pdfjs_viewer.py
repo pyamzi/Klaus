@@ -40,6 +40,7 @@ import json
 import math
 import threading
 import uuid
+import weakref
 from typing import Any, Callable, Optional
 
 import os
@@ -901,7 +902,37 @@ def make_text_record(
     }
 
 
-def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
+NOTE_COLOR_DEFAULT = "#fadc50"  # yellow, the first highlight ink
+
+
+def make_note_record(
+    page: int,
+    x: float,
+    y: float,
+    text: str,
+    color: str,
+    size: float,
+    w: float,
+    h: float,
+) -> dict:
+    """A free-standing sticky note (hand-drawn reader): a card at (*x*,
+    *y*) page points sized by the page's measurement. The same key set
+    as a text box, with ``kind: "note"`` and a highlight ink."""
+    return {
+        "id": uuid.uuid4().hex,
+        "kind": "note",
+        "page": int(page),
+        "rects": [[float(x), float(y), float(w), float(h)]],
+        "text": str(text),
+        "note": "",
+        "color": str(color),
+        "size": float(size),
+    }
+
+
+def apply_text_update(
+    records: Any, data: Any, kind: str = "text"
+) -> tuple[list[dict], bool]:
     """One outside-text record re-committed from the page's editor.
 
     Returns ``(records, changed)`` — a NEW list when something moved,
@@ -936,7 +967,7 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
     index = -1
     for i, rec in enumerate(out):
         if isinstance(rec, dict) and rec.get("id") == rec_id \
-                and rec.get("kind") == "text":
+                and rec.get("kind") == kind:
             index = i
             break
     if index < 0:
@@ -945,7 +976,10 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
     if not body:
         return out, False
     old = out[index]
-    color = validate_hex_color(data.get("color"), TEXT_COLOR_DEFAULT)
+    color = validate_hex_color(
+        data.get("color"),
+        NOTE_COLOR_DEFAULT if kind == "note" else TEXT_COLOR_DEFAULT,
+    )
     size = validate_text_size(data.get("size"))
     rects = old.get("rects") or [[0.0, 0.0, 0.0, 0.0]]
     try:
@@ -979,6 +1013,19 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
         return out, False
     out[index] = updated
     return out, True
+
+
+_viewers: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def set_hand_drawn_all(flag: bool) -> None:
+    """Preferences saved "Hand-drawn style": every open reader redraws.
+    The PDF file does not depend on it, so nothing re-bakes."""
+    for viewer in list(_viewers):
+        try:
+            viewer._push_hand_drawn(bool(flag))
+        except Exception as exc:
+            print(f"[klausmate] hand-drawn push failed: {exc}")
 
 
 class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
@@ -1036,6 +1083,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # "Draw a diagram…" from the same menu: no image, just the editor.
         self.on_draw_diagram: Optional[Callable[[], None]] = None
         self._occlusion_enabled = False
+        _viewers.add(self)
         # No Add Text prompt lives here any more (K-150): text is typed
         # in the page, so there is no dialog to keep a singleton of.
         self._note_dialog: Any = None  # live Highlight Note prompt (singleton)
@@ -1229,6 +1277,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._push_annotations()
         # The page forgot it with the reload.
         self._push_occlusion_enabled()
+        self._push_hand_drawn()
         if self._scroll_pos:
             self._eval(f"window.klausScrollTo && window.klausScrollTo({int(self._scroll_pos)});")
 
@@ -1475,6 +1524,84 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         if tooltip is not None and not self._save_failed:
             tooltip("Klaus: text added")
 
+    def _bridge_note_add(self, payload: str) -> None:
+        """A sticky note placed with the Note tool and typed in place
+        (hand-drawn reader). No dialog: validated like ``text-add``."""
+        self._sync_marks()
+        data = decode_b64_json(payload) or {}
+        hit = clamp_text_add(data, self._page_count)
+        if hit is None:
+            return
+        page, x, y = hit
+        body = sanitize_text(data.get("text"))
+        if not body:
+            return
+        size = validate_text_size(data.get("size"))
+        w, h = validate_text_box(data.get("w"), data.get("h"), size) \
+            or text_box_size(body, size, 0)
+        self._highlights.append(make_note_record(
+            page, x, y, body,
+            validate_hex_color(data.get("color"), NOTE_COLOR_DEFAULT),
+            size, w, h,
+        ))
+        self._save_annotations()
+        self._push_annotations()
+
+    def _bridge_note_update(self, payload: str) -> None:
+        """A sticky note re-committed: edited, recoloured or dragged.
+        Always pushes back, like ``text-update``."""
+        self._sync_marks()
+        data = decode_b64_json(payload) or {}
+        updated, changed = apply_text_update(self._highlights, data, kind="note")
+        if changed:
+            self._highlights = updated
+            self._save_annotations()
+        self._push_annotations()
+
+    def _bridge_note_remove(self, payload: str) -> None:
+        self._sync_marks()
+        data = decode_b64_json(payload) or {}
+        note_id = data.get("id")
+        kept = [h for h in self._highlights
+                if not (h.get("id") == note_id and h.get("kind") == "note")]
+        if len(kept) != len(self._highlights):
+            self._highlights = kept
+            self._save_annotations()
+        self._push_annotations()
+
+    def _bridge_card_move(self, payload: str) -> None:
+        """A highlight's note card dragged: its offset from the
+        highlight's top-right, in page points."""
+        self._sync_marks()
+        data = decode_b64_json(payload) or {}
+        dx, dy = _finite(data.get("dx")), _finite(data.get("dy"))
+        rec = next((h for h in self._highlights
+                    if h.get("id") == data.get("id") and not h.get("kind")), None)
+        if rec is None or dx is None or dy is None or not str(rec.get("note") or "").strip():
+            self._push_annotations()
+            return
+        lim = MAX_PAGE_PT
+        rec["card"] = [min(max(dx, -lim), lim), min(max(dy, -lim), lim)]
+        self._save_annotations()
+        self._push_annotations()
+
+    def _bridge_note_text(self, payload: str) -> None:
+        """A highlight's note edited in place on its card. Empty clears
+        the note, and the card goes with it."""
+        self._sync_marks()
+        data = decode_b64_json(payload) or {}
+        rec = next((h for h in self._highlights
+                    if h.get("id") == data.get("id") and not h.get("kind")), None)
+        if rec is None:
+            self._push_annotations()
+            return
+        body = sanitize_text(data.get("text"))
+        rec["note"] = body
+        if not body:
+            rec.pop("card", None)
+        self._save_annotations()
+        self._push_annotations()
+
     def _bridge_text_update(self, payload: str) -> None:
         """An existing text box re-committed after an in-place edit.
 
@@ -1659,6 +1786,21 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         """Tell the page whether an editor is there to occlude into."""
         self._occlusion_enabled = bool(enabled)
         self._push_occlusion_enabled()
+
+    def _push_hand_drawn(self, flag: bool | None = None) -> None:
+        """Tell the page whether to draw marks hand-drawn (the
+        "Hand-drawn style" preference, read fresh when not given)."""
+        if flag is None:
+            try:
+                from . import settings
+
+                flag = settings.read().get("hand_drawn", True) is not False
+            except Exception:
+                flag = True
+        self._eval(
+            "window.klausSetHandDrawn && "
+            f"window.klausSetHandDrawn({'true' if flag else 'false'});"
+        )
 
     def _push_occlusion_enabled(self) -> None:
         flag = "true" if self._occlusion_enabled else "false"

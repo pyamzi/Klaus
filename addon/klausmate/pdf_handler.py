@@ -1494,6 +1494,16 @@ def annotations_path_for(user_files_dir: str, name: str) -> str:
 _HIGHLIGHT_COLOR_DEFAULT = "#fadc50"
 
 
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def record_kind(rec) -> str:
+    """"text" (a text box), "note" (a free-standing sticky note) or
+    "highlight" (everything else, the classic shape)."""
+    kind = rec.get("kind") if isinstance(rec, dict) else None
+    return kind if kind in ("text", "note") else "highlight"
+
+
 def _validate_highlight(entry) -> dict | None:
     """Normalize one stored highlight record; None if malformed.
 
@@ -1545,13 +1555,31 @@ def _validate_highlight(entry) -> dict | None:
     # FreeText record (rects[0] is its box, ``text`` its contents);
     # anything else normalizes to the classic highlight shape, keeping
     # pre-K-077 records byte-identical through save/load.
-    if entry.get("kind") == "text":
+    kind = record_kind(entry)
+    if kind in ("text", "note"):
         text = entry.get("text", "")
-        out["kind"] = "text"
+        out["kind"] = kind
         out["text"] = text if isinstance(text, str) else ""
         size = entry.get("size")
         if _finite_number(size) and size > 0:
             out["size"] = float(size)
+    if kind == "note":
+        # A sticky note (hand-drawn reader): never empty, and its ink is
+        # one of the highlight hexes the page sends.
+        if not out["text"].strip():
+            return None
+        if not _HEX_COLOR.match(out["color"]):
+            out["color"] = _HIGHLIGHT_COLOR_DEFAULT
+    card = entry.get("card")
+    if (
+        kind == "highlight"
+        and isinstance(card, (list, tuple))
+        and len(card) == 2
+        and all(_finite_number(v) for v in card)
+    ):
+        # Where this highlight's note card sits: [dx, dy] page points
+        # from the highlight's union top-right (pdfjs_pure.cardSpot).
+        out["card"] = [float(card[0]), float(card[1])]
     origin = entry.get("origin")
     if isinstance(origin, str) and origin:
         out["origin"] = origin
@@ -1688,7 +1716,7 @@ def add_suppressed(user_files_dir: str, name: str, record: dict) -> None:
             return
         entry = {
             "page": record.get("page"),
-            "kind": "text" if record.get("kind") == "text" else "highlight",
+            "kind": record_kind(record),
             "rects": rects,
             "text": str(record.get("text") or ""),
             "ts": time.time(),
@@ -1872,6 +1900,72 @@ def _num(value: float) -> str:
     """A PDF numeric token: ``12`` not ``12.0``, ``0.9804`` not
     ``0.9803921568627451`` — a content-stream operand, not a repr."""
     return f"{round(float(value), 4):g}"
+
+
+NOTE_CARD_MAX_W, NOTE_CARD_MAX_H = 480.0, 720.0  # pdfjs_viewer.TEXT_BOX_MAX_W/H
+_NOTE_PAD_PT = 6.0
+
+
+def card_box(rec: dict, page_w: float, page_h: float, w: float, h: float) -> tuple[float, float]:
+    """Top-left of a highlight's note card in page points (top-left
+    origin): ``card`` [dx, dy] from the highlight's union top-right,
+    else 8 pt right of it; kept inside the page. The same arithmetic as
+    pdfjs_pure.cardSpot, so the file puts the card where Klaus draws it."""
+    right, top = 0.0, None
+    for r in rec.get("rects") or []:
+        try:
+            x, y, rw = float(r[0]), float(r[1]), float(r[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        right = max(right, x + rw)
+        top = y if top is None else min(top, y)
+    card = rec.get("card")
+    dx, dy = (float(card[0]), float(card[1])) if isinstance(card, (list, tuple)) and len(card) == 2 else (8.0, 0.0)
+
+    def clamp(v: float, hi: float) -> float:
+        return max(0.0, min(v, max(0.0, hi)))
+
+    return clamp(right + dx, page_w - w), clamp((top or 0.0) + dy, page_h - h)
+
+
+def note_card_size(text: str, size: float) -> tuple[float, float]:
+    """A highlight note card's size in the file. The record stores only
+    where the card sits, so this estimates it from the text: Helvetica
+    at about 0.55 em per character, wrapped at 30 em, 1.15 line height,
+    plus padding; capped like a text box."""
+    pt = text_point_size(size)
+    wrap_chars = 30.0 / 0.55
+    lines = 0
+    widest = 0
+    for raw in str(text or "").split("\n") or [""]:
+        n = len(raw)
+        lines += max(1, -(-n // int(wrap_chars)))
+        widest = max(widest, min(n, int(wrap_chars)))
+    w = min(max(widest * 0.55 * pt + 2 * _NOTE_PAD_PT, 60.0), NOTE_CARD_MAX_W)
+    h = min(lines * 1.15 * pt + 2 * _NOTE_PAD_PT, NOTE_CARD_MAX_H)
+    return w, h
+
+
+def _freetext(text: str, box: tuple, ox: float, oy: float, ph: float, color, size, fill=None):
+    """One Helvetica /FreeText at ``box`` (x, y, w, h page points,
+    top-left origin) — a text box when ``fill`` is None, a note card
+    filled with that ink otherwise. Never a border (K-150)."""
+    x, y, w, h = box
+    inset = FREETEXT_INSET_PT
+    x, y, w, h = x - inset, y - inset, w + 2 * inset, h + 2 * inset
+    pt = text_point_size(size)
+    free = _BakeFreeText(
+        text=str(text or ""),
+        rect=(ox + x, oy + ph - (y + h), ox + x + w, oy + ph - y),
+        font_size=f"{pt}pt",
+        font_color=_bake_color(color, "000000"),
+        border_color=None,
+        background_color=_bake_color(fill, "fadc50") if fill else None,
+    )
+    # /DA, which pypdf leaves EMPTY for a borderless box — see
+    # free_text_da (K-159).
+    free[_BakeName("/DA")] = _BakeString(free_text_da(color, pt))
+    return free
 
 
 def free_text_da(color, size, fallback_color: str = "000000") -> str:
@@ -2168,36 +2262,22 @@ def bake_annotations(
                 oy = float(mb.bottom)
             except Exception:
                 ox = oy = 0.0
-            if hl.get("kind") == "text":
-                # Adopted outside text (K-077): one FreeText per record,
-                # rects[0] is its box in Qt page points.
+            kind = record_kind(hl)
+            if kind in ("text", "note"):
+                # A text box (K-077) or a sticky note (hand-drawn
+                # reader): one Helvetica FreeText per record, rects[0]
+                # its box in Qt page points; a note is filled with its
+                # ink and its text is black.
                 rects = hl.get("rects") or []
                 if not rects:
                     continue
-                x, y, w, h = (float(v) for v in rects[0])
-                inset = FREETEXT_INSET_PT
-                x, y, w, h = x - inset, y - inset, w + 2 * inset, h + 2 * inset
-                pt = text_point_size(hl.get("size"))
-                free = _BakeFreeText(
-                    text=str(hl.get("text") or ""),
-                    rect=(
-                        ox + x,
-                        oy + ph - (y + h),
-                        ox + x + w,
-                        oy + ph - y,
-                    ),
-                    font_size=f"{pt}pt",
-                    font_color=_bake_color(hl.get("color"), "000000"),
-                    border_color=None,
-                    background_color=None,
-                )
-                # /DA, which pypdf leaves EMPTY for a borderless box —
-                # see free_text_da. Without it Preview renders every
-                # note at its own default size in black, whatever /DS
-                # says (measured in PDFKit, K-159).
-                free[_BakeName("/DA")] = _BakeString(
-                    free_text_da(hl.get("color"), pt)
-                )
+                box = tuple(float(v) for v in rects[0])
+                if kind == "note":
+                    free = _freetext(hl.get("text"), box, ox, oy, ph, "#000000",
+                                     hl.get("size"), fill=hl.get("color"))
+                else:
+                    free = _freetext(hl.get("text"), box, ox, oy, ph,
+                                     hl.get("color"), hl.get("size"))
                 _mark_klaus(free, hl)
                 writer.add_annotation(page, free)
                 baked += 1
@@ -2230,23 +2310,25 @@ def bake_annotations(
                 highlight_color=_bake_color(hl.get("color"), "fadc50"),
                 printing=True,
             )
+            note = hl.get("note")
+            note = note.strip() if isinstance(note, str) else ""
+            if note:
+                # The note rides in the highlight's own popup text.
+                anno[_BakeName("/Contents")] = _BakeString(note)
             _mark_klaus(anno, hl)
             writer.add_annotation(page, anno)
             baked += 1
             if hl.get("id"):
                 baked_ids_now.append(str(hl["id"]))
-            note = hl.get("note")
-            note = note.strip() if isinstance(note, str) else ""
             if note:
-                # Sticky note: 18x18 icon anchored at the union's
-                # top-right corner.
-                sticky = _BakeText(
-                    rect=(ux1, uy1 - 18, ux1 + 18, uy1),
-                    text=note,
-                    open=False,
-                )
-                _mark_klaus(sticky, hl, suffix=":note")
-                writer.add_annotation(page, sticky)
+                # ...and shows as a plain Helvetica card where Klaus
+                # draws it (hand-drawn reader), in the highlight's ink.
+                cw, ch = note_card_size(note, None)
+                cx, cy = card_box(hl, float(mb.width), ph, cw, ch)
+                card = _freetext(note, (cx, cy, cw, ch), ox, oy, ph, "#000000",
+                                 None, fill=hl.get("color"))
+                _mark_klaus(card, hl, suffix=":note")
+                writer.add_annotation(page, card)
 
         def write_tmp(tmp: str) -> None:
             with open(tmp, "wb") as f:
@@ -2647,9 +2729,7 @@ def _same_annotation(a: dict, b: dict) -> bool:
     outside annotation (possibly edited in between)."""
     if a.get("page") != b.get("page"):
         return False
-    ka = "text" if a.get("kind") == "text" else "highlight"
-    kb = "text" if b.get("kind") == "text" else "highlight"
-    if ka != kb:
+    if record_kind(a) != record_kind(b):
         return False
     ba = _bbox_of(a)
     bb = _bbox_of(b)
@@ -2661,12 +2741,12 @@ def _same_annotation(a: dict, b: dict) -> bool:
 def _record_signature(rec: dict) -> tuple:
     return (
         rec.get("page"),
-        "text" if rec.get("kind") == "text" else "highlight",
+        record_kind(rec),
         tuple(
             tuple(round(float(v), 1) for v in r)
             for r in rec.get("rects") or []
         ),
-        (rec.get("text") or "") if rec.get("kind") == "text" else "",
+        (rec.get("text") or "") if record_kind(rec) != "highlight" else "",
     )
 
 
@@ -2689,10 +2769,10 @@ def _tombstone_hits(s: dict, rec: dict) -> bool:
         return False
     if s.get("page") != rec.get("page"):
         return False
-    kind = "text" if rec.get("kind") == "text" else "highlight"
-    if ("text" if s.get("kind") == "text" else "highlight") != kind:
+    kind = record_kind(rec)
+    if record_kind(s) != kind:
         return False
-    if kind == "text" and (
+    if kind != "highlight" and (
         str(s.get("text") or "").strip()
         != str(rec.get("text") or "").strip()
     ):

@@ -5,7 +5,7 @@
 const assert = require("assert");
 const path = require("path");
 const { KEEP_RENDERED, evictable, changedPages, findOrder,
-        FIND_BUDGET_MS, shouldYield, insertMatch } =
+        FIND_BUDGET_MS, shouldYield, insertMatch, seedFor, cardSpot } =
   require(path.join(__dirname, "..", "klausmate", "web", "pdfjs_pure.js"));
 
 const failures = [];
@@ -85,6 +85,40 @@ check("insertMatch keeps the current match current", () => {
   assert.strictEqual(insertMatch(list, m(3, 0), 1), 2);   // earlier page: index moves again
   assert.deepStrictEqual(keys(list), ["1:0", "3:0", "4:0", "4:5", "5:3", "9:0"]);
   assert.strictEqual(insertMatch([], m(0, 0), -1), -1);   // no current match yet
+});
+
+// Hand-drawn reader: a mark's wobble comes from its id, and a note card's
+// default spot sits beside its highlight, inside the page.
+check("seedFor is stable per id and differs between ids", () => {
+  assert.strictEqual(seedFor("abc"), seedFor("abc"));
+  assert.notStrictEqual(seedFor("abc"), seedFor("abd"));
+  const hex = "3f2c5db56cc93c5a6873b1361d730c16";
+  assert.strictEqual(seedFor(hex), seedFor(hex));
+});
+check("seedFor is a positive 32-bit integer, never 0 (rough.js reads 0 as random)", () => {
+  for (const id of ["", "x", "abc", "0", "3f2c5db56cc93c5a6873b1361d730c16"]) {
+    const s = seedFor(id);
+    assert.ok(Number.isInteger(s) && s > 0 && s <= 0xffffffff, id + " -> " + s);
+  }
+});
+check("seedFor spreads: 200 ids give 200 seeds", () => {
+  const seen = new Set();
+  for (let i = 0; i < 200; i++) seen.add(seedFor("mark-" + i));
+  assert.strictEqual(seen.size, 200);
+});
+const two = {rects: [[100, 50, 80, 12], [100, 64, 40, 12]]};
+check("cardSpot: 8 pt right of the highlight's union, top-aligned", () => {
+  assert.deepStrictEqual(cardSpot(two, 600, 800, 120, 40), {x: 188, y: 50});
+});
+check("cardSpot: a saved card offset is from the union's top-right", () => {
+  assert.deepStrictEqual(cardSpot(Object.assign({card: [10, 5]}, two), 600, 800, 120, 40), {x: 190, y: 55});
+});
+check("cardSpot: clamped inside the page", () => {
+  assert.deepStrictEqual(cardSpot({rects: [[550, 790, 40, 12]]}, 600, 800, 120, 40), {x: 480, y: 760});
+  assert.deepStrictEqual(cardSpot({rects: [[0, 0, 10, 10]], card: [-500, -500]}, 600, 800, 120, 40), {x: 0, y: 0});
+});
+check("cardSpot: a card bigger than the page pins to the top-left", () => {
+  assert.deepStrictEqual(cardSpot(two, 100, 100, 300, 300), {x: 0, y: 0});
 });
 
 if (failures.length) { console.log(failures.length + " failed"); process.exit(1); }
