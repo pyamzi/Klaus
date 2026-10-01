@@ -1218,7 +1218,7 @@ same reason.
   `_<image media name>.excalidraw` (JSON plus a `klaus` block holding the
   export origin), under the name Anki RETURNED; the `_` keeps Check Media
   from listing it as unused. **Re-edit**: edit mode shows Draw (the Masks
-  Editor stays current) only when that file reads (`excal_tab.has_diagram`).
+  Editor stays current) only when that file reads (`excal_tab.read_diagram`).
   A Use drawing on top of an earlier drawing reads svg-edit's masks back and
   `remap_masks` carries them over: the best mask with IoU >= 0.8 on an old
   label's box follows its label and keeps its id (so the note updates in

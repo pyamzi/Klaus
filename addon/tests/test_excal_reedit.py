@@ -456,12 +456,18 @@ def listing(d):
     return sorted(os.listdir(d))
 
 
-# ------------------------------------------------------------ has_diagram
+# ------------------------------------------------------------ read_diagram
 
-section("has_diagram: only a readable _<image>.excalidraw with its klaus block")
+section("read_diagram: only a readable _<image>.excalidraw with its klaus block")
 HD = tempfile.mkdtemp(prefix="io-media-", dir=TMP)
-has = getattr(et, "has_diagram", None)
-check("excal_tab.has_diagram exists", has is not None)
+check("read_diagram is the one name (no unused has_diagram beside it)",
+      not hasattr(et, "has_diagram") and callable(getattr(et, "read_diagram", None)))
+
+
+def has(media_dir, name):
+    return et.read_diagram(media_dir, name) is not None
+
+
 cases = (
     ("missing", None, False),
     ("invalid JSON", "{not json", False),
@@ -476,12 +482,13 @@ for i, (label, body, want) in enumerate(cases):
     if body is not None:
         with open(os.path.join(HD, "_" + name + ".excalidraw"), "w", encoding="utf-8") as f:
             f.write(body)
-    ok, r = attempt(has, HD, name) if has else (False, "missing")
+    ok, r = attempt(has, HD, name)
     check("%s: %s" % (label, want), ok and r is want, str(r))
 with open(os.path.join(HD, "img9.png.excalidraw"), "w", encoding="utf-8") as f:
     f.write(json.dumps(sidecar(OLD, META)))
-check("the name without its leading _ does not count",
-      has is not None and has(HD, "img9.png") is False)
+check("the name without its leading _ does not count", has(HD, "img9.png") is False)
+check("a saved scene comes back whole, klaus block included",
+      et.read_diagram(HD, "img6.png") == sidecar(OLD, META))
 
 
 # ------------------------------------------------------------ the editor
@@ -887,5 +894,45 @@ if dlg is not None:
               not any("loadFromString" in js for js in sv.evals) and TIPS == [], str(TIPS))
     else:
         check("the repeat use reads svg-edit", False)
+
+
+section("io_ask: a continuation that raises becomes a tooltip, never escapes the slot")
+dialogs = importlib.import_module("klausmate.image_occlusion.dialogs")
+dialogs.tooltip = tip
+HOOKED: list = []
+_hook = sys.excepthook
+sys.excepthook = lambda *a: HOOKED.append(a[1])
+try:
+    def _boom(yes):
+        raise KeyError("id")  # e.g. ngen proceed -> _finishUpdate on a mask without an id
+
+    TIPS.clear()
+    box = dialogs.io_ask(QtWidgets.QWidget(), "Proceed?", _boom)
+    box.finished.emit(int(QtWidgets.QMessageBox.StandardButton.Yes.value))
+    app.processEvents()
+    check("nothing reaches the excepthook", HOOKED == [], str(HOOKED))
+    check("...a tooltip says it failed", len(TIPS) == 1, str(TIPS))
+finally:
+    sys.excepthook = _hook
+
+section("Update with no ask: an error in the continuation stays inside it")
+media = tempfile.mkdtemp(prefix="io-media-", dir=TMP)
+c, editor, ia, dlg, _r = edit_session(media)
+if dlg is not None:
+    HOOKED.clear()
+    sys.excepthook = lambda *a: HOOKED.append(a[1])
+    _after = ia._afterEditNotes
+    ia._afterEditNotes = lambda *a: (_ for _ in ()).throw(RuntimeError("refresh failed"))
+    try:
+        TIPS.clear()
+        dlg.svg_edit.callbacks.clear()
+        ia.onEditNotesButton("Don't Change")
+        ok, r = attempt(dlg.svg_edit.callbacks[-1], OLD_SVG) if dlg.svg_edit.callbacks else (False, "no read")
+        check("svg-edit's answer runs the update without raising", ok, str(r))
+        check("...the failure is a tooltip", any("error" in t.lower() for t in TIPS), str(TIPS))
+    finally:
+        ia._afterEditNotes = _after
+        sys.excepthook = _hook
+    dlg.close()
 
 raise SystemExit(report())

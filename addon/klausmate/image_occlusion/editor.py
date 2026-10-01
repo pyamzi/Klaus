@@ -167,7 +167,13 @@ class ImgOccEdit(QDialog):
         window = self._watched
         if window is None or sip.isdeleted(self):
             return
-        if sip.isdeleted(window) or not window.isVisible():
+        if sip.isdeleted(window):
+            return self._on_parent_window_gone()
+        # Anki's Add sets this when its own close has run. The single window
+        # ignores a user Close on its Add tab and only hides it (a tab switch,
+        # the instance kept): the flag stays False and so does this editor.
+        cleaned = getattr(window, "_close_event_has_cleaned_up", None)
+        if cleaned is True or (cleaned is None and not window.isVisible()):
             self._on_parent_window_gone()
 
     def _on_parent_window_gone(self, *_args):

@@ -53,7 +53,7 @@ BANNED_NAMES = {"askUser", "askUserDialog", "getText", "getOnlyText", "chooseLis
                 "addHook", "remHook", "runHook", "wrap"}
 BANNED_STATICS = {"QMessageBox.question", "QMessageBox.information",
                   "QMessageBox.critical", "QMessageBox.warning"}
-SHADOWS = {"parent", "window", "close", "show", "hide"}
+SHADOWS = {"parent", "window", "close", "show", "hide", "font"}
 
 violations = {k: [] for k in ("exec", "banned", "static", "shadow", "showAnswer",
                               "col.conf", "webexports")}
@@ -98,7 +98,7 @@ check("no askUser/getText/getOnlyText/chooseList, no addHook/remHook/runHook, no
       not violations["banned"], str(violations["banned"]))
 check("no static QMessageBox.question/information/critical/warning, QInputDialog.getX or "
       "QColorDialog.getColor", not violations["static"], str(violations["static"]))
-check("no instance attribute named parent/window/close/show/hide",
+check("no instance attribute named parent/window/close/show/hide/font",
       not violations["shadow"], str(violations["shadow"]))
 check("no assignment to Reviewer._showAnswer", not violations["showAnswer"],
       str(violations["showAnswer"]))

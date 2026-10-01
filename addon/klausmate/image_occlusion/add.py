@@ -49,7 +49,7 @@ from . import excal_tab
 from .config import *
 from .excal_masks import remap_masks
 from .consts import SUPPORTED_EXTENSIONS
-from .dialogs import io_critical, io_info
+from .dialogs import guarded, io_critical, io_info
 from .editor import ImgOccEdit
 from .lang import _
 from .ngen import *
@@ -477,9 +477,9 @@ class ImgOccAdd(object):
         # Calling leaveContext() first fixes this.
         dialog.svg_edit.evalWithCallback(
             "svgCanvas.leaveContext(); svgCanvas.svgCanvasToString();",
-            lambda val, choice=choice, close=close: self._onAddNotesButton(
+            guarded(lambda val, choice=choice, close=close: self._onAddNotesButton(
                 choice, close, val
-            ),
+            )),
         )
 
     def _onAddNotesButton(self, choice, close, svg):
@@ -521,7 +521,7 @@ class ImgOccAdd(object):
         # the call to `leaveContext()`.
         dialog.svg_edit.evalWithCallback(
             "svgCanvas.leaveContext(); svgCanvas.svgCanvasToString();",
-            lambda val, choice=choice: self._onEditNotesButton(choice, val),
+            guarded(lambda val, choice=choice: self._onEditNotesButton(choice, val)),
         )
 
     def _onEditNotesButton(self, choice, svg):

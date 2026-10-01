@@ -32,6 +32,7 @@ stay aqt-free for the headless tests.
 from __future__ import annotations
 
 from . import settings
+from .image_occlusion.excal_masks import MAX_SIDE, png_size
 
 import base64
 import colorsys
@@ -692,7 +693,6 @@ def _finite(value: Any) -> float | None:
 # The menu's disabled-item tooltip. The page carries the same string
 # (pdfjs_viewer.html's NO_EDITOR_TIP); tests/test_reader_occlude.py pins both.
 NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note"
-_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def decode_occlude_payload(
@@ -718,9 +718,8 @@ def decode_occlude_payload(
         return None
     try:
         png = base64.b64decode(png_b64, validate=True)
+        png_size(png)  # a PNG signature and IHDR, or ValueError
     except Exception:
-        return None
-    if not png.startswith(_PNG_MAGIC):
         return None
     return png, int(page), region
 
@@ -1635,6 +1634,12 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         if hit is None:
             if tooltip is not None:
                 tooltip("Klaus: couldn't read that image")
+            return
+        width, height = png_size(hit[0])
+        if width > MAX_SIDE or height > MAX_SIDE:  # Ruling R2, as for a drawing
+            if tooltip is not None:
+                tooltip("Klaus: the page is too large to occlude (%d × %d px, at most %d a side)"
+                        % (width, height, MAX_SIDE))
             return
         if self.on_occlude is None:
             if tooltip is not None:

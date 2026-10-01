@@ -47,7 +47,7 @@ from aqt.utils import tooltip
 from .add import ImgOccAdd
 from .config import *
 from .consts import *
-from .dialogs import io_critical, ioHelp
+from .dialogs import guarded, io_critical, ioHelp
 from .lang import _
 from .options import ImgOccOpts
 from .web import setup_webview_injections
@@ -108,9 +108,10 @@ def source_menu(editor):
     """Klaus: the two sources the Add editor's I/O button offers."""
     menu = QMenu(editor.parentWindow)
     choose = menu.addAction(_("Choose image…"))
-    qconnect(choose.triggered, lambda _checked=False, e=editor: onImgOccButton(e))
+    qconnect(choose.triggered, guarded(lambda _checked=False, e=editor: onImgOccButton(e)))
     draw = menu.addAction(_("Draw a diagram…"))
-    qconnect(draw.triggered, lambda _checked=False, e=editor: onImgOccButton(e, draw=True))
+    qconnect(draw.triggered,
+             guarded(lambda _checked=False, e=editor: onImgOccButton(e, draw=True)))
     return menu
 
 

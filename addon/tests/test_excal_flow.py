@@ -973,4 +973,126 @@ check("io.occlude takes draw=False by default (reader's positional call still wo
       __import__("inspect").signature(io.occlude).parameters.get("draw") is not None
       and __import__("inspect").signature(io.occlude).parameters["draw"].default is False)
 
+
+
+section("R21 in the single window: Add's Close is a tab switch, not a close")
+
+
+class AddLike(QtWidgets.QMainWindow):
+    """NewAddCards as far as R21 sees it: Anki's own teardown sets the flag."""
+    deckChooser = types.SimpleNamespace(selectedId=lambda: 1)
+
+    def __init__(self):
+        super().__init__()
+        self._close_event_has_cleaned_up = False
+
+
+class TabFilter(QtCore.QObject):
+    """single_window._CloseFilter("add"): a user Close goes back a tab, keeping Add."""
+
+    def __init__(self, stack, back):
+        super().__init__()
+        self.stack, self.back = stack, back
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QtCore.QEvent.Type.Close and not obj._close_event_has_cleaned_up:
+            ev.ignore()
+            self.stack.setCurrentWidget(self.back)
+            return True
+        return False
+
+
+ed_mod.io_ask = asks
+try:
+    stack, decks, addw = QtWidgets.QStackedWidget(), QtWidgets.QWidget(), AddLike()
+    stack.addWidget(decks)
+    stack.addWidget(addw)
+    stack.setCurrentWidget(addw)
+    stack.show()
+    tab_filter = TabFilter(stack, decks)
+    addw.installEventFilter(tab_filter)  # first, as single_window does at Add's init
+    e9 = new_editor()
+    e9.parentWindow = addw
+    attempt(io.occlude, e9, photo)
+    d9 = getattr(getattr(e9, "imgoccadd", None), "imgoccedit", None)
+    check("a session opened on the hosted Add", d9 is not None)
+    if d9 is not None:
+        del asks[:]
+        addw.close()  # the Add tab's Close / Cmd+W
+        for _i in range(3):
+            app.processEvents()
+        check("Add is hidden but alive (the tab switched)", not addw.isVisible() and not sip.isdeleted(addw))
+        check("the occlusion editor stays open", not sip.isdeleted(d9) and d9.isVisible())
+        check("...and nothing asked", asks == [], str(asks))
+        stack.setCurrentWidget(addw)
+        addw._close_event_has_cleaned_up = True  # Anki's own teardown ran (_close)
+        addw.close()
+        for _i in range(3):
+            app.processEvents()
+        check("Anki's own close of Add still closes it", sip.isdeleted(d9) or not d9.isVisible())
+        check("...without asking", asks == [], str(asks))
+    # Edit Current in its dock: no such flag; its close hides it, then it is reaped.
+    holder = QtWidgets.QWidget()
+    lay = QtWidgets.QVBoxLayout(holder)
+    editw = QtWidgets.QMainWindow()
+    editw.deckChooser = types.SimpleNamespace(selectedId=lambda: 1)
+    lay.addWidget(editw)
+    holder.show()
+    e10 = new_editor()
+    e10.parentWindow = editw
+    attempt(io.occlude, e10, photo)
+    d10 = getattr(getattr(e10, "imgoccadd", None), "imgoccedit", None)
+    if d10 is not None:
+        editw.close()
+        for _i in range(3):
+            app.processEvents()
+        check("a hosted Edit Current's real close still closes it",
+              sip.isdeleted(d10) or not d10.isVisible())
+finally:
+    ed_mod.io_ask = _io_ask
+
+
+section("the source menu's actions never raise out of the Qt slot")
+dlg_mod = importlib.import_module("klausmate.image_occlusion.dialogs")
+dlg_mod.tooltip = tip
+HOOKED: list = []
+_hook, _btn = sys.excepthook, main.onImgOccButton
+sys.excepthook = lambda *a: HOOKED.append(a[1])
+
+
+def _boom(*a, **k):
+    raise RuntimeError("IOE launch failed")
+
+
+main.onImgOccButton = _boom
+try:
+    TIPS.clear()
+    menu = main.source_menu(new_editor())
+    for act in menu.actions():
+        act.trigger()
+    check("both actions: no exception reaches the slot", HOOKED == [], str(HOOKED))
+    check("...each says so in a tooltip", len(TIPS) == 2, str(TIPS))
+finally:
+    sys.excepthook, main.onImgOccButton = _hook, _btn
+
+
+section("the Draw page's folder is derived from the add-on's package")
+src = open(et.__file__, encoding="utf-8").read() if et else ""
+check("excal_tab names no add-on folder", "/_addons/klausmate" not in src)
+if et is not None:
+    other = types.ModuleType("1374772155.image_occlusion.excal_tab")
+    other.__package__ = "klausmate.image_occlusion"  # its imports resolve as usual
+    other.__file__ = et.__file__
+    ok, r = attempt(exec, compile(src, et.__file__, "exec"), other.__dict__)
+    check("the module loads under another add-on folder", ok, str(r))
+    if ok:
+        want = "/_addons/1374772155/image_occlusion/excalidraw/"
+        check("PAGE_DIR follows it", other.PAGE_DIR == want, other.PAGE_DIR)
+        other.mw = fake_mw(None)
+        nav = other.DrawPage.acceptNavigationRequest
+        check("its page check accepts that folder",
+              nav(None, QtCore.QUrl(SERVER + want[1:] + "index.html"), 0, True) is True)
+        check("...and refuses klausmate's",
+              nav(None, QtCore.QUrl(SERVER + PAGE[1:] + "index.html"), 0, True) is False)
+
 raise SystemExit(report())

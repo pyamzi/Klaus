@@ -3,12 +3,26 @@
 Every live, non-blank text element becomes one occlusion rectangle in image
 pixels. The mask SVG is IOE's omask format, which ngen.py reads unchanged.
 remap_masks carries masks over when a drawing is used again (re-edit).
+png_size is the one PNG size check (the Draw tab and the reader's occlusions).
 """
 from __future__ import annotations
 
 import math
+import struct
 from xml.dom import minidom
 from xml.sax.saxutils import quoteattr
+
+# Ruling R2: IOE has no size limit of its own; Chromium's canvas (svg-edit,
+# the reviewer) is what breaks first above this many px a side.
+MAX_SIDE = 8192
+
+
+def png_size(data: bytes) -> tuple[int, int]:
+    """(width, height) from a PNG's IHDR; ValueError when data is not a PNG."""
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        raise ValueError("not a PNG")
+    return struct.unpack(">II", data[16:24])
+
 
 # An old mask whose box overlaps an old label's this much is that label's mask.
 LABEL_IOU = 0.8

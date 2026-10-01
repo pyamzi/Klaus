@@ -59,9 +59,21 @@ if not os.path.isfile(os.path.join(D, "excalidraw.js")):
 
 html, js, css = read("index.html"), read("excalidraw.js"), read("excalidraw.css")
 
-section("asset path")
-check("EXCALIDRAW_ASSET_PATH is the add-on's own folder",
-      re.search(r'window\.EXCALIDRAW_ASSET_PATH\s*=\s*"' + re.escape(ASSET_PATH) + '"', html))
+section("asset path: the page's own folder, whatever the add-on folder is called")
+check("index.html names no add-on folder (no /_addons/klausmate)", "/_addons/" not in html)
+m = re.search(r"<script>(window\.EXCALIDRAW_ASSET_PATH\s*=[^<]*)</script>", html)
+check("EXCALIDRAW_ASSET_PATH is set in an inline script before the bundle",
+      m is not None and html.find(m.group(0)) < html.find('src="excalidraw.js"'))
+_node = shutil.which("node") or shutil.which("node", path=os.path.expanduser("~/.local/bin"))
+if m is not None and _node:
+    for page in (ASSET_PATH + "index.html", "/_addons/1374772155/image_occlusion/excalidraw/index.html"):
+        probe = ("var window = {}, location = {pathname: %r, href: 'http://127.0.0.1:1' + %r};"
+                 "%s; process.stdout.write(window.EXCALIDRAW_ASSET_PATH)" % (page, page, m.group(1)))
+        r = subprocess.run([_node, "-e", probe], capture_output=True, text=True, timeout=30)
+        check("served from %s: the asset path is its folder" % page,
+              r.stdout == page[: page.rindex("/") + 1], r.stdout + r.stderr[-200:])
+elif m is not None:
+    print("  SKIP asset-path evaluation: node not found")
 check("index.html loads the bundle as a classic script",
       '<script src="excalidraw.js"></script>' in html and 'type="module"' not in html)
 

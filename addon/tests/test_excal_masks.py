@@ -93,4 +93,27 @@ check("IOE attribute order (fill height stroke width x y)",
       '<rect fill="#FFEBA2" height="58" stroke="#2D2D2D" width="168" x="236" y="136"' in
       em.masks_svg(400, 300, [("free", 236, 136, 168, 58)], "#FFEBA2", "#2D2D2D"))
 
+
+section("png_size: the one PNG size check (excal_tab and the reader)")
+import struct  # noqa: E402
+
+def png_head(w, h):
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x02\x00\x00\x00"
+
+size = getattr(em, "png_size", None)
+check("excal_masks.png_size exists", size is not None)
+check("MAX_SIDE is 8192 (R2)", getattr(em, "MAX_SIDE", None) == 8192)
+if size is not None:
+    check("width and height from the IHDR", size(png_head(9000, 37)) == (9000, 37))
+    for label, blob in (("empty", b""), ("GIF", b"GIF89a" + b"\0" * 30),
+                        ("magic only", b"\x89PNG\r\n\x1a\n" + b"x" * 20),
+                        ("a short IHDR", png_head(5, 5)[:20]),
+                        ("another chunk first", png_head(5, 5).replace(b"IHDR", b"IDAT"))):
+        try:
+            size(blob)
+            raised = False
+        except ValueError:
+            raised = True
+        check(label + ": ValueError", raised)
+
 raise SystemExit(report())

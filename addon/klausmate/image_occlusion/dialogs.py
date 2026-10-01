@@ -34,9 +34,12 @@
 Handles all minor utility dialogs
 """
 
+import traceback
+
 from aqt import mw
 from aqt.gui_hooks import profile_will_close
 from aqt.qt import QMessageBox, Qt, QTimer, sip
+from aqt.utils import tooltip
 
 # from .config import *
 from .lang import _
@@ -252,6 +255,21 @@ def io_critical(
     return box
 
 
+def guarded(fn):
+    """Klaus: fn for a Qt slot or callback, where an uncaught exception would
+    abort Anki (PyQt6): an error becomes a print and a tooltip."""
+
+    def run(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            print("[klausmate] image occlusion: %s: %s" % (type(e).__name__, e))
+            traceback.print_exc()
+            tooltip(_("Klaus: Image Occlusion ran into an error; nothing more was done"))
+
+    return run
+
+
 def io_ask(parent, text, on_answer, title=_("Image Occlusion Enhanced"), help="",
            default_no=False):
     """Ask a yes/no question; on_answer(True) on Yes, on_answer(False)
@@ -272,7 +290,7 @@ def io_ask(parent, text, on_answer, title=_("Image Occlusion Enhanced"), help=""
             ioHelp(help, parent=parent)
         on_answer(answer == QMessageBox.StandardButton.Yes.value)
 
-    box.finished.connect(on_finished)
+    box.finished.connect(guarded(on_finished))  # Klaus: the continuation never raises
     box.open()
     return box
 

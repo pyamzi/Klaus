@@ -69,7 +69,22 @@ html = open(HTML_PATH, encoding="utf-8").read()
 
 NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note"
 PNG_HEAD = b"\x89PNG\r\n\x1a\n"
-PNG = PNG_HEAD + b"fake-pixels"
+
+
+def png_blob(w, h):
+    """A PNG signature and IHDR (all png_size reads), then filler."""
+    import struct
+    return (PNG_HEAD + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h)
+            + b"\x08\x02\x00\x00\x00" + b"fake-pixels")
+
+
+PNG = png_blob(40, 30)
+
+
+def flush():
+    """The reader launches IOE a tick later (QTimer.singleShot(0))."""
+    for _i in range(3):
+        app.processEvents()
 TIPS: list = []
 pj.tooltip = lambda text, *a, **k: TIPS.append(text)
 rp.tooltip = lambda text, *a, **k: TIPS.append(text)
@@ -223,6 +238,8 @@ if handler is not None:
         "empty bytes": b64json({"png": "", "page": 1, "region": False}),
         "non-PNG bytes": b64json({"png": base64.b64encode(b"GIF89a....").decode(),
                                   "page": 1, "region": False}),
+        "a PNG signature without its IHDR": b64json(
+            {"png": base64.b64encode(PNG_HEAD + b"fake-pixels").decode(), "page": 1, "region": False}),
         "negative page": b64json({"png": png_b64, "page": -1, "region": False}),
         "page past the count": b64json({"png": png_b64, "page": 10, "region": False}),
         "huge int page": b64json({"png": png_b64, "page": 10 ** 400, "region": False}),
@@ -236,6 +253,14 @@ if handler is not None:
         ok, res = occ(s, payload)
         check(f"{label}: tooltip, no call, no raise",
               ok and s.calls == [] and len(TIPS) == 1, f"{res} {s.calls} {TIPS}")
+    s5 = Stand()
+    big = b64json({"png": base64.b64encode(png_blob(8193, 10)).decode(), "page": 1, "region": False})
+    ok, res = occ(s5, big)
+    check("a page over 8192 px (MAX_SIDE): the too-large tooltip, no call, no raise",
+          ok and s5.calls == [] and len(TIPS) == 1 and "too large" in TIPS[0], f"{res} {TIPS}")
+    ok, res = occ(s5, b64json({"png": base64.b64encode(png_blob(8192, 8192)).decode(),
+                               "page": 1, "region": False}))
+    check("...exactly 8192 a side is allowed", ok and len(s5.calls) == 1 and TIPS == [], f"{TIPS}")
     s2 = Stand(page_count=0)  # count not reported yet: no upper bound to apply
     ok, _ = occ(s2, good)
     check("an unknown page count does not reject a good page", s2.calls == [(PNG, 4, True)])
@@ -327,7 +352,7 @@ v = sb._viewer
 check("built without an editor: the viewer is told False (or never told, default False)",
       v.pushed in ([], [False]), str(v.pushed))
 v.pushed.clear()
-ed = types.SimpleNamespace(addMode=True)
+ed = types.SimpleNamespace(addMode=True, note=object())
 sb._editor = ed
 check("assigning _editor on an instance pushes True", v.pushed == [True], str(v.pushed))
 check("...and reads back", sb._editor is ed)
@@ -353,7 +378,9 @@ section("PdfSidebar: the occlude handler")
 
 
 def occ_sb(*a):
-    return attempt(lambda: sb._on_occlude(*a))
+    r = attempt(lambda: sb._on_occlude(*a))
+    flush()
+    return r
 
 
 CALLS: list = []
@@ -366,8 +393,23 @@ occ_sb(PNG, 4, False)
 check("no editor: the exact tooltip, and occlude is never called",
       TIPS == [NO_EDITOR_TIP] and CALLS == [], f"{TIPS} {CALLS}")
 
+sb._editor = types.SimpleNamespace(addMode=False, note=None)  # Browse with no row selected
+_mk0 = rp.tempfile.mkdtemp
+MK: list = []
+rp.tempfile.mkdtemp = lambda *a, **k: MK.append(a) or _mk0(*a, **k)
+TIPS.clear()
+ok, res = occ_sb(PNG, 4, False)
+rp.tempfile.mkdtemp = _mk0
+check("an editor with no note: the no-editor tooltip, nothing written, occlude not called",
+      ok and TIPS == [NO_EDITOR_TIP] and MK == [] and CALLS == [], f"{res} {TIPS} {MK} {CALLS}")
+
 sb._editor = ed
 TIPS.clear()
+attempt(lambda: sb._on_occlude(PNG, 4, False))
+check("IOE is launched a tick later, never inside the bridge call", CALLS == [], str(CALLS))
+flush()
+check("...and then once", len(CALLS) == 1, str(CALLS))
+CALLS.clear()
 ok, res = occ_sb(PNG, 4, False)
 check("with an editor, occlude(editor, path, None) is called once",
       ok and len(CALLS) == 1 and CALLS[0][0] is ed and CALLS[0][2] is None, f"{res} {CALLS}")
@@ -554,24 +596,55 @@ if draw_sb is not None:
     sb._editor = None
     TIPS.clear()
     attempt(draw_sb)
+    flush()
     check("no editor: the exact tooltip, occlude not called",
           TIPS == [NO_EDITOR_TIP] and DRAWS == [], f"{TIPS} {DRAWS}")
+    sb._editor = types.SimpleNamespace(addMode=False, note=None)
+    TIPS.clear()
+    ok, res = attempt(draw_sb)
+    flush()
+    check("an editor with no note: the no-editor tooltip, occlude not called",
+          ok and TIPS == [NO_EDITOR_TIP] and DRAWS == [], f"{res} {TIPS} {DRAWS}")
     sb._editor = ed
     TIPS.clear()
     attempt(draw_sb)
+    check("Draw a diagram also launches a tick later", DRAWS == [], str(DRAWS))
+    flush()
     check("with an editor: occlude(editor, draw=True), no image, no tooltip",
           DRAWS == [(ed, None, None, True)] and TIPS == [], f"{DRAWS} {TIPS}")
     io._active = False
     DRAWS.clear()
     TIPS.clear()
     attempt(draw_sb)
+    flush()
     check("guard tripped: the conflict tooltip, occlude not called",
           TIPS == [io.CONFLICT_TOOLTIP] and DRAWS == [], f"{TIPS} {DRAWS}")
     io._active = True
     io.occlude = lambda *a, **k: False
     TIPS.clear()
     attempt(draw_sb)
+    flush()
     check("occlude False: a tooltip, never silent",
           TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+
+    section("a launch that raises, a tick later, never escapes the timer slot")
+    HOOKED: list = []
+    _hook = sys.excepthook
+    sys.excepthook = lambda *a: HOOKED.append(a[1])
+
+    def _boom(*a, **k):
+        raise AttributeError("'NoneType' object has no attribute 'model'")
+
+    io.occlude = _boom
+    try:
+        for label, fn in (("Occlude", lambda: sb._on_occlude(PNG, 4, False)), ("Draw", draw_sb)):
+            TIPS.clear()
+            attempt(fn)
+            flush()
+            check(label + ": nothing reaches the excepthook", HOOKED == [], str(HOOKED))
+            check(label + ": a tooltip says it failed",
+                  TIPS == ["Klaus: couldn't open the occlusion editor"], str(TIPS))
+    finally:
+        sys.excepthook = _hook
 
 raise SystemExit(report())

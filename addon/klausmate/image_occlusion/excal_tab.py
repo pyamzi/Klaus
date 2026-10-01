@@ -19,7 +19,6 @@ import binascii
 import json
 import math
 import os
-import struct
 import tempfile
 import time
 from typing import Callable, Optional
@@ -29,14 +28,13 @@ from aqt.qt import QColor, QHBoxLayout, QImage, QPushButton, Qt, QUrl, QVBoxLayo
 from aqt.utils import tooltip
 from aqt.webview import AnkiWebPage, AnkiWebView
 
-from .excal_masks import label_rects, masks_svg
+from .excal_masks import MAX_SIDE, label_rects, masks_svg, png_size
 
 # entry.jsx exports at these; label masks get MARGIN image px around the text.
 PADDING, SCALE, MARGIN = 20, 2, 4
-# Ruling R2: IOE has no size limit of its own; Chromium's canvas (svg-edit,
-# the reviewer) is what breaks first above this.
-MAX_SIDE = 8192
-PAGE_DIR = "/_addons/klausmate/image_occlusion/excalidraw/"
+# The page's folder on Anki's add-on server, from this package's own name
+# (as consts.MODULE_ADDON is): "klausmate", or an AnkiWeb install's number.
+PAGE_DIR = "/_addons/%s/excalidraw/" % "/".join(__name__.split(".")[:-1])
 PREFIX = "klausexcal:"
 EMPTY_TIP = "Draw something first, then press Use drawing"
 
@@ -72,9 +70,10 @@ def prepare_occlusion(result: dict, tmpdir: str, fill: str, stroke: str) -> tupl
         png = base64.b64decode(result.get("png") or "", validate=True)
     except (binascii.Error, ValueError, TypeError):
         png = b""
-    if len(png) < 24 or png[:8] != b"\x89PNG\r\n\x1a\n" or png[12:16] != b"IHDR":
-        raise ValueError("Klaus: the drawing didn't export as an image")
-    width, height = struct.unpack(">II", png[16:24])
+    try:
+        width, height = png_size(png)
+    except ValueError:
+        raise ValueError("Klaus: the drawing didn't export as an image") from None
     if width > MAX_SIDE or height > MAX_SIDE:
         raise ValueError(
             "Klaus: the drawing is too large to occlude (%d × %d px, at most %d a side). "
@@ -116,11 +115,6 @@ def read_diagram(media_dir: str, image_name: str) -> Optional[dict]:
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
     return None
-
-
-def has_diagram(media_dir: str, image_name: str) -> bool:
-    """True when image_name has a readable saved scene: edit mode shows Draw."""
-    return read_diagram(media_dir, image_name) is not None
 
 
 def theme_css() -> str:

@@ -64,6 +64,23 @@ def _pdf_display_name(safe: str) -> str:
         return safe
 
 
+
+def _launch_occlusion(open_editor: Callable[[], bool]) -> None:
+    """Open the occlusion editor a tick later, never inside the webchannel
+    call that asked for it (IOE may show a warning or build its window).
+    False or an error: a tooltip; IOE may have said why itself."""
+
+    def run() -> None:
+        try:
+            opened = open_editor()
+        except Exception as exc:  # a timer slot must never raise
+            print(f"[klausmate] occlude: the occlusion editor failed: {type(exc).__name__}: {exc}")
+            opened = False
+        if not opened:
+            tooltip("Klaus: couldn't open the occlusion editor")
+
+    QTimer.singleShot(0, run)
+
 class PdfSidebar(QWidget):
     """Right-side sidebar: one scrollable PDF document."""
 
@@ -214,7 +231,7 @@ class PdfSidebar(QWidget):
         from .pdfjs_viewer import NO_EDITOR_TIP
 
         editor = self._editor_ref
-        if editor is None:
+        if editor is None or editor.note is None:  # Browse with no row selected
             tooltip(NO_EDITOR_TIP)
             return
         if not self._name:
@@ -238,9 +255,7 @@ class PdfSidebar(QWidget):
             print(f"[klausmate] occlude: could not save the page image: {exc}")
             tooltip("Klaus: couldn't save the page image")
             return
-        if not image_occlusion.occlude(editor, path, None):
-            # IOE may have said why itself (unsupported image, wrong note type).
-            tooltip("Klaus: couldn't open the occlusion editor")
+        _launch_occlusion(lambda: image_occlusion.occlude(editor, path, None))
 
     def _on_draw_diagram(self) -> None:
         """ "Draw a diagram…": the occlusion editor on a blank image, Draw tab first."""
@@ -248,14 +263,13 @@ class PdfSidebar(QWidget):
         from .pdfjs_viewer import NO_EDITOR_TIP
 
         editor = self._editor_ref
-        if editor is None:
+        if editor is None or editor.note is None:
             tooltip(NO_EDITOR_TIP)
             return
         if not image_occlusion._active:
             tooltip(image_occlusion.CONFLICT_TOOLTIP)
             return
-        if not image_occlusion.occlude(editor, draw=True):
-            tooltip("Klaus: couldn't open the occlusion editor")
+        _launch_occlusion(lambda: image_occlusion.occlude(editor, draw=True))
 
     def notify_page_changed(self, page: int) -> None:
         self._on_page_changed(page)

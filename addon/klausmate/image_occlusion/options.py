@@ -159,7 +159,7 @@ class ImgOccOpts(QDialog):
         self.qfill = self.sconf["qfill"]
         self.scol = self.sconf["scol"]
         self.swidth = self.sconf["swidth"]
-        self.font = self.sconf["font"]
+        self.font_name = self.sconf["font"]  # Klaus: .font would shadow QWidget.font()
         self.fsize = self.sconf["fsize"]
         self.hotkey = self.lconf["hotkey"]
         self.setupUi()
