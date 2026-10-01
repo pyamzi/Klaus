@@ -4,8 +4,11 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anki_proto::collection::OpChangesWithId;
-use anki_proto::decks::{Deck, DeckTreeNode, DeckTreeRequest};
+use anki_proto::collection::{OpChanges, OpChangesWithId};
+use anki_proto::config::Preferences;
+use anki_proto::deck_config::{DeckConfigsForUpdate, UpdateDeckConfigsRequest};
+use anki_proto::scheduler::{GetQueuedCardsRequest, QueuedCards, SchedTimingTodayResponse};
+use anki_proto::decks::{Deck, DeckId, DeckTreeNode, DeckTreeRequest};
 use anki_proto::generic::{self, Empty};
 use anki_proto::import_export::{
     export_limit, ExportAnkiPackageOptions, ExportAnkiPackageRequest, ExportLimit,
@@ -13,7 +16,7 @@ use anki_proto::import_export::{
 };
 use anki_proto::media::AddMediaFileRequest;
 use anki_proto::notes::{
-    note_fields_check_response::State, AddNoteRequest, DeckAndNotetype, DefaultsForAddingRequest, Note,
+    note_fields_check_response::State, AddNoteRequest, AddNoteResponse, DeckAndNotetype, DefaultsForAddingRequest, Note,
     NoteFieldsCheckResponse, NoteId,
 };
 use anki_proto::notetypes::{NotetypeId, NotetypeNames};
@@ -321,6 +324,8 @@ async fn http_contract_matches_ankis_post_ts() {
         anki: anki_dir.path().into(),
         anki_static: static_dir.path().into(),
     };
+    let save = deck_options_save(&bridge, |r| r.configs[0].config.as_mut().unwrap().new_per_day = 9);
+    let bad_save = deck_options_save(&bridge, |r| r.configs.clear());
     let (addr, server) = serve(Arc::new(bridge), web, token.clone(), hook).await.unwrap();
     tokio::spawn(server);
     let base = format!("http://{addr}");
@@ -397,6 +402,28 @@ async fn http_contract_matches_ankis_post_ts() {
     assert_eq!(asked.status(), 200);
     assert_eq!(&asked.bytes().await.unwrap()[..], b"question");
 
+    // Deck options' Save returns at once and saves in the background, then the shell
+    // closes the page (Anki's update_deck_configs); a failed save is shown instead.
+    let wait_for_hook = |name: &'static str| {
+        let hooked = hooked.clone();
+        async move {
+            for _ in 0..200 {
+                if hooked.lock().unwrap().iter().any(|m| m == name) {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            panic!("{name} never fired");
+        }
+    };
+    assert_eq!(raw("updateDeckConfigs", save.encode_to_vec()).await.unwrap().status(), 204);
+    wait_for_hook("deckOptionsRequireClose").await;
+    let saved = raw("getDeckConfigsForUpdate", DeckId { did: 1 }.encode_to_vec()).await.unwrap();
+    let saved = DeckConfigsForUpdate::decode(saved.bytes().await.unwrap()).unwrap();
+    assert_eq!(saved.all_config[0].config.as_ref().unwrap().config.as_ref().unwrap().new_per_day, 9);
+    assert_eq!(raw("updateDeckConfigs", bad_save.encode_to_vec()).await.unwrap().status(), 204);
+    wait_for_hook("showMessageBox").await;
+
     // Anki's routes and assets come from Anki's build; everything else from Klaus's.
     let get = |path: &str| {
         let url = format!("{base}{path}");
@@ -449,4 +476,93 @@ async fn http_contract_matches_ankis_post_ts() {
     assert_eq!(get("/..%2Fcollection.anki2").await, "<p>klaus</p>");
     assert_eq!(get("/_app/start.mjs").await, "// anki");
     assert_eq!(get("/decks").await, "<p>klaus</p>");
+}
+
+fn trusted<T: Message + Default>(bridge: &Bridge, method: &str, input: impl Message) -> T {
+    T::decode(bridge.call_trusted(method, &input.encode_to_vec()).unwrap().as_slice()).unwrap()
+}
+
+/// What the deck options page sends on Save: the deck's current state with `edit`
+/// applied (as UpdateDeckConfigsRequest, built the way DeckOptionsState.dataForSaving does).
+fn deck_options_save(
+    bridge: &Bridge,
+    edit: impl FnOnce(&mut UpdateDeckConfigsRequest),
+) -> UpdateDeckConfigsRequest {
+    let current: DeckConfigsForUpdate = call(bridge, "getDeckConfigsForUpdate", DeckId { did: 1 });
+    let deck = current.current_deck.unwrap();
+    let config = current.all_config.into_iter().find(|c| c.config.as_ref().unwrap().id == deck.config_id).unwrap();
+    let mut req = UpdateDeckConfigsRequest {
+        target_deck_id: 1,
+        configs: vec![config.config.unwrap()],
+        limits: deck.limits,
+        new_cards_ignore_review_limit: current.new_cards_ignore_review_limit,
+        fsrs: current.fsrs,
+        apply_all_parent_limits: current.apply_all_parent_limits,
+        ..Default::default()
+    };
+    edit(&mut req);
+    req
+}
+
+#[test]
+fn deck_options_save_and_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let bridge = Bridge::new().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+    let req = deck_options_save(&bridge, |r| {
+        let c = r.configs[0].config.as_mut().unwrap();
+        c.new_per_day = 7;
+        c.learn_steps = vec![2.0, 30.0];
+        c.bury_new = true;
+        c.desired_retention = 0.85;
+        r.fsrs = true;
+    });
+    let _: OpChanges = trusted(&bridge, "updateDeckConfigs", req);
+    bridge.close_collection().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+
+    let reloaded: DeckConfigsForUpdate = call(&bridge, "getDeckConfigsForUpdate", DeckId { did: 1 });
+    let c = reloaded.all_config[0].config.as_ref().unwrap().config.as_ref().unwrap();
+    assert_eq!((c.new_per_day, c.learn_steps.clone(), c.bury_new), (7, vec![2.0, 30.0], true));
+    assert_eq!(c.desired_retention, 0.85);
+    assert!(reloaded.fsrs);
+}
+
+#[test]
+fn fsrs_on_and_off_schedule_the_same_answer_differently() {
+    let (_dir, bridge) = open_temp();
+    let defaults: DeckAndNotetype =
+        call(&bridge, "defaultsForAdding", DefaultsForAddingRequest { home_deck_of_current_review_card: 0 });
+    let mut note: Note = call(&bridge, "newNote", NotetypeId { ntid: defaults.notetype_id });
+    note.fields = vec!["front".into(), "back".into()];
+    let _: AddNoteResponse =
+        trusted(&bridge, "addNote", AddNoteRequest { note: Some(note), deck_id: defaults.deck_id });
+    // The interval each answer would give the new card, as the reviewer's buttons show.
+    let labels = |bridge: &Bridge| {
+        let queued: QueuedCards =
+            trusted(bridge, "getQueuedCards", GetQueuedCardsRequest { fetch_limit: 1, intraday_learning_only: false });
+        let states = queued.cards[0].states.clone().unwrap();
+        trusted::<generic::StringList>(bridge, "describeNextStates", states).vals
+    };
+    let sm2 = labels(&bridge);
+    let _: OpChanges = trusted(&bridge, "updateDeckConfigs", deck_options_save(&bridge, |r| r.fsrs = true));
+    let fsrs = labels(&bridge);
+    // Easy graduates a new card: SM-2 uses the preset's easy interval, FSRS its
+    // initial stability for Easy.
+    assert_ne!(sm2[3], fsrs[3], "{sm2:?} vs {fsrs:?}");
+}
+
+#[test]
+fn day_rollover_hour_sets_when_the_day_ends() {
+    let (_dir, bridge) = open_temp();
+    let next_day_at = |rollover: u32| {
+        let mut prefs: Preferences = trusted(&bridge, "getPreferences", Empty {});
+        prefs.scheduling.as_mut().unwrap().rollover = rollover;
+        let _: OpChanges = trusted(&bridge, "setPreferences", prefs);
+        trusted::<SchedTimingTodayResponse>(&bridge, "schedTimingToday", Empty {}).next_day_at
+    };
+    // Due counts are taken against this cutoff: moving "next day starts at" from
+    // 4:00 to 20:00 moves it by 16 hours (modulo a day).
+    let (four, twenty) = (next_day_at(4), next_day_at(20));
+    assert_eq!((twenty - four).rem_euclid(86_400), 16 * 3600);
 }
