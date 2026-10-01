@@ -342,25 +342,69 @@ class LibraryNameDelegate(QStyledItemDelegate):
         try:
             tag = self.tag_of(index)
             text = percent_text(_state["means"], tag) if tag else None
+            excluded = is_excluded_tag(tag)
         except Exception:  # noqa: BLE001
-            text = None
-        if not text:
+            text, excluded = None, False
+        if not text and not excluded:
             super().paint(painter, option, index)
             return
-        width = option.fontMetrics.horizontalAdvance(text) + 2 * PCT_GAP
-        # The selection/hover band spans the whole row; only the NAME
-        # gives up room, so a long name elides before it reaches the %.
-        full = QStyleOptionViewItem(option)
-        self.initStyleOption(full, index)
-        full.text = ""
-        full.icon = type(full.icon)()
-        style = option.widget.style() if option.widget is not None else None
-        if style is not None:
-            style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full, painter, option.widget)
-        narrow = QStyleOptionViewItem(option)
-        narrow.rect = option.rect.adjusted(0, 0, -width, 0)
-        super().paint(painter, narrow, index)
+        width = option.fontMetrics.horizontalAdvance(text) + 2 * PCT_GAP if text else 0
+        if excluded:
+            self._paint_dimmed_name(painter, option, index, width)
+        else:
+            # The selection/hover band spans the whole row; only the NAME
+            # gives up room, so a long name elides before it reaches the %.
+            full = QStyleOptionViewItem(option)
+            self.initStyleOption(full, index)
+            full.text = ""
+            full.icon = type(full.icon)()
+            style = option.widget.style() if option.widget is not None else None
+            if style is not None:
+                style.drawPrimitive(QStyle.PrimitiveElement.PE_PanelItemViewItem, full, painter, option.widget)
+            narrow = QStyleOptionViewItem(option)
+            narrow.rect = option.rect.adjusted(0, 0, -width, 0)
+            super().paint(painter, narrow, index)
+        if not text:
+            return
         painter.save()
+        painter.setPen(self._secondary_color(option))
+        painter.drawText(
+            option.rect.adjusted(0, 0, -PCT_GAP, 0),
+            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+            text,
+        )
+        painter.restore()
+
+    def _paint_dimmed_name(self, painter, option, index, pct_width: int) -> None:
+        """An excluded row: the band and icon as usual, the name drawn here
+        in the secondary colour. Browse's sidebar sheet sets ``color`` on
+        the tree, and a stylesheet colour beats ``option.palette``, so a
+        palette change alone never shows there."""
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        name = opt.text
+        opt.text = ""
+        widget = option.widget
+        style = widget.style() if widget is not None else None
+        if style is None:
+            super().paint(painter, option, index)
+            return
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, widget)
+        rect.setRight(min(rect.right(), option.rect.right() - pct_width))
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(self._secondary_color(option))
+        painter.drawText(
+            rect,
+            int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            opt.fontMetrics.elidedText(name, Qt.TextElideMode.ElideRight, max(rect.width(), 0)),
+        )
+        painter.restore()
+
+    @staticmethod
+    def _secondary_color(option) -> QColor:
+        """The muted colour the % and excluded names share."""
         if option.state & QStyle.StateFlag.State_Selected:
             # Muted grey on the selection band is unreadable: the band's
             # own text colour, slightly dimmed, stays secondary. With
@@ -376,21 +420,15 @@ class LibraryNameDelegate(QStyledItemDelegate):
             except Exception:  # noqa: BLE001
                 color = QColor(option.palette.highlightedText().color())
             color.setAlphaF(0.75)
-        else:
-            try:
-                from . import theme
+            return color
+        try:
+            from . import theme
 
-                color = QColor(theme.palette(theme.night_mode())["text_muted"])
-            except Exception:  # noqa: BLE001
-                color = QColor(option.palette.text().color())
-                color.setAlphaF(0.5)
-        painter.setPen(color)
-        painter.drawText(
-            option.rect.adjusted(0, 0, -PCT_GAP, 0),
-            int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-            text,
-        )
-        painter.restore()
+            return QColor(theme.palette(theme.night_mode())["text_muted"])
+        except Exception:  # noqa: BLE001
+            color = QColor(option.palette.text().color())
+            color.setAlphaF(0.5)
+            return color
 
 
 def _repaint() -> None:

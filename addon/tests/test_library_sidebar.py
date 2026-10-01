@@ -680,4 +680,43 @@ check("an index built from the current text is not stale", retention.index_statu
 _manifest((1, 2))
 check("an index built from other text is stale", retention.index_status("Changed", _sig) == (True, True))
 
+section("manual indexing: an excluded row looks dimmed under Browse's own stylesheet")
+theme = importlib.import_module("klausmate.theme")
+_real_x, _real_label = ls.is_excluded_tag, ls.label_for
+ls.is_excluded_tag = lambda tag: tag == "EXCL"
+ls.label_for = lambda tag: "Hemolysis lecture" if tag in ("EXCL", "PLAIN") else None
+_dm = QtGui.QStandardItemModel()
+for _t in ("EXCL", "PLAIN"):
+    _dm.appendRow(QtGui.QStandardItem(_t))
+
+
+class _DimDel(ls.LibraryNameDelegate):
+    def tag_of(self, index):
+        return index.data()
+
+
+_dv = QtWidgets.QTreeView()
+_dv.setHeaderHidden(True)
+_dv.setModel(_dm)
+_dv.setItemDelegate(_DimDel(_dv))
+_dv.resize(300, 80)
+
+
+def _darkest(img, row):
+    r = _dv.visualRect(_dm.index(row, 0))
+    return min(QtGui.QColor(img.pixel(x, y)).lightness()
+               for x in range(r.left(), r.right()) for y in range(r.top(), r.bottom()))
+
+
+for _label, _pct in (("no %", None), ("with a %", {"excl": 0.5, "plain": 0.5})):
+    ls._state["means"] = _pct
+    _dv.setStyleSheet(theme.sidebar_tree_qss(False))
+    _dv.show()
+    app.processEvents()
+    _img = _dv.grab().toImage()
+    _x, _p = _darkest(_img, 0), _darkest(_img, 1)
+    check(f"Browse's sheet: the excluded name draws lighter than a plain one ({_label})", _x > _p + 60, f"excluded={_x} plain={_p}")
+ls._state["means"] = None
+ls.is_excluded_tag, ls.label_for = _real_x, _real_label
+
 raise SystemExit(report())
