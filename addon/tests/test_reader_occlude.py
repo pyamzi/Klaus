@@ -66,7 +66,7 @@ io = importlib.import_module("klausmate.image_occlusion")
 HTML_PATH = os.path.join(ROOT, "klausmate", "web", "pdfjs_viewer.html")
 html = open(HTML_PATH, encoding="utf-8").read()
 
-NO_EDITOR_TIP = "Open the Add or Edit window to make an occlusion card"
+NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note"
 PNG_HEAD = b"\x89PNG\r\n\x1a\n"
 PNG = PNG_HEAD + b"fake-pixels"
 TIPS: list = []

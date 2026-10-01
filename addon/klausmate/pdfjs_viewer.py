@@ -691,7 +691,7 @@ def _finite(value: Any) -> float | None:
 
 # The menu's disabled-item tooltip. The page carries the same string
 # (pdfjs_viewer.html's NO_EDITOR_TIP); tests/test_reader_occlude.py pins both.
-NO_EDITOR_TIP = "Open the Add or Edit window to make an occlusion card"
+NO_EDITOR_TIP = "Open Add or Edit to make an occlusion note"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
