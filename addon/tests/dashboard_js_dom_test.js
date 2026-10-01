@@ -405,6 +405,21 @@ ok("an add-on block Klaus has no size for gets the shared box",
 ok("Anki's table sits in the decks box's scroll body, not the grid item itself",
    d.table.parentNode.className === "klaus-w-body" && d.table.parentNode.parentNode === widget("decks"));
 
+// 14b. A fit-rows widget (the deck list) shrinks to the fewest rows that
+//      hold its content, never past its size's rows.
+for (const [need, want] of [[100, "1"], [300, "2"], [5000, "3"]]) {
+  d = build({});
+  const deckBody = d.table.parentNode;
+  Object.defineProperty(deckBody, "scrollHeight", { get: () => need, configurable: true });
+  boot(Object.assign({}, SIZED, { sizes: { decks: "4x3", heatmap: "4x1" }, fitRows: ["decks"] }));
+  const body = widget("decks").children.find((c) => c.className === "klaus-w-body");
+  Object.defineProperty(body, "scrollHeight", { get: () => need, configurable: true });
+  window.klausDash.applySizes();
+  ok(`${need}px of decks take ${want} row(s) of a 4x3 box`,
+     widget("decks").style["--kw-rows"] === want && widget("heatmap").style["--kw-rows"] === "1",
+     widget("decks").style["--kw-rows"]);
+}
+
 // 15. Edit mode offers no size control: sizes are Klaus's.
 d = build({});
 boot(Object.assign({}, SIZED, { edit: true }));

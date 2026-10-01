@@ -310,6 +310,11 @@ check("AMBOSS's card loses its 2em margins and 440px width inside its root",
       "margin: 0 !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and "width: auto !important" in dash.SHADOW_CSS["amboss-component-wrapper"]
       and dash.boot_state({}, False)["shadowCss"] == dash.SHADOW_CSS)
+check("the deck list's rows are fitted to its decks (3 decks filled a third of a 4x3 box)",
+      dash.FIT_ROWS == ("decks",) and dash.boot_state({}, False)["fitRows"] == ["decks"])
+check("a fitted deck table fills its box and its studied row takes the slack, at the bottom",
+      ".klaus-w-body > table:only-child { height: 100%; }" in _css
+      and ".klaus-w-body > table:only-child tr.klaus-studied > td { height: 100%; vertical-align: bottom; }" in _css)
 check("no size chip: sizes are Klaus's, not the user's",
       ".klaus-w-size" not in _css)
 check("Same Look's card padding replaces the child's, so the 4x1 heatmap "

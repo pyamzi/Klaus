@@ -34,6 +34,7 @@
   var sizes = {};
   var foreignSize = "2x2";
   var shadowCss = {};
+  var fitRows = [];
   var grid = { cell: 160, gap: 16 };
   var uniform = false;
 
@@ -218,10 +219,19 @@
     var cols = Math.min(Number(parts[0]) || 2, columns(w));
     var rows = Number(parts[1]) || 1;
     w.setAttribute("data-size", sizeOf(id));
-    if (w.style.setProperty) {
-      w.style.setProperty("--kw-cols", String(cols));
-      w.style.setProperty("--kw-rows", String(rows));
-    }
+    if (!w.style.setProperty) return;
+    w.style.setProperty("--kw-cols", String(cols));
+    w.style.setProperty("--kw-rows", String(rows));
+    if (fitRows.indexOf(id) >= 0) w.style.setProperty("--kw-rows", String(fittedRows(w, rows)));
+  }
+
+  // The fewest rows (up to max) whose box holds the content: measured at
+  // one row, where the body overflows and scrollHeight is the content's.
+  function fittedRows(w, max) {
+    w.style.setProperty("--kw-rows", "1");
+    var need = bodyOf(w).scrollHeight || 0;
+    var rows = Math.ceil((need + grid.gap) / (grid.cell + grid.gap));
+    return Math.max(1, Math.min(max, rows));
   }
 
   function applySizes() {
@@ -254,6 +264,7 @@
     uniform = !!on;
     if (uniform) document.body.classList.add("klaus-dash-uniform");
     else document.body.classList.remove("klaus-dash-uniform");
+    applySizes(); // Same Look's padding changes what a fitted box holds
   }
 
   /* --- menus ------------------------------------------------------- */
@@ -604,14 +615,14 @@
     sizes = state.sizes || {};
     foreignSize = state.foreignSize || "2x2";
     shadowCss = state.shadowCss || {};
+    fitRows = state.fitRows || [];
     grid = state.grid || grid;
     if (!wrap()) return;
     var col = widgetById("decks").parentNode;
     if (col.classList) col.classList.add("klaus-dash-col");
     adopt();
     applyOrder(savedOrder);
-    setUniform(state.uniform);
-    applySizes();
+    setUniform(state.uniform); // also sizes every widget
     dressShadows();
     if (!window.klausDashBound) {
       // Real Anki never re-runs this script in one document (every

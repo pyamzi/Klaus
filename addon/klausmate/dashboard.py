@@ -202,6 +202,13 @@ GRID_GAP = 16
 GRID_MAX = 800
 SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x1"}
 FOREIGN_SIZE = "2x2"
+# Widgets whose content height depends on the user's data (the deck list:
+# 3 decks or 30): their SIZES rows are a MAXIMUM, and the page shrinks
+# the box to the fewest rows that hold the content (Pouya, 2026-10-01:
+# "some of the widgets are clearly much larger in space than they should
+# be" — 3 decks in a 4x3 box). Fixed per render: the deck screen is
+# rebuilt on every change, so the box never jumps under the pointer.
+FIT_ROWS = ("decks",)
 
 
 # Add-on blocks that draw their card inside an open shadow root, where the
@@ -300,6 +307,7 @@ def boot_state(cfg: Any, edit: bool) -> dict:
         "sizes": dict(SIZES),
         "foreignSize": FOREIGN_SIZE,
         "shadowCss": dict(SHADOW_CSS),
+        "fitRows": list(FIT_ROWS),
         "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
         "uniform": uniform_from_cfg(cfg),
         "edit": bool(edit),
@@ -484,6 +492,13 @@ def dashboard_css() -> str:
         # with every other widget's (border-box: Anki pads it 1rem with
         # content-box sizing, and 100% of that overflowed the box).
         " .klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box; }"
+        # A fitted deck box is up to a cell taller than its table: the
+        # table's card fills the box and its last row (the studied line
+        # background.panel_js welds in) takes the slack, so the space is
+        # inside the card under the decks, not an empty box under a card.
+        # Tables treat height as a minimum: a long list still scrolls.
+        " .klaus-w-body > table:only-child { height: 100%; }"
+        " .klaus-w-body > table:only-child tr.klaus-studied > td { height: 100%; vertical-align: bottom; }"
         # A shadow-root card's host is inline by default; as a block the
         # full height of its box, the adopted SHADOW_CSS can fill it.
         + "".join(f" .klaus-w-body > {tag} {{ display: block; height: 100%; }}" for tag in SHADOW_CSS)

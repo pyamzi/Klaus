@@ -349,7 +349,12 @@ same reason.
   Add-on cards drawn in an OPEN shadow root (AMBOSS) get
   `SHADOW_CSS[tag]` adopted into the root as a constructed sheet (a
   `<style>` node would be the add-on renderer's to drop): AMBOSS's
-  440px div with 2em margins is what sat its card ~30px low. A box's ONE card stretches to fill it (`:only-child`,
+  440px div with 2em margins is what sat its card ~30px low.
+  `FIT_ROWS` (the deck list) makes a widget's SIZES rows a MAXIMUM: the
+  page measures the body's scrollHeight at one row and takes the fewest
+  rows that hold it (3 decks in a 4x3 box was "much larger than it
+  should be"); the table then fills the box and its welded
+  `tr.klaus-studied` row takes the slack at the bottom. A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer
