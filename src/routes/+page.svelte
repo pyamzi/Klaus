@@ -29,6 +29,7 @@
   import * as Select from "$lib/components/ui/select";
   import * as Table from "$lib/components/ui/table";
   import DeckRows, { type DeckAction } from "./DeckRows.svelte";
+  import SyncControl from "./SyncControl.svelte";
 
   let root: DeckTreeNode | undefined = $state();
   let loadError = $state("");
@@ -205,7 +206,10 @@
 
 <main class="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8">
   <header class="flex flex-wrap items-center justify-between gap-4">
-    <h1 class="text-2xl font-semibold tracking-tight">Decks</h1>
+    <div class="flex items-center gap-4">
+      <h1 class="text-2xl font-semibold tracking-tight">Decks</h1>
+      <SyncControl onsynced={refresh} />
+    </div>
     <div class="flex flex-wrap gap-2">
       <Button onclick={addNote}>Add</Button>
       <Button variant="outline" onclick={() => (location.href = "/browse")}>Browse</Button>
