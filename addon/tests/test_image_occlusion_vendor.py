@@ -61,7 +61,8 @@ for base, dirs, files in os.walk(PKG):
     dirs[:] = [d for d in dirs if d != "__pycache__" and not (base == PKG and d == "excalidraw")]
     for f in files:
         rel = os.path.relpath(os.path.join(base, f), PKG)
-        if rel not in ("UPSTREAM.md", "__init__.py"):
+        # excal_masks.py is a Klaus addition (Task 6), not part of IOE (Ruling R9).
+        if rel not in ("UPSTREAM.md", "__init__.py", "excal_masks.py"):
             actual[rel] = os.path.join(base, f)
 check("UPSTREAM.md hashes every vendored file", set(recorded) == set(actual),
       str(sorted(set(recorded) ^ set(actual))[:5]))
