@@ -131,7 +131,7 @@ def _embed_plan(index, plan, sig, on_progress, cancel):
     texts = [t for (_, _, _, t) in todo]
     total = len(texts)
     embedded: dict[int, Any] = {}
-    provider = embeddings.provider_from_config(_cfg)
+    provider = embeddings.provider_from_config(settings.read)
     since_flush = 0
     for offset, vecs in embeddings.embed_batches(provider, texts, cancel=cancel):
         for j, vec in enumerate(vecs):
