@@ -79,6 +79,7 @@ Addons/                       # Git repo root
     ├── tag_migrate.py          # One-time klaus:: -> !Library:: tag rename for upgrading collections
     ├── browse_toggles.py       # Browse toolbar ◧/◨ sidebar and editor-column toggles
     ├── crop_dialog.py          # Image-crop dialog (crop saved as a new media file)
+    ├── image_occlusion/        # Image Occlusion Enhanced v1.4.0 (AGPL-3) built in: setup() (off while add-on 1374772155 is enabled), occlude(); provenance in UPSTREAM.md
     ├── config.json             # Default add-on config
     ├── config.md               # Config key documentation (shown in Anki config UI)
     ├── manifest.json           # Package name and version for non–AnkiWeb distribution
@@ -244,6 +245,7 @@ browse_highlight.setup()                                            # Browse sea
 heatmap.setup()                                                     # review heatmap on the deck list (independent try/except)
 dashboard.setup()                                                   # Control-Center widget editing (independent try/except; MUST stay after heatmap — body order)
 window_chrome.setup()                                               # KlausBook chrome for Add/Browse/Stats/reviewer-bar (independent try/except)
+image_occlusion.setup()                                             # IOE's editor/reviewer/profile hooks, Tools + Help items, Browse conversion; nothing when the separate add-on is enabled (independent try/except)
 gui_hooks.profile_will_close.append(_stop_endpoint_on_profile_close)  # stop the retained endpoint
 lecture_view.setup()                                                # review-time Lecture dock (independent try/except)
 ```

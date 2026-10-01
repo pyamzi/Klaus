@@ -1,4 +1,4 @@
-"""Image Occlusion 1/3: IOE v1.4.0 is vendored verbatim and not yet wired.
+"""Image Occlusion 1/3: IOE v1.4.0 is vendored (provenance in UPSTREAM.md) and wired once.
 
 Run: env QT_QPA_PLATFORM=offscreen python3 tests/test_image_occlusion_vendor.py
 """
@@ -32,8 +32,11 @@ def sha(p):
 
 section("package layout")
 check("package exists", os.path.isdir(PKG))
-check("__init__.py is empty", os.path.isfile(os.path.join(PKG, "__init__.py"))
-      and read(os.path.join(PKG, "__init__.py")) == b"")
+# Task 3 wrote Klaus's own __init__.py (setup/occlude); IOE's bootstrap never came.
+check("__init__.py is Klaus's setup, not IOE's bootstrap",
+      os.path.isfile(os.path.join(PKG, "__init__.py"))
+      and b"def setup()" in read(os.path.join(PKG, "__init__.py"))
+      and b"setup_main(mw)" in read(os.path.join(PKG, "__init__.py")))
 for d in ("_vendor", "icons", "svg-edit", "web"):
     check(d + "/ exists", os.path.isdir(os.path.join(PKG, d)))
 for n in PY:
@@ -91,9 +94,9 @@ else:
            and read(p) != read(os.path.join(SRC, r))]
     check("data files identical to upstream", not bad, str(bad[:5]))
 
-section("not wired")
+section("wired once (Task 3)")
 init = read(os.path.join(ROOT, "klausmate", "__init__.py")).decode()
-check("klausmate/__init__.py does not import image_occlusion",
-      "image_occlusion" not in init)
+check("klausmate/__init__.py calls image_occlusion's setup() exactly once",
+      init.count("_image_occlusion.setup()") == 1)
 
 raise SystemExit(report())

@@ -69,10 +69,12 @@ class ImgOccAdd(object):
         self.mode = "add"
         self.origin = origin
         self.opref = {}  # original io session preference
+        self.initial_svg = None
         loadConfig(self)
 
-    def occlude(self, image_path=None):
-
+    def occlude(self, image_path=None, initial_svg=None):
+        """Klaus: initial_svg, in add mode, is loaded as the starting masks
+        (svg-edit's url item, as edit mode passes the original mask)."""
         note = self.ed.note
         isIO = note and note.model() == getOrCreateModel()
 
@@ -119,7 +121,9 @@ class ImgOccAdd(object):
             )
             return False
 
+        self.initial_svg = initial_svg
         self.callImgOccEdit(width, height)
+        return True
 
     def setPreservedAttrs(self, note):
         # FIXME: Not necessarily up-to-date with new tag edit contents
@@ -248,6 +252,8 @@ class ImgOccAdd(object):
             items.addQueryItem("url", svg_url)
         else:
             items.addQueryItem("initTool", "rect"),
+            if self.initial_svg:
+                items.addQueryItem("url", path_to_url(self.initial_svg))
 
         url.setQuery(items)
         dialog.svg_edit.setUrl(url)

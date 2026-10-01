@@ -5,7 +5,7 @@
 - Project: https://github.com/glutanimate/image-occlusion-enhanced
 - Licence: AGPL-3 with Section 7 additions, see `LICENSE.txt`. Every copyright header is kept.
 
-Copied verbatim. Not copied: IOE's own `__init__.py` (the add-on bootstrap; ours is empty),
+Copied verbatim. Not copied: IOE's own `__init__.py` (the add-on bootstrap; ours is Klaus's `setup()`/`occlude()`),
 `manifest.json`, `meta.json`, `CHANGELOG.md`, `__pycache__`.
 
 Later tasks edit some `.py` files here. The sha256 below is of the file as vendored, so the
@@ -13,6 +13,8 @@ diff against upstream stays recoverable after those edits. Data files (everythin
 not `.py`) must still match.
 
 Modified by Task 2 (Klaus rules: window-modal asks, gui_hooks, no `parent` shadow, `col.get_config`/`set_config`, web path): `add.py`, `config.py`, `consts.py`, `dialogs.py`, `editor.py`, `main.py`, `nconvert.py`, `ngen.py`, `options.py`, `web.py`.
+
+Also modified by Task 3 (wiring): `add.py` (`occlude(image_path, initial_svg)` returns True; add mode loads `initial_svg` through svg-edit's `url` item), `main.py` (no `setConfigAction`; menu labels "Image Occlusion Options…" and "Image Occlusion Help…").
 
 ```
 3b530b4274f7458b02fa4cfdb8f876aa1befb208641ffa47d1f493dfa02e05e6  LICENSE.txt

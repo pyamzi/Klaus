@@ -78,7 +78,7 @@ def on_io_help():
     ioHelp("main", parent=mw)
 
 
-def on_image_occlusion_button(self, origin=None, image_path=None):
+def on_image_occlusion_button(self, origin=None, image_path=None, initial_svg=None):
     """Launch Image Occlusion Enhanced"""
     origin = origin or get_editor_parent_instance(self.parentWindow)
     io_model = getOrCreateModel()
@@ -98,7 +98,7 @@ def on_image_occlusion_button(self, origin=None, image_path=None):
     except AttributeError:
         oldimg = None
     self.imgoccadd = ImgOccAdd(self, origin, oldimg)
-    self.imgoccadd.occlude(image_path)
+    return self.imgoccadd.occlude(image_path, initial_svg)
 
 
 # legacy alias for third-party add-ons calling IO
@@ -301,11 +301,12 @@ def on_reviewer_did_show_answer(card):
 
 
 def setup_menus(main_window: "AnkiQt"):
-    options_action = QAction(_("Image &Occlusion Enhanced Options..."), mw)
+    # Klaus: no setConfigAction. It would replace Klaus's own Config button;
+    # the options live in the Tools menu only.
+    options_action = QAction(_("Image Occlusion Options…"), mw)
     qconnect(options_action.triggered, on_io_settings)
-    help_action = QAction(_("Image &Occlusion Enhanced..."), mw)
+    help_action = QAction(_("Image Occlusion Help…"), mw)
     qconnect(help_action.triggered, on_io_help)
-    main_window.addonManager.setConfigAction(__name__, on_io_settings)
     main_window.form.menuTools.addAction(options_action)
     main_window.form.menuHelp.addAction(help_action)
 

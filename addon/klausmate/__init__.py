@@ -569,12 +569,14 @@ def import_pdf_file(path: str) -> str | None:
 
 # web/ assets plus the user's chosen background image — the top bar
 # and the deck screens load it by URL rather than inlining megabytes
-# of base64 into every webview.
+# of base64 into every webview — plus Image Occlusion's web/ and its
+# Excalidraw page (svg-edit loads by file URL, so it is not exported).
 mw.addonManager.setWebExports(
     __name__,
     # (?i:...) because store_image keeps the file's own name: IMG_1234.JPG
     # was stored as-is and then refused by a lower-case-only pattern.
-    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif))",
+    # Keep it ONE string literal: tests read the first one after the call.
+    r"(web/.*\.(css|js)|user_files/backgrounds/.*\.(?i:png|jpg|jpeg|webp|gif)|image_occlusion/web/.*\.(css|js)|image_occlusion/excalidraw/.*\.(html|js|css|woff2|png))",
 )
 mw.addonManager.setConfigAction(__name__, open_config)
 
@@ -835,6 +837,14 @@ try:
     _window_chrome.setup()
 except Exception as _e:
     print(f"[klausmate] window chrome setup failed: {type(_e).__name__}: {_e}")
+
+# Image Occlusion Enhanced, built in; off while the separate add-on is enabled.
+try:
+    from . import image_occlusion as _image_occlusion
+
+    _image_occlusion.setup()
+except Exception as _e:
+    print(f"[klausmate] image occlusion setup failed: {type(_e).__name__}: {_e}")
 
 
 # NOTE: no editor_did_focus_field hook here. That hook's signature is

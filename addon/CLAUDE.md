@@ -1085,6 +1085,18 @@ same reason.
   bypasses `QPushButton:focus`. Checked-state bookkeeping is 100%
   inherited from `QCheckBox` — every call site keeps working unchanged.
 - `crop_dialog.py`: image-crop dialog (crop saved as NEW media file).
+- `image_occlusion/`: Image Occlusion Enhanced v1.4.0 (AGPL-3, every
+  copyright header kept; provenance and Klaus's edits in `UPSTREAM.md`),
+  ported to Klaus rules. `setup()` (called once from `__init__`) registers
+  IOE's hooks, "Image Occlusion Options…" in Tools and "Image Occlusion
+  Help…" in Help, never `setConfigAction` (Klaus keeps its Config button).
+  **Conflict guard**: with add-on `1374772155` installed AND enabled
+  (`allAddons()` first: `isEnabled` is True for a missing folder) it
+  registers nothing and shows one tooltip a second later. `occlude(editor,
+  image_path, initial_svg=None)` opens svg-edit; `initial_svg` loads as
+  the starting masks in add mode. Note type, mask SVGs and the `imgocc`
+  config stay byte-compatible with IOE. svg-edit loads by file URL; only
+  `image_occlusion/web/` and `image_occlusion/excalidraw/` are web exports.
 - `web/copilot.js`: injected into editor webviews; shadow-DOM-aware
   (`composedPath`). Ghost text and Ask are gone — this file now only tracks
   field focus (for PDF page-insert targeting) and the image-crop dblclick
