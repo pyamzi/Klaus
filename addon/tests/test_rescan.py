@@ -110,7 +110,19 @@ check("settled: a second pass moves and imports nothing",
 
 section("rescan reports moved, missing, back and changed in one walk")
 _stub_extract, _stub_repair = ph.extract_pages, ph.repair_garbled_pages
-ph.extract_pages = lambda path: open(path, encoding="utf-8").read().split("|")
+
+
+def read_text(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def write_text(path, text):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+ph.extract_pages = lambda path: read_text(path).split("|")
 ph.repair_garbled_pages = lambda path, pages, **k: pages
 ps5 = importlib.import_module("klausmate.page_store")
 _real_ensure = ps5.ensure_records
@@ -127,15 +139,14 @@ seed = {"Lecture": ("Lecture.pdf", "lecture one|lecture two"),
 
 
 def put(rel, text):
-    with open(os.path.join(root5, rel), "w", encoding="utf-8") as fh:
-        fh.write(text)
+    write_text(os.path.join(root5, rel), text)
 
 
 for _safe, (_rel, _text) in seed.items():
     put(_rel, _text)
-    json.dump({"pages": _text.split("|"), "page_count": len(_text.split("|"))},
-              open(os.path.join(uf5, "contexts", _safe + ".json"), "w"))
-    open(os.path.join(uf5, "contexts", _safe + ".txt"), "w").write(_text)
+    write_text(os.path.join(uf5, "contexts", _safe + ".json"),
+               json.dumps({"pages": _text.split("|"), "page_count": len(_text.split("|"))}))
+    write_text(os.path.join(uf5, "contexts", _safe + ".txt"), _text)
 ph.save_library_map(uf5, {s: rel for s, (rel, _t) in seed.items()})
 
 
@@ -172,7 +183,7 @@ s5 = scan()
 check("a deleted file is missing and persisted",
       s5["missing"] == ["Gone"] and ph.load_missing(uf5) == {"Gone"}, str(s5))
 check("the missing set lives under __missing__ beside the stats",
-      json.load(open(os.path.join(uf5, "library_stats.json")))["__missing__"] == ["Gone"]
+      json.loads(read_text(os.path.join(uf5, "library_stats.json")))["__missing__"] == ["Gone"]
       and "__missing__" not in ph.load_library_stats(uf5))
 ph.record_stat(uf5, "Closed", ph.file_stat(os.path.join(root5, "Closed.pdf")))
 check("record_stat keeps the missing set", ph.load_missing(uf5) == {"Gone"})
@@ -213,16 +224,24 @@ check("present on disk though the walk predates it", "Late" not in s5["missing"]
 
 section("a closed file changed outside Klaus")
 del ensured[:]
+pristine = os.path.join(uf5, "pdf_originals", "Closed.pdf")
+os.makedirs(os.path.dirname(pristine))
+write_text(pristine, "closed one|closed two")
 put("Closed.pdf", "edited elsewhere|closed two|page three")
+_read_st = ph.file_stat(os.path.join(root5, "Closed.pdf"))
 p5 = ph.prepare_rescan(uf5, root5)
-check("prepare re-extracts its pages",
-      p5["changed"] == {"Closed": ["edited elsewhere", "closed two", "page three"]}, str(p5["changed"]))
+check("prepare re-extracts its pages, with the stat they were read at",
+      p5["changed"] == {"Closed": {"pages": ["edited elsewhere", "closed two", "page three"], "stat": _read_st}},
+      str(p5["changed"]))
+check("...and leaves it unrecorded until apply stores the text",
+      ph.load_library_stats(uf5)["Closed"] != [_read_st[2], _read_st[1]])
 s5 = ph.rescan_root(uf5, root5, {}, p5)
 check("its text changed", s5["changed_text"] == ["Closed"], str(s5))
 check("context json and txt rewritten as ingest writes them",
       ph.load_pages(uf5, "Closed") == ["edited elsewhere", "closed two", "page three"]
-      and open(os.path.join(uf5, "contexts", "Closed.txt")).read()
+      and read_text(os.path.join(uf5, "contexts", "Closed.txt"))
       == "edited elsewhere\n\nclosed two\n\npage three")
+check("its stale pristine original is dropped (the next bake re-captures)", not os.path.exists(pristine))
 check("page records refreshed once",
       ensured == [("Closed", os.path.join(root5, "Closed.pdf"), ["edited elsewhere", "closed two", "page three"])],
       str(ensured))
@@ -236,6 +255,70 @@ check("whitespace-only change: records refreshed, text not changed",
 put("Closed.pdf", "baked by klaus|closed two|page three|x")
 ph.record_stat(uf5, "Closed", ph.file_stat(os.path.join(root5, "Closed.pdf")))
 check("Klaus's own write (stat recorded) is not reported", ph.prepare_rescan(uf5, root5)["changed"] == {})
+
+section("a changed file is retried until its text is stored")
+_closed = os.path.join(root5, "Closed.pdf")
+put("Closed.pdf", "first edit|z")
+p5 = ph.prepare_rescan(uf5, root5)
+put("Closed.pdf", "saved again before apply|z|z")
+ph.rescan_root(uf5, root5, {}, p5)
+check("rewritten between prepare and apply: the next pass reports it again",
+      ph.prepare_rescan(uf5, root5)["changed"].get("Closed", {}).get("pages") == ["saved again before apply", "z", "z"])
+scan()
+put("Closed.pdf", "extraction fails once|z")
+_good_extract = ph.extract_pages
+_fails = []
+
+
+def _extract_once_broken(path):
+    if not _fails:
+        _fails.append(path)
+        raise ValueError("truncated file")
+    return _good_extract(path)
+
+
+ph.extract_pages = _extract_once_broken
+check("extraction raises: nothing reported", scan()["changed_text"] == [] and _fails == [_closed])
+check("...and the next pass retries and succeeds", scan()["changed_text"] == ["Closed"])
+ph.extract_pages = _good_extract
+put("Closed.pdf", "records fail once|z")
+_ok_ensure = ps5.ensure_records
+
+
+def _ensure_broken(*a):
+    raise OSError("disk full")
+
+
+ps5.ensure_records = _ensure_broken
+check("ensure_records raises: not counted", scan()["changed_text"] == [])
+ps5.ensure_records = _ok_ensure
+check("...and the next pass retries", scan()["changed_text"] == ["Closed"])
+
+
+def _extract_while_writing(path):
+    pages = _good_extract(path)
+    write_text(path, "still being written|z|z|z")
+    return pages
+
+
+put("Closed.pdf", "half written|z")
+ph.extract_pages = _extract_while_writing
+check("a file that changes while it is read is not taken", ph.prepare_rescan(uf5, root5)["changed"] == {})
+ph.extract_pages = _good_extract
+check("...the settled file is picked up next pass",
+      ph.prepare_rescan(uf5, root5)["changed"]["Closed"]["pages"] == ["still being written", "z", "z", "z"])
+scan()
+
+section("a newly ingested file's stat is recorded")
+put("Fresh.pdf", "fresh|one")
+s5 = scan()
+_fresh = s5["ingested"][0] if s5["ingested"] else None
+_fst = ph.file_stat(os.path.join(root5, "Fresh.pdf"))
+check("recorded at ingest", _fresh is not None and ph.load_library_stats(uf5).get(_fresh) == [_fst[2], _fst[1]],
+      str(s5))
+put("Fresh.pdf", "fresh|one|edited before the next pass")
+check("an edit before the next pass is reported", scan()["changed_text"] == [_fresh])
+
 ds5 = importlib.import_module("klausmate.doc_sync")
 ds5._paths["Closed"] = os.path.join(root5, "Closed.pdf")
 put("Closed.pdf", "open in a reader|y")

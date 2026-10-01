@@ -575,13 +575,7 @@ def save_pdf(
     # Re-ingest under the same name: the base file changed, so any
     # captured pristine original is stale — drop it (the next bake
     # re-captures from the fresh copy).
-    stale_orig = os.path.join(_originals_dir(user_files_dir), safe + ".pdf")
-    if os.path.isfile(stale_orig):
-        try:
-            os.remove(stale_orig)
-            print(f"[klausmate] dropped stale pristine original: {safe}.pdf")
-        except OSError as exc:
-            print(f"[klausmate] could not drop stale original: {exc}")
+    _drop_stale_original(user_files_dir, safe)
 
     set_active_pdf(user_files_dir, safe)
     # A re-import under the same basename must sort as freshly ingested,
@@ -589,6 +583,17 @@ def save_pdf(
     # mtime — see list_by_recency).
     touch_last_used(user_files_dir, safe)
     return {"name": safe, "page_count": len(pages), "txt_path": txt_path}
+
+
+def _drop_stale_original(user_files_dir: str, safe: str) -> None:
+    """Remove ``pdf_originals/<safe>.pdf`` (the base file changed); never raises."""
+    stale_orig = os.path.join(_originals_dir(user_files_dir), safe + ".pdf")
+    if os.path.isfile(stale_orig):
+        try:
+            os.remove(stale_orig)
+            print(f"[klausmate] dropped stale pristine original: {safe}.pdf")
+        except OSError as exc:
+            print(f"[klausmate] could not drop stale original: {exc}")
 
 
 def load_pages(user_files_dir: str, name: str) -> list[str] | None:
@@ -737,12 +742,15 @@ def record_stat(user_files_dir: str, safe: str, stat: tuple | None) -> None:
 
 
 def changed_since_recorded(
-    user_files_dir: str, root: str, mapping: dict
+    user_files_dir: str, root: str, mapping: dict, record_changed: bool = True
 ) -> list[str]:
     """Safe names in ``mapping`` ({safe: path relative to ``root``}) whose
     current ``[size, mtime_ns]`` differs from the recorded one. A changed
     file is reported once (its new value is recorded); an unrecorded name
-    is recorded, not reported; a missing file is neither."""
+    is recorded, not reported; a missing file is neither.
+    ``record_changed=False`` leaves a changed file's entry alone, so it is
+    reported again until the caller records it (the rescan does, once
+    its new text is stored)."""
     recorded = load_library_stats(user_files_dir)
     changed: list[str] = []
     updates: dict[str, tuple] = {}
@@ -754,6 +762,8 @@ def changed_since_recorded(
             continue
         if safe in recorded:
             changed.append(safe)
+            if not record_changed:
+                continue
         updates[safe] = st
     if updates:
         _apply_stats(user_files_dir, updates)
@@ -1244,8 +1254,10 @@ def prepare_rescan(user_files_dir: str, root: str) -> dict:
     collection): walk the root ONCE (``"disk"``), read the text of every
     new file once, fingerprint it against the stored text of every
     missing PDF, OCR-repair the files that will be ingested, and
-    re-extract (``"changed"``: {safe: pages}) mapped files that changed
-    while closed and not by Klaus's own recorded write.
+    re-extract (``"changed"``: {safe: {"pages", "stat"}}, the stat read
+    around the extraction) mapped files that changed while closed and not
+    by Klaus's own recorded write; ``"stats"`` is {rel: stat} of the new
+    files as they were read.
     ``rescan_root(..., prepared=...)`` then applies the result without
     walking or touching a PDF again. ``{"root_ok": False}`` alone when
     the root is absent or unreadable."""
@@ -1258,18 +1270,26 @@ def prepare_rescan(user_files_dir: str, root: str) -> dict:
     open_safes = doc_sync.open_paths()
     closed = {s: rel for s, rel in mapping.items() if s not in open_safes}
     changed: dict = {}
-    for safe in changed_since_recorded(user_files_dir, root, closed):
+    for safe in changed_since_recorded(user_files_dir, root, closed, record_changed=False):
+        # Unrecorded until apply has stored the new text: any failure on
+        # the way (or a file still being written) is retried next pass.
         path = os.path.join(root, mapping[safe])
+        st = file_stat(path)
         try:
-            changed[safe] = repair_garbled_pages(path, extract_pages(path))
+            pages = repair_garbled_pages(path, extract_pages(path))
         except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
             print(f"[klausmate] rescan: could not re-read {safe!r}: {exc}")
+            continue
+        if st is not None and file_stat(path) == st:
+            changed[safe] = {"pages": pages, "stat": st}
     out = {"root_ok": True, "disk": disk, "changed": changed, "fingerprints": None, "pages": {}}
     first = plan_rescan(mapping, disk)
     if not first["new"]:
         return out
     raw: dict = {}
+    stats: dict = {}
     for rel in first["new"]:
+        stats[rel] = file_stat(os.path.join(root, rel))
         try:
             raw[rel] = extract_pages(os.path.join(root, rel))
         except Exception as exc:  # noqa: BLE001 - an unreadable file is simply unmatched
@@ -1287,7 +1307,7 @@ def prepare_rescan(user_files_dir: str, root: str) -> dict:
             except Exception as exc:  # noqa: BLE001
                 print(f"[klausmate] rescan: could not repair {rel!r}: {exc}")
                 pages[rel] = raw[rel]
-    out.update(fingerprints=fingerprints if first["missing"] else None, pages=pages)
+    out.update(fingerprints=fingerprints if first["missing"] else None, pages=pages, stats=stats)
     return out
 
 
@@ -1318,11 +1338,8 @@ def _unique_safe(user_files_dir: str, mapping: dict, stem: str) -> str:
 def _write_context(user_files_dir: str, safe: str, pages: list[str]) -> None:
     """``contexts/<safe>.txt`` and ``.json`` from ``pages``, as ingest writes them."""
     ctx_dir = os.path.join(user_files_dir, "contexts")
-    os.makedirs(ctx_dir, exist_ok=True)
-    with open(os.path.join(ctx_dir, safe + ".txt"), "w", encoding="utf-8") as f:
-        f.write("\n\n".join(pages))
-    with open(os.path.join(ctx_dir, safe + ".json"), "w", encoding="utf-8") as f:
-        json.dump({"pages": pages, "page_count": len(pages)}, f)
+    _atomic_write(os.path.join(ctx_dir, safe + ".txt"), lambda f: f.write("\n\n".join(pages)))
+    _atomic_write_json(os.path.join(ctx_dir, safe + ".json"), {"pages": pages, "page_count": len(pages)})
 
 
 def _exists_exact(root: str, rel: str) -> bool:
@@ -1394,7 +1411,9 @@ def rescan_root(
         full = os.path.join(root, rel)
         try:
             pages = (prepared.get("pages") or {}).get(rel)
+            st = (prepared.get("stats") or {}).get(rel)
             if pages is None:
+                st = file_stat(full)
                 pages = repair_garbled_pages(full, extract_pages(full))
         except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
             print(f"[klausmate] rescan: could not ingest {rel!r}: {exc}")
@@ -1403,6 +1422,7 @@ def rescan_root(
         stem = os.path.splitext(os.path.basename(rel))[0]
         safe = _unique_safe(user_files_dir, mapping, stem)
         _write_context(user_files_dir, safe, pages)
+        record_stat(user_files_dir, safe, st)
         mapping[safe] = rel
         ingested.append(safe)
 
@@ -1413,18 +1433,20 @@ def rescan_root(
     if prepared.get("changed"):
         from . import page_store
 
-        for safe, pages in sorted(prepared["changed"].items()):
+        for safe, got in sorted(prepared["changed"].items()):
             if safe not in mapping or safe in plan["missing"]:
                 continue
+            pages = got["pages"]
             path = os.path.join(root, mapping[safe])
             old = load_pages(user_files_dir, safe)
-            try:
-                _write_context(user_files_dir, safe, pages)
+            try:  # the context last: a retry still sees the old text and counts the change
+                _drop_stale_original(user_files_dir, safe)  # the next bake re-captures the edited file
                 page_store.ensure_records(user_files_dir, safe, path, pages)
-            except Exception as exc:  # noqa: BLE001 - one bad file never stops a rescan
+                _write_context(user_files_dir, safe, pages)
+            except Exception as exc:  # noqa: BLE001 - unrecorded, so retried next pass
                 print(f"[klausmate] rescan: could not refresh {safe!r}: {exc}")
                 continue
-            record_stat(user_files_dir, safe, file_stat(path))
+            record_stat(user_files_dir, safe, got["stat"])  # what was read, not what is there now
             if old is None or [page_store._norm(p) for p in old] != [page_store._norm(p) for p in pages]:
                 changed_text.append(safe)
 
