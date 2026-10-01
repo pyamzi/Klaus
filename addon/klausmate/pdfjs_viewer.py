@@ -392,7 +392,7 @@ def merge_rects(rects: Any, gap: float = 0.75) -> list[list[float]]:
     for r in rects or []:
         try:
             x, y, w, h = (float(v) for v in r)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # 10**400 is JSON
             continue
         if not all(math.isfinite(v) for v in (x, y, w, h)):
             continue
@@ -670,6 +670,25 @@ def merge_highlight_records(
     return out
 
 
+def _finite(value: Any) -> float | None:
+    """A real, finite float out of an untrusted bridge number, or None.
+
+    Bools are rejected (they are ints in Python). So is an int too big
+    for a float: JSON puts no limit on integers, ``10**400`` parses as a
+    Python int, and ``float()`` of it raises OverflowError — which,
+    raised inside a bridge slot, aborts Anki (PyQt6 aborts on an
+    unhandled slot exception). Every number the text-box bridge reads
+    goes through here.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        f = float(value)
+    except OverflowError:
+        return None
+    return f if math.isfinite(f) else None
+
+
 def clamp_text_add(
     data: Any, page_count: int = 0
 ) -> tuple[int, float, float] | None:
@@ -690,11 +709,8 @@ def clamp_text_add(
         return None
     coords: list[float] = []
     for key in ("x", "y"):
-        v = data.get(key)
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        f = float(v)
-        if not math.isfinite(f):
+        f = _finite(data.get(key))
+        if f is None:
             return None
         coords.append(min(max(f, 0.0), MAX_PAGE_PT))
     return page, coords[0], coords[1]
@@ -731,43 +747,41 @@ def validate_text_size(
     :data:`TEXT_SIZE_MAX`] rather than rejected, so a size the page
     offers that this side has since tightened still places text.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return default
-    size = float(value)
-    if not math.isfinite(size):
+    size = _finite(value)
+    if size is None:
         return default
     return min(max(size, TEXT_SIZE_MIN), TEXT_SIZE_MAX)
 
 
 def _validate_rows(value: Any) -> int:
     """A trusted rendered-row count, or 0 for "not measured"."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0
-    rows = float(value)
-    if not math.isfinite(rows) or rows < 1:
+    rows = _finite(value)
+    if rows is None or rows < 1:
         return 0
     return int(min(rows, MAX_TEXT_ROWS))
 
 
-def validate_text_box(w: Any, h: Any) -> tuple[float, float] | None:
+def validate_text_box(
+    w: Any, h: Any, size: float = TEXT_SIZE_DEFAULT
+) -> tuple[float, float] | None:
     """The page's MEASURED box ``(w, h)`` in points, or None.
 
     The page lays the text out in the browser, in the font it draws in,
     and sends the size it got. That beats any estimate, but it is still
-    bridge input: both values must be real, finite and positive (bools
-    rejected), else None and the caller falls back to
-    :func:`text_box_size`. A good value is clamped into
-    [1, :data:`TEXT_BOX_MAX_W`] x [1, :data:`TEXT_BOX_MAX_H`].
+    bridge input: both values must be real and finite (:func:`_finite`),
+    else None and the caller falls back to :func:`text_box_size`.
+
+    A box smaller than ONE LINE of *size* is refused too: narrower than
+    0.2 em (Helvetica's narrowest glyph, "i", is 0.22 em, and the page
+    adds 1 pt) or shorter than 1.1 em (a line is 1.15 em, rounded UP to
+    whole points). Nothing the page measures is smaller, so a sliver is
+    a bad payload, not a tiny box. A good value is capped at
+    :data:`TEXT_BOX_MAX_W` x :data:`TEXT_BOX_MAX_H`.
     """
-    out: list[float] = []
-    for v, cap in ((w, TEXT_BOX_MAX_W), (h, TEXT_BOX_MAX_H)):
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            return None
-        f = float(v)
-        if not math.isfinite(f) or f <= 0:
-            return None
-        out.append(min(max(f, 1.0), cap))
-    return out[0], out[1]
+    fw, fh = _finite(w), _finite(h)
+    if fw is None or fh is None or fw < size * 0.2 or fh < size * 1.1:
+        return None
+    return min(fw, TEXT_BOX_MAX_W), min(fh, TEXT_BOX_MAX_H)
 
 
 def text_box_size(
@@ -901,14 +915,11 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
     rects = old.get("rects") or [[0.0, 0.0, 0.0, 0.0]]
     try:
         x, y = float(rects[0][0]), float(rects[0][1])
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         x = y = 0.0
-    for key, cur in (("x", x), ("y", y)):
-        v = data.get(key)
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            continue
-        f = float(v)
-        if not math.isfinite(f):
+    for key in ("x", "y"):
+        f = _finite(data.get(key))
+        if f is None:
             continue
         if key == "x":
             x = min(max(f, 0.0), MAX_PAGE_PT)
@@ -916,21 +927,19 @@ def apply_text_update(records: Any, data: Any) -> tuple[list[dict], bool]:
             y = min(max(f, 0.0), MAX_PAGE_PT)
     try:
         w, h = float(rects[0][2]), float(rects[0][3])
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError, OverflowError):
         w = h = 0.0
-    if body != old.get("text") or size != validate_text_size(
-        old.get("size")
-    ) or w <= 0 or h <= 0:
+    # A record with no stored size (one adopted from Preview) is drawn,
+    # opened and baked at the default; the page sends that, so the same
+    # number here is "unchanged" and the record stays size-less.
+    old_size = validate_text_size(old.get("size"))
+    if body != old.get("text") or size != old_size or w <= 0 or h <= 0:
         w, h = validate_text_box(
-            data.get("w"), data.get("h")
+            data.get("w"), data.get("h"), size
         ) or text_box_size(body, size, _validate_rows(data.get("rows")))
-    updated = dict(
-        old,
-        text=body,
-        color=color,
-        size=size,
-        rects=[[x, y, w, h]],
-    )
+    updated = dict(old, text=body, color=color, rects=[[x, y, w, h]])
+    if "size" in old or size != old_size:
+        updated["size"] = size
     if updated == old:
         return out, False
     out[index] = updated
@@ -1334,7 +1343,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._highlights = merged
         self._save_annotations()
         self._push_annotations()
-        if tooltip is not None:
+        if tooltip is not None and not self._save_failed:  # see text-add
             tooltip("Klaus: highlight added")
 
     def _bridge_hl_remove(self, payload: str) -> None:
@@ -1392,6 +1401,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         body = sanitize_text(data.get("text"))
         if not body:
             return  # an empty box mints nothing (dialog-era rule, kept)
+        size = validate_text_size(data.get("size"))
         self._highlights.append(
             make_text_record(
                 page,
@@ -1401,14 +1411,16 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                 color=validate_hex_color(
                     data.get("color"), TEXT_COLOR_DEFAULT
                 ),
-                size=validate_text_size(data.get("size")),
+                size=size,
                 rows=_validate_rows(data.get("rows")),
-                box=validate_text_box(data.get("w"), data.get("h")),
+                box=validate_text_box(data.get("w"), data.get("h"), size),
             )
         )
         self._save_annotations()
         self._push_annotations()
-        if tooltip is not None:
+        # A failed write already toasted SAVE_FAILED_COPY; a second
+        # "added" toast would contradict it.
+        if tooltip is not None and not self._save_failed:
             tooltip("Klaus: text added")
 
     def _bridge_text_update(self, payload: str) -> None:

@@ -1564,25 +1564,14 @@ check("the frame takes NO layout space (box-shadows, and a grip offset "
 # tall and wider than its text, and the commit's measured rows could
 # only RAISE Python's copy, so the box jumped on close. The page now
 # measures in the browser, in the same font, and sends what it measured.
-def _jsfn(head):
-    """One function's body out of the page, or "" when it is missing."""
-    parts = _H150.split(head, 1)
-    return parts[1].split("\n}\n", 1)[0] if len(parts) == 2 else ""
-
-
-_STE = _jsfn("function sizeTextEdit() {")
-check("the editor sizes from the browser's own MEASUREMENT, not from "
-      "the 0.6-em formula (which is gone from the page)",
+# What the editor DOES — sizes live from measurement, sends the measured
+# w/h, keeps a stored box until the text or size changes, sets
+# --k = 1/scale — is run for real under node by
+# tests/pdfjs_textbox_test.js (from test_pdfjs_pure.py). Only what node
+# cannot run stays here: the CSS, and that the old estimate is gone.
+check("the 0.6-em estimate is gone from the page",
       "function textBoxSize(" not in _H150
-      and "* 0.6 + 8" not in _H150 and "* 1.35 + 6" not in _H150
-      and "textBoxFor(te, " in _STE and "textBoxSize" not in _STE)
-_MTB = _jsfn("function measureTextBox(text, size) {")
-check("measureTextBox lays the text out in a hidden twin and reads "
-      "its rendered size — width first, then height AT that width, so "
-      "the height is exactly what a box of that width wraps to",
-      "getBoundingClientRect()" in _MTB
-      and _MTB.find("m.style.width = w + \"px\";")
-      > _MTB.find("const w = ") > -1)
+      and "* 0.6 + 8" not in _H150 and "* 1.35 + 6" not in _H150)
 _TMR = _H150.split("#textMeasure {", 1)[1].split("}", 1)[0] if "#textMeasure {" in _H150 else ""
 _HLT = _H150.split(".hlLayer .hltext {", 1)[1].split("}", 1)[0]
 _EBD = _H150.split(".editLayer .editBody {", 1)[1].split("}", 1)[0]
@@ -1603,13 +1592,8 @@ check("the committed .hltext font scales WITH the page — no 6px floor, "
       "which made the glyphs outgrow a measured box below 50% zoom "
       "(fit-width in a narrow dock is ~45%) so the text wrapped and "
       "clipped",
-      't.style.fontSize = (parseFloat(rec.size) || 12) * s + "px";'
+      't.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";'
       in _H150 and "Math.max(6," not in _H150)
-_TBF = _jsfn("function textBoxFor(te, text) {")
-check("an existing box keeps its STORED size until its text or size "
-      "changes, so opening an old record is not a resize",
-      "te.kept" in _TBF and "te.kept.box" in _TBF
-      and "measureTextBox(text, te.size)" in _TBF)
 check("and sanitizeEditText mirroring sanitize_text, on the same cap",
       "function sanitizeEditText(value)" in _H150
       and "MAX_TEXT_CHARS = 4000" in _H150 and pv.MAX_TEXT_CHARS == 4000)
@@ -1682,24 +1666,15 @@ check("the page's measured row count raises the estimate and never "
 check("an untrusted row count degrades to the formula alone",
       pv.text_box_size("hi", 12.0, -5) == pv.text_box_size("hi", 12.0)
       and pv.text_box_size("hi", 12.0, 10 ** 9)[1] == 720.0)
-_CTE = _jsfn("function commitTextEdit() {")
-check("the commit sends the MEASURED box (w/h in points) with both "
-      "text-add and text-update, and no longer a row count",
-      _CTE.count("w: box[0], h: box[1],") == 2
-      and "const box = textBoxFor(te, text);" in _CTE
-      and "rows" not in _CTE and "scrollHeight" not in _CTE)
-_PTE = _jsfn("function positionTextEdit() {")
 _ELR = _H150.split("  .editLayer {", 1)[1].split("}", 1)[0]
 _RING = _H150.split(".editLayer::after {", 1)[1].split("}", 1)[0] \
     if ".editLayer::after {" in _H150 else ""
 _GRIP = _H150.split(".editLayer .editGrip {", 1)[1].split("}", 1)[0]
-check("the frame is CHROME: positionTextEdit sets --k = 1 / state.scale "
-      "and grip, ring and halo are all multiplied by it, so they stay "
-      "the same screen size at any zoom (a 6 px grip was an 18 px bar "
-      "at 300%)",
-      'te.el.style.setProperty("--k", String(1 / s));' in _PTE
-      and "const s = state.scale;" in _PTE
-      and "calc(6px * var(--k, 1)) var(--accent-selection)" in _ELR
+check("the frame is CHROME: grip, ring and halo are all multiplied by "
+      "--k (which the node test shows positionTextEdit sets to "
+      "1 / state.scale), so they stay the same screen size at any zoom "
+      "(a 6 px grip was an 18 px bar at 300%)",
+      "calc(6px * var(--k, 1)) var(--accent-selection)" in _ELR
       and "calc(1px * var(--k, 1)) var(--accent)" in _RING
       and "calc(-3px * var(--k, 1))" in _RING
       and all(f"calc({v} * var(--k, 1))" in _GRIP
@@ -1713,9 +1688,9 @@ check("...and the ring is NOT an outline: Blink snaps an outline's "
 section("2026-09-30: the bridge stores the MEASURED box")
 check("validate_text_box passes a measured box through",
       pv.validate_text_box(58.5, 14) == (58.5, 14.0))
-check("...clamps an absurd one to the caps, and a sliver up to 1 pt",
+check("...caps an absurd one, and refuses a sliver (below one line)",
       pv.validate_text_box(1e9, 1e9) == (pv.TEXT_BOX_MAX_W, pv.TEXT_BOX_MAX_H)
-      and pv.validate_text_box(0.25, 0.5) == (1.0, 1.0))
+      and pv.validate_text_box(0.25, 0.5) is None)
 check("...and REJECTS junk: absent, bools, strings, non-finite, zero "
       "and negative sizes all mean 'not measured'",
       all(pv.validate_text_box(w, h) is None for w, h in (
@@ -1740,16 +1715,21 @@ class _FakeViewer:
     directly, never through a Qt slot (PyQt6 aborts on a slot that
     raises)."""
 
-    def __init__(self, highlights=None):
+    def __init__(self, highlights=None, save_ok=True):
         self._page_count = 3
         self._highlights = list(highlights or [])
         self.saves = self.pushes = 0
+        self._save_ok = save_ok
+        self._save_failed = False
 
     def _sync_marks(self):
         pass
 
     def _save_annotations(self):
+        # The real one sets _save_failed from save_annotations' result
+        # and toasts the failure itself.
         self.saves += 1
+        self._save_failed = not self._save_ok
 
     def _push_annotations(self):
         self.pushes += 1
@@ -1859,10 +1839,202 @@ try:
           "is applied at bake time only, so it cannot compound",
           _ph930.load_annotations(_uf930, "Box")[0]["rects"]
           == [[100.0, 200.0, 61.0, 14.0]])
+
+    def _rects930():
+        return [[round(float(v), 2) for v in a.get_object()["/Rect"]]
+                for a in (_R930(os.path.join(_uf930, "pdfs", "Box.pdf"))
+                          .pages[0].get("/Annots") or [])
+                if a.get_object().get("/Subtype") == "/FreeText"]
+
+    # Round 1 (R55 I2): the outset must survive every round trip the
+    # file takes, without growing and without touching the record.
+    _ok930b = _ph930.bake_annotations(_uf930, "Box")
+    _ph930.bake_annotations(_uf930, "Box")
+    check("a RE-bake (twice) writes the same /Rect — the 2pt outset is "
+          "applied to the record, never to the previous bake's /Rect",
+          _ok930b and _rects930() == [[98.0, 576.0, 163.0, 594.0]],
+          repr(_rects930()))
+    check("...and leaves the stored record exactly as it was",
+          _ph930.load_annotations(_uf930, "Box") == [_rec930],
+          repr(_ph930.load_annotations(_uf930, "Box")))
+    _scan930 = _ph930.scan_working_annotations(_uf930, "Box") or {}
+    check("a scan after the bake finds NOTHING foreign (the outset box "
+          "is a Klaus mark, recognised by /NM, never re-adopted) and "
+          "sees the record's id as present",
+          _scan930.get("foreign") == []
+          and _rec930["id"] in set(_scan930.get("marked_ids") or ()),
+          repr(_scan930))
+    _ph930.mirror_foreign_annotations(_uf930, "Box", _scan930)
+    check("...and mirroring that scan leaves the stored record unchanged",
+          _ph930.load_annotations(_uf930, "Box") == [_rec930],
+          repr(_ph930.load_annotations(_uf930, "Box")))
+    _ph930.save_annotations(_uf930, "Box", [])
+    _ok930c = _ph930.bake_annotations(_uf930, "Box")
+    _scan930c = _ph930.scan_working_annotations(_uf930, "Box") or {}
+    check("an UN-bake (no records) leaves no FreeText behind, and its "
+          "scan finds nothing foreign to adopt back",
+          _ok930c and _rects930() == [] and _scan930c.get("foreign") == [],
+          repr((_rects930(), _scan930c)))
+    # A new mark gets a fresh id (re-adding the SAME id after an
+    # un-bake is the K-085 resurrection guard's case, not this one).
+    _rec930d = dict(_rec930, id="f" * 32)
+    _ph930.save_annotations(_uf930, "Box", [_rec930d])
+    _ph930.bake_annotations(_uf930, "Box")
+    check("a box added after the un-bake bakes the SAME /Rect and keeps "
+          "its record as stored",
+          _rects930() == [[98.0, 576.0, 163.0, 594.0]]
+          and _ph930.load_annotations(_uf930, "Box") == [_rec930d],
+          repr(_rects930()))
 finally:
     _ph930._live_library_root = _root930
     import shutil as _sh930
     _sh930.rmtree(_uf930, ignore_errors=True)
+section("text-box fix round 1: a huge JSON number never crashes a slot")
+# JSON has no size limit on integers and Python parses 10**400 as an
+# int, so it passed every isinstance(int) check and then float() raised
+# OverflowError — inside a bridge slot, where PyQt6 aborts the process.
+_HUGE = (10 ** 400, 10 ** 4000)
+_r1base = pv.make_text_record(1, 10.0, 20.0, "hello")
+
+
+def _no_raise(f):
+    try:
+        return True, f()
+    except Exception as exc:  # the test reports instead of aborting
+        return False, exc
+
+
+for _hv in _HUGE:
+    _tag = "10**%d" % (len(str(_hv)) - 1)
+    _ok, _res = _no_raise(lambda: pv.validate_text_box(_hv, 14))
+    check(f"validate_text_box refuses ({_tag}, 14)", _ok and _res is None,
+          repr(_res))
+    _ok, _res = _no_raise(lambda: pv.validate_text_box(_hv, _hv))
+    check(f"validate_text_box refuses ({_tag}, {_tag})",
+          _ok and _res is None, repr(_res))
+    _ok, _res = _no_raise(lambda: pv.validate_text_size(_hv))
+    check(f"validate_text_size falls back on {_tag}",
+          _ok and _res == pv.TEXT_SIZE_DEFAULT, repr(_res))
+    _ok, _res = _no_raise(lambda: pv._validate_rows(_hv))
+    check(f"_validate_rows reads {_tag} as 'not measured'",
+          _ok and _res == 0, repr(_res))
+    _ok, _res = _no_raise(
+        lambda: pv.clamp_text_add({"page": 0, "x": _hv, "y": 1}, 1))
+    check(f"clamp_text_add refuses x={_tag}", _ok and _res is None,
+          repr(_res))
+    _ok, _res = _no_raise(lambda: pv.apply_text_update(
+        [_r1base], {"id": _r1base["id"], "text": "edited",
+                     "x": _hv, "y": _hv, "w": _hv, "h": _hv,
+                     "size": _hv, "rows": _hv}))
+    check(f"apply_text_update with every number {_tag}: keeps the anchor, "
+          "default size, estimated box",
+          _ok and _res[0][0]["rects"]
+          == [[10.0, 20.0] + list(pv.text_box_size("edited", 12.0))],
+          repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_add(
+        _fv, _b64({"page": 0, "x": 5, "y": 5, "text": "hi",
+                   "w": _hv, "h": _hv, "size": _hv})))
+    check(f"_bridge_text_add with w/h/size {_tag} does not raise and "
+          "stores the estimate",
+          _ok and len(_fv._highlights) == 1
+          and _fv._highlights[0]["rects"][0][2:]
+          == list(pv.text_box_size("hi", 12.0)), repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_add(
+        _fv, _b64({"page": 0, "x": _hv, "y": 5, "text": "hi"})))
+    check(f"_bridge_text_add with x={_tag} does not raise and mints "
+          "nothing", _ok and _fv._highlights == [], repr(_res))
+    _fv = _FakeViewer([_r1base])
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_text_update(
+        _fv, _b64({"id": _r1base["id"], "text": "edited", "x": _hv,
+                   "y": _hv, "w": _hv, "h": _hv, "size": _hv})))
+    check(f"_bridge_text_update with every number {_tag} does not raise",
+          _ok and _fv._highlights[0]["text"] == "edited", repr(_res))
+    _fv = _FakeViewer()
+    _ok, _res = _no_raise(lambda: pv.PdfJsViewer._bridge_hl_add(
+        _fv, _b64({"pages": {"0": [[_hv, 1, 2, 3], [10, 10, 50, 12]]},
+                   "color": "#fadc50"})))
+    check(f"_bridge_hl_add with a {_tag} rect does not raise and keeps "
+          "the good rect",
+          _ok and [h["rects"] for h in _fv._highlights]
+          == [[[10.0, 10.0, 50.0, 12.0]]], repr(_res))
+
+section("text-box fix round 1: a measured box is at least one line")
+check("a box narrower than 0.2 em or shorter than 1.1 lines of its own "
+      "font size is refused (falls back to the estimate)",
+      pv.validate_text_box(1, 1, 12.0) is None
+      and pv.validate_text_box(2, 14, 12.0) is None
+      and pv.validate_text_box(61, 13, 12.0) is None
+      and pv.validate_text_box(61, 20, 24.0) is None)
+check("...while real measured boxes pass: 'i' at 12 pt (4 x 14), "
+      "'Hello world' (61 x 14), 'i' at 96 pt (23 x 111)",
+      pv.validate_text_box(4, 14, 12.0) == (4.0, 14.0)
+      and pv.validate_text_box(61, 14, 12.0) == (61.0, 14.0)
+      and pv.validate_text_box(23, 111, 96.0) == (23.0, 111.0))
+_fv = _FakeViewer()
+pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+    {"page": 0, "x": 5, "y": 5, "text": "Hello world", "size": 12,
+     "w": 1, "h": 1}))
+check("text-add with a 1x1 'measurement' stores the estimate, not a "
+      "1x1 box",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello world", 12.0)))
+_fv = _FakeViewer([_r1base])
+pv.PdfJsViewer._bridge_text_update(_fv, _b64(
+    {"id": _r1base["id"], "text": "Hello there", "size": 24,
+     "w": 70, "h": 14}))
+check("text-update floors against the NEW size: a 14 pt-tall box for "
+      "24 pt text is refused",
+      _fv._highlights[0]["rects"][0][2:]
+      == list(pv.text_box_size("Hello there", 24.0)))
+
+section("text-box fix round 1: a size-less record is 12 pt everywhere")
+_nosize = {"id": "ns1", "kind": "text", "page": 0, "text": "Preview note",
+           "note": "", "color": "#000000", "origin": "external",
+           "rects": [[1.0, 2.0, 80.0, 20.0]]}
+check("re-committing a size-less (adopted) record at the 12 pt the page "
+      "opens it at changes nothing: no save, box kept",
+      pv.apply_text_update([_nosize], {"id": "ns1", "text": "Preview note",
+                                       "color": "#000000", "size": 12,
+                                       "w": 80, "h": 20})[1] is False)
+_out_ns = pv.apply_text_update([_nosize], {
+    "id": "ns1", "text": "Preview note", "color": "#000000", "size": 18,
+    "w": 110, "h": 21})[0][0]
+check("...and a real size change re-measures it",
+      _out_ns["size"] == 18.0 and _out_ns["rects"] == [[1.0, 2.0, 110.0, 21.0]],
+      repr(_out_ns))
+check("the page's default text size IS Python's (the size a size-less "
+      "record is drawn, edited and stored at)",
+      "const TEXT_SIZE_DEFAULT = 12;" in _H150
+      and pv.TEXT_SIZE_DEFAULT == 12.0
+      and 't.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";'
+      in _H150)
+
+section("text-box fix round 1: a failed save shows ONE toast")
+_toasts = []
+_tooltip_was = pv.tooltip
+pv.tooltip = _toasts.append
+try:
+    _fv = _FakeViewer(save_ok=False)
+    pv.PdfJsViewer._bridge_hl_add(_fv, _b64(
+        {"pages": {"0": [[10, 10, 50, 12]]}, "color": "#fadc50"}))
+    pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+        {"page": 0, "x": 5, "y": 5, "text": "hi", "w": 11, "h": 14}))
+    check("a failed write does not ALSO toast 'highlight added' / 'text "
+          "added' (the save already toasted its failure)",
+          _toasts == [], repr(_toasts))
+    _fv = _FakeViewer()
+    pv.PdfJsViewer._bridge_hl_add(_fv, _b64(
+        {"pages": {"0": [[10, 10, 50, 12]]}, "color": "#fadc50"}))
+    pv.PdfJsViewer._bridge_text_add(_fv, _b64(
+        {"page": 0, "x": 5, "y": 5, "text": "hi", "w": 11, "h": 14}))
+    check("a successful write still confirms both",
+          _toasts == ["Klaus: highlight added", "Klaus: text added"],
+          repr(_toasts))
+finally:
+    pv.tooltip = _tooltip_was
+
 _KEYS150 = {"id", "kind", "page", "rects", "text", "note", "color", "size"}
 check("a picked ink and size are written EXPLICITLY, and the KEY SET "
       "is still closed: the editor's frame is chrome, not record "

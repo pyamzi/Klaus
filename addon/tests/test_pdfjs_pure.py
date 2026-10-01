@@ -37,4 +37,17 @@ if shutil.which("node"):
 else:
     print("  SKIP  pdfjs_pure.js helpers (node not installed) — NOT counted as a pass")
 
+section("the in-place text box editor, run for real (node)")
+if shutil.which("node"):
+    here = os.path.dirname(os.path.abspath(__file__))
+    proc = subprocess.run(["node", os.path.join(here, "pdfjs_textbox_test.js")],
+                          capture_output=True, text=True, timeout=60)
+    print(proc.stdout.rstrip())
+    check("openTextEdit/sizeTextEdit/positionTextEdit/commitTextEdit behave: "
+          "measured w/h in the payload, kept boxes kept, --k = 1/scale",
+          proc.returncode == 0,
+          (proc.stdout + proc.stderr).strip().replace("\n", " | "))
+else:
+    print("  SKIP  text box editor (node not installed) — NOT counted as a pass")
+
 raise SystemExit(report())

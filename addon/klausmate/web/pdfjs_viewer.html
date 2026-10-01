@@ -869,7 +869,7 @@ function renderAnnotLayers(num, div) {
       /* No px floor: the box is sized to its text, so a floor (it was
          6px) outgrew the box below 50% zoom (fit-width in a narrow
          dock) and the committed text wrapped and clipped. */
-      t.style.fontSize = (parseFloat(rec.size) || 12) * s + "px";
+      t.style.fontSize = (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) * s + "px";
       hlLayer.appendChild(t);
     } else {
       let first = null;
@@ -1790,6 +1790,10 @@ document.getElementById("scroll").addEventListener("click", (ev) => {
    ones that get committed. */
 const TEXT_SIZES = [8, 10, 12, 14, 18, 24, 36, 48];
 const MAX_TEXT_CHARS = 4000;
+/* pdfjs_viewer.TEXT_SIZE_DEFAULT: the size a record WITHOUT one (adopted
+   from Preview) is drawn, opened and stored at — one number on both
+   sides, or opening it at the stepper's size reads as a resize. */
+const TEXT_SIZE_DEFAULT = 12;
 const TEXT_BOX_MAX_W = 480;   // pdfjs_viewer.TEXT_BOX_MAX_W, pt
 const TEXT_BOX_MAX_H = 720;   // pdfjs_viewer.TEXT_BOX_MAX_H, pt
 
@@ -1807,8 +1811,9 @@ function sanitizeEditText(value) {
    browser in the font the box draws in (it used to be a 0.6-em-per-char
    guess, which drew a one-line box rows tall and wider than its text).
    Width is the widest line plus 1 pt, so a zoomed .hltext cannot wrap
-   a line the editor did not; height is measured AT that width, so it
-   is exactly the lines a box that wide holds. Whole points, so the
+   a line the editor did not. Height comes from the same layout: lines
+   break identically at any width from the widest line up to the cap,
+   and the box's width is always in that range. Whole points, so the
    same text always measures the same and a click-away is a no-op.
    An empty box is one line tall. */
 let textMeasurer = null;
@@ -1820,14 +1825,10 @@ function measureTextBox(text, size) {
     document.getElementById("root").appendChild(m);
   }
   m.style.fontSize = size + "px";
-  m.style.width = "";
   m.textContent = text || "\u200b";
-  const w = Math.min(
-    Math.ceil(m.getBoundingClientRect().width + 1), TEXT_BOX_MAX_W);
-  m.style.width = w + "px";
-  const h = Math.min(
-    Math.ceil(m.getBoundingClientRect().height), TEXT_BOX_MAX_H);
-  return [w, h];
+  const r = m.getBoundingClientRect();
+  return [Math.min(Math.ceil(r.width + 1), TEXT_BOX_MAX_W),
+          Math.min(Math.ceil(r.height), TEXT_BOX_MAX_H)];
 }
 
 /* The box the editor shows and the commit sends. A re-opened record
@@ -1930,7 +1931,8 @@ function openTextEdit(page0, xPt, yPt, rec) {
   el.appendChild(body);
   const color = (rec && rec.color)
     ? String(rec.color) : (currentTextInk() || "");
-  const size = rec ? (parseFloat(rec.size) || state.tsize) : state.tsize;
+  const size = rec
+    ? (parseFloat(rec.size) || TEXT_SIZE_DEFAULT) : state.tsize;
   body.style.color = color;
   body.style.fontSize = size + "px";   // POINTS — scale() carries it
   const r0 = rec && (rec.rects || [])[0];
