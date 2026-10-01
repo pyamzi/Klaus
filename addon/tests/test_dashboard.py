@@ -302,8 +302,10 @@ check("edit mode shows every cell as a slot, tiled from the content box's corner
 check("the landing outline is out of flow (an in-flow node would take a grid cell)",
       "position: absolute;" in _css.split(".klaus-dash-slot {")[1].split("}")[0]
       and "pointer-events: none" in _css.split(".klaus-dash-slot {")[1].split("}")[0])
-check("Anki's table spans its box with border-box sizing (its 1rem padding overflowed at 100%)",
-      ".klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box; }" in _css)
+check("Anki's table spans its box with border-box sizing (its 1rem padding overflowed at 100%), "
+      "deck names aligned to the start, not centred by the box",
+      ".klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box;"
+      " text-align: start; }" in _css)
 check("a shadow-root card's host is a full-height block so its adopted CSS can fill the box",
       ".klaus-w-body > amboss-component-wrapper { display: block; height: 100%; }" in _css)
 check("AMBOSS's card loses its 2em margins and 440px width inside its root",

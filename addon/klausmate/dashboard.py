@@ -491,7 +491,12 @@ def dashboard_css() -> str:
         # Anki's table spans its box's width so its card's edges line up
         # with every other widget's (border-box: Anki pads it 1rem with
         # content-box sizing, and 100% of that overflowed the box).
-        " .klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box; }"
+        # text-align: start, or the body's centring reaches Anki's deck
+        # names (their cells set no alignment; a shrink-to-fit table hid
+        # that, a full-width one centred "– AnKing" in its column). The
+        # count cells keep their own align=end.
+        " .klaus-w-body > table { margin: 0 auto; width: 100%; box-sizing: border-box;"
+        " text-align: start; }"
         # A fitted deck box is up to a cell taller than its table: the
         # table's card fills the box and its last row (the studied line
         # background.panel_js welds in) takes the slack, so the space is
