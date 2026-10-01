@@ -17,3 +17,50 @@ message RenderCardResponse {
   string question = 1;
   string answer = 2;
 }
+
+// AnkiWeb sync (#14, #15). The sync key stays in the bridge (Keychain); the page
+// only sees the account and each sync's outcome.
+
+// klausSyncAccount: the signed-in account and sync settings (empty username = signed out).
+message SyncAccount {
+  string username = 1;
+  // Self-hosted sync server, normalised; empty = AnkiWeb.
+  string custom_url = 2;
+  bool auto_sync = 3;
+  bool sync_media = 4;
+}
+
+// klausSyncSignIn
+message SyncSignIn {
+  string username = 1;
+  string password = 2;
+}
+
+// klausFullSync: resolve a full sync by uploading or downloading.
+message FullSyncRequest {
+  bool upload = 1;
+  // The server's media USN from the normal sync, so media syncs afterwards.
+  optional int32 server_media_usn = 2;
+}
+
+// klausSyncOutcome: polled while klausSync/klausFullSync run in the background.
+// A DONE outcome is returned once, then the state is IDLE again.
+message SyncOutcome {
+  enum State {
+    IDLE = 0;
+    RUNNING = 1;
+    DONE = 2;
+  }
+  State state = 1;
+  // DONE with an error: Anki's message and BackendError.Kind (SYNC_AUTH_ERROR
+  // means the sign-in has expired and the account was signed out).
+  string error = 2;
+  int32 error_kind = 3;
+  // DONE without error: anki.sync.SyncCollectionResponse.ChangesRequired
+  // (NO_CHANGES after a full sync).
+  int32 required = 4;
+  int32 server_media_usn = 5;
+  string server_message = 6;
+  // Set when a full download first backed up the Collection.
+  string backup_folder = 7;
+}

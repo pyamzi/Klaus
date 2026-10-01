@@ -723,3 +723,215 @@ fn browser_searches_and_rows() {
     let columns: anki_proto::search::BrowserColumns = call(&bridge, "allBrowserColumns", Empty {});
     assert!(columns.columns.iter().any(|c| c.key == "cardDue"));
 }
+
+// ---- Sync (#14, #15): against rslib's own sync server, started in-process. ----
+
+/// One local sync server for the whole test binary, with a user per test so
+/// parallel tests don't share a server-side Collection.
+fn sync_server() -> String {
+    use anki::sync::http_server::{default_ip_header, SimpleServer, SyncServerConfig};
+    static URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    URL.get_or_init(|| {
+        std::env::set_var("SYNC_USER1", "normal:secret");
+        std::env::set_var("SYNC_USER2", "conflict:secret");
+        let base_folder = tempfile::tempdir().unwrap().keep();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let config = SyncServerConfig {
+                    host: "127.0.0.1".parse().unwrap(),
+                    port: 0,
+                    base_folder,
+                    ip_header: default_ip_header(),
+                };
+                let (addr, server) = SimpleServer::make_server(config).await.unwrap();
+                tx.send(format!("http://{addr}/")).unwrap();
+                server.await.unwrap();
+            });
+        });
+        rx.recv().unwrap()
+    })
+    .clone()
+}
+
+/// A Klaus Collection signed in to the local server as `user`.
+fn signed_in(user: &str) -> (tempfile::TempDir, Bridge) {
+    let (dir, bridge) = open_temp();
+    let _: Empty = call(&bridge, "klausSetSyncUrl", generic::String { val: sync_server().trim_end_matches('/').into() });
+    let _: Empty = call(&bridge, "klausSyncSignIn", klaus_bridge::klaus::SyncSignIn { username: user.into(), password: "secret".into() });
+    (dir, bridge)
+}
+
+fn wait_for_media(bridge: &Bridge) {
+    for _ in 0..200 {
+        let status: anki_proto::sync::MediaSyncStatusResponse = call(bridge, "mediaSyncStatus", Empty {});
+        if !status.active {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("media sync didn't finish");
+}
+
+fn cards_in(bridge: &Bridge) -> u32 {
+    deck_tree(bridge).children.iter().map(|d| d.total_including_children).sum()
+}
+
+use anki_proto::sync::sync_collection_response::ChangesRequired;
+use klaus_bridge::klaus::{sync_outcome::State as SyncState, SyncAccount, SyncOutcome};
+
+/// A finished sync without error.
+fn done(outcome: &SyncOutcome) {
+    assert_eq!((outcome.state(), outcome.error.as_str()), (SyncState::Done, ""), "{outcome:?}");
+}
+
+/// …and what the server required.
+fn ok(outcome: &SyncOutcome) -> ChangesRequired {
+    assert_eq!((outcome.state(), outcome.error.as_str()), (SyncState::Done, ""), "{outcome:?}");
+    ChangesRequired::try_from(outcome.required).unwrap()
+}
+
+/// #14: sign-in (key kept out of files), first upload, first-run download on a
+/// second device, normal sync both ways, media, and the background HTTP path.
+#[test]
+fn syncs_with_a_local_sync_server() {
+    let (dir_a, a) = signed_in("normal");
+    let account: SyncAccount = call(&a, "klausSyncAccount", Empty {});
+    assert_eq!((account.username.as_str(), account.custom_url.as_str()), ("normal", sync_server().as_str()));
+    assert!(account.auto_sync && account.sync_media);
+    // The sync key lives in the secret store, never in klaus-settings.json.
+    let settings = std::fs::read_to_string(dir_a.path().join("klaus-settings.json")).unwrap();
+    let profile: serde_json::Value = serde_json::from_str(&settings).unwrap();
+    let keys: Vec<_> = profile["profile"].as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, ["currentSyncUrl", "customSyncUrl", "syncUser"], "{settings}");
+    // A wrong password is refused.
+    let (_dir_x, x) = open_temp();
+    let _: Empty = call(&x, "klausSetSyncUrl", generic::String { val: sync_server() });
+    let wrong = klaus_bridge::klaus::SyncSignIn { username: "normal".into(), password: "nope".into() };
+    assert!(x.call("klausSyncSignIn", &wrong.encode_to_vec()).is_err());
+
+    // Device A has a note and an image; a new account's first sync uploads it.
+    add_tagged(&a, 1, ["Heart", "<img src=heart.png>"], &[]);
+    let _: generic::String = call(&a, "addMediaFile", AddMediaFileRequest { desired_name: "heart.png".into(), data: b"png".to_vec() });
+    let out = a.sync();
+    let required = ok(&out);
+    assert!(matches!(required, ChangesRequired::FullUpload | ChangesRequired::FullSync), "{required:?}");
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    wait_for_media(&a);
+
+    // Device B (empty) downloads it all on its first sync, backing itself up first.
+    let (dir_b, b) = signed_in("normal");
+    let out = b.sync();
+    assert_eq!(ok(&out), ChangesRequired::FullDownload);
+    let full = b.full_sync(false, Some(out.server_media_usn));
+    done(&full);
+    assert!(std::path::Path::new(&full.backup_folder).read_dir().unwrap().next().is_some(), "backup written");
+    wait_for_media(&b);
+    assert_eq!(cards_in(&b), 1);
+    assert_eq!(std::fs::read(dir_b.path().join("collection.media/heart.png")).unwrap(), b"png");
+
+    // A normal sync carries B's new note up…
+    add_tagged(&b, 1, ["Lung", "gas exchange"], &[]);
+    assert_eq!(ok(&b.sync()), ChangesRequired::NoChanges);
+
+    // …and A pulls it down the webview's way: klausSync returns at once (204),
+    // then the outcome is polled.
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    rt.block_on(async move {
+        let (_web, web_dirs) = empty_web_dirs();
+        let token = new_token();
+        let hook: Hook = std::sync::Arc::new(|_: &str, _: &[u8]| None);
+        let (addr, server) = serve(std::sync::Arc::new(a), web_dirs, token.clone(), hook).await.unwrap();
+        tokio::spawn(server);
+        let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let grant = client.get(format!("http://{addr}/?t={token}")).send().await.unwrap();
+        let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+        let post = |method: &str, body: Vec<u8>| {
+            client
+                .post(format!("http://{addr}/_anki/{method}"))
+                .header("Content-Type", "application/binary")
+                .header("Cookie", &cookie)
+                .body(body)
+                .send()
+        };
+        assert_eq!(post("klausSync", vec![]).await.unwrap().status(), 204);
+        let outcome = loop {
+            let res = post("klausSyncOutcome", vec![]).await.unwrap();
+            let outcome = SyncOutcome::decode(res.bytes().await.unwrap()).unwrap();
+            if outcome.state() != SyncState::Running {
+                break outcome;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert_eq!(ok(&outcome), ChangesRequired::NoChanges);
+        // Read once: the next poll is idle again.
+        let res = post("klausSyncOutcome", vec![]).await.unwrap();
+        assert_eq!(SyncOutcome::decode(res.bytes().await.unwrap()).unwrap().state(), SyncState::Idle);
+        let tree = post("deckTree", DeckTreeRequest { now: now() }.encode_to_vec()).await.unwrap();
+        let tree = DeckTreeNode::decode(tree.bytes().await.unwrap()).unwrap();
+        assert_eq!(tree.children.iter().map(|d| d.total_including_children).sum::<u32>(), 2, "A has B's note");
+    });
+    drop(dir_a);
+}
+
+/// Klaus's and Anki's web dirs, empty (for tests that only call /_anki).
+fn empty_web_dirs() -> ([tempfile::TempDir; 3], WebDirs) {
+    let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    let web = WebDirs { klaus: dirs[0].path().into(), anki: dirs[1].path().into(), anki_static: dirs[2].path().into() };
+    (dirs, web)
+}
+
+fn notetype_names(bridge: &Bridge) -> Vec<String> {
+    let mut names: Vec<_> = call::<NotetypeNames>(bridge, "getNotetypeNames", Empty {}).entries.into_iter().map(|n| n.name).collect();
+    names.sort();
+    names
+}
+
+/// Removes an unused notetype: a schema change, so the next sync can't merge.
+fn change_schema(bridge: &Bridge, name: &str) {
+    let names: NotetypeNames = call(bridge, "getNotetypeNames", Empty {});
+    let ntid = names.entries.iter().find(|n| n.name == name).unwrap().id;
+    let _: anki_proto::collection::OpChanges =
+        Message::decode(bridge.call_trusted("removeNotetype", &NotetypeId { ntid }.encode_to_vec()).unwrap().as_slice()).unwrap();
+}
+
+/// #15: both devices change the schema, so the second to sync gets a real
+/// conflict (FULL_SYNC: choose a side). Resolved once by downloading, once by uploading.
+#[test]
+fn full_sync_conflicts_resolve_in_both_directions() {
+    let (_dir_a, a) = signed_in("conflict");
+    let (_dir_b, b) = signed_in("conflict");
+    let out = a.sync();
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    let out = b.sync();
+    done(&b.full_sync(false, Some(out.server_media_usn)));
+
+    // Download: B discards its own change and takes AnkiWeb's (A's) version.
+    change_schema(&a, "Cloze");
+    add_tagged(&a, 1, ["only on A", "a"], &[]);
+    change_schema(&b, "Basic (type in the answer)");
+    add_tagged(&b, 1, ["only on B", "b"], &[]);
+    let out = a.sync();
+    assert_eq!(ok(&out), ChangesRequired::FullUpload, "only A's side changed so far");
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    let out = b.sync();
+    assert_eq!(ok(&out), ChangesRequired::FullSync);
+    done(&b.full_sync(false, Some(out.server_media_usn)));
+    assert_eq!(notetype_names(&b), notetype_names(&a));
+    assert_eq!(cards_in(&b), 1, "B's note gone, A's note here");
+
+    // Upload: B keeps its own change and overwrites AnkiWeb; A then takes B's version.
+    change_schema(&a, "Basic (and reversed card)");
+    change_schema(&b, "Basic (optional reversed card)");
+    let out = a.sync();
+    done(&a.full_sync(true, Some(out.server_media_usn)));
+    let out = b.sync();
+    assert_eq!(ok(&out), ChangesRequired::FullSync);
+    done(&b.full_sync(true, Some(out.server_media_usn)));
+    let out = a.sync();
+    assert!(matches!(ok(&out), ChangesRequired::FullDownload | ChangesRequired::FullSync), "{out:?}");
+    done(&a.full_sync(false, Some(out.server_media_usn)));
+    assert_eq!(notetype_names(&a), notetype_names(&b));
+    assert!(notetype_names(&a).contains(&"Basic (and reversed card)".to_string()), "A's change was overwritten");
+}

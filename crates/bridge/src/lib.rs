@@ -101,6 +101,11 @@ const ALLOWED: &[&str] = &[
     "undo",
     "getUndoStatus",
     "congratsInfo",
+    // Sync progress and cancelling (the sync itself goes through Klaus's methods,
+    // which keep the AnkiWeb key out of the page).
+    "mediaSyncStatus",
+    "abortSync",
+    "abortMediaSync",
     // Klaus's deck list (Anki's deckbrowser.py and filtered deck dialog).
     "newDeck",
     "addDeck",
@@ -221,7 +226,16 @@ const LOCAL: &[&str] = &[
     "setProfileConfigJson",
     "convertPastedImage",
     "klausRenderCard",
+    "klausSyncAccount",
+    "klausSyncSignIn",
+    "klausSyncSignOut",
+    "klausSetSyncUrl",
+    "klausSyncOutcome",
 ];
+
+/// Klaus's sync calls that run in the background (see `start_sync`): the page
+/// polls `klausSyncOutcome`, `latestProgress` and `mediaSyncStatus` meanwhile.
+const BACKGROUND_SYNC: &[&str] = &["klausSync", "klausFullSync"];
 
 /// Anki SvelteKit routes, served from Anki's build (its client router takes over).
 const ANKI_PAGES: &[&str] = &[
@@ -258,10 +272,44 @@ pub struct Bridge {
     /// Anki keeps profile settings (Qt's pm.meta and pm.profile) outside the
     /// Collection; Klaus has one profile, so both live in `klaus-settings.json`.
     settings: Mutex<Value>,
+    /// Where the AnkiWeb sync key lives: the macOS Keychain in the app.
+    secrets: Box<dyn Secrets>,
+    /// The background sync's state, for `klausSyncOutcome`.
+    sync_outcome: Mutex<klaus::SyncOutcome>,
 }
+
+/// Secret storage (the sync key must never be written to a plain file).
+pub trait Secrets: Send + Sync {
+    fn get(&self, key: &str) -> Option<String>;
+    fn set(&self, key: &str, value: &str) -> Result<(), String>;
+    fn delete(&self, key: &str);
+}
+
+/// In-memory secrets: tests, and builds without a keychain.
+#[derive(Default)]
+pub struct MemorySecrets(Mutex<std::collections::HashMap<String, String>>);
+
+impl Secrets for MemorySecrets {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.lock().unwrap().get(key).cloned()
+    }
+    fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.0.lock().unwrap().insert(key.into(), value.into());
+        Ok(())
+    }
+    fn delete(&self, key: &str) {
+        self.0.lock().unwrap().remove(key);
+    }
+}
+
+const SYNC_KEY: &str = "ankiweb-sync-key";
 
 impl Bridge {
     pub fn new() -> Result<Self, String> {
+        Self::with_secrets(Box::new(MemorySecrets::default()))
+    }
+
+    pub fn with_secrets(secrets: Box<dyn Secrets>) -> Result<Self, String> {
         let init = BackendInit {
             preferred_langs: vec!["en".into()],
             ..Default::default()
@@ -270,12 +318,17 @@ impl Bridge {
             backend: init_backend(&init.encode_to_vec())?,
             dir: Mutex::new(None),
             settings: Mutex::new(Value::Null),
+            secrets,
+            sync_outcome: Mutex::default(),
         })
     }
 
     /// Opens (creating if needed) the Collection stored in `dir`, using Anki's
     /// profile layout so the files are interchangeable with Anki desktop's.
     pub fn open_collection(&self, dir: &Path) -> Result<(), CallError> {
+        // Anki's profile manager creates the media folder; media sync and adding
+        // files fail without it.
+        std::fs::create_dir_all(dir.join("collection.media")).map_err(|e| CallError::Backend(e.to_string()))?;
         let req = OpenCollectionRequest {
             collection_path: path_str(&dir.join("collection.anki2")),
             media_folder_path: path_str(&dir.join("collection.media")),
@@ -356,6 +409,29 @@ impl Bridge {
                     .ok_or_else(|| CallError::Backend("Klaus can't read this image format.".into()))?;
                 Ok(ConvertPastedImageResponse { data }.encode_to_vec())
             }
+            "klausSyncAccount" => Ok(self.sync_account().encode_to_vec()),
+            "klausSyncSignIn" => {
+                let req = klaus::SyncSignIn::decode(input).map_err(bad)?;
+                self.sync_sign_in(&req.username, &req.password)?;
+                Ok(vec![])
+            }
+            "klausSyncSignOut" => {
+                self.sync_sign_out()?;
+                Ok(vec![])
+            }
+            "klausSetSyncUrl" => {
+                let url = generic::String::decode(input).map_err(bad)?.val;
+                self.set_sync_url(&url)?;
+                Ok(vec![])
+            }
+            "klausSyncOutcome" => {
+                let mut outcome = self.sync_outcome.lock().unwrap();
+                let current = outcome.clone();
+                if current.state() == klaus::sync_outcome::State::Done {
+                    *outcome = klaus::SyncOutcome::default();
+                }
+                Ok(current.encode_to_vec())
+            }
             "getMetaJson" | "getProfileConfigJson" => {
                 let key = generic::String::decode(input).map_err(bad)?.val;
                 let settings = self.settings.lock().unwrap();
@@ -366,14 +442,176 @@ impl Bridge {
                 let req = SetSettingJsonRequest::decode(input).map_err(bad)?;
                 let value: Value = serde_json::from_slice(&req.value_json)
                     .map_err(|e| CallError::Backend(e.to_string()))?;
-                let mut settings = self.settings.lock().unwrap();
-                settings[section][req.key] = value;
-                let dir = self.dir.lock().unwrap().clone().ok_or_else(|| CallError::Backend("no Collection open".into()))?;
-                std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec_pretty(&*settings).unwrap())
-                    .map_err(|e| CallError::Backend(e.to_string()))?;
+                self.set_setting(section, &req.key, value)?;
                 Ok(vec![])
             }
         }
+    }
+
+    fn set_setting(&self, section: &str, key: &str, value: Value) -> Result<(), CallError> {
+        let mut settings = self.settings.lock().unwrap();
+        settings[section][key] = value;
+        let dir = self.dir.lock().unwrap().clone().ok_or_else(|| CallError::Backend("no Collection open".into()))?;
+        std::fs::write(dir.join(SETTINGS_FILE), serde_json::to_vec_pretty(&*settings).unwrap())
+            .map_err(|e| CallError::Backend(e.to_string()))
+    }
+
+    fn profile(&self, key: &str) -> Value {
+        self.settings.lock().unwrap()["profile"][key].clone()
+    }
+}
+
+// AnkiWeb sync, as aqt/sync.py and aqt/profiles.py drive it. Profile keys match
+// Anki's (syncUser, customSyncUrl, currentSyncUrl, autoSync, syncMedia).
+impl Bridge {
+    pub fn sync_account(&self) -> klaus::SyncAccount {
+        let flag = |key: &str| self.profile(key).as_bool().unwrap_or(true);
+        let signed_in = self.secrets.get(SYNC_KEY).is_some();
+        klaus::SyncAccount {
+            username: if signed_in { self.profile("syncUser").as_str().unwrap_or_default().into() } else { String::new() },
+            custom_url: self.profile("customSyncUrl").as_str().unwrap_or_default().into(),
+            auto_sync: flag("autoSync"),
+            sync_media: flag("syncMedia"),
+        }
+    }
+
+    /// pm.sync_endpoint: the server's redirect, else the self-hosted URL, else AnkiWeb.
+    fn sync_endpoint(&self) -> Option<String> {
+        ["currentSyncUrl", "customSyncUrl"]
+            .iter()
+            .find_map(|key| self.profile(key).as_str().filter(|s| !s.is_empty()).map(String::from))
+    }
+
+    fn sync_auth(&self) -> Option<anki_proto::sync::SyncAuth> {
+        Some(anki_proto::sync::SyncAuth { hkey: self.secrets.get(SYNC_KEY)?, endpoint: self.sync_endpoint(), io_timeout_secs: None })
+    }
+
+    pub fn sync_sign_in(&self, username: &str, password: &str) -> Result<(), CallError> {
+        let req = anki_proto::sync::SyncLoginRequest {
+            username: username.into(),
+            password: password.into(),
+            endpoint: self.sync_endpoint(),
+        };
+        let auth: anki_proto::sync::SyncAuth = self.rpc("syncLogin", req)?;
+        self.secrets.set(SYNC_KEY, &auth.hkey).map_err(CallError::Backend)?;
+        self.set_setting("profile", "syncUser", username.into())
+    }
+
+    /// pm.clear_sync_auth.
+    pub fn sync_sign_out(&self) -> Result<(), CallError> {
+        self.secrets.delete(SYNC_KEY);
+        self.set_setting("profile", "syncUser", Value::Null)?;
+        self.set_setting("profile", "currentSyncUrl", Value::Null)
+    }
+
+    /// pm.set_custom_sync_url: normalised with a trailing slash; a new server
+    /// forgets AnkiWeb's redirect.
+    pub fn set_sync_url(&self, url: &str) -> Result<(), CallError> {
+        let url = url.trim();
+        let url = if url.is_empty() || url.ends_with('/') { url.to_owned() } else { format!("{url}/") };
+        self.set_setting("profile", "currentSyncUrl", Value::Null)?;
+        self.set_setting("profile", "customSyncUrl", url.into())
+    }
+
+    fn failed(err: Option<BackendError>) -> klaus::SyncOutcome {
+        let err = err.unwrap_or_else(|| BackendError { message: "unknown sync method".into(), ..Default::default() });
+        klaus::SyncOutcome {
+            state: klaus::sync_outcome::State::Done as i32,
+            error: err.message,
+            error_kind: err.kind,
+            ..Default::default()
+        }
+    }
+
+    fn not_signed_in() -> klaus::SyncOutcome {
+        Self::failed(Some(BackendError {
+            message: "Sign in to AnkiWeb to sync.".into(),
+            kind: backend_error::Kind::SyncAuthError as i32,
+            ..Default::default()
+        }))
+    }
+
+    /// Like failed(), but an expired sign-in also signs out (Anki's handle_sync_error).
+    fn sync_failed(&self, err: Option<BackendError>) -> klaus::SyncOutcome {
+        let outcome = Self::failed(err);
+        if outcome.error_kind == backend_error::Kind::SyncAuthError as i32 {
+            let _ = self.sync_sign_out();
+        }
+        outcome
+    }
+
+    /// A normal sync (and media sync in the background when enabled). Blocks; the
+    /// webview runs it through `start_sync`.
+    pub fn sync(&self) -> klaus::SyncOutcome {
+        let Some(auth) = self.sync_auth() else { return Self::not_signed_in() };
+        let req = anki_proto::sync::SyncCollectionRequest { auth: Some(auth), sync_media: self.sync_account().sync_media };
+        match self.run_raw("syncCollection", &req.encode_to_vec()) {
+            Err(err) => self.sync_failed(err),
+            Ok(bytes) => {
+                let out = anki_proto::sync::SyncCollectionResponse::decode(bytes.as_slice()).unwrap_or_default();
+                if let Some(endpoint) = &out.new_endpoint {
+                    let _ = self.set_setting("profile", "currentSyncUrl", endpoint.as_str().into());
+                }
+                klaus::SyncOutcome {
+                    state: klaus::sync_outcome::State::Done as i32,
+                    required: out.required,
+                    server_media_usn: out.server_media_usn,
+                    server_message: out.server_message,
+                    ..Default::default()
+                }
+            }
+        }
+    }
+
+    /// Resolves a full sync. A download first backs the Collection up (Anki's
+    /// create_backup_now), since it replaces everything here.
+    pub fn full_sync(&self, upload: bool, server_media_usn: Option<i32>) -> klaus::SyncOutcome {
+        let Some(auth) = self.sync_auth() else { return Self::not_signed_in() };
+        let mut backup_folder = String::new();
+        if !upload {
+            let Some(dir) = self.dir.lock().unwrap().clone() else { return Self::failed(None) };
+            if let Err(err) = std::fs::create_dir_all(dir.join("backups")) {
+                return Self::failed(Some(BackendError { message: err.to_string(), ..Default::default() }));
+            }
+            let folder = path_str(&dir.join("backups"));
+            let backup = anki_proto::collection::CreateBackupRequest { backup_folder: folder.clone(), force: true, wait_for_completion: true };
+            if let Err(err) = self.run_raw("createBackup", &backup.encode_to_vec()) {
+                return Self::failed(err);
+            }
+            backup_folder = folder;
+        }
+        let media_usn = server_media_usn.filter(|_| self.sync_account().sync_media);
+        let req = anki_proto::sync::FullUploadOrDownloadRequest { auth: Some(auth), upload, server_usn: media_usn };
+        match self.run_raw("fullUploadOrDownload", &req.encode_to_vec()) {
+            Err(err) => self.sync_failed(err),
+            Ok(_) => klaus::SyncOutcome { state: klaus::sync_outcome::State::Done as i32, backup_folder, ..Default::default() },
+        }
+    }
+
+    /// Starts klausSync / klausFullSync on its own thread and returns at once: a
+    /// sync can take minutes, longer than a request should stay open.
+    fn start_sync(self: &Arc<Self>, method: &str, input: &[u8]) -> Result<(), CallError> {
+        let full = if method == "klausFullSync" {
+            Some(klaus::FullSyncRequest::decode(input).map_err(|e| CallError::Backend(e.to_string()))?)
+        } else {
+            None
+        };
+        {
+            let mut outcome = self.sync_outcome.lock().unwrap();
+            if outcome.state() == klaus::sync_outcome::State::Running {
+                return Err(CallError::Backend("A sync is already running.".into()));
+            }
+            *outcome = klaus::SyncOutcome { state: klaus::sync_outcome::State::Running as i32, ..Default::default() };
+        }
+        let bridge = Arc::clone(self);
+        std::thread::spawn(move || {
+            let outcome = match full {
+                Some(req) => bridge.full_sync(req.upload, req.server_media_usn),
+                None => bridge.sync(),
+            };
+            *bridge.sync_outcome.lock().unwrap() = outcome;
+        });
+        Ok(())
     }
 }
 
@@ -831,6 +1069,13 @@ async fn anki_method(
     }
     if method == "updateDeckConfigs" {
         return save_deck_configs(state, body);
+    }
+    if BACKGROUND_SYNC.contains(&method.as_str()) {
+        return match state.bridge.start_sync(&method, &body) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(CallError::Backend(msg)) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            Err(_) => StatusCode::NOT_FOUND.into_response(),
+        };
     }
     let bridge = state.bridge.clone();
     let result = tokio::task::spawn_blocking(move || bridge.call(&method, &body)).await;
