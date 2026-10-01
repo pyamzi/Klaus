@@ -216,28 +216,23 @@ same reason.
   legacy-key scrub is built in) and run ONCE per profile open by
   `settings.migrate()`, never on read. Tests assign `settings.store =
   DictStore({...})` (or the harness's `LiveStore` over a dict they keep
-  mutating) and `settings.user_files_dir = <scratch>`; `PdfDock` (a
-  `QDockWidget` of the host window — Browse and Add Cards — since
-  2026-09-05): the PDF viewer panel. Its title bar is `_PanelBar` (`[◫]
-  [＋] [tabs] … [page n/m] [⧉] [✕]`), which IGNORES presses it does not
-  handle so Qt moves, docks and floats the dock from the empty bar
-  (`setTitleBarWidget`'s contract; the tab bar does not stretch over that
-  space). Allowed areas: left, right, bottom; floating is Qt's attached
-  tool window, above the host and hidden with it — the parentless
-  Mission-Control window, the six pane-anchored placements (K-169's note
-  anchor included) and the `startSystemMove` tear-off with its watchdog
-  and ghost were all deleted with the 2026-09-05 dock. `pdf_tabs.json`
-  keeps `placement` (`left`/`right`/`bottom`/`float`, old values migrated
-  once by `pdf_handler.migrate_placement`) and `geom`; applied on the
-  first `panel_show`, never from Anki's saved `QMainWindow` state.
-  `setDockNestingEnabled(True)` on the host lets it sit beside Anki's
-  Browse sidebar dock. Host close still runs `PdfSidebar.cleanup()`
-  before the window's C++ objects die. Anki's three editor windows —
-  Browse, Add Cards and Edit Current — are all `QMainWindow`s and all
-  get the dock; only an editor whose window is not a `QMainWindow` (a
-  third-party add-on's) gets none — `hasattr(parent_window,
-  'addDockWidget')` declines it with one log line — and the bar's ＋
-  button only started working with the dock: `@_guarded` zero-argument
+  mutating) and `settings.user_files_dir = <scratch>`; the ONE PDF reader
+  (`reader_panel.PdfSidebar`, `host_key="editor"`, the `ReaderTabs` strip
+  above its page) is owned by `reader_host.py` since the Add tab
+  (2026-10-01, spec `docs/superpowers/specs/2026-10-01-add-tab-design.md`):
+  its permanent parent is the Add tab's reader slot (`set_home`), Browse's
+  viewer mode borrows it (`library_viewer.enter` → `lend(box)`, `leave` →
+  `give_back()`), `release()` is cleanup + forget and a cleaned reader is
+  never reused (the peer's lifecycle rule: `PdfJsViewer.cleanup` drops its
+  webview for good). It is NEVER re-parented across top-level windows — a
+  lend into another window releases and rebuilds there; in fallback mode
+  (stock Browse) it is built under Browse and released when that Browse
+  closes. The dock (`PdfDock`, `_PanelBar`, left/right/bottom/float
+  placement in `pdf_tabs.json`, migrated by `migrate_placement`), the
+  editor-toolbar Library… button (`copilot.js` + the `library` pycmd) and
+  the status-bar / bottom-row "Right Sidebar" dock toggles were deleted
+  with it; `_load_tabs_file` drops `placement`/`geom` from older files.
+  The reader strip's ＋ button: `@_guarded` zero-argument
   slots connected to `clicked` had been swallowing PyQt's `checked`
   argument as a TypeError since the panel was built (both slots now
   take `*_args`); image-crop plumbing;
@@ -389,6 +384,52 @@ same reason.
   window (`main_window_did_init`, which fires after all add-ons load) and
   Browse (`browser_will_show`). A menu-bar `ActionAdded` watcher re-runs
   it a tick later for menus added afterwards (AnkiHub's). Hidden when empty.
+- `single_window.py` + `host_keys.py` (spec
+  [single-window](docs/superpowers/specs/2026-09-30-single-window-design.md),
+  config `single_window`, default on): the main window is the only daily
+  window. Decks (Anki's whole main screen, unchanged), Add and Browse are
+  pages of a `QStackedWidget` under Anki's toolbar, whose three links are
+  the tabs (`klaus-active` class). The Add page (`build_add_page`,
+  `AddPage`) is a splitter of `library_tree.LibraryTree` | the reader
+  slot (`reader_host`'s home) | the editor slot Anki's Add is built into,
+  with Klaus's status bar (◧ tree, ◨ editor; `status_bar.install_add_tab`)
+  under it; `a` and the Add link switch to it (`open_add` asks Anki for an
+  instance when none is live), Close and Escape go back to
+  `Host.previous`, the splitter persists under `klausmate_add_tab`
+  (`saveSplitter`), and a click on a PDF row loads it into the reader.
+  Edit Current keeps its right dock (the one dock left; it still runs the
+  full window height beside the stack — open bug). The Add tab is
+  keyboard-scoped exactly like Browse (state keys suspended, bare host
+  keys parked, `focus_in_editor` lets typing through in the editor slot
+  and the Edit dock). **Anki's windows are never moved** (see the
+  Deleted paragraph): each is BUILT as a child of its container from its
+  first line — `register` replaces the creators of every hosted name in
+  `aqt.dialogs._dialogs` (26.09 has five: Browser, AddCards, NewAddCards,
+  EditCurrent, NewEditCurrent) with `_construct`, which puts `_Shim`
+  after the class in a subclass's method resolution order (`super().
+  __init__(None, Window)` lands in the shim) AND swaps the class's
+  module-level `QMainWindow` name for the one constructor call (Browse
+  calls `QMainWindow.__init__(self, …)` explicitly); whichever the source
+  uses runs once, the other is inert. `build_host` moves whatever the
+  central layout holds (AMBOSS and AnkiHub wrap `mw.web` in a splitter
+  and find it through `mw.mainLayout`, which now IS the Decks page's
+  layout) and never detaches a layout. Browse's menus swap into the host
+  bar while its tab is active (`menus_in/out`, exempt from
+  `addons_menu`'s watcher via `_klausmate_keep_on_bar`; its Add-ons menu
+  reads "Browse Add-ons" there), which is also what scopes their
+  shortcuts. `host_keys`: the state shortcuts (review keys) are recorded
+  from `state_shortcuts_will_change` and DISABLED (never cleared and
+  re-set) while the Add or Browse tab shows; an app-level `ShortcutOverride`
+  filter lets those keys type into the hosted editors (the Add editor
+  slot and the Edit dock). Escape does nothing in the Browse tab; Add's
+  Close and Escape go back to the previous tab (a close filter;
+  Anki's own teardown, `_close_event_has_cleaned_up`, passes); Edit
+  Current's dock is reaped once the registry shows it closed. Startup:
+  Decks, dock closed (`mw.saveState` under `klausmate_host_state`).
+  Fallback: any preflight or shim failure restores Anki's creators for
+  the session, with a toolbar tooltip and a sticky error task; `false`
+  in config is stock Anki. Live-verified 2026-09-30 on 26.09.2 with
+  AMBOSS + AnkiHub active: both editors render.
 - `browse_highlight.py` (aqt-free at module top): Browse search-term
   highlighting (K-113), adapted from Glutanimate's
   highlight-search-results (AGPLv3 — its header must stay intact;
@@ -576,8 +617,9 @@ same reason.
   button — Cmd/Ctrl-double-click a page, or right-click "Copy slide as
   image", copies it as an image; right-click also offers "Copy page text".
 - `pdf_handler.py`: storage + text extraction. `user_files/{contexts,pdfs,
-  pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs, placement,
-  thumbs, last_used — all writers MERGE via `_save_tabs_file`). Since K-070/
+  pdf_originals,annotations}`, state in `pdf_tabs.json` (open tabs per host,
+  thumbs, last_used — all writers MERGE via `_save_tabs_file`; `placement`/
+  `geom` from older builds are dropped on read). Since K-070/
   K-073 the PDF *files* live in a user-chosen **library root** (config key
   `library_root`, picked at setup or in Preferences): `library_map.json`
   maps safe basename → path relative to that root, and **`pdf_path_for` is
@@ -1314,16 +1356,19 @@ same reason.
     Keep these retained modules; do not restore assistant session storage.
 - Deleted (2026-08, 2026-09-02 — do not resurrect the language): `claude_api.py`,
   `settings_ui.py`, `chat_dock.py` (the "Klaus panel"),
-  `web/search.html|css|js`; also `single_window.py` (2026-08-25 — the
-  panes-in-one-window mode from K-059..K-062 was removed as too buggy:
-  dark webview panes survived five rework rounds, K-090..K-094. Anki is
-  stock multi-window again; `_migrate_config` scrubs the
-  `single_window_mode` key). **Embedding Anki's windows stays deleted.**
+  `web/search.html|css|js`. The first `single_window.py` (2026-08-25, the
+  panes-in-one-window mode from K-059..K-062) was removed as too buggy:
+  dark webview panes survived five rework rounds, K-090..K-094;
+  `settings._scrub_legacy` still scrubs its `single_window_mode` key. It is
+  BACK since 2026-09-30 (Pouya's call) with a different mechanism — see
+  the `single_window.py` bullet. **What stays banned is re-parenting a
+  window Anki built as a top-level**: a QtWebEngine view presents through
+  the window it was born under, so a moved editor is a black pane.
   `workspace.py` (K-102, the sidebar-shell follow-up) lasted one day —
   deleted 2026-08-25 as the wrong shape; the unified-UI ask is served
-  by `top_bar.py`'s toolbar restyle instead (`_migrate_config` scrubs
-  `workspace_enabled`). Config lives in `klausmate/config.json` +
-  Anki's addon config (`meta.json`) + `config.md`. `_migrate_config()`
+  by `top_bar.py`'s toolbar restyle instead (`settings._scrub_legacy`
+  scrubs `workspace_enabled`). Config lives in `klausmate/config.json` +
+  Anki's addon config (`meta.json`) + `config.md`. `settings.migrate()`
   (profile_did_open) cleans up legacy `chat_*`/`claude_*` keys left from the
   deleted Claude-Ask feature; keep it until users have upgraded past it.
   Deleted again, 2026-09-02, for the same "converged, then reversed"
