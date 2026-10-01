@@ -1156,7 +1156,7 @@ def toolbar_css() -> str:
     ``night_mode()`` snapshot therefore goes stale the first time the
     user toggles the theme. So both palettes ship in one sheet, keyed
     on those classes — the same pattern Anki's own toolbar.css uses —
-    and the bar (logo included, it strokes ``var(--klaus-accent)``)
+    and the bar (logo included, it fills ``var(--klaus-text)``)
     follows the theme instantly with no re-injection.
     """
     return f"""

@@ -15,13 +15,13 @@ section("logo")
 html = top_bar.logo_html()
 check("inline svg", "<svg" in html and "</svg>" in html)
 # 2026-10-01: the mark is Pouya's hand-drawn k — ONE evenodd path of
-# M/L/Z subpaths, filled in the accent, in a viewBox cropped to the k.
+# M/L/Z subpaths, filled in the text colour, in a viewBox cropped to the k.
 check("the hand-drawn k is ONE filled evenodd path in its cropped box",
       f'viewBox="{top_bar.LOGO_VIEWBOX}"' in html
       and top_bar.LOGO_VIEWBOX == "126 163 1010 918"
       and html.count("<path") == 1
       and 'fill-rule="evenodd"' in html
-      and html.count('fill="var(--klaus-accent, currentColor)"') == 1)
+      and html.count('fill="var(--klaus-text, currentColor)"') == 1)
 check("nothing is stroked — a filled mark, never an outlined one",
       "stroke" not in html and 'fill="none"' not in html)
 check("the path in the svg is _LOGO_PATH, verbatim",
@@ -32,7 +32,7 @@ check("colour comes from the CSS var with a currentColor fallback — "
       "the var only exists while the design layer injects toolbar_css; "
       "on a stock toolbar the k must inherit Anki's own link colour "
       "rather than vanish (an unresolvable var() makes the fill invalid)",
-      "var(--klaus-accent, currentColor)" in html
+      "var(--klaus-text, currentColor)" in html
       and "#" not in html.split("href=#")[1])
 check("clicking the k opens Klaus's own settings",
       "pycmd('klausmate:settings')" in html)
@@ -119,8 +119,8 @@ import re
 check("rule bodies contain NO baked hex colours",
       re.search(r"#[0-9A-Fa-f]{6}", rules) is None)
 check("rule bodies reference the klaus vars", "var(--klaus-" in rules)
-check("the logo strokes a var, so it recolours too",
-      "var(--klaus-accent," in top_bar.logo_html())
+check("the logo fills a var, so it recolours too",
+      "var(--klaus-text," in top_bar.logo_html())
 check("top_bar injects without a snapshot",
       "toolbar_css()" in open("klausmate/top_bar.py").read())
 

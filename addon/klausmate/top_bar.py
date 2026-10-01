@@ -33,7 +33,7 @@ from . import settings
 # subpaths, verbatim from the white shape in the brand source of record,
 # docs/reference/brand/klaus-logo.svg; tests/test_top_bar.py pins the
 # two equal so they cannot drift. The file's blue tile is the APP ICON
-# only: inside Klaus the mark is the bare k in the accent colour.
+# only: inside Klaus the mark is the bare k in the text colour.
 # Two subpaths (the left dash and the k's body), filled evenodd exactly
 # as the file declares it; a traced outline is only guaranteed to read
 # as drawn under the rule it was exported with.
@@ -53,7 +53,7 @@ LOGO_VIEWBOX = "126 163 1010 918"
 def logo_svg(fill: str) -> str:
     """The k as a standalone SVG, filled with ``fill`` (a CSS colour or
     ``var()``). Colour never lives here: the web side passes
-    ``--klaus-accent``, the Qt side theme.palette()'s accent token."""
+    ``--klaus-text``, the Qt side theme.palette()'s text token."""
     return (
         f'<svg width="26" height="26" viewBox="{LOGO_VIEWBOX}" '
         'style="display: block" xmlns="http://www.w3.org/2000/svg">'
@@ -79,8 +79,9 @@ def logo_html() -> str:
     # the text links there, and is simply ignored once it IS a flex
     # item. display:block on the svg drops the inline descender gap.
     #
-    # currentColor fallback: --klaus-accent only exists while the
-    # design layer injects toolbar_css. On a stock toolbar the k
+    # The k is in the text colour, matching the bar's labels and the
+    # Preferences wordmark (Pouya, 2026-10-01). currentColor fallback:
+    # --klaus-text only exists while the design layer injects toolbar_css. On a stock toolbar the k
     # fills in the link's own computed colour — Anki's native
     # foreground — rather than vanishing, since an unresolvable var()
     # makes the fill invalid.
@@ -94,7 +95,7 @@ def logo_html() -> str:
         f'<a id="klaus-logo" style="{seat}" '
         'href=# onclick="return pycmd(\'klausmate:settings\')" '
         'title="Klaus settings" aria-label="Klaus settings">'
-        + logo_svg("var(--klaus-accent, currentColor)") + "</a>"
+        + logo_svg("var(--klaus-text, currentColor)") + "</a>"
     )
 
 
