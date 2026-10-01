@@ -413,8 +413,10 @@ const state = {
   observer: null,
   thumbObserver: null,
   currentPage: 0,
-  b64parts: [],
   t0: null,              // performance.now() at load start; first-page timing
+  gen: 0,                // load generation, from Python's klausPdfOpen
+  transport: null,       // KlausRange feeding the open document
+  task: null,            // its getDocument loading task
   annots: [],            // canonical records, pushed from Python
   pageTexts: null,       // [{str, items:[{start,len}]}] lazily built for find
   find: { query: "", matches: [], index: -1 },
@@ -458,15 +460,69 @@ function postB64(action, obj) {
 }
 
 /* ==== feed ========================================================= */
-window.klausPdfChunk = function (part) { state.b64parts.push(part); };
-window.klausPdfLoad = function () {
-  state.t0 = performance.now();
-  const b64 = state.b64parts.join("");
-  state.b64parts = [];
+/* PDF reader 2/5: Python sends the length and the first 256 KB; pdf.js
+   asks for every further byte range over the bridge. One bridge call
+   carries at most MAX_RANGE (pdf_source.MAX_RANGE), but pdf.js groups
+   contiguous missing chunks into one request and accepts exactly ONE
+   onDataRange per requested begin, so a request is fetched in slices
+   and delivered whole. */
+const MAX_RANGE = 1048576;
+
+function b64Bytes(b64) {
   const raw = atob(b64);
-  const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-  openDocument(bytes);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function askRange(gen, begin, end) {
+  return new Promise((resolve, reject) => {
+    try {
+      pycmd("klausmate_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve);
+    } catch (e) { reject(e); }
+  });
+}
+
+class KlausRange extends pdfjsLib.PDFDataRangeTransport {
+  constructor(gen, length, first) {
+    super(length, first);
+    this.gen = gen;
+    this.aborted = false;
+  }
+  async requestDataRange(begin, end) {
+    const parts = [];
+    let pos = begin;
+    try {
+      while (pos < end) {
+        const r = await askRange(this.gen, pos, Math.min(end, pos + MAX_RANGE));
+        if (this.aborted) return;
+        if (r && r.stale) {
+          this.abort();
+          post("stale:" + this.gen);
+          return;
+        }
+        if (!r || typeof r.b64 !== "string") return;   // refused: a newer load owns the bridge
+        const bytes = b64Bytes(r.b64);
+        if (!bytes.length) break;                       // past EOF: never spin
+        parts.push(bytes);
+        pos += bytes.length;
+      }
+    } catch (e) {
+      post("log:range " + begin + "-" + end + " failed: " + e.message);
+      return;
+    }
+    const chunk = new Uint8Array(pos - begin);
+    let off = 0;
+    for (const p of parts) { chunk.set(p, off); off += p.length; }
+    this.onDataRange(begin, chunk);
+  }
+  abort() { this.aborted = true; }
+}
+
+window.klausPdfOpen = function (gen, length, firstB64, _name) {
+  state.t0 = performance.now();
+  state.gen = gen;
+  openDocument(gen, length, b64Bytes(firstB64));
 };
 window.klausPdfError = function (text) {
   const el = document.getElementById("error");
@@ -474,15 +530,29 @@ window.klausPdfError = function (text) {
   el.style.display = "block";
 };
 
-async function openDocument(bytes) {
-  teardown();
+async function openDocument(gen, length, first) {
+  await teardown();
+  if (gen !== state.gen) return;            // a newer klausPdfOpen owns the page
+  const transport = new KlausRange(gen, length, first);
+  const task = pdfjsLib.getDocument({
+    range: transport,
+    disableAutoFetch: true,
+    disableStream: true,
+    rangeChunkSize: 262144,
+  });
+  state.transport = transport;
+  state.task = task;
+  let doc;
   try {
-    state.doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+    doc = await task.promise;
   } catch (e) {
+    if (gen !== state.gen) return;          // destroyed by a newer open
     window.klausPdfError("Could not open this PDF: " + e.message);
     post("log:open failed: " + e.message);
     return;
   }
+  if (gen !== state.gen) return;
+  state.doc = doc;
   post("count:" + state.doc.numPages);
   await buildPlaceholders();
   buildThumbs();
@@ -620,7 +690,10 @@ function teardownPage(num, div) {
   state.rendered.delete(num);
 }
 
-function teardown() {
+async function teardown() {
+  const transport = state.transport, task = state.task;
+  state.transport = null;
+  state.task = null;
   if (state.observer) state.observer.disconnect();
   state.rendered.clear();
   state.pageDivs = [];
@@ -635,6 +708,10 @@ function teardown() {
   document.getElementById("error").style.display = "none";
   state.doc = null;
   state.currentPage = 0;
+  if (transport) transport.abort();
+  /* The loading task, not the doc: doc.destroy() is task.destroy(), and
+     the task also exists while getDocument is still pending. */
+  if (task) { try { await task.destroy(); } catch (e) {} }
 }
 
 function trackCurrentPage() {

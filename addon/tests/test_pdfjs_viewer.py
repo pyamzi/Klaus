@@ -24,21 +24,9 @@ check("unknown value degrades to native",
       pv.renderer_from_config({"pdf_renderer": "webgl"}) == "native")
 check("non-dict degrades to native", pv.renderer_from_config(None) == "native")
 
-section("base64 chunking")
-data = os.urandom(100_000)
-parts = pv.chunk_b64(data, chunk_chars=7_000)
-check("chunks are bounded", all(len(p) <= 7_000 for p in parts))
-check("multiple chunks for data beyond one chunk", len(parts) > 1)
-check("reassembled chunks round-trip the bytes",
-      base64.b64decode("".join(parts)) == data)
-check("small payload -> single chunk", len(pv.chunk_b64(b"x" * 10)) == 1)
-check("empty payload -> no chunks", pv.chunk_b64(b"") == [])
-try:
-    pv.chunk_b64(b"x", chunk_chars=0)
-    bad_chunk_raised = False
-except ValueError:
-    bad_chunk_raised = True
-check("chunk_chars=0 raises", bad_chunk_raised)
+section("PDF reader 2/5: the whole-file feed is gone")
+check("chunk_b64 is gone", not hasattr(pv, "chunk_b64"))
+check("CHUNK_CHARS is gone", not hasattr(pv, "CHUNK_CHARS"))
 
 section("page HTML build")
 html = pv.build_page_html("klausmate", night=False)
@@ -67,7 +55,7 @@ check("template spells __ADDON__ only at its two real sites",
       _TPL.count("__ADDON__") == 2)
 check("so the rendered page carries the palette exactly once",
       html.count("--bg: ") == 1 and dark.count("--bg: ") == 1)
-for fn in ("klausPdfChunk", "klausPdfLoad", "klausPdfError",
+for fn in ("klausPdfOpen", "klausPdfError",
            "klausGoToPage", "klausSetZoom", "klausSetAnnotations",
            "klausToggleThumbs", "klausScrollTo", "klausZoomReset"):
     check(f"JS API {fn} present", fn in html)
@@ -127,6 +115,219 @@ with _ctxl.redirect_stdout(_fp_out):
 check("Python prints the timing line",
       _fp_out.getvalue().strip()
       == "[klausmate] pdfjs first page lecture.pdf 412 ms")
+
+section("PDF reader 2/5: piece loader (pdf.js asks Python for byte ranges)")
+import builtins as _bi
+import tempfile as _tf
+
+_ps = importlib.import_module("klausmate.pdf_source")
+_ph = importlib.import_module("klausmate.pdf_handler")
+_tmp8 = _tf.mkdtemp()
+_pdf8 = os.path.join(_tmp8, "lecture.pdf")
+_w8 = _ph.pypdf.PdfWriter()
+_w8.add_blank_page(width=200, height=200)
+with open(_pdf8, "wb") as _f8:
+    _w8.write(_f8)
+    _f8.write(b"\n%" + b"k" * 400_000 + b"\n")   # comment padding past 256 KB
+_data8 = open(_pdf8, "rb").read()
+check("fixture is a real PDF larger than the first chunk",
+      _data8.startswith(b"%PDF") and len(_data8) > _ps.FIRST_CHUNK)
+
+check("parse_bridge routes range",
+      pv.parse_bridge("klausmate_pdfjs:range:3:0:262144") == ("range", "3:0:262144"))
+check("the viewer has a range handler", hasattr(pv.PdfJsViewer, "_bridge_range"))
+
+_src8 = _ps.DocSource(_pdf8)
+_r8 = pv.handle_range("1:0:262144", _src8, 1)
+check("handle_range returns base64 of the first 256 KB",
+      _b64.b64decode(_r8["b64"]) == _data8[:262144])
+_r8 = pv.handle_range("1:1000:5000", _src8, 1)
+check("...and of a range in the middle",
+      _b64.b64decode(_r8["b64"]) == _data8[1000:5000])
+check("an old generation is refused",
+      pv.handle_range("0:0:10", _src8, 1) == {"refused": True})
+for _bad in ("", "1", "1:0", "1:0:10:5", "1:-1:10", "1:0:-10", "1:0.5:10",
+             "1:x:10", "True:0:10", "1:0:1e3", " 1:0:10", "1:²:10",
+             "1::10", None, 7):
+    check("malformed payload %r is refused" % (_bad,),
+          pv.handle_range(_bad, _src8, 1) == {"refused": True})
+check("no source (load failed) answers stale",
+      pv.handle_range("1:0:10", None, 1) == {"stale": True})
+_new8 = os.path.join(_tmp8, "new.pdf")
+with open(_new8, "wb") as _f8:
+    _f8.write(_data8 + b"%changed\n")
+os.replace(_new8, _pdf8)
+check("after the file is replaced the reply is stale",
+      pv.handle_range("1:0:10", _src8, 1) == {"stale": True})
+_data8 = open(_pdf8, "rb").read()
+
+
+class _CountingFile:
+    def __init__(self, f, box):
+        self._f, self._box = f, box
+
+    def read(self, n=-1):
+        out = self._f.read(n)
+        self._box[0] += len(out)
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self._f.close()
+
+
+_real_open8 = _bi.open
+
+
+def _counting(box):
+    def _open(*a, **k):
+        return _CountingFile(_real_open8(*a, **k), box)
+    return _open
+
+
+_box8 = [0]
+_bi.open = _counting(_box8)
+try:
+    _len8, _first8 = pv.first_chunk(_pdf8)
+finally:
+    _bi.open = _real_open8
+check("first_chunk returns the true file length", _len8 == len(_data8))
+check("first_chunk returns base64 of the first 256 KB",
+      _b64.b64decode(_first8) == _data8[:_ps.FIRST_CHUNK])
+check("first_chunk reads no more than FIRST_CHUNK bytes",
+      0 < _box8[0] <= _ps.FIRST_CHUNK)
+
+
+class _FakeWeb8:
+    def __init__(self):
+        self.js = []
+
+    def eval(self, js):
+        self.js.append(js)
+
+    def setZoomFactor(self, _z):
+        pass
+
+
+def _viewer8():
+    v = pv.PdfJsViewer.__new__(pv.PdfJsViewer)   # no Qt construction
+    v._web = _FakeWeb8()
+    v._page_loaded = True
+    v._gen = 0
+    v._source = None
+    v._path = None
+    v._name = None
+    v._scroll_pos = 0
+    return v
+
+
+_v8 = _viewer8()
+_box8 = [0]
+_bi.open = _counting(_box8)
+try:
+    _v8.load_path(_pdf8, "lecture.pdf")
+finally:
+    _bi.open = _real_open8
+check("load_path reads only the first chunk on the main thread",
+      0 < _box8[0] <= _ps.FIRST_CHUNK)
+_open8 = [j for j in _v8._web.js if "klausPdfOpen(" in j]
+check("load_path calls klausPdfOpen(gen, length, firstB64, name) once",
+      _open8 == ["window.klausPdfOpen && window.klausPdfOpen(1, %d, %s, "
+                 "\"lecture.pdf\");" % (len(_data8), '"' + _first8 + '"')])
+check("no whole-file feed is sent", not any("klausPdfChunk" in j
+                                            for j in _v8._web.js))
+check("load_path bumps the generation and holds a DocSource",
+      _v8._gen == 1 and _v8._source is not None
+      and _v8._source.length == len(_data8))
+_rep8 = _v8._on_bridge("klausmate_pdfjs:range:1:0:10")
+check("_on_bridge RETURNS the range reply (Anki hands it to the JS callback)",
+      isinstance(_rep8, dict) and _b64.b64decode(_rep8["b64"]) == _data8[:10])
+check("other bridge commands keep the old (True, None) reply",
+      _v8._on_bridge("klausmate_pdfjs:scroll:5") == (True, None)
+      and _v8._scroll_pos == 5)
+
+_v8._web.js.clear()
+_out8 = _io.StringIO()
+with _ctxl.redirect_stdout(_out8):
+    _v8.load_path(os.path.join(_tmp8, "missing.pdf"), "missing.pdf")
+check("a missing file at load does not raise and opens nothing",
+      not any("klausPdfOpen(" in j for j in _v8._web.js)
+      and "[klausmate] pdfjs read failed" in _out8.getvalue())
+check("...and the generation still moved on, so the old page's ranges "
+      "are refused", _v8._gen == 2
+      and _v8._on_bridge("klausmate_pdfjs:range:1:0:10") == {"refused": True})
+
+_v8._web.js.clear()
+_max8 = pv.MAX_PDF_MB
+pv.MAX_PDF_MB = 0
+try:
+    _v8.load_path(_pdf8, "lecture.pdf")
+finally:
+    pv.MAX_PDF_MB = _max8
+check("MAX_PDF_MB still applies before anything is opened",
+      not any("klausPdfOpen(" in j for j in _v8._web.js)
+      and any("too large" in j for j in _v8._web.js))
+
+# stale: the page aborts its transport and posts stale:<gen>
+_v8 = _viewer8()
+_v8.load_path(_pdf8, "lecture.pdf")
+_stale8 = []
+_v8.on_stale = lambda: _stale8.append(1)
+
+
+class _NowTimer:
+    @staticmethod
+    def singleShot(_ms, fn):
+        fn()
+
+
+_qt8 = pv.QTimer
+pv.QTimer = _NowTimer
+try:
+    _v8._on_bridge("klausmate_pdfjs:stale:0")
+    check("a stale report for an old generation is ignored", _stale8 == [])
+    _v8._on_bridge("klausmate_pdfjs:stale:1")
+    check("a stale report for the current generation calls on_stale",
+          _stale8 == [1])
+finally:
+    pv.QTimer = _qt8
+_v8._web.js.clear()
+pv.PdfJsViewer._reload_current(_v8)
+check("the default on_stale reloads the current document",
+      _v8._gen == 2 and any('klausPdfOpen(2, ' in j
+                            and '"lecture.pdf");' in j for j in _v8._web.js))
+
+_FEED8 = html.split("/* ==== feed", 1)[1].split("async function availWidth", 1)[0]
+check("the page builds a PDFDataRangeTransport",
+      "extends pdfjsLib.PDFDataRangeTransport" in _FEED8)
+check("getDocument is range-loaded with the agreed options",
+      "range: transport," in _FEED8
+      and "disableAutoFetch: true," in _FEED8
+      and "disableStream: true," in _FEED8
+      and "rangeChunkSize: 262144," in _FEED8
+      and "getDocument({ data" not in html)
+check("ranges are fetched over the bridge with a callback",
+      'pycmd("klausmate_pdfjs:range:" + gen + ":" + begin + ":" + end, resolve)'
+      in _FEED8)
+check("a stale reply aborts the transport and posts stale:<gen>",
+      'this.abort();' in _FEED8 and 'post("stale:" + this.gen);' in _FEED8)
+check("one onDataRange per request, at the begin pdf.js asked for",
+      _FEED8.count("this.onDataRange(") == 1
+      and "this.onDataRange(begin, chunk);" in _FEED8)
+_TD8 = html.split("function teardown() {", 1)[1].split("\n}\n", 1)[0]
+check("teardown aborts the transport and destroys the document",
+      "transport.abort();" in _TD8 and "await task.destroy();" in _TD8)
+check("the whole-file feed is gone from the page",
+      "b64parts" not in html and "klausPdfChunk" not in html
+      and "klausPdfLoad" not in html)
+check("first-page timing is measured from klausPdfOpen",
+      "window.klausPdfOpen = function (gen, length, firstB64, _name) {\n"
+      "  state.t0 = performance.now();" in html)
 
 section("live selection reported over the bridge (K-196 task 10)")
 _sel_payload = _b64.b64encode(b'{"text": "abc"}').decode()
@@ -1720,7 +1921,7 @@ assert pv.PdfJsViewer.__bases__ == (object,), pv.PdfJsViewer.__bases__
 
 # The six aqt-free helpers the card names, each actually exercised.
 assert pv.renderer_from_config({"pdf_renderer": "pdfjs"}) == "pdfjs"
-assert pv.chunk_b64(b"klaus") == ["a2xhdXM="]
+assert pv.handle_range("1:0", None, 1) == {"refused": True}
 assert "__ADDON__" not in pv.build_page_html("klausmate", night=False)
 assert pv.parse_bridge("klausmate_pdfjs:hl-add:a:b") == ("hl-add", "a:b")
 assert pv.decode_b64_json("eyJhIjogMX0=") == {"a": 1}

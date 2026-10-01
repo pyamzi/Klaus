@@ -22,10 +22,11 @@ viewer's (0-based ``page``, ``rects`` in top-left-origin page points), so
 the bake pipeline and K-081 external-delete tombstones are shared, not
 forked.
 
-Feed pattern (SynapsePro's): read the file in Python, base64, push into
-window globals in chunks, then trigger the load. Pure helpers
-(:func:`renderer_from_config`, :func:`chunk_b64`, :func:`build_page_html`,
-:func:`parse_bridge`, :func:`decode_b64_json`,
+Feed (PDF reader 2/5): Python hands the page the file length and the
+first ``pdf_source.FIRST_CHUNK`` bytes; pdf.js asks for further byte
+ranges over the bridge (``range``) as it needs them. Pure helpers
+(:func:`renderer_from_config`, :func:`first_chunk`, :func:`handle_range`,
+:func:`build_page_html`, :func:`parse_bridge`, :func:`decode_b64_json`,
 :func:`records_from_rect_map`) stay aqt-free for the headless tests.
 """
 
@@ -71,7 +72,7 @@ except Exception:  # pragma: no cover — only in stripped test stubs
 # ``class PdfJsViewer(None)`` is a hard TypeError AT IMPORT TIME —
 # "NoneType takes no arguments" — so a partial Qt surface would not cost
 # the viewer, it would cost the WHOLE MODULE: every aqt-free helper below
-# (renderer_from_config, chunk_b64, build_page_html, parse_bridge,
+# (renderer_from_config, handle_range, build_page_html, parse_bridge,
 # decode_b64_json, records_from_rect_map) and PDFJS_AVAILABLE itself,
 # which never got to be False because the module never finished importing
 # to set it. The handler above says "only in stripped test stubs", which
@@ -87,12 +88,7 @@ except Exception:  # pragma: no cover — only in stripped test stubs
 _WidgetBase: Any = QWidget if QWidget is not None else object
 
 
-# ~6 MB of base64 per eval call: large enough that a lecture PDF loads in
-# a handful of calls, small enough that no single eval string is huge.
-CHUNK_CHARS = 6 * 1024 * 1024
-
-# Refuse beyond this — base64 inflates 4/3 and the whole document lives
-# in webview memory.
+# Refuse beyond this — pdf.js keeps every fetched range in webview memory.
 MAX_PDF_MB = 200
 
 _BRIDGE_PREFIX = "klausmate_pdfjs:"
@@ -137,12 +133,35 @@ def renderer_from_config(cfg: Any) -> str:
     return "pdfjs" if val == "pdfjs" else "native"
 
 
-def chunk_b64(data: bytes, chunk_chars: int = CHUNK_CHARS) -> list[str]:
-    """Base64-encode *data* and split into eval-sized string chunks."""
-    if chunk_chars <= 0:
-        raise ValueError("chunk_chars must be positive")
-    b64 = base64.b64encode(data).decode("ascii")
-    return [b64[i : i + chunk_chars] for i in range(0, len(b64), chunk_chars)]
+def first_chunk(path: str) -> tuple[int, str]:
+    """File length and base64 of its first ``FIRST_CHUNK`` bytes — all
+    the main thread reads at load; pdf.js asks for the rest by range."""
+    from .pdf_source import FIRST_CHUNK
+
+    with open(path, "rb") as f:
+        length = os.fstat(f.fileno()).st_size
+        head = f.read(FIRST_CHUNK)
+    return length, base64.b64encode(head).decode("ascii")
+
+
+def handle_range(payload: Any, source: Any, current_gen: int) -> dict:
+    """Answer a ``range:<gen>:<begin>:<end>`` bridge payload.
+
+    JS is never trusted: anything but three plain non-negative decimal
+    ints is ``{"refused": True}``. Never raises."""
+    if not isinstance(payload, str):
+        return {"refused": True}
+    try:
+        parts = payload.split(":")
+        if len(parts) != 3 or not all(p.isascii() and p.isdigit() for p in parts):
+            return {"refused": True}
+        gen, begin, end = (int(p) for p in parts)
+        from .pdf_source import range_reply
+
+        return range_reply(source, gen, current_gen, begin, end)
+    except Exception as exc:
+        print(f"[klausmate] pdfjs range failed: {exc}")
+        return {"refused": True}
 
 
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
@@ -874,6 +893,14 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         super().__init__(parent)
         self._on_page_changed = on_page_changed
         self._name: str | None = None
+        # Piece loader (PDF reader 2/5): each load_path is a new
+        # generation; range requests from an older page are refused.
+        self._path: str | None = None
+        self._gen = 0
+        self._source: Any = None  # pdf_source.DocSource of the open file
+        # Called when the page reports the open file changed under it.
+        # A later task repoints this at doc_sync.
+        self.on_stale: Callable[[], None] = self._reload_current
         self._annotations_name: str | None = None
         self._highlights: list[dict] = []
         self._page_count = 0
@@ -1011,7 +1038,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         try:
             handler = getattr(self, f"_bridge_{action.replace('-', '_')}", None)
             if handler is not None:
-                handler(payload)
+                result = handler(payload)
+                if result is not None:
+                    return result  # Anki JSON-encodes it to the pycmd callback
             # "boot" needs no action.
         except Exception as exc:
             print(f"[klausmate] pdfjs bridge {action} error: {exc}")
@@ -1046,6 +1075,20 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._push_annotations()
         if self._scroll_pos:
             self._eval(f"window.klausScrollTo && window.klausScrollTo({int(self._scroll_pos)});")
+
+    def _bridge_range(self, payload: str) -> dict:
+        return handle_range(payload, self._source, self._gen)
+
+    def _bridge_stale(self, payload: str) -> None:
+        if payload != str(self._gen):
+            return
+        gen = self._gen
+        # Deferred: a reload evals into the page this bridge call came from.
+        QTimer.singleShot(0, lambda: gen == self._gen and self.on_stale())
+
+    def _reload_current(self) -> None:
+        if self._path is not None and self._name is not None:
+            self.load_path(self._path, self._name)
 
     def _bridge_firstpage(self, payload: str) -> None:
         print(f"[klausmate] pdfjs first page {self._name} {int(payload)} ms")
@@ -1469,7 +1512,8 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         self._claim_shortcuts()
 
     def load_path(self, path: str, name: str) -> None:
-        """Read the stored PDF and feed it to pdf.js (chunked base64)."""
+        """Open the stored PDF in pdf.js by byte range: only its length and
+        first chunk are read here; the page asks for the rest."""
         if self._web is None:
             return
         self._ensure_page()
@@ -1479,9 +1523,15 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         except Exception:
             pass
         self._name = name
+        self._path = path
         self._scroll_pos = 0
+        self._gen += 1
+        self._source = None
         try:
-            size_mb = os.path.getsize(path) / (1024 * 1024)
+            from .pdf_source import DocSource
+
+            source = DocSource(path)
+            size_mb = source.length / (1024 * 1024)
             if size_mb > MAX_PDF_MB:
                 self._eval(
                     "window.klausPdfError && window.klausPdfError("
@@ -1492,18 +1542,13 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                     + ");"
                 )
                 return
-            with open(path, "rb") as f:
-                data = f.read()
+            length, first_b64 = first_chunk(path)
         except Exception as exc:
             print(f"[klausmate] pdfjs read failed: {exc}")
             return
-        for part in chunk_b64(data):
-            self._web.eval(
-                "window.klausPdfChunk && window.klausPdfChunk("
-                + json.dumps(part)
-                + ");"
-            )
-        self._web.eval("window.klausPdfLoad && window.klausPdfLoad();")
+        self._source = source
+        args = ", ".join(json.dumps(v) for v in (self._gen, length, first_b64, name))
+        self._web.eval(f"window.klausPdfOpen && window.klausPdfOpen({args});")
 
     # ---- PdfViewer-surface parity ---------------------------------------
 
