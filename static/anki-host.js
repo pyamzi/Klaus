@@ -32,7 +32,23 @@
     };
     // Everything else (focus:N, blur:N, key:N, saved, editorState:…) is a
     // notification Klaus doesn't need yet.
+    // Embedded (the browser's side editor): the page hosting the editor plays Qt's
+    // part, so it hears every command (editorReady, key:N, saved, preview).
+    const embedded = window.parent !== window;
+    // Anki's browser redraws a row when the editor's save op completes
+    // (operation_did_execute); tell the host page when updateNotes returns.
+    if (embedded) {
+        const fetch = globalThis.fetch;
+        globalThis.fetch = async (input, init) => {
+            const response = await fetch(input, init);
+            if (String(input).endsWith("/_anki/updateNotes") && response.ok) {
+                parent.postMessage({ klausEditor: "noteUpdated" }, location.origin);
+            }
+            return response;
+        };
+    }
     globalThis.bridgeCommand = globalThis.pycmd = (cmd, callback) => {
+        if (embedded) parent.postMessage({ klausEditor: cmd }, location.origin);
         handlers[cmd]?.();
         callback?.(null);
         return false;
