@@ -62,8 +62,17 @@
     name = deck ? fullName(deck) : "";
     nameOpen = true;
   }
+  // Undo reverts the collection's latest operation, so only the newest delete's
+  // toast may offer it: any later change (another delete, a rename…) retires it.
+  let undoToast: string | number | undefined;
+  function retireUndo() {
+    if (undoToast !== undefined) toast.dismiss(undoToast);
+    undoToast = undefined;
+  }
+
   async function saveName(event: SubmitEvent) {
     event.preventDefault();
+    retireUndo();
     const trimmed = name.trim();
     if (!trimmed) return;
     try {
@@ -135,6 +144,7 @@
   }
   async function saveFiltered(event: SubmitEvent) {
     event.preventDefault();
+    retireUndo();
     const deck = filtered!;
     deck.config!.searchTerms = (second ? terms : terms.slice(0, 1)).map((t) => new Deck_Filtered_SearchTerm(t));
     deck.config!.reschedule = reschedule;
@@ -149,6 +159,7 @@
   }
 
   async function onaction(action: DeckAction, deck: DeckTreeNode) {
+    if (action !== "rename" && action !== "filteredOptions") retireUndo();
     try {
       switch (action) {
         case "collapse":
@@ -171,8 +182,10 @@
         case "delete": {
           // As Anki: no confirmation, but an undo in the "N cards deleted" notice.
           const { count } = await removeDecks({ dids: [deck.deckId] });
-          toast(`Deleted ${deck.name} (${count} ${count === 1 ? "card" : "cards"})`, {
+          undoToast = toast(`Deleted ${deck.name} (${count} ${count === 1 ? "card" : "cards"})`, {
             action: { label: "Undo", onClick: undoDelete },
+            onDismiss: () => (undoToast = undefined),
+            onAutoClose: () => (undoToast = undefined),
           });
           break;
         }
@@ -184,6 +197,7 @@
   }
 
   async function undoDelete() {
+    undoToast = undefined;
     await undo({}).catch(() => {});
     await refresh();
   }
