@@ -1608,7 +1608,7 @@ def _load_annotation_doc(user_files_dir: str, name: str) -> dict:
 
 def save_annotations(
     user_files_dir: str, name: str, highlights: list[dict]
-) -> None:
+) -> bool:
     """Write highlights for ``name`` — SYNCHRONOUS by design (plan B).
 
     Saves are rare and tiny; a debounce would risk cross-tab loss when
@@ -1616,6 +1616,7 @@ def save_annotations(
     flush fires.
     Top-level keys other than ``highlights`` are preserved (K-081: the
     suppressed_external tombstones used to be dropped on every save).
+    True when the file was written.
     """
     path = annotations_path_for(user_files_dir, name)
     try:
@@ -1625,8 +1626,10 @@ def save_annotations(
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(doc, f)
+        return True
     except (OSError, TypeError, ValueError) as exc:
         print(f"[klausmate] failed to save annotations {path}: {exc}")
+        return False
 
 
 def load_suppressed(user_files_dir: str, name: str) -> list[dict]:
@@ -1934,6 +1937,16 @@ def bake_annotations(
         had_working = os.path.isfile(working)
         pristine = os.path.join(_originals_dir(user_files_dir), base + ".pdf")
         highlights = load_annotations(user_files_dir, name)
+
+        # An outside save doc_sync has not reported yet, or one that landed
+        # mid-bake (the _MovedIn pass): the working file is neither what
+        # Klaus last wrote nor what the rescan last read, so the pristine
+        # predates it and rebuilding from it would revert that save.
+        # Nothing recorded: trust the pristine.
+        recorded = load_library_stats(user_files_dir).get(base)
+        now = file_stat(working)
+        if recorded is not None and now is not None and recorded != _stat_entry(now):
+            _drop_stale_original(user_files_dir, base)
 
         if not os.path.isfile(pristine):
             if not highlights:

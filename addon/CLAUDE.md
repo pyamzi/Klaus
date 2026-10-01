@@ -611,7 +611,14 @@ same reason.
   than the file requests a bake. On `saved` and `records` every reader
   of that PDF re-reads the JSON and pushes it when it differs, so a
   second reader never writes back a stale list over the first one's
-  marks. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
+  marks; every mutating bridge handler also re-reads the JSON first
+  (`PdfJsViewer._sync_marks`), closing the window before `saved`
+  arrives. `save_annotations` returns whether the JSON was written: a
+  failed write keeps the marks in memory, requests no bake, and is
+  retried by the next save. A bake whose working file differs from the
+  stat recorded in `library_stats.json` (an outside save doc_sync has
+  not reported yet, or one landing mid-bake) drops the stale pristine
+  first. `forget(name)` (`pdf_drive.delete_pdf`, before the readers let
   go) drops a deleted PDF's pending save and failed flag.
 - `reader_tabs.py`: `ReaderTabs`, the reader's tab strip (`[＋] [tabs]
   … [page n/m]`), one per `PdfSidebar` (its `tabs` attribute). It only

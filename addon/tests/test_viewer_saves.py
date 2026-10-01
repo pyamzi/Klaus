@@ -109,7 +109,7 @@ class FakePipe:
 PIPE = FakePipe()
 asv.pipeline = lambda: PIPE
 saved_json = []
-ph.save_annotations = lambda ufd, name, hl: saved_json.append((name, list(hl)))
+ph.save_annotations = lambda ufd, name, hl: saved_json.append((name, list(hl))) or True  # written
 loaded = []
 ph.load_annotations = lambda ufd, name: loaded.append((ufd, name)) or [{"id": "r"}]
 
@@ -151,7 +151,7 @@ check("no document: no request", PIPE.requests == ["A"])
 section(f"{label}: pipeline events for its own document")
 tips = []
 pj.tooltip = lambda text, *a, **k: tips.append(text)
-g = types.SimpleNamespace(_annotations_name="A", _highlights=[], redraws=0)
+g = types.SimpleNamespace(_annotations_name="A", _highlights=[], redraws=0, _save_failed=False)
 g._refresh_highlight_overlay = lambda: setattr(g, "redraws", g.redraws + 1)
 loaded.clear()
 cls._on_save_event(g, "failed", "A")

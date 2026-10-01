@@ -1271,6 +1271,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             tooltip(text)
 
     def _bridge_hl_add(self, payload: str) -> None:
+        self._sync_marks()
         data = decode_b64_json(payload) or {}
         # The page sends the swatch row's chosen ink; anything that is
         # not a hex colour falls back to the default yellow rather than
@@ -1291,6 +1292,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
             tooltip("Klaus: highlight added")
 
     def _bridge_hl_remove(self, payload: str) -> None:
+        self._sync_marks()
         data = decode_b64_json(payload) or {}
         hl_id = data.get("id")
         removed = [h for h in self._highlights if h.get("id") == hl_id]
@@ -1335,6 +1337,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         hence sanitize_text/validate_hex_color/validate_text_size
         below, all before anything reaches the JSON.
         """
+        self._sync_marks()
         data = decode_b64_json(payload) or {}
         hit = clamp_text_add(data, self._page_count)
         if hit is None:
@@ -1371,6 +1374,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         posts ``hl-remove`` for that, which already tombstones an
         adopted record (K-081).
         """
+        self._sync_marks()
         data = decode_b64_json(payload) or {}
         updated, changed = apply_text_update(self._highlights, data)
         if changed:
@@ -1471,6 +1475,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         # Re-look-up by id: annotations may have reloaded (bake refresh)
         # while the prompt was open. An emptied box clears the note —
         # same as OK-on-empty did under the old static.
+        self._sync_marks()
         record = next(
             (h for h in self._highlights if h.get("id") == hl_id), None
         )
@@ -1581,17 +1586,40 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         to the page."""
         self._push_annotations()
 
+    # True while the last JSON write failed: memory holds marks the JSON
+    # lacks, so _sync_marks must not replace them (the next save retries).
+    _save_failed = False
+
+    def _sync_marks(self) -> None:
+        """Before a mutation: take the marks JSON as it is now, so a mark
+        another reader of this PDF saved since is kept, not overwritten
+        by this viewer's older list."""
+        if self._annotations_name is None or self._save_failed:
+            return
+        try:
+            from . import pdf_handler, settings
+
+            self._highlights = pdf_handler.load_annotations(
+                settings.user_files(), self._annotations_name
+            )
+        except Exception as exc:
+            print(f"[klausmate] pdfjs marks re-read failed: {exc}")
+
     def _save_annotations(self) -> None:
-        """Synchronous write-through, then the shared save pipeline."""
+        """Synchronous write-through, then the shared save pipeline. A
+        failed write keeps the marks in memory and requests no bake."""
         if self._annotations_name is None:
             return
         try:
             from . import settings
             from . import pdf_handler
 
-            pdf_handler.save_annotations(
+            ok = pdf_handler.save_annotations(
                 settings.user_files(), self._annotations_name, self._highlights
             )
+            self._save_failed = not ok
+            if not ok:
+                return
             # Hold what the JSON holds (normalized), so a pipeline event
             # compares like with like and pushes only real differences.
             self._highlights = pdf_handler.load_annotations(
@@ -1617,7 +1645,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         toasts that the marks are kept."""
         if name != self._annotations_name:
             return
-        if event in ("saved", "records"):
+        if event in ("saved", "records") and not self._save_failed:
             from . import pdf_handler, pdf_source
 
             fresh = pdf_handler.load_annotations(pdf_source.user_files_dir(), name)
@@ -1722,6 +1750,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     def load_annotations(self, name: str) -> None:
         """Load the shared annotations JSON and push it to the page."""
         self._annotations_name = name
+        self._save_failed = False
         try:
             from . import settings
             from . import pdf_handler

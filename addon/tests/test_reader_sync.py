@@ -567,6 +567,40 @@ pushes = len(rb._web.js)
 rb._on_save_event("saved", "Other")
 check("another document's save changes nothing", len(rb._web.js) == pushes)
 
+section("a second reader's mark made before any 'saved' keeps the first reader's (R53 b)")
+ph.save_annotations(UF, "Shared2", [])
+ra, rb = reader_of("Shared2"), reader_of("Shared2")
+mark(ra, 0)
+mark(rb, 1)  # no pipeline event has reached rb yet
+check("the JSON keeps both marks",
+      sorted(h.get("page") for h in ph.load_annotations(UF, "Shared2")) == [0, 1],
+      str(ph.load_annotations(UF, "Shared2")))
+_mut = ("_bridge_hl_add", "_bridge_hl_remove", "_bridge_text_add", "_bridge_text_update", "_on_note_edited")
+check("every mutating handler re-reads the marks once, through one helper",
+      all(inspect.getsource(getattr(REAL_JS, n)).count("self._sync_marks()") == 1 for n in _mut),
+      str([n for n in _mut if inspect.getsource(getattr(REAL_JS, n)).count("self._sync_marks()") != 1]))
+
+section("a failed marks write keeps the marks in memory (R53 #2)")
+ph.save_annotations(UF, "Failing", [])
+rc = reader_of("Failing")
+_jp = ph.annotations_path_for(UF, "Failing")
+os.remove(_jp)
+os.makedirs(_jp)  # writing the JSON now raises an OSError
+check("save_annotations reports the failure", ph.save_annotations(UF, "Failing", []) is False)
+PIPE.requests.clear()
+mark(rc, 0)
+check("the new mark stays in memory", [h.get("page") for h in rc._highlights] == [0], str(rc._highlights))
+check("...and no bake is requested for a JSON that was not written", PIPE.requests == [], str(PIPE.requests))
+mark(rc, 1)
+check("a second mark while writes fail keeps the first",
+      sorted(h.get("page") for h in rc._highlights) == [0, 1], str(rc._highlights))
+os.rmdir(_jp)
+mark(rc, 2)
+check("once writes work again, every kept mark reaches the JSON",
+      sorted(h.get("page") for h in ph.load_annotations(UF, "Failing")) == [0, 1, 2],
+      str(ph.load_annotations(UF, "Failing")))
+check("...and the bake is requested", PIPE.requests == ["Failing"], str(PIPE.requests))
+
 section("two readers in one host keep their own registration (R36)")
 e1, e2 = rp.PdfSidebar(None), rp.PdfSidebar(None)
 e1.load_pdf("Doc")
