@@ -642,9 +642,11 @@ def index_status(name: str, sig) -> tuple[bool, bool]:
     priority_rows.)"""
     st = pdf_index.stats_from_disk(pdf_index.index_dir(settings.user_files(), name))
     indexed = bool(st["exists"] and st["complete"])
+    source = pdf_index.source_signature(settings.user_files(), name)
     stale = indexed and (
         not embeddings.signature_matches(st["provider"], st["model"], st.get("dims", 0), sig)
-        or pdf_index.source_signature(settings.user_files(), name) is None
+        or source is None
+        or (st.get("source_sig") is not None and tuple(st["source_sig"]) != tuple(source))
     )
     return indexed, stale
 

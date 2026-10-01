@@ -234,13 +234,13 @@ check("Anki's items stay first", menu_for("!Library")[0] == "Anki's own item")
 check("root: import and new folder", menu_for("!Library")[1:] == ["Import PDFs…", "New Folder…"])
 check("a PDF: only what Anki's own items and a double-click can't do (K-316)",
       menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")[1:]
-      == ["Match Sensitivity…", "Retention History…", "Show in Finder"],
+      == ["Match Sensitivity…", "Retention History…", "Show in Finder", "Exclude from Index"],
       str(menu_for("!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC")))
 check("a folder with PDFs",
-      menu_for("!Library::2-BiB::Exam_1::Week_1")[1:] == ["New Folder…", "Import PDFs Here…"])
+      menu_for("!Library::2-BiB::Exam_1::Week_1")[1:] == ["New Folder…", "Import PDFs Here…", "Exclude from Index"])
 check("an empty folder can be renamed and removed here (Anki's own items skip empty tags)",
       menu_for("!Library::2-BiB::Exam_1")[1:]
-      == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])
+      == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder", "Exclude from Index"])
 check("any other tag gets nothing extra", menu_for("Hematology::Anemia") == ["Anki's own item"])
 
 section("a PDF missing from the Library folder")
@@ -398,26 +398,42 @@ check("a name clash at the root gets a new name, never an overwrite",
       and any(f.startswith("Lecture (") for f in os.listdir(root)), str(os.listdir(root)))
 check("each import starts the background scan", scans == [1, 1])
 
-section("footer: only the Import button (indexing shows in the status bar)")
+section("header: ⟳ and +PDF beside the filter, no footer")
 ls.refresh_status = lambda: None
-footer = ls.Footer(types.SimpleNamespace())
-footer.show()
-check("no status line and no ✕ in the footer any more",
-      not hasattr(footer, "status") and not hasattr(footer, "cancel")
-      and [b.text() for b in footer.findChildren(QtWidgets.QPushButton)] == ["Import PDFs…"])
-check("the button says what it does", footer.button.text() == "Import PDFs…")
+check("the footer is gone", not hasattr(ls, "Footer") and not hasattr(ls, "_install_footer"))
+_iq = importlib.import_module("klausmate.index_queue")
+_act = importlib.import_module("klausmate.library_actions")
+_hits = []
+_iq_refresh, _pick = _iq.refresh, _act.pick_and_import
+_iq.refresh = lambda parent=None: _hits.append(("refresh", parent)) or 0
+_act.pick_and_import = lambda parent, folder=None: _hits.append(("import", parent))
+_owner = QtWidgets.QWidget()
+_refresh_act, _add_act = ls.header_actions(_owner)
+check("two actions: ⟳ then +PDF, named and iconed",
+      (_refresh_act.toolTip(), _add_act.toolTip()) == ("Index New and Changed PDFs", "Import PDFs…")
+      and _refresh_act.objectName() == "klausmate_library_refresh" and _add_act.objectName() == "klausmate_library_add_pdf"
+      and not _refresh_act.icon().isNull() and not _add_act.icon().isNull())
+_refresh_act.trigger(); _add_act.trigger()
+check("⟳ runs index_queue.refresh, +PDF opens the picker, both on the owner",
+      _hits == [("refresh", _owner), ("import", _owner)], str(_hits))
 container = QtWidgets.QWidget()
 grid = QtWidgets.QGridLayout(container)
 grid.addWidget(QtWidgets.QLineEdit(), 0, 0)
-grid.addWidget(QtWidgets.QToolBar(), 0, 1)
+_toolbar = QtWidgets.QToolBar()
+_toolbar.addAction("Search"); _toolbar.addAction("Select")
+grid.addWidget(_toolbar, 0, 1)
 side = QtWidgets.QTreeView()
+side.toolbar = _toolbar
 grid.addWidget(side, 1, 0, 1, 2)
-browser = types.SimpleNamespace(sidebarDockWidget=types.SimpleNamespace(widget=lambda: container))
-ls._install_footer(browser, side)
-ls._install_footer(browser, side)
-check("the footer sits under the tree, once",
-      grid.itemAtPosition(2, 0) is not None and grid.itemAtPosition(2, 0).widget() is browser._klausmate_library_footer
-      and grid.rowCount() == 3)
+browser = types.SimpleNamespace(sidebar=side, sidebarDockWidget=types.SimpleNamespace(widget=lambda: container))
+ls._install_header(browser)
+ls._install_header(browser)
+_names = [a.objectName() for a in _toolbar.actions()]
+check("Browse's sidebar toolbar gets the two actions once, after a separator",
+      _names.count("klausmate_library_refresh") == 1 and _names.count("klausmate_library_add_pdf") == 1
+      and _toolbar.actions()[2].isSeparator() and grid.rowCount() == 2, str(_names))
+check("Finder drops still land on the sidebar", isinstance(getattr(side, "_klausmate_drops", None), ls.PdfDropFilter))
+_iq.refresh, _act.pick_and_import = _iq_refresh, _pick
 
 section("the Library is its own section, with its own icons")
 
@@ -540,5 +556,128 @@ held[-1].fail(RuntimeError("db"))
 check("...and a failure stays in the bar with its reason",
       [(t.key, t.error, "db" in t.message) for t in tasks.snapshot()] == [("retention", True, True)], str(tasks.snapshot()))
 tasks.clear()
+
+section("manual indexing: exclude and include")
+pdf_index = importlib.import_module("klausmate.pdf_index")
+iq = importlib.import_module("klausmate.index_queue")
+PDF_TAG = "!Library::2-BiB::Exam_1::Week_1::04-L-Intro_to_CBC"
+WEEK_TAG = "!Library::2-BiB::Exam_1::Week_1"
+EXAM_TAG = "!Library::2-BiB::Exam_1"
+check("the root offers neither", not {"Exclude from Index", "Include in Index"} & set(menu_for("!Library")))
+check("exclude_confirm_text, a PDF",
+      act.exclude_confirm_text("Hemolysis", "pdf", 1)
+      == "Exclude “Hemolysis” from the index? Its search index is deleted. Its cards keep their Library tag.")
+check("exclude_confirm_text, a folder of four",
+      act.exclude_confirm_text("Exam 1", "folder", 4)
+      == "Exclude “Exam 1” from the index? The search index of 4 PDFs in it is deleted. Their cards keep their Library tags.")
+check("exclude_confirm_text, a folder of one",
+      act.exclude_confirm_text("Exam 1", "folder", 1)
+      == "Exclude “Exam 1” from the index? The search index of 1 PDF in it is deleted. Their cards keep their Library tags.")
+
+asked, forgot, repaints = [], [], []
+act._ask_exclude = lambda parent, text, on_yes: asked.append((text, on_yes))
+iq.forget = lambda name: forgot.append(name) or 0
+_rs, _rt = ls.refresh_status, ls.refresh_trees
+ls.refresh_status = lambda: repaints.append("status")
+ls.refresh_trees = lambda: repaints.append("trees")
+
+
+def _index(safe):
+    os.makedirs(pdf_index.index_dir(UF, safe), exist_ok=True)
+    return pdf_index.index_dir(UF, safe)
+
+
+act.exclude(None, "pdf", "Intro_to_CBC", "04-L-Intro to CBC")
+check("no index data: no question, recorded at once",
+      asked == [] and drive_store.is_excluded(drive_store.load(UF), "Intro_to_CBC"))
+check("exclude repaints Browse's sidebar and the Add tab's tree", repaints == ["status", "trees"], str(repaints))
+check("an excluded PDF offers Include", menu_for(PDF_TAG)[-1] == "Include in Index", str(menu_for(PDF_TAG)))
+repaints.clear()
+_pending = iq.pending_names()
+act.include("pdf", "Intro_to_CBC")
+check("include clears it, repaints both, and queues nothing",
+      not drive_store.is_excluded(drive_store.load(UF), "Intro_to_CBC") and repaints == ["status", "trees"]
+      and iq.pending_names() == _pending)
+
+forgot.clear()
+d = _index("Intro_to_CBC")
+act.exclude(None, "pdf", "Intro_to_CBC", "04-L-Intro to CBC")
+check("with index data it asks first, deleting nothing yet",
+      len(asked) == 1 and "04-L-Intro to CBC" in asked[0][0] and os.path.isdir(d)
+      and not drive_store.is_excluded(drive_store.load(UF), "Intro_to_CBC"))
+asked[0][1]()
+check("Exclude records it, forgets queued jobs, deletes the index",
+      drive_store.is_excluded(drive_store.load(UF), "Intro_to_CBC") and forgot == ["Intro_to_CBC"] and not os.path.isdir(d))
+act.include("pdf", "Intro_to_CBC")
+asked.clear(); forgot.clear()
+
+act.pdfs_under = lambda folder: ["Intro_to_CBC", "Other"] if folder.startswith("2-BiB/Exam 1") else []
+d1, d2 = _index("Intro_to_CBC"), _index("Other")
+act.exclude(None, "folder", "2-BiB/Exam 1", "Exam 1")
+check("a folder asks with its count", len(asked) == 1 and "2 PDFs" in asked[0][0], str(asked))
+asked[0][1]()
+check("...and deletes every covered index", not os.path.isdir(d1) and not os.path.isdir(d2)
+      and sorted(forgot) == ["Intro_to_CBC", "Other"])
+check("the excluded folder offers Include", menu_for(EXAM_TAG)[-1] == "Include in Index", str(menu_for(EXAM_TAG)))
+check("a folder inside it offers neither", not {"Exclude from Index", "Include in Index"} & set(menu_for(WEEK_TAG)))
+check("a PDF inside it offers neither", not {"Exclude from Index", "Include in Index"} & set(menu_for(PDF_TAG)))
+check("library_index lists the excluded tags, covered ones included",
+      {EXAM_TAG.casefold(), WEEK_TAG.casefold(), PDF_TAG.casefold()} <= ls.library_index()["excluded"])
+check("is_excluded_tag", ls.is_excluded_tag(PDF_TAG) and not ls.is_excluded_tag("!Library"))
+st = ls.pdf_status(["Intro_to_CBC", "x"], set(), lambda s: (False, False), excluded={"Intro_to_CBC"})
+check("an excluded PDF gets no warning reason", st == {"x": ls.NOT_EMBEDDED}, str(st))
+_model = QtGui.QStandardItemModel()
+_item = QtGui.QStandardItem(PDF_TAG)
+_model.appendRow(_item)
+
+
+class _Del(ls.LibraryNameDelegate):
+    def tag_of(self, index):
+        return PDF_TAG
+
+
+_view = QtWidgets.QTreeView()
+_view.setModel(_model)
+_d = _Del(_view)
+_opt = QtWidgets.QStyleOptionViewItem()
+_opt.widget = _view
+_d.initStyleOption(_opt, _model.index(0, 0))
+check("an excluded row draws in the disabled text colour",
+      _opt.palette.color(QtGui.QPalette.ColorRole.Text)
+      == _opt.palette.color(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.Text)
+      and _opt.icon.isNull())
+check("the delegate's tooltip names the exclusion", ls.tooltip_for(PDF_TAG).endswith("Excluded from the index"),
+      str(ls.tooltip_for(PDF_TAG)))
+act.include("folder", "2-BiB/Exam 1")
+_failed_write = drive_store.set_excluded
+drive_store.set_excluded = lambda *a: False
+d1 = _index("Intro_to_CBC")
+asked.clear()
+act.exclude(None, "pdf", "Intro_to_CBC", "x")
+asked[0][1]()
+check("a failed write deletes nothing", os.path.isdir(d1))
+drive_store.set_excluded = _failed_write
+ls.refresh_status, ls.refresh_trees = _rs, _rt
+
+section("manual indexing: a PDF whose text changed shows as stale")
+embeddings = importlib.import_module("klausmate.embeddings")
+_sig = embeddings.index_signature({})
+os.makedirs(os.path.join(UF, "contexts"), exist_ok=True)
+open(os.path.join(UF, "contexts", "Changed.txt"), "w").write("page text")
+_d = pdf_index.index_dir(UF, "Changed")
+os.makedirs(_d, exist_ok=True)
+
+
+def _manifest(source_sig):
+    json.dump({"version": pdf_index.INDEX_VERSION, "pages": [[0, "h"]], "embedded_rows": 1,
+               "provider": _sig[0], "model": _sig[1], "dims": 0, "source_sig": list(source_sig)},
+              open(os.path.join(_d, pdf_index.MANIFEST_FILE), "w"))
+
+
+_manifest(pdf_index.source_signature(UF, "Changed"))
+check("an index built from the current text is not stale", retention.index_status("Changed", _sig) == (True, False),
+      str(retention.index_status("Changed", _sig)))
+_manifest((1, 2))
+check("an index built from other text is stale", retention.index_status("Changed", _sig) == (True, True))
 
 raise SystemExit(report())

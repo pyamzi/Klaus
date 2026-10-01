@@ -6,7 +6,7 @@ Same rows as Browse's Library section — the ``!Library`` root, folders,
 PDFs, with the same icons, painted names, retention % and warning icons
 (``library_sidebar.LibraryNameDelegate`` through ``TreeDelegate``), the
 same right-click items (``library_sidebar.menu_entries``), the same
-import footer and Finder drops — plus a filter box. It is NOT an Anki
+Finder drops — plus a header row: the filter box, ⟳ and +PDF. It is NOT an Anki
 ``SidebarTreeView``: Anki's needs a Browse instance for every click.
 
 A single click on a PDF row emits ``pdf_clicked(safe)``; the host opens
@@ -75,9 +75,12 @@ from aqt.qt import (  # noqa: E402
     QIcon,
     QLineEdit,
     QMenu,
+    QHBoxLayout,
+    QSize,
     QStandardItem,
     QStandardItemModel,
     Qt,
+    QToolBar,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -143,18 +146,23 @@ class LibraryTree(QWidget):
         self.view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.model = QStandardItemModel(self)
         self.view.setModel(self.model)
-        self.footer = ls.Footer(self)
-        lay.addWidget(self.filter)
+        self.header = QToolBar(self)
+        self.header.setIconSize(QSize(16, 16))
+        for action in ls.header_actions(self):
+            self.header.addAction(action)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        row.addWidget(self.filter, 1)
+        row.addWidget(self.header)
+        lay.addLayout(row)
         lay.addWidget(self.view, 1)
-        lay.addWidget(self.footer)
         self._items: dict[str, QStandardItem] = {}
         self._expanded: set[str] = set()
         self._built = False
         self._drops = ls.PdfDropFilter(self)
         self.view.viewport().setAcceptDrops(True)
         self.view.viewport().installEventFilter(self._drops)
-        self.footer.setAcceptDrops(True)
-        self.footer.installEventFilter(self._drops)
         self.view.clicked.connect(self._on_clicked)
         self.view.expanded.connect(lambda idx: self._expanded.add(idx.data(TAG_ROLE)))
         self.view.collapsed.connect(lambda idx: self._expanded.discard(idx.data(TAG_ROLE)))

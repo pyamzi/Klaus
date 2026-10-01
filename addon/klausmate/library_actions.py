@@ -15,6 +15,7 @@ from aqt import mw
 from aqt.operations import QueryOp
 from aqt.qt import (
     QDialog,
+    QMessageBox,
     QDialogButtonBox,
     QFileDialog,
     QInputDialog,
@@ -47,6 +48,78 @@ def _refresh() -> None:
 def _live_root() -> str | None:
     root = pdf_handler._live_library_root()
     return root if root and os.path.isdir(root) else None
+
+
+def exclude_confirm_text(name: str, kind: str, n_indexed: int) -> str:
+    if kind == "pdf":
+        return (f"Exclude “{name}” from the index? Its search index is deleted. "
+                "Its cards keep their Library tag.")
+    count = f"{n_indexed} PDF" + ("" if n_indexed == 1 else "s")
+    return (f"Exclude “{name}” from the index? The search index of {count} in it is deleted. "
+            "Their cards keep their Library tags.")
+
+
+def _ask_exclude(parent, text: str, on_yes: Callable[[], None]) -> None:
+    """Window-modal (K-114), Cancel the default: this deletes files."""
+    box = QMessageBox(parent or mw)
+    box.setWindowTitle("Exclude from Index")
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(text)
+    yes = box.addButton("Exclude", QMessageBox.ButtonRole.DestructiveRole)
+    cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel)
+    yes.setObjectName("DangerButton")
+    cancel.setObjectName("SecondaryButton")
+    _style(box)
+
+    def answered(_result: int) -> None:
+        chosen = box.clickedButton() is yes
+        box.deleteLater()
+        if chosen:
+            on_yes()
+
+    box.finished.connect(answered)
+    box.open()
+
+
+def _repaint_library() -> None:
+    from . import library_sidebar
+
+    library_sidebar.refresh_status()
+    library_sidebar.refresh_trees()
+
+
+def exclude(parent, kind: str, key: str, name: str) -> None:
+    """Exclude a PDF (``key`` = safe name) or folder (``key`` = path) from
+    indexing. Its index data is deleted, after a confirm when there is
+    any; card tags are untouched (manual indexing spec, Rulings)."""
+    from . import index_queue, pdf_index
+
+    uf = settings.user_files()
+    covered = [key] if kind == "pdf" else pdfs_under(key)
+    indexed = [s for s in covered if os.path.isdir(pdf_index.index_dir(uf, s))]
+
+    def do() -> None:
+        if not drive_store.set_excluded(uf, kind, key, True):
+            tooltip("Couldn't save the exclusion.", parent=parent)
+            return
+        for safe in covered:
+            index_queue.forget(safe)
+        for safe in indexed:
+            pdf_index.delete(uf, safe)
+        _repaint_library()
+
+    if not indexed:
+        do()
+    else:
+        _ask_exclude(parent, exclude_confirm_text(name, kind, len(indexed)), do)
+
+
+def include(kind: str, key: str) -> None:
+    """Undo an exclusion. Queues nothing: the row shows its warning
+    icon until ⟳."""
+    drive_store.set_excluded(settings.user_files(), kind, key, False)
+    _repaint_library()
 
 
 def pdfs_under(folder: str) -> list[str]:

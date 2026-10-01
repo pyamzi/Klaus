@@ -64,6 +64,9 @@ check("no reader attribute on editors anywhere in the package",
       not any("_klausmate_pdf_tabs" in open(os.path.join("klausmate", f)).read() or "_klausmate_sidebar" in open(os.path.join("klausmate", f)).read()
               for f in os.listdir("klausmate") if f.endswith(".py")))
 check("the deleted test file is gone", not os.path.exists("tests/test_pdf_dock.py"))
+check("the Duplicates strip is gone, its engine stays (manual indexing spec)",
+      not os.path.exists("klausmate/browse_toolkit.py") and "browse_toolkit" not in src_init
+      and not os.path.exists("tests/test_browse_toolkit.py") and os.path.exists("klausmate/duplicates.py"))
 
 section("legacy placement keys are dropped on read and on save")
 json.dump({"placement": "float", "geom": [1, 2, 3, 4], "tabs": {"editor": ["A"]}},

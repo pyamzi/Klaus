@@ -337,80 +337,14 @@ def _readiness_after_library_root() -> None:
             return
         if _first_run_dialog_shown_this_session:
             return
-        if result.status in ("reachable", "started"):
-            _offer_v2_index_sweep(settings.read())
-            _rematch_stale_matches()
-            _resume_unindexed()
-        else:
+        # Ollama answered: nothing more to do. Indexing waits for the
+        # Library's ⟳ (manual indexing); only a failure needs the nudge.
+        if result.status not in ("reachable", "started"):
             _readiness_check_body()
 
     op = QueryOp(parent=mw, op=work, success=done)
     op.failure(lambda _exc: done(ollama_runtime.EnsureResult("failed", "")))
     op.without_collection().run_in_background()
-
-
-def _resume_unindexed() -> None:
-    """Queue every PDF that has text but no complete index (a batch the
-    user never cancelled by hand, dropped by a failure or a restart)."""
-    try:
-        from . import index_queue
-
-        index_queue.resume_unindexed()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] resume of unindexed PDFs failed: {exc}")
-
-
-def _rematch_stale_matches() -> None:
-    """K-302: re-match every PDF whose match cache predates the centered
-    score scale, quietly (no embedding when its indexes are current). Runs
-    the threshold-scale migration on the main thread first so the re-tag
-    each job ends with uses the new thresholds. Self-healing, no flag: the
-    re-match rewrites the cache at the current version."""
-    try:
-        from . import index_queue
-
-        names = index_queue.stale_match_names()
-        if names:
-            index_queue.request([(index_queue.JOB_PDF, n) for n in names], announce=False)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] re-match after scoring change failed: {exc}")
-
-
-def _offer_v2_index_sweep(cfg: dict) -> bool:
-    """One-time upgrade offer: rebuild the PDF indexes pdf_index v2 left
-    unreadable (K-236). True when it actually opened its confirm.
-
-    A profile whose indexes predate v2 reads as having NO indexes at all
-    — every Library row blank, the Lecture panel silent, every PDF
-    invisible to the assistant — because an upgrade moves no embedding
-    signature, so nothing else triggers a rebuild on its own.
-    Preferences' Save shares this same trigger
-    (``index_queue.offer_model_sweep``) and MAY re-offer while stale
-    manifests remain; this profile-open call is the ONCE-per-profile
-    one, gated on ``_v2_index_sweep_offered`` below — the flag is
-    written whether the user said yes or no, because "no" to a priced
-    whole-collection re-embed is an answer, not a snooze.
-
-    Passing the CURRENT signature as ``previous`` is deliberate — it
-    leaves the stale-manifest scan as the only trigger that can fire
-    here, so this never doubles as a model-change prompt.
-    """
-    if cfg.get("_v2_index_sweep_offered"):
-        return False
-    try:
-        from . import embeddings, index_queue
-
-        if not index_queue.stale_index_names():
-            return False  # nothing to upgrade — ask later if that changes
-        if not index_queue.offer_model_sweep(
-            mw, embeddings.index_signature(cfg)
-        ):
-            return False  # never asked (no profile, refused trigger) — no flag
-    except Exception as exc:
-        print(f"[klausmate] v2 index sweep offer failed: {exc}")
-        return False
-    settings.patch({"_v2_index_sweep_offered": True})
-    return True
 
 
 def _readiness_check_body() -> None:

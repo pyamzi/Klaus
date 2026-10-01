@@ -902,14 +902,25 @@ same reason.
     never-studied ones at 0% — recall times coverage, Pouya's call
     2026-09-30; parents include children; computed in a QueryOp only
     while a Browse is open), warning icons with `helpEvent` tooltips (not embedded / stale /
-    indexing, from `retention.index_status` + `index_queue.pending_names`),
+    indexing, from `retention.index_status` + `index_queue.pending_names`;
+    stale includes a text file changed since indexing), excluded rows
+    dimmed with "Excluded from the index" and no warning icon,
     the right-click menus (`browser_sidebar_will_show_context_menu`), a
     click that loads the PDF into Browse's PDF panel only when that panel
-    is already showing, a drop filter for PDF files, and a footer under the
-    tree (Import PDFs…; indexing progress is in the status bar).
+    is already showing, a drop filter for PDF files, and two actions on
+    Anki's own `sidebar.toolbar` beside its search box (`header_actions`:
+    ⟳ "Index New and Changed PDFs" → `index_queue.refresh`, +PDF "Import
+    PDFs…"; the Add tab's tree puts the same two beside its filter). No
+    footer. Right-click "Exclude from Index" / "Include in Index" on a
+    PDF or folder (`library_actions.exclude`/`include`): the exclusion
+    lives in `drive.json` (`drive_store.set_excluded`, a folder covers its
+    subfolders and later imports), excluding DELETES the covered PDFs'
+    index dirs after a window-modal confirm when any exist, and card tags
+    are never touched (manual indexing, 2026-10-01, spec
+    [manual-indexing](docs/superpowers/specs/2026-10-01-manual-indexing-design.md)).
   - `library_actions.py`: the window-free actions those menus call; every
     dialog an instance with `open()`. Import COPIES files into the library
-    root and lets the background scan read, import and index them.
+    root and lets the background scan read and import them; ⟳ indexes them.
   - `pdf_drive.py` is now only the disk half: `start_library_rescan`
     (QueryOp without the collection → `pdf_handler.prepare_rescan` reads and
     OCRs new files; applied on main by `rescan_library_root`), renamed files
@@ -917,8 +928,8 @@ same reason.
     pages — a bulk Finder rename once froze the Library for a week), the
     filesystem watcher, `delete_pdf`/`delete_folder` (files go to the
     Trash), `apply_folder_change`, and `refresh_open_library` (Preferences
-    calls it). PDFs the scan imports get page records, auto-indexing and a
-    tag (`_after_ingest`), like every other import.
+    calls it). PDFs the scan imports get page records and a tag
+    (`_after_ingest`), like every other import; nothing is indexed until ⟳.
 - `tag_sync.py`: per-PDF collection tags. THE INVARIANT: every indexed PDF
   owns exactly one tag `!Library::<folder path, / → ::>::<leaf>` (leaf =
   display name minus extension, tag-sanitized), whose members are exactly
@@ -1217,13 +1228,17 @@ same reason.
     its prompt and progress state. It exists
     because that chain was a METHOD on the Library window
     (`DriveWindow._on_embed`) and a PDF added from the deck screen has
-    no Library window: `_on_embed` now just calls `request_pdf`, and
-    `__init__.import_pdf_file` — the one funnel every import surface
-    returns through — calls `on_pdf_imported`, so every add indexes
-    itself (config `auto_index_on_add`, default ON; a corrupt value
-    reads ON, opposite of `background.design_enabled`'s rule, because
-    the failure here is a silently deleted feature rather than an
-    unasked-for restyle). **`curation._busy` REFUSES concurrent runs** —
+    no Library window. **Indexing is manual (2026-10-01)**: `refresh(parent)`,
+    the Library's ⟳, is the only trigger. It queues every PDF that
+    `needs_indexing` (missing, partial, older `INDEX_VERSION`, another
+    embedding signature, another source signature) or has a stale match
+    cache, minus excluded (`drive_store`) and already-queued ones, deletes
+    index dirs excluded PDFs still have, and tooltips the count. No import,
+    profile open, rescan or model change starts a job (the
+    `auto_index_on_add` key, `on_pdf_imported`, `resume_unindexed`, the
+    profile-open v2 sweep / re-match and `offer_model_sweep` are gone). A
+    PDF excluded while its own job runs loses the index that job wrote
+    (`_drop_if_excluded`). **`curation._busy` REFUSES concurrent runs** —
     right for a double-clicked button, wrong for ten dropped PDFs — so
     jobs queue here (dupes collapse, FIFO) and the runner WAITS on that
     token (`_busy_elsewhere`, bounded poll) rather than racing
@@ -1240,14 +1255,11 @@ same reason.
     stops `after_matches` tagging on the PARTIAL ranking
     `ensure_matches` hands back. **Closing the Library no longer
     cancels indexing** (the job may have been started from the deck
-    screen). `offer_model_sweep(parent, prev_sig)`, called
-    from the Preferences `index_sweep` effect (`prefs_state.commit`
-    hands it the BASELINE signature, captured before the write), re-indexes the card index plus every
-    PDF with an index on disk — announced first, counted in notes and
-    PDFs. The offer confirms local work with default No and preserves the
-    stale-index upgrade trigger.
-    `indexed_pdf_names` must inspect manifest files rather than hide old
-    versions through `stats_from_disk`.
+    screen). The Preferences `index_sweep` effect only tooltips "Press ⟳
+    in the Library to re-index for the new model."; ⟳ then finds every
+    index under the old signature. When no PDF needs work but the card
+    index needs a from-scratch rebuild, ⟳ queues one `JOB_CARDS`; a PDF
+    job's phase one still asks first (K-237, Skip default).
     Signature comparison is ALWAYS `embeddings.signature_matches`,
     never a tuple `==`: a hand-spelled one reads every cache as stale
     and needlessly re-embeds the collection (the exact bug
@@ -1334,8 +1346,7 @@ same reason.
     `bg_wash_row`) so labels dim with their controls.
     General and Appearance remain alongside Local models: Ollama runtime
     management, free-text embedding model and External clients configuration. The embedded Assistant page is removed.
-    The `index_sweep` effect carries the baseline `index_signature` and offers a
-    confirmed local index sweep when appropriate.
+    The `index_sweep` effect tooltips where to re-index (indexing is manual).
     **Preferences are a state machine (2026-10-01, spec
     [prefs-state](docs/superpowers/specs/2026-09-30-prefs-state-design.md))**:
     `prefs_state.PrefsState` (aqt-free) holds EVERY value the dialog
@@ -1348,8 +1359,8 @@ same reason.
     `_edit_spec`. **Dirty is a fact** (`state.dirty` = pending values
     exist), so a keyboard-only slider edit lights Save. `save_all()` is
     `state.commit()`: ONE `settings.patch` of the changed keys, then the
-    effects in fixed order — `index_sweep` (baseline signature → the
-    rebuild offer), `threshold_changed` (the tuned-PDFs prompt),
+    effects in fixed order — `index_sweep` (the "Press ⟳" tooltip),
+    `threshold_changed` (the tuned-PDFs prompt),
     `anki_theme` (`mw.set_theme`),
     `appearance` (live apply, then drop the preview). Discard is
     `state.discard()` + `paint_all()`. Endpoint relocation is
@@ -1359,8 +1370,7 @@ same reason.
     one key in `prefs_state.KEYS` + one `_Binding`; a forgotten binding
     costs a missing edit, never a silently unsaved setting.
   - `setup_flow.py`: first-run library setup and profile-open local readiness.
-    Preserve one clear nudge and the once-per-profile stale-index sweep offer.
-    A declined sweep is an answer, not a snooze.
+    Preserve one clear nudge. Profile open starts no indexing.
 - **External endpoint and context**: as of 2026-09-19, the embedded dock, host
   and sessions are removed. `scripts/mcp_stdio_bridge.py` is a standalone stdlib
   process launched by an external client with Python 3.9+. It reads private

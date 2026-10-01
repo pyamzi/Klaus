@@ -366,17 +366,16 @@ ps = importlib.import_module("klausmate.page_store")
 iq = importlib.import_module("klausmate.index_queue")
 tsync = importlib.import_module("klausmate.tag_sync")
 ps.ensure_records = lambda uf_, safe, path, pages: calls.append(("pages", safe))
-iq.on_pdf_imported = lambda safe: calls.append(("index", safe))
 tsync._schedule_reconcile = lambda: calls.append(("tag", None))  # scheduled, not inline: our renames land first
 pdf_drive.mw = type("MW", (), {"col": object()})()
 pdf_drive._after_ingest(["splen"])
-check("page records, auto-index and a tag for the new PDF",
-      calls == [("pages", "splen"), ("index", "splen"), ("tag", None)], str(calls))
+check("page records and a tag for the new PDF, no indexing (manual: ⟳ does that)",
+      calls == [("pages", "splen"), ("tag", None)], str(calls))
 del calls[:]
 pdf_drive.rescan_library_root = lambda prepared=None: {"moved": [], "ingested": ["x"], "tree_changed": []}
 pdf_drive._library_changed = lambda: None
 pdf_drive.start_library_rescan()
-check("the background rescan hands what it ingested on", ("index", "x") in calls, str(calls))
+check("the background rescan hands what it ingested on", ("pages", "x") in calls, str(calls))
 
 section("deleting a folder never takes the user's own files with it")
 import importlib as _il  # noqa: E402
@@ -541,10 +540,6 @@ pdg._library_changed = lambda: ui.append(1)
 requested, resyncs, events = [], [], []
 _real_request_pdf = iq.request_pdf
 iq.request_pdf = lambda safe, **k: requested.append((safe, k.get("announce", True)))
-_real_indexed, _real_auto = iq.indexed_pdf_names, iq.auto_index_enabled
-auto_on = [False]
-iq.indexed_pdf_names = lambda: ["Edited"]  # Fresh was never indexed
-iq.auto_index_enabled = lambda cfg: auto_on[0]
 _real_resync = ds5.resync
 ds5.resync = lambda: resyncs.append(1)
 _unsub = ds5.subscribe(lambda ev, safe, path: events.append((ev, safe, path, ph.load_library_map(ufg).get(safe))))
@@ -581,22 +576,11 @@ check("...and the sidebar clears the icon", ui == [1], str(ui))
 del events[:]
 putg("Edited.pdf", "new|text|three")
 pdg.start_library_rescan()
-check("an indexed closed file whose text changed outside Klaus is re-indexed once, quietly",
-      requested == [("Edited", False)], str(requested))
-pdg.start_library_rescan()
-check("...and only once", requested == [("Edited", False)], str(requested))
-putg("Edited.pdf", "new |text|three\n")
-pdg.start_library_rescan()
-check("a whitespace-only change is not re-indexed", requested == [("Edited", False)], str(requested))
-del requested[:]
+check("a closed file whose text changed outside Klaus is NOT re-indexed: it waits for ⟳",
+      requested == [], str(requested))
 putg("Fresh.pdf", "fresh|one|edited")
 pdg.start_library_rescan()
-check("a never-indexed PDF with auto-index off is not indexed by an outside edit", requested == [], str(requested))
-auto_on[0] = True
-putg("Fresh.pdf", "fresh|one|edited again")
-pdg.start_library_rescan()
-check("...with auto-index on it is", requested == [("Fresh", False)], str(requested))
-auto_on[0] = False
+check("...nor a never-indexed one", requested == [], str(requested))
 check("none of these were reader events", events == [], str(events))
 
 section("Klaus's own rename re-points an open reader on the next rescan (I4)")
@@ -757,7 +741,6 @@ else:
 _unsub()
 ds5.resync = _real_resync
 iq.request_pdf = _real_request_pdf
-iq.indexed_pdf_names, iq.auto_index_enabled = _real_indexed, _real_auto
 ph.extract_pages, ph.repair_garbled_pages = _stub_extract, _stub_repair
 ps5.ensure_records = _real_ensure
 

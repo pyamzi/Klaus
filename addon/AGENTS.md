@@ -62,7 +62,7 @@ Addons/                       # Git repo root
     ├── doc_sync.py             # Open-PDF folder sync: watcher + rescan events changed/moved/missing/back; own writes pinned
     ├── annotation_save.py      # SavePipeline: the one bake path (500 ms debounce, one worker per PDF, retry, flush on close)
     ├── pdf_drive.py            # The Library's disk half: background folder scan, watcher, delete-to-Trash
-    ├── library_sidebar.py      # The Library in Browse's sidebar: real names, retention %, icons, menus, footer
+    ├── library_sidebar.py      # The Library in Browse's sidebar: real names, retention %, icons, menus, ⟳/+PDF header, Exclude from Index
     ├── tasks.py                # The one list of running processes (aqt-free, thread-safe reports)
     ├── status_bar.py           # Browse's bottom bar: gear (Anki Preferences), task progress, pane toggles
     ├── bottom_row.py           # main window: Anki's own bottom row + gear and task readout at its left edge

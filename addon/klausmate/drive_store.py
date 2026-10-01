@@ -17,8 +17,14 @@ Schema (version 1)::
       "pdfs": {"<safe>": {"folder": "Anatomy/Week 3",
                            "display": "Renal Physiology (Dr. K).pdf"}},
       "window": {"x": 120, "y": 80, "w": 1100, "h": 720,
-                  "splitter": [280, 800]}
+                  "splitter": [280, 800]},
+      "excluded": {"pdfs": ["<safe>"], "folders": ["Anatomy/Week 3"]}
     }
+
+``excluded`` lists what indexing skips (manual indexing, spec
+docs/superpowers/specs/2026-10-01-manual-indexing-design.md). A folder
+covers its subfolders and every PDF in them, including later imports. A
+file without the key reads as nothing excluded.
 
 Orphan rules: a stored PDF with no ``pdfs`` entry shows at the root under
 its safe name; a ``pdfs`` entry whose files are gone is skipped by
@@ -40,7 +46,8 @@ def _drive_path(user_files_dir: str) -> str:
 
 
 def _default() -> dict:
-    return {"version": DRIVE_VERSION, "folders": [], "pdfs": {}, "window": {}}
+    return {"version": DRIVE_VERSION, "folders": [], "pdfs": {}, "window": {},
+            "excluded": {"pdfs": [], "folders": []}}
 
 
 def load(user_files_dir: str) -> dict:
@@ -67,6 +74,13 @@ def load(user_files_dir: str) -> dict:
         window = data.get("window")
         if isinstance(window, dict):
             out["window"] = window
+        excluded = data.get("excluded")
+        if isinstance(excluded, dict):
+            pdfs_x, folders_x = excluded.get("pdfs"), excluded.get("folders")
+            if isinstance(pdfs_x, list):
+                out["excluded"]["pdfs"] = sorted({str(p) for p in pdfs_x if p})
+            if isinstance(folders_x, list):
+                out["excluded"]["folders"] = sorted({str(p) for p in folders_x if _valid_folder(str(p))})
         return out
     except (OSError, ValueError, json.JSONDecodeError):
         return _default()
@@ -153,6 +167,7 @@ def rename_folder(user_files_dir: str, old: str, new: str) -> bool:
     for entry in data["pdfs"].values():
         if entry.get("folder"):
             entry["folder"] = swap(entry["folder"])
+    data["excluded"]["folders"] = sorted({swap(p) for p in data["excluded"]["folders"]})
     _save(user_files_dir, data)
     return True
 
@@ -177,14 +192,58 @@ def remove_folder(user_files_dir: str, path: str) -> None:
     )
     for entry in data["pdfs"].values():
         entry["folder"] = reparent(entry.get("folder"))
+    data["excluded"]["folders"] = [
+        p for p in data["excluded"]["folders"] if p != path and not p.startswith(path + "/")
+    ]
     _save(user_files_dir, data)
 
 
 def remove_pdf(user_files_dir: str, safe: str) -> None:
     data = load(user_files_dir)
-    if safe in data["pdfs"]:
-        del data["pdfs"][safe]
+    if safe in data["pdfs"] or safe in data["excluded"]["pdfs"]:
+        data["pdfs"].pop(safe, None)
+        data["excluded"]["pdfs"] = [s for s in data["excluded"]["pdfs"] if s != safe]
         _save(user_files_dir, data)
+
+
+# ------------------------------------------------------------ exclusion
+
+
+def folder_excluded(data: dict, folder: str | None) -> bool:
+    """``folder`` is an excluded folder or inside one."""
+    if not folder:
+        return False
+    return any(folder == p or folder.startswith(p + "/") for p in data["excluded"]["folders"])
+
+
+def is_excluded(data: dict, safe: str) -> bool:
+    """Indexing skips ``safe``: listed itself, or in an excluded folder."""
+    if safe in data["excluded"]["pdfs"]:
+        return True
+    return folder_excluded(data, (data["pdfs"].get(safe) or {}).get("folder"))
+
+
+def excluded_safes(data: dict, safes) -> set[str]:
+    return {s for s in safes if is_excluded(data, s)}
+
+
+def set_excluded(user_files_dir: str, kind: str, key: str, on: bool) -> bool:
+    """Exclude (``on``) or include one PDF (``kind="pdf"``, its safe name)
+    or folder (``kind="folder"``, its path). False when nothing was
+    recorded: an unknown kind or a failed write."""
+    field = {"pdf": "pdfs", "folder": "folders"}.get(kind)
+    if field is None or not key:
+        return False
+    data = load(user_files_dir)
+    keys = set(data["excluded"][field])
+    keys = keys | {key} if on else keys - {key}
+    data["excluded"][field] = sorted(keys)
+    try:
+        _save(user_files_dir, data)
+    except OSError as exc:
+        print(f"[klausmate] could not record the exclusion: {exc}")
+        return False
+    return True
 
 
 # --------------------------------------------------------------- window

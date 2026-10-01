@@ -1719,16 +1719,13 @@ def manage_models_dialog(*_args: Any) -> None:
                 txt += " · settings changed: next indexing rebuilds from scratch"
         embed_status.setText(txt)
 
-    def _run_index_sweep(prev_sig) -> None:
-        """The ``index_sweep`` effect: the stored signature moved under the
-        index, so offer the local rebuild (K-152)."""
-        update_embed_status()
-        try:
-            from . import index_queue
+    REINDEX_HINT = "Press ⟳ in the Library to re-index for the new model."
 
-            index_queue.offer_model_sweep(dlg, prev_sig)
-        except Exception as exc:
-            print(f"[klausmate] model-change sweep offer failed: {exc}")
+    def _run_index_sweep(_prev_sig) -> None:
+        """The ``index_sweep`` effect: the stored signature moved under the
+        index. Indexing is manual; Save's own tooltip says where to rebuild
+        it (one tooltip: Anki's ``tooltip`` closes the previous one)."""
+        update_embed_status()
 
     def _update_threshold_label(value: int) -> None:
         threshold_value_lbl.setText(f"{value / 100:.2f}")
@@ -2221,7 +2218,10 @@ def manage_models_dialog(*_args: Any) -> None:
             _background.set_preview(None)
         paint_all()
         refresh_dirty()
-        tooltip("Klaus: preferences saved", parent=dlg)
+        saved = "Klaus: preferences saved."
+        if any(e[0] == "index_sweep" for e in commit.effects):
+            saved += " " + REINDEX_HINT
+        tooltip(saved, parent=dlg)
 
     def change_library_folder() -> None:
         """Point the Library at a different on-disk folder, moving

@@ -39,9 +39,9 @@ progress display. So the runner publishes ONE ``RunnerState``, rendered
 by ONE pure ``status_line()``, and ``_report_task`` turns it into the
 ``index`` task of the status bar (``tasks``/``status_bar``) at the
 bottom of the main window and Browse: progress bar, text, and ✕ to
-stop. Nothing is ever started silently: a single add tooltips
-and shows the bar, and a whole-library sweep asks first, in notes and
-PDFs, before spending anything.
+stop. Nothing starts on its own: the Library's ⟳ (``refresh``) is the
+only trigger, and it tooltips what it queued (manual indexing, spec
+docs/superpowers/specs/2026-10-01-manual-indexing-design.md).
 
 **Gates.** No profile, no run (``mw.col`` is None until one opens).
 A cancelled or failed job leaves nothing
@@ -51,8 +51,8 @@ vectors, ``pdf_index.is_fresh`` is False while ``embedded_rows`` trails
 ``chunks``, ``ensure_matches`` refuses to cache a cancelled pass), and
 the tag write is on the completion path only.
 
-Pure above the divider — the queue, the config gates, the sweep plan and
-every string the user reads — so ``tests/test_index_queue.py`` can drive
+Pure above the divider — what needs indexing, the ⟳ job plan, the queue
+and every string the user reads — so ``tests/test_index_queue.py`` can drive
 the whole policy without Qt.
 """
 
@@ -70,33 +70,58 @@ from . import settings
 JOB_CARDS = "cards"  # refresh the card index alone (a sweep with no PDFs)
 JOB_PDF = "pdf"  # the full chain for one PDF
 
-CONFIG_KEY = "auto_index_on_add"
+
+# ── pure: manual indexing (⟳) ───────────────────────────────────────────
 
 
-# ── pure: config gates ───────────────────────────────────────────────────
+def needs_indexing(stats: dict, source_sig: Any, signature: Any) -> bool:
+    """Does this PDF's page index need (re)building? ``stats`` is
+    ``pdf_index.stats_from_disk``; ``source_sig`` the current
+    ``pdf_index.source_signature`` (None when the text file is gone).
+    Missing, partial, older-version, other-model and other-source
+    indexes all need it."""
+    from . import pdf_index
 
-
-def _truthy(value: Any) -> bool:
-    """Config booleans, tolerant of the strings a hand-edited meta.json
-    can hold. Only an explicitly false-ish value is False."""
-    if isinstance(value, str):
-        return value.strip().lower() not in ("", "0", "false", "no", "off")
-    return bool(value)
-
-
-def auto_index_enabled(cfg: dict) -> bool:
-    """Auto-index-on-add, default ON — and a corrupt value reads ON too.
-
-    The opposite of ``background.design_enabled``'s rule, on purpose. A
-    bad value there would restyle the whole app unasked; here the worst
-    case is one job the user just asked for by adding a PDF, announced
-    on the status bar and stoppable from it. Reading a corrupt value as
-    OFF would instead delete the feature with no message at all, which
-    is the failure this card exists to remove.
-    """
-    if not isinstance(cfg, dict) or CONFIG_KEY not in cfg:
+    try:
+        return not (
+            stats.get("exists")
+            and stats.get("complete")
+            and stats.get("version") == pdf_index.INDEX_VERSION
+            and embeddings.signature_matches(
+                stats.get("provider", ""), stats.get("model", ""), stats.get("dims", 0), signature
+            )
+            and source_sig is not None
+            and tuple(stats.get("source_sig") or ()) == tuple(source_sig)
+        )
+    except Exception:
         return True
-    return _truthy(cfg.get(CONFIG_KEY))
+
+
+def refresh_jobs(
+    names: list[str],
+    excluded: set,
+    pending: set,
+    needs: Callable[[str], bool],
+    stale_matches: set,
+    cards_from_scratch: bool,
+) -> list[tuple[str, str]]:
+    """What one ⟳ press queues, in Library order: every PDF that needs
+    indexing or re-matching, minus excluded and already-queued ones; the
+    card index alone when no PDF job would rebuild it first."""
+    jobs = [
+        (JOB_PDF, n)
+        for n in names
+        if n not in excluded and n not in pending and (n in stale_matches or needs(n))
+    ]
+    if not jobs and cards_from_scratch:
+        jobs.append((JOB_CARDS, ""))
+    return jobs
+
+
+def refresh_message(n_pdfs: int, cards: bool) -> str:
+    if n_pdfs:
+        return f"Indexing {n_pdfs} PDF" + ("" if n_pdfs == 1 else "s")
+    return "Rebuilding the card index" if cards else "Everything is indexed"
 
 
 # ── pure: the queue ──────────────────────────────────────────────────────
@@ -148,17 +173,6 @@ class JobQueue:
         return list(self._items)
 
 
-def sweep_jobs(pdf_names: list[str]) -> list[tuple[str, str]]:
-    """The model-change plan: the card index, then every indexed PDF.
-
-    ``JOB_CARDS`` leads even though every PDF job re-runs
-    ``curation.ensure_index`` as its own first phase — that phase is a
-    no-op once the index is current, and leading with it means a
-    collection with no PDFs at all still gets its cards re-embedded.
-    """
-    return [(JOB_CARDS, "")] + [(JOB_PDF, n) for n in pdf_names]
-
-
 # ── pure: everything the user reads ──────────────────────────────────────
 
 
@@ -194,24 +208,16 @@ def status_line(state: RunnerState) -> str:
     return head
 
 
-def sweep_message(n_pdfs: int, n_notes: int, model: str) -> str:
-    notes = "1 note" if n_notes == 1 else f"{n_notes:,} notes"
-    pdfs = "1 PDF" if n_pdfs == 1 else f"{n_pdfs:,} PDFs"
-    return (
-        f"Re-index everything with {model}?\n\n"
-        f"{notes} and {pdfs} will be embedded again locally. "
-        "This may take a while. If you decline, the card index is rebuilt "
-        "when a PDF is next indexed, with confirmation.\n\n"
-        "You can stop it at any time from the bar at the bottom of the main window."
-    )
-
-
 def card_index_confirm_message(pdf_label: str) -> str:
+    """``pdf_label`` "" is ⟳'s card-index-only job."""
+    if not pdf_label:
+        return ("Indexing needs to rebuild your whole card index locally. "
+                "This may take a while. Skip to leave it for later.")
     return (
         f"Indexing “{pdf_label}” needs to rebuild your whole card index locally first. "
         "This may take a while. Skip to add this PDF anyway: matching against your cards "
         "stays degraded until the card index is rebuilt (Preferences' Index Now, "
-        "or the next model sweep, will finish it)."
+        "or the Library's ⟳, will finish it)."
     )
 
 
@@ -354,14 +360,69 @@ def request_pdf(name: str, *, announce: bool = True) -> bool:
     return request([(JOB_PDF, name)], announce=announce) > 0
 
 
-def on_pdf_imported(name: str) -> bool:
-    """``import_pdf_file``'s hook — the ONE funnel every import surface
-    returns through, so this covers the Library tree drop, the Library's
-    Browse…, the deck-screen square and the deck-screen file drop
-    without any of them knowing about indexing."""
-    if not name or not auto_index_enabled(settings.read()):
-        return False
-    return request_pdf(name)
+def _excluded_now(names) -> set:
+    from . import drive_store
+
+    return drive_store.excluded_safes(drive_store.load(settings.user_files()), names)
+
+
+def _drop_if_excluded(name: str) -> bool:
+    """Excluded while its job ran: the index it just wrote goes too.
+    True when ``name`` is excluded (its index is gone)."""
+    try:
+        if _excluded_now([name]):
+            from . import pdf_index
+
+            pdf_index.delete(settings.user_files(), name)
+            return True
+    except Exception as exc:
+        print(f"[klausmate] dropping an excluded PDF's index failed: {exc}")
+    return False
+
+
+def refresh(parent: Any = None) -> int:
+    """The Library's ⟳: queue every PDF that needs indexing and is not
+    excluded, delete index data an excluded PDF still has, and say what
+    happened. The only thing that starts indexing (manual indexing).
+    Returns how many jobs were queued."""
+    if mw is None or getattr(mw, "col", None) is None:
+        tooltip("Open a profile first.", parent=parent)
+        return 0
+    try:
+        from . import pdf_index
+
+        uf = settings.user_files()
+        names = [name for name, _manifest in _manifest_paths()]
+        excluded = _excluded_now(names)
+        for name in excluded:
+            if os.path.isdir(pdf_index.index_dir(uf, name)):
+                forget(name)
+                pdf_index.delete(uf, name)
+        sig = embeddings.index_signature(settings.read())
+
+        def needs(name: str) -> bool:
+            return needs_indexing(
+                pdf_index.stats_from_disk(pdf_index.index_dir(uf, name)),
+                pdf_index.source_signature(uf, name),
+                sig,
+            )
+
+        try:
+            stale = set(stale_match_names())
+        except Exception as exc:
+            print(f"[klausmate] stale match scan failed: {exc}")
+            stale = set()
+        jobs = refresh_jobs(
+            names, excluded, pending_names(), needs, stale, card_index_from_scratch(settings.read())
+        )
+    except Exception as exc:
+        print(f"[klausmate] refresh failed: {exc}")
+        tooltip("Couldn't check the Library for new PDFs.", parent=parent)
+        return 0
+    added = request(jobs, announce=False) if jobs else 0
+    n_pdfs = sum(1 for kind, _n in jobs if kind == JOB_PDF)
+    tooltip(refresh_message(n_pdfs, bool(jobs) and not n_pdfs), parent=parent)
+    return added
 
 
 def cancel_all() -> None:
@@ -527,6 +588,8 @@ def _run(job: tuple[str, str]) -> None:
         )
 
     def on_error(exc: Exception) -> None:
+        if kind == JOB_PDF:
+            _drop_if_excluded(name)  # phase two may already have saved it
         if not live():
             return
         _fail(exc)
@@ -538,10 +601,16 @@ def _run(job: tuple[str, str]) -> None:
             tag_sync.sync_after_matches(mw, name, matches)
         except Exception as exc:
             print(f"[klausmate] tag sync after index failed: {exc}")
+        _drop_if_excluded(name)
         _job_done(f"Indexed “{label}”.", finished=name)
 
     def after_pdf_index(idx: Any) -> None:
+        # Before live(): a cancelled run still saved its partial index.
+        excluded = _drop_if_excluded(name)
         if not live():
+            return
+        if excluded:
+            _job_done(f"“{label}” is excluded from the index.")
             return
         if not idx.is_complete():
             # Reachable only if something set the shared cancel event
@@ -593,6 +662,9 @@ def _run(job: tuple[str, str]) -> None:
         if embed:
             start_card_index()
             return
+        if kind == JOB_CARDS:
+            _job_done("Card index rebuild skipped.")
+            return
         # K-237's decline behaviour: continue without the embed. The rest
         # of the chain still runs, against whatever card
         # index already exists on disk (stale or empty) rather than the
@@ -618,17 +690,14 @@ def _run(job: tuple[str, str]) -> None:
         )
     )
     cfg = settings.read()
-    # The confirm guards only the SILENT auto-index-on-add path (a single
-    # PDF's own phase one) — never a JOB_CARDS entry, which only ever
-    # reaches this queue via offer_model_sweep's OWN priced confirm
-    # (Preferences Save); asking again here would double-prompt for a
-    # spend the user already approved.
-    if kind != JOB_PDF or not card_index_from_scratch(cfg):
+    # K-237: a from-scratch card re-embed is long, so it is asked first —
+    # as a PDF job's phase one and as ⟳'s card-index-only job alike.
+    if not card_index_from_scratch(cfg):
         start_card_index()
     else:
         ask_card_index_confirm(
             mw,
-            card_index_confirm_message(label),
+            card_index_confirm_message(label if kind == JOB_PDF else ""),
             card_index_answered,
         )
 
@@ -684,7 +753,7 @@ def _fail(exc: Exception) -> None:
     _publish(RunnerState(message=msg, failed=True))
 
 
-# ── the model-change sweep ───────────────────────────────────────────────
+# ── Library scans ────────────────────────────────────────────────────────
 
 
 def _manifest_paths() -> list[tuple[str, str]]:
@@ -700,93 +769,6 @@ def _manifest_paths() -> list[tuple[str, str]]:
             (name, os.path.join(pdf_index.index_dir(root, name), pdf_index.MANIFEST_FILE))
         )
     return out
-
-
-def indexed_pdf_names() -> list[str]:
-    """Every PDF that has an index on disk, fresh or stale.
-
-    Membership is "has a manifest FILE", NOT a signature comparison —
-    after a model change every one of them is stale by definition, and
-    hand-spelling that comparison is exactly how eight call sites
-    silently broke when the signature grew a third element.
-
-    Nor a PARSED, version-checked manifest (K-236): ``stats_from_disk``
-    reads through ``card_index.read_manifest``, which answers None for
-    any version but the current one, so asking it here excluded every
-    index built before pdf_index v2 — the exact population D8's sweep
-    exists for. The upgrader accepted a priced re-index and only the
-    card index rebuilt.
-    """
-    names: list[str] = []
-    try:
-        for name, manifest in _manifest_paths():
-            if os.path.isfile(manifest):
-                names.append(name)
-    except Exception as exc:
-        print(f"[klausmate] index sweep scan failed: {exc}")
-    return names
-
-
-def unindexed_pdf_names() -> list[str]:
-    """Every PDF with stored text whose page index is absent, incomplete
-    or unreadable at the current version — what the resume pass queues.
-    Reads through ``stats_from_disk`` on purpose: an old-version manifest
-    reads as absent everywhere else too, so re-indexing it here is the
-    same answer the Library's warning icon already gives."""
-    names: list[str] = []
-    try:
-        from . import pdf_index
-
-        for name, manifest in _manifest_paths():
-            if not pdf_index.stats_from_disk(os.path.dirname(manifest))["complete"]:
-                names.append(name)
-    except Exception as exc:
-        print(f"[klausmate] unindexed scan failed: {exc}")
-    return names
-
-
-def resume_unindexed() -> int:
-    """Queue every unindexed PDF, quietly. The queue is in memory: a
-    failure, the status bar's ✕ or closing the profile drops whatever
-    was behind the running job, and nothing used to ask about those
-    PDFs again (Pouya, 2026-09-30: 14 of 94 indexed). Runs once per
-    profile open from the readiness check, after Ollama answered, and
-    only when auto-indexing is on. Returns how many were newly queued."""
-    if not auto_index_enabled(settings.read()):
-        return 0
-    names = unindexed_pdf_names()
-    if not names:
-        return 0
-    return request([(JOB_PDF, n) for n in names], announce=False)
-
-
-def stale_index_names() -> list[str]:
-    """Every PDF whose manifest was written by an older INDEX_VERSION.
-
-    These read as ABSENT everywhere (``pdf_index.load`` and
-    ``stats_from_disk`` both gate on the version), so the Library shows
-    them unembedded, the Lecture panel finds no page and the assistant
-    skips them — and nothing would ever offer to rebuild them, because
-    an UPGRADE moves no embedding signature. That is why this is the
-    third sweep trigger (K-236). A corrupt manifest is not stale: it
-    rebuilds on demand, and a whole-collection prompt is the wrong
-    answer to one bad file.
-    """
-    names: list[str] = []
-    try:
-        from . import pdf_index
-
-        for name, manifest in _manifest_paths():
-            try:
-                with open(manifest, encoding="utf-8") as f:
-                    version = json.load(f).get("version")
-            except (OSError, ValueError, AttributeError):
-                continue
-            if version != pdf_index.INDEX_VERSION:
-                names.append(name)
-    except Exception as exc:
-        print(f"[klausmate] stale index scan failed: {exc}")
-    return names
 
 
 def stale_match_names() -> list[str]:
@@ -833,10 +815,8 @@ def card_index_from_scratch(cfg: dict) -> bool:
     index rather than diff it — no manifest on disk yet, or its stored
     signature no longer matches the configured provider/model/dims?
 
-    The exact condition ``offer_model_sweep`` already gates its own priced
-    confirm on, read here from ``curation.index_stats()`` (manifest-only,
-    no vector load — cheap enough for the phase-one call site this backs,
-    which runs on every silent auto-index-on-add). Comparison is always
+    Read from ``curation.index_stats()`` (manifest-only, no vector load —
+    cheap enough for every PDF job's phase one and every ⟳). Comparison is always
     ``signature_changed``/``embeddings.signature_matches``, never a
     hand-spelled tuple check, for the same reason spelled out there.
     """
@@ -852,55 +832,6 @@ def card_index_from_scratch(cfg: dict) -> bool:
     current = embeddings.index_signature(cfg)
     stored = (stats.get("provider", ""), stats.get("model", ""), stats.get("dims", 0))
     return signature_changed(stored, current)
-
-
-def offer_model_sweep(parent: Any, previous: tuple) -> bool:
-    """Offer a local rebuild for a changed model or stale index manifests."""
-    if mw is None or getattr(mw, "col", None) is None:
-        return False
-    current = embeddings.index_signature(settings.read())
-    if not (
-        signature_changed(previous, current) or stale_index_names()
-    ):
-        return False
-    names = indexed_pdf_names()
-    try:
-        note_count = mw.col.note_count()
-    except Exception:
-        note_count = 0
-    text = sweep_message(len(names), note_count, current[1] or current[0])
-    jobs = sweep_jobs(names)
-
-    def answered(_result: int) -> None:
-        clicked = box.clickedButton()
-        yes = (
-            clicked is not None
-            and box.standardButton(clicked) == QMessageBox.StandardButton.Yes
-        )
-        box.deleteLater()
-        if yes:
-            request(jobs, announce=False)
-
-    box = QMessageBox(parent)
-    box.setWindowTitle("Re-index with the new model?")
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setText(text)
-    box.setStandardButtons(
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-    )
-    box.setDefaultButton(QMessageBox.StandardButton.No)
-    no_btn = box.button(QMessageBox.StandardButton.No)
-    if no_btn is not None:
-        no_btn.setObjectName("SecondaryButton")
-    try:
-        from . import theme
-
-        box.setStyleSheet(theme.dialog_qss(theme.night_mode()))
-    except Exception as exc:
-        print(f"[klausmate] sweep dialog theme failed: {exc}")
-    box.finished.connect(answered)
-    box.open()
-    return True
 
 
 def ask_card_index_confirm(parent: Any, text: str, answer: Callable[[bool], None]) -> None:

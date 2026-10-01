@@ -33,7 +33,9 @@ _cache: dict = {"key": None, "index": None}
 def build_index(drive: dict, prefs: dict) -> dict:
     """Pure. ``labels``: tag casefolded -> the name to show, for the
     root, every folder and every PDF that owns a tag. ``safes``: PDF tag
-    -> safe name. ``folders``: folder tag -> folder path."""
+    -> safe name. ``folders``: folder tag -> folder path. ``excluded``:
+    the tags of excluded PDFs and folders, those covered by an excluded
+    folder included (manual indexing)."""
     labels = {ROOT_TAG.casefold(): ROOT_LABEL}
     safes: dict[str, str] = {}
     folder_tags: dict[str, str] = {}
@@ -51,7 +53,13 @@ def build_index(drive: dict, prefs: dict) -> dict:
             display = (pdfs.get(safe) or {}).get("display") or safe
             labels[key] = tag_sync.strip_pdf_ext(display).strip() or safe
             safes[key] = safe
-    return {"labels": labels, "safes": safes, "folders": folder_tags}
+    from . import drive_store
+
+    x = drive.get("excluded") or {}
+    view = {"pdfs": pdfs, "excluded": {"pdfs": list(x.get("pdfs") or []), "folders": list(x.get("folders") or [])}}
+    excluded = {k for k, f in folder_tags.items() if drive_store.folder_excluded(view, f)}
+    excluded |= {k for k, safe in safes.items() if drive_store.is_excluded(view, safe)}
+    return {"labels": labels, "safes": safes, "folders": folder_tags, "excluded": excluded}
 
 
 def build_labels(drive: dict, prefs: dict) -> dict[str, str]:
@@ -69,6 +77,17 @@ def library_index() -> dict:
         _cache["index"] = build_index(drive_store.load(settings.user_files()), retention._load_prefs())
         _cache["key"] = key
     return _cache["index"]
+
+
+def is_excluded_tag(tag: str | None) -> bool:
+    return bool(tag) and tag.casefold() in library_index()["excluded"]
+
+
+def tooltip_for(tag: str | None) -> str | None:
+    """The row's hover text: why it needs attention, or that indexing
+    skips it; None for an ordinary row."""
+    reason = "Excluded from the index" if is_excluded_tag(tag) else status_for(tag)
+    return f"{label_for(tag)}\n{reason}" if reason else None
 
 
 def library_labels() -> dict[str, str]:
@@ -121,6 +140,8 @@ _WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 ROOT_ICON = os.path.join(_WEB, "library-root.svg")
 FOLDER_ICON = os.path.join(_WEB, "library-folder.svg")
 PDF_ICON = os.path.join(_WEB, "library-pdf.svg")
+REFRESH_ICON = os.path.join(_WEB, "library-refresh.svg")
+ADD_PDF_ICON = os.path.join(_WEB, "library-add-pdf.svg")
 
 
 def _kind(item) -> str:
@@ -204,7 +225,7 @@ INDEXING = "Indexing…"
 MISSING = "Missing from your Library folder"
 
 
-def pdf_status(safes, pending: set, index_status: Callable, missing=()) -> dict[str, str]:
+def pdf_status(safes, pending: set, index_status: Callable, missing=(), excluded=()) -> dict[str, str]:
     """``{safe: reason}`` for PDFs that need attention. Pure: the caller
     passes ``index_status(safe) -> (indexed, stale)`` and the rescan's
     ``missing`` set, which wins. A failed index run is not here: the
@@ -213,6 +234,8 @@ def pdf_status(safes, pending: set, index_status: Callable, missing=()) -> dict[
     for safe in safes:
         if safe in missing:
             out[safe] = MISSING
+            continue
+        if safe in excluded:
             continue
         if safe in pending:
             out[safe] = INDEXING
@@ -242,9 +265,12 @@ import weakref  # noqa: E402
 from aqt import gui_hooks, mw  # noqa: E402
 from aqt.operations import QueryOp  # noqa: E402
 from aqt.qt import (  # noqa: E402
+    QAction,
     QColor,
     QEvent,
+    QIcon,
     QObject,
+    QPalette,
     QPushButton,
     QStyle,
     QStyledItemDelegate,
@@ -285,6 +311,12 @@ class LibraryNameDelegate(QStyledItemDelegate):
             label = label_for(name)
             if label:
                 option.text = label
+                if is_excluded_tag(name):
+                    option.palette.setColor(
+                        QPalette.ColorRole.Text,
+                        option.palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text),
+                    )
+                    return
                 reason = status_for(name)
                 if reason and option.widget is not None:
                     icon = (
@@ -298,10 +330,9 @@ class LibraryNameDelegate(QStyledItemDelegate):
 
     def helpEvent(self, event, view, option, index) -> bool:  # noqa: N802 - Qt override
         try:
-            name = self.tag_of(index)
-            reason = status_for(name)
-            if event.type() == QEvent.Type.ToolTip and reason:
-                QToolTip.showText(event.globalPos(), f"{label_for(name)}\n{reason}", view)
+            text = tooltip_for(self.tag_of(index))
+            if event.type() == QEvent.Type.ToolTip and text:
+                QToolTip.showText(event.globalPos(), text, view)
                 return True
         except Exception:  # noqa: BLE001
             pass
@@ -454,11 +485,13 @@ def refresh_status() -> None:
         from . import embeddings, index_queue, retention
 
         sig = embeddings.index_signature(settings.read())
+        lib = library_index()
         _state["status"] = pdf_status(
-            set(library_index()["safes"].values()),
+            set(lib["safes"].values()),
             index_queue.pending_names(),
             lambda safe: retention.index_status(safe, sig),
             missing=_missing(),
+            excluded={safe for tag, safe in lib["safes"].items() if tag in lib["excluded"]},
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] library status failed: {exc}")
@@ -485,6 +518,7 @@ def menu_entries(parent, key: str) -> list:
     menu order; empty for a tag that is not the Library's. Browse's
     sidebar hook and the Add tab's tree both build their menus from
     this."""
+    from . import drive_store
     from . import library_actions as act
 
     lib = library_index()
@@ -508,6 +542,13 @@ def menu_entries(parent, key: str) -> list:
             if pdf_handler.pdf_path_for(pdf_source.user_files_dir(), safe) is None:
                 name = lib["labels"].get(key) or safe
                 out.append(("Remove from Library", lambda: _confirm_remove(safe, name)))
+        drive = drive_store.load(settings.user_files())
+        if not drive_store.folder_excluded(drive, (drive["pdfs"].get(safe) or {}).get("folder")):
+            label = lib["labels"].get(key) or safe
+            if safe in drive["excluded"]["pdfs"]:
+                out += [None, ("Include in Index", lambda: act.include("pdf", safe))]
+            else:
+                out += [None, ("Exclude from Index", lambda: act.exclude(parent, "pdf", safe, label))]
     elif key in lib["folders"]:
         folder = lib["folders"][key]
         out += [None, ("New Folder…", lambda: act.new_folder(parent, folder)),
@@ -515,6 +556,14 @@ def menu_entries(parent, key: str) -> list:
         if not act.pdfs_under(folder):  # Anki's own rename and delete skip a tag with no cards
             out += [("Rename Folder…", lambda: act.rename_folder(parent, folder)),
                     ("Remove Folder", lambda: act.remove_empty_folder(folder))]
+        drive = drive_store.load(settings.user_files())
+        above = folder.rsplit("/", 1)[0] if "/" in folder else None
+        if not drive_store.folder_excluded(drive, above):
+            label = lib["labels"].get(key) or folder
+            if folder in drive["excluded"]["folders"]:
+                out += [None, ("Include in Index", lambda: act.include("folder", folder))]
+            else:
+                out += [None, ("Exclude from Index", lambda: act.exclude(parent, "folder", folder, label))]
     return out
 
 
@@ -549,7 +598,7 @@ def _confirm_remove(safe: str, name: str) -> None:
     )
 
 
-# ------------------------------------------------------------ click, drop, footer
+# ------------------------------------------------------------ click, drop, header
 
 
 def _on_clicked(browser, index) -> None:
@@ -604,23 +653,6 @@ class PdfDropFilter(QObject):
         return True
 
 
-class Footer(QWidget):
-    """Under the sidebar tree (and the Add tab's tree): the Import PDFs…
-    button. ``parent`` is any widget the file dialog can hang off.
-    Indexing progress shows in the status bar (``status_bar``), not here."""
-
-    def __init__(self, parent) -> None:
-        super().__init__()
-        self.setObjectName("klausmateLibraryFooter")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 6, 8, 6)
-        self.button = QPushButton("Import PDFs…", self)
-        lay.addWidget(self.button)
-        from . import library_actions
-
-        self.button.clicked.connect(lambda *_a: library_actions.pick_and_import(parent))
-
-
 def _on_index_state(state) -> None:
     """A PDF finished indexing (or the runner went idle): its warning
     icon may be stale."""
@@ -628,17 +660,75 @@ def _on_index_state(state) -> None:
         refresh_status()
 
 
-def _install_footer(browser, sidebar) -> None:
-    if getattr(browser, "_klausmate_library_footer", None) is not None:
+def themed_icon(path: str) -> QIcon:
+    """A Library icon through Anki's themed loader (white at night)."""
+    try:
+        from aqt.theme import theme_manager
+
+        return theme_manager.icon_from_resources(path)
+    except Exception:  # noqa: BLE001
+        return QIcon(path)
+
+
+_header_actions: "weakref.WeakSet" = weakref.WeakSet()
+_header_theme_hooked = False
+
+
+def _retint_headers() -> None:
+    for action in list(_header_actions):
+        try:
+            action.setIcon(themed_icon(action.property("klausmate_icon")))
+        except RuntimeError:
+            pass
+
+
+def header_actions(parent) -> tuple:
+    """⟳ (index what needs it) and +PDF (import), for Browse's sidebar
+    toolbar and the Add tab's tree header. ``parent`` owns the actions
+    and is what the file picker and tooltips hang off."""
+    global _header_theme_hooked
+    from . import index_queue, library_actions
+
+    out = []
+    for name, tip, icon, fn in (
+        ("klausmate_library_refresh", "Index New and Changed PDFs", REFRESH_ICON,
+         lambda *_a: index_queue.refresh(parent)),
+        ("klausmate_library_add_pdf", "Import PDFs…", ADD_PDF_ICON,
+         lambda *_a: library_actions.pick_and_import(parent)),
+    ):
+        action = QAction(themed_icon(icon), tip, parent)
+        action.setObjectName(name)
+        action.setToolTip(tip)
+        action.setProperty("klausmate_icon", icon)
+        action.triggered.connect(fn)
+        _header_actions.add(action)
+        out.append(action)
+    if not _header_theme_hooked:
+        try:
+            from aqt import gui_hooks
+
+            gui_hooks.theme_did_change.append(_retint_headers)
+            _header_theme_hooked = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[klausmate] library header theme hook failed: {exc}")
+    return tuple(out)
+
+
+def _install_header(browser) -> None:
+    """⟳ and +PDF on Anki's own sidebar toolbar, beside its search box,
+    once per Browse; Finder drops land on the tree."""
+    if getattr(browser, "_klausmate_library_header", None) is not None:
         return
-    grid = browser.sidebarDockWidget.widget().layout()
-    footer = Footer(browser)
-    grid.addWidget(footer, grid.rowCount(), 0, 1, 2)
-    browser._klausmate_library_footer = footer
+    sidebar = browser.sidebar
+    toolbar = sidebar.toolbar
+    toolbar.addSeparator()
+    actions = header_actions(toolbar)
+    for action in actions:
+        toolbar.addAction(action)
+    browser._klausmate_library_header = actions
     drops = PdfDropFilter(sidebar)
+    sidebar.viewport().setAcceptDrops(True)
     sidebar.viewport().installEventFilter(drops)
-    footer.setAcceptDrops(True)
-    footer.installEventFilter(drops)
     sidebar._klausmate_drops = drops
 
 
@@ -665,9 +755,9 @@ def on_browser_will_show(browser) -> None:
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] library sidebar install failed: {exc}")
     try:
-        _install_footer(browser, browser.sidebar)
+        _install_header(browser)
     except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] library sidebar footer failed: {exc}")
+        print(f"[klausmate] library sidebar header failed: {exc}")
 
 
 def on_profile_will_close() -> None:

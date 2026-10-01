@@ -236,8 +236,7 @@ def _nudge_for(cfg):
     """(title, text, informative) the readiness nudge would show, or None
     when it shows nothing at all."""
     shown = []
-    saved = (setup_flow._themed_message_box, _settings.store,
-             setup_flow._offer_v2_index_sweep)
+    saved = (setup_flow._themed_message_box, _settings.store)
 
     def _fake_box(_parent, title, _icon):
         msg = _FakeMsg(title)
@@ -246,14 +245,10 @@ def _nudge_for(cfg):
 
     setup_flow._themed_message_box = _fake_box
     _settings.store = _settings.DictStore(cfg)
-    # The v2 sweep is K-236's own gate and is exercised by its own pins;
-    # neutralised here so this reads the nudge alone.
-    setup_flow._offer_v2_index_sweep = lambda _cfg: False
     try:
         setup_flow._readiness_check_body()
     finally:
-        (setup_flow._themed_message_box, _settings.store,
-         setup_flow._offer_v2_index_sweep) = saved
+        (setup_flow._themed_message_box, _settings.store) = saved
     if not shown:
         return None
     return (shown[0].title, shown[0].text, shown[0].info)

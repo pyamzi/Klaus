@@ -64,7 +64,7 @@ def ensure(cfg, save_config):
     cfg['endpoint'] = 'http://127.0.0.1:12346'
     save_config(cfg)
     return runtime.EnsureResult('started', cfg['endpoint'])
-with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store()), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_offer_v2_index_sweep', lambda cfg: events.append('sweep')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
+with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store()), patch.object(setup, 'mw', SimpleNamespace(taskman=SimpleNamespace(run_on_main=main.append))), patch.object(runtime, 'ensure_server', ensure), patch.object(runtime.server_manager, 'stop', lambda: events.append('stop')), patch.object(setup, '_readiness_check_body', lambda: events.append('nudge')):
     setup._readiness_after_library_root()
     check('startup deferred and collection free', operations[-1].collection_free and events == [])
     setup._first_run_dialog_shown_this_session = True
@@ -77,7 +77,7 @@ with patch.object(setup, 'QueryOp', Op), patch.object(_settings, 'store', _Store
     main.pop(0)()
     operations[-1].success(result)
     check('only endpoint is patched', patches == [{'endpoint': 'http://127.0.0.1:12346'}])
-    check('reachable startup offers stale sweep', events == ['ensure', 'sweep'])
+    check('a reachable startup indexes nothing on its own (manual indexing)', events == ['ensure'], str(events))
     setup._readiness_after_library_root()
     result = operations[-1].work(None)
     setup.stop_local_runtime()

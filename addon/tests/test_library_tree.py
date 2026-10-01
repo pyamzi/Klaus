@@ -1,6 +1,6 @@
 """The Add tab's Library tree (klausmate/library_tree.py): Klaus's own view
 over the index library_sidebar builds — same rows, icons, names, retention
-%, right-click items, import footer and Finder drops as Browse's sidebar,
+%, right-click items, ⟳ and +PDF header and Finder drops as Browse's sidebar,
 plus a filter box; a single click on a PDF opens it.
 Spec: docs/superpowers/specs/2026-10-01-add-tab-design.md, "The Library tree".
 
@@ -138,22 +138,25 @@ act = importlib.import_module("klausmate.library_actions")
 act.pdfs_under = lambda folder: ["Intro_to_CBC"] if folder == "2-BiB/Exam 1/Week 1" else []
 labels = lambda key: [e[0] for e in ls.menu_entries(tree, key) if e is not None]  # noqa: E731
 check("root", labels(ROOT) == ["Import PDFs…", "New Folder…"])
-check("a PDF", labels(CBC) == ["Match Sensitivity…", "Retention History…", "Show in Finder"])
-check("a folder with PDFs", labels(WEEK) == ["New Folder…", "Import PDFs Here…"])
-check("an empty folder", labels(EMPTY) == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder"])
+check("a PDF", labels(CBC) == ["Match Sensitivity…", "Retention History…", "Show in Finder", "Exclude from Index"])
+check("a folder with PDFs", labels(WEEK) == ["New Folder…", "Import PDFs Here…", "Exclude from Index"])
+check("an empty folder", labels(EMPTY) == ["New Folder…", "Import PDFs Here…", "Rename Folder…", "Remove Folder", "Exclude from Index"])
 check("separators are None entries, first", ls.menu_entries(tree, CBC)[0] is None)
 check("the Browse hook still builds the same menu through menu_entries",
       "menu_entries(" in open("klausmate/library_sidebar.py").read().split("def on_context_menu")[1].split("\ndef ")[0])
 shown = []
 tree.popup_menu = lambda menu, pos: shown.append([a.text() for a in menu.actions() if not a.isSeparator()])
 tree._on_context_menu(tree.view.visualRect(tree.index_for(CBC)).center())
-check("the context menu is built from the entries and shown without exec", shown == [["Match Sensitivity…", "Retention History…", "Show in Finder"]], str(shown))
+check("the context menu is built from the entries and shown without exec", shown == [["Match Sensitivity…", "Retention History…", "Show in Finder", "Exclude from Index"]], str(shown))
 
-section("drops and footer")
-check("drops are accepted on the view and the footer",
-      tree.view.viewport().acceptDrops() and tree.footer.acceptDrops()
-      and isinstance(getattr(tree, "_drops", None), ls.PdfDropFilter))
-check("the footer is the sidebar's Import button", isinstance(tree.footer, ls.Footer) and tree.footer.button.text() == "Import PDFs…")
+section("drops and the header row")
+check("drops are accepted on the view", tree.view.viewport().acceptDrops() and isinstance(getattr(tree, "_drops", None), ls.PdfDropFilter))
+check("no footer", not hasattr(tree, "footer"))
+check("the header row: the filter, then ⟳ and +PDF",
+      [a.objectName() for a in tree.header.actions()] == ["klausmate_library_refresh", "klausmate_library_add_pdf"]
+      and tree.layout().itemAt(0).layout() is not None
+      and tree.layout().itemAt(0).layout().itemAt(0).widget() is tree.filter
+      and tree.layout().itemAt(0).layout().itemAt(1).widget() is tree.header)
 
 section("registry and refresh fan-out")
 check("a tree is registered beside the sidebars", tree in ls._trees)

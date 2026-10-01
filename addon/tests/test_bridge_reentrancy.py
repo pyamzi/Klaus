@@ -415,25 +415,15 @@ check("setup_flow: the native folder sheet is deferred a tick past the "
       "finished handler, never nested inside it",
       "QTimer.singleShot(0, _pick_folder)" in _K114["setup_flow"])
 
-# K-236: raw source, never code_only — every name this pin cares about
-# lives in a string literal, and code_only strips those, so the whole
-# check would pass against a file that lost the feature.
-_V2_SWEEP_SRC = _func_src("setup_flow", "_offer_v2_index_sweep")
-check("setup_flow: the key-is-present path carries the ONE-TIME v2 "
-      "index-sweep offer — an upgrade to pdf_index v2 moves no "
-      "embedding signature, so Preferences' Save can never ask, while "
-      "every pre-v2 index reads as absent (blank Library, silent "
-      "Lecture panel). Asked once per profile off the stale-manifest "
-      "scan, and the flag is written whether the answer was yes or NO: "
-      "a refused whole-collection re-embed is an answer, not a snooze",
-      "_offer_v2_index_sweep(settings.read())"
-      in _func_src("setup_flow", "_readiness_after_library_root")
-      and "_resume_unindexed()" in _func_src("setup_flow", "_readiness_after_library_root")
-      and "index_queue.resume_unindexed()" in _func_src("setup_flow", "_resume_unindexed")
-      and '_v2_index_sweep_offered' in _V2_SWEEP_SRC
-      and "index_queue.stale_index_names()" in _V2_SWEEP_SRC
-      and "index_queue.offer_model_sweep(" in _V2_SWEEP_SRC
-      and 'settings.patch({"_v2_index_sweep_offered": True})' in _V2_SWEEP_SRC)
+# Manual indexing: Ollama answering at profile open starts no indexing —
+# no v2 sweep offer, no stale re-match, no resume pass. Raw source: the
+# names live in string-free code, but the pin reads the whole function.
+_READY_SRC = _func_src("setup_flow", "_readiness_after_library_root")
+check("setup_flow: a reachable runtime at profile open indexes nothing on its own "
+      "(the Library's ⟳ is the only trigger)",
+      bool(_READY_SRC) and "_readiness_check_body()" in _READY_SRC
+      and not any(n in _READY_SRC for n in ("_offer_v2_index_sweep", "_rematch_stale_matches",
+                                            "_resume_unindexed", "index_queue")))
 
 # Klaus Plus / setup_flow readiness pins used to live here as source-only
 # checks (an AST-extracted-source substring for _embedding_ready and a

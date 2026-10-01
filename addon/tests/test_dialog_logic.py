@@ -437,13 +437,14 @@ print("== changing the model re-indexes everything (K-152) ==")
 # The signature comparison lives in prefs_state.commit() now (pinned
 # behaviourally in tests/test_prefs_state.py: the index_sweep effect
 # carries the BASELINE signature); the shell only dispatches it.
-check("the shell dispatches the index_sweep effect to index_queue with the "
-      "baseline signature the state captured",
-      "index_queue.offer_model_sweep(dlg, prev_sig)" in _fn_src("_run_index_sweep")
+check("the shell dispatches the index_sweep effect, which tooltips where to "
+      "re-index (manual indexing: no re-index prompt)",
+      "index_queue" not in _fn_src("_run_index_sweep")
+      and "REINDEX_HINT" in _fn_src("save_all")
       and "_run_index_sweep(effect[1])" in _fn_src("_run_effect"))
 
 _iq_code = code_only(open("klausmate/index_queue.py").read())
-check("the sweep offer is raised window-modal — open() and a finished "
+check("the card-index confirm is raised window-modal — open() and a finished "
       "callback, never exec() (K-114: exec's nested app-modal loop "
       "segfaults on Qt 6.11 + macOS 26, and the Preferences window this "
       "is raised from is itself non-modal)",

@@ -50,7 +50,7 @@ tmp = tempfile.mkdtemp(prefix="klaus_drive_")
 
 print("== drive_store basics ==")
 check("empty load is default-shaped",
-      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}})
+      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}, "excluded": {"pdfs": [], "folders": []}})
 
 drive_store.record_import(tmp, "Renal_Phys", "Renal Physiology (Dr. K).pdf")
 d = drive_store.load(tmp)
@@ -154,7 +154,7 @@ check("version mismatch -> default", drive_store.load(tmp)["pdfs"] == {})
 with open(os.path.join(tmp, "drive.json"), "w") as f:
     json.dump({"version": 1, "folders": "nope", "pdfs": [1, 2]}, f)
 check("wrong types -> default-shaped",
-      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}})
+      drive_store.load(tmp) == {"version": 1, "folders": [], "pdfs": {}, "window": {}, "excluded": {"pdfs": [], "folders": []}})
 check("write after corruption recovers",
       (drive_store.record_import(tmp, "A", "a.pdf") or True)
       and drive_store.display_name(tmp, "A") == "a.pdf")
@@ -730,9 +730,40 @@ check("no toolbar Library link, no Library window, no Library screen",
       and "class DriveWindow" not in _srcs["pdf_drive.py"]
       and not os.path.exists(os.path.join(ADDON, "library_tab.py")))
 check("every dialog in library_actions is an instance opened with open()",
-      _code_only(_srcs["library_actions.py"]).count(".open()") == 3)  # text prompt, sensitivity, file picker
+      _code_only(_srcs["library_actions.py"]).count(".open()") == 4)  # text prompt, sensitivity, file picker, exclude confirm
 check("Preferences' refresh hook still exists (manage_models calls it)",
       hasattr(pdf_drive, "refresh_open_library"))
+
+
+print("== exclusion (manual indexing) ==")
+ds = drive_store
+uf = tempfile.mkdtemp(prefix="klaus_excl_")
+ds.record_import(uf, "Hemo", "Hemo.pdf"); ds.add_folder(uf, "Exam 1/Week 1"); ds.set_folder(uf, "CBC", "Exam 1/Week 1")
+check("a file without the key loads as nothing excluded", ds.load(uf)["excluded"] == {"pdfs": [], "folders": []})
+check("set_excluded pdf round-trips", ds.set_excluded(uf, "pdf", "Hemo", True) and ds.is_excluded(ds.load(uf), "Hemo"))
+ds.set_excluded(uf, "folder", "Exam 1", True)
+check("a folder covers nested folders' PDFs",
+      ds.is_excluded(ds.load(uf), "CBC") and ds.folder_excluded(ds.load(uf), "Exam 1/Week 1"))
+ds.record_import(uf, "Later", "Later.pdf"); ds.set_folder(uf, "Later", "Exam 1")
+check("...and PDFs added later", ds.is_excluded(ds.load(uf), "Later"))
+check("a sibling folder is not covered", not ds.folder_excluded(ds.load(uf), "Exam 10"))
+check("excluded_safes picks the covered ones", ds.excluded_safes(ds.load(uf), ["Hemo", "CBC", "Later", "Other"]) == {"Hemo", "CBC", "Later"})
+ds.rename_folder(uf, "Exam 1", "Exam A")
+check("rename carries the exclusion",
+      ds.load(uf)["excluded"]["folders"] == ["Exam A"] and ds.is_excluded(ds.load(uf), "CBC"), str(ds.load(uf)["excluded"]))
+ds.remove_folder(uf, "Exam A")
+check("removing the folder drops it", ds.load(uf)["excluded"]["folders"] == [] and not ds.is_excluded(ds.load(uf), "CBC"),
+      str(ds.load(uf)["excluded"]))
+ds.remove_pdf(uf, "Hemo")
+check("removing the PDF drops it", ds.load(uf)["excluded"]["pdfs"] == [])
+ds.set_excluded(uf, "pdf", "X", True); ds.set_excluded(uf, "pdf", "X", False)
+check("include removes it", ds.load(uf)["excluded"]["pdfs"] == [])
+ds.set_excluded(uf, "pdf", "Y", True); ds.set_excluded(uf, "pdf", "Y", True)
+check("excluding twice stores it once", ds.load(uf)["excluded"]["pdfs"] == ["Y"])
+check("an unknown kind is refused", ds.set_excluded(uf, "page", "Y", True) is False)
+open(ds._drive_path(uf), "w").write("{corrupt")
+check("a corrupt file reads as nothing excluded",
+      not ds.is_excluded(ds.load(uf), "CBC") and ds.excluded_safes(ds.load(uf), {"CBC"}) == set())
 
 
 print(f"\n{PASS} passed, {FAIL} failed")

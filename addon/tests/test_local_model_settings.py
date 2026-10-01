@@ -54,7 +54,7 @@ mm = importlib.import_module('klausmate.manage_models')
 mm.mw = mw
 importlib.import_module('klausmate.curation').index_stats = lambda: {'exists': False}
 sweeps = []
-importlib.import_module('klausmate.index_queue').offer_model_sweep = lambda *args: sweeps.append(args)
+mm.tooltip = lambda text='', **_k: sweeps.append(text)  # a model change tooltips where to re-index
 class Op:
     def __init__(self, parent, op, success):
         self.op, self.success, self.free = op, success, False
@@ -206,7 +206,7 @@ check('selection populates pending embedding field only', field('embedding_model
 auto = dlg.findChild(QtWidgets.QAbstractButton, 'runtime_auto_setup')
 auto.setChecked(False)
 save_preferences()
-check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps))
+check('Save persists selection and automatic management', store['embedding_model'] == 'new-model' and not store['runtime_auto_setup'] and bool(sweeps) and sweeps[-1].endswith('Press ⟳ in the Library to re-index for the new model.') and 'preferences saved' in sweeps[-1], str(sweeps))  # one tooltip: Anki's closes the previous one
 button('Install/Start').click()
 check('explicit install click queues background setup', len(operations) == 1 and not button('Download').isEnabled())
 before = status.text()

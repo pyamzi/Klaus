@@ -184,7 +184,16 @@ _EMPTY_STATS: dict = {
     "model": "",
     "dims": 0,
     "updated_at": 0.0,
+    "version": 0,
+    "source_sig": None,
 }
+
+
+def _sig_tuple(raw) -> tuple[int, int] | None:
+    try:
+        return (int(raw[0]), int(raw[1])) if raw else None
+    except (TypeError, ValueError, IndexError):
+        return None
 
 
 def stats_from_disk(dir_path: str) -> dict:
@@ -204,6 +213,8 @@ def stats_from_disk(dir_path: str) -> dict:
             "model": str(m.get("model") or ""),
             "dims": int(m.get("dims") or 0),
             "updated_at": float(m.get("updated_at") or 0.0),
+            "version": int(m.get("version") or 0),
+            "source_sig": _sig_tuple(m.get("source_sig")),
         }
     except (KeyError, TypeError, ValueError):  # a dict, but not a manifest
         return dict(_EMPTY_STATS)

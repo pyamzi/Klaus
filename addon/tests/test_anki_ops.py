@@ -271,12 +271,6 @@ finally:
 check("batch retags load the card index once, not once per PDF",
       len(_loads) == 1 and out == {"a": None, "b": None, "c": None})
 
-_bt = open("klausmate/browse_toolkit.py", encoding="utf-8").read()
-check("the duplicate scan runs without the collection; only the row "
-      "texts are fetched with it",
-      "op = QueryOp(parent=mw, op=work, success=with_texts)" in _bt
-      and "op.without_collection().run_in_background()" in _bt
-      and "op2 = QueryOp(parent=mw, op=texts, success=done)" in _bt)
 _mm = open("klausmate/manage_models.py", encoding="utf-8").read()
 check("Preferences stops its preview timer on every close",
       "dlg.finished.connect(lambda _result: _preview_timer.stop())" in _mm)

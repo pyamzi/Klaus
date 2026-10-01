@@ -359,8 +359,8 @@ def _prepare(uf: str, root: str) -> dict:
 def _after_ingest(safes: list[str]) -> None:
     """A PDF the folder scan imported gets what every other import
     surface gives it (``__init__.import_pdf_file``): page records for the
-    transcript strip and current_page, a tag so it shows in Browse's
-    sidebar, and auto-indexing when that is on."""
+    transcript strip and current_page, and a tag so it shows in Browse's
+    sidebar. Indexing waits for the Library's ⟳ (manual indexing)."""
     uf = settings.user_files()
     for safe in safes:
         try:
@@ -371,12 +371,6 @@ def _after_ingest(safes: list[str]) -> None:
             )
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] page records for {safe!r} failed: {exc}")
-        try:
-            from . import index_queue
-
-            index_queue.on_pdf_imported(safe)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[klausmate] auto-index for {safe!r} failed: {exc}")
     # Registers the new PDFs' tags. Scheduled, not run inline: the
     # rescan just queued tag renames, and reading the collection before
     # they land mistook them for deletions (2026-09-30).
@@ -440,8 +434,8 @@ def _tell_readers(uf: str, root: str, summary: dict) -> None:
     """After the mapping is applied, never before: open readers follow a
     move (the scan's, or Klaus's own rename/move, which the scan cannot
     see), hear a delete or a return (doc_sync), the watches are re-synced,
-    and a closed PDF whose text changed outside Klaus is re-indexed when
-    it already has an index or auto-index is on."""
+    and a PDF whose text changed waits for the Library's ⟳ (its row
+    shows as stale; manual indexing)."""
     try:
         from . import doc_sync
 
@@ -464,32 +458,6 @@ def _tell_readers(uf: str, root: str, summary: dict) -> None:
         doc_sync.resync()
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] rescan: telling readers failed: {exc}")
-    changed = summary.get("changed_text") or []
-    if not changed:
-        return
-    try:
-        from . import index_queue
-
-        indexed = set(index_queue.indexed_pdf_names())
-        auto = index_queue.auto_index_enabled(_config())
-        for safe in changed:
-            if safe in indexed or auto:
-                index_queue.request_pdf(safe, announce=False)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[klausmate] re-index of changed PDFs failed: {exc}")
-
-
-def _config() -> dict:
-    """The add-on config: the settings seam's ``read()`` where it exists,
-    else what ``index_queue`` reads at HEAD."""
-    try:
-        from . import settings
-
-        return settings.read()
-    except ImportError:
-        from . import index_queue
-
-        return index_queue._cfg()
 
 
 def _library_changed() -> None:

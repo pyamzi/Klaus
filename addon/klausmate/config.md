@@ -92,31 +92,24 @@ matches and opened Browse on that same `!Library` tag, so it has been
 removed. An earlier version of this file also described a temporary
 `!Library::Curating` tag, which was retired two releases before that.)*
 
-**Indexing starts by itself**: adding a PDF — dropped on the deck
-screen, dropped on the Library tree, or picked through either Browse…
-button — queues it for indexing straight away; you never have to press
-anything. Ten PDFs at once queue ten jobs and run them one at a time, in
-the order you added them. Whatever the job was started from, the status
-bar at the bottom of the main window and Browse shows what is running
-and how far along it is; click it for the list, where **✕** stops a
-run. Nothing starts before a profile is open. Ollama connection or model errors
-are reported by the indexing operation. Stopping or failing
-mid-way is always safe: partial work is saved as partial and the next
-run resumes from it, and a PDF's `!Library` tag is only ever written by
-a run that finished.
+**Indexing starts when you press ⟳**, the refresh icon beside the
+Library's filter (in Browse's sidebar and in the Add tab). It queues
+every PDF that was never indexed, is partly indexed, or changed since it
+was indexed — its text, the embedding model or the index format — and
+skips PDFs and folders you excluded (right-click → **Exclude from
+Index**; excluding deletes their search index, their cards keep their
+`!Library` tag). Importing a PDF, opening a profile or rescanning the
+Library folder never starts indexing on its own. Jobs run one at a time;
+the status bar at the bottom of the main window and Browse shows what is
+running and how far along it is; click it for the list, where **✕**
+stops a run. Nothing starts before a profile is open. Stopping or
+failing mid-way is always safe: partial work is saved as partial and
+the next run resumes from it, and a PDF's `!Library` tag is only ever
+written by a run that finished.
 
-- **auto_index_on_add**: Default `true`. Set `false` to go back to
-  indexing by hand from the Library (right-click a PDF → **Add to
-  Search Index**). Only the automatic start is affected — the Library's
-  button, the queue, the status bar and the model-change sweep all work
-  the same either way.
-
-**Changing the embedding model re-indexes everything.** Vectors made by
-one model cannot be compared with another's, so when you change
-the model in KlausMate Preferences,
-saving offers to re-embed your notes and every indexed PDF from scratch.
-It tells you how many of each first, and you can decline and keep
-working on stale vectors, or stop the sweep part-way from the same bar.
+**Changing the embedding model** makes every index stale: vectors made
+by one model cannot be compared with another's. Saving Preferences says
+so; press ⟳ to re-embed.
 
 - **pdf_match_threshold**: The single sensitivity control — how closely a
   card must match a PDF to count, for the priorities score and the
