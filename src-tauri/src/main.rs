@@ -1,11 +1,12 @@
 // Prevents an extra console window on Windows in release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anki_proto::generic;
 use klaus_bridge::frontend::{AskUserRequest, OpenFilePickerRequest, ShowMessageBoxRequest};
-use klaus_bridge::{new_token, serve, Bridge, Hook, WebDirs};
+use klaus_bridge::{new_token, serve, Bridge, Hook, Secrets, WebDirs};
 use prost::Message;
 use tauri::{AppHandle, Manager, RunEvent, Theme, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -19,7 +20,7 @@ fn main() {
             #[cfg(debug_assertions)]
             let dir = std::env::var_os("KLAUS_DATA_DIR").map(std::path::PathBuf::from).unwrap_or(dir);
             std::fs::create_dir_all(&dir)?;
-            let bridge = Arc::new(Bridge::new()?);
+            let bridge = Arc::new(Bridge::with_secrets(Box::new(Keychain))?);
             bridge.open_collection(&dir).map_err(|e| format!("could not open Collection: {e:?}"))?;
             app.manage(bridge.clone());
 
@@ -56,11 +57,71 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Klaus");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
+    let synced_on_close = Arc::new(AtomicBool::new(false));
+    app.run(move |app, event| match event {
+        // Anki syncs on close (autoSync); Klaus holds the exit until the sync and
+        // its media sync are done. A full sync needs a choice, so it's left for
+        // the next sync rather than asked for while quitting.
+        RunEvent::ExitRequested { api, .. } => {
+            let bridge = app.state::<Arc<Bridge>>().inner().clone();
+            let account = bridge.sync_account();
+            if account.username.is_empty() || !account.auto_sync || synced_on_close.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            api.prevent_exit();
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_title("Klaus — Syncing…");
+            }
+            let app = app.clone();
+            std::thread::spawn(move || {
+                bridge.sync();
+                wait_for_media_sync(&bridge);
+                app.exit(0);
+            });
+        }
+        RunEvent::Exit => {
             let _ = app.state::<Arc<Bridge>>().close_collection();
         }
+        _ => {}
     });
+}
+
+/// Media sync runs in the background after a sync; quitting mid-way would waste it.
+fn wait_for_media_sync(bridge: &Bridge) {
+    use anki_proto::sync::MediaSyncStatusResponse;
+    // ponytail: capped at 2 minutes; a huge first media upload resumes next time.
+    for _ in 0..240 {
+        let active = bridge
+            .call_trusted("mediaSyncStatus", &[])
+            .ok()
+            .and_then(|bytes| MediaSyncStatusResponse::decode(bytes.as_slice()).ok())
+            .is_some_and(|status| status.active);
+        if !active {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// The AnkiWeb sync key, in the macOS Keychain (Windows Credential Manager,
+/// Linux keyutils) rather than a file.
+struct Keychain;
+
+const KEYCHAIN_SERVICE: &str = "ink.klaus.desktop";
+
+impl Secrets for Keychain {
+    fn get(&self, key: &str) -> Option<String> {
+        keyring::Entry::new(KEYCHAIN_SERVICE, key).ok()?.get_password().ok()
+    }
+    fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|e| e.to_string())?;
+        entry.set_password(value).map_err(|e| e.to_string())
+    }
+    fn delete(&self, key: &str) {
+        if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, key) {
+            let _ = entry.delete_credential();
+        }
+    }
 }
 
 /// Requests the webview makes to its host (see klaus_bridge::HOOKS); the reply is
