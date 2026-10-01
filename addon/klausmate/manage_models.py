@@ -2562,7 +2562,8 @@ def manage_models_dialog(*_args: Any) -> None:
                  lambda v: anki_theme_combo.setCurrentIndex(max(0, anki_theme_combo.findData(int(v)))),
                  anki_theme_combo.currentIndexChanged, refresh_dirty),
         _Binding(state, "bar_scale", lambda: bar_scale_slider.value() * _dashboard.SCALE_STEP,
-                 lambda v: bar_scale_slider.setValue(int(v) // _dashboard.SCALE_STEP),
+                 lambda v: (bar_scale_slider.setValue(int(v) // _dashboard.SCALE_STEP),
+                            bar_scale_value_lbl.setText(f"{int(v)}%")),  # no signal at the minimum
                  bar_scale_slider.valueChanged, appearance_changed),
     ]
     threshold_slider.valueChanged.connect(_update_threshold_label)

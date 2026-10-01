@@ -151,6 +151,8 @@ check("a Bar size slider on the Appearance page, 70-150 in 5s, with a % readout"
 check("the caption names Anki's size and links to Anki's Preferences",
       "anki_ui_scale()" in mm.split("bar_scale_slider = QSlider")[0][-400:]
       and "linkActivated.connect(lambda *_a: _status_bar._open_anki_settings())" in row + mm.split("bar_scale_desc.")[1][:200])
+check("the readout is painted with the value (setValue(14) on a fresh slider emits nothing)",
+      'bar_scale_value_lbl.setText(f"{int(v)}%")' in mm)
 check("bound to the state and previewed live", '_Binding(state, "bar_scale"' in mm
       and "bar_scale_slider.valueChanged, appearance_changed" in mm)
 check("the strips follow a preview and its revert",
