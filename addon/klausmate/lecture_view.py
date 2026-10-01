@@ -421,6 +421,7 @@ class LectureDock(_DockBase):  # type: ignore[misc]
 
         self._jump_gen = 0
         self._last_target: tuple[str, int] | None = None
+        self._status_safe: str | None = None  # the lecture the status names
 
     # -- follow ------------------------------------------------------------
 
@@ -457,6 +458,11 @@ class LectureDock(_DockBase):  # type: ignore[misc]
                 # The webview grabbing focus on load would eat the answer
                 # keys — hand focus straight back to the reviewer.
                 QTimer.singleShot(0, _refocus_reviewer)
+                if getattr(self.sidebar, "_name", None) != m.safe:
+                    # The load failed (the tab handler logged it): no
+                    # "p. N" for a document that isn't showing, no jumps.
+                    self._show_empty("")
+                    return
             self.stack.setCurrentWidget(self.sidebar)
         except Exception as e:
             print(f"[klausmate] lecture: load failed for {m.safe}: {e}")
@@ -488,10 +494,12 @@ class LectureDock(_DockBase):  # type: ignore[misc]
             self._jump_gen += 1
             self._last_target = None
         self._set_status(text)
+        self._status_safe = m.safe
 
     def _show_empty(self, reason: str) -> None:
         self._jump_gen += 1
         self._last_target = None
+        self._status_safe = None
         try:
             self.stack.setCurrentWidget(self.empty_label)
         except Exception:
@@ -499,9 +507,16 @@ class LectureDock(_DockBase):  # type: ignore[misc]
         self._set_status(_STATUS_HINTS.get(reason, ""))
 
     @_guarded
-    def _on_tab_closed(self, *_args) -> None:
+    def _on_tab_closed(self, name: str = "", *_args) -> None:
         if not self.sidebar.tabs.names():
             self._show_empty("")
+        elif name == self._status_safe:
+            # The neighbour now showing gets its status from the next
+            # card; a jump still pending was for the closed lecture.
+            self._jump_gen += 1
+            self._last_target = None
+            self._status_safe = None
+            self._set_status("")
 
     def _set_status(self, text: str) -> None:
         try:

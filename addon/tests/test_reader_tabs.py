@@ -409,12 +409,46 @@ try:
     check("every jump hands keyboard focus back to the reviewer",
           jumps_at and all(i + 1 < len(events) and events[i + 1] == "focus"
                            for i in jumps_at), str(events))
+    check("the status names the current lecture", "Bee Lecture — p. 3" in dock.status.text(),
+          dock.status.text())
     dock.sidebar.tabs.close("b")
     check("closing a tab while another remains keeps the reader",
           dock.stack.currentWidget() is dock.sidebar)
+    check("...and the status no longer names the closed lecture",
+          "Bee" not in dock.status.text() and "p. 3" not in dock.status.text(), dock.status.text())
+    dock._show_match(_match("b", 3))
     dock.sidebar.tabs.close("a")
+    check("closing a tab that isn't the current one keeps the current one's status",
+          "Bee Lecture — p. 3" in dock.status.text(), dock.status.text())
+    dock.sidebar.tabs.close("b")
     check("closing the last tab shows the panel's empty state, not a blank reader",
           dock.stack.currentWidget() is dock.empty_label)
+
+    def _failing_load(assign_first):
+        def _load(name):
+            if assign_first:
+                dock.sidebar._name = name
+                dock.sidebar._page_count = 3
+            raise RuntimeError("load failed")
+        return _load
+
+    dock._show_match(_match("a", 2))
+    events.clear()
+    dock.sidebar.load_pdf = _failing_load(assign_first=False)
+    _out = io.StringIO()
+    with contextlib.redirect_stdout(_out):
+        dock._show_match(_match("c", 4))
+    check("a lecture that fails to load before the reader names it: the empty state",
+          dock.stack.currentWidget() is dock.empty_label, _out.getvalue())
+    check("...no 'p. N' status for it and no jump",
+          "p. 4" not in dock.status.text() and not any(e.startswith("jump") for e in events),
+          f"{dock.status.text()!r} {events}")
+    dock.sidebar.load_pdf = _failing_load(assign_first=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        dock._show_match(_match("d", 2))
+    check("one that fails after the reader names it counts as shown (the reader holds it)",
+          dock.stack.currentWidget() is dock.sidebar and "d — p. 2" in dock.status.text(),
+          dock.status.text())
 finally:
     lv.mw, lv.QTimer, lv._refocus_reviewer = real_lv
     if dock is not None:
