@@ -1058,10 +1058,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
                     if act[0] == "smart":
                         self._eval("window.klausSmartZoom && window.klausSmartZoom();")
                     else:
-                        pos = event.position()
-                        if obj is not self._web:  # the focusProxy child
-                            pos = obj.mapTo(self._web, pos)
+                        # Global -> view: right whichever widget got it.
                         # Frame zoom is pinned to 1.0: view px == CSS px.
+                        pos = self._web.mapFromGlobal(event.globalPosition())
                         self._eval(
                             "window.klausPinch && window.klausPinch("
                             f"{act[1]!r}, {pos.x()!r}, {pos.y()!r});"
@@ -1135,6 +1134,9 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
 
     def _bridge_ready(self, _payload: str) -> None:
         self._hold_scroll = False
+        # The page is up, so the live focusProxy exists: filter it too
+        # (idempotent) — the pinch/smart-zoom interception rides on it.
+        self._claim_shortcuts()
         # openDocument's teardown() wiped page state — (re)push whatever
         # records we hold so annotations survive load order races.
         self._push_annotations()
@@ -1158,6 +1160,7 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
     # Class defaults, so __new__-built test stand-ins carry them too.
     _user_zoom = 0.0  # the page's committed user zoom; 0 = fit width
     _vv_reload_at = float("-inf")
+    _vv_retry_pending = False  # the ONE end-of-gap retry is scheduled
 
     def _bridge_zoom(self, payload: str) -> None:
         try:
@@ -1183,13 +1186,26 @@ class PdfJsViewer(_WidgetBase):  # type: ignore[misc]
         import time
 
         now = time.monotonic()
-        if now - self._vv_reload_at < VV_RELOAD_GAP_S:
-            print(f"[klausmate] pdfjs page still zoomed to {scale:.2f}; not reloading again")
+        wait = VV_RELOAD_GAP_S - (now - self._vv_reload_at)
+        if wait > 0:
+            # At most one reload per gap — but never drop the report for
+            # good: retry once when the gap ends.
+            if not self._vv_retry_pending:
+                self._vv_retry_pending = True
+                QTimer.singleShot(int(wait * 1000) + 1, self._vv_retry)
+            print(f"[klausmate] pdfjs page still zoomed to {scale:.2f}; retrying in {wait:.0f} s")
             return
         self._vv_reload_at = now
         print(f"[klausmate] pdfjs page zoomed to {scale:.2f}; reloading the page")
         # Deferred: the reload replaces the page this bridge call came from.
         QTimer.singleShot(0, self._reload_page)
+
+    def _vv_retry(self) -> None:
+        """End of the gap: the page re-checks its scale and reports again
+        (into a fresh gap, so it reloads) only if it is still zoomed."""
+        self._vv_retry_pending = False
+        if self._path is not None:
+            self._eval("window.klausVvRearm && window.klausVvRearm();")
 
     def _reload_page(self) -> None:
         if self._web is None or self._path is None or self._name is None:

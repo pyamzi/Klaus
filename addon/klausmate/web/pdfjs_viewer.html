@@ -598,6 +598,7 @@ async function buildPlaceholders() {
   if (!(state.keepZoom && state.userZoomed)) {
     state.scale = clampScale(avail / base.width);
     state.userZoomed = false;
+    if (!state.keepZoom) state.prevZoom = 0;   // B never smart-zooms to A's zoom
   }
   applyScaleFactor();
   for (let i = 1; i <= state.doc.numPages; i++) {
@@ -1554,18 +1555,22 @@ document.addEventListener("wheel", (ev) => {
    neither Python's native-gesture filter nor the wheel listener above
    caught), nothing in the page can undo it; only a new page resets it.
    Report it once — Python reloads the page and re-opens the document at
-   the same scroll and zoom, and the fresh page re-arms this. Checked at
-   boot too: a pinch that landed before this script ran. */
+   the same scroll and zoom. Re-armed by a fresh page, by the scale
+   coming back to 1, or by Python's end-of-gap retry (klausVvRearm).
+   Checked at boot too: a pinch that landed before this script ran. */
 let vvPosted = false, vvTimer = null;
 function vvCheck() {
   clearTimeout(vvTimer);
   vvTimer = setTimeout(() => {
     const vv = window.visualViewport;
-    if (!vv || vvPosted || Math.abs(vv.scale - 1) <= 0.01) return;
+    if (!vv) return;
+    if (Math.abs(vv.scale - 1) <= 0.01) { vvPosted = false; return; }
+    if (vvPosted) return;
     vvPosted = true;
     post("vv-scale:" + vv.scale);
   }, 200);
 }
+window.klausVvRearm = function () { vvPosted = false; vvCheck(); };
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", vvCheck);
   window.visualViewport.addEventListener("scroll", vvCheck);

@@ -2299,37 +2299,42 @@ _proxy10.installEventFilter(_filter10)
 _view10.installEventFilter(_filter10)
 
 
-def _gesture10(kind, value, x=5.0, y=6.0):
+_view10.move(100, 200)   # so global, view and proxy coordinates all differ
+
+
+def _gesture10(kind, value, recv, x=5.0, y=6.0):
+    """A gesture at local (x, y) on ``recv``, its global point consistent."""
     p = _QPF10(x, y)
-    return _NGE10(kind, _QPD10.primaryPointingDevice(), 2, p, p, p,
+    g = recv.mapToGlobal(p)
+    return _NGE10(kind, _QPD10.primaryPointingDevice(), 2, p, p, g,
                   value, _QPF10(0, 0))
 
 
-_QApp10.sendEvent(_proxy10, _gesture10(_NG10.ZoomNativeGesture, 0.1))
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.ZoomNativeGesture, 0.1, _proxy10))
 check("a pinch on the focusProxy never reaches Chromium",
       _proxy10.got == [], repr(_proxy10.got))
 check("...and becomes ONE klausPinch at the point in view coordinates",
       _js10 == ["window.klausPinch && window.klausPinch(%r, 15.0, 26.0);"
                 % _m10.exp(0.1)], repr(_js10))
 _js10.clear()
-_QApp10.sendEvent(_proxy10, _gesture10(_NG10.SmartZoomNativeGesture, 0.0))
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.SmartZoomNativeGesture, 0.0, _proxy10))
 check("a two-finger double-tap is consumed and becomes klausSmartZoom",
       _proxy10.got == []
       and _js10 == ["window.klausSmartZoom && window.klausSmartZoom();"],
       repr(_js10))
 _js10.clear()
-_QApp10.sendEvent(_proxy10, _gesture10(_NG10.RotateNativeGesture, 0.2))
+_QApp10.sendEvent(_proxy10, _gesture10(_NG10.RotateNativeGesture, 0.2, _proxy10))
 check("a non-zoom gesture is not consumed",
       _proxy10.got == [_NG10.RotateNativeGesture] and _js10 == [])
-_QApp10.sendEvent(_view10, _gesture10(_NG10.ZoomNativeGesture, -0.1))
-check("a pinch delivered to the view itself needs no mapping",
+_QApp10.sendEvent(_view10, _gesture10(_NG10.ZoomNativeGesture, -0.1, _view10))
+check("a pinch delivered to the view itself lands at its view point",
       _js10 == ["window.klausPinch && window.klausPinch(%r, 5.0, 6.0);"
                 % _m10.exp(-0.1)], repr(_js10))
 _label10 = _Recv10()                  # the page label lives in the header
 _stand10._page_label = _label10
 _label10.installEventFilter(_filter10)
 _js10.clear()
-_QApp10.sendEvent(_label10, _gesture10(_NG10.ZoomNativeGesture, 0.1))
+_QApp10.sendEvent(_label10, _gesture10(_NG10.ZoomNativeGesture, 0.1, _label10))
 check("a pinch over the page label (outside the view) is left alone",
       _js10 == [] and _label10.got == [_NG10.ZoomNativeGesture])
 
@@ -2350,8 +2355,21 @@ def _ensure10():   # stdHtml stand-in; a no-op once loaded, like the real one
 
 
 _v10._ensure_page = _ensure10
+class _Timer10:
+    """singleShot(0) runs now (the deferred reload); anything longer is
+    held until the test fires it (the end-of-gap retry)."""
+    held = []
+
+    @staticmethod
+    def singleShot(ms, fn):
+        if ms == 0:
+            fn()
+        else:
+            _Timer10.held.append((ms, fn))
+
+
 _qt10 = pv.QTimer
-pv.QTimer = _NowTimer
+pv.QTimer = _Timer10
 _out10 = _io.StringIO()
 
 
@@ -2360,14 +2378,17 @@ def _bridge10(cmd):
         _v10._on_bridge("klausmate_pdfjs:" + cmd)
 
 
+_BAD10 = ("abc", "nan", "inf", "-2", "", "1.0", "1.005")
+_REARM10 = "window.klausVvRearm && window.klausVvRearm();"
 try:
     _bridge10("zoom:abc")
     _bridge10("zoom:1.75")
     _v10._web.js.clear()
-    for _bad10 in ("abc", "nan", "inf", "-2", "", "1.0", "1.005"):
+    for _bad10 in _BAD10:
         _bridge10("vv-scale:" + _bad10)
     check("malformed or unzoomed vv-scale reports are ignored",
-          _pages10 == [] and _v10._web.js == [], repr(_v10._web.js))
+          _pages10 == [] and _v10._web.js == [] and _Timer10.held == [],
+          repr(_v10._web.js))
     _bridge10("vv-scale:1.4")
     check("a zoomed visual viewport reloads the page once", _pages10 == [1])
     _open10 = [i for i, j in enumerate(_v10._web.js)
@@ -2379,14 +2400,61 @@ try:
     check("...at the user's zoom, set before the document opens",
           len(_keep10) == 1 and _keep10[0] < _open10[0], repr(_v10._web.js))
     check("...and the scroll position", _v10._scroll_pos == 700)
+
+    _v10._web.js.clear()
     _bridge10("vv-scale:1.4")
-    check("a second report right after does not reload again (no loop "
-          "if a reload ever kept the scale)", _pages10 == [1])
+    _bridge10("vv-scale:1.6")
+    check("reports inside the gap do not reload again (no loop if a "
+          "reload ever kept the scale)", _pages10 == [1])
+    check("...but schedule exactly ONE retry, at the end of the gap",
+          len(_Timer10.held) == 1
+          and 0 < _Timer10.held[0][0] <= pv.VV_RELOAD_GAP_S * 1000 + 1,
+          repr(_Timer10.held))
+    check("...and nothing reaches the page until it fires",
+          _v10._web.js == [])
+    _ms10, _fire10 = _Timer10.held.pop()
+    _fire10()
+    check("the retry re-arms the page so it re-checks and re-reports "
+          "if still zoomed", _v10._web.js == [_REARM10], repr(_v10._web.js))
+    _bridge10("vv-scale:1.4")
+    check("...while still inside the gap a report schedules a new single "
+          "retry rather than reloading", _pages10 == [1]
+          and len(_Timer10.held) == 1)
+    _Timer10.held.clear()
+    _v10._vv_retry_pending = False
+
+    _v10._vv_reload_at -= pv.VV_RELOAD_GAP_S + 1    # the gap has passed
+    _bridge10("vv-scale:1.4")
+    check("a report after the gap reloads again — the backstop is never "
+          "dead for the viewer's life", _pages10 == [1, 1]
+          and _Timer10.held == [])
+    _v10._web.js.clear()
+    for _bad10 in _BAD10:
+        _bridge10("vv-scale:" + _bad10)
+    check("...and malformed reports are still ignored after that",
+          _pages10 == [1, 1] and _v10._web.js == [] and _Timer10.held == [])
 finally:
     pv.QTimer = _qt10
 check("the recovery is logged and nothing raised",
       "pdfjs page zoomed to 1.40; reloading" in _out10.getvalue()
+      and "retrying in" in _out10.getvalue()
       and "error" not in _out10.getvalue(), _out10.getvalue())
+
+_v10._path = None
+_v10._web.js.clear()
+pv.PdfJsViewer._vv_retry(_v10)
+check("a retry with no document loaded does nothing",
+      _v10._web.js == [] and _v10._vv_retry_pending is False)
+_v10._path = _pdf8
+
+_claimed10 = []
+_v10._web.installEventFilter = lambda f: _claimed10.append(("view", f))
+_v10._web.focusProxy = lambda: _NS10(
+    installEventFilter=lambda f: _claimed10.append(("proxy", f)))
+_bridge10("ready")
+check("ready (re)claims the live focusProxy, so the gesture filter is on it",
+      _claimed10 == [("view", _v10), ("proxy", _v10)], repr(_claimed10))
+
 _v10.load_path(_pdf8, "lecture.pdf")
 check("a new document forgets the user zoom", _v10._user_zoom == 0.0)
 
@@ -2416,6 +2484,14 @@ check("...checking once at boot too (a pinch before the script ran)",
 check("every committed zoom is reported so a page reload can restore it",
       'post("zoom:" + (state.userZoomed ? state.scale : 0))' in _HTML10
       and "window.klausKeepZoom = function" in _HTML10)
+check("...and forgets the previous document's smart-zoom target",
+      "if (!state.keepZoom) state.prevZoom = 0;" in _HTML10)
+check("the page re-arms the backstop when the scale returns to 1, and "
+      "exposes klausVvRearm for Python's retry",
+      "if (Math.abs(vv.scale - 1) <= 0.01) { vvPosted = false; return; }"
+      in _HTML10
+      and "window.klausVvRearm = function () { vvPosted = false; vvCheck(); };"
+      in _HTML10)
 check("a fresh document's fit clears a stale user-zoom flag",
       "state.scale = clampScale(avail / base.width);\n"
       "    state.userZoomed = false;" in _HTML10)
