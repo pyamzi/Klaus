@@ -26,6 +26,11 @@ use tower_http::services::{ServeDir, ServeFile};
 
 include!(concat!(env!("OUT_DIR"), "/methods.rs"));
 
+/// Klaus's own bridge methods' messages (`proto/klaus.proto`).
+pub mod klaus {
+    include!(concat!(env!("OUT_DIR"), "/klaus.rs"));
+}
+
 /// Messages from Anki's `anki/frontend.proto` (the page ↔ Qt host contract), which
 /// anki_proto doesn't compile for Rust. Field tags must match the .proto.
 pub mod frontend {
@@ -86,6 +91,16 @@ use frontend::{ConvertPastedImageRequest, ConvertPastedImageResponse, SetSetting
 /// webview never gets the whole backend.
 const ALLOWED: &[&str] = &[
     "deckTree",
+    // Klaus's review screen (Anki's reviewer calls these from Python, not a page).
+    // Cards render in a sandboxed frame that can't reach /_anki, so card JS never
+    // gets these.
+    "setCurrentDeck",
+    "getQueuedCards",
+    "describeNextStates",
+    "answerCard",
+    "undo",
+    "getUndoStatus",
+    "congratsInfo",
     // A mediasrv post handler in Anki (missing keys read as null); see Bridge::call.
     "getConfigJson",
     // Deck options: post handlers in Anki, a plain backend call there too. Saving
@@ -184,6 +199,7 @@ const LOCAL: &[&str] = &[
     "getProfileConfigJson",
     "setProfileConfigJson",
     "convertPastedImage",
+    "klausRenderCard",
 ];
 
 /// Anki SvelteKit routes, served from Anki's build (its client router takes over).
@@ -309,6 +325,10 @@ impl Bridge {
         let bad = |e: prost::DecodeError| CallError::Backend(e.to_string());
         let section = if method.contains("Meta") { "meta" } else { "profile" };
         match method {
+            "klausRenderCard" => {
+                let req = klaus::RenderCardRequest::decode(input).map_err(bad)?;
+                Ok(self.render_card(req.card_id, req.typed_answer.as_deref())?.encode_to_vec())
+            }
             "convertPastedImage" => {
                 let req = ConvertPastedImageRequest::decode(input).map_err(bad)?;
                 let data = convert_image(&req.data, &req.ext)
@@ -334,6 +354,148 @@ impl Bridge {
             }
         }
     }
+}
+
+impl Bridge {
+    /// Calls a backend method with typed messages (shell/bridge-internal).
+    fn rpc<I: Message, O: Message + Default>(&self, method: &str, input: I) -> Result<O, CallError> {
+        let out = self.run(method, &input.encode_to_vec())?;
+        O::decode(out.as_slice()).map_err(|e| CallError::Backend(e.to_string()))
+    }
+
+    /// A card's question and answer HTML as Anki's desktop reviewer shows it. Mirrors
+    /// pylib's TemplateRenderContext.render (without add-on filters), the latex
+    /// card_did_render hook, aqt's prepare_card_text_for_display, and the reviewer's
+    /// type-answer filters. `typed`: the type-in answer, once revealed.
+    fn render_card(&self, card_id: i64, typed: Option<&str>) -> Result<klaus::RenderCardResponse, CallError> {
+        use anki_proto::card_rendering::{
+            rendered_template_node::Value, CompareAnswerRequest, ExtractAvTagsRequest, ExtractAvTagsResponse,
+            ExtractClozeForTypingRequest, ExtractLatexRequest, ExtractLatexResponse, RenderCardResponse,
+            RenderExistingCardRequest, RenderedTemplateNode,
+        };
+        let rendered: RenderCardResponse = self.rpc(
+            "renderExistingCard",
+            RenderExistingCardRequest { card_id, browser: false, partial_render: true },
+        )?;
+        let join = |nodes: &[RenderedTemplateNode], front_side: Option<&str>| -> String {
+            nodes
+                .iter()
+                .filter_map(|n| n.value.as_ref())
+                .map(|v| match v {
+                    Value::Text(t) => t.as_str(),
+                    Value::Replacement(r) if r.field_name == "FrontSide" => front_side.unwrap_or(&r.current_text),
+                    Value::Replacement(r) => &r.current_text,
+                })
+                .collect()
+        };
+        let av = |text: String, question_side: bool| -> Result<String, CallError> {
+            let out: ExtractAvTagsResponse = self.rpc("extractAvTags", ExtractAvTagsRequest { text, question_side })?;
+            Ok(out.text)
+        };
+        let question = av(join(&rendered.question_nodes, None), true)?;
+        let answer = av(join(&rendered.answer_nodes, Some(&question)), false)?;
+
+        let display = |text: String| -> Result<String, CallError> {
+            let latex: ExtractLatexResponse =
+                self.rpc("extractLatex", ExtractLatexRequest { text, svg: rendered.latex_svg, expand_clozes: false })?;
+            let escaped: generic::String = self.rpc("encodeIriPaths", generic::String { val: latex.text })?;
+            let hide_buttons: generic::Bool = self.rpc(
+                "getConfigBool",
+                anki_proto::config::GetConfigBoolRequest {
+                    key: anki_proto::config::config_key::Bool::HideAudioPlayButtons as i32,
+                },
+            )?;
+            Ok(play_buttons(&escaped.val, hide_buttons.val))
+        };
+        let (question, answer) = (display(question)?, display(answer)?);
+
+        // Type-in answers (aqt/reviewer.py typeAnsQuestionFilter / typeAnsAnswerFilter).
+        let type_re = regex::Regex::new(r"\[\[type:(.+?)\]\]").unwrap();
+        let Some(spec) = type_re.captures(&question).map(|c| c[1].to_string()) else {
+            return Ok(klaus::RenderCardResponse { question: css(&rendered.css, question), answer: css(&rendered.css, answer) });
+        };
+        let card: anki_proto::cards::Card = self.rpc("getCard", anki_proto::cards::CardId { cid: card_id })?;
+        let note: anki_proto::notes::Note = self.rpc("getNote", anki_proto::notes::NoteId { nid: card.note_id })?;
+        let notetype: anki_proto::notetypes::Notetype =
+            self.rpc("getNotetype", anki_proto::notetypes::NotetypeId { ntid: note.notetype_id })?;
+        let mut field = spec.as_str();
+        let cloze = field.strip_prefix("cloze:").inspect(|f| field = f).is_some();
+        let combining = field.strip_prefix("nc:").inspect(|f| field = f).is_none();
+        let found = notetype.fields.iter().zip(&note.fields).find(|(f, _)| f.name == field);
+        let mut expected = found.map(|(_, text)| text.clone());
+        if cloze {
+            if let Some(text) = expected.take() {
+                let out: generic::String = self.rpc(
+                    "extractClozeForTyping",
+                    ExtractClozeForTypingRequest { text, ordinal: card.template_idx + 1 },
+                )?;
+                expected = Some(out.val).filter(|v| !v.is_empty());
+            }
+        }
+        let (font, size) = found
+            .and_then(|(f, _)| f.config.as_ref())
+            .map(|c| (c.font_name.clone(), c.font_size))
+            .unwrap_or_default();
+        let question = match &expected {
+            None if cloze => type_re.replace_all(&question, "Please run Tools>Empty Cards").into_owned(),
+            None => type_re.replace_all(&question, format!("Type answer: unknown field {field}")).into_owned(),
+            Some(e) if e.is_empty() => type_re.replace_all(&question, "").into_owned(),
+            Some(_) => type_re
+                .replace_all(
+                    &question,
+                    format!(
+                        "\n<center>\n<input type=text id=typeans onkeypress=\"_typeAnsPress();\"\n   style=\"font-family: '{font}'; font-size: {size}px;\">\n</center>\n"
+                    ),
+                )
+                .into_owned(),
+        };
+        let answer = match (expected.filter(|e| !e.is_empty()), typed) {
+            (Some(expected), Some(provided)) => {
+                let without_hr = answer.replace("<hr id=answer>", "");
+                let had_hr = without_hr.len() != answer.len();
+                if had_hr && !type_re.is_match(&without_hr) {
+                    answer
+                } else {
+                    let compared: generic::String = self.rpc(
+                        "compareAnswer",
+                        CompareAnswerRequest { expected, provided: provided.into(), combining },
+                    )?;
+                    let hr = if had_hr { "<hr id=answer>" } else { "" };
+                    let div = format!("{hr}\n<div style=\"font-family: '{font}'; font-size: {size}px\">{}</div>", compared.val);
+                    type_re.replace_all(&without_hr, regex::NoExpand(&div)).into_owned()
+                }
+            }
+            _ => type_re.replace_all(&answer, "").into_owned(),
+        };
+        Ok(klaus::RenderCardResponse { question: css(&rendered.css, question), answer: css(&rendered.css, answer) })
+    }
+}
+
+/// pylib TemplateRenderOutput.question_and_style.
+fn css(css: &str, html: String) -> String {
+    format!("<style>{css}</style>{html}")
+}
+
+/// aqt.sound.av_refs_to_play_icons (or strip_av_refs when play buttons are hidden).
+fn play_buttons(text: &str, hide: bool) -> String {
+    let av_ref = regex::Regex::new(r"\[anki:(play:(.):(\d+))\]").unwrap();
+    av_ref
+        .replace_all(text, |c: &regex::Captures| {
+            if hide {
+                return String::new();
+            }
+            format!(
+                r#"
+<a class="replay-button soundLink" href=# onclick="pycmd('{}'); return false;" draggable="false">
+    <svg class="playImage" viewBox="0 0 64 64" version="1.1">
+        <circle cx="32" cy="32" r="29" />
+        <path d="M56.502,32.301l-37.502,20.101l0.329,-40.804l37.173,20.703Z" />
+    </svg>
+</a>"#,
+                &c[1]
+            )
+        })
+        .into_owned()
 }
 
 const SETTINGS_FILE: &str = "klaus-settings.json";
@@ -404,6 +566,9 @@ pub struct WebDirs {
     pub klaus: PathBuf,
     /// Anki's SvelteKit build (`vendor/anki/out/sveltekit`).
     pub anki: PathBuf,
+    /// Anki's reviewer assets and MathJax (`vendor/anki/out/klaus`), served at
+    /// `/_anki/js` and `/_anki/css` as Anki's Qt app serves its web folder.
+    pub anki_static: PathBuf,
 }
 
 /// Binds 127.0.0.1 on a free port and returns the address plus the server future.
@@ -424,7 +589,8 @@ pub async fn serve(
         // Axum's default 2 MiB cap would reject pasted photos (convertPastedImage,
         // addMediaFile carry the bytes); the caller is already cookie-authenticated.
         .route("/_anki/{method}", post(anki_method).layer(DefaultBodyLimit::max(MAX_BODY)))
-        .nest_service("/_app", ServeDir::new(web.anki.join("_app")));
+        .nest_service("/_app", ServeDir::new(web.anki.join("_app")))
+        .merge(anki_static(&web.anki_static));
     for page in ANKI_PAGES {
         let page_route = get(move |state: State<AppState>| anki_page(state, page));
         app = app
@@ -442,6 +608,19 @@ pub async fn serve(
         .layer(middleware::from_fn_with_state(state.clone(), grant_cookie))
         .with_state(state);
     Ok((addr, async move { axum::serve(listener, app).await }))
+}
+
+/// Static reviewer assets. Cards render in a sandboxed (opaque-origin) frame, so
+/// every load from it is cross-origin; MathJax's fonts are CORS-gated, hence the
+/// header. Static files only: `/_anki/<method>` calls must stay unreachable from cards.
+fn anki_static(dir: &Path) -> Router<AppState> {
+    Router::new()
+        .nest_service("/_anki/js", ServeDir::new(dir.join("_anki/js")))
+        .nest_service("/_anki/css", ServeDir::new(dir.join("_anki/css")))
+        .layer(axum::middleware::map_response(|mut res: Response| async move {
+            res.headers_mut().insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+            res
+        }))
 }
 
 /// aqt/mediasrv.py UNTRUSTED_MEDIA_CSP, verbatim.
@@ -561,7 +740,13 @@ async fn grant_cookie(State(state): State<AppState>, req: Request, next: Next) -
         return next.run(req).await;
     }
     let cookie = format!("{}; HttpOnly; SameSite=Strict; Path=/", state.cookie);
-    let location = req.uri().path().to_owned();
+    // Same URL without the token (other query parameters, e.g. ?deck=, kept).
+    let token_param = format!("t={}", state.token);
+    let rest: Vec<&str> = req.uri().query().unwrap_or_default().split('&').filter(|kv| *kv != token_param).collect();
+    let location = match rest.join("&") {
+        q if q.is_empty() => req.uri().path().to_owned(),
+        q => format!("{}?{q}", req.uri().path()),
+    };
     (StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, location)]).into_response()
 }
 

@@ -9,7 +9,7 @@
 
 {#each decks as deck (deck.deckId)}
   <tr>
-    <td style:padding-left="{deck.level - 1}rem">{deck.name}</td>
+    <td style:padding-left="{deck.level - 1}rem"><a href="/review?deck={deck.deckId}">{deck.name}</a></td>
     <td class="new">{deck.newCount}</td>
     <td class="learn">{deck.learnCount}</td>
     <td class="review">{deck.reviewCount}</td>

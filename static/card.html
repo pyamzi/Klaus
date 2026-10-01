@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  The card document, loaded by Klaus's review screen in a sandboxed (opaque-origin)
+  frame: card HTML can carry arbitrary JS, so it must not reach /_anki. Lives at the
+  site root so cards' relative media URLs (<img src="foo.png">) resolve to media.
+  Mirrors the page Anki's Qt reviewer builds (aqt/reviewer.py, stdHtml).
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="/_anki/css/webview.css" />
+    <link rel="stylesheet" href="/_anki/css/reviewer.css" />
+    <script src="/card-host.js"></script>
+    <script src="/_anki/js/reviewer.js"></script>
+  </head>
+  <body class="card">
+    <div id="_mark" hidden>&#x2605;</div>
+    <div id="_flag" hidden>&#x2691;</div>
+    <div id="qa"></div>
+  </body>
+</html>

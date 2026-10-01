@@ -21,6 +21,7 @@ use anki_proto::notes::{
 };
 use anki_proto::notetypes::{NotetypeId, NotetypeNames};
 use klaus_bridge::frontend::{ConvertPastedImageRequest, ConvertPastedImageResponse, SetSettingJsonRequest};
+use klaus_bridge::klaus::{RenderCardRequest, RenderCardResponse};
 use klaus_bridge::{new_token, serve, Bridge, CallError, Hook, WebDirs};
 use prost::Message;
 
@@ -178,6 +179,90 @@ fn adds_a_note_the_way_the_editor_does() {
     assert_eq!(dupe.state(), State::Duplicate);
 }
 
+/// Adds a note of the named notetype to the Default deck; returns its first card's id.
+fn add_note(bridge: &Bridge, notetype: &str, fields: &[&str]) -> i64 {
+    let names: NotetypeNames = call(bridge, "getNotetypeNames", Empty {});
+    let ntid = names.entries.iter().find(|n| n.name == notetype).unwrap().id;
+    let mut note: Note = call(bridge, "newNote", NotetypeId { ntid });
+    note.fields = fields.iter().map(|f| f.to_string()).collect();
+    let added: anki_proto::notes::AddNoteResponse =
+        call(bridge, "addNote", AddNoteRequest { note: Some(note), deck_id: 1 });
+    let cards: anki_proto::cards::CardIds = Message::decode(
+        bridge.call_trusted("cardsOfNote", &NoteId { nid: added.note_id }.encode_to_vec()).unwrap().as_slice(),
+    )
+    .unwrap();
+    cards.cids[0]
+}
+
+fn queue(bridge: &Bridge) -> anki_proto::scheduler::QueuedCards {
+    call(bridge, "getQueuedCards", anki_proto::scheduler::GetQueuedCardsRequest { fetch_limit: 1, intraday_learning_only: false })
+}
+
+/// #7's acceptance sequence, as Klaus's review screen drives it (Anki's reviewer.py).
+#[test]
+fn reviews_a_card_like_ankis_reviewer() {
+    use anki_proto::scheduler::{card_answer::Rating, CardAnswer, CongratsInfoResponse};
+    let (_dir, bridge) = open_temp();
+    add_note(&bridge, "Basic", &["Loop of Henle", "Countercurrent multiplier"]);
+    let _: anki_proto::collection::OpChanges = call(&bridge, "setCurrentDeck", anki_proto::decks::DeckId { did: 1 });
+
+    let q = queue(&bridge);
+    assert_eq!((q.new_count, q.learning_count, q.review_count, q.cards.len()), (1, 0, 0, 1));
+    let top = q.cards[0].clone();
+    let states = top.states.clone().unwrap();
+    let labels: generic::StringList = call(&bridge, "describeNextStates", states.clone());
+    assert_eq!(labels.vals.len(), 4, "a label for each of Again/Hard/Good/Easy");
+    assert!(labels.vals.iter().all(|l| !l.is_empty()));
+
+    let card_id = top.card.unwrap().id;
+    let answer = CardAnswer {
+        card_id,
+        current_state: states.current.clone(),
+        new_state: states.easy.clone(),
+        rating: Rating::Easy as i32,
+        answered_at_millis: now() * 1000,
+        milliseconds_taken: 4_000,
+    };
+    let _: anki_proto::collection::OpChanges = call(&bridge, "answerCard", answer);
+    assert!(queue(&bridge).cards.is_empty(), "Easy graduates the only card");
+    let _: CongratsInfoResponse = call(&bridge, "congratsInfo", Empty {});
+
+    // Undo puts the card back on top of the queue.
+    let _: anki_proto::collection::OpChangesAfterUndo = call(&bridge, "undo", Empty {});
+    let again = queue(&bridge);
+    assert_eq!(again.new_count, 1);
+    assert_eq!(again.cards[0].card.as_ref().unwrap().id, card_id);
+}
+
+fn render(bridge: &Bridge, card_id: i64, typed: Option<&str>) -> RenderCardResponse {
+    call(bridge, "klausRenderCard", RenderCardRequest { card_id, typed_answer: typed.map(Into::into) })
+}
+
+/// The card HTML Klaus shows must be what Anki's desktop reviewer shows.
+#[test]
+fn renders_cards_like_ankis_reviewer() {
+    let (_dir, bridge) = open_temp();
+    let front = r#"[sound:heart.mp3] \(x^2\) [$]e^x[/$] <img src="my pic.png">"#;
+    let basic = add_note(&bridge, "Basic", &[front, "Back side"]);
+    let card = render(&bridge, basic, None);
+    assert!(card.question.starts_with("<style>"), "notetype CSS first: {}", card.question);
+    assert!(card.question.contains(r#"onclick="pycmd('play:q:0'); return false;""#), "{}", card.question);
+    assert!(card.question.contains(r"\(x^2\)"), "MathJax left for the page");
+    assert!(card.question.contains(r#"<img class=latex alt="#) && card.question.contains(r#"src="latex-"#), "[$]…[/$] becomes a LaTeX image");
+    assert!(card.question.contains("my%20pic.png"), "media filenames escaped");
+    // {{FrontSide}} reuses the question's tags, so its sound stays a question tag.
+    assert!(card.answer.contains("play:q:0") && !card.answer.contains("play:a:"), "{}", card.answer);
+    assert!(card.answer.contains("<hr id=answer>") && card.answer.contains("Back side"));
+
+    let typed = add_note(&bridge, "Basic (type in the answer)", &["Loop of Henle", "Countercurrent"]);
+    let card = render(&bridge, typed, None);
+    assert!(card.question.contains(r#"<input type=text id=typeans onkeypress="_typeAnsPress();""#), "{}", card.question);
+    assert!(!card.answer.contains("[[type:"), "no typed answer yet: marker removed");
+    let revealed = render(&bridge, typed, Some("Counter"));
+    assert!(revealed.answer.contains("typeGood") && revealed.answer.contains("typeMissed"), "{}", revealed.answer);
+    assert!(!revealed.answer.contains("[[type:"));
+}
+
 /// Profile settings Anki keeps in Qt (pm.meta / pm.profile) and collection config.
 #[test]
 fn settings_round_trip_and_persist() {
@@ -231,7 +316,14 @@ async fn http_contract_matches_ankis_post_ts() {
         })
     };
     let token = new_token();
-    let web = WebDirs { klaus: klaus_dir.path().into(), anki: anki_dir.path().into() };
+    let static_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(static_dir.path().join("_anki/js")).unwrap();
+    std::fs::write(static_dir.path().join("_anki/js/reviewer.js"), "// reviewer").unwrap();
+    let web = WebDirs {
+        klaus: klaus_dir.path().into(),
+        anki: anki_dir.path().into(),
+        anki_static: static_dir.path().into(),
+    };
     let save = deck_options_save(&bridge, |r| r.configs[0].config.as_mut().unwrap().new_per_day = 9);
     let bad_save = deck_options_save(&bridge, |r| r.configs.clear());
     let (addr, server) = serve(Arc::new(bridge), web, token.clone(), hook).await.unwrap();
@@ -255,6 +347,8 @@ async fn http_contract_matches_ankis_post_ts() {
     let cookie = grant.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
     assert_eq!(cookie, format!("klaus_{}={token}", addr.port()));
     assert_eq!(client.get(format!("{base}/")).send().await.unwrap().text().await.unwrap(), "<p>klaus</p>");
+    let deep = client.get(format!("{base}/review?deck=5&t={token}")).send().await.unwrap();
+    assert_eq!(deep.headers()["location"], "/review?deck=5", "only the token is dropped");
 
     let ok = post(Some(&cookie), "application/binary").await.unwrap();
     assert_eq!(ok.status(), 200);
@@ -366,6 +460,14 @@ async fn http_contract_matches_ankis_post_ts() {
     assert_eq!(csp("/editor/?mode=add").await, untrusted);
     assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted);
     assert_eq!(csp("/deck-options/1").await, "frame-ancestors 'none'");
+
+    // Reviewer assets are served for the card frame, readable cross-origin (fonts)…
+    let js = client.get(format!("{base}/_anki/js/reviewer.js")).send().await.unwrap();
+    assert_eq!(js.headers()["access-control-allow-origin"], "*");
+    assert_eq!(js.text().await.unwrap(), "// reviewer");
+    // …but backend calls never are.
+    let call = raw("deckTree", DeckTreeRequest { now: now() }.encode_to_vec()).await.unwrap();
+    assert!(call.headers().get("access-control-allow-origin").is_none());
 
     // Large bodies (pasted photos) get past the default 2 MiB cap.
     let big = ConvertPastedImageRequest { data: vec![0; 3 * 1024 * 1024], ext: "png".into() };
