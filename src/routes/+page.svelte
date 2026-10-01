@@ -20,12 +20,18 @@
     SetDeckCollapsedRequest_Scope,
   } from "@generated/anki/decks_pb";
   import { onMount } from "svelte";
+  import { toast } from "svelte-sonner";
+  import { Button } from "$lib/components/ui/button";
+  import { Checkbox } from "$lib/components/ui/checkbox";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import * as Field from "$lib/components/ui/field";
+  import { Input } from "$lib/components/ui/input";
+  import * as Select from "$lib/components/ui/select";
+  import * as Table from "$lib/components/ui/table";
   import DeckRows, { type DeckAction } from "./DeckRows.svelte";
 
   let root: DeckTreeNode | undefined = $state();
   let loadError = $state("");
-  // After a delete, as Anki's "N cards deleted" tooltip: offers undo.
-  let deleted = $state("");
 
   async function refresh() {
     try {
@@ -48,16 +54,25 @@
   }
 
   // Create / Rename. "Parent::Child" nests, as in Anki.
-  let nameDialog: HTMLDialogElement;
+  let nameOpen = $state(false);
   let renaming: DeckTreeNode | undefined = $state();
   let name = $state("");
   function askName(deck?: DeckTreeNode) {
     renaming = deck;
     name = deck ? fullName(deck) : "";
-    nameDialog.showModal();
+    nameOpen = true;
   }
+  // Undo reverts the collection's latest operation, so only the newest delete's
+  // toast may offer it: any later change (another delete, a rename…) retires it.
+  let undoToast: string | number | undefined;
+  function retireUndo() {
+    if (undoToast !== undefined) toast.dismiss(undoToast);
+    undoToast = undefined;
+  }
+
   async function saveName(event: SubmitEvent) {
     event.preventDefault();
+    retireUndo();
     const trimmed = name.trim();
     if (!trimmed) return;
     try {
@@ -68,7 +83,7 @@
         deck.name = trimmed;
         await addDeck(deck);
       }
-      nameDialog.close();
+      nameOpen = false;
       await refresh();
     } catch {
       // The bridge's error was already shown.
@@ -88,6 +103,8 @@
     return (root && walk(root, [])) ?? target.name;
   }
 
+  const orderLabel = (value: Order) => orders.find(([v]) => v === value)?.[1] ?? "";
+
   // Anki's filtered deck dialog (aqt/filtered_deck.py): first search, optional
   // second, reschedule. Preview delays keep their saved values.
   const orders: [Order, string][] = [
@@ -103,37 +120,38 @@
     [Order.RETRIEVABILITY_DESCENDING, "Retrievability descending"],
     [Order.RELATIVE_OVERDUENESS, "Relative overdueness"],
   ];
-  let filteredDialog: HTMLDialogElement;
+  let filteredOpen = $state(false);
   let filtered: FilteredDeckForUpdate | undefined = $state();
-  let terms: Deck_Filtered_SearchTerm[] = $state([]);
+  // Plain objects: $state doesn't track protobuf class instances.
+  type Term = { search: string; limit: number; order: Order };
+  let terms: Term[] = $state([]);
   let second = $state(false);
   let reschedule = $state(true);
   async function openFiltered(deckId = 0n) {
     try {
       const deck = await getOrCreateFilteredDeck({ did: deckId });
       const saved = deck.config!.searchTerms;
-      terms = [
-        saved[0],
-        saved[1] ?? new Deck_Filtered_SearchTerm({ search: "", limit: 20, order: Order.DUE }),
-      ];
+      const plain = ({ search, limit, order }: Term): Term => ({ search, limit, order });
+      terms = [plain(saved[0]), saved[1] ? plain(saved[1]) : { search: "", limit: 20, order: Order.DUE }];
       // As Anki: a second filter shows as enabled only for an existing deck.
       second = deckId !== 0n && saved.length > 1;
       reschedule = deck.config!.reschedule;
       filtered = deck;
-      filteredDialog.showModal();
+      filteredOpen = true;
     } catch {
       // Shown by the bridge.
     }
   }
   async function saveFiltered(event: SubmitEvent) {
     event.preventDefault();
+    retireUndo();
     const deck = filtered!;
-    deck.config!.searchTerms = second ? terms : terms.slice(0, 1);
+    deck.config!.searchTerms = (second ? terms : terms.slice(0, 1)).map((t) => new Deck_Filtered_SearchTerm(t));
     deck.config!.reschedule = reschedule;
     try {
       // Saving (re)builds the deck; Anki then shows it.
       await addOrUpdateFilteredDeck(deck);
-      filteredDialog.close();
+      filteredOpen = false;
       await refresh();
     } catch {
       // e.g. no cards matched: shown by the bridge; the dialog stays open.
@@ -141,6 +159,7 @@
   }
 
   async function onaction(action: DeckAction, deck: DeckTreeNode) {
+    if (action !== "rename" && action !== "filteredOptions") retireUndo();
     try {
       switch (action) {
         case "collapse":
@@ -161,8 +180,13 @@
           await emptyFilteredDeck({ did: deck.deckId });
           break;
         case "delete": {
+          // As Anki: no confirmation, but an undo in the "N cards deleted" notice.
           const { count } = await removeDecks({ dids: [deck.deckId] });
-          deleted = `Deleted ${deck.name} (${count} ${count === 1 ? "card" : "cards"}).`;
+          undoToast = toast(`Deleted ${deck.name} (${count} ${count === 1 ? "card" : "cards"})`, {
+            action: { label: "Undo", onClick: undoDelete },
+            onDismiss: () => (undoToast = undefined),
+            onAutoClose: () => (undoToast = undefined),
+          });
           break;
         }
       }
@@ -173,107 +197,129 @@
   }
 
   async function undoDelete() {
-    deleted = "";
+    undoToast = undefined;
     await undo({}).catch(() => {});
     await refresh();
   }
 </script>
 
-<main>
-  <header>
-    <h1>Decks</h1>
-    <div class="actions">
-      <button onclick={addNote}>Add</button>
-      <button onclick={() => (location.href = "/browse")}>Browse</button>
-      <button onclick={() => askName()}>Create Deck</button>
-      <button onclick={() => openFiltered()}>Filtered Deck…</button>
-      <button onclick={importPackage}>Import…</button>
+<main class="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8">
+  <header class="flex flex-wrap items-center justify-between gap-4">
+    <h1 class="text-2xl font-semibold tracking-tight">Decks</h1>
+    <div class="flex flex-wrap gap-2">
+      <Button onclick={addNote}>Add</Button>
+      <Button variant="outline" onclick={() => (location.href = "/browse")}>Browse</Button>
+      <Button variant="outline" onclick={() => askName()}>Create Deck</Button>
+      <Button variant="outline" onclick={() => openFiltered()}>Filtered Deck…</Button>
+      <Button variant="outline" onclick={importPackage}>Import…</Button>
     </div>
   </header>
-  {#if deleted}
-    <p class="status" role="status">{deleted} <button onclick={undoDelete}>Undo</button></p>
-  {/if}
   {#if root}
-    <table>
-      <thead>
-        <tr><th>Deck</th><th>New</th><th>Learn</th><th>Due</th><th><span class="visually-hidden">Actions</span></th></tr>
-      </thead>
-      <tbody><DeckRows decks={root.children} {onaction} /></tbody>
-    </table>
+    <Table.Root>
+      <Table.Header>
+        <Table.Row>
+          <Table.Head>Deck</Table.Head>
+          <Table.Head class="text-right">New</Table.Head>
+          <Table.Head class="text-right">Learn</Table.Head>
+          <Table.Head class="text-right">Due</Table.Head>
+          <Table.Head class="w-10"><span class="sr-only">Actions</span></Table.Head>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body><DeckRows decks={root.children} {onaction} /></Table.Body>
+    </Table.Root>
   {:else if loadError}
-    <p role="alert">{loadError}</p>
+    <p role="alert" class="text-destructive">{loadError}</p>
   {:else}
-    <p>Loading…</p>
+    <p class="text-muted-foreground">Loading…</p>
   {/if}
 </main>
 
-<dialog bind:this={nameDialog} aria-labelledby="name-title">
-  <form onsubmit={saveName}>
-    <h2 id="name-title">{renaming ? "Rename Deck" : "Create Deck"}</h2>
-    <label>Name <input bind:value={name} required /></label>
-    <p class="hint">Use <code>::</code> to nest, e.g. <code>Biology::Cells</code>.</p>
-    <div class="buttons">
-      <button type="button" onclick={() => nameDialog.close()}>Cancel</button>
-      <button type="submit">{renaming ? "Rename" : "Create"}</button>
-    </div>
-  </form>
-</dialog>
-
-<dialog bind:this={filteredDialog} aria-labelledby="filtered-title">
-  {#if filtered}
-    <form onsubmit={saveFiltered}>
-      <h2 id="filtered-title">{filtered.id ? `Options for ${filtered.name}` : "Filtered Deck"}</h2>
-      <label>Name <input bind:value={filtered.name} required /></label>
-      {#each terms as term, i (i)}
-        {#if i === 0 || second}
-          <fieldset>
-            <legend>{i === 0 ? "Filter" : "Filter 2"}</legend>
-            <label>Search <input bind:value={term.search} /></label>
-            <label>Limit to <input type="number" min="1" max="99999" bind:value={term.limit} /> cards</label>
-            <label
-              >Cards selected by
-              <select bind:value={term.order}>
-                {#each orders as [value, label] (value)}<option {value}>{label}</option>{/each}
-              </select>
-            </label>
-          </fieldset>
-        {/if}
-      {/each}
-      <label><input type="checkbox" bind:checked={second} /> Enable second filter</label>
-      <label><input type="checkbox" bind:checked={reschedule} /> Reschedule cards based on my answers in this deck</label>
-      <div class="buttons">
-        <button type="button" onclick={() => filteredDialog.close()}>Cancel</button>
-        <button type="submit">{filtered.id ? "Rebuild" : "Build"}</button>
-      </div>
+<Dialog.Root bind:open={nameOpen}>
+  <Dialog.Content class="sm:max-w-sm">
+    <form onsubmit={saveName} class="flex flex-col gap-4">
+      <Dialog.Header>
+        <Dialog.Title>{renaming ? "Rename Deck" : "Create Deck"}</Dialog.Title>
+      </Dialog.Header>
+      <Field.Group>
+        <Field.Field>
+          <Field.Label for="deck-name">Name</Field.Label>
+          <Input id="deck-name" bind:value={name} required />
+          <Field.Description>Use <code>::</code> to nest, e.g. <code>Biology::Cells</code>.</Field.Description>
+        </Field.Field>
+      </Field.Group>
+      <Dialog.Footer>
+        <Dialog.Close>
+          {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
+        </Dialog.Close>
+        <Button type="submit">{renaming ? "Rename" : "Create"}</Button>
+      </Dialog.Footer>
     </form>
-  {/if}
-</dialog>
+  </Dialog.Content>
+</Dialog.Root>
 
-<style>
-  :global(body) {
-    font-family: system-ui, sans-serif;
-    color: CanvasText;
-    background: Canvas;
-    color-scheme: light dark;
-  }
-  main { max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
-  header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-  .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
-  .status { display: flex; align-items: center; gap: 0.5rem; }
-  table { width: 100%; border-collapse: collapse; }
-  th, :global(td) { padding: 0.35rem 0.5rem; text-align: right; }
-  th:first-child, :global(td:first-child) { text-align: left; }
-  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-  /* ≥4.5:1 against the Canvas background in both schemes. */
-  :global(.new) { color: light-dark(#1d4ed8, #93c5fd); }
-  :global(.learn) { color: light-dark(#b91c1c, #fca5a5); }
-  :global(.review) { color: light-dark(#15803d, #86efac); }
-  dialog { min-width: 22rem; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 8px; color: inherit; background: Canvas; }
-  dialog form { display: flex; flex-direction: column; gap: 0.6rem; }
-  dialog h2 { margin: 0; font-size: 1.1rem; }
-  dialog label { display: flex; align-items: center; gap: 0.5rem; }
-  dialog input:not([type]), dialog input[type="number"] { flex: 1; }
-  fieldset { display: flex; flex-direction: column; gap: 0.5rem; border-radius: 6px; }
-  .hint { margin: 0; font-size: 0.85rem; opacity: 0.75; }
-  .buttons { display: flex; justify-content: flex-end; gap: 0.5rem; }
-</style>
+<Dialog.Root bind:open={filteredOpen}>
+  <Dialog.Content class="sm:max-w-lg">
+    {#if filtered}
+      <form onsubmit={saveFiltered} class="flex flex-col gap-4">
+        <Dialog.Header>
+          <Dialog.Title>{filtered.id ? `Options for ${filtered.name}` : "Filtered Deck"}</Dialog.Title>
+        </Dialog.Header>
+        <Field.Group>
+          <Field.Field>
+            <Field.Label for="filtered-name">Name</Field.Label>
+            <Input id="filtered-name" bind:value={filtered.name} required />
+          </Field.Field>
+          {#each terms as term, i (i)}
+            {#if i === 0 || second}
+              <Field.Set>
+                <Field.Legend>{i === 0 ? "Filter" : "Filter 2"}</Field.Legend>
+                <Field.Group>
+                  <Field.Field>
+                    <Field.Label for="search-{i}">Search</Field.Label>
+                    <Input id="search-{i}" bind:value={term.search} />
+                  </Field.Field>
+                  <div class="flex gap-4">
+                    <Field.Field>
+                      <Field.Label for="limit-{i}">Limit to</Field.Label>
+                      <Input id="limit-{i}" type="number" min="1" max="99999" bind:value={term.limit} />
+                    </Field.Field>
+                    <Field.Field>
+                      <Field.Label for="order-{i}">Cards selected by</Field.Label>
+                      <Select.Root
+                        type="single"
+                        bind:value={() => String(term.order), (v) => (term.order = Number(v))}
+                      >
+                        <Select.Trigger id="order-{i}" class="w-full">{orderLabel(term.order)}</Select.Trigger>
+                        <Select.Content>
+                          <Select.Group>
+                            {#each orders as [value, label] (value)}
+                              <Select.Item value={String(value)} {label}>{label}</Select.Item>
+                            {/each}
+                          </Select.Group>
+                        </Select.Content>
+                      </Select.Root>
+                    </Field.Field>
+                  </div>
+                </Field.Group>
+              </Field.Set>
+            {/if}
+          {/each}
+          <Field.Field orientation="horizontal">
+            <Checkbox id="second-filter" bind:checked={second} />
+            <Field.Label for="second-filter">Enable second filter</Field.Label>
+          </Field.Field>
+          <Field.Field orientation="horizontal">
+            <Checkbox id="reschedule" bind:checked={reschedule} />
+            <Field.Label for="reschedule">Reschedule cards based on my answers in this deck</Field.Label>
+          </Field.Field>
+        </Field.Group>
+        <Dialog.Footer>
+          <Dialog.Close>
+            {#snippet child({ props })}<Button {...props} variant="outline">Cancel</Button>{/snippet}
+          </Dialog.Close>
+          <Button type="submit">{filtered.id ? "Rebuild" : "Build"}</Button>
+        </Dialog.Footer>
+      </form>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
