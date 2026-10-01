@@ -101,6 +101,16 @@ const ALLOWED: &[&str] = &[
     "undo",
     "getUndoStatus",
     "congratsInfo",
+    // Klaus's deck list (Anki's deckbrowser.py and filtered deck dialog).
+    "newDeck",
+    "addDeck",
+    "renameDeck",
+    "removeDecks",
+    "setDeckCollapsed",
+    "getOrCreateFilteredDeck",
+    "addOrUpdateFilteredDeck",
+    "rebuildFilteredDeck",
+    "emptyFilteredDeck",
     // A mediasrv post handler in Anki (missing keys read as null); see Bridge::call.
     "getConfigJson",
     // Deck options: post handlers in Anki, a plain backend call there too. Saving
@@ -651,12 +661,12 @@ async fn anki_page(State(state): State<AppState>, page: &'static str) -> Respons
     }
     let html = html.replacen(
         "<head>",
-        r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script>"#,
+        r#"<head><link rel="stylesheet" href="/anki-host.css"><script src="/native-dialogs.js"></script><script src="/anki-host.js"></script>"#,
         1,
     );
     let csp = if matches!(page, "editor" | "image-occlusion") {
         let o = &state.origin;
-        format!("script-src {o}/_anki/ {o}/_app/ {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'none'")
+        format!("script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js {hash}; form-action 'none'; frame-ancestors 'none'")
     } else {
         "frame-ancestors 'none'".to_owned()
     };

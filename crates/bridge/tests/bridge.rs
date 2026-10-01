@@ -431,7 +431,7 @@ async fn http_contract_matches_ankis_post_ts() {
         async move { client.get(url).send().await.unwrap().text().await.unwrap() }
     };
     // Anki pages get the host script (bridgeCommand) and base styles before their own scripts.
-    let anki_page = r#"<html><head><link rel="stylesheet" href="/anki-host.css"><script src="/anki-host.js"></script></head><p>anki</p></html>"#;
+    let anki_page = r#"<html><head><link rel="stylesheet" href="/anki-host.css"><script src="/native-dialogs.js"></script><script src="/anki-host.js"></script></head><p>anki</p></html>"#;
     assert_eq!(get("/import-anki-package/Users/me/biology.apkg").await, anki_page);
     assert_eq!(get("/editor/?mode=add").await, anki_page);
     // The editor's relative media URLs come from the Collection's media folder.
@@ -455,7 +455,7 @@ async fn http_contract_matches_ankis_post_ts() {
     };
     let o = &base;
     let untrusted = format!(
-        "script-src {o}/_anki/ {o}/_app/ {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors 'none'"
+        "script-src {o}/_anki/ {o}/_app/ {o}/native-dialogs.js {o}/anki-host.js 'sha256-abc='; form-action 'none'; frame-ancestors 'none'"
     );
     assert_eq!(csp("/editor/?mode=add").await, untrusted);
     assert_eq!(csp("/image-occlusion/Users/me/a.png").await, untrusted);
@@ -565,4 +565,86 @@ fn day_rollover_hour_sets_when_the_day_ends() {
     // 4:00 to 20:00 moves it by 16 hours (modulo a day).
     let (four, twenty) = (next_day_at(4), next_day_at(20));
     assert_eq!((twenty - four).rem_euclid(86_400), 16 * 3600);
+}
+
+fn find_deck<'a>(node: &'a DeckTreeNode, name: &str) -> Option<&'a DeckTreeNode> {
+    if node.name == name {
+        return Some(node);
+    }
+    node.children.iter().find_map(|c| find_deck(c, name))
+}
+
+fn create_deck(bridge: &Bridge, name: &str) -> i64 {
+    let mut deck: Deck = call(bridge, "newDeck", Empty {});
+    deck.name = name.into();
+    call::<OpChangesWithId>(bridge, "addDeck", deck).id
+}
+
+/// #10, as the deck list drives it: create, rename (which also nests), collapse,
+/// delete and undo.
+#[test]
+fn manages_decks_from_the_deck_list() {
+    use anki_proto::decks::{set_deck_collapsed_request::Scope, DeckIds, RenameDeckRequest, SetDeckCollapsedRequest};
+    let dir = tempfile::tempdir().unwrap();
+    let bridge = Bridge::new().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+
+    let bio = create_deck(&bridge, "Biology");
+    let cells = create_deck(&bridge, "Cells");
+    add_note(&bridge, "Basic", &["front", "back"]);
+    let _: OpChanges = call(&bridge, "renameDeck", RenameDeckRequest { deck_id: cells, new_name: "Biology::Cell biology".into() });
+    let tree = deck_tree(&bridge);
+    let parent = find_deck(&tree, "Biology").unwrap();
+    assert_eq!((parent.deck_id, parent.children[0].name.as_str()), (bio, "Cell biology"));
+    assert!(find_deck(&tree, "Cells").is_none());
+
+    // Collapsing persists in the Collection.
+    let collapse = SetDeckCollapsedRequest { deck_id: bio, collapsed: true, scope: Scope::Reviewer as i32 };
+    let _: OpChanges = call(&bridge, "setDeckCollapsed", collapse);
+    bridge.close_collection().unwrap();
+    bridge.open_collection(dir.path()).unwrap();
+    assert!(find_deck(&deck_tree(&bridge), "Biology").unwrap().collapsed);
+
+    // Deleting a parent deletes its children; undo brings both back.
+    let removed: anki_proto::collection::OpChangesWithCount = call(&bridge, "removeDecks", DeckIds { dids: vec![bio] });
+    assert_eq!(removed.count, 0, "no cards in Biology");
+    assert!(find_deck(&deck_tree(&bridge), "Biology").is_none());
+    let _: anki_proto::collection::OpChangesAfterUndo = call(&bridge, "undo", Empty {});
+    let tree = deck_tree(&bridge);
+    assert_eq!(find_deck(&tree, "Biology").unwrap().children.len(), 1);
+}
+
+#[test]
+fn builds_rebuilds_and_empties_filtered_decks() {
+    use anki_proto::decks::FilteredDeckForUpdate;
+    let (_dir, bridge) = open_temp();
+    add_note(&bridge, "Basic", &["one", "1"]);
+    add_note(&bridge, "Basic", &["two", "2"]);
+    // An empty Default deck is hidden from the tree.
+    let in_default = |bridge: &Bridge| find_deck(&deck_tree(bridge), "Default").map_or(0, |d| d.total_in_deck);
+    assert_eq!(in_default(&bridge), 2);
+
+    // The filtered deck dialog: defaults for a new deck (id 0), edited, then saved,
+    // which builds it.
+    let mut filtered: FilteredDeckForUpdate = call(&bridge, "getOrCreateFilteredDeck", DeckId { did: 0 });
+    assert_eq!(filtered.id, 0);
+    filtered.name = "Cram".into();
+    // Without the second filter enabled, the dialog saves only the first term.
+    filtered.config.as_mut().unwrap().search_terms.truncate(1);
+    let term = &mut filtered.config.as_mut().unwrap().search_terms[0];
+    term.search = "deck:Default".into();
+    term.limit = 1;
+    let id = call::<OpChangesWithId>(&bridge, "addOrUpdateFilteredDeck", filtered).id;
+    let cram = |bridge: &Bridge| find_deck(&deck_tree(bridge), "Cram").unwrap().total_in_deck;
+    assert!(find_deck(&deck_tree(&bridge), "Cram").unwrap().filtered);
+    assert_eq!((cram(&bridge), in_default(&bridge)), (1, 1));
+
+    // Editing reopens the saved settings.
+    let saved: FilteredDeckForUpdate = call(&bridge, "getOrCreateFilteredDeck", DeckId { did: id });
+    assert_eq!(saved.config.unwrap().search_terms[0].search, "deck:Default");
+
+    let _: OpChanges = call(&bridge, "emptyFilteredDeck", DeckId { did: id });
+    assert_eq!((cram(&bridge), in_default(&bridge)), (0, 2));
+    let rebuilt: anki_proto::collection::OpChangesWithCount = call(&bridge, "rebuildFilteredDeck", DeckId { did: id });
+    assert_eq!((rebuilt.count, cram(&bridge)), (1, 1));
 }
