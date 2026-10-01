@@ -1,12 +1,29 @@
 <script lang="ts">
-  import { deckTree } from "$lib/generated/backend";
+  import { deckTree } from "@generated/backend";
   import DeckRows from "./DeckRows.svelte";
 
   const tree = deckTree({ now: BigInt(Math.floor(Date.now() / 1000)) });
+
+  // Anki's own editor; it adds the note itself through the bridge.
+  function addNote() {
+    const night = matchMedia("(prefers-color-scheme: dark)").matches ? "#night" : "";
+    location.href = `/editor/?mode=add${night}`;
+  }
+
+  // Klaus's shell shows a file picker, then opens Anki's import page.
+  function importPackage() {
+    fetch("/_anki/klausImportPackage", { method: "POST", headers: { "Content-Type": "application/binary" } });
+  }
 </script>
 
 <main>
-  <h1>Decks</h1>
+  <header>
+    <h1>Decks</h1>
+    <div>
+      <button onclick={addNote}>Add</button>
+      <button onclick={importPackage}>Import…</button>
+    </div>
+  </header>
   {#await tree}
     <p>Loading…</p>
   {:then root}
@@ -27,6 +44,7 @@
     color-scheme: light dark;
   }
   main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+  header { display: flex; align-items: center; justify-content: space-between; }
   table { width: 100%; border-collapse: collapse; }
   th, :global(td) { padding: 0.35rem 0.5rem; text-align: right; }
   th:first-child, :global(td:first-child) { text-align: left; }
