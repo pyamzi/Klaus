@@ -45,7 +45,7 @@ function connected(c) {
 function pw(id, child) {
   const w = el("div", "klaus-widget");
   w.setAttribute("data-w", id);
-  w.appendChild(child);
+  w.appendChild(el("div", "klaus-w-body")).appendChild(child);
   return w;
 }
 // style.order as a number (CSS order is how the page reorders).
@@ -59,7 +59,7 @@ function el(tag, cls, id) {
     tagName: tag.toUpperCase(),
     className: cls || "",
     id: id || "",
-    style: {},
+    style: { setProperty(k, v) { this[k] = String(v); } },
     textContent: "",
     attrs: {},
     children: [],
@@ -264,12 +264,13 @@ d = build({});
 const amb2 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
 d.center.appendChild(pw("x:amboss-qbank-widget", amb2));
 boot(Object.assign({}, STATE, { edit: true, order: ["decks", "heatmap", "x:amboss-qbank-widget"] }));
+// Layout slots stacked by CSS order (the drag measures slots with its
+// own transform removed, so the mock ignores transforms).
 for (const id of ["decks", "heatmap", "x:amboss-qbank-widget"]) {
   const w = widget(id);
   w.getBoundingClientRect = () => {
-    const m = /translateY\((-?[\d.]+)px\)/.exec(w.style.transform || "");
-    const top = (ord(w) - 1) * 100 + (m ? Number(m[1]) : 0);
-    return { top, bottom: top + 50, height: 50, left: 0, right: 0, width: 0 };
+    const top = (ord(w) - 1) * 100;
+    return { top, bottom: top + 50, height: 50, left: 0, right: 1000, width: 1000 };
   };
 }
 const sh = widget("x:amboss-qbank-widget").querySelector(".klaus-w-shield");
@@ -384,6 +385,94 @@ const evOff = fire(document.body, "contextmenu", {});
 ok("right-click outside the widgets is left to Anki",
    !evOff._prevented
    && document.querySelectorAll(".klaus-dash-menu").length === 0);
+
+// 14. Sizes: each widget takes its saved or default COLUMNS x ROWS box,
+//     clamped to the columns the window has.
+d = build({ foreign: true });
+d.center.clientWidth = 16 + 3 * 176; // room for exactly 3 columns
+const SIZED = Object.assign({}, STATE, {
+  sizes: { decks: "2x2" }, defaultSizes: { decks: "3x3", heatmap: "4x2" }, foreignSize: "2x1",
+  sizeChoices: ["1x1", "2x1", "2x2", "3x2", "4x2"], grid: { cell: 160, gap: 16 },
+});
+boot(SIZED);
+ok("a saved size wins over the default",
+   widget("decks").getAttribute("data-size") === "2x2"
+   && widget("decks").style["--kw-cols"] === "2" && widget("decks").style["--kw-rows"] === "2");
+ok("a 4-wide widget in a 3-column window takes 3 columns (no overflow)",
+   widget("heatmap").getAttribute("data-size") === "4x2" && widget("heatmap").style["--kw-cols"] === "3",
+   widget("heatmap").style["--kw-cols"]);
+ok("an add-on block gets the shared default box",
+   widget("x:.ankihub-thing").getAttribute("data-size") === "2x1");
+ok("Anki's table sits in the decks box's scroll body, not the grid item itself",
+   d.table.parentNode.className === "klaus-w-body" && d.table.parentNode.parentNode === widget("decks"));
+
+// 15. Edit mode: a size chip on every widget; picking a size applies it
+//     and reports {size}.
+d = build({});
+boot(Object.assign({}, SIZED, { edit: true }));
+const chip = widget("heatmap").querySelector(".klaus-w-size");
+ok("every widget gets a size chip naming its box",
+   widget("decks").querySelectorAll(".klaus-w-size").length === 1 && chip && chip.textContent === "4×2");
+fire(chip, "click", { clientX: 100, clientY: 100 });
+const sizeMenu = document.querySelectorAll(".klaus-dash-menu")[0];
+ok("the chip opens the sizes, the current one ticked",
+   sizeMenu && sizeMenu.children.some((c) => c.textContent === "✓ 4×2")
+   && sizeMenu.children.some((c) => c.textContent === "2×1"));
+fire(sizeMenu.children.find((c) => c.textContent === "3×2"), "click");
+ok("picking one resizes the widget and reports {size}",
+   widget("heatmap").getAttribute("data-size") === "3x2" && chip.textContent === "3×2"
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"size","id":"heatmap","size":"3x2"}',
+   JSON.stringify(decoded(SENT.length - 1)));
+
+// 16. Shake: every widget gets its own phase and speed, cleared on exit.
+const phases = ["decks", "heatmap"].map((id) => widget(id).style.animationDelay);
+ok("each widget shakes from its own point in the cycle",
+   phases.every((p) => /^-0\.\d{3}s$/.test(p)) && widget("decks").style.animationDuration, phases.join(","));
+
+// 17. Same Look: a chip in the bar toggles one card on every widget.
+const same = document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-uniform");
+ok("the bar carries Same Look, off by default",
+   same && same.getAttribute("aria-pressed") === "false" && !document.body.classList.contains("klaus-dash-uniform"));
+fire(same, "click");
+ok("…turning it on dresses every widget alike and reports {uniform: true}",
+   document.body.classList.contains("klaus-dash-uniform") && same.getAttribute("aria-pressed") === "true"
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"uniform","on":true}');
+ok("…and it stays in edit mode (a chip click is not an outside click)",
+   document.body.classList.contains("klaus-dash-editing"));
+fire(document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-done"), "click");
+ok("Done clears the chips and the shake phases",
+   document.querySelectorAll(".klaus-w-size").length === 0 && widget("decks").style.animationDelay === "");
+d = build({});
+boot(Object.assign({}, SIZED, { uniform: true }));
+ok("a saved Same Look boots on", document.body.classList.contains("klaus-dash-uniform"));
+
+// 18. Drag works across the grid too: drop beside, not just above.
+d = build({});
+const amb3 = el("amboss-component-wrapper", "", "amboss-qbank-widget");
+d.center.appendChild(pw("x:amboss-qbank-widget", amb3));
+boot(Object.assign({}, SIZED, { edit: true, order: ["decks", "heatmap", "x:amboss-qbank-widget"] }));
+const COLS = { 1: 0, 2: 300, 3: 600 }; // one row of three, side by side
+for (const id of ["decks", "heatmap", "x:amboss-qbank-widget"]) {
+  const w = widget(id);
+  w.getBoundingClientRect = () => {
+    const left = COLS[ord(w)];
+    return { top: 0, bottom: 200, height: 200, left, right: left + 280, width: 280 };
+  };
+}
+const sh3 = widget("x:amboss-qbank-widget").querySelector(".klaus-w-shield");
+fire(sh3, "pointerdown", { clientX: 650, clientY: 100, button: 0, pointerId: 1 });
+fire(sh3, "pointermove", { clientX: 100, clientY: 100, pointerId: 1 });
+ok("dragging sideways onto the first widget takes its place",
+   ord(widget("x:amboss-qbank-widget")) === 1 && ord(widget("decks")) === 2,
+   [ord(widget("x:amboss-qbank-widget")), ord(widget("decks"))]);
+ok("…and the widget follows the pointer in both directions",
+   /^translate\(-?[\d.]+px, -?[\d.]+px\) scale\(1.02\)$/.test(widget("x:amboss-qbank-widget").style.transform),
+   widget("x:amboss-qbank-widget").style.transform);
+fire(sh3, "pointerup", { clientX: 100, clientY: 100, pointerId: 1 });
+ok("the drop reports the new order",
+   JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["x:amboss-qbank-widget","decks","heatmap"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+ok("…without ever re-connecting the add-on's element", amb3.connects === 1, String(amb3.connects));
 
 let failed = 0;
 for (const [name, pass, detail] of results) {

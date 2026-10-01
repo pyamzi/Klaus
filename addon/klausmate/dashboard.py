@@ -180,8 +180,47 @@ def wrap_foreign(body: str, hidden: Any = ()) -> str:
     for start, end, key in reversed(wraps):
         style = ' style="display:none"' if key in hide else ""
         out = (out[:start] + f'<div class="klaus-widget" data-w="{key}"{style}>'
-               + out[start:end] + "</div>" + out[end:])
+               + '<div class="klaus-w-body">' + out[start:end] + "</div></div>" + out[end:])
     return out
+
+
+# The grid (Pouya, 2026-10-01: "they should fit within square boxes").
+# The deck screen is one grid of square cells, GRID_GAP apart and around;
+# every widget fills a whole COLUMNS x ROWS box of them and scrolls inside
+# it when its content is bigger. Sizes are picked per widget in edit mode
+# from SIZES; a widget never saved keeps its DEFAULT_SIZES entry (other
+# add-ons' blocks: FOREIGN_SIZE).
+GRID_CELL = 160
+GRID_GAP = 16
+SIZES: tuple = ("1x1", "2x1", "1x2", "2x2", "3x2", "3x3", "4x2", "4x3")
+DEFAULT_SIZES = {"decks": "3x3", "heatmap": "4x2"}
+FOREIGN_SIZE = "2x1"
+
+
+def default_size(wid: str) -> str:
+    return DEFAULT_SIZES.get(wid, FOREIGN_SIZE)
+
+
+def sizes_from_cfg(cfg: Any) -> dict:
+    """``dashboard_sizes`` made safe: known or foreign-shaped ids only,
+    sizes from SIZES only; anything else is dropped (and that widget
+    falls back to its default size)."""
+    value = cfg.get("dashboard_sizes") if isinstance(cfg, dict) else None
+    out: dict = {}
+    if isinstance(value, dict):
+        known = widget_ids()
+        for wid, size in value.items():
+            if len(out) >= MAX_FOREIGN + len(known):
+                break
+            if (wid in known or is_foreign(wid)) and size in SIZES:
+                out[wid] = size
+    return out
+
+
+def uniform_from_cfg(cfg: Any) -> bool:
+    """``dashboard_uniform``: only an explicit True forces the one card
+    look (a corrupt value must not restyle other add-ons' blocks)."""
+    return isinstance(cfg, dict) and cfg.get("dashboard_uniform") is True
 
 
 def widget_ids() -> list:
@@ -248,6 +287,12 @@ def boot_state(cfg: Any, edit: bool) -> dict:
     return {
         "order": order_from_cfg(cfg),
         "hiddenForeign": hidden_foreign(cfg),
+        "sizes": sizes_from_cfg(cfg),
+        "defaultSizes": dict(DEFAULT_SIZES),
+        "foreignSize": FOREIGN_SIZE,
+        "sizeChoices": list(SIZES),
+        "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
+        "uniform": uniform_from_cfg(cfg),
         "edit": bool(edit),
         "removable": removable_ids(),
         "labels": {wid: label for wid, key, label in WIDGETS if key},
@@ -294,6 +339,16 @@ def apply_action(action: Any, cfg: Any = None) -> dict | None:
     act = action.get("action")
     if act == "order":
         return {"dashboard_order": normalize_order(action.get("order"))}
+    if act == "size":
+        wid, size = action.get("id"), action.get("size")
+        if size not in SIZES or not (wid in widget_ids() or is_foreign(wid)):
+            return None
+        sizes = sizes_from_cfg(cfg)
+        sizes[wid] = size
+        return {"dashboard_sizes": sizes}
+    if act == "uniform":
+        on = action.get("on")
+        return {"dashboard_uniform": on} if isinstance(on, bool) else None
     if act in ("remove", "add"):
         wid = action.get("id")
         if is_foreign(wid):
@@ -316,7 +371,11 @@ def _palette_vars(night: bool) -> str:
     colours = theme.palette(night)
     edge = "rgba(255,255,255,0.12)" if night else "rgba(0,0,0,0.10)"
     chip = "rgba(48,48,48,0.60)" if night else "rgba(255,255,255,0.60)"
+    lift = "0 1px 3px rgba(0,0,0,0.40)" if night else "0 1px 3px rgba(0,0,0,0.08)"
     return (
+        f" --klaus-dash-card: {colours['surface']};"
+        f" --klaus-dash-card-edge: {colours['grey_light']};"
+        f" --klaus-dash-lift: {lift};"
         f" --klaus-dash-surface: {colours['surface']};"
         f" --klaus-dash-text: {colours['text']};"
         f" --klaus-dash-hover: {colours['hover_subtle']};"
@@ -328,16 +387,14 @@ def _palette_vars(night: bool) -> str:
 
 
 def dashboard_css() -> str:
-    """Wrapper + edit-mode chrome, both palettes keyed on Anki's own
-    ``:root.night-mode`` class (Anki flips it with JS and never re-runs
+    """The widget grid + edit-mode chrome, both palettes keyed on Anki's
+    own ``:root.night-mode`` class (Anki flips it with JS and never re-runs
     the injecting hook — same reason as theme.toolbar_css).
 
-    No width rules anywhere: Anki's global ``*{box-sizing:content-box}``
-    is what made a forced width overflow the deck panel before. The
-    wrappers are plain blocks under ``<center>`` (Chromium's
-    ``text-align:-webkit-center`` centres block children shrink-to-fit),
-    so they hug their widget and the corner badge lands on the panel's
-    actual corner.
+    Every widget fills a whole box of square grid cells and scrolls
+    inside it (``.klaus-w-body``), so sizes and spacing are the grid's,
+    never the content's. ``body.klaus-dash-uniform`` (Same Look) gives
+    every box one card and switches each widget's own outer card off.
 
     The jiggle honours Anki's OWN reduced-motion mechanism: Anki ships
     no ``prefers-reduced-motion`` CSS at all — it live-toggles a
@@ -347,64 +404,70 @@ def dashboard_css() -> str:
     return (
         f":root {{{_palette_vars(False)} }}"
         f":root.night-mode {{{_palette_vars(True)} }}"
-        # position:relative always (not just in edit mode) so the badge
-        # and shield anchor without a layout jump when editing starts.
-        #
-        # width:fit-content + auto margins is the shrink-to-fit, and
-        # the CHOICE of sizing function is load-bearing (both wrong
-        # options were measured in Chromium):
-        #   - a plain block stays full-width (589px around a 411px
-        #     table), parking the ⊖ badge at the window edge and letting
-        #     the edit shield swallow click-outside-exits beside the
-        #     panel;
-        #   - display:table shrinks but is sized purely to content, so
-        #     the heatmap's max-width:100% stops resolving and the year
-        #     grid blew out to 859px instead of engaging its own
-        #     horizontal scroller.
-        # fit-content + max-width:100% — BOTH are needed, measured:
-        # fit-content alone still hit 859px, because it cannot go below
-        # min-content and the heatmap's grid (width:max-content) IS its
-        # min-content; the max-width cap is what re-engages the
-        # heatmap's own horizontal scroller. This is exactly how the
-        # .klaus-hm panel already sizes itself (inline-block +
-        # max-width:100%), lifted onto the wrapper. Neither is a forced
-        # width: the content-box overflow class of bug (width:100% on a
-        # padded box) cannot happen with them.
-        " .klaus-widget {"
-        " position: relative; width: fit-content; max-width: 100%;"
-        " margin: 0 auto 1.1em auto;"
-        " }"
-        # The wrapper must hug what the user can SEE: the edit badge
-        # anchors to its corners, and a wrapped child's own margin sits
-        # INSIDE the wrapper box — the heatmap's 1.4em margin-top
-        # floated the ⊖ into empty page space above the panel (live
-        # screenshot 2026-08-30). The child's rhythm is neutralised
-        # here and the wrapper's bottom margin carries spacing instead;
-        # native mode is untouched, since this sheet only exists with
-        # the design on. Child selector outranks heatmap_css's own
-        # .klaus-hm margin rule — no !important needed.
-        " .klaus-widget > .klaus-hm { margin: 0; }"
-        # Widgets reorder by CSS `order`, never by moving nodes (an add-on's
-        # custom element re-renders on every move), so their <center> is a
-        # flex column; a stray <br> there would be an empty item.
+        # THE GRID (2026-10-01). The deck screen's <center> is one grid
+        # of GRID_CELL squares, GRID_GAP apart and padded by GRID_GAP, so
+        # spacing is one number everywhere. Widgets still reorder by CSS
+        # `order` only, never by moving nodes (an add-on's custom element
+        # re-renders on every move); a stray <br> there would take a cell.
+        # No `dense` flow: a widget's place on screen must follow its
+        # order, or a drag lands somewhere other than where it was aimed.
         " center.klaus-dash-col {"
-        " display: flex; flex-direction: column; align-items: center;"
+        f" display: grid; grid-template-columns: repeat(auto-fill, {GRID_CELL}px);"
+        f" grid-auto-rows: {GRID_CELL}px; gap: {GRID_GAP}px; padding: {GRID_GAP}px;"
+        " justify-content: center;"
         " }"
         " center.klaus-dash-col > br { display: none; }"
+        # Each widget fills a whole COLUMNS x ROWS box: the page sets the
+        # two spans (--kw-cols/--kw-rows) from the saved size, clamped to
+        # the columns the window has. position:relative always, so the
+        # badge, size chip and shield anchor without a jump.
+        " .klaus-widget {"
+        " position: relative; min-width: 0; min-height: 0;"
+        " grid-column: span var(--kw-cols, 2); grid-row: span var(--kw-rows, 1);"
+        " }"
+        # The box itself: exactly the grid area, content scrolling inside
+        # it. Its own element so the ⊖ badge and the size chip (children
+        # of the widget, outside it) are never clipped by the scroll.
+        # border-box explicitly: Anki's global *{box-sizing:content-box}
+        # would push the padded uniform card past its cell.
+        " .klaus-w-body {"
+        " position: absolute; inset: 0; overflow: auto; box-sizing: border-box;"
+        " border-radius: 12px; text-align: center;"
+        " }"
+        # A widget's own card fills its box, so the grid's sizes show even
+        # with Same Look off. Only a box's ONE card (the decks box holds
+        # the table AND the studied line, and a full-height studied line
+        # overflowed it), and never Anki's deck table: a table stretched
+        # to a height spreads the extra into its rows.
+        " .klaus-w-body > :only-child:not(table) {"
+        " box-sizing: border-box; width: 100%; min-height: 100%; margin: 0;"
+        " }"
+        " .klaus-w-body > table { margin: 0 auto; }"
+        # SAME LOOK (dashboard_uniform): one card from DESIGN.md on every
+        # widget, other add-ons' blocks included, and each widget's own
+        # OUTER card switched off so cards never nest. Only the direct
+        # child's chrome goes; the colours inside it stay.
+        " body.klaus-dash-uniform .klaus-w-body {"
+        " background: var(--klaus-dash-card);"
+        " border: 1px solid var(--klaus-dash-card-edge);"
+        " box-shadow: var(--klaus-dash-lift); padding: 16px;"
+        " }"
+        " body.klaus-dash-uniform .klaus-w-body > * {"
+        " background: transparent !important; border: 0 !important;"
+        " box-shadow: none !important; border-radius: 0 !important;"
+        " -webkit-backdrop-filter: none !important; backdrop-filter: none !important;"
+        " }"
+        # THE SHAKE: iOS's home-screen jiggle, ~±1.5° with a 1px bob on a
+        # quarter-second cycle. The page gives each widget its own phase
+        # and a slightly different period (animation-delay/-duration
+        # inline), so they never move in lockstep.
         " @keyframes klaus-jiggle {"
-        " 0% { transform: rotate(-0.4deg); }"
-        " 50% { transform: rotate(0.4deg); }"
-        " 100% { transform: rotate(-0.4deg); }"
+        " 0% { transform: rotate(-1.5deg); }"
+        " 50% { transform: rotate(1.5deg) translateY(-1px); }"
+        " 100% { transform: rotate(-1.5deg); }"
         " }"
-        # Small amplitude on purpose: these are large panels, not app
-        # icons — ±0.4° reads as the iOS jiggle without smearing text.
-        # Even children run slightly slower and phase-shifted so the
-        # panels shake organically rather than in lockstep.
         " body.klaus-dash-editing .klaus-widget {"
-        " animation: klaus-jiggle 0.32s ease-in-out infinite;"
-        " }"
-        " body.klaus-dash-editing .klaus-widget:nth-child(even) {"
-        " animation-duration: 0.36s; animation-delay: -0.14s;"
+        " animation: klaus-jiggle 0.26s ease-in-out infinite;"
         " }"
         " body.reduce-motion .klaus-widget { animation: none !important; }"
         # The shield is the iOS semantics enforcer: layered over the
@@ -419,6 +482,18 @@ def dashboard_css() -> str:
         " .klaus-widget.klaus-w-drag {"
         " animation: none !important; z-index: 7;"
         " filter: drop-shadow(0 12px 24px rgba(0,0,0,0.28));"
+        " }"
+        # The size chip: bottom-right, above the shield, opens the sizes.
+        " .klaus-w-size {"
+        " position: absolute; right: 8px; bottom: 8px; z-index: 6;"
+        " padding: 2px 8px; border-radius: 6px; cursor: pointer;"
+        " border: 1px solid var(--klaus-dash-edge);"
+        " background: var(--klaus-dash-badge); color: var(--klaus-dash-text);"
+        " font-size: 11px; font-weight: 600; line-height: 16px;"
+        f" font-family: {theme.FONT_FAMILY};"
+        " }"
+        " #klaus-dash-uniform[aria-pressed=true] {"
+        " color: var(--klaus-dash-accent); border-color: var(--klaus-dash-accent);"
         " }"
         " .klaus-w-remove {"
         " position: absolute; top: -8px; left: -8px;"
@@ -483,6 +558,7 @@ def dashboard_css() -> str:
         " }"
         + theme.web_control_css(".klaus-dash-chip", "var(--klaus-dash-accent)")
         + theme.web_control_css(".klaus-w-remove", "var(--klaus-dash-accent)")
+        + theme.web_control_css(".klaus-w-size", "var(--klaus-dash-accent)")
         + " @media (prefers-reduced-motion: reduce) {"
           " .klaus-widget { animation: none !important; } }"
         + " @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {"

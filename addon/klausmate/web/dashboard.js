@@ -6,7 +6,8 @@
  * refresh, so this runs fresh each time and must be idempotent.
  *
  * Contract with Python: window.klausDashState carries {order, edit,
- * removable, labels, hidden}; every mutation is reported over
+ * removable, labels, hidden, hiddenForeign, sizes, defaultSizes,
+ * foreignSize, sizeChoices, grid, uniform}; every mutation is reported over
  * pycmd("klausmate:dash:<b64 json>") and VALIDATED there — nothing this
  * file sends is trusted. Any failure inside boot() leaves Anki's stock
  * layout untouched.
@@ -30,6 +31,12 @@
   var hidden = [];
   var hiddenForeign = [];
   var savedOrder = [];
+  var sizes = {};
+  var defaultSizes = {};
+  var foreignSize = "2x1";
+  var sizeChoices = [];
+  var grid = { cell: 160, gap: 16 };
+  var uniform = false;
 
   /* --- bridge ------------------------------------------------------ */
 
@@ -93,10 +100,22 @@
     return null;
   }
 
+  // A widget is the grid item; its .klaus-w-body is the box its content
+  // scrolls in, so the ⊖ badge and size chip (the widget's own children)
+  // are never clipped. Python writes the same pair around add-on blocks.
   function makeWrapper(id) {
     var w = document.createElement("div");
     w.className = "klaus-widget";
     w.setAttribute("data-w", id);
+    var b = document.createElement("div");
+    b.className = "klaus-w-body";
+    w.appendChild(b);
+    return w;
+  }
+
+  function bodyOf(w) {
+    for (var i = 0; i < w.children.length; i++)
+      if (w.children[i].classList.contains("klaus-w-body")) return w.children[i];
     return w;
   }
 
@@ -117,17 +136,17 @@
     var br = table.nextElementSibling;
     var w = makeWrapper("decks");
     center.insertBefore(w, table);
-    w.appendChild(table);
+    bodyOf(w).appendChild(table);
     var studied = document.getElementById("studiedToday");
     if (studied && !studied.closest("table")) {
-      if (br && br.tagName === "BR") w.appendChild(br);
-      w.appendChild(studied);
+      if (br && br.tagName === "BR") bodyOf(w).appendChild(br);
+      bodyOf(w).appendChild(studied);
     }
     var hm = document.querySelector(".klaus-hm");
     if (hm && !hm.closest(".klaus-widget")) {
       var wh = makeWrapper("heatmap");
       hm.parentNode.insertBefore(wh, hm);
-      wh.appendChild(hm);
+      bodyOf(wh).appendChild(hm);
     }
     return true;
   }
@@ -175,6 +194,55 @@
     var n = 0;
     for (var j = 0; j < seq.length; j++) if (saved.indexOf(seq[j]) >= 0) seq[j] = saved[n++];
     for (var k = 0; k < seq.length; k++) seq[k].style.order = String(k + 1);
+  }
+
+  /* --- sizes ------------------------------------------------------- */
+
+  function sizeOf(id) {
+    if (sizes[id]) return sizes[id];
+    if (defaultSizes[id]) return defaultSizes[id];
+    return foreignSize;
+  }
+
+  // Grid columns the window has room for (the <center> pads by one gap).
+  function columns(w) {
+    var host = w.parentNode;
+    var width = host && host.clientWidth;
+    if (!width) return 99;
+    return Math.max(1, Math.floor((width - grid.gap) / (grid.cell + grid.gap)));
+  }
+
+  // The saved COLUMNS x ROWS box, columns clamped to what fits: a 4-wide
+  // widget in a 3-column window takes 3 rather than overflowing.
+  function applySize(w) {
+    var id = w.getAttribute("data-w");
+    var parts = String(sizeOf(id)).split("x");
+    var cols = Math.min(Number(parts[0]) || 2, columns(w));
+    var rows = Number(parts[1]) || 1;
+    w.setAttribute("data-size", sizeOf(id));
+    if (w.style.setProperty) {
+      w.style.setProperty("--kw-cols", String(cols));
+      w.style.setProperty("--kw-rows", String(rows));
+    }
+    var chip = sizeChip(w);
+    if (chip) chip.textContent = sizeOf(id).replace("x", "×");
+  }
+
+  function applySizes() {
+    var ws = widgets();
+    for (var i = 0; i < ws.length; i++) applySize(ws[i]);
+  }
+
+  function sizeChip(w) {
+    for (var i = 0; i < w.children.length; i++)
+      if (w.children[i].classList.contains("klaus-w-size")) return w.children[i];
+    return null;
+  }
+
+  function setUniform(on) {
+    uniform = !!on;
+    if (uniform) document.body.classList.add("klaus-dash-uniform");
+    else document.body.classList.remove("klaus-dash-uniform");
   }
 
   /* --- menus ------------------------------------------------------- */
@@ -231,6 +299,20 @@
     removeBar();
     var bar = document.createElement("div");
     bar.className = "klaus-dash-bar";
+    // Same Look: one card on every widget, add-on blocks included.
+    var same = document.createElement("button");
+    same.className = "klaus-dash-chip";
+    same.id = "klaus-dash-uniform";
+    same.textContent = "Same Look";
+    same.setAttribute("title", "Give every widget the same card");
+    same.setAttribute("aria-pressed", uniform ? "true" : "false");
+    same.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      setUniform(!uniform);
+      same.setAttribute("aria-pressed", uniform ? "true" : "false");
+      send({ action: "uniform", on: uniform });
+    });
+    bar.appendChild(same);
     if (hidden.length) {
       var plus = document.createElement("button");
       plus.className = "klaus-dash-chip";
@@ -286,14 +368,46 @@
     buildBar();
   }
 
-  // Edit-mode chrome for one widget: the drag shield, and ⊖ if removable.
+  // Edit-mode chrome for one widget: its own shake phase, the drag
+  // shield, the size chip, and ⊖ if removable.
   function dress(w) {
+    // Each widget starts its shake somewhere else in the cycle, at a
+    // slightly different speed, so they never move in lockstep (iOS).
+    w.style.animationDelay = "-" + (Math.random() * 0.26).toFixed(3) + "s";
+    w.style.animationDuration = (0.24 + Math.random() * 0.06).toFixed(3) + "s";
     var shield = document.createElement("div");
     shield.className = "klaus-w-shield";
     w.appendChild(shield);
     bindDrag(shield, w);
     var id = w.getAttribute("data-w");
+    addSizeChip(w, id);
     if (removable.indexOf(id) >= 0) addBadge(w, id);
+  }
+
+  function addSizeChip(w, id) {
+    var chip = document.createElement("button");
+    chip.className = "klaus-w-size";
+    chip.textContent = sizeOf(id).replace("x", "×");
+    chip.setAttribute("title", "Change the size of " + label(id));
+    chip.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      var m = document.createElement("div");
+      m.className = "klaus-dash-menu";
+      for (var i = 0; i < sizeChoices.length; i++)
+        (function (size) {
+          var mark = size === sizeOf(id) ? "✓ " : "";
+          m.appendChild(
+            menuItem(mark + size.replace("x", "×"), function () {
+              sizes[id] = size;
+              applySize(w);
+              send({ action: "size", id: id, size: size });
+            })
+          );
+        })(sizeChoices[i]);
+      hideMenus();
+      showMenuAt(m, ev.clientX, ev.clientY);
+    });
+    w.appendChild(chip);
   }
 
   function exitEdit() {
@@ -306,20 +420,37 @@
     var badges = document.querySelectorAll(".klaus-w-remove");
     for (var j = 0; j < badges.length; j++)
       badges[j].parentNode.removeChild(badges[j]);
+    var chips = document.querySelectorAll(".klaus-w-size");
+    for (var c = 0; c < chips.length; c++)
+      chips[c].parentNode.removeChild(chips[c]);
+    var ws = widgets();
+    for (var k = 0; k < ws.length; k++) {
+      ws[k].style.animationDelay = "";
+      ws[k].style.animationDuration = "";
+    }
     removeBar();
     hideMenus();
   }
 
   /* --- drag to reorder --------------------------------------------- */
 
+  // The widget follows the pointer in both directions; when the pointer
+  // is over another widget, the dragged one takes that widget's place in
+  // the order (before it when moving back, after it when moving on) and
+  // the grid reflows around it. Only CSS order changes (see widgets()).
   function bindDrag(shield, w) {
     shield.addEventListener("pointerdown", function (ev) {
       if (ev.isPrimary === false) return;
       if (ev.button !== undefined && ev.button !== 0) return;
+      var r = w.getBoundingClientRect();
       dragState = {
         w: w,
+        x0: ev.clientX,
         y0: ev.clientY,
+        gx: ev.clientX - r.left,
+        gy: ev.clientY - r.top,
         moved: false,
+        over: null,
         startOrder: currentOrder(),
       };
       try {
@@ -329,42 +460,36 @@
     });
     shield.addEventListener("pointermove", function (ev) {
       if (!dragState || dragState.w !== w) return;
+      var dx = ev.clientX - dragState.x0;
       var dy = ev.clientY - dragState.y0;
       if (!dragState.moved) {
-        if (dy > -5 && dy < 5) return; // 5px lift threshold
+        if (dx > -5 && dx < 5 && dy > -5 && dy < 5) return; // 5px lift threshold
         dragState.moved = true;
         w.classList.add("klaus-w-drag");
       }
-      w.style.transform = "translateY(" + dy + "px) scale(1.02)";
-      // Midpoint swap against the neighbouring widget. The moving node
-      // is its own placeholder; after the DOM move, rebase y0 by the
-      // layout shift (offsetTop ignores transforms) so the panel under
-      // the pointer doesn't jump.
       var ws = widgets();
-      var i = ws.indexOf ? ws.indexOf(w) : indexOfNode(ws, w);
-      var rect = w.getBoundingClientRect();
-      var neighbour = null;
-      if (dy < 0 && i > 0) {
-        var prev = ws[i - 1].getBoundingClientRect();
-        if (rect.top < prev.top + prev.height / 2) {
-          neighbour = ws[i - 1];
-        }
-      } else if (dy > 0 && i < ws.length - 1) {
-        var next = ws[i + 1].getBoundingClientRect();
-        if (rect.bottom > next.top + next.height / 2) {
-          neighbour = ws[i + 1];
-        }
+      var target = null;
+      for (var i = 0; i < ws.length; i++) {
+        if (ws[i] === w || ws[i].style.display === "none") continue;
+        var r = ws[i].getBoundingClientRect();
+        if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom)
+          target = ws[i];
       }
-      if (neighbour) {
-        // Swap CSS order, never the DOM (see widgets()).
-        var oldTop = w.offsetTop;
-        var o = w.style.order;
-        w.style.order = neighbour.style.order;
-        neighbour.style.order = o;
-        dragState.y0 += w.offsetTop - oldTop;
-        w.style.transform =
-          "translateY(" + (ev.clientY - dragState.y0) + "px) scale(1.02)";
+      if (target && target !== dragState.over) {
+        var from = ws.indexOf ? ws.indexOf(w) : indexOfNode(ws, w);
+        var to = ws.indexOf ? ws.indexOf(target) : indexOfNode(ws, target);
+        ws.splice(from, 1);
+        ws.splice(to, 0, w);
+        for (var k = 0; k < ws.length; k++) ws[k].style.order = String(k + 1);
       }
+      dragState.over = target;
+      // Keep the grabbed point under the pointer wherever the widget's
+      // grid slot now is: measure the slot with the drag offset removed.
+      w.style.transform = "none";
+      var slot = w.getBoundingClientRect();
+      w.style.transform =
+        "translate(" + (ev.clientX - dragState.gx - slot.left) + "px, " +
+        (ev.clientY - dragState.gy - slot.top) + "px) scale(1.02)";
     });
     var finish = function () {
       if (!dragState || dragState.w !== w) return;
@@ -469,11 +594,18 @@
     hidden = (state.hidden || []).slice();
     hiddenForeign = state.hiddenForeign || [];
     savedOrder = state.order || [];
+    sizes = state.sizes || {};
+    defaultSizes = state.defaultSizes || {};
+    foreignSize = state.foreignSize || "2x1";
+    sizeChoices = state.sizeChoices || [];
+    grid = state.grid || grid;
     if (!wrap()) return;
     var col = widgetById("decks").parentNode;
     if (col.classList) col.classList.add("klaus-dash-col");
     adopt();
     applyOrder(savedOrder);
+    setUniform(state.uniform);
+    applySizes();
     if (!window.klausDashBound) {
       // Real Anki never re-runs this script in one document (every
       // refresh is a fresh page), but the guard keeps a double eval —
@@ -481,6 +613,7 @@
       // document-level listeners.
       window.klausDashBound = true;
       bindGlobal();
+      if (window.addEventListener) window.addEventListener("resize", applySizes);
     }
     if (state.edit) enterEdit();
   }
@@ -489,6 +622,7 @@
     wrap: wrap,
     label: label,
     applyOrder: applyOrder,
+    applySizes: applySizes,
     enterEdit: enterEdit,
     exitEdit: exitEdit,
     send: send,

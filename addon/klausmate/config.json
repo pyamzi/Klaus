@@ -36,6 +36,8 @@
     "heatmap"
   ],
   "dashboard_hidden": [],
+  "dashboard_sizes": {},
+  "dashboard_uniform": false,
   "embedding_provider": "ollama",
   "endpoint": "http://127.0.0.1:11434",
   "runtime_auto_setup": true

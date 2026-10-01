@@ -140,14 +140,15 @@ _BODY = (
 )
 _W = dash.wrap_foreign(_BODY)
 check("the AMBOSS element is wrapped, whole and byte-for-byte",
-      '<div class="klaus-widget" data-w="x:amboss-qbank-widget">'
+      '<div class="klaus-widget" data-w="x:amboss-qbank-widget"><div class="klaus-w-body">'
       '<amboss-component-wrapper data-widget-state="{&quot;a&quot;: 1}" id="amboss-qbank-widget">'
-      "</amboss-component-wrapper></div>" in _W, _W)
+      "</amboss-component-wrapper></div></div>" in _W, _W)
 check("a class-keyed block is wrapped, a second one gets its own key",
-      '<div class="klaus-widget" data-w="x:.ankihub-thing"><div class="ankihub-thing"><p>unclosed<br></div></div>' in _W
-      and 'data-w="x:.ankihub-thing-2"><div class="ankihub-thing">second</div></div>' in _W, _W)
+      '<div class="klaus-widget" data-w="x:.ankihub-thing"><div class="klaus-w-body">'
+      '<div class="ankihub-thing"><p>unclosed<br></div></div></div>' in _W
+      and 'data-w="x:.ankihub-thing-2"><div class="klaus-w-body"><div class="ankihub-thing">second</div></div></div>' in _W, _W)
 check("Anki's table, <br>, studied line, the heatmap and scripts are left for the page",
-      _W.count("klaus-widget") == 3 and "<script src=\"/_addons/x/w.js\"></script>" in _W
+      _W.count('class="klaus-widget"') == 3 and "<script src=\"/_addons/x/w.js\"></script>" in _W
       and '<div id=studiedToday>Studied 7 cards</div><div class="klaus-hm">grid</div>' in _W)
 check("nothing outside the <center> changes", _W.endswith("</center><script>after()</script>"))
 check("a removed block is written hidden, so it never flashes",
@@ -247,15 +248,30 @@ check("the jiggle exists and honours Anki's reduce-motion mechanism — "
       and "body.reduce-motion .klaus-widget { animation: none !important; }"
       in _css)
 _wrapper_rule = _css.split(".klaus-widget {", 1)[1].split("}")[0]
-check("the wrapper's ONLY width is fit-content — hugs a narrow deck "
-      "table (badge on the panel corner, click-outside works beside "
-      "it) yet caps at the viewport so the heatmap's max-width:100% "
-      "scroller keeps engaging; a forced width (the content-box "
-      "overflow class of bug) never appears anywhere",
-      "width: fit-content" in _wrapper_rule
-      and "max-width: 100%" in _wrapper_rule
-      and _wrapper_rule.count("width") == 2
-      and not re.search(r"(?<!max-)width: 100%", _css))
+_grid_rule = _css.split("center.klaus-dash-col {", 1)[1].split("}")[0]
+check("the deck screen is ONE grid of square cells, one gap everywhere "
+      "(between widgets and around them)",
+      f"grid-template-columns: repeat(auto-fill, {dash.GRID_CELL}px)" in _grid_rule
+      and f"grid-auto-rows: {dash.GRID_CELL}px" in _grid_rule
+      and f"gap: {dash.GRID_GAP}px" in _grid_rule and f"padding: {dash.GRID_GAP}px" in _grid_rule
+      and "dense" not in _grid_rule, _grid_rule)
+check("a widget fills a whole COLUMNS x ROWS box from the spans the page sets, "
+      "and no width or height of its own",
+      "grid-column: span var(--kw-cols" in _wrapper_rule and "grid-row: span var(--kw-rows" in _wrapper_rule
+      and not re.search(r"(?<![-a-z])(width|height):", _wrapper_rule), _wrapper_rule)
+_body_rule = _css.split(".klaus-w-body {", 1)[1].split("}")[0]
+check("content scrolls inside its box, which is exactly the grid area "
+      "(border-box: Anki's global content-box would push a padded card out)",
+      "inset: 0" in _body_rule and "overflow: auto" in _body_rule and "box-sizing: border-box" in _body_rule)
+check("Same Look: one card on every box, and each widget's own outer card off "
+      "so cards never nest; colours inside are left alone",
+      "body.klaus-dash-uniform .klaus-w-body {" in _css
+      and "background: var(--klaus-dash-card)" in _css
+      and "body.klaus-dash-uniform .klaus-w-body > * {" in _css
+      and "color" not in _css.split("body.klaus-dash-uniform .klaus-w-body > * {")[1].split("}")[0])
+_jig = _css.split("@keyframes klaus-jiggle {", 1)[1].split("} }", 1)[0]
+check("the shake is iOS-strength: ±1.5° with a small bob",
+      "rotate(-1.5deg)" in _jig and "rotate(1.5deg)" in _jig and "translateY(-1px)" in _jig, _jig)
 check("edit chrome floats ABOVE pdf_drop's PDF drop square "
       "(fixed, z-index 50): bar 60, menus 70",
       "z-index: 60" in _css and "z-index: 70" in _css)
@@ -268,13 +284,12 @@ check("the ⊖ badge's hit target outgrows its 22px disc via an "
       and "inset: -6px" in _css.split(".klaus-w-remove::after {")[1])
 check("the badge mirrors to the leading corner in RTL",
       "[dir=rtl] .klaus-w-remove { left: auto; right: -8px; }" in _css)
-check("the wrapper hugs what the user can SEE: a wrapped heatmap's "
-      "own margins are neutralised, because a child margin sits "
-      "INSIDE the wrapper box and floated the \u2296 badge into empty "
-      "page space above the panel (screenshot 2026-08-30)",
-      ".klaus-widget > .klaus-hm { margin: 0; }" in _css)
-check("...and the wrapper carries the vertical rhythm itself",
-      "margin: 0 auto 1.1em auto;" in _css)
+check("a box's one card fills it, so sizes show with Same Look off; never Anki's "
+      "table (its rows would stretch) and never a second element (it overflowed the decks box)",
+      ".klaus-w-body > :only-child:not(table) {" in _css
+      and "min-height: 100%" in _css.split(".klaus-w-body > :only-child:not(table) {")[1].split("}")[0])
+check("the size chip sits above the shield, beside the badge",
+      ".klaus-w-size {" in _css and "z-index: 6;" in _css.split(".klaus-w-size {")[1].split("}")[0])
 check("a dragged widget stops jiggling — a CSS animation would "
       "otherwise override the inline drag transform outright",
       "animation: none !important; z-index: 7;" in _css)
@@ -375,5 +390,39 @@ if shutil.which("node"):
 else:
     print("  SKIP  dashboard.js DOM behaviour (node not installed) — NOT "
           "counted as a pass")
+
+section("sizes and Same Look: config policy")
+check("every widget has a default box; add-on blocks share one",
+      dash.default_size("decks") == "3x3" and dash.default_size("heatmap") == "4x2"
+      and dash.default_size("x:amboss") == dash.FOREIGN_SIZE == "2x1"
+      and all(v in dash.SIZES for v in dash.DEFAULT_SIZES.values()))
+check("saved sizes are read safely: unknown ids and unknown sizes are dropped",
+      dash.sizes_from_cfg({"dashboard_sizes": {"decks": "2x2", "nope": "2x2", "heatmap": "9x9",
+                                               "x:amboss": "1x2", "x:bad id!": "2x2"}})
+      == {"decks": "2x2", "x:amboss": "1x2"}
+      and dash.sizes_from_cfg({"dashboard_sizes": "junk"}) == {} and dash.sizes_from_cfg(None) == {})
+check("a size pick is validated and merged into the saved sizes",
+      dash.apply_action({"action": "size", "id": "heatmap", "size": "3x2"},
+                        {"dashboard_sizes": {"decks": "2x2"}})
+      == {"dashboard_sizes": {"decks": "2x2", "heatmap": "3x2"}})
+check("…a foreign block's size too",
+      dash.apply_action({"action": "size", "id": "x:amboss-qbank-widget", "size": "2x2"}, {})
+      == {"dashboard_sizes": {"x:amboss-qbank-widget": "2x2"}})
+check("an unknown size, an unknown id or a junk payload writes nothing",
+      dash.apply_action({"action": "size", "id": "heatmap", "size": "9x9"}, {}) is None
+      and dash.apply_action({"action": "size", "id": "evil", "size": "2x2"}, {}) is None
+      and dash.apply_action({"action": "size", "id": ["heatmap"], "size": "2x2"}, {}) is None)
+check("Same Look writes a strict bool, and only for a strict bool",
+      dash.apply_action({"action": "uniform", "on": True}, {}) == {"dashboard_uniform": True}
+      and dash.apply_action({"action": "uniform", "on": False}, {}) == {"dashboard_uniform": False}
+      and dash.apply_action({"action": "uniform", "on": "yes"}, {}) is None)
+check("only an explicit True turns Same Look on (a corrupt value must not restyle add-ons)",
+      dash.uniform_from_cfg({"dashboard_uniform": True}) is True
+      and dash.uniform_from_cfg({"dashboard_uniform": 1}) is False and dash.uniform_from_cfg({}) is False)
+_bs = dash.boot_state({"dashboard_sizes": {"decks": "2x2"}, "dashboard_uniform": True}, False)
+check("the page gets the saved sizes, the defaults, the choices, the grid and Same Look",
+      _bs["sizes"] == {"decks": "2x2"} and _bs["defaultSizes"] == dash.DEFAULT_SIZES
+      and _bs["foreignSize"] == "2x1" and _bs["sizeChoices"] == list(dash.SIZES)
+      and _bs["grid"] == {"cell": dash.GRID_CELL, "gap": dash.GRID_GAP} and _bs["uniform"] is True)
 
 raise SystemExit(report())
