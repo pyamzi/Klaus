@@ -535,13 +535,16 @@ def heatmap_html(
         # The grid is allowed to be wider than the window and scroll
         # inside its own box. It must never widen the panel: forcing a
         # width here is what pushed the deck panel off-screen before.
-        '<div class="klaus-hm-scroll"><div class="klaus-hm-plot">'
-        '<span class="klaus-hm-corner"></span>'
-        f'<div class="klaus-hm-months">{months}</div>'
+        # The weekday letters sit OUTSIDE the scroller, beside it, so a
+        # range that scrolls keeps them pinned (Pouya: "pin the weekday
+        # letters too") with no background to match the card behind them.
+        '<div class="klaus-hm-body">'
         f'<div class="klaus-hm-wd">{weekdays}</div>'
+        '<div class="klaus-hm-scroll"><div class="klaus-hm-plot">'
+        f'<div class="klaus-hm-months">{months}</div>'
         '<div class="klaus-hm-cells">'
         f'{_cells_html(columns, levels, starts)}</div>'
-        "</div></div>"
+        "</div></div></div>"
         # No legend: Glutanimate's addon renders with displayLegend
         # false — the grid and the stats row carry the whole story. The
         # personal "0 → a full day (N)" line the 2026-08-27 audit built
@@ -653,13 +656,19 @@ def heatmap_css() -> str:
         " .klaus-hm-scroll > .klaus-hm-plot { direction: ltr; }"
         " [dir=rtl] .klaus-hm-scroll { direction: ltr; }"
         " [dir=rtl] .klaus-hm-scroll > .klaus-hm-plot { direction: rtl; }"
-        # Two rows: month strip beside a spacer, then the weekday
-        # column beside the cells. Both inner grids use the same column
-        # and row sizes as the cells, so labels line up by construction
-        # rather than by measurement.
+        # The weekday column, then the scroller, centred together while
+        # the range fits; once it does not, the scroller shrinks (min-width
+        # 0) and scrolls while the column stays put.
+        " .klaus-hm-body {"
+        f" display: flex; align-items: flex-start; justify-content: center; gap: {GAP + 3}px;"
+        " }"
+        " .klaus-hm-body > .klaus-hm-scroll { flex: 0 1 auto; min-width: 0; }"
+        # Two rows: the month strip, then the cells. The weekday column
+        # uses the cells' row sizes and drops by the month strip plus the
+        # row gap, so the letters line up by construction.
         " .klaus-hm-plot {"
-        " display: grid; grid-template-columns: auto auto;"
-        f" gap: 4px {GAP + 3}px; width: max-content;"
+        " display: grid; grid-template-columns: auto;"
+        " row-gap: 4px; width: max-content;"
         # Centre the grid when it is narrower than the stats row above
         # it (a 3-month range is), and go inert when it is not: auto
         # margins resolve to 0 the moment the content overflows, so
@@ -697,7 +706,7 @@ def heatmap_css() -> str:
         " }"
         " .klaus-hm-wd {"
         f" display: grid; grid-template-rows: repeat(7, {CELL}px);"
-        f" row-gap: {GAP}px;"
+        f" row-gap: {GAP}px; padding-top: {11 + 4}px; flex: none;"
         " }"
         " .klaus-hm-w {"
         " font-size: 10px; color: var(--klaus-hm-text);"

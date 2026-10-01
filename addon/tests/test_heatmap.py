@@ -389,6 +389,14 @@ check("a range wider than its box opens on the NEWEST weeks (the scroller runs "
       and " .klaus-hm-scroll > .klaus-hm-plot { direction: ltr; }" in _css
       and " [dir=rtl] .klaus-hm-scroll { direction: ltr; }" in _css
       and " [dir=rtl] .klaus-hm-scroll > .klaus-hm-plot { direction: rtl; }" in _css)
+check("the weekday letters are pinned: their column sits BESIDE the scroller, not in it, "
+      "and drops by the month strip plus the row gap so the letters meet their rows",
+      re.search(r'<div class="klaus-hm-body"><div class="klaus-hm-wd">.*?</div>'
+                r'<div class="klaus-hm-scroll"><div class="klaus-hm-plot">'
+                r'<div class="klaus-hm-months">', _html) is not None
+      and "klaus-hm-corner" not in _html
+      and "padding-top: 15px; flex: none;" in _css.split(" .klaus-hm-wd {")[1].split("}")[0]
+      and " .klaus-hm-body > .klaus-hm-scroll { flex: 0 1 auto; min-width: 0; }" in _css)
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "
