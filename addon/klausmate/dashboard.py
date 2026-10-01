@@ -190,7 +190,8 @@ def wrap_foreign(body: str, hidden: Any = ()) -> str:
 # it when its content is bigger. Klaus decides each box (Pouya, same day:
 # "set up predecided 2x1, 1x2, and whatnot for it, and then I will just
 # move it around"), measured once from each widget's rendered content:
-# the heatmap is a 159px strip that wants width (4x1); AMBOSS's Qbank card,
+# the heatmap is a 159px strip that wants width (own height, at most 4x2:
+# it grows when narrow columns wrap its stats); AMBOSS's Qbank card,
 # its margins stripped by SHADOW_CSS, is 142px tall at full width and
 # taller once its text wraps (own height, at most 4x2);
 # Anki's deck table is ~546px wide with its 1rem padding and holds ~12
@@ -201,7 +202,7 @@ GRID_GAP = 16
 # Pouya, 2026-10-01: "I don't want the widget grid to get wider than
 # 800 px, keep it aligned center" — 4 columns (4*176+16 = 720px).
 GRID_MAX = 800
-SIZES = {"decks": "4x3", "heatmap": "4x1", "x:amboss-qbank-widget": "4x2"}
+SIZES = {"decks": "4x3", "heatmap": "4x2", "x:amboss-qbank-widget": "4x2"}
 FOREIGN_SIZE = "2x2"
 # Widgets with their OWN height (Pouya, 2026-10-01: "let the deck list
 # have its own height", after 3 decks still left ~120px of a 2-row box
@@ -210,13 +211,13 @@ FOREIGN_SIZE = "2x2"
 # (grid rows are minmax(GRID_CELL, auto)); every other widget's body is
 # out of flow, so all other rows stay exactly GRID_CELL. Only a
 # full-width widget may be listed: a row it set would stretch neighbours.
-OWN_HEIGHT = ("decks", "x:amboss-qbank-widget")
+OWN_HEIGHT = ("decks", "heatmap", "x:amboss-qbank-widget")
 
 
 # DESIGN.md's primary button, as declarations (8px, 6px 14px, 600, the
 # accent theme's blue with white text), forced over an add-on's own.
 _PRIMARY_BUTTON = (
-    " background: var(--klaus-dash-primary) !important; color: #FFFFFF !important;"
+    " background: var(--klaus-dash-primary) !important; color: var(--klaus-dash-on-accent) !important;"
     " border: 1px solid var(--klaus-dash-primary) !important; border-radius: 8px !important;"
     " box-shadow: none !important; font-weight: 600 !important;"
 )
@@ -440,12 +441,13 @@ def _palette_vars(night: bool) -> str:
     # background"). DESIGN.md: depth is tonal layering plus a hairline,
     # never a shadow. Dark `surface` IS Anki's canvas (#2C2C2C), so the
     # card steps a tone up; both modes get a firmer hairline.
-    card = "#3A3A3C" if night else colours["surface"]
+    card = colours["card_raised"]
     card_edge = "rgba(255,255,255,0.16)" if night else "rgba(0,0,0,0.14)"
     return (
         f" --klaus-dash-card: {card};"
         f" --klaus-dash-card-edge: {card_edge};"
         f" --klaus-dash-primary: {colours['blue']};"
+        f" --klaus-dash-on-accent: {colours['on_accent']};"
         f" --klaus-dash-surface: {colours['surface']};"
         f" --klaus-dash-text: {colours['text']};"
         f" --klaus-dash-hover: {colours['hover_subtle']};"
@@ -557,6 +559,14 @@ def dashboard_css() -> str:
         f" position: relative; inset: auto; min-height: {GRID_CELL}px;"
         " display: flex; flex-direction: column;"
         " }"
+        # A widget's one card grows to its own-height box (min-height:100%
+        # cannot resolve against an auto height); never Anki's table.
+        " .klaus-widget.klaus-w-own > .klaus-w-body > :only-child:not(table) { flex: 1 0 auto; }"
+        # A popover inside a widget (the heatmap's settings menu) must
+        # not be clipped by the widget's scroll box: while one is open,
+        # the box lets it out and the widget rises above its neighbours.
+        " .klaus-widget:has(details[open]) { z-index: 8; }"
+        " .klaus-widget:has(details[open]) > .klaus-w-body { overflow: visible; }"
         # Anki's deck-name column has min-width:15em, which made the table
         # ~546px and scrolled it sideways in a 3-column grid (120% size, a
         # narrow window); the name column already takes the spare width.
@@ -611,7 +621,11 @@ def dashboard_css() -> str:
         # pointer capture honest.
         " .klaus-w-shield {"
         " position: absolute; inset: 0; z-index: 5;"
-        " cursor: grab; touch-action: none;"
+        " cursor: grab; touch-action: none; border-radius: 12px;"
+        " }"
+        # Keyboard: Tab lands on each widget's shield, arrows move it.
+        " .klaus-w-shield:focus-visible {"
+        " outline: 2px solid var(--klaus-dash-accent); outline-offset: 2px;"
         " }"
         " .klaus-widget.klaus-w-drag {"
         " animation: none !important; z-index: 7;"
@@ -622,6 +636,7 @@ def dashboard_css() -> str:
         " #klaus-dash-scale input[type=range] {"
         " width: 110px; margin: 0; accent-color: var(--klaus-dash-accent); cursor: pointer;"
         " }"
+        " .klaus-dash-size-label { font-weight: 500; }"
         " .klaus-dash-pct { min-width: 3em; text-align: end; font-variant-numeric: tabular-nums; }"
         " #klaus-dash-uniform[aria-pressed=true] {"
         " color: var(--klaus-dash-accent); border-color: var(--klaus-dash-accent);"
@@ -683,6 +698,9 @@ def dashboard_css() -> str:
         " .klaus-dash-menu .mi {"
         " padding: 5px 10px; border-radius: 6px; cursor: pointer;"
         " white-space: nowrap;"
+        " }"
+        " .klaus-dash-menu .mi:focus-visible {"
+        " outline: 2px solid var(--klaus-dash-accent); outline-offset: -2px;"
         " }"
         " .klaus-dash-menu .mi:hover {"
         " background: var(--klaus-dash-hover);"

@@ -306,7 +306,7 @@ same reason.
   switch). The JS owns the DOM: wraps the deck table (+ in theme mode
   the still-sibling `<br>`+`#studiedToday` trio) and `.klaus-hm` into
   `.klaus-widget` divs, applies `dashboard_order`, and runs the whole
-  edit mode — right-click → "Edit Widgets…" (JS preventDefault beats
+  edit mode — right-click → "Edit Widgets" (JS preventDefault beats
   AnkiWebView's menu; pdfjs precedent), iOS jiggle (disabled under
   Anki's `body.reduce-motion` class — Anki ships NO
   prefers-reduced-motion CSS), per-widget shields so deck clicks/drags
@@ -372,7 +372,18 @@ same reason.
   in the chip's title). Same Look: card #3A3A3C at night (dark `surface`
   IS Anki's canvas), firmer hairline, no shadow (DESIGN.md), and add-on
   buttons become DESIGN.md primary buttons (`_PRIMARY_BUTTON`, also in
-  AMBOSS's root via `:host-context`). A box's ONE card stretches to fill it (`:only-child`,
+  AMBOSS's root via `:host-context`). Review fixes (2026-10-01): the
+  heatmap is own-height too, and `.klaus-widget:has(details[open])`
+  lets a popover (its settings menu) out of the scroll box and above
+  the next widget; the edit bar never covers the grid (`clearBar` adds
+  the overlap as the grid's margin-top while editing); edit-mode cells
+  are drawn only where no widget's offset box sits; keyboard: Shift+F10
+  or the Menu key opens "Edit Widgets" (no ellipsis: it is a mode, not a
+  dialog), menu items are focusable menuitems, each shield is a
+  focusable button and arrow keys move it (`moveBy`, saved per press);
+  Same Look colours are `theme.palette` tokens (`card_raised`,
+  `on_accent`); a month starting in the heatmap's last column keeps its
+  gap and loses its name. A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer

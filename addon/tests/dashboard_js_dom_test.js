@@ -365,9 +365,9 @@ const evCtx = fire(d.table, "contextmenu", { clientX: 40, clientY: 40 });
 ok("right-click on a widget is consumed (native menu suppressed)",
    evCtx._prevented);
 const ctxMenu = document.querySelectorAll(".klaus-dash-menu")[0];
-ok("…and opens the menu with Edit Widgets…",
-   ctxMenu && ctxMenu.children.some((c) => c.textContent === "Edit Widgets…"));
-fire(ctxMenu.children.find((c) => c.textContent === "Edit Widgets…"), "click");
+ok("…and opens the menu with Edit Widgets",
+   ctxMenu && ctxMenu.children.some((c) => c.textContent === "Edit Widgets"));
+fire(ctxMenu.children.find((c) => c.textContent === "Edit Widgets"), "click");
 ok("picking Edit enters edit mode and reports {edit-on}",
    document.body.classList.contains("klaus-dash-editing")
    && JSON.stringify(decoded(0)) === '{"action":"edit-on"}');
@@ -433,6 +433,51 @@ window.klausDash.exitEdit();
 ok("…and gone when editing ends", d.center.querySelectorAll(".klaus-dash-cell").length === 0);
 delete window.getComputedStyle;
 
+// 14d. Slots only where no widget sits: a translucent card let the
+//      dashed lines run through its text.
+d = build({});
+d.center.clientWidth = 16 + 3 * 176;
+window.getComputedStyle = () => ({ gridTemplateRows: "160px 160px" });
+const place = (w, left, top, wd, ht) => Object.assign(w, { offsetLeft: left, offsetTop: top, offsetWidth: wd, offsetHeight: ht });
+boot(Object.assign({}, SIZED, { sizes: { decks: "2x1", heatmap: "1x1" } }));
+place(widget("decks"), 16, 16, 336, 160);   // row 1, columns 1-2
+place(widget("heatmap"), 368, 16, 160, 160); // row 1, column 3
+window.klausDash.enterEdit();
+const freeCells = d.center.querySelectorAll(".klaus-dash-cell");
+ok("only the 3 empty cells of row 2 get a slot; the 3 under widgets do not",
+   freeCells.length === 3 && freeCells.every((c) => c.style.top === "192px"),
+   freeCells.map((c) => c.style.left + "/" + c.style.top).join(","));
+window.klausDash.exitEdit();
+delete window.getComputedStyle;
+
+// 14e. Keyboard: Shift+F10 (or the Menu key) opens the same menu at the
+//      first widget, its item focused; Enter picks it.
+d = build({});
+boot(STATE);
+const kbEv = fire(document, "keydown", { key: "F10", shiftKey: true });
+const kbMenu = document.querySelectorAll(".klaus-dash-menu")[0];
+const kbItem = kbMenu && kbMenu.children[0];
+ok("Shift+F10 opens the Edit Widgets menu without a right-click",
+   kbEv._prevented && kbItem && kbItem.textContent === "Edit Widgets"
+   && kbItem.getAttribute("role") === "menuitem" && kbItem.getAttribute("tabindex") === "0");
+fire(kbItem, "keydown", { key: "Enter" });
+ok("…and Enter on its item enters edit mode",
+   document.body.classList.contains("klaus-dash-editing")
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"edit-on"}');
+const shields = ["decks", "heatmap"].map((id) => widget(id).querySelector(".klaus-w-shield"));
+ok("every widget's shield is a focusable button named for the move",
+   shields.every((sh) => sh.getAttribute("tabindex") === "0" && sh.getAttribute("role") === "button")
+   && /^Move Review Heatmap/.test(shields[1].getAttribute("aria-label")), shields[1].getAttribute("aria-label"));
+const upEv = fire(shields[1], "keydown", { key: "ArrowUp" });
+ok("an arrow key moves the focused widget one place and saves the order",
+   upEv._prevented && ord(widget("heatmap")) < ord(widget("decks"))
+   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"order","order":["heatmap","decks"]}',
+   JSON.stringify(decoded(SENT.length - 1)));
+const sentAtEdge = SENT.length;
+fire(shields[1], "keydown", { key: "ArrowLeft" });
+ok("…and at the first place it stays put, saving nothing", SENT.length === sentAtEdge);
+window.klausDash.exitEdit();
+
 // 15. Edit mode offers no size control: sizes are Klaus's.
 d = build({});
 boot(Object.assign({}, SIZED, { edit: true }));
@@ -468,6 +513,8 @@ boot(Object.assign({}, SIZED, { edit: true, scale: 110, scaleRange: [70, 150, 5]
 const sizeChip = document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-scale");
 const slider = sizeChip && sizeChip.children.find((c) => c.tag === "input");
 const pct = sizeChip && sizeChip.children.find((c) => c.className === "klaus-dash-pct");
+ok("the slider is labelled Size on the bar, not only in its tooltip",
+   sizeChip && sizeChip.children[0].textContent === "Size");
 ok("the bar has a 70-150% slider in 5% steps at the saved size, with a % readout",
    slider && slider.type === "range" && slider.min === "70" && slider.max === "150" && slider.step === "5"
    && slider.value === "110" && pct.textContent === "110%"

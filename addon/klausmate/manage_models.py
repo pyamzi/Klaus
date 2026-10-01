@@ -997,7 +997,7 @@ def manage_models_dialog(*_args: Any) -> None:
         "overview and study screens, and the deck-screen widgets. The "
         "accent color styles Klaus's own windows in either mode. To add "
         "or remove a widget such as the review heatmap, right-click the "
-        "deck screen and choose Edit Widgets…",
+        "deck screen and choose Edit Widgets",
     )
 
     # Anki's own Light/Dark switch, mirrored here (Pouya: "add the

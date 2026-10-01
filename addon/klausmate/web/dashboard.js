@@ -251,9 +251,11 @@
       var h = parseFloat(rows[r]);
       if (!(h > 0)) continue;
       for (var c = 0; c < cols; c++) {
+        var left = grid.gap + c * (grid.cell + grid.gap);
+        if (occupied(left, top, grid.cell, h)) continue;
         var cell = document.createElement("div");
         cell.className = "klaus-dash-cell";
-        cell.style.left = grid.gap + c * (grid.cell + grid.gap) + "px";
+        cell.style.left = left + "px";
         cell.style.top = top + "px";
         cell.style.width = grid.cell + "px";
         cell.style.height = h + "px";
@@ -263,9 +265,39 @@
     }
   }
 
+  // Slots show only where no widget sits (a translucent card let the
+  // dashed lines run through its text). Offsets are layout values: they
+  // ignore the jiggle and drag transforms and the grid's zoom.
+  function occupied(x, y, wd, ht) {
+    var ws = widgets();
+    for (var i = 0; i < ws.length; i++) {
+      var w = ws[i];
+      if (w.style.display === "none" || !(w.offsetWidth > 0)) continue;
+      if (x < w.offsetLeft + w.offsetWidth - 1 && x + wd > w.offsetLeft + 1
+          && y < w.offsetTop + w.offsetHeight - 1 && y + ht > w.offsetTop + 1) return true;
+    }
+    return false;
+  }
+
+  // Keyboard reorder: one place earlier or later, past hidden widgets.
+  function moveBy(w, step) {
+    var ws = widgets();
+    var i = indexOfNode(ws, w);
+    var j = i + step;
+    while (j >= 0 && j < ws.length && ws[j].style.display === "none") j += step;
+    if (i < 0 || j < 0 || j >= ws.length) return;
+    ws.splice(i, 1);
+    ws.splice(j, 0, w);
+    for (var k = 0; k < ws.length; k++) ws[k].style.order = String(k + 1);
+    drawCells();
+    send({ action: "order", order: currentOrder() });
+  }
+
   function relayout() {
     applySizes();
-    if (editing) drawCells();
+    if (!editing) return;
+    clearBar();
+    drawCells();
   }
 
   function clearCells() {
@@ -333,7 +365,16 @@
     var mi = document.createElement("div");
     mi.className = "mi";
     mi.textContent = label;
+    mi.setAttribute("role", "menuitem");
+    mi.setAttribute("tabindex", "0");
     mi.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      hideMenus();
+      onPick();
+    });
+    mi.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      ev.preventDefault();
       ev.stopPropagation();
       hideMenus();
       onPick();
@@ -421,6 +462,10 @@
     size.addEventListener("click", function (ev) {
       ev.stopPropagation();
     });
+    var sizeLabel = document.createElement("span");
+    sizeLabel.className = "klaus-dash-size-label";
+    sizeLabel.textContent = "Size";
+    size.appendChild(sizeLabel);
     size.appendChild(range);
     size.appendChild(readout);
     bar.appendChild(size);
@@ -477,7 +522,24 @@
     var ws = widgets();
     for (var i = 0; i < ws.length; i++) dress(ws[i]);
     buildBar();
+    clearBar();
     drawCells();
+  }
+
+  // The bar is pinned to the window's top right; at the top of the page
+  // it must not sit on the first row of widgets, so the grid moves down
+  // by exactly the overlap while editing (screen px / zoom: the grid is
+  // zoomed, its margin is in its own units).
+  function clearBar() {
+    var bar = document.querySelector(".klaus-dash-bar");
+    var first = widgets()[0];
+    if (!bar || !first || !bar.getBoundingClientRect) return;
+    var host = first.parentNode;
+    host.style.marginTop = "";
+    var scrolled = window.pageYOffset || 0;
+    var need = bar.getBoundingClientRect().bottom + 8
+      - (host.getBoundingClientRect().top + scrolled + grid.gap * zoom());
+    if (need > 0) host.style.marginTop = need / zoom() + "px";
   }
 
   // Edit-mode chrome for one widget: its own shake phase, the drag
@@ -489,9 +551,18 @@
     w.style.animationDuration = (0.24 + Math.random() * 0.06).toFixed(3) + "s";
     var shield = document.createElement("div");
     shield.className = "klaus-w-shield";
+    var id = w.getAttribute("data-w");
+    shield.setAttribute("tabindex", "0");
+    shield.setAttribute("role", "button");
+    shield.setAttribute("aria-label", "Move " + label(id) + " with the arrow keys");
+    shield.addEventListener("keydown", function (ev) {
+      var step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[ev.key];
+      if (!step) return;
+      ev.preventDefault();
+      moveBy(w, step);
+    });
     w.appendChild(shield);
     bindDrag(shield, w);
-    var id = w.getAttribute("data-w");
     if (removable.indexOf(id) >= 0) addBadge(w, id);
   }
 
@@ -513,6 +584,8 @@
     removeBar();
     hideMenus();
     clearCells();
+    var first = widgets()[0];
+    if (first) first.parentNode.style.marginTop = "";
   }
 
   /* --- drag to reorder --------------------------------------------- */
@@ -644,6 +717,22 @@
     );
   }
 
+  // "Edit Widgets": no ellipsis, it switches the page into edit mode
+  // rather than opening a dialog. Its item takes focus, for the keyboard.
+  function openEditMenu(x, y) {
+    hideMenus();
+    var m = document.createElement("div");
+    m.className = "klaus-dash-menu";
+    m.setAttribute("role", "menu");
+    var item = menuItem("Edit Widgets", function () {
+      enterEdit();
+      send({ action: "edit-on" });
+    });
+    m.appendChild(item);
+    showMenuAt(m, x, y);
+    if (item.focus) item.focus();
+  }
+
   function bindGlobal() {
     document.addEventListener("contextmenu", function (ev) {
       if (dragState) {
@@ -657,15 +746,7 @@
       ev.preventDefault();
       hideMenus();
       if (editing) return; // already jiggling — the bar has the controls
-      var m = document.createElement("div");
-      m.className = "klaus-dash-menu";
-      m.appendChild(
-        menuItem("Edit Widgets…", function () {
-          enterEdit();
-          send({ action: "edit-on" });
-        })
-      );
-      showMenuAt(m, ev.clientX, ev.clientY);
+      openEditMenu(ev.clientX, ev.clientY);
     });
     document.addEventListener("click", function (ev) {
       hideMenus();
@@ -679,6 +760,16 @@
     });
     document.addEventListener("scroll", hideMenus, true);
     document.addEventListener("keydown", function (ev) {
+      // The keyboard's way in: the Menu key or Shift+F10 opens the same
+      // menu a right-click on a widget does, at the first widget.
+      if (!editing && (ev.key === "ContextMenu" || (ev.shiftKey && ev.key === "F10"))) {
+        var first = widgets()[0];
+        if (!first) return;
+        ev.preventDefault();
+        var r = first.getBoundingClientRect();
+        openEditMenu(r.left + 24, r.top + 24);
+        return;
+      }
       if (ev.key !== "Escape") return;
       if (dragState) {
         abortDrag();

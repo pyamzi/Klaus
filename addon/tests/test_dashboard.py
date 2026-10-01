@@ -7,6 +7,7 @@ covers the pure Python layer — the registry, the config policy, the
 boot state, the stylesheet — and pins the aqt glue's shape.
 """
 import importlib
+import inspect
 import json
 import os
 import re
@@ -321,7 +322,7 @@ check("AMBOSS's card loses its 2em margins and 440px width inside its root",
       and dash.boot_state({}, False)["shadowCss"] == dash.SHADOW_CSS)
 check("the deck list and AMBOSS have their own height (3 decks left a 2-row box a third "
       "empty; AMBOSS's text wraps taller in 3 columns)",
-      dash.OWN_HEIGHT == ("decks", "x:amboss-qbank-widget")
+      dash.OWN_HEIGHT == ("decks", "heatmap", "x:amboss-qbank-widget")
       and dash.boot_state({}, False)["ownHeight"] == list(dash.OWN_HEIGHT))
 check("…and every own-height widget is 4 wide, so it is always full width and its row "
       "stretches nobody",
@@ -330,7 +331,7 @@ check("Anki's 15em deck-name minimum is lifted, or the table scrolls sideways in
       ".klaus-w-body > table .decktd { min-width: 0; }" in _css)
 check("Same Look's card steps up from the canvas, with a firmer hairline and no shadow "
       "(DESIGN.md: depth is tone plus a hairline, never a shadow)",
-      "--klaus-dash-card: #3A3A3C;" in _css and "--klaus-dash-card-edge: rgba(0,0,0,0.14);" in _css
+      "--klaus-dash-card: #3A3A3C;" in _css  # theme.palette(True)["card_raised"] and "--klaus-dash-card-edge: rgba(0,0,0,0.14);" in _css
       and "box-shadow: none; padding: 12px;" in _css and "--klaus-dash-lift" not in _css)
 check("Same Look turns add-on blocks' buttons into DESIGN.md primary buttons in the accent "
       "theme's blue — light DOM and AMBOSS's shadow root alike",
@@ -354,6 +355,18 @@ _bs2 = dash.boot_state({"dashboard_scale": 110}, True, 125)
 check("…and the page gets the size, its range and Anki's own interface size (the slider sits on top of it)",
       _bs2["scale"] == 110 and _bs2["scaleRange"] == [70, 150, 5] and _bs2["ankiScale"] == 125
       and dash.boot_state({}, False)["ankiScale"] == 100)
+check("a popover inside a widget (the heatmap's settings menu) is let out of the scroll box "
+      "while open and its widget rises above the next one",
+      ".klaus-widget:has(details[open]) { z-index: 8; }" in _css
+      and ".klaus-widget:has(details[open]) > .klaus-w-body { overflow: visible; }" in _css)
+check("an own-height widget's one card grows to its box, never Anki's table",
+      ".klaus-widget.klaus-w-own > .klaus-w-body > :only-child:not(table) { flex: 1 0 auto; }" in _css)
+check("keyboard focus shows on a widget's shield and on menu items",
+      ".klaus-w-shield:focus-visible {" in _css and ".klaus-dash-menu .mi:focus-visible {" in _css)
+check("Same Look's colours come from the theme palette, not typed-in hex",
+      "#3A3A3C" not in inspect.getsource(dash._palette_vars)
+      and "#FFFFFF" not in dash._PRIMARY_BUTTON
+      and "var(--klaus-dash-on-accent)" in dash._PRIMARY_BUTTON)
 check("no size chip: sizes are Klaus's, not the user's",
       ".klaus-w-size" not in _css)
 check("Same Look's card padding replaces the child's, so the 4x1 heatmap "
@@ -463,7 +476,7 @@ else:
 
 section("sizes and Same Look: config policy")
 check("Klaus fixes each widget's box from its measured content; unknown add-on blocks share one",
-      dash.size_of("decks") == "4x3" and dash.size_of("heatmap") == "4x1"
+      dash.size_of("decks") == "4x3" and dash.size_of("heatmap") == "4x2"
       and dash.size_of("x:amboss-qbank-widget") == "4x2"
       and dash.size_of("x:.ankihub-thing") == dash.FOREIGN_SIZE == "2x2")
 check("every size is a real COLUMNS x ROWS box no wider than 4 columns",

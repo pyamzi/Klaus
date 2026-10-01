@@ -397,6 +397,28 @@ check("the weekday letters are pinned: their column sits BESIDE the scroller, no
       and "klaus-hm-corner" not in _html
       and "padding-top: 15px; flex: none;" in _css.split(" .klaus-hm-wd {")[1].split("}")[0]
       and " .klaus-hm-body > .klaus-hm-scroll { flex: 0 1 auto; min-width: 0; }" in _css)
+_late = heatmap.heatmap_html({99: 40}, {100 + d: 3 for d in range(1, 12)}, 100, _stats,
+                             history_days=40, forecast_days=11)
+_late_cols = heatmap.build_columns({99: 40}, {100 + d: 3 for d in range(1, 12)}, 100, 40, 11)
+_late_labels = heatmap.month_labels(_late_cols)
+_shown = re.findall(r'<span class="klaus-hm-m(?: ms)?">([^<]*)</span>', _late)
+_n = len(_late_labels)
+check("a month starting in the last column keeps its gap but not its name (it was cut "
+      "to 'No' by the plot's edge); every other month keeps its name",
+      _shown == [l if _n - i >= 2 else "" for i, l in enumerate(_late_labels)]
+      and _late.count('klaus-hm-m ms') == sum(1 for l in _late_labels if l),
+      f"{_shown} vs {_late_labels}")
+# A forecast whose very last column opens a new month — the case that drew "No".
+for _fd in range(1, 60):
+    _cols = heatmap.build_columns({99: 40}, {}, 100, 40, _fd)
+    if heatmap.month_labels(_cols)[-1]:
+        break
+_edge = heatmap.heatmap_html({99: 40}, {100 + _fd: 1}, 100, _stats, history_days=40, forecast_days=_fd)
+_edge_shown = re.findall(r'<span class="klaus-hm-m(?: ms)?">([^<]*)</span>', _edge)
+check("…pinned on a range whose LAST column opens a month: that name is dropped",
+      heatmap.month_labels(_cols)[-1] != "" and _edge_shown[-1] == ""
+      and _edge.rstrip().count("klaus-hm-m ms") == sum(1 for l in heatmap.month_labels(_cols) if l),
+      str(_fd))
 check("both palettes ship, keyed on Anki's own night-mode class — Anki "
       "flips that class with JS and never re-runs the hook that "
       "injected this, so baking one palette would freeze the heatmap "

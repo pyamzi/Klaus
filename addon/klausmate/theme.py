@@ -66,6 +66,8 @@ LIGHT: dict = {
     "grey_mid":     "#D1D1D6",   # Hovers, input borders
     "grey_dark":    "#AEAEB2",   # Pressed states
     "hover_subtle": "#F0F0F0",   # Very subtle hover backgrounds
+    "card_raised":  "#FFFFFF",   # A card one tone above the canvas
+    "on_accent":    "#FFFFFF",   # Text on an accent (primary) fill
     "selection_bg": "#E4F2FF",   # Tree/table row selection
 
     # ── Text ─────────────────────────────────────────────────────────────
@@ -116,6 +118,8 @@ DARK: dict = {
     "grey_mid":     "#404040",
     "grey_dark":    "#505050",
     "hover_subtle": "#404040",
+    "card_raised":  "#3A3A3C",   # dark `surface` IS Anki's canvas: step up
+    "on_accent":    "#FFFFFF",
     "selection_bg": "#404040",
 
     # ── Text ─────────────────────────────────────────────────────────────

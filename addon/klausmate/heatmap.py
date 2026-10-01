@@ -515,9 +515,11 @@ def heatmap_html(
     labels = month_labels(columns)
     # One list decides both the gap and the label above it.
     starts = [bool(label) for label in labels]
+    # A month that starts in the last column has no room for its name
+    # ("No" for Nov, cut by the plot's edge): keep its gap, drop the text.
     months = "".join(
         '<span class="klaus-hm-m%s">%s</span>'
-        % (" ms" if starts[index] else "", label)
+        % (" ms" if starts[index] else "", label if len(labels) - index >= 2 else "")
         for index, label in enumerate(labels)
     )
     weekdays = "".join(

@@ -315,8 +315,9 @@ removed. Use the external MCP client setup below.
   hides them.
 - **dashboard_order**: the order of the deck-screen widgets on its grid,
   in reading order (default `["decks", "heatmap"]`). Normally written by the
-  dashboard itself: right-click a widget → *Edit Widgets…*, then drag
-  to rearrange, ⊖ to remove, ＋ to add back (removal/re-adding writes
+  dashboard itself: right-click a widget → *Edit Widgets* (or press
+  Shift+F10), then drag to rearrange (or Tab to a widget and use the
+  arrow keys), ⊖ to remove, ＋ to add back (removal/re-adding writes
   the widget's own toggle, e.g. `heatmap_enabled`). Other add-ons'
   blocks on the deck screen (AMBOSS's Qbank card, an AnkiHub banner)
   are widgets too, saved as `x:<their id or .class>`. Unknown entries are
@@ -328,12 +329,12 @@ removed. Use the external MCP client setup below.
 - **dashboard_uniform**: `true` gives every deck-screen widget, other
   add-ons' blocks included, the same card (Klaus's surface, corners and
   border; add-on blocks' buttons take your colour theme); `false` (default)
-  lets each keep its own look. Toggled by **Same Look** in *Edit Widgets…*.
+  lets each keep its own look. Toggled by **Same Look** in *Edit Widgets*.
 - **dashboard_scale**: the size of the deck-screen widgets in percent,
   `70` to `150` in steps of `5` (default `100`). It applies on top of
   Anki's own **Preferences → Appearance → User Interface Size**, which
   already scales the whole deck screen; `100` means Anki's size. Set with
-  the **Size** slider in *Edit Widgets…*.
+  the **Size** slider in *Edit Widgets*.
 
 Apart from `heatmap_enabled` and the four `dashboard_*` keys (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display
