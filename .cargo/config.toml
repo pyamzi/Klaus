@@ -1,0 +1,3 @@
+[env]
+# anki_proto writes the descriptor set here; klaus-bridge's build script reads it back.
+DESCRIPTORS_BIN = { value = "target/anki_descriptors.bin", relative = true }

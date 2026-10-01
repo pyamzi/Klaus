@@ -1,3 +1,4 @@
+/target
 # Python
 core/.venv/
 __pycache__/
@@ -14,3 +15,10 @@ extensions/*/out/
 .worktrees/
 references/
 graphify-out/
+
+# Frontend
+node_modules/
+/build/
+/.svelte-kit/
+src/lib/generated/
+src-tauri/gen/
