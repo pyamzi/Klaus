@@ -76,4 +76,4 @@ See [`AGENTS.md`](AGENTS.md) for the development notes.
 
 ## License
 
-Klaus embeds Anki's `rslib`, which is licensed under the GNU AGPL v3, so Klaus is **AGPL-3.0-or-later** ([ADR 0001](docs/adr/0001-build-on-anki-rslib.md)). Klaus is not affiliated with or endorsed by Ankitects.
+Klaus embeds Anki's `rslib`, which is licensed under the GNU AGPL v3, so Klaus is **AGPL-3.0-or-later** ([LICENSE](LICENSE), [ADR 0001](docs/adr/0001-build-on-anki-rslib.md)). Klaus is not affiliated with or endorsed by Ankitects.
