@@ -2093,7 +2093,6 @@ def manage_models_dialog(*_args: Any) -> None:
             # read live per tick, in case the dashboard writes mid-preview.
             "dashboard_order": _dashboard.order_from_cfg(settings.read()),
             "dashboard_hidden": _dashboard.hidden_foreign(settings.read()),
-            "dashboard_sizes": _dashboard.sizes_from_cfg(settings.read()),
             "dashboard_uniform": _dashboard.uniform_from_cfg(settings.read()),
         })
         return out

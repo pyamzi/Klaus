@@ -187,34 +187,21 @@ def wrap_foreign(body: str, hidden: Any = ()) -> str:
 # The grid (Pouya, 2026-10-01: "they should fit within square boxes").
 # The deck screen is one grid of square cells, GRID_GAP apart and around;
 # every widget fills a whole COLUMNS x ROWS box of them and scrolls inside
-# it when its content is bigger. Sizes are picked per widget in edit mode
-# from SIZES; a widget never saved keeps its DEFAULT_SIZES entry (other
-# add-ons' blocks: FOREIGN_SIZE).
+# it when its content is bigger. Klaus decides each box (Pouya, same day:
+# "set up predecided 2x1, 1x2, and whatnot for it, and then I will just
+# move it around"), measured once from each widget's rendered content:
+# the heatmap is a 159px strip that wants width (4x1); AMBOSS's Qbank card
+# is 440px wide and 222px tall with its own 2em margins (3x2); the deck
+# list holds ~17 decks before it scrolls (3x3). An add-on block not
+# listed here gets FOREIGN_SIZE. Nothing is saved: sizes are not a setting.
 GRID_CELL = 160
 GRID_GAP = 16
-SIZES: tuple = ("1x1", "2x1", "1x2", "2x2", "3x2", "3x3", "4x2", "4x3")
-DEFAULT_SIZES = {"decks": "3x3", "heatmap": "4x2"}
-FOREIGN_SIZE = "2x1"
+SIZES = {"decks": "3x3", "heatmap": "4x1", "x:amboss-qbank-widget": "3x2"}
+FOREIGN_SIZE = "2x2"
 
 
-def default_size(wid: str) -> str:
-    return DEFAULT_SIZES.get(wid, FOREIGN_SIZE)
-
-
-def sizes_from_cfg(cfg: Any) -> dict:
-    """``dashboard_sizes`` made safe: known or foreign-shaped ids only,
-    sizes from SIZES only; anything else is dropped (and that widget
-    falls back to its default size)."""
-    value = cfg.get("dashboard_sizes") if isinstance(cfg, dict) else None
-    out: dict = {}
-    if isinstance(value, dict):
-        known = widget_ids()
-        for wid, size in value.items():
-            if len(out) >= MAX_FOREIGN + len(known):
-                break
-            if (wid in known or is_foreign(wid)) and size in SIZES:
-                out[wid] = size
-    return out
+def size_of(wid: str) -> str:
+    return SIZES.get(wid, FOREIGN_SIZE)
 
 
 def uniform_from_cfg(cfg: Any) -> bool:
@@ -287,10 +274,8 @@ def boot_state(cfg: Any, edit: bool) -> dict:
     return {
         "order": order_from_cfg(cfg),
         "hiddenForeign": hidden_foreign(cfg),
-        "sizes": sizes_from_cfg(cfg),
-        "defaultSizes": dict(DEFAULT_SIZES),
+        "sizes": dict(SIZES),
         "foreignSize": FOREIGN_SIZE,
-        "sizeChoices": list(SIZES),
         "grid": {"cell": GRID_CELL, "gap": GRID_GAP},
         "uniform": uniform_from_cfg(cfg),
         "edit": bool(edit),
@@ -339,13 +324,6 @@ def apply_action(action: Any, cfg: Any = None) -> dict | None:
     act = action.get("action")
     if act == "order":
         return {"dashboard_order": normalize_order(action.get("order"))}
-    if act == "size":
-        wid, size = action.get("id"), action.get("size")
-        if size not in SIZES or not (wid in widget_ids() or is_foreign(wid)):
-            return None
-        sizes = sizes_from_cfg(cfg)
-        sizes[wid] = size
-        return {"dashboard_sizes": sizes}
     if act == "uniform":
         on = action.get("on")
         return {"dashboard_uniform": on} if isinstance(on, bool) else None
@@ -418,16 +396,16 @@ def dashboard_css() -> str:
         " }"
         " center.klaus-dash-col > br { display: none; }"
         # Each widget fills a whole COLUMNS x ROWS box: the page sets the
-        # two spans (--kw-cols/--kw-rows) from the saved size, clamped to
+        # two spans (--kw-cols/--kw-rows) from SIZES, clamped to
         # the columns the window has. position:relative always, so the
-        # badge, size chip and shield anchor without a jump.
+        # badge and shield anchor without a jump.
         " .klaus-widget {"
         " position: relative; min-width: 0; min-height: 0;"
         " grid-column: span var(--kw-cols, 2); grid-row: span var(--kw-rows, 1);"
         " }"
         # The box itself: exactly the grid area, content scrolling inside
-        # it. Its own element so the ⊖ badge and the size chip (children
-        # of the widget, outside it) are never clipped by the scroll.
+        # it. Its own element so the ⊖ badge (a child of the widget,
+        # outside it) is never clipped by the scroll.
         # border-box explicitly: Anki's global *{box-sizing:content-box}
         # would push the padded uniform card past its cell.
         " .klaus-w-body {"
@@ -446,14 +424,17 @@ def dashboard_css() -> str:
         # SAME LOOK (dashboard_uniform): one card from DESIGN.md on every
         # widget, other add-ons' blocks included, and each widget's own
         # OUTER card switched off so cards never nest. Only the direct
-        # child's chrome goes; the colours inside it stay.
+        # child's chrome goes; the colours inside it stay. The card's
+        # padding replaces the child's own, so a box that fits its content
+        # without Same Look still fits it with (the 4x1 heatmap: 131px of
+        # content + 12px + 12px + borders = 157px of a 160px cell).
         " body.klaus-dash-uniform .klaus-w-body {"
         " background: var(--klaus-dash-card);"
         " border: 1px solid var(--klaus-dash-card-edge);"
-        " box-shadow: var(--klaus-dash-lift); padding: 16px;"
+        " box-shadow: var(--klaus-dash-lift); padding: 12px;"
         " }"
         " body.klaus-dash-uniform .klaus-w-body > * {"
-        " background: transparent !important; border: 0 !important;"
+        " background: transparent !important; border: 0 !important; padding: 0 !important;"
         " box-shadow: none !important; border-radius: 0 !important;"
         " -webkit-backdrop-filter: none !important; backdrop-filter: none !important;"
         " }"
@@ -482,15 +463,6 @@ def dashboard_css() -> str:
         " .klaus-widget.klaus-w-drag {"
         " animation: none !important; z-index: 7;"
         " filter: drop-shadow(0 12px 24px rgba(0,0,0,0.28));"
-        " }"
-        # The size chip: bottom-right, above the shield, opens the sizes.
-        " .klaus-w-size {"
-        " position: absolute; right: 8px; bottom: 8px; z-index: 6;"
-        " padding: 2px 8px; border-radius: 6px; cursor: pointer;"
-        " border: 1px solid var(--klaus-dash-edge);"
-        " background: var(--klaus-dash-badge); color: var(--klaus-dash-text);"
-        " font-size: 11px; font-weight: 600; line-height: 16px;"
-        f" font-family: {theme.FONT_FAMILY};"
         " }"
         " #klaus-dash-uniform[aria-pressed=true] {"
         " color: var(--klaus-dash-accent); border-color: var(--klaus-dash-accent);"
@@ -558,7 +530,6 @@ def dashboard_css() -> str:
         " }"
         + theme.web_control_css(".klaus-dash-chip", "var(--klaus-dash-accent)")
         + theme.web_control_css(".klaus-w-remove", "var(--klaus-dash-accent)")
-        + theme.web_control_css(".klaus-w-size", "var(--klaus-dash-accent)")
         + " @media (prefers-reduced-motion: reduce) {"
           " .klaus-widget { animation: none !important; } }"
         + " @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {"

@@ -386,43 +386,31 @@ ok("right-click outside the widgets is left to Anki",
    !evOff._prevented
    && document.querySelectorAll(".klaus-dash-menu").length === 0);
 
-// 14. Sizes: each widget takes its saved or default COLUMNS x ROWS box,
+// 14. Sizes: each widget takes Klaus's fixed COLUMNS x ROWS box,
 //     clamped to the columns the window has.
 d = build({ foreign: true });
 d.center.clientWidth = 16 + 3 * 176; // room for exactly 3 columns
 const SIZED = Object.assign({}, STATE, {
-  sizes: { decks: "2x2" }, defaultSizes: { decks: "3x3", heatmap: "4x2" }, foreignSize: "2x1",
-  sizeChoices: ["1x1", "2x1", "2x2", "3x2", "4x2"], grid: { cell: 160, gap: 16 },
+  sizes: { decks: "2x2", heatmap: "4x1" }, foreignSize: "2x2", grid: { cell: 160, gap: 16 },
 });
 boot(SIZED);
-ok("a saved size wins over the default",
+ok("a widget takes its own box",
    widget("decks").getAttribute("data-size") === "2x2"
    && widget("decks").style["--kw-cols"] === "2" && widget("decks").style["--kw-rows"] === "2");
 ok("a 4-wide widget in a 3-column window takes 3 columns (no overflow)",
-   widget("heatmap").getAttribute("data-size") === "4x2" && widget("heatmap").style["--kw-cols"] === "3",
+   widget("heatmap").getAttribute("data-size") === "4x1" && widget("heatmap").style["--kw-cols"] === "3",
    widget("heatmap").style["--kw-cols"]);
-ok("an add-on block gets the shared default box",
-   widget("x:.ankihub-thing").getAttribute("data-size") === "2x1");
+ok("an add-on block Klaus has no size for gets the shared box",
+   widget("x:.ankihub-thing").getAttribute("data-size") === "2x2");
 ok("Anki's table sits in the decks box's scroll body, not the grid item itself",
    d.table.parentNode.className === "klaus-w-body" && d.table.parentNode.parentNode === widget("decks"));
 
-// 15. Edit mode: a size chip on every widget; picking a size applies it
-//     and reports {size}.
+// 15. Edit mode offers no size control: sizes are Klaus's.
 d = build({});
 boot(Object.assign({}, SIZED, { edit: true }));
-const chip = widget("heatmap").querySelector(".klaus-w-size");
-ok("every widget gets a size chip naming its box",
-   widget("decks").querySelectorAll(".klaus-w-size").length === 1 && chip && chip.textContent === "4×2");
-fire(chip, "click", { clientX: 100, clientY: 100 });
-const sizeMenu = document.querySelectorAll(".klaus-dash-menu")[0];
-ok("the chip opens the sizes, the current one ticked",
-   sizeMenu && sizeMenu.children.some((c) => c.textContent === "✓ 4×2")
-   && sizeMenu.children.some((c) => c.textContent === "2×1"));
-fire(sizeMenu.children.find((c) => c.textContent === "3×2"), "click");
-ok("picking one resizes the widget and reports {size}",
-   widget("heatmap").getAttribute("data-size") === "3x2" && chip.textContent === "3×2"
-   && JSON.stringify(decoded(SENT.length - 1)) === '{"action":"size","id":"heatmap","size":"3x2"}',
-   JSON.stringify(decoded(SENT.length - 1)));
+ok("no widget grows a size chip in edit mode",
+   document.querySelectorAll(".klaus-w-size").length === 0
+   && widget("heatmap").getAttribute("data-size") === "4x1");
 
 // 16. Shake: every widget gets its own phase and speed, cleared on exit.
 const phases = ["decks", "heatmap"].map((id) => widget(id).style.animationDelay);
@@ -440,8 +428,8 @@ ok("…turning it on dresses every widget alike and reports {uniform: true}",
 ok("…and it stays in edit mode (a chip click is not an outside click)",
    document.body.classList.contains("klaus-dash-editing"));
 fire(document.querySelectorAll(".klaus-dash-bar")[0].children.find((c) => c.id === "klaus-dash-done"), "click");
-ok("Done clears the chips and the shake phases",
-   document.querySelectorAll(".klaus-w-size").length === 0 && widget("decks").style.animationDelay === "");
+ok("Done clears the badges and the shake phases",
+   document.querySelectorAll(".klaus-w-remove").length === 0 && widget("decks").style.animationDelay === "");
 d = build({});
 boot(Object.assign({}, SIZED, { uniform: true }));
 ok("a saved Same Look boots on", document.body.classList.contains("klaus-dash-uniform"));

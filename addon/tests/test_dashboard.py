@@ -288,8 +288,12 @@ check("a box's one card fills it, so sizes show with Same Look off; never Anki's
       "table (its rows would stretch) and never a second element (it overflowed the decks box)",
       ".klaus-w-body > :only-child:not(table) {" in _css
       and "min-height: 100%" in _css.split(".klaus-w-body > :only-child:not(table) {")[1].split("}")[0])
-check("the size chip sits above the shield, beside the badge",
-      ".klaus-w-size {" in _css and "z-index: 6;" in _css.split(".klaus-w-size {")[1].split("}")[0])
+check("no size chip: sizes are Klaus's, not the user's",
+      ".klaus-w-size" not in _css)
+check("Same Look's card padding replaces the child's, so the 4x1 heatmap "
+      "(131px of content) still fits its 160px row",
+      "padding: 12px;" in _css.split("body.klaus-dash-uniform .klaus-w-body {")[1].split("}")[0]
+      and "padding: 0 !important" in _css.split("body.klaus-dash-uniform .klaus-w-body > * {")[1].split("}")[0])
 check("a dragged widget stops jiggling — a CSS animation would "
       "otherwise override the inline drag transform outright",
       "animation: none !important; z-index: 7;" in _css)
@@ -392,26 +396,14 @@ else:
           "counted as a pass")
 
 section("sizes and Same Look: config policy")
-check("every widget has a default box; add-on blocks share one",
-      dash.default_size("decks") == "3x3" and dash.default_size("heatmap") == "4x2"
-      and dash.default_size("x:amboss") == dash.FOREIGN_SIZE == "2x1"
-      and all(v in dash.SIZES for v in dash.DEFAULT_SIZES.values()))
-check("saved sizes are read safely: unknown ids and unknown sizes are dropped",
-      dash.sizes_from_cfg({"dashboard_sizes": {"decks": "2x2", "nope": "2x2", "heatmap": "9x9",
-                                               "x:amboss": "1x2", "x:bad id!": "2x2"}})
-      == {"decks": "2x2", "x:amboss": "1x2"}
-      and dash.sizes_from_cfg({"dashboard_sizes": "junk"}) == {} and dash.sizes_from_cfg(None) == {})
-check("a size pick is validated and merged into the saved sizes",
-      dash.apply_action({"action": "size", "id": "heatmap", "size": "3x2"},
-                        {"dashboard_sizes": {"decks": "2x2"}})
-      == {"dashboard_sizes": {"decks": "2x2", "heatmap": "3x2"}})
-check("…a foreign block's size too",
-      dash.apply_action({"action": "size", "id": "x:amboss-qbank-widget", "size": "2x2"}, {})
-      == {"dashboard_sizes": {"x:amboss-qbank-widget": "2x2"}})
-check("an unknown size, an unknown id or a junk payload writes nothing",
-      dash.apply_action({"action": "size", "id": "heatmap", "size": "9x9"}, {}) is None
-      and dash.apply_action({"action": "size", "id": "evil", "size": "2x2"}, {}) is None
-      and dash.apply_action({"action": "size", "id": ["heatmap"], "size": "2x2"}, {}) is None)
+check("Klaus fixes each widget's box from its measured content; unknown add-on blocks share one",
+      dash.size_of("decks") == "3x3" and dash.size_of("heatmap") == "4x1"
+      and dash.size_of("x:amboss-qbank-widget") == "3x2"
+      and dash.size_of("x:.ankihub-thing") == dash.FOREIGN_SIZE == "2x2")
+check("every size is a real COLUMNS x ROWS box no wider than 4 columns",
+      all(re.fullmatch(r"[1-4]x[1-4]", v) for v in list(dash.SIZES.values()) + [dash.FOREIGN_SIZE]))
+check("a size pick from an old page writes nothing (sizes are not a setting)",
+      dash.apply_action({"action": "size", "id": "heatmap", "size": "3x2"}, {}) is None)
 check("Same Look writes a strict bool, and only for a strict bool",
       dash.apply_action({"action": "uniform", "on": True}, {}) == {"dashboard_uniform": True}
       and dash.apply_action({"action": "uniform", "on": False}, {}) == {"dashboard_uniform": False}
@@ -419,10 +411,10 @@ check("Same Look writes a strict bool, and only for a strict bool",
 check("only an explicit True turns Same Look on (a corrupt value must not restyle add-ons)",
       dash.uniform_from_cfg({"dashboard_uniform": True}) is True
       and dash.uniform_from_cfg({"dashboard_uniform": 1}) is False and dash.uniform_from_cfg({}) is False)
-_bs = dash.boot_state({"dashboard_sizes": {"decks": "2x2"}, "dashboard_uniform": True}, False)
-check("the page gets the saved sizes, the defaults, the choices, the grid and Same Look",
-      _bs["sizes"] == {"decks": "2x2"} and _bs["defaultSizes"] == dash.DEFAULT_SIZES
-      and _bs["foreignSize"] == "2x1" and _bs["sizeChoices"] == list(dash.SIZES)
+_bs = dash.boot_state({"dashboard_sizes": {"heatmap": "1x2"}, "dashboard_uniform": True}, False)
+check("the page gets Klaus's sizes (a stale saved dashboard_sizes is ignored), the grid and Same Look",
+      _bs["sizes"] == dash.SIZES and _bs["foreignSize"] == "2x2"
+      and "sizeChoices" not in _bs and "defaultSizes" not in _bs
       and _bs["grid"] == {"cell": dash.GRID_CELL, "gap": dash.GRID_GAP} and _bs["uniform"] is True)
 
 raise SystemExit(report())

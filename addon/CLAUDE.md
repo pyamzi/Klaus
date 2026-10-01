@@ -334,15 +334,19 @@ same reason.
   Every widget fills a whole COLUMNS x ROWS box (`--kw-cols`/`--kw-rows`
   spans, set by the page and clamped to the columns the window has) and
   scrolls inside its `.klaus-w-body` (the wrapper's own child, so the ⊖
-  badge and the size chip are never clipped; Python's `wrap_foreign`
-  writes the same pair). Sizes: `SIZES`, picked per widget from a size
-  chip in edit mode, saved in `dashboard_sizes` (validated in
-  `apply_action`; defaults `DEFAULT_SIZES`, add-on blocks
-  `FOREIGN_SIZE`). A box's ONE card stretches to fill it (`:only-child`,
+  badge is never clipped; Python's `wrap_foreign` writes the same pair).
+  Sizes are Klaus's, not a setting (Pouya: "set up predecided 2x1,
+  1x2... then I will just move it around"): `SIZES` per widget id,
+  measured once from the rendered content (re-measure in the offscreen
+  harness when a widget's content changes shape), `FOREIGN_SIZE` for an
+  add-on block not listed. A stale `dashboard_sizes` in meta.json is
+  ignored. A box's ONE card stretches to fill it (`:only-child`,
   never Anki's table: a stretched table spreads height into its rows).
   **Same Look** (`dashboard_uniform`, explicit True only, a chip in the
   edit bar): one DESIGN.md card on every box and each widget's own outer
-  card switched off, colours inside untouched. The jiggle is iOS-strength
+  card switched off, colours inside untouched; its 12px padding
+  replaces the child's own, so a box that fits without it still fits
+  (the 4x1 heatmap has 3px to spare). The jiggle is iOS-strength
   (±1.5° and a 1px bob, ~0.26 s) with a random phase and period per
   widget, and drag is 2-D: pointer over another widget takes its place
   in the order. Visibility

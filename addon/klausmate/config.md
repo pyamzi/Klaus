@@ -325,11 +325,6 @@ removed. Use the external MCP client setup below.
   the saved order waits for the design layer.
 - **dashboard_hidden**: the other add-ons' deck-screen blocks you removed
   with ⊖ (default `[]`), as their `x:` ids; ＋ brings one back.
-- **dashboard_sizes**: each widget's box on the deck screen's grid, as
-  columns×rows of square cells (default `{}`: the deck list is `3x3`, the
-  heatmap `4x2`, other add-ons' blocks `2x1`). Pick one with the size chip
-  on a widget in *Edit Widgets…*; choices are `1x1`, `2x1`, `1x2`, `2x2`,
-  `3x2`, `3x3`, `4x2` and `4x3`. Content bigger than its box scrolls inside it.
 - **dashboard_uniform**: `true` gives every deck-screen widget, other
   add-ons' blocks included, the same card (Klaus's surface, corners, border
   and shadow); `false` (default) lets each keep its own look. Toggled by

@@ -6,8 +6,8 @@
  * refresh, so this runs fresh each time and must be idempotent.
  *
  * Contract with Python: window.klausDashState carries {order, edit,
- * removable, labels, hidden, hiddenForeign, sizes, defaultSizes,
- * foreignSize, sizeChoices, grid, uniform}; every mutation is reported over
+ * removable, labels, hidden, hiddenForeign, sizes, foreignSize, grid,
+ * uniform}; every mutation is reported over
  * pycmd("klausmate:dash:<b64 json>") and VALIDATED there — nothing this
  * file sends is trusted. Any failure inside boot() leaves Anki's stock
  * layout untouched.
@@ -32,9 +32,7 @@
   var hiddenForeign = [];
   var savedOrder = [];
   var sizes = {};
-  var defaultSizes = {};
-  var foreignSize = "2x1";
-  var sizeChoices = [];
+  var foreignSize = "2x2";
   var grid = { cell: 160, gap: 16 };
   var uniform = false;
 
@@ -101,8 +99,8 @@
   }
 
   // A widget is the grid item; its .klaus-w-body is the box its content
-  // scrolls in, so the ⊖ badge and size chip (the widget's own children)
-  // are never clipped. Python writes the same pair around add-on blocks.
+  // scrolls in, so the ⊖ badge (the widget's own child) is never
+  // clipped. Python writes the same pair around add-on blocks.
   function makeWrapper(id) {
     var w = document.createElement("div");
     w.className = "klaus-widget";
@@ -198,10 +196,9 @@
 
   /* --- sizes ------------------------------------------------------- */
 
+  // Klaus's fixed box for each widget (dashboard.SIZES); not a setting.
   function sizeOf(id) {
-    if (sizes[id]) return sizes[id];
-    if (defaultSizes[id]) return defaultSizes[id];
-    return foreignSize;
+    return sizes[id] || foreignSize;
   }
 
   // Grid columns the window has room for (the <center> pads by one gap).
@@ -212,7 +209,7 @@
     return Math.max(1, Math.floor((width - grid.gap) / (grid.cell + grid.gap)));
   }
 
-  // The saved COLUMNS x ROWS box, columns clamped to what fits: a 4-wide
+  // The widget's COLUMNS x ROWS box, columns clamped to what fits: a 4-wide
   // widget in a 3-column window takes 3 rather than overflowing.
   function applySize(w) {
     var id = w.getAttribute("data-w");
@@ -224,19 +221,11 @@
       w.style.setProperty("--kw-cols", String(cols));
       w.style.setProperty("--kw-rows", String(rows));
     }
-    var chip = sizeChip(w);
-    if (chip) chip.textContent = sizeOf(id).replace("x", "×");
   }
 
   function applySizes() {
     var ws = widgets();
     for (var i = 0; i < ws.length; i++) applySize(ws[i]);
-  }
-
-  function sizeChip(w) {
-    for (var i = 0; i < w.children.length; i++)
-      if (w.children[i].classList.contains("klaus-w-size")) return w.children[i];
-    return null;
   }
 
   function setUniform(on) {
@@ -369,7 +358,7 @@
   }
 
   // Edit-mode chrome for one widget: its own shake phase, the drag
-  // shield, the size chip, and ⊖ if removable.
+  // shield, and ⊖ if removable.
   function dress(w) {
     // Each widget starts its shake somewhere else in the cycle, at a
     // slightly different speed, so they never move in lockstep (iOS).
@@ -380,34 +369,7 @@
     w.appendChild(shield);
     bindDrag(shield, w);
     var id = w.getAttribute("data-w");
-    addSizeChip(w, id);
     if (removable.indexOf(id) >= 0) addBadge(w, id);
-  }
-
-  function addSizeChip(w, id) {
-    var chip = document.createElement("button");
-    chip.className = "klaus-w-size";
-    chip.textContent = sizeOf(id).replace("x", "×");
-    chip.setAttribute("title", "Change the size of " + label(id));
-    chip.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      var m = document.createElement("div");
-      m.className = "klaus-dash-menu";
-      for (var i = 0; i < sizeChoices.length; i++)
-        (function (size) {
-          var mark = size === sizeOf(id) ? "✓ " : "";
-          m.appendChild(
-            menuItem(mark + size.replace("x", "×"), function () {
-              sizes[id] = size;
-              applySize(w);
-              send({ action: "size", id: id, size: size });
-            })
-          );
-        })(sizeChoices[i]);
-      hideMenus();
-      showMenuAt(m, ev.clientX, ev.clientY);
-    });
-    w.appendChild(chip);
   }
 
   function exitEdit() {
@@ -420,9 +382,6 @@
     var badges = document.querySelectorAll(".klaus-w-remove");
     for (var j = 0; j < badges.length; j++)
       badges[j].parentNode.removeChild(badges[j]);
-    var chips = document.querySelectorAll(".klaus-w-size");
-    for (var c = 0; c < chips.length; c++)
-      chips[c].parentNode.removeChild(chips[c]);
     var ws = widgets();
     for (var k = 0; k < ws.length; k++) {
       ws[k].style.animationDelay = "";
@@ -595,9 +554,7 @@
     hiddenForeign = state.hiddenForeign || [];
     savedOrder = state.order || [];
     sizes = state.sizes || {};
-    defaultSizes = state.defaultSizes || {};
-    foreignSize = state.foreignSize || "2x1";
-    sizeChoices = state.sizeChoices || [];
+    foreignSize = state.foreignSize || "2x2";
     grid = state.grid || grid;
     if (!wrap()) return;
     var col = widgetById("decks").parentNode;
