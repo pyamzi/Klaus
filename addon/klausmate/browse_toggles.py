@@ -146,10 +146,16 @@ def toggle_label(pane: str, visible: bool) -> str:
 # ── The widget ─────────────────────────────────────────────────────────
 
 # Sized for the status bar's 23px row inside its 28pt strip: a 16px icon with
-# 3px of hover wash around it.
+# 3px of hover wash around it. At 100%: the strip resizes the button by
+# bar_scale (status_bar._size) and the icon follows the button (icon_size).
 BUTTON_SIZE = 22
 ICON_SIZE = 16.0
 CHIP_RADIUS = 6.0  # the design system's small-control radius
+
+
+def icon_size(w: float, h: float) -> float:
+    """The icon for a ``w``x``h`` button: ICON_SIZE at BUTTON_SIZE, scaled."""
+    return ICON_SIZE * min(w, h) / BUTTON_SIZE
 
 
 def is_keyboard_focus(event) -> bool:
@@ -295,10 +301,9 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
             side = "right" if side == "left" else "left"
 
         painter.save()
-        painter.translate(
-            round((w - ICON_SIZE) / 2.0), round((h - ICON_SIZE) / 2.0)
-        )
-        self._paint_icon(painter, c, on, side)
+        size = icon_size(w, h)
+        painter.translate(round((w - size) / 2.0), round((h - size) / 2.0))
+        self._paint_icon(painter, c, on, side, size)
         painter.restore()
 
         if self.show_focus():
@@ -312,8 +317,7 @@ class _PaneToggle(QToolButton):  # type: ignore[misc]
                 QRectF(1.0, 1.0, w - 2.0, h - 2.0), CHIP_RADIUS, CHIP_RADIUS
             )
 
-    def _paint_icon(self, painter, c: dict, on: bool, side: str) -> None:
-        size = ICON_SIZE
+    def _paint_icon(self, painter, c: dict, on: bool, side: str, size: float = ICON_SIZE) -> None:
         colour = QColor(c["text"] if on else c["text_muted"])
 
         # Fill first, outline over it: the stroke then covers the fill's

@@ -82,8 +82,9 @@ check("unknown accent seeds as ocean, a bad custom colour as the default swatch,
 check("specs seed through background.resolve",
       st.get("background")["mode"] == "color" and st.get("reviewer_background")["grad_x"] == 7)
 check("anki_theme defaults to 0 and klausbook_design to off", st.get("anki_theme") == 0 and st.get("klausbook_design") is False)
-check("APPEARANCE_KEYS is the six", set(ps.APPEARANCE_KEYS) == {"klausbook_design", "color_theme", "color_theme_custom",
-                                                                "background", "reviewer_background", "anki_theme"})
+check("APPEARANCE_KEYS is the seven", set(ps.APPEARANCE_KEYS) == {"klausbook_design", "color_theme", "color_theme_custom",
+                                                                  "background", "reviewer_background", "anki_theme",
+                                                                  "bar_scale"})
 spec = st.get("background")
 spec["grad_x"] = 12.0
 st.set("background", spec)

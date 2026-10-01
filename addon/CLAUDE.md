@@ -437,7 +437,7 @@ same reason.
   every Qt bar follows: a resize filter on `mw.bottomWeb` (deck screens
   only, never the taller review row) calls `status_bar.set_row_height`,
   so the bottom edge is one height on every tab (28px floor,
-  `STRIP_MAX` cap). It starts in the rendered state and follows `tasks`
+  `STRIP_MAX` cap, both times `bar_scale`). It starts in the rendered state and follows `tasks`
   live via `klausStatus` evals on `mw.bottomWeb` while
   `mw.state` is deckBrowser/overview. Both clicks open a tick later
   (`bridge_reentrancy`'s deferral rule). **Browse** keeps a 28pt Qt bar
@@ -462,6 +462,22 @@ same reason.
   `SHOW_DELAY_S` (0.5 s) aren't drawn (no flashing). The QSS goes on Qt's
   QStatusBar (one hairline, no macOS panel line or item frames).
   Anki's own "Processing…" popups are deliberately not mirrored.
+  **Bar size** (`bar_scale`, 70-150 in 5s, default 85,
+  `dashboard.bar_scale_from_cfg`; 2026-10-01): one factor on top of
+  Anki's User Interface Size for the top bar, the deck/overview row and
+  the strips. Webviews: `theme.bar_zoom_css` (`body { zoom }`, Anki's
+  own `app_zoom_factor` multiplied in) injected by
+  `top_bar._on_webview_will_set_content` BEFORE the design gate, so the
+  stock bars shrink too; never `setZoomFactor` — Anki's
+  `adjustHeightToFit` reads `documentElement.offsetHeight`, which follows
+  CSS zoom only. `klausFit` divides screen px by the body zoom. Strips:
+  `status_bar.scale()` (cached, reset per profile) scales the floor
+  (never under `STRIP_MIN` 20), the cap, the gear and pane toggles
+  (`_size`; the icon follows the button, `browse_toggles.icon_size`),
+  the progress width and `status_bar_qss`'s text; `set_scale` re-sizes
+  every bar. Live: Preferences previews it (appearance preview →
+  `top_bar.refresh` redraws both webviews; `set_scale` the strips) and
+  reverts on Cancel.
 - `addons_menu.py`: every top-level menu bar entry that isn't Anki's own
   (`MAIN_MENUS`/`BROWSE_MENUS`, the `window.form` names from main.ui and
   browser.ui) moves whole under ONE "Add-ons" menu before Help, in the main
@@ -1436,7 +1452,10 @@ same reason.
     effects in fixed order — `index_sweep` (the "Press ⟳" tooltip),
     `threshold_changed` (the tuned-PDFs prompt),
     `anki_theme` (`mw.set_theme`),
-    `appearance` (live apply, then drop the preview). Discard is
+    `appearance` (live apply, then drop the preview). Appearance's
+    **Bar size** slider (`bar_scale`, after Theme; a % readout, a caption
+    naming Anki's UI size with a link to Anki's Preferences) is an
+    appearance key, so it previews live. Discard is
     `state.discard()` + `paint_all()`. Endpoint relocation is
     `state.reseed` (a stored value moved; not an edit); a model pick is
     `state.set`. The live preview reads `flatten_appearance(state.view())`

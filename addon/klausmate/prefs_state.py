@@ -23,7 +23,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable, NamedTuple
 
-from . import background, embeddings, theme
+from . import background, dashboard, embeddings, theme
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
 # retention.DEFAULT_THRESHOLD, spelled here because retention imports aqt;
@@ -105,19 +105,22 @@ _SPEC: dict[str, tuple[Any, Callable[[Any], Any]]] = {
     "background": (None, _spec("background")),
     "reviewer_background": (None, _spec("reviewer_background")),
     "anki_theme": (0, _anki_theme),
+    # Bar size: previewed live like the rest of Appearance (the bars are
+    # judged by eye), so it rides the appearance preview and effect.
+    "bar_scale": (dashboard.BAR_SCALE_DEFAULT, lambda v: dashboard.bar_scale_from_cfg({"bar_scale": v})),
 }
 KEYS: tuple[str, ...] = tuple(_SPEC)
 APPEARANCE_KEYS: tuple[str, ...] = ("klausbook_design", "color_theme", "color_theme_custom",
-                                    "background", "reviewer_background", "anki_theme")
+                                    "background", "reviewer_background", "anki_theme", "bar_scale")
 PSEUDO_KEYS: tuple[str, ...] = ("anki_theme",)
 
 
 def flatten_appearance(view: dict) -> dict:
     """The ``background_*`` / ``reviewer_background_*`` keys plus the
-    accent pair and the design gate, exactly as the dialog writes them
-    (and as its live preview reads them): ``int()`` on blur/wash and the
-    gradient geometry for BOTH screens, no reviewer blur, never
-    ``heatmap_enabled`` or ``color2``."""
+    accent pair, the design gate and ``bar_scale``, exactly as the dialog
+    writes them (and as its live preview reads them): ``int()`` on
+    blur/wash and the gradient geometry for BOTH screens, no reviewer
+    blur, never ``heatmap_enabled`` or ``color2``."""
     out: dict = {}
     for prefix, fields in (("background", _SPEC_FIELDS), ("reviewer_background", _REVIEWER_FIELDS)):
         spec = view.get(prefix) or {}
@@ -131,6 +134,7 @@ def flatten_appearance(view: dict) -> dict:
     out["color_theme"] = view.get("color_theme", "ocean")
     out["color_theme_custom"] = view.get("color_theme_custom", theme.DEFAULT_CUSTOM_COLOR)
     out["klausbook_design"] = bool(view.get("klausbook_design"))
+    out["bar_scale"] = dashboard.bar_scale_from_cfg(view)
     return out
 
 

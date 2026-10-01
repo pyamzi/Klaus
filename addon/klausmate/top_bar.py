@@ -427,11 +427,34 @@ def _on_left_tray(content: list, toolbar: Any) -> None:
         print(f"[klausmate] top bar logo failed: {exc}")
 
 
+def _bar_zoom_css() -> str:
+    """The top bar's and the bottom row's size (``bar_scale``; the
+    Preferences preview wins), with Anki's own body zoom multiplied in."""
+    from . import background, dashboard, theme
+
+    try:
+        from aqt import mw
+
+        anki_zoom = float(mw.web.app_zoom_factor())
+    except Exception:
+        anki_zoom = 1.0
+    scale = dashboard.bar_scale_from_cfg(background.effective_cfg(_config()))
+    return theme.bar_zoom_css(scale, anki_zoom)
+
+
 def _on_webview_will_set_content(web_content: Any, context: Any) -> None:
     try:
         from aqt.toolbar import TopToolbar
 
         from . import background
+
+        # Bar size is a size preference, not the KlausBook restyle: it
+        # comes before the design gate, so a stock bar shrinks too.
+        if isinstance(context, TopToolbar) or type(context).__name__ in (
+            "DeckBrowserBottomBar",
+            "OverviewBottomBar",
+        ):
+            web_content.head += "<style>" + _bar_zoom_css() + "</style>"
 
         # The KlausBook design gate. Without it these two sheets were
         # injected UNCONDITIONALLY — the one part of the design layer

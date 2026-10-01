@@ -1019,6 +1019,39 @@ def manage_models_dialog(*_args: Any) -> None:
         anki_theme_combo,
     )
 
+    # Bar size (bar_scale; Pouya, 2026-10-01: the bars "smaller in general
+    # by default ... a setting that allows the user to make them bigger
+    # ... that links to the default Anki settings"). The top bar, the deck
+    # screen's bottom row and the Browse / Add strips, 70-150% in 5s ON
+    # TOP of Anki's User Interface Size, previewed live like the rest of
+    # Appearance. The caption names Anki's size and opens its Preferences.
+    from . import dashboard as _dashboard
+    from . import status_bar as _status_bar
+
+    _anki_ui = _dashboard.anki_ui_scale()
+    bar_scale_slider = QSlider(Qt.Orientation.Horizontal)
+    bar_scale_slider.setObjectName("bar_scale")
+    bar_scale_slider.setRange(_dashboard.SCALE_MIN // _dashboard.SCALE_STEP,
+                              _dashboard.SCALE_MAX // _dashboard.SCALE_STEP)
+    bar_scale_slider.setPageStep(1)
+    bar_scale_slider.setFixedWidth(160)
+    bar_scale_slider.setToolTip(f"On top of Anki's User Interface Size ({_anki_ui}%)")
+    bar_scale_slider.setAccessibleName("Bar size")
+    bar_scale_value_lbl = QLabel()
+    bar_scale_value_lbl.setMinimumWidth(36)
+    bar_scale_slider.valueChanged.connect(
+        lambda v: bar_scale_value_lbl.setText(f"{v * _dashboard.SCALE_STEP}%"))
+    bar_scale_ctl = QHBoxLayout()
+    bar_scale_ctl.setContentsMargins(0, 0, 0, 0)
+    bar_scale_ctl.addWidget(bar_scale_slider)
+    bar_scale_ctl.addWidget(bar_scale_value_lbl)
+    bar_scale_desc = QLabel(
+        "The top bar and the bottom bars. 100% is Anki's own User Interface "
+        f"Size, now {_anki_ui}% in <a href=\"prefs\">Anki's Preferences</a>."
+    )
+    bar_scale_desc.linkActivated.connect(lambda *_a: _status_bar._open_anki_settings())
+    _row(appearance_layout, "Bar size", bar_scale_desc, bar_scale_ctl)
+
     # The master switch, next — everything below it on this page is
     # either gated by it (backgrounds) or independent of it (accent),
     # and reading it first makes that hierarchy legible.
@@ -2130,7 +2163,8 @@ def manage_models_dialog(*_args: Any) -> None:
         try:
             from . import top_bar as _top_bar
 
-            _top_bar.refresh()
+            _top_bar.refresh()  # the webview bars redraw at the new size
+            _status_bar.set_scale(state.get("bar_scale"))
         except Exception as _exc:
             print(f"[klausmate] background refresh failed: {_exc}")
         try:
@@ -2159,6 +2193,7 @@ def manage_models_dialog(*_args: Any) -> None:
             return  # nothing previewed — stored config is already drawn
         _background.set_preview(None)
         try:
+            _status_bar.set_scale(_dashboard.bar_scale_from_cfg(settings.read()))
             _pkg()._apply_color_theme()
         except Exception as _exc:
             print(f"[klausmate] appearance revert failed: {_exc}")
@@ -2526,6 +2561,9 @@ def manage_models_dialog(*_args: Any) -> None:
         _Binding(state, "anki_theme", lambda: int(anki_theme_combo.currentData() or 0),
                  lambda v: anki_theme_combo.setCurrentIndex(max(0, anki_theme_combo.findData(int(v)))),
                  anki_theme_combo.currentIndexChanged, refresh_dirty),
+        _Binding(state, "bar_scale", lambda: bar_scale_slider.value() * _dashboard.SCALE_STEP,
+                 lambda v: bar_scale_slider.setValue(int(v) // _dashboard.SCALE_STEP),
+                 bar_scale_slider.valueChanged, appearance_changed),
     ]
     threshold_slider.valueChanged.connect(_update_threshold_label)
     index_btn.clicked.connect(start_index)

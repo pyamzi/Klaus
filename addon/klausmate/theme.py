@@ -1340,12 +1340,28 @@ def muted_label_qss(night: bool, size_px: int = 11) -> str:
     return f"color: {c['text_muted']}; font-size: {size_px}px;"
 
 
-def status_bar_qss(night: bool) -> str:
+def bar_zoom_css(scale: int, anki_zoom: float = 1.0) -> str:
+    """The top bar's and the bottom row's size (``bar_scale``, percent):
+    ONE CSS zoom on body, so icons, text, chips and paddings scale
+    together and Anki's ``adjustHeightToFit`` (documentElement.offsetHeight)
+    measures the zoomed height. Never ``setZoomFactor``: offsetHeight
+    stays in unzoomed px under it and the bar would keep its old height.
+    ``anki_zoom`` is Anki's own body zoom (``app_zoom_factor``, 1 except
+    on HiDPI Linux), which this replaces, so it is multiplied in."""
+    return f"body {{ zoom: {round(anki_zoom * scale / 100, 4):g}; }}"
+
+
+def status_bar_qss(night: bool, scale: int = 100) -> str:
     """The status bar along the bottom of the main window and Browse
     (VS Code's): chrome ground, ONE grey_light hairline on top (on Qt's
     QStatusBar, replacing the macOS panel line; the bar inside draws
-    none), muted 11px text, the progress chunk in the accent."""
+    none), muted 11px text, the progress chunk in the accent. ``scale``
+    (``bar_scale``) sizes the text and the progress bar."""
     c = palette(night)
+
+    def px(n: float) -> str:
+        return f"{max(1, round(n * scale / 100))}px"
+
     return f"""
     QStatusBar {{
         background-color: {c['chrome']};
@@ -1355,12 +1371,15 @@ def status_bar_qss(night: bool) -> str:
     QStatusBar::item {{
         border: none;
     }}
+    QStatusBar > QToolButton {{
+        font-size: {px(12)};
+    }}
     QWidget#KlausStatusBar {{
         background-color: {c['chrome']};
     }}
     QWidget#KlausStatusBar QLabel {{
         color: {c['text_muted']};
-        font-size: 11px;
+        font-size: {px(11)};
         background: transparent;
     }}
     QWidget#KlausStatusBar QLabel[error="true"] {{
@@ -1374,7 +1393,7 @@ def status_bar_qss(night: bool) -> str:
     }}
     QWidget#KlausStatusBar QToolButton#KlausBarAction {{
         color: {c['text']};
-        font-size: 12px;
+        font-size: {px(12)};
         padding: 1px 8px;
         border-radius: 5px;
     }}
@@ -1388,7 +1407,7 @@ def status_bar_qss(night: bool) -> str:
         background-color: {c['grey_light']};
         border: none;
         border-radius: 2px;
-        max-height: 4px;
+        max-height: {px(4)};
     }}
     QWidget#KlausStatusBar QProgressBar::chunk {{
         background-color: {c['blue']};

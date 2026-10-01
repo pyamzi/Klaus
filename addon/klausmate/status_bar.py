@@ -83,11 +83,33 @@ LABEL_MAX_PX = 320
 # to the Decks row's height when that is taller (set_row_height).
 # QStatusBar hard-codes 3px above its items and ~2px below, so the bar
 # inside gets what's left, which also centres it in the strip.
+# These are the 100% sizes: the floor, the cap, the gear and the text all
+# scale by bar_scale (85% by default, so the floor is 24), never under
+# STRIP_MIN (70%'s floor, where a 15px gear still fits the bar).
 STRIP_HEIGHT = 28
 STRIP_MAX = 64  # a measurement past this is a transient layout, not a row
+STRIP_MIN = 20
 STRIP_INSET = 3 + 2
 BAR_HEIGHT = STRIP_HEIGHT - STRIP_INSET
-_row_height = [STRIP_HEIGHT]
+PROGRESS_PX = 120
+_row_px = [0]  # the Decks row as last measured
+_scale: list = [None]  # bar_scale, read from config on first use
+
+
+def scale() -> int:
+    """``bar_scale`` in percent: what ``set_scale`` last set, else config."""
+    if _scale[0] is None:
+        try:
+            from . import dashboard, settings
+
+            _scale[0] = dashboard.bar_scale_from_cfg(settings.read())
+        except Exception:  # noqa: BLE001
+            return 85
+    return _scale[0]
+
+
+def scaled(px: float) -> int:
+    return round(px * scale() / 100)
 
 
 def _open_anki_settings() -> None:
@@ -148,7 +170,7 @@ class _GearButton(QToolButton):
         super().__init__(parent)
         from .browse_toggles import BUTTON_SIZE
 
-        self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+        self.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)  # bar_scale: _size
         self.setAutoRaise(True)  # repaints on hover
         self._tab_focus = False
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -175,7 +197,7 @@ class _GearButton(QToolButton):
         painter = QPainter(self)
         try:
             from . import theme
-            from .browse_toggles import CHIP_RADIUS, ICON_SIZE, stroke_width
+            from .browse_toggles import CHIP_RADIUS, icon_size, stroke_width
 
             c = theme.palette(theme.night_mode())
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -184,13 +206,14 @@ class _GearButton(QToolButton):
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(c["hover_subtle"]))
                 painter.drawRoundedRect(QRectF(0.0, 0.0, w, h), CHIP_RADIUS, CHIP_RADIUS)
-            painter.translate(round((w - ICON_SIZE) / 2.0), round((h - ICON_SIZE) / 2.0))
+            size = icon_size(w, h)
+            painter.translate(round((w - size) / 2.0), round((h - size) / 2.0))
             pen = QPen(QColor(c["text_muted"]))
-            pen.setWidthF(stroke_width(ICON_SIZE))
+            pen.setWidthF(stroke_width(size))
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(gear_path(ICON_SIZE))
+            painter.drawPath(gear_path(size))
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] status bar gear paint failed: {exc}")
         finally:
@@ -225,7 +248,7 @@ class StatusBar(QWidget):
             self._add_toggles(row, browser)
         row.addStretch(1)
         self.progress = QProgressBar(self)
-        self.progress.setFixedWidth(120)
+        self.progress.setFixedWidth(PROGRESS_PX)
         self.progress.setTextVisible(False)
         self.progress.hide()
         self.label = QLabel("", self)
@@ -285,7 +308,7 @@ class StatusBar(QWidget):
             host = self.parentWidget()
             if host is None or not host.inherits("QStatusBar"):
                 host = self
-            host.setStyleSheet(theme.status_bar_qss(theme.night_mode()))
+            host.setStyleSheet(theme.status_bar_qss(theme.night_mode(), scale()))
         except Exception as exc:  # noqa: BLE001
             print(f"[klausmate] status bar theme failed: {exc}")
 
@@ -390,28 +413,51 @@ def _track(bar: StatusBar) -> StatusBar:
 
 
 def strip_height() -> int:
-    """Every Klaus bar's strip height: the Decks row's, at least 28."""
-    return _row_height[0]
+    """Every Klaus bar's strip height: the Decks row's, at least the
+    scaled 28pt floor, at most the scaled cap."""
+    floor = max(STRIP_MIN, scaled(STRIP_HEIGHT))
+    return max(floor, min(_row_px[0], scaled(STRIP_MAX)))
 
 
 def _size(bar: StatusBar) -> None:
+    from .browse_toggles import BUTTON_SIZE
+
     native = bar.parentWidget()
     if native is not None and native.inherits("QStatusBar"):
         native.setFixedHeight(strip_height())
     bar.setFixedHeight(strip_height() - STRIP_INSET)
+    n = scaled(BUTTON_SIZE)
+    for btn in (bar.gear, bar.sidebar_btn, bar.editor_btn):
+        if btn is not None:
+            btn.setFixedSize(n, n)
+    bar.progress.setFixedWidth(scaled(PROGRESS_PX))
+
+
+def _resize_all(theme_too: bool = False) -> None:
+    for bar in list(_bars):
+        try:
+            _size(bar)
+            if theme_too:
+                bar.apply_theme()
+        except RuntimeError:
+            pass
 
 
 def set_row_height(px: int) -> None:
     """The Decks row measured ``px`` tall: size every bar to match."""
-    h = max(STRIP_HEIGHT, min(int(px), STRIP_MAX))
-    if h == _row_height[0]:
-        return
-    _row_height[0] = h
-    for bar in list(_bars):
-        try:
-            _size(bar)
-        except RuntimeError:
-            pass
+    before = strip_height()
+    _row_px[0] = int(px)
+    if strip_height() != before:
+        _resize_all()
+
+
+def set_scale(pct) -> None:
+    """``bar_scale`` changed (a Preferences preview, its revert, a
+    profile): re-size and re-style every bar. Invalid reads as 85."""
+    from . import dashboard
+
+    _scale[0] = dashboard.bar_scale_from_cfg({"bar_scale": pct})
+    _resize_all(theme_too=True)
 
 
 def _strip(parent):
@@ -513,6 +559,7 @@ def _on_profile_open() -> None:
         tasks.run_on_main = mw.taskman.run_on_main
     except Exception as exc:  # noqa: BLE001
         print(f"[klausmate] status bar: no taskman: {exc}")
+    _scale[0] = None  # this profile's bar_scale, read on next use
 
 
 def _on_browser_will_show(browser) -> None:

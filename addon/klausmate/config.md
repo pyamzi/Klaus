@@ -335,6 +335,12 @@ removed. Use the external MCP client setup below.
   Anki's own **Preferences → Appearance → User Interface Size**, which
   already scales the whole deck screen; `100` means Anki's size. Set with
   the **Size** slider in *Edit Widgets*.
+- **bar_scale**: the size of the top bar, the deck screen's bottom row and
+  the status strips under Browse and the Add tab, in percent, `70` to `150`
+  in steps of `5` (default `85`, a little smaller than Anki draws them).
+  Like `dashboard_scale` it applies on top of Anki's own **User Interface
+  Size**; `100` means Anki's size. Set with **Bar size** in *KlausMate
+  Preferences → Appearance*.
 
 Apart from `heatmap_enabled` and the four `dashboard_*` keys (written from the
 deck screen's own Edit Widgets mode) and the two `heatmap_*` display

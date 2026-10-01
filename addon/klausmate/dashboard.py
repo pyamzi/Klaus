@@ -280,6 +280,19 @@ def scale_from_cfg(cfg: Any) -> int:
     return value if valid_scale(value) else 100
 
 
+# Pouya, 2026-10-01: the top bar, the bottom row and the Qt status strips
+# "smaller in general by default, like by 10-20%", with a Preferences
+# slider to grow them. Same range and the same meaning as dashboard_scale:
+# on top of Anki's User Interface Size, 100 = Anki's size.
+BAR_SCALE_DEFAULT = 85
+
+
+def bar_scale_from_cfg(cfg: Any) -> int:
+    """``bar_scale`` in percent; anything not valid_scale is 85."""
+    value = cfg.get("bar_scale") if isinstance(cfg, dict) else None
+    return value if valid_scale(value) else BAR_SCALE_DEFAULT
+
+
 def widget_ids() -> list:
     return [wid for wid, _key, _label in WIDGETS]
 

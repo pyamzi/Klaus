@@ -202,8 +202,8 @@ found = b3.statusBar().findChildren(QtWidgets.QWidget, "KlausStatusBar")
 b3.show()
 app.processEvents()
 _strip = b3.statusBar()
-check("the strip is the macOS title bar's height (28pt), content centred in it",
-      _strip.height() == 28 and abs(first.y() + first.height() / 2 - 14) <= 1,
+check("the strip is the macOS title bar's height (28pt) at the default 85% bar size (24), content centred in it",
+      _strip.height() == 24 and abs(first.y() + first.height() / 2 - 12) <= 1,
       f"{_strip.height()} {first.geometry()}")
 check("Browse outside the single window gets one bar, with toggles", first is not None and again is first
       and len(found) == 1 and first.sidebar_btn is not None, str(len(found)))
@@ -281,8 +281,9 @@ b7, _s7, _c7 = make_browser()
 bar7 = sb.install_browser(b7)
 b7.show()
 app.processEvents()
-check("Add and Browse strips start at the same height (28)",
-      strip6.height() == b7.statusBar().height() == sb.STRIP_HEIGHT == 28, f"{strip6.height()} {b7.statusBar().height()}")
+check("Add and Browse strips start at the same height (28pt at 85%: 24)",
+      strip6.height() == b7.statusBar().height() == sb.strip_height() == 24 and sb.STRIP_HEIGHT == 28,
+      f"{strip6.height()} {b7.statusBar().height()}")
 check("hosted Browse has no toggles in its bar (they are in the top bar)", bar7.sidebar_btn is None)
 sb.set_row_height(40)
 app.processEvents()
@@ -290,10 +291,10 @@ check("a 40px Decks row makes both strips 40", strip6.height() == 40 and b7.stat
       f"{strip6.height()} {b7.statusBar().height()}")
 check("…the bars inside keep Qt's insets", bar6.height() == bar7.height() == 40 - sb.STRIP_INSET)
 sb.set_row_height(10)
-check("never below the 28pt floor", strip6.height() == 28)
+check("never below the 28pt floor (scaled: 24)", strip6.height() == 24)
 sb.set_row_height(500)
-check("…nor past the cap", strip6.height() == sb.STRIP_MAX)
-sb.set_row_height(sb.STRIP_HEIGHT)
+check("…nor past the cap (scaled)", strip6.height() == round(sb.STRIP_MAX * 0.85))
+sb.set_row_height(0)
 sw.is_active = lambda: False
 
 section("the top bar's pane toggles (single window)")

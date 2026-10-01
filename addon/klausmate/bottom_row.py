@@ -71,9 +71,12 @@ function klausStatus(s) {
 }
 function klausFit() {
   // Anki centres its buttons; the readout stops 24px short of the last.
+  // Screen px over the body's zoom (bar_scale): getBoundingClientRect is
+  // zoomed, a max-width inside the body is not.
   var r = document.getElementById('klaus-status'),
-      bs = document.querySelectorAll('#outer button'), b = bs[bs.length - 1];
-  if (r && b) r.style.maxWidth = Math.max(0, window.innerWidth - 8 - b.getBoundingClientRect().right - 24) + 'px';
+      bs = document.querySelectorAll('#outer button'), b = bs[bs.length - 1],
+      z = parseFloat(getComputedStyle(document.body).zoom) || 1;
+  if (r && b) r.style.maxWidth = Math.max(0, (window.innerWidth - b.getBoundingClientRect().right) / z - 8 - 24) + 'px';
 }
 window.addEventListener('resize', klausFit);
 function klausKey(e, cmd) {
