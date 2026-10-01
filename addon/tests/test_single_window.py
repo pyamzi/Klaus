@@ -279,6 +279,15 @@ class FakeBrowser(QtWidgets.QMainWindow):
         super().__init__(None, QtCore.Qt.WindowType.Window)
         self.table = self.sidebar = self.editor = object()
         self.form = types.SimpleNamespace(menu_Notes=self.menuBar().addMenu("Notes"))
+        self.form.actionClose = QtGui.QAction("Close", self)  # setupUi binds it to _handle_close
+        self.form.actionClose.triggered.connect(self._handle_close)
+
+    def _handle_close(self):  # mirrors Anki's Browse: Cmd+W closes the ACTIVE window
+        active = QtWidgets.QApplication.activeWindow()
+        if active and active is not self:
+            (active.reject if isinstance(active, QtWidgets.QDialog) else active.close)()
+        else:
+            self.close()
 
     def keyPressEvent(self, ev):  # mirrors Anki's Browse: Escape closes
         if ev.key() == QtCore.Qt.Key.Key_Escape:
@@ -384,6 +393,26 @@ host6.switch("browse")
 esc = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, QtCore.Qt.Key.Key_Escape, QtCore.Qt.KeyboardModifier.NoModifier)
 QtWidgets.QApplication.sendEvent(b, esc)
 check("Escape in Browse is swallowed", closed == [] and esc.isAccepted())
+mw_closed = []
+mw6.close = lambda: mw_closed.append(1) or True
+QtWidgets.QApplication.setActiveWindow(mw6)
+b.form.actionClose.trigger()
+check("Cmd+W in hosted Browse closes Browse, never the main window",
+      QtWidgets.QApplication.activeWindow() is mw6 and closed == [1] and mw_closed == [],
+      f"active={QtWidgets.QApplication.activeWindow()} closed={closed} mw_closed={mw_closed}")
+dlg = QtWidgets.QDialog(mw6)
+rejected = []
+dlg.rejected.connect(lambda: rejected.append(1))
+dlg.show()
+QtWidgets.QApplication.setActiveWindow(dlg)
+b.form.actionClose.trigger()
+check("…while a dialog is active, Cmd+W rejects the dialog and keeps Browse",
+      rejected == [1] and closed == [1] and mw_closed == [], f"rejected={rejected} closed={closed}")
+dlg.deleteLater()
+del mw6.close
+app.processEvents()  # the dialog's hide settles first, or mw6 is left inactive
+QtWidgets.QApplication.setActiveWindow(mw6)
+closed.clear()
 redrawn = []
 b.table = types.SimpleNamespace(redraw_cells=lambda: redrawn.append("t"))
 b.sidebar = types.SimpleNamespace(refresh_if_needed=lambda: redrawn.append("s"))
@@ -564,6 +593,7 @@ check("…is_active is false, the toolbar carries the reason, keys resumed",
 b4 = FakeBrowser()
 sw._on_browser_will_show(b4)
 check("after disable, a top-level Browse is left alone", b4.isWindow() and sw._state.browser is not b4)
+check("…and keeps Anki's own Cmd+W wiring", b4.form.actionClose.receivers(b4.form.actionClose.triggered) == 1)
 wc3 = types.SimpleNamespace(head="", body="")
 sw._on_toolbar_content(wc3, type("TopToolbar", (), {})())
 check("…and the toolbar gets no indicator css", wc3.head == "")
