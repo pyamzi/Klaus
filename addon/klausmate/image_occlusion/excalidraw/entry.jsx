@@ -7,13 +7,20 @@
 //     {png: <base64>, scene: <excalidraw scene object>, originX, originY,
 //      width, height}; origin = getCommonBounds min x/y of the non-deleted
 //     elements; PNG = exportToBlob, exportPadding 20, scale 2.
-// Python hears pycmd("klausexcal:<action>:<base64 JSON>") for ready, occlude
-// and cancel. occlude carries the export result, or {error} when the drawing
-// is empty or the export failed (the window stays open).
+//   occlude()                    export, then send("occlude", result | {error});
+//                                the Draw tab's Qt "Use drawing" button calls it
+// Python hears pycmd("klausexcal:<action>:<base64 JSON>") for ready and
+// occlude. occlude carries the export result, or {error} when the drawing is
+// empty or the export failed (the tab stays open).
+// The page lives on the occlusion editor's Draw tab, so Excalidraw's web-app
+// chrome is gone: an empty <MainMenu> replaces the default one (and its
+// GitHub/X/Discord links), and index.html hides the menu, library and help
+// triggers.
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   Excalidraw,
+  MainMenu,
   exportToBlob,
   getCommonBounds,
   restore,
@@ -97,16 +104,7 @@ async function occlude() {
   send("occlude", out);
 }
 
-window.klausExcalidraw = { load, exportForOcclusion };
-
-function TopRight() {
-  return (
-    <div className="klaus-actions">
-      <button type="button" className="klaus-btn klaus-primary" onClick={occlude}>Occlude</button>
-      <button type="button" className="klaus-btn" onClick={() => send("cancel", {})}>Cancel</button>
-    </div>
-  );
-}
+window.klausExcalidraw = { load, exportForOcclusion, occlude };
 
 function App() {
   return (
@@ -116,11 +114,12 @@ function App() {
         api = a;
         send("ready", {});
       }}
-      renderTopRightUI={() => <TopRight />}
       UIOptions={{
         canvasActions: { loadScene: false, saveToActiveFile: false, export: false },
       }}
-    />
+    >
+      <MainMenu />
+    </Excalidraw>
   );
 }
 
